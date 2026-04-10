@@ -1,7 +1,3 @@
-"""
-Stub summary for /Users/stuart/parallel_development/civibus_dev/MAR18_cross_domain_er_and_property_graph/civibus_dev/core/entity_resolution/splink_config.py.
-"""
-
 from __future__ import annotations
 
 from typing import Any

@@ -1,7 +1,3 @@
-"""
-Stub summary for /Users/stuart/parallel_development/civibus_dev/mar22_01_backend_api_completeness/civibus_dev/domains/campaign_finance/quality/fec_closeout.py.
-"""
-
 from __future__ import annotations
 
 import argparse

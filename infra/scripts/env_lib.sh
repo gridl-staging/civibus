@@ -5,8 +5,6 @@
 # Parse a .env file and export each KEY=VALUE pair into the current shell.
 # Handles comments, blank lines, 'export' prefixes, and single/double quotes.
 # Does NOT eval arbitrary shell syntax — only literal assignments are loaded.
-# TODO: Document load_env_assignments.
-# TODO: Document load_env_assignments.
 load_env_assignments() {
   local env_path="$1"
   local raw_line line key value

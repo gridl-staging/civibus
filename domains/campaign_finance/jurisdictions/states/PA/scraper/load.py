@@ -1,7 +1,3 @@
-"""
-Stub summary for /Users/stuart/parallel_development/civibus_dev/mar21_02_tx_pa_state_pipelines/civibus_dev/domains/campaign_finance/jurisdictions/states/PA/scraper/load.py.
-"""
-
 from __future__ import annotations
 
 import logging

@@ -1,7 +1,3 @@
-"""
-Stub summary for /Users/stuart/parallel_development/civibus_dev/mar26_am_3_new_state_pipeline_builds/civibus_dev/infra/scripts/postgres_local.py.
-"""
-
 from __future__ import annotations
 
 import argparse

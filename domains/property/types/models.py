@@ -1,7 +1,3 @@
-"""
-Stub summary for /Users/stuart/parallel_development/civibus_dev/MAR18_cross_domain_er_and_property_graph/civibus_dev/domains/property/types/models.py.
-"""
-
 from __future__ import annotations
 
 from datetime import date, datetime, timezone

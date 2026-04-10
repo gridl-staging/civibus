@@ -1,7 +1,3 @@
-"""
-Stub summary for IN scraper CLI.
-"""
-
 from __future__ import annotations
 
 import argparse

@@ -1,7 +1,3 @@
-"""
-Stub summary for /Users/stuart/parallel_development/civibus_dev/mar21_01_fec_pipeline_hardening/civibus_dev/api/main.py.
-"""
-
 import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager

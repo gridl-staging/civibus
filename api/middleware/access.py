@@ -1,7 +1,3 @@
-"""
-Stub summary for /Users/stuart/parallel_development/civibus_dev/mar19_02_backend_hardening/civibus_dev/api/middleware/access.py.
-"""
-
 from __future__ import annotations
 
 import os

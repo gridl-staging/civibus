@@ -1,7 +1,3 @@
-"""
-Stub summary for /Users/stuart/parallel_development/civibus_dev/mar23_pm_02_frontend_seo_and_ux_polish/civibus_dev/api/models/campaign_finance.py.
-"""
-
 from __future__ import annotations
 
 from datetime import date, datetime
