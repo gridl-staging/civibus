@@ -1,0 +1,142 @@
+# Nebraska campaign finance jurisdiction config
+# Source: Nebraska Accountability and Disclosure Commission (NADC) bulk data exports
+
+jurisdiction:
+  name: "Nebraska"
+  code: "NE"
+  type: "state"
+  fips: "31"
+  parent: null
+
+data_sources:
+  - name: "NE NADC Campaign Finance — Contributions and Loans"
+    url: "https://nadc-e.nebraska.gov/PublicSite/Docs/BulkDataDownloads/"
+    bulk_download_url: "https://nadc-e.nebraska.gov/PublicSite/Docs/BulkDataDownloads/{year}_ContributionLoanExtract.csv.zip"
+    api_base_url: null
+    format: "csv"
+    auth_required: false
+    update_frequency: "weekly"
+    coverage:
+      start_year: 2022
+      covers_sub_jurisdictions: true
+      office_levels:
+        - governor
+        - lieutenant_governor
+        - attorney_general
+        - state_senate
+        - state_house
+        - county
+        - municipal
+      transaction_types:
+        - contributions
+        - loans
+    field_mappings:
+      Receipt ID: "ne.receipt_id"
+      Org ID: "committee.id"
+      Filer Type: "committee.type"
+      Filer Name: "committee.name"
+      Candidate Name: "candidate.name"
+      Receipt Transaction/Contribution Type: "ne.receipt_transaction_type"
+      Other Funds Type: "ne.other_funds_type"
+      Receipt Date: "transaction.date"
+      Receipt Amount: "transaction.amount"
+      Description: "transaction.description"
+      Contributor or Transaction Source Type: "donor.type"
+      Contributor or Source Name (Individual Last Name): "donor.org_name"
+      First Name: "donor.first_name"
+      Middle Name: "donor.middle_name"
+      Suffix: "donor.name_suffix"
+      Address 1: "donor.address.street1"
+      Address 2: "donor.address.street2"
+      City: "donor.address.city"
+      State: "donor.address.state"
+      Zip: "donor.address.zip"
+      Filed Date: "filing.submitted_date"
+      Amended: "ne.amended"
+      Employer: "donor.employer"
+      Occupation: "donor.occupation"
+    scraper: null
+    last_successful_pull: null
+    last_verified_working: "2026-03-29"
+    known_issues:
+      - "ContributionLoanExtract contains intermixed contribution and loan rows; parse by Receipt Transaction/Contribution Type"
+      - "Loan-related row types include Loan and Loan Forgiveness Received in the same file"
+
+  - name: "NE NADC Campaign Finance — Expenditures"
+    url: "https://nadc-e.nebraska.gov/PublicSite/Docs/BulkDataDownloads/"
+    bulk_download_url: "https://nadc-e.nebraska.gov/PublicSite/Docs/BulkDataDownloads/{year}_ExpenditureExtract.csv.zip"
+    api_base_url: null
+    format: "csv"
+    auth_required: false
+    update_frequency: "weekly"
+    coverage:
+      start_year: 2022
+      covers_sub_jurisdictions: true
+      office_levels:
+        - governor
+        - lieutenant_governor
+        - attorney_general
+        - state_senate
+        - state_house
+        - county
+        - municipal
+      transaction_types:
+        - expenditures
+    field_mappings:
+      Expenditure ID: "ne.expenditure_id"
+      Org ID: "committee.id"
+      Filer Type: "committee.type"
+      Filer Name: "committee.name"
+      Candidate Name: "candidate.name"
+      Expenditure Transaction Type: "ne.expenditure_transaction_type"
+      Expenditure Sub Type: "ne.expenditure_sub_type"
+      Expenditure Date: "transaction.date"
+      Expenditure Amount: "transaction.amount"
+      Description: "transaction.description"
+      Payee or Recipient or In-Kind Contributor Type: "payee.type"
+      Payee or Recipient or In-Kind Contributor Name: "payee.org_name"
+      First Name: "payee.first_name"
+      Middle Name: "payee.middle_name"
+      Suffix: "payee.name_suffix"
+      Address 1: "payee.address.street1"
+      Address 2: "payee.address.street2"
+      City: "payee.address.city"
+      State: "payee.address.state"
+      Zip: "payee.address.zip"
+      Filed Date: "filing.submitted_date"
+      Support Or Oppose: "ne.support_or_oppose"
+      Candidate Name or Ballot Issue: "ne.ballot_issue_name"
+      Jurisdiction - Office - District or Ballot Description: "ne.jurisdiction_office_district_or_ballot"
+      Amended: "ne.amended"
+      Employer: "payee.employer"
+      Occupation: "payee.occupation"
+      Principal Place of Business: "payee.principal_place_of_business"
+    scraper: null
+    last_successful_pull: null
+    last_verified_working: "2026-03-29"
+    known_issues:
+      - "Bulk ZIP is current-year snapshot and includes records from multiple prior years"
+
+laws:
+  source_url: "https://nadc.nebraska.gov/"
+  last_verified: "2026-03-29"
+  contribution_limits:
+    individual_to_candidate: null
+    pac_to_candidate: null
+    corporate_direct: null
+    union_direct: null
+    party_to_candidate: null
+  itemization_threshold: 0
+  reporting:
+    periods: ["periodic", "pre-primary", "pre-election", "annual"]
+    electronic_filing_required: "required"
+  public_financing: false
+  notes:
+    - "NADC publishes campaign finance records via weekly-updated bulk CSV ZIP extracts"
+
+status:
+  discovery: "complete"
+  scraper: "working"
+  normalization: "pending"
+  entity_resolution: "pending"
+  last_full_update: null

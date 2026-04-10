@@ -1,0 +1,137 @@
+# New Jersey campaign finance jurisdiction config
+# Source: NJ Election Law Enforcement Commission (ELEC) e-filing system
+
+jurisdiction:
+  name: "New Jersey"
+  code: "NJ"
+  type: "state"
+  fips: "34"
+  parent: null
+
+data_sources:
+  - name: "ELEC Reports and Data Search Export API"
+    url: "https://www.elec.nj.gov/"
+    bulk_download_url: "https://www.njelecefilesearch.com/api/VWContributionDetail/DownlodDataCSV"
+    api_base_url: "https://www.njelecefilesearch.com/api"
+    format: "api"
+    auth_required: false
+    update_frequency: "quarterly"
+    coverage:
+      start_year: 2000
+      covers_sub_jurisdictions: true
+      office_levels:
+        - governor
+        - lieutenant_governor
+        - state_senate
+        - state_house
+        - county
+        - municipal
+      transaction_types:
+        - contributions
+    field_mappings:
+      IsIndividual: "donor.is_individual"
+      FirstName: "donor.first_name"
+      MI: "donor.middle_initial"
+      LastName: "donor.last_name"
+      Suffix: "donor.suffix"
+      NonIndName: "donor.organization_name"
+      Street: "donor.address.street1"
+      City: "donor.address.city"
+      State: "donor.address.state"
+      ZIP: "donor.address.zip"
+      EmpName: "donor.employer"
+      EmpStreet: "donor.employer_address.street1"
+      EmpCity: "donor.employer_address.city"
+      EmpState: "donor.employer_address.state"
+      EmpZip: "donor.employer_address.zip"
+      OccupationName: "donor.occupation"
+      ContributorType: "donor.type"
+      ContributionType: "transaction.type"
+      ContributionDate: "transaction.date"
+      ContributionAmount: "transaction.amount"
+      EntityName: "committee.name"
+      Location: "nj.filing.location"
+      ElectionYear: "transaction.year"
+    scraper: null
+    last_successful_pull: null
+    last_verified_working: "2026-03-26"
+    known_issues:
+      - "POST endpoint returns a JSON string containing a temporary Azure Blob Storage URL with SAS token"
+      - "Blob URL is temporary and must be downloaded immediately after POST"
+      - "Empty POST body returns all contributions; filtered exports require reverse-engineered query parameters"
+
+  - name: "ELEC Pay-to-Play Quick Download (CSV/XLS)"
+    url: "https://www.elec.nj.gov/pay2play/quickdownload.html"
+    bulk_download_url: "https://www.elec.nj.gov/download/ptp/data/P2P_2024_Contributions.csv"
+    api_base_url: null
+    format: "csv"
+    auth_required: false
+    update_frequency: "quarterly"
+    coverage:
+      start_year: 2006
+      covers_sub_jurisdictions: true
+      office_levels:
+        - governor
+        - state_senate
+        - state_house
+        - county
+        - municipal
+      transaction_types:
+        - pay_to_play
+    field_mappings:
+      Vendor_ID: "nj.vendor.id"
+      Business_Name: "nj.vendor.name"
+      Business_Address1: "nj.vendor.address.street1"
+      Business_Address2: "nj.vendor.address.street2"
+      Business_City: "nj.vendor.address.city"
+      Business_State: "nj.vendor.address.state"
+      Business_Zip: "nj.vendor.address.zip"
+      Business_Phone: "nj.vendor.phone"
+      Filing_Year: "transaction.year"
+      Filing_Date: "filing.date"
+      Amendment: "filing.amended"
+      Aggregate_Contribution_Amount: "nj.aggregate_amount"
+      Contributor_Name: "donor.name"
+      Contributor_Address1: "donor.address.street1"
+      Contributor_Address2: "donor.address.street2"
+      Contributor_City: "donor.address.city"
+      Contributor_State: "donor.address.state"
+      Contributor_Zip: "donor.address.zip"
+      Contributor_Phone: "donor.phone"
+      Contribution_Date: "transaction.date"
+      Contribution_Amount: "transaction.amount"
+      Recipient_Name: "committee.name"
+    scraper: null
+    last_successful_pull: null
+    last_verified_working: "2026-03-26"
+    known_issues:
+      - "Pay-to-Play subset only; not general campaign contributions"
+      - "Requires browser-like User-Agent; Incapsula blocks bare HTTP clients"
+      - "File URLs follow pattern P2P_{YEAR}_Contributions.csv"
+      - "CSV fields are double-quoted with comma delimiter"
+
+laws:
+  source_url: "https://www.elec.nj.gov/"
+  last_verified: null
+  contribution_limits:
+    individual_to_candidate: null
+    pac_to_candidate: null
+    corporate_direct: null
+    union_direct: null
+    party_to_candidate: null
+  itemization_threshold: 300
+  reporting:
+    periods: ["pre-election", "post-election", "quarterly", "annual"]
+    electronic_filing_required: "required"
+  public_financing: false
+  notes:
+    - "This laws block is a provisional machine-readable placeholder pending statute-specific legal verification."
+    - "Package implementation in Stage 6 is scoped to verified ELEC API export contracts."
+    - "NJ has a gubernatorial public financing program not yet modeled here."
+
+status:
+  discovery: "complete"
+  scraper: "pending"
+  normalization: "pending"
+  entity_resolution: "pending"
+  last_full_update: null

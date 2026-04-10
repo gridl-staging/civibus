@@ -1,0 +1,4 @@
+COM_NAME,MASTER_KEY,REPORT_DESCRIPTION,RPT_YEAR,REPORT_KEY,SHORT_DESCRIPTION,FIRST_NAME,MIDDLE_NAME,LAST_NAME,SUFFIX_NAME,NON_INDIVIDUAL,ADDRESS,CITY,STATE,ZIP,EXPEND_DATE,AMOUNT,EVENT_DATE,PURPOSE,INKIND,CANDIDATE_FIRST_NAME,CANDIDATE_LAST_NAME,OFFICE_SOUGHT,DISTRICT,PARTY
+"Friends of Smith",12345,"Annual Report",2022,67890,"Expenditures","","","","","ABC Printing Co","100 Print Lane","Columbus","OH","43215",07/01/2022,1500.00,,"Campaign mailers",FALSE,"Jane","Doe","State Representative",10,"Republican"
+"Citizens for Progress PAC",23456,"Semi-Annual Report",2022,78901,"Expenditures","Sarah","B","Williams","","","200 Elm St","Akron","OH","44302",04/15/2022,350.00,,"Consulting services",FALSE,"Robert","Johnson","State Senator",5,"Democrat"
+"Campaign for Better Ohio",34567,"Pre-Primary Report",2022,89012,"Expenditures","","","","","Hometown Venue LLC","500 Event Dr","Dayton","OH","45401",02/28/2022,2000.00,02/28/2022,"Venue rental for fundraiser",TRUE,,,,,

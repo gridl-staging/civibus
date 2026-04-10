@@ -1,0 +1,200 @@
+# Virginia campaign finance jurisdiction config
+# Source: Virginia Department of Elections SBE CSV bulk exports
+# Portal: https://apps.elections.virginia.gov/SBE_CSV/CF/
+# Monthly directories (YYYY_MM/) containing ScheduleA.csv, ScheduleD.csv, Report.csv
+# Data from 1999 to present, daily updates, no bot protection (just needs User-Agent)
+
+jurisdiction:
+  name: "Virginia"
+  code: "VA"
+  type: "state"
+  fips: "51"
+  parent: null
+
+data_sources:
+  - name: "VA SBE Contributions Export (ScheduleA)"
+    url: "https://apps.elections.virginia.gov/SBE_CSV/CF/"
+    bulk_download_url: "https://apps.elections.virginia.gov/SBE_CSV/CF/{year_month}/ScheduleA.csv"
+    api_base_url: null
+    format: "csv"
+    auth_required: false
+    update_frequency: "daily"
+    coverage:
+      start_year: 1999
+      covers_sub_jurisdictions: true
+      office_levels:
+        - governor
+        - lieutenant_governor
+        - attorney_general
+        - state_senate
+        - state_house
+        - local
+      transaction_types:
+        - contributions
+    field_mappings:
+      ReportId: "filing.id"
+      CommitteeContactId: "va.committee_contact_id"
+      FirstName: "donor.first_name"
+      MiddleName: "donor.middle_name"
+      LastOrCompanyName: "donor.last_name"
+      Prefix: "donor.prefix"
+      Suffix: "donor.suffix"
+      NameOfEmployer: "donor.employer"
+      OccupationOrTypeOfBusiness: "donor.occupation"
+      PrimaryCityAndStateOfEmploymentOrBusiness: "va.employer_city_state"
+      AddressLine1: "donor.address.street1"
+      AddressLine2: "donor.address.street2"
+      City: "donor.address.city"
+      StateCode: "donor.address.state"
+      ZipCode: "donor.address.zip"
+      IsIndividual: "va.is_individual"
+      TransactionDate: "transaction.date"
+      Amount: "transaction.amount"
+      TotalToDate: "va.total_to_date"
+      ScheduleAId: "va.schedule_a_id"
+      ScheduleId: "va.schedule_id"
+      ReportUID: "va.report_uid"
+    scraper: null
+    last_successful_pull: null
+    last_verified_working: "2026-03-28"
+    known_issues:
+      - "Monthly directory structure requires building URLs per YYYY_MM period"
+      - "IsIndividual field is a string 'True'/'False', not a native boolean"
+
+  - name: "VA SBE Expenditures Export (ScheduleD)"
+    url: "https://apps.elections.virginia.gov/SBE_CSV/CF/"
+    bulk_download_url: "https://apps.elections.virginia.gov/SBE_CSV/CF/{year_month}/ScheduleD.csv"
+    api_base_url: null
+    format: "csv"
+    auth_required: false
+    update_frequency: "daily"
+    coverage:
+      start_year: 1999
+      covers_sub_jurisdictions: true
+      office_levels:
+        - governor
+        - lieutenant_governor
+        - attorney_general
+        - state_senate
+        - state_house
+        - local
+      transaction_types:
+        - expenditures
+    field_mappings:
+      ScheduleDId: "va.schedule_d_id"
+      ReportId: "filing.id"
+      CommitteeContactId: "va.committee_contact_id"
+      FirstName: "payee.first_name"
+      MiddleName: "payee.middle_name"
+      LastOrCompanyName: "payee.last_name"
+      Prefix: "payee.prefix"
+      Suffix: "payee.suffix"
+      AddressLine1: "payee.address.street1"
+      AddressLine2: "payee.address.street2"
+      City: "payee.address.city"
+      StateCode: "payee.address.state"
+      ZipCode: "payee.address.zip"
+      IsIndividual: "va.is_individual"
+      TransactionDate: "transaction.date"
+      Amount: "transaction.amount"
+      AuthorizingName: "va.authorizing_name"
+      ItemOrService: "transaction.description"
+      ScheduleId: "va.schedule_id"
+      ReportUID: "va.report_uid"
+    scraper: null
+    last_successful_pull: null
+    last_verified_working: "2026-03-28"
+    known_issues:
+      - "Monthly directory structure requires building URLs per YYYY_MM period"
+      - "IsIndividual field is a string 'True'/'False', not a native boolean"
+
+  - name: "VA SBE Reports Export (Report)"
+    url: "https://apps.elections.virginia.gov/SBE_CSV/CF/"
+    bulk_download_url: "https://apps.elections.virginia.gov/SBE_CSV/CF/{year_month}/Report.csv"
+    api_base_url: null
+    format: "csv"
+    auth_required: false
+    update_frequency: "daily"
+    coverage:
+      start_year: 1999
+      covers_sub_jurisdictions: true
+      office_levels:
+        - governor
+        - lieutenant_governor
+        - attorney_general
+        - state_senate
+        - state_house
+        - local
+      transaction_types:
+        - reports
+    field_mappings:
+      ReportId: "filing.id"
+      CommitteeCode: "committee.id"
+      CommitteeName: "committee.name"
+      CommitteeType: "committee.type"
+      CandidateName: "va.candidate_name"
+      IsStateWide: "va.is_statewide"
+      IsGeneralAssembly: "va.is_general_assembly"
+      IsLocal: "va.is_local"
+      Party: "committee.party"
+      FecNumber: "va.fec_number"
+      ReportYear: "filing.year"
+      FilingDate: "filing.date"
+      StartDate: "filing.coverage_start"
+      EndDate: "filing.coverage_end"
+      AddressLine1: "committee.address.street1"
+      AddressLine2: "committee.address.street2"
+      AddressLine3: "committee.address.street3"
+      City: "committee.address.city"
+      StateCode: "committee.address.state"
+      ZipCode: "committee.address.zip"
+      FilingType: "filing.type"
+      IsFinalReport: "va.is_final_report"
+      IsAmendment: "filing.amended"
+      AmendmentCount: "va.amendment_count"
+      SubmitterPhone: "committee.phone"
+      SubmitterEmail: "committee.email"
+      ElectionCycle: "va.election_cycle"
+      ElectionCycleStartDate: "va.election_cycle_start"
+      ElectionCycleEndDate: "va.election_cycle_end"
+      OfficeSought: "va.office_sought"
+      District: "va.district"
+      NoActivity: "va.no_activity"
+      BalanceLastReportingPeriod: "va.balance_last_period"
+      DateOfReferendum: "va.referendum_date"
+      SubmittedDate: "va.submitted_date"
+      AccountId: "va.account_id"
+      DueDate: "va.due_date"
+      IsXmlUpload: "va.is_xml_upload"
+      ReportUID: "va.report_uid"
+    scraper: null
+    last_successful_pull: null
+    last_verified_working: "2026-03-28"
+    known_issues:
+      - "Monthly directory structure requires building URLs per YYYY_MM period"
+      - "Date fields use mixed formats (MM/DD/YYYY vs YYYY-MM-DD HH:MM:SS.nnnnnnnnn)"
+
+laws:
+  source_url: "https://www.elections.virginia.gov/candidatepac-info/campaign-finance/"
+  last_verified: null
+  contribution_limits:
+    individual_to_candidate: "unlimited"
+    pac_to_candidate: "unlimited"
+    corporate_direct: "unlimited"
+    union_direct: "unlimited"
+    party_to_candidate: "unlimited"
+  itemization_threshold: 100
+  reporting:
+    periods: ["pre-election", "post-election", "annual", "large-contribution"]
+    electronic_filing_required: "required"
+  public_financing: false
+  notes:
+    - "This laws block is a provisional machine-readable placeholder pending statute-specific legal verification."
+    - "Virginia has no contribution limits for state-level candidates."
+
+status:
+  discovery: "complete"
+  scraper: "working"
+  normalization: "pending"
+  entity_resolution: "pending"
+  last_full_update: null

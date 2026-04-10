@@ -1,0 +1,52 @@
+name: Integration
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  integration-tests:
+    name: integration-tests
+    runs-on: ubuntu-latest
+    env:
+      COMPOSE_PROJECT_NAME: civibus_${{ github.event.repository.name }}
+      POSTGRES_PASSWORD: ci-postgres-password
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: astral-sh/setup-uv@0c5e2b8115b80b4c7c5ddf6ffdd634974642d182 # v5.4.1
+        with:
+          python-version: "3.12"
+      - name: Sync dependencies
+        run: uv sync --locked --extra dev --extra entity-resolution
+      - name: Start DB
+        run: make db-up
+      - name: Wait for DB health
+        run: |
+          container_id="$(docker compose -f infra/docker-compose.yml ps -q db)"
+          if [ -z "$container_id" ]; then
+            echo "Database container ID not found" >&2
+            exit 1
+          fi
+          for attempt in $(seq 1 60); do
+            status="$(docker inspect -f '{{.State.Health.Status}}' "$container_id")"
+            if [ "$status" = "healthy" ]; then
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Database did not become healthy in time" >&2
+          exit 1
+      - name: Reset DB schema
+        run: make db-reset
+      - name: Seed FEC bulk data
+        run: make ingest-fec-bulk-sample
+      - name: Load graph
+        run: make graph-load
+      - name: Integration tests
+        run: uv run --locked pytest -m "integration" --tb=short
+      - name: Stop DB
+        if: always()
+        run: make db-down

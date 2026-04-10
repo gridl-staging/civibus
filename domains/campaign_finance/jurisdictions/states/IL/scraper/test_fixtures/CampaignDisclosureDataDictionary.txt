@@ -1,0 +1,249 @@
+Illinois State Board of Elections
+Data Dictionary for files found at https://elections.il.gov/campaigndisclosuredatafiles
+
+Included Files:
+	Candidates.txt
+	CanElections.txt
+	CmteCandidateLinks.txt
+	Committees.txt
+	D2Totals.txt
+	Expenditures.txt
+	FiledDocs.txt
+	Investments.txt
+	Officers.txt
+	PrevOfficers.txt
+	Receipts.txt
+
+*** Candidates.txt ***
+ID					ID number generated for each candidate record
+LastName			Candidate’s last name
+FirstName			Candidate’s first name
+Address1			Candidate’s address
+Address2			Candidate’s address
+City				Candidate’s city
+State				Candidate’s state
+Zip					Candidate’s zip code
+Office				Office sought by the candidate
+DistrictType		District type for the office (township, county, senate, etc.)
+District			Specific district for the office (ward #, district #, county name, etc.)
+ResidenceCounty		Candidate’s county of residence
+PartyAffiliation	Candidate’s political party
+RedactionRequested	Has the candidate requested their address be redacted under the Judicial Privacy Act? (Judges only)
+
+*** CanElections.txt - Candidate Election Records ***
+ID					ID number generated for each record
+CandidateID			ID number generated for each candidate election record
+ElectionType		Type of election (GP = General Primary, GE = General Election, CP = Consolidated Primary, CE = Consolidated Election, SP = Special Primary, SE = Special Election, NE = Nonpartisan Election)
+ElectionYear		Year of the election
+IncChallOpen		Incumbent, Challenger, or Open seat
+WonLost				election result – won or lost
+FairCampaign		did the candidate file a Code of Fair Campaign Practices statement?
+LimitsOff			indicates whether contribution limits were lifted for the race
+LimitsOffReason		reason for lifting of contribution limits – self-funding, expenditures by Independent Expenditure committees, or Board Determination (of total independent expenditures for the race)
+
+*** CmteCandidateLinks.txt ***
+ID					ID number generated for each record
+CommitteeID			Political Committee ID number assigned by SBE
+CandidateID			ID number generated for each candidate election record
+
+*** CmteOfficerLinks.txt ***
+ID					ID number generated for each officer record
+CommitteeID			Political Committee ID number assigned by SBE
+OfficerID			ID number generated for each officer
+
+*** Committees.txt ***
+ID					Political Committee ID number assigned by SBE
+TypeOfCommittee		Type of political committee
+StateCommittee		State Committee (obsolete)
+StateID				State Committee ID number (obsolete)
+LocalCommittee		Local Committee (obsolete)
+LocalID				Local Committee ID number (obsolete)
+ReferName			Committee reference name assigned by SBE
+Name				Committee name
+Address1			Committee address
+Address2			Committee address
+Address3			Committee address
+City				Committee city
+State				Committee state
+Zip					Committee zip code
+Status				Committee status = Active or Final
+StatusDate			Date of committee’s last status change
+CreationDate		Committee creation date
+CreationAmount		Committee creation funds available
+DispFundsReturn		Residual funds will be returned to contributors
+DispFundsPolComm	Residual funds will be donated to another committee
+DispFundsCharity	Residual funds will be donated to charity
+DispFunds95			Residual funds will be handled pursuant to 10ILCS5/9-5
+DispFundsDescrip	Description of residual fund information/entity
+CanSuppOpp			Candidates Supported or Opposed by the committee
+PolicySuppOpp		Public Policy question Supported or Opposed by the committee
+PartyAffiliation	Party affiliation
+Purpose				Purpose of the committee (per D-1 statement)
+
+*** D2Totals.txt ***
+ID					ID number generated for each record
+CommitteeID			Political Committee ID number assigned by SBE
+FiledDocID			ID number generated for each filed document
+BegFundsAvail		Beginning Funds Available 
+IndivContribI		Individual Contributions - Itemized
+IndivContribNI		Individual Contributions – Not Itemized
+XferInI				Transfers In - Itemized
+XferInNI			Transfers In – Not Itemized
+LoanRcvI			Loans Received - itemized
+LoanRcvNI			Loans Received – Not Itemized
+OtherRctI			Other Receipts - itemized
+OtherRctNI			Other Receipts – Not Itemized
+TotalReceipts		Total Receipts (parts 1-4)
+InKindI				In-Kind Contributions - Itemized
+InKindNI			In-Kind Contributions – Not Itemized
+TotalInKind			Total In-Kind Contributions
+XferOutI			Transfers Out - Itemized
+XferOutNI			Transfers Out – Not Itemized
+LoanMadeI			Loans Made - Itemized
+LoanMadeNI			Loans Made – Not Itemized
+ExpendI				Expenditures - Itemized
+ExpendNI			Expenditures – Not Itemized
+IndependentExpI		Independent Expenditures - Itemized
+IndependentExpNI	Independent Expenditures – Not Itemized
+TotalExpend			Total Expenditures (parts 6-8)
+DebtsI				Debts and Obligations - Itemized
+DebtsNI				Debts and Obligations – Not Itemized
+TotalDebts			Total Debts and Obligations
+TotalInvest			Investments Total
+EndFundsAvail		Ending Funds Available
+Archived			Indicates if the report has been superseded by an amendment
+
+*** Expenditures.txt ***
+ID					ID number generated for each record
+CommitteeID			Political Committee ID number assigned by SBE
+FiledDocID			ID number for the filed document containing the expenditure
+ETransID			ID number generated for electronically filed document
+LastOnlyName		Last/Business name for expenditure entity
+FirstName			First Name for expenditure entity
+ExpendedDate		Date of Expenditure
+Amount				Amount of Expenditure
+AggregateAmount		Aggregate expenditure total for filing period
+Address1			Expenditure entity address
+Address2			Expenditure entity address
+City				Expenditure entity city
+State				Expenditure entity state
+Zip					Expenditure entity zip code
+D2Part				Location of expenditure on the D2 form (6=transfers out, 7=loans made, 8=expenditures, 9=independent expenditures)
+Purpose				Purpose of the expenditure
+CandidateName		Candidate name (for independent expenditures only)
+Office				Candidate office (for independent expenditures only)
+Supporting			Is the independent expenditure in support of the candidate?
+Opposing			Is the independent expenditure in opposition to the candidate?
+Archived			Indicates the expenditure has been superseded by an amendment
+Country 			
+RedactionRequested	Has the “expended to” entity requested their address be redacted under the Judicial Privacy Act?
+
+*** FiledDocs.txt ***
+ID					ID number generated for each record
+CommitteeID			Political Committee ID number assigned by SBE
+FiledDocType		Numerical value for document type (see DocName
+DocName				Filed Document Type (D-1, Quarterly, A-1, B-1, Final, etc)
+Amend				Is the document an amendment to an earlier filing?
+Comment				Comment to filer from SBE 
+Pages				Number of pages
+ElectionType		Type of election (GP = General Primary, GE = General Election, CP = Consolidated Primary, CE = Consolidated Election, SP = Special Primary, SE = Special Election, NE = Nonpartisan Election)
+ElectionYear		Year of Election
+RptPdBegDate		Beginning date of the period covered by the report
+RptPdEndDate		Ending date of the period covered by the report
+RcvdAt				report received in (S)pringfield or (C)hicago
+RecvdDateTime		Date and time report was filed
+Source				(D)ata entry - paper filing (I)nternet – electronically filed
+Provider			Indicates outside vendor if electronically filed through 3rd party
+SingerLastOnlyName	Last name of report signer (treasurer or candidate)
+SignerFirstName		First name of report signer (treasurer or candidate)
+SbmttrLastOnlyName	Last name of report submitter
+SbmttrFirstName		First name of report submitter
+SbmttrAddress1		Report submitter’s address
+SbmttrAddress2		Report submitter’s address
+SbmttrCity			Report submitter’s city
+SbmttrState			Report submitter’s state
+SbmttrZip			Report submitter’s zip code
+B9SignerLastOnlyName	Last name of B-9 (independent expenditure) signer
+B9SignerFirstName	First name of B-9 (independent expenditure) signer
+Archived			Indicates the report has been superseded by an amendment
+Clarification		Comment from filer (usually for an amendment)
+RedactionRequested	Has the filer requested their address be redacted under the Judicial Privacy Act?
+
+*** Investments.txt ***
+ID					ID number generated for each record
+CommtteeID			Political Committee ID number assigned by SBE
+FiledDocID			ID number generated for the filed document
+Description			Description of the investment
+PurchaseDate		Date of purchase of the investment
+PurchaseShares		# of shares purchased (stocks only)
+PurchasePrice		Purchase price of the investment
+CurrentValue		Current investment value (as of end of the reporting period)
+LiquidValue			Value of the investment when liquidated/sold
+LiquidDate			Date the investment was liquidated/sold
+LastOnlyName		Last/Business name of entity from whom the investment was purchased
+FirstName			First name of above entity
+Address1			Address of the investment entity
+Address2			Address of the investment entity
+City				City of the investment entity
+State				State of the investment entity
+Zip					Zip Code of the investment entity
+Archived			Indicates the investment data hase been superseded by an amendment
+Country				Country of the investment entity (if outside USA)
+
+*** Officers.txt ***
+ID					ID number generated for each record
+LastName			Committee officer’s last name
+FirstName			Committee officer’s first name
+Address1			Officer’s address
+Address2			Officer’s address
+City				Officer’s city
+State				Officer’s state
+Zip					Officer’s zip code
+Title				Officer’s title
+Phone				Officer’s phone number
+RedactionRequested	Has the office requested redaction under the Judicial Privacy Act?
+
+*** PrevOfficers.txt - Previous Committee Officers ***
+ID					ID number generated for each record
+CommitteeID			Political Committee ID number assigned by SBE
+LastName			Previous officer’s last name
+FirstName			Previous officer’s first name
+Address1			Previous officer’s address
+Address2			Previous officer’s address
+City				Previous officer’s city
+State				Previous officer’s state
+Zip					Previous officer’s zip code
+Title				Previous officer’s title
+ResignDate			Date previous officer resigned
+RedactionRequested	Has the previous officer requested redaction under the Judicial Privacy Act?
+
+*** Receipts.txt ***
+ID					ID number generated for each record
+CommitteeID			Political Committee ID number assigned by SBE
+FiledDocID			ID number for the filed document containing the receipt
+ETransID			ID number generated for electronically filed document
+LastOnlyName		Last/Business name for donor
+FirstName			First name for donor
+RcvDate				Date receipt received
+Amount				Amount of the receipt
+AggregateAmount		Aggregate receipt total for filing period
+LoanAmount			Amount of loan
+Occupation			Occupation of donor
+Employer			Employer of donor
+Address1			Donor’s address
+Addresss2			Donor’s address
+City 				Donor’s city
+State				Donor’s state
+Zip					Donor’s zip code
+D2Part				Indicates section of the D-2 form for the receipt (1=individual contributions, 2=transfers in, 3=loans received, 4=other receipts, 5=in-kind contributions)
+Description			Description of the receipt
+VendorLastOnlyName	Last name of vendor, for in-kind contribution
+VendorFirstName		First name of vendor, for in-kind contribution
+VendorAddress1		Vendor’s address, for in-kind contribution
+VendorAddress2		Vendor’s address, for in-kind contribution
+VendorCity			Vendor’s city, for in-kind contribution
+VendorState			Vendor’s state, for in-kind contribution
+VendorZip			Vendor’s zip code, for in-kind contribution
+Archived			Indicates the receipt has been superseded by an amendment
+Country				Country of the receipt entity (if any)
+RedactionRequested	Donor has requested address redaction under the Judicial Privacy Act

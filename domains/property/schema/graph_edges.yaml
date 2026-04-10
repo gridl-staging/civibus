@@ -1,0 +1,41 @@
+# Property domain graph edge declarations for the live property graph contract.
+#
+# `domains/property/graph/loader.py::load_property_edges` materializes these
+# relationship types (`OWNS`, `LOCATED_IN`, `ZONED_AS`, `ASSESSED_AT`) from
+# `prop` schema records into the AGE graph.
+
+domain: property
+
+node_labels:
+  - Parcel
+  - Assessment
+  - ZoningClass
+
+relationship_types:
+  - name: OWNS
+    from: "Person | Organization"
+    to: Parcel
+    properties:
+      - ownership_recorded_at
+      - source_record_id
+
+  - name: LOCATED_IN
+    from: Parcel
+    to: Jurisdiction
+    properties:
+      - effective_at
+      - source_record_id
+
+  - name: ZONED_AS
+    from: Parcel
+    to: ZoningClass
+    properties:
+      - zoned_at
+      - source_record_id
+
+  - name: ASSESSED_AT
+    from: Parcel
+    to: Assessment
+    properties:
+      - assessed_at
+      - source_record_id

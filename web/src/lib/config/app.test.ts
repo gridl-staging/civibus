@@ -1,0 +1,145 @@
+import { describe, expect, it } from 'vitest';
+import { APP_SHELL } from './app';
+
+describe('APP_SHELL shared static-route contract', () => {
+  it('keeps shell branding and default app title in shared config', () => {
+    expect(APP_SHELL.branding).toEqual({
+      name: 'Civibus',
+      appTitle: 'Civibus',
+      stageLabel: 'Public Beta',
+      tagline: 'Universal public-records intelligence'
+    });
+  });
+
+  it('removes the old frontend-probe stage label from shell branding', () => {
+    expect(APP_SHELL.branding.stageLabel).not.toBe('Frontend Probe');
+  });
+
+  it('defines a footer contract with methodology and reporting links', () => {
+    const shellWithFooter = APP_SHELL as unknown as {
+      footer?: {
+        links?: Array<{
+          label: string;
+          href: string;
+        }>;
+      };
+    };
+
+    expect(shellWithFooter.footer).toBeDefined();
+    expect(shellWithFooter.footer?.links).toEqual(
+      expect.arrayContaining([
+        { label: 'Methodology', href: '/methodology' },
+        APP_SHELL.reportingLink
+      ])
+    );
+  });
+
+  it('keeps landing action and coverage summary copy in shared config', () => {
+    expect(APP_SHELL.landing.coverageSummary).toBe(
+      'Coverage spans federal and state campaign-finance records, civic offices, and a property pilot. See methodology for current operational scope by jurisdiction.'
+    );
+    expect(APP_SHELL.landing.actions).toEqual([
+      {
+        label: 'Browse candidates',
+        href: '/candidates',
+        description: 'Review candidate records and filings by jurisdiction.'
+      },
+      {
+        label: 'Browse committees',
+        href: '/committees',
+        description: 'Inspect committee registrations and campaign-finance activity.'
+      },
+      {
+        label: 'Understand coverage',
+        href: '/methodology',
+        description:
+          'Read data freshness policy, entity resolution methods, and source-linking standards.'
+      }
+    ]);
+  });
+
+  it('keeps landing hero and CTA copy in shared config', () => {
+    expect(APP_SHELL.landing.eyebrow).toBe('Public-records intelligence for journalists');
+    expect(APP_SHELL.landing.heading).toBe(
+      'Trace people, organizations, committees, and offices across jurisdictions.'
+    );
+    expect(APP_SHELL.landing.body).toBe(
+      'Civibus is a universal public-records intelligence platform with shared search and source-linked evidence.'
+    );
+    expect(APP_SHELL.landing.cta).toEqual({
+      label: 'Start with search',
+      href: '/search',
+      description:
+        'Use the shared entity search to start from a person, organization, office, or address.'
+    });
+  });
+
+  it('defines static-route metadata copy in one shared config owner', () => {
+    expect(APP_SHELL.staticRoutes.home).toEqual({
+      title: 'Civibus | Public-records intelligence for journalists',
+      description:
+        'Investigate campaign-finance, civic office, and property records with source-linked evidence in Civibus search.'
+    });
+    expect(APP_SHELL.staticRoutes.methodology).toEqual({
+      title: 'Methodology | Civibus',
+      description:
+        'Coverage scope, confidence labels, and source guidance for campaign-finance, civic office, and property records.'
+    });
+  });
+
+  it('limits static-route metadata ownership to static pages only', () => {
+    expect(Object.keys(APP_SHELL.staticRoutes).sort()).toEqual(['home', 'methodology']);
+  });
+
+  it('captures methodology confidence labels from classify_confidence tiers', () => {
+    expect(APP_SHELL.methodology.confidenceLabels).toEqual([
+      {
+        label: 'match',
+        description: 'Confidence >= 0.95. Auto-merge threshold.'
+      },
+      {
+        label: 'probable_match',
+        description: 'Confidence from 0.80 to <0.95. Likely same entity and review-worthy.'
+      },
+      {
+        label: 'possible_match',
+        description: 'Confidence from 0.60 to <0.80. Candidate link with lower confidence.'
+      }
+    ]);
+  });
+
+  it('keeps methodology sections in shared config', () => {
+    expect(APP_SHELL.methodology.coverageSummary).toBe(
+      'Civibus combines campaign-finance, civic office, and property records in one search experience. Coverage varies by jurisdiction and is refreshed based on source cadence.'
+    );
+    expect(APP_SHELL.methodology.sections).toEqual([
+      {
+        heading: 'Data freshness policy',
+        body:
+          'Production support requires data that can be refreshed at least weekly near elections, with daily updates preferred. Sources that only publish annual or quarterly exports are not treated as fully launch-ready without a supplementary path.'
+      },
+      {
+        heading: 'Entity resolution methodology',
+        body:
+          'Entity resolution uses probabilistic matching with confidence tiers derived from model scores. High-confidence matches can be auto-merged while lower-confidence links remain reviewable so users can inspect uncertainty.'
+      },
+      {
+        heading: 'Source-linking and evidence',
+        body:
+          'Every surfaced record is tied to provenance metadata and source links so users can trace claims back to official filings or source systems. Civibus prioritizes verifiable evidence over inferred narrative summaries.'
+      }
+    ]);
+  });
+
+  it('pins methodology headings to shared stage-2 copy', () => {
+    expect(APP_SHELL.methodology.heading).toBe('Methodology');
+    expect(APP_SHELL.methodology.confidenceHeading).toBe('Entity resolution confidence labels');
+  });
+
+  it('shares one reporting link for static pages', () => {
+    expect(APP_SHELL.reportingLink).toEqual({
+      label: 'Report a data issue',
+      href: 'mailto:team@civibus.org?subject=Civibus%20data%20issue'
+    });
+  });
+});

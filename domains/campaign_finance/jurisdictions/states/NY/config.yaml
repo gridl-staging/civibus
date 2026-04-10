@@ -1,0 +1,189 @@
+# New York campaign finance jurisdiction config
+# Source: NYS Board of Elections via data.ny.gov SODA API (daily refresh, no auth)
+# Contributions dataset: 4j2b-6a2j (Schedules A/B/C/D/G — pre-filtered)
+# Expenditures dataset: ajsb-8pni (Schedule F — pre-filtered)
+# Filers dataset: 7x2g-h32p (all filers, active + terminated)
+# Parent "all transactions" dataset: e9ss-239a (17.9M rows, all schedules)
+
+jurisdiction:
+  name: "New York"
+  code: "NY"
+  type: "state"
+  fips: "36"
+  parent: null
+
+data_sources:
+  - name: "NY BoE Contributions"
+    url: "https://data.ny.gov/Government-Finance/Campaign-Finance-Disclosure-Reports-Contributions-/4j2b-6a2j"
+    bulk_download_url: "https://data.ny.gov/resource/4j2b-6a2j.csv"
+    api_base_url: "https://data.ny.gov/resource"
+    format: "api"
+    auth_required: false
+    update_frequency: "daily"
+    coverage:
+      start_year: 1999
+      covers_sub_jurisdictions: true
+      office_levels:
+        - governor
+        - lieutenant_governor
+        - attorney_general
+        - comptroller
+        - state_senate
+        - state_assembly
+        - county
+        - municipal
+      transaction_types:
+        - contributions
+    field_mappings:
+      filer_id: "committee.id"
+      filer_previous_id: "ny.filer_previous_id"
+      cand_comm_name: "committee.name"
+      election_year: "transaction.year"
+      election_type: "ny.election_type"
+      county_desc: "jurisdiction.county"
+      filing_abbrev: "ny.filing_abbrev"
+      filing_desc: "ny.filing_desc"
+      r_amend: "ny.r_amend"
+      filing_cat_desc: "ny.filing_cat_desc"
+      filing_sched_abbrev: "ny.filing_sched_abbrev"
+      filing_sched_desc: "ny.filing_sched_desc"
+      loan_lib_number: "ny.loan_lib_number"
+      trans_number: "ny.trans_number"
+      trans_mapping: "ny.trans_mapping"
+      sched_date: "transaction.date"
+      org_date: "ny.org_date"
+      cntrbr_type_desc: "donor.type"
+      cntrbn_type_desc: "ny.cntrbn_type_desc"
+      transfer_type_desc: "ny.transfer_type_desc"
+      receipt_type_desc: "ny.receipt_type_desc"
+      receipt_code_desc: "ny.receipt_code_desc"
+      purpose_code_desc: "ny.purpose_code_desc"
+      r_subcontractor: "ny.r_subcontractor"
+      flng_ent_name: "donor.org_name"
+      flng_ent_first_name: "donor.first_name"
+      flng_ent_middle_name: "donor.middle_name"
+      flng_ent_last_name: "donor.last_name"
+      flng_ent_add1: "donor.address.street1"
+      flng_ent_city: "donor.address.city"
+      flng_ent_state: "donor.address.state"
+      flng_ent_zip: "donor.address.zip"
+      flng_ent_country: "ny.flng_ent_country"
+      payment_type_desc: "ny.payment_type_desc"
+      pay_number: "ny.pay_number"
+      owed_amt: "ny.owed_amt"
+      org_amt: "transaction.amount"
+      loan_other_desc: "ny.loan_other_desc"
+      trans_explntn: "transaction.description"
+      r_itemized: "ny.r_itemized"
+      r_liability: "ny.r_liability"
+      election_year_r: "ny.election_year_r"
+      office_desc: "jurisdiction.office"
+      district: "jurisdiction.district"
+      dist_off_cand_bal_prop: "ny.dist_off_cand_bal_prop"
+    scraper: null
+    last_successful_pull: null
+    last_verified_working: "2026-03-29"
+    known_issues:
+      - "Dataset 4j2b-6a2j is a filtered view of parent e9ss-239a showing only contribution schedules (A/B/C/D/G)"
+      - "SODA API default limit is 1000 rows; must use $limit=50000 for bulk pulls"
+      - "sched_date is floating_timestamp type — filter with ISO 8601 format"
+
+  - name: "NY BoE Expenditures"
+    url: "https://data.ny.gov/Government-Finance/Campaign-Finance-Disclosure-Reports-Expenditures-/ajsb-8pni"
+    bulk_download_url: "https://data.ny.gov/resource/ajsb-8pni.csv"
+    api_base_url: "https://data.ny.gov/resource"
+    format: "api"
+    auth_required: false
+    update_frequency: "daily"
+    coverage:
+      start_year: 1999
+      covers_sub_jurisdictions: true
+      office_levels:
+        - governor
+        - lieutenant_governor
+        - attorney_general
+        - comptroller
+        - state_senate
+        - state_assembly
+        - county
+        - municipal
+      transaction_types:
+        - expenditures
+    field_mappings:
+      filer_id: "committee.id"
+      filer_previous_id: "ny.filer_previous_id"
+      cand_comm_name: "committee.name"
+      election_year: "transaction.year"
+      election_type: "ny.election_type"
+      county_desc: "jurisdiction.county"
+      filing_abbrev: "ny.filing_abbrev"
+      filing_desc: "ny.filing_desc"
+      r_amend: "ny.r_amend"
+      filing_cat_desc: "ny.filing_cat_desc"
+      filing_sched_abbrev: "ny.filing_sched_abbrev"
+      filing_sched_desc: "ny.filing_sched_desc"
+      loan_lib_number: "ny.loan_lib_number"
+      trans_number: "ny.trans_number"
+      trans_mapping: "ny.trans_mapping"
+      sched_date: "transaction.date"
+      org_date: "ny.org_date"
+      cntrbr_type_desc: "ny.cntrbr_type_desc"
+      cntrbn_type_desc: "ny.cntrbn_type_desc"
+      transfer_type_desc: "ny.transfer_type_desc"
+      receipt_type_desc: "ny.receipt_type_desc"
+      receipt_code_desc: "ny.receipt_code_desc"
+      purpose_code_desc: "ny.purpose_code_desc"
+      r_subcontractor: "ny.r_subcontractor"
+      flng_ent_name: "payee.org_name"
+      flng_ent_first_name: "payee.first_name"
+      flng_ent_middle_name: "payee.middle_name"
+      flng_ent_last_name: "payee.last_name"
+      flng_ent_add1: "payee.address.street1"
+      flng_ent_city: "payee.address.city"
+      flng_ent_state: "payee.address.state"
+      flng_ent_zip: "payee.address.zip"
+      flng_ent_country: "ny.flng_ent_country"
+      payment_type_desc: "ny.payment_type_desc"
+      pay_number: "ny.pay_number"
+      owed_amt: "ny.owed_amt"
+      org_amt: "transaction.amount"
+      loan_other_desc: "ny.loan_other_desc"
+      trans_explntn: "transaction.description"
+      r_itemized: "ny.r_itemized"
+      r_liability: "ny.r_liability"
+      election_year_r: "ny.election_year_r"
+      office_desc: "jurisdiction.office"
+      district: "jurisdiction.district"
+      dist_off_cand_bal_prop: "ny.dist_off_cand_bal_prop"
+    scraper: null
+    last_successful_pull: null
+    last_verified_working: "2026-03-29"
+    known_issues:
+      - "Dataset ajsb-8pni is a filtered view of parent e9ss-239a showing only Schedule F (expenditures)"
+      - "Same schema as contributions — differentiated by filing_sched_abbrev field"
+
+laws:
+  source_url: "https://www.nysenate.gov/legislation/laws/ELN/14-100"
+  last_verified: "2026-03-29"
+  contribution_limits:
+    individual_to_candidate: null
+    pac_to_candidate: null
+    corporate_direct: "prohibited"
+    union_direct: null
+    party_to_candidate: null
+  itemization_threshold: 99
+  reporting:
+    periods: ["periodic", "pre-election", "post-election"]
+    electronic_filing_required: "required"
+  public_financing: false
+  notes:
+    - "NY contribution limits vary by office (governor vs. legislature vs. local)"
+    - "Corporate contributions prohibited; LLC contributions treated as individual"
+    - "NY has a public campaign finance matching program for state elections (PCFB) but it is separate"
+
+status:
+  discovery: "complete"
+  scraper: "working"
+  normalization: "partial"
+  entity_resolution: "pending"
+  last_full_update: null

@@ -1,0 +1,5 @@
+Tran Id	Original Id	Tran Date	Tran Status	Filer	Filer Id	Contributor/Payee	Sub Type	Amount	Aggregate Amount	Contributor/Payee Committee ID	Filing Date	Description	Purpose Codes	Employer Name	Occupation	Occupation Ltr Date	Addr Book Type	Book Type
+5001	5001	01/20/2021	Original	Citizens for Oregon 2026	60282	WILSON JAMES	Cash Contribution	500.00	500.00		01/25/2021	Campaign contribution		Acme Manufacturing	Machinist		Individual	
+5002	5002	02/20/2026	Original	Citizens for Oregon 2026	60282	THOMPSON MARIA	Cash Contribution	1000.00	1500.00		02/25/2026			Oregon Health Sciences	Physician		Individual	
+5003	5003	03/01/2026	Original	Oregon Progressive PAC	70100	PACIFIC LUMBER CORPORATION	Cash Contribution	5000.00	5000.00		03/05/2026	Annual donation					Business Entity	
+5004	5004	03/10/2026	Original	Citizens for Oregon 2026	60282	CHEN DAVID	Cash Contribution	250.00	250.00		03/15/2026			Self-Employed	Attorney		Individual	

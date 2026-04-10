@@ -1,0 +1,13 @@
+<table cellspacing="0" rules="all" border="1" style="border-collapse:collapse;">
+	<tr style="color:White;background-color:Black;font-weight:bold;text-decoration:underline;">
+		<td>FilerID</td><td>Key</td><td>Ref</td><td>Type</td><td>LastName</td><td>FirstName</td><td>Address</td><td>City</td><td>State</td><td>Zip</td><td>Occupation_or_Employer</td><td>Date</td><td>Purpose</td><td>Paid</td><td>Other</td><td>Election</td><td>Election_Year</td><td>Candidate_FirstName</td><td>Candidate_MiddleName</td><td>Candidate_LastName</td><td>Candidate_Suffix</td><td>Committee_Name</td>
+	</tr><tr style="color:Black;background-color:GhostWhite;">
+		<td>C2006000122</td><td>1</td><td>1</td><td>Expenditure</td><td>Waycross Bank & Trust</td><td>&nbsp;</td><td>501 Tebeau Street</td><td>Waycross</td><td>GA</td><td>31501</td><td>&nbsp;</td><td>1/29/2025 12:00:00 AM</td><td>Dormant Service Charge on Checking Account</td><td>5.0000</td><td>0.0000</td><td>Primary</td><td>2026</td><td>John</td><td>Mark</td><td>Hatfield</td><td>&nbsp;</td><td>Hatfield for House</td>
+	</tr><tr style="color:Black;background-color:GhostWhite;">
+		<td>C2006000122</td><td>2</td><td>2</td><td>Expenditure</td><td>Waycross Bank & Trust</td><td>&nbsp;</td><td>501 Tebeau Street</td><td>Waycross</td><td>GA</td><td>31501</td><td>&nbsp;</td><td>2/28/2025 12:00:00 AM</td><td>Dormant Service Charge on Checking Account</td><td>5.0000</td><td>0.0000</td><td>Primary</td><td>2026</td><td>John</td><td>Mark</td><td>Hatfield</td><td>&nbsp;</td><td>Hatfield for House</td>
+	</tr><tr style="color:Black;background-color:GhostWhite;">
+		<td>C2006000122</td><td>2</td><td>2</td><td>Expenditure</td><td>Georgia Lions Camp, Inc.</td><td>&nbsp;</td><td>5626 Laura Walker Road</td><td>Waycross</td><td>GA</td><td>31503</td><td>&nbsp;</td><td>12/30/2025 12:00:00 AM</td><td>Charitable Contribution</td><td>993.0800</td><td>0.0000</td><td>Primary</td><td>2026</td><td>John</td><td>Mark</td><td>Hatfield</td><td>&nbsp;</td><td>Hatfield for House</td>
+	</tr><tr style="color:Black;background-color:GhostWhite;">
+		<td>C2006000122</td><td>3</td><td>3</td><td>Expenditure</td><td>Hospice Satilla</td><td>&nbsp;</td><td>808 Evergreen Way</td><td>Waycross</td><td>GA</td><td>31501</td><td>&nbsp;</td><td>12/30/2025 12:00:00 AM</td><td>Charitable Contribution</td><td>993.0800</td><td>0.0000</td><td>Primary</td><td>2026</td><td>John</td><td>Mark</td><td>Hatfield</td><td>&nbsp;</td><td>Hatfield for House</td>
+	</tr>
+</table>

@@ -1,0 +1,16 @@
+jurisdiction:
+  name: "Durham County"
+  slug: "states/nc/counties/durham"
+  type: "county"
+  state: "NC"
+  fips: "37063"
+
+source:
+  name: "Durham County ArcGIS Property Query"
+  arcgis_query_url: "https://maps.durhamnc.gov/server/rest/services/Tax_Parcels/FeatureServer/0/query"
+  source_format: "arcgis_json"
+  license: "public_domain"
+  update_frequency: "daily"
+
+fixture:
+  relative_path: "fixtures/sample_query_response.json"

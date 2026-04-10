@@ -1,0 +1,135 @@
+# Indiana campaign finance jurisdiction config
+# Source: Indiana Election Division (IED) Indiana Campaign Finance Online bulk ZIP exports
+
+jurisdiction:
+  name: "Indiana"
+  code: "IN"
+  type: "state"
+  fips: "18"
+  parent: null
+
+data_sources:
+  - name: "IN IED Campaign Finance - Contributions"
+    url: "https://campaignfinance.in.gov/PublicSite/Docs/BulkDataDownloads/{YEAR}_ContributionData.csv.zip"
+    bulk_download_url: "https://campaignfinance.in.gov/PublicSite/Docs/BulkDataDownloads/{YEAR}_ContributionData.csv.zip"
+    api_base_url: null
+    format: "csv"
+    auth_required: false
+    update_frequency: "annual"
+    coverage:
+      start_year: 2000
+      covers_sub_jurisdictions: true
+      office_levels:
+        - governor
+        - lieutenant_governor
+        - attorney_general
+        - state_senate
+        - state_house
+        - county
+        - municipal
+        - school_board
+      transaction_types:
+        - contributions
+    field_mappings:
+      FileNumber: "filing.id"
+      CommitteeType: "committee.type"
+      Committee: "committee.name"
+      CandidateName: "candidate.name"
+      ContributorType: "donor.type"
+      Name: "donor.name"
+      Address: "donor.address.street1"
+      City: "donor.address.city"
+      State: "donor.address.state"
+      Zip: "donor.address.zip"
+      Occupation: "donor.occupation"
+      Type: "transaction.type"
+      Description: "transaction.description"
+      Amount: "transaction.amount"
+      ContributionDate: "transaction.date"
+      Received_By: "in.received_by"
+      Amended: "transaction.amended"
+    scraper: null
+    last_successful_pull: null
+    last_verified_working: "2026-03-23"
+    known_issues:
+      - "No row-unique transaction identifier is exposed; FileNumber is filing-level and repeated across rows"
+      - "2025 contribution export contains malformed quoted rows (for example unescaped double quotes in Received_By) that can shift CSV columns in strict parsers"
+      - "Source text encoding is not UTF-8; files include non-ASCII single-byte values"
+      - "ContributionDate includes mixed timestamp precision (mostly midnight, some non-midnight HH:MM:SS values)"
+
+  - name: "IN IED Campaign Finance - Expenditures"
+    url: "https://campaignfinance.in.gov/PublicSite/Docs/BulkDataDownloads/{YEAR}_ExpenditureData.csv.zip"
+    bulk_download_url: "https://campaignfinance.in.gov/PublicSite/Docs/BulkDataDownloads/{YEAR}_ExpenditureData.csv.zip"
+    api_base_url: null
+    format: "csv"
+    auth_required: false
+    update_frequency: "annual"
+    coverage:
+      start_year: 2000
+      covers_sub_jurisdictions: true
+      office_levels:
+        - governor
+        - lieutenant_governor
+        - attorney_general
+        - state_senate
+        - state_house
+        - county
+        - municipal
+        - school_board
+      transaction_types:
+        - expenditures
+    field_mappings:
+      FileNumber: "filing.id"
+      CommitteeType: "committee.type"
+      Committee: "committee.name"
+      CandidateName: "candidate.name"
+      ExpenditureCode: "transaction.code"
+      Name: "payee.name"
+      Address: "payee.address.street1"
+      City: "payee.address.city"
+      State: "payee.address.state"
+      Zip: "payee.address.zip"
+      Occupation: "payee.occupation"
+      OfficeSought: "jurisdiction.office"
+      ExpenditureType: "transaction.type"
+      Description: "transaction.description"
+      Purpose: "transaction.purpose"
+      Amount: "transaction.amount"
+      Expenditure_Date: "transaction.date"
+      Amended: "transaction.amended"
+    scraper: null
+    last_successful_pull: null
+    last_verified_working: "2026-03-23"
+    known_issues:
+      - "No row-unique transaction identifier is exposed; FileNumber is filing-level and repeated across rows"
+      - "2025 expenditure export includes multiline free-text descriptions with embedded quotes that can trigger parser edge cases"
+      - "Source text encoding is not UTF-8; files include non-ASCII single-byte values"
+      - "OfficeSought values are highly inconsistent free text and are often blank"
+
+laws:
+  source_url: "https://www.in.gov/sos/elections/campaign-finance/"
+  last_verified: "2026-03-23"
+  contribution_limits:
+    individual_to_candidate: "unlimited"
+    pac_to_candidate: "unlimited"
+    corporate_direct: 2000
+    union_direct: 2000
+    party_to_candidate: "unlimited"
+  itemization_threshold: 100
+  reporting:
+    periods: ["pre-primary", "pre-election", "annual", "supplemental-48-hour"]
+    electronic_filing_required: "required"
+  public_financing: false
+  notes:
+    - "Manual guidance states individuals may make unlimited contributions; business entities other than corporations/labor unions are also described as unlimited in Indiana guidance"
+    - "Corporation and labor-organization limits are a matrix under IC 3-9-2-4 and IC 3-9-2-5 (including $5,000 statewide-category buckets, $2,000 non-statewide buckets, and $22,000 aggregate annual cap); schema uses conservative 2,000 structured value and keeps full matrix here"
+    - "Allen County Superior Court candidates have a special statutory contribution rule under IC 33-33-2-11 not expressible in current structured law fields"
+    - "Statewide and state legislative candidates must file electronically; local filing methods vary by county policy"
+    - "A 2024 federal-court ruling described in Indiana guidance affects application of some corporation-to-PAC limit language for independent-expenditure-only PAC contexts"
+
+status:
+  discovery: "complete"
+  scraper: "complete"
+  normalization: "pending"
+  entity_resolution: "pending"
+  last_full_update: null

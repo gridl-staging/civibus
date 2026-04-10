@@ -1,0 +1,100 @@
+services:
+  db:
+    build:
+      context: ..
+      dockerfile: infra/db/Dockerfile
+    ports:
+      - "127.0.0.1:5432:5432"
+    # Docker default shm_size is 64MB; PostgreSQL needs at least shared_buffers
+    # worth of /dev/shm for its shared memory segments.
+    shm_size: "1g"
+    # Tuned for bulk pipeline loads from host. Default max_locks_per_transaction=64
+    # causes OOM during large state ingests (TX ~500K rows, WI ~100K rows).
+    # TX alone needs ~500K row-level locks in a single transaction.
+    command:
+      - "postgres"
+      - "-c"
+      - "max_locks_per_transaction=2048"
+      - "-c"
+      - "shared_buffers=512MB"
+      - "-c"
+      - "work_mem=32MB"
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-civibus}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-civibus}
+      PGDATA: /var/lib/postgresql/data
+    volumes:
+      - civibus_db_data:/var/lib/postgresql/data
+      - ../core/schema/entities.sql:/docker-entrypoint-initdb.d/01-entities.sql
+      - ../core/schema/jurisdiction.sql:/docker-entrypoint-initdb.d/02-jurisdiction.sql
+      - ../core/schema/provenance.sql:/docker-entrypoint-initdb.d/03-provenance.sql
+      - ../core/schema/entity_resolution.sql:/docker-entrypoint-initdb.d/04-entity_resolution.sql
+      - ../core/schema/er_views.sql:/docker-entrypoint-initdb.d/05-er_views.sql
+      - ../domains/campaign_finance/schema/tables.sql:/docker-entrypoint-initdb.d/06-campaign-finance.sql
+      - ../domains/campaign_finance/schema/dark_money_tables.sql:/docker-entrypoint-initdb.d/07-dark-money.sql
+      - ../domains/property/schema/tables.sql:/docker-entrypoint-initdb.d/08-property.sql
+      - ../domains/civics/schema/tables.sql:/docker-entrypoint-initdb.d/09-civics.sql
+      - ../infra/db/09-age-graph-bootstrap.sql:/docker-entrypoint-initdb.d/10-age-graph-bootstrap.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - civibus
+
+  api:
+    build:
+      context: ..
+      dockerfile: infra/api/Dockerfile
+    image: "ghcr.io/gridl-dev/civibus_dev/api:${IMAGE_TAG:-latest}"
+    environment:
+      CIVIBUS_ENV: production
+      POSTGRES_HOST: db
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: ${POSTGRES_USER:-civibus}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-civibus}
+      CIVIBUS_CORS_ORIGIN: ${ORIGIN:?Set ORIGIN}
+      CIVIBUS_API_KEYS: ${CIVIBUS_API_KEYS:?Set CIVIBUS_API_KEYS}
+      CIVIBUS_ADMIN_API_KEYS: ${CIVIBUS_ADMIN_API_KEYS:?Set CIVIBUS_ADMIN_API_KEYS}
+      CIVIBUS_RATE_LIMIT_REQUESTS: ${CIVIBUS_RATE_LIMIT_REQUESTS:-100}
+      CIVIBUS_RATE_LIMIT_WINDOW_SECONDS: ${CIVIBUS_RATE_LIMIT_WINDOW_SECONDS:-60}
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - civibus
+
+  web:
+    build:
+      context: ../web
+      dockerfile: Dockerfile
+    image: "ghcr.io/gridl-dev/civibus_dev/web:${IMAGE_TAG:-latest}"
+    environment:
+      CIVIBUS_API_BASE_URL: http://api:8000
+      CIVIBUS_API_KEY: ${CIVIBUS_API_KEY:?Set CIVIBUS_API_KEY}
+      ORIGIN: ${ORIGIN:?Set ORIGIN}
+      PUBLIC_ORIGIN: ${ORIGIN:?Set ORIGIN}
+      NODE_ENV: production
+    ports:
+      - "${WEB_PORT:-3000}:3000"
+    depends_on:
+      api:
+        condition: service_healthy
+    networks:
+      - civibus
+
+volumes:
+  civibus_db_data:
+
+networks:
+  civibus:
+    driver: bridge

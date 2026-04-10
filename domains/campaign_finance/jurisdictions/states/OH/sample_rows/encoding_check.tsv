@@ -1,0 +1,8 @@
+filename	utf8_valid	detected_encoding	byte_evidence_hex	decode_recommendation
+# Live encoding verification deferred: Ohio SOS APEX File Transfer Page under maintenance as of 2026-03-22.
+# The Accountability Project R diary does not specify encoding for OH files.
+# R's readr::read_csv() defaults to UTF-8; the diary reports no encoding errors, suggesting
+# either UTF-8 or ASCII-compatible data (no high-byte characters encountered in processing).
+# Encoding must be verified on the first successful live download.
+ALL_CAN_CON_YYYY.CSV	unverified	presumed_utf8_or_ascii	none	verify_on_live_download
+ALL_CAN_EXP_YYYY.CSV	unverified	presumed_utf8_or_ascii	none	verify_on_live_download

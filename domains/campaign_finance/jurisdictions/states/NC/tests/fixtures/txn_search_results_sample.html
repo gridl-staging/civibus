@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html>
+<head><title>Transaction Search By Entity - Results</title></head>
+<body>
+<form action="/CFTxnLkup/TxnSearchResults/" method="post">
+	<input type="button" id="btnExportResults" class="btn" value="Export to .CSV" />
+</form>
+<form action="/CFTxnLkup/ExportResults/" method="post">
+    <input name="Params" type="hidden" />
+</form>
+<script>
+    $('#btnExportResults').click(function (e) {
+        e.preventDefault();
+        setTimeout(function () {
+            $('input[name="Params"]').val('{"ReceiptType":"","ExpenditureType":"","CommitteeType":"","PartyType":"","OfficeType":"","CommitteeIDs":null,"CommitteeName":"","Cities":"","Counties":"","State":"","ZipCodes":"","DateFrom":"01/01/2026","DateTo":"03/14/2026","OrganizationName":"","FirstName":"","LastName":"ADAMS","NameSoundsLike":false,"NameIsOrg":false,"Purpose":"","AmountFrom":"","AmountTo":"","JobProfession":"","JobProfSoundsLike":false,"Employer":"","EmployerSoundsLike":false,"PaymentType":"","Page":0,"Debug":false}');
+            $('input[name="Params"]').closest("form").submit();
+        }, 2000);
+    });
+</script>
+</body>
+</html>

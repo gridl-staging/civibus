@@ -1,0 +1,6 @@
+filename	utf8_valid	detected_encoding	byte_evidence_hex	decode_recommendation
+contrib_2025.txt	no	cp437_or_cp850	0x82,0xA0,0xFF	decode_cp437
+debt_2025.txt	yes	utf-8	none	decode_utf8
+expense_2025.txt	no	cp437_or_cp850	0x82	decode_cp437
+filer_2025.txt	yes	utf-8	none	decode_utf8
+receipt_2025.txt	yes	utf-8	none	decode_utf8

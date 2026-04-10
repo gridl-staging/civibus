@@ -1,0 +1,8 @@
+ID	CommitteeID	FiledDocID	ETransID	LastOnlyName	FirstName	ExpendedDate	Amount	AggregateAmount	Address1	Address2	City	State	Zip	D2Part	Purpose	CandidateName	Office	Supporting	Opposing	Archived	Country	RedactionRequested
+1267	12478	169182		Sykes	George	1999-03-01 00:00:00	300	300	3524 Johnson Rd.		Granitte City	IL	62040     	6B	contribution			False	False	True		False
+1268	4294	170584		Regular Cicero Democratic Organization		1999-02-25 00:00:00	160	160	5838 W. Cermak Rd.		Cicero	IL	60804     	6B	ticket purchase			False	False	True		False
+1269	7103	171179		UNITED - 4 - PROGRESS		1999-03-11 00:00:00	5000	5000	P. O. BOX  506		FRANKLIN  PK.	IL	60131     	6B	TRANSFER  OUT			False	False	True		False
+1270	13710	171890		12th Ward regular Democratic Organization		1999-02-05 00:00:00	2000	2000	2456 W. 38th Street		Chicago	IL	60632     	6B				False	False	True		False
+1271	13710	171890		32nd Ward Regular Democratic Organization		1999-02-04 00:00:00	300	300	2150 N. Damen Avenue		Chicago	IL	60622     	6B				False	False	True		False
+1272	13710	171890		Citizens for Barbara Holt		1999-02-05 00:00:00	750	750	1817 E. 71st Street		Chicago	IL	60649     	6B				False	False	True		False
+1273	13710	171890		Citizens for Capparelli		1999-02-09 00:00:00	500	500	7452 N. Harlem		Chicago	IL	60631     	6B				False	False	True		False

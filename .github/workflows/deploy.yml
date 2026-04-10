@@ -1,0 +1,173 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  publish-api:
+    name: publish-api
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: docker/login-action@b45d80f862d83dbcd57f89517bcf500b2ab88fb2 # v4.0.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@d08e5c354a6adb9ed34480a06d141179aa583294 # v7.0.0
+        with:
+          context: .
+          file: infra/api/Dockerfile
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}/api:${{ github.sha }}
+            ghcr.io/${{ github.repository }}/api:latest
+
+  publish-web:
+    name: publish-web
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: docker/login-action@b45d80f862d83dbcd57f89517bcf500b2ab88fb2 # v4.0.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@d08e5c354a6adb9ed34480a06d141179aa583294 # v7.0.0
+        with:
+          context: ./web
+          file: web/Dockerfile
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}/web:${{ github.sha }}
+            ghcr.io/${{ github.repository }}/web:latest
+
+  deploy:
+    name: deploy
+    needs: [publish-api, publish-web]
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+      packages: read
+    env:
+      # Automatic GitHub token for private repo clone/fetch and GHCR image pull.
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # Manual GitHub Actions secret: Hetzner VM host/IP for deploy SSH target.
+      HETZNER_HOST: ${{ secrets.HETZNER_HOST }}
+      # Manual GitHub Actions secret: private key authorized for root@$HETZNER_HOST.
+      HETZNER_SSH_KEY: ${{ secrets.HETZNER_SSH_KEY }}
+      # Manual GitHub Actions secret: pinned known_hosts entry for the deploy target.
+      HETZNER_KNOWN_HOSTS: ${{ secrets.HETZNER_KNOWN_HOSTS }}
+      # Manual GitHub Actions secret: full production .env file contents.
+      PRODUCTION_ENV_FILE: ${{ secrets.PRODUCTION_ENV_FILE }}
+      # Workflow-triggering commit SHA; remote checkout must match the images published in this run.
+      DEPLOY_GIT_SHA: ${{ github.sha }}
+      # Public repo URL; bootstrap/rollout use temporary credentials instead of persisting a tokenized origin URL.
+      DEPLOY_REPO_URL: https://github.com/${{ github.repository }}.git
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Configure SSH credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          if [[ -z "$HETZNER_HOST" || -z "$HETZNER_SSH_KEY" || -z "$HETZNER_KNOWN_HOSTS" || -z "$PRODUCTION_ENV_FILE" ]]; then
+            echo "Deploy workflow requires HETZNER_HOST, HETZNER_SSH_KEY, HETZNER_KNOWN_HOSTS, and PRODUCTION_ENV_FILE secrets" >&2
+            exit 1
+          fi
+          install -m 600 /dev/null ~/.ssh/hetzner_deploy_key
+          install -m 600 /dev/null ~/.ssh/known_hosts
+          printf '%s\n' "$HETZNER_SSH_KEY" > ~/.ssh/hetzner_deploy_key
+          printf '%s\n' "$HETZNER_KNOWN_HOSTS" > ~/.ssh/known_hosts
+
+      - name: Bootstrap remote host prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          cleanup_local() {
+            rm -f /tmp/civibus-production.env /tmp/civibus-github-token
+          }
+          trap cleanup_local EXIT
+          install -m 600 /dev/null /tmp/civibus-production.env
+          install -m 600 /dev/null /tmp/civibus-github-token
+          printf '%s\n' "$PRODUCTION_ENV_FILE" > /tmp/civibus-production.env
+          printf '%s\n' "$GITHUB_TOKEN" > /tmp/civibus-github-token
+          ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile=~/.ssh/known_hosts -i ~/.ssh/hetzner_deploy_key "root@${HETZNER_HOST}" \
+            "install -d -m 700 /tmp/civibus-deploy"
+          scp -o StrictHostKeyChecking=yes -o UserKnownHostsFile=~/.ssh/known_hosts -i ~/.ssh/hetzner_deploy_key \
+            infra/scripts/bootstrap_prod_vm.sh /tmp/civibus-production.env /tmp/civibus-github-token "root@${HETZNER_HOST}:/tmp/civibus-deploy/"
+          ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile=~/.ssh/known_hosts -i ~/.ssh/hetzner_deploy_key "root@${HETZNER_HOST}" bash -se -- "$DEPLOY_GIT_SHA" "$DEPLOY_REPO_URL" <<'EOF'
+          set -euo pipefail
+          deploy_git_sha="$1"
+          deploy_repo_url="$2"
+          cleanup_remote() {
+            rm -f /tmp/civibus-deploy/civibus-production.env
+            rm -f /tmp/civibus-deploy/civibus-github-token
+          }
+          trap cleanup_remote EXIT
+          export DEPLOY_GIT_SHA="$deploy_git_sha"
+          export REPO_URL="$deploy_repo_url"
+          export REPO_DIR="/root/civibus/civibus_dev"
+          export ENV_FILE_SOURCE="/tmp/civibus-deploy/civibus-production.env"
+          export GITHUB_TOKEN_FILE="/tmp/civibus-deploy/civibus-github-token"
+          bash /tmp/civibus-deploy/bootstrap_prod_vm.sh
+          EOF
+
+      - name: Roll out api and web via remote compose
+        shell: bash
+        run: |
+          set -euo pipefail
+          cleanup_local() {
+            rm -f /tmp/civibus-github-token
+          }
+          trap cleanup_local EXIT
+          install -m 600 /dev/null /tmp/civibus-github-token
+          printf '%s\n' "$GITHUB_TOKEN" > /tmp/civibus-github-token
+          ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile=~/.ssh/known_hosts -i ~/.ssh/hetzner_deploy_key "root@${HETZNER_HOST}" \
+            "install -d -m 700 /tmp/civibus-deploy"
+          scp -o StrictHostKeyChecking=yes -o UserKnownHostsFile=~/.ssh/known_hosts -i ~/.ssh/hetzner_deploy_key \
+            /tmp/civibus-github-token "root@${HETZNER_HOST}:/tmp/civibus-deploy/"
+          ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile=~/.ssh/known_hosts -i ~/.ssh/hetzner_deploy_key "root@${HETZNER_HOST}" bash -se -- "$DEPLOY_GIT_SHA" "$GITHUB_ACTOR" <<'EOF'
+          set -euo pipefail
+          deploy_git_sha="$1"
+          deploy_actor="$2"
+          deploy_token_file="/tmp/civibus-deploy/civibus-github-token"
+          if [[ ! -s "${deploy_token_file}" ]]; then
+            echo "Missing deploy token file at ${deploy_token_file}" >&2
+            exit 1
+          fi
+          askpass_script="$(mktemp)"
+          cleanup() {
+            rm -f "${askpass_script}" "${deploy_token_file}"
+          }
+          trap cleanup EXIT
+          cat > "${askpass_script}" <<'EOS'
+          #!/usr/bin/env bash
+          case "$1" in
+            *Username*) printf '%s\n' 'x-access-token' ;;
+            *Password*) cat /tmp/civibus-deploy/civibus-github-token ;;
+            *) exit 1 ;;
+          esac
+          EOS
+          chmod 700 "${askpass_script}"
+          cd /root/civibus/civibus_dev
+          GIT_TERMINAL_PROMPT=0 GIT_ASKPASS="${askpass_script}" git fetch origin "$deploy_git_sha"
+          git checkout --detach "$deploy_git_sha"
+          cat "${deploy_token_file}" | docker login ghcr.io -u "${deploy_actor}" --password-stdin
+          export IMAGE_TAG="$deploy_git_sha"
+          docker compose --env-file .env -f infra/docker-compose.prod.yml pull api web
+          docker compose --env-file .env -f infra/docker-compose.prod.yml up -d --wait --wait-timeout 180 api web
+          EOF

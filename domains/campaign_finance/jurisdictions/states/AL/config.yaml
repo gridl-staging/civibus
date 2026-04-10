@@ -1,0 +1,140 @@
+# Alabama campaign finance jurisdiction config
+# Source: Alabama FCPA portal at fcpa.alabamavotes.gov — T2 JSON search API + ZIP downloads
+# Contributions endpoint: contributionsearchresults (paginated JSON)
+# Expenditures endpoint: expendituresearchresults (paginated JSON)
+# Alternative: transactiondatadownloadsresults listing → getTransactionData&id=<ID> ZIP downloads
+
+jurisdiction:
+  name: "Alabama"
+  code: "AL"
+  type: "state"
+  fips: "01"
+  parent: null
+
+data_sources:
+  - name: "AL FCPA Campaign Finance — Contributions"
+    url: "https://fcpa.alabamavotes.gov/page.request.do?page=page.acfPublicDownloadData"
+    bulk_download_url: null
+    api_base_url: "https://fcpa.alabamavotes.gov"
+    format: "api"
+    auth_required: false
+    update_frequency: "daily"
+    coverage:
+      start_year: 2022
+      covers_sub_jurisdictions: true
+      office_levels:
+        - governor
+        - lieutenant_governor
+        - attorney_general
+        - state_senate
+        - state_house
+        - county
+        - municipal
+      transaction_types:
+        - contributions
+    field_mappings:
+      orgId: "committee.id"
+      committeeType: "committee.type"
+      filerName: "committee.name"
+      candidateName: "candidate.name"
+      contributionType: "al.contribution_type"
+      sourceType: "donor.type"
+      sourceName: "donor.org_name"
+      firstName: "donor.first_name"
+      lastName: "donor.last_name"
+      middleName: "donor.middle_name"
+      suffix: "donor.name_suffix"
+      address1: "donor.address.street1"
+      address2: "donor.address.street2"
+      city: "donor.address.city"
+      state: "donor.address.state"
+      zipCode: "donor.address.zip"
+      receivedDate: "transaction.date"
+      amount: "transaction.amount"
+      description: "transaction.description"
+      employer: "donor.employer"
+      occupation: "donor.occupation"
+      filedDate: "filing.submitted_date"
+      amended: "al.amended"
+    scraper: null
+    last_successful_pull: null
+    last_verified_working: "2026-03-29"
+    known_issues:
+      - "FCPA search API returns paginated JSON; use pageSize/pageNumber params for bulk retrieval"
+      - "Download-data listing at transactiondatadownloadsresults provides yearly ZIP files as alternative"
+      - "No authentication required; no bot protection observed as of 2026-03-29"
+
+  - name: "AL FCPA Campaign Finance — Expenditures"
+    url: "https://fcpa.alabamavotes.gov/page.request.do?page=page.acfPublicDownloadData"
+    bulk_download_url: null
+    api_base_url: "https://fcpa.alabamavotes.gov"
+    format: "api"
+    auth_required: false
+    update_frequency: "daily"
+    coverage:
+      start_year: 2022
+      covers_sub_jurisdictions: true
+      office_levels:
+        - governor
+        - lieutenant_governor
+        - attorney_general
+        - state_senate
+        - state_house
+        - county
+        - municipal
+      transaction_types:
+        - expenditures
+    field_mappings:
+      orgId: "committee.id"
+      committeeType: "committee.type"
+      filerName: "committee.name"
+      candidateName: "candidate.name"
+      expenditureType: "al.expenditure_type"
+      payeeType: "payee.type"
+      payeeName: "payee.org_name"
+      firstName: "payee.first_name"
+      lastName: "payee.last_name"
+      middleName: "payee.middle_name"
+      suffix: "payee.name_suffix"
+      address1: "payee.address.street1"
+      address2: "payee.address.street2"
+      city: "payee.address.city"
+      state: "payee.address.state"
+      zipCode: "payee.address.zip"
+      expendedDate: "transaction.date"
+      amount: "transaction.amount"
+      description: "transaction.description"
+      employer: "payee.employer"
+      occupation: "payee.occupation"
+      filedDate: "filing.submitted_date"
+      amended: "al.amended"
+    scraper: null
+    last_successful_pull: null
+    last_verified_working: "2026-03-29"
+    known_issues:
+      - "FCPA expenditure search API returns paginated JSON; same contract as contributions"
+
+laws:
+  source_url: "https://www.sos.alabama.gov/alabama-votes/media/campaign-finance-reports"
+  last_verified: "2026-03-29"
+  contribution_limits:
+    individual_to_candidate: null
+    pac_to_candidate: null
+    corporate_direct: null
+    union_direct: null
+    party_to_candidate: null
+  itemization_threshold: 0
+  reporting:
+    periods: ["pre-primary", "pre-election", "pre-runoff", "monthly", "annual"]
+    electronic_filing_required: "required"
+  public_financing: false
+  notes:
+    - "2026 filing calendar: May 19 primary, June 16 runoff, November 3 general"
+    - "FCPA portal updated daily per live metadata (LASTUPDATED field on download listings)"
+
+status:
+  discovery: "complete"
+  scraper: "in_progress"
+  normalization: "pending"
+  entity_resolution: "pending"
+  last_full_update: null

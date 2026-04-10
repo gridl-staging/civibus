@@ -1,0 +1,3 @@
+Candidate/Committee	Date	Amount	Typ	Contributor Name	Address	City State Zip	Occupation	Inkind Desc
+Florida Data Director Council Inc (PAC)	07/10/2024	20.00	CHE	"STAATS, MD" NANCY	1911 BEACH AVE	ATLANTIC BEACH, FL 32233	PHYSICIAN	
+Affectionately Building Communities PC (PAC)	07/10/2024	5000.00	CHE	1 SOUTH DADE	6619 S DIXIE HWY	MIAMI, FL 33143	PC	

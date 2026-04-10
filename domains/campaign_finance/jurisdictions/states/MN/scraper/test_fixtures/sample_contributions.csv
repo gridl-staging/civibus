@@ -1,0 +1,4 @@
+Recipient reg num,Recipient,Recipient type,Recipient subtype,Amount,Receipt date,Year,Contributor,Contrib Reg Num,Contrib type,Receipt type,In kind?,In-kind descr,Contrib zip,Contrib Employer name
+9001,Friends of Example,Candidate Committee,Candidate,100.00,2025-01-15,2025,"Doe, Jane",C-123,Individual,Monetary,N,,55101,Acme Corp
+9001,Friends of Example,Candidate Committee,Candidate,250.00,2025-01-18,2025,Example Holdings LLC,C-987,Business,Monetary,N,,55102,
+9002,Citizens for Audit,Political Committee,General,75.00,2025-01-22,2025,Aaron Wells,C-455,Individual,Monetary,N,,55401,Statewide Services

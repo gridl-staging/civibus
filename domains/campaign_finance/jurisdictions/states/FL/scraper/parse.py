@@ -1,0 +1,111 @@
+"""
+Stub summary for /Users/stuart/parallel_development/civibus_dev/mar25_pm_2_easy_jurisdiction_expansion/civibus_dev/domains/campaign_finance/jurisdictions/states/FL/scraper/parse.py.
+"""
+
+from __future__ import annotations
+
+import csv
+import logging
+from pathlib import Path
+from typing import Iterator
+
+from . import _load_columns_for_data_type
+
+LOGGER = logging.getLogger(__name__)
+
+_EXTRA_FIELD_SENTINEL = object()
+_MISSING_FIELD_SENTINEL = object()
+
+CONTRIBUTION_COLUMNS = _load_columns_for_data_type("contributions")
+EXPENDITURE_COLUMNS = _load_columns_for_data_type("expenditures")
+TRANSFER_COLUMNS = _load_columns_for_data_type("transfers")
+OTHER_COLUMNS = _load_columns_for_data_type("other")
+
+
+class FLTsvParser:
+    """Iterate FL TSV rows as normalized dictionaries."""
+
+    def __init__(
+        self,
+        path: Path,
+        *,
+        columns: tuple[str, ...],
+        data_type: str,
+        row_label: str,
+    ):
+        self.path = path
+        self.columns = columns
+        self.data_type = data_type
+        self.row_label = row_label
+        self.skipped = 0
+
+    def __iter__(self) -> Iterator[dict[str, str | None]]:
+        self.skipped = 0
+
+        with self.path.open("r", encoding="utf-8", errors="replace", newline="") as tsv_file:
+            reader = csv.DictReader(
+                tsv_file,
+                delimiter="\t",
+                quoting=csv.QUOTE_NONE,
+                restkey=_EXTRA_FIELD_SENTINEL,
+                restval=_MISSING_FIELD_SENTINEL,
+            )
+            _validate_header(reader.fieldnames, self.columns, self.row_label, source_name=self.path.name)
+
+            for raw_row in reader:
+                if _is_malformed_row(raw_row):
+                    self.skipped += 1
+                    LOGGER.warning(
+                        "Skipping malformed %s row in %s at line %d",
+                        self.row_label,
+                        self.path.name,
+                        reader.line_num,
+                    )
+                    continue
+
+                yield _normalize_row(raw_row)
+
+
+def _validate_header(
+    fieldnames: list[str] | None,
+    expected_columns: tuple[str, ...],
+    row_label: str,
+    *,
+    source_name: str,
+) -> None:
+    if tuple(fieldnames or ()) != expected_columns:
+        raise ValueError(f"Unexpected {row_label} TSV header in {source_name}")
+
+
+def _is_malformed_row(raw_row: dict[object, object]) -> bool:
+    return _EXTRA_FIELD_SENTINEL in raw_row or _MISSING_FIELD_SENTINEL in raw_row.values()
+
+
+def _normalize_row(raw_row: dict[object, object]) -> dict[str, str | None]:
+    normalized_row: dict[str, str | None] = {}
+
+    for key, value in raw_row.items():
+        if value in ("", None):
+            normalized_row[str(key)] = None
+            continue
+        if not isinstance(value, str):
+            raise ValueError(f"Unexpected non-string TSV value for {key!r}: {type(value)!r}")
+        normalized_row[str(key)] = value
+
+    return normalized_row
+
+
+def parse_contributions(path: Path) -> FLTsvParser:
+    return FLTsvParser(path=path, columns=CONTRIBUTION_COLUMNS, data_type="contributions", row_label="contribution")
+
+
+def parse_expenditures(path: Path) -> FLTsvParser:
+    return FLTsvParser(path=path, columns=EXPENDITURE_COLUMNS, data_type="expenditures", row_label="expenditure")
+
+
+def parse_transfers(path: Path) -> FLTsvParser:
+    return FLTsvParser(path=path, columns=TRANSFER_COLUMNS, data_type="transfers", row_label="transfer")
+
+
+def parse_other(path: Path) -> FLTsvParser:
+    return FLTsvParser(path=path, columns=OTHER_COLUMNS, data_type="other", row_label="other")

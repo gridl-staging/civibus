@@ -1,0 +1,8 @@
+ID	CommitteeID	FiledDocID	ETransID	LastOnlyName	FirstName	RcvDate	Amount	AggregateAmount	LoanAmount	Occupation	Employer	Address1	Address2	City	State	Zip	D2Part	Description	VendorLastOnlyName	VendorFirstName	VendorAddress1	VendorAddress2	VendorCity	VendorState	VendorZip	Archived	Country	RedactionRequested
+236628	10353	82298		Abc Pac		1998-10-28 00:00:00	500	0	0			Rt 1 Box 255		Decatur	IL	62526     	2A									False		False
+236629	10353	82298		Bacon	Donald	1998-09-03 00:00:00	250	0	0			16 Bruarckuff		Bourbonnais	IL	60914     	1A									False		False
+236630	10353	82298		Baum	H James	1998-09-10 00:00:00	150	0	0			221 Liberty St		Morris	IL	60450     	1A									False		False
+236631	10353	82298		Burns	John & Sandy	1998-09-14 00:00:00	176	0	0			610 Houston		Ottawa	IL	61350     	5A	Food For Fundraiser								False		False
+236632	10353	82298		Cable Television & Commission Pac		1998-09-21 00:00:00	1000	0	0			2400 E Devon Ave Ste 317		Des Plaines	IL	60018     	2A									False		False
+236633	10353	82298		Carus	Cynthia	1998-09-02 00:00:00	200	0	0			Rr 1		Peru	IL	61354     	1A									False		False
+236634	10353	82298		Caterpillar Cmte For Effective Govt		1998-10-27 00:00:00	1000	0	0			100 Ne Adams St		Peoria	IL	61629     	2A									False		False

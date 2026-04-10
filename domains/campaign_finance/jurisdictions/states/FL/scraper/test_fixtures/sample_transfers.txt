@@ -1,0 +1,2 @@
+Candidate/Committee	Date	Amount	Funds Transferred To	Address	City State Zip	Nature Of Account	Type
+Conservatives for Good Government (PAC)	07/10/2024	-100000.00	TRUIST BANK - MMA	2051 THOMASVILLE ROAD	TALLAHASSEE, FL 32308	MM	F

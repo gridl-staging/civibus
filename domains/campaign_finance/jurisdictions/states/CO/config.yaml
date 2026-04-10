@@ -1,0 +1,237 @@
+# Colorado campaign finance jurisdiction config
+# Source: TRACER (Transparency in Contribution and Expenditure Reporting)
+# Governing law: Colorado Constitution Article XXVIII + C.R.S. Title 1, Article 45
+
+jurisdiction:
+  name: "Colorado"
+  code: "CO"
+  type: "state"
+  fips: "08"
+  parent: null
+
+data_sources:
+  - name: "TRACER Bulk Download — Contributions"
+    url: "https://tracer.sos.colorado.gov/PublicSite/DataDownload.aspx"
+    bulk_download_url: "https://tracer.sos.colorado.gov/PublicSite/Docs/BulkDataDownloads/{YEAR}_ContributionData.csv.zip"
+    api_base_url: null
+    format: "csv"
+    auth_required: false
+    update_frequency: "weekly"
+    coverage:
+      start_year: 2000
+      covers_sub_jurisdictions: true
+      office_levels:
+        - governor
+        - attorney_general
+        - secretary_of_state
+        - state_treasurer
+        - state_senate
+        - state_house
+        - district_attorney
+        - cu_regent
+        - state_board_of_education
+        - county
+        - municipal
+        - school_district
+        - rtd
+      transaction_types:
+        - contributions
+    field_mappings:
+      CO_ID: "committee.id"
+      ContributionAmount: "transaction.amount"
+      ContributionDate: "transaction.date"
+      LastName: "donor.name.last"
+      FirstName: "donor.name.first"
+      MI: "donor.name.middle_initial"
+      Suffix: "donor.name.suffix"
+      Address1: "donor.address.street1"
+      Address2: "donor.address.street2"
+      City: "donor.address.city"
+      State: "donor.address.state"
+      Zip: "donor.address.zip"
+      Explanation: "transaction.description"
+      RecordID: "transaction.id"
+      FiledDate: "transaction.filed_date"
+      ContributionType: "transaction.type"
+      ReceiptType: "transaction.receipt_type"
+      ContributorType: "donor.type"
+      Electioneering: "transaction.electioneering"
+      CommitteeType: "committee.type"
+      CommitteeName: "committee.name"
+      CandidateName: "candidate.name"
+      Employer: "donor.employer"
+      Occupation: "donor.occupation"
+      Amended: "transaction.amended"
+      Amendment: "transaction.is_amendment"
+      AmendedRecordID: "transaction.amended_record_id"
+      Jurisdiction: "jurisdiction.name"
+      OccupationComments: "donor.occupation_comments"
+    scraper: null
+    last_successful_pull: null
+    last_verified_working: "2026-03-26"
+    known_issues:
+      - "SOS terms prohibit robotic extraction on public pages; bulk downloads via DataDownload.aspx are the compliant access path (see docs/research/data-licensing.md)"
+      - "No explicit commercial reuse grant found in TRACER bulk download materials (see docs/research/data-licensing.md)"
+      - "ContributionType field embeds LLC total amount in string for LLC contributions (e.g. 'Monetary (Itemized) - LLC Contribution (Total Amount: 500.00)')"
+      - "ContributorType field embeds LLC member name in string for LLC member contributions"
+      - "Some records in 2025 file have ContributionDate in 2022, indicating late-filed or amended records"
+      - "2025 ContributionData has malformed quoted donor names in at least 14 rows (26 columns instead of 29), requiring tolerant CSV parsing and row-level quarantine"
+
+  - name: "TRACER Bulk Download — Expenditures"
+    url: "https://tracer.sos.colorado.gov/PublicSite/DataDownload.aspx"
+    bulk_download_url: "https://tracer.sos.colorado.gov/PublicSite/Docs/BulkDataDownloads/{YEAR}_ExpenditureData.csv.zip"
+    api_base_url: null
+    format: "csv"
+    auth_required: false
+    update_frequency: "weekly"
+    coverage:
+      start_year: 2000
+      covers_sub_jurisdictions: true
+      office_levels:
+        - governor
+        - attorney_general
+        - secretary_of_state
+        - state_treasurer
+        - state_senate
+        - state_house
+        - district_attorney
+        - cu_regent
+        - state_board_of_education
+        - county
+        - municipal
+        - school_district
+        - rtd
+      transaction_types:
+        - expenditures
+    field_mappings:
+      CO_ID: "committee.id"
+      ExpenditureAmount: "transaction.amount"
+      ExpenditureDate: "transaction.date"
+      LastName: "payee.name.last"
+      FirstName: "payee.name.first"
+      MI: "payee.name.middle_initial"
+      Suffix: "payee.name.suffix"
+      Address1: "payee.address.street1"
+      Address2: "payee.address.street2"
+      City: "payee.address.city"
+      State: "payee.address.state"
+      Zip: "payee.address.zip"
+      Explanation: "transaction.description"
+      RecordID: "transaction.id"
+      FiledDate: "transaction.filed_date"
+      ExpenditureType: "transaction.type"
+      PaymentType: "transaction.payment_type"
+      DisbursementType: "transaction.disbursement_type"
+      Electioneering: "transaction.electioneering"
+      CommitteeType: "committee.type"
+      CommitteeName: "committee.name"
+      CandidateName: "candidate.name"
+      Employer: "payee.employer" # not used for expenditures per field key
+      Occupation: "payee.occupation" # not used for expenditures per field key
+      Amended: "transaction.amended"
+      Amendment: "transaction.is_amendment"
+      AmendedRecordID: "transaction.amended_record_id"
+      Jurisdiction: "jurisdiction.name"
+    scraper: null
+    last_successful_pull: null
+    last_verified_working: "2026-03-26"
+    known_issues:
+      - "Employer and Occupation fields are documented as 'not used for expenditures' in field key but columns are present"
+
+  - name: "TRACER Bulk Download — Loans"
+    url: "https://tracer.sos.colorado.gov/PublicSite/DataDownload.aspx"
+    bulk_download_url: "https://tracer.sos.colorado.gov/PublicSite/Docs/BulkDataDownloads/{YEAR}_LoanData.csv.zip"
+    api_base_url: null
+    format: "csv"
+    auth_required: false
+    update_frequency: "weekly"
+    coverage:
+      start_year: 2000
+      covers_sub_jurisdictions: true
+      office_levels:
+        - governor
+        - attorney_general
+        - secretary_of_state
+        - state_treasurer
+        - state_senate
+        - state_house
+        - district_attorney
+        - cu_regent
+        - state_board_of_education
+        - county
+        - municipal
+        - school_district
+        - rtd
+      transaction_types:
+        - loans
+    field_mappings:
+      CO_ID: "committee.id"
+      PaymentAmount: "transaction.payment_amount"
+      PaymentDate: "transaction.payment_date"
+      Name: "lender.name"
+      Address1: "lender.address.street1"
+      Address2: "lender.address.street2"
+      City: "lender.address.city"
+      State: "lender.address.state"
+      Zip: "lender.address.zip"
+      Description: "transaction.description" # not used for loans per field key
+      RecordID: "transaction.id"
+      FiledDate: "transaction.filed_date"
+      Type: "transaction.loan_type" # O=origination, P=payment
+      LoanSourceType: "lender.type"
+      LoanAmount: "transaction.amount"
+      LoanDate: "transaction.date"
+      CommitteeType: "committee.type"
+      CommitteeName: "committee.name"
+      CandidateName: "candidate.name"
+      InterestRate: "transaction.interest_rate"
+      InterestPayment: "transaction.interest_payment"
+      Amended: "transaction.amended"
+      Amendment: "transaction.is_amendment"
+      AmendedRecordID: "transaction.amended_record_id"
+      Jurisdiction: "jurisdiction.name"
+      LoanBalance: "transaction.loan_balance"
+    scraper: null
+    last_successful_pull: null
+    last_verified_working: "2026-03-26"
+    known_issues:
+      - "Description field documented as 'not used for loans' in field key but column is present"
+      - "PaymentAmount and PaymentDate may be blank for loan origination records (Type=O)"
+      - "Loans bulk file is source-available but the current CO ingest path does not load loans (CLI/loader support contributions and expenditures only)"
+
+laws:
+  source_url: "https://www.coloradosos.gov/pubs/elections/CampaignFinance/limits/contributions.html"
+  last_verified: "2026-03-21"
+  contribution_limits:
+    individual_to_candidate: 725 # statewide offices; $225 for legislative — see notes
+    pac_to_candidate: 725 # same limits as individual; Art. XXVIII § 3
+    corporate_direct: "prohibited" # Art. XXVIII § 3(4)(a)
+    union_direct: "prohibited" # Art. XXVIII § 3(4)(a)
+    party_to_candidate: 789060 # governor; varies dramatically by office — see notes
+  itemization_threshold: 20 # name/address required at $20+; employer/occupation at $100+
+  reporting:
+    periods: ["quarterly", "biweekly", "monthly", "pre-election", "post-election"]
+    electronic_filing_required: "required" # TRACER system; C.R.S. § 1-45-109(6)(a)
+  public_financing: false
+  notes:
+    - "Limits vary by office level — flat schema uses statewide (governor) amounts as primary values"
+    - "Individual/PAC limits per cycle: $725 statewide, $225 legislative/DA/SBE/Regent, $1,425 county, $400/election municipal, $2,500/election school director, unlimited RTD"
+    - "Small donor committee limits per cycle: $7,825 statewide, $3,100 legislative, $14,400 county, $25,000/election school director"
+    - "Party-to-candidate per cycle: $789,060 governor, $157,805 other statewide, $20,500 legislative/DA/SBE/Regent, $25,475 county, $2,500/election school director"
+    - "Employer/occupation disclosure required at $100+ (Art. XXVIII § 7)"
+    - "Major contributor reports ($1,000+) due within 24 hours if within 30 days of election (C.R.S. § 1-45-108(2)(a))"
+    - "Corporations and unions may contribute to political committees and issue committees, but not directly to candidates or parties (Art. XXVIII § 3(4)(a))"
+    - "LLC contributions attributed to individual members; prohibited if LLC has foreign member, elected corporate IRS treatment, or is publicly traded (C.R.S. § 1-45-103.7)"
+    - "Limits adjusted every 4 years by CPI (Denver-Boulder-Greeley); current amounts effective 2023-02-15 per CPF Rule 10.17"
+    - "Home-rule counties and municipalities may adopt their own contribution limits that differ from the state defaults listed here (per SOS limits page caveat); TRACER sub-jurisdiction filings from those localities may be subject to local limits"
+    - "Constitutional authority: Art. XXVIII (statewide/legislative); Statutory: C.R.S. § 1-45-103.7 (county/school/municipal)"
+    - "Frequent filers: biweekly pre-primary, monthly mid-year, biweekly pre-general; Infrequent: quarterly (C.R.S. § 1-45-108(2)(a))"
+    - "Late filing penalty: $50/day including weekends (C.R.S. § 1-45-111)"
+    - "Denver has a local Fair Elections Fund (9:1 match) but no state-level public financing program exists"
+
+status:
+  discovery: "complete"
+  scraper: "pending"
+  normalization: "pending"
+  entity_resolution: "pending"
+  last_full_update: null

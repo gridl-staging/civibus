@@ -1,0 +1,57 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "civibus"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+  "pydantic",
+  "pyyaml",
+  "psycopg[binary]",
+  "httpx",
+  "beautifulsoup4>=4.14.3",
+  "psycopg-pool>=3.3.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "fastapi",
+  "pandas",
+  "pytest",
+  "pytest-cov",
+  "pytest-asyncio",
+  "ruff",
+]
+api = [
+  "fastapi",
+  "uvicorn[standard]",
+]
+entity-resolution = [
+  "duckdb",
+  "pandas",
+  "splink",
+]
+download = [
+  "playwright",
+]
+load = [
+  "locust",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["api", "core", "domains", "tests"]
+addopts = ["--import-mode=importlib"]
+markers = [
+  "unit: regular suite of tests",
+  "integration: requires external services such as Postgres, Docker, or networked APIs",
+  "e2e: end-to-end tests requiring Docker, database, and live API access",
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.hatch.build.targets.wheel]
+packages = ["api", "core", "domains"]

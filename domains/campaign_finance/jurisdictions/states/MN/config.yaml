@@ -1,0 +1,180 @@
+# Minnesota campaign finance jurisdiction config
+# Source: Minnesota Campaign Finance and Public Disclosure Board direct CSV downloads
+
+jurisdiction:
+  name: "Minnesota"
+  code: "MN"
+  type: "state"
+  fips: "27"
+  parent: null
+
+data_sources:
+  - name: "MN CFB Contributions (All)"
+    url: "https://register.cfb.mn.gov/reports-and-data/self-help/data-downloads/campaign-finance/"
+    bulk_download_url: "https://register.cfb.mn.gov/reports-and-data/self-help/data-downloads/campaign-finance/?download=-2113865252"
+    api_base_url: null
+    format: "csv"
+    auth_required: false
+    update_frequency: "quarterly"
+    coverage:
+      start_year: 2015
+      covers_sub_jurisdictions: false
+      office_levels:
+        - governor
+        - secretary_of_state
+        - attorney_general
+        - state_auditor
+        - state_senate
+        - state_house
+      transaction_types:
+        - contributions
+    field_mappings:
+      Recipient reg num: "committee.id"
+      Recipient: "committee.name"
+      Recipient type: "committee.type"
+      Recipient subtype: "committee.sub_type"
+      Amount: "transaction.amount"
+      Receipt date: "transaction.date"
+      Year: "transaction.year"
+      Contributor: "donor.name"
+      Contrib Reg Num: "donor.id"
+      Contrib type: "donor.type"
+      Receipt type: "transaction.receipt_type"
+      In kind?: "transaction.in_kind"
+      In-kind descr: "transaction.in_kind_description"
+      Contrib zip: "donor.address.zip"
+      Contrib Employer name: "donor.employer"
+    scraper: null
+    last_successful_pull: null
+    last_verified_working: "2026-03-21"
+    known_issues:
+      - "Direct CSV links are parameterized with ?download=<id>; IDs can drift over time"
+      - "Covers state-board registered filers; local campaign reporting is a separate source surface"
+      - "The /reports/#/ UI and /reports/api/ endpoints are supplemental evidence surfaces only; cadence is unproven and they are not required for canonical ingest"
+
+  - name: "MN CFB Expenditures (All)"
+    url: "https://register.cfb.mn.gov/reports-and-data/self-help/data-downloads/campaign-finance/"
+    bulk_download_url: "https://register.cfb.mn.gov/reports-and-data/self-help/data-downloads/campaign-finance/?download=-1890073264"
+    api_base_url: null
+    format: "csv"
+    auth_required: false
+    update_frequency: "quarterly"
+    coverage:
+      start_year: 2015
+      covers_sub_jurisdictions: false
+      office_levels:
+        - governor
+        - secretary_of_state
+        - attorney_general
+        - state_auditor
+        - state_senate
+        - state_house
+      transaction_types:
+        - expenditures
+    field_mappings:
+      Committee reg num: "committee.id"
+      Committee name: "committee.name"
+      Entity type: "committee.type"
+      Entity sub-type: "committee.sub_type"
+      Vendor name: "payee.name"
+      Vendor address 1: "payee.address.street1"
+      Vendor address 2: "payee.address.street2"
+      Vendor city: "payee.address.city"
+      Vendor state: "payee.address.state"
+      Vendor zip: "payee.address.zip"
+      Amount: "transaction.amount"
+      Unpaid amount: "transaction.unpaid_amount"
+      Date: "transaction.date"
+      Purpose: "transaction.description"
+      Year: "transaction.year"
+      Type: "transaction.type"
+      In-kind descr: "transaction.in_kind_description"
+      In-kind?: "transaction.in_kind"
+      Affected committee name: "transaction.affected_committee_name"
+      Affected committee reg num: "transaction.affected_committee_id"
+    scraper: null
+    last_successful_pull: null
+    last_verified_working: "2026-03-21"
+    known_issues:
+      - "Direct CSV links are parameterized with ?download=<id>; IDs can drift over time"
+      - "The /reports/#/ UI and /reports/api/ endpoints are supplemental evidence surfaces only; cadence is unproven and they are not required for canonical ingest"
+
+  - name: "MN CFB Independent Expenditures (All)"
+    url: "https://register.cfb.mn.gov/reports-and-data/self-help/data-downloads/campaign-finance/"
+    bulk_download_url: "https://register.cfb.mn.gov/reports-and-data/self-help/data-downloads/campaign-finance/?download=-617535497"
+    api_base_url: null
+    format: "csv"
+    auth_required: false
+    update_frequency: "quarterly"
+    coverage:
+      start_year: 2015
+      covers_sub_jurisdictions: false
+      office_levels:
+        - governor
+        - secretary_of_state
+        - attorney_general
+        - state_auditor
+        - state_senate
+        - state_house
+      transaction_types:
+        - independent_expenditures
+    field_mappings:
+      Spender: "committee.name"
+      Spender Reg Num: "committee.id"
+      Spender type: "committee.type"
+      Spender sub-type: "committee.sub_type"
+      Affected Comte Name: "transaction.affected_committee_name"
+      Affected Cmte Reg Num: "transaction.affected_committee_id"
+      For /Against: "mn.independent_expenditure.support_oppose"
+      Year: "transaction.year"
+      Date: "transaction.date"
+      Type: "transaction.type"
+      Amount: "transaction.amount"
+      Unpaid amount: "transaction.unpaid_amount"
+      In kind?: "transaction.in_kind"
+      In kind descr: "transaction.in_kind_description"
+      Purpose: "transaction.description"
+      Vendor name: "payee.name"
+      Vendor address 1: "payee.address.street1"
+      Vendor address 2: "payee.address.street2"
+      Vendor city: "payee.address.city"
+      Vendor State: "payee.address.state"
+      Vendor zip: "payee.address.zip"
+    scraper: null
+    last_successful_pull: null
+    last_verified_working: "2026-03-21"
+    known_issues:
+      - "Direct CSV links are parameterized with ?download=<id>; IDs can drift over time"
+      - "Stage 3 ingests contributions and expenditures; independent expenditures remain documented until loader support is enabled"
+      - "The /reports/#/ UI and /reports/api/ endpoints are supplemental evidence surfaces only; cadence is unproven and they are not required for canonical ingest"
+
+laws:
+  source_url: "https://www.revisor.mn.gov/statutes/cite/10A.27"
+  last_verified: "2026-03-21"
+  contribution_limits:
+    individual_to_candidate: 4000
+    pac_to_candidate: 4000
+    corporate_direct: "prohibited"
+    union_direct: null
+    party_to_candidate: 40000
+  itemization_threshold: 200
+  reporting:
+    periods: ["annual", "pre-primary", "pre-general"]
+    electronic_filing_required: "required"
+  public_financing:
+    type: "political_contribution_refund"
+    administering_agency: "Minnesota Campaign Finance and Public Disclosure Board"
+  notes:
+    - "Office-level limits vary under Minn. Stat. 10A.27; listed values use governor-level amounts"
+    - "Party-unit limit is 10x the candidate office-level limit under Minn. Stat. 10A.27 subd. 2"
+    - "Corporate direct contributions are prohibited under Minn. Stat. 211B.15"
+    - "Board guidance: general-purpose committees/funds cannot accept corporate money, while independent-expenditure and ballot-question committees/funds may accept corporate/LLC sources subject to required disclosure rules"
+    - "union_direct remains null pending legal review of political-fund treatment"
+    - "Reporting cadence varies by filer class and election year under Minn. Stat. 10A.20"
+
+status:
+  discovery: "complete"
+  scraper: "complete"
+  normalization: "pending"
+  entity_resolution: "pending"
+  last_full_update: null

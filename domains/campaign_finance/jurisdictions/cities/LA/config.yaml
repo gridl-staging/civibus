@@ -1,0 +1,100 @@
+# Los Angeles campaign finance jurisdiction config
+# Source: LA City Ethics Commission campaign finance disclosure data (data.lacity.org/Socrata)
+
+jurisdiction:
+  name: "Los Angeles"
+  code: "LA"
+  type: "municipality"
+  fips: "06037"
+  parent: "CA"
+
+data_sources:
+  - name: "LA Ethics Campaign Contributions"
+    url: "https://ethics.lacity.gov/data/campaigns/contributions/"
+    bulk_download_url: "https://data.lacity.org/resource/m6g2-gc6c.csv"
+    api_base_url: "https://data.lacity.org/resource"
+    format: "api"
+    auth_required: false
+    update_frequency: "daily"
+    coverage:
+      start_year: 2000
+      covers_sub_jurisdictions: false
+      office_levels:
+        - mayor
+        - city_council
+        - city_attorney
+        - city_controller
+        - citywide
+      transaction_types:
+        - contributions
+    field_mappings:
+      con_date: "transaction.date"
+      con_name: "donor.name"
+      con_city_nm: "donor.address.city"
+      con_state_nm: "donor.address.state"
+      con_zip_cd: "donor.address.zip"
+      con_occp: "donor.occupation"
+      con_empr: "donor.employer"
+      cmt_nm: "committee.name"
+      cmt_id: "committee.fppc_id"
+      cmt_type: "committee.type"
+      cand_name: "candidate.name"
+      seat_desc: "la.seat_description"
+      dist_num: "la.district_number"
+      con_type: "transaction.type"
+      con_desc: "transaction.description"
+      con_amount: "transaction.amount"
+      con_amount_pd_forgiven: "la.amount_paid_or_forgiven"
+      form: "la.form_type"
+      schedule: "la.schedule"
+      per_beg_date: "filing.period_start"
+      per_end_date: "filing.period_end"
+      election_date: "la.election_date"
+      election_desc: "la.election_description"
+      int_name: "intermediary.name"
+      int_city_nm: "intermediary.address.city"
+      int_state_nm: "intermediary.address.state"
+      int_zip_cd: "intermediary.address.zip"
+      int_occp: "intermediary.occupation"
+      int_empr: "intermediary.employer"
+      memo: "la.memo"
+    scraper: null
+    last_successful_pull: null
+    last_verified_working: "2026-04-08"
+    known_issues:
+      - "Dataset m6g2-gc6c covers contributions only; expenditures and independent expenditures require separate datasets"
+      - "Some rows have null cmt_id values; committee identity falls back to namespaced cmt_nm"
+      - "The ethics.lacity.gov portal returns 403 to automated requests; data.lacity.org SODA API is the programmatic alternative"
+
+laws:
+  source_url: "https://ethics.lacity.gov/campaigns/"
+  last_verified: "2026-04-08"
+  contribution_limits:
+    individual_to_candidate: 900
+    pac_to_candidate: 900
+    corporate_direct: "prohibited"
+    union_direct: 900
+    party_to_candidate: null
+  itemization_threshold: 100
+  reporting:
+    periods:
+      - semi-annual
+      - pre-election
+      - post-election
+      - 24-hour
+    electronic_filing_required: "required"
+  public_financing:
+    type: "matching_funds"
+    administering_agency: "Los Angeles City Ethics Commission"
+  notes:
+    - "LA city contribution limits are indexed and adjusted periodically; $900 is the 2025-2026 cycle limit for most city races"
+    - "Corporate and LLC direct contributions to city candidates are prohibited"
+    - "LA administers a local matching funds program for participating candidates through the Ethics Commission"
+    - "This package currently models the contributions dataset only; expenditure and IE datasets are queued for a later pass"
+
+status:
+  discovery: "complete"
+  scraper: "pending"
+  normalization: "pending"
+  entity_resolution: "pending"
+  last_full_update: null

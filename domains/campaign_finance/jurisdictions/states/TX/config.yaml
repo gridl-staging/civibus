@@ -1,0 +1,365 @@
+# Texas campaign finance jurisdiction config
+# Source: Texas Ethics Commission (TEC) bulk CSV archive
+
+jurisdiction:
+  name: "Texas"
+  code: "TX"
+  type: "state"
+  fips: "48"
+  parent: null
+
+data_sources:
+  - name: "TEC Campaign Finance — Contributions"
+    url: "https://www.ethics.state.tx.us/search/cf/"
+    bulk_download_url: "https://prd.tecprd.ethicsefile.com/public/cf/public/TEC_CF_CSV.zip"
+    api_base_url: null
+    format: "csv"
+    auth_required: false
+    update_frequency: "daily"
+    coverage:
+      start_year: 2000
+      covers_sub_jurisdictions: true
+      office_levels:
+        - governor
+        - lieutenant_governor
+        - attorney_general
+        - comptroller
+        - commissioner_of_general_land_office
+        - commissioner_of_agriculture
+        - railroad_commissioner
+        - state_senate
+        - state_house
+        - supreme_court
+        - court_of_criminal_appeals
+        - courts_of_appeals
+        - district_judge
+        - county
+        - municipal
+      transaction_types:
+        - contributions
+    field_mappings:
+      recordType: "tx.record_type"
+      formTypeCd: "tx.form_type_code"
+      schedFormTypeCd: "tx.schedule_form_type_code"
+      reportInfoIdent: "tx.report_info_id"
+      receivedDt: "tx.received_date"
+      infoOnlyFlag: "tx.info_only_flag"
+      filerIdent: "committee.id"
+      filerTypeCd: "committee.type"
+      filerName: "committee.name"
+      contributionInfoId: "tx.contribution_info_id"
+      contributionDt: "transaction.date"
+      contributionAmount: "transaction.amount"
+      contributionDescr: "transaction.description"
+      itemizeFlag: "tx.itemize_flag"
+      travelFlag: "tx.travel_flag"
+      contributorPersentTypeCd: "donor.type"
+      contributorNameOrganization: "donor.name.organization"
+      contributorNameLast: "donor.name.last"
+      contributorNameSuffixCd: "donor.name.suffix"
+      contributorNameFirst: "donor.name.first"
+      contributorNamePrefixCd: "donor.name.prefix"
+      contributorNameShort: "donor.name.short"
+      contributorStreetCity: "donor.address.city"
+      contributorStreetStateCd: "donor.address.state"
+      contributorStreetCountyCd: "donor.address.county"
+      contributorStreetCountryCd: "donor.address.country"
+      contributorStreetPostalCode: "donor.address.zip"
+      contributorStreetRegion: "donor.address.region"
+      contributorEmployer: "donor.employer"
+      contributorOccupation: "donor.occupation"
+      contributorJobTitle: "donor.job_title"
+      contributorPacFein: "tx.contributor_pac_fein"
+      contributorOosPacFlag: "tx.contributor_oos_pac_flag"
+      contributorLawFirmName: "tx.contributor_law_firm"
+      contributorSpouseLawFirmName: "tx.contributor_spouse_law_firm"
+      contributorParent1LawFirmName: "tx.contributor_parent1_law_firm"
+      contributorParent2LawFirmName: "tx.contributor_parent2_law_firm"
+    scraper: null
+    last_successful_pull: null
+    last_verified_working: "2026-03-26"
+    known_issues:
+      - "infoOnlyFlag='Y' marks rows superseded by a later report; maps to amendment_indicator='T' but downstream loaders may choose to skip these rows entirely"
+      - "All three transaction CSV types share a single bulk ZIP archive (TEC_CF_CSV.zip); file selection is by filename prefix (contribs_*, expend_*, loans.csv)"
+
+  - name: "TEC Campaign Finance — Expenditures"
+    url: "https://www.ethics.state.tx.us/search/cf/"
+    bulk_download_url: "https://prd.tecprd.ethicsefile.com/public/cf/public/TEC_CF_CSV.zip"
+    api_base_url: null
+    format: "csv"
+    auth_required: false
+    update_frequency: "daily"
+    coverage:
+      start_year: 2000
+      covers_sub_jurisdictions: true
+      office_levels:
+        - governor
+        - lieutenant_governor
+        - attorney_general
+        - comptroller
+        - commissioner_of_general_land_office
+        - commissioner_of_agriculture
+        - railroad_commissioner
+        - state_senate
+        - state_house
+        - supreme_court
+        - court_of_criminal_appeals
+        - courts_of_appeals
+        - district_judge
+        - county
+        - municipal
+      transaction_types:
+        - expenditures
+    field_mappings:
+      recordType: "tx.record_type"
+      formTypeCd: "tx.form_type_code"
+      schedFormTypeCd: "tx.schedule_form_type_code"
+      reportInfoIdent: "tx.report_info_id"
+      receivedDt: "tx.received_date"
+      infoOnlyFlag: "tx.info_only_flag"
+      filerIdent: "committee.id"
+      filerTypeCd: "committee.type"
+      filerName: "committee.name"
+      expendInfoId: "tx.expend_info_id"
+      expendDt: "transaction.date"
+      expendAmount: "transaction.amount"
+      expendDescr: "transaction.description"
+      expendCatCd: "tx.expend_category_code"
+      expendCatDescr: "tx.expend_category_description"
+      itemizeFlag: "tx.itemize_flag"
+      travelFlag: "tx.travel_flag"
+      politicalExpendCd: "tx.political_expend_code"
+      reimburseIntendedFlag: "tx.reimburse_intended_flag"
+      srcCorpContribFlag: "tx.src_corp_contrib_flag"
+      capitalLivingexpFlag: "tx.capital_living_exp_flag"
+      payeePersentTypeCd: "payee.type"
+      payeeNameOrganization: "payee.name.organization"
+      payeeNameLast: "payee.name.last"
+      payeeNameSuffixCd: "payee.name.suffix"
+      payeeNameFirst: "payee.name.first"
+      payeeNamePrefixCd: "payee.name.prefix"
+      payeeNameShort: "payee.name.short"
+      payeeStreetAddr1: "payee.address.street1"
+      payeeStreetAddr2: "payee.address.street2"
+      payeeStreetCity: "payee.address.city"
+      payeeStreetStateCd: "payee.address.state"
+      payeeStreetCountyCd: "payee.address.county"
+      payeeStreetCountryCd: "payee.address.country"
+      payeeStreetPostalCode: "payee.address.zip"
+      payeeStreetRegion: "payee.address.region"
+      creditCardIssuer: "tx.credit_card_issuer"
+      repaymentDt: "tx.repayment_date"
+    scraper: null
+    last_successful_pull: null
+    last_verified_working: "2026-03-26"
+    known_issues:
+      - "infoOnlyFlag='Y' marks rows superseded by a later report; maps to amendment_indicator='T' but downstream loaders may choose to skip these rows entirely"
+
+  - name: "TEC Campaign Finance — Loans"
+    url: "https://www.ethics.state.tx.us/search/cf/"
+    bulk_download_url: "https://prd.tecprd.ethicsefile.com/public/cf/public/TEC_CF_CSV.zip"
+    api_base_url: null
+    format: "csv"
+    auth_required: false
+    update_frequency: "daily"
+    coverage:
+      start_year: 2000
+      covers_sub_jurisdictions: true
+      office_levels:
+        - governor
+        - lieutenant_governor
+        - attorney_general
+        - comptroller
+        - commissioner_of_general_land_office
+        - commissioner_of_agriculture
+        - railroad_commissioner
+        - state_senate
+        - state_house
+        - supreme_court
+        - court_of_criminal_appeals
+        - courts_of_appeals
+        - district_judge
+        - county
+        - municipal
+      transaction_types:
+        - loans
+    field_mappings:
+      recordType: "tx.record_type"
+      formTypeCd: "tx.form_type_code"
+      schedFormTypeCd: "tx.schedule_form_type_code"
+      reportInfoIdent: "tx.report_info_id"
+      receivedDt: "tx.received_date"
+      infoOnlyFlag: "tx.info_only_flag"
+      filerIdent: "committee.id"
+      filerTypeCd: "committee.type"
+      filerName: "committee.name"
+      loanInfoId: "tx.loan_info_id"
+      loanDt: "transaction.date"
+      loanAmount: "transaction.amount"
+      loanDescr: "transaction.description"
+      interestRate: "tx.interest_rate"
+      maturityDt: "tx.maturity_date"
+      collateralFlag: "tx.collateral_flag"
+      collateralDescr: "tx.collateral_description"
+      loanStatusCd: "tx.loan_status_code"
+      paymentMadeFlag: "tx.payment_made_flag"
+      paymentAmount: "tx.payment_amount"
+      paymentSource: "tx.payment_source"
+      loanGuaranteedFlag: "tx.loan_guaranteed_flag"
+      financialInstitutionFlag: "tx.financial_institution_flag"
+      loanGuaranteeAmount: "tx.loan_guarantee_amount"
+      lenderPersentTypeCd: "lender.type"
+      lenderNameOrganization: "lender.name.organization"
+      lenderNameLast: "lender.name.last"
+      lenderNameSuffixCd: "lender.name.suffix"
+      lenderNameFirst: "lender.name.first"
+      lenderNamePrefixCd: "lender.name.prefix"
+      lenderNameShort: "lender.name.short"
+      lenderStreetCity: "lender.address.city"
+      lenderStreetStateCd: "lender.address.state"
+      lenderStreetCountyCd: "lender.address.county"
+      lenderStreetCountryCd: "lender.address.country"
+      lenderStreetPostalCode: "lender.address.zip"
+      lenderStreetRegion: "lender.address.region"
+      lenderEmployer: "lender.employer"
+      lenderOccupation: "lender.occupation"
+      lenderJobTitle: "lender.job_title"
+      lenderPacFein: "tx.lender_pac_fein"
+      lenderOosPacFlag: "tx.lender_oos_pac_flag"
+      lenderLawFirmName: "tx.lender_law_firm"
+      lenderSpouseLawFirmName: "tx.lender_spouse_law_firm"
+      lenderParent1LawFirmName: "tx.lender_parent1_law_firm"
+      lenderParent2LawFirmName: "tx.lender_parent2_law_firm"
+      guarantorPersentTypeCd1: "tx.guarantor1.type"
+      guarantorNameOrganization1: "tx.guarantor1.name_organization"
+      guarantorNameLast1: "tx.guarantor1.name_last"
+      guarantorNameSuffixCd1: "tx.guarantor1.name_suffix"
+      guarantorNameFirst1: "tx.guarantor1.name_first"
+      guarantorNamePrefixCd1: "tx.guarantor1.name_prefix"
+      guarantorNameShort1: "tx.guarantor1.name_short"
+      guarantorStreetCity1: "tx.guarantor1.address.city"
+      guarantorStreetStateCd1: "tx.guarantor1.address.state"
+      guarantorStreetCountyCd1: "tx.guarantor1.address.county"
+      guarantorStreetCountryCd1: "tx.guarantor1.address.country"
+      guarantorStreetPostalCode1: "tx.guarantor1.address.zip"
+      guarantorStreetRegion1: "tx.guarantor1.address.region"
+      guarantorEmployer1: "tx.guarantor1.employer"
+      guarantorOccupation1: "tx.guarantor1.occupation"
+      guarantorJobTitle1: "tx.guarantor1.job_title"
+      guarantorLawFirmName1: "tx.guarantor1.law_firm"
+      guarantorSpouseLawFirmName1: "tx.guarantor1.spouse_law_firm"
+      guarantorParent1LawFirmName1: "tx.guarantor1.parent1_law_firm"
+      guarantorParent2LawFirmName1: "tx.guarantor1.parent2_law_firm"
+      guarantorPersentTypeCd2: "tx.guarantor2.type"
+      guarantorNameOrganization2: "tx.guarantor2.name_organization"
+      guarantorNameLast2: "tx.guarantor2.name_last"
+      guarantorNameSuffixCd2: "tx.guarantor2.name_suffix"
+      guarantorNameFirst2: "tx.guarantor2.name_first"
+      guarantorNamePrefixCd2: "tx.guarantor2.name_prefix"
+      guarantorNameShort2: "tx.guarantor2.name_short"
+      guarantorStreetCity2: "tx.guarantor2.address.city"
+      guarantorStreetStateCd2: "tx.guarantor2.address.state"
+      guarantorStreetCountyCd2: "tx.guarantor2.address.county"
+      guarantorStreetCountryCd2: "tx.guarantor2.address.country"
+      guarantorStreetPostalCode2: "tx.guarantor2.address.zip"
+      guarantorStreetRegion2: "tx.guarantor2.address.region"
+      guarantorEmployer2: "tx.guarantor2.employer"
+      guarantorOccupation2: "tx.guarantor2.occupation"
+      guarantorJobTitle2: "tx.guarantor2.job_title"
+      guarantorLawFirmName2: "tx.guarantor2.law_firm"
+      guarantorSpouseLawFirmName2: "tx.guarantor2.spouse_law_firm"
+      guarantorParent1LawFirmName2: "tx.guarantor2.parent1_law_firm"
+      guarantorParent2LawFirmName2: "tx.guarantor2.parent2_law_firm"
+      guarantorPersentTypeCd3: "tx.guarantor3.type"
+      guarantorNameOrganization3: "tx.guarantor3.name_organization"
+      guarantorNameLast3: "tx.guarantor3.name_last"
+      guarantorNameSuffixCd3: "tx.guarantor3.name_suffix"
+      guarantorNameFirst3: "tx.guarantor3.name_first"
+      guarantorNamePrefixCd3: "tx.guarantor3.name_prefix"
+      guarantorNameShort3: "tx.guarantor3.name_short"
+      guarantorStreetCity3: "tx.guarantor3.address.city"
+      guarantorStreetStateCd3: "tx.guarantor3.address.state"
+      guarantorStreetCountyCd3: "tx.guarantor3.address.county"
+      guarantorStreetCountryCd3: "tx.guarantor3.address.country"
+      guarantorStreetPostalCode3: "tx.guarantor3.address.zip"
+      guarantorStreetRegion3: "tx.guarantor3.address.region"
+      guarantorEmployer3: "tx.guarantor3.employer"
+      guarantorOccupation3: "tx.guarantor3.occupation"
+      guarantorJobTitle3: "tx.guarantor3.job_title"
+      guarantorLawFirmName3: "tx.guarantor3.law_firm"
+      guarantorSpouseLawFirmName3: "tx.guarantor3.spouse_law_firm"
+      guarantorParent1LawFirmName3: "tx.guarantor3.parent1_law_firm"
+      guarantorParent2LawFirmName3: "tx.guarantor3.parent2_law_firm"
+      guarantorPersentTypeCd4: "tx.guarantor4.type"
+      guarantorNameOrganization4: "tx.guarantor4.name_organization"
+      guarantorNameLast4: "tx.guarantor4.name_last"
+      guarantorNameSuffixCd4: "tx.guarantor4.name_suffix"
+      guarantorNameFirst4: "tx.guarantor4.name_first"
+      guarantorNamePrefixCd4: "tx.guarantor4.name_prefix"
+      guarantorNameShort4: "tx.guarantor4.name_short"
+      guarantorStreetCity4: "tx.guarantor4.address.city"
+      guarantorStreetStateCd4: "tx.guarantor4.address.state"
+      guarantorStreetCountyCd4: "tx.guarantor4.address.county"
+      guarantorStreetCountryCd4: "tx.guarantor4.address.country"
+      guarantorStreetPostalCode4: "tx.guarantor4.address.zip"
+      guarantorStreetRegion4: "tx.guarantor4.address.region"
+      guarantorEmployer4: "tx.guarantor4.employer"
+      guarantorOccupation4: "tx.guarantor4.occupation"
+      guarantorJobTitle4: "tx.guarantor4.job_title"
+      guarantorLawFirmName4: "tx.guarantor4.law_firm"
+      guarantorSpouseLawFirmName4: "tx.guarantor4.spouse_law_firm"
+      guarantorParent1LawFirmName4: "tx.guarantor4.parent1_law_firm"
+      guarantorParent2LawFirmName4: "tx.guarantor4.parent2_law_firm"
+      guarantorPersentTypeCd5: "tx.guarantor5.type"
+      guarantorNameOrganization5: "tx.guarantor5.name_organization"
+      guarantorNameLast5: "tx.guarantor5.name_last"
+      guarantorNameSuffixCd5: "tx.guarantor5.name_suffix"
+      guarantorNameFirst5: "tx.guarantor5.name_first"
+      guarantorNamePrefixCd5: "tx.guarantor5.name_prefix"
+      guarantorNameShort5: "tx.guarantor5.name_short"
+      guarantorStreetCity5: "tx.guarantor5.address.city"
+      guarantorStreetStateCd5: "tx.guarantor5.address.state"
+      guarantorStreetCountyCd5: "tx.guarantor5.address.county"
+      guarantorStreetCountryCd5: "tx.guarantor5.address.country"
+      guarantorStreetPostalCode5: "tx.guarantor5.address.zip"
+      guarantorStreetRegion5: "tx.guarantor5.address.region"
+      guarantorEmployer5: "tx.guarantor5.employer"
+      guarantorOccupation5: "tx.guarantor5.occupation"
+      guarantorJobTitle5: "tx.guarantor5.job_title"
+      guarantorLawFirmName5: "tx.guarantor5.law_firm"
+      guarantorSpouseLawFirmName5: "tx.guarantor5.spouse_law_firm"
+      guarantorParent1LawFirmName5: "tx.guarantor5.parent1_law_firm"
+      guarantorParent2LawFirmName5: "tx.guarantor5.parent2_law_firm"
+    scraper: null
+    last_successful_pull: null
+    last_verified_working: "2026-03-26"
+    known_issues:
+      - "infoOnlyFlag='Y' marks rows superseded by a later report; maps to amendment_indicator='T' but downstream loaders may choose to skip these rows entirely"
+      - "Loans CSV contains 5 repeating guarantor blocks (guarantor1-5) with identical field layouts; denormalized in source"
+
+laws:
+  source_url: "https://www.ethics.state.tx.us/laws/election-code/"
+  last_verified: "2026-03-21"
+  contribution_limits:
+    individual_to_candidate: "unlimited"
+    pac_to_candidate: "unlimited"
+    corporate_direct: "prohibited"
+    union_direct: "prohibited"
+    party_to_candidate: "unlimited"
+  itemization_threshold: 110 # lowest current TEC-adjusted Chapter 254 threshold; expenditure itemization rises to $230
+  reporting:
+    periods: ["semi-annual", "pre-election", "runoff"]
+    electronic_filing_required: "required"
+  public_financing: false
+  notes:
+    - "Texas has no contribution limits for individuals or PACs to candidates; only corporate and union direct contributions are prohibited (TX Election Code Title 15, Chapter 253)"
+    - "Texas uses multiple TEC-adjusted Chapter 254 thresholds effective January 1, 2026; this config keeps the lowest current threshold ($110) for contributions and loans, while expenditure itemization rises to $230"
+    - "Most TEC filers must file electronically unless they qualify for a statutory exemption tied to recordkeeping method and the current calendar-year ceiling for contributions and expenditures ($34,890 effective January 1, 2026)"
+    - "TEC bulk archive includes both state and local campaign finance filings"
+
+status:
+  discovery: "complete"
+  scraper: "complete"
+  normalization: "pending"
+  entity_resolution: "pending"
+  last_full_update: null

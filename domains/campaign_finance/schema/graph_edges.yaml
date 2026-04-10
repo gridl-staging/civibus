@@ -1,0 +1,78 @@
+# Campaign finance domain graph edge declarations.
+#
+# This file follows the plugin-contract shape from docs/specs/domain-plugin-contract.md.
+# The graph builder reads this to know which node labels and edge types the CF domain adds.
+#
+# Edge set decision (Stage 5):
+#   Authoritative set comes from the stage brief's 7 edges, not graph-schema.md's 5.
+#   Canonical office/contest traversal edges (HOLDS, RUNS_IN, CANDIDACY_OF,
+#   REPRESENTS) now live in the civics domain declaration and loader.
+#   All property names trace to Stage 2 SQL column names in tables.sql.
+
+domain: campaign_finance
+
+node_labels:
+  - Committee
+  - Candidate
+  - Filing
+
+relationship_types:
+  - name: CONTRIBUTED_TO
+    from: "Person | Organization"
+    to: Committee
+    properties:
+      - amount
+      - transaction_date
+      - transaction_type
+      - filing_id
+      - source_record_id
+
+  - name: SPENT_ON
+    from: Committee
+    to: "Organization | Person"
+    properties:
+      - amount
+      - transaction_date
+      - transaction_type
+      - filing_id
+      - source_record_id
+
+  - name: SUPPORTS
+    from: Committee
+    to: Candidate
+    properties:
+      - amount
+      - transaction_date
+      - transaction_type
+      - filing_id
+      - source_record_id
+
+  - name: OPPOSES
+    from: Committee
+    to: Candidate
+    properties:
+      - amount
+      - transaction_date
+      - transaction_type
+      - filing_id
+      - source_record_id
+
+  - name: AFFILIATED_WITH
+    from: Candidate
+    to: Committee
+    properties:
+      - designation
+      - candidate_election_year
+      - fec_election_year
+      - valid_period
+      - source_record_id
+
+  - name: FILED
+    from: Committee
+    to: Filing
+    properties:
+      - receipt_date
+      - due_date
+      - accepted_date
+      - report_type
+      - source_record_id

@@ -1,0 +1,124 @@
+# New York City campaign finance jurisdiction config
+# Source: NYC Campaign Finance Board (CFB) bulk CSV downloads from Data Library
+
+jurisdiction:
+  name: "New York City"
+  code: "NYC"
+  type: "municipality"
+  fips: "36061"
+  parent: "NY"
+
+data_sources:
+  - name: "NYC CFB Campaign Contributions"
+    url: "https://www.nyccfb.info/follow-the-money/data-library/"
+    bulk_download_url: "https://www.nyccfb.info/datalibrary/2025_Contributions.csv"
+    api_base_url: null
+    format: "csv"
+    auth_required: false
+    update_frequency: "monthly"
+    coverage:
+      start_year: 2001
+      covers_sub_jurisdictions: false
+      office_levels:
+        - mayor
+        - public_advocate
+        - comptroller
+        - borough_president
+        - city_council
+      transaction_types:
+        - contributions
+    field_mappings:
+      ELECTION: "nyc.election_cycle"
+      OFFICECD: "nyc.office_code"
+      RECIPID: "committee.cfb_id"
+      CANCLASS: "nyc.candidate_classification"
+      RECIPNAME: "committee.name"
+      COMMITTEE: "committee.committee_id"
+      FILING: "filing.period"
+      SCHEDULE: "nyc.schedule"
+      PAGENO: "nyc.page_number"
+      SEQUENCENO: "nyc.sequence_number"
+      REFNO: "transaction.id"
+      DATE: "transaction.date"
+      REFUNDDATE: "nyc.refund_date"
+      NAME: "donor.name"
+      C_CODE: "donor.type_code"
+      STRNO: "donor.address.street_number"
+      STRNAME: "donor.address.street_name"
+      APARTMENT: "donor.address.apartment"
+      BOROUGHCD: "nyc.borough_code"
+      CITY: "donor.address.city"
+      STATE: "donor.address.state"
+      ZIP: "donor.address.zip"
+      OCCUPATION: "donor.occupation"
+      EMPNAME: "donor.employer"
+      EMPSTRNO: "donor.employer_address.street_number"
+      EMPSTRNAME: "donor.employer_address.street_name"
+      EMPCITY: "donor.employer_address.city"
+      EMPSTATE: "donor.employer_address.state"
+      AMNT: "transaction.amount"
+      MATCHAMNT: "nyc.matchable_amount"
+      PREVAMNT: "nyc.previous_contributions_total"
+      PAY_METHOD: "nyc.payment_method"
+      INTERMNO: "intermediary.number"
+      INTERMNAME: "intermediary.name"
+      INTSTRNO: "intermediary.address.street_number"
+      INTSTRNM: "intermediary.address.street_name"
+      INTAPTNO: "intermediary.address.apartment"
+      INTCITY: "intermediary.address.city"
+      INTST: "intermediary.address.state"
+      INTZIP: "intermediary.address.zip"
+      INTEMPNAME: "intermediary.employer"
+      INTEMPSTNO: "intermediary.employer_address.street_number"
+      INTEMPSTNM: "intermediary.employer_address.street_name"
+      INTEMPCITY: "intermediary.employer_address.city"
+      INTEMPST: "intermediary.employer_address.state"
+      INTOCCUPA: "intermediary.occupation"
+      PURPOSECD: "nyc.purpose_code"
+      EXEMPTCD: "nyc.exempt_code"
+      ADJTYPECD: "nyc.adjustment_type_code"
+      RR_IND: "nyc.runoff_rerun_indicator"
+      SEG_IND: "nyc.segregated_indicator"
+      INT_C_CODE: "intermediary.type_code"
+    scraper: null
+    last_successful_pull: null
+    last_verified_working: "2026-04-08"
+    known_issues:
+      - "Data Library CSV files are organized by election cycle; bulk ingest requires downloading per-cycle files or the full ZIP archive"
+      - "update_frequency is monthly based on observed Data Library revision dates; no guaranteed published schedule"
+      - "Expenditures, intermediaries, and public funds payments are separate datasets not yet mapped in this config"
+      - "Monthly cadence is below the weekly launch threshold; pre-election daily summaries may supplement near elections"
+
+laws:
+  source_url: "https://www.nyccfb.info/law/rules/"
+  last_verified: "2026-04-08"
+  contribution_limits:
+    individual_to_candidate: 2000
+    pac_to_candidate: 2000
+    corporate_direct: "prohibited"
+    union_direct: 2000
+    party_to_candidate: null
+  itemization_threshold: 99
+  reporting:
+    periods:
+      - semi-annual
+      - pre-election
+      - post-election
+      - 24-hour
+      - 27-day-post
+    electronic_filing_required: "required"
+  public_financing:
+    type: "matching_funds"
+    administering_agency: "NYC Campaign Finance Board"
+  notes:
+    - "NYC Campaign Finance Board administers a mandatory public matching funds program for participating candidates"
+    - "Contribution limits vary by office: $2,000 for citywide offices (mayor, public advocate, comptroller), lower for borough president and city council"
+    - "Corporate contributions to city candidates are prohibited"
+    - "NYC uses a small-dollar matching system: contributions up to $250 from NYC residents are matched at 8:1 for participating candidates"
+
+status:
+  discovery: "complete"
+  scraper: "pending"
+  normalization: "pending"
+  entity_resolution: "pending"
+  last_full_update: null

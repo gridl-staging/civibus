@@ -1,0 +1,21 @@
+.secret/
+.secret*
+.env
+.env.prod
+.DS_Store
+__pycache__/
+*.pyc
+.coverage
+htmlcov/
+node_modules/
+data/
+*.egg-info/
+
+# Stage 3 browser-capture local profile caches
+.tmp/**/profiles/
+docs/research/artifacts/2026-03-production-proof/*.dump
+
+.hashbrown
+
+# Auto-generated scrai caches (large, change frequently)
+.scrai/codemap_graph_cache.json

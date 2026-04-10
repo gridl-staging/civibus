@@ -1,0 +1,1223 @@
+from __future__ import annotations
+
+from decimal import Decimal
+from datetime import date, datetime, timezone
+from uuid import UUID, uuid4
+
+import pytest
+from pydantic import ValidationError
+
+import api.models as api_models
+from api.models import (
+    CandidateFundraisingSummary,
+    CandidateResponse,
+    CommitteeFilingBreakdown,
+    ClusterMemberResponse,
+    CommitteeFundraisingSummary,
+    CommitteeResponse,
+    DonorsWithPropertyParams,
+    DonorsWithPropertyResult,
+    ERClusterDetailResponse,
+    ERClusterListParams,
+    ERClusterSummaryResponse,
+    ERSummaryResponse,
+    FilingResponse,
+    FilingPeriodSummary,
+    IndependentExpenditureResponse,
+    IndependentExpenditureSummary,
+    MatchDecisionResponse,
+    OrgResponse,
+    ParcelDetailResponse,
+    ParcelListParams,
+    ParcelSummaryResponse,
+    PersonResponse,
+    PersonSlugResult,
+    PropertyAssessmentResponse,
+    PropertyOwnershipResponse,
+    SearchParams,
+    SearchResult,
+    SourceInfo,
+    TopSpenderEntry,
+    TransactionListParams,
+    TransactionResponse,
+)
+
+
+def _source_info_payload() -> dict[str, object]:
+    return {
+        "domain": "campaign_finance",
+        "jurisdiction": None,
+        "data_source_name": "FEC Bulk",
+        "data_source_url": "https://example.org/fec",
+        "source_record_key": None,
+        "record_url": None,
+        "pull_date": datetime(2026, 3, 16, 12, 0, tzinfo=timezone.utc),
+    }
+
+
+def test_source_info_requires_domain() -> None:
+    payload = _source_info_payload()
+    payload.pop("domain")
+
+    with pytest.raises(ValidationError):
+        SourceInfo.model_validate(payload)
+
+
+def test_source_info_serializes_optional_fields_as_null_and_round_trips() -> None:
+    source = SourceInfo.model_validate(_source_info_payload())
+
+    dumped = source.model_dump(mode="json")
+
+    assert dumped["jurisdiction"] is None
+    assert dumped["source_record_key"] is None
+    assert dumped["record_url"] is None
+    assert SourceInfo.model_validate(dumped).model_dump(mode="json") == dumped
+
+
+def test_person_response_requires_canonical_name() -> None:
+    payload = {
+        "id": str(uuid4()),
+        "name_variants": [],
+        "identifiers": {},
+        "sources": [_source_info_payload()],
+    }
+
+    with pytest.raises(ValidationError):
+        PersonResponse.model_validate(payload)
+
+
+def test_person_response_serializes_optional_fields_as_null_and_round_trips() -> None:
+    person_id = uuid4()
+    response = PersonResponse.model_validate(
+        {
+            "id": person_id,
+            "canonical_name": "Jane Doe",
+            "name_variants": [],
+            "identifiers": {},
+            "sources": [_source_info_payload()],
+        }
+    )
+
+    dumped = response.model_dump(mode="json")
+
+    assert dumped["id"] == str(person_id)
+    assert dumped["first_name"] is None
+    assert dumped["middle_name"] is None
+    assert dumped["last_name"] is None
+    assert dumped["suffix"] is None
+    assert dumped["date_of_birth"] is None
+    assert dumped["year_of_birth"] is None
+    assert dumped["primary_address_id"] is None
+    assert dumped["er_cluster_id"] is None
+    assert dumped["er_confidence"] is None
+    assert PersonResponse.model_validate(dumped).model_dump(mode="json") == dumped
+
+
+def test_org_response_requires_canonical_name() -> None:
+    payload = {
+        "id": str(uuid4()),
+        "name_variants": [],
+        "identifiers": {},
+        "sources": [_source_info_payload()],
+    }
+
+    with pytest.raises(ValidationError):
+        OrgResponse.model_validate(payload)
+
+
+def test_org_response_serializes_optional_fields_as_null_and_round_trips() -> None:
+    org_id = UUID("00000000-0000-0000-0000-000000000099")
+    response = OrgResponse.model_validate(
+        {
+            "id": org_id,
+            "canonical_name": "Civibus PAC",
+            "name_variants": [],
+            "identifiers": {},
+            "sources": [_source_info_payload()],
+            "formation_date": date(2012, 4, 2),
+        }
+    )
+
+    dumped = response.model_dump(mode="json")
+
+    assert dumped["id"] == str(org_id)
+    assert dumped["org_type"] is None
+    assert dumped["registered_state"] is None
+    assert dumped["dissolution_date"] is None
+    assert dumped["primary_address_id"] is None
+    assert dumped["er_cluster_id"] is None
+    assert dumped["er_confidence"] is None
+    assert OrgResponse.model_validate(dumped).model_dump(mode="json") == dumped
+
+
+def test_committee_response_requires_fec_committee_id() -> None:
+    payload = {
+        "id": str(uuid4()),
+        "name": "Civibus Committee",
+        "sources": [_source_info_payload()],
+    }
+
+    with pytest.raises(ValidationError):
+        CommitteeResponse.model_validate(payload)
+
+
+def test_committee_response_serializes_optional_fields_as_null_and_round_trips() -> None:
+    committee_id = uuid4()
+    response = CommitteeResponse.model_validate(
+        {
+            "id": committee_id,
+            "fec_committee_id": "C12345678",
+            "name": "Civibus Committee",
+            "slug": "civibus-committee",
+            "slug_is_unique": True,
+            "sources": [_source_info_payload()],
+        }
+    )
+
+    dumped = response.model_dump(mode="json")
+
+    assert dumped["id"] == str(committee_id)
+    assert dumped["slug"] == "civibus-committee"
+    assert dumped["slug_is_unique"] is True
+    assert dumped["organization_id"] is None
+    assert dumped["committee_type"] is None
+    assert dumped["committee_designation"] is None
+    assert dumped["party"] is None
+    assert dumped["state"] is None
+    assert dumped["city"] is None
+    assert dumped["zip_code"] is None
+    assert dumped["treasurer_name"] is None
+    assert "created_at" not in dumped
+    assert "updated_at" not in dumped
+    assert CommitteeResponse.model_validate(dumped).model_dump(mode="json") == dumped
+
+
+def test_candidate_response_requires_office() -> None:
+    payload = {
+        "id": str(uuid4()),
+        "fec_candidate_id": "H0NC01001",
+        "name": "Jane Doe",
+        "sources": [_source_info_payload()],
+    }
+
+    with pytest.raises(ValidationError):
+        CandidateResponse.model_validate(payload)
+
+
+def test_candidate_response_serializes_optional_fields_as_null_and_round_trips() -> None:
+    candidate_id = uuid4()
+    response = CandidateResponse.model_validate(
+        {
+            "id": candidate_id,
+            "fec_candidate_id": "H0NC01001",
+            "name": "Jane Doe",
+            "slug": "jane-doe",
+            "slug_is_unique": True,
+            "office": "H",
+            "sources": [_source_info_payload()],
+        }
+    )
+
+    dumped = response.model_dump(mode="json")
+
+    assert dumped["id"] == str(candidate_id)
+    assert dumped["slug"] == "jane-doe"
+    assert dumped["slug_is_unique"] is True
+    assert dumped["person_id"] is None
+    assert dumped["party"] is None
+    assert dumped["state"] is None
+    assert dumped["district"] is None
+    assert dumped["incumbent_challenge"] is None
+    assert dumped["principal_committee_id"] is None
+    assert "created_at" not in dumped
+    assert "updated_at" not in dumped
+    assert CandidateResponse.model_validate(dumped).model_dump(mode="json") == dumped
+
+
+def test_filing_response_requires_required_fields() -> None:
+    payload = {"id": str(uuid4())}
+
+    with pytest.raises(ValidationError):
+        FilingResponse.model_validate(payload)
+
+
+def test_filing_response_serializes_optional_fields_as_null_and_round_trips() -> None:
+    filing_id = UUID("00000000-0000-0000-0000-000000000211")
+    committee_id = UUID("00000000-0000-0000-0000-000000000212")
+    response = FilingResponse.model_validate(
+        {
+            "id": filing_id,
+            "filing_fec_id": "1290024",
+            "committee_id": committee_id,
+            "amendment_indicator": "N",
+            "is_amended": False,
+            "sources": [_source_info_payload()],
+        }
+    )
+
+    dumped = response.model_dump(mode="json")
+
+    assert dumped["id"] == str(filing_id)
+    assert dumped["committee_id"] == str(committee_id)
+    assert dumped["candidate_id"] is None
+    assert dumped["election_id"] is None
+    assert dumped["report_type"] is None
+    assert dumped["filing_name"] is None
+    assert dumped["coverage_start_date"] is None
+    assert dumped["coverage_end_date"] is None
+    assert dumped["due_date"] is None
+    assert dumped["receipt_date"] is None
+    assert dumped["accepted_date"] is None
+    assert dumped["amended_from_filing_id"] is None
+    assert dumped["days_late"] is None
+    assert FilingResponse.model_validate(dumped).model_dump(mode="json") == dumped
+
+
+def test_transaction_response_requires_required_fields() -> None:
+    payload = {"id": str(uuid4())}
+
+    with pytest.raises(ValidationError):
+        TransactionResponse.model_validate(payload)
+
+
+def test_transaction_response_serializes_optional_fields_as_null_and_round_trips() -> None:
+    transaction_id = uuid4()
+    filing_id = uuid4()
+    committee_id = uuid4()
+    response = TransactionResponse.model_validate(
+        {
+            "id": transaction_id,
+            "filing_id": filing_id,
+            "committee_id": committee_id,
+            "transaction_type": "15",
+            "transaction_identifier": None,
+            "transaction_date": date(2026, 3, 15),
+            "amount": 123.45,
+            "contributor_name_raw": None,
+            "contributor_employer": None,
+            "contributor_occupation": None,
+            "contributor_city": None,
+            "contributor_state": None,
+            "contributor_zip": None,
+            "contributor_person_id": None,
+            "contributor_organization_id": None,
+            "contributor_address_id": None,
+            "recipient_candidate_id": None,
+            "recipient_committee_id": None,
+            "memo_text": None,
+            "is_memo": False,
+            "amendment_indicator": "N",
+            "date_is_reliable": True,
+        }
+    )
+
+    dumped = response.model_dump(mode="json")
+
+    assert dumped["id"] == str(transaction_id)
+    assert dumped["filing_id"] == str(filing_id)
+    assert dumped["committee_id"] == str(committee_id)
+    assert dumped["transaction_date"] == "2026-03-15"
+    assert dumped["amount"] == pytest.approx(123.45)
+    assert dumped["contributor_name_raw"] is None
+    assert dumped["recipient_candidate_id"] is None
+    assert dumped["memo_text"] is None
+    # IE fields default to None for non-Schedule-E transactions
+    assert dumped["support_oppose"] is None
+    assert dumped["dissemination_date"] is None
+    assert dumped["aggregate_amount"] is None
+    assert "sub_id" not in dumped
+    assert "memo_code" not in dumped
+    assert "amended_by_transaction_id" not in dumped
+    assert "created_at" not in dumped
+    assert "updated_at" not in dumped
+    assert TransactionResponse.model_validate(dumped).model_dump(mode="json") == dumped
+
+
+def test_transaction_response_accepts_populated_ie_fields() -> None:
+    """Prove TransactionResponse accepts IE values without breaking required-field expectations."""
+    payload = {
+        "id": str(uuid4()),
+        "filing_id": str(uuid4()),
+        "committee_id": str(uuid4()),
+        "transaction_type": "24E",
+        "transaction_date": "2026-03-15",
+        "amount": 5000.00,
+        "is_memo": False,
+        "amendment_indicator": "N",
+        "date_is_reliable": True,
+        "support_oppose": "O",
+        "dissemination_date": "2026-03-10",
+        "aggregate_amount": 12500.50,
+    }
+    response = TransactionResponse.model_validate(payload)
+    dumped = response.model_dump(mode="json")
+
+    assert dumped["support_oppose"] == "O"
+    assert dumped["dissemination_date"] == "2026-03-10"
+    assert dumped["aggregate_amount"] == pytest.approx(12500.50)
+    # Required fields still enforced
+    assert dumped["transaction_type"] == "24E"
+    assert dumped["is_memo"] is False
+    assert dumped["amendment_indicator"] == "N"
+    # Round-trip
+    assert TransactionResponse.model_validate(dumped).model_dump(mode="json") == dumped
+
+
+def test_ie_independent_expenditure_response_requires_required_fields() -> None:
+    with pytest.raises(ValidationError):
+        IndependentExpenditureResponse.model_validate({"id": str(uuid4())})
+
+
+def test_ie_independent_expenditure_response_serializes_nullable_fields_and_round_trips() -> None:
+    payload = {
+        "id": str(uuid4()),
+        "filing_id": None,
+        "committee_id": str(uuid4()),
+        "committee_name": "Independent Spenders PAC",
+        "amount": 2345.67,
+        "transaction_date": "2026-03-18",
+        "purpose": None,
+        "dissemination_date": None,
+        "aggregate_amount": None,
+        "support_oppose": "S",
+    }
+
+    response = IndependentExpenditureResponse.model_validate(payload)
+    dumped = response.model_dump(mode="json")
+
+    assert dumped["purpose"] is None
+    assert dumped["filing_id"] is None
+    assert dumped["dissemination_date"] is None
+    assert dumped["aggregate_amount"] is None
+    assert dumped["support_oppose"] == "S"
+    assert "memo_text" not in dumped
+    assert IndependentExpenditureResponse.model_validate(dumped).model_dump(mode="json") == dumped
+
+
+def test_ie_independent_expenditure_response_rejects_invalid_support_oppose() -> None:
+    with pytest.raises(ValidationError):
+        IndependentExpenditureResponse.model_validate(
+            {
+                "id": str(uuid4()),
+                "filing_id": str(uuid4()),
+                "committee_id": str(uuid4()),
+                "committee_name": "Independent Spenders PAC",
+                "amount": 100.0,
+                "transaction_date": "2026-03-18",
+                "purpose": "Digital ad buy",
+                "dissemination_date": "2026-03-17",
+                "aggregate_amount": 1000.0,
+                "support_oppose": "X",
+            }
+        )
+
+
+def test_ie_independent_expenditure_summary_round_trips_with_ranked_top_spenders() -> None:
+    summary = IndependentExpenditureSummary.model_validate(
+        {
+            "candidate_id": str(uuid4()),
+            "support_total": Decimal("1200.50"),
+            "oppose_total": Decimal("900.25"),
+            "support_count": 3,
+            "oppose_count": 2,
+            "top_spenders": [
+                {
+                    "committee_id": str(uuid4()),
+                    "committee_name": "Support Committee",
+                    "support_oppose": "S",
+                    "total_amount": Decimal("700.25"),
+                    "transaction_count": 2,
+                },
+                {
+                    "committee_id": str(uuid4()),
+                    "committee_name": "Oppose Committee",
+                    "support_oppose": "O",
+                    "total_amount": Decimal("500.00"),
+                    "transaction_count": 1,
+                },
+            ],
+        }
+    )
+
+    dumped = summary.model_dump(mode="json")
+
+    assert dumped["support_total"] == "1200.50"
+    assert dumped["oppose_total"] == "900.25"
+    assert dumped["support_count"] == 3
+    assert dumped["oppose_count"] == 2
+    assert dumped["top_spenders"][0]["support_oppose"] == "S"
+    assert dumped["top_spenders"][1]["support_oppose"] == "O"
+    assert IndependentExpenditureSummary.model_validate(dumped).model_dump(mode="json") == dumped
+
+
+def test_ie_top_spender_entry_rejects_invalid_support_oppose() -> None:
+    with pytest.raises(ValidationError):
+        TopSpenderEntry.model_validate(
+            {
+                "committee_id": str(uuid4()),
+                "committee_name": "Invalid Entry Committee",
+                "support_oppose": "N",
+                "total_amount": Decimal("15.00"),
+                "transaction_count": 1,
+            }
+        )
+
+
+def test_transaction_list_params_defaults() -> None:
+    params = TransactionListParams.model_validate({})
+
+    dumped = params.model_dump(mode="json")
+    assert dumped["committee_id"] is None
+    assert dumped["jurisdiction"] is None
+    assert dumped["min_date"] is None
+    assert dumped["max_date"] is None
+    assert dumped["min_amount"] is None
+    assert dumped["max_amount"] is None
+    assert dumped["limit"] == 50
+    assert dumped["offset"] == 0
+
+
+def test_transaction_list_params_accepts_inclusive_filters() -> None:
+    params = TransactionListParams.model_validate(
+        {
+            "committee_id": str(uuid4()),
+            "jurisdiction": "state/co",
+            "min_date": "2026-03-01",
+            "max_date": "2026-03-31",
+            "min_amount": 10.5,
+            "max_amount": 99.99,
+            "limit": 200,
+            "offset": 5,
+        }
+    )
+    dumped = params.model_dump(mode="json")
+
+    assert dumped["min_date"] == "2026-03-01"
+    assert dumped["max_date"] == "2026-03-31"
+    assert dumped["min_amount"] == pytest.approx(10.5)
+    assert dumped["max_amount"] == pytest.approx(99.99)
+    assert dumped["limit"] == 200
+    assert dumped["offset"] == 5
+
+
+@pytest.mark.parametrize(
+    ("payload", "message_fragment"),
+    [
+        ({"limit": 0}, "limit"),
+        ({"limit": 201}, "limit"),
+        ({"offset": -1}, "offset"),
+        ({"min_date": "2026-03-16", "max_date": "2026-03-15"}, "min_date must be less than or equal to max_date"),
+        ({"min_amount": 200, "max_amount": 100}, "min_amount must be less than or equal to max_amount"),
+    ],
+)
+def test_transaction_list_params_rejects_invalid_bounds(payload: dict[str, object], message_fragment: str) -> None:
+    with pytest.raises(ValidationError) as exc_info:
+        TransactionListParams.model_validate(payload)
+
+    assert message_fragment in str(exc_info.value)
+
+
+def test_parcel_summary_response_serializes_optional_fields_and_round_trips() -> None:
+    parcel_id = uuid4()
+    jurisdiction_id = uuid4()
+    response = ParcelSummaryResponse.model_validate(
+        {
+            "id": parcel_id,
+            "reid": "100000001",
+            "pin": "0123456789",
+            "site_address": "123 MAIN ST",
+            "property_description": "Residential lot",
+            "city": "Durham",
+            "zoning_class": "R-20",
+            "land_class": "Residential",
+            "acreage": Decimal("1.2500"),
+            "neighborhood": "Northside",
+            "fire_district": "Durham",
+            "is_pending": False,
+            "deed_date": date(2020, 1, 1),
+            "deed_book": "1234",
+            "deed_page": "567",
+            "jurisdiction_id": jurisdiction_id,
+            "sources": [_source_info_payload()],
+        }
+    )
+
+    dumped = response.model_dump(mode="json")
+
+    assert dumped["id"] == str(parcel_id)
+    assert dumped["jurisdiction_id"] == str(jurisdiction_id)
+    assert dumped["deed_date"] == "2020-01-01"
+    assert dumped["acreage"] == "1.2500"
+    assert "source_record_id" not in dumped
+    assert "created_at" not in dumped
+    assert "updated_at" not in dumped
+    assert ParcelSummaryResponse.model_validate(dumped).model_dump(mode="json") == dumped
+
+
+def test_property_assessment_response_serializes_decimal_fields_and_round_trips() -> None:
+    assessment_id = uuid4()
+    response = PropertyAssessmentResponse.model_validate(
+        {
+            "id": assessment_id,
+            "tax_year": 2025,
+            "land_assessed_value": Decimal("100000.00"),
+            "improvement_assessed_value": Decimal("250000.00"),
+            "total_assessed_value": Decimal("350000.00"),
+            "assessed_at": date(2025, 1, 31),
+            "heated_area": 2400,
+            "exemption_description": "Homestead",
+            "sources": [_source_info_payload()],
+        }
+    )
+
+    dumped = response.model_dump(mode="json")
+
+    assert dumped["id"] == str(assessment_id)
+    assert dumped["assessed_at"] == "2025-01-31"
+    assert dumped["land_assessed_value"] == "100000.00"
+    assert dumped["improvement_assessed_value"] == "250000.00"
+    assert dumped["total_assessed_value"] == "350000.00"
+    assert dumped["heated_area"] == 2400
+    assert dumped["exemption_description"] == "Homestead"
+    assert "source_record_id" not in dumped
+    assert "created_at" not in dumped
+    assert "updated_at" not in dumped
+    assert PropertyAssessmentResponse.model_validate(dumped).model_dump(mode="json") == dumped
+
+
+def test_property_ownership_response_serializes_timeline_and_links_and_round_trips() -> None:
+    ownership_id = uuid4()
+    person_id = uuid4()
+    organization_id = uuid4()
+    address_id = uuid4()
+    response = PropertyOwnershipResponse.model_validate(
+        {
+            "id": ownership_id,
+            "owner_name": "Jane Owner",
+            "owner_mail_line1": "123 MAIN ST",
+            "owner_mail_line2": None,
+            "owner_mail_line3": "SUITE 10",
+            "owner_mail_city": "Durham",
+            "owner_mail_state": "NC",
+            "owner_mail_zip5": "27701",
+            "ownership_recorded_at": date(2024, 5, 1),
+            "valid_period": "[2024-05-01,2025-05-01)",
+            "date_precision": "day",
+            "owner_person_id": person_id,
+            "owner_organization_id": organization_id,
+            "owner_address_id": address_id,
+            "sources": [_source_info_payload()],
+        }
+    )
+
+    dumped = response.model_dump(mode="json")
+
+    assert dumped["id"] == str(ownership_id)
+    assert dumped["ownership_recorded_at"] == "2024-05-01"
+    assert dumped["valid_period"] == "[2024-05-01,2025-05-01)"
+    assert dumped["date_precision"] == "day"
+    assert dumped["owner_mail_line3"] == "SUITE 10"
+    assert dumped["owner_person_id"] == str(person_id)
+    assert dumped["owner_organization_id"] == str(organization_id)
+    assert dumped["owner_address_id"] == str(address_id)
+    assert "source_record_id" not in dumped
+    assert "created_at" not in dumped
+    assert "updated_at" not in dumped
+    assert PropertyOwnershipResponse.model_validate(dumped).model_dump(mode="json") == dumped
+
+
+def test_parcel_detail_response_defaults_nested_lists_and_round_trips() -> None:
+    parcel_id = uuid4()
+    response = ParcelDetailResponse.model_validate(
+        {
+            "id": parcel_id,
+            "reid": "100000001",
+            "pin": "0123456789",
+            "site_address": "123 MAIN ST",
+            "is_pending": False,
+            "sources": [_source_info_payload()],
+        }
+    )
+
+    dumped = response.model_dump(mode="json")
+
+    assert dumped["id"] == str(parcel_id)
+    assert dumped["assessments"] == []
+    assert dumped["ownership"] == []
+    assert "source_record_id" not in dumped
+    assert ParcelDetailResponse.model_validate(dumped).model_dump(mode="json") == dumped
+
+
+def test_parcel_list_params_defaults() -> None:
+    params = ParcelListParams.model_validate({})
+    dumped = params.model_dump(mode="json")
+
+    assert dumped["city"] is None
+    assert dumped["zoning_class"] is None
+    assert dumped["min_acreage"] is None
+    assert dumped["max_acreage"] is None
+    assert dumped["limit"] == 50
+    assert dumped["offset"] == 0
+
+
+def test_parcel_list_params_accepts_inclusive_bounds() -> None:
+    params = ParcelListParams.model_validate(
+        {
+            "city": "Durham",
+            "zoning_class": "R-20",
+            "min_acreage": "1.0",
+            "max_acreage": "2.5",
+            "limit": 200,
+            "offset": 10,
+        }
+    )
+    dumped = params.model_dump(mode="json")
+
+    assert dumped["city"] == "Durham"
+    assert dumped["zoning_class"] == "R-20"
+    assert dumped["min_acreage"] == "1.0"
+    assert dumped["max_acreage"] == "2.5"
+    assert dumped["limit"] == 200
+    assert dumped["offset"] == 10
+
+
+@pytest.mark.parametrize(
+    ("payload", "message_fragment"),
+    [
+        ({"limit": 0}, "limit"),
+        ({"limit": 201}, "limit"),
+        ({"offset": -1}, "offset"),
+        ({"min_acreage": "3.0", "max_acreage": "2.0"}, "min_acreage must be less than or equal to max_acreage"),
+    ],
+)
+def test_parcel_list_params_rejects_invalid_bounds(payload: dict[str, object], message_fragment: str) -> None:
+    with pytest.raises(ValidationError) as exc_info:
+        ParcelListParams.model_validate(payload)
+
+    assert message_fragment in str(exc_info.value)
+
+
+def test_er_cluster_list_params_defaults_and_round_trips() -> None:
+    params = ERClusterListParams.model_validate({})
+    dumped = params.model_dump(mode="json")
+
+    assert dumped["entity_type"] is None
+    assert dumped["limit"] == 50
+    assert dumped["offset"] == 0
+    assert ERClusterListParams.model_validate(dumped).model_dump(mode="json") == dumped
+
+
+@pytest.mark.parametrize(
+    ("payload", "message_fragment"),
+    [
+        ({"entity_type": "org"}, "entity_type"),
+        ({"limit": 0}, "limit"),
+        ({"limit": 201}, "limit"),
+        ({"offset": -1}, "offset"),
+    ],
+)
+def test_er_cluster_list_params_rejects_invalid_values(payload: dict[str, object], message_fragment: str) -> None:
+    with pytest.raises(ValidationError) as exc_info:
+        ERClusterListParams.model_validate(payload)
+
+    assert message_fragment in str(exc_info.value)
+
+
+def test_cluster_member_response_serializes_uuid_and_allows_null_name() -> None:
+    entity_id = UUID("00000000-0000-0000-0000-000000000901")
+    response = ClusterMemberResponse.model_validate(
+        {
+            "entity_type": "person",
+            "entity_id": entity_id,
+            "is_canonical": True,
+            "canonical_name": None,
+            "split_at": "2026-03-18T12:00:00Z",
+        }
+    )
+    dumped = response.model_dump(mode="json")
+
+    assert dumped["entity_id"] == str(entity_id)
+    assert dumped["canonical_name"] is None
+    assert "split_at" not in dumped
+    assert ClusterMemberResponse.model_validate(dumped).model_dump(mode="json") == dumped
+
+
+def test_er_cluster_summary_response_round_trips_and_drops_mutation_fields() -> None:
+    cluster_id = UUID("00000000-0000-0000-0000-000000000902")
+    canonical_entity_id = UUID("00000000-0000-0000-0000-000000000903")
+    response = ERClusterSummaryResponse.model_validate(
+        {
+            "id": cluster_id,
+            "entity_type": "organization",
+            "canonical_entity_id": canonical_entity_id,
+            "canonical_name": "Civibus Action LLC",
+            "cluster_confidence": 0.875,
+            "member_count": 2,
+            "created_at": "2026-03-18T12:00:00Z",
+            "updated_at": "2026-03-18T12:00:00Z",
+        }
+    )
+    dumped = response.model_dump(mode="json")
+
+    assert dumped["id"] == str(cluster_id)
+    assert dumped["canonical_entity_id"] == str(canonical_entity_id)
+    assert dumped["cluster_confidence"] == pytest.approx(0.875)
+    assert "created_at" not in dumped
+    assert "updated_at" not in dumped
+    assert ERClusterSummaryResponse.model_validate(dumped).model_dump(mode="json") == dumped
+
+
+def test_er_cluster_detail_response_round_trips_with_members() -> None:
+    cluster_id = UUID("00000000-0000-0000-0000-000000000904")
+    canonical_entity_id = UUID("00000000-0000-0000-0000-000000000905")
+    noncanonical_entity_id = UUID("00000000-0000-0000-0000-000000000906")
+    response = ERClusterDetailResponse.model_validate(
+        {
+            "id": cluster_id,
+            "entity_type": "person",
+            "canonical_entity_id": canonical_entity_id,
+            "canonical_name": "Jane Doe",
+            "cluster_confidence": 0.95,
+            "member_count": 2,
+            "members": [
+                {
+                    "entity_type": "person",
+                    "entity_id": canonical_entity_id,
+                    "is_canonical": True,
+                    "canonical_name": "Jane Doe",
+                },
+                {
+                    "entity_type": "person",
+                    "entity_id": noncanonical_entity_id,
+                    "is_canonical": False,
+                    "canonical_name": "J. Doe",
+                    "split_at": None,
+                },
+            ],
+        }
+    )
+    dumped = response.model_dump(mode="json")
+
+    assert dumped["id"] == str(cluster_id)
+    assert dumped["members"][0]["entity_id"] == str(canonical_entity_id)
+    assert dumped["members"][1]["entity_id"] == str(noncanonical_entity_id)
+    assert dumped["members"][0]["is_canonical"] is True
+    assert dumped["members"][1]["is_canonical"] is False
+    assert "split_at" not in dumped["members"][1]
+    assert ERClusterDetailResponse.model_validate(dumped).model_dump(mode="json") == dumped
+
+
+def test_match_decision_response_round_trips_and_drops_mutation_fields() -> None:
+    decision_id = UUID("00000000-0000-0000-0000-000000000907")
+    entity_id_a = UUID("00000000-0000-0000-0000-000000000908")
+    entity_id_b = UUID("00000000-0000-0000-0000-000000000909")
+    response = MatchDecisionResponse.model_validate(
+        {
+            "id": decision_id,
+            "entity_type": "person",
+            "entity_id_a": entity_id_a,
+            "entity_id_b": entity_id_b,
+            "decision": "probable_match",
+            "confidence": 0.82,
+            "decided_by": "splink_v1",
+            "decision_method": "probabilistic",
+            "match_evidence": {"name_similarity": 0.9},
+            "decided_at": "2026-03-18T12:00:00Z",
+            "superseded_by": str(uuid4()),
+            "superseded_at": "2026-03-18T13:00:00Z",
+            "created_at": "2026-03-18T11:00:00Z",
+        }
+    )
+    dumped = response.model_dump(mode="json")
+
+    assert dumped["id"] == str(decision_id)
+    assert dumped["entity_id_a"] == str(entity_id_a)
+    assert dumped["entity_id_b"] == str(entity_id_b)
+    assert dumped["confidence"] == pytest.approx(0.82)
+    assert dumped["match_evidence"] == {"name_similarity": 0.9}
+    assert "superseded_by" not in dumped
+    assert "superseded_at" not in dumped
+    assert "created_at" not in dumped
+    assert MatchDecisionResponse.model_validate(dumped).model_dump(mode="json") == dumped
+
+
+def test_er_summary_response_round_trips_with_decision_counts() -> None:
+    response = ERSummaryResponse.model_validate(
+        {
+            "total_active_clusters": 3,
+            "total_active_members": 8,
+            "total_active_matches": 5,
+            "decision_counts": {
+                "match": 2,
+                "probable_match": 1,
+                "possible_match": 1,
+                "no_match": 1,
+            },
+            "updated_at": "2026-03-18T11:00:00Z",
+        }
+    )
+    dumped = response.model_dump(mode="json")
+
+    assert dumped["total_active_clusters"] == 3
+    assert dumped["total_active_members"] == 8
+    assert dumped["total_active_matches"] == 5
+    assert dumped["decision_counts"]["match"] == 2
+    assert dumped["decision_counts"]["no_match"] == 1
+    assert "updated_at" not in dumped
+    assert ERSummaryResponse.model_validate(dumped).model_dump(mode="json") == dumped
+
+
+def test_search_params_requires_q_with_minimum_length() -> None:
+    with pytest.raises(ValidationError):
+        SearchParams.model_validate({})
+
+    with pytest.raises(ValidationError):
+        SearchParams.model_validate({"q": "a"})
+
+
+def test_search_params_defaults_and_optional_entity_type() -> None:
+    params = SearchParams.model_validate({"q": "civ"})
+    dumped = params.model_dump(mode="json")
+
+    assert dumped["q"] == "civ"
+    assert dumped["entity_type"] is None
+    assert dumped["limit"] == 20
+    assert dumped["offset"] == 0
+
+
+@pytest.mark.parametrize(
+    ("payload", "message_fragment"),
+    [
+        ({"q": "civ", "entity_type": "organization"}, "entity_type"),
+        ({"q": "civ", "limit": 0}, "limit"),
+        ({"q": "civ", "limit": 101}, "limit"),
+        ({"q": "civ", "offset": -1}, "offset"),
+        ({"q": "x" * 101}, "at most 100"),
+    ],
+)
+def test_search_params_rejects_invalid_entity_type_and_bounds(
+    payload: dict[str, object],
+    message_fragment: str,
+) -> None:
+    with pytest.raises(ValidationError) as exc_info:
+        SearchParams.model_validate(payload)
+
+    assert message_fragment in str(exc_info.value)
+
+
+def test_search_result_serializes_and_round_trips() -> None:
+    result_id = UUID("00000000-0000-0000-0000-000000000123")
+    result = SearchResult.model_validate(
+        {
+            "entity_type": "committee",
+            "entity_id": result_id,
+            "name": "Civibus Committee",
+        }
+    )
+
+    dumped = result.model_dump(mode="json")
+    assert dumped == {
+        "entity_type": "committee",
+        "entity_id": str(result_id),
+        "name": "Civibus Committee",
+    }
+    assert SearchResult.model_validate(dumped).model_dump(mode="json") == dumped
+
+
+def test_person_slug_result_requires_canonical_name() -> None:
+    payload = {"id": str(uuid4())}
+
+    with pytest.raises(ValidationError):
+        PersonSlugResult.model_validate(payload)
+
+
+def test_person_slug_result_serializes_optional_fields_as_null_and_round_trips() -> None:
+    person_id = UUID("00000000-0000-0000-0000-000000000213")
+    result = PersonSlugResult.model_validate(
+        {
+            "id": person_id,
+            "canonical_name": "Alex Donor",
+        }
+    )
+
+    dumped = result.model_dump(mode="json")
+
+    assert dumped["id"] == str(person_id)
+    assert dumped["first_name"] is None
+    assert dumped["last_name"] is None
+    assert dumped["suffix"] is None
+    assert PersonSlugResult.model_validate(dumped).model_dump(mode="json") == dumped
+
+
+def test_donors_with_property_params_defaults_and_optional_jurisdiction() -> None:
+    params = DonorsWithPropertyParams.model_validate({})
+    dumped = params.model_dump(mode="json")
+
+    assert dumped["jurisdiction"] is None
+    assert dumped["limit"] == 50
+    assert dumped["offset"] == 0
+
+
+@pytest.mark.parametrize(
+    ("payload", "message_fragment"),
+    [
+        ({"limit": 0}, "limit"),
+        ({"limit": 201}, "limit"),
+        ({"offset": -1}, "offset"),
+    ],
+)
+def test_donors_with_property_params_rejects_out_of_bounds_values(
+    payload: dict[str, object],
+    message_fragment: str,
+) -> None:
+    with pytest.raises(ValidationError) as exc_info:
+        DonorsWithPropertyParams.model_validate(payload)
+
+    assert message_fragment in str(exc_info.value)
+
+
+def test_donors_with_property_result_requires_literal_match_type() -> None:
+    payload = {
+        "person_id": str(UUID("00000000-0000-0000-0000-000000000214")),
+        "canonical_name": "Taylor Cluster",
+        "match_type": "alias",
+    }
+
+    with pytest.raises(ValidationError):
+        DonorsWithPropertyResult.model_validate(payload)
+
+
+def test_donors_with_property_result_serializes_and_round_trips() -> None:
+    person_id = UUID("00000000-0000-0000-0000-000000000215")
+    result = DonorsWithPropertyResult.model_validate(
+        {
+            "person_id": person_id,
+            "canonical_name": "Taylor Cluster",
+            "match_type": "cluster",
+        }
+    )
+    dumped = result.model_dump(mode="json")
+
+    assert dumped["person_id"] == str(person_id)
+    assert dumped["canonical_name"] == "Taylor Cluster"
+    assert dumped["match_type"] == "cluster"
+    assert DonorsWithPropertyResult.model_validate(dumped).model_dump(mode="json") == dumped
+
+
+def test_committee_fundraising_summary_serializes_decimal_fields_and_round_trips() -> None:
+    committee_id = uuid4()
+    response = CommitteeFundraisingSummary.model_validate(
+        {
+            "committee_id": committee_id,
+            "committee_name": "Civibus Victory Fund",
+            "total_raised": Decimal("150000.50"),
+            "total_spent": Decimal("75000.25"),
+            "net": Decimal("75000.25"),
+            "transaction_count": 42,
+            "jurisdiction": "federal/fec",
+            "data_through": datetime(2026, 3, 15, 12, 0, tzinfo=timezone.utc),
+        }
+    )
+
+    dumped = response.model_dump(mode="json")
+
+    # Decimal fields serialize as strings (not floats) to preserve precision
+    assert dumped["committee_id"] == str(committee_id)
+    assert dumped["committee_name"] == "Civibus Victory Fund"
+    assert dumped["total_raised"] == "150000.50"
+    assert dumped["total_spent"] == "75000.25"
+    assert dumped["net"] == "75000.25"
+    assert dumped["transaction_count"] == 42
+    assert dumped["jurisdiction"] == "federal/fec"
+    assert dumped["data_through"] == "2026-03-15T12:00:00Z"
+    assert CommitteeFundraisingSummary.model_validate(dumped).model_dump(mode="json") == dumped
+
+
+def test_committee_fundraising_summary_allows_null_jurisdiction_and_data_through() -> None:
+    response = CommitteeFundraisingSummary.model_validate(
+        {
+            "committee_id": uuid4(),
+            "committee_name": "Zero Committee",
+            "total_raised": Decimal("0.00"),
+            "total_spent": Decimal("0.00"),
+            "net": Decimal("0.00"),
+            "transaction_count": 0,
+            "jurisdiction": None,
+            "data_through": None,
+        }
+    )
+
+    dumped = response.model_dump(mode="json")
+
+    assert dumped["total_raised"] == "0.00"
+    assert dumped["total_spent"] == "0.00"
+    assert dumped["net"] == "0.00"
+    assert dumped["transaction_count"] == 0
+    assert dumped["jurisdiction"] is None
+    assert dumped["data_through"] is None
+    assert CommitteeFundraisingSummary.model_validate(dumped).model_dump(mode="json") == dumped
+
+
+def test_candidate_fundraising_summary_serializes_decimals_and_nested_committees_round_trip() -> None:
+    candidate_id = uuid4()
+    committee_id = uuid4()
+    response = CandidateFundraisingSummary.model_validate(
+        {
+            "candidate_id": candidate_id,
+            "candidate_name": "Candidate Summary Name",
+            "total_raised": Decimal("1500.50"),
+            "total_spent": Decimal("300.25"),
+            "net": Decimal("1200.25"),
+            "transaction_count": 4,
+            "committees": [
+                {
+                    "committee_id": committee_id,
+                    "committee_name": "Committee Summary Name",
+                    "total_raised": Decimal("1500.50"),
+                    "total_spent": Decimal("300.25"),
+                    "net": Decimal("1200.25"),
+                    "transaction_count": 4,
+                    "jurisdiction": "state/nc",
+                    "data_through": datetime(2026, 3, 20, 12, 0, tzinfo=timezone.utc),
+                }
+            ],
+        }
+    )
+
+    dumped = response.model_dump(mode="json")
+
+    assert dumped["candidate_id"] == str(candidate_id)
+    assert dumped["candidate_name"] == "Candidate Summary Name"
+    assert dumped["total_raised"] == "1500.50"
+    assert dumped["total_spent"] == "300.25"
+    assert dumped["net"] == "1200.25"
+    assert dumped["transaction_count"] == 4
+    assert len(dumped["committees"]) == 1
+    assert dumped["committees"][0]["committee_id"] == str(committee_id)
+    assert dumped["committees"][0]["total_raised"] == "1500.50"
+    assert dumped["committees"][0]["total_spent"] == "300.25"
+    assert dumped["committees"][0]["net"] == "1200.25"
+    assert dumped["committees"][0]["transaction_count"] == 4
+    assert dumped["committees"][0]["jurisdiction"] == "state/nc"
+    assert dumped["committees"][0]["data_through"] == "2026-03-20T12:00:00Z"
+    assert CandidateFundraisingSummary.model_validate(dumped).model_dump(mode="json") == dumped
+
+
+def test_filing_period_summary_serializes_decimal_and_date_fields_and_round_trips() -> None:
+    filing_id = uuid4()
+    summary = FilingPeriodSummary.model_validate(
+        {
+            "filing_id": filing_id,
+            "filing_fec_id": "FILING-0001",
+            "filing_name": "Q1 Filing",
+            "report_type": "Q1",
+            "amendment_indicator": "A",
+            "coverage_start_date": date(2026, 1, 1),
+            "coverage_end_date": date(2026, 3, 31),
+            "receipt_date": date(2026, 4, 17),
+            "total_raised": Decimal("1250.50"),
+            "total_spent": Decimal("500.25"),
+            "net": Decimal("750.25"),
+            "transaction_count": 3,
+        }
+    )
+
+    dumped = summary.model_dump(mode="json")
+
+    assert dumped["filing_id"] == str(filing_id)
+    assert dumped["filing_fec_id"] == "FILING-0001"
+    assert dumped["filing_name"] == "Q1 Filing"
+    assert dumped["report_type"] == "Q1"
+    assert dumped["amendment_indicator"] == "A"
+    assert dumped["coverage_start_date"] == "2026-01-01"
+    assert dumped["coverage_end_date"] == "2026-03-31"
+    assert dumped["receipt_date"] == "2026-04-17"
+    assert dumped["total_raised"] == "1250.50"
+    assert dumped["total_spent"] == "500.25"
+    assert dumped["net"] == "750.25"
+    assert dumped["transaction_count"] == 3
+    assert FilingPeriodSummary.model_validate(dumped).model_dump(mode="json") == dumped
+
+
+def test_committee_filing_breakdown_serializes_nested_filings_shape_and_round_trips() -> None:
+    committee_id = uuid4()
+    filing_id = uuid4()
+    breakdown = CommitteeFilingBreakdown.model_validate(
+        {
+            "committee_id": committee_id,
+            "committee_name": "Committee Filing Breakdown",
+            "filings": [
+                {
+                    "filing_id": filing_id,
+                    "filing_fec_id": "FILING-0002",
+                    "filing_name": None,
+                    "report_type": None,
+                    "amendment_indicator": "N",
+                    "coverage_start_date": None,
+                    "coverage_end_date": None,
+                    "receipt_date": None,
+                    "total_raised": Decimal("0.00"),
+                    "total_spent": Decimal("0.00"),
+                    "net": Decimal("0.00"),
+                    "transaction_count": 0,
+                }
+            ],
+        }
+    )
+
+    dumped = breakdown.model_dump(mode="json")
+
+    assert dumped["committee_id"] == str(committee_id)
+    assert dumped["committee_name"] == "Committee Filing Breakdown"
+    assert len(dumped["filings"]) == 1
+    assert dumped["filings"][0]["filing_id"] == str(filing_id)
+    assert dumped["filings"][0]["total_raised"] == "0.00"
+    assert dumped["filings"][0]["total_spent"] == "0.00"
+    assert dumped["filings"][0]["net"] == "0.00"
+    assert dumped["filings"][0]["coverage_end_date"] is None
+    assert dumped["filings"][0]["receipt_date"] is None
+    assert dumped["filings"][0]["transaction_count"] == 0
+    assert CommitteeFilingBreakdown.model_validate(dumped).model_dump(mode="json") == dumped
+
+
+def test_models_package_reexports_public_response_and_params_models() -> None:
+    expected_exports = {
+        "SourceInfo",
+        "PersonResponse",
+        "OrgResponse",
+        "CommitteeFilingBreakdown",
+        "CommitteeFundraisingSummary",
+        "CandidateFundraisingSummary",
+        "CommitteeResponse",
+        "CandidateResponse",
+        "FilingResponse",
+        "FilingPeriodSummary",
+        "IndependentExpenditureResponse",
+        "IndependentExpenditureSummary",
+        "TopSpenderEntry",
+        "TransactionResponse",
+        "TransactionListParams",
+        "PersonSlugResult",
+        "ParcelSummaryResponse",
+        "PropertyAssessmentResponse",
+        "PropertyOwnershipResponse",
+        "ParcelDetailResponse",
+        "ParcelListParams",
+        "DonorsWithPropertyParams",
+        "DonorsWithPropertyResult",
+        "ERClusterListParams",
+        "ClusterMemberResponse",
+        "ERClusterSummaryResponse",
+        "ERClusterDetailResponse",
+        "MatchDecisionResponse",
+        "ERDecisionCounts",
+        "ERSummaryResponse",
+        "SearchParams",
+        "SearchResult",
+        "GraphNeighbor",
+        "EntityRelationshipsResponse",
+    }
+
+    assert expected_exports.issubset(set(api_models.__all__))
+    for export_name in expected_exports:
+        assert getattr(api_models, export_name).__name__ == export_name

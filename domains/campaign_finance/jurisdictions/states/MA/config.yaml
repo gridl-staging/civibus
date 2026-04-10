@@ -1,0 +1,98 @@
+# Massachusetts campaign finance jurisdiction config
+# Source: OCPF (Office of Campaign and Political Finance) via ocpf2.blob.core.windows.net
+# Bulk ZIP downloads regenerated nightly at ~07:30 UTC for current year + 3 prior years.
+# Per-year ZIPs contain: reports.txt (filing summaries), report-items.txt (all transactions),
+# readme.txt (data dictionary). Contributions and expenditures are combined in report-items.txt,
+# differentiated by Record_Type_ID (200-series = receipts, 300-series = expenditures).
+# Filers data: ocpf-filers.zip (all registered committees/candidates).
+# REST API at api.ocpf.us also available (no auth, CORS *).
+
+jurisdiction:
+  name: "Massachusetts"
+  code: "MA"
+  type: "state"
+  fips: "25"
+  parent: null
+
+data_sources:
+  - name: "MA OCPF Report Items (Contributions + Expenditures)"
+    url: "https://www.ocpf.us/Data"
+    bulk_download_url: "https://ocpf2.blob.core.windows.net/downloads/data2/ocpf-{year}-reports.zip"
+    api_base_url: "https://api.ocpf.us"
+    format: "csv"
+    auth_required: false
+    update_frequency: "daily"
+    coverage:
+      start_year: 2002
+      covers_sub_jurisdictions: true
+      office_levels:
+        - governor
+        - lieutenant_governor
+        - attorney_general
+        - secretary_of_state
+        - state_treasurer
+        - state_auditor
+        - state_senate
+        - state_house
+        - county
+        - municipal
+      transaction_types:
+        - contributions
+        - expenditures
+    field_mappings:
+      Item_ID: "ma.item_id"
+      Report_ID: "ma.report_id"
+      Record_Type_ID: "ma.record_type_id"
+      Date: "transaction.date"
+      Amount: "transaction.amount"
+      Name: "donor.org_name"
+      First_Name: "donor.first_name"
+      Street_Address: "donor.address.street1"
+      City: "donor.address.city"
+      State: "donor.address.state"
+      Zip: "donor.address.zip"
+      Description: "transaction.description"
+      Related_CPF_ID: "ma.related_cpf_id"
+      Occupation: "donor.occupation"
+      Employer: "donor.employer"
+      Principal_Officer: "ma.principal_officer"
+      Tender_Type_ID: "ma.tender_type_id"
+      Clarified_Name: "ma.clarified_name"
+      Clarified_Purpose: "ma.clarified_purpose"
+      Is_Supported: "ma.is_supported"
+      Is_Previous_Year_Receipt: "ma.is_previous_year_receipt"
+    scraper: null
+    last_successful_pull: null
+    last_verified_working: "2026-03-29"
+    known_issues:
+      - "Report-items.txt is tab-delimited with Windows line endings"
+      - "Contributions and expenditures combined — split by Record_Type_ID at parse time"
+      - "Record_Type_ID 200-series = receipts/contributions, 300-series = expenditures"
+      - "Current year + 3 prior years regenerated nightly; older years frozen at year-end"
+      - "2022 data was last updated 2025-12-31 and is now frozen"
+
+laws:
+  source_url: "https://www.ocpf.us/Legal/LawsAndGuidelines"
+  last_verified: "2026-03-29"
+  contribution_limits:
+    individual_to_candidate: 1000
+    pac_to_candidate: 1000
+    corporate_direct: "prohibited"
+    union_direct: "prohibited"
+    party_to_candidate: null
+  itemization_threshold: 50
+  reporting:
+    periods: ["pre-election", "post-election", "year-end"]
+    electronic_filing_required: "required"
+  public_financing: false
+  notes:
+    - "MA has some of the strictest limits in the nation ($1000 individual to candidate)"
+    - "Corporate and union direct contributions are prohibited"
+    - "Ballot question committees have different rules"
+
+status:
+  discovery: "complete"
+  scraper: "working"
+  normalization: "partial"
+  entity_resolution: "pending"
+  last_full_update: null

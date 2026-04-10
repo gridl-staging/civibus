@@ -1,0 +1,17 @@
+.git/
+.github/
+.matt/
+.env
+.env.*
+.venv/
+.pytest_cache/
+.ruff_cache/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.log
+docs/
+tests/
+eval/
+infra/scripts/backups/

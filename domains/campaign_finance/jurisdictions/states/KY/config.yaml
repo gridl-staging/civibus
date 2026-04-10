@@ -1,0 +1,146 @@
+# Kentucky campaign finance jurisdiction config
+# Source: Kentucky Registry of Election Finance (KREF) at secure.kentucky.gov/kref/publicsearch/
+# Contribution export endpoint: /ExportContributors?... returns CSV without authentication
+# Expenditure export endpoint: /Export?... returns CSV without authentication
+# JSON endpoints: /GetAllElectionDates, /BallotSearch/GetElectionTypeByDate, etc.
+
+jurisdiction:
+  name: "Kentucky"
+  code: "KY"
+  type: "state"
+  fips: "21"
+  parent: null
+
+data_sources:
+  - name: "KY KREF Campaign Finance — Contributions"
+    url: "https://secure.kentucky.gov/kref/publicsearch/"
+    bulk_download_url: null
+    api_base_url: "https://secure.kentucky.gov/kref/publicsearch"
+    format: "csv"
+    auth_required: false
+    update_frequency: "weekly"
+    coverage:
+      start_year: 2022
+      covers_sub_jurisdictions: true
+      office_levels:
+        - governor
+        - lieutenant_governor
+        - attorney_general
+        - secretary_of_state
+        - state_senate
+        - state_house
+        - county
+        - municipal
+      transaction_types:
+        - contributions
+    field_mappings:
+      To Organization: "ky.to_organization"
+      From Organization Name: "donor.org_name"
+      Contributor Last Name: "donor.last_name"
+      Contributor First Name: "donor.first_name"
+      Recipient Last Name: "ky.committee_candidate_last_name"
+      Recipient First Name: "ky.committee_candidate_first_name"
+      Office Sought: "jurisdiction.office"
+      Location: "ky.location"
+      Election Date: "ky.election_date"
+      Election Type: "ky.election_type"
+      Exemption Status: "ky.exemption_status"
+      OtherText: "ky.other_text"
+      Address 1: "donor.address.street1"
+      Address 2: "donor.address.street2"
+      City: "donor.address.city"
+      State: "donor.address.state"
+      Zip: "donor.address.zip"
+      Amount: "transaction.amount"
+      Contribution Type: "ky.contribution_type"
+      Contribution Mode: "ky.contribution_mode"
+      Occupation: "donor.occupation"
+      Other Occupation: "ky.other_occupation"
+      Employer: "donor.employer"
+      Spouse Prefix: "ky.spouse_prefix"
+      Spouse Last Name: "ky.spouse_last_name"
+      Spouse First Name: "ky.spouse_first_name"
+      Spouse Middle Initial: "ky.spouse_middle_initial"
+      Spouse Suffix: "ky.spouse_suffix"
+      Spouse Occupation: "ky.spouse_occupation"
+      Spouse Employer: "ky.spouse_employer"
+      Number Of Contributors: "ky.number_of_contributors"
+      In kind Description: "transaction.description"
+      Receipt Date: "transaction.date"
+      Statement Type: "ky.statement_type"
+    scraper: null
+    last_successful_pull: null
+    last_verified_working: "2026-03-30"
+    known_issues:
+      - "Contribution search export uses /ExportContributors, not the candidate-summary /ExportSearch route"
+      - "GetAllElectionDates returns JSON array of election dates including 5/19/2026"
+      - "No authentication required; no bot protection observed as of 2026-03-30"
+
+  - name: "KY KREF Campaign Finance — Expenditures"
+    url: "https://secure.kentucky.gov/kref/publicsearch/"
+    bulk_download_url: null
+    api_base_url: "https://secure.kentucky.gov/kref/publicsearch"
+    format: "csv"
+    auth_required: false
+    update_frequency: "weekly"
+    coverage:
+      start_year: 2022
+      covers_sub_jurisdictions: true
+      office_levels:
+        - governor
+        - lieutenant_governor
+        - attorney_general
+        - secretary_of_state
+        - state_senate
+        - state_house
+        - county
+        - municipal
+      transaction_types:
+        - expenditures
+    field_mappings:
+      Recipient Last Name: "payee.last_name"
+      Recipient First Name: "payee.first_name"
+      Organization Name: "payee.org_name"
+      Purpose: "transaction.description"
+      Occupation: "payee.occupation"
+      Disbursement Code: "ky.expenditure_type"
+      Disbursement Amount: "transaction.amount"
+      Disbursement Date: "transaction.date"
+      From Candidate First Name: "ky.committee_candidate_first_name"
+      From Candidate Last Name: "ky.committee_candidate_last_name"
+      From Organization Name: "ky.from_organization_name"
+      Statement Type: "ky.statement_type"
+      Office Sought: "jurisdiction.office"
+      Election Date: "ky.election_date"
+      Election Type: "ky.election_type"
+      Is Independent Expenditure: "ky.is_independent_expenditure"
+    scraper: null
+    last_successful_pull: null
+    last_verified_working: "2026-03-30"
+    known_issues:
+      - "Expenditure search export uses /Export with a different query contract than contributions"
+
+laws:
+  source_url: "https://kref.ky.gov/"
+  last_verified: "2026-03-30"
+  contribution_limits:
+    individual_to_candidate: null
+    pac_to_candidate: null
+    corporate_direct: null
+    union_direct: null
+    party_to_candidate: null
+  itemization_threshold: 0
+  reporting:
+    periods: ["pre-primary", "pre-election", "post-election", "annual"]
+    electronic_filing_required: "required"
+  public_financing: false
+  notes:
+    - "2026 filing calendar: May 19 primary, November 3 general"
+    - "KREF public search includes current-cycle candidates and filing activity"
+
+status:
+  discovery: "complete"
+  scraper: "in_progress"
+  normalization: "pending"
+  entity_resolution: "pending"
+  last_full_update: null

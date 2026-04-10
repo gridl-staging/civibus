@@ -1,0 +1,298 @@
+# Pennsylvania campaign finance jurisdiction config
+# Source: Pennsylvania Department of State (DOS) campaign finance yearly full exports
+
+jurisdiction:
+  name: "Pennsylvania"
+  code: "PA"
+  type: "state"
+  fips: "42"
+  parent: null
+
+data_sources:
+  - name: "PA DOS Campaign Finance — Contributions"
+    url: "https://www.pa.gov/agencies/dos/resources/voting-and-elections-resources/campaign-finance-data"
+    bulk_download_url: "https://www.pa.gov/content/dam/copapwp-pagov/en/dos/resources/voting-and-elections/campaign-finance/campaign-finance-data/{year}.zip"
+    api_base_url: null
+    format: "csv"
+    auth_required: false
+    update_frequency: "weekly"
+    coverage:
+      start_year: 2000
+      covers_sub_jurisdictions: true
+      office_levels:
+        - governor
+        - lieutenant_governor
+        - attorney_general
+        - auditor_general
+        - state_treasurer
+        - supreme_court
+        - superior_court
+        - commonwealth_court
+        - state_senate
+        - state_house
+        - county
+        - municipal
+      transaction_types:
+        - contributions
+    field_mappings:
+      CampaignFinanceID: "pa.campaign_finance_id"
+      FilerID: "committee.id"
+      EYEAR: "transaction.year"
+      SubmittedDate: "filing.submitted_date"
+      CYCLE: "pa.cycle"
+      Section: "pa.section"
+      CONTRIBUTOR: "donor.name"
+      ADDRESS1: "donor.address.street1"
+      ADDRESS2: "donor.address.street2"
+      CITY: "donor.address.city"
+      STATE: "donor.address.state"
+      ZIPCODE: "donor.address.zip"
+      OCCUPATION: "donor.occupation"
+      ENAME: "donor.employer"
+      EADDRESS1: "pa.donor_employer_address.street1"
+      EADDRESS2: "pa.donor_employer_address.street2"
+      ECITY: "pa.donor_employer_address.city"
+      ESTATE: "pa.donor_employer_address.state"
+      EZIPCODE: "pa.donor_employer_address.zip"
+      CONTDATE1: "transaction.date"
+      CONTAMT1: "transaction.amount"
+      CONTDATE2: "pa.contribution_date_2"
+      CONTAMT2: "pa.contribution_amount_2"
+      CONTDATE3: "pa.contribution_date_3"
+      CONTAMT3: "pa.contribution_amount_3"
+      CONTDESC: "transaction.description"
+    scraper: null
+    last_successful_pull: null
+    last_verified_working: "2026-03-28"
+    known_issues:
+      - "yearly_bulk_download_url_exception:2025=https://www.pa.gov/content/dam/copapwp-pagov/en/dos/resources/voting-and-elections/campaign-finance/campaign-finance-data/2025%20campaign%20finance%20full%20export%20.zip"
+      - "contrib_2025.txt includes non-UTF8 bytes (0x82, 0xA0, 0xFF); decode with cp437"
+      - "Detail rows do not include amendment flags; amendment state is inherited by joining detail CampaignFinanceID to filer CampaignfinanceID"
+      - "update_frequency changed to weekly (2026-03-28): despite URL labeling as 'annual', current-year ZIPs are regenerated roughly weekly with ~4 day lag from latest filing. 2026.zip Last-Modified: 2026-03-23, contains data through SubmittedDate 2026-03-19. All reporting cycles (pre-primary, pre-election, 24-hour, etc.) are included as filed, not batched annually."
+      - "data.pa.gov SODA API exists (datasets: w5um-i7zu receipts, btk5-mx6k expenses, 8bef-t5zg debt, 53wp-ib3s filers) but returns 403 requiring login — not usable without authentication. Contributions 'Current State' dataset not found."
+      - "campaignfinanceonline.pa.gov is behind Incapsula bot protection and was temporarily unavailable as of 2026-03-28"
+
+  - name: "PA DOS Campaign Finance — Expenditures"
+    url: "https://www.pa.gov/agencies/dos/resources/voting-and-elections-resources/campaign-finance-data"
+    bulk_download_url: "https://www.pa.gov/content/dam/copapwp-pagov/en/dos/resources/voting-and-elections/campaign-finance/campaign-finance-data/{year}.zip"
+    api_base_url: null
+    format: "csv"
+    auth_required: false
+    update_frequency: "weekly"
+    coverage:
+      start_year: 2000
+      covers_sub_jurisdictions: true
+      office_levels:
+        - governor
+        - lieutenant_governor
+        - attorney_general
+        - auditor_general
+        - state_treasurer
+        - supreme_court
+        - superior_court
+        - commonwealth_court
+        - state_senate
+        - state_house
+        - county
+        - municipal
+      transaction_types:
+        - expenditures
+    field_mappings:
+      CampaignFinanceID: "pa.campaign_finance_id"
+      FILERID: "committee.id"
+      EYEAR: "transaction.year"
+      SubmittedDate: "filing.submitted_date"
+      CYCLE: "pa.cycle"
+      EXPNAME: "payee.name"
+      ADDRESS1: "payee.address.street1"
+      ADDRESS2: "payee.address.street2"
+      CITY: "payee.address.city"
+      STATE: "payee.address.state"
+      ZIPCODE: "payee.address.zip"
+      EXPDATE: "transaction.date"
+      EXPAMT: "transaction.amount"
+      EXPDESC: "transaction.description"
+    scraper: null
+    last_successful_pull: null
+    last_verified_working: "2026-03-28"
+    known_issues:
+      - "yearly_bulk_download_url_exception:2025=https://www.pa.gov/content/dam/copapwp-pagov/en/dos/resources/voting-and-elections/campaign-finance/campaign-finance-data/2025%20campaign%20finance%20full%20export%20.zip"
+      - "expense_2025.txt includes non-UTF8 bytes (0x82); decode with cp437"
+      - "Detail rows do not include amendment flags; amendment state is inherited by joining detail CampaignFinanceID to filer CampaignfinanceID"
+
+  - name: "PA DOS Campaign Finance — Debt"
+    url: "https://www.pa.gov/agencies/dos/resources/voting-and-elections-resources/campaign-finance-data"
+    bulk_download_url: "https://www.pa.gov/content/dam/copapwp-pagov/en/dos/resources/voting-and-elections/campaign-finance/campaign-finance-data/{year}.zip"
+    api_base_url: null
+    format: "csv"
+    auth_required: false
+    update_frequency: "weekly"
+    coverage:
+      start_year: 2000
+      covers_sub_jurisdictions: true
+      office_levels:
+        - governor
+        - lieutenant_governor
+        - attorney_general
+        - auditor_general
+        - state_treasurer
+        - supreme_court
+        - superior_court
+        - commonwealth_court
+        - state_senate
+        - state_house
+        - county
+        - municipal
+      transaction_types:
+        - debts
+    field_mappings:
+      CampaignFinanceID: "pa.campaign_finance_id"
+      FILERID: "committee.id"
+      EYEAR: "transaction.year"
+      SubmittedDate: "filing.submitted_date"
+      CYCLE: "pa.cycle"
+      DBTNAME: "lender.name"
+      ADDRESS1: "lender.address.street1"
+      ADDRESS2: "lender.address.street2"
+      CITY: "lender.address.city"
+      STATE: "lender.address.state"
+      ZIPCODE: "lender.address.zip"
+      DBTDATE: "transaction.date"
+      DBTAMT: "transaction.amount"
+      DBTDESC: "transaction.description"
+    scraper: null
+    last_successful_pull: null
+    last_verified_working: "2026-03-28"
+    known_issues:
+      - "yearly_bulk_download_url_exception:2025=https://www.pa.gov/content/dam/copapwp-pagov/en/dos/resources/voting-and-elections/campaign-finance/campaign-finance-data/2025%20campaign%20finance%20full%20export%20.zip"
+      - "Detail rows do not include amendment flags; amendment state is inherited by joining detail CampaignFinanceID to filer CampaignfinanceID"
+
+  - name: "PA DOS Campaign Finance — Receipts"
+    url: "https://www.pa.gov/agencies/dos/resources/voting-and-elections-resources/campaign-finance-data"
+    bulk_download_url: "https://www.pa.gov/content/dam/copapwp-pagov/en/dos/resources/voting-and-elections/campaign-finance/campaign-finance-data/{year}.zip"
+    api_base_url: null
+    format: "csv"
+    auth_required: false
+    update_frequency: "weekly"
+    coverage:
+      start_year: 2000
+      covers_sub_jurisdictions: true
+      office_levels:
+        - governor
+        - lieutenant_governor
+        - attorney_general
+        - auditor_general
+        - state_treasurer
+        - supreme_court
+        - superior_court
+        - commonwealth_court
+        - state_senate
+        - state_house
+        - county
+        - municipal
+      transaction_types:
+        - receipts
+    field_mappings:
+      CampaignFinanceID: "pa.campaign_finance_id"
+      FILERID: "committee.id"
+      EYEAR: "transaction.year"
+      SubmittedDate: "filing.submitted_date"
+      CYCLE: "pa.cycle"
+      RECNAME: "pa.receipt_source_name"
+      ADDRESS1: "pa.receipt_source_address.street1"
+      ADDRESS2: "pa.receipt_source_address.street2"
+      CITY: "pa.receipt_source_address.city"
+      STATE: "pa.receipt_source_address.state"
+      ZIPCODE: "pa.receipt_source_address.zip"
+      RECDESC: "transaction.description"
+      RECDATE: "transaction.date"
+      RECAMT: "transaction.amount"
+    scraper: null
+    last_successful_pull: null
+    last_verified_working: "2026-03-28"
+    known_issues:
+      - "yearly_bulk_download_url_exception:2025=https://www.pa.gov/content/dam/copapwp-pagov/en/dos/resources/voting-and-elections/campaign-finance/campaign-finance-data/2025%20campaign%20finance%20full%20export%20.zip"
+      - "Detail rows do not include amendment flags; amendment state is inherited by joining detail CampaignFinanceID to filer CampaignfinanceID"
+
+  - name: "PA DOS Campaign Finance — Filing Index"
+    url: "https://www.pa.gov/agencies/dos/resources/voting-and-elections-resources/campaign-finance-data"
+    bulk_download_url: "https://www.pa.gov/content/dam/copapwp-pagov/en/dos/resources/voting-and-elections/campaign-finance/campaign-finance-data/{year}.zip"
+    api_base_url: null
+    format: "csv"
+    auth_required: false
+    update_frequency: "weekly"
+    coverage:
+      start_year: 2000
+      covers_sub_jurisdictions: true
+      office_levels:
+        - governor
+        - lieutenant_governor
+        - attorney_general
+        - auditor_general
+        - state_treasurer
+        - supreme_court
+        - superior_court
+        - commonwealth_court
+        - state_senate
+        - state_house
+        - county
+        - municipal
+      transaction_types:
+        - filings
+    field_mappings:
+      CampaignfinanceID: "pa.campaignfinance_id"
+      FILERID: "committee.id"
+      EYEAR: "pa.election_year"
+      SubmittedDate: "filing.submitted_date"
+      CYCLE: "pa.cycle"
+      AMMEND: "pa.amend_flag"
+      TERMINATE: "pa.terminate_flag"
+      FILERTYPE: "committee.type"
+      FILERNAME: "committee.name"
+      OFFICE: "jurisdiction.office"
+      DISTRICT: "jurisdiction.district"
+      PARTY: "committee.party"
+      ADDRESS1: "committee.address.street1"
+      ADDRESS2: "committee.address.street2"
+      CITY: "committee.address.city"
+      STATE: "committee.address.state"
+      ZIPCODE: "committee.address.zip"
+      COUNTY: "jurisdiction.county"
+      PHONE: "committee.phone"
+      BEGINNING: "pa.beginning_balance"
+      MONETARY: "pa.unitemized_monetary"
+      INKIND: "pa.unitemized_inkind"
+    scraper: null
+    last_successful_pull: null
+    last_verified_working: "2026-03-28"
+    known_issues:
+      - "yearly_bulk_download_url_exception:2025=https://www.pa.gov/content/dam/copapwp-pagov/en/dos/resources/voting-and-elections/campaign-finance/campaign-finance-data/2025%20campaign%20finance%20full%20export%20.zip"
+      - "CampaignFinanceID to CampaignfinanceID join is required to inherit amendment state for detail rows"
+      - "Amendment indicator mapping is filing-level only: A when AMMEND=Y, T when AMMEND!=Y and TERMINATE=Y, N otherwise"
+
+laws:
+  source_url: "https://www.pa.gov/agencies/dos/programs/voting-and-elections/campaign-finance"
+  last_verified: "2026-03-21"
+  contribution_limits:
+    individual_to_candidate: "unlimited"
+    pac_to_candidate: "unlimited"
+    corporate_direct: "prohibited"
+    union_direct: "prohibited"
+    party_to_candidate: "unlimited"
+  itemization_threshold: 50
+  reporting:
+    periods: ["annual", "pre-primary", "post-primary", "pre-election", "post-election", "24-hour"]
+    electronic_filing_required: "not_required"
+  public_financing: false
+  notes:
+    - "PA DOS Campaign Finance FAQ states there is no dollar limit for individual contributions, but cash contributions over $100 are not allowed"
+    - "PA DOS Campaign Finance FAQ states corporations and labor unions (unincorporated associations) cannot make contributions or expenditures to candidates or political committees"
+    - "PA DOS reporting guidance requires multiple periodic reports and 24-hour reporting for contributions or independent expenditures of $500 or more after the final pre-election or pre-primary report"
+    - "PA DOS reporting guidance lists late fee penalties as $20/day for first six days, then $10/day, capped at $250"
+
+status:
+  discovery: "complete"
+  scraper: "pending"
+  normalization: "pending"
+  entity_resolution: "pending"
+  last_full_update: null

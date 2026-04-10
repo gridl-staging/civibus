@@ -1,0 +1,4 @@
+Recipient Last Name,Recipient First Name,Organization Name,Purpose,Occupation,Disbursement Code,Disbursement Amount,Disbursement Date,From Candidate First Name,From Candidate Last Name,From Organization Name,Statement Type,Office Sought,Election Date,Election Type,Is Independent Expenditure
+,,BLUEGRASS PRINTING INC,Campaign literature,,MONETARY,800.00,12/15/2021,Jane,Doe,,ANNUAL,GOVERNOR,5/19/2026,PRIMARY,
+JOHNSON,AMY,,Consulting services,Consultant,MONETARY,1500.00,03/05/2026,Jane,Doe,,PRE-PRIMARY,GOVERNOR,5/19/2026,PRIMARY,
+,,CITIZENS FOR LIBERTY PAC,Television advertising against opponent,,MONETARY,25000.00,04/01/2026,John,Smith,,PRE-PRIMARY,GOVERNOR,5/19/2026,PRIMARY,True

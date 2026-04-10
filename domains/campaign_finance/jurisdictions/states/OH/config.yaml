@@ -1,0 +1,160 @@
+# Ohio campaign finance jurisdiction config
+# Source: Ohio Secretary of State (SOS) APEX File Transfer Page bulk CSV exports
+
+jurisdiction:
+  name: "Ohio"
+  code: "OH"
+  type: "state"
+  fips: "39"
+  parent: null
+
+data_sources:
+  - name: "OH SOS Campaign Finance — Contributions"
+    url: "https://www.ohiosos.gov/campaign-finance/search/"
+    bulk_download_url: "https://www6.ohiosos.gov/ords/f?p=CFDISCLOSURE:73:0::NO:RP:P73_TYPE:{TYPE}:"
+    api_base_url: null
+    format: "csv"
+    auth_required: false
+    update_frequency: "annual"
+    coverage:
+      start_year: 1990
+      covers_sub_jurisdictions: true
+      office_levels:
+        - governor
+        - lieutenant_governor
+        - secretary_of_state
+        - attorney_general
+        - state_auditor
+        - state_treasurer
+        - supreme_court
+        - state_senate
+        - state_house
+        - county
+        - municipal
+      transaction_types:
+        - contributions
+    field_mappings:
+      COM_NAME: "committee.name"
+      MASTER_KEY: "committee.id"
+      REPORT_DESCRIPTION: "oh.report_description"
+      RPT_YEAR: "transaction.year"
+      REPORT_KEY: "transaction.report_id"
+      SHORT_DESCRIPTION: "oh.short_description"
+      FIRST_NAME: "donor.name.first"
+      MIDDLE_NAME: "donor.name.middle"
+      LAST_NAME: "donor.name.last"
+      SUFFIX_NAME: "donor.name.suffix"
+      NON_INDIVIDUAL: "donor.name.organization"
+      PAC_REG_NO: "donor.pac_registration_number"
+      ADDRESS: "donor.address.street1"
+      CITY: "donor.address.city"
+      STATE: "donor.address.state"
+      ZIP: "donor.address.zip"
+      FILE_DATE: "transaction.date"
+      AMOUNT: "transaction.amount"
+      EVENT_DATE: "transaction.event_date"
+      EMP_OCCUPATION: "oh.donor_employer_occupation"
+      INKIND_DESCRIPTION: "transaction.in_kind_description"
+      OTHER_INCOME_TYPE: "oh.other_income_type"
+      RCV_EVENT: "oh.receive_event"
+      CANDIDATE_FIRST_NAME: "candidate.name.first"
+      CANDIDATE_LAST_NAME: "candidate.name.last"
+      OFFICE: "jurisdiction.office"
+      DISTRICT: "jurisdiction.district"
+      PARTY: "committee.party"
+    scraper: null
+    last_successful_pull: null
+    last_verified_working: null
+    known_issues:
+      - "APEX file transfer listing page was unavailable (HTTP 403 maintenance) on 2026-03-22 and can be unstable during maintenance windows"
+      - "Rows do not expose a native row-level transaction identifier; downstream loaders must derive deterministic source_record_key hashes"
+      - "No verified amendment indicator field in contribution CSV rows; amendment fallback may require REPORT_DESCRIPTION or SHORT_DESCRIPTION text parsing"
+      - "Contributions use OFFICE while expenditures use OFFICE_SOUGHT, so office-field mapping must remain data-type specific"
+
+  - name: "OH SOS Campaign Finance — Expenditures"
+    url: "https://www.ohiosos.gov/campaign-finance/search/"
+    bulk_download_url: "https://www6.ohiosos.gov/ords/f?p=CFDISCLOSURE:73:0::NO:RP:P73_TYPE:{TYPE}:"
+    api_base_url: null
+    format: "csv"
+    auth_required: false
+    update_frequency: "annual"
+    coverage:
+      start_year: 1990
+      covers_sub_jurisdictions: true
+      office_levels:
+        - governor
+        - lieutenant_governor
+        - secretary_of_state
+        - attorney_general
+        - state_auditor
+        - state_treasurer
+        - supreme_court
+        - state_senate
+        - state_house
+        - county
+        - municipal
+      transaction_types:
+        - expenditures
+    field_mappings:
+      COM_NAME: "committee.name"
+      MASTER_KEY: "committee.id"
+      REPORT_DESCRIPTION: "oh.report_description"
+      RPT_YEAR: "transaction.year"
+      REPORT_KEY: "transaction.report_id"
+      SHORT_DESCRIPTION: "oh.short_description"
+      FIRST_NAME: "payee.name.first"
+      MIDDLE_NAME: "payee.name.middle"
+      LAST_NAME: "payee.name.last"
+      SUFFIX_NAME: "payee.name.suffix"
+      NON_INDIVIDUAL: "payee.name.organization"
+      ADDRESS: "payee.address.street1"
+      CITY: "payee.address.city"
+      STATE: "payee.address.state"
+      ZIP: "payee.address.zip"
+      EXPEND_DATE: "transaction.date"
+      AMOUNT: "transaction.amount"
+      EVENT_DATE: "transaction.event_date"
+      PURPOSE: "transaction.description"
+      INKIND: "transaction.in_kind"
+      CANDIDATE_FIRST_NAME: "candidate.name.first"
+      CANDIDATE_LAST_NAME: "candidate.name.last"
+      OFFICE_SOUGHT: "jurisdiction.office"
+      DISTRICT: "jurisdiction.district"
+      PARTY: "committee.party"
+    scraper: null
+    last_successful_pull: null
+    last_verified_working: null
+    known_issues:
+      - "APEX file transfer listing page was unavailable (HTTP 403 maintenance) on 2026-03-22 and can be unstable during maintenance windows"
+      - "Rows do not expose a native row-level transaction identifier; downstream loaders must derive deterministic source_record_key hashes"
+      - "No verified amendment indicator field in expenditure CSV rows; amendment fallback may require REPORT_DESCRIPTION or SHORT_DESCRIPTION text parsing"
+      - "Contributions use OFFICE while expenditures use OFFICE_SOUGHT, so office-field mapping must remain data-type specific"
+
+laws:
+  source_url: "https://codes.ohio.gov/ohio-revised-code/chapter-3517"
+  last_verified: "2026-03-22"
+  contribution_limits:
+    individual_to_candidate: 16616
+    pac_to_candidate: 16616
+    corporate_direct: "prohibited"
+    union_direct: "prohibited"
+    party_to_candidate: 93048
+  itemization_threshold: 50
+  reporting:
+    periods: ["semiannual", "annual", "pre-election", "post-election"]
+    electronic_filing_required: "required"
+  public_financing: false
+  notes:
+    - "ORC §3517.102 base limits are $10,000 per election period; ORC §3517.104 requires CPI adjustment every odd year — current adjusted limits effective 2025-02-25 through 2027-02-24 are $16,615.67 (rounded to $16,616)"
+    - "Corporate and union direct contributions to candidates are prohibited per ORC §3599.03; they may form PACs and may contribute up to $10,000 per calendar year to a state political party restricted fund per ORC §3517.102(X)(3)(a)"
+    - "Party-to-candidate limits (CPI-adjusted) vary by office: $937,124 statewide, $186,926 senate, $93,048 house per election period; config uses $93,048 (lowest tier)"
+    - "ORC §3517.10(B)(4)(e) allows limited aggregation for contributions of $50 or less received at one social or fund-raising activity and payroll-deduction contributions of $50 or less per calendar year; ORC §3517.104 adjusts those amounts every odd year, and the 2025 SOS booklet shows the parallel in-kind social/fund-raising threshold at $425"
+    - "Contributions exceeding $100 require disclosure of donor's employer and occupation per ORC §3517.10"
+    - "ORC §3517.106 mandates electronic filing for statewide, General Assembly, appeals court, PAC, and party committees exceeding $10,000 in contributions or expenditures; only local candidates below threshold are exempt"
+
+status:
+  discovery: "complete"
+  scraper: "pending"
+  normalization: "pending"
+  entity_resolution: "pending"
+  last_full_update: null

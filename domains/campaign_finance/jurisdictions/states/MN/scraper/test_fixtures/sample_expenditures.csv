@@ -1,0 +1,3 @@
+Committee reg num,Committee name,Entity type,Entity sub-type,Vendor name,Vendor address 1,Vendor address 2,Vendor city,Vendor state,Vendor zip,Amount,Unpaid amount,Date,Purpose,Year,Type,In-kind descr,In-kind?,Affected committee name,Affected committee reg num
+9001,Friends of Example,Candidate Committee,Candidate,John Smith,100 Main St,,Saint Paul,MN,55104,80.50,0.00,2025-02-01,Signs,2025,Operating Expenditure,,N,,
+9001,Friends of Example,Candidate Committee,Candidate,North Star Printing LLC,200 Broad Ave,Suite 2,Minneapolis,MN,55403,315.25,10.00,2025-02-04,Direct mail,2025,Operating Expenditure,,N,,

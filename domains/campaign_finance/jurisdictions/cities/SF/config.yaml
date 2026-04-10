@@ -1,0 +1,126 @@
+# San Francisco campaign finance jurisdiction config
+# Source: SF Ethics Commission campaign finance disclosure data (DataSF/Socrata)
+
+jurisdiction:
+  name: "San Francisco"
+  code: "SF"
+  type: "municipality"
+  fips: "06075"
+  parent: "CA"
+
+data_sources:
+  - name: "SF Ethics Campaign Finance Transactions"
+    url: "https://sfethics.org/disclosures/campaign-finance-disclosure/campaign-finance-disclosure-data"
+    bulk_download_url: "https://data.sfgov.org/resource/pitq-e56w.csv"
+    api_base_url: "https://data.sfgov.org/resource"
+    format: "api"
+    auth_required: false
+    update_frequency: "daily"
+    coverage:
+      start_year: 1998
+      covers_sub_jurisdictions: false
+      office_levels:
+        - mayor
+        - board_of_supervisors
+        - city_attorney
+        - citywide
+      transaction_types:
+        - contributions
+        - expenditures
+        - loans
+        - independent_expenditures
+    field_mappings:
+      filing_id_number: "filing.id"
+      filing_date: "filing.date"
+      start_date: "filing.period_start"
+      end_date: "filing.period_end"
+      fppc_id: "sf.fppc_id"
+      filer_name: "committee.name"
+      filer_type: "committee.type"
+      calculated_amount: "sf.calculated_amount"
+      calculated_date: "sf.calculated_date"
+      form_type: "sf.form_type"
+      transaction_id: "transaction.id"
+      transaction_first_name: "donor.first_name"
+      transaction_last_name: "donor.last_name"
+      transaction_amount_1: "transaction.amount"
+      transaction_amount_2: "sf.transaction_amount_secondary"
+      transaction_date: "transaction.date"
+      transaction_date_1: "sf.transaction_date_secondary"
+      transaction_description: "transaction.description"
+      transaction_city: "donor.address.city"
+      transaction_state: "donor.address.state"
+      transaction_zip: "donor.address.zip"
+      transaction_name_title: "donor.name_title"
+      transaction_name_suffix: "donor.name_suffix"
+      transaction_occupation: "donor.occupation"
+      transaction_employer: "donor.employer"
+      transaction_self: "sf.transaction_self_reported"
+      transaction_check_number: "sf.check_number"
+      transaction_code: "transaction.type"
+      treasurer_first_name: "committee.treasurer.first_name"
+      treasurer_last_name: "committee.treasurer.last_name"
+      treasurer_name_title: "committee.treasurer.name_title"
+      treasurer_name_suffix: "committee.treasurer.name_suffix"
+      treasurer_city: "committee.treasurer.address.city"
+      treasurer_state: "committee.treasurer.address.state"
+      treasurer_zip: "committee.treasurer.address.zip"
+      intermediary_committee_id: "sf.intermediary_committee_id"
+      intermediary_first_name: "intermediary.first_name"
+      intermediary_last_name: "intermediary.last_name"
+      intermediary_name_title: "intermediary.name_title"
+      intermediary_name_suffix: "intermediary.name_suffix"
+      intermediary_employer: "intermediary.employer"
+      intermediary_occupation: "intermediary.occupation"
+      intermediary_selfemployed: "sf.intermediary_self_employed"
+      intermediary_city: "intermediary.address.city"
+      intermediary_state: "intermediary.address.state"
+      intermediary_zip: "intermediary.address.zip"
+      lender_name: "lender.name"
+      interest_rate: "loan.interest_rate"
+      loan_amount_1: "loan.amount_1"
+      loan_amount_2: "loan.amount_2"
+      loan_amount_3: "loan.amount_3"
+      loan_amount_4: "loan.amount_4"
+      loan_amount_5: "loan.amount_5"
+      loan_amount_6: "loan.amount_6"
+      loan_amount_7: "loan.amount_7"
+      loan_amount_8: "loan.amount_8"
+    scraper: null
+    last_successful_pull: null
+    last_verified_working: "2026-03-31"
+    known_issues:
+      - "SODA metadata currently exposes more than the Stage 1 baseline transaction field inventory; additional fields are intentionally deferred"
+      - "Supplementary datasets are verified in catalog but not yet mapped in this config: qizs-bwft (Filings Received), 4c8t-ngau (Campaign Filers)"
+
+laws:
+  source_url: "https://sfethics.org/disclosures/campaign-finance-disclosure"
+  last_verified: "2026-03-31"
+  contribution_limits:
+    individual_to_candidate: 500
+    pac_to_candidate: 500
+    corporate_direct: "prohibited"
+    union_direct: 500
+    party_to_candidate: null
+  itemization_threshold: 100
+  reporting:
+    periods:
+      - semi-annual
+      - pre-election
+      - post-election
+      - 24-hour
+    electronic_filing_required: "required"
+  public_financing:
+    type: "matching_funds"
+    administering_agency: "San Francisco Ethics Commission"
+  notes:
+    - "SF Ethics guidance currently prohibits corporate/LLC/LLP direct contributions and caps other direct sources, including unions, at $500 for city candidates"
+    - "San Francisco administers a local public financing program through the Ethics Commission"
+    - "This package currently models the transactions dataset only; additional filing/filer datasets are queued for a later mapping pass"
+
+status:
+  discovery: "complete"
+  scraper: "pending"
+  normalization: "pending"
+  entity_resolution: "pending"
+  last_full_update: null

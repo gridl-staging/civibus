@@ -1,0 +1,208 @@
+# Wisconsin campaign finance jurisdiction config
+# Source: Wisconsin Elections Commission Sunshine CSV exports
+
+jurisdiction:
+  name: "Wisconsin"
+  code: "WI"
+  type: "state"
+  fips: "55"
+  parent: null
+
+data_sources:
+  - name: "WI Sunshine Transactions Export"
+    url: "https://campaignfinance.wi.gov"
+    bulk_download_url: "https://campaignfinance.wi.gov/api/data-download/transactions"
+    api_base_url: "https://campaignfinance.wi.gov/api"
+    format: "csv"
+    auth_required: false
+    update_frequency: "daily"
+    coverage:
+      start_year: 2000
+      covers_sub_jurisdictions: false
+      office_levels:
+        - governor
+        - lieutenant_governor
+        - attorney_general
+        - secretary_of_state
+        - state_senate
+        - state_house
+        - county
+      transaction_types:
+        - transactions
+    field_mappings:
+      ID: "wi.transaction.id"
+      Date: "transaction.date"
+      Amount: "transaction.amount"
+      Comment: "transaction.description"
+      Contributor Entity ID (-> Related Payer Entity ID if applicable): "donor.id"
+      Contributor Name (-> Related Payer Name if applicable): "donor.name"
+      Contributor Entity Type: "donor.type"
+      Contributor Address 1: "donor.address.street1"
+      Contributor Address 2: "donor.address.street2"
+      Contributor City: "donor.address.city"
+      Contributor State: "donor.address.state"
+      Contributor Zip: "donor.address.zip"
+      Contributor Country: "donor.address.country"
+      Contributor Occupation: "donor.occupation"
+      Payee Entity ID: "payee.id"
+      Payee Name: "payee.name"
+      Payee Entity Type: "payee.type"
+      Payee Address 1: "payee.address.street1"
+      Payee Address 2: "payee.address.street2"
+      Payee City: "payee.address.city"
+      Payee State: "payee.address.state"
+      Payee Zip: "payee.address.zip"
+      Payee Country: "payee.address.country"
+      Transaction Type ID: "wi.transaction.type_id"
+      Transaction Type: "transaction.type"
+      Transaction Category ID: "wi.transaction.category_id"
+      Transaction Category: "wi.transaction.category"
+      Transaction Purpose ID: "wi.transaction.purpose_id"
+      Transaction Purpose: "wi.transaction.purpose"
+      Related Entity ID: "wi.related_entity.id"
+      Related Entity: "wi.related_entity.name"
+      Related Entity Type: "wi.related_entity.type"
+      Related Entity Address 1: "wi.related_entity.address.street1"
+      Related Entity Address 2: "wi.related_entity.address.street2"
+      Related Entity City: "wi.related_entity.address.city"
+      Related Entity State: "wi.related_entity.address.state"
+      Related Entity Zip: "wi.related_entity.address.zip"
+      Related Entity Country: "wi.related_entity.address.country"
+      Final Recipient ID: "wi.final_recipient.id"
+      Final Recipient: "wi.final_recipient.name"
+      Final Recipient Type: "wi.final_recipient.type"
+      Final Recipient Address 1: "wi.final_recipient.address.street1"
+      Final Recipient Address 2: "wi.final_recipient.address.street2"
+      Final Recipient City: "wi.final_recipient.address.city"
+      Final Recipient State: "wi.final_recipient.address.state"
+      Final Recipient Zip: "wi.final_recipient.address.zip"
+      Final Recipient Country: "wi.final_recipient.address.country"
+      Communication Date: "wi.transaction.communication_date"
+      Support Stance: "transaction.support_stance"
+      Related Ballot Event ID: "wi.ballot_event.id"
+      Related Ballot Event Name: "wi.ballot_event.name"
+      Related Ballot Event Date: "wi.ballot_event.date"
+      Related Office: "jurisdiction.office"
+      Related District: "jurisdiction.district"
+      Related Branch: "jurisdiction.branch"
+      Registrant ID: "committee.id"
+      Registrant Name: "committee.name"
+      Registrant Address: "committee.address.raw"
+      Registrant Type: "committee.type"
+      Registrant Party: "committee.party"
+      Reports: "wi.reports.raw"
+    scraper: null
+    last_successful_pull: null
+    last_verified_working: "2026-03-27"
+    known_issues:
+      - "Registrant and address fields can contain embedded newlines in quoted CSV values"
+      - "Transactions export currently has no explicit row-level amendment indicator"
+
+  - name: "WI Sunshine Reports Export"
+    url: "https://campaignfinance.wi.gov"
+    bulk_download_url: "https://campaignfinance.wi.gov/api/data-download/reports"
+    api_base_url: "https://campaignfinance.wi.gov/api"
+    format: "csv"
+    auth_required: false
+    update_frequency: "daily"
+    coverage:
+      start_year: 2000
+      covers_sub_jurisdictions: false
+      office_levels:
+        - governor
+        - lieutenant_governor
+        - attorney_general
+        - secretary_of_state
+        - state_senate
+        - state_house
+        - county
+      transaction_types:
+        - reports
+    field_mappings:
+      ID: "wi.report.id"
+      Updated at: "wi.report.updated_at"
+      Report name: "filing.name"
+      Filing period: "filing.period"
+      Period start: "filing.coverage_start"
+      Period end: "filing.coverage_end"
+      Registrant ID: "committee.id"
+      Registrant Name: "committee.name"
+      Registrant Address: "committee.address.raw"
+      Registrant Email: "committee.email"
+      Registrant Phone: "committee.phone"
+      Registrant Registration date: "committee.registration_date"
+      Registrant Type: "committee.type"
+      Registrant Party: "committee.party"
+      Number of transactions: "wi.report.transaction_count"
+      Number of submissions: "wi.report.submission_count"
+      Amended: "filing.amended"
+    scraper: null
+    last_successful_pull: null
+    last_verified_working: "2026-03-26"
+    known_issues:
+      - "Registrant address fields can span multiple lines inside quoted CSV values"
+
+  - name: "WI Sunshine Committees Export"
+    url: "https://campaignfinance.wi.gov"
+    bulk_download_url: "https://campaignfinance.wi.gov/api/data-download/committees"
+    api_base_url: "https://campaignfinance.wi.gov/api"
+    format: "csv"
+    auth_required: false
+    update_frequency: "daily"
+    coverage:
+      start_year: 2000
+      covers_sub_jurisdictions: false
+      office_levels:
+        - governor
+        - lieutenant_governor
+        - attorney_general
+        - secretary_of_state
+        - state_senate
+        - state_house
+        - county
+      transaction_types:
+        - committees
+    field_mappings:
+      Registrant ID: "committee.id"
+      Registrant Name: "committee.name"
+      Registrant Address: "committee.address.raw"
+      Registrant Email: "committee.email"
+      Registrant Phone: "committee.phone"
+      Registrant Registration date: "committee.registration_date"
+      Registrant Type: "committee.type"
+      Registrant Party: "committee.party"
+      Registrant Status: "committee.status"
+      Reports submitted: "wi.committee.reports_submitted"
+      Exempt: "wi.committee.exempt"
+      Has a segregated fund: "wi.committee.has_segregated_fund"
+      Ballot events: "wi.committee.ballot_events"
+    scraper: null
+    last_successful_pull: null
+    last_verified_working: "2026-03-26"
+    known_issues:
+      - "Registrant address fields can span multiple lines inside quoted CSV values"
+
+laws:
+  source_url: "https://campaignfinance.wi.gov"
+  last_verified: null
+  contribution_limits:
+    individual_to_candidate: null
+    pac_to_candidate: null
+    corporate_direct: null
+    union_direct: null
+    party_to_candidate: null
+  itemization_threshold: 100
+  reporting:
+    periods: ["pre-election", "post-election", "spring-election", "fall-election"]
+    electronic_filing_required: "required"
+  public_financing: false
+  notes:
+    - "This laws block is a provisional machine-readable placeholder pending statute-specific legal verification."
+    - "Package implementation in Stage 5 is scoped to verified Sunshine CSV export contracts."
+
+status:
+  discovery: "complete"
+  scraper: "working"
+  normalization: "pending"
+  entity_resolution: "pending"
+  last_full_update: null

@@ -1,0 +1,105 @@
+# Canonical template for campaign finance jurisdiction configs.
+# This file is the single schema authority for all new jurisdictions.
+
+jurisdiction: # Shared jurisdiction identity for this config
+  name: "" # Human-readable jurisdiction name
+  code: "" # Standard jurisdiction code (state code, FIPS parent chain segment, etc.)
+  type: "state" # federal | state | county | municipality
+  fips: "" # Official FIPS code for this jurisdiction node
+  parent: null # Parent jurisdiction code/path when applicable; null for top-level nodes
+
+data_sources: # One entry per authoritative filing source or access path
+  # Example 1: state-provided CSV bulk download
+  - name: "Example bulk download source" # Source label used in logs, docs, and provenance
+    url: "https://example.state.gov/campaign-finance" # Human landing page for this source
+    bulk_download_url: "https://example.state.gov/campaign-finance/downloads/transactions.csv" # Direct file download when available
+    api_base_url: null # Omit-if-not-applicable guidance is resolved as explicit null in this template
+    format: "csv" # csv | api | web_portal | pdf | pipe_delimited
+    auth_required: false # True when login, token, or session setup is required before access
+    update_frequency: "quarterly" # continuous | daily | weekly | monthly | quarterly | annual
+    coverage: # Scope of elections and years represented by this source
+      start_year: 2000 # earliest cycle/year represented in this source
+      covers_sub_jurisdictions: true # true if this portal includes county/municipal races
+      office_levels: # Office classes present in this source
+        - state_senate
+        - state_house
+      transaction_types: # Campaign finance record types available from this source
+        - contributions
+        - expenditures
+        - loans
+    # Committed configs and pilot outputs use only field_mappings.
+    # This replaces the older field_schema naming in prompt outputs.
+    # field_schema -> field_mappings
+    field_mappings: # Source column/key to canonical Civibus field mapping
+      REPORT_DATE: "transaction.date"
+      CONTRIBUTOR_NAME: "donor.name"
+      CONTRIBUTOR_CITY: "donor.address.city"
+      RECIPIENT_NAME: "candidate.name"
+      AMOUNT: "transaction.amount"
+      TRANSACTION_ID: "transaction.id"
+      OFFICE_SOURCED: "jurisdiction.office_level"
+    scraper: "./scraper/download.ts" # Optional path for generated scraper; null if not applicable
+    last_successful_pull: null # YYYY-MM-DD; explicit null when unknown/unrun
+    last_verified_working: null # YYYY-MM-DD; explicit null when not yet verified
+    known_issues: [] # Add concrete data quality gaps for this source
+
+  # Example 2: web portal with CSV export
+  - name: "Example web portal source" # Source label used in logs, docs, and provenance
+    url: "https://portal.example.state.gov/cf/" # Human landing page for this source
+    bulk_download_url: null # Explicit null when no direct bulk feed is provided
+    api_base_url: null # Explicit null when no API base URL is provided
+    format: "web_portal" # csv | api | web_portal | pdf | pipe_delimited
+    auth_required: true # True when login, token, or session setup is required before access
+    update_frequency: "monthly" # continuous | daily | weekly | monthly | quarterly | annual
+    coverage: # Scope of elections and years represented by this source
+      start_year: 2010 # earliest cycle/year represented in this source
+      covers_sub_jurisdictions: false # False when this source only covers the named jurisdiction
+      office_levels: # Office classes present in this source
+        - governor
+        - statewide
+      transaction_types: # Campaign finance record types available from this source
+        - contributions
+        - expenditures
+    field_mappings: # Source column/key to canonical Civibus field mapping
+      TRANSACTION_DATE: "transaction.date"
+      DONOR_NAME: "donor.name"
+      AMOUNT: "transaction.amount"
+      RECEIPT_ID: "transaction.id"
+      CATEGORY: "transaction.type"
+      OFFICE: "jurisdiction.office_level"
+    scraper: "./scraper/portal.ts" # Optional path for generated scraper; null if not applicable
+    last_successful_pull: null # YYYY-MM-DD; explicit null when unknown/unrun
+    last_verified_working: null # YYYY-MM-DD; explicit null when not yet verified
+    known_issues: # Concrete source-specific data quality or access gaps
+      - "Fill in portal-specific quirks in data_semantics.md#portal-navigation"
+
+laws: # Structured legal constraints used during normalization and validation
+  source_url: "https://example.state.gov/campaign-finance/rules" # Canonical source URL for legal text used to encode campaign finance law
+  last_verified: "2026-03-01" # YYYY-MM-DD date the research for this laws block was last confirmed
+  contribution_limits: # Limits keyed by donor class to candidate recipients
+    individual_to_candidate: 5000 # dollar amount | "unlimited" | "prohibited"
+    pac_to_candidate: 5000 # dollar amount | "unlimited" | "prohibited"
+    corporate_direct: "prohibited" # dollar amount | "unlimited" | "prohibited"
+    union_direct: 5000 # dollar amount | "unlimited" | "prohibited"
+    party_to_candidate: null # null when no explicit party-to-candidate limit is set
+  # Placed at laws root per resolved schema decision (not under laws.reporting)
+  itemization_threshold: 100 # amount threshold for donor identity/name disclosure
+  reporting: # Filing cadence and submission requirements
+    periods: ["quarterly", "pre-election", "post-election"] # Canonical naming uses a list of periods; not a single string
+    electronic_filing_required: "required" # required | not_required | voluntary | paper_only
+  # Union type resolved as false or object
+  public_financing: false # live default in template
+  # public_financing: # alternate object shape (commented example)
+  #   type: "matching_funds"
+  #   administering_agency: "State Election Board"
+  notes: # Freeform caveats that do not yet fit the structured schema
+    - "Document office-level/election-type variation here until Stage 3 rules schema exists."
+
+status: # Pipeline progress for this jurisdiction
+  # Each status uses the same canonical enum:
+  # pending | in_progress | complete | working | partial | broken | unknown
+  discovery: "complete" # Research/discovery completeness for this jurisdiction
+  scraper: "working" # Current scraper health and operational status
+  normalization: "partial" # Coverage of normalization logic for this jurisdiction
+  entity_resolution: "unknown" # Entity resolution readiness against shared graph entities
+  last_full_update: "2026-03-01" # YYYY-MM-DD of the most recent end-to-end refresh

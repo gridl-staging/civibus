@@ -1,0 +1,167 @@
+# Louisiana campaign finance jurisdiction config
+# Source: Louisiana Ethics Administration campaign finance bulk exports
+
+jurisdiction:
+  name: "Louisiana"
+  code: "LA"
+  type: "state"
+  fips: "22"
+  parent: null
+
+data_sources:
+  - name: "LA Ethics Campaign Finance — Contributions"
+    url: "https://www.ethics.la.gov/CampaignFinanceSearch/ShowPremadereports.aspx"
+    bulk_download_url: "https://www.ethics.la.gov/Pub/CampFinan/DataDownload/ContributionReports.zip"
+    api_base_url: null
+    format: "csv"
+    auth_required: false
+    update_frequency: "daily"
+    coverage:
+      start_year: 1995
+      covers_sub_jurisdictions: true
+      office_levels:
+        - governor
+        - lieutenant_governor
+        - attorney_general
+        - state_senate
+        - state_house
+        - county
+        - municipal
+      transaction_types:
+        - contributions
+    field_mappings:
+      FilerNumber: "committee.id"
+      FilerLastName: "committee.name"
+      FilerFirstName: "la.filer_first_name"
+      ReportCode: "la.report_code"
+      ReportType: "la.report_type"
+      ReportNumber: "la.report_number"
+      ContributorTypeCode: "donor.type"
+      ContributorName: "donor.org_name"
+      ContributorAddr1: "donor.address.street1"
+      ContributorAddr2: "donor.address.street2"
+      ContributorCity: "donor.address.city"
+      ContributorrState: "donor.address.state"
+      ContributorZip: "donor.address.zip"
+      ContributionType: "la.contribution_type"
+      ContributionDescription: "transaction.description"
+      ContributionDate: "transaction.date"
+      ContributionAmt: "transaction.amount"
+      ContributionDesignatedElectionAdditionInfo: "la.contribution_designated_election_info"
+    scraper: null
+    last_successful_pull: null
+    last_verified_working: "2026-03-29"
+    known_issues:
+      - "Contribution ZIP contains date-range member files (for example Contributions_2024_to_2027.csv), not single-year members"
+      - "Column name ContributorrState includes a double-r typo in the published export"
+
+  - name: "LA Ethics Campaign Finance — Loans"
+    url: "https://www.ethics.la.gov/CampaignFinanceSearch/ShowPremadereports.aspx"
+    bulk_download_url: "https://www.ethics.la.gov/Pub/CampFinan/DataDownload/LoanReports.zip"
+    api_base_url: null
+    format: "csv"
+    auth_required: false
+    update_frequency: "daily"
+    coverage:
+      start_year: 1995
+      covers_sub_jurisdictions: true
+      office_levels:
+        - governor
+        - lieutenant_governor
+        - attorney_general
+        - state_senate
+        - state_house
+        - county
+        - municipal
+      transaction_types:
+        - loans
+    field_mappings:
+      FilerNumber: "committee.id"
+      FilerLastName: "committee.name"
+      FilerFirstName: "la.filer_first_name"
+      ReportCode: "la.report_code"
+      ReportType: "la.report_type"
+      ReportNumber: "la.report_number"
+      ContributorTypeCode: "donor.type"
+      LoanHolderName: "donor.org_name"
+      LoanHolderAddr1: "donor.address.street1"
+      LoanHolderAddr2: "donor.address.street2"
+      LoanHolderCity: "donor.address.city"
+      LoanHolderState: "donor.address.state"
+      LoanHolderZip: "donor.address.zip"
+      LoanDate: "transaction.date"
+      LoanAmt: "transaction.amount"
+      LoanRate: "la.loan_rate"
+    scraper: null
+    last_successful_pull: null
+    last_verified_working: "2026-03-29"
+    known_issues:
+      - "Loan ZIP contains date-range member files (for example Loans_2024_to_2027.csv), not single-year members"
+
+  - name: "LA Ethics Campaign Finance — Expenditures"
+    url: "https://www.ethics.la.gov/CampaignFinanceSearch/ShowPremadereports.aspx"
+    bulk_download_url: "https://www.ethics.la.gov/Pub/CampFinan/DataDownload/ExpenditureReports.zip"
+    api_base_url: null
+    format: "csv"
+    auth_required: false
+    update_frequency: "daily"
+    coverage:
+      start_year: 1995
+      covers_sub_jurisdictions: true
+      office_levels:
+        - governor
+        - lieutenant_governor
+        - attorney_general
+        - state_senate
+        - state_house
+        - county
+        - municipal
+      transaction_types:
+        - expenditures
+    field_mappings:
+      FilerNumber: "committee.id"
+      FilerLastName: "committee.name"
+      FilerFirstName: "la.filer_first_name"
+      ReportCode: "la.report_code"
+      ReportType: "la.report_type"
+      ReportNumber: "la.report_number"
+      Schedule: "la.schedule"
+      RecipientName: "payee.org_name"
+      RecipientAddr1: "payee.address.street1"
+      RecipientAddr2: "payee.address.street2"
+      RecipientCity: "payee.address.city"
+      RecipientState: "payee.address.state"
+      RecipientZip: "payee.address.zip"
+      ExpenditureDescription: "transaction.description"
+      CandidateBeneficiary: "la.candidate_beneficiary"
+      ExpenditureDate: "transaction.date"
+      ExpenditureAmt: "transaction.amount"
+    scraper: null
+    last_successful_pull: null
+    last_verified_working: "2026-03-29"
+    known_issues:
+      - "Expenditure ZIP contains date-range member files (for example Expenditures_2024_to_2027.csv), not single-year members"
+
+laws:
+  source_url: "https://ethics.la.gov/CampFinanFilingSchedules.aspx"
+  last_verified: "2026-03-29"
+  contribution_limits:
+    individual_to_candidate: null
+    pac_to_candidate: null
+    corporate_direct: null
+    union_direct: null
+    party_to_candidate: null
+  itemization_threshold: 0
+  reporting:
+    periods: ["periodic", "pre-election", "post-election", "annual"]
+    electronic_filing_required: "required"
+  public_financing: false
+  notes:
+    - "Louisiana Ethics bulk downloads publish contributions, loans, and expenditures as direct ZIP files with frequent updates"
+
+status:
+  discovery: "complete"
+  scraper: "working"
+  normalization: "pending"
+  entity_resolution: "pending"
+  last_full_update: null

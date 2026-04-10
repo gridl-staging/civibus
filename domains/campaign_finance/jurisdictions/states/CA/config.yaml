@@ -1,0 +1,190 @@
+# California campaign finance jurisdiction config
+# Source: CAL-ACCESS (Secretary of State electronic filing system)
+# Governing law: California Political Reform Act (Gov. Code §§ 81000–91014)
+
+jurisdiction:
+  name: "California"
+  code: "CA"
+  type: "state"
+  fips: "06"
+  parent: null
+
+data_sources:
+  - name: "CAL-ACCESS Raw Data Export"
+    url: "https://www.sos.ca.gov/campaign-lobbying/cal-access-resources/raw-data-campaign-finance-and-lobbying-activity"
+    bulk_download_url: "https://campaignfinance.cdn.sos.ca.gov/dbwebexport.zip"
+    api_base_url: null
+    format: "csv"
+    auth_required: false
+    update_frequency: "daily"
+    coverage:
+      start_year: 1999
+      covers_sub_jurisdictions: true
+      office_levels:
+        - governor
+        - lieutenant_governor
+        - attorney_general
+        - secretary_of_state
+        - state_treasurer
+        - state_controller
+        - insurance_commissioner
+        - superintendent_of_public_instruction
+        - board_of_equalization
+        - state_senate
+        - state_assembly
+        - county
+        - municipal
+        - school_district
+        - judicial
+        - special_district
+      transaction_types:
+        - contributions
+        - expenditures
+        - loans
+    field_mappings:
+      # CVR_CAMPAIGN_DISCLOSURE_CD — filing-level metadata
+      CVR_CAMPAIGN_DISCLOSURE_CD.FILER_ID: "filer.id"
+      CVR_CAMPAIGN_DISCLOSURE_CD.FILING_ID: "filing.id"
+      CVR_CAMPAIGN_DISCLOSURE_CD.AMEND_ID: "filing.amendment_id"
+      CVR_CAMPAIGN_DISCLOSURE_CD.RPT_DATE: "filing.report_date"
+      CVR_CAMPAIGN_DISCLOSURE_CD.FILER_NAML: "filer.name.last"
+      CVR_CAMPAIGN_DISCLOSURE_CD.FILER_NAMF: "filer.name.first"
+      CVR_CAMPAIGN_DISCLOSURE_CD.FILER_NAMT: "filer.name.title"
+      CVR_CAMPAIGN_DISCLOSURE_CD.FILER_NAMS: "filer.name.suffix"
+      CVR_CAMPAIGN_DISCLOSURE_CD.ENTITY_CD: "filer.entity_type"
+      CVR_CAMPAIGN_DISCLOSURE_CD.OFFICE_CD: "jurisdiction.office_code"
+      CVR_CAMPAIGN_DISCLOSURE_CD.OFFIC_DSCR: "jurisdiction.office_description"
+      CVR_CAMPAIGN_DISCLOSURE_CD.JURIS_CD: "jurisdiction.code"
+      CVR_CAMPAIGN_DISCLOSURE_CD.JURIS_DSCR: "jurisdiction.description"
+      CVR_CAMPAIGN_DISCLOSURE_CD.FORM_TYPE: "filing.form_type"
+      CVR_CAMPAIGN_DISCLOSURE_CD.STMT_TYPE: "filing.statement_type"
+      # RCPT_CD — contribution/receipt transactions
+      RCPT_CD.FILING_ID: "filing.id"
+      RCPT_CD.AMEND_ID: "filing.amendment_id"
+      RCPT_CD.TRAN_ID: "transaction.id"
+      RCPT_CD.ENTITY_CD: "donor.entity_type"
+      RCPT_CD.CTRIB_NAML: "donor.name.last"
+      RCPT_CD.CTRIB_NAMF: "donor.name.first"
+      RCPT_CD.CTRIB_NAMT: "donor.name.title"
+      RCPT_CD.CTRIB_NAMS: "donor.name.suffix"
+      RCPT_CD.CTRIB_CITY: "donor.address.city"
+      RCPT_CD.CTRIB_ST: "donor.address.state"
+      RCPT_CD.CTRIB_ZIP4: "donor.address.zip"
+      RCPT_CD.CTRIB_EMP: "donor.employer"
+      RCPT_CD.CTRIB_OCC: "donor.occupation"
+      RCPT_CD.RCPT_DATE: "transaction.date"
+      RCPT_CD.AMOUNT: "transaction.amount"
+      RCPT_CD.FORM_TYPE: "transaction.form_type"
+      RCPT_CD.TRAN_TYPE: "transaction.type"
+      # EXPN_CD — expenditure transactions
+      EXPN_CD.FILING_ID: "filing.id"
+      EXPN_CD.AMEND_ID: "filing.amendment_id"
+      EXPN_CD.TRAN_ID: "transaction.id"
+      EXPN_CD.ENTITY_CD: "payee.entity_type"
+      EXPN_CD.PAYEE_NAML: "payee.name.last"
+      EXPN_CD.PAYEE_NAMF: "payee.name.first"
+      EXPN_CD.PAYEE_NAMT: "payee.name.title"
+      EXPN_CD.PAYEE_NAMS: "payee.name.suffix"
+      EXPN_CD.PAYEE_CITY: "payee.address.city"
+      EXPN_CD.PAYEE_ST: "payee.address.state"
+      EXPN_CD.PAYEE_ZIP4: "payee.address.zip"
+      EXPN_CD.EXPN_DATE: "transaction.date"
+      EXPN_CD.AMOUNT: "transaction.amount"
+      EXPN_CD.FORM_TYPE: "transaction.form_type"
+      EXPN_CD.EXPN_CODE: "transaction.type"
+      EXPN_CD.EXPN_DSCR: "transaction.description"
+      # LOAN_CD — loan transactions
+      LOAN_CD.FILING_ID: "filing.id"
+      LOAN_CD.AMEND_ID: "filing.amendment_id"
+      LOAN_CD.TRAN_ID: "transaction.id"
+      LOAN_CD.ENTITY_CD: "lender.entity_type"
+      LOAN_CD.LNDR_NAML: "lender.name.last"
+      LOAN_CD.LNDR_NAMF: "lender.name.first"
+      LOAN_CD.LNDR_NAMT: "lender.name.title"
+      LOAN_CD.LNDR_NAMS: "lender.name.suffix"
+      LOAN_CD.LNDR_CITY: "lender.address.city"
+      LOAN_CD.LNDR_ST: "lender.address.state"
+      LOAN_CD.LNDR_ZIP4: "lender.address.zip"
+      LOAN_CD.LOAN_DATE1: "transaction.date"
+      LOAN_CD.LOAN_AMT1: "transaction.amount"
+      LOAN_CD.LOAN_RATE: "transaction.interest_rate"
+      LOAN_CD.FORM_TYPE: "transaction.form_type"
+      LOAN_CD.LOAN_TYPE: "transaction.type"
+      # FILERNAME_CD — filer dimension (naming/address)
+      FILERNAME_CD.XREF_FILER_ID: "filer.id"
+      FILERNAME_CD.FILER_TYPE: "filer.type"
+      FILERNAME_CD.NAML: "filer.name.last"
+      FILERNAME_CD.NAMF: "filer.name.first"
+      FILERNAME_CD.NAMT: "filer.name.title"
+      FILERNAME_CD.NAMS: "filer.name.suffix"
+      FILERNAME_CD.CITY: "filer.address.city"
+      FILERNAME_CD.ST: "filer.address.state"
+      FILERNAME_CD.ZIP4: "filer.address.zip"
+      FILERNAME_CD.EFFECT_DT: "filer.effective_date"
+      # FILERS_CD — filer dimension (ID reference only; live export contains only FILER_ID)
+      FILERS_CD.FILER_ID: "filer.id"
+    scraper: null
+    last_successful_pull: null
+    last_verified_working: "2026-03-26"
+    known_issues:
+      - "ZIP archive is very large (~1.5 GB compressed); RCPT_CD and EXPN_CD report uncomp_size=4294967295 in central directory, requiring ZIP64 handling"
+      - "Legacy/outlier dates present: 0200, 1899, 1982 in CVR_CAMPAIGN_DISCLOSURE_CD RPT_DATE; isolated 1970 in sampled EXPN_CD EXPN_DATE"
+      - "Inconsistent jurisdiction and office descriptors across rows; OFFICE_CD and JURIS_CD values vary between state and local filers"
+      - "Loan transactions include pre-2000 legacy dates (at least 1990 in full LOAN_CD scan); coverage.start_year reflects campaign disclosure baseline (1999) not loan date floor"
+      - "Documentation set is legacy-dated (start-here.htm Last Updated 10/14/2013); table semantics must be validated against live data"
+      - "Tab-delimited TSV format despite format field showing csv; actual delimiter is tab character"
+
+  - name: "CAL-ACCESS Documentation Bundle"
+    url: "https://www.sos.ca.gov/campaign-lobbying/cal-access-resources/raw-data-campaign-finance-and-lobbying-activity"
+    bulk_download_url: "https://campaignfinance.cdn.sos.ca.gov/calaccess-documentation.zip"
+    api_base_url: null
+    format: "csv"
+    auth_required: false
+    update_frequency: "annual"
+    coverage:
+      start_year: 2000
+      covers_sub_jurisdictions: false
+      office_levels: []
+      transaction_types: []
+    field_mappings: {}
+    scraper: null
+    last_successful_pull: null
+    last_verified_working: "2026-03-26"
+    known_issues:
+      - "Documentation-only source; no transaction data for ingestion"
+      - "Content is legacy-dated (Last Updated 10/14/2013)"
+
+laws:
+  source_url: "https://www.fppc.ca.gov/learn/campaign-rules.html"
+  last_verified: "2026-03-21"
+  contribution_limits:
+    individual_to_candidate: 5500
+    pac_to_candidate: 10200
+    corporate_direct: "prohibited"
+    union_direct: "prohibited"
+    party_to_candidate: null
+  itemization_threshold: 100
+  reporting:
+    periods: ["semi-annual", "pre-election", "quarterly"]
+    electronic_filing_required: "required"
+  public_financing: false
+  notes:
+    - "Limits per election (primary/general each); amounts are 2025-2026 cycle per FPPC"
+    - "Individual limit to candidate: $5,500 per election (Gov. Code § 85301)"
+    - "Small contributor committee to candidate: $10,200 per election (Gov. Code § 85302)"
+    - "Corporate and union direct contributions to candidates are prohibited (Gov. Code § 85301)"
+    - "No explicit party-to-candidate limit in Political Reform Act; party spending treated differently"
+    - "Itemization threshold: name and address required at $100+ (Gov. Code § 84211)"
+    - "Electronic filing required via CAL-ACCESS for committees receiving/spending $25,000+ per calendar year"
+    - "Semi-annual statements (Jan-Jun, Jul-Dec), plus pre-election statements for primary and general elections"
+    - "State-level candidates file with SOS; local candidates file with local filing officers (FPPC campaign-rules)"
+    - "Limits adjusted biennially based on CPI; current amounts effective 2025-01-01"
+    - "Ballot measure committees have no contribution limits (Gov. Code § 85303)"
+    - "Independent expenditure committees must file 24-hour reports for IE over $1,000 within 90 days of election"
+
+status:
+  discovery: "complete"
+  scraper: "pending"
+  normalization: "pending"
+  entity_resolution: "pending"
+  last_full_update: null

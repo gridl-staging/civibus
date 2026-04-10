@@ -1,0 +1,141 @@
+# North Carolina campaign finance jurisdiction config
+# Source systems: NCSBE transaction and committee/document portals on cf.ncsbe.gov
+
+jurisdiction:
+  name: "North Carolina"
+  code: "NC"
+  type: "state"
+  fips: "37"
+  parent: null
+
+data_sources:
+  - name: "North Carolina SBoE Transaction Search"
+    url: "https://cf.ncsbe.gov/CFTxnLkup/"
+    bulk_download_url: null
+    api_base_url: null
+    format: "web_portal"
+    auth_required: false
+    update_frequency: "daily"
+    coverage:
+      start_year: 1990
+      covers_sub_jurisdictions: true
+      office_levels:
+        - state_house
+        - state_senate
+        - county
+        - municipal
+        - judicial
+      transaction_types:
+        - contributions
+        - expenditures
+        - loans
+    field_mappings:
+      Name: "participant.name" # TODO: split contributor/payee role using transaction context during normalization
+      "Street Line 1": "participant.address.street1" # TODO: split contributor/payee role using transaction context during normalization
+      "Street Line 2": "participant.address.street2" # TODO: split contributor/payee role using transaction context during normalization
+      City: "participant.address.city" # TODO: split contributor/payee role using transaction context during normalization
+      State: "participant.address.state" # TODO: split contributor/payee role using transaction context during normalization
+      "Zip Code": "participant.address.zip" # TODO: split contributor/payee role using transaction context during normalization
+      "Profession/Job Title": "participant.occupation" # TODO: split contributor/payee role using transaction context during normalization
+      "Employer's Name/Specific Field": "participant.employer_or_business" # TODO: split contributor/payee role using transaction context during normalization
+      "Transction Type": "transaction.type"
+      "Committee Name": "committee.name"
+      "Committee SBoE ID": "committee.id"
+      "Committee Street 1": "committee.address.street1"
+      "Committee Street 2": "committee.address.street2"
+      "Committee City": "committee.address.city"
+      "Committee State": "committee.address.state"
+      "Committee Zip Code": "committee.address.zip"
+      "Report Name": "filing.report_name"
+      "Date Occured": "transaction.date"
+      "Account Code": "transaction.account_code"
+      Amount: "transaction.amount"
+      "Form of Payment": "transaction.form_of_payment"
+      Purpose: "transaction.purpose"
+      "Candidate/Referendum Name": "candidate_or_referendum.name" # TODO: confirm canonical shared-schema path for referendum naming
+      Declaration: "transaction.declaration"
+    scraper: null
+    last_successful_pull: null
+    last_verified_working: "2026-03-27"
+    known_issues:
+      - "No official bulk-download file or public API endpoint was found on CFTxnLkup or linked campaign-finance search applications; extraction is query/export driven."
+      - "Transaction export is stateful and requires browser-side grid paging before CSV download; plain HTTP replay can still raise BrowserAutomationRequiredError."
+      - "CSV export is generated through `/CFTxnLkup/ExportResults/` using hidden `Params` JSON from the results page; use the Playwright workflow in `download_transaction_export_playwright()`."
+      - "As of 2026-03-27, reliable committee-scoped live exports require both the visible committee text field and the hidden committee ID; hidden-name-only replay can trigger `GetPagedResults` `502` failures and never reach an exportable grid."
+      - "Transaction export does not include explicit office, county, or municipality columns; sub-jurisdiction classification must use committee identifiers/names and committee-document portal joins."
+      - "Statewide nc.gov disclaimer/terms are the web-use constraint baseline (non-commercial, unchanged copies with citation), not an explicit campaign-data open-license grant."
+
+  - name: "North Carolina SBoE Committee/Document Search"
+    url: "https://cf.ncsbe.gov/CFOrgLkup/"
+    bulk_download_url: null
+    api_base_url: null
+    format: "web_portal"
+    auth_required: false
+    update_frequency: "daily"
+    coverage:
+      start_year: 1990
+      covers_sub_jurisdictions: true
+      office_levels:
+        - state_house
+        - state_senate
+        - county
+        - municipal
+        - judicial
+      transaction_types:
+        - contributions
+        - expenditures
+        - loans
+    field_mappings:
+      "Committee Name": "committee.name"
+      "SBoE ID": "committee.id"
+      Year: "filing.year"
+      "Doc Type": "filing.document_type"
+      "Doc Name": "filing.report_type"
+      Amend: "filing.is_amendment"
+      "Received Image": "filing.image_received_date"
+      "Received Data": "filing.data_received_date"
+      "Start Date": "filing.period_start_date"
+      "End Date": "filing.period_end_date"
+      Image: "filing.image_link_label"
+      Data: "filing.data_link_label"
+    scraper: null
+    last_successful_pull: null
+    last_verified_working: "2026-03-27"
+    known_issues:
+      - "Committee and document result grids are delivered as inline JSON payloads in HTML pages; large name searches can create very large response documents."
+      - "Document export (`Type=DocGen`) is per-committee list export only; no statewide bulk document-index export path was found."
+      - "Document rows mix DATA and scanned-image workflows; some filings have image receipt dates, data receipt dates, or both."
+      - "Real committee-document exports can include blank `Doc Name` rows; loader retains source-record provenance for these rows but does not create filing lookup entries from them."
+      - "Filing-aware transaction ingest depends on exact `(Committee SBoE ID, Year + Doc Name)` join keys from committee-document exports and will fail unmatched transaction rows."
+
+laws:
+  source_url: "https://www.ncleg.gov/EnactedLegislation/Statutes/HTML/BySection/Chapter_163/GS_163-278.13.html"
+  last_verified: "2026-03-14"
+  contribution_limits:
+    individual_to_candidate: 6800
+    pac_to_candidate: 6800
+    corporate_direct: "prohibited"
+    union_direct: "prohibited"
+    party_to_candidate: "unlimited"
+  itemization_threshold: 50
+  reporting:
+    periods: ["quarterly", "semiannual", "pre-election", "post-election", "annual"]
+    electronic_filing_required: "required"
+  public_financing: false
+  notes:
+    - "Contribution cap is $6,800 per election for individuals/political committees/other entities under G.S. 163-278.13(a),(c); candidate and candidate-spouse contributions are unlimited under 163-278.13(d)."
+    - "State/district/county party executive committees and affiliated party committees are exempt from the 163-278.13 contribution cap under 163-278.13(h)."
+    - "Corporate, business-entity, labor-union, professional-association, and insurance-company direct contributions are prohibited by 163-278.15(a) and 163-278.19(a), subject to segregated-fund exceptions in 163-278.19."
+    - "Contributor identity itemization threshold is $50 per election under 163-278.11(b)."
+    - "State-level and most candidate/political-committee filing cadence is governed by 163-278.9 (organizational, quarterly windows in election years, semiannual off-cycle, and 48-hour reports for $1,000+ late-cycle receipts)."
+    - "Municipal office reporting schedules are defined separately in Part 2 (163-278.40B through 163-278.40E), including thirty-five-day and 10-day pre-election style reports plus semiannual reporting."
+    - "Electronic filing is threshold-triggered and required for filer classes listed in 163-278.9(i); NCSBE reporting-software guidance and 08 NCAC 21 .0106 provide operational filing requirements."
+    - "North Carolina Public Campaign Fund sections (163-278.61 through 163-278.67) are repealed effective 2013-07-01; no active statewide public-financing program is codified in current Chapter 163 text."
+    - "Legacy report types such as Judicial Qualifying Contributions and Municipal Voter-Owned Election Qualifying Contributions appear in portal document-type lists; treat as historical/legacy until an active local enabling authority is re-verified."
+
+status:
+  discovery: "complete"
+  scraper: "complete"
+  normalization: "pending"
+  entity_resolution: "pending"
+  last_full_update: null

@@ -1,0 +1,275 @@
+"""
+Campaign finance API routes — committees, candidates, transactions, independent expenditures.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from uuid import UUID
+
+import psycopg
+from fastapi import APIRouter, Depends, HTTPException, Query
+
+from api.deps import get_db
+from api.models import (
+    CandidateFundraisingSummary,
+    CandidateListItem,
+    CandidateListParams,
+    CandidateListResponse,
+    CandidateResponse,
+    CommitteeFilingBreakdown,
+    CommitteeFundraisingSummary,
+    CommitteeListItem,
+    CommitteeListParams,
+    CommitteeListResponse,
+    CommitteeResponse,
+    FilingResponse,
+    IndependentExpenditureResponse,
+    IndependentExpenditureSummary,
+    TransactionListParams,
+    TransactionResponse,
+)
+from api.queries import (
+    CAMPAIGN_FINANCE_CANDIDATE_DETAIL_SQL,
+    CAMPAIGN_FINANCE_COMMITTEE_DETAIL_SQL,
+    CAMPAIGN_FINANCE_FILING_DETAIL_SQL,
+    build_zero_candidate_fundraising_summary,
+    build_zero_committee_fundraising_summary,
+    fetch_campaign_finance_provenance,
+    fetch_candidate_ie_summary,
+    fetch_candidate_ie_transactions,
+    fetch_candidate_list,
+    fetch_candidate_summary,
+    fetch_candidates_by_slug,
+    fetch_committee_filing_breakdown,
+    fetch_committee_fundraising_summary,
+    fetch_committee_list,
+    fetch_committees_by_slug,
+    fetch_one_row,
+    fetch_transaction_list,
+)
+from api.routes.validation import build_query_params_dependency
+
+router = APIRouter()
+_build_transaction_list_params = build_query_params_dependency(TransactionListParams)
+_build_candidate_list_params = build_query_params_dependency(CandidateListParams)
+_build_committee_list_params = build_query_params_dependency(CommitteeListParams)
+
+
+@dataclass(frozen=True)
+class _ProvenanceContext:
+    """Provenance routing parameters for campaign-finance detail endpoints."""
+
+    canonical_entity_type: str
+    canonical_entity_id_key: str | None
+    fallback_row_source_record_id_key: str | None = None
+    fallback_canonical_entity_id_key: str | None = None
+
+
+def _resolve_provenance_targets(
+    detail_row: dict[str, object],
+    provenance: _ProvenanceContext,
+) -> tuple[object | None, object | None]:
+    row_source_record_id = detail_row.pop("source_record_id")
+    canonical_entity_id = (
+        detail_row[provenance.canonical_entity_id_key] if provenance.canonical_entity_id_key is not None else None
+    )
+    if provenance.fallback_row_source_record_id_key is None or row_source_record_id is not None:
+        return row_source_record_id, canonical_entity_id
+
+    # Filing rows should only use committee-level provenance when the filing row
+    # itself does not carry a source_record_id.
+    fallback_source_record_id = detail_row.pop(provenance.fallback_row_source_record_id_key)
+    fallback_canonical_entity_id = (
+        detail_row.pop(provenance.fallback_canonical_entity_id_key)
+        if provenance.fallback_canonical_entity_id_key is not None
+        else None
+    )
+    return fallback_source_record_id, fallback_canonical_entity_id
+
+
+def _fetch_row_or_404(conn: psycopg.Connection, query: str, row_id: UUID, not_found_detail: str) -> dict:
+    """Fetch a single row by id or raise 404."""
+    row = fetch_one_row(conn, query=query, row_id=row_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail=not_found_detail)
+    return row
+
+
+def _build_detail_response(
+    conn: psycopg.Connection,
+    *,
+    query: str,
+    row_id: UUID,
+    not_found_detail: str,
+    provenance: _ProvenanceContext,
+    response_model: type[CommitteeResponse] | type[CandidateResponse] | type[FilingResponse],
+) -> CommitteeResponse | CandidateResponse | FilingResponse:
+    detail_row = _fetch_row_or_404(conn, query, row_id, not_found_detail)
+
+    row_source_record_id, canonical_entity_id = _resolve_provenance_targets(detail_row, provenance)
+
+    detail_row["sources"] = fetch_campaign_finance_provenance(
+        conn,
+        row_source_record_id=row_source_record_id,
+        canonical_entity_type=provenance.canonical_entity_type,
+        canonical_entity_id=canonical_entity_id,
+    )
+    return response_model.model_validate(detail_row)
+
+
+@router.get("/committees", response_model=CommitteeListResponse)
+def list_committees(
+    params: CommitteeListParams = Depends(_build_committee_list_params),
+    conn: psycopg.Connection = Depends(get_db),
+) -> CommitteeListResponse:
+    result = fetch_committee_list(conn, params)
+    result["items"] = [CommitteeListItem.model_validate(row) for row in result["items"]]
+    return CommitteeListResponse.model_validate(result)
+
+
+@router.get("/committees/by-slug/{slug}", response_model=list[CommitteeListItem])
+def get_committee_by_slug(slug: str, conn: psycopg.Connection = Depends(get_db)) -> list[CommitteeListItem]:
+    rows = fetch_committees_by_slug(conn, slug)
+    return [CommitteeListItem.model_validate(row) for row in rows]
+
+
+@router.get("/committees/{committee_id}", response_model=CommitteeResponse)
+def get_committee(committee_id: UUID, conn: psycopg.Connection = Depends(get_db)) -> CommitteeResponse:
+    return _build_detail_response(
+        conn,
+        query=CAMPAIGN_FINANCE_COMMITTEE_DETAIL_SQL,
+        row_id=committee_id,
+        not_found_detail="Committee not found",
+        provenance=_ProvenanceContext(
+            canonical_entity_type="organization",
+            canonical_entity_id_key="organization_id",
+        ),
+        response_model=CommitteeResponse,
+    )
+
+
+@router.get("/candidates", response_model=CandidateListResponse)
+def list_candidates(
+    params: CandidateListParams = Depends(_build_candidate_list_params),
+    conn: psycopg.Connection = Depends(get_db),
+) -> CandidateListResponse:
+    result = fetch_candidate_list(conn, params)
+    result["items"] = [CandidateListItem.model_validate(row) for row in result["items"]]
+    return CandidateListResponse.model_validate(result)
+
+
+@router.get("/candidates/by-slug/{slug}", response_model=list[CandidateListItem])
+def get_candidate_by_slug(slug: str, conn: psycopg.Connection = Depends(get_db)) -> list[CandidateListItem]:
+    rows = fetch_candidates_by_slug(conn, slug)
+    return [CandidateListItem.model_validate(row) for row in rows]
+
+
+@router.get("/candidates/{candidate_id}", response_model=CandidateResponse)
+def get_candidate(candidate_id: UUID, conn: psycopg.Connection = Depends(get_db)) -> CandidateResponse:
+    return _build_detail_response(
+        conn,
+        query=CAMPAIGN_FINANCE_CANDIDATE_DETAIL_SQL,
+        row_id=candidate_id,
+        not_found_detail="Candidate not found",
+        provenance=_ProvenanceContext(
+            canonical_entity_type="person",
+            canonical_entity_id_key="person_id",
+        ),
+        response_model=CandidateResponse,
+    )
+
+
+@router.get("/filings/{filing_id}", response_model=FilingResponse)
+def get_filing(filing_id: UUID, conn: psycopg.Connection = Depends(get_db)) -> FilingResponse:
+    return _build_detail_response(
+        conn,
+        query=CAMPAIGN_FINANCE_FILING_DETAIL_SQL,
+        row_id=filing_id,
+        not_found_detail="Filing not found",
+        provenance=_ProvenanceContext(
+            canonical_entity_type="organization",
+            canonical_entity_id_key=None,
+            fallback_row_source_record_id_key="fallback_committee_source_record_id",
+            fallback_canonical_entity_id_key="fallback_committee_organization_id",
+        ),
+        response_model=FilingResponse,
+    )
+
+
+@router.get("/transactions", response_model=list[TransactionResponse])
+def list_transactions(
+    params: TransactionListParams = Depends(_build_transaction_list_params),
+    conn: psycopg.Connection = Depends(get_db),
+) -> list[TransactionResponse]:
+    transaction_rows = fetch_transaction_list(conn, params)
+    return [TransactionResponse.model_validate(transaction_row) for transaction_row in transaction_rows]
+
+
+@router.get("/committees/{committee_id}/summary", response_model=CommitteeFundraisingSummary)
+def get_committee_summary(
+    committee_id: UUID, conn: psycopg.Connection = Depends(get_db)
+) -> CommitteeFundraisingSummary:
+    detail_row = _fetch_row_or_404(conn, CAMPAIGN_FINANCE_COMMITTEE_DETAIL_SQL, committee_id, "Committee not found")
+
+    summary = fetch_committee_fundraising_summary(conn, committee_id)
+    if summary is None:
+        summary = build_zero_committee_fundraising_summary(committee_id=committee_id, committee_name=detail_row["name"])
+    return CommitteeFundraisingSummary.model_validate(summary)
+
+
+@router.get("/committees/{committee_id}/filings/summary", response_model=CommitteeFilingBreakdown)
+def get_committee_filings_summary(
+    committee_id: UUID, conn: psycopg.Connection = Depends(get_db)
+) -> CommitteeFilingBreakdown:
+    detail_row = _fetch_row_or_404(conn, CAMPAIGN_FINANCE_COMMITTEE_DETAIL_SQL, committee_id, "Committee not found")
+
+    filings = fetch_committee_filing_breakdown(conn, committee_id)
+    return CommitteeFilingBreakdown.model_validate(
+        {"committee_id": committee_id, "committee_name": detail_row["name"], "filings": filings}
+    )
+
+
+@router.get("/candidates/{candidate_id}/summary", response_model=CandidateFundraisingSummary)
+def get_candidate_summary(
+    candidate_id: UUID, conn: psycopg.Connection = Depends(get_db)
+) -> CandidateFundraisingSummary:
+    detail_row = _fetch_row_or_404(conn, CAMPAIGN_FINANCE_CANDIDATE_DETAIL_SQL, candidate_id, "Candidate not found")
+
+    candidate_name = detail_row["name"]
+    summary = fetch_candidate_summary(conn, candidate_id, candidate_name)
+    if summary is None:
+        summary = build_zero_candidate_fundraising_summary(
+            candidate_id=candidate_id,
+            candidate_name=candidate_name,
+        )
+    return CandidateFundraisingSummary.model_validate(summary)
+
+
+@router.get(
+    "/candidates/{candidate_id}/independent-expenditures",
+    response_model=list[IndependentExpenditureResponse],
+)
+def get_candidate_independent_expenditures(
+    candidate_id: UUID,
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    conn: psycopg.Connection = Depends(get_db),
+) -> list[IndependentExpenditureResponse]:
+    _fetch_row_or_404(conn, CAMPAIGN_FINANCE_CANDIDATE_DETAIL_SQL, candidate_id, "Candidate not found")
+
+    ie_rows = fetch_candidate_ie_transactions(conn, candidate_id, limit=limit, offset=offset)
+    return [IndependentExpenditureResponse.model_validate(ie_row) for ie_row in ie_rows]
+
+
+@router.get(
+    "/candidates/{candidate_id}/independent-expenditures/summary",
+    response_model=IndependentExpenditureSummary,
+)
+def get_candidate_independent_expenditures_summary(
+    candidate_id: UUID,
+    conn: psycopg.Connection = Depends(get_db),
+) -> IndependentExpenditureSummary:
+    _fetch_row_or_404(conn, CAMPAIGN_FINANCE_CANDIDATE_DETAIL_SQL, candidate_id, "Candidate not found")
+
+    return IndependentExpenditureSummary.model_validate(fetch_candidate_ie_summary(conn, candidate_id))

@@ -1,0 +1,4 @@
+COM_NAME,MASTER_KEY,REPORT_DESCRIPTION,RPT_YEAR,REPORT_KEY,SHORT_DESCRIPTION,FIRST_NAME,MIDDLE_NAME,LAST_NAME,SUFFIX_NAME,NON_INDIVIDUAL,PAC_REG_NO,ADDRESS,CITY,STATE,ZIP,FILE_DATE,AMOUNT,EVENT_DATE,EMP_OCCUPATION,INKIND_DESCRIPTION,OTHER_INCOME_TYPE,RCV_EVENT,CANDIDATE_FIRST_NAME,CANDIDATE_LAST_NAME,OFFICE,DISTRICT,PARTY
+"Friends of Smith",12345,"Annual Report",2022,67890,"Contributions","John","A","Smith","","","","123 Main St","Columbus","OH","43215",06/14/2022,250.00,,,,,,"Jane","Doe","State Representative",10,"Republican"
+"Citizens for Progress PAC",23456,"Semi-Annual Report",2022,78901,"Contributions","","","","","Ohio Teachers Union","OH-PAC-001","456 Union Blvd","Cleveland","OH","44101",03/15/2022,5000.00,,,"Labor Union",,,"Robert","Johnson","State Senator",5,"Democrat"
+"Campaign for Better Ohio",34567,"Pre-Primary Report",2022,89012,"Contributions","Mary","","Jones","","","","789 Oak Ave","Cincinnati","OH","45202",01/20/2022,25.00,,,,,,,,,,

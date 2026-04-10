@@ -1,0 +1,381 @@
+# Washington campaign finance jurisdiction config
+# Source: Washington Public Disclosure Commission open-data API (Socrata)
+
+jurisdiction:
+  name: "Washington"
+  code: "WA"
+  type: "state"
+  fips: "53"
+  parent: null
+
+data_sources:
+  - name: "WA PDC Contributions"
+    url: "https://www.pdc.wa.gov/political-disclosure-reporting-data/open-data"
+    bulk_download_url: "https://data.wa.gov/resource/kv7h-kjye.csv"
+    api_base_url: "https://data.wa.gov/resource"
+    format: "api"
+    auth_required: false
+    update_frequency: "daily"
+    coverage:
+      start_year: 2007
+      covers_sub_jurisdictions: true
+      office_levels:
+        - governor
+        - lieutenant_governor
+        - secretary_of_state
+        - attorney_general
+        - state_treasurer
+        - state_auditor
+        - superintendent_of_public_instruction
+        - commissioner_of_public_lands
+        - insurance_commissioner
+        - state_senate
+        - state_house
+        - county
+        - municipal
+        - school_district
+        - special_district
+      transaction_types:
+        - contributions
+    field_mappings:
+      id: "wa.record.id"
+      report_number: "wa.report_number"
+      origin: "wa.origin"
+      committee_id: "committee.id"
+      fund_id: "wa.fund_id"
+      filer_id: "wa.filer_id"
+      type: "committee.type"
+      filer_name: "committee.name"
+      office: "jurisdiction.office"
+      legislative_district: "jurisdiction.legislative_district"
+      position: "wa.position"
+      party: "wa.party"
+      ballot_number: "wa.ballot_number"
+      for_or_against: "wa.for_or_against"
+      jurisdiction: "jurisdiction.name"
+      jurisdiction_county: "jurisdiction.county"
+      jurisdiction_type: "jurisdiction.type"
+      election_year: "transaction.year"
+      amount: "transaction.amount"
+      cash_or_in_kind: "transaction.type"
+      receipt_date: "transaction.date"
+      description: "transaction.description"
+      memo: "wa.memo"
+      primary_general: "wa.primary_general"
+      code: "wa.code"
+      contributor_category: "donor.type"
+      contributor_name: "donor.name"
+      contributor_address: "donor.address.street1"
+      contributor_city: "donor.address.city"
+      contributor_state: "donor.address.state"
+      contributor_zip: "donor.address.zip"
+      contributor_occupation: "donor.occupation"
+      contributor_employer_name: "donor.employer"
+      contributor_employer_city: "wa.donor_employer_city"
+      contributor_employer_state: "wa.donor_employer_state"
+      url: "wa.source_url"
+      contributor_location: "wa.contributor_location"
+    scraper: null
+    last_successful_pull: null
+    last_verified_working: "2026-03-25"
+    known_issues:
+      - "CONDITION OF RELEASE in dataset metadata states records may not be used for commercial purposes (RCW 42.56.070(9), AGO 1975 No. 15)"
+      - "Coverage floor is rolling-window behavior; API currently returns election_year minima earlier than metadata narrative"
+
+  - name: "WA PDC Expenditures"
+    url: "https://www.pdc.wa.gov/political-disclosure-reporting-data/open-data"
+    bulk_download_url: "https://data.wa.gov/resource/tijg-9zyp.csv"
+    api_base_url: "https://data.wa.gov/resource"
+    format: "api"
+    auth_required: false
+    update_frequency: "daily"
+    coverage:
+      start_year: 2007
+      covers_sub_jurisdictions: true
+      office_levels:
+        - governor
+        - lieutenant_governor
+        - secretary_of_state
+        - attorney_general
+        - state_treasurer
+        - state_auditor
+        - superintendent_of_public_instruction
+        - commissioner_of_public_lands
+        - insurance_commissioner
+        - state_senate
+        - state_house
+        - county
+        - municipal
+        - school_district
+        - special_district
+      transaction_types:
+        - expenditures
+    field_mappings:
+      id: "wa.record.id"
+      report_number: "wa.report_number"
+      origin: "wa.origin"
+      committee_id: "committee.id"
+      fund_id: "wa.fund_id"
+      filer_id: "wa.filer_id"
+      type: "committee.type"
+      filer_name: "committee.name"
+      office: "jurisdiction.office"
+      legislative_district: "jurisdiction.legislative_district"
+      position: "wa.position"
+      party: "wa.party"
+      ballot_number: "wa.ballot_number"
+      for_or_against: "wa.for_or_against"
+      jurisdiction: "jurisdiction.name"
+      jurisdiction_county: "jurisdiction.county"
+      jurisdiction_type: "jurisdiction.type"
+      election_year: "transaction.year"
+      amount: "transaction.amount"
+      itemized_or_non_itemized: "wa.itemized_or_non_itemized"
+      expenditure_date: "transaction.date"
+      description: "transaction.description"
+      code: "transaction.type"
+      recipient_name: "payee.name"
+      recipient_address: "payee.address.street1"
+      recipient_city: "payee.address.city"
+      recipient_state: "payee.address.state"
+      recipient_zip: "payee.address.zip"
+      url: "wa.source_url"
+      recipient_location: "wa.recipient_location"
+      payee: "wa.payee"
+      creditor: "wa.creditor"
+    scraper: null
+    last_successful_pull: null
+    last_verified_working: "2026-03-25"
+    known_issues:
+      - "CONDITION OF RELEASE in dataset metadata states records may not be used for commercial purposes (RCW 42.56.070(9), AGO 1975 No. 15)"
+
+  - name: "WA PDC Independent Expenditures"
+    url: "https://www.pdc.wa.gov/political-disclosure-reporting-data/open-data"
+    bulk_download_url: "https://data.wa.gov/resource/67cp-h962.csv"
+    api_base_url: "https://data.wa.gov/resource"
+    format: "api"
+    auth_required: false
+    update_frequency: "daily"
+    coverage:
+      start_year: 2009
+      covers_sub_jurisdictions: true
+      office_levels:
+        - governor
+        - lieutenant_governor
+        - secretary_of_state
+        - attorney_general
+        - state_treasurer
+        - state_auditor
+        - superintendent_of_public_instruction
+        - commissioner_of_public_lands
+        - insurance_commissioner
+        - state_senate
+        - state_house
+        - county
+        - municipal
+        - school_district
+        - special_district
+      transaction_types:
+        - independent_expenditures
+    field_mappings:
+      id: "wa.record.id"
+      report_number: "wa.report_number"
+      origin: "wa.origin"
+      sponsor_entity_id: "wa.ie.sponsor_entity_id"
+      sponsor_id: "committee.id"
+      sponsor_name: "committee.name"
+      sponsor_description: "committee.type"
+      report_type: "transaction.type"
+      report_date: "wa.ie.report_date"
+      election_year: "transaction.year"
+      sponsor_address: "wa.ie.sponsor_address"
+      sponsor_city: "wa.ie.sponsor_city"
+      sponsor_state: "wa.ie.sponsor_state"
+      sponsor_zip: "wa.ie.sponsor_zip"
+      sponsor_email: "wa.ie.sponsor_email"
+      sponsor_phone: "wa.ie.sponsor_phone"
+      total_unitemized: "wa.ie.total_unitemized"
+      total_cycle: "wa.ie.total_cycle"
+      total_this_report: "wa.ie.total_this_report"
+      expenditure_amount: "transaction.amount"
+      expenditure_description: "transaction.description"
+      date_expense_obligated: "transaction.date"
+      date_advertising_presented: "wa.ie.date_advertising_presented"
+      vendor_name: "payee.name"
+      vendor_address: "payee.address.street1"
+      vendor_city: "payee.address.city"
+      vendor_state: "payee.address.state"
+      vendor_zipcode: "payee.address.zip"
+      candidate_entity_id: "wa.ie.candidate_entity_id"
+      candidate_candidacy_id: "wa.ie.candidate_candidacy_id"
+      candidate_committee_id: "wa.ie.candidate_committee_id"
+      candidate_filer_id: "wa.ie.candidate_filer_id"
+      candidate_name: "wa.ie.candidate_name"
+      candidate_last_name: "wa.ie.candidate_last_name"
+      candidate_first_name: "wa.ie.candidate_first_name"
+      candidate_office: "wa.ie.candidate_office"
+      candidate_jurisdiction: "wa.ie.candidate_jurisdiction"
+      candidate_party: "wa.ie.candidate_party"
+      candidate_office_type: "wa.ie.candidate_office_type"
+      ballot_name: "wa.ie.ballot_name"
+      ballot_number: "wa.ie.ballot_number"
+      ballot_type: "wa.ie.ballot_type"
+      portion_of_amount: "wa.ie.portion_of_amount"
+      for_or_against: "transaction.support_oppose"
+      funders_name: "wa.ie.funders_name"
+      funders_first_name: "wa.ie.funders_first_name"
+      funders_middle_initial: "wa.ie.funders_middle_initial"
+      date_received: "wa.ie.date_received"
+      amount: "wa.ie.amount"
+      funders_address: "wa.ie.funders_address"
+      funders_city: "wa.ie.funders_city"
+      funders_state: "wa.ie.funders_state"
+      funders_zipcode: "wa.ie.funders_zipcode"
+      funders_occupation: "wa.ie.funders_occupation"
+      funders_employer: "wa.ie.funders_employer"
+      funders_employer_city: "wa.ie.funders_employer_city"
+      funders_employer_state: "wa.ie.funders_employer_state"
+      url: "wa.source_url"
+      sponsor_location: "wa.ie.sponsor_location"
+      vendor_location: "wa.ie.vendor_location"
+      funders_location: "wa.ie.funders_location"
+      filer_id: "wa.filer_id"
+    scraper: null
+    last_successful_pull: null
+    last_verified_working: "2026-03-27"
+    known_issues:
+      - "CONDITION OF RELEASE in dataset metadata states records may not be used for commercial purposes (RCW 42.56.070(9), AGO 1975 No. 15)"
+      - "Independent expenditures load through the standard WA filing/transaction path; canonical civic loader remains a separate workflow"
+
+  - name: "WA PDC Loans"
+    url: "https://www.pdc.wa.gov/political-disclosure-reporting-data/open-data"
+    bulk_download_url: "https://data.wa.gov/resource/d2ig-r3q4.csv"
+    api_base_url: "https://data.wa.gov/resource"
+    format: "api"
+    auth_required: false
+    update_frequency: "daily"
+    coverage:
+      start_year: 2007
+      covers_sub_jurisdictions: true
+      office_levels:
+        - governor
+        - lieutenant_governor
+        - secretary_of_state
+        - attorney_general
+        - state_treasurer
+        - state_auditor
+        - superintendent_of_public_instruction
+        - commissioner_of_public_lands
+        - insurance_commissioner
+        - state_senate
+        - state_house
+        - county
+        - municipal
+        - school_district
+        - special_district
+      transaction_types:
+        - loans
+    field_mappings:
+      id: "wa.record.id"
+      report_number: "wa.report_number"
+      origin: "wa.origin"
+      committee_id: "committee.id"
+      fund_id: "wa.fund_id"
+      filer_id: "wa.filer_id"
+      type: "committee.type"
+      filer_name: "committee.name"
+      office: "jurisdiction.office"
+      legislative_district: "jurisdiction.legislative_district"
+      position: "wa.position"
+      party: "wa.party"
+      jurisdiction: "jurisdiction.name"
+      jurisdiction_county: "jurisdiction.county"
+      jurisdiction_type: "jurisdiction.type"
+      election_year: "transaction.year"
+      cash_or_in_kind: "wa.cash_or_in_kind"
+      receipt_date: "transaction.date"
+      repayment_schedule: "wa.repayment_schedule"
+      loan_due_date: "wa.loan_due_date"
+      lender_or_endorser: "lender.type"
+      transaction_type: "transaction.loan_type"
+      amount: "transaction.amount"
+      endorser_liable_amount: "wa.endorser_liable_amount"
+      primary_general: "wa.primary_general"
+      lenders_name: "lender.name"
+      lenders_address: "lender.address.street1"
+      lenders_city: "lender.address.city"
+      lenders_state: "lender.address.state"
+      lenders_zip: "lender.address.zip"
+      lenders_occupation: "lender.occupation"
+      lenders_employer: "lender.employer"
+      employers_city: "wa.lender_employer_city"
+      employers_state: "wa.lender_employer_state"
+      url: "wa.source_url"
+      carry_forward_loan: "wa.carry_forward_loan"
+      description: "transaction.description"
+    scraper: null
+    last_successful_pull: null
+    last_verified_working: "2026-03-27"
+    known_issues:
+      - "CONDITION OF RELEASE in dataset metadata states records may not be used for commercial purposes (RCW 42.56.070(9), AGO 1975 No. 15)"
+      - "Previously referenced loans dataset id g6x6-jd8p now returns dataset.missing; current id is d2ig-r3q4"
+
+  - name: "WA Legislature Sponsor Directory"
+    url: "https://wslwebservices.leg.wa.gov/SponsorService.asmx?op=GetSponsors"
+    bulk_download_url: "https://wslwebservices.leg.wa.gov/SponsorService.asmx/GetSponsors?biennium=2025-26"
+    api_base_url: "https://wslwebservices.leg.wa.gov/SponsorService.asmx"
+    format: "api"
+    auth_required: false
+    update_frequency: "weekly"
+    coverage:
+      start_year: 2025
+      covers_sub_jurisdictions: false
+      office_levels:
+        - state_senate
+        - state_house
+      transaction_types:
+        - officeholder_directory
+    field_mappings:
+      Id: "person.identifiers.wa_sponsor_id"
+      Name: "person.canonical_name"
+      LongName: "person.display_name"
+      FirstName: "person.first_name"
+      LastName: "person.last_name"
+      Agency: "office.name"
+      District: "electoral_division.district_number"
+      Party: "officeholding.party_text"
+      Phone: "contact_point.office.phone"
+      Email: "contact_point.officeholding.email"
+    scraper: "domains/campaign_finance/jurisdictions/states/WA/scraper/wa_officeholder_loader.py"
+    last_successful_pull: null
+    last_verified_working: "2026-03-30"
+    known_issues:
+      - "Feed is biennium-scoped (`GetSponsors?biennium=YYYY-YY`) and requires biennium selection for historical pulls"
+      - "Vacancy rows may appear as blank or VACANT sponsor identity and must not produce fake person-backed officeholding rows"
+
+laws:
+  source_url: "https://app.leg.wa.gov/RCW/default.aspx?cite=42.17A.405"
+  last_verified: "2026-03-21"
+  contribution_limits:
+    individual_to_candidate: null
+    pac_to_candidate: null
+    corporate_direct: "prohibited"
+    union_direct: null
+    party_to_candidate: null
+  itemization_threshold: 25
+  reporting:
+    periods: ["monthly", "pre-election", "post-election"]
+    electronic_filing_required: "required"
+  public_financing: false
+  notes:
+    - "RCW contribution-limit values vary by office class and election context; config keeps flattened placeholders with narrative caveats"
+    - "RCW 42.56.070(9) and AGO 1975 No. 15 are cited in PDC dataset release conditions for non-commercial reuse limits"
+    - "RCW chapter headings indicate recodification from 42.17A to 29B as of 2026; citations should be re-verified during updates"
+    - "State and local office classes are both covered by WA campaign-finance law definitions"
+
+status:
+  discovery: "complete"
+  scraper: "working"
+  normalization: "partial"
+  entity_resolution: "pending"
+  last_full_update: null

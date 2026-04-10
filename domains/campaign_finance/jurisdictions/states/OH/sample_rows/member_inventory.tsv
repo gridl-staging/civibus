@@ -1,0 +1,17 @@
+filename	rows	delimiter	header
+# Source: Accountability Project R diary (oh_contribs_diary.Rmd, oh_expends_diary.Rmd)
+# OH files are individual CSVs, not ZIP members. This inventory catalogs known files from documentation.
+# Row counts are approximate totals from the Accountability Project's 2022 download (12M contributions, 1.57M expenditures).
+# Live verification deferred: Ohio SOS APEX File Transfer Page under maintenance as of 2026-03-22.
+# --- Contribution files (prefix CON) ---
+ALL_CAN_CON_1994.CSV	unknown	comma	COM_NAME,MASTER_KEY,REPORT_DESCRIPTION,RPT_YEAR,REPORT_KEY,SHORT_DESCRIPTION,FIRST_NAME,MIDDLE_NAME,LAST_NAME,SUFFIX_NAME,NON_INDIVIDUAL,PAC_REG_NO,ADDRESS,CITY,STATE,ZIP,FILE_DATE,AMOUNT,EVENT_DATE,EMP_OCCUPATION,INKIND_DESCRIPTION,OTHER_INCOME_TYPE,RCV_EVENT,CANDIDATE_FIRST_NAME,CANDIDATE_LAST_NAME,OFFICE,DISTRICT,PARTY
+ALL_PAC_CON_1994.CSV	unknown	comma	(same as ALL_CAN_CON header)
+ALL_PAR_CON_1994.CSV	unknown	comma	(same as ALL_CAN_CON header)
+CAC_CON_2022.CSV	unknown	comma	(same as ALL_CAN_CON header)
+PAC_CON_2022.CSV	unknown	comma	(same as ALL_CAN_CON header)
+PPC_CON_2022.CSV	unknown	comma	(same as ALL_CAN_CON header)
+# --- Expenditure files (prefix EXP) ---
+ALL_CAN_EXP_1994.CSV	unknown	comma	COM_NAME,MASTER_KEY,REPORT_DESCRIPTION,RPT_YEAR,REPORT_KEY,SHORT_DESCRIPTION,FIRST_NAME,MIDDLE_NAME,LAST_NAME,SUFFIX_NAME,NON_INDIVIDUAL,ADDRESS,CITY,STATE,ZIP,EXPEND_DATE,AMOUNT,EVENT_DATE,PURPOSE,INKIND,CANDIDATE_FIRST_NAME,CANDIDATE_LAST_NAME,OFFICE_SOUGHT,DISTRICT,PARTY
+ALL_PAC_EXP_1994.CSV	unknown	comma	(same as ALL_CAN_EXP header)
+ALL_PAR_EXP_1994.CSV	unknown	comma	(same as ALL_CAN_EXP header)
+CAC_EXP_2022.CSV	unknown	comma	(same as ALL_CAN_EXP header)

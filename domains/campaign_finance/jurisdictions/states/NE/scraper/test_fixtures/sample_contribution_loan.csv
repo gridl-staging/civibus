@@ -1,0 +1,5 @@
+Receipt ID,Org ID,Filer Type,Filer Name,Candidate Name,Receipt Transaction/Contribution Type,Other Funds Type,Receipt Date,Receipt Amount,Description,Contributor or Transaction Source Type,Contributor or Source Name (Individual Last Name),First Name,Middle Name,Suffix,Address 1,Address 2,City,State,Zip,Filed Date,Amended,Employer,Occupation
+1001,7001,Candidate Committee,Committee A,Candidate A,Monetary,,01/05/2021,100.00,old contribution,Individual,DONOR,ALICE,,,101 MAIN ST,,LINCOLN,NE,68501,01/06/2021,N,Acme,Engineer
+1002,7001,Candidate Committee,Committee A,Candidate A,Monetary,,03/15/2026,250.00,new contribution,Individual,DONOR,BOB,,,102 MAIN ST,,OMAHA,NE,68101,03/16/2026,N,Contoso,Teacher
+1003,7001,Candidate Committee,Committee A,Candidate A,Loan,,03/20/2026,1000.00,loan from candidate,Self (Candidate),CANDIDATE,ALEX,,,103 MAIN ST,,OMAHA,NE,68101,03/21/2026,N,,
+1004,7001,Candidate Committee,Committee A,Candidate A,Loan Forgiveness Received,,03/22/2026,500.00,loan forgiveness,Individual,LENDER,CASEY,,,104 MAIN ST,,LINCOLN,NE,68501,03/23/2026,N,Example,Attorney

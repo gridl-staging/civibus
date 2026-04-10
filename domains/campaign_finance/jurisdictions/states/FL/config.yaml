@@ -1,0 +1,280 @@
+# Florida campaign finance jurisdiction config
+# Source: Florida Department of State campaign finance export CGI endpoints
+
+jurisdiction:
+  name: "Florida"
+  code: "FL"
+  type: "state"
+  fips: "12"
+  parent: null
+
+data_sources:
+  - name: "FL DOS Campaign Finance - Contributions"
+    url: "https://dos.elections.myflorida.com/campaign-finance/contributions/"
+    bulk_download_url: "https://dos.elections.myflorida.com/cgi-bin/contrib.exe"
+    api_base_url: null
+    format: "csv"
+    auth_required: false
+    update_frequency: "daily"
+    coverage:
+      start_year: 2000
+      covers_sub_jurisdictions: true
+      office_levels:
+        - governor
+        - lieutenant_governor
+        - attorney_general
+        - chief_financial_officer
+        - commissioner_of_agriculture
+        - state_senate
+        - state_house
+        - county
+        - municipal
+        - school_district
+        - special_district
+      transaction_types:
+        - contributions
+    field_mappings:
+      "Candidate/Committee": "committee.name"
+      "Date": "transaction.date"
+      "Amount": "transaction.amount"
+      "Typ": "transaction.type"
+      "Contributor Name": "donor.name"
+      "Address": "donor.address.street1"
+      "City State Zip": "donor.address.city_state_zip"
+      "Occupation": "donor.occupation"
+      "Inkind Desc": "transaction.in_kind_description"
+    scraper: null
+    last_successful_pull: null
+    last_verified_working: "2026-03-27"
+    known_issues:
+      - "Source is a form POST export; bulk_download_url stores the full CGI endpoint URL used for POST requests"
+      - "Export payload is tab-delimited TSV with CRLF line endings and US-ASCII encoding; schema format remains csv"
+      - "Browser-like User-Agent is required or upstream may return Cloudflare 403"
+      - "Direct HTTP POST can return Cloudflare-backed 502 HTML even after a successful landing-page GET; downloader falls back to browser-session form submission"
+      - "Errors can return HTTP 200 with Content-Type text/html; downloader must validate response Content-Type"
+      - "Server truncates silently at rowlimit"
+
+  - name: "FL DOS Campaign Finance - Expenditures"
+    url: "https://dos.elections.myflorida.com/campaign-finance/expenditures/"
+    bulk_download_url: "https://dos.elections.myflorida.com/cgi-bin/expend.exe"
+    api_base_url: null
+    format: "csv"
+    auth_required: false
+    update_frequency: "daily"
+    coverage:
+      start_year: 2000
+      covers_sub_jurisdictions: true
+      office_levels:
+        - governor
+        - lieutenant_governor
+        - attorney_general
+        - chief_financial_officer
+        - commissioner_of_agriculture
+        - state_senate
+        - state_house
+        - county
+        - municipal
+        - school_district
+        - special_district
+      transaction_types:
+        - expenditures
+    field_mappings:
+      "Candidate/Committee": "committee.name"
+      "Date": "transaction.date"
+      "Amount": "transaction.amount"
+      "Payee Name": "payee.name"
+      "Address": "payee.address.street1"
+      "City State Zip": "payee.address.city_state_zip"
+      "Purpose": "transaction.description"
+      "Type": "transaction.type"
+    scraper: null
+    last_successful_pull: null
+    last_verified_working: "2026-03-27"
+    known_issues:
+      - "Source is a form POST export; bulk_download_url stores the full CGI endpoint URL used for POST requests"
+      - "Export payload is tab-delimited TSV with CRLF line endings and US-ASCII encoding; schema format remains csv"
+      - "Browser-like User-Agent is required or upstream may return Cloudflare 403"
+      - "Direct HTTP POST can return Cloudflare-backed 502 HTML even after a successful landing-page GET; downloader falls back to browser-session form submission"
+      - "Errors can return HTTP 200 with Content-Type text/html; downloader must validate response Content-Type"
+      - "Expenditures endpoint rejects multi-day date windows; downloader must request one day at a time"
+      - "Server truncates silently at rowlimit"
+
+  - name: "FL DOS Campaign Finance - Transfers"
+    url: "https://dos.elections.myflorida.com/campaign-finance/transfers/"
+    bulk_download_url: "https://dos.elections.myflorida.com/cgi-bin/FundXfers.exe"
+    api_base_url: null
+    format: "csv"
+    auth_required: false
+    update_frequency: "daily"
+    coverage:
+      start_year: 2000
+      covers_sub_jurisdictions: true
+      office_levels:
+        - governor
+        - lieutenant_governor
+        - attorney_general
+        - chief_financial_officer
+        - commissioner_of_agriculture
+        - state_senate
+        - state_house
+        - county
+        - municipal
+        - school_district
+        - special_district
+      transaction_types:
+        - transfers
+    field_mappings:
+      "Candidate/Committee": "committee.name"
+      "Date": "transaction.date"
+      "Amount": "transaction.amount"
+      "Funds Transferred To": "payee.name"
+      "Address": "payee.address.street1"
+      "City State Zip": "payee.address.city_state_zip"
+      "Nature Of Account": "transaction.account_nature"
+      "Type": "transaction.type"
+    scraper: null
+    last_successful_pull: null
+    last_verified_working: "2026-03-27"
+    known_issues:
+      - "Source is a form POST export; bulk_download_url stores the full CGI endpoint URL used for POST requests"
+      - "Export payload is tab-delimited TSV with CRLF line endings and US-ASCII encoding; schema format remains csv"
+      - "Browser-like User-Agent is required or upstream may return Cloudflare 403"
+      - "Direct HTTP POST can return Cloudflare-backed 502 HTML even after a successful landing-page GET; downloader falls back to browser-session form submission"
+      - "Errors can return HTTP 200 with Content-Type text/html; downloader must validate response Content-Type"
+      - "Transfers endpoint rejects multi-day date windows; downloader must request one day at a time"
+      - "Server truncates silently at rowlimit"
+
+  - name: "FL DOS Campaign Finance - Other Disbursements"
+    url: "https://dos.elections.myflorida.com/campaign-finance/other/"
+    bulk_download_url: "https://dos.elections.myflorida.com/cgi-bin/otherdis.exe"
+    api_base_url: null
+    format: "csv"
+    auth_required: false
+    update_frequency: "daily"
+    coverage:
+      start_year: 2000
+      covers_sub_jurisdictions: true
+      office_levels:
+        - governor
+        - lieutenant_governor
+        - attorney_general
+        - chief_financial_officer
+        - commissioner_of_agriculture
+        - state_senate
+        - state_house
+        - county
+        - municipal
+        - school_district
+        - special_district
+      transaction_types:
+        - other
+    field_mappings:
+      "Candidate/Committee": "committee.name"
+      "Date": "transaction.date"
+      "Amount": "transaction.amount"
+      "Distributed To": "payee.name"
+      "Address": "payee.address.street1"
+      "City State Zip": "payee.address.city_state_zip"
+      "Purpose": "transaction.description"
+    scraper: null
+    last_successful_pull: null
+    last_verified_working: "2026-03-27"
+    known_issues:
+      - "Source is a form POST export; bulk_download_url stores the full CGI endpoint URL used for POST requests"
+      - "Export payload is tab-delimited TSV with CRLF line endings and US-ASCII encoding; schema format remains csv"
+      - "Browser-like User-Agent is required or upstream may return Cloudflare 403"
+      - "Direct HTTP POST can return Cloudflare-backed 502 HTML even after a successful landing-page GET; downloader falls back to browser-session form submission"
+      - "Errors can return HTTP 200 with Content-Type text/html; downloader must validate response Content-Type"
+      - "Server truncates silently at rowlimit"
+
+  - name: "FL Senate Officeholder Directory"
+    url: "https://www.flsenate.gov/Senators/"
+    bulk_download_url: null
+    api_base_url: null
+    format: "web_portal"
+    auth_required: false
+    update_frequency: "weekly"
+    coverage:
+      start_year: 2024
+      covers_sub_jurisdictions: false
+      office_levels:
+        - state_senate
+      transaction_types:
+        - officeholder_directory
+    field_mappings:
+      senator_id: "person.identifiers.fl_senator_id"
+      first_name: "person.first_name"
+      last_name: "person.last_name"
+      district: "electoral_division.district_number"
+      status: "officeholding.holder_status_source"
+      term_start: "officeholding.term_start_year"
+      term_end: "officeholding.term_end_year"
+      district_phone: "contact_point.office.phone_district"
+      district_address: "contact_point.office.address_district"
+      tallahassee_phone: "contact_point.office.phone_capitol"
+      tallahassee_address: "contact_point.office.address_capitol"
+    scraper: "domains/campaign_finance/jurisdictions/states/FL/scraper/fl_officeholder_loader.py"
+    last_successful_pull: null
+    last_verified_working: "2026-03-30"
+    known_issues:
+      - "Roster table includes resigned/died records alongside active members; loader must map non-active statuses to holder_status='former'"
+      - "Term windows are provided as year ranges and are represented with year-level precision in canonical officeholding"
+
+  - name: "FL House Representatives Directory (Blocked in Datacenter)"
+    url: "https://www.flhouse.gov/representatives"
+    bulk_download_url: "https://www.flhouse.gov/api/document/house"
+    api_base_url: "https://www.flhouse.gov/api"
+    format: "web_portal"
+    auth_required: false
+    update_frequency: "weekly"
+    coverage:
+      start_year: 2024
+      covers_sub_jurisdictions: false
+      office_levels:
+        - state_house
+      transaction_types:
+        - officeholder_directory
+    field_mappings:
+      member_name: "person.canonical_name"
+      district: "electoral_division.district_number"
+      status: "officeholding.holder_status_source"
+      term_start: "officeholding.term_start_year"
+      term_end: "officeholding.term_end_year"
+      district_phone: "contact_point.office.phone_district"
+      district_address: "contact_point.office.address_district"
+      capitol_phone: "contact_point.office.phone_capitol"
+      capitol_address: "contact_point.office.address_capitol"
+    scraper: null
+    last_successful_pull: null
+    last_verified_working: null
+    known_issues:
+      - "This environment currently receives Request Rejected HTML from flhouse.gov portal and API endpoints"
+      - "Field-level extraction for holder status/term/vacancy/contact requires browser-session workflow from a non-blocked environment"
+
+laws:
+  source_url: "https://www.leg.state.fl.us/statutes/index.cfm?App_mode=Display_Statute&URL=0100-0199/0106/0106.html"
+  last_verified: "2026-03-25"
+  contribution_limits:
+    individual_to_candidate: 1000
+    pac_to_candidate: 1000
+    corporate_direct: 1000
+    union_direct: 1000
+    party_to_candidate: 50000
+  itemization_threshold: 100
+  reporting:
+    periods: ["quarterly", "weekly", "daily", "pre-election"]
+    electronic_filing_required: "required"
+  public_financing: false
+  notes:
+    - "Section 106.08(1)(a) sets candidate contribution caps at $3,000 for statewide offices and $1,000 for legislative, multicounty, countywide, and sub-county offices; config uses the lower statewide-safe ceiling"
+    - "Section 106.08(2) caps aggregate party executive and affiliated party committee contributions at $50,000, with a $250,000 cap for statewide candidates"
+    - "Section 106.07 requires quarterly reports plus intensified election-period reporting (weekly and, for division filers, daily windows)"
+    - "Section 106.0705 requires electronic filing for entities filing with the Division of Elections"
+    - "Chapter 106 does not impose a categorical corporate or labor-union direct-contribution ban; limits apply under the same candidate cap structure"
+
+status:
+  discovery: "complete"
+  scraper: "complete"
+  normalization: "pending"
+  entity_resolution: "pending"
+  last_full_update: null

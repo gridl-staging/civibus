@@ -1,0 +1,460 @@
+import { describe, expect, it } from "vitest";
+import { buildTrustSection } from "$lib/detail-trust/presentation";
+import {
+  buildCandidacyDetailMetadataFromDetail,
+  buildCandidacyDetailPresentation,
+  buildContestDetailMetadataFromDetail,
+  buildContestDetailPresentation,
+  buildOfficeDetailMetadataFromDetail,
+  buildOfficeDetailPresentation,
+  buildOfficeholdingDetailMetadataFromDetail,
+  buildOfficeholdingDetailPresentation
+} from "./presentation";
+
+const OFFICE_ID = "33333333-3333-4333-8333-333333333333";
+const OFFICEHOLDING_ID = "44444444-4444-4444-8444-444444444444";
+const CONTEST_ID = "77777777-7777-4777-8777-777777777777";
+const CANDIDACY_ID = "88888888-8888-4888-8888-888888888888";
+const PERSON_ID = "11111111-1111-4111-8111-111111111111";
+const ELECTORAL_DIVISION_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+
+describe("office detail presentation", () => {
+  it("builds office title/facts, current officeholder link rows, incomplete-data warning, and shared trust section", () => {
+    const sources = [
+      {
+        domain: "civics",
+        jurisdiction: "us/nc",
+        data_source_name: "NC Board of Elections",
+        data_source_url: "https://example.org/nc",
+        source_record_key: "office-1",
+        record_url: "https://example.org/nc/offices/1",
+        pull_date: "2026-03-30T00:00:00Z"
+      }
+    ];
+
+    const viewModel = buildOfficeDetailPresentation({
+      id: OFFICE_ID,
+      name: "North Carolina Governor",
+      office_level: "state",
+      title: "Governor",
+      jurisdiction_id: null,
+      state: "NC",
+      is_elected: true,
+      number_of_seats: 1,
+      current_officeholders: [
+        {
+          officeholding_id: OFFICEHOLDING_ID,
+          person_id: PERSON_ID,
+          person_name: "Jane Officeholder",
+          holder_status: "elected"
+        }
+      ],
+      incomplete_data_states: ["no_officeholder"],
+      sources
+    });
+
+    expect(viewModel.title).toBe("North Carolina Governor");
+    expect(viewModel.factRows).toEqual([
+      { label: "Name", value: "North Carolina Governor" },
+      { label: "Title", value: "Governor" },
+      { label: "Office level", value: "state" },
+      { label: "State", value: "NC" },
+      { label: "Elected", value: "Yes" },
+      { label: "Number of seats", value: "1" }
+    ]);
+    expect(viewModel.officeholderRows).toEqual([
+      {
+        id: OFFICEHOLDING_ID,
+        personName: "Jane Officeholder",
+        holderStatus: "elected",
+        personHref: `/person/${PERSON_ID}`
+      }
+    ]);
+    expect(viewModel.incompleteDataWarning).toBe(
+      "Current officeholder data is incomplete for this office."
+    );
+    expect(viewModel.trustSection).toEqual(buildTrustSection(sources));
+    expect(viewModel.sectionOrder).toEqual([
+      "summary",
+      "trust",
+      "metrics",
+      "records",
+      "caveats"
+    ]);
+    expect(viewModel.keyMetricRows).toEqual([
+      { label: "Current officeholders", value: "1" }
+    ]);
+  });
+
+  it("emits next-step officeholder empty-state copy while preserving incomplete-data warning as caveat content", () => {
+    const viewModel = buildOfficeDetailPresentation({
+      id: OFFICE_ID,
+      name: "North Carolina Governor",
+      office_level: "state",
+      title: "Governor",
+      jurisdiction_id: null,
+      state: "NC",
+      is_elected: true,
+      number_of_seats: 1,
+      current_officeholders: [],
+      incomplete_data_states: ["no_officeholder"],
+      sources: []
+    });
+
+    expect(viewModel.keyMetricRows).toEqual([
+      { label: "Current officeholders", value: "0" }
+    ]);
+    expect(viewModel.officeholderEmptyMessage).toBe(
+      "No current officeholders are linked yet. Check back after the next records refresh."
+    );
+    expect(viewModel.incompleteDataWarning).toBe(
+      "Current officeholder data is incomplete for this office."
+    );
+  });
+
+  it("builds office route metadata from loaded office detail", () => {
+    expect(
+      buildOfficeDetailMetadataFromDetail({
+        id: OFFICE_ID,
+        name: "North Carolina Governor",
+        office_level: "state",
+        title: "Governor",
+        jurisdiction_id: null,
+        state: "NC",
+        is_elected: true,
+        number_of_seats: 1,
+        current_officeholders: [
+          {
+            officeholding_id: OFFICEHOLDING_ID,
+            person_id: PERSON_ID,
+            person_name: "Jane Officeholder",
+            holder_status: "elected"
+          }
+        ],
+        incomplete_data_states: [],
+        sources: []
+      })
+    ).toEqual({
+      title: "North Carolina Governor | Office | Civibus",
+      description: "Office profile with 1 current officeholder."
+    });
+  });
+});
+
+describe("contest detail presentation", () => {
+  it("builds title/facts/candidacy rows, delegates trust section, and computes key metrics", () => {
+    const sources = [
+      {
+        domain: "civics",
+        jurisdiction: "us/nc",
+        data_source_name: "NC Board of Elections",
+        data_source_url: "https://example.org/nc",
+        source_record_key: "contest-1",
+        record_url: "https://example.org/nc/contests/1",
+        pull_date: "2026-03-30T00:00:00Z"
+      }
+    ];
+
+    const viewModel = buildContestDetailPresentation({
+      id: CONTEST_ID,
+      name: "Governor 2026 General Election",
+      election_date: "2026-11-03",
+      election_type: "general",
+      office_id: OFFICE_ID,
+      electoral_division_id: ELECTORAL_DIVISION_ID,
+      number_of_seats: 1,
+      filing_deadline: "2026-09-01",
+      is_partisan: true,
+      candidate_list_incomplete: false,
+      candidacies: [
+        {
+          candidacy_id: CANDIDACY_ID,
+          person_id: PERSON_ID,
+          person_name: "Jane Officeholder",
+          party: "DEM",
+          status: "filed",
+          incumbent_challenge: "I"
+        }
+      ],
+      sources
+    });
+
+    expect(viewModel.title).toBe("Governor 2026 General Election");
+    expect(viewModel.factRows).toEqual([
+      { label: "Name", value: "Governor 2026 General Election" },
+      { label: "Election date", value: "2026-11-03" },
+      { label: "Election type", value: "general" },
+      { label: "Filing deadline", value: "2026-09-01" },
+      { label: "Partisan", value: "Yes" },
+      { label: "Number of seats", value: "1" }
+    ]);
+    expect(viewModel.keyMetricRows).toEqual([{ label: "Candidacies", value: "1" }]);
+    expect(viewModel.candidacyRows).toEqual([
+      {
+        id: CANDIDACY_ID,
+        personName: "Jane Officeholder",
+        personHref: `/person/${PERSON_ID}`,
+        party: "DEM",
+        status: "filed",
+        incumbentChallenge: "I"
+      }
+    ]);
+    expect(viewModel.candidacyEmptyMessage).toBeNull();
+    expect(viewModel.candidateListWarning).toBeNull();
+    expect(viewModel.trustSection).toEqual(buildTrustSection(sources));
+  });
+
+  it("emits candidacy empty-state and candidate-list warning when coverage is incomplete", () => {
+    const viewModel = buildContestDetailPresentation({
+      id: CONTEST_ID,
+      name: "Governor 2026 General Election",
+      election_date: null,
+      election_type: "general",
+      office_id: OFFICE_ID,
+      electoral_division_id: null,
+      number_of_seats: 1,
+      filing_deadline: null,
+      is_partisan: false,
+      candidate_list_incomplete: true,
+      candidacies: [],
+      sources: []
+    });
+
+    expect(viewModel.keyMetricRows).toEqual([{ label: "Candidacies", value: "0" }]);
+    expect(viewModel.candidacyEmptyMessage).toBe(
+      "No candidacies are linked yet. Check back after the next records refresh."
+    );
+    expect(viewModel.candidateListWarning).toBe(
+      "Candidate list coverage is incomplete for this contest."
+    );
+  });
+
+  it("builds contest route metadata from loaded contest detail", () => {
+    expect(
+      buildContestDetailMetadataFromDetail({
+        id: CONTEST_ID,
+        name: "Governor 2026 General Election",
+        election_date: "2026-11-03",
+        election_type: "general",
+        office_id: OFFICE_ID,
+        electoral_division_id: null,
+        number_of_seats: 1,
+        filing_deadline: "2026-09-01",
+        is_partisan: true,
+        candidate_list_incomplete: false,
+        candidacies: [
+          {
+            candidacy_id: CANDIDACY_ID,
+            person_id: PERSON_ID,
+            person_name: "Jane Officeholder",
+            party: "DEM",
+            status: "filed",
+            incumbent_challenge: "I"
+          }
+        ],
+        sources: []
+      })
+    ).toEqual({
+      title: "Governor 2026 General Election | Contest | Civibus",
+      description: "Contest profile with 1 candidacy."
+    });
+  });
+});
+
+describe("candidacy detail presentation", () => {
+  it("builds title/facts for person linkage, filing metadata, and trust delegation", () => {
+    const sources = [
+      {
+        domain: "civics",
+        jurisdiction: "us/nc",
+        data_source_name: "NC Board of Elections",
+        data_source_url: "https://example.org/nc",
+        source_record_key: "candidacy-1",
+        record_url: "https://example.org/nc/candidacies/1",
+        pull_date: "2026-03-30T00:00:00Z"
+      }
+    ];
+
+    const viewModel = buildCandidacyDetailPresentation({
+      id: CANDIDACY_ID,
+      person_id: PERSON_ID,
+      person_name: "Jane Officeholder",
+      contest_id: CONTEST_ID,
+      party: "DEM",
+      filing_date: "2026-02-01",
+      status: "filed",
+      incumbent_challenge: "I",
+      candidate_number: "17",
+      sources
+    });
+
+    expect(viewModel.title).toBe("Jane Officeholder candidacy");
+    expect(viewModel.factRows).toEqual([
+      { label: "Person", value: "Jane Officeholder" },
+      { label: "Party", value: "DEM" },
+      { label: "Filing date", value: "2026-02-01" },
+      { label: "Status", value: "filed" },
+      { label: "Incumbent/challenger", value: "I" },
+      { label: "Candidate number", value: "17" }
+    ]);
+    expect(viewModel.personHref).toBe(`/person/${PERSON_ID}`);
+    expect(viewModel.keyMetricRows).toEqual([{ label: "Has filing date", value: "Yes" }]);
+    expect(viewModel.statusEmptyMessage).toBeNull();
+    expect(viewModel.trustSection).toEqual(buildTrustSection(sources));
+  });
+
+  it("emits status empty-state when candidacy status is not available", () => {
+    const viewModel = buildCandidacyDetailPresentation({
+      id: CANDIDACY_ID,
+      person_id: PERSON_ID,
+      person_name: "Jane Officeholder",
+      contest_id: CONTEST_ID,
+      party: null,
+      filing_date: null,
+      status: null,
+      incumbent_challenge: null,
+      candidate_number: null,
+      sources: []
+    });
+
+    expect(viewModel.factRows).toEqual([
+      { label: "Person", value: "Jane Officeholder" },
+      { label: "Party", value: "—" },
+      { label: "Filing date", value: "—" },
+      { label: "Status", value: "—" },
+      { label: "Incumbent/challenger", value: "—" },
+      { label: "Candidate number", value: "—" }
+    ]);
+    expect(viewModel.keyMetricRows).toEqual([{ label: "Has filing date", value: "No" }]);
+    expect(viewModel.statusEmptyMessage).toBe(
+      "Status is not available for this candidacy yet."
+    );
+  });
+
+  it("builds candidacy route metadata from loaded candidacy detail", () => {
+    expect(
+      buildCandidacyDetailMetadataFromDetail({
+        id: CANDIDACY_ID,
+        person_id: PERSON_ID,
+        person_name: "Jane Officeholder",
+        contest_id: CONTEST_ID,
+        party: "DEM",
+        filing_date: "2026-02-01",
+        status: "filed",
+        incumbent_challenge: "I",
+        candidate_number: "17",
+        sources: []
+      })
+    ).toEqual({
+      title: "Jane Officeholder | Candidacy | Civibus",
+      description: "Candidacy profile for Jane Officeholder."
+    });
+  });
+});
+
+describe("officeholding detail presentation", () => {
+  it("builds title/facts for person linkage, status, valid period, and trust delegation", () => {
+    const sources = [
+      {
+        domain: "civics",
+        jurisdiction: "us/nc",
+        data_source_name: "NC Board of Elections",
+        data_source_url: "https://example.org/nc",
+        source_record_key: "officeholding-1",
+        record_url: "https://example.org/nc/officeholdings/1",
+        pull_date: "2026-03-30T00:00:00Z"
+      }
+    ];
+
+    const viewModel = buildOfficeholdingDetailPresentation({
+      id: OFFICEHOLDING_ID,
+      person_id: PERSON_ID,
+      person_name: "Jane Officeholder",
+      office_id: OFFICE_ID,
+      electoral_division_id: ELECTORAL_DIVISION_ID,
+      holder_status: "elected",
+      valid_period_lower: "2025-01-01",
+      valid_period_upper: null,
+      date_precision: "day",
+      sources
+    });
+
+    expect(viewModel.title).toBe("Jane Officeholder officeholding");
+    expect(viewModel.factRows).toEqual([
+      { label: "Person", value: "Jane Officeholder" },
+      { label: "Holder status", value: "elected" },
+      { label: "Valid from", value: "2025-01-01" },
+      { label: "Valid through", value: "—" },
+      { label: "Date precision", value: "day" }
+    ]);
+    expect(viewModel.personHref).toBe(`/person/${PERSON_ID}`);
+    expect(viewModel.keyMetricRows).toEqual([{ label: "Active officeholding", value: "Yes" }]);
+    expect(viewModel.validPeriodEmptyMessage).toBeNull();
+    expect(viewModel.trustSection).toEqual(buildTrustSection(sources));
+  });
+
+  it("emits valid-period empty-state when both period bounds are unavailable", () => {
+    const viewModel = buildOfficeholdingDetailPresentation({
+      id: OFFICEHOLDING_ID,
+      person_id: PERSON_ID,
+      person_name: "Jane Officeholder",
+      office_id: OFFICE_ID,
+      electoral_division_id: null,
+      holder_status: "former",
+      valid_period_lower: null,
+      valid_period_upper: null,
+      date_precision: "day",
+      sources: []
+    });
+
+    expect(viewModel.factRows).toEqual([
+      { label: "Person", value: "Jane Officeholder" },
+      { label: "Holder status", value: "former" },
+      { label: "Valid from", value: "—" },
+      { label: "Valid through", value: "—" },
+      { label: "Date precision", value: "day" }
+    ]);
+    expect(viewModel.keyMetricRows).toEqual([{ label: "Active officeholding", value: "No" }]);
+    expect(viewModel.validPeriodEmptyMessage).toBe(
+      "No valid-period bounds are available for this officeholding."
+    );
+  });
+
+  it("does not mark former officeholdings as active when their period is still open-ended", () => {
+    const viewModel = buildOfficeholdingDetailPresentation({
+      id: OFFICEHOLDING_ID,
+      person_id: PERSON_ID,
+      person_name: "Jane Officeholder",
+      office_id: OFFICE_ID,
+      electoral_division_id: null,
+      holder_status: "former",
+      valid_period_lower: "2025-01-01",
+      valid_period_upper: null,
+      date_precision: "day",
+      sources: []
+    });
+
+    expect(viewModel.keyMetricRows).toEqual([{ label: "Active officeholding", value: "No" }]);
+    expect(viewModel.validPeriodEmptyMessage).toBeNull();
+  });
+
+  it("builds officeholding route metadata from loaded officeholding detail", () => {
+    expect(
+      buildOfficeholdingDetailMetadataFromDetail({
+        id: OFFICEHOLDING_ID,
+        person_id: PERSON_ID,
+        person_name: "Jane Officeholder",
+        office_id: OFFICE_ID,
+        electoral_division_id: null,
+        holder_status: "elected",
+        valid_period_lower: "2025-01-01",
+        valid_period_upper: null,
+        date_precision: "day",
+        sources: []
+      })
+    ).toEqual({
+      title: "Jane Officeholder | Officeholding | Civibus",
+      description: "Officeholding profile for Jane Officeholder."
+    });
+  });
+});

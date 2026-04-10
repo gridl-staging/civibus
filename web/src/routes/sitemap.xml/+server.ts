@@ -1,0 +1,87 @@
+/** Builds the public sitemap from static routes plus campaign-finance detail pages. */
+import { env } from "$env/dynamic/public";
+import {
+  buildCandidateHref,
+  buildCandidateListPath,
+  buildCommitteeHref,
+  buildCommitteeListPath,
+  type CandidateListItem,
+  type CandidateListResponse,
+  type CommitteeListItem,
+  type CommitteeListResponse
+} from "$lib/campaign-finance-detail/contract";
+import { buildCanonicalUrl } from "$lib/seo/canonical";
+import type { RequestHandler } from "@sveltejs/kit";
+
+// Keep the sitemap walker inside the backend's authoritative list max (`limit <= 200`).
+const BATCH_LIMIT = 200;
+
+/** Static paths that always appear in the sitemap. */
+const STATIC_PATHS = ["/", "/candidates", "/committees"];
+
+/**
+ * Walks a paginated list endpoint until `has_next` is false,
+ * collecting all items across pages.
+ */
+async function collectAllItems<TItem>(
+  requestJson: (path: string) => Promise<{ items: TItem[]; has_next: boolean; limit: number }>,
+  buildPath: (params: { limit: number; offset: number }) => string
+): Promise<TItem[]> {
+  const items: TItem[] = [];
+  let offset = 0;
+  let hasNext = true;
+
+  while (hasNext) {
+    const response = await requestJson(buildPath({ limit: BATCH_LIMIT, offset }));
+    items.push(...response.items);
+    hasNext = response.has_next;
+    offset += response.limit;
+  }
+
+  return items;
+}
+
+function escapeXml(text: string): string {
+  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+/** Returns an XML sitemap that walks candidate and committee list pagination. */
+export const GET: RequestHandler = async (event) => {
+  const { api } = event.locals;
+  const origin = env.PUBLIC_ORIGIN || undefined;
+
+  // Fetch all candidates and committees in parallel
+  const [candidates, committees] = await Promise.all([
+    collectAllItems<CandidateListItem>(
+      (path) => api.requestJson<CandidateListResponse>(path),
+      buildCandidateListPath
+    ),
+    collectAllItems<CommitteeListItem>(
+      (path) => api.requestJson<CommitteeListResponse>(path),
+      buildCommitteeListPath
+    )
+  ]);
+
+  // Build detail paths using the single-source href helpers
+  const candidatePaths = candidates.map((item) => buildCandidateHref(item));
+  const committeePaths = committees.map((item) => buildCommitteeHref(item));
+
+  // Convert all paths to absolute canonical URLs
+  const allPaths = [...STATIC_PATHS, ...candidatePaths, ...committeePaths];
+  const urls = allPaths.map(
+    (path) => buildCanonicalUrl(new URL(path, event.url.origin), origin)
+  );
+
+  // Build XML
+  const urlEntries = urls.map((loc) => `  <url><loc>${escapeXml(loc)}</loc></url>`).join("\n");
+  const xml = [
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">',
+    urlEntries,
+    "</urlset>"
+  ].join("\n");
+
+  return new Response(xml, {
+    headers: { "Content-Type": "application/xml" }
+  });
+};

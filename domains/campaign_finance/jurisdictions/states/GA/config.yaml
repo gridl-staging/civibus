@@ -1,0 +1,149 @@
+# Georgia campaign finance jurisdiction config
+# Source system: Georgia Government Transparency & Campaign Finance Commission portal
+
+jurisdiction:
+  name: "Georgia"
+  code: "GA"
+  type: "state"
+  fips: "13"
+  parent: null
+
+data_sources:
+  - name: "Georgia Campaign Portal — Contributions Search Export"
+    url: "https://media.ethics.ga.gov/search/Campaign/Campaign_ByContributions.aspx"
+    bulk_download_url: null
+    api_base_url: null
+    format: "web_portal"
+    auth_required: false
+    update_frequency: "continuous"
+    coverage:
+      start_year: 2000
+      covers_sub_jurisdictions: true
+      office_levels:
+        - governor
+        - lieutenant_governor
+        - state_senate
+        - state_house
+        - judicial
+        - county
+        - municipal
+      transaction_types:
+        - contributions
+        - loans
+    field_mappings:
+      FilerID: "committee.id"
+      Type: "transaction.type"
+      LastName: "donor.name.last"
+      FirstName: "donor.name.first"
+      Address: "donor.address.street1"
+      City: "donor.address.city"
+      State: "donor.address.state"
+      Zip: "donor.address.zip"
+      PAC: "donor.pac_affiliation" # TODO: confirm canonical shared-schema path for PAC affiliation text
+      Occupation: "donor.occupation"
+      Employer: "donor.employer"
+      Date: "transaction.date"
+      Election: "transaction.election_type"
+      Election_Year: "election.year"
+      Cash_Amount: "transaction.amount"
+      In_Kind_Amount: "transaction.in_kind_amount"
+      In_Kind_Description: "transaction.in_kind_description"
+      Candidate_FirstName: "candidate.name.first"
+      Candidate_MiddleName: "candidate.name.middle"
+      Candidate_LastName: "candidate.name.last"
+      Candidate_Suffix: "candidate.name.suffix"
+      Committee_Name: "committee.name"
+    scraper: null
+    last_successful_pull: null
+    last_verified_working: "2026-03-26"
+    known_issues:
+      - "Portal requires one persistent ASP.NET browser context per scrape run (ASP.NET_SessionId + __VIEWSTATE + __EVENTVALIDATION)."
+      - "Contribution search export returns full matching result sets, not only the visible page, and can take more than 30 seconds for broad queries."
+      - "Contribution export is delivered as text/csv attachment StateEthicsReport.csv; some tooling saves the payload with .xls extension."
+      - "Raw HTTP clients frequently time out on postback export/pagination flows; Playwright browser automation succeeds when page state is preserved."
+      - "No official bulk download, API, or machine-readable feed was found on campaign search surfaces."
+
+  - name: "Georgia Campaign Portal — Expenditures Search Export"
+    url: "https://media.ethics.ga.gov/search/Campaign/Campaign_ByExpenditures.aspx"
+    bulk_download_url: null
+    api_base_url: null
+    format: "web_portal"
+    auth_required: false
+    update_frequency: "continuous"
+    coverage:
+      start_year: 2000
+      covers_sub_jurisdictions: true
+      office_levels:
+        - governor
+        - lieutenant_governor
+        - state_senate
+        - state_house
+        - judicial
+        - county
+        - municipal
+      transaction_types:
+        - expenditures
+    field_mappings:
+      FilerID: "committee.id"
+      Key: "transaction.sequence"
+      Ref: "transaction.reference"
+      Type: "transaction.type"
+      LastName: "payee.name.last"
+      FirstName: "payee.name.first"
+      Address: "payee.address.street1"
+      City: "payee.address.city"
+      State: "payee.address.state"
+      Zip: "payee.address.zip"
+      Occupation_or_Employer: "payee.employer_or_occupation" # TODO: split employer vs occupation when source detail pages are integrated
+      Date: "transaction.date"
+      Purpose: "transaction.purpose"
+      Paid: "transaction.amount"
+      Other: "transaction.other_amount"
+      Election: "transaction.election_type"
+      Election_Year: "election.year"
+      Candidate_FirstName: "candidate.name.first"
+      Candidate_MiddleName: "candidate.name.middle"
+      Candidate_LastName: "candidate.name.last"
+      Candidate_Suffix: "candidate.name.suffix"
+      Committee_Name: "committee.name"
+    scraper: null
+    last_successful_pull: null
+    last_verified_working: "2026-03-26"
+    known_issues:
+      - "Expenditure export is returned as application/vnd.ms-excel attachment EthicsReportExport.xls but payload is an HTML table, not BIFF/OOXML workbook bytes."
+      - "Expenditure result pages are stateful ASP.NET postbacks and require continuous session + hidden-form token reuse."
+      - "No official bulk download, API, or machine-readable feed was found on campaign search surfaces."
+
+laws:
+  source_url: "https://media.ethics.ga.gov/Commission/pdf/EthicsInGovernmentAct.pdf"
+  last_verified: "2026-03-14"
+  contribution_limits:
+    individual_to_candidate: 8400
+    pac_to_candidate: 8400
+    corporate_direct: 8400
+    union_direct: 8400
+    party_to_candidate: 8400
+  itemization_threshold: 100
+  reporting:
+    periods: ["quarterly", "pre-election"]
+    electronic_filing_required: "required"
+  public_financing: false
+  notes:
+    - "Commission notice dated 2023-03-27 sets adjusted limits to $8,400 statewide primary/general, $4,800 statewide runoff, $3,300 all-other primary/general, $1,800 all-other runoff (https://ethics.ga.gov/contribution-limits/)."
+    - "O.C.G.A. 21-5-41 applies limits to person, corporation, political committee, and political party; unions are not separately enumerated in this limits subsection and are normalized as equivalent donor entities for this flat schema."
+    - "21-5-41(j) excludes certain political party spending supporting the party ticket or group of named candidates from contribution-limit accounting."
+    - "21-5-41(g) excludes contributions from a candidate to their own campaign and from specific immediate-family relationships from contribution-limit caps."
+    - "21-5-41(c) aggregates contributions from affiliated entities under common ownership/control for limit enforcement."
+    - "Two-business-day reporting for contributions over $1,000 during the period before election requires separate handling (21-5-34(c)(2))."
+    - "Fundraising blackout applies to General Assembly members, statewide elected officers, and related committees during legislative session windows (21-5-35)."
+    - "21-5-30 prohibits anonymous contributions and conversion of campaign funds to personal use."
+    - "Reporting periods are mapped to quarterly + pre-election: the 2026 Commission filing schedule lists four roughly quarterly CCDR windows plus two-business-day pre-election reporting for contributions over $1,000 (21-5-34(c)(2))."
+    - "Commission-published adjusted limits reference the 2023-03-27 vote under 21-5-41(k); monitor for future CPI-driven updates."
+    - "Filing cadence changed in 2026 guidance (SB 199 implementation context); re-verify each cycle against both statute and Commission schedule-page updates."
+
+status:
+  discovery: "complete"
+  scraper: "pending"
+  normalization: "pending"
+  entity_resolution: "pending"
+  last_full_update: null

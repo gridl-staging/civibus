@@ -1,0 +1,2235 @@
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from decimal import Decimal
+from uuid import UUID, uuid4
+
+import psycopg
+import pytest
+from fastapi.testclient import TestClient
+
+from api.queries import fetch_committee_fundraising_summary
+from api.test_campaign_finance_support import (
+    CandidateCommitteeLinkSeed,
+    CandidateRowSeed,
+    CommitteeRowSeed,
+    FilingRowSeed,
+    TransactionRowSeed,
+    insert_candidate_committee_link_row,
+    insert_candidate_row,
+    insert_committee_row,
+    insert_data_source_for_test,
+    insert_filing_breakdown_transaction,
+    insert_filing_row,
+    insert_source_record_for_test,
+    insert_summary_transaction,
+    insert_transaction_row,
+    seed_committee_for_filing_breakdown,
+    seed_committee_for_summary,
+    seed_transactions_for_filters,
+)
+from core.db import insert_entity_source, insert_organization, insert_person
+from core.types.python.models import Organization, Person
+from domains.campaign_finance.ingest.filing_loader import upsert_filing
+from domains.campaign_finance.types.models import Filing
+
+pytestmark = pytest.mark.integration
+
+
+def test_get_committee_returns_direct_provenance(
+    api_client: TestClient,
+    db_conn: psycopg.Connection,
+) -> None:
+    organization = Organization(canonical_name="Committee Org")
+    insert_organization(db_conn, organization)
+
+    data_source = insert_data_source_for_test(db_conn, jurisdiction="federal/fec", name_suffix=str(uuid4()))
+    source_record = insert_source_record_for_test(
+        db_conn,
+        source_record_id=UUID("00000000-0000-0000-0000-000000000901"),
+        data_source_id=data_source.id,
+        source_record_key="committee-direct",
+        source_url="https://example.org/record/committee-direct",
+        pull_date=datetime(2026, 3, 16, 12, 0, tzinfo=timezone.utc),
+    )
+
+    committee_id = UUID("00000000-0000-0000-0000-000000000900")
+    insert_committee_row(
+        db_conn,
+        CommitteeRowSeed(
+            id=committee_id,
+            fec_committee_id="C12345678",
+            name="Civibus Committee",
+            organization_id=organization.id,
+            source_record_id=source_record.id,
+            committee_type="P",
+            committee_designation="A",
+            party="DEM",
+            state="NC",
+            city="Durham",
+            zip_code="27701",
+            treasurer_name="Alex Treasurer",
+        ),
+    )
+
+    response = api_client.get(f"/v1/committees/{committee_id}")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["id"] == str(committee_id)
+    assert payload["fec_committee_id"] == "C12345678"
+    assert payload["name"] == "Civibus Committee"
+    assert payload["organization_id"] == str(organization.id)
+    assert payload["committee_type"] == "P"
+    assert payload["committee_designation"] == "A"
+    assert payload["party"] == "DEM"
+    assert payload["state"] == "NC"
+    assert payload["city"] == "Durham"
+    assert payload["zip_code"] == "27701"
+    assert payload["treasurer_name"] == "Alex Treasurer"
+    assert payload["sources"] == [
+        {
+            "domain": "campaign_finance",
+            "jurisdiction": "federal/fec",
+            "data_source_name": data_source.name,
+            "data_source_url": data_source.source_url,
+            "source_record_key": "committee-direct",
+            "record_url": "https://example.org/record/committee-direct",
+            "pull_date": "2026-03-16T12:00:00Z",
+        }
+    ]
+    assert "created_at" not in payload
+    assert "updated_at" not in payload
+
+
+def test_get_committee_falls_back_to_organization_entity_source_when_row_source_missing(
+    api_client: TestClient,
+    db_conn: psycopg.Connection,
+) -> None:
+    organization = Organization(canonical_name="Fallback Committee Org")
+    insert_organization(db_conn, organization)
+
+    data_source = insert_data_source_for_test(db_conn, jurisdiction="state/co", name_suffix=str(uuid4()))
+    newer_record = insert_source_record_for_test(
+        db_conn,
+        source_record_id=UUID("00000000-0000-0000-0000-000000000911"),
+        data_source_id=data_source.id,
+        source_record_key="committee-fallback-newer",
+        source_url="https://example.org/record/committee-fallback-newer",
+        pull_date=datetime(2026, 3, 16, 10, 0, tzinfo=timezone.utc),
+    )
+    tie_break_first = insert_source_record_for_test(
+        db_conn,
+        source_record_id=UUID("00000000-0000-0000-0000-000000000001"),
+        data_source_id=data_source.id,
+        source_record_key="committee-fallback-tie-a",
+        source_url="https://example.org/record/committee-fallback-tie-a",
+        pull_date=datetime(2026, 3, 15, 10, 0, tzinfo=timezone.utc),
+    )
+    tie_break_second = insert_source_record_for_test(
+        db_conn,
+        source_record_id=UUID("00000000-0000-0000-0000-000000000002"),
+        data_source_id=data_source.id,
+        source_record_key="committee-fallback-tie-b",
+        source_url="https://example.org/record/committee-fallback-tie-b",
+        pull_date=datetime(2026, 3, 15, 10, 0, tzinfo=timezone.utc),
+    )
+    insert_entity_source(db_conn, "organization", organization.id, newer_record.id, "committee")
+    insert_entity_source(db_conn, "organization", organization.id, newer_record.id, "recipient")
+    insert_entity_source(db_conn, "organization", organization.id, tie_break_first.id, "committee")
+    insert_entity_source(db_conn, "organization", organization.id, tie_break_second.id, "committee")
+
+    committee_id = UUID("00000000-0000-0000-0000-000000000910")
+    insert_committee_row(
+        db_conn,
+        CommitteeRowSeed(
+            id=committee_id,
+            fec_committee_id="C12345679",
+            name="Fallback Committee",
+            organization_id=organization.id,
+            source_record_id=None,
+        ),
+    )
+
+    response = api_client.get(f"/v1/committees/{committee_id}")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert [source["source_record_key"] for source in payload["sources"]] == [
+        "committee-fallback-newer",
+        "committee-fallback-tie-a",
+        "committee-fallback-tie-b",
+    ]
+
+
+def test_get_committee_unions_direct_and_entity_sources_without_duplicates(
+    api_client: TestClient,
+    db_conn: psycopg.Connection,
+) -> None:
+    organization = Organization(canonical_name="Union Source Committee Org")
+    insert_organization(db_conn, organization)
+
+    data_source = insert_data_source_for_test(db_conn, jurisdiction="state/ga", name_suffix=str(uuid4()))
+    direct_source = insert_source_record_for_test(
+        db_conn,
+        source_record_id=UUID("00000000-0000-0000-0000-000000000921"),
+        data_source_id=data_source.id,
+        source_record_key="committee-direct-older",
+        source_url="https://example.org/record/committee-direct-older",
+        pull_date=datetime(2026, 3, 10, 10, 0, tzinfo=timezone.utc),
+    )
+    newer_entity_source = insert_source_record_for_test(
+        db_conn,
+        source_record_id=UUID("00000000-0000-0000-0000-000000000922"),
+        data_source_id=data_source.id,
+        source_record_key="committee-entity-newer",
+        source_url="https://example.org/record/committee-entity-newer",
+        pull_date=datetime(2026, 3, 16, 10, 0, tzinfo=timezone.utc),
+    )
+    insert_entity_source(db_conn, "organization", organization.id, direct_source.id, "committee")
+    insert_entity_source(db_conn, "organization", organization.id, newer_entity_source.id, "committee")
+
+    committee_id = UUID("00000000-0000-0000-0000-000000000920")
+    insert_committee_row(
+        db_conn,
+        CommitteeRowSeed(
+            id=committee_id,
+            fec_committee_id="C12345680",
+            name="Union Source Committee",
+            organization_id=organization.id,
+            source_record_id=direct_source.id,
+        ),
+    )
+
+    response = api_client.get(f"/v1/committees/{committee_id}")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert [source["source_record_key"] for source in payload["sources"]] == [
+        "committee-entity-newer",
+        "committee-direct-older",
+    ]
+
+
+def test_get_committee_returns_404_for_missing_committee(api_client: TestClient) -> None:
+    response = api_client.get(f"/v1/committees/{uuid4()}")
+
+    assert response.status_code == 404
+
+
+def test_get_committee_rejects_malformed_uuid(api_client: TestClient) -> None:
+    response = api_client.get("/v1/committees/not-a-uuid")
+
+    assert response.status_code == 422
+    assert response.json()["detail"][0]["loc"] == ["path", "committee_id"]
+
+
+def test_get_candidate_returns_direct_provenance(
+    api_client: TestClient,
+    db_conn: psycopg.Connection,
+) -> None:
+    person = Person(canonical_name="Candidate Person")
+    insert_person(db_conn, person)
+
+    committee_id = UUID("00000000-0000-0000-0000-000000000931")
+    insert_committee_row(
+        db_conn,
+        CommitteeRowSeed(
+            id=committee_id,
+            fec_committee_id="C12345681",
+            name="Principal Committee",
+            organization_id=None,
+            source_record_id=None,
+        ),
+    )
+
+    data_source = insert_data_source_for_test(db_conn, jurisdiction="federal/fec", name_suffix=str(uuid4()))
+    source_record = insert_source_record_for_test(
+        db_conn,
+        source_record_id=UUID("00000000-0000-0000-0000-000000000932"),
+        data_source_id=data_source.id,
+        source_record_key="candidate-direct",
+        source_url="https://example.org/record/candidate-direct",
+        pull_date=datetime(2026, 3, 16, 9, 30, tzinfo=timezone.utc),
+    )
+
+    candidate_id = UUID("00000000-0000-0000-0000-000000000930")
+    insert_candidate_row(
+        db_conn,
+        CandidateRowSeed(
+            id=candidate_id,
+            fec_candidate_id="H0NC01001",
+            name="Jane Candidate",
+            office="H",
+            person_id=person.id,
+            principal_committee_id=committee_id,
+            source_record_id=source_record.id,
+            party="DEM",
+            state="NC",
+            district="01",
+            incumbent_challenge="I",
+        ),
+    )
+
+    response = api_client.get(f"/v1/candidates/{candidate_id}")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["id"] == str(candidate_id)
+    assert payload["fec_candidate_id"] == "H0NC01001"
+    assert payload["name"] == "Jane Candidate"
+    assert payload["person_id"] == str(person.id)
+    assert payload["party"] == "DEM"
+    assert payload["office"] == "H"
+    assert payload["state"] == "NC"
+    assert payload["district"] == "01"
+    assert payload["incumbent_challenge"] == "I"
+    assert payload["principal_committee_id"] == str(committee_id)
+    assert payload["sources"] == [
+        {
+            "domain": "campaign_finance",
+            "jurisdiction": "federal/fec",
+            "data_source_name": data_source.name,
+            "data_source_url": data_source.source_url,
+            "source_record_key": "candidate-direct",
+            "record_url": "https://example.org/record/candidate-direct",
+            "pull_date": "2026-03-16T09:30:00Z",
+        }
+    ]
+    assert "created_at" not in payload
+    assert "updated_at" not in payload
+
+
+def test_get_candidate_falls_back_to_person_entity_source_when_row_source_missing(
+    api_client: TestClient,
+    db_conn: psycopg.Connection,
+) -> None:
+    person = Person(canonical_name="Fallback Candidate Person")
+    insert_person(db_conn, person)
+
+    data_source = insert_data_source_for_test(db_conn, jurisdiction="state/nc", name_suffix=str(uuid4()))
+    newer_record = insert_source_record_for_test(
+        db_conn,
+        source_record_id=UUID("00000000-0000-0000-0000-000000000941"),
+        data_source_id=data_source.id,
+        source_record_key="candidate-fallback-newer",
+        source_url="https://example.org/record/candidate-fallback-newer",
+        pull_date=datetime(2026, 3, 16, 8, 0, tzinfo=timezone.utc),
+    )
+    older_record = insert_source_record_for_test(
+        db_conn,
+        source_record_id=UUID("00000000-0000-0000-0000-000000000942"),
+        data_source_id=data_source.id,
+        source_record_key="candidate-fallback-older",
+        source_url="https://example.org/record/candidate-fallback-older",
+        pull_date=datetime(2026, 3, 15, 8, 0, tzinfo=timezone.utc),
+    )
+    insert_entity_source(db_conn, "person", person.id, newer_record.id, "candidate")
+    insert_entity_source(db_conn, "person", person.id, newer_record.id, "donor")
+    insert_entity_source(db_conn, "person", person.id, older_record.id, "candidate")
+
+    candidate_id = UUID("00000000-0000-0000-0000-000000000940")
+    insert_candidate_row(
+        db_conn,
+        CandidateRowSeed(
+            id=candidate_id,
+            fec_candidate_id="H0NC01002",
+            name="Fallback Candidate",
+            office="H",
+            person_id=person.id,
+            principal_committee_id=None,
+            source_record_id=None,
+        ),
+    )
+
+    response = api_client.get(f"/v1/candidates/{candidate_id}")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert [source["source_record_key"] for source in payload["sources"]] == [
+        "candidate-fallback-newer",
+        "candidate-fallback-older",
+    ]
+
+
+def test_get_candidate_unions_direct_and_entity_sources_without_duplicates(
+    api_client: TestClient,
+    db_conn: psycopg.Connection,
+) -> None:
+    person = Person(canonical_name="Union Source Candidate Person")
+    insert_person(db_conn, person)
+
+    data_source = insert_data_source_for_test(db_conn, jurisdiction="state/ga", name_suffix=str(uuid4()))
+    direct_source = insert_source_record_for_test(
+        db_conn,
+        source_record_id=UUID("00000000-0000-0000-0000-000000000943"),
+        data_source_id=data_source.id,
+        source_record_key="candidate-direct-older",
+        source_url="https://example.org/record/candidate-direct-older",
+        pull_date=datetime(2026, 3, 10, 8, 0, tzinfo=timezone.utc),
+    )
+    newer_entity_source = insert_source_record_for_test(
+        db_conn,
+        source_record_id=UUID("00000000-0000-0000-0000-000000000944"),
+        data_source_id=data_source.id,
+        source_record_key="candidate-entity-newer",
+        source_url="https://example.org/record/candidate-entity-newer",
+        pull_date=datetime(2026, 3, 16, 8, 0, tzinfo=timezone.utc),
+    )
+    insert_entity_source(db_conn, "person", person.id, direct_source.id, "candidate")
+    insert_entity_source(db_conn, "person", person.id, newer_entity_source.id, "candidate")
+
+    candidate_id = UUID("00000000-0000-0000-0000-000000000945")
+    insert_candidate_row(
+        db_conn,
+        CandidateRowSeed(
+            id=candidate_id,
+            fec_candidate_id="H0NC01003",
+            name="Union Source Candidate",
+            office="H",
+            person_id=person.id,
+            source_record_id=direct_source.id,
+        ),
+    )
+
+    response = api_client.get(f"/v1/candidates/{candidate_id}")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert [source["source_record_key"] for source in payload["sources"]] == [
+        "candidate-entity-newer",
+        "candidate-direct-older",
+    ]
+
+
+def test_get_candidate_returns_404_for_missing_candidate(api_client: TestClient) -> None:
+    response = api_client.get(f"/v1/candidates/{uuid4()}")
+
+    assert response.status_code == 404
+
+
+def test_get_candidate_rejects_malformed_uuid(api_client: TestClient) -> None:
+    response = api_client.get("/v1/candidates/not-a-uuid")
+
+    assert response.status_code == 422
+    assert response.json()["detail"][0]["loc"] == ["path", "candidate_id"]
+
+
+def test_get_candidate_summary_aggregates_multi_committee_totals(
+    api_client: TestClient,
+    db_conn: psycopg.Connection,
+) -> None:
+    candidate_id = UUID("b0000000-0000-0000-0000-000000000101")
+    insert_candidate_row(
+        db_conn,
+        CandidateRowSeed(
+            id=candidate_id,
+            fec_candidate_id="H0NC02001",
+            name="Multi Committee Candidate",
+            office="H",
+            source_record_id=None,
+        ),
+    )
+
+    committee_a_context = seed_committee_for_summary(
+        db_conn,
+        committee_id=UUID("b1111111-1111-1111-1111-111111111111"),
+        committee_name="Multi Committee A",
+        fec_committee_id="C99000111",
+        jurisdiction="state/nc",
+        pull_date=datetime(2026, 3, 20, 12, 0, tzinfo=timezone.utc),
+    )
+    committee_b_context = seed_committee_for_summary(
+        db_conn,
+        committee_id=UUID("b2222222-2222-2222-2222-222222222222"),
+        committee_name="Multi Committee B",
+        fec_committee_id="C99000112",
+        jurisdiction="state/co",
+        pull_date=datetime(2026, 3, 21, 12, 0, tzinfo=timezone.utc),
+    )
+
+    insert_summary_transaction(
+        db_conn,
+        context=committee_a_context,
+        transaction_id=UUID("b0000000-0000-0000-0000-000000000121"),
+        transaction_type="15",
+        amount=Decimal("100.00"),
+        source_record_id=committee_a_context.source_record_id,
+    )
+    insert_summary_transaction(
+        db_conn,
+        context=committee_a_context,
+        transaction_id=UUID("b0000000-0000-0000-0000-000000000122"),
+        transaction_type="24A",
+        amount=Decimal("30.00"),
+        source_record_id=committee_a_context.source_record_id,
+    )
+    insert_summary_transaction(
+        db_conn,
+        context=committee_b_context,
+        transaction_id=UUID("b0000000-0000-0000-0000-000000000123"),
+        transaction_type="15",
+        amount=Decimal("40.00"),
+        source_record_id=committee_b_context.source_record_id,
+    )
+    insert_summary_transaction(
+        db_conn,
+        context=committee_b_context,
+        transaction_id=UUID("b0000000-0000-0000-0000-000000000124"),
+        transaction_type="24A",
+        amount=Decimal("10.00"),
+        source_record_id=committee_b_context.source_record_id,
+    )
+
+    insert_candidate_committee_link_row(
+        db_conn,
+        CandidateCommitteeLinkSeed(
+            id=UUID("b0000000-0000-0000-0000-000000000131"),
+            candidate_id=candidate_id,
+            committee_id=committee_a_context.committee_id,
+            valid_period="[2000-01-01,2100-01-01)",
+            designation="P",
+            source_record_id=None,
+            candidate_election_year=2026,
+            fec_election_year=2026,
+        ),
+    )
+    insert_candidate_committee_link_row(
+        db_conn,
+        CandidateCommitteeLinkSeed(
+            id=UUID("b0000000-0000-0000-0000-000000000132"),
+            candidate_id=candidate_id,
+            committee_id=committee_b_context.committee_id,
+            valid_period="[2000-01-01,2100-01-01)",
+            designation="A",
+            source_record_id=None,
+            candidate_election_year=2026,
+            fec_election_year=2026,
+        ),
+    )
+
+    response = api_client.get(f"/v1/candidates/{candidate_id}/summary")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["candidate_id"] == str(candidate_id)
+    assert payload["candidate_name"] == "Multi Committee Candidate"
+    assert payload["total_raised"] == "140.00"
+    assert payload["total_spent"] == "40.00"
+    assert payload["net"] == "100.00"
+    assert payload["transaction_count"] == 4
+    assert [row["committee_id"] for row in payload["committees"]] == [
+        str(committee_a_context.committee_id),
+        str(committee_b_context.committee_id),
+    ]
+    assert payload["committees"][0]["committee_name"] == "Multi Committee A"
+    assert payload["committees"][0]["total_raised"] == "100.00"
+    assert payload["committees"][0]["total_spent"] == "30.00"
+    assert payload["committees"][0]["net"] == "70.00"
+    assert payload["committees"][0]["transaction_count"] == 2
+    assert payload["committees"][0]["jurisdiction"] == "state/nc"
+    assert payload["committees"][0]["data_through"] == "2026-03-20T12:00:00Z"
+    assert payload["committees"][1]["committee_name"] == "Multi Committee B"
+    assert payload["committees"][1]["total_raised"] == "40.00"
+    assert payload["committees"][1]["total_spent"] == "10.00"
+    assert payload["committees"][1]["net"] == "30.00"
+    assert payload["committees"][1]["transaction_count"] == 2
+    assert payload["committees"][1]["jurisdiction"] == "state/co"
+    assert payload["committees"][1]["data_through"] == "2026-03-21T12:00:00Z"
+
+
+def test_get_candidate_summary_single_committee_common_case(
+    api_client: TestClient,
+    db_conn: psycopg.Connection,
+) -> None:
+    candidate_id = UUID("b0000000-0000-0000-0000-000000000201")
+    insert_candidate_row(
+        db_conn,
+        CandidateRowSeed(
+            id=candidate_id,
+            fec_candidate_id="H0NC02002",
+            name="Single Committee Candidate",
+            office="H",
+        ),
+    )
+
+    committee_context = seed_committee_for_summary(
+        db_conn,
+        committee_id=UUID("b1211111-1111-1111-1111-111111111111"),
+        committee_name="Single Committee",
+        fec_committee_id="C99000211",
+    )
+    insert_summary_transaction(
+        db_conn,
+        context=committee_context,
+        transaction_id=UUID("b0000000-0000-0000-0000-000000000221"),
+        transaction_type="15",
+        amount=Decimal("75.00"),
+        source_record_id=committee_context.source_record_id,
+    )
+    insert_summary_transaction(
+        db_conn,
+        context=committee_context,
+        transaction_id=UUID("b0000000-0000-0000-0000-000000000222"),
+        transaction_type="24A",
+        amount=Decimal("25.00"),
+        source_record_id=committee_context.source_record_id,
+    )
+    insert_candidate_committee_link_row(
+        db_conn,
+        CandidateCommitteeLinkSeed(
+            id=UUID("b0000000-0000-0000-0000-000000000231"),
+            candidate_id=candidate_id,
+            committee_id=committee_context.committee_id,
+            valid_period="[2000-01-01,2100-01-01)",
+            designation="P",
+            source_record_id=None,
+            candidate_election_year=2026,
+            fec_election_year=2026,
+        ),
+    )
+
+    response = api_client.get(f"/v1/candidates/{candidate_id}/summary")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["candidate_id"] == str(candidate_id)
+    assert payload["candidate_name"] == "Single Committee Candidate"
+    assert payload["total_raised"] == "75.00"
+    assert payload["total_spent"] == "25.00"
+    assert payload["net"] == "50.00"
+    assert payload["transaction_count"] == 2
+    assert [row["committee_id"] for row in payload["committees"]] == [str(committee_context.committee_id)]
+    assert payload["committees"][0]["committee_name"] == "Single Committee"
+
+
+def test_get_candidate_summary_returns_zero_totals_when_no_linked_committees(
+    api_client: TestClient,
+    db_conn: psycopg.Connection,
+) -> None:
+    candidate_id = UUID("b0000000-0000-0000-0000-000000000301")
+    insert_candidate_row(
+        db_conn,
+        CandidateRowSeed(
+            id=candidate_id,
+            fec_candidate_id="H0NC02003",
+            name="No Committee Candidate",
+            office="H",
+        ),
+    )
+
+    response = api_client.get(f"/v1/candidates/{candidate_id}/summary")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload == {
+        "candidate_id": str(candidate_id),
+        "candidate_name": "No Committee Candidate",
+        "total_raised": "0.00",
+        "total_spent": "0.00",
+        "net": "0.00",
+        "transaction_count": 0,
+        "committees": [],
+    }
+
+
+def test_get_candidate_summary_keeps_linked_committee_with_zero_qualifying_transactions(
+    api_client: TestClient,
+    db_conn: psycopg.Connection,
+) -> None:
+    candidate_id = UUID("b0000000-0000-0000-0000-000000000351")
+    insert_candidate_row(
+        db_conn,
+        CandidateRowSeed(
+            id=candidate_id,
+            fec_candidate_id="H0NC02031",
+            name="Zero Qualifying Candidate",
+            office="H",
+        ),
+    )
+
+    committee_context = seed_committee_for_summary(
+        db_conn,
+        committee_id=UUID("b3555555-5555-5555-5555-555555555555"),
+        committee_name="Zero Qualifying Committee",
+        fec_committee_id="C99000351",
+    )
+    insert_summary_transaction(
+        db_conn,
+        context=committee_context,
+        transaction_id=UUID("b0000000-0000-0000-0000-000000000361"),
+        transaction_type="15",
+        amount=Decimal("90.00"),
+        source_record_id=committee_context.source_record_id,
+        is_memo=True,
+    )
+    insert_summary_transaction(
+        db_conn,
+        context=committee_context,
+        transaction_id=UUID("b0000000-0000-0000-0000-000000000362"),
+        transaction_type="24A",
+        amount=Decimal("15.00"),
+        source_record_id=committee_context.source_record_id,
+        amendment_indicator="T",
+    )
+    insert_candidate_committee_link_row(
+        db_conn,
+        CandidateCommitteeLinkSeed(
+            id=UUID("b0000000-0000-0000-0000-000000000371"),
+            candidate_id=candidate_id,
+            committee_id=committee_context.committee_id,
+            valid_period="[2000-01-01,2100-01-01)",
+            designation="P",
+            source_record_id=None,
+            candidate_election_year=2026,
+            fec_election_year=2026,
+        ),
+    )
+
+    response = api_client.get(f"/v1/candidates/{candidate_id}/summary")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "candidate_id": str(candidate_id),
+        "candidate_name": "Zero Qualifying Candidate",
+        "total_raised": "0.00",
+        "total_spent": "0.00",
+        "net": "0.00",
+        "transaction_count": 0,
+        "committees": [
+            {
+                "committee_id": str(committee_context.committee_id),
+                "committee_name": "Zero Qualifying Committee",
+                "total_raised": "0.00",
+                "total_spent": "0.00",
+                "net": "0.00",
+                "transaction_count": 0,
+                "jurisdiction": None,
+                "data_through": None,
+            }
+        ],
+    }
+
+
+def test_get_candidate_summary_excludes_expired_candidate_committee_links(
+    api_client: TestClient,
+    db_conn: psycopg.Connection,
+) -> None:
+    candidate_id = UUID("b0000000-0000-0000-0000-000000000401")
+    insert_candidate_row(
+        db_conn,
+        CandidateRowSeed(
+            id=candidate_id,
+            fec_candidate_id="H0NC02004",
+            name="Filtered Link Candidate",
+            office="H",
+        ),
+    )
+
+    active_committee_context = seed_committee_for_summary(
+        db_conn,
+        committee_id=UUID("b3333333-3333-3333-3333-333333333333"),
+        committee_name="Active Committee",
+        fec_committee_id="C99000411",
+    )
+    expired_committee_context = seed_committee_for_summary(
+        db_conn,
+        committee_id=UUID("b4444444-4444-4444-4444-444444444444"),
+        committee_name="Expired Committee",
+        fec_committee_id="C99000412",
+    )
+
+    insert_summary_transaction(
+        db_conn,
+        context=active_committee_context,
+        transaction_id=UUID("b0000000-0000-0000-0000-000000000421"),
+        transaction_type="15",
+        amount=Decimal("125.00"),
+        source_record_id=active_committee_context.source_record_id,
+    )
+    insert_summary_transaction(
+        db_conn,
+        context=expired_committee_context,
+        transaction_id=UUID("b0000000-0000-0000-0000-000000000422"),
+        transaction_type="15",
+        amount=Decimal("900.00"),
+        source_record_id=expired_committee_context.source_record_id,
+    )
+
+    insert_candidate_committee_link_row(
+        db_conn,
+        CandidateCommitteeLinkSeed(
+            id=UUID("b0000000-0000-0000-0000-000000000431"),
+            candidate_id=candidate_id,
+            committee_id=active_committee_context.committee_id,
+            valid_period="[2000-01-01,2100-01-01)",
+            designation="P",
+            source_record_id=None,
+            candidate_election_year=2026,
+            fec_election_year=2026,
+        ),
+    )
+    insert_candidate_committee_link_row(
+        db_conn,
+        CandidateCommitteeLinkSeed(
+            id=UUID("b0000000-0000-0000-0000-000000000432"),
+            candidate_id=candidate_id,
+            committee_id=expired_committee_context.committee_id,
+            valid_period="[2000-01-01,2001-01-01)",
+            designation="A",
+            source_record_id=None,
+            candidate_election_year=2026,
+            fec_election_year=2026,
+        ),
+    )
+
+    response = api_client.get(f"/v1/candidates/{candidate_id}/summary")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total_raised"] == "125.00"
+    assert payload["total_spent"] == "0.00"
+    assert payload["net"] == "125.00"
+    assert payload["transaction_count"] == 1
+    assert [row["committee_id"] for row in payload["committees"]] == [str(active_committee_context.committee_id)]
+    assert payload["committees"][0]["committee_name"] == "Active Committee"
+
+
+def test_get_candidate_summary_returns_404_for_missing_candidate(api_client: TestClient) -> None:
+    response = api_client.get(f"/v1/candidates/{uuid4()}/summary")
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Candidate not found"}
+
+
+def test_get_candidate_independent_expenditures_returns_paginated_rows(
+    api_client: TestClient,
+    db_conn: psycopg.Connection,
+) -> None:
+    candidate_id = UUID("c0000000-0000-0000-0000-000000000101")
+    other_candidate_id = UUID("c0000000-0000-0000-0000-000000000102")
+    insert_candidate_row(
+        db_conn,
+        CandidateRowSeed(
+            id=candidate_id,
+            fec_candidate_id="H0NC03001",
+            name="IE Target Candidate",
+            office="H",
+        ),
+    )
+    insert_candidate_row(
+        db_conn,
+        CandidateRowSeed(
+            id=other_candidate_id,
+            fec_candidate_id="H0NC03002",
+            name="Other Candidate",
+            office="H",
+        ),
+    )
+
+    committee_a = UUID("c1111111-1111-1111-1111-111111111111")
+    committee_b = UUID("c2222222-2222-2222-2222-222222222222")
+    insert_committee_row(
+        db_conn,
+        CommitteeRowSeed(id=committee_a, fec_committee_id="C99800101", name="Committee Alpha"),
+    )
+    insert_committee_row(
+        db_conn,
+        CommitteeRowSeed(id=committee_b, fec_committee_id="C99800102", name="Committee Beta"),
+    )
+
+    filing_a = UUID("c0000000-0000-0000-0000-000000000111")
+    filing_b = UUID("c0000000-0000-0000-0000-000000000112")
+    insert_filing_row(
+        db_conn,
+        FilingRowSeed(id=filing_a, filing_fec_id="IE-FILING-A", committee_id=committee_a),
+    )
+    insert_filing_row(
+        db_conn,
+        FilingRowSeed(id=filing_b, filing_fec_id="IE-FILING-B", committee_id=committee_b),
+    )
+
+    transaction_1 = UUID("c0000000-0000-0000-0000-000000000121")
+    transaction_2 = UUID("c0000000-0000-0000-0000-000000000122")
+    transaction_3 = UUID("c0000000-0000-0000-0000-000000000123")
+    insert_transaction_row(
+        db_conn,
+        TransactionRowSeed(
+            id=transaction_1,
+            filing_id=filing_a,
+            committee_id=committee_a,
+            transaction_type="24E",
+            amount=Decimal("500.00"),
+            amendment_indicator="N",
+            transaction_date=datetime(2026, 3, 20, tzinfo=timezone.utc).date(),
+            memo_text="Digital ad buy",
+            recipient_candidate_id=candidate_id,
+            support_oppose="S",
+            dissemination_date=datetime(2026, 3, 19, tzinfo=timezone.utc).date(),
+            aggregate_amount=Decimal("750.00"),
+        ),
+    )
+    insert_transaction_row(
+        db_conn,
+        TransactionRowSeed(
+            id=transaction_2,
+            filing_id=filing_b,
+            committee_id=committee_b,
+            transaction_type="24E",
+            amount=Decimal("300.00"),
+            amendment_indicator="N",
+            transaction_date=datetime(2026, 3, 19, tzinfo=timezone.utc).date(),
+            memo_text=None,
+            recipient_candidate_id=candidate_id,
+            support_oppose="O",
+            dissemination_date=None,
+            aggregate_amount=None,
+        ),
+    )
+    insert_transaction_row(
+        db_conn,
+        TransactionRowSeed(
+            id=transaction_3,
+            filing_id=filing_a,
+            committee_id=committee_a,
+            transaction_type="24E",
+            amount=Decimal("300.00"),
+            amendment_indicator="N",
+            transaction_date=datetime(2026, 3, 18, tzinfo=timezone.utc).date(),
+            memo_text="TV ad buy",
+            recipient_candidate_id=candidate_id,
+            support_oppose="S",
+            dissemination_date=datetime(2026, 3, 17, tzinfo=timezone.utc).date(),
+            aggregate_amount=Decimal("900.00"),
+        ),
+    )
+
+    # Excluded by support_oppose IS NULL
+    insert_transaction_row(
+        db_conn,
+        TransactionRowSeed(
+            id=UUID("c0000000-0000-0000-0000-000000000124"),
+            filing_id=filing_a,
+            committee_id=committee_a,
+            transaction_type="24E",
+            amount=Decimal("999.99"),
+            amendment_indicator="N",
+            recipient_candidate_id=candidate_id,
+            support_oppose=None,
+        ),
+    )
+    # Excluded by recipient_candidate_id mismatch
+    insert_transaction_row(
+        db_conn,
+        TransactionRowSeed(
+            id=UUID("c0000000-0000-0000-0000-000000000125"),
+            filing_id=filing_b,
+            committee_id=committee_b,
+            transaction_type="24E",
+            amount=Decimal("888.88"),
+            amendment_indicator="N",
+            recipient_candidate_id=other_candidate_id,
+            support_oppose="O",
+        ),
+    )
+
+    response = api_client.get(
+        f"/v1/candidates/{candidate_id}/independent-expenditures",
+        params={"limit": 2, "offset": 1},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert [row["id"] for row in payload] == [str(transaction_2), str(transaction_3)]
+    assert payload[0]["committee_name"] == "Committee Beta"
+    assert payload[0]["purpose"] is None
+    assert payload[0]["support_oppose"] == "O"
+    assert payload[0]["dissemination_date"] is None
+    assert payload[0]["aggregate_amount"] is None
+    assert payload[1]["committee_name"] == "Committee Alpha"
+    assert payload[1]["purpose"] == "TV ad buy"
+    assert payload[1]["support_oppose"] == "S"
+    assert payload[1]["dissemination_date"] == "2026-03-17"
+    assert payload[1]["aggregate_amount"] == pytest.approx(900.00)
+    assert "memo_text" not in payload[0]
+
+
+def test_get_candidate_independent_expenditures_summary_aggregates_and_ranks_spenders(
+    api_client: TestClient,
+    db_conn: psycopg.Connection,
+) -> None:
+    candidate_id = UUID("c0000000-0000-0000-0000-000000000201")
+    insert_candidate_row(
+        db_conn,
+        CandidateRowSeed(
+            id=candidate_id,
+            fec_candidate_id="H0NC03003",
+            name="IE Summary Candidate",
+            office="H",
+        ),
+    )
+
+    committee_a = UUID("c3333333-3333-3333-3333-333333333333")
+    committee_b = UUID("c4444444-4444-4444-4444-444444444444")
+    committee_c = UUID("c5555555-5555-5555-5555-555555555555")
+    insert_committee_row(
+        db_conn,
+        CommitteeRowSeed(id=committee_a, fec_committee_id="C99800201", name="Committee A"),
+    )
+    insert_committee_row(
+        db_conn,
+        CommitteeRowSeed(id=committee_b, fec_committee_id="C99800202", name="Committee B"),
+    )
+    insert_committee_row(
+        db_conn,
+        CommitteeRowSeed(id=committee_c, fec_committee_id="C99800203", name="Committee C"),
+    )
+
+    filing_a = UUID("c0000000-0000-0000-0000-000000000211")
+    filing_b = UUID("c0000000-0000-0000-0000-000000000212")
+    filing_c = UUID("c0000000-0000-0000-0000-000000000213")
+    insert_filing_row(db_conn, FilingRowSeed(id=filing_a, filing_fec_id="IE-SUM-FILING-A", committee_id=committee_a))
+    insert_filing_row(db_conn, FilingRowSeed(id=filing_b, filing_fec_id="IE-SUM-FILING-B", committee_id=committee_b))
+    insert_filing_row(db_conn, FilingRowSeed(id=filing_c, filing_fec_id="IE-SUM-FILING-C", committee_id=committee_c))
+
+    rows = [
+        TransactionRowSeed(
+            id=UUID("c0000000-0000-0000-0000-000000000221"),
+            filing_id=filing_a,
+            committee_id=committee_a,
+            transaction_type="24E",
+            amount=Decimal("300.00"),
+            amendment_indicator="N",
+            recipient_candidate_id=candidate_id,
+            support_oppose="S",
+        ),
+        TransactionRowSeed(
+            id=UUID("c0000000-0000-0000-0000-000000000222"),
+            filing_id=filing_a,
+            committee_id=committee_a,
+            transaction_type="24E",
+            amount=Decimal("50.00"),
+            amendment_indicator="N",
+            recipient_candidate_id=candidate_id,
+            support_oppose="S",
+        ),
+        TransactionRowSeed(
+            id=UUID("c0000000-0000-0000-0000-000000000223"),
+            filing_id=filing_a,
+            committee_id=committee_a,
+            transaction_type="24E",
+            amount=Decimal("40.00"),
+            amendment_indicator="N",
+            recipient_candidate_id=candidate_id,
+            support_oppose="O",
+        ),
+        TransactionRowSeed(
+            id=UUID("c0000000-0000-0000-0000-000000000224"),
+            filing_id=filing_b,
+            committee_id=committee_b,
+            transaction_type="24E",
+            amount=Decimal("200.00"),
+            amendment_indicator="N",
+            recipient_candidate_id=candidate_id,
+            support_oppose="O",
+        ),
+        TransactionRowSeed(
+            id=UUID("c0000000-0000-0000-0000-000000000225"),
+            filing_id=filing_b,
+            committee_id=committee_b,
+            transaction_type="24E",
+            amount=Decimal("75.00"),
+            amendment_indicator="N",
+            recipient_candidate_id=candidate_id,
+            support_oppose="O",
+        ),
+        TransactionRowSeed(
+            id=UUID("c0000000-0000-0000-0000-000000000226"),
+            filing_id=filing_c,
+            committee_id=committee_c,
+            transaction_type="24E",
+            amount=Decimal("125.00"),
+            amendment_indicator="N",
+            recipient_candidate_id=candidate_id,
+            support_oppose="S",
+        ),
+        TransactionRowSeed(
+            id=UUID("c0000000-0000-0000-0000-000000000227"),
+            filing_id=filing_c,
+            committee_id=committee_c,
+            transaction_type="24E",
+            amount=Decimal("125.00"),
+            amendment_indicator="N",
+            recipient_candidate_id=candidate_id,
+            support_oppose="O",
+        ),
+    ]
+    for row in rows:
+        insert_transaction_row(db_conn, row)
+
+    response = api_client.get(f"/v1/candidates/{candidate_id}/independent-expenditures/summary")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["candidate_id"] == str(candidate_id)
+    assert payload["support_total"] == "475.00"
+    assert payload["oppose_total"] == "440.00"
+    assert payload["support_count"] == 3
+    assert payload["oppose_count"] == 4
+    assert payload["top_spenders"] == [
+        {
+            "committee_id": str(committee_a),
+            "committee_name": "Committee A",
+            "support_oppose": "S",
+            "total_amount": "350.00",
+            "transaction_count": 2,
+        },
+        {
+            "committee_id": str(committee_b),
+            "committee_name": "Committee B",
+            "support_oppose": "O",
+            "total_amount": "275.00",
+            "transaction_count": 2,
+        },
+        {
+            "committee_id": str(committee_c),
+            "committee_name": "Committee C",
+            "support_oppose": "O",
+            "total_amount": "125.00",
+            "transaction_count": 1,
+        },
+        {
+            "committee_id": str(committee_c),
+            "committee_name": "Committee C",
+            "support_oppose": "S",
+            "total_amount": "125.00",
+            "transaction_count": 1,
+        },
+        {
+            "committee_id": str(committee_a),
+            "committee_name": "Committee A",
+            "support_oppose": "O",
+            "total_amount": "40.00",
+            "transaction_count": 1,
+        },
+    ]
+
+
+def test_get_candidate_independent_expenditure_endpoints_exclude_memo_rows(
+    api_client: TestClient,
+    db_conn: psycopg.Connection,
+) -> None:
+    candidate_id = UUID("c0000000-0000-0000-0000-000000000251")
+    committee_id = UUID("c6666666-6666-6666-6666-666666666666")
+    filing_id = UUID("c0000000-0000-0000-0000-000000000252")
+    insert_candidate_row(
+        db_conn,
+        CandidateRowSeed(
+            id=candidate_id,
+            fec_candidate_id="H0NC03005",
+            name="IE Memo Candidate",
+            office="H",
+        ),
+    )
+    insert_committee_row(
+        db_conn,
+        CommitteeRowSeed(id=committee_id, fec_committee_id="C99800204", name="Memo Filter Committee"),
+    )
+    insert_filing_row(
+        db_conn,
+        FilingRowSeed(id=filing_id, filing_fec_id="IE-MEMO-FILING", committee_id=committee_id),
+    )
+
+    insert_transaction_row(
+        db_conn,
+        TransactionRowSeed(
+            id=UUID("c0000000-0000-0000-0000-000000000253"),
+            filing_id=filing_id,
+            committee_id=committee_id,
+            transaction_type="24E",
+            amount=Decimal("125.00"),
+            amendment_indicator="N",
+            recipient_candidate_id=candidate_id,
+            support_oppose="S",
+            memo_text="Broadcast ad buy",
+            is_memo=False,
+        ),
+    )
+    insert_transaction_row(
+        db_conn,
+        TransactionRowSeed(
+            id=UUID("c0000000-0000-0000-0000-000000000254"),
+            filing_id=filing_id,
+            committee_id=committee_id,
+            transaction_type="24E",
+            amount=Decimal("900.00"),
+            amendment_indicator="N",
+            recipient_candidate_id=candidate_id,
+            support_oppose="O",
+            memo_code="X",
+            memo_text="Memo row should be excluded",
+            is_memo=True,
+        ),
+    )
+
+    list_response = api_client.get(f"/v1/candidates/{candidate_id}/independent-expenditures")
+    summary_response = api_client.get(f"/v1/candidates/{candidate_id}/independent-expenditures/summary")
+
+    assert list_response.status_code == 200
+    assert list_response.json() == [
+        {
+            "id": "c0000000-0000-0000-0000-000000000253",
+            "filing_id": "c0000000-0000-0000-0000-000000000252",
+            "committee_id": "c6666666-6666-6666-6666-666666666666",
+            "committee_name": "Memo Filter Committee",
+            "amount": 125.0,
+            "transaction_date": None,
+            "purpose": "Broadcast ad buy",
+            "dissemination_date": None,
+            "aggregate_amount": None,
+            "support_oppose": "S",
+        }
+    ]
+    assert summary_response.status_code == 200
+    assert summary_response.json() == {
+        "candidate_id": str(candidate_id),
+        "support_total": "125.00",
+        "oppose_total": "0.00",
+        "support_count": 1,
+        "oppose_count": 0,
+        "top_spenders": [
+            {
+                "committee_id": str(committee_id),
+                "committee_name": "Memo Filter Committee",
+                "support_oppose": "S",
+                "total_amount": "125.00",
+                "transaction_count": 1,
+            }
+        ],
+    }
+
+
+@pytest.mark.parametrize(
+    "endpoint_suffix",
+    [
+        "/independent-expenditures",
+        "/independent-expenditures/summary",
+    ],
+)
+def test_get_candidate_independent_expenditure_endpoints_return_404_for_missing_candidate(
+    api_client: TestClient,
+    endpoint_suffix: str,
+) -> None:
+    response = api_client.get(f"/v1/candidates/{uuid4()}{endpoint_suffix}")
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Candidate not found"}
+
+
+def test_get_candidate_independent_expenditure_endpoints_return_empty_state(
+    api_client: TestClient,
+    db_conn: psycopg.Connection,
+) -> None:
+    candidate_id = UUID("c0000000-0000-0000-0000-000000000301")
+    insert_candidate_row(
+        db_conn,
+        CandidateRowSeed(
+            id=candidate_id,
+            fec_candidate_id="H0NC03004",
+            name="IE Empty Candidate",
+            office="H",
+        ),
+    )
+
+    list_response = api_client.get(f"/v1/candidates/{candidate_id}/independent-expenditures")
+    summary_response = api_client.get(f"/v1/candidates/{candidate_id}/independent-expenditures/summary")
+
+    assert list_response.status_code == 200
+    assert list_response.json() == []
+    assert summary_response.status_code == 200
+    assert summary_response.json() == {
+        "candidate_id": str(candidate_id),
+        "support_total": "0.00",
+        "oppose_total": "0.00",
+        "support_count": 0,
+        "oppose_count": 0,
+        "top_spenders": [],
+    }
+
+
+def test_get_filing_returns_direct_provenance(
+    api_client: TestClient,
+    db_conn: psycopg.Connection,
+) -> None:
+    organization = Organization(canonical_name="Filing Committee Organization")
+    insert_organization(db_conn, organization)
+    person = Person(canonical_name="Filing Candidate Person")
+    insert_person(db_conn, person)
+
+    candidate_id = UUID("00000000-0000-0000-0000-000000000971")
+    insert_candidate_row(
+        db_conn,
+        CandidateRowSeed(
+            id=candidate_id,
+            fec_candidate_id="H0NC01004",
+            name="Filing Candidate",
+            office="H",
+            person_id=person.id,
+        ),
+    )
+
+    committee_data_source = insert_data_source_for_test(db_conn, jurisdiction="state/co", name_suffix=str(uuid4()))
+    committee_source = insert_source_record_for_test(
+        db_conn,
+        source_record_id=UUID("00000000-0000-0000-0000-000000000972"),
+        data_source_id=committee_data_source.id,
+        source_record_key="filing-committee-source",
+        source_url="https://example.org/record/filing-committee-source",
+        pull_date=datetime(2026, 3, 14, 11, 0, tzinfo=timezone.utc),
+    )
+    insert_entity_source(db_conn, "organization", organization.id, committee_source.id, "committee")
+
+    committee_id = UUID("00000000-0000-0000-0000-000000000973")
+    insert_committee_row(
+        db_conn,
+        CommitteeRowSeed(
+            id=committee_id,
+            fec_committee_id="C12345684",
+            name="Filing Committee",
+            organization_id=organization.id,
+            source_record_id=committee_source.id,
+        ),
+    )
+
+    filing_data_source = insert_data_source_for_test(db_conn, jurisdiction="federal/fec", name_suffix=str(uuid4()))
+    filing_source = insert_source_record_for_test(
+        db_conn,
+        source_record_id=UUID("00000000-0000-0000-0000-000000000974"),
+        data_source_id=filing_data_source.id,
+        source_record_key="filing-direct-source",
+        source_url="https://example.org/record/filing-direct-source",
+        pull_date=datetime(2026, 3, 16, 11, 0, tzinfo=timezone.utc),
+    )
+
+    original_filing_id = UUID("00000000-0000-0000-0000-000000000975")
+    insert_filing_row(
+        db_conn,
+        FilingRowSeed(
+            id=original_filing_id,
+            filing_fec_id="FILING-ORIGINAL-0001",
+            committee_id=committee_id,
+            amendment_indicator="N",
+        ),
+    )
+
+    filing_id = UUID("00000000-0000-0000-0000-000000000970")
+    insert_filing_row(
+        db_conn,
+        FilingRowSeed(
+            id=filing_id,
+            filing_fec_id="FILING-DIRECT-0001",
+            committee_id=committee_id,
+            candidate_id=candidate_id,
+            report_type="Q1",
+            amendment_indicator="A",
+            filing_name="Quarterly Filing",
+            coverage_start_date=datetime(2026, 1, 1, tzinfo=timezone.utc).date(),
+            coverage_end_date=datetime(2026, 3, 31, tzinfo=timezone.utc).date(),
+            due_date=datetime(2026, 4, 15, tzinfo=timezone.utc).date(),
+            receipt_date=datetime(2026, 4, 17, tzinfo=timezone.utc).date(),
+            accepted_date=datetime(2026, 4, 18, tzinfo=timezone.utc).date(),
+            amended_from_filing_id=original_filing_id,
+            source_record_id=filing_source.id,
+        ),
+    )
+
+    response = api_client.get(f"/v1/filings/{filing_id}")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["id"] == str(filing_id)
+    assert payload["filing_fec_id"] == "FILING-DIRECT-0001"
+    assert payload["committee_id"] == str(committee_id)
+    assert payload["candidate_id"] == str(candidate_id)
+    assert payload["report_type"] == "Q1"
+    assert payload["amendment_indicator"] == "A"
+    assert payload["filing_name"] == "Quarterly Filing"
+    assert payload["coverage_start_date"] == "2026-01-01"
+    assert payload["coverage_end_date"] == "2026-03-31"
+    assert payload["due_date"] == "2026-04-15"
+    assert payload["receipt_date"] == "2026-04-17"
+    assert payload["accepted_date"] == "2026-04-18"
+    assert payload["is_amended"] is True
+    assert payload["amended_from_filing_id"] == str(original_filing_id)
+    assert payload["days_late"] == 2
+    assert payload["sources"] == [
+        {
+            "domain": "campaign_finance",
+            "jurisdiction": "federal/fec",
+            "data_source_name": filing_data_source.name,
+            "data_source_url": filing_data_source.source_url,
+            "source_record_key": "filing-direct-source",
+            "record_url": "https://example.org/record/filing-direct-source",
+            "pull_date": "2026-03-16T11:00:00Z",
+        }
+    ]
+    assert "source_record_id" not in payload
+    assert "created_at" not in payload
+    assert "updated_at" not in payload
+
+
+def test_get_filing_falls_back_to_committee_provenance_when_row_source_missing(
+    api_client: TestClient,
+    db_conn: psycopg.Connection,
+) -> None:
+    organization = Organization(canonical_name="Fallback Filing Organization")
+    insert_organization(db_conn, organization)
+
+    data_source = insert_data_source_for_test(db_conn, jurisdiction="state/nc", name_suffix=str(uuid4()))
+    committee_source = insert_source_record_for_test(
+        db_conn,
+        source_record_id=UUID("00000000-0000-0000-0000-000000000981"),
+        data_source_id=data_source.id,
+        source_record_key="filing-fallback-committee-shared",
+        source_url="https://example.org/record/filing-fallback-committee-shared",
+        pull_date=datetime(2026, 3, 15, 10, 0, tzinfo=timezone.utc),
+    )
+    entity_newer_source = insert_source_record_for_test(
+        db_conn,
+        source_record_id=UUID("00000000-0000-0000-0000-000000000982"),
+        data_source_id=data_source.id,
+        source_record_key="filing-fallback-entity-newer",
+        source_url="https://example.org/record/filing-fallback-entity-newer",
+        pull_date=datetime(2026, 3, 16, 10, 0, tzinfo=timezone.utc),
+    )
+    insert_entity_source(db_conn, "organization", organization.id, committee_source.id, "committee")
+    insert_entity_source(db_conn, "organization", organization.id, committee_source.id, "recipient")
+    insert_entity_source(db_conn, "organization", organization.id, entity_newer_source.id, "committee")
+
+    committee_id = UUID("00000000-0000-0000-0000-000000000980")
+    insert_committee_row(
+        db_conn,
+        CommitteeRowSeed(
+            id=committee_id,
+            fec_committee_id="C12345685",
+            name="Fallback Filing Committee",
+            organization_id=organization.id,
+            source_record_id=committee_source.id,
+        ),
+    )
+
+    filing_id = UUID("00000000-0000-0000-0000-000000000983")
+    insert_filing_row(
+        db_conn,
+        FilingRowSeed(
+            id=filing_id,
+            filing_fec_id="FILING-FALLBACK-0001",
+            committee_id=committee_id,
+            source_record_id=None,
+        ),
+    )
+
+    response = api_client.get(f"/v1/filings/{filing_id}")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert [source["source_record_key"] for source in payload["sources"]] == [
+        "filing-fallback-entity-newer",
+        "filing-fallback-committee-shared",
+    ]
+
+
+def test_get_filing_returns_404_for_missing_filing(api_client: TestClient) -> None:
+    response = api_client.get(f"/v1/filings/{uuid4()}")
+
+    assert response.status_code == 404
+
+
+def test_get_filing_rejects_malformed_uuid(api_client: TestClient) -> None:
+    response = api_client.get("/v1/filings/not-a-uuid")
+
+    assert response.status_code == 422
+    assert response.json()["detail"][0]["loc"] == ["path", "filing_id"]
+
+
+def test_list_transactions_returns_empty_result_set(api_client: TestClient) -> None:
+    response = api_client.get("/v1/transactions", params={"committee_id": str(uuid4())})
+
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+@pytest.mark.parametrize(
+    ("params", "message_fragment", "expected_ctx_error"),
+    [
+        (
+            {"min_date": "2026-03-16", "max_date": "2026-03-15"},
+            "min_date must be less than or equal to max_date",
+            "min_date must be less than or equal to max_date",
+        ),
+        (
+            {"min_amount": "200", "max_amount": "100"},
+            "min_amount must be less than or equal to max_amount",
+            "min_amount must be less than or equal to max_amount",
+        ),
+        ({"limit": "0"}, "greater than or equal to 1", None),
+        ({"offset": "-1"}, "greater than or equal to 0", None),
+    ],
+)
+def test_list_transactions_rejects_invalid_query_ranges_and_bounds(
+    api_client: TestClient,
+    params: dict[str, str],
+    message_fragment: str,
+    expected_ctx_error: str | None,
+) -> None:
+    response = api_client.get("/v1/transactions", params=params)
+
+    assert response.status_code == 422
+    payload = response.json()
+    assert message_fragment in response.text
+    assert payload["detail"][0]["msg"].endswith(message_fragment)
+    if expected_ctx_error is None:
+        assert payload["detail"][0].get("ctx") is None or "error" not in payload["detail"][0]["ctx"]
+    else:
+        assert payload["detail"][0]["ctx"]["error"] == expected_ctx_error
+
+
+def test_list_transactions_uses_deterministic_default_sort_and_stable_pagination(
+    api_client: TestClient,
+    db_conn: psycopg.Connection,
+) -> None:
+    # Integration DBs may contain preloaded transactions; clear table scope so pagination
+    # assertions validate only this fixture's deterministic ordering guarantees.
+    db_conn.execute("DELETE FROM cf.transaction")
+    fixture_ids = seed_transactions_for_filters(db_conn)
+
+    first_page = api_client.get("/v1/transactions", params={"limit": 2, "offset": 0})
+    second_page = api_client.get("/v1/transactions", params={"limit": 2, "offset": 2})
+
+    assert first_page.status_code == 200
+    assert second_page.status_code == 200
+
+    first_page_payload = first_page.json()
+    second_page_payload = second_page.json()
+
+    assert [row["id"] for row in first_page_payload] == [
+        str(fixture_ids["transaction_a"]),
+        str(fixture_ids["transaction_b"]),
+    ]
+    assert [row["id"] for row in second_page_payload] == [
+        str(fixture_ids["transaction_c"]),
+        str(fixture_ids["transaction_d"]),
+    ]
+    assert "sub_id" not in first_page_payload[0]
+    assert "memo_code" not in first_page_payload[0]
+    assert "amended_by_transaction_id" not in first_page_payload[0]
+    assert "created_at" not in first_page_payload[0]
+    assert "updated_at" not in first_page_payload[0]
+
+    # IE row (transaction_a) returns populated IE fields
+    ie_row = first_page_payload[0]
+    assert ie_row["support_oppose"] == "O"
+    assert ie_row["dissemination_date"] == "2026-03-10"
+    assert ie_row["aggregate_amount"] == pytest.approx(5000.00)
+
+    # Non-IE row (transaction_b) returns null IE fields
+    non_ie_row = first_page_payload[1]
+    assert non_ie_row["support_oppose"] is None
+    assert non_ie_row["dissemination_date"] is None
+    assert non_ie_row["aggregate_amount"] is None
+
+
+def test_list_transactions_filters_by_committee_and_inclusive_ranges(
+    api_client: TestClient,
+    db_conn: psycopg.Connection,
+) -> None:
+    fixture_ids = seed_transactions_for_filters(db_conn)
+
+    response = api_client.get(
+        "/v1/transactions",
+        params={
+            "committee_id": str(fixture_ids["committee_a"]),
+            "min_date": "2026-03-14",
+            "max_date": "2026-03-15",
+            "min_amount": "100",
+            "max_amount": "120",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert [row["id"] for row in payload] == [str(fixture_ids["transaction_a"])]
+
+
+def test_list_transactions_filters_by_jurisdiction_via_source_record_chain(
+    api_client: TestClient,
+    db_conn: psycopg.Connection,
+) -> None:
+    fixture_ids = seed_transactions_for_filters(db_conn)
+
+    response = api_client.get("/v1/transactions", params={"jurisdiction": "state/co"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert [row["id"] for row in payload] == [
+        str(fixture_ids["transaction_a"]),
+        str(fixture_ids["transaction_c"]),
+    ]
+
+
+def test_list_transactions_includes_null_source_rows_when_unfiltered_but_excludes_them_when_jurisdiction_filtered(
+    api_client: TestClient,
+    db_conn: psycopg.Connection,
+) -> None:
+    fixture_ids = seed_transactions_for_filters(db_conn)
+
+    unfiltered = api_client.get("/v1/transactions")
+    jurisdiction_filtered = api_client.get("/v1/transactions", params={"jurisdiction": "state/co"})
+
+    assert unfiltered.status_code == 200
+    assert jurisdiction_filtered.status_code == 200
+
+    unfiltered_ids = [row["id"] for row in unfiltered.json()]
+    filtered_ids = [row["id"] for row in jurisdiction_filtered.json()]
+
+    assert str(fixture_ids["transaction_d"]) in unfiltered_ids
+    assert str(fixture_ids["transaction_d"]) not in filtered_ids
+
+
+# ---------------------------------------------------------------------------
+# Committee fundraising summary aggregation
+# ---------------------------------------------------------------------------
+
+SUMMARY_COMMITTEE_ID = UUID("a0000000-0000-0000-0000-000000000001")
+
+
+def test_summary_aggregates_raised_spent_net_and_count(
+    db_conn: psycopg.Connection,
+) -> None:
+    """Receipts (type prefix '1') go to total_raised, disbursements ('2') to total_spent."""
+    source_record_id = UUID(f"10000000-0000-0000-0000-{SUMMARY_COMMITTEE_ID.hex[:12]}")
+    ctx = seed_committee_for_summary(db_conn, committee_id=SUMMARY_COMMITTEE_ID)
+
+    # Two receipts, one disbursement
+    insert_summary_transaction(
+        db_conn,
+        context=ctx,
+        transaction_id=uuid4(),
+        transaction_type="15",  # receipt
+        amount=Decimal("1000.00"),
+        source_record_id=source_record_id,
+    )
+    insert_summary_transaction(
+        db_conn,
+        context=ctx,
+        transaction_id=uuid4(),
+        transaction_type="15E",  # receipt
+        amount=Decimal("500.50"),
+        source_record_id=source_record_id,
+    )
+    insert_summary_transaction(
+        db_conn,
+        context=ctx,
+        transaction_id=uuid4(),
+        transaction_type="24A",  # disbursement
+        amount=Decimal("200.25"),
+        source_record_id=source_record_id,
+    )
+
+    result = fetch_committee_fundraising_summary(db_conn, SUMMARY_COMMITTEE_ID)
+
+    assert result is not None
+    assert result["total_raised"] == Decimal("1500.50")
+    assert result["total_spent"] == Decimal("200.25")
+    assert result["net"] == Decimal("1300.25")
+    assert str(result["total_raised"]) == "1500.50"
+    assert str(result["total_spent"]) == "200.25"
+    assert str(result["net"]) == "1300.25"
+    assert result["transaction_count"] == 3
+    assert result["committee_name"] == "Summary Test Committee"
+
+
+def test_summary_excludes_memo_transactions(
+    db_conn: psycopg.Connection,
+) -> None:
+    committee_id = UUID("a0000000-0000-0000-0000-000000000002")
+    source_record_id = UUID(f"10000000-0000-0000-0000-{committee_id.hex[:12]}")
+    ctx = seed_committee_for_summary(db_conn, committee_id=committee_id, fec_committee_id="C99990002")
+
+    # Normal receipt
+    insert_summary_transaction(
+        db_conn,
+        context=ctx,
+        transaction_id=uuid4(),
+        transaction_type="15",
+        amount=Decimal("1000.00"),
+        source_record_id=source_record_id,
+    )
+    # Memo receipt — should be excluded
+    insert_summary_transaction(
+        db_conn,
+        context=ctx,
+        transaction_id=uuid4(),
+        transaction_type="15",
+        amount=Decimal("9999.99"),
+        source_record_id=source_record_id,
+        is_memo=True,
+    )
+
+    result = fetch_committee_fundraising_summary(db_conn, committee_id)
+
+    assert result is not None
+    assert result["total_raised"] == Decimal("1000.00")
+    assert result["transaction_count"] == 1
+
+
+def test_summary_excludes_terminated_amendment_transactions(
+    db_conn: psycopg.Connection,
+) -> None:
+    committee_id = UUID("a0000000-0000-0000-0000-000000000003")
+    source_record_id = UUID(f"10000000-0000-0000-0000-{committee_id.hex[:12]}")
+    ctx = seed_committee_for_summary(db_conn, committee_id=committee_id, fec_committee_id="C99990003")
+
+    # Normal receipt
+    insert_summary_transaction(
+        db_conn,
+        context=ctx,
+        transaction_id=uuid4(),
+        transaction_type="15",
+        amount=Decimal("500.00"),
+        source_record_id=source_record_id,
+    )
+    # Terminated amendment — should be excluded
+    insert_summary_transaction(
+        db_conn,
+        context=ctx,
+        transaction_id=uuid4(),
+        transaction_type="15",
+        amount=Decimal("7777.77"),
+        source_record_id=source_record_id,
+        amendment_indicator="T",
+    )
+
+    result = fetch_committee_fundraising_summary(db_conn, committee_id)
+
+    assert result is not None
+    assert result["total_raised"] == Decimal("500.00")
+    assert result["transaction_count"] == 1
+
+
+def test_summary_derives_jurisdiction_and_data_through_from_provenance_chain(
+    db_conn: psycopg.Connection,
+) -> None:
+    committee_id = UUID("a0000000-0000-0000-0000-000000000004")
+    pull = datetime(2026, 3, 19, 8, 30, tzinfo=timezone.utc)
+    source_record_id = UUID(f"10000000-0000-0000-0000-{committee_id.hex[:12]}")
+    ctx = seed_committee_for_summary(
+        db_conn,
+        committee_id=committee_id,
+        fec_committee_id="C99990004",
+        jurisdiction="state/nc",
+        pull_date=pull,
+    )
+
+    insert_summary_transaction(
+        db_conn,
+        context=ctx,
+        transaction_id=uuid4(),
+        transaction_type="15",
+        amount=Decimal("100.00"),
+        source_record_id=source_record_id,
+    )
+
+    result = fetch_committee_fundraising_summary(db_conn, committee_id)
+
+    assert result is not None
+    assert result["jurisdiction"] == "state/nc"
+    assert result["data_through"] == pull
+
+
+def test_summary_aggregates_mixed_provenance_rows_without_dropping_transactions(
+    db_conn: psycopg.Connection,
+) -> None:
+    committee_id = UUID("a0000000-0000-0000-0000-000000000005")
+    source_record_id = UUID(f"10000000-0000-0000-0000-{committee_id.hex[:12]}")
+    pull = datetime(2026, 3, 20, 9, 0, tzinfo=timezone.utc)
+    ctx = seed_committee_for_summary(
+        db_conn,
+        committee_id=committee_id,
+        fec_committee_id="C99990005",
+        jurisdiction="state/co",
+        pull_date=pull,
+    )
+
+    insert_summary_transaction(
+        db_conn,
+        context=ctx,
+        transaction_id=uuid4(),
+        transaction_type="15",
+        amount=Decimal("100.00"),
+        source_record_id=None,
+    )
+    insert_summary_transaction(
+        db_conn,
+        context=ctx,
+        transaction_id=uuid4(),
+        transaction_type="15",
+        amount=Decimal("50.00"),
+        source_record_id=source_record_id,
+    )
+
+    result = fetch_committee_fundraising_summary(db_conn, committee_id)
+
+    assert result is not None
+    assert result["total_raised"] == Decimal("150.00")
+    assert result["total_spent"] == Decimal("0.00")
+    assert result["net"] == Decimal("150.00")
+    assert result["transaction_count"] == 2
+    assert result["jurisdiction"] == "state/co"
+    assert result["data_through"] == pull
+
+
+def test_summary_excludes_transactions_backed_by_superseded_source_records(
+    db_conn: psycopg.Connection,
+) -> None:
+    committee_id = UUID("a0000000-0000-0000-0000-000000000007")
+    superseded_source_record_id = UUID("10000000-0000-0000-0000-000000000777")
+    pull = datetime(2026, 3, 20, 11, 0, tzinfo=timezone.utc)
+    ctx = seed_committee_for_summary(
+        db_conn,
+        committee_id=committee_id,
+        fec_committee_id="C99990007",
+        jurisdiction="state/nc",
+        pull_date=pull,
+    )
+    insert_source_record_for_test(
+        db_conn,
+        source_record_id=superseded_source_record_id,
+        data_source_id=ctx.data_source_id,
+        source_record_key=f"summary-sr-{committee_id}",
+        source_url="https://example.org/summary-superseded",
+        pull_date=datetime(2026, 3, 18, 11, 0, tzinfo=timezone.utc),
+        superseded_by=ctx.source_record_id,
+    )
+
+    insert_summary_transaction(
+        db_conn,
+        context=ctx,
+        transaction_id=uuid4(),
+        transaction_type="15",
+        amount=Decimal("100.00"),
+        source_record_id=ctx.source_record_id,
+    )
+    insert_summary_transaction(
+        db_conn,
+        context=ctx,
+        transaction_id=uuid4(),
+        transaction_type="15",
+        amount=Decimal("250.00"),
+        source_record_id=superseded_source_record_id,
+    )
+
+    result = fetch_committee_fundraising_summary(db_conn, committee_id)
+
+    assert result is not None
+    assert result["total_raised"] == Decimal("100.00")
+    assert result["total_spent"] == Decimal("0.00")
+    assert result["net"] == Decimal("100.00")
+    assert result["transaction_count"] == 1
+    assert result["jurisdiction"] == "state/nc"
+    assert result["data_through"] == pull
+
+
+def test_get_committee_summary_returns_404_for_missing_committee(api_client: TestClient) -> None:
+    response = api_client.get(f"/v1/committees/{uuid4()}/summary")
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Committee not found"}
+
+
+def test_get_committee_summary_returns_zero_totals_when_no_qualifying_transactions(
+    api_client: TestClient,
+    db_conn: psycopg.Connection,
+) -> None:
+    committee_id = UUID("a0000000-0000-0000-0000-000000000006")
+    committee_name = "No Summary Transactions Committee"
+    seed_committee_for_summary(
+        db_conn,
+        committee_id=committee_id,
+        committee_name=committee_name,
+        fec_committee_id="C99990006",
+        jurisdiction="state/nc",
+        pull_date=datetime(2026, 3, 18, 12, 0, tzinfo=timezone.utc),
+    )
+
+    response = api_client.get(f"/v1/committees/{committee_id}/summary")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "committee_id": str(committee_id),
+        "committee_name": committee_name,
+        "total_raised": "0.00",
+        "total_spent": "0.00",
+        "net": "0.00",
+        "transaction_count": 0,
+        "jurisdiction": None,
+        "data_through": None,
+    }
+
+
+def test_get_committee_filings_summary_returns_sorted_totals_and_keeps_zero_transaction_filings(
+    api_client: TestClient,
+    db_conn: psycopg.Connection,
+) -> None:
+    committee_id = UUID("a0000000-0000-0000-0000-000000000021")
+    committee_name = "Filing Breakdown Test Committee"
+    context = seed_committee_for_filing_breakdown(
+        db_conn,
+        committee_id=committee_id,
+        committee_name=committee_name,
+        fec_committee_id="C99992021",
+    )
+
+    filing_recent_low_id = UUID("a0000000-0000-0000-0000-000000000110")
+    filing_recent_high_id = UUID("a0000000-0000-0000-0000-000000000111")
+    filing_older = UUID("a0000000-0000-0000-0000-000000000112")
+    filing_no_transactions = UUID("a0000000-0000-0000-0000-000000000113")
+    insert_filing_row(
+        db_conn,
+        FilingRowSeed(
+            id=filing_recent_low_id,
+            filing_fec_id="FILING-RECENT-LOW",
+            committee_id=context.committee_id,
+            report_type="Q2",
+            amendment_indicator="N",
+            filing_name="Recent Filing A",
+            coverage_start_date=datetime(2026, 4, 1, tzinfo=timezone.utc).date(),
+            coverage_end_date=datetime(2026, 6, 30, tzinfo=timezone.utc).date(),
+            receipt_date=datetime(2026, 7, 20, tzinfo=timezone.utc).date(),
+        ),
+    )
+    insert_filing_row(
+        db_conn,
+        FilingRowSeed(
+            id=filing_recent_high_id,
+            filing_fec_id="FILING-RECENT-HIGH",
+            committee_id=context.committee_id,
+            report_type="Q2",
+            amendment_indicator="N",
+            filing_name="Recent Filing B",
+            coverage_start_date=datetime(2026, 4, 1, tzinfo=timezone.utc).date(),
+            coverage_end_date=datetime(2026, 6, 30, tzinfo=timezone.utc).date(),
+            receipt_date=datetime(2026, 7, 20, tzinfo=timezone.utc).date(),
+        ),
+    )
+    insert_filing_row(
+        db_conn,
+        FilingRowSeed(
+            id=filing_older,
+            filing_fec_id="FILING-OLDER",
+            committee_id=context.committee_id,
+            report_type="Q1",
+            amendment_indicator="A",
+            filing_name="Older Filing",
+            coverage_start_date=datetime(2026, 1, 1, tzinfo=timezone.utc).date(),
+            coverage_end_date=datetime(2026, 3, 31, tzinfo=timezone.utc).date(),
+            receipt_date=datetime(2026, 4, 15, tzinfo=timezone.utc).date(),
+        ),
+    )
+    insert_filing_row(
+        db_conn,
+        FilingRowSeed(
+            id=filing_no_transactions,
+            filing_fec_id="FILING-NO-TRANSACTIONS",
+            committee_id=context.committee_id,
+            report_type="YE",
+            amendment_indicator="N",
+            filing_name="No Transactions Filing",
+            coverage_start_date=None,
+            coverage_end_date=None,
+            receipt_date=None,
+        ),
+    )
+
+    insert_filing_breakdown_transaction(
+        db_conn,
+        committee_id=context.committee_id,
+        filing_id=filing_recent_low_id,
+        transaction_id=UUID("a0000000-0000-0000-0000-000000000201"),
+        transaction_type="15",
+        amount=Decimal("100.00"),
+        amendment_indicator="N",
+    )
+    insert_filing_breakdown_transaction(
+        db_conn,
+        committee_id=context.committee_id,
+        filing_id=filing_recent_low_id,
+        transaction_id=UUID("a0000000-0000-0000-0000-000000000202"),
+        transaction_type="24A",
+        amount=Decimal("30.00"),
+        amendment_indicator="N",
+    )
+    insert_filing_breakdown_transaction(
+        db_conn,
+        committee_id=context.committee_id,
+        filing_id=filing_recent_high_id,
+        transaction_id=UUID("a0000000-0000-0000-0000-000000000203"),
+        transaction_type="15",
+        amount=Decimal("50.00"),
+        amendment_indicator="N",
+    )
+    insert_filing_breakdown_transaction(
+        db_conn,
+        committee_id=context.committee_id,
+        filing_id=filing_older,
+        transaction_id=UUID("a0000000-0000-0000-0000-000000000204"),
+        transaction_type="15",
+        amount=Decimal("40.00"),
+        amendment_indicator="A",
+    )
+    insert_filing_breakdown_transaction(
+        db_conn,
+        committee_id=context.committee_id,
+        filing_id=filing_older,
+        transaction_id=UUID("a0000000-0000-0000-0000-000000000205"),
+        transaction_type="15",
+        amount=Decimal("999.00"),
+        amendment_indicator="T",
+    )
+    insert_filing_breakdown_transaction(
+        db_conn,
+        committee_id=context.committee_id,
+        filing_id=filing_older,
+        transaction_id=UUID("a0000000-0000-0000-0000-000000000206"),
+        transaction_type="15",
+        amount=Decimal("888.00"),
+        amendment_indicator="N",
+        is_memo=True,
+    )
+
+    response = api_client.get(f"/v1/committees/{context.committee_id}/filings/summary")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["committee_id"] == str(context.committee_id)
+    assert payload["committee_name"] == committee_name
+    assert [row["filing_id"] for row in payload["filings"]] == [
+        str(filing_recent_low_id),
+        str(filing_recent_high_id),
+        str(filing_older),
+        str(filing_no_transactions),
+    ]
+    assert payload["filings"][0]["total_raised"] == "100.00"
+    assert payload["filings"][0]["total_spent"] == "30.00"
+    assert payload["filings"][0]["net"] == "70.00"
+    assert payload["filings"][0]["transaction_count"] == 2
+    assert payload["filings"][1]["total_raised"] == "50.00"
+    assert payload["filings"][1]["total_spent"] == "0.00"
+    assert payload["filings"][1]["net"] == "50.00"
+    assert payload["filings"][1]["transaction_count"] == 1
+    assert payload["filings"][2]["total_raised"] == "40.00"
+    assert payload["filings"][2]["total_spent"] == "0.00"
+    assert payload["filings"][2]["net"] == "40.00"
+    assert payload["filings"][2]["transaction_count"] == 1
+    assert payload["filings"][3]["total_raised"] == "0.00"
+    assert payload["filings"][3]["total_spent"] == "0.00"
+    assert payload["filings"][3]["net"] == "0.00"
+    assert payload["filings"][3]["transaction_count"] == 0
+
+
+def test_get_committee_filings_summary_excludes_transactions_backed_by_superseded_source_records(
+    api_client: TestClient,
+    db_conn: psycopg.Connection,
+) -> None:
+    committee_id = UUID("a0000000-0000-0000-0000-000000000023")
+    context = seed_committee_for_filing_breakdown(
+        db_conn,
+        committee_id=committee_id,
+        committee_name="Filing Superseded Source Committee",
+        fec_committee_id="C99992023",
+    )
+    filing_id = UUID("a0000000-0000-0000-0000-000000000114")
+    current_source_record_id = UUID("10000000-0000-0000-0000-000000000723")
+    superseded_source_record_id = UUID("10000000-0000-0000-0000-000000000724")
+
+    insert_filing_row(
+        db_conn,
+        FilingRowSeed(
+            id=filing_id,
+            filing_fec_id="FILING-SUPERSEDED-SOURCE",
+            committee_id=context.committee_id,
+            report_type="Q2",
+            amendment_indicator="N",
+            filing_name="Superseded Source Filing",
+            coverage_start_date=datetime(2026, 4, 1, tzinfo=timezone.utc).date(),
+            coverage_end_date=datetime(2026, 6, 30, tzinfo=timezone.utc).date(),
+            receipt_date=datetime(2026, 7, 18, tzinfo=timezone.utc).date(),
+        ),
+    )
+
+    data_source = insert_data_source_for_test(
+        db_conn,
+        jurisdiction="state/nc",
+        name_suffix="filing-superseded-source",
+    )
+    insert_source_record_for_test(
+        db_conn,
+        source_record_id=current_source_record_id,
+        data_source_id=data_source.id,
+        source_record_key="filing-superseded-source-current",
+        source_url="https://example.org/record/filing-superseded-source-current",
+        pull_date=datetime(2026, 7, 18, 12, 0, tzinfo=timezone.utc),
+    )
+    insert_source_record_for_test(
+        db_conn,
+        source_record_id=superseded_source_record_id,
+        data_source_id=data_source.id,
+        source_record_key="filing-superseded-source-old",
+        source_url="https://example.org/record/filing-superseded-source-old",
+        pull_date=datetime(2026, 7, 15, 12, 0, tzinfo=timezone.utc),
+        superseded_by=current_source_record_id,
+    )
+
+    insert_filing_breakdown_transaction(
+        db_conn,
+        committee_id=context.committee_id,
+        filing_id=filing_id,
+        transaction_id=UUID("a0000000-0000-0000-0000-000000000213"),
+        transaction_type="15",
+        amount=Decimal("100.00"),
+        source_record_id=current_source_record_id,
+        amendment_indicator="N",
+    )
+    insert_filing_breakdown_transaction(
+        db_conn,
+        committee_id=context.committee_id,
+        filing_id=filing_id,
+        transaction_id=UUID("a0000000-0000-0000-0000-000000000214"),
+        transaction_type="15",
+        amount=Decimal("250.00"),
+        source_record_id=superseded_source_record_id,
+        amendment_indicator="N",
+    )
+
+    response = api_client.get(f"/v1/committees/{context.committee_id}/filings/summary")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert len(payload["filings"]) == 1
+    filing_summary = payload["filings"][0]
+    assert filing_summary["filing_id"] == str(filing_id)
+    assert filing_summary["total_raised"] == "100.00"
+    assert filing_summary["total_spent"] == "0.00"
+    assert filing_summary["net"] == "100.00"
+    assert filing_summary["transaction_count"] == 1
+
+
+def test_get_committee_filings_summary_uses_canonical_row_after_filing_upsert_replacement(
+    api_client: TestClient,
+    db_conn: psycopg.Connection,
+) -> None:
+    committee_id = UUID("a0000000-0000-0000-0000-000000000022")
+    context = seed_committee_for_filing_breakdown(
+        db_conn,
+        committee_id=committee_id,
+        committee_name="Filing Upsert Replacement Committee",
+        fec_committee_id="C99992022",
+    )
+    filing_fec_id = "FILING-UPSERT-CANONICAL-001"
+    canonical_filing_id = UUID("a0000000-0000-0000-0000-000000000120")
+
+    first_upsert_id = upsert_filing(
+        db_conn,
+        Filing(
+            id=canonical_filing_id,
+            filing_fec_id=filing_fec_id,
+            committee_id=context.committee_id,
+            report_type="Q1",
+            amendment_indicator="N",
+            filing_name="Quarterly Filing Original",
+            coverage_start_date=datetime(2026, 1, 1, tzinfo=timezone.utc).date(),
+            coverage_end_date=datetime(2026, 3, 31, tzinfo=timezone.utc).date(),
+            receipt_date=datetime(2026, 4, 15, tzinfo=timezone.utc).date(),
+        ),
+    )
+    assert first_upsert_id == canonical_filing_id
+
+    replacement_upsert_id = upsert_filing(
+        db_conn,
+        Filing(
+            id=UUID("a0000000-0000-0000-0000-000000000121"),
+            filing_fec_id=filing_fec_id,
+            committee_id=context.committee_id,
+            report_type="Q1A",
+            amendment_indicator="A",
+            filing_name="Quarterly Filing Amended",
+            coverage_start_date=datetime(2026, 1, 1, tzinfo=timezone.utc).date(),
+            coverage_end_date=datetime(2026, 3, 31, tzinfo=timezone.utc).date(),
+            receipt_date=datetime(2026, 4, 20, tzinfo=timezone.utc).date(),
+        ),
+    )
+    assert replacement_upsert_id == canonical_filing_id
+
+    with db_conn.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT id, report_type, amendment_indicator, filing_name, receipt_date
+            FROM cf.filing
+            WHERE filing_fec_id = %s
+            """,
+            (filing_fec_id,),
+        )
+        filing_rows = cursor.fetchall()
+    assert len(filing_rows) == 1
+    assert filing_rows[0] == (
+        canonical_filing_id,
+        "Q1A",
+        "A",
+        "Quarterly Filing Amended",
+        datetime(2026, 4, 20, tzinfo=timezone.utc).date(),
+    )
+
+    insert_filing_breakdown_transaction(
+        db_conn,
+        committee_id=context.committee_id,
+        filing_id=canonical_filing_id,
+        transaction_id=UUID("a0000000-0000-0000-0000-000000000211"),
+        transaction_type="15",
+        amount=Decimal("125.00"),
+        amendment_indicator="N",
+    )
+    insert_filing_breakdown_transaction(
+        db_conn,
+        committee_id=context.committee_id,
+        filing_id=canonical_filing_id,
+        transaction_id=UUID("a0000000-0000-0000-0000-000000000212"),
+        transaction_type="24A",
+        amount=Decimal("20.00"),
+        amendment_indicator="N",
+    )
+
+    response = api_client.get(f"/v1/committees/{context.committee_id}/filings/summary")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert len(payload["filings"]) == 1
+    filing_summary = payload["filings"][0]
+    assert filing_summary["filing_id"] == str(canonical_filing_id)
+    assert filing_summary["filing_fec_id"] == filing_fec_id
+    assert filing_summary["report_type"] == "Q1A"
+    assert filing_summary["amendment_indicator"] == "A"
+    assert filing_summary["filing_name"] == "Quarterly Filing Amended"
+    assert filing_summary["receipt_date"] == "2026-04-20"
+    assert filing_summary["total_raised"] == "125.00"
+    assert filing_summary["total_spent"] == "20.00"
+    assert filing_summary["net"] == "105.00"
+    assert filing_summary["transaction_count"] == 2
+
+
+def test_get_committee_filings_summary_returns_404_for_missing_committee(
+    api_client: TestClient,
+) -> None:
+    response = api_client.get(f"/v1/committees/{uuid4()}/filings/summary")
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Committee not found"}

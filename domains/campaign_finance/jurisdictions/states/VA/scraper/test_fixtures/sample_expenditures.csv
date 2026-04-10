@@ -1,0 +1,6 @@
+"ScheduleDId","ReportId","CommitteeContactId","FirstName","MiddleName","LastOrCompanyName","Prefix","Suffix","AddressLine1","AddressLine2","City","StateCode","ZipCode","IsIndividual","TransactionDate","Amount","AuthorizingName","ItemOrService","ScheduleId","ReportUID"
+"3991396","297173","904705","Jennifer","","Brooks","","","2244 Executive Dr","","Hampton","VA","23666","True","08/02/2022","250.00","Willard Maxwell","Campaign Consulting","","{75F88EFA-7ECB-BCDE-8FD5-11972ACA3162}"
+"3991397","297173","904705","Jennifer","","Brooks","","","2244 Executive Dr","","Hampton","VA","23666","True","08/22/2022","250.00","Willard Maxwell Jr.","Campaign Consulting","","{75F88EFA-7ECB-BCDE-8FD5-11972ACA3162}"
+"3991398","297173","905120","","","Cardwell Printing","","","15470 Warwick Blvd","","Newport News","VA","23608","False","07/09/2022","465.42","Willard Maxwell Jr.","Palm Cards","","{75F88EFA-7ECB-BCDE-8FD5-11972ACA3162}"
+"3991399","297173","905120","","","Cardwell Printing","","","15470 Warwick Blvd","","Newport News","VA","23608","False","07/09/2022","465.42","Willard Maxwell","Palm cards","","{75F88EFA-7ECB-BCDE-8FD5-11972ACA3162}"
+"3991400","297173","905120","","","Cardwell Printing","","","15470 Warwick Blvd","","Newport News","VA","23608","False","08/04/2022","457.00","Willard Maxwell","Palm Cards/Door Hangers","","{75F88EFA-7ECB-BCDE-8FD5-11972ACA3162}"

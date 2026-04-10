@@ -1,0 +1,5 @@
+Item_ID	Report_ID	Record_Type_ID	Date	Amount	Name	First_Name	Street_Address	City	State	Zip	Description	Related_CPF_ID	Occupation	Employer	Principal_Officer	Tender_Type_ID	Clarified_Name	Clarified_Purpose	Is_Supported	Is_Previous_Year_Receipt
+100001	5001	201	1/15/2024	500.00	Smith	John	123 Main St	Boston	MA	02101	Campaign contribution	10001	Attorney	Smith & Associates		1				0
+100002	5001	211	2/1/2024	1000.00	ACME Corp		456 Oak Ave	Cambridge	MA	02139	Business contribution	10001			Jane Doe	2				0
+100003	5002	301	1/20/2024	2500.00	Print Shop Inc		789 Elm St	Springfield	MA	01101	Campaign mailers	10002				1				0
+100004	5002	301	2/5/2024	750.00	Brown	Alice	100 Park Ave	Worcester	MA	01609	Consulting fees	10002	Consultant	Self		1				0

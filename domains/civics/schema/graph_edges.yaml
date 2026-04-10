@@ -1,0 +1,45 @@
+# Civics domain graph edge declarations.
+#
+# `domains/civics/graph/loader.py` materializes these relationship types
+# (HOLDS, RUNS_IN, CANDIDACY_OF, REPRESENTS) from `civic` schema records
+# into the AGE graph.
+
+domain: civics
+
+node_labels:
+  - Office
+  - ElectoralDivision
+  - Contest
+  - Candidacy
+  - Officeholding
+
+relationship_types:
+  - name: HOLDS
+    from: Person
+    to: Office
+    properties:
+      - holder_status
+      - valid_period
+      - source_record_id
+
+  - name: RUNS_IN
+    from: Candidacy
+    to: Contest
+    properties:
+      - party
+      - election_date
+      - source_record_id
+
+  - name: CANDIDACY_OF
+    from: Person
+    to: Candidacy
+    properties:
+      - source_record_id
+
+  - name: REPRESENTS
+    from: Person
+    to: ElectoralDivision
+    properties:
+      - holder_status
+      - valid_period
+      - source_record_id

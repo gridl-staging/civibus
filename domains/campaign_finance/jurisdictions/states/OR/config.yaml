@@ -1,0 +1,135 @@
+# Oregon campaign finance jurisdiction config
+# Source: Oregon Elections Division ORESTAR at secure.sos.state.or.us/orestar/
+# Two-step acquisition: (1) GET cneSearch.do?... to seed session, (2) GET XcelCNESearch with session cookie → XLS
+# CSRF protects POST routes but GET cneSearch.do works without CSRF token
+
+jurisdiction:
+  name: "Oregon"
+  code: "OR"
+  type: "state"
+  fips: "41"
+  parent: null
+
+data_sources:
+  - name: "OR ORESTAR Campaign Finance — Contributions"
+    url: "https://secure.sos.state.or.us/orestar/gotoPublicTransactionSearch.do"
+    bulk_download_url: null
+    api_base_url: "https://secure.sos.state.or.us/orestar"
+    format: "web_portal"
+    auth_required: false
+    update_frequency: "weekly"
+    coverage:
+      start_year: 2022
+      covers_sub_jurisdictions: true
+      office_levels:
+        - governor
+        - secretary_of_state
+        - attorney_general
+        - state_treasurer
+        - state_senate
+        - state_house
+        - county
+        - municipal
+      transaction_types:
+        - contributions
+    field_mappings:
+      Tran Id: "or.tran_id"
+      Original Id: "or.original_id"
+      Tran Date: "transaction.date"
+      Tran Status: "or.tran_status"
+      Filer: "committee.name"
+      Filer Id: "committee.id"
+      Contributor/Payee: "donor.org_name"
+      Sub Type: "or.sub_type"
+      Amount: "transaction.amount"
+      Aggregate Amount: "or.aggregate_amount"
+      Contributor/Payee Committee ID: "or.contributor_payee_committee_id"
+      Filing Date: "filing.submitted_date"
+      Description: "transaction.description"
+      Purpose Codes: "or.purpose_codes"
+      Employer Name: "donor.employer"
+      Occupation: "donor.occupation"
+      Occupation Ltr Date: "or.occupation_ltr_date"
+      Addr Book Type: "or.addr_book_type"
+      Book Type: "or.book_type"
+    scraper: null
+    last_successful_pull: null
+    last_verified_working: "2026-03-30"
+    known_issues:
+      - "Two-step export: GET cneSearch.do seeds session, GET XcelCNESearch exports XLS with session cookie"
+      - "Direct GET to XcelCNESearch without seeded session returns error page"
+      - "POST routes are CSRF-protected; only GET-based acquisition contract works"
+      - "ORESTAR currently v4.4.1; cneSearch.do param names may change across versions"
+
+  - name: "OR ORESTAR Campaign Finance — Expenditures"
+    url: "https://secure.sos.state.or.us/orestar/gotoPublicTransactionSearch.do"
+    bulk_download_url: null
+    api_base_url: "https://secure.sos.state.or.us/orestar"
+    format: "web_portal"
+    auth_required: false
+    update_frequency: "weekly"
+    coverage:
+      start_year: 2022
+      covers_sub_jurisdictions: true
+      office_levels:
+        - governor
+        - secretary_of_state
+        - attorney_general
+        - state_treasurer
+        - state_senate
+        - state_house
+        - county
+        - municipal
+      transaction_types:
+        - expenditures
+    field_mappings:
+      Tran Id: "or.tran_id"
+      Original Id: "or.original_id"
+      Tran Date: "transaction.date"
+      Tran Status: "or.tran_status"
+      Filer: "committee.name"
+      Filer Id: "committee.id"
+      Contributor/Payee: "payee.org_name"
+      Sub Type: "or.sub_type"
+      Amount: "transaction.amount"
+      Aggregate Amount: "or.aggregate_amount"
+      Contributor/Payee Committee ID: "or.contributor_payee_committee_id"
+      Filing Date: "filing.submitted_date"
+      Description: "transaction.description"
+      Purpose Codes: "or.purpose_codes"
+      Employer Name: "payee.employer"
+      Occupation: "payee.occupation"
+      Occupation Ltr Date: "or.occupation_ltr_date"
+      Addr Book Type: "or.addr_book_type"
+      Book Type: "or.book_type"
+    scraper: null
+    last_successful_pull: null
+    last_verified_working: "2026-03-30"
+    known_issues:
+      - "Same two-step export contract as contributions; transaction type filtered via cneSearchTranType param"
+
+laws:
+  source_url: "https://sos.oregon.gov/elections/Pages/campaign-finance.aspx"
+  last_verified: "2026-03-30"
+  contribution_limits:
+    individual_to_candidate: null
+    pac_to_candidate: null
+    corporate_direct: null
+    union_direct: null
+    party_to_candidate: null
+  itemization_threshold: 0
+  reporting:
+    periods: ["pre-primary", "pre-election", "post-election", "annual"]
+    electronic_filing_required: "required"
+  public_financing: false
+  notes:
+    - "2026 election calendar: May 19 primary, November 3 general"
+    - "Seven-day transaction-reporting windows around election periods"
+    - "ORESTAR electronic filing with statutory deadlines"
+
+status:
+  discovery: "complete"
+  scraper: "in_progress"
+  normalization: "pending"
+  entity_resolution: "pending"
+  last_full_update: null

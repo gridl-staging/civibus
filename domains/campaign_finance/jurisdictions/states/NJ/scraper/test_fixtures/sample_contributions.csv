@@ -1,0 +1,4 @@
+IsIndividual,FirstName,MI,LastName,Suffix,NonIndName,Street,City,State,ZIP,EmpName,EmpStreet,EmpCity,EmpState,EmpZip,OccupationName,ContributorType,ContributionType,ContributionDate,ContributionAmount,EntityName,Location,ElectionYear
+True,John,A,Smith,,,,"Trenton",NJ,08608,Acme Corp,,,,,Engineer,Individual,Monetary,01/15/2024,250.00,NJ Democrats,NJ,2024
+False,,,,,Garden State PAC,123 Main St,Newark,NJ,07102,,,,,,,PAC,Monetary,02/20/2024,"1,000.00",NJ Republicans,NJ,2024
+True,Jane,,Doe,Jr,,456 Oak Ave,Camden,NJ,08101,State University,,,,,Professor,Individual,In-Kind,03/10/2024,500.00,NJ Democrats,NJ,2024

@@ -1,0 +1,167 @@
+# Illinois campaign finance jurisdiction config
+# Source surface verified live on 2026-03-27:
+#   https://elections.il.gov/CampaignDisclosure/DownloadCDDataFiles.aspx
+#
+# Cadence evidence was updated on 2026-03-29 from official "Latest Reports
+# Filed" portal activity. Update-frequency values below align to that proof;
+# export-latency follow-up remains tracked in known_issues.
+
+jurisdiction:
+  name: "Illinois"
+  code: "IL"
+  type: "state"
+  fips: "17"
+  parent: null
+
+data_sources:
+  - name: "IL SBE Campaign Disclosure — Receipts"
+    url: "https://elections.il.gov/CampaignDisclosure/DownloadCDDataFiles.aspx"
+    bulk_download_url: "https://elections.il.gov/CampaignDisclosure/DownloadCDDataFiles.aspx"
+    api_base_url: null
+    format: "csv"
+    auth_required: false
+    update_frequency: "continuous"
+    coverage:
+      start_year: 1998
+      covers_sub_jurisdictions: true
+      office_levels:
+        - governor
+        - lieutenant_governor
+        - attorney_general
+        - secretary_of_state
+        - comptroller
+        - treasurer
+        - state_senate
+        - state_house
+        - supreme_court
+        - appellate_court
+        - circuit_court
+        - county
+        - municipal
+        - school_board
+      transaction_types:
+        - contributions
+    field_mappings:
+      ID: "transaction.id"
+      CommitteeID: "committee.id"
+      FiledDocID: "filing.id"
+      ETransID: "il.e_trans_id"
+      LastOnlyName: "donor.name.last_or_business"
+      FirstName: "donor.name.first"
+      RcvDate: "transaction.date"
+      Amount: "transaction.amount"
+      AggregateAmount: "il.aggregate_amount"
+      LoanAmount: "il.loan_amount"
+      Occupation: "donor.occupation"
+      Employer: "donor.employer"
+      Address1: "donor.address.street1"
+      Address2: "donor.address.street2"
+      City: "donor.address.city"
+      State: "donor.address.state"
+      Zip: "donor.address.zip"
+      D2Part: "il.d2_part"
+      Description: "transaction.description"
+      VendorLastOnlyName: "vendor.name.last_or_business"
+      VendorFirstName: "vendor.name.first"
+      VendorAddress1: "vendor.address.street1"
+      VendorAddress2: "vendor.address.street2"
+      VendorCity: "vendor.address.city"
+      VendorState: "vendor.address.state"
+      VendorZip: "vendor.address.zip"
+      Archived: "il.archived"
+      Country: "donor.address.country"
+      RedactionRequested: "il.redaction_requested"
+    scraper: null
+    last_successful_pull: null
+    last_verified_working: "2026-03-27"
+    known_issues:
+      - "Cadence evidence (2026-03-29): ReportsFiled.aspx showed 25 electronically filed reports across 2026-03-27 through 2026-03-29 (docs/research/il-freshness-investigation-2026-03-29.md); open question: confirm whether Receipts.txt reflects same-day portal filings."
+      - "The ASP.NET flow is two-step: post back the dropdown selection, then follow the rendered NewDocDisplay.aspx link."
+      - "Rows do not include committee names; the initial loader synthesizes committee display names from CommitteeID until auxiliary files are ingested."
+
+  - name: "IL SBE Campaign Disclosure — Expenditures"
+    url: "https://elections.il.gov/CampaignDisclosure/DownloadCDDataFiles.aspx"
+    bulk_download_url: "https://elections.il.gov/CampaignDisclosure/DownloadCDDataFiles.aspx"
+    api_base_url: null
+    format: "csv"
+    auth_required: false
+    update_frequency: "continuous"
+    coverage:
+      start_year: 1999
+      covers_sub_jurisdictions: true
+      office_levels:
+        - governor
+        - lieutenant_governor
+        - attorney_general
+        - secretary_of_state
+        - comptroller
+        - treasurer
+        - state_senate
+        - state_house
+        - supreme_court
+        - appellate_court
+        - circuit_court
+        - county
+        - municipal
+        - school_board
+      transaction_types:
+        - expenditures
+    field_mappings:
+      ID: "transaction.id"
+      CommitteeID: "committee.id"
+      FiledDocID: "filing.id"
+      ETransID: "il.e_trans_id"
+      LastOnlyName: "payee.name.last_or_business"
+      FirstName: "payee.name.first"
+      ExpendedDate: "transaction.date"
+      Amount: "transaction.amount"
+      AggregateAmount: "il.aggregate_amount"
+      Address1: "payee.address.street1"
+      Address2: "payee.address.street2"
+      City: "payee.address.city"
+      State: "payee.address.state"
+      Zip: "payee.address.zip"
+      D2Part: "il.d2_part"
+      Purpose: "transaction.description"
+      CandidateName: "il.candidate_name"
+      Office: "il.candidate_office"
+      Supporting: "il.supporting"
+      Opposing: "il.opposing"
+      Archived: "il.archived"
+      Country: "payee.address.country"
+      RedactionRequested: "il.redaction_requested"
+    scraper: null
+    last_successful_pull: null
+    last_verified_working: "2026-03-27"
+    known_issues:
+      - "Cadence evidence (2026-03-29): ReportsFiled.aspx showed 25 electronically filed reports across 2026-03-27 through 2026-03-29 (docs/research/il-freshness-investigation-2026-03-29.md); open question: confirm whether Expenditures.txt reflects same-day portal filings."
+      - "The ASP.NET flow is two-step: post back the dropdown selection, then follow the rendered NewDocDisplay.aspx link."
+      - "Rows do not include committee names; the initial loader synthesizes committee display names from CommitteeID until auxiliary files are ingested."
+
+laws:
+  source_url: "https://www.ilga.gov/Documents/legislation/ilcs/documents/001000050K9-8.5.htm"
+  last_verified: "2026-03-27"
+  contribution_limits:
+    individual_to_candidate: 6900
+    pac_to_candidate: 68500
+    corporate_direct: 13700
+    union_direct: 13700
+    party_to_candidate: "unlimited"
+  itemization_threshold: 150
+  reporting:
+    periods: ["quarterly", "A-1", "B-1", "statement-of-organization"]
+    electronic_filing_required: "not_required"
+  public_financing: false
+  notes:
+    - "Base campaign-finance duties are in 10 ILCS 5/9-3, 9-10, 9-11, and contribution limits are in 10 ILCS 5/9-8.5."
+    - "Current per-cycle limit values above are taken from Appendix A, Table A of 26 Ill. Adm. Code part 100 as mirrored by Cornell LII on 2026-03-27."
+    - "Political party committees are generally unlimited, but Appendix A imposes office-specific caps during a primary-cycle nomination contest."
+    - "Quarterly reporting is required under 10 ILCS 5/9-10(b); large-contribution A-1 and independent-expenditure B-1 reports accelerate to 2 business days near an election."
+    - "The bulk files include both electronically filed and paper-entered records; the data dictionary's FiledDocs source field distinguishes them."
+
+status:
+  discovery: "complete"
+  scraper: "complete"
+  normalization: "pending"
+  entity_resolution: "pending"
+  last_full_update: null

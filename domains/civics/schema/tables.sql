@@ -1,0 +1,350 @@
+-- Civic Domain Tables: Office, ElectoralDivision, Contest, Candidacy, Officeholding
+-- These are persistent domain nodes owned by domains/civics/ (ADR 0008).
+-- They provide canonical civic abstractions across jurisdictions without
+-- replacing existing source-shaped tables (e.g., cf.candidate, cf.election).
+--
+-- Migration order: 8 of 9 — run AFTER core (01–05), campaign_finance (06),
+--   and property (07). Run BEFORE AGE graph bootstrap (09).
+--   Defines: civic schema with 5 tables
+--   Requires: core schema (entities.sql, jurisdiction.sql, provenance.sql)
+--
+-- PostgreSQL schema: civic (NOT civibus — that is the AGE graph schema)
+
+CREATE SCHEMA IF NOT EXISTS civic;
+
+-- ============================================================================
+-- Office
+-- ============================================================================
+-- A named governmental position. Examples: "US House of Representatives",
+-- "Governor", "County Commissioner". Deterministic keys derived from
+-- office_level + state + name. Jurisdiction_id links to core.jurisdiction
+-- for reference FIPS data when applicable.
+
+CREATE TABLE civic.office (
+    id                UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    name              TEXT NOT NULL,
+    office_level      TEXT NOT NULL CHECK (office_level IN (
+                          'federal', 'state', 'county', 'municipal',
+                          'judicial', 'school_board', 'special_district'
+                      )),
+    title             TEXT,                       -- Formal title: "Representative", "Senator"
+    jurisdiction_id   UUID REFERENCES core.jurisdiction(id),
+    state             TEXT CHECK (
+                          state IS NULL OR state ~ '^[A-Z]{2}$'
+                      ),                          -- Two-letter state code (NULL for federal-wide)
+    is_elected        BOOLEAN NOT NULL DEFAULT TRUE,
+    number_of_seats   SMALLINT NOT NULL DEFAULT 1 CHECK (number_of_seats >= 1),
+    source_record_id  UUID,                       -- FK to core.source_record
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX uq_office_canonical_key
+    ON civic.office (office_level, COALESCE(state, ''), name);
+
+CREATE INDEX idx_office_level ON civic.office (office_level);
+CREATE INDEX idx_office_state ON civic.office (state) WHERE state IS NOT NULL;
+CREATE INDEX idx_office_jurisdiction ON civic.office (jurisdiction_id) WHERE jurisdiction_id IS NOT NULL;
+
+-- ============================================================================
+-- Electoral Division
+-- ============================================================================
+-- Geographic or administrative boundary for elections. Tied to redistricting
+-- cycles via boundary_year. Examples: "NC Congressional District 1 (2020)",
+-- "Durham County", "NC State Senate District 20".
+
+CREATE TABLE civic.electoral_division (
+    id                UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    name              TEXT NOT NULL,
+    division_type     TEXT NOT NULL CHECK (division_type IN (
+                          'congressional_district', 'state_legislative_upper',
+                          'state_legislative_lower', 'county', 'municipal',
+                          'judicial_district', 'school_district', 'special_district',
+                          'at_large', 'statewide'
+                      )),
+    state             TEXT CHECK (
+                          state IS NULL OR state ~ '^[A-Z]{2}$'
+                      ),                          -- Two-letter state code
+    district_number   TEXT,                       -- "01", "12", etc.
+    ocd_id            TEXT CHECK (
+                          ocd_id IS NULL OR ocd_id LIKE 'ocd-division/%'
+                      ),                          -- Open Civic Data ID (Stage 4)
+    is_container      BOOLEAN NOT NULL DEFAULT FALSE,
+    parent_id         UUID REFERENCES civic.electoral_division(id),
+    boundary_year     SMALLINT CHECK (
+                          boundary_year IS NULL OR boundary_year >= 0
+                      ),                          -- Redistricting cycle year
+    source_record_id  UUID,                       -- FK to core.source_record
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX uq_electoral_division_canonical_key
+    ON civic.electoral_division (
+        division_type,
+        COALESCE(state, ''),
+        name,
+        COALESCE(boundary_year, 0)
+    );
+
+CREATE INDEX idx_electoral_division_type ON civic.electoral_division (division_type);
+CREATE INDEX idx_electoral_division_state ON civic.electoral_division (state) WHERE state IS NOT NULL;
+CREATE UNIQUE INDEX uq_electoral_division_ocd_id ON civic.electoral_division (ocd_id) WHERE ocd_id IS NOT NULL;
+CREATE INDEX idx_electoral_division_ocd_id ON civic.electoral_division (ocd_id) WHERE ocd_id IS NOT NULL;
+
+-- ============================================================================
+-- Contest
+-- ============================================================================
+-- A specific race or ballot question in a specific election. Links an office
+-- to a time and (optionally) an electoral division. Deterministic keying by
+-- office + division + election_date + election_type.
+
+CREATE TABLE civic.contest (
+    id                    UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    name                  TEXT NOT NULL,
+    election_date         DATE,
+    election_type         TEXT NOT NULL CHECK (election_type IN (
+                              'general', 'primary', 'runoff', 'special', 'recall'
+                          )),
+    office_id             UUID NOT NULL REFERENCES civic.office(id),
+    electoral_division_id UUID REFERENCES civic.electoral_division(id),
+    number_of_seats       SMALLINT NOT NULL DEFAULT 1 CHECK (number_of_seats >= 1),
+    filing_deadline       DATE,
+    is_partisan           BOOLEAN NOT NULL DEFAULT TRUE,
+    candidate_list_incomplete BOOLEAN NOT NULL DEFAULT FALSE,
+    source_record_id      UUID,                   -- FK to core.source_record
+    created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at            TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX uq_contest_canonical_key
+    ON civic.contest (
+        office_id,
+        COALESCE(electoral_division_id, '00000000-0000-0000-0000-000000000000'::uuid),
+        COALESCE(election_date, '0001-01-01'::date),
+        election_type
+    );
+
+CREATE INDEX idx_contest_office ON civic.contest (office_id);
+CREATE INDEX idx_contest_electoral_division ON civic.contest (electoral_division_id)
+    WHERE electoral_division_id IS NOT NULL;
+CREATE INDEX idx_contest_election_date ON civic.contest (election_date) WHERE election_date IS NOT NULL;
+
+-- ============================================================================
+-- Candidacy
+-- ============================================================================
+-- A person's candidacy for a specific contest. Links a core.person to a
+-- civic.contest with party, filing status, and incumbent/challenger info.
+
+CREATE TABLE civic.candidacy (
+    id                UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    person_id         UUID NOT NULL REFERENCES core.person(id),
+    contest_id        UUID NOT NULL REFERENCES civic.contest(id),
+    party             TEXT,
+    filing_date       DATE,
+    status            TEXT,                       -- filed, qualified, withdrawn, winner, lost
+    incumbent_challenge TEXT,                     -- I, C, O (FEC convention)
+    candidate_number  TEXT,                       -- Source-assigned candidate number
+    source_record_id  UUID,                       -- FK to core.source_record
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX uq_candidacy_canonical_key
+    ON civic.candidacy (person_id, contest_id);
+
+CREATE INDEX idx_candidacy_person ON civic.candidacy (person_id);
+CREATE INDEX idx_candidacy_contest ON civic.candidacy (contest_id);
+CREATE INDEX idx_candidacy_status ON civic.candidacy (status) WHERE status IS NOT NULL;
+
+-- ============================================================================
+-- Officeholding
+-- ============================================================================
+-- Time-bounded record of who holds a governmental office. Uses daterange
+-- with WITHOUT OVERLAPS to prevent duplicate concurrent holdings for the
+-- same person+office combination.
+
+CREATE TABLE civic.officeholding (
+    id                    UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    person_id             UUID NOT NULL REFERENCES core.person(id),
+    office_id             UUID NOT NULL REFERENCES civic.office(id),
+    electoral_division_id UUID REFERENCES civic.electoral_division(id),
+    holder_status         TEXT NOT NULL DEFAULT 'elected' CHECK (holder_status IN (
+                              'elected', 'appointed', 'acting', 'former'
+                          )),
+    valid_period          daterange NOT NULL DEFAULT daterange(NULL, NULL, '[)'),
+    date_precision        core.date_precision NOT NULL DEFAULT 'day',
+    source_record_id      UUID,                   -- FK to core.source_record
+    created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT uq_officeholding_canonical_key UNIQUE (person_id, office_id, valid_period WITHOUT OVERLAPS)
+);
+
+CREATE INDEX idx_officeholding_person ON civic.officeholding (person_id);
+CREATE INDEX idx_officeholding_office ON civic.officeholding (office_id);
+CREATE INDEX idx_officeholding_current ON civic.officeholding (person_id, office_id)
+    WHERE upper_inf(valid_period);
+
+-- ============================================================================
+-- Cross-schema foreign keys: source_record_id
+-- ============================================================================
+-- Applied here (not in provenance.sql) because these are domain tables.
+-- Stage 3 will expand provenance CHECK constraints to cover civic types.
+
+ALTER TABLE civic.office
+    ADD CONSTRAINT fk_office_source_record
+    FOREIGN KEY (source_record_id) REFERENCES core.source_record(id);
+
+ALTER TABLE civic.electoral_division
+    ADD CONSTRAINT fk_electoral_division_source_record
+    FOREIGN KEY (source_record_id) REFERENCES core.source_record(id);
+
+ALTER TABLE civic.contest
+    ADD CONSTRAINT fk_contest_source_record
+    FOREIGN KEY (source_record_id) REFERENCES core.source_record(id);
+
+ALTER TABLE civic.candidacy
+    ADD CONSTRAINT fk_candidacy_source_record
+    FOREIGN KEY (source_record_id) REFERENCES core.source_record(id);
+
+ALTER TABLE civic.officeholding
+    ADD CONSTRAINT fk_officeholding_source_record
+    FOREIGN KEY (source_record_id) REFERENCES core.source_record(id);
+
+-- ============================================================================
+-- Reference Seed Data (Stage 4)
+-- ============================================================================
+-- Deterministic office and electoral-division reference rows for federal + WA + FL.
+-- These are stable inventory rows that downstream loaders can map against.
+-- Inserts are idempotent so db-reset and repeated schema applies remain safe.
+
+INSERT INTO core.jurisdiction (
+    id,
+    name,
+    jurisdiction_type,
+    fips,
+    state
+)
+VALUES
+    ('00000000-0000-4000-8000-000000000901', 'Washington', 'state', '53', 'WA'),
+    ('00000000-0000-4000-8000-000000000902', 'Florida', 'state', '12', 'FL')
+ON CONFLICT (fips) WHERE fips IS NOT NULL DO UPDATE
+SET
+    name = EXCLUDED.name,
+    jurisdiction_type = EXCLUDED.jurisdiction_type,
+    state = EXCLUDED.state;
+
+INSERT INTO civic.office (
+    id,
+    name,
+    office_level,
+    title,
+    jurisdiction_id,
+    state,
+    is_elected,
+    number_of_seats
+)
+VALUES
+    -- FEC H/S/P expansion into canonical offices
+    ('00000000-0000-4000-8000-000000000101', 'us_house', 'federal', 'Representative', NULL, NULL, TRUE, 435),
+    ('00000000-0000-4000-8000-000000000102', 'us_senate', 'federal', 'Senator', NULL, NULL, TRUE, 100),
+    ('00000000-0000-4000-8000-000000000103', 'us_president', 'federal', 'President', NULL, NULL, TRUE, 1),
+
+    -- WA office levels (15) from state config coverage.office_levels
+    ('00000000-0000-4000-8000-000000000201', 'attorney_general', 'state', 'Attorney General', (SELECT id FROM core.jurisdiction WHERE fips = '53' LIMIT 1), 'WA', TRUE, 1),
+    ('00000000-0000-4000-8000-000000000202', 'commissioner_of_public_lands', 'state', 'Commissioner of Public Lands', (SELECT id FROM core.jurisdiction WHERE fips = '53' LIMIT 1), 'WA', TRUE, 1),
+    ('00000000-0000-4000-8000-000000000203', 'county', 'county', 'County Office', NULL, 'WA', TRUE, 1),
+    ('00000000-0000-4000-8000-000000000204', 'governor', 'state', 'Governor', (SELECT id FROM core.jurisdiction WHERE fips = '53' LIMIT 1), 'WA', TRUE, 1),
+    ('00000000-0000-4000-8000-000000000205', 'insurance_commissioner', 'state', 'Insurance Commissioner', (SELECT id FROM core.jurisdiction WHERE fips = '53' LIMIT 1), 'WA', TRUE, 1),
+    ('00000000-0000-4000-8000-000000000206', 'lieutenant_governor', 'state', 'Lieutenant Governor', (SELECT id FROM core.jurisdiction WHERE fips = '53' LIMIT 1), 'WA', TRUE, 1),
+    ('00000000-0000-4000-8000-000000000207', 'municipal', 'municipal', 'Municipal Office', NULL, 'WA', TRUE, 1),
+    ('00000000-0000-4000-8000-000000000208', 'school_district', 'school_board', 'School Board Office', NULL, 'WA', TRUE, 1),
+    ('00000000-0000-4000-8000-000000000209', 'secretary_of_state', 'state', 'Secretary of State', (SELECT id FROM core.jurisdiction WHERE fips = '53' LIMIT 1), 'WA', TRUE, 1),
+    ('00000000-0000-4000-8000-000000000210', 'special_district', 'special_district', 'Special District Office', NULL, 'WA', TRUE, 1),
+    ('00000000-0000-4000-8000-000000000211', 'state_auditor', 'state', 'State Auditor', (SELECT id FROM core.jurisdiction WHERE fips = '53' LIMIT 1), 'WA', TRUE, 1),
+    ('00000000-0000-4000-8000-000000000212', 'state_house', 'state', 'State House', (SELECT id FROM core.jurisdiction WHERE fips = '53' LIMIT 1), 'WA', TRUE, 1),
+    ('00000000-0000-4000-8000-000000000213', 'state_senate', 'state', 'State Senate', (SELECT id FROM core.jurisdiction WHERE fips = '53' LIMIT 1), 'WA', TRUE, 1),
+    ('00000000-0000-4000-8000-000000000214', 'state_treasurer', 'state', 'State Treasurer', (SELECT id FROM core.jurisdiction WHERE fips = '53' LIMIT 1), 'WA', TRUE, 1),
+    ('00000000-0000-4000-8000-000000000215', 'superintendent_of_public_instruction', 'state', 'Superintendent of Public Instruction', (SELECT id FROM core.jurisdiction WHERE fips = '53' LIMIT 1), 'WA', TRUE, 1),
+
+    -- FL office levels (11) from state config coverage.office_levels
+    ('00000000-0000-4000-8000-000000000301', 'attorney_general', 'state', 'Attorney General', (SELECT id FROM core.jurisdiction WHERE fips = '12' LIMIT 1), 'FL', TRUE, 1),
+    ('00000000-0000-4000-8000-000000000302', 'chief_financial_officer', 'state', 'Chief Financial Officer', (SELECT id FROM core.jurisdiction WHERE fips = '12' LIMIT 1), 'FL', TRUE, 1),
+    ('00000000-0000-4000-8000-000000000303', 'commissioner_of_agriculture', 'state', 'Commissioner of Agriculture', (SELECT id FROM core.jurisdiction WHERE fips = '12' LIMIT 1), 'FL', TRUE, 1),
+    ('00000000-0000-4000-8000-000000000304', 'county', 'county', 'County Office', NULL, 'FL', TRUE, 1),
+    ('00000000-0000-4000-8000-000000000305', 'governor', 'state', 'Governor', (SELECT id FROM core.jurisdiction WHERE fips = '12' LIMIT 1), 'FL', TRUE, 1),
+    ('00000000-0000-4000-8000-000000000306', 'lieutenant_governor', 'state', 'Lieutenant Governor', (SELECT id FROM core.jurisdiction WHERE fips = '12' LIMIT 1), 'FL', TRUE, 1),
+    ('00000000-0000-4000-8000-000000000307', 'municipal', 'municipal', 'Municipal Office', NULL, 'FL', TRUE, 1),
+    ('00000000-0000-4000-8000-000000000308', 'school_district', 'school_board', 'School Board Office', NULL, 'FL', TRUE, 1),
+    ('00000000-0000-4000-8000-000000000309', 'special_district', 'special_district', 'Special District Office', NULL, 'FL', TRUE, 1),
+    ('00000000-0000-4000-8000-000000000310', 'state_house', 'state', 'State House', (SELECT id FROM core.jurisdiction WHERE fips = '12' LIMIT 1), 'FL', TRUE, 1),
+    ('00000000-0000-4000-8000-000000000311', 'state_senate', 'state', 'State Senate', (SELECT id FROM core.jurisdiction WHERE fips = '12' LIMIT 1), 'FL', TRUE, 1)
+ON CONFLICT DO NOTHING;
+
+UPDATE civic.office AS office
+SET jurisdiction_id = jurisdiction.id
+FROM core.jurisdiction AS jurisdiction
+WHERE office.office_level = 'state'
+  AND office.state IN ('WA', 'FL')
+  AND jurisdiction.fips = CASE office.state
+      WHEN 'WA' THEN '53'
+      WHEN 'FL' THEN '12'
+      ELSE NULL
+  END
+  AND office.jurisdiction_id IS DISTINCT FROM jurisdiction.id;
+
+INSERT INTO civic.electoral_division (
+    id,
+    name,
+    division_type,
+    state,
+    district_number,
+    ocd_id,
+    is_container,
+    parent_id,
+    boundary_year
+)
+VALUES
+    -- Actual statewide divisions with official OCD-IDs.
+    ('00000000-0000-4000-8000-000000000501', 'us', 'statewide', NULL, NULL, 'ocd-division/country:us', FALSE, NULL, NULL),
+    ('00000000-0000-4000-8000-000000000502', 'wa', 'statewide', 'WA', NULL, 'ocd-division/country:us/state:wa', FALSE, '00000000-0000-4000-8000-000000000501', NULL),
+    ('00000000-0000-4000-8000-000000000503', 'fl', 'statewide', 'FL', NULL, 'ocd-division/country:us/state:fl', FALSE, '00000000-0000-4000-8000-000000000501', NULL),
+    -- Hierarchy-only grouping rows. Later loaders should not treat these as actual browseable districts.
+    ('00000000-0000-4000-8000-000000000504', 'us_congressional_districts', 'congressional_district', NULL, NULL, NULL, TRUE, '00000000-0000-4000-8000-000000000501', 2022),
+    ('00000000-0000-4000-8000-000000000505', 'wa_state_senate_districts', 'state_legislative_upper', 'WA', NULL, NULL, TRUE, '00000000-0000-4000-8000-000000000502', 2020),
+    ('00000000-0000-4000-8000-000000000506', 'wa_state_house_districts', 'state_legislative_lower', 'WA', NULL, NULL, TRUE, '00000000-0000-4000-8000-000000000502', 2020),
+    ('00000000-0000-4000-8000-000000000507', 'wa_counties', 'county', 'WA', NULL, NULL, TRUE, '00000000-0000-4000-8000-000000000502', NULL),
+    ('00000000-0000-4000-8000-000000000508', 'wa_municipalities', 'municipal', 'WA', NULL, NULL, TRUE, '00000000-0000-4000-8000-000000000502', NULL),
+    ('00000000-0000-4000-8000-000000000509', 'wa_school_districts', 'school_district', 'WA', NULL, NULL, TRUE, '00000000-0000-4000-8000-000000000502', NULL),
+    ('00000000-0000-4000-8000-000000000510', 'wa_special_districts', 'special_district', 'WA', NULL, NULL, TRUE, '00000000-0000-4000-8000-000000000502', NULL),
+    ('00000000-0000-4000-8000-000000000511', 'fl_state_senate_districts', 'state_legislative_upper', 'FL', NULL, NULL, TRUE, '00000000-0000-4000-8000-000000000503', 2022),
+    ('00000000-0000-4000-8000-000000000512', 'fl_state_house_districts', 'state_legislative_lower', 'FL', NULL, NULL, TRUE, '00000000-0000-4000-8000-000000000503', 2022),
+    ('00000000-0000-4000-8000-000000000513', 'fl_counties', 'county', 'FL', NULL, NULL, TRUE, '00000000-0000-4000-8000-000000000503', NULL),
+    ('00000000-0000-4000-8000-000000000514', 'fl_municipalities', 'municipal', 'FL', NULL, NULL, TRUE, '00000000-0000-4000-8000-000000000503', NULL),
+    ('00000000-0000-4000-8000-000000000515', 'fl_school_districts', 'school_district', 'FL', NULL, NULL, TRUE, '00000000-0000-4000-8000-000000000503', NULL),
+    ('00000000-0000-4000-8000-000000000516', 'fl_special_districts', 'special_district', 'FL', NULL, NULL, TRUE, '00000000-0000-4000-8000-000000000503', NULL)
+ON CONFLICT DO NOTHING;
+
+-- ============================================================================
+-- Triggers: auto-update updated_at
+-- ============================================================================
+
+CREATE TRIGGER trg_office_updated_at
+    BEFORE UPDATE ON civic.office
+    FOR EACH ROW EXECUTE FUNCTION core.set_updated_at();
+
+CREATE TRIGGER trg_electoral_division_updated_at
+    BEFORE UPDATE ON civic.electoral_division
+    FOR EACH ROW EXECUTE FUNCTION core.set_updated_at();
+
+CREATE TRIGGER trg_contest_updated_at
+    BEFORE UPDATE ON civic.contest
+    FOR EACH ROW EXECUTE FUNCTION core.set_updated_at();
+
+CREATE TRIGGER trg_candidacy_updated_at
+    BEFORE UPDATE ON civic.candidacy
+    FOR EACH ROW EXECUTE FUNCTION core.set_updated_at();
+
+CREATE TRIGGER trg_officeholding_updated_at
+    BEFORE UPDATE ON civic.officeholding
+    FOR EACH ROW EXECUTE FUNCTION core.set_updated_at();
