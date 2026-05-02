@@ -101,6 +101,20 @@ _OR_TRANSACTION_KIND: dict[str, str] = {
     "expenditures": "expenditure",
 }
 
+# ORESTAR or.sub_type values indicating independent expenditures.
+# "Independent Expenditure" is the canonical ORESTAR sub-type label.
+_OR_IE_SUB_TYPES = frozenset({"INDEPENDENT EXPENDITURE"})
+
+
+def _or_is_independent_expenditure(row: Mapping[str, str | None], *, data_type: str) -> bool:
+    if data_type != "expenditures":
+        return False
+    sub_type_col = _load_column_for_semantic_path(data_type, "or.sub_type")
+    raw_value = _normalize_optional_text(row.get(sub_type_col))
+    if raw_value is None:
+        return False
+    return raw_value.upper() in _OR_IE_SUB_TYPES
+
 
 def ensure_or_data_source(conn: psycopg.Connection, data_type: str) -> UUID:
     """Ensure the OR data source row exists and return its UUID."""
@@ -528,7 +542,11 @@ def _upsert_or_transaction_with_filing(
         Transaction(
             filing_id=filing_id,
             committee_id=committee_id,
-            transaction_type=_OR_TRANSACTION_KIND[data_type],
+            transaction_type=(
+                "Independent Expenditure"
+                if _or_is_independent_expenditure(row, data_type=data_type)
+                else _OR_TRANSACTION_KIND[data_type]
+            ),
             transaction_identifier=_transaction_identifier(row, data_type=data_type),
             transaction_date=_parse_optional_or_date(row.get(date_col)),
             amount=_parse_required_or_amount(row.get(amount_col), amount_col),

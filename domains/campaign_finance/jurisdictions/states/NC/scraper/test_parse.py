@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 
@@ -55,6 +56,17 @@ def _write_fixture(path: Path, *rows: str, header: str) -> None:
     path.write_text("\n".join((header, *rows, "")), encoding="utf-8")
 
 
+def _build_transaction_row(date_occured: str) -> dict[str, str]:
+    row = {column: "" for column in TRANSACTION_COLUMNS}
+    row["Committee Name"] = "EXAMPLE COMMITTEE"
+    row["Committee SBoE ID"] = "STA-XXXX-C-001"
+    row["Date Occured"] = date_occured
+    row["Amount"] = "10.0000"
+    row["Form of Payment"] = "Check"
+    row["Transction Type"] = "Individual"
+    return row
+
+
 def test_transaction_columns_match_fixture_header_order_and_preserve_typos() -> None:
     assert len(TRANSACTION_COLUMNS) == 24
     assert TRANSACTION_COLUMNS[0] == "Name"
@@ -105,6 +117,42 @@ def test_parse_transactions_reads_fixture_rows_and_normalizes_blanks(transaction
     assert rows[0]["Street Line 2"] is None
     assert rows[0]["Profession/Job Title"] is None
     assert rows[0]["Employer's Name/Specific Field"] is None
+
+
+def test_parse_transactions_filters_pre_year_from_rows_and_tracks_filtered_count(tmp_path: Path) -> None:
+    fixture_path = tmp_path / "year-filter.csv"
+    with fixture_path.open("w", encoding="utf-8", newline="") as csv_file:
+        writer = csv.DictWriter(csv_file, fieldnames=list(TRANSACTION_COLUMNS))
+        writer.writeheader()
+        writer.writerow(_build_transaction_row("12/31/2021"))
+        writer.writerow(_build_transaction_row("01/01/2022"))
+        writer.writerow(_build_transaction_row("06/26/2025"))
+
+    parser = parse_transactions(fixture_path, year_from=2022)
+    rows = list(parser)
+
+    assert len(rows) == 2
+    assert [row["Date Occured"] for row in rows] == ["01/01/2022", "06/26/2025"]
+    assert parser.filtered == 1
+    assert parser.skipped == 0
+
+
+def test_parse_transactions_without_explicit_year_from_uses_default_five_year_window(tmp_path: Path) -> None:
+    fixture_path = tmp_path / "default-year-filter.csv"
+    current_year = datetime.now(timezone.utc).year
+    default_year_from = current_year - 4
+    with fixture_path.open("w", encoding="utf-8", newline="") as csv_file:
+        writer = csv.DictWriter(csv_file, fieldnames=list(TRANSACTION_COLUMNS))
+        writer.writeheader()
+        writer.writerow(_build_transaction_row(f"01/01/{default_year_from - 1}"))
+        writer.writerow(_build_transaction_row(f"01/01/{default_year_from}"))
+
+    parser = parse_transactions(fixture_path, year_from=None)
+    rows = list(parser)
+
+    assert len(rows) == 1
+    assert rows[0]["Date Occured"] == f"01/01/{default_year_from}"
+    assert parser.filtered == 1
 
 
 def test_parse_committee_docs_reads_fixture_rows_and_normalizes_blanks(

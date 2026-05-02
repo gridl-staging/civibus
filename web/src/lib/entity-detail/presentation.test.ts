@@ -1,8 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { buildTrustSection } from "$lib/detail-trust/presentation";
 import {
+  buildPersonCandidacyRows,
+  buildPersonOfficeholdingTimelineRows,
+  buildPersonSummaryChartSeries,
+  buildPersonOutsideSpendingChartSeries,
   type ResolvedEntityDetailBundle,
   buildCanonicalDetailFacts,
+  buildEntityDetailShellPresentation,
   buildEntityDetailMetadata,
   buildEntityDetailMetadataFromDetail,
   buildEntityDetailPresentation,
@@ -25,8 +30,14 @@ describe("entity detail presentation", () => {
       middle_name: null,
       last_name: "Doe",
       suffix: null,
+      occupation: "Attorney",
+      education: "State University",
       date_of_birth: null,
       year_of_birth: 1980,
+      bio_text: null,
+      bio_source_url: null,
+      bio_license: null,
+      bio_pulled_at: null,
       identifiers: {},
       primary_address_id: null,
       er_cluster_id: null,
@@ -38,9 +49,198 @@ describe("entity detail presentation", () => {
       { label: "Canonical name", value: "Jane Doe" },
       { label: "First name", value: "Jane" },
       { label: "Last name", value: "Doe" },
+      { label: "Occupation", value: "Attorney" },
+      { label: "Education", value: "State University" },
       { label: "Year of birth", value: "1980" },
       { label: "ER confidence", value: "0.93" }
     ]);
+  });
+
+  it("builds deterministic officeholding timeline rows sorted by period then id", () => {
+    const rows = buildPersonOfficeholdingTimelineRows([
+      {
+        id: "33333333-3333-4333-8333-333333333333",
+        person_id: PERSON_ID,
+        person_name: "Jane Doe",
+        office_id: "office-3",
+        electoral_division_id: null,
+        holder_status: "elected",
+        valid_period_lower: "2024-01-01",
+        valid_period_upper: null,
+        date_precision: "day",
+        sources: []
+      },
+      {
+        id: "11111111-1111-4111-8111-111111111111",
+        person_id: PERSON_ID,
+        person_name: "Jane Doe",
+        office_id: "office-1",
+        electoral_division_id: null,
+        holder_status: "former",
+        valid_period_lower: "2022-01-01",
+        valid_period_upper: "2023-01-01",
+        date_precision: "day",
+        sources: []
+      },
+      {
+        id: "22222222-2222-4222-8222-222222222222",
+        person_id: PERSON_ID,
+        person_name: "Jane Doe",
+        office_id: "office-2",
+        electoral_division_id: null,
+        holder_status: "appointed",
+        valid_period_lower: "2022-01-01",
+        valid_period_upper: null,
+        date_precision: "day",
+        sources: []
+      }
+    ]);
+
+    expect(rows.map((row) => row.officeholdingId)).toEqual([
+      "33333333-3333-4333-8333-333333333333",
+      "11111111-1111-4111-8111-111111111111",
+      "22222222-2222-4222-8222-222222222222"
+    ]);
+    expect(rows[0]).toMatchObject({
+      officeholdingLabel: "Officeholding record",
+      officeLabel: "Office record"
+    });
+  });
+
+  it("builds deterministic candidacy rows sorted by filing date then id", () => {
+    const rows = buildPersonCandidacyRows([
+      {
+        id: "33333333-3333-4333-8333-333333333333",
+        person_id: PERSON_ID,
+        person_name: "Jane Doe",
+        contest_id: "contest-3",
+        party: null,
+        filing_date: null,
+        status: "qualified",
+        incumbent_challenge: null,
+        candidate_number: null,
+        sources: []
+      },
+      {
+        id: "11111111-1111-4111-8111-111111111111",
+        person_id: PERSON_ID,
+        person_name: "Jane Doe",
+        contest_id: "contest-1",
+        party: "DEM",
+        filing_date: "2026-01-05",
+        status: "qualified",
+        incumbent_challenge: "I",
+        candidate_number: "17",
+        sources: []
+      },
+      {
+        id: "22222222-2222-4222-8222-222222222222",
+        person_id: PERSON_ID,
+        person_name: "Jane Doe",
+        contest_id: "contest-2",
+        party: "DEM",
+        filing_date: "2026-01-05",
+        status: "filed",
+        incumbent_challenge: "C",
+        candidate_number: "18",
+        sources: []
+      }
+    ]);
+
+    expect(rows.map((row) => row.candidacyId)).toEqual([
+      "11111111-1111-4111-8111-111111111111",
+      "22222222-2222-4222-8222-222222222222",
+      "33333333-3333-4333-8333-333333333333"
+    ]);
+    expect(rows[0]).toMatchObject({
+      candidacyLabel: "Candidacy record",
+      contestLabel: "Contest record"
+    });
+  });
+
+  it("uses provided civic-history label lookups instead of raw ids/paths", () => {
+    const officeholdingRows = buildPersonOfficeholdingTimelineRows(
+      [
+        {
+          id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          person_id: PERSON_ID,
+          person_name: "Jane Doe",
+          office_id: "office-1",
+          electoral_division_id: null,
+          holder_status: "elected",
+          valid_period_lower: "2025-01-01",
+          valid_period_upper: null,
+          date_precision: "day",
+          sources: []
+        }
+      ],
+      {
+        officeholdingLabelsById: { "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa": "Jane Doe officeholding" },
+        officeLabelsById: { "office-1": "US House NC-01" }
+      }
+    );
+    expect(officeholdingRows[0].officeholdingLabel).toBe("Jane Doe officeholding");
+    expect(officeholdingRows[0].officeLabel).toBe("US House NC-01");
+
+    const candidacyRows = buildPersonCandidacyRows(
+      [
+        {
+          id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+          person_id: PERSON_ID,
+          person_name: "Jane Doe",
+          contest_id: "contest-1",
+          party: "DEM",
+          filing_date: "2026-01-10",
+          status: "qualified",
+          incumbent_challenge: "I",
+          candidate_number: "17",
+          sources: []
+        }
+      ],
+      {
+        candidacyLabelsById: { "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb": "Jane Doe candidacy" },
+        contestLabelsById: { "contest-1": "NC-01 General Election" }
+      }
+    );
+    expect(candidacyRows[0].candidacyLabel).toBe("Jane Doe candidacy");
+    expect(candidacyRows[0].contestLabel).toBe("NC-01 General Election");
+  });
+
+  it("builds person summary and outside-spending chart series from finance values", () => {
+    expect(
+      buildPersonSummaryChartSeries({
+        total_raised: "125.00",
+        total_spent: "75.00",
+        net: "50.00"
+      })
+    ).toEqual([
+      {
+        id: "finance",
+        label: "Finance",
+        points: [
+          { x: "Raised", y: 125 },
+          { x: "Spent", y: 75 },
+          { x: "Net", y: 50 }
+        ]
+      }
+    ]);
+
+    expect(
+      buildPersonOutsideSpendingChartSeries({
+        support_total: "200.00",
+        oppose_total: "80.00"
+      })
+    ).toEqual([
+      {
+        id: "outside-spending",
+        label: "Outside spending",
+        points: [
+          { x: "Support", y: 200 },
+          { x: "Oppose", y: 80 }
+        ]
+      }
+    ]);
+    expect(buildPersonOutsideSpendingChartSeries(null)).toEqual([]);
   });
 
   it("builds canonical organization facts from backend detail payload", () => {
@@ -104,6 +304,10 @@ describe("entity detail presentation", () => {
         suffix: null,
         date_of_birth: null,
         year_of_birth: null,
+        bio_text: null,
+        bio_source_url: null,
+        bio_license: null,
+        bio_pulled_at: null,
         identifiers: {},
         primary_address_id: null,
         er_cluster_id: null,
@@ -227,6 +431,79 @@ describe("entity detail presentation", () => {
     );
   });
 
+  it("builds shell key metrics for person detail from identifier rows while ER and graph data are loading", () => {
+    const shellViewModel = buildEntityDetailShellPresentation({
+      entityType: "person",
+      detail: {
+        id: PERSON_ID,
+        canonical_name: "Jane Doe",
+        name_variants: [],
+        first_name: "Jane",
+        middle_name: null,
+        last_name: "Doe",
+        suffix: null,
+        date_of_birth: null,
+        year_of_birth: null,
+        bio_text: null,
+        bio_source_url: null,
+        bio_license: null,
+        bio_pulled_at: null,
+        identifiers: {
+          alpha_id: "A-1",
+          beta_id: "B-1",
+          gamma_id: "C-1"
+        },
+        primary_address_id: null,
+        er_cluster_id: null,
+        er_confidence: null,
+        sources: []
+      }
+    });
+
+    expect(shellViewModel.keyMetricRows).toEqual([
+      { label: "Identifiers", value: "3" },
+      { label: "ER matches", value: "Loading..." },
+      { label: "Graph relationships", value: "Loading..." }
+    ]);
+  });
+
+  it("builds org shell key metrics with loading placeholders and excludes civic-record from section order", () => {
+    const shellViewModel = buildEntityDetailShellPresentation({
+      entityType: "org",
+      detail: {
+        id: ORG_ID,
+        canonical_name: "Civibus Action Org",
+        name_variants: [],
+        org_type: "pac",
+        identifiers: {
+          fec_committee_id: "C12345678",
+          state_committee_id: "NC-001"
+        },
+        registered_state: "NC",
+        formation_date: "2014-05-01",
+        dissolution_date: null,
+        primary_address_id: null,
+        er_cluster_id: null,
+        er_confidence: null,
+        sources: []
+      }
+    });
+
+    expect(shellViewModel.keyMetricRows).toEqual([
+      { label: "Identifiers", value: "2" },
+      { label: "ER matches", value: "Loading..." },
+      { label: "Graph relationships", value: "Loading..." }
+    ]);
+    expect(shellViewModel.sectionOrder).toEqual([
+      "summary",
+      "trust",
+      "metrics",
+      "records",
+      "technical-disclosure"
+    ]);
+    expect(shellViewModel.sectionOrder).not.toContain("civic-record");
+  });
+
   it("builds page view data with empty-state messages when panels have no rows", () => {
     const sources: ResolvedEntityDetailBundle["detail"]["sources"] = [];
     const viewModel = buildEntityDetailPresentation({
@@ -241,6 +518,10 @@ describe("entity detail presentation", () => {
         suffix: null,
         date_of_birth: null,
         year_of_birth: null,
+        bio_text: null,
+        bio_source_url: null,
+        bio_license: null,
+        bio_pulled_at: null,
         identifiers: {},
         primary_address_id: null,
         er_cluster_id: null,
@@ -263,6 +544,8 @@ describe("entity detail presentation", () => {
       "metrics",
       "records",
       "civic-record",
+      "person-civic-history",
+      "person-campaign-finance",
       "technical-disclosure"
     ]);
     expect(viewModel.keyMetricRows).toEqual([
@@ -360,6 +643,10 @@ describe("entity detail presentation", () => {
         suffix: null,
         date_of_birth: null,
         year_of_birth: null,
+        bio_text: null,
+        bio_source_url: null,
+        bio_license: null,
+        bio_pulled_at: null,
         identifiers: {},
         primary_address_id: null,
         er_cluster_id: null,
@@ -411,6 +698,8 @@ describe("entity detail presentation", () => {
       "metrics",
       "records",
       "civic-record",
+      "person-civic-history",
+      "person-campaign-finance",
       "technical-disclosure"
     ]);
     expect(contract.civicRecordSection).toEqual({
@@ -451,6 +740,10 @@ describe("entity detail presentation", () => {
         suffix: null,
         date_of_birth: null,
         year_of_birth: null,
+        bio_text: null,
+        bio_source_url: null,
+        bio_license: null,
+        bio_pulled_at: null,
         identifiers: {},
         primary_address_id: null,
         er_cluster_id: null,
@@ -532,6 +825,10 @@ describe("entity detail presentation", () => {
         suffix: null,
         date_of_birth: null,
         year_of_birth: null,
+        bio_text: null,
+        bio_source_url: null,
+        bio_license: null,
+        bio_pulled_at: null,
         identifiers: {},
         primary_address_id: null,
         er_cluster_id: null,
@@ -609,6 +906,10 @@ describe("entity detail presentation", () => {
           suffix: null,
           date_of_birth: null,
           year_of_birth: null,
+          bio_text: null,
+          bio_source_url: null,
+          bio_license: null,
+          bio_pulled_at: null,
           identifiers: {
             alpha_id: "A-1"
           },

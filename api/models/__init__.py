@@ -1,5 +1,8 @@
 from api.models.campaign_finance import (
     CandidateFundraisingSummary,
+    CountyCampaignFinanceSummary,
+    CountySummaryLinkedCandidate,
+    CountySummaryRecipientCommittee,
     CandidateListItem,
     CandidateListParams,
     CandidateListResponse,
@@ -14,6 +17,11 @@ from api.models.campaign_finance import (
     FilingPeriodSummary,
     IndependentExpenditureResponse,
     IndependentExpenditureSummary,
+    StateCandidateTopEntry,
+    StateCommitteeTopEntry,
+    StateDetailResponse,
+    StateIndependentExpenditureTopSpender,
+    StateSummaryItem,
     TopSpenderEntry,
     TransactionListParams,
     TransactionResponse,
@@ -28,7 +36,7 @@ from api.models.civics import (
     OfficeholderSummary,
     OfficeResponse,
 )
-from api.models.entities import OrgResponse, PersonResponse, PersonSlugResult
+from api.models.entities import OrgResponse, PersonPortraitResponse, PersonResponse, PersonSlugResult
 from api.models.entity_resolution import (
     ClusterMemberResponse,
     ERClusterDetailResponse,
@@ -48,6 +56,7 @@ from api.models.graph import (
     GraphNeighbor,
 )
 from api.models.investigate import DonorsWithPropertyParams, DonorsWithPropertyResult
+from api.models.metadata import CoverageRegistryResponse, DataSourceMetadataResponse
 from api.models.property import (
     ParcelDetailResponse,
     ParcelListParams,
@@ -69,6 +78,9 @@ __all__ = [
     "OfficeListItem",
     "OfficeResponse",
     "CandidateFundraisingSummary",
+    "CountyCampaignFinanceSummary",
+    "CountySummaryLinkedCandidate",
+    "CountySummaryRecipientCommittee",
     "CandidateListItem",
     "CandidateListParams",
     "CandidateListResponse",
@@ -90,8 +102,15 @@ __all__ = [
     "FilingPeriodSummary",
     "IndependentExpenditureResponse",
     "IndependentExpenditureSummary",
+    "StateCandidateTopEntry",
+    "StateCommitteeTopEntry",
+    "StateDetailResponse",
+    "StateIndependentExpenditureTopSpender",
+    "StateSummaryItem",
     "DonorsWithPropertyParams",
     "DonorsWithPropertyResult",
+    "CoverageRegistryResponse",
+    "DataSourceMetadataResponse",
     "GRAPH_ENTITY_TYPE_TO_AGE_LABEL",
     "GRAPH_ENTITY_TYPE_TO_RELATIONAL_ENTITY_TYPE",
     "GRAPH_ENTITY_TYPE_SPECS",
@@ -99,6 +118,7 @@ __all__ = [
     "GraphNeighbor",
     "MatchDecisionResponse",
     "OrgResponse",
+    "PersonPortraitResponse",
     "ParcelDetailResponse",
     "ParcelListParams",
     "ParcelSummaryResponse",

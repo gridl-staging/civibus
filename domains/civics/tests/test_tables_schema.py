@@ -21,6 +21,8 @@ SCHEMA_FILE = REPO_ROOT / "domains" / "civics" / "schema" / "tables.sql"
 CORE_ENTITIES_SQL = REPO_ROOT / "core" / "schema" / "entities.sql"
 CORE_JURISDICTION_SQL = REPO_ROOT / "core" / "schema" / "jurisdiction.sql"
 CORE_PROVENANCE_SQL = REPO_ROOT / "core" / "schema" / "provenance.sql"
+CORE_ENTITY_RESOLUTION_SQL = REPO_ROOT / "core" / "schema" / "entity_resolution.sql"
+CORE_ER_VIEWS_SQL = REPO_ROOT / "core" / "schema" / "er_views.sql"
 WA_CONFIG_PATH = REPO_ROOT / "domains" / "campaign_finance" / "jurisdictions" / "states" / "WA" / "config.yaml"
 FL_CONFIG_PATH = REPO_ROOT / "domains" / "campaign_finance" / "jurisdictions" / "states" / "FL" / "config.yaml"
 FEC_FIELD_MAPPER_PATH = REPO_ROOT / "domains" / "campaign_finance" / "ingest" / "field_mapper.py"
@@ -29,30 +31,67 @@ TEST_DATABASE = os.getenv("CIVIC_SCHEMA_TEST_DATABASE", "civibus")
 CIVIC_TABLES = [
     "candidacy",
     "contest",
+    "contest_result",
+    "election",
     "electoral_division",
+    "filing_deadline",
     "office",
+    "office_roster_link",
     "officeholding",
+    "reporting_period",
 ]
 
 EXPECTED_UNIQUE_INDEXES = [
     "uq_office_canonical_key",
+    "uq_office_roster_link_pair",
     "uq_electoral_division_canonical_key",
     "uq_contest_canonical_key",
+    "uq_contest_result_canonical",
+    "uq_election_natural_key",
+    "uq_filing_deadline_natural_key",
+    "uq_reporting_period_natural_key",
     "uq_candidacy_canonical_key",
     "uq_officeholding_canonical_key",
     "uq_electoral_division_ocd_id",
 ]
 
+EXPECTED_TRIGRAM_INDEXES = [
+    "idx_office_name_trgm",
+    "idx_contest_name_trgm",
+]
+EXPECTED_SPATIAL_INDEXES = [
+    "idx_electoral_division_geometry",
+]
+
+EXPECTED_GIST_INDEXES = [
+    "idx_electoral_division_geometry",
+]
+
 EXPECTED_FOREIGN_KEYS = [
     ("office", "jurisdiction_id", "jurisdiction", "id"),
     ("office", "source_record_id", "source_record", "id"),
+    ("office_roster_link", "office_id", "office", "id"),
+    ("office_roster_link", "data_source_id", "data_source", "id"),
     ("electoral_division", "parent_id", "electoral_division", "id"),
     ("electoral_division", "source_record_id", "source_record", "id"),
     ("contest", "office_id", "office", "id"),
+    ("contest", "election_id", "election", "id"),
     ("contest", "electoral_division_id", "electoral_division", "id"),
     ("contest", "source_record_id", "source_record", "id"),
+    ("contest_result", "contest_id", "contest", "id"),
+    ("contest_result", "source_record_id", "source_record", "id"),
+    ("election", "office_id", "office", "id"),
+    ("election", "electoral_division_id", "electoral_division", "id"),
+    ("election", "source_record_id", "source_record", "id"),
+    ("filing_deadline", "election_id", "election", "id"),
+    ("filing_deadline", "office_id", "office", "id"),
+    ("filing_deadline", "electoral_division_id", "electoral_division", "id"),
+    ("filing_deadline", "source_record_id", "source_record", "id"),
+    ("reporting_period", "election_id", "election", "id"),
+    ("reporting_period", "source_record_id", "source_record", "id"),
     ("candidacy", "person_id", "person", "id"),
     ("candidacy", "contest_id", "contest", "id"),
+    ("candidacy", "committee_id", "committee", "id"),
     ("candidacy", "source_record_id", "source_record", "id"),
     ("officeholding", "person_id", "person", "id"),
     ("officeholding", "office_id", "office", "id"),
@@ -131,6 +170,32 @@ def _index_exists(database: str, index_name: str) -> bool:
     )
 
 
+def _index_definition(database: str, index_name: str) -> str | None:
+    rows = _run_psql_command(
+        database,
+        f"SELECT indexdef FROM pg_indexes WHERE schemaname = 'civic' AND indexname = '{index_name}';",
+    )
+    return rows[0] if rows else None
+
+
+def _column_format_type(database: str, table_name: str, column_name: str) -> str | None:
+    rows = _run_psql_command(
+        database,
+        f"""
+        SELECT format_type(a.atttypid, a.atttypmod)
+        FROM pg_attribute AS a
+        JOIN pg_class AS c ON c.oid = a.attrelid
+        JOIN pg_namespace AS n ON n.oid = c.relnamespace
+        WHERE n.nspname = 'civic'
+          AND c.relname = '{table_name}'
+          AND a.attname = '{column_name}'
+          AND a.attnum > 0
+          AND NOT a.attisdropped;
+        """,
+    )
+    return rows[0] if rows else None
+
+
 def _table_exists(database: str, table_name: str) -> bool:
     return _query_returns_expected_first_row(
         database,
@@ -150,8 +215,29 @@ def _fk_exists(
     referenced_table: str,
     referenced_column: str,
 ) -> bool:
-    # Civic-domain self-referential and intra-domain FKs use 'civic' schema;
-    # cross-domain FKs (person, source_record, jurisdiction) use 'core' schema.
+    # Civic-domain self-referential and intra-domain FKs use 'civic' schema.
+    # Cross-domain FKs resolve to core.* by default, except committee -> cf.committee.
+    referenced_schema = (
+        "cf"
+        if referenced_table == "committee"
+        else (
+            "civic"
+            if referenced_table
+            in {
+                "office",
+                "office_roster_link",
+                "electoral_division",
+                "contest",
+                "contest_result",
+                "election",
+                "filing_deadline",
+                "reporting_period",
+                "candidacy",
+                "officeholding",
+            }
+            else "core"
+        )
+    )
     return _query_returns_truthy_first_row(
         database,
         f"""
@@ -168,10 +254,7 @@ def _fk_exists(
                   AND tc.table_name = '{table_name}'
                   AND tc.constraint_type = 'FOREIGN KEY'
                   AND kcu.column_name = '{column_name}'
-                  AND ccu.table_schema = CASE
-                        WHEN '{referenced_table}' IN ('office', 'electoral_division', 'contest', 'candidacy', 'officeholding') THEN 'civic'
-                        ELSE 'core'
-                      END
+                  AND ccu.table_schema = '{referenced_schema}'
                   AND ccu.table_name = '{referenced_table}'
                   AND ccu.column_name = '{referenced_column}'
             )::text;
@@ -232,6 +315,18 @@ def _prepared_schema() -> None:
     _run_psql_file(TEST_DATABASE, CORE_ENTITIES_SQL)
     _run_psql_file(TEST_DATABASE, CORE_JURISDICTION_SQL)
     _run_psql_file(TEST_DATABASE, CORE_PROVENANCE_SQL)
+    _run_psql_file(TEST_DATABASE, CORE_ENTITY_RESOLUTION_SQL)
+    _run_psql_file(TEST_DATABASE, CORE_ER_VIEWS_SQL)
+    _run_psql_command(
+        TEST_DATABASE,
+        """
+        CREATE SCHEMA IF NOT EXISTS cf;
+        CREATE TABLE IF NOT EXISTS cf.committee (
+            id UUID PRIMARY KEY
+        );
+        """,
+        expect_tuples=False,
+    )
     _run_psql_file(TEST_DATABASE, SCHEMA_FILE)
 
 
@@ -247,6 +342,32 @@ def test_civic_schema_tables_created() -> None:
 def test_civic_schema_unique_indexes() -> None:
     for index_name in EXPECTED_UNIQUE_INDEXES:
         assert _index_exists(TEST_DATABASE, index_name), f"Missing index: {index_name}"
+
+
+def test_civic_schema_office_roster_link_lookup_indexes() -> None:
+    assert _index_exists(TEST_DATABASE, "idx_office_roster_link_office_id")
+    assert _index_exists(TEST_DATABASE, "idx_office_roster_link_data_source_id")
+
+
+def test_civic_schema_search_trgm_indexes() -> None:
+    for index_name in EXPECTED_TRIGRAM_INDEXES:
+        indexdef = _index_definition(TEST_DATABASE, index_name)
+        assert indexdef is not None, f"Missing index: {index_name}"
+        indexdef_lower = indexdef.lower()
+        assert "using gin" in indexdef_lower, f"{index_name} must be a GIN index, got: {indexdef}"
+        assert "gin_trgm_ops" in indexdef_lower, f"{index_name} must use gin_trgm_ops, got: {indexdef}"
+
+
+def test_civic_schema_spatial_indexes() -> None:
+    for index_name in EXPECTED_GIST_INDEXES:
+        indexdef = _index_definition(TEST_DATABASE, index_name)
+        assert indexdef is not None, f"Missing index: {index_name}"
+        indexdef_lower = indexdef.lower()
+        assert "using gist" in indexdef_lower, f"{index_name} must be a GIST index, got: {indexdef}"
+        assert "(geometry)" in indexdef_lower, f"{index_name} must index geometry column, got: {indexdef}"
+        assert "where (geometry is not null)" in indexdef_lower, (
+            f"{index_name} must skip NULL geometry rows, got: {indexdef}"
+        )
 
 
 def test_civic_schema_foreign_keys() -> None:
@@ -267,6 +388,39 @@ def test_civic_schema_check_constraints() -> None:
     assert _has_check_constraint_on_column(TEST_DATABASE, "office", "office_level")
     assert _has_check_constraint_on_column(TEST_DATABASE, "electoral_division", "division_type")
     assert _has_check_constraint_on_column(TEST_DATABASE, "contest", "election_type")
+
+
+def test_electoral_division_geometry_column_contract() -> None:
+    rows = _run_psql_command(
+        TEST_DATABASE,
+        """
+        SELECT is_nullable, udt_name
+        FROM information_schema.columns
+        WHERE table_schema = 'civic'
+          AND table_name = 'electoral_division'
+          AND column_name = 'geometry';
+        """,
+    )
+    assert rows
+    is_nullable, udt_name = rows[0].split("|")
+    assert is_nullable == "YES"
+    assert udt_name == "geometry"
+
+    geometry_type_rows = _run_psql_command(
+        TEST_DATABASE,
+        """
+        SELECT postgis_typmod_type(a.atttypmod) || '|' || postgis_typmod_srid(a.atttypmod)
+        FROM pg_attribute a
+        JOIN pg_class c ON c.oid = a.attrelid
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = 'civic'
+          AND c.relname = 'electoral_division'
+          AND a.attname = 'geometry'
+          AND a.attnum > 0
+          AND NOT a.attisdropped;
+        """,
+    )
+    assert geometry_type_rows == ["MultiPolygon|4326"]
 
 
 def test_officeholding_valid_period_is_daterange() -> None:
@@ -291,6 +445,36 @@ def test_officeholding_date_precision_uses_core_enum() -> None:
     assert rows == ["core.date_precision"]
 
 
+def test_candidacy_mvp_column_contract() -> None:
+    rows = _run_psql_command(
+        TEST_DATABASE,
+        """
+        SELECT column_name || '|' || data_type || '|' || is_nullable || '|' || COALESCE(column_default, '')
+        FROM information_schema.columns
+        WHERE table_schema = 'civic'
+          AND table_name = 'candidacy'
+          AND column_name IN ('name_on_ballot', 'is_unexpired_term', 'raw_fields', 'committee_id')
+        ORDER BY column_name;
+        """,
+    )
+    assert rows == [
+        "committee_id|uuid|YES|",
+        "is_unexpired_term|boolean|NO|false",
+        "name_on_ballot|text|YES|",
+        "raw_fields|jsonb|NO|'{}'::jsonb",
+    ]
+
+
+def test_candidacy_mvp_lookup_indexes_are_partial() -> None:
+    committee_index_definition = _index_definition(TEST_DATABASE, "idx_candidacy_committee_id")
+    assert committee_index_definition is not None
+    assert "where (committee_id is not null)" in committee_index_definition.lower()
+
+    ballot_name_index_definition = _index_definition(TEST_DATABASE, "idx_candidacy_name_on_ballot")
+    assert ballot_name_index_definition is not None
+    assert "where (name_on_ballot is not null)" in ballot_name_index_definition.lower()
+
+
 def test_contest_candidate_list_incomplete_contract() -> None:
     rows = _run_psql_command(
         TEST_DATABASE,
@@ -308,6 +492,64 @@ def test_contest_candidate_list_incomplete_contract() -> None:
     is_nullable, column_default = rows[0].split("|")
     assert is_nullable == "NO"
     assert column_default in {"false", "FALSE"}
+
+
+def test_contest_result_column_contract() -> None:
+    rows = _run_psql_command(
+        TEST_DATABASE,
+        """
+        SELECT column_name || '|' || data_type || '|' || is_nullable || '|' || COALESCE(column_default, '')
+        FROM information_schema.columns
+        WHERE table_schema = 'civic'
+          AND table_name = 'contest_result'
+          AND column_name IN (
+            'contest_id',
+            'candidate_name',
+            'is_certified',
+            'is_winner',
+            'party',
+            'source_record_id',
+            'vote_pct',
+            'votes'
+          )
+        ORDER BY column_name;
+        """,
+    )
+    assert rows == [
+        "candidate_name|text|NO|",
+        "contest_id|uuid|NO|",
+        "is_certified|boolean|NO|false",
+        "is_winner|boolean|NO|false",
+        "party|text|YES|",
+        "source_record_id|uuid|NO|",
+        "vote_pct|numeric|YES|",
+        "votes|integer|NO|",
+    ]
+
+
+def test_contest_election_id_bridge_is_nullable_foreign_key() -> None:
+    rows = _run_psql_command(
+        TEST_DATABASE,
+        """
+        SELECT is_nullable
+        FROM information_schema.columns
+        WHERE table_schema = 'civic'
+          AND table_name = 'contest'
+          AND column_name = 'election_id';
+        """,
+    )
+    assert rows == ["YES"]
+    assert _fk_exists(TEST_DATABASE, "contest", "election_id", "election", "id")
+
+
+def test_electoral_division_geometry_column_format_type() -> None:
+    assert _column_format_type(TEST_DATABASE, "electoral_division", "geometry") == "geometry(MultiPolygon,4326)"
+
+
+def test_election_natural_key_distinguishes_special_elections() -> None:
+    indexdef = _index_definition(TEST_DATABASE, "uq_election_natural_key")
+    assert indexdef is not None
+    assert "is_special" in indexdef
 
 
 def test_office_status_columns_are_not_stored_in_table() -> None:

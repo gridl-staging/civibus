@@ -8,11 +8,12 @@ from dataclasses import dataclass
 from uuid import UUID
 
 import psycopg
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Path, Query
 
 from api.deps import get_db
 from api.models import (
     CandidateFundraisingSummary,
+    CountyCampaignFinanceSummary,
     CandidateListItem,
     CandidateListParams,
     CandidateListResponse,
@@ -26,6 +27,8 @@ from api.models import (
     FilingResponse,
     IndependentExpenditureResponse,
     IndependentExpenditureSummary,
+    StateDetailResponse,
+    StateSummaryItem,
     TransactionListParams,
     TransactionResponse,
 )
@@ -33,9 +36,11 @@ from api.queries import (
     CAMPAIGN_FINANCE_CANDIDATE_DETAIL_SQL,
     CAMPAIGN_FINANCE_COMMITTEE_DETAIL_SQL,
     CAMPAIGN_FINANCE_FILING_DETAIL_SQL,
+    UnknownCountySlugError,
     build_zero_candidate_fundraising_summary,
     build_zero_committee_fundraising_summary,
     fetch_campaign_finance_provenance,
+    fetch_cf_summary_by_county,
     fetch_candidate_ie_summary,
     fetch_candidate_ie_transactions,
     fetch_candidate_list,
@@ -46,9 +51,12 @@ from api.queries import (
     fetch_committee_list,
     fetch_committees_by_slug,
     fetch_one_row,
+    fetch_state_campaign_finance_detail,
+    fetch_state_campaign_finance_summaries,
     fetch_transaction_list,
 )
 from api.routes.validation import build_query_params_dependency
+from core.types.python.models import validate_optional_state_code
 
 router = APIRouter()
 _build_transaction_list_params = build_query_params_dependency(TransactionListParams)
@@ -218,6 +226,22 @@ def get_committee_summary(
     return CommitteeFundraisingSummary.model_validate(summary)
 
 
+@router.get("/counties/{state}/{county_slug}/campaign-finance-summary", response_model=CountyCampaignFinanceSummary)
+def get_county_campaign_finance_summary(
+    state: str,
+    county_slug: str,
+    conn: psycopg.Connection = Depends(get_db),
+) -> CountyCampaignFinanceSummary:
+    # Stage 1 selected committee-city proxy path: this reports money flowing out of
+    # committees in mapped county cities, not candidate residence or donor residence.
+    try:
+        summary = fetch_cf_summary_by_county(conn, state=state, county_slug=county_slug)
+    except UnknownCountySlugError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    summary.setdefault("sources", [])
+    return CountyCampaignFinanceSummary.model_validate(summary)
+
+
 @router.get("/committees/{committee_id}/filings/summary", response_model=CommitteeFilingBreakdown)
 def get_committee_filings_summary(
     committee_id: UUID, conn: psycopg.Connection = Depends(get_db)
@@ -273,3 +297,26 @@ def get_candidate_independent_expenditures_summary(
     _fetch_row_or_404(conn, CAMPAIGN_FINANCE_CANDIDATE_DETAIL_SQL, candidate_id, "Candidate not found")
 
     return IndependentExpenditureSummary.model_validate(fetch_candidate_ie_summary(conn, candidate_id))
+
+
+@router.get("/campaign-finance/states/summary", response_model=list[StateSummaryItem])
+def get_campaign_finance_state_summary(
+    conn: psycopg.Connection = Depends(get_db),
+) -> list[StateSummaryItem]:
+    summary_rows = fetch_state_campaign_finance_summaries(conn)
+    return [StateSummaryItem.model_validate(summary_row) for summary_row in summary_rows]
+
+
+@router.get("/campaign-finance/states/{state_code}", response_model=StateDetailResponse)
+def get_campaign_finance_state_detail(
+    state_code: str = Path(pattern=r"^[A-Z]{2}$"),
+    conn: psycopg.Connection = Depends(get_db),
+) -> StateDetailResponse:
+    validated_state_code = validate_optional_state_code(state_code, field_name="state_code")
+    if validated_state_code is None:
+        raise HTTPException(status_code=404, detail="State not found")
+
+    detail = fetch_state_campaign_finance_detail(conn, validated_state_code)
+    if detail is None:
+        raise HTTPException(status_code=404, detail="State not found")
+    return StateDetailResponse.model_validate(detail)

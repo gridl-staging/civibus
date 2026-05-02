@@ -241,6 +241,7 @@ def _build_transaction_seed(
     is_memo: bool = False,
     transaction_identifier: str | None = None,
     memo_code: str | None = None,
+    recipient_candidate_id: UUID | None = None,
     support_oppose: str | None = None,
     dissemination_date: date | None = None,
     aggregate_amount: Decimal | None = None,
@@ -256,6 +257,7 @@ def _build_transaction_seed(
         is_memo=is_memo,
         transaction_identifier=transaction_identifier,
         memo_code=_resolve_memo_code(is_memo=is_memo, memo_code=memo_code),
+        recipient_candidate_id=recipient_candidate_id,
         support_oppose=support_oppose,
         dissemination_date=dissemination_date,
         aggregate_amount=aggregate_amount,
@@ -411,7 +413,7 @@ def insert_transaction_row(conn: psycopg.Connection, transaction: TransactionRow
             transaction.contributor_address_id,
             transaction.recipient_candidate_id,
             transaction.recipient_committee_id,
-            transaction.memo_code,
+            _resolve_memo_code(is_memo=transaction.is_memo, memo_code=transaction.memo_code),
             transaction.memo_text,
             transaction.is_memo,
             transaction.amendment_indicator,
@@ -603,6 +605,24 @@ class FilingBreakdownTestContext:
     committee_name: str
 
 
+@dataclass(frozen=True)
+class CountySummaryFixtureContext:
+    """Seed ids for county campaign-finance summary tests."""
+
+    committee_id: UUID
+    recipient_committee_id: UUID
+    candidate_id: UUID
+    filing_id: UUID
+
+
+@dataclass(frozen=True)
+class CountySummaryRecipientContext:
+    """Recipient committee + linked candidate for county summary fixtures."""
+
+    recipient_committee_id: UUID
+    candidate_id: UUID
+
+
 def seed_committee_for_filing_breakdown(
     db_conn: psycopg.Connection,
     *,
@@ -631,6 +651,7 @@ def seed_committee_for_summary(
     committee_id: UUID,
     committee_name: str = "Summary Test Committee",
     fec_committee_id: str = "C99990001",
+    state: str | None = None,
     jurisdiction: str = "federal/fec",
     pull_date: datetime = datetime(2026, 3, 20, 12, 0, tzinfo=timezone.utc),
 ) -> SummaryTestContext:
@@ -640,7 +661,7 @@ def seed_committee_for_summary(
     """
     insert_committee_row(
         db_conn,
-        CommitteeRowSeed(id=committee_id, fec_committee_id=fec_committee_id, name=committee_name),
+        CommitteeRowSeed(id=committee_id, fec_committee_id=fec_committee_id, name=committee_name, state=state),
     )
 
     data_source = insert_data_source_for_test(db_conn, jurisdiction=jurisdiction, name_suffix=f"summary-{committee_id}")
@@ -674,6 +695,120 @@ def seed_committee_for_summary(
     )
 
 
+def seed_county_summary_fixture(
+    db_conn: psycopg.Connection,
+    *,
+    committee_id: UUID,
+    committee_name: str,
+    recipient_committee_id: UUID,
+    recipient_committee_name: str,
+    candidate_id: UUID,
+    candidate_name: str,
+) -> CountySummaryFixtureContext:
+    """Seed committee/candidate linkage for county-summary route tests."""
+    insert_committee_row(
+        db_conn,
+        CommitteeRowSeed(
+            id=committee_id,
+            fec_committee_id="C99991001",
+            name=committee_name,
+            state="NC",
+            city="Raleigh",
+        ),
+    )
+    insert_committee_row(
+        db_conn,
+        CommitteeRowSeed(
+            id=recipient_committee_id,
+            fec_committee_id="C99991002",
+            name=recipient_committee_name,
+            state="NC",
+            city="Raleigh",
+        ),
+    )
+    insert_candidate_row(
+        db_conn,
+        CandidateRowSeed(
+            id=candidate_id,
+            fec_candidate_id="H0NC09999",
+            name=candidate_name,
+            office="H",
+            state="NC",
+        ),
+    )
+    insert_candidate_committee_link_row(
+        db_conn,
+        CandidateCommitteeLinkSeed(
+            id=UUID("30000000-0000-0000-0000-000000000001"),
+            candidate_id=candidate_id,
+            committee_id=recipient_committee_id,
+            valid_period="[2024-01-01,2030-01-01)",
+        ),
+    )
+    filing_id = _summary_filing_id(committee_id)
+    insert_filing_row(
+        db_conn,
+        FilingRowSeed(
+            id=filing_id,
+            filing_fec_id=f"county-summary-filing-{committee_id}",
+            committee_id=committee_id,
+        ),
+    )
+    return CountySummaryFixtureContext(
+        committee_id=committee_id,
+        recipient_committee_id=recipient_committee_id,
+        candidate_id=candidate_id,
+        filing_id=filing_id,
+    )
+
+
+def seed_county_summary_recipient(
+    db_conn: psycopg.Connection,
+    *,
+    recipient_committee_id: UUID,
+    recipient_committee_name: str,
+    recipient_committee_fec_id: str,
+    candidate_id: UUID,
+    candidate_name: str,
+    candidate_fec_id: str,
+    link_id: UUID,
+) -> CountySummaryRecipientContext:
+    """Seed one recipient committee and active candidate link for county summary tests."""
+    insert_committee_row(
+        db_conn,
+        CommitteeRowSeed(
+            id=recipient_committee_id,
+            fec_committee_id=recipient_committee_fec_id,
+            name=recipient_committee_name,
+            state="NC",
+            city="Raleigh",
+        ),
+    )
+    insert_candidate_row(
+        db_conn,
+        CandidateRowSeed(
+            id=candidate_id,
+            fec_candidate_id=candidate_fec_id,
+            name=candidate_name,
+            office="H",
+            state="NC",
+        ),
+    )
+    insert_candidate_committee_link_row(
+        db_conn,
+        CandidateCommitteeLinkSeed(
+            id=link_id,
+            candidate_id=candidate_id,
+            committee_id=recipient_committee_id,
+            valid_period="[2024-01-01,2030-01-01)",
+        ),
+    )
+    return CountySummaryRecipientContext(
+        recipient_committee_id=recipient_committee_id,
+        candidate_id=candidate_id,
+    )
+
+
 def insert_summary_transaction(
     db_conn: psycopg.Connection,
     *,
@@ -685,6 +820,10 @@ def insert_summary_transaction(
     is_memo: bool = False,
     memo_code: str | None = None,
     amendment_indicator: str = "N",
+    recipient_candidate_id: UUID | None = None,
+    support_oppose: str | None = None,
+    dissemination_date: date | None = None,
+    aggregate_amount: Decimal | None = None,
 ) -> None:
     """Insert a transaction for summary testing with sensible defaults."""
     insert_transaction_row(
@@ -699,6 +838,10 @@ def insert_summary_transaction(
             source_record_id=source_record_id,
             is_memo=is_memo,
             memo_code=memo_code,
+            recipient_candidate_id=recipient_candidate_id,
+            support_oppose=support_oppose,
+            dissemination_date=dissemination_date,
+            aggregate_amount=aggregate_amount,
         ),
     )
 

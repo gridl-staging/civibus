@@ -1,11 +1,15 @@
+
 import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import APIRouter, Depends, FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 import psycopg
 from psycopg_pool import ConnectionPool
+
+from api import health_content as _health_content_module
 
 from api.middleware import (
     API_KEY_HEADER_NAME,
@@ -25,6 +29,8 @@ from api.routes.entity_resolution import router as entity_resolution_router
 from api.routes.entities import router as entities_router
 from api.routes.graph import router as graph_router
 from api.routes.investigate import router as investigate_router
+from api.routes.metadata import router as metadata_router
+from api.routes.portrait_admin import router as portrait_admin_router
 from api.routes.property import router as property_router
 from api.routes.search import router as search_router
 from core.db import build_connection_parameters
@@ -36,6 +42,7 @@ def _v1_routers() -> tuple[APIRouter, ...]:
         entities_router,
         campaign_finance_router,
         civics_router,
+        metadata_router,
         property_router,
         investigate_router,
         graph_router,
@@ -44,7 +51,7 @@ def _v1_routers() -> tuple[APIRouter, ...]:
 
 
 def _administrative_v1_routers() -> tuple[APIRouter, ...]:
-    return (entity_resolution_router,)
+    return (entity_resolution_router, portrait_admin_router)
 
 
 def _include_versioned_routers(
@@ -171,6 +178,54 @@ def create_app() -> FastAPI:
     @app.get("/health")
     def health() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.get("/api/health/content")
+    def content_health(request: Request) -> Response:
+        """Content-aware probe for external uptime monitors.
+
+        Returns 200 when all DB content floors are met, 503 (with
+        per-check details) otherwise. See ``api/health_content.py`` for
+        the rationale (Apr 30 wrong-volume-bootstrap incident). The
+        endpoint deliberately lives outside ``/v1`` so monitors can hit
+        it without rotating API keys; it exposes only row-count metadata
+        which is non-sensitive.
+        """
+        pool: ConnectionPool = request.app.state.db_pool
+        try:
+            with pool.connection() as connection:
+                # Always re-read floors at request time so an env var
+                # rollout takes effect without a restart.
+                failures = _health_content_module.evaluate_content_health(connection)
+        except Exception as exc:  # noqa: BLE001 — probe must catch broadly.
+            # DB unreachable IS the failure mode this endpoint exists to
+            # surface (Apr 30 had the API up but DB severed). Map to 503.
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "healthy": False,
+                    "error": "db_unreachable",
+                    "detail": str(exc),
+                },
+            )
+        if failures:
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "healthy": False,
+                    "failures": [
+                        {"check": f.check, "actual": f.actual, "floor": f.floor}
+                        for f in failures
+                    ],
+                },
+            )
+        return JSONResponse(status_code=200, content={"healthy": True})
+
+    @app.get("/provenance/people-enrichment")
+    def people_enrichment_provenance_contract() -> dict[str, str]:
+        return {
+            "source": "people-enrichment",
+            "contract": "core.people.enrichment.orchestrator",
+        }
 
     _include_versioned_routers(app, routers=_v1_routers(), dependency=require_authorized_request)
     _include_versioned_routers(app, routers=_administrative_v1_routers(), dependency=require_administrative_request)

@@ -13,21 +13,47 @@ router = APIRouter()
 
 _PERSON_SELECT_SQL = """
     SELECT
-        id,
-        canonical_name,
-        name_variants,
-        first_name,
-        middle_name,
-        last_name,
-        suffix,
-        date_of_birth,
-        year_of_birth,
-        identifiers,
-        primary_address_id,
-        er_cluster_id,
-        er_confidence
-    FROM core.person
-    WHERE id = %s
+        p.id,
+        p.canonical_name,
+        p.name_variants,
+        p.first_name,
+        p.middle_name,
+        p.last_name,
+        p.suffix,
+        p.occupation,
+        p.education,
+        p.bio_text,
+        p.bio_source_url,
+        p.bio_license,
+        p.bio_pulled_at,
+        p.date_of_birth,
+        p.year_of_birth,
+        p.identifiers,
+        p.primary_address_id,
+        p.er_cluster_id,
+        p.er_confidence,
+        pp.status AS portrait_status,
+        pp.rights_status AS portrait_rights_status,
+        pp.source_image_url AS portrait_source_image_url,
+        pp.mime_type AS portrait_mime_type,
+        pp.width_px AS portrait_width_px,
+        pp.height_px AS portrait_height_px
+    FROM core.person p
+    LEFT JOIN LATERAL (
+        SELECT
+            status,
+            rights_status,
+            source_image_url,
+            mime_type,
+            width_px,
+            height_px
+        FROM core.person_portrait
+        WHERE person_id = p.id
+          AND status = 'active'
+        ORDER BY updated_at DESC, id ASC
+        LIMIT 1
+    ) pp ON TRUE
+    WHERE p.id = %s
 """
 
 _ORGANIZATION_SELECT_SQL = """
@@ -47,6 +73,15 @@ _ORGANIZATION_SELECT_SQL = """
     WHERE id = %s
 """
 
+_PERSON_PORTRAIT_COLUMN_TO_RESPONSE_KEY = {
+    "portrait_status": "status",
+    "portrait_rights_status": "rights_status",
+    "portrait_source_image_url": "source_image_url",
+    "portrait_mime_type": "mime_type",
+    "portrait_width_px": "width_px",
+    "portrait_height_px": "height_px",
+}
+
 
 def _build_entity_response(
     conn: psycopg.Connection,
@@ -60,6 +95,13 @@ def _build_entity_response(
     entity_row = fetch_one_row(conn, query=query, row_id=entity_id)
     if entity_row is None:
         raise HTTPException(status_code=404, detail=not_found_detail)
+    if entity_type == "person":
+        portrait_status = entity_row.get("portrait_status")
+        portrait_payload = {
+            response_key: entity_row.pop(column_name, None)
+            for column_name, response_key in _PERSON_PORTRAIT_COLUMN_TO_RESPONSE_KEY.items()
+        }
+        entity_row["portrait"] = portrait_payload if portrait_status is not None else None
     entity_row["sources"] = fetch_entity_provenance(conn, entity_type, entity_id)
     return response_model.model_validate(entity_row)
 

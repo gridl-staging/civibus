@@ -106,8 +106,8 @@ CREATE TABLE cf.filing_8872 (
     form_type                   TEXT NOT NULL,
     form_id_number              TEXT NOT NULL,
     ein                         TEXT NOT NULL,
-    period_begin_date           DATE NOT NULL,
-    period_end_date             DATE NOT NULL,
+    period_begin_date           DATE,
+    period_end_date             DATE,
 
     -- Organization info (denormalized from filing record)
     organization_name           TEXT,
@@ -175,7 +175,7 @@ CREATE TABLE cf.filing_8872 (
     CONSTRAINT uq_filing_8872_form_id UNIQUE (form_id_number),
 
     CONSTRAINT ck_filing_8872_coverage_order
-        CHECK (period_begin_date <= period_end_date),
+        CHECK (period_begin_date IS NULL OR period_end_date IS NULL OR period_begin_date <= period_end_date),
 
     CONSTRAINT ck_filing_8872_ein_format
         CHECK (ein ~ '^\d{2}-?\d{7}$')
@@ -195,7 +195,7 @@ CREATE TABLE cf.contribution_527 (
     ein                         TEXT NOT NULL,
     contributor_name            TEXT NOT NULL,
     amount                      NUMERIC(14, 2) NOT NULL,
-    contribution_date           DATE NOT NULL,
+    contribution_date           DATE,
     aggregate_ytd               NUMERIC(14, 2) NOT NULL,
 
     -- Optional org name (denormalized)
@@ -240,8 +240,8 @@ CREATE TABLE cf.expenditure_527 (
     ein                         TEXT NOT NULL,
     recipient_name              TEXT NOT NULL,
     amount                      NUMERIC(14, 2) NOT NULL,
-    expenditure_date            DATE NOT NULL,
-    purpose                     TEXT NOT NULL,
+    expenditure_date            DATE,
+    purpose                     TEXT,
 
     -- Optional org name (denormalized)
     org_name                    TEXT,

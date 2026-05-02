@@ -1,8 +1,3 @@
-"""Entity extraction helpers for AL rows.
-
-Extracts Person, Organization, and Address entities from normalized
-AL FCPA JSON rows, following the same patterns as NE extract.py.
-"""
 
 from __future__ import annotations
 
@@ -45,42 +40,27 @@ class ALExpenditureExtraction(TypedDict):
 
 @lru_cache(maxsize=1)
 def _contribution_fields() -> dict[str, str]:
-    """Map semantic roles to config-driven JSON field names for contributions."""
     return {
         "committee_id": _load_column_for_semantic_path("contributions", "committee.id"),
         "committee_name": _load_column_for_semantic_path("contributions", "committee.name"),
-        "name": _load_column_for_semantic_path("contributions", "donor.org_name"),
-        "first_name": _load_column_for_semantic_path("contributions", "donor.first_name"),
-        "middle_name": _load_column_for_semantic_path("contributions", "donor.middle_name"),
-        "last_name": _load_column_for_semantic_path("contributions", "donor.last_name"),
-        "street1": _load_column_for_semantic_path("contributions", "donor.address.street1"),
-        "street2": _load_column_for_semantic_path("contributions", "donor.address.street2"),
-        "city": _load_column_for_semantic_path("contributions", "donor.address.city"),
-        "state": _load_column_for_semantic_path("contributions", "donor.address.state"),
+        "name": _load_column_for_semantic_path("contributions", "donor.name"),
+        "city_state": _load_column_for_semantic_path("contributions", "donor.address.city_state"),
         "zip": _load_column_for_semantic_path("contributions", "donor.address.zip"),
     }
 
 
 @lru_cache(maxsize=1)
 def _expenditure_fields() -> dict[str, str]:
-    """Map semantic roles to config-driven JSON field names for expenditures."""
     return {
         "committee_id": _load_column_for_semantic_path("expenditures", "committee.id"),
         "committee_name": _load_column_for_semantic_path("expenditures", "committee.name"),
-        "name": _load_column_for_semantic_path("expenditures", "payee.org_name"),
-        "first_name": _load_column_for_semantic_path("expenditures", "payee.first_name"),
-        "middle_name": _load_column_for_semantic_path("expenditures", "payee.middle_name"),
-        "last_name": _load_column_for_semantic_path("expenditures", "payee.last_name"),
-        "street1": _load_column_for_semantic_path("expenditures", "payee.address.street1"),
-        "street2": _load_column_for_semantic_path("expenditures", "payee.address.street2"),
-        "city": _load_column_for_semantic_path("expenditures", "payee.address.city"),
-        "state": _load_column_for_semantic_path("expenditures", "payee.address.state"),
+        "name": _load_column_for_semantic_path("expenditures", "payee.name"),
+        "city_state": _load_column_for_semantic_path("expenditures", "payee.address.city_state"),
         "zip": _load_column_for_semantic_path("expenditures", "payee.address.zip"),
     }
 
 
 def _normalized_text(value: str | None) -> str | None:
-    """Strip and return None for empty strings."""
     if not value:
         return None
     stripped = value.strip()
@@ -98,7 +78,6 @@ def _normalize_state_code(state: str | None) -> str | None:
 
 
 def _split_zip(raw_zip: str | None) -> tuple[str | None, str | None]:
-    """Split a ZIP code into zip5 and optional zip4 components."""
     text = _normalized_text(raw_zip)
     if not text:
         return None, None
@@ -116,53 +95,54 @@ def _split_zip(raw_zip: str | None) -> tuple[str | None, str | None]:
     return None, None
 
 
-def _build_address(
-    street1: str | None,
-    street2: str | None,
-    city: str | None,
-    state: str | None,
+def _parse_city_state(city_state: str | None) -> tuple[str | None, str | None]:
+    """Parse a combined 'CITY, ST' value into (city, state_code)."""
+    text = _normalized_text(city_state)
+    if text is None:
+        return None, None
+
+    if "," in text:
+        parts = [p.strip() for p in text.rsplit(",", maxsplit=1)]
+        city = _normalized_text(parts[0])
+        state = _normalize_state_code(parts[1]) if len(parts) > 1 else None
+        return city, state
+
+    return text, None
+
+
+def _build_address_from_city_state(
+    city_state: str | None,
     raw_zip: str | None,
 ) -> Address | None:
-    """Build an Address entity from raw fields, returning None if all are empty."""
-    normalized_street1 = _normalized_text(street1)
-    normalized_street2 = _normalized_text(street2)
-    normalized_city = _normalized_text(city)
-    normalized_state = _normalize_state_code(state)
+    city, state = _parse_city_state(city_state)
     normalized_zip = _normalized_text(raw_zip)
 
-    if not any((normalized_street1, normalized_street2, normalized_city, normalized_state, normalized_zip)):
+    if not any((city, state, normalized_zip)):
         return None
 
     zip5, zip4 = _split_zip(normalized_zip)
-    raw_address = ", ".join(
-        part
-        for part in (normalized_street1, normalized_street2, normalized_city, normalized_state, normalized_zip)
-        if part
-    )
+    raw_parts = [p for p in (city, state, normalized_zip) if p]
     return Address(
-        raw_address=raw_address,
-        city=normalized_city,
-        state=normalized_state,
+        raw_address=", ".join(raw_parts),
+        city=city,
+        state=state,
         zip5=zip5,
         zip4=zip4,
     )
 
 
 def _looks_like_organization_name(name: str) -> bool:
-    """Heuristic: detect organization-style names."""
     upper_name = f" {name.upper()} "
     if any(keyword in upper_name for keyword in _ORGANIZATION_KEYWORDS):
         return True
     if "&" in name:
         return True
-    # Single-word names without comma are likely organizations.
     if "," not in name and len(name.split()) == 1:
         return True
     return False
 
 
 def _extract_committee(row: dict[str, str | None], fields: dict[str, str]) -> Organization:
-    """Extract the recipient committee as an Organization entity."""
     committee_name = _normalized_text(row.get(fields["committee_name"])) or "Unknown AL Committee"
     committee_id = _normalized_text(row.get(fields["committee_id"]))
     identifiers = {"al_org_id": committee_id} if committee_id is not None else {}
@@ -173,109 +153,58 @@ def _extract_committee(row: dict[str, str | None], fields: dict[str, str]) -> Or
     )
 
 
-def _extract_person_or_org(
-    row: dict[str, str | None],
-    *,
-    name_column: str,
-    first_name_column: str,
-    middle_name_column: str,
-    last_name_column: str,
+def _extract_person_or_org_from_name(
+    name_value: str | None,
 ) -> tuple[Person | None, Organization | None]:
-    """Determine if a row's counterparty is a Person or Organization.
+    """Classify a single name field as person or organization."""
+    text = _normalized_text(name_value)
+    if text is None:
+        return None, None
 
-    AL data has separate firstName/lastName fields, so if firstName is
-    present we treat it as a person. Otherwise we fall back to the
-    sourceName/payeeName field and apply organization heuristics.
-    """
-    name_value = _normalized_text(row.get(name_column))
-    first_name = _normalized_text(row.get(first_name_column))
-    last_name = _normalized_text(row.get(last_name_column))
-    middle_name = _normalized_text(row.get(middle_name_column))
+    if _looks_like_organization_name(text):
+        return None, Organization(canonical_name=text)
 
-    # If first_name is present, treat as person.
-    if first_name is not None:
-        canonical_parts = [part for part in (first_name, middle_name, last_name) if part]
+    # Multi-word names are likely persons; try "FIRST MIDDLE LAST" parsing.
+    words = text.split()
+    if len(words) >= 2:
         return (
             Person(
-                canonical_name=" ".join(canonical_parts),
-                first_name=first_name,
-                middle_name=middle_name,
-                last_name=last_name,
+                canonical_name=text,
+                first_name=words[0],
+                last_name=words[-1],
+                middle_name=" ".join(words[1:-1]) if len(words) > 2 else None,
             ),
             None,
         )
 
-    # No first name — check if the name field indicates a person or org.
-    if name_value is None:
-        return None, None
-
-    if _looks_like_organization_name(name_value):
-        return None, Organization(canonical_name=name_value)
-
-    # Name with comma might be "Last, First" format.
-    if "," in name_value:
-        parts = [part.strip() for part in name_value.split(",", maxsplit=1)]
-        last_part, first_part = parts[0], parts[1] if len(parts) > 1 else ""
-        first_token = _normalized_text(first_part.split(" ")[0] if first_part else None)
-        if first_token and last_part:
-            return (
-                Person(
-                    canonical_name=name_value,
-                    first_name=first_token,
-                    last_name=last_part,
-                ),
-                None,
-            )
-
-    # Default: treat as organization.
-    return None, Organization(canonical_name=name_value)
+    return None, Organization(canonical_name=text)
 
 
 def extract_al_contribution(row: dict[str, str | None]) -> ALContributionExtraction:
-    """Extract entities from an AL contribution row."""
     fields = _contribution_fields()
-    donor_person, donor_org = _extract_person_or_org(
-        row,
-        name_column=fields["name"],
-        first_name_column=fields["first_name"],
-        middle_name_column=fields["middle_name"],
-        last_name_column=fields["last_name"],
-    )
+    donor_person, donor_org = _extract_person_or_org_from_name(row.get(fields["name"]))
 
     return {
         "donor_person": donor_person,
         "donor_org": donor_org,
         "committee": _extract_committee(row, fields),
-        "address": _build_address(
-            row.get(fields["street1"]),
-            row.get(fields["street2"]),
-            row.get(fields["city"]),
-            row.get(fields["state"]),
+        "address": _build_address_from_city_state(
+            row.get(fields["city_state"]),
             row.get(fields["zip"]),
         ),
     }
 
 
 def extract_al_expenditure(row: dict[str, str | None]) -> ALExpenditureExtraction:
-    """Extract entities from an AL expenditure row."""
     fields = _expenditure_fields()
-    payee_person, payee_org = _extract_person_or_org(
-        row,
-        name_column=fields["name"],
-        first_name_column=fields["first_name"],
-        middle_name_column=fields["middle_name"],
-        last_name_column=fields["last_name"],
-    )
+    payee_person, payee_org = _extract_person_or_org_from_name(row.get(fields["name"]))
 
     return {
         "payee_person": payee_person,
         "payee_org": payee_org,
         "committee": _extract_committee(row, fields),
-        "address": _build_address(
-            row.get(fields["street1"]),
-            row.get(fields["street2"]),
-            row.get(fields["city"]),
-            row.get(fields["state"]),
+        "address": _build_address_from_city_state(
+            row.get(fields["city_state"]),
             row.get(fields["zip"]),
         ),
     }

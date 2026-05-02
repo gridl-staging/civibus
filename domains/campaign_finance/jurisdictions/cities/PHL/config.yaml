@@ -1,0 +1,136 @@
+# Philadelphia campaign finance jurisdiction config
+# Source: Philadelphia Board of Ethics campaign finance disclosure data via Carto SQL API
+# Contract reference: docs/research/phl_campaign_finance_contract_2026_04_25.md
+
+jurisdiction:
+  name: "Philadelphia"
+  code: "PHL"
+  type: "municipality"
+  fips: "42101"  # Philadelphia County
+  parent: "PA"
+
+data_sources:
+  - name: "PHL Campaign Finance Contributions"
+    url: "https://www.phila.gov/departments/board-of-ethics/campaign-finance/"
+    bulk_download_url: "https://phl.carto.com/api/v2/sql"
+    api_base_url: "https://phl.carto.com/api/v2/sql"
+    format: "api"
+    auth_required: false
+    update_frequency: "daily"
+    coverage:
+      start_year: 2019
+      covers_sub_jurisdictions: false
+      office_levels:
+        - mayor
+        - city_council
+        - city_commissioners
+        - sheriff
+        - register_of_wills
+        - district_attorney
+        - controller
+        - judicial
+      transaction_types:
+        - contributions
+    field_mappings:
+      # Stage 1 contract observed live 2026-04-25; full 83-column schema in
+      # tests/fixtures/campfin_contributions_sample_2026_04_25.json. Only the
+      # fields the loader maps are listed here per the SF/NYC convention.
+      transaction_id: "transaction.id"
+      transaction_date: "transaction.date"
+      transaction_amount: "transaction.amount"
+      transaction_description: "transaction.description"
+      transaction_type: "transaction.type"
+      filer_id: "committee.id"
+      filer_name: "committee.name"
+      filer_type: "committee.type"
+      donor_name: "donor.name"
+      donor_name_std: "donor.name_normalized"
+      donor_type: "donor.type"
+      donor_city: "donor.address.city"
+      donor_state: "donor.address.state"
+      donor_zip: "donor.address.zip"
+      donor_zip4: "donor.address.zip_plus_four"
+      donor_occupation: "donor.occupation"
+      donor_employer_name: "donor.employer"
+      report_year: "filing.report_year"
+      report_id: "filing.report_id"
+      report_filed_by: "filing.filed_by"
+    scraper: null
+    last_successful_pull: null
+    last_verified_working: "2026-04-25"
+    known_issues:
+      - "Carto rate-limit is 81 req/sec — respect with bounded politeness for parallel queries"
+      - "Pagination behavior on million-row result sets unverified; confirm OFFSET/LIMIT semantics before unbounded pulls"
+      - "IE classification: PHL's transaction_type vocabulary is mostly 'Monetary Contributions' / 'In-Kind' etc.; per-row IE detection mapping is TBD"
+
+  - name: "PHL Campaign Finance Expenditures"
+    url: "https://www.phila.gov/departments/board-of-ethics/campaign-finance/"
+    bulk_download_url: "https://phl.carto.com/api/v2/sql"
+    api_base_url: "https://phl.carto.com/api/v2/sql"
+    format: "api"
+    auth_required: false
+    update_frequency: "daily"
+    coverage:
+      start_year: 2019
+      covers_sub_jurisdictions: false
+      office_levels:
+        - mayor
+        - city_council
+        - city_commissioners
+        - sheriff
+        - register_of_wills
+        - district_attorney
+        - controller
+        - judicial
+      transaction_types:
+        - expenditures
+    field_mappings:
+      transaction_id: "transaction.id"
+      transaction_date: "transaction.date"
+      transaction_amount: "transaction.amount"
+      transaction_description: "transaction.description"
+      transaction_type: "transaction.type"
+      filer_id: "committee.id"
+      filer_name: "committee.name"
+      payee_name: "payee.name"
+      payee_name_std: "payee.name_normalized"
+      payee_type: "payee.type"
+      payee_city: "payee.address.city"
+      payee_state: "payee.address.state"
+      payee_zip: "payee.address.zip"
+      payee_zip4: "payee.address.zip_plus_four"
+      report_year: "filing.report_year"
+      report_id: "filing.report_id"
+    scraper: null
+    last_successful_pull: null
+    last_verified_working: "2026-04-25"
+    known_issues:
+      - "PHL expenditure rows do not have donor_* columns (payee_* instead); parser must select side based on table"
+
+laws:
+  source_url: "https://www.phila.gov/departments/board-of-ethics/campaign-finance/"
+  last_verified: "2026-04-25"
+  contribution_limits:
+    individual_to_candidate: null  # PHL local limits not yet captured
+    pac_to_candidate: null
+    corporate_direct: null
+    union_direct: null
+    party_to_candidate: null
+  itemization_threshold: 50  # placeholder pending PHL Board-of-Ethics research; see config.notes
+  reporting:
+    periods:
+      - semi-annual
+      - pre-election
+      - post-election
+    electronic_filing_required: "required"
+  public_financing: false  # PHL has no formal city-level public-financing program at this time
+  notes:
+    - "Philadelphia administers campaign-finance oversight via the Board of Ethics"
+    - "Limits research deferred to a future research pass; see docs/research/phl_campaign_finance_contract_2026_04_25.md"
+
+status:
+  discovery: "complete"
+  scraper: "in_progress"
+  normalization: "pending"
+  entity_resolution: "pending"
+  last_full_update: null

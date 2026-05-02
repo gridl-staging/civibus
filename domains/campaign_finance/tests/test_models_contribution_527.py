@@ -35,11 +35,11 @@ class TestContribution527RequiredFields:
         with pytest.raises(ValidationError):
             Contribution527.model_validate(payload)
 
-    def test_requires_contribution_date(self):
+    def test_contribution_date_defaults_none_when_omitted(self):
         payload = build_contribution_527_payload()
         del payload["contribution_date"]
-        with pytest.raises(ValidationError):
-            Contribution527.model_validate(payload)
+        c = Contribution527.model_validate(payload)
+        assert c.contribution_date is None
 
     def test_requires_contributor_name(self):
         payload = build_contribution_527_payload()

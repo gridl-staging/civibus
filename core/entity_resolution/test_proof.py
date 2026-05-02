@@ -15,10 +15,14 @@ from core.entity_resolution.persist import (
     persist_match_decisions,
 )
 from core.entity_resolution.proof import (
+    build_l8_regression_payload,
+    build_persisted_state_cutover_proof,
     build_cross_jurisdiction_proof,
+    write_l8_regression_artifact,
     write_cross_jurisdiction_proof_artifact,
 )
 from core.entity_resolution.test_persist import (
+    _create_org,
     _create_person,
     _insert_data_source,
     _insert_entity_source,
@@ -49,6 +53,40 @@ def _insert_completed_person_run(
         run_id,
         completed_at=completed_at,
         duration_seconds=60.0,
+        counts={
+            "input_record_count": 8,
+            "pairs_compared": pairs_compared,
+            "matches_found": matches_found,
+            "auto_merged": auto_merged,
+            "probable_matches": 0,
+            "possible_matches": 0,
+        },
+    )
+    return run_id
+
+
+def _insert_completed_run(
+    db_conn: psycopg.Connection,
+    *,
+    entity_type: str,
+    started_at: datetime,
+    completed_at: datetime,
+    pairs_compared: int,
+    matches_found: int,
+    auto_merged: int,
+) -> UUID:
+    run_id = log_splink_run_start(
+        db_conn,
+        entity_type=entity_type,
+        splink_version="4.0.0",
+        model_config={"stage": "proof-test"},
+        started_at=started_at,
+    )
+    log_splink_run_complete(
+        db_conn,
+        run_id,
+        completed_at=completed_at,
+        duration_seconds=(completed_at - started_at).total_seconds(),
         counts={
             "input_record_count": 8,
             "pairs_compared": pairs_compared,
@@ -281,3 +319,192 @@ def test_write_cross_jurisdiction_proof_artifact_does_not_write_file_for_blocker
 
     assert payload["status"] == "blocked_no_qualifying_cluster"
     assert output_path.exists() is False
+
+
+def test_build_l8_regression_payload_sorts_pair_results_and_flagged_case_ids() -> None:
+    payload = build_l8_regression_payload(
+        scope="global",
+        produced_at=datetime(2026, 4, 24, 21, 45, tzinfo=UTC),
+        repo_sha="abc1234",
+        gate_command="uv run python -m core.keel_gate_l8",
+        pair_results=[
+            {
+                "case_id": "z_case",
+                "expected_relation": "must_not_match",
+                "entity_type": "person",
+                "entity_id_a": "a",
+                "entity_id_b": "b",
+                "decision": "match",
+                "confidence": 0.98,
+                "decision_method": "probabilistic",
+                "decided_by": "splink_v1",
+                "passed": False,
+            },
+            {
+                "case_id": "a_case",
+                "expected_relation": "must_match",
+                "entity_type": "person",
+                "entity_id_a": "c",
+                "entity_id_b": "d",
+                "decision": "match",
+                "confidence": 0.99,
+                "decision_method": "probabilistic",
+                "decided_by": "splink_v1",
+                "passed": True,
+            },
+        ],
+        false_positive_summary={
+            "cases_evaluated": 3,
+            "flagged_false_positives": 2,
+            "flagged_case_ids": ["fp_z", "fp_a"],
+            "false_positive_rate": 2 / 3,
+        },
+    )
+
+    assert [row["case_id"] for row in payload["pair_results"]] == ["a_case", "z_case"]
+    assert payload["must_match_violations"] == 0
+    assert payload["must_not_match_violations"] == 1
+    assert payload["status"] == "fail"
+    assert payload["false_positive_summary"]["flagged_case_ids"] == ["fp_a", "fp_z"]
+
+
+def test_write_l8_regression_artifact_writes_prepared_payload(tmp_path: Path) -> None:
+    payload = {
+        "layer": "L8",
+        "scope": "global",
+        "schema_version": 1,
+        "produced_at_utc": "2026-04-24T21:45:00Z",
+        "repo_sha": "abc1234",
+        "gate_command": "uv run python -m core.keel_gate_l8",
+        "status": "pass",
+        "regression_pairs_checked": 0,
+        "must_match_violations": 0,
+        "must_not_match_violations": 0,
+        "pair_results": [],
+        "false_positive_summary": {
+            "cases_evaluated": 0,
+            "flagged_false_positives": 0,
+            "flagged_case_ids": [],
+            "false_positive_rate": 0.0,
+        },
+    }
+    artifact_path = tmp_path / "evidence" / "L8" / "regression_run_2026-04-24.json"
+
+    written = write_l8_regression_artifact(payload, artifact_path=artifact_path)
+
+    assert written == payload
+    assert json.loads(artifact_path.read_text(encoding="utf-8")) == payload
+
+
+def test_build_persisted_state_cutover_proof_uses_latest_completed_runs_and_cluster_member_counts(
+    db_conn: psycopg.Connection,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    old_person_started_at = datetime(2026, 4, 30, 9, 0, 0, tzinfo=UTC)
+    old_person_completed_at = datetime(2026, 4, 30, 9, 30, 0, tzinfo=UTC)
+    new_person_started_at = datetime(2026, 4, 30, 11, 0, 0, tzinfo=UTC)
+    new_person_completed_at = datetime(2026, 4, 30, 11, 45, 0, tzinfo=UTC)
+    old_org_started_at = datetime(2026, 4, 30, 8, 0, 0, tzinfo=UTC)
+    old_org_completed_at = datetime(2026, 4, 30, 8, 20, 0, tzinfo=UTC)
+    new_org_started_at = datetime(2026, 4, 30, 10, 0, 0, tzinfo=UTC)
+    new_org_completed_at = datetime(2026, 4, 30, 10, 40, 0, tzinfo=UTC)
+
+    _insert_completed_run(
+        db_conn,
+        entity_type="person",
+        started_at=old_person_started_at,
+        completed_at=old_person_completed_at,
+        pairs_compared=12,
+        matches_found=9,
+        auto_merged=4,
+    )
+    latest_person_run_id = _insert_completed_run(
+        db_conn,
+        entity_type="person",
+        started_at=new_person_started_at,
+        completed_at=new_person_completed_at,
+        pairs_compared=20,
+        matches_found=11,
+        auto_merged=5,
+    )
+    _insert_completed_run(
+        db_conn,
+        entity_type="organization",
+        started_at=old_org_started_at,
+        completed_at=old_org_completed_at,
+        pairs_compared=5,
+        matches_found=3,
+        auto_merged=2,
+    )
+    latest_org_run_id = _insert_completed_run(
+        db_conn,
+        entity_type="organization",
+        started_at=new_org_started_at,
+        completed_at=new_org_completed_at,
+        pairs_compared=7,
+        matches_found=4,
+        auto_merged=3,
+    )
+
+    person_cluster = _seed_person_cluster(
+        db_conn,
+        member_names=["Cutover Person One", "Cutover Person Two"],
+        jurisdiction_order=["state/NC", "federal/fec"],
+        data_source_name_prefix="cutover-proof-person",
+    )
+    org_a = uuid4()
+    org_b = uuid4()
+    _create_org(db_conn, organization_id=org_a, name="Cutover Org A")
+    _create_org(db_conn, organization_id=org_b, name="Cutover Org B")
+    org_cluster_component = {
+        "canonical_entity_id": org_a,
+        "member_ids": {org_a, org_b},
+        "min_confidence": 0.97,
+        "min_decision": "match",
+        "links": [],
+    }
+    persist_match_decisions(
+        db_conn,
+        [
+            {
+                "entity_id_a": org_a,
+                "entity_id_b": org_b,
+                "decision": "match",
+                "confidence": 0.97,
+                "decision_method": "deterministic",
+                "decided_by": "deterministic_fec_id_match",
+            }
+        ],
+        "organization",
+    )
+    persist_auto_merge_clusters(db_conn, [org_cluster_component], "organization")
+
+    expected_cohort_payload = {
+        "stage2_baseline_path": str(tmp_path / "stage2_baseline.json"),
+        "cohorts": {"ncga_house": {"pct_resolved": 0.82, "gate_target_pct": 0.8}},
+        "cohort_gate": {"status": "pass", "failed_cohort_slugs": [], "misses": [], "cohorts": {}},
+    }
+    monkeypatch.setattr(
+        "core.entity_resolution.proof.evaluate_persisted_state_cohort_gate",
+        lambda conn, *, stage2_baseline_path: expected_cohort_payload if conn is db_conn else {},
+    )
+
+    payload = build_persisted_state_cutover_proof(
+        db_conn,
+        stage2_baseline_path=tmp_path / "stage2_baseline.json",
+    )
+
+    assert payload["status"] == "pass"
+    assert payload["cohort"] == expected_cohort_payload
+    assert payload["latest_completed_runs"]["person"]["run_id"] == str(latest_person_run_id)
+    assert payload["latest_completed_runs"]["person"]["pairs_compared"] == 20
+    assert payload["latest_completed_runs"]["organization"]["run_id"] == str(latest_org_run_id)
+    assert payload["latest_completed_runs"]["organization"]["pairs_compared"] == 7
+
+    person_counts = payload["entity_state"]["person"]
+    organization_counts = payload["entity_state"]["organization"]
+    assert person_counts["active_cluster_count"] == 1
+    assert person_counts["active_member_count"] == len(person_cluster["member_ids"])
+    assert organization_counts["active_cluster_count"] == 1
+    assert organization_counts["active_member_count"] == 2

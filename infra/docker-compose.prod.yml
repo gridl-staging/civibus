@@ -1,3 +1,20 @@
+# Production compose — SELF-CONTAINED. No overlays, no overrides.
+#
+# This is the only compose file the production VM should run.
+# `docker compose up` from this directory either produces a correct prod
+# stack or refuses to start. There is no ambiguity, no flag-required
+# wrapper script.
+#
+# Apr 30 incident: a `docker compose up` from infra/ loaded the dev
+# compose (named volume, port 5433) and force-recreated infra-db-1
+# against a fresh volume, severing the prod data link for 16 hours.
+# Removing the overlay file `docker-compose.volume-override.yml` and
+# baking the bind mount into the prod file directly is the structural
+# fix.
+#
+# Bind mount path is required (`?Set CIVIBUS_DB_DATA_PATH`) so a
+# fat-fingered env file fails the stack at start time instead of
+# silently bootstrapping a fresh named volume.
 services:
   db:
     build:
@@ -25,17 +42,25 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-civibus}
       PGDATA: /var/lib/postgresql/data
     volumes:
-      - civibus_db_data:/var/lib/postgresql/data
+      # Bind mount to the dedicated data volume. Required env var: any
+      # missing/typoed value fails compose immediately rather than
+      # silently provisioning a fresh empty volume.
+      - ${CIVIBUS_DB_DATA_PATH:?Set CIVIBUS_DB_DATA_PATH (e.g. /mnt/HC_Volume_105390322/pgdata)}:/var/lib/postgresql/data
+      # Schema init scripts: single source of truth for table-creation
+      # ordering. Postgres only runs these against an EMPTY data dir
+      # (first-boot only), so reordering is safe in practice but should
+      # mirror the dev compose's list.
       - ../core/schema/entities.sql:/docker-entrypoint-initdb.d/01-entities.sql
       - ../core/schema/jurisdiction.sql:/docker-entrypoint-initdb.d/02-jurisdiction.sql
       - ../core/schema/provenance.sql:/docker-entrypoint-initdb.d/03-provenance.sql
       - ../core/schema/entity_resolution.sql:/docker-entrypoint-initdb.d/04-entity_resolution.sql
       - ../core/schema/er_views.sql:/docker-entrypoint-initdb.d/05-er_views.sql
       - ../domains/campaign_finance/schema/tables.sql:/docker-entrypoint-initdb.d/06-campaign-finance.sql
-      - ../domains/campaign_finance/schema/dark_money_tables.sql:/docker-entrypoint-initdb.d/07-dark-money.sql
-      - ../domains/property/schema/tables.sql:/docker-entrypoint-initdb.d/08-property.sql
-      - ../domains/civics/schema/tables.sql:/docker-entrypoint-initdb.d/09-civics.sql
-      - ../infra/db/09-age-graph-bootstrap.sql:/docker-entrypoint-initdb.d/10-age-graph-bootstrap.sql
+      - ../domains/campaign_finance/schema/nc_orchestrator_tables.sql:/docker-entrypoint-initdb.d/07-nc-orchestrator.sql
+      - ../domains/campaign_finance/schema/dark_money_tables.sql:/docker-entrypoint-initdb.d/08-dark-money.sql
+      - ../domains/property/schema/tables.sql:/docker-entrypoint-initdb.d/09-property.sql
+      - ../domains/civics/schema/tables.sql:/docker-entrypoint-initdb.d/10-civics.sql
+      - ../infra/db/09-age-graph-bootstrap.sql:/docker-entrypoint-initdb.d/11-age-graph-bootstrap.sql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
       interval: 5s
@@ -61,12 +86,25 @@ services:
       CIVIBUS_ADMIN_API_KEYS: ${CIVIBUS_ADMIN_API_KEYS:?Set CIVIBUS_ADMIN_API_KEYS}
       CIVIBUS_RATE_LIMIT_REQUESTS: ${CIVIBUS_RATE_LIMIT_REQUESTS:-100}
       CIVIBUS_RATE_LIMIT_WINDOW_SECONDS: ${CIVIBUS_RATE_LIMIT_WINDOW_SECONDS:-60}
+      # Startup canary floors. Defaults in api/health_content.py are
+      # prod-sized; override here only when promoting a smaller-than-prod
+      # snapshot (and never to zero).
+      CIVIBUS_HEALTH_CONTENT_FLOOR_CF_TRANSACTION_TOTAL: ${CIVIBUS_HEALTH_CONTENT_FLOOR_CF_TRANSACTION_TOTAL:-1000000}
+      CIVIBUS_HEALTH_CONTENT_FLOOR_CORE_PERSON_TOTAL: ${CIVIBUS_HEALTH_CONTENT_FLOOR_CORE_PERSON_TOTAL:-1000}
+      CIVIBUS_HEALTH_CONTENT_FLOOR_CIVIC_OFFICEHOLDING_TOTAL: ${CIVIBUS_HEALTH_CONTENT_FLOOR_CIVIC_OFFICEHOLDING_TOTAL:-100}
+      CIVIBUS_HEALTH_CONTENT_FLOOR_CF_TRANSACTION_WITH_RESOLVED_PERSON: ${CIVIBUS_HEALTH_CONTENT_FLOOR_CF_TRANSACTION_WITH_RESOLVED_PERSON:-1000}
     healthcheck:
-      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\""]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
+      # Use the content-aware probe so the API container is only marked
+      # healthy when the DB actually contains data above floors. This
+      # prevents Caddy from routing traffic to an empty DB after a
+      # wrong-volume bootstrap.
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request, sys; r = urllib.request.urlopen('http://localhost:8000/api/health/content', timeout=5); sys.exit(0 if r.status == 200 else 1)\""]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      # Long start_period because the canary itself does a DB query at
+      # boot; a slow DB or migration replay must not flap the gate.
+      start_period: 60s
     depends_on:
       db:
         condition: service_healthy
@@ -84,16 +122,30 @@ services:
       ORIGIN: ${ORIGIN:?Set ORIGIN}
       PUBLIC_ORIGIN: ${ORIGIN:?Set ORIGIN}
       NODE_ENV: production
-    ports:
-      - "${WEB_PORT:-3000}:3000"
     depends_on:
       api:
         condition: service_healthy
     networks:
       - civibus
 
-volumes:
-  civibus_db_data:
+  caddy:
+    image: caddy:2
+    environment:
+      PUBLIC_HOSTNAME: ${PUBLIC_HOSTNAME:?Set PUBLIC_HOSTNAME}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ../infra/Caddyfile:/etc/caddy/Caddyfile:ro
+    depends_on:
+      - web
+    networks:
+      - civibus
+
+# No named volumes section: the DB is bind-mounted to the path supplied
+# by CIVIBUS_DB_DATA_PATH. A future loose `docker compose up` against a
+# missing env var fails fast instead of bootstrapping a fresh anonymous
+# volume.
 
 networks:
   civibus:

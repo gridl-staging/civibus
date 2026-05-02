@@ -125,6 +125,9 @@ _TX_ENTITY_KEYS = {
     "loans": ("lender_person", "lender_org"),
 }
 _TX_PARSER_FN = {"contributions": parse_contributions, "expenditures": parse_expenditures, "loans": parse_loans}
+# TX independent expenditures are identified by form type code DCE
+# (Direct Campaign Expenditure) in live TEC data.
+_TX_IE_FORM_TYPE_CODES = frozenset({"DCE"})
 
 
 def _select_first_uuid(conn: psycopg.Connection, query: str, params: tuple[object, ...]) -> UUID | None:
@@ -222,6 +225,18 @@ def _tx_transaction_type(row: Mapping[str, str | None], *, data_type: str) -> st
             return value
 
     return data_type.rstrip("s")
+
+
+def _tx_is_independent_expenditure(row: Mapping[str, str | None], *, data_type: str) -> bool:
+    """Return True when an expenditure row matches TX IE form type codes."""
+    if data_type != "expenditures":
+        return False
+
+    form_type_column = _load_column_for_semantic_path(data_type, "tx.form_type_code")
+    form_type_code = normalize_optional_text(row.get(form_type_column))
+    if form_type_code is None:
+        return False
+    return form_type_code.upper() in _TX_IE_FORM_TYPE_CODES
 
 
 def _parse_required_tx_amount(raw_value: str | None, field_name: str) -> Decimal:
@@ -675,12 +690,18 @@ def _upsert_tx_transaction_with_filing(
         transaction_identifier=transaction_identifier,
     )
 
+    transaction_type = (
+        "Independent Expenditure"
+        if _tx_is_independent_expenditure(row, data_type=data_type)
+        else _tx_transaction_type(row, data_type=data_type)
+    )
+
     upsert_transaction(
         conn,
         Transaction(
             filing_id=filing_id,
             committee_id=committee_id,
-            transaction_type=_tx_transaction_type(row, data_type=data_type),
+            transaction_type=transaction_type,
             transaction_identifier=transaction_identifier,
             transaction_date=_parse_tx_date(row.get(transaction_date_column)),
             amount=_parse_required_tx_amount(row.get(amount_column), amount_column),

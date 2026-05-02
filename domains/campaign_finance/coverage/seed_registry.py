@@ -25,6 +25,7 @@ _PRESERVED_REGISTRY_FIELDS = (
     "operational_reason",
     "next_action",
     "evidence_date",
+    "ie_coverage_available",
 )
 
 

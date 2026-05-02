@@ -14,6 +14,7 @@ from .checks import (
     check_amount_sanity,
     check_date_range,
     check_duplicate_records,
+    check_graph_edge_presence,
     check_null_rate,
 )
 from .freshness import run_freshness_checks
@@ -38,7 +39,10 @@ def build_argument_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--check",
-        help="Run only a specific check by name (e.g. record_count, null_rate, duplicates, amount, date_range, completeness)",
+        help=(
+            "Run only a specific check by name "
+            "(e.g. record_count, null_rate, duplicates, amount, date_range, completeness, graph_edges)"
+        ),
     )
     parser.add_argument(
         "--artifact-path",
@@ -60,6 +64,7 @@ _VALID_CHECKS = frozenset(
         "duplicates",
         "amount",
         "date_range",
+        "graph_edges",
         "freshness",
     }
 )
@@ -102,6 +107,9 @@ def _run_checks_for_data_source(
 
     if check_filter is None or check_filter == "date_range":
         results.append(check_date_range(conn, ds_id, data_source_name))
+
+    if check_filter is None or check_filter == "graph_edges":
+        results.append(check_graph_edge_presence(conn, ds_id, data_source_name))
 
     return results
 
@@ -236,10 +244,17 @@ def main(argv: list[str] | None = None) -> int:
         if connection is not None:
             connection.close()
 
-    if args.artifact_path:
-        _write_report_artifact(report, args.artifact_path)
+    report_json = report.to_json()
 
-    print(report.to_json())
+    if args.artifact_path:
+        try:
+            _write_report_artifact(report, args.artifact_path)
+        except OSError as error:
+            print(report_json)
+            print(f"Failed to write report artifact: {error}", file=sys.stderr)
+            return 1
+
+    print(report_json)
 
     if report.status in ("fail", "error"):
         return 1

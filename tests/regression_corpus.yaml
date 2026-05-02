@@ -1,0 +1,58 @@
+schema_version: 1
+cases:
+  - case_id: candidate_detail_route
+    layer: L15
+    case_type: route_render
+    route_path: /candidate/44444444-4444-4444-8444-444444444444
+    owner_paths:
+      - web/src/routes/candidate/[id]/+page.server.ts
+      - web/src/lib/campaign-finance-detail/page-load.ts
+    owner_symbols:
+      - loadCampaignFinanceDetailPage
+      - fetchCandidateDetailBundle
+    metric_name: candidate_display_name
+    expected_value: Pat Candidate
+    fixture_export: CANDIDATE_CANONICAL_DATA
+    fixture_value_pattern: 'detail:\s*\{.*?\bname:\s*"([^"]+)"'
+  - case_id: committee_detail_route
+    layer: L15
+    case_type: route_render
+    route_path: /committee/33333333-3333-4333-8333-333333333333
+    owner_paths:
+      - web/src/routes/committee/[id]/+page.server.ts
+      - web/src/lib/campaign-finance-detail/page-load.ts
+    owner_symbols:
+      - loadCampaignFinanceDetailPage
+      - fetchCommitteeDetailBundle
+    metric_name: committee_display_name
+    expected_value: Citizens for Civibus
+    fixture_export: COMMITTEE_CANONICAL_DATA
+    fixture_value_pattern: 'detail:\s*\{.*?\bname:\s*"([^"]+)"'
+  - case_id: candidate_summary_total_raised
+    layer: L15
+    case_type: api_bundle
+    route_path: /v1/candidates/44444444-4444-4444-8444-444444444444/summary
+    owner_paths:
+      - web/src/lib/server/api/campaign-finance-detail.ts
+      - web/src/lib/campaign-finance-detail/contract.ts
+    owner_symbols:
+      - fetchCandidateSummary
+      - buildCandidateSummaryPath
+    metric_name: total_raised
+    expected_value: "250.00"
+    fixture_export: CANDIDATE_CANONICAL_DATA
+    fixture_value_pattern: 'summary:\s*asDeferredValue<[^>]+>\(\{.*?\btotal_raised:\s*"([^"]+)"'
+  - case_id: committee_summary_total_raised
+    layer: L15
+    case_type: api_bundle
+    route_path: /v1/committees/33333333-3333-4333-8333-333333333333/summary
+    owner_paths:
+      - web/src/lib/server/api/campaign-finance-detail.ts
+      - web/src/lib/campaign-finance-detail/contract.ts
+    owner_symbols:
+      - fetchCommitteeSummary
+      - buildCommitteeSummaryPath
+    metric_name: total_raised
+    expected_value: "125.00"
+    fixture_export: COMMITTEE_CANONICAL_DATA
+    fixture_value_pattern: 'summary:\s*asDeferredValue<[^>]+>\(\{.*?\btotal_raised:\s*"([^"]+)"'

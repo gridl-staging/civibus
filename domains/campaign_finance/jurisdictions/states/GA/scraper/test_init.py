@@ -34,6 +34,9 @@ def _clear_loader_caches() -> None:
     load_by_transaction_type = getattr(ga_scraper, "_load_columns_for_transaction_type", None)
     if load_by_transaction_type is not None:
         load_by_transaction_type.cache_clear()
+    load_date_selectors_by_transaction_type = getattr(ga_scraper, "_load_date_selectors_for_transaction_type", None)
+    if load_date_selectors_by_transaction_type is not None:
+        load_date_selectors_by_transaction_type.cache_clear()
 
 
 def _data_source_by_transaction_type(config: dict[str, Any], transaction_type: str) -> dict[str, Any]:
@@ -86,12 +89,18 @@ def test_load_columns_for_transaction_type_uses_config_metadata_not_source_names
     config = yaml.safe_load(read(CONFIG_PATH))
     contribution_source = _data_source_by_transaction_type(config, "contributions")
     expenditure_source = _data_source_by_transaction_type(config, "expenditures")
+    independent_expenditure_source = _data_source_by_transaction_type(config, "independent_expenditures")
     contribution_source["name"] = "Temporary Contribution Export Name"
     contribution_source["field_mappings"]["TemporaryContributionTestColumn"] = "transaction.test_contribution"
     expenditure_source["name"] = "Temporary Expenditure Export Name"
     expenditure_source["field_mappings"]["TemporaryExpenditureTestColumn"] = "transaction.test_expenditure"
+    independent_expenditure_source["name"] = "Temporary Independent Expenditure Export Name"
+    independent_expenditure_source["field_mappings"]["TemporaryIndependentExpenditureTestColumn"] = (
+        "transaction.test_independent_expenditure"
+    )
     expected_contribution_columns = tuple(contribution_source["field_mappings"].keys())
     expected_expenditure_columns = tuple(expenditure_source["field_mappings"].keys())
+    expected_independent_expenditure_columns = tuple(independent_expenditure_source["field_mappings"].keys())
     rewritten_config = yaml.safe_dump(
         config,
         sort_keys=False,
@@ -108,14 +117,15 @@ def test_load_columns_for_transaction_type_uses_config_metadata_not_source_names
     try:
         assert load_by_transaction_type("contributions") == expected_contribution_columns
         assert load_by_transaction_type("expenditures") == expected_expenditure_columns
+        assert load_by_transaction_type("independent_expenditures") == expected_independent_expenditure_columns
     finally:
         _clear_loader_caches()
 
 
 def test_load_columns_for_transaction_type_rejects_ambiguous_config(tmp_path: Path, monkeypatch) -> None:
     config = yaml.safe_load(read(CONFIG_PATH))
-    expenditure_source = _data_source_by_transaction_type(config, "expenditures")
-    expenditure_source["coverage"]["transaction_types"].append("contributions")
+    independent_expenditure_source = _data_source_by_transaction_type(config, "independent_expenditures")
+    independent_expenditure_source["coverage"]["transaction_types"].append("expenditures")
     temporary_config_path = tmp_path / "config.yaml"
     temporary_config_path.write_text(
         yaml.safe_dump(config, sort_keys=False, allow_unicode=True),
@@ -130,8 +140,8 @@ def test_load_columns_for_transaction_type_rejects_ambiguous_config(tmp_path: Pa
     try:
         with pytest.raises(
             RuntimeError,
-            match=r"multiple data_sources with transaction type 'contributions'",
+            match=r"multiple data_sources with transaction type 'expenditures'",
         ):
-            load_by_transaction_type("contributions")
+            load_by_transaction_type("expenditures")
     finally:
         _clear_loader_caches()

@@ -1,8 +1,9 @@
 <script lang="ts">
   import { APP_SHELL } from '$lib/config/app';
   import { getApiErrorDisplayMessage } from '$lib/api/error-display';
+  import { page } from '$app/stores';
 
-  export let status: number;
+  export let status: number | undefined;
   export let error: App.Error;
 
   type ErrorRouteCopy = {
@@ -48,10 +49,24 @@
     };
   }
 
+  function resolveStatusCode(statusCode: number | undefined, pageStatusCode: number | undefined): number {
+    if (typeof statusCode === 'number') {
+      return statusCode;
+    }
+
+    if (typeof pageStatusCode === 'number') {
+      return pageStatusCode;
+    }
+
+    return 500;
+  }
+
+  let resolvedStatus: number;
   let statusCopy: ErrorRouteCopy;
   let displayMessage: string;
 
-  $: statusCopy = getErrorRouteCopy(status);
+  $: resolvedStatus = resolveStatusCode(status, $page.status);
+  $: statusCopy = getErrorRouteCopy(resolvedStatus);
   $: displayMessage = getApiErrorDisplayMessage(error);
 </script>
 
@@ -64,7 +79,7 @@
 <section class="card error" aria-live="assertive">
   <h2>{statusCopy.heading}</h2>
   <p class="error__summary">{statusCopy.summary}</p>
-  <p class="error__status">HTTP {status}</p>
+  <p class="error__status">HTTP {resolvedStatus}</p>
   <p>{displayMessage}</p>
   <p class="error__actions">
     <a href="/">Return home</a>

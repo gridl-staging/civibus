@@ -35,17 +35,17 @@ class TestFiling8872RequiredFields:
         with pytest.raises(ValidationError):
             Filing8872.model_validate(payload)
 
-    def test_requires_period_begin_date(self):
+    def test_period_begin_date_defaults_none_when_omitted(self):
         payload = build_filing_8872_payload()
         del payload["period_begin_date"]
-        with pytest.raises(ValidationError):
-            Filing8872.model_validate(payload)
+        filing = Filing8872.model_validate(payload)
+        assert filing.period_begin_date is None
 
-    def test_requires_period_end_date(self):
+    def test_period_end_date_defaults_none_when_omitted(self):
         payload = build_filing_8872_payload()
         del payload["period_end_date"]
-        with pytest.raises(ValidationError):
-            Filing8872.model_validate(payload)
+        filing = Filing8872.model_validate(payload)
+        assert filing.period_end_date is None
 
 
 class TestFiling8872Defaults:
@@ -179,4 +179,4 @@ class TestFiling8872RoundTrip:
         assert "form_id_number" in schema["properties"]
         assert "ein" in schema["properties"]
         assert "form_type" in schema["required"]
-        assert "period_begin_date" in schema["required"]
+        assert "period_begin_date" not in schema["required"]

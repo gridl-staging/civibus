@@ -8,9 +8,9 @@ Campaign finance is the active launch domain. The current work is proving live g
 
 Real government campaign-finance data is now served from the production VM, and the main bottleneck is coverage validation, not frontend polish.
 
-- Refresh runner surface: FEC + 13 states (`CA`, `CO`, `FL`, `GA`, `IL`, `IN`, `MN`, `NC`, `NJ`, `PA`, `TX`, `WA`, `WI`)
-- Illinois now has bounded live proof against the official portal, including live DB-backed ingest on isolated Postgres
-- Illinois is still not launch-ready because the portal's repeat publication cadence remains unverified
+- Public production is live at `https://civibus.shareborough.com`
+- Coverage, live-proof, and freshness status are intentionally maintained in `ROADMAP.md` and `PRIORITIES.md` rather than duplicated here
+- Keel rollout work is active under `docs/keel/`
 
 `ROADMAP.md` is the project SSOT for open work. `PRIORITIES.md` explains what matters now and what not to work on.
 
@@ -28,6 +28,8 @@ make lint
 make validate-configs
 make validate-registry
 ```
+
+Maintenance note: retired symbols are declared inline in `Makefile` (`RETIRED_SYMBOLS` and `RETIRED_ALLOWLIST`), and `make lint` enforces them repo-wide via `check-retired-symbols`. Add future retirements to that single list/allowlist instead of creating a second registry.
 
 Default local DB:
 

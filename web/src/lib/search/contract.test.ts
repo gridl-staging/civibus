@@ -39,6 +39,11 @@ describe('search contract', () => {
         entity_type: 'candidate',
         entity_id: '44444444-4444-4444-8444-444444444444',
         name: 'Candidate Four'
+      },
+      {
+        entity_type: 'contest',
+        entity_id: '55555555-5555-4555-8555-555555555555',
+        name: 'Contest Five'
       }
     ];
 
@@ -46,7 +51,8 @@ describe('search contract', () => {
       '/person/11111111-1111-4111-8111-111111111111',
       '/org/22222222-2222-4222-8222-222222222222',
       '/committee/33333333-3333-4333-8333-333333333333',
-      '/person/44444444-4444-4444-8444-444444444444'
+      '/person/44444444-4444-4444-8444-444444444444',
+      '/contest/55555555-5555-4555-8555-555555555555'
     ]);
   });
 
@@ -78,8 +84,15 @@ describe('search contract', () => {
 
   // --- Office search integration contract (Stage 1 red-phase tests) ---
 
-  it('includes candidate in the supported entity types array', () => {
-    expect(SEARCH_ENTITY_TYPES).toEqual(['person', 'org', 'committee', 'candidate', 'office']);
+  it('includes candidate, office, and contest in the supported entity types array', () => {
+    expect(SEARCH_ENTITY_TYPES).toEqual([
+      'person',
+      'org',
+      'committee',
+      'candidate',
+      'office',
+      'contest'
+    ]);
   });
 
   it('maps office search results to /office/<uuid> route hrefs', () => {
@@ -98,6 +111,10 @@ describe('search contract', () => {
     expect(isSearchEntityType('candidate')).toBe(true);
   });
 
+  it('recognizes contest as a valid search entity type', () => {
+    expect(isSearchEntityType('contest')).toBe(true);
+  });
+
   it('accepts only supported entity types with UUID ids as renderable search results', () => {
     expect(
       isRenderableSearchResult({
@@ -111,6 +128,13 @@ describe('search contract', () => {
         entity_type: 'office',
         entity_id: '44444444-4444-4444-8444-444444444444',
         name: 'Governor'
+      })
+    ).toBe(true);
+    expect(
+      isRenderableSearchResult({
+        entity_type: 'contest',
+        entity_id: '66666666-6666-4666-8666-666666666666',
+        name: 'General Election Contest'
       })
     ).toBe(true);
     expect(
@@ -135,6 +159,11 @@ describe('search contract', () => {
         name: 'Governor'
       },
       {
+        entity_type: 'contest',
+        entity_id: '66666666-6666-4666-8666-666666666666',
+        name: 'General Election Contest'
+      },
+      {
         entity_type: 'person',
         entity_id: 'not-a-uuid',
         name: 'Alice'
@@ -151,6 +180,11 @@ describe('search contract', () => {
         entity_type: 'office',
         entity_id: '44444444-4444-4444-8444-444444444444',
         name: 'Governor'
+      },
+      {
+        entity_type: 'contest',
+        entity_id: '66666666-6666-4666-8666-666666666666',
+        name: 'General Election Contest'
       }
     ]);
   });
@@ -158,5 +192,57 @@ describe('search contract', () => {
   it('keeps candidate in the UI filter list while still allowing backend-owned passthrough values', () => {
     expect(SEARCH_ENTITY_TYPES).toContain('candidate');
     expect(buildSearchPath({ q: 'civ', entityType: 'candidate' })).toBe('/v1/search?q=civ&entity_type=candidate');
+  });
+
+  // --- Context field passthrough (Stage 4 pin tests) ---
+
+  it('passes through optional context fields on renderable results unchanged', () => {
+    const payload: SearchApiResultPayload = {
+      entity_type: 'committee',
+      entity_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      name: 'Citizens for Progress',
+      state: 'CA',
+      party: 'DEM',
+      office_name: null,
+      committee_type: 'pac',
+      total_raised: 250000
+    };
+
+    expect(isRenderableSearchResult(payload)).toBe(true);
+    const filtered = filterRenderableSearchResults([payload]);
+    expect(filtered).toHaveLength(1);
+    expect(filtered[0].state).toBe('CA');
+    expect(filtered[0].party).toBe('DEM');
+    expect(filtered[0].office_name).toBeNull();
+    expect(filtered[0].committee_type).toBe('pac');
+    expect(filtered[0].total_raised).toBe(250000);
+  });
+
+  it('passes through serialized decimal total_raised strings unchanged', () => {
+    const payload: SearchApiResultPayload = {
+      entity_type: 'committee',
+      entity_id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+      name: 'Serialized Money Committee',
+      total_raised: '150000.00'
+    };
+
+    expect(isRenderableSearchResult(payload)).toBe(true);
+    const filtered = filterRenderableSearchResults([payload]);
+    expect(filtered).toHaveLength(1);
+    expect(filtered[0].total_raised).toBe('150000.00');
+  });
+
+  it('validates results with no context fields as renderable', () => {
+    const payload: SearchApiResultPayload = {
+      entity_type: 'person',
+      entity_id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      name: 'Alice Smith'
+    };
+
+    expect(isRenderableSearchResult(payload)).toBe(true);
+    const filtered = filterRenderableSearchResults([payload]);
+    expect(filtered).toHaveLength(1);
+    expect(filtered[0].state).toBeUndefined();
+    expect(filtered[0].party).toBeUndefined();
   });
 });

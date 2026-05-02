@@ -130,6 +130,23 @@ def test_run_psql_command_uses_psycopg_fallback_when_no_cli_path(monkeypatch: py
     assert result == ["1"]
 
 
+def test_run_psql_command_ignores_psql_command_status_lines(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "core.schema_sql_runner.build_base_psql_command",
+        lambda database, *, command_env_var, repo_root: ["psql", "-d", database],
+    )
+    monkeypatch.setattr("core.schema_sql_runner._run_command", lambda command: "person\nINSERT 0 1")
+
+    result = schema_sql_runner.run_psql_command(
+        "civibus_test",
+        "SELECT 'person';",
+        command_env_var="TEST_SCHEMA_PSQL_CMD",
+        repo_root=Path("/tmp/repo"),
+    )
+
+    assert result == ["person"]
+
+
 def test_run_psql_file_uses_psycopg_fallback_when_no_cli_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     sql_file = tmp_path / "test.sql"
     sql_file.write_text("SELECT 1;", encoding="utf-8")

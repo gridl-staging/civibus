@@ -37,6 +37,12 @@ CREATE TABLE core.person (
     middle_name     TEXT,
     last_name       TEXT,
     suffix          TEXT,                          -- Jr, Sr, III, etc.
+    occupation      TEXT,                          -- Best-known occupation (source-traceable via core.field_provenance)
+    education       TEXT,                          -- Best-known education text (source-traceable via core.field_provenance)
+    bio_text        TEXT,                          -- Best-known official biography text (source-traceable via core.field_provenance)
+    bio_source_url  TEXT,                          -- Canonical source URL from which bio_text was acquired
+    bio_license     TEXT CHECK (bio_license IS NULL OR bio_license IN ('public_domain', 'licensed', 'restricted', 'unknown')),
+    bio_pulled_at   TIMESTAMPTZ,                   -- UTC timestamp when biography text was last fetched
     date_of_birth   DATE,
     year_of_birth   SMALLINT,                     -- When full DOB unavailable
     identifiers     JSONB NOT NULL DEFAULT '{}',   -- {"fec_id": "...", "nc_voter_id": "..."}
@@ -58,6 +64,44 @@ CREATE INDEX idx_person_primary_address ON core.person (primary_address_id) WHER
 -- Full-text search on canonical name
 CREATE INDEX idx_person_name_fts ON core.person
     USING GIN (to_tsvector('simple', canonical_name));
+
+-- ============================================================================
+-- Person Portrait
+-- ============================================================================
+-- Candidate portrait metadata linked to an entity person.
+-- Provenance remains centralized in core.source_record/core.field_provenance:
+-- source_record_id is declared here and resolved as a cross-file FK in provenance.sql.
+
+CREATE TABLE core.person_portrait (
+    id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    person_id       UUID NOT NULL REFERENCES core.person(id),
+    source_record_id UUID NOT NULL,                -- FK applied in provenance.sql
+    status          TEXT NOT NULL CHECK (status IN (
+                        'active',
+                        'not_found',
+                        'too_small',
+                        'face_too_small',
+                        'takedown_requested',
+                        'superseded',
+                        'rejected'
+                    )),
+    rights_status   TEXT NOT NULL CHECK (rights_status IN ('public_domain', 'licensed', 'restricted', 'unknown')),
+    image_hash      TEXT NOT NULL,                 -- SHA-256 of canonical image bytes
+    dedup_key       TEXT NOT NULL,                 -- Deterministic hash of source identity + image hash
+    mime_type       TEXT,                          -- image/jpeg, image/png, etc.
+    width_px        INTEGER CHECK (width_px IS NULL OR width_px > 0),
+    height_px       INTEGER CHECK (height_px IS NULL OR height_px > 0),
+    source_image_url TEXT,                         -- Original fetch URL
+    storage_uri     TEXT,                          -- Internal storage locator (object key/URI)
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_person_portrait_person_id ON core.person_portrait (person_id);
+CREATE INDEX idx_person_portrait_source_record ON core.person_portrait (source_record_id);
+CREATE UNIQUE INDEX idx_person_portrait_dedup ON core.person_portrait (person_id, dedup_key);
+CREATE UNIQUE INDEX idx_person_portrait_active_per_person ON core.person_portrait (person_id)
+    WHERE status = 'active';
 
 -- ============================================================================
 -- Organization
@@ -237,6 +281,10 @@ $$ LANGUAGE plpgsql;
 
 CREATE TRIGGER trg_person_updated_at
     BEFORE UPDATE ON core.person
+    FOR EACH ROW EXECUTE FUNCTION core.set_updated_at();
+
+CREATE TRIGGER trg_person_portrait_updated_at
+    BEFORE UPDATE ON core.person_portrait
     FOR EACH ROW EXECUTE FUNCTION core.set_updated_at();
 
 CREATE TRIGGER trg_org_updated_at

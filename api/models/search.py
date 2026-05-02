@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+from decimal import Decimal
 from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field
 
-SearchEntityType = Literal["person", "org", "committee", "candidate", "office"]
+SearchEntityType = Literal["person", "org", "committee", "candidate", "office", "contest"]
 
 
 class SearchParams(BaseModel):
@@ -19,3 +20,8 @@ class SearchResult(BaseModel):
     entity_type: SearchEntityType
     entity_id: UUID
     name: str
+    state: str | None = None
+    party: str | None = None
+    office_name: str | None = None
+    committee_type: str | None = None
+    total_raised: Decimal | None = None

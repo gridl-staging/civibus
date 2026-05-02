@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, call
 
 import pytest
 from unittest.mock import ANY
@@ -159,6 +159,127 @@ def test_run_ca_refresh_executes_typed_path_mode(monkeypatch: pytest.MonkeyPatch
     result = cli.run_ca_refresh(path=_SAMPLE_FIXTURE_PATH, limit=5)
 
     assert result == load_result
+    load_with_filings.assert_called_once_with(connection, _SAMPLE_FIXTURE_PATH, limit=5, year_from=None)
+    connection.commit.assert_called_once_with()
+    connection.close.assert_called_once_with()
+
+
+def test_run_ca_refresh_retries_db_connection_on_host_default_port_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    connection = MagicMock()
+    load_result = _build_load_result()
+    get_connection_mock = MagicMock(
+        side_effect=[
+            RuntimeError("Unable to connect to PostgreSQL at localhost:5433/civibus"),
+            connection,
+        ]
+    )
+
+    monkeypatch.delenv("POSTGRES_HOST", raising=False)
+    monkeypatch.delenv("POSTGRES_PORT", raising=False)
+    monkeypatch.setattr(cli, "get_connection", get_connection_mock)
+    load_with_filings = MagicMock(return_value=load_result)
+    monkeypatch.setattr(cli, "load_ca_member_directory_with_filings", load_with_filings)
+
+    result = cli.run_ca_refresh(path=_SAMPLE_FIXTURE_PATH, limit=5)
+
+    assert result == load_result
+    assert get_connection_mock.call_args_list == [
+        call(),
+        call(host="127.0.0.1", port=5432),
+    ]
+    load_with_filings.assert_called_once_with(connection, _SAMPLE_FIXTURE_PATH, limit=5, year_from=None)
+    connection.commit.assert_called_once_with()
+    connection.close.assert_called_once_with()
+
+
+def test_run_ca_refresh_retries_db_connection_when_default_host_mode_is_explicitly_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for configured_host in ("localhost", "db"):
+        connection = MagicMock()
+        load_result = _build_load_result()
+        get_connection_mock = MagicMock(
+            side_effect=[
+                RuntimeError("Unable to connect to PostgreSQL at 127.0.0.1:5433/civibus"),
+                connection,
+            ]
+        )
+
+        monkeypatch.setenv("POSTGRES_HOST", configured_host)
+        monkeypatch.setenv("POSTGRES_PORT", "5433")
+        monkeypatch.setattr(cli, "get_connection", get_connection_mock)
+        load_with_filings = MagicMock(return_value=load_result)
+        monkeypatch.setattr(cli, "load_ca_member_directory_with_filings", load_with_filings)
+
+        result = cli.run_ca_refresh(path=_SAMPLE_FIXTURE_PATH, limit=5)
+
+        assert result == load_result
+        assert get_connection_mock.call_args_list == [
+            call(),
+            call(host="127.0.0.1", port=5432),
+        ]
+        load_with_filings.assert_called_once_with(connection, _SAMPLE_FIXTURE_PATH, limit=5, year_from=None)
+        connection.commit.assert_called_once_with()
+        connection.close.assert_called_once_with()
+
+
+def test_run_ca_refresh_retries_db_connection_on_loopback_default_port_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    connection = MagicMock()
+    load_result = _build_load_result()
+    get_connection_mock = MagicMock(
+        side_effect=[
+            RuntimeError("Unable to connect to PostgreSQL at 127.0.0.1:5433/civibus"),
+            connection,
+        ]
+    )
+
+    monkeypatch.delenv("POSTGRES_HOST", raising=False)
+    monkeypatch.delenv("POSTGRES_PORT", raising=False)
+    monkeypatch.setattr(cli, "get_connection", get_connection_mock)
+    load_with_filings = MagicMock(return_value=load_result)
+    monkeypatch.setattr(cli, "load_ca_member_directory_with_filings", load_with_filings)
+
+    result = cli.run_ca_refresh(path=_SAMPLE_FIXTURE_PATH, limit=5)
+
+    assert result == load_result
+    assert get_connection_mock.call_args_list == [
+        call(),
+        call(host="127.0.0.1", port=5432),
+    ]
+    load_with_filings.assert_called_once_with(connection, _SAMPLE_FIXTURE_PATH, limit=5, year_from=None)
+    connection.commit.assert_called_once_with()
+    connection.close.assert_called_once_with()
+
+
+def test_run_ca_refresh_retries_db_connection_on_explicit_localhost_5432_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    connection = MagicMock()
+    load_result = _build_load_result()
+    get_connection_mock = MagicMock(
+        side_effect=[
+            RuntimeError("Unable to connect to PostgreSQL at localhost:5432/civibus"),
+            connection,
+        ]
+    )
+
+    monkeypatch.setenv("POSTGRES_HOST", "localhost")
+    monkeypatch.setenv("POSTGRES_PORT", "5432")
+    monkeypatch.setattr(cli, "get_connection", get_connection_mock)
+    load_with_filings = MagicMock(return_value=load_result)
+    monkeypatch.setattr(cli, "load_ca_member_directory_with_filings", load_with_filings)
+
+    result = cli.run_ca_refresh(path=_SAMPLE_FIXTURE_PATH, limit=5)
+
+    assert result == load_result
+    assert get_connection_mock.call_args_list == [
+        call(),
+        call(host="127.0.0.1", port=5432),
+    ]
     load_with_filings.assert_called_once_with(connection, _SAMPLE_FIXTURE_PATH, limit=5, year_from=None)
     connection.commit.assert_called_once_with()
     connection.close.assert_called_once_with()

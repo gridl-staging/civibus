@@ -5,15 +5,20 @@
 export const SEARCH_API_PATH = '/v1/search';
 export const SEARCH_PAGE_PATH = '/search';
 export const SEARCH_QUERY_MIN_LENGTH = 2;
-export const SEARCH_ENTITY_TYPES = ['person', 'org', 'committee', 'candidate', 'office'] as const;
+export const SEARCH_ENTITY_TYPES = ['person', 'org', 'committee', 'candidate', 'office', 'contest'] as const;
 
 export type SearchEntityType = (typeof SEARCH_ENTITY_TYPES)[number];
-type SearchRouteSegment = 'person' | 'org' | 'committee' | 'office';
+type SearchRouteSegment = 'person' | 'org' | 'committee' | 'office' | 'contest';
 
 export type SearchApiResultPayload = {
   entity_type: string;
   entity_id: string;
   name: string;
+  state?: string | null;
+  party?: string | null;
+  office_name?: string | null;
+  committee_type?: string | null;
+  total_raised?: number | string | null;
 };
 
 export type SearchApiResult = SearchApiResultPayload & {
@@ -37,7 +42,8 @@ const SEARCH_ROUTE_SEGMENT_BY_ENTITY_TYPE: Record<SearchEntityType, SearchRouteS
   committee: 'committee',
   // backend candidate search rows are keyed by canonical person UUIDs.
   candidate: 'person',
-  office: 'office'
+  office: 'office',
+  contest: 'contest'
 };
 
 function isUuid(value: string): boolean {

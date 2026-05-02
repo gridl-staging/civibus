@@ -1,6 +1,8 @@
+
 from __future__ import annotations
 
 import os
+import re
 import secrets
 import shlex
 import shutil
@@ -27,6 +29,9 @@ _PSQL_DISALLOWED_OVERRIDE_FLAGS = {
     "-f",
     "--file",
 }
+_PSQL_COMMAND_TAG_PATTERN = re.compile(
+    r"^(?:INSERT \d+ \d+|UPDATE \d+|DELETE \d+|MERGE \d+|COPY \d+|SELECT \d+|MOVE \d+|FETCH \d+)$"
+)
 
 
 def _command_binary_name(token: str) -> str:
@@ -166,6 +171,10 @@ def _run_command(command: list[str]) -> str:
     return result.stdout.strip()
 
 
+def _is_psql_command_tag(output_line: str) -> bool:
+    return bool(_PSQL_COMMAND_TAG_PATTERN.match(output_line))
+
+
 def run_psql_command(
     database: str,
     sql: str,
@@ -187,7 +196,7 @@ def run_psql_command(
         return output
     if not output:
         return []
-    return [line.strip() for line in output.splitlines() if line.strip()]
+    return [line for line in (line.strip() for line in output.splitlines()) if line and not _is_psql_command_tag(line)]
 
 
 def run_psql_file(database: str, sql_file: Path, *, command_env_var: str, repo_root: Path) -> None:

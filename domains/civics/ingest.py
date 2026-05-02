@@ -1,6 +1,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import date
 from uuid import UUID
 
@@ -9,9 +10,20 @@ from psycopg.types.json import Jsonb
 from psycopg.types.range import DateRange
 
 from core.db_ingest import insert_entity_source
-from domains.civics.types.models import Candidacy, Contest, ElectoralDivision, Office, Officeholding
+from domains.civics.types.models import (
+    Candidacy,
+    Contest,
+    Election,
+    ElectoralDivision,
+    FilingDeadline,
+    Office,
+    OfficeRosterLink,
+    Officeholding,
+    ReportingPeriod,
+)
 
 _UNSET_ELECTORAL_DIVISION = object()
+_ELECTORAL_DIVISION_HAS_GEOMETRY: bool | None = None
 
 
 def _find_existing_officeholding_id(
@@ -105,21 +117,66 @@ def retire_officeholdings_for_vacancy(
 
 
 def upsert_office(conn: psycopg.Connection, office: Office) -> UUID:
-    """Upsert an office row keyed by (office_level, COALESCE(state,''), name)."""
+    """Upsert an office row keyed by the canonical office natural key."""
+    if office.electoral_division_id is not None:
+        with conn.cursor() as cur:
+            # Preserve legacy office identity rows that were inserted before division ids were known.
+            cur.execute(
+                """
+                UPDATE civic.office
+                SET
+                    title = %s,
+                    jurisdiction_id = %s,
+                    is_elected = %s,
+                    number_of_seats = %s,
+                    source_record_id = COALESCE(%s, civic.office.source_record_id),
+                    electoral_division_id = %s,
+                    updated_at = NOW()
+                WHERE office_level = %s
+                  AND COALESCE(state, '') = COALESCE(%s, '')
+                  AND name = %s
+                  AND electoral_division_id IS NULL
+                RETURNING civic.office.id
+                """,
+                (
+                    office.title,
+                    office.jurisdiction_id,
+                    office.is_elected,
+                    office.number_of_seats,
+                    office.source_record_id,
+                    office.electoral_division_id,
+                    office.office_level,
+                    office.state,
+                    office.name,
+                ),
+            )
+            promoted_row = cur.fetchone()
+            if promoted_row is not None:
+                row_id: UUID = promoted_row[0]
+                if office.source_record_id is not None:
+                    insert_entity_source(conn, "office", row_id, office.source_record_id, "office")
+                return row_id
+
     with conn.cursor() as cur:
         cur.execute(
             """
             INSERT INTO civic.office (
                 id, name, office_level, title, jurisdiction_id, state,
-                is_elected, number_of_seats, source_record_id
+                electoral_division_id, is_elected, number_of_seats, source_record_id
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (office_level, COALESCE(state, ''), name)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (
+                office_level,
+                COALESCE(state, ''),
+                name,
+                COALESCE(electoral_division_id, '00000000-0000-0000-0000-000000000000'::uuid)
+            )
             DO UPDATE SET
                 title = EXCLUDED.title,
                 jurisdiction_id = EXCLUDED.jurisdiction_id,
                 is_elected = EXCLUDED.is_elected,
                 number_of_seats = EXCLUDED.number_of_seats,
+                electoral_division_id = COALESCE(EXCLUDED.electoral_division_id, civic.office.electoral_division_id),
                 source_record_id = COALESCE(EXCLUDED.source_record_id, civic.office.source_record_id),
                 updated_at = NOW()
             RETURNING id
@@ -131,6 +188,7 @@ def upsert_office(conn: psycopg.Connection, office: Office) -> UUID:
                 office.title,
                 office.jurisdiction_id,
                 office.state,
+                office.electoral_division_id,
                 office.is_elected,
                 office.number_of_seats,
                 office.source_record_id,
@@ -146,37 +204,94 @@ def upsert_office(conn: psycopg.Connection, office: Office) -> UUID:
 
 def upsert_electoral_division(conn: psycopg.Connection, division: ElectoralDivision) -> UUID:
     """Upsert an electoral division keyed by (division_type, COALESCE(state,''), name, COALESCE(boundary_year,0))."""
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            INSERT INTO civic.electoral_division (
-                id, name, division_type, state, district_number, ocd_id,
-                is_container, parent_id, boundary_year, source_record_id
+    global _ELECTORAL_DIVISION_HAS_GEOMETRY
+    if _ELECTORAL_DIVISION_HAS_GEOMETRY is None:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT EXISTS (
+                    SELECT 1
+                    FROM information_schema.columns
+                    WHERE table_schema = 'civic'
+                      AND table_name = 'electoral_division'
+                      AND column_name = 'geometry'
+                )
+                """
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (division_type, COALESCE(state, ''), name, COALESCE(boundary_year, 0))
-            DO UPDATE SET
-                district_number = COALESCE(EXCLUDED.district_number, civic.electoral_division.district_number),
-                ocd_id = COALESCE(EXCLUDED.ocd_id, civic.electoral_division.ocd_id),
-                is_container = EXCLUDED.is_container,
-                parent_id = COALESCE(EXCLUDED.parent_id, civic.electoral_division.parent_id),
-                source_record_id = COALESCE(EXCLUDED.source_record_id, civic.electoral_division.source_record_id),
-                updated_at = NOW()
-            RETURNING id
-            """,
-            (
-                division.id,
-                division.name,
-                division.division_type,
-                division.state,
-                division.district_number,
-                division.ocd_id,
-                division.is_container,
-                division.parent_id,
-                division.boundary_year,
-                division.source_record_id,
-            ),
-        )
+            _ELECTORAL_DIVISION_HAS_GEOMETRY = bool(cur.fetchone()[0])
+
+    geometry_geojson = json.dumps(division.geometry) if division.geometry is not None else None
+    with conn.cursor() as cur:
+        if _ELECTORAL_DIVISION_HAS_GEOMETRY:
+            cur.execute(
+                """
+                INSERT INTO civic.electoral_division (
+                    id, name, division_type, state, district_number, ocd_id,
+                    is_container, parent_id, boundary_year, geometry, source_record_id
+                )
+                VALUES (
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                    ST_Multi(ST_SetSRID(ST_GeomFromGeoJSON(%s::json), 4326)),
+                    %s
+                )
+                ON CONFLICT (division_type, COALESCE(state, ''), name, COALESCE(boundary_year, 0))
+                DO UPDATE SET
+                    district_number = COALESCE(EXCLUDED.district_number, civic.electoral_division.district_number),
+                    ocd_id = COALESCE(EXCLUDED.ocd_id, civic.electoral_division.ocd_id),
+                    is_container = EXCLUDED.is_container,
+                    parent_id = COALESCE(EXCLUDED.parent_id, civic.electoral_division.parent_id),
+                    geometry = COALESCE(EXCLUDED.geometry, civic.electoral_division.geometry),
+                    source_record_id = COALESCE(EXCLUDED.source_record_id, civic.electoral_division.source_record_id),
+                    updated_at = NOW()
+                RETURNING id
+                """,
+                (
+                    division.id,
+                    division.name,
+                    division.division_type,
+                    division.state,
+                    division.district_number,
+                    division.ocd_id,
+                    division.is_container,
+                    division.parent_id,
+                    division.boundary_year,
+                    geometry_geojson,
+                    division.source_record_id,
+                ),
+            )
+        else:
+            # Some stage bootstrap snapshots predate the geometry column migration.
+            # Keep the canonical upsert owner usable in both schema states.
+            cur.execute(
+                """
+                INSERT INTO civic.electoral_division (
+                    id, name, division_type, state, district_number, ocd_id,
+                    is_container, parent_id, boundary_year, source_record_id
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (division_type, COALESCE(state, ''), name, COALESCE(boundary_year, 0))
+                DO UPDATE SET
+                    district_number = COALESCE(EXCLUDED.district_number, civic.electoral_division.district_number),
+                    ocd_id = COALESCE(EXCLUDED.ocd_id, civic.electoral_division.ocd_id),
+                    is_container = EXCLUDED.is_container,
+                    parent_id = COALESCE(EXCLUDED.parent_id, civic.electoral_division.parent_id),
+                    source_record_id = COALESCE(EXCLUDED.source_record_id, civic.electoral_division.source_record_id),
+                    updated_at = NOW()
+                RETURNING id
+                """,
+                (
+                    division.id,
+                    division.name,
+                    division.division_type,
+                    division.state,
+                    division.district_number,
+                    division.ocd_id,
+                    division.is_container,
+                    division.parent_id,
+                    division.boundary_year,
+                    division.source_record_id,
+                ),
+            )
         row_id: UUID = cur.fetchone()[0]
 
     if division.source_record_id is not None:
@@ -187,15 +302,58 @@ def upsert_electoral_division(conn: psycopg.Connection, division: ElectoralDivis
 
 def upsert_contest(conn: psycopg.Connection, contest: Contest) -> UUID:
     """Upsert a contest keyed by (office_id, COALESCE(electoral_division_id, NULL_UUID), COALESCE(election_date, 0001-01-01), election_type)."""
+    if contest.electoral_division_id is not None:
+        with conn.cursor() as cur:
+            # Promote legacy contest rows created before division ids were populated.
+            cur.execute(
+                """
+                UPDATE civic.contest
+                SET
+                    name = %s,
+                    election_id = COALESCE(%s, civic.contest.election_id),
+                    electoral_division_id = %s,
+                    number_of_seats = %s,
+                    filing_deadline = COALESCE(%s, civic.contest.filing_deadline),
+                    is_partisan = %s,
+                    candidate_list_incomplete = %s,
+                    source_record_id = COALESCE(%s, civic.contest.source_record_id),
+                    updated_at = NOW()
+                WHERE office_id = %s
+                  AND election_date IS NOT DISTINCT FROM %s
+                  AND election_type = %s
+                  AND electoral_division_id IS NULL
+                RETURNING id
+                """,
+                (
+                    contest.name,
+                    contest.election_id,
+                    contest.electoral_division_id,
+                    contest.number_of_seats,
+                    contest.filing_deadline,
+                    contest.is_partisan,
+                    contest.candidate_list_incomplete,
+                    contest.source_record_id,
+                    contest.office_id,
+                    contest.election_date,
+                    contest.election_type,
+                ),
+            )
+            promoted_row = cur.fetchone()
+            if promoted_row is not None:
+                row_id: UUID = promoted_row[0]
+                if contest.source_record_id is not None:
+                    insert_entity_source(conn, "contest", row_id, contest.source_record_id, "contest")
+                return row_id
+
     with conn.cursor() as cur:
         cur.execute(
             """
             INSERT INTO civic.contest (
                 id, name, election_date, election_type, office_id,
-                electoral_division_id, number_of_seats, filing_deadline,
+                election_id, electoral_division_id, number_of_seats, filing_deadline,
                 is_partisan, candidate_list_incomplete, source_record_id
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (
                 office_id,
                 COALESCE(electoral_division_id, '00000000-0000-0000-0000-000000000000'::uuid),
@@ -204,6 +362,8 @@ def upsert_contest(conn: psycopg.Connection, contest: Contest) -> UUID:
             )
             DO UPDATE SET
                 name = EXCLUDED.name,
+                election_id = COALESCE(EXCLUDED.election_id, civic.contest.election_id),
+                electoral_division_id = COALESCE(EXCLUDED.electoral_division_id, civic.contest.electoral_division_id),
                 number_of_seats = EXCLUDED.number_of_seats,
                 filing_deadline = COALESCE(EXCLUDED.filing_deadline, civic.contest.filing_deadline),
                 is_partisan = EXCLUDED.is_partisan,
@@ -218,6 +378,7 @@ def upsert_contest(conn: psycopg.Connection, contest: Contest) -> UUID:
                 contest.election_date,
                 contest.election_type,
                 contest.office_id,
+                contest.election_id,
                 contest.electoral_division_id,
                 contest.number_of_seats,
                 contest.filing_deadline,
@@ -234,19 +395,213 @@ def upsert_contest(conn: psycopg.Connection, contest: Contest) -> UUID:
     return row_id
 
 
+def upsert_election(conn: psycopg.Connection, election: Election) -> UUID:
+    """Upsert an election keyed by uq_election_natural_key index columns."""
+    if election.electoral_division_id is not None:
+        with conn.cursor() as cur:
+            # Promote legacy election rows created before district linkage was available.
+            cur.execute(
+                """
+                UPDATE civic.election
+                SET
+                    office_id = COALESCE(%s, civic.election.office_id),
+                    electoral_division_id = %s,
+                    source_record_id = COALESCE(%s, civic.election.source_record_id),
+                    updated_at = NOW()
+                WHERE jurisdiction_scope = %s
+                  AND COALESCE(state, '') = COALESCE(%s, '')
+                  AND election_date = %s
+                  AND election_type = %s
+                  AND is_special = %s
+                  AND COALESCE(office_id, '00000000-0000-0000-0000-000000000000'::uuid) = COALESCE(%s, '00000000-0000-0000-0000-000000000000'::uuid)
+                  AND electoral_division_id IS NULL
+                RETURNING id
+                """,
+                (
+                    election.office_id,
+                    election.electoral_division_id,
+                    election.source_record_id,
+                    election.jurisdiction_scope,
+                    election.state,
+                    election.election_date,
+                    election.election_type,
+                    election.is_special,
+                    election.office_id,
+                ),
+            )
+            promoted_row = cur.fetchone()
+            if promoted_row is not None:
+                row_id: UUID = promoted_row[0]
+                if election.source_record_id is not None:
+                    insert_entity_source(conn, "election", row_id, election.source_record_id, "election")
+                return row_id
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO civic.election (
+                id, jurisdiction_scope, state, county, municipality,
+                election_date, election_type, is_special, office_id,
+                electoral_division_id, source_record_id
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (
+                jurisdiction_scope,
+                COALESCE(state, ''),
+                COALESCE(county, ''),
+                COALESCE(municipality, ''),
+                election_date,
+                election_type,
+                is_special,
+                COALESCE(office_id, '00000000-0000-0000-0000-000000000000'::uuid),
+                COALESCE(electoral_division_id, '00000000-0000-0000-0000-000000000000'::uuid)
+            )
+            DO UPDATE SET
+                state = COALESCE(EXCLUDED.state, civic.election.state),
+                county = COALESCE(EXCLUDED.county, civic.election.county),
+                municipality = COALESCE(EXCLUDED.municipality, civic.election.municipality),
+                office_id = COALESCE(EXCLUDED.office_id, civic.election.office_id),
+                electoral_division_id = COALESCE(EXCLUDED.electoral_division_id, civic.election.electoral_division_id),
+                source_record_id = COALESCE(EXCLUDED.source_record_id, civic.election.source_record_id),
+                updated_at = NOW()
+            RETURNING id
+            """,
+            (
+                election.id,
+                election.jurisdiction_scope,
+                election.state,
+                election.county,
+                election.municipality,
+                election.election_date,
+                election.election_type,
+                election.is_special,
+                election.office_id,
+                election.electoral_division_id,
+                election.source_record_id,
+            ),
+        )
+        row_id: UUID = cur.fetchone()[0]
+
+    if election.source_record_id is not None:
+        insert_entity_source(conn, "election", row_id, election.source_record_id, "election")
+
+    return row_id
+
+
+def upsert_filing_deadline(conn: psycopg.Connection, filing_deadline: FilingDeadline) -> UUID:
+    """Upsert a filing deadline keyed by uq_filing_deadline_natural_key index columns."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO civic.filing_deadline (
+                id, election_id, office_id, electoral_division_id,
+                jurisdiction_scope, state, county, municipality,
+                deadline_date, deadline_kind, source_record_id
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (
+                election_id,
+                office_id,
+                COALESCE(electoral_division_id, '00000000-0000-0000-0000-000000000000'::uuid),
+                deadline_kind
+            )
+            DO UPDATE SET
+                jurisdiction_scope = EXCLUDED.jurisdiction_scope,
+                state = COALESCE(EXCLUDED.state, civic.filing_deadline.state),
+                county = COALESCE(EXCLUDED.county, civic.filing_deadline.county),
+                municipality = COALESCE(EXCLUDED.municipality, civic.filing_deadline.municipality),
+                deadline_date = EXCLUDED.deadline_date,
+                source_record_id = COALESCE(EXCLUDED.source_record_id, civic.filing_deadline.source_record_id),
+                updated_at = NOW()
+            RETURNING id
+            """,
+            (
+                filing_deadline.id,
+                filing_deadline.election_id,
+                filing_deadline.office_id,
+                filing_deadline.electoral_division_id,
+                filing_deadline.jurisdiction_scope,
+                filing_deadline.state,
+                filing_deadline.county,
+                filing_deadline.municipality,
+                filing_deadline.deadline_date,
+                filing_deadline.deadline_kind,
+                filing_deadline.source_record_id,
+            ),
+        )
+        row_id: UUID = cur.fetchone()[0]
+
+    if filing_deadline.source_record_id is not None:
+        insert_entity_source(conn, "filing_deadline", row_id, filing_deadline.source_record_id, "filing_deadline")
+
+    return row_id
+
+
+def upsert_reporting_period(conn: psycopg.Connection, reporting_period: ReportingPeriod) -> UUID:
+    """Upsert a reporting period keyed by uq_reporting_period_natural_key index columns."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO civic.reporting_period (
+                id, election_id, period_name, period_start, period_end,
+                report_due_date, is_pre_election, is_post_election,
+                disclosure_kind, source_record_id
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (election_id, period_name)
+            DO UPDATE SET
+                period_start = EXCLUDED.period_start,
+                period_end = EXCLUDED.period_end,
+                report_due_date = EXCLUDED.report_due_date,
+                is_pre_election = EXCLUDED.is_pre_election,
+                is_post_election = EXCLUDED.is_post_election,
+                disclosure_kind = COALESCE(EXCLUDED.disclosure_kind, civic.reporting_period.disclosure_kind),
+                source_record_id = COALESCE(EXCLUDED.source_record_id, civic.reporting_period.source_record_id),
+                updated_at = NOW()
+            RETURNING id
+            """,
+            (
+                reporting_period.id,
+                reporting_period.election_id,
+                reporting_period.period_name,
+                reporting_period.period_start,
+                reporting_period.period_end,
+                reporting_period.report_due_date,
+                reporting_period.is_pre_election,
+                reporting_period.is_post_election,
+                reporting_period.disclosure_kind,
+                reporting_period.source_record_id,
+            ),
+        )
+        row_id: UUID = cur.fetchone()[0]
+
+    if reporting_period.source_record_id is not None:
+        insert_entity_source(conn, "reporting_period", row_id, reporting_period.source_record_id, "reporting_period")
+
+    return row_id
+
+
 def upsert_candidacy(conn: psycopg.Connection, candidacy: Candidacy) -> UUID:
     """Upsert a candidacy keyed by (person_id, contest_id)."""
+    should_update_is_unexpired_term = "is_unexpired_term" in candidacy.model_fields_set
+    should_update_raw_fields = "raw_fields" in candidacy.model_fields_set
+
     with conn.cursor() as cur:
         cur.execute(
             """
             INSERT INTO civic.candidacy (
-                id, person_id, contest_id, party, filing_date, status,
-                incumbent_challenge, candidate_number, source_record_id
+                id, person_id, contest_id, party, name_on_ballot,
+                is_unexpired_term, raw_fields, committee_id,
+                filing_date, status, incumbent_challenge, candidate_number, source_record_id
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (person_id, contest_id)
             DO UPDATE SET
                 party = COALESCE(EXCLUDED.party, civic.candidacy.party),
+                name_on_ballot = COALESCE(EXCLUDED.name_on_ballot, civic.candidacy.name_on_ballot),
+                is_unexpired_term = CASE WHEN %s THEN EXCLUDED.is_unexpired_term ELSE civic.candidacy.is_unexpired_term END,
+                raw_fields = CASE WHEN %s THEN EXCLUDED.raw_fields ELSE civic.candidacy.raw_fields END,
+                committee_id = COALESCE(EXCLUDED.committee_id, civic.candidacy.committee_id),
                 filing_date = COALESCE(EXCLUDED.filing_date, civic.candidacy.filing_date),
                 status = COALESCE(EXCLUDED.status, civic.candidacy.status),
                 incumbent_challenge = COALESCE(EXCLUDED.incumbent_challenge, civic.candidacy.incumbent_challenge),
@@ -260,11 +615,17 @@ def upsert_candidacy(conn: psycopg.Connection, candidacy: Candidacy) -> UUID:
                 candidacy.person_id,
                 candidacy.contest_id,
                 candidacy.party,
+                candidacy.name_on_ballot,
+                candidacy.is_unexpired_term,
+                Jsonb(candidacy.raw_fields),
+                candidacy.committee_id,
                 candidacy.filing_date,
                 candidacy.status,
                 candidacy.incumbent_challenge,
                 candidacy.candidate_number,
                 candidacy.source_record_id,
+                should_update_is_unexpired_term,
+                should_update_raw_fields,
             ),
         )
         row_id: UUID = cur.fetchone()[0]
@@ -336,6 +697,29 @@ def upsert_officeholding(conn: psycopg.Connection, officeholding: Officeholding)
         insert_entity_source(conn, "officeholding", row_id, officeholding.source_record_id, "officeholding")
 
     return row_id
+
+
+def upsert_office_roster_link(conn: psycopg.Connection, office_roster_link: OfficeRosterLink) -> UUID:
+    """Upsert a bridge row keyed by (office_id, data_source_id)."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO civic.office_roster_link (
+                id, office_id, data_source_id
+            )
+            VALUES (%s, %s, %s)
+            ON CONFLICT (office_id, data_source_id)
+            DO UPDATE SET
+                updated_at = NOW()
+            RETURNING id
+            """,
+            (
+                office_roster_link.id,
+                office_roster_link.office_id,
+                office_roster_link.data_source_id,
+            ),
+        )
+        return cur.fetchone()[0]
 
 
 def derive_incumbent_challenge(

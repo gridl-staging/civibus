@@ -6,6 +6,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from domains.campaign_finance.jurisdictions.states.LA.scraper import cli
+from domains.campaign_finance.jurisdictions.states.LA.scraper import load_supported_data_types
 from domains.campaign_finance.jurisdictions.states.load_utils import LoadResult
 
 _FIXTURE_DIR = Path(__file__).parent / "test_fixtures"
@@ -25,9 +26,21 @@ def _build_load_result() -> LoadResult:
 
 def test_build_argument_parser_accepts_all_la_data_types() -> None:
     parser = cli._build_argument_parser()
-    for data_type in ("contributions", "expenditures", "loans"):
+    for data_type in cli.LA_LOADABLE_REFRESH_DATA_TYPES:
         args = parser.parse_args(["--year", "2026", "--path", "/tmp/sample.csv", "--data-type", data_type])
         assert args.data_type == data_type
+
+
+def test_loadable_refresh_data_types_follow_config_without_ie_lane() -> None:
+    assert cli.LA_LOADABLE_REFRESH_DATA_TYPES == load_supported_data_types()
+    assert "independent_expenditures" not in cli.LA_LOADABLE_REFRESH_DATA_TYPES
+
+
+def test_build_argument_parser_rejects_independent_expenditures_choice() -> None:
+    with pytest.raises(SystemExit, match="2"):
+        cli._build_argument_parser().parse_args(
+            ["--year", "2026", "--path", "/tmp/sample.csv", "--data-type", "independent_expenditures"]
+        )
 
 
 def test_build_argument_parser_rejects_path_and_download_together() -> None:

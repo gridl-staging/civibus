@@ -1,10 +1,20 @@
 from datetime import date, datetime, timezone
 from math import nan
+from typing import get_args
 from uuid import UUID, uuid4
 
 import pytest
 
-from core.types.python.models import Address, ContactPoint, Jurisdiction, Organization, Person, ValidDateRange
+from core.types.python.models import (
+    Address,
+    ContactPoint,
+    Jurisdiction,
+    Organization,
+    Person,
+    PersonPortrait,
+    PortraitRightsStatus,
+    ValidDateRange,
+)
 
 
 class TestPersonModel:
@@ -27,11 +37,30 @@ class TestPersonModel:
         assert person.middle_name is None
         assert person.last_name is None
         assert person.suffix is None
+        assert person.bio_text is None
+        assert person.bio_source_url is None
+        assert person.bio_license is None
+        assert person.bio_pulled_at is None
         assert person.date_of_birth is None
         assert person.year_of_birth is None
         assert person.primary_address_id is None
         assert person.er_cluster_id is None
         assert person.er_confidence is None
+
+    def test_person_accepts_stage5_bio_fields_when_populated(self) -> None:
+        pulled_at = datetime(2025, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+        person = Person(
+            canonical_name="Jane Doe",
+            bio_text="Jane Doe is a public servant.",
+            bio_source_url="https://example.com/bio/jane-doe",
+            bio_license="licensed",
+            bio_pulled_at=pulled_at,
+        )
+
+        assert person.bio_text == "Jane Doe is a public servant."
+        assert person.bio_source_url == "https://example.com/bio/jane-doe"
+        assert person.bio_license == "licensed"
+        assert person.bio_pulled_at == pulled_at
 
     @pytest.mark.parametrize("confidence", [0.0, 0.5, 1.0])
     def test_person_er_confidence_accepts_range(self, confidence: float) -> None:
@@ -144,6 +173,48 @@ class TestOrganizationModel:
     def test_organization_identifiers_rejects_non_string_values(self) -> None:
         with pytest.raises(ValueError):
             Organization(canonical_name="Civibus Action Fund", identifiers={"ein": 123456789})
+
+
+class TestPersonPortraitModel:
+    def test_person_portrait_derives_dedup_key_from_image_hash_only(self) -> None:
+        source_record_id = UUID("00000000-0000-0000-0000-000000000111")
+        image_hash = "7f63cb6d067972c3f34f094bb7e776a8f7f5bf3ce6f5f8a761fd72d4e95f94c4"
+        portrait = PersonPortrait(
+            person_id=UUID("00000000-0000-0000-0000-000000000222"),
+            source_record_id=source_record_id,
+            image_hash=image_hash,
+        )
+        portrait_with_different_source = PersonPortrait(
+            person_id=UUID("00000000-0000-0000-0000-000000000222"),
+            source_record_id=UUID("00000000-0000-0000-0000-000000000333"),
+            image_hash=image_hash,
+        )
+
+        assert portrait.dedup_key is not None
+        assert len(portrait.dedup_key) == 64
+        assert portrait_with_different_source.dedup_key == portrait.dedup_key
+
+    @pytest.mark.parametrize(
+        "status",
+        ["active", "not_found", "too_small", "face_too_small", "takedown_requested", "superseded", "rejected"],
+    )
+    def test_person_portrait_accepts_stage_status_values(self, status: str) -> None:
+        portrait = PersonPortrait(
+            person_id=UUID("00000000-0000-0000-0000-000000000222"),
+            source_record_id=UUID("00000000-0000-0000-0000-000000000111"),
+            status=status,
+            image_hash="7f63cb6d067972c3f34f094bb7e776a8f7f5bf3ce6f5f8a761fd72d4e95f94c4",
+        )
+
+        assert portrait.status == status
+
+    def test_person_portrait_rejects_invalid_image_hash(self) -> None:
+        with pytest.raises(ValueError):
+            PersonPortrait(
+                person_id=UUID("00000000-0000-0000-0000-000000000222"),
+                source_record_id=UUID("00000000-0000-0000-0000-000000000111"),
+                image_hash="not-a-hash",
+            )
 
 
 class TestAddressModel:
@@ -528,6 +599,7 @@ class TestModelJsonSchemaSmoke:
         address_schema = Address.model_json_schema()
         jurisdiction_schema = Jurisdiction.model_json_schema()
         contact_point_schema = ContactPoint.model_json_schema()
+        person_portrait_schema = PersonPortrait.model_json_schema()
 
         person_fields = {
             "id",
@@ -537,12 +609,34 @@ class TestModelJsonSchemaSmoke:
             "middle_name",
             "last_name",
             "suffix",
+            "occupation",
+            "education",
+            "bio_text",
+            "bio_source_url",
+            "bio_license",
+            "bio_pulled_at",
             "date_of_birth",
             "year_of_birth",
             "identifiers",
             "primary_address_id",
             "er_cluster_id",
             "er_confidence",
+            "created_at",
+            "updated_at",
+        }
+        person_portrait_fields = {
+            "id",
+            "person_id",
+            "source_record_id",
+            "status",
+            "rights_status",
+            "image_hash",
+            "dedup_key",
+            "mime_type",
+            "width_px",
+            "height_px",
+            "source_image_url",
+            "storage_uri",
             "created_at",
             "updated_at",
         }
@@ -613,3 +707,49 @@ class TestModelJsonSchemaSmoke:
         assert set(address_schema["properties"]) == address_fields
         assert set(jurisdiction_schema["properties"]) == jurisdiction_fields
         assert set(contact_point_schema["properties"]) == contact_point_fields
+        assert set(person_portrait_schema["properties"]) == person_portrait_fields
+
+    def test_person_json_schema_bio_license_enum_matches_portrait_rights_status(self) -> None:
+        person_schema = Person.model_json_schema()
+        bio_license_variants = person_schema["properties"]["bio_license"]["anyOf"]
+        enum_values = next(variant["enum"] for variant in bio_license_variants if "enum" in variant)
+
+        assert set(enum_values) == set(get_args(PortraitRightsStatus))
+
+
+def test_person_portrait_accepts_stage3_binary_metadata_for_active_and_rejected() -> None:
+    source_record_id = UUID("00000000-0000-0000-0000-000000000111")
+    person_id = UUID("00000000-0000-0000-0000-000000000222")
+
+    active_portrait = PersonPortrait(
+        person_id=person_id,
+        source_record_id=source_record_id,
+        status="active",
+        rights_status="licensed",
+        image_hash="7f63cb6d067972c3f34f094bb7e776a8f7f5bf3ce6f5f8a761fd72d4e95f94c4",
+        mime_type="image/jpeg",
+        width_px=640,
+        height_px=480,
+    )
+    rejected_portrait = PersonPortrait(
+        person_id=person_id,
+        source_record_id=source_record_id,
+        status="rejected",
+        rights_status="restricted",
+        image_hash="5e538104ec4d5e8806cb6920e2c69ba70440e9504dcd0e8f2ab0d4e5b95d5f3d",
+        mime_type="image/png",
+        width_px=40,
+        height_px=40,
+    )
+
+    assert active_portrait.status == "active"
+    assert active_portrait.rights_status == "licensed"
+    assert active_portrait.mime_type == "image/jpeg"
+    assert active_portrait.width_px == 640
+    assert active_portrait.height_px == 480
+
+    assert rejected_portrait.status == "rejected"
+    assert rejected_portrait.rights_status == "restricted"
+    assert rejected_portrait.mime_type == "image/png"
+    assert rejected_portrait.width_px == 40
+    assert rejected_portrait.height_px == 40

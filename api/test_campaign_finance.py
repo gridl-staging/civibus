@@ -8,10 +8,16 @@ import psycopg
 import pytest
 from fastapi.testclient import TestClient
 
+import api.queries as campaign_finance_queries
 from api.queries import fetch_committee_fundraising_summary
+from api.queries.campaign_finance import (
+    DISBURSEMENT_TYPE_PREFIX,
+    _COUNTY_PROXY_QUALIFYING_TRANSACTIONS_CTE,
+)
 from api.test_campaign_finance_support import (
     CandidateCommitteeLinkSeed,
     CandidateRowSeed,
+    CountySummaryFixtureContext,
     CommitteeRowSeed,
     FilingRowSeed,
     TransactionRowSeed,
@@ -24,12 +30,15 @@ from api.test_campaign_finance_support import (
     insert_source_record_for_test,
     insert_summary_transaction,
     insert_transaction_row,
+    seed_county_summary_recipient,
+    seed_county_summary_fixture,
     seed_committee_for_filing_breakdown,
     seed_committee_for_summary,
     seed_transactions_for_filters,
 )
 from core.db import insert_entity_source, insert_organization, insert_person
 from core.types.python.models import Organization, Person
+from domains.civics.constants import LAUNCH_SCOPE_USPS_STATES
 from domains.campaign_finance.ingest.filing_loader import upsert_filing
 from domains.campaign_finance.types.models import Filing
 
@@ -159,6 +168,47 @@ def test_get_committee_falls_back_to_organization_entity_source_when_row_source_
         "committee-fallback-newer",
         "committee-fallback-tie-a",
         "committee-fallback-tie-b",
+    ]
+    assert all(
+        set(source) == {
+            "domain",
+            "jurisdiction",
+            "data_source_name",
+            "data_source_url",
+            "source_record_key",
+            "record_url",
+            "pull_date",
+        }
+        for source in payload["sources"]
+    )
+    assert payload["sources"] == [
+        {
+            "domain": "campaign_finance",
+            "jurisdiction": "state/co",
+            "data_source_name": data_source.name,
+            "data_source_url": data_source.source_url,
+            "source_record_key": "committee-fallback-newer",
+            "record_url": "https://example.org/record/committee-fallback-newer",
+            "pull_date": "2026-03-16T10:00:00Z",
+        },
+        {
+            "domain": "campaign_finance",
+            "jurisdiction": "state/co",
+            "data_source_name": data_source.name,
+            "data_source_url": data_source.source_url,
+            "source_record_key": "committee-fallback-tie-a",
+            "record_url": "https://example.org/record/committee-fallback-tie-a",
+            "pull_date": "2026-03-15T10:00:00Z",
+        },
+        {
+            "domain": "campaign_finance",
+            "jurisdiction": "state/co",
+            "data_source_name": data_source.name,
+            "data_source_url": data_source.source_url,
+            "source_record_key": "committee-fallback-tie-b",
+            "record_url": "https://example.org/record/committee-fallback-tie-b",
+            "pull_date": "2026-03-15T10:00:00Z",
+        },
     ]
 
 
@@ -413,6 +463,49 @@ def test_get_candidate_rejects_malformed_uuid(api_client: TestClient) -> None:
 
     assert response.status_code == 422
     assert response.json()["detail"][0]["loc"] == ["path", "candidate_id"]
+
+
+def test_list_candidates_filters_by_person_id(
+    api_client: TestClient,
+    db_conn: psycopg.Connection,
+) -> None:
+    person_a = Person(canonical_name="Filtered Person A")
+    person_b = Person(canonical_name="Filtered Person B")
+    insert_person(db_conn, person_a)
+    insert_person(db_conn, person_b)
+
+    insert_candidate_row(
+        db_conn,
+        CandidateRowSeed(
+            id=UUID("91000000-0000-0000-0000-000000000001"),
+            fec_candidate_id="H0NC09001",
+            name="Candidate For A",
+            office="H",
+            person_id=person_a.id,
+            state="NC",
+        ),
+    )
+    insert_candidate_row(
+        db_conn,
+        CandidateRowSeed(
+            id=UUID("92000000-0000-0000-0000-000000000001"),
+            fec_candidate_id="H0NC09002",
+            name="Candidate For B",
+            office="H",
+            person_id=person_b.id,
+            state="NC",
+        ),
+    )
+
+    response = api_client.get(f"/v1/candidates?person_id={person_a.id}&limit=10&offset=0")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["has_next"] is False
+    assert payload["offset"] == 0
+    assert payload["limit"] == 10
+    assert [row["id"] for row in payload["items"]] == ["91000000-0000-0000-0000-000000000001"]
+    assert payload["items"][0]["person_id"] == str(person_a.id)
 
 
 def test_get_candidate_summary_aggregates_multi_committee_totals(
@@ -706,6 +799,13 @@ def test_get_candidate_summary_keeps_linked_committee_with_zero_qualifying_trans
                 "transaction_count": 0,
                 "jurisdiction": None,
                 "data_through": None,
+                "cash_receipts_total": "0.00",
+                "in_kind_receipts_total": "0.00",
+                "loan_receipts_total": "0.00",
+                "contribution_receipts_total": "0.00",
+                "top_donors": [],
+                "top_vendors": [],
+                "spend_categories": None,
             }
         ],
     }
@@ -1257,6 +1357,482 @@ def test_get_candidate_independent_expenditure_endpoints_return_empty_state(
     }
 
 
+def test_get_state_summary_returns_all_states_with_ranked_totals_and_registry_flags(
+    api_client: TestClient,
+    db_conn: psycopg.Connection,
+) -> None:
+    nc_context = seed_committee_for_summary(
+        db_conn,
+        committee_id=UUID("d1111111-1111-1111-1111-111111111111"),
+        committee_name="North Carolina Committee",
+        fec_committee_id="C99700111",
+        state="NC",
+        jurisdiction="state/nc",
+        pull_date=datetime(2026, 3, 22, 12, 0, tzinfo=timezone.utc),
+    )
+    nc_newer_source = insert_source_record_for_test(
+        db_conn,
+        source_record_id=UUID("d1000000-0000-0000-0000-000000000101"),
+        data_source_id=nc_context.data_source_id,
+        source_record_key="summary-nc-newer",
+        source_url="https://example.org/record/summary-nc-newer",
+        pull_date=datetime(2026, 3, 23, 12, 0, tzinfo=timezone.utc),
+    )
+    ca_context = seed_committee_for_summary(
+        db_conn,
+        committee_id=UUID("d2222222-2222-2222-2222-222222222222"),
+        committee_name="California Committee",
+        fec_committee_id="C99700222",
+        state="CA",
+        jurisdiction="state/ca",
+        pull_date=datetime(2026, 3, 21, 12, 0, tzinfo=timezone.utc),
+    )
+
+    insert_summary_transaction(
+        db_conn,
+        context=nc_context,
+        transaction_id=UUID("d0000000-0000-0000-0000-000000000111"),
+        transaction_type="15",
+        amount=Decimal("250.00"),
+        source_record_id=nc_context.source_record_id,
+    )
+    insert_summary_transaction(
+        db_conn,
+        context=nc_context,
+        transaction_id=UUID("d0000000-0000-0000-0000-000000000112"),
+        transaction_type="24A",
+        amount=Decimal("50.00"),
+        source_record_id=nc_context.source_record_id,
+    )
+    insert_summary_transaction(
+        db_conn,
+        context=nc_context,
+        transaction_id=UUID("d0000000-0000-0000-0000-000000000113"),
+        transaction_type="24E",
+        amount=Decimal("40.00"),
+        source_record_id=nc_context.source_record_id,
+        support_oppose="S",
+        aggregate_amount=Decimal("40.00"),
+    )
+    insert_summary_transaction(
+        db_conn,
+        context=nc_context,
+        transaction_id=UUID("d0000000-0000-0000-0000-000000000114"),
+        transaction_type="15",
+        amount=Decimal("25.00"),
+        source_record_id=nc_newer_source.id,
+    )
+    insert_summary_transaction(
+        db_conn,
+        context=ca_context,
+        transaction_id=UUID("d0000000-0000-0000-0000-000000000121"),
+        transaction_type="15",
+        amount=Decimal("100.00"),
+        source_record_id=ca_context.source_record_id,
+    )
+    insert_summary_transaction(
+        db_conn,
+        context=ca_context,
+        transaction_id=UUID("d0000000-0000-0000-0000-000000000122"),
+        transaction_type="24A",
+        amount=Decimal("20.00"),
+        source_record_id=ca_context.source_record_id,
+    )
+    insert_summary_transaction(
+        db_conn,
+        context=ca_context,
+        transaction_id=UUID("d0000000-0000-0000-0000-000000000123"),
+        transaction_type="24E",
+        amount=Decimal("10.00"),
+        source_record_id=ca_context.source_record_id,
+        support_oppose="O",
+        aggregate_amount=Decimal("10.00"),
+    )
+
+    insert_candidate_row(
+        db_conn,
+        CandidateRowSeed(
+            id=UUID("d0000000-0000-0000-0000-000000000131"),
+            fec_candidate_id="H0NC99001",
+            name="NC Candidate 1",
+            office="H",
+            state="NC",
+        ),
+    )
+    insert_candidate_row(
+        db_conn,
+        CandidateRowSeed(
+            id=UUID("d0000000-0000-0000-0000-000000000132"),
+            fec_candidate_id="S0NC99002",
+            name="NC Candidate 2",
+            office="S",
+            state="NC",
+        ),
+    )
+    insert_candidate_row(
+        db_conn,
+        CandidateRowSeed(
+            id=UUID("d0000000-0000-0000-0000-000000000133"),
+            fec_candidate_id="H0CA99003",
+            name="CA Candidate 1",
+            office="H",
+            state="CA",
+        ),
+    )
+
+    response = api_client.get("/v1/campaign-finance/states/summary")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert len(payload) == len(LAUNCH_SCOPE_USPS_STATES)
+    assert {row["state_code"] for row in payload} == set(LAUNCH_SCOPE_USPS_STATES)
+    assert [row["state_code"] for row in payload[:2]] == ["NC", "CA"]
+
+    rows_by_state = {row["state_code"]: row for row in payload}
+    nc_row = rows_by_state["NC"]
+    ca_row = rows_by_state["CA"]
+    dc_row = rows_by_state["DC"]
+
+    assert nc_row["total_raised"] == "275.00"
+    assert nc_row["total_spent"] == "90.00"
+    assert nc_row["net"] == "185.00"
+    assert nc_row["committee_count"] == 1
+    assert nc_row["transaction_count"] == 4
+    assert nc_row["federal_candidate_count"] == 2
+    assert nc_row["ie_support_total"] == "40.00"
+    assert nc_row["ie_oppose_total"] == "0.00"
+    assert nc_row["ie_support_count"] == 1
+    assert nc_row["ie_oppose_count"] == 0
+    assert nc_row["data_through"] == "2026-03-23T12:00:00Z"
+    assert nc_row["supported"] is True
+
+    assert ca_row["total_raised"] == "100.00"
+    assert ca_row["total_spent"] == "30.00"
+    assert ca_row["net"] == "70.00"
+    assert ca_row["committee_count"] == 1
+    assert ca_row["transaction_count"] == 3
+    assert ca_row["federal_candidate_count"] == 1
+    assert ca_row["ie_support_total"] == "0.00"
+    assert ca_row["ie_oppose_total"] == "10.00"
+    assert ca_row["ie_support_count"] == 0
+    assert ca_row["ie_oppose_count"] == 1
+    assert ca_row["supported"] is True
+
+    assert dc_row["total_raised"] == "0.00"
+    assert dc_row["total_spent"] == "0.00"
+    assert dc_row["net"] == "0.00"
+    assert dc_row["committee_count"] == 0
+    assert dc_row["transaction_count"] == 0
+    assert dc_row["federal_candidate_count"] == 0
+    assert dc_row["ie_support_total"] is None
+    assert dc_row["ie_oppose_total"] is None
+    assert dc_row["ie_support_count"] is None
+    assert dc_row["ie_oppose_count"] is None
+    assert dc_row["data_through"] is None
+    assert dc_row["supported"] is False
+
+
+def test_state_summary_and_detail_return_null_ie_for_supported_state_without_ie_lane(
+    api_client: TestClient,
+    db_conn: psycopg.Connection,
+) -> None:
+    """A launch-support state whose registry evidence shows no IE coverage must return null IE totals.
+
+    Louisiana is the canonical example: the state pipeline is launch-support
+    candidate, but `docs/research/coverage-registry.json` documents that the
+    bulk export carries no independent-expenditure schedule. Even when the DB
+    happens to contain IE-flagged transactions for an LA committee, the API
+    must serialize null IE totals/counts so the frontend cannot render
+    misleading zeroes for outside-spending coverage.
+    """
+    la_context = seed_committee_for_summary(
+        db_conn,
+        committee_id=UUID("d6666666-6666-6666-6666-666666666666"),
+        committee_name="Louisiana Committee",
+        fec_committee_id="C99700666",
+        state="LA",
+        jurisdiction="state/la",
+        pull_date=datetime(2026, 3, 27, 12, 0, tzinfo=timezone.utc),
+    )
+
+    insert_summary_transaction(
+        db_conn,
+        context=la_context,
+        transaction_id=UUID("d0000000-0000-0000-0000-000000000601"),
+        transaction_type="15",
+        amount=Decimal("400.00"),
+        source_record_id=la_context.source_record_id,
+    )
+    # Even with IE-classified rows present in the DB, the registry evidence says
+    # LA has no IE coverage in the current bulk export, so the API contract is
+    # null IE totals (not zero, not the seeded amount).
+    insert_summary_transaction(
+        db_conn,
+        context=la_context,
+        transaction_id=UUID("d0000000-0000-0000-0000-000000000602"),
+        transaction_type="24E",
+        amount=Decimal("75.00"),
+        source_record_id=la_context.source_record_id,
+        support_oppose="S",
+        aggregate_amount=Decimal("75.00"),
+    )
+    insert_summary_transaction(
+        db_conn,
+        context=la_context,
+        transaction_id=UUID("d0000000-0000-0000-0000-000000000603"),
+        transaction_type="24E",
+        amount=Decimal("25.00"),
+        source_record_id=la_context.source_record_id,
+        support_oppose="O",
+        aggregate_amount=Decimal("25.00"),
+    )
+
+    summary_response = api_client.get("/v1/campaign-finance/states/summary")
+    assert summary_response.status_code == 200
+
+    rows_by_state = {row["state_code"]: row for row in summary_response.json()}
+    la_summary_row = rows_by_state["LA"]
+
+    assert la_summary_row["supported"] is True
+    assert la_summary_row["total_raised"] == "400.00"
+    assert la_summary_row["transaction_count"] == 3
+    assert la_summary_row["warning_text"] == "Independent expenditure data is incomplete for this state."
+    assert la_summary_row["ie_support_total"] is None
+    assert la_summary_row["ie_oppose_total"] is None
+    assert la_summary_row["ie_support_count"] is None
+    assert la_summary_row["ie_oppose_count"] is None
+
+    detail_response = api_client.get("/v1/campaign-finance/states/LA")
+    assert detail_response.status_code == 200
+
+    la_detail_payload = detail_response.json()
+    assert la_detail_payload["state_code"] == "LA"
+    assert la_detail_payload["supported"] is True
+    assert la_detail_payload["warning_text"] == "Independent expenditure data is incomplete for this state."
+    assert la_detail_payload["ie_support_total"] is None
+    assert la_detail_payload["ie_oppose_total"] is None
+    assert la_detail_payload["ie_support_count"] is None
+    assert la_detail_payload["ie_oppose_count"] is None
+    # The state has no IE coverage, so the detail panel must not surface
+    # any top-IE-spender entries derived from incidental DB rows.
+    assert la_detail_payload["top_ie_spenders"] == []
+
+
+def test_get_state_detail_returns_aggregate_panels_and_validation_behavior(
+    api_client: TestClient,
+    db_conn: psycopg.Connection,
+) -> None:
+    nc_committee_a = seed_committee_for_summary(
+        db_conn,
+        committee_id=UUID("d3333333-3333-3333-3333-333333333333"),
+        committee_name="NC Committee A",
+        fec_committee_id="C99700333",
+        state="NC",
+        jurisdiction="state/nc",
+        pull_date=datetime(2026, 3, 25, 12, 0, tzinfo=timezone.utc),
+    )
+    nc_committee_b = seed_committee_for_summary(
+        db_conn,
+        committee_id=UUID("d4444444-4444-4444-4444-444444444444"),
+        committee_name="NC Committee B",
+        fec_committee_id="C99700444",
+        state="NC",
+        jurisdiction="state/nc",
+        pull_date=datetime(2026, 3, 26, 12, 0, tzinfo=timezone.utc),
+    )
+    ca_committee = seed_committee_for_summary(
+        db_conn,
+        committee_id=UUID("d5555555-5555-5555-5555-555555555555"),
+        committee_name="CA Committee A",
+        fec_committee_id="C99700555",
+        state="CA",
+        jurisdiction="state/ca",
+        pull_date=datetime(2026, 3, 24, 12, 0, tzinfo=timezone.utc),
+    )
+
+    nc_candidate_one = UUID("d0000000-0000-0000-0000-000000000211")
+    nc_candidate_two = UUID("d0000000-0000-0000-0000-000000000212")
+    insert_candidate_row(
+        db_conn,
+        CandidateRowSeed(
+            id=nc_candidate_one,
+            fec_candidate_id="H0NC99011",
+            name="NC Candidate One",
+            office="H",
+            state="NC",
+        ),
+    )
+    insert_candidate_row(
+        db_conn,
+        CandidateRowSeed(
+            id=nc_candidate_two,
+            fec_candidate_id="H0NC99012",
+            name="NC Candidate Two",
+            office="H",
+            state="NC",
+        ),
+    )
+    insert_candidate_row(
+        db_conn,
+        CandidateRowSeed(
+            id=UUID("d0000000-0000-0000-0000-000000000213"),
+            fec_candidate_id="H0CA99013",
+            name="CA Candidate One",
+            office="H",
+            state="CA",
+        ),
+    )
+
+    insert_summary_transaction(
+        db_conn,
+        context=nc_committee_a,
+        transaction_id=UUID("d0000000-0000-0000-0000-000000000221"),
+        transaction_type="15",
+        amount=Decimal("200.00"),
+        source_record_id=nc_committee_a.source_record_id,
+        recipient_candidate_id=nc_candidate_one,
+    )
+    insert_summary_transaction(
+        db_conn,
+        context=nc_committee_a,
+        transaction_id=UUID("d0000000-0000-0000-0000-000000000222"),
+        transaction_type="15",
+        amount=Decimal("70.00"),
+        source_record_id=nc_committee_a.source_record_id,
+        recipient_candidate_id=nc_candidate_two,
+    )
+    insert_summary_transaction(
+        db_conn,
+        context=nc_committee_b,
+        transaction_id=UUID("d0000000-0000-0000-0000-000000000223"),
+        transaction_type="15",
+        amount=Decimal("120.00"),
+        source_record_id=nc_committee_b.source_record_id,
+        recipient_candidate_id=nc_candidate_two,
+    )
+    insert_summary_transaction(
+        db_conn,
+        context=nc_committee_a,
+        transaction_id=UUID("d0000000-0000-0000-0000-000000000224"),
+        transaction_type="24A",
+        amount=Decimal("30.00"),
+        source_record_id=nc_committee_a.source_record_id,
+    )
+    insert_summary_transaction(
+        db_conn,
+        context=nc_committee_b,
+        transaction_id=UUID("d0000000-0000-0000-0000-000000000225"),
+        transaction_type="24E",
+        amount=Decimal("80.00"),
+        source_record_id=nc_committee_b.source_record_id,
+        support_oppose="O",
+        aggregate_amount=Decimal("80.00"),
+    )
+    insert_summary_transaction(
+        db_conn,
+        context=nc_committee_a,
+        transaction_id=UUID("d0000000-0000-0000-0000-000000000226"),
+        transaction_type="24E",
+        amount=Decimal("20.00"),
+        source_record_id=nc_committee_a.source_record_id,
+        support_oppose="S",
+        aggregate_amount=Decimal("20.00"),
+    )
+    insert_summary_transaction(
+        db_conn,
+        context=ca_committee,
+        transaction_id=UUID("d0000000-0000-0000-0000-000000000227"),
+        transaction_type="15",
+        amount=Decimal("55.00"),
+        source_record_id=ca_committee.source_record_id,
+    )
+
+    nc_response = api_client.get("/v1/campaign-finance/states/NC")
+    ca_response = api_client.get("/v1/campaign-finance/states/CA")
+    missing_response = api_client.get("/v1/campaign-finance/states/ZZ")
+    lowercase_response = api_client.get("/v1/campaign-finance/states/nc")
+
+    assert nc_response.status_code == 200
+    nc_payload = nc_response.json()
+    assert nc_payload["state_code"] == "NC"
+    assert nc_payload["total_raised"] == "390.00"
+    assert nc_payload["total_spent"] == "130.00"
+    assert nc_payload["net"] == "260.00"
+    assert nc_payload["transaction_count"] == 6
+    assert nc_payload["committee_count"] == 2
+    assert nc_payload["federal_candidate_count"] == 2
+    assert nc_payload["ie_support_total"] == "20.00"
+    assert nc_payload["ie_oppose_total"] == "80.00"
+    assert nc_payload["ie_support_count"] == 1
+    assert nc_payload["ie_oppose_count"] == 1
+    assert nc_payload["supported"] is True
+    assert nc_payload["data_through"] == "2026-03-26T12:00:00Z"
+    assert nc_payload["top_candidates"] == [
+        {
+            "candidate_id": str(nc_candidate_one),
+            "candidate_name": "NC Candidate One",
+            "total_raised": "200.00",
+        },
+        {
+            "candidate_id": str(nc_candidate_two),
+            "candidate_name": "NC Candidate Two",
+            "total_raised": "190.00",
+        },
+    ]
+    assert nc_payload["top_committees"] == [
+        {
+            "committee_id": str(nc_committee_a.committee_id),
+            "committee_name": "NC Committee A",
+            "total_raised": "270.00",
+        },
+        {
+            "committee_id": str(nc_committee_b.committee_id),
+            "committee_name": "NC Committee B",
+            "total_raised": "120.00",
+        },
+    ]
+    assert nc_payload["top_ie_spenders"] == [
+        {
+            "committee_id": str(nc_committee_b.committee_id),
+            "committee_name": "NC Committee B",
+            "total_amount": "80.00",
+        },
+        {
+            "committee_id": str(nc_committee_a.committee_id),
+            "committee_name": "NC Committee A",
+            "total_amount": "20.00",
+        },
+    ]
+    assert [source["source_record_key"] for source in nc_payload["sources"]] == [
+        f"summary-sr-{nc_committee_b.committee_id}",
+        f"summary-sr-{nc_committee_a.committee_id}",
+    ]
+    assert all(
+        set(source) == {
+            "domain",
+            "jurisdiction",
+            "data_source_name",
+            "data_source_url",
+            "source_record_key",
+            "record_url",
+            "pull_date",
+        }
+        for source in nc_payload["sources"]
+    )
+    assert all(source["jurisdiction"] == "state/nc" for source in nc_payload["sources"])
+
+    assert ca_response.status_code == 200
+    ca_payload = ca_response.json()
+    assert ca_payload["state_code"] == "CA"
+    assert [source["source_record_key"] for source in ca_payload["sources"]] == [
+        f"summary-sr-{ca_committee.committee_id}"
+    ]
+    assert missing_response.status_code == 404
+    assert missing_response.json() == {"detail": "State not found"}
+    assert lowercase_response.status_code == 422
+    assert lowercase_response.json()["detail"][0]["loc"] == ["path", "state_code"]
+
+
 def test_get_filing_returns_direct_provenance(
     api_client: TestClient,
     db_conn: psycopg.Connection,
@@ -1649,6 +2225,124 @@ def test_summary_aggregates_raised_spent_net_and_count(
     assert result["committee_name"] == "Summary Test Committee"
 
 
+def test_summary_computes_stage4_receipt_splits_rankings_and_spend_categories(
+    db_conn: psycopg.Connection,
+) -> None:
+    committee_id = UUID("a0000000-0000-0000-0000-000000000008")
+    ctx = seed_committee_for_summary(db_conn, committee_id=committee_id, fec_committee_id="C99990008")
+    summary_filing_id = UUID(f"20000000-0000-0000-0000-{committee_id.hex[:12]}")
+
+    seeded_transactions = (
+        TransactionRowSeed(
+            id=UUID("a0000000-0000-0000-0000-000000000801"),
+            filing_id=summary_filing_id,
+            committee_id=committee_id,
+            transaction_type="15",
+            amount=Decimal("100.00"),
+            amendment_indicator="N",
+            source_record_id=ctx.source_record_id,
+            contributor_name_raw="Donor One",
+        ),
+        TransactionRowSeed(
+            id=UUID("a0000000-0000-0000-0000-000000000802"),
+            filing_id=summary_filing_id,
+            committee_id=committee_id,
+            transaction_type="15",
+            amount=Decimal("25.00"),
+            amendment_indicator="N",
+            source_record_id=ctx.source_record_id,
+            contributor_name_raw="Donor One",
+        ),
+        TransactionRowSeed(
+            id=UUID("a0000000-0000-0000-0000-000000000803"),
+            filing_id=summary_filing_id,
+            committee_id=committee_id,
+            transaction_type="15Z",
+            amount=Decimal("30.00"),
+            amendment_indicator="N",
+            source_record_id=ctx.source_record_id,
+            contributor_name_raw="Donor Two",
+        ),
+        TransactionRowSeed(
+            id=UUID("a0000000-0000-0000-0000-000000000804"),
+            filing_id=summary_filing_id,
+            committee_id=committee_id,
+            transaction_type="16G",
+            amount=Decimal("20.00"),
+            amendment_indicator="N",
+            source_record_id=ctx.source_record_id,
+            contributor_name_raw="Lender LLC",
+        ),
+        TransactionRowSeed(
+            id=UUID("a0000000-0000-0000-0000-000000000805"),
+            filing_id=summary_filing_id,
+            committee_id=committee_id,
+            transaction_type="24A",
+            amount=Decimal("40.00"),
+            amendment_indicator="N",
+            source_record_id=ctx.source_record_id,
+            contributor_name_raw="Vendor Alpha",
+            memo_text="Media",
+        ),
+        TransactionRowSeed(
+            id=UUID("a0000000-0000-0000-0000-000000000806"),
+            filing_id=summary_filing_id,
+            committee_id=committee_id,
+            transaction_type="24E",
+            amount=Decimal("15.00"),
+            amendment_indicator="N",
+            source_record_id=ctx.source_record_id,
+            contributor_name_raw="Vendor Beta",
+            memo_text="Field",
+        ),
+        TransactionRowSeed(
+            id=UUID("a0000000-0000-0000-0000-000000000807"),
+            filing_id=summary_filing_id,
+            committee_id=committee_id,
+            transaction_type="24A",
+            amount=Decimal("10.00"),
+            amendment_indicator="N",
+            source_record_id=ctx.source_record_id,
+            contributor_name_raw="Vendor Alpha",
+            memo_text="Media",
+        ),
+        TransactionRowSeed(
+            id=UUID("a0000000-0000-0000-0000-000000000808"),
+            filing_id=summary_filing_id,
+            committee_id=committee_id,
+            transaction_type="24A",
+            amount=Decimal("5.00"),
+            amendment_indicator="N",
+            source_record_id=ctx.source_record_id,
+            contributor_name_raw="Vendor Alpha",
+            memo_text=None,
+        ),
+    )
+    for transaction in seeded_transactions:
+        insert_transaction_row(db_conn, transaction)
+
+    result = fetch_committee_fundraising_summary(db_conn, committee_id)
+
+    assert result is not None
+    assert result["cash_receipts_total"] == Decimal("125.00")
+    assert result["in_kind_receipts_total"] == Decimal("30.00")
+    assert result["loan_receipts_total"] == Decimal("20.00")
+    assert result["contribution_receipts_total"] == Decimal("155.00")
+    assert result["top_donors"] == [
+        {"name": "Donor One", "total_amount": Decimal("125.00"), "transaction_count": 2},
+        {"name": "Donor Two", "total_amount": Decimal("30.00"), "transaction_count": 1},
+        {"name": "Lender LLC", "total_amount": Decimal("20.00"), "transaction_count": 1},
+    ]
+    assert result["top_vendors"] == [
+        {"name": "Vendor Alpha", "total_amount": Decimal("55.00"), "transaction_count": 3},
+        {"name": "Vendor Beta", "total_amount": Decimal("15.00"), "transaction_count": 1},
+    ]
+    assert result["spend_categories"] == [
+        {"category": "media", "total_amount": Decimal("50.00"), "transaction_count": 2},
+        {"category": "field", "total_amount": Decimal("15.00"), "transaction_count": 1},
+    ]
+
+
 def test_summary_excludes_memo_transactions(
     db_conn: psycopg.Connection,
 ) -> None:
@@ -1745,6 +2439,73 @@ def test_summary_derives_jurisdiction_and_data_through_from_provenance_chain(
     assert result is not None
     assert result["jurisdiction"] == "state/nc"
     assert result["data_through"] == pull
+
+
+def test_state_summary_derives_data_through_from_latest_qualifying_provenance_chain(
+    db_conn: psycopg.Connection,
+) -> None:
+    committee_id = UUID("d6666666-6666-6666-6666-666666666666")
+    old_pull = datetime(2026, 3, 20, 8, 0, tzinfo=timezone.utc)
+    new_pull = datetime(2026, 3, 24, 9, 0, tzinfo=timezone.utc)
+    context = seed_committee_for_summary(
+        db_conn,
+        committee_id=committee_id,
+        committee_name="NC State Summary Provenance",
+        fec_committee_id="C99700666",
+        state="NC",
+        jurisdiction="state/nc",
+        pull_date=old_pull,
+    )
+    new_source = insert_source_record_for_test(
+        db_conn,
+        source_record_id=UUID("d1000000-0000-0000-0000-000000000301"),
+        data_source_id=context.data_source_id,
+        source_record_key="state-summary-provenance-new",
+        source_url="https://example.org/record/state-summary-provenance-new",
+        pull_date=new_pull,
+    )
+    superseded_source = insert_source_record_for_test(
+        db_conn,
+        source_record_id=UUID("d1000000-0000-0000-0000-000000000302"),
+        data_source_id=context.data_source_id,
+        source_record_key="state-summary-provenance-superseded",
+        source_url="https://example.org/record/state-summary-provenance-superseded",
+        pull_date=datetime(2026, 3, 25, 9, 0, tzinfo=timezone.utc),
+        superseded_by=new_source.id,
+    )
+
+    insert_summary_transaction(
+        db_conn,
+        context=context,
+        transaction_id=UUID("d0000000-0000-0000-0000-000000000311"),
+        transaction_type="15",
+        amount=Decimal("100.00"),
+        source_record_id=context.source_record_id,
+    )
+    insert_summary_transaction(
+        db_conn,
+        context=context,
+        transaction_id=UUID("d0000000-0000-0000-0000-000000000312"),
+        transaction_type="15",
+        amount=Decimal("50.00"),
+        source_record_id=new_source.id,
+    )
+    insert_summary_transaction(
+        db_conn,
+        context=context,
+        transaction_id=UUID("d0000000-0000-0000-0000-000000000313"),
+        transaction_type="15",
+        amount=Decimal("250.00"),
+        source_record_id=superseded_source.id,
+    )
+
+    assert hasattr(campaign_finance_queries, "fetch_state_campaign_finance_summaries")
+    summary_rows = campaign_finance_queries.fetch_state_campaign_finance_summaries(db_conn)
+    nc_row = next(row for row in summary_rows if row["state_code"] == "NC")
+
+    assert nc_row["total_raised"] == Decimal("150.00")
+    assert nc_row["transaction_count"] == 2
+    assert nc_row["data_through"] == new_pull
 
 
 def test_summary_aggregates_mixed_provenance_rows_without_dropping_transactions(
@@ -1874,6 +2635,366 @@ def test_get_committee_summary_returns_zero_totals_when_no_qualifying_transactio
         "transaction_count": 0,
         "jurisdiction": None,
         "data_through": None,
+        "cash_receipts_total": "0.00",
+        "in_kind_receipts_total": "0.00",
+        "loan_receipts_total": "0.00",
+        "contribution_receipts_total": "0.00",
+        "top_donors": [],
+        "top_vendors": [],
+        "spend_categories": None,
+    }
+
+
+def _seed_nc_county_summary_three_transaction_fixture(
+    db_conn: psycopg.Connection,
+) -> CountySummaryFixtureContext:
+    context = seed_county_summary_fixture(
+        db_conn,
+        committee_id=UUID("a2000000-0000-0000-0000-000000000001"),
+        committee_name="Wake Forward PAC",
+        recipient_committee_id=UUID("a2000000-0000-0000-0000-000000000002"),
+        recipient_committee_name="NC Action Committee",
+        candidate_id=UUID("a2000000-0000-0000-0000-000000000003"),
+        candidate_name="Jordan Candidate",
+    )
+    insert_transaction_row(
+        db_conn,
+        TransactionRowSeed(
+            id=UUID("a2000000-0000-0000-0000-000000000011"),
+            filing_id=context.filing_id,
+            committee_id=context.committee_id,
+            transaction_type="24A",
+            amount=Decimal("100.00"),
+            amendment_indicator="N",
+            recipient_committee_id=context.recipient_committee_id,
+        ),
+    )
+    insert_transaction_row(
+        db_conn,
+        TransactionRowSeed(
+            id=UUID("a2000000-0000-0000-0000-000000000012"),
+            filing_id=context.filing_id,
+            committee_id=context.committee_id,
+            transaction_type="15",
+            amount=Decimal("999.00"),
+            amendment_indicator="N",
+            recipient_committee_id=context.recipient_committee_id,
+        ),
+    )
+    insert_transaction_row(
+        db_conn,
+        TransactionRowSeed(
+            id=UUID("a2000000-0000-0000-0000-000000000013"),
+            filing_id=context.filing_id,
+            committee_id=context.committee_id,
+            transaction_type="15",
+            amount=Decimal("777.00"),
+            amendment_indicator="T",
+            recipient_committee_id=context.recipient_committee_id,
+        ),
+    )
+    return context
+
+
+def test_county_qualifying_transactions_cte_uses_disbursement_prefix_value() -> None:
+    expected_like_clause = f"t.transaction_type LIKE '{DISBURSEMENT_TYPE_PREFIX}%%'"
+    assert expected_like_clause in _COUNTY_PROXY_QUALIFYING_TRANSACTIONS_CTE
+    assert "{DISBURSEMENT_TYPE_PREFIX}" not in _COUNTY_PROXY_QUALIFYING_TRANSACTIONS_CTE
+
+
+def test_get_county_campaign_finance_summary_returns_aggregated_proxy_totals_for_mapped_county(
+    api_client: TestClient,
+    db_conn: psycopg.Connection,
+) -> None:
+    context = _seed_nc_county_summary_three_transaction_fixture(db_conn)
+
+    response = api_client.get("/v1/counties/nc/wake/campaign-finance-summary")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["state"] == "nc"
+    assert payload["county_slug"] == "wake"
+    assert payload["donor_total_cents"] == 10000
+    assert payload["transaction_count"] == 1
+    assert payload["top_recipient_committees"] == [
+        {
+            "committee_id": str(context.recipient_committee_id),
+            "committee_name": "NC Action Committee",
+            "donor_total_cents": 10000,
+            "transaction_count": 1,
+        }
+    ]
+    assert payload["top_linked_candidates"] == [
+        {
+            "candidate_id": str(context.candidate_id),
+            "candidate_name": "Jordan Candidate",
+            "donor_total_cents": 10000,
+            "transaction_count": 1,
+        }
+    ]
+    assert payload["sources"] == []
+
+
+def test_get_county_campaign_finance_summary_ranks_recipients_and_candidates_with_tiebreakers(
+    api_client: TestClient,
+    db_conn: psycopg.Connection,
+) -> None:
+    context = seed_county_summary_fixture(
+        db_conn,
+        committee_id=UUID("a2100000-0000-0000-0000-000000000001"),
+        committee_name="Wake Outflow Committee",
+        recipient_committee_id=UUID("a2100000-0000-0000-0000-000000000010"),
+        recipient_committee_name="Recipient Seed",
+        candidate_id=UUID("a2100000-0000-0000-0000-000000000020"),
+        candidate_name="Candidate Seed",
+    )
+    recipient_alpha = seed_county_summary_recipient(
+        db_conn,
+        recipient_committee_id=UUID("a2100000-0000-0000-0000-000000000011"),
+        recipient_committee_name="Recipient Alpha",
+        recipient_committee_fec_id="C21000011",
+        candidate_id=UUID("a2100000-0000-0000-0000-000000000021"),
+        candidate_name="Candidate Alpha",
+        candidate_fec_id="H0NC21001",
+        link_id=UUID("a2100000-0000-0000-0000-000000000101"),
+    )
+    recipient_beta = seed_county_summary_recipient(
+        db_conn,
+        recipient_committee_id=UUID("a2100000-0000-0000-0000-000000000012"),
+        recipient_committee_name="Recipient Beta",
+        recipient_committee_fec_id="C21000012",
+        candidate_id=UUID("a2100000-0000-0000-0000-000000000022"),
+        candidate_name="Candidate Beta",
+        candidate_fec_id="H0NC21002",
+        link_id=UUID("a2100000-0000-0000-0000-000000000102"),
+    )
+    recipient_gamma = seed_county_summary_recipient(
+        db_conn,
+        recipient_committee_id=UUID("a2100000-0000-0000-0000-000000000013"),
+        recipient_committee_name="Recipient Gamma",
+        recipient_committee_fec_id="C21000013",
+        candidate_id=UUID("a2100000-0000-0000-0000-000000000023"),
+        candidate_name="Candidate Gamma",
+        candidate_fec_id="H0NC21003",
+        link_id=UUID("a2100000-0000-0000-0000-000000000103"),
+    )
+    filing_id = context.filing_id
+    seeded_rows = [
+        (UUID("a2100000-0000-0000-0000-000000000111"), recipient_alpha.recipient_committee_id, Decimal("80.00")),
+        (UUID("a2100000-0000-0000-0000-000000000112"), recipient_alpha.recipient_committee_id, Decimal("40.00")),
+        (UUID("a2100000-0000-0000-0000-000000000113"), recipient_beta.recipient_committee_id, Decimal("60.00")),
+        (UUID("a2100000-0000-0000-0000-000000000114"), recipient_beta.recipient_committee_id, Decimal("60.00")),
+        (UUID("a2100000-0000-0000-0000-000000000115"), recipient_gamma.recipient_committee_id, Decimal("120.00")),
+    ]
+    for transaction_id, recipient_committee_id, amount in seeded_rows:
+        insert_transaction_row(
+            db_conn,
+            TransactionRowSeed(
+                id=transaction_id,
+                filing_id=filing_id,
+                committee_id=context.committee_id,
+                transaction_type="24A",
+                amount=amount,
+                amendment_indicator="N",
+                recipient_committee_id=recipient_committee_id,
+            ),
+        )
+
+    response = api_client.get("/v1/counties/nc/wake/campaign-finance-summary")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["donor_total_cents"] == 36000
+    assert payload["transaction_count"] == 5
+    assert payload["top_recipient_committees"] == [
+        {
+            "committee_id": str(recipient_alpha.recipient_committee_id),
+            "committee_name": "Recipient Alpha",
+            "donor_total_cents": 12000,
+            "transaction_count": 2,
+        },
+        {
+            "committee_id": str(recipient_beta.recipient_committee_id),
+            "committee_name": "Recipient Beta",
+            "donor_total_cents": 12000,
+            "transaction_count": 2,
+        },
+        {
+            "committee_id": str(recipient_gamma.recipient_committee_id),
+            "committee_name": "Recipient Gamma",
+            "donor_total_cents": 12000,
+            "transaction_count": 1,
+        },
+    ]
+    assert payload["top_linked_candidates"] == [
+        {
+            "candidate_id": str(recipient_alpha.candidate_id),
+            "candidate_name": "Candidate Alpha",
+            "donor_total_cents": 12000,
+            "transaction_count": 2,
+        },
+        {
+            "candidate_id": str(recipient_beta.candidate_id),
+            "candidate_name": "Candidate Beta",
+            "donor_total_cents": 12000,
+            "transaction_count": 2,
+        },
+        {
+            "candidate_id": str(recipient_gamma.candidate_id),
+            "candidate_name": "Candidate Gamma",
+            "donor_total_cents": 12000,
+            "transaction_count": 1,
+        },
+    ]
+    assert payload["sources"] == []
+
+
+def test_get_county_campaign_finance_summary_excludes_memo_terminated_and_superseded_rows(
+    api_client: TestClient,
+    db_conn: psycopg.Connection,
+) -> None:
+    context = seed_county_summary_fixture(
+        db_conn,
+        committee_id=UUID("a2200000-0000-0000-0000-000000000001"),
+        committee_name="Wake Filter Committee",
+        recipient_committee_id=UUID("a2200000-0000-0000-0000-000000000002"),
+        recipient_committee_name="Wake Recipient",
+        candidate_id=UUID("a2200000-0000-0000-0000-000000000003"),
+        candidate_name="Filter Candidate",
+    )
+    filing_id = context.filing_id
+    data_source = insert_data_source_for_test(db_conn, jurisdiction="state/nc", name_suffix="county-filter")
+    replacement_record = insert_source_record_for_test(
+        db_conn,
+        source_record_id=UUID("a2200000-0000-0000-0000-000000000101"),
+        data_source_id=data_source.id,
+        source_record_key="county-filter-replacement",
+        source_url="https://example.org/record/county-filter-replacement",
+        pull_date=datetime(2026, 4, 1, 10, 0, tzinfo=timezone.utc),
+    )
+    superseded_record = insert_source_record_for_test(
+        db_conn,
+        source_record_id=UUID("a2200000-0000-0000-0000-000000000102"),
+        data_source_id=data_source.id,
+        source_record_key="county-filter-superseded",
+        source_url="https://example.org/record/county-filter-superseded",
+        pull_date=datetime(2026, 3, 30, 10, 0, tzinfo=timezone.utc),
+        superseded_by=replacement_record.id,
+    )
+    insert_transaction_row(
+        db_conn,
+        TransactionRowSeed(
+            id=UUID("a2200000-0000-0000-0000-000000000201"),
+            filing_id=filing_id,
+            committee_id=context.committee_id,
+            transaction_type="24A",
+            amount=Decimal("75.00"),
+            amendment_indicator="N",
+            source_record_id=replacement_record.id,
+            recipient_committee_id=context.recipient_committee_id,
+        ),
+    )
+    insert_transaction_row(
+        db_conn,
+        TransactionRowSeed(
+            id=UUID("a2200000-0000-0000-0000-000000000202"),
+            filing_id=filing_id,
+            committee_id=context.committee_id,
+            transaction_type="24A",
+            amount=Decimal("999.00"),
+            amendment_indicator="N",
+            recipient_committee_id=context.recipient_committee_id,
+            memo_code="X",
+            is_memo=True,
+        ),
+    )
+    insert_transaction_row(
+        db_conn,
+        TransactionRowSeed(
+            id=UUID("a2200000-0000-0000-0000-000000000203"),
+            filing_id=filing_id,
+            committee_id=context.committee_id,
+            transaction_type="24A",
+            amount=Decimal("888.00"),
+            amendment_indicator="T",
+            recipient_committee_id=context.recipient_committee_id,
+        ),
+    )
+    insert_transaction_row(
+        db_conn,
+        TransactionRowSeed(
+            id=UUID("a2200000-0000-0000-0000-000000000204"),
+            filing_id=filing_id,
+            committee_id=context.committee_id,
+            transaction_type="24A",
+            amount=Decimal("777.00"),
+            amendment_indicator="N",
+            recipient_committee_id=context.recipient_committee_id,
+            source_record_id=superseded_record.id,
+        ),
+    )
+
+    response = api_client.get("/v1/counties/nc/wake/campaign-finance-summary")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "state": "nc",
+        "county_slug": "wake",
+        "donor_total_cents": 7500,
+        "transaction_count": 1,
+        "top_recipient_committees": [
+            {
+                "committee_id": str(context.recipient_committee_id),
+                "committee_name": "Wake Recipient",
+                "donor_total_cents": 7500,
+                "transaction_count": 1,
+            }
+        ],
+        "top_linked_candidates": [
+            {
+                "candidate_id": str(context.candidate_id),
+                "candidate_name": "Filter Candidate",
+                "donor_total_cents": 7500,
+                "transaction_count": 1,
+            }
+        ],
+        "sources": [
+            {
+                "domain": "campaign_finance",
+                "jurisdiction": "state/nc",
+                "data_source_name": data_source.name,
+                "data_source_url": data_source.source_url,
+                "source_record_key": "county-filter-replacement",
+                "record_url": "https://example.org/record/county-filter-replacement",
+                "pull_date": "2026-04-01T10:00:00Z",
+            }
+        ],
+    }
+
+
+def test_get_county_campaign_finance_summary_returns_404_for_unknown_county_slug(
+    api_client: TestClient,
+) -> None:
+    response = api_client.get("/v1/counties/nc/not-a-county/campaign-finance-summary")
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Unknown county slug for state: nc/not-a-county"}
+
+
+def test_get_county_campaign_finance_summary_returns_zero_totals_for_mapped_county_without_transactions(
+    api_client: TestClient,
+) -> None:
+    response = api_client.get("/v1/counties/nc/wake/campaign-finance-summary")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "state": "nc",
+        "county_slug": "wake",
+        "donor_total_cents": 0,
+        "transaction_count": 0,
+        "top_recipient_committees": [],
+        "top_linked_candidates": [],
+        "sources": [],
     }
 
 
@@ -2023,18 +3144,26 @@ def test_get_committee_filings_summary_returns_sorted_totals_and_keeps_zero_tran
     assert payload["filings"][0]["total_spent"] == "30.00"
     assert payload["filings"][0]["net"] == "70.00"
     assert payload["filings"][0]["transaction_count"] == 2
+    assert payload["filings"][0]["cash_on_hand"] == "110.00"
+    assert payload["filings"][0]["row_id"] == f"{filing_recent_low_id}:N"
     assert payload["filings"][1]["total_raised"] == "50.00"
     assert payload["filings"][1]["total_spent"] == "0.00"
     assert payload["filings"][1]["net"] == "50.00"
     assert payload["filings"][1]["transaction_count"] == 1
+    assert payload["filings"][1]["cash_on_hand"] == "160.00"
+    assert payload["filings"][1]["row_id"] == f"{filing_recent_high_id}:N"
     assert payload["filings"][2]["total_raised"] == "40.00"
     assert payload["filings"][2]["total_spent"] == "0.00"
     assert payload["filings"][2]["net"] == "40.00"
     assert payload["filings"][2]["transaction_count"] == 1
+    assert payload["filings"][2]["cash_on_hand"] == "40.00"
+    assert payload["filings"][2]["row_id"] == f"{filing_older}:A"
     assert payload["filings"][3]["total_raised"] == "0.00"
     assert payload["filings"][3]["total_spent"] == "0.00"
     assert payload["filings"][3]["net"] == "0.00"
     assert payload["filings"][3]["transaction_count"] == 0
+    assert payload["filings"][3]["cash_on_hand"] == "160.00"
+    assert payload["filings"][3]["row_id"] == f"{filing_no_transactions}:N"
 
 
 def test_get_committee_filings_summary_excludes_transactions_backed_by_superseded_source_records(
@@ -2122,6 +3251,8 @@ def test_get_committee_filings_summary_excludes_transactions_backed_by_supersede
     assert filing_summary["total_spent"] == "0.00"
     assert filing_summary["net"] == "100.00"
     assert filing_summary["transaction_count"] == 1
+    assert filing_summary["cash_on_hand"] == "100.00"
+    assert filing_summary["row_id"] == f"{filing_id}:N"
 
 
 def test_get_committee_filings_summary_uses_canonical_row_after_filing_upsert_replacement(

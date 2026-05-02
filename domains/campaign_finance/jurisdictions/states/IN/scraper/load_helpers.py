@@ -115,7 +115,24 @@ def _in_native_committee_id(row: Mapping[str, str | None], *, data_type: str) ->
     return f"{committee_name}::{committee_type.casefold()}"
 
 
+# Assumed IN IE token: ExpenditureCode == "Independent Expenditure".
+# Indiana IED bulk data uses ExpenditureCode for broad categories (Advertising,
+# Contributions, etc.). IE filings would use this category code.
+_IN_IE_EXPENDITURE_CODES = frozenset({"independent expenditure"})
+
+
+def _in_is_independent_expenditure(row: Mapping[str, str | None], *, data_type: str) -> bool:
+    if data_type != "expenditures":
+        return False
+    code = normalize_optional_text(_in_row_value(row, data_type=data_type, semantic_path="transaction.code"))
+    if code is None:
+        return False
+    return code.lower() in _IN_IE_EXPENDITURE_CODES
+
+
 def _in_transaction_type(row: Mapping[str, str | None], *, data_type: str) -> str:
+    if _in_is_independent_expenditure(row, data_type=data_type):
+        return "Independent Expenditure"
     transaction_type = normalize_optional_text(
         _in_row_value(row, data_type=data_type, semantic_path="transaction.type")
     )

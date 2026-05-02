@@ -100,6 +100,32 @@ class TestDownloadIrs527FullData:
 
 
 class TestStreamDownloadToPath:
+    def test_uses_ipv4_only_transport_for_irs_downloads(self, tmp_path: Path):
+        dest = tmp_path / "downloads" / "PolOrgsFullData.zip"
+        response = _streaming_response(
+            [b"PK", b"\x03\x04zipcontent"],
+            response_url=IRS_527_FULL_DATA_URL,
+        )
+
+        ipv4_client_cm = MagicMock()
+        ipv4_client = ipv4_client_cm.__enter__.return_value
+        ipv4_client.stream.return_value.__enter__.return_value = response
+
+        transport = MagicMock()
+
+        with patch("httpx.Client", return_value=ipv4_client_cm) as mock_client_type:
+            with patch("httpx.HTTPTransport", return_value=transport) as mock_transport_type:
+                irs_download._stream_download_to_path(IRS_527_FULL_DATA_URL, dest)
+
+        assert dest.exists()
+        assert dest.read_bytes() == b"PK\x03\x04zipcontent"
+        assert mock_client_type.call_count == 1
+        assert mock_client_type.call_args_list[0].kwargs == {
+            "timeout": irs_download.REQUEST_TIMEOUT_SECONDS,
+            "transport": transport,
+        }
+        mock_transport_type.assert_called_once_with(local_address="0.0.0.0")
+
     def test_writes_atomically_without_temp_residue(self, tmp_path: Path):
         dest = tmp_path / "downloads" / "PolOrgsFullData.zip"
         response = _streaming_response(

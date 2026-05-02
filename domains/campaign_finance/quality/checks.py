@@ -1,3 +1,7 @@
+"""
+Stub summary for /Users/stuart/parallel_development/civibus_dev/mar22_pm_01_seo_landing_pages_and_slug_routing/civibus_dev/domains/campaign_finance/quality/checks.py.
+"""
+
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -7,8 +11,10 @@ import psycopg
 
 from .models import CheckResult
 from .reconciliation import (
+    count_graph_edges_by_family,
     count_source_records,
     duplicate_hashes,
+    expected_edge_denominators,
     null_rate,
     pull_date_range,
     raw_field_null_rate,
@@ -214,6 +220,39 @@ def check_source_count(
         metric_value=float(count),
         threshold=float(min_expected),
         details={"count": count, "min_expected": min_expected},
+    )
+
+
+def check_graph_edge_presence(
+    conn: psycopg.Connection,
+    data_source_id: UUID,
+    data_source_name: str,
+    *,
+    threshold: float = 0.95,
+) -> CheckResult:
+    """Check graph edge population ratios against expected denominators."""
+    expected_counts = expected_edge_denominators(conn, data_source_id)
+    actual_counts = count_graph_edges_by_family(conn, data_source_id)
+
+    family_details: dict[str, dict[str, float | int]] = {}
+    min_ratio = 1.0
+    for family, expected in expected_counts.items():
+        actual = actual_counts.get(family, 0)
+        ratio = 1.0 if expected == 0 else actual / expected
+        family_details[family] = {"expected": expected, "actual": actual, "ratio": ratio}
+        min_ratio = min(min_ratio, ratio)
+
+    status = "pass" if min_ratio >= threshold else "fail"
+    return CheckResult(
+        name="graph_edge_presence",
+        status=status,  # type: ignore[arg-type]
+        message=(
+            f"{data_source_name}: minimum edge population ratio {min_ratio:.4f} across {len(family_details)} families"
+        ),
+        metric_name="edge_population_ratio",
+        metric_value=min_ratio,
+        threshold=threshold,
+        details={"edge_families": family_details},
     )
 
 

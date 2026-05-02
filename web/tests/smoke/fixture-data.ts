@@ -1,0 +1,1692 @@
+const fixtureConstants =
+  (await import(new URL("./fixtures.ts", import.meta.url).href)) as typeof import("./fixtures");
+
+const {
+  SMOKE_CANDIDACY_ID,
+  SMOKE_CANDIDACY_PERSON_NAME,
+  SMOKE_CANDIDATE_ID,
+  SMOKE_AL_CANDIDATE_ID,
+  SMOKE_CANDIDATE_NAME,
+  SMOKE_CANDIDATE_SLUG,
+  SMOKE_COVERAGE_DOMAIN,
+  SMOKE_COVERAGE_JURISDICTION,
+  SMOKE_DATA_SOURCE_NAME,
+  SMOKE_ELECTION_DATE,
+  SMOKE_COLLIDING_CANDIDATE_ID,
+  SMOKE_COLLIDING_CANDIDATE_SLUG,
+  SMOKE_COLLIDING_COMMITTEE_ID,
+  SMOKE_COLLIDING_COMMITTEE_SLUG,
+  SMOKE_COMMITTEE_ID,
+  SMOKE_COMMITTEE_NAME,
+  SMOKE_COMMITTEE_SLUG,
+  SMOKE_CONTEST_ID,
+  SMOKE_CONTEST_NAME,
+  SMOKE_DEVIANT_CANDIDATE_ID,
+  SMOKE_EMPTY_CANDIDATE_ID,
+  SMOKE_EMPTY_COMMITTEE_ID,
+  SMOKE_EMPTY_OFFICE_ID,
+  SMOKE_EMPTY_OFFICE_NAME,
+  SMOKE_EMPTY_PROPERTY_ID,
+  SMOKE_EMPTY_PROPERTY_TITLE,
+  SMOKE_FILING_ID,
+  SMOKE_IE_COMMITTEE_A_ID,
+  SMOKE_IE_COMMITTEE_A_NAME,
+  SMOKE_IE_TRANSACTION_DISSEMINATION_DATE,
+  SMOKE_GA_CANDIDATE_ID,
+  SMOKE_NC_SHOWCASE_COUNTY_DIVISION_NAME,
+  SMOKE_NC_SHOWCASE_COUNTY_SLUG,
+  SMOKE_NC_SHOWCASE_DISTRICT_DIVISION_NAME,
+  SMOKE_NC_SHOWCASE_RECIPIENT_NAME,
+  SMOKE_NC_SHOWCASE_STATE_CODE,
+  SMOKE_OFFICEHOLDING_ID,
+  SMOKE_OFFICEHOLDING_PERSON_NAME,
+  SMOKE_OFFICE_ID,
+  SMOKE_OFFICE_NAME,
+  SMOKE_OFFICE_OFFICEHOLDER_ID,
+  SMOKE_OFFICE_OFFICEHOLDER_NAME,
+  SMOKE_ORG_CANONICAL_NAME,
+  SMOKE_ORG_ID,
+  SMOKE_ORG_RELATIONSHIP_NAME,
+  SMOKE_PHL_COMMITTEE_ID,
+  SMOKE_PHL_COMMITTEE_NAME,
+  SMOKE_PERSON_CANONICAL_NAME,
+  SMOKE_PERSON_GRAPH_ORG_NAME,
+  SMOKE_PERSON_ID,
+  SMOKE_PERSON_MISSING_PORTRAIT_CANONICAL_NAME,
+  SMOKE_PERSON_MISSING_PORTRAIT_FIELD_ID,
+  SMOKE_PERSON_NO_PORTRAIT_CANONICAL_NAME,
+  SMOKE_PERSON_NO_PORTRAIT_ID,
+  SMOKE_PERSON_RELATIONSHIP_NAME,
+  SMOKE_ROSTER_DURHAM_PERSON_CANONICAL_NAME,
+  SMOKE_ROSTER_DURHAM_PERSON_ID,
+  SMOKE_ROSTER_DURHAM_PORTRAIT_URL,
+  SMOKE_ROSTER_NC_HOUSE_PERSON_CANONICAL_NAME,
+  SMOKE_ROSTER_NC_HOUSE_PERSON_ID,
+  SMOKE_ROSTER_NC_HOUSE_PORTRAIT_URL,
+  SMOKE_PROPERTY_ID,
+  SMOKE_PROPERTY_TITLE,
+  SMOKE_STATE_DETAIL_IE_CAVEAT,
+  SMOKE_STATE_DETAIL_TOP_CANDIDATE_NAME,
+  SMOKE_STATE_DETAIL_TOP_CANDIDATE_TOTAL,
+  SMOKE_STATE_DETAIL_TOP_COMMITTEE_NAME,
+  SMOKE_STATE_DETAIL_TOP_COMMITTEE_TOTAL,
+  SMOKE_STATE_DETAIL_TOP_IE_SPENDER_NAME,
+  SMOKE_STATE_DETAIL_TOP_IE_SPENDER_TOTAL,
+  SMOKE_SEARCH_CANDIDATE_QUERY,
+  SMOKE_SEARCH_CANDIDATE_RESULT_NAME,
+  SMOKE_SEARCH_CONTEST_QUERY,
+  SMOKE_SEARCH_QUERY,
+  SMOKE_SEARCH_RESULT_NAME,
+  SMOKE_SEARCH_SLOW_QUERY,
+  SMOKE_SEARCH_VALIDATION_QUERY
+} = fixtureConstants;
+
+export const smokeFixtures = {
+  search: {
+    query: SMOKE_SEARCH_QUERY,
+    entityType: "org",
+    results: [
+      {
+        entity_type: "org",
+        entity_id: SMOKE_ORG_ID,
+        name: SMOKE_SEARCH_RESULT_NAME
+      }
+    ]
+  },
+  searchValidation: {
+    query: SMOKE_SEARCH_VALIDATION_QUERY,
+    entityType: "candidate",
+    status: 422,
+    detail: [{ loc: ["query", "q"], msg: "Synthetic validation failure for smoke coverage" }]
+  },
+  searchSlow: {
+    query: SMOKE_SEARCH_SLOW_QUERY,
+    entityType: "org",
+    delayMs: 350,
+    results: [
+      {
+        entity_type: "org",
+        entity_id: SMOKE_ORG_ID,
+        name: SMOKE_SEARCH_RESULT_NAME
+      }
+    ]
+  },
+  searchCandidate: {
+    query: SMOKE_SEARCH_CANDIDATE_QUERY,
+    entityType: "candidate",
+    results: [
+      {
+        entity_type: "candidate",
+        entity_id: SMOKE_PERSON_ID,
+        name: SMOKE_SEARCH_CANDIDATE_RESULT_NAME
+      }
+    ]
+  },
+  searchContest: {
+    query: SMOKE_SEARCH_CONTEST_QUERY,
+    entityType: "contest",
+    results: [
+      {
+        entity_type: "contest",
+        entity_id: SMOKE_CONTEST_ID,
+        name: SMOKE_CONTEST_NAME
+      }
+    ]
+  },
+  coverageRegistry: [
+    {
+      domain: SMOKE_COVERAGE_DOMAIN,
+      jurisdiction: SMOKE_COVERAGE_JURISDICTION,
+      data_source_count: 1,
+      latest_data_source_pull_at: "2026-04-25T13:00:00Z",
+      latest_source_pull_date: "2026-04-25"
+    }
+  ],
+  dataSourcesMetadata: [
+    {
+      data_source_id: "cf_nc",
+      domain: SMOKE_COVERAGE_DOMAIN,
+      jurisdiction: SMOKE_COVERAGE_JURISDICTION,
+      name: SMOKE_DATA_SOURCE_NAME,
+      source_url: "https://cf.ncsbe.gov/",
+      update_frequency: "daily",
+      last_pull_at: "2026-04-25T13:00:00Z",
+      last_pull_status: "success",
+      record_count: 1000,
+      latest_source_record_id: "row-1",
+      latest_source_record_key: "nc-2026-04-25",
+      latest_source_record_url: "https://cf.ncsbe.gov/CFOrgLkup/",
+      latest_source_pull_date: "2026-04-25"
+    }
+  ],
+  upcomingElectionTimeline: [
+    {
+      date: SMOKE_ELECTION_DATE,
+      contests: [
+        {
+          contest_id: SMOKE_CONTEST_ID,
+          office_id: SMOKE_OFFICE_ID,
+          name: SMOKE_CONTEST_NAME,
+          election_type: "general" as const,
+          office_name: SMOKE_OFFICE_NAME,
+          office_level: "state" as const,
+          state: "NC",
+          jurisdiction_id: null,
+          electoral_division_id: null,
+          candidate_count: 1,
+          result_status: null,
+          winning_person_name: null
+        }
+      ]
+    }
+  ],
+  electionDateAggregate: {
+    date: SMOKE_ELECTION_DATE,
+    total_contests: 1,
+    total_candidacies: 1,
+    contests: [
+      {
+        contest_id: SMOKE_CONTEST_ID,
+        office_id: SMOKE_OFFICE_ID,
+        name: SMOKE_CONTEST_NAME,
+        election_type: "general" as const,
+        office_name: SMOKE_OFFICE_NAME,
+        office_level: "state" as const,
+        state: "NC",
+        jurisdiction_id: null,
+        electoral_division_id: null,
+        candidate_count: 1,
+        result_status: null,
+        winning_person_name: null
+      }
+    ]
+  },
+  person: {
+    id: SMOKE_PERSON_ID,
+    detail: {
+      id: SMOKE_PERSON_ID,
+      canonical_name: SMOKE_PERSON_CANONICAL_NAME,
+      name_variants: ["Jane Q. Doe"],
+      first_name: "Jane",
+      middle_name: "Q",
+      last_name: "Doe",
+      suffix: null,
+      date_of_birth: null,
+      year_of_birth: 1984,
+      bio_text: null,
+      bio_source_url: null,
+      bio_license: null,
+      bio_pulled_at: null,
+      identifiers: {
+        fec_candidate_id: "H0NC99999"
+      },
+      primary_address_id: null,
+      er_cluster_id: null,
+      er_confidence: 0.97,
+      portrait: {
+        status: "active",
+        rights_status: "licensed",
+        source_image_url: "https://images.example.org/jane-doe.jpg",
+        mime_type: "image/jpeg",
+        width_px: 640,
+        height_px: 480
+      },
+      sources: [
+        {
+          domain: "campaign_finance",
+          jurisdiction: "federal/fec",
+          data_source_name: "FEC",
+          data_source_url: "https://www.fec.gov",
+          source_record_key: "person-1",
+          record_url: "https://example.org/person-1",
+          pull_date: "2026-03-19T00:00:00Z"
+        }
+      ]
+    },
+    matches: [],
+    relationships: {
+      entity_type: "person",
+      entity_id: SMOKE_PERSON_ID,
+      neighbors: [
+        {
+          entity_type: "filing",
+          entity_id: SMOKE_FILING_ID,
+          name: SMOKE_PERSON_RELATIONSHIP_NAME,
+          relationship_type: "FILED",
+          direction: "inbound"
+        },
+        {
+          entity_type: "org",
+          entity_id: SMOKE_ORG_ID,
+          name: SMOKE_PERSON_GRAPH_ORG_NAME,
+          relationship_type: "AFFILIATED_WITH",
+          direction: "outbound"
+        }
+      ],
+      total_count: 2
+    }
+  },
+  personNoPortrait: {
+    id: SMOKE_PERSON_NO_PORTRAIT_ID,
+    detail: {
+      id: SMOKE_PERSON_NO_PORTRAIT_ID,
+      canonical_name: SMOKE_PERSON_NO_PORTRAIT_CANONICAL_NAME,
+      name_variants: [],
+      first_name: "Jordan",
+      middle_name: null,
+      last_name: "Portrait",
+      suffix: null,
+      date_of_birth: null,
+      year_of_birth: null,
+      bio_text: null,
+      bio_source_url: null,
+      bio_license: null,
+      bio_pulled_at: null,
+      identifiers: { fec_candidate_id: "H0NC00001" },
+      primary_address_id: null,
+      er_cluster_id: null,
+      er_confidence: null,
+      portrait: null,
+      sources: []
+    },
+    matches: [],
+    relationships: {
+      entity_type: "person",
+      entity_id: SMOKE_PERSON_NO_PORTRAIT_ID,
+      neighbors: [],
+      total_count: 0
+    }
+  },
+  rosterDurhamPerson: {
+    id: SMOKE_ROSTER_DURHAM_PERSON_ID,
+    detail: {
+      id: SMOKE_ROSTER_DURHAM_PERSON_ID,
+      canonical_name: SMOKE_ROSTER_DURHAM_PERSON_CANONICAL_NAME,
+      name_variants: [],
+      first_name: "Javiera",
+      middle_name: null,
+      last_name: "Caballero",
+      suffix: null,
+      date_of_birth: null,
+      year_of_birth: null,
+      bio_text: null,
+      bio_source_url: null,
+      bio_license: null,
+      bio_pulled_at: null,
+      identifiers: {},
+      primary_address_id: null,
+      er_cluster_id: null,
+      er_confidence: null,
+      portrait: {
+        status: "active",
+        rights_status: "licensed",
+        source_image_url: SMOKE_ROSTER_DURHAM_PORTRAIT_URL,
+        mime_type: "image/jpeg",
+        width_px: 75,
+        height_px: 75
+      },
+      sources: [
+        {
+          domain: "civics",
+          jurisdiction: "state/NC",
+          data_source_name: "Durham City Council Official Roster",
+          data_source_url: "https://www.durhamnc.gov/1396/City-Council-Members",
+          source_record_key: "official_roster:nc_durham_city_council_roster:snapshot",
+          record_url: "https://www.durhamnc.gov/1396/City-Council-Members",
+          pull_date: "2026-04-29T01:31:29Z"
+        }
+      ]
+    },
+    matches: [],
+    relationships: {
+      entity_type: "person",
+      entity_id: SMOKE_ROSTER_DURHAM_PERSON_ID,
+      neighbors: [],
+      total_count: 0
+    }
+  },
+  rosterNcHousePerson: {
+    id: SMOKE_ROSTER_NC_HOUSE_PERSON_ID,
+    detail: {
+      id: SMOKE_ROSTER_NC_HOUSE_PERSON_ID,
+      canonical_name: SMOKE_ROSTER_NC_HOUSE_PERSON_CANONICAL_NAME,
+      name_variants: [],
+      first_name: "Pricey",
+      middle_name: null,
+      last_name: "Harrison",
+      suffix: null,
+      date_of_birth: null,
+      year_of_birth: null,
+      bio_text: null,
+      bio_source_url: null,
+      bio_license: null,
+      bio_pulled_at: null,
+      identifiers: {},
+      primary_address_id: null,
+      er_cluster_id: null,
+      er_confidence: null,
+      portrait: {
+        status: "active",
+        rights_status: "licensed",
+        source_image_url: SMOKE_ROSTER_NC_HOUSE_PORTRAIT_URL,
+        mime_type: "image/jpeg",
+        width_px: 320,
+        height_px: 400
+      },
+      sources: [
+        {
+          domain: "civics",
+          jurisdiction: "state/NC",
+          data_source_name: "North Carolina House Official Roster",
+          data_source_url: "https://www.ncleg.gov/Members/MemberList/H",
+          source_record_key: "official_roster:nc_general_assembly_house_roster:snapshot",
+          record_url: "https://www.ncleg.gov/Members/MemberList/H",
+          pull_date: "2026-04-29T01:31:29Z"
+        }
+      ]
+    },
+    matches: [],
+    relationships: {
+      entity_type: "person",
+      entity_id: SMOKE_ROSTER_NC_HOUSE_PERSON_ID,
+      neighbors: [],
+      total_count: 0
+    }
+  },
+  personMissingPortraitField: {
+    id: SMOKE_PERSON_MISSING_PORTRAIT_FIELD_ID,
+    detail: {
+      id: SMOKE_PERSON_MISSING_PORTRAIT_FIELD_ID,
+      canonical_name: SMOKE_PERSON_MISSING_PORTRAIT_CANONICAL_NAME,
+      name_variants: [],
+      first_name: "Avery",
+      middle_name: null,
+      last_name: "Missing",
+      suffix: null,
+      date_of_birth: null,
+      year_of_birth: null,
+      bio_text: null,
+      bio_source_url: null,
+      bio_license: null,
+      bio_pulled_at: null,
+      identifiers: { fec_candidate_id: "H0NC00002" },
+      primary_address_id: null,
+      er_cluster_id: null,
+      er_confidence: null,
+      sources: []
+    },
+    matches: [],
+    relationships: {
+      entity_type: "person",
+      entity_id: SMOKE_PERSON_MISSING_PORTRAIT_FIELD_ID,
+      neighbors: [],
+      total_count: 0
+    }
+  },
+  org: {
+    id: SMOKE_ORG_ID,
+    detail: {
+      id: SMOKE_ORG_ID,
+      canonical_name: SMOKE_ORG_CANONICAL_NAME,
+      name_variants: ["Civibus Action Committee"],
+      org_type: "pac",
+      registered_state: "NC",
+      formation_date: "2014-05-01",
+      dissolution_date: null,
+      identifiers: {
+        fec_committee_id: "C12345678"
+      },
+      primary_address_id: null,
+      er_cluster_id: null,
+      er_confidence: 0.91,
+      sources: [
+        {
+          domain: "campaign_finance",
+          jurisdiction: "federal/fec",
+          data_source_name: "FEC",
+          data_source_url: "https://www.fec.gov",
+          source_record_key: "org-1",
+          record_url: "https://example.org/org-1",
+          pull_date: "2026-03-19T00:00:00Z"
+        }
+      ]
+    },
+    matches: [],
+    relationships: {
+      entity_type: "org",
+      entity_id: SMOKE_ORG_ID,
+      neighbors: [
+        {
+          entity_type: "filing",
+          entity_id: SMOKE_FILING_ID,
+          name: SMOKE_ORG_RELATIONSHIP_NAME,
+          relationship_type: "FILED",
+          direction: "inbound"
+        }
+      ],
+      total_count: 1
+    }
+  },
+  committee: {
+    id: SMOKE_COMMITTEE_ID,
+    detail: {
+      id: SMOKE_COMMITTEE_ID,
+      fec_committee_id: "C12345678",
+      name: SMOKE_COMMITTEE_NAME,
+      slug: SMOKE_COMMITTEE_SLUG,
+      slug_is_unique: true,
+      organization_id: SMOKE_ORG_ID,
+      committee_type: "Q",
+      committee_designation: "P",
+      party: "DEM",
+      state: "NC",
+      city: "Raleigh",
+      zip_code: "27601",
+      treasurer_name: "Jordan Treasurer",
+      sources: [
+        {
+          domain: "campaign_finance",
+          jurisdiction: "state/IN",
+          data_source_name: "Indiana Campaign Finance",
+          data_source_url: "https://campaignfinance.in.gov/PublicSite/Reporting/DataDownload.aspx",
+          source_record_key: "committee-1",
+          record_url: "https://example.org/committee-1",
+          pull_date: "2026-03-19T00:00:00Z"
+        }
+      ]
+    },
+    transactions: [
+      {
+        id: "77777777-7777-4777-8777-777777777777",
+        filing_id: SMOKE_FILING_ID,
+        committee_id: SMOKE_COMMITTEE_ID,
+        transaction_type: "contribution",
+        transaction_identifier: "TX-001",
+        transaction_date: "2026-03-18",
+        amount: 125,
+        contributor_name_raw: "Donor Example",
+        contributor_employer: null,
+        contributor_occupation: null,
+        contributor_city: "Durham",
+        contributor_state: "NC",
+        contributor_zip: "27701",
+        contributor_person_id: SMOKE_PERSON_ID,
+        contributor_organization_id: SMOKE_ORG_ID,
+        contributor_address_id: null,
+        recipient_candidate_id: SMOKE_CANDIDATE_ID,
+        recipient_committee_id: SMOKE_COMMITTEE_ID,
+        memo_text: null,
+        is_memo: false,
+        amendment_indicator: "N",
+        date_is_reliable: true
+      }
+    ],
+    summary: {
+      committee_id: SMOKE_COMMITTEE_ID,
+      committee_name: SMOKE_COMMITTEE_NAME,
+      total_raised: "125.00",
+      total_spent: "40.00",
+      net: "85.00",
+      transaction_count: 3,
+      jurisdiction: "federal/fec",
+      data_through: "2026-03-19T00:00:00Z",
+      cash_receipts_total: "125.00",
+      in_kind_receipts_total: "0.00",
+      loan_receipts_total: "0.00",
+      contribution_receipts_total: "125.00",
+      top_donors: [],
+      top_vendors: [],
+      spend_categories: null
+    },
+    filingBreakdown: {
+      committee_id: SMOKE_COMMITTEE_ID,
+      committee_name: SMOKE_COMMITTEE_NAME,
+      filings: [
+        {
+          filing_id: SMOKE_FILING_ID,
+          filing_fec_id: "F3N",
+          filing_name: "Q1 Filing",
+          report_type: "Q1",
+          amendment_indicator: "N",
+          coverage_start_date: "2026-01-01",
+          coverage_end_date: "2026-03-31",
+          receipt_date: "2026-04-15",
+          total_raised: "125.00",
+          total_spent: "40.00",
+          net: "85.00",
+          transaction_count: 3,
+          cash_on_hand: null
+        }
+      ]
+    }
+  },
+  committeeEmpty: {
+    id: SMOKE_EMPTY_COMMITTEE_ID,
+    detail: {
+      id: SMOKE_EMPTY_COMMITTEE_ID,
+      fec_committee_id: "C00000000",
+      name: "Committee Empty",
+      slug: "committee-empty",
+      slug_is_unique: false,
+      organization_id: null,
+      committee_type: null,
+      committee_designation: null,
+      party: null,
+      state: null,
+      city: null,
+      zip_code: null,
+      treasurer_name: null,
+      sources: []
+    },
+    transactions: [],
+    summary: {
+      committee_id: SMOKE_EMPTY_COMMITTEE_ID,
+      committee_name: "Committee Empty",
+      total_raised: "0.00",
+      total_spent: "0.00",
+      net: "0.00",
+      transaction_count: 0,
+      jurisdiction: null,
+      data_through: null,
+      cash_receipts_total: "0.00",
+      in_kind_receipts_total: "0.00",
+      loan_receipts_total: "0.00",
+      contribution_receipts_total: "0.00",
+      top_donors: [],
+      top_vendors: [],
+      spend_categories: []
+    },
+    filingBreakdown: {
+      committee_id: SMOKE_EMPTY_COMMITTEE_ID,
+      committee_name: "Committee Empty",
+      filings: []
+    }
+  },
+  committeePhl: {
+    id: SMOKE_PHL_COMMITTEE_ID,
+    detail: {
+      id: SMOKE_PHL_COMMITTEE_ID,
+      fec_committee_id: "PHL-CF-0001",
+      name: SMOKE_PHL_COMMITTEE_NAME,
+      slug: "philadelphia-transit-neighbors",
+      slug_is_unique: false,
+      organization_id: SMOKE_ORG_ID,
+      committee_type: "Q",
+      committee_designation: "P",
+      party: "DEM",
+      state: "PA",
+      city: "Philadelphia",
+      zip_code: "19107",
+      treasurer_name: "Taylor Treasurer",
+      sources: [
+        {
+          domain: "campaign_finance",
+          jurisdiction: "municipality/PHL",
+          data_source_name: "Philadelphia Campaign Finance",
+          data_source_url: "https://www.opendataphilly.org/dataset/campaign-finance",
+          source_record_key: "phl-committee-1",
+          record_url: "https://www.opendataphilly.org/dataset/campaign-finance",
+          pull_date: "2026-03-19T00:00:00Z"
+        }
+      ]
+    },
+    transactions: [
+      {
+        id: "17171717-1717-4171-8171-171717171717",
+        filing_id: SMOKE_FILING_ID,
+        committee_id: SMOKE_PHL_COMMITTEE_ID,
+        transaction_type: "contribution",
+        transaction_identifier: "PHL-TX-001",
+        transaction_date: "2026-03-17",
+        amount: 2100,
+        contributor_name_raw: "SEPTA Riders PAC",
+        contributor_employer: null,
+        contributor_occupation: null,
+        contributor_city: "Philadelphia",
+        contributor_state: "PA",
+        contributor_zip: "19103",
+        contributor_person_id: SMOKE_PERSON_ID,
+        contributor_organization_id: SMOKE_ORG_ID,
+        contributor_address_id: null,
+        recipient_candidate_id: SMOKE_CANDIDATE_ID,
+        recipient_committee_id: SMOKE_PHL_COMMITTEE_ID,
+        memo_text: null,
+        is_memo: false,
+        amendment_indicator: "N",
+        date_is_reliable: true
+      }
+    ],
+    summary: {
+      committee_id: SMOKE_PHL_COMMITTEE_ID,
+      committee_name: SMOKE_PHL_COMMITTEE_NAME,
+      total_raised: "2100.00",
+      total_spent: "300.00",
+      net: "1800.00",
+      transaction_count: 1,
+      jurisdiction: "municipality/PHL",
+      data_through: "2026-03-19T00:00:00Z",
+      cash_receipts_total: "2100.00",
+      in_kind_receipts_total: "0.00",
+      loan_receipts_total: "0.00",
+      contribution_receipts_total: "2100.00",
+      top_donors: [],
+      top_vendors: [],
+      spend_categories: null
+    },
+    filingBreakdown: {
+      committee_id: SMOKE_PHL_COMMITTEE_ID,
+      committee_name: SMOKE_PHL_COMMITTEE_NAME,
+      filings: [
+        {
+          filing_id: SMOKE_FILING_ID,
+          filing_fec_id: "PHL-Q1",
+          filing_name: "Q1 Local Filing",
+          report_type: "Q1",
+          amendment_indicator: "N",
+          coverage_start_date: "2026-01-01",
+          coverage_end_date: "2026-03-31",
+          receipt_date: "2026-04-15",
+          total_raised: "2100.00",
+          total_spent: "300.00",
+          net: "1800.00",
+          transaction_count: 1,
+          cash_on_hand: null
+        }
+      ]
+    }
+  },
+  candidate: {
+    id: SMOKE_CANDIDATE_ID,
+    detail: {
+      id: SMOKE_CANDIDATE_ID,
+      fec_candidate_id: "H0NC01001",
+      name: SMOKE_CANDIDATE_NAME,
+      slug: SMOKE_CANDIDATE_SLUG,
+      slug_is_unique: true,
+      person_id: SMOKE_PERSON_ID,
+      party: "DEM",
+      office: "H",
+      state: "NC",
+      district: "01",
+      incumbent_challenge: "I",
+      principal_committee_id: SMOKE_COMMITTEE_ID,
+      sources: [
+        {
+          domain: "campaign_finance",
+          jurisdiction: "state/IN",
+          data_source_name: "Indiana Campaign Finance",
+          data_source_url: "https://campaignfinance.in.gov/PublicSite/Reporting/DataDownload.aspx",
+          source_record_key: "candidate-1",
+          record_url: "https://example.org/candidate-1",
+          pull_date: "2026-03-19T00:00:00Z"
+        }
+      ]
+    },
+    summary: {
+      candidate_id: SMOKE_CANDIDATE_ID,
+      candidate_name: SMOKE_CANDIDATE_NAME,
+      total_raised: "250.00",
+      total_spent: "80.00",
+      net: "170.00",
+      transaction_count: 5,
+      committees: [
+        {
+          committee_id: SMOKE_COMMITTEE_ID,
+          committee_name: SMOKE_COMMITTEE_NAME,
+          slug: SMOKE_COMMITTEE_SLUG,
+          slug_is_unique: true,
+          total_raised: "250.00",
+          total_spent: "80.00",
+          net: "170.00",
+          transaction_count: 5,
+          jurisdiction: "federal/fec",
+          data_through: "2026-03-19T00:00:00Z"
+        }
+      ]
+    },
+    ieTransactions: [
+      {
+        id: "dd222222-2222-4222-8222-222222222222",
+        filing_id: null,
+        committee_id: SMOKE_IE_COMMITTEE_A_ID,
+        committee_name: SMOKE_IE_COMMITTEE_A_NAME,
+        amount: 5000,
+        transaction_date: "2026-03-19",
+        purpose: "Independent expenditure",
+        dissemination_date: SMOKE_IE_TRANSACTION_DISSEMINATION_DATE,
+        aggregate_amount: 5000,
+        support_oppose: "S" as const
+      }
+    ],
+    ieSummary: {
+      candidate_id: SMOKE_CANDIDATE_ID,
+      support_total: "15000.00",
+      oppose_total: "8500.00",
+      support_count: 12,
+      oppose_count: 5,
+      top_spenders: [
+        {
+          committee_id: SMOKE_IE_COMMITTEE_A_ID,
+          committee_name: SMOKE_IE_COMMITTEE_A_NAME,
+          support_oppose: "S" as const,
+          total_amount: "10000.00",
+          transaction_count: 8
+        }
+      ]
+    }
+  },
+  candidateEmpty: {
+    id: SMOKE_EMPTY_CANDIDATE_ID,
+    detail: {
+      id: SMOKE_EMPTY_CANDIDATE_ID,
+      fec_candidate_id: "H0NC99998",
+      name: "Candidate Empty",
+      slug: "candidate-empty",
+      slug_is_unique: false,
+      person_id: null,
+      party: null,
+      office: "H",
+      state: null,
+      district: null,
+      incumbent_challenge: null,
+      principal_committee_id: null,
+      sources: []
+    },
+    summary: {
+      candidate_id: SMOKE_EMPTY_CANDIDATE_ID,
+      candidate_name: "Candidate Empty",
+      total_raised: "0.00",
+      total_spent: "0.00",
+      net: "0.00",
+      transaction_count: 0,
+      committees: []
+    }
+  },
+  candidateDeviant: {
+    id: SMOKE_DEVIANT_CANDIDATE_ID,
+    detail: {
+      id: SMOKE_DEVIANT_CANDIDATE_ID,
+      fec_candidate_id: "H0NC99997",
+      name: "Candidate Deviant",
+      slug: "candidate-deviant",
+      slug_is_unique: false,
+      person_id: null,
+      party: "DEM",
+      office: "H",
+      state: "NC",
+      district: "09",
+      incumbent_challenge: "C",
+      principal_committee_id: SMOKE_COMMITTEE_ID,
+      keel_l10_reference: {
+        totalRaised: "1000.00",
+        sourceLabel: "NC SBOE anchor",
+        methodologyHref: "/methodology",
+        deviationThresholdRatio: 0.2
+      },
+      sources: []
+    },
+    summary: {
+      candidate_id: SMOKE_DEVIANT_CANDIDATE_ID,
+      candidate_name: "Candidate Deviant",
+      total_raised: "250.00",
+      total_spent: "80.00",
+      net: "170.00",
+      transaction_count: 5,
+      committees: [
+        {
+          committee_id: SMOKE_COMMITTEE_ID,
+          committee_name: SMOKE_COMMITTEE_NAME,
+          slug: SMOKE_COMMITTEE_SLUG,
+          slug_is_unique: true,
+          total_raised: "250.00",
+          total_spent: "80.00",
+          net: "170.00",
+          transaction_count: 5,
+          jurisdiction: "federal/fec",
+          data_through: "2026-03-19T00:00:00Z"
+        }
+      ]
+    }
+  },
+  candidateAl: {
+    id: SMOKE_AL_CANDIDATE_ID,
+    detail: {
+      id: SMOKE_AL_CANDIDATE_ID,
+      fec_candidate_id: "H0AL00001",
+      name: "Candidate Alabama",
+      slug: "candidate-alabama",
+      slug_is_unique: false,
+      person_id: null,
+      party: "REP",
+      office: "S",
+      state: "AL",
+      district: null,
+      incumbent_challenge: "C",
+      principal_committee_id: SMOKE_COMMITTEE_ID,
+      sources: [
+        {
+          domain: "campaign_finance",
+          jurisdiction: "state/AL",
+          data_source_name: "Alabama Campaign Finance",
+          data_source_url: "https://fcpa.alabamavotes.gov/page.request.do?page=page.acfPublicDownloadData",
+          source_record_key: "candidate-al-1",
+          record_url: "https://example.org/candidate-al-1",
+          pull_date: "2026-03-19T00:00:00Z"
+        }
+      ]
+    },
+    summary: {
+      candidate_id: SMOKE_AL_CANDIDATE_ID,
+      candidate_name: "Candidate Alabama",
+      total_raised: "900.00",
+      total_spent: "325.00",
+      net: "575.00",
+      transaction_count: 4,
+      committees: [
+        {
+          committee_id: SMOKE_COMMITTEE_ID,
+          committee_name: SMOKE_COMMITTEE_NAME,
+          slug: SMOKE_COMMITTEE_SLUG,
+          slug_is_unique: true,
+          total_raised: "900.00",
+          total_spent: "325.00",
+          net: "575.00",
+          transaction_count: 4,
+          jurisdiction: "state/AL",
+          data_through: "2026-03-19T00:00:00Z"
+        }
+      ]
+    }
+  },
+  candidateGa: {
+    id: SMOKE_GA_CANDIDATE_ID,
+    detail: {
+      id: SMOKE_GA_CANDIDATE_ID,
+      fec_candidate_id: "H0GA00001",
+      name: "Candidate Georgia",
+      slug: "candidate-georgia",
+      slug_is_unique: false,
+      person_id: null,
+      party: "DEM",
+      office: "S",
+      state: "GA",
+      district: null,
+      incumbent_challenge: "C",
+      principal_committee_id: SMOKE_COMMITTEE_ID,
+      sources: [
+        {
+          domain: "campaign_finance",
+          jurisdiction: "state/GA",
+          data_source_name: "Georgia Campaign Finance",
+          data_source_url: "https://media.ethics.ga.gov/search/Campaign/Campaign_ByContributions.aspx",
+          source_record_key: "candidate-ga-1",
+          record_url: "https://example.org/candidate-ga-1",
+          pull_date: "2026-03-19T00:00:00Z"
+        }
+      ]
+    },
+    summary: {
+      candidate_id: SMOKE_GA_CANDIDATE_ID,
+      candidate_name: "Candidate Georgia",
+      total_raised: "1200.00",
+      total_spent: "475.00",
+      net: "725.00",
+      transaction_count: 6,
+      committees: [
+        {
+          committee_id: SMOKE_COMMITTEE_ID,
+          committee_name: SMOKE_COMMITTEE_NAME,
+          slug: SMOKE_COMMITTEE_SLUG,
+          slug_is_unique: true,
+          total_raised: "1200.00",
+          total_spent: "475.00",
+          net: "725.00",
+          transaction_count: 6,
+          jurisdiction: "state/GA",
+          data_through: "2026-03-19T00:00:00Z"
+        }
+      ]
+    }
+  },
+  candidateList: {
+    items: [
+      {
+        id: SMOKE_CANDIDATE_ID,
+        fec_candidate_id: "H0NC01001",
+        name: SMOKE_CANDIDATE_NAME,
+        party: "DEM",
+        office: "H",
+        state: "NC",
+        district: "01",
+        slug: SMOKE_CANDIDATE_SLUG,
+        slug_is_unique: true
+      },
+      {
+        id: SMOKE_EMPTY_CANDIDATE_ID,
+        fec_candidate_id: "H0NC99998",
+        name: "Candidate Empty",
+        party: null,
+        office: "H",
+        state: null,
+        district: null,
+        slug: "candidate-empty",
+        slug_is_unique: false
+      }
+    ],
+    has_next: true,
+    offset: 0,
+    limit: 1
+  },
+  committeeList: {
+    items: [
+      {
+        id: SMOKE_COMMITTEE_ID,
+        fec_committee_id: "C12345678",
+        name: SMOKE_COMMITTEE_NAME,
+        committee_type: "Q",
+        party: "DEM",
+        state: "NC",
+        slug: SMOKE_COMMITTEE_SLUG,
+        slug_is_unique: true
+      },
+      {
+        id: SMOKE_EMPTY_COMMITTEE_ID,
+        fec_committee_id: "C00000000",
+        name: "Committee Empty",
+        committee_type: null,
+        party: null,
+        state: null,
+        slug: "committee-empty",
+        slug_is_unique: false
+      }
+    ],
+    has_next: true,
+    offset: 0,
+    limit: 1
+  },
+  slugLookups: {
+    candidates: {
+      [SMOKE_CANDIDATE_SLUG]: [
+        {
+          id: SMOKE_CANDIDATE_ID,
+          fec_candidate_id: "H0NC01001",
+          name: SMOKE_CANDIDATE_NAME,
+          party: "DEM",
+          office: "H",
+          state: "NC",
+          district: "01",
+          slug: SMOKE_CANDIDATE_SLUG,
+          slug_is_unique: true
+        }
+      ],
+      [SMOKE_COLLIDING_CANDIDATE_SLUG]: [
+        {
+          id: SMOKE_CANDIDATE_ID,
+          fec_candidate_id: "H0NC01001",
+          name: SMOKE_CANDIDATE_NAME,
+          party: "DEM",
+          office: "H",
+          state: "NC",
+          district: "01",
+          slug: SMOKE_COLLIDING_CANDIDATE_SLUG,
+          slug_is_unique: false
+        },
+        {
+          id: SMOKE_COLLIDING_CANDIDATE_ID,
+          fec_candidate_id: "H0NC01003",
+          name: "Pat Candidate Jr",
+          party: "DEM",
+          office: "H",
+          state: "NC",
+          district: "02",
+          slug: SMOKE_COLLIDING_CANDIDATE_SLUG,
+          slug_is_unique: false
+        }
+      ]
+    },
+    committees: {
+      [SMOKE_COMMITTEE_SLUG]: [
+        {
+          id: SMOKE_COMMITTEE_ID,
+          fec_committee_id: "C12345678",
+          name: SMOKE_COMMITTEE_NAME,
+          committee_type: "Q",
+          party: "DEM",
+          state: "NC",
+          slug: SMOKE_COMMITTEE_SLUG,
+          slug_is_unique: true
+        }
+      ],
+      [SMOKE_COLLIDING_COMMITTEE_SLUG]: [
+        {
+          id: SMOKE_COMMITTEE_ID,
+          fec_committee_id: "C12345678",
+          name: SMOKE_COMMITTEE_NAME,
+          committee_type: "Q",
+          party: "DEM",
+          state: "NC",
+          slug: SMOKE_COLLIDING_COMMITTEE_SLUG,
+          slug_is_unique: false
+        },
+        {
+          id: SMOKE_COLLIDING_COMMITTEE_ID,
+          fec_committee_id: "C00009999",
+          name: "Citizens for Civibus NC",
+          committee_type: "P",
+          party: "DEM",
+          state: "NC",
+          slug: SMOKE_COLLIDING_COMMITTEE_SLUG,
+          slug_is_unique: false
+        }
+      ]
+    }
+  },
+  ncCountyDrilldown: {
+    stateCode: SMOKE_NC_SHOWCASE_STATE_CODE,
+    countySlug: SMOKE_NC_SHOWCASE_COUNTY_SLUG,
+    geometryByLevel: {
+      state: {
+        type: "FeatureCollection",
+        features: [
+          {
+            type: "Feature",
+            geometry: { type: "Polygon", coordinates: [] },
+            properties: {
+              id: "state-nc",
+              name: "North Carolina",
+              division_type: "statewide",
+              state: "NC",
+              district_number: null,
+              boundary_year: 2024
+            }
+          }
+        ]
+      },
+      county: {
+        type: "FeatureCollection",
+        features: [
+          {
+            type: "Feature",
+            geometry: { type: "Polygon", coordinates: [] },
+            properties: {
+              id: "county-nc-wake",
+              name: SMOKE_NC_SHOWCASE_COUNTY_DIVISION_NAME,
+              division_type: "county",
+              state: "NC",
+              district_number: null,
+              boundary_year: 2024
+            }
+          },
+          {
+            type: "Feature",
+            geometry: { type: "Polygon", coordinates: [] },
+            properties: {
+              id: "county-nc-durham",
+              name: "nc_county_durham",
+              division_type: "county",
+              state: "NC",
+              district_number: null,
+              boundary_year: 2024
+            }
+          }
+        ]
+      },
+      congressional_district: {
+        type: "FeatureCollection",
+        features: [
+          {
+            type: "Feature",
+            geometry: { type: "Polygon", coordinates: [] },
+            properties: {
+              id: "district-nc-01",
+              name: SMOKE_NC_SHOWCASE_DISTRICT_DIVISION_NAME,
+              division_type: "congressional_district",
+              state: "NC",
+              district_number: "01",
+              boundary_year: 2024
+            }
+          }
+        ]
+      }
+    },
+    campaignFinanceSummary: {
+      state: "nc",
+      county_slug: SMOKE_NC_SHOWCASE_COUNTY_SLUG,
+      donor_total_cents: 123456,
+      transaction_count: 7,
+      top_recipient_committees: [
+        {
+          committee_id: "0a111111-1111-4111-8111-111111111111",
+          committee_name: SMOKE_NC_SHOWCASE_RECIPIENT_NAME,
+          donor_total_cents: 82500,
+          transaction_count: 4
+        }
+      ],
+      top_linked_candidates: [
+        {
+          candidate_id: "0b222222-2222-4222-8222-222222222222",
+          candidate_name: "Casey Example",
+          donor_total_cents: 61000,
+          transaction_count: 3
+        }
+      ],
+      sources: [
+        {
+          domain: "campaign_finance",
+          jurisdiction: "state/nc",
+          data_source_name: "NC Campaign Finance",
+          data_source_url: "https://cf.ncsbe.gov",
+          source_record_key: "wake_proxy_summary_2026_04_20",
+          record_url: "https://cf.ncsbe.gov/CFOrgLkup/",
+          pull_date: "2026-04-20T12:00:00Z"
+        }
+      ]
+    }
+  },
+  property: {
+    id: SMOKE_PROPERTY_ID,
+    detail: {
+      id: SMOKE_PROPERTY_ID,
+      reid: "200000001",
+      pin: "0999999999",
+      site_address: SMOKE_PROPERTY_TITLE,
+      property_description: "Single family home",
+      city: "Durham",
+      zoning_class: "R-20",
+      land_class: "Residential",
+      acreage: "1.2500",
+      neighborhood: "Northside",
+      fire_district: "Durham",
+      is_pending: false,
+      deed_date: "2024-01-15",
+      deed_book: "1234",
+      deed_page: "567",
+      jurisdiction_id: null,
+      sources: [
+        {
+          domain: "property",
+          jurisdiction: "us/nc/durham",
+          data_source_name: "Durham County",
+          data_source_url: "https://example.org/durham",
+          source_record_key: "parcel-1",
+          record_url: "https://example.org/parcel-1",
+          pull_date: "2026-03-19T00:00:00Z"
+        }
+      ],
+      ownership: [
+        {
+          id: "88888888-8888-4888-8888-888888888888",
+          owner_name: "Civibus Homeowner",
+          owner_mail_line1: "123 MAIN ST",
+          owner_mail_line2: null,
+          owner_mail_line3: null,
+          owner_mail_city: "Durham",
+          owner_mail_state: "NC",
+          owner_mail_zip5: "27701",
+          ownership_recorded_at: "2024-02-01",
+          valid_period: "[2024-02-01,)",
+          date_precision: "day",
+          owner_person_id: SMOKE_PERSON_ID,
+          owner_organization_id: SMOKE_ORG_ID,
+          owner_address_id: null,
+          sources: []
+        }
+      ],
+      assessments: [
+        {
+          id: "99999999-9999-4999-8999-999999999999",
+          tax_year: 2025,
+          land_assessed_value: "150000.00",
+          improvement_assessed_value: "350000.00",
+          total_assessed_value: "500000.00",
+          assessed_at: "2025-01-31",
+          heated_area: 2500,
+          exemption_description: "Homestead",
+          sources: []
+        }
+      ]
+    }
+  },
+  propertyEmpty: {
+    id: SMOKE_EMPTY_PROPERTY_ID,
+    detail: {
+      id: SMOKE_EMPTY_PROPERTY_ID,
+      reid: "200000099",
+      pin: "0999999900",
+      site_address: SMOKE_EMPTY_PROPERTY_TITLE,
+      property_description: null,
+      city: "Durham",
+      zoning_class: null,
+      land_class: null,
+      acreage: null,
+      neighborhood: null,
+      fire_district: null,
+      is_pending: false,
+      deed_date: null,
+      deed_book: null,
+      deed_page: null,
+      jurisdiction_id: null,
+      sources: [],
+      ownership: [],
+      assessments: []
+    }
+  },
+  office: {
+    id: SMOKE_OFFICE_ID,
+    detail: {
+      id: SMOKE_OFFICE_ID,
+      name: SMOKE_OFFICE_NAME,
+      office_level: "federal",
+      title: "Senator",
+      jurisdiction_id: null,
+      state: "NC",
+      is_elected: true,
+      number_of_seats: 1,
+      current_officeholders: [
+        {
+          officeholding_id: SMOKE_OFFICE_OFFICEHOLDER_ID,
+          person_id: SMOKE_PERSON_ID,
+          person_name: SMOKE_OFFICE_OFFICEHOLDER_NAME,
+          holder_status: "elected"
+        }
+      ],
+      incomplete_data_states: [],
+      sources: [
+        {
+          domain: "civic",
+          jurisdiction: "federal/us",
+          data_source_name: "Civic Records",
+          data_source_url: "https://example.org/civic",
+          source_record_key: "office-1",
+          record_url: "https://example.org/office-1",
+          pull_date: "2026-03-19T00:00:00Z"
+        }
+      ]
+    }
+  },
+  officeEmpty: {
+    id: SMOKE_EMPTY_OFFICE_ID,
+    detail: {
+      id: SMOKE_EMPTY_OFFICE_ID,
+      name: SMOKE_EMPTY_OFFICE_NAME,
+      office_level: "state",
+      title: "State Auditor",
+      jurisdiction_id: null,
+      state: "NC",
+      is_elected: true,
+      number_of_seats: 1,
+      current_officeholders: [],
+      incomplete_data_states: ["no_officeholder"],
+      sources: []
+    }
+  },
+  contest: {
+    id: SMOKE_CONTEST_ID,
+    detail: {
+      id: SMOKE_CONTEST_ID,
+      name: SMOKE_CONTEST_NAME,
+      election_date: "2026-11-03",
+      election_type: "general" as const,
+      office_id: SMOKE_OFFICE_ID,
+      electoral_division_id: null,
+      number_of_seats: 1,
+      filing_deadline: "2026-06-15",
+      is_partisan: true,
+      candidate_list_incomplete: false,
+      candidacies: [
+        {
+          candidacy_id: SMOKE_CANDIDACY_ID,
+          person_id: SMOKE_PERSON_ID,
+          person_name: SMOKE_CANDIDACY_PERSON_NAME,
+          party: "DEM",
+          status: "filed",
+          incumbent_challenge: "I"
+        }
+      ],
+      sources: [
+        {
+          domain: "civic",
+          jurisdiction: "federal/us",
+          data_source_name: "Civic Records",
+          data_source_url: "https://example.org/civic",
+          source_record_key: "contest-1",
+          record_url: "https://example.org/contest-1",
+          pull_date: "2026-03-19T00:00:00Z"
+        }
+      ]
+    }
+  },
+  candidacy: {
+    id: SMOKE_CANDIDACY_ID,
+    detail: {
+      id: SMOKE_CANDIDACY_ID,
+      person_id: SMOKE_PERSON_ID,
+      person_name: SMOKE_CANDIDACY_PERSON_NAME,
+      contest_id: SMOKE_CONTEST_ID,
+      party: "DEM",
+      filing_date: "2026-01-15",
+      status: "filed",
+      incumbent_challenge: "I",
+      candidate_number: null,
+      sources: [
+        {
+          domain: "civic",
+          jurisdiction: "federal/us",
+          data_source_name: "Civic Records",
+          data_source_url: "https://example.org/civic",
+          source_record_key: "candidacy-1",
+          record_url: "https://example.org/candidacy-1",
+          pull_date: "2026-03-19T00:00:00Z"
+        }
+      ]
+    }
+  },
+  officeholding: {
+    id: SMOKE_OFFICEHOLDING_ID,
+    detail: {
+      id: SMOKE_OFFICEHOLDING_ID,
+      person_id: SMOKE_PERSON_ID,
+      person_name: SMOKE_OFFICEHOLDING_PERSON_NAME,
+      office_id: SMOKE_OFFICE_ID,
+      electoral_division_id: null,
+      holder_status: "elected" as const,
+      valid_period_lower: "2021-01-03",
+      valid_period_upper: null,
+      date_precision: "day" as const,
+      sources: [
+        {
+          domain: "civic",
+          jurisdiction: "federal/us",
+          data_source_name: "Civic Records",
+          data_source_url: "https://example.org/civic",
+          source_record_key: "officeholding-1",
+          record_url: "https://example.org/officeholding-1",
+          pull_date: "2026-03-19T00:00:00Z"
+        }
+      ]
+    }
+  },
+  landingMap: {
+    geometry: {
+      type: "FeatureCollection" as const,
+      features: [
+        {
+          type: "Feature" as const,
+          geometry: {
+            type: "Polygon" as const,
+            coordinates: [
+              [
+                [-84, 34],
+                [-75, 34],
+                [-75, 36.5],
+                [-84, 36.5],
+                [-84, 34]
+              ]
+            ]
+          },
+          properties: {
+            state: "NC",
+            name: "North Carolina",
+            division_type: "state",
+            boundary_year: 2020
+          }
+        },
+        {
+          type: "Feature" as const,
+          geometry: {
+            type: "Polygon" as const,
+            coordinates: [
+              [
+                [-94, 33],
+                [-89, 33],
+                [-89, 35],
+                [-94, 35],
+                [-94, 33]
+              ]
+            ]
+          },
+          properties: {
+            state: "AR",
+            name: "Arkansas",
+            division_type: "state",
+            boundary_year: 2020
+          }
+        },
+        {
+          type: "Feature" as const,
+          geometry: {
+            type: "Polygon" as const,
+            coordinates: [
+              [
+                [-97, 43],
+                [-90, 43],
+                [-90, 49],
+                [-97, 49],
+                [-97, 43]
+              ]
+            ]
+          },
+          properties: {
+            state: "MN",
+            name: "Minnesota",
+            division_type: "state",
+            boundary_year: 2020
+          }
+        },
+        {
+          type: "Feature" as const,
+          geometry: {
+            type: "Polygon" as const,
+            coordinates: [
+              [
+                [-85, 30],
+                [-80, 30],
+                [-80, 35],
+                [-85, 35],
+                [-85, 30]
+              ]
+            ]
+          },
+          properties: {
+            state: "LA",
+            name: "Louisiana",
+            division_type: "state",
+            boundary_year: 2020
+          }
+        }
+      ]
+    },
+    summaries: [
+      {
+        state_code: "NC",
+        total_raised: "1234.56",
+        total_spent: "1000.00",
+        net: "234.56",
+        committee_count: 3,
+        transaction_count: 12,
+        federal_candidate_count: 2,
+        ie_support_total: null,
+        ie_oppose_total: null,
+        ie_support_count: null,
+        ie_oppose_count: null,
+        coverage_tier: "launch-support candidate" as const,
+        support_status: "supported" as const,
+        supported: true,
+        warning_text: null,
+        data_through: "2026-04-20T00:00:00Z"
+      },
+      {
+        state_code: "AR",
+        total_raised: "0",
+        total_spent: "0",
+        net: "0",
+        committee_count: 0,
+        transaction_count: 0,
+        federal_candidate_count: 0,
+        ie_support_total: null,
+        ie_oppose_total: null,
+        ie_support_count: null,
+        ie_oppose_count: null,
+        coverage_tier: null,
+        support_status: "unsupported" as const,
+        supported: false,
+        warning_text: null,
+        data_through: null
+      },
+      {
+        state_code: "MN",
+        total_raised: "500.00",
+        total_spent: "400.00",
+        net: "100.00",
+        committee_count: 1,
+        transaction_count: 4,
+        federal_candidate_count: 1,
+        ie_support_total: null,
+        ie_oppose_total: null,
+        ie_support_count: null,
+        ie_oppose_count: null,
+        coverage_tier: "freshness-limited" as const,
+        support_status: "warning" as const,
+        supported: false,
+        warning_text: "Quarterly bulk only; refresh cadence below weekly target.",
+        data_through: "2026-03-30T00:00:00Z"
+      },
+      {
+        state_code: "LA",
+        total_raised: "400.00",
+        total_spent: "25.00",
+        net: "375.00",
+        committee_count: 1,
+        transaction_count: 3,
+        federal_candidate_count: 0,
+        ie_support_total: null,
+        ie_oppose_total: null,
+        ie_support_count: null,
+        ie_oppose_count: null,
+        coverage_tier: "launch-support candidate" as const,
+        support_status: "supported" as const,
+        supported: true,
+        warning_text: SMOKE_STATE_DETAIL_IE_CAVEAT,
+        data_through: "2026-03-27T12:00:00Z"
+      }
+    ]
+  },
+  stateDetails: {
+    NC: {
+      state_code: "NC",
+      total_raised: "390.00",
+      total_spent: "130.00",
+      net: "260.00",
+      committee_count: 2,
+      transaction_count: 6,
+      federal_candidate_count: 2,
+      ie_support_total: "20.00",
+      ie_oppose_total: "80.00",
+      ie_support_count: 1,
+      ie_oppose_count: 1,
+      coverage_tier: "launch-support candidate" as const,
+      support_status: "supported" as const,
+      supported: true,
+      warning_text: null,
+      data_through: "2026-03-26T12:00:00Z",
+      sources: [
+        {
+          domain: "campaign_finance",
+          jurisdiction: "state/NC",
+          data_source_name: "NC State Campaign Finance",
+          data_source_url: "https://cf.ncsbe.gov",
+          source_record_key: "nc-state-summary-2026-03-26",
+          record_url: "https://cf.ncsbe.gov/CFOrgLkup/",
+          pull_date: "2026-03-26T12:00:00Z"
+        }
+      ],
+      top_candidates: [
+        {
+          candidate_id: SMOKE_CANDIDATE_ID,
+          candidate_name: SMOKE_STATE_DETAIL_TOP_CANDIDATE_NAME,
+          total_raised: SMOKE_STATE_DETAIL_TOP_CANDIDATE_TOTAL.replace("$", "").replace(",", "")
+        }
+      ],
+      top_committees: [
+        {
+          committee_id: SMOKE_COMMITTEE_ID,
+          committee_name: SMOKE_STATE_DETAIL_TOP_COMMITTEE_NAME,
+          total_raised: SMOKE_STATE_DETAIL_TOP_COMMITTEE_TOTAL.replace("$", "").replace(",", "")
+        }
+      ],
+      top_ie_spenders: [
+        {
+          committee_id: SMOKE_IE_COMMITTEE_A_ID,
+          committee_name: SMOKE_STATE_DETAIL_TOP_IE_SPENDER_NAME,
+          total_amount: SMOKE_STATE_DETAIL_TOP_IE_SPENDER_TOTAL.replace("$", "").replace(",", "")
+        }
+      ]
+    },
+    AR: {
+      state_code: "AR",
+      total_raised: "0",
+      total_spent: "0",
+      net: "0",
+      committee_count: 0,
+      transaction_count: 0,
+      federal_candidate_count: 0,
+      ie_support_total: null,
+      ie_oppose_total: null,
+      ie_support_count: null,
+      ie_oppose_count: null,
+      coverage_tier: null,
+      support_status: "unsupported" as const,
+      supported: false,
+      warning_text: null,
+      data_through: null,
+      sources: [],
+      top_candidates: [],
+      top_committees: [],
+      top_ie_spenders: []
+    },
+    MN: {
+      state_code: "MN",
+      total_raised: "500.00",
+      total_spent: "400.00",
+      net: "100.00",
+      committee_count: 1,
+      transaction_count: 4,
+      federal_candidate_count: 1,
+      ie_support_total: null,
+      ie_oppose_total: null,
+      ie_support_count: null,
+      ie_oppose_count: null,
+      coverage_tier: "freshness-limited" as const,
+      support_status: "warning" as const,
+      supported: false,
+      warning_text: "Quarterly bulk only; refresh cadence below weekly target.",
+      data_through: "2026-03-30T00:00:00Z",
+      sources: [],
+      top_candidates: [],
+      top_committees: [],
+      top_ie_spenders: []
+    },
+    LA: {
+      state_code: "LA",
+      total_raised: "400.00",
+      total_spent: "25.00",
+      net: "375.00",
+      committee_count: 1,
+      transaction_count: 3,
+      federal_candidate_count: 0,
+      ie_support_total: null,
+      ie_oppose_total: null,
+      ie_support_count: null,
+      ie_oppose_count: null,
+      coverage_tier: "launch-support candidate" as const,
+      support_status: "supported" as const,
+      supported: true,
+      warning_text: SMOKE_STATE_DETAIL_IE_CAVEAT,
+      data_through: "2026-03-27T12:00:00Z",
+      sources: [],
+      top_candidates: [],
+      top_committees: [],
+      top_ie_spenders: []
+    }
+  }
+} as const;

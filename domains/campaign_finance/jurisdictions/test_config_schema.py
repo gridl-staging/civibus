@@ -25,7 +25,7 @@ PILOT_CONFIG_PATHS = [
     GA_CONFIG_PATH,
     NC_CONFIG_PATH,
 ]
-EXPANDED_CONFIG_PATHS = [JURISDICTIONS_DIR / "cities" / code / "config.yaml" for code in ("LA", "NYC", "SF")] + [
+EXPANDED_CONFIG_PATHS = [JURISDICTIONS_DIR / "cities" / code / "config.yaml" for code in ("LA", "NYC", "PHL", "SF")] + [
     JURISDICTIONS_DIR / "states" / code / "config.yaml"
     for code in (
         "AL",

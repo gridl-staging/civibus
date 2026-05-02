@@ -115,7 +115,7 @@ Every successful run must produce exactly three artifacts:
 - Use bounded concurrency with a configurable maximum (default: 1 concurrent request).
 - Respect `robots.txt` and terms of service where applicable.
 - Identify with a stable user-agent string (e.g., `Civibus/1.0 (public-records-research; +https://civibus.org)`).
-- **Never** bypass authentication, captchas, or anti-bot controls. If encountered, escalate (see below).
+- **Never** bypass authentication, captchas, or anti-bot controls. If encountered, stop and reclassify the source as T4 (out of scope). Civibus does not invest in anti-bot circumvention — no residential proxies, CAPTCHA solving, IP rotation, or trust-accumulation. See `docs/research/acquisition-taxonomy.md`.
 
 ---
 

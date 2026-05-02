@@ -2,6 +2,8 @@
 import { encodeRoutePathSegment, type SourceInfo } from "$lib/entity-detail/contract";
 
 export const COMMITTEE_TRANSACTIONS_LIMIT = 25;
+export const CANDIDATES_PAGE_PATH = "/candidates";
+export const COMMITTEES_PAGE_PATH = "/committees";
 export type SerializedMoney = string;
 type ListQueryParamValue = string | number | undefined;
 type CampaignFinanceListPathParams = Record<string, ListQueryParamValue>;
@@ -50,6 +52,7 @@ export type CandidateListItem = {
   id: string;
   fec_candidate_id: string;
   name: string;
+  person_id?: string | null;
   party: string | null;
   office: string;
   state: string | null;
@@ -89,6 +92,7 @@ export type CommitteeSlugMatchResponse = CommitteeListItem[];
 export type CandidateListRequest = {
   state?: string;
   office?: string;
+  person_id?: string;
   limit?: ListRequestParam;
   offset?: ListRequestParam;
 };
@@ -170,6 +174,25 @@ export type CommitteeFundraisingSummary = {
   transaction_count: number;
   jurisdiction: string | null;
   data_through: string | null;
+  cash_receipts_total: SerializedMoney;
+  in_kind_receipts_total: SerializedMoney;
+  loan_receipts_total: SerializedMoney;
+  contribution_receipts_total: SerializedMoney;
+  top_donors: RankedTransactionParty[];
+  top_vendors: RankedTransactionParty[];
+  spend_categories: SpendCategorySummary[] | null;
+};
+
+export type RankedTransactionParty = {
+  name: string;
+  total_amount: SerializedMoney;
+  transaction_count: number;
+};
+
+export type SpendCategorySummary = {
+  category: string;
+  total_amount: SerializedMoney;
+  transaction_count: number;
 };
 
 export type FilingPeriodSummary = {
@@ -185,6 +208,8 @@ export type FilingPeriodSummary = {
   total_spent: SerializedMoney;
   net: SerializedMoney;
   transaction_count: number;
+  cash_on_hand: SerializedMoney | null;
+  row_id: string;
 };
 
 export type CommitteeFilingBreakdown = {
@@ -197,20 +222,24 @@ function buildCampaignFinancePath(resource: string, id: string, suffix = ""): st
   return `/v1/${resource}/${encodeRoutePathSegment(id)}${suffix}`;
 }
 
-function buildCampaignFinanceCollectionPath(
-  resource: "candidates" | "committees",
-  params: CampaignFinanceListPathParams
-): string {
+function buildPathWithQuery(basePath: string, params: CampaignFinanceListPathParams): string {
   const searchParams = new URLSearchParams();
 
   for (const [key, value] of Object.entries(params)) {
-    if (value !== undefined) {
+    if (value !== undefined && value !== "") {
       searchParams.set(key, String(value));
     }
   }
 
   const queryString = searchParams.toString();
-  return queryString === "" ? `/v1/${resource}` : `/v1/${resource}?${queryString}`;
+  return queryString === "" ? basePath : `${basePath}?${queryString}`;
+}
+
+function buildCampaignFinanceCollectionPath(
+  resource: "candidates" | "committees",
+  params: CampaignFinanceListPathParams
+): string {
+  return buildPathWithQuery(`/v1/${resource}`, params);
 }
 
 function buildCampaignFinanceBySlugPath(resource: "candidates" | "committees", slug: string): string {
@@ -256,12 +285,44 @@ export type CandidateFundraisingSummary = {
   committees: CommitteeFundraisingSummary[];
 };
 
+export type CountySummaryRecipientCommittee = {
+  committee_id: string;
+  committee_name: string;
+  donor_total_cents: number;
+  transaction_count: number;
+};
+
+export type CountySummaryLinkedCandidate = {
+  candidate_id: string;
+  candidate_name: string;
+  donor_total_cents: number;
+  transaction_count: number;
+};
+
+export type CountyCampaignFinanceSummaryResponse = {
+  state: string;
+  county_slug: string;
+  donor_total_cents: number;
+  transaction_count: number;
+  top_recipient_committees: CountySummaryRecipientCommittee[];
+  top_linked_candidates: CountySummaryLinkedCandidate[];
+  sources: SourceInfo[];
+};
+
 export function buildCandidateDetailPath(candidateId: string): string {
   return buildCampaignFinancePath("candidates", candidateId);
 }
 
 export function buildCandidateListPath(params: CandidateListRequest): string {
   return buildCampaignFinanceCollectionPath("candidates", params);
+}
+
+export function buildCandidatesPagePath(params: CandidateListRequest): string {
+  return buildPathWithQuery(CANDIDATES_PAGE_PATH, params);
+}
+
+export function buildCommitteesPagePath(params: CommitteeListRequest): string {
+  return buildPathWithQuery(COMMITTEES_PAGE_PATH, params);
 }
 
 export function buildCandidatesBySlugPath(slug: string): string {
@@ -274,6 +335,12 @@ export function buildCandidateHref(item: SlugRoutableItem): string {
 
 export function buildCandidateSummaryPath(candidateId: string): string {
   return buildCampaignFinancePath("candidates", candidateId, "/summary");
+}
+
+export function buildCountyCampaignFinanceSummaryPath(state: string, countySlug: string): string {
+  return `/v1/counties/${encodeRoutePathSegment(state.toLowerCase())}/${encodeRoutePathSegment(
+    countySlug.toLowerCase()
+  )}/campaign-finance-summary`;
 }
 
 export function buildCandidateIndependentExpendituresPath(candidateId: string): string {

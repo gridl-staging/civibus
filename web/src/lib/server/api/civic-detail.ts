@@ -1,12 +1,16 @@
 import {
+  buildElectionDateAggregatePath,
+  buildUpcomingElectionTimelinePath,
   buildCandidacyDetailPath,
   buildContestDetailPath,
   buildOfficeDetailPath,
   buildOfficeholdingDetailPath,
   type CandidacyDetailResponse,
   type ContestDetailResponse,
+  type ElectionDateAggregateResponse,
   type OfficeDetailResponse,
-  type OfficeholdingDetailResponse
+  type OfficeholdingDetailResponse,
+  type UpcomingElectionTimelineEntry
 } from "$lib/civic-detail/contract";
 import type { ApiClient } from "./client";
 
@@ -24,6 +28,10 @@ export type CandidacyDetailRequest = {
 
 export type OfficeholdingDetailRequest = {
   id: string;
+};
+
+export type ElectionDateAggregateRequest = {
+  date: string;
 };
 
 export async function fetchOfficeDetail(
@@ -52,4 +60,17 @@ export async function fetchOfficeholdingDetail(
   request: OfficeholdingDetailRequest
 ): Promise<OfficeholdingDetailResponse> {
   return apiClient.requestJson<OfficeholdingDetailResponse>(buildOfficeholdingDetailPath(request.id));
+}
+
+export async function fetchElectionDateAggregate(
+  apiClient: ApiClient,
+  request: ElectionDateAggregateRequest
+): Promise<ElectionDateAggregateResponse> {
+  return apiClient.requestJson<ElectionDateAggregateResponse>(buildElectionDateAggregatePath(request.date));
+}
+
+export async function fetchUpcomingElectionTimeline(
+  apiClient: ApiClient
+): Promise<UpcomingElectionTimelineEntry[]> {
+  return apiClient.requestJson<UpcomingElectionTimelineEntry[]>(buildUpcomingElectionTimelinePath());
 }

@@ -17,6 +17,7 @@ IRS_527_TXT_MEMBER_PATH = "var/IRS/data/scripts/pofd/download/FullDataFile.txt"
 
 REQUEST_TIMEOUT_SECONDS = 120.0
 MAX_DOWNLOAD_BYTES = 2_147_483_648  # 2 GiB — full archive is ~321 MB
+_IPV4_ONLY_LOCAL_ADDRESS = "0.0.0.0"
 
 _ALLOWED_IRS_SCHEMES = frozenset({"https"})
 _ALLOWED_IRS_HOSTS = frozenset({"forms.irs.gov", "apps.irs.gov"})
@@ -35,7 +36,41 @@ def _validate_irs_download_url(url: str, *, context: str) -> str:
     return url
 
 
+def _download_to_temp_path(url: str, tmp_path: Path, *, force_ipv4_only: bool) -> None:
+    """Download the IRS archive to a temporary path.
+
+    The IRS host currently hangs in IPv6 SYN-SENT from the production VM, so the
+    caller may bind the outbound transport to IPv4 to keep downloads reliable.
+    """
+    _validate_irs_download_url(url, context="IRS download URL")
+    client_kwargs: dict[str, object] = {"timeout": REQUEST_TIMEOUT_SECONDS}
+    if force_ipv4_only:
+        # Binding the outbound socket to 0.0.0.0 forces IPv4 without changing
+        # the request URL or bypassing the normal TLS / redirect validation flow.
+        client_kwargs["transport"] = httpx.HTTPTransport(local_address=_IPV4_ONLY_LOCAL_ADDRESS)
+
+    with httpx.Client(**client_kwargs) as client:
+        with client.stream("GET", url, follow_redirects=True) as response:
+            response.raise_for_status()
+
+            redirect_history = tuple(getattr(response, "history", ()))
+            for hop in (*redirect_history, response):
+                _validate_irs_download_url(str(hop.url), context="IRS download URL")
+
+            with tmp_path.open("wb") as f:
+                downloaded_bytes = 0
+                for chunk in response.iter_bytes():
+                    if chunk:
+                        downloaded_bytes += len(chunk)
+                        if downloaded_bytes > MAX_DOWNLOAD_BYTES:
+                            raise ValueError(
+                                f"IRS download exceeds the allowed size limit of {MAX_DOWNLOAD_BYTES} bytes"
+                            )
+                        f.write(chunk)
+
+
 def _stream_download_to_path(url: str, destination: Path) -> None:
+    """Download the IRS archive atomically to the requested destination."""
     _validate_irs_download_url(url, context="IRS download URL")
     destination.parent.mkdir(parents=True, exist_ok=True)
 
@@ -48,25 +83,9 @@ def _stream_download_to_path(url: str, destination: Path) -> None:
     tmp_path = Path(tmp_path_str)
 
     try:
-        with httpx.Client(timeout=REQUEST_TIMEOUT_SECONDS) as client:
-            with client.stream("GET", url, follow_redirects=True) as response:
-                response.raise_for_status()
-
-                redirect_history = tuple(getattr(response, "history", ()))
-                for hop in (*redirect_history, response):
-                    _validate_irs_download_url(str(hop.url), context="IRS download URL")
-
-                with tmp_path.open("wb") as f:
-                    downloaded_bytes = 0
-                    for chunk in response.iter_bytes():
-                        if chunk:
-                            downloaded_bytes += len(chunk)
-                            if downloaded_bytes > MAX_DOWNLOAD_BYTES:
-                                raise ValueError(
-                                    f"IRS download exceeds the allowed size limit of {MAX_DOWNLOAD_BYTES} bytes"
-                                )
-                            f.write(chunk)
-
+        # We intentionally prefer IPv4 here because the live Hetzner VM reaches
+        # the IRS endpoint over IPv4 but can hang indefinitely on IPv6 connect.
+        _download_to_temp_path(url, tmp_path, force_ipv4_only=True)
         tmp_path.replace(destination)
     except Exception:
         tmp_path.unlink(missing_ok=True)

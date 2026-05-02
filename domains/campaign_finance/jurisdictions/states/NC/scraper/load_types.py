@@ -14,10 +14,19 @@ LoadResult = _shared_load_utils.LoadResult
 
 
 @dataclass(slots=True)
+class NCTransactionsLoadResult(LoadResult):
+    year_filtered: int = 0
+
+
+@dataclass(slots=True)
 class _NCLoadCounts:
     inserted: int = 0
     skipped: int = 0
     errors: int = 0
+
+
+# Public alias for shared loader callers outside this module.
+NCLoadCounts = _NCLoadCounts
 
 
 @dataclass(frozen=True, slots=True)

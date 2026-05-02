@@ -108,10 +108,15 @@ def _record_entity_ids(record: dict[str, Any]) -> tuple[Any, Any]:
     )
 
 
-def score_with_splink(rows: list[RowDict], entity_type: str) -> list[ScoredPair]:
+def score_with_splink(
+    rows: list[RowDict],
+    entity_type: str,
+    *,
+    probabilistic_settings: Any | None = None,
+) -> list[ScoredPair]:
     """Run probabilistic matching with Splink and return Stage 3 scored-pair contract."""
     settings = require_probabilistic_settings(
-        get_probabilistic_settings(entity_type),
+        probabilistic_settings if probabilistic_settings is not None else get_probabilistic_settings(entity_type),
         entity_type=entity_type,
     )
     runtime = get_splink_runtime()
@@ -119,7 +124,10 @@ def score_with_splink(rows: list[RowDict], entity_type: str) -> list[ScoredPair]
     if not prepared_rows:
         return []
 
-    blocking_rules = get_blocking_rule_sqls(entity_type)
+    if probabilistic_settings is None:
+        blocking_rules = get_blocking_rule_sqls(entity_type)
+    else:
+        blocking_rules = get_blocking_rule_sqls(entity_type, probabilistic_settings=settings)
     linker = build_splink_linker(
         prepared_rows,
         settings,
@@ -150,13 +158,46 @@ def score_with_splink(rows: list[RowDict], entity_type: str) -> list[ScoredPair]
     ]
 
 
-def score_entities(conn: psycopg.Connection, entity_type: str) -> list[ScoredPair]:
+def score_rows(
+    rows: list[RowDict],
+    entity_type: str,
+    *,
+    deterministic_pairs: list[ScoredPair] | None = None,
+    probabilistic_settings: Any | None = None,
+) -> list[ScoredPair]:
+    """Score already-materialized ER rows through the standard deterministic/probabilistic pipeline.
+
+    This keeps curated fixture evaluation on the same scoring path as DB-backed
+    runs without requiring a live extraction query.
+    """
+    resolved_deterministic_pairs = list(deterministic_pairs or [])
+    unresolved_rows = filter_unresolved_rows(rows, resolved_deterministic_pairs)
+    if not unresolved_rows:
+        return resolved_deterministic_pairs
+
+    if probabilistic_settings is None:
+        probabilistic_pairs = score_with_splink(unresolved_rows, entity_type)
+    else:
+        probabilistic_pairs = score_with_splink(
+            unresolved_rows,
+            entity_type,
+            probabilistic_settings=probabilistic_settings,
+        )
+    return resolved_deterministic_pairs + probabilistic_pairs
+
+
+def score_entities(
+    conn: psycopg.Connection,
+    entity_type: str,
+    *,
+    probabilistic_settings: Any | None = None,
+) -> list[ScoredPair]:
     """Stage 2 scoring entry point: deterministic tier then probabilistic tier."""
     rows = extract_rows_for_matching(conn, entity_type)
     deterministic_pairs = run_deterministic_rules(conn, entity_type)
-    unresolved_rows = filter_unresolved_rows(rows, deterministic_pairs)
-    if not unresolved_rows:
-        return deterministic_pairs
-
-    probabilistic_pairs = score_with_splink(unresolved_rows, entity_type)
-    return deterministic_pairs + probabilistic_pairs
+    return score_rows(
+        rows,
+        entity_type,
+        deterministic_pairs=deterministic_pairs,
+        probabilistic_settings=probabilistic_settings,
+    )

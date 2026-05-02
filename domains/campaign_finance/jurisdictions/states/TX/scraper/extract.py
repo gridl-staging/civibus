@@ -1,3 +1,7 @@
+"""
+Stub summary for /Users/stuart/parallel_development/civibus_dev/mar21_02_tx_pa_state_pipelines/civibus_dev/domains/campaign_finance/jurisdictions/states/TX/scraper/extract.py.
+"""
+
 from __future__ import annotations
 
 from functools import lru_cache
@@ -277,28 +281,45 @@ def _extract_address(
 def _split_zip(raw_zip: str | None) -> tuple[str | None, str | None]:
     """Split a raw ZIP string into (zip5, zip4) components.
 
-    Handles three formats seen in government data:
+    Handles formats seen in government data:
       - '77494'       -> ('77494', None)       standard 5-digit
       - '77494-6162'  -> ('77494', '6162')      ZIP+4 with dash
       - '774946162'   -> ('77494', '6162')      ZIP+4 without dash (TX live data)
+      - '693' / '966' -> (None, None)           garbage short ZIP, drop silently
+
+    Anything that is not exactly 5 or 9 digits (or a dashed split that yields
+    a 5-digit zip5) is treated as malformed and dropped — propagating it as
+    `zip5` would fail Address.zip5 Pydantic validation and, on the priority
+    refresh runner, spam hundreds of MB of stack traces while still leaving
+    the row unloaded. Dropping the bad ZIP keeps the rest of the address
+    intact so the row still loads.
     """
     normalized_zip = _normalized_text(raw_zip)
     if normalized_zip is None:
         return None, None
 
     if "-" in normalized_zip:
-        zip5, zip4 = normalized_zip.split("-", maxsplit=1)
-        return _normalized_digits(zip5), _normalized_digits(zip4)
+        zip5_raw, zip4_raw = normalized_zip.split("-", maxsplit=1)
+        zip5 = _normalized_digits(zip5_raw)
+        zip4 = _normalized_digits(zip4_raw)
+        # A dashed value with a non-5-digit prefix is malformed; drop it rather
+        # than raising downstream.
+        if zip5 is None or len(zip5) != 5:
+            return None, None
+        return zip5, zip4
 
     digits = _normalized_digits(normalized_zip)
     if digits is None:
         return None, None
 
+    if len(digits) == 5:
+        return digits, None
     # 9-digit ZIP+4 without dash: split into 5+4
     if len(digits) == 9:
         return digits[:5], digits[5:]
 
-    return digits, None
+    # 1-4 or 6-8 digits is garbage; drop rather than raise.
+    return None, None
 
 
 def _normalized_digits(value: str | None) -> str | None:

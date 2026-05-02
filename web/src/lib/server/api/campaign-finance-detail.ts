@@ -1,11 +1,13 @@
 /** Fetch helpers for campaign-finance detail routes, lists, and slug lookups. */
 import {
   buildCandidateDetailPath,
+  buildCandidateHref,
   buildCandidateIndependentExpendituresPath,
   buildCandidateIndependentExpendituresSummaryPath,
   buildCandidateListPath,
   buildCandidateSummaryPath,
   buildCandidatesBySlugPath,
+  buildCountyCampaignFinanceSummaryPath,
   buildCommitteeDetailPath,
   buildCommitteeFilingBreakdownPath,
   buildCommitteeListPath,
@@ -18,6 +20,7 @@ import {
   type CandidateListResponse,
   type CandidateSlugMatchResponse,
   type CampaignFinanceTransactionResponse,
+  type CountyCampaignFinanceSummaryResponse,
   type CommitteeDetailResponse,
   type CommitteeFilingBreakdown,
   type CommitteeFundraisingSummary,
@@ -38,12 +41,16 @@ export type CandidateListRequest = CandidateListPathRequest;
 export type CommitteeListRequest = CommitteeListPathRequest;
 export type CandidateBySlugRequest = SlugRequest;
 export type CommitteeBySlugRequest = SlugRequest;
+export type CountyCampaignFinanceSummaryRequest = {
+  state: string;
+  countySlug: string;
+};
 
 export type CommitteeDetailBundle = {
   detail: CommitteeDetailResponse;
-  transactions: CampaignFinanceTransactionResponse[];
-  summary: CommitteeFundraisingSummary;
-  filingBreakdown: CommitteeFilingBreakdown;
+  transactions: Promise<CampaignFinanceTransactionResponse[]>;
+  summary: Promise<CommitteeFundraisingSummary>;
+  filingBreakdown: Promise<CommitteeFilingBreakdown>;
 };
 
 function fetchByRequest<TResponse, TRequest>(
@@ -99,9 +106,41 @@ export async function fetchCommitteeFilingBreakdown(
 
 export type CandidateDetailBundle = {
   detail: CandidateDetailResponse;
-  summary: CandidateFundraisingSummary;
-  ieTransactions: IndependentExpenditureResponse[];
+  summary: Promise<CandidateFundraisingSummary>;
+  ieTransactions: Promise<IndependentExpenditureResponse[]>;
+  ieSummary: Promise<IndependentExpenditureSummary | null>;
+};
+
+export type PersonCandidateFinanceSection = {
+  candidate: CandidateDetailResponse;
+  summary: Promise<CandidateFundraisingSummary>;
+  ieTransactions: Promise<IndependentExpenditureResponse[]>;
+  ieSummary: Promise<IndependentExpenditureSummary | null>;
+  donorVendorTransactions: Promise<CampaignFinanceTransactionResponse[]>;
+};
+
+export type PersonCandidateFinanceRequest = {
+  personId: string;
+  limit?: number;
+};
+
+export type ContestCandidacyFinanceRequestItem = {
+  personId: string;
+};
+
+export type ContestCandidateFinanceSection = {
+  personId: string;
+  candidateHref: string | null;
+  summary: CandidateFundraisingSummary | null;
   ieSummary: IndependentExpenditureSummary | null;
+  ieTransactions: IndependentExpenditureResponse[];
+};
+
+export type ContestCandidateFinanceByPersonId = Record<string, ContestCandidateFinanceSection>;
+
+export type ContestCandidateFinanceRequest = {
+  candidacies: ContestCandidacyFinanceRequestItem[];
+  limitPerPerson?: number;
 };
 
 export async function fetchCandidateSummary(
@@ -125,6 +164,69 @@ export async function fetchCandidateIndependentExpendituresSummary(
   return fetchById(apiClient, request, buildCandidateIndependentExpendituresSummaryPath);
 }
 
+function guardUnhandledRejection(promise: Promise<unknown>): void {
+  void promise.catch(() => {});
+}
+
+function collectLinkedCommitteeIds(
+  summary: CandidateFundraisingSummary,
+  principalCommitteeId: string | null
+): string[] {
+  const committeeIds: string[] = [];
+  const seen = new Set<string>();
+
+  if (principalCommitteeId !== null) {
+    seen.add(principalCommitteeId);
+    committeeIds.push(principalCommitteeId);
+  }
+
+  for (const committeeSummary of summary.committees) {
+    if (seen.has(committeeSummary.committee_id)) {
+      continue;
+    }
+    seen.add(committeeSummary.committee_id);
+    committeeIds.push(committeeSummary.committee_id);
+  }
+
+  return committeeIds;
+}
+
+function parseTransactionSortDate(transactionDate: string | null): number | null {
+  if (transactionDate === null) {
+    return null;
+  }
+
+  const parsed = Date.parse(transactionDate);
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
+/**
+ * Applies deterministic ordering across merged committee transaction feeds.
+ * Newer rows render first; same-date rows use canonical transaction id tie-breakers.
+ */
+function sortMergedDonorVendorTransactions(
+  transactions: CampaignFinanceTransactionResponse[]
+): CampaignFinanceTransactionResponse[] {
+  return [...transactions].sort((left, right) => {
+    const leftDate = parseTransactionSortDate(left.transaction_date);
+    const rightDate = parseTransactionSortDate(right.transaction_date);
+
+    if (leftDate !== null && rightDate !== null && leftDate !== rightDate) {
+      return rightDate - leftDate;
+    }
+
+    if (leftDate === null && rightDate !== null) {
+      return 1;
+    }
+
+    if (leftDate !== null && rightDate === null) {
+      return -1;
+    }
+
+    return left.id.localeCompare(right.id);
+  });
+}
+
 async function fetchOptionalCandidateData<T>(operation: () => Promise<T>, fallbackValue: T): Promise<T> {
   try {
     return await operation();
@@ -142,6 +244,125 @@ export async function fetchCandidateList(
   request: CandidateListRequest
 ): Promise<CandidateListResponse> {
   return fetchByRequest(apiClient, request, buildCandidateListPath);
+}
+
+/**
+ * Loads person-linked candidate finance inputs while reusing existing candidate/committee owners.
+ * Summary + IE remain streamed promises so person detail sections can render progressively.
+ */
+export async function fetchPersonCandidateFinanceSections(
+  apiClient: ApiClient,
+  request: PersonCandidateFinanceRequest
+): Promise<PersonCandidateFinanceSection[]> {
+  const linkedCandidates = await fetchCandidateList(apiClient, {
+    person_id: request.personId,
+    limit: request.limit ?? 10,
+    offset: 0
+  });
+
+  return Promise.all(
+    linkedCandidates.items.map(async (candidateListItem) => {
+      const candidateBundle = await fetchCandidateDetailBundle(apiClient, {
+        id: candidateListItem.id
+      });
+
+      const donorVendorTransactions = candidateBundle.summary.then(async (summary) => {
+        const committeeIds = collectLinkedCommitteeIds(
+          summary,
+          candidateBundle.detail.principal_committee_id
+        );
+        if (committeeIds.length === 0) {
+          return [];
+        }
+
+        const transactionsByCommittee = await Promise.all(
+          committeeIds.map((committeeId) =>
+            fetchCommitteeTransactions(apiClient, {
+              id: committeeId
+            })
+          )
+        );
+        return sortMergedDonorVendorTransactions(transactionsByCommittee.flat());
+      });
+      guardUnhandledRejection(donorVendorTransactions);
+
+      return {
+        candidate: candidateBundle.detail,
+        summary: candidateBundle.summary,
+        ieTransactions: candidateBundle.ieTransactions,
+        ieSummary: candidateBundle.ieSummary,
+        donorVendorTransactions
+      };
+    })
+  );
+}
+
+function createEmptyContestCandidateFinanceSection(personId: string): ContestCandidateFinanceSection {
+  return {
+    personId,
+    candidateHref: null,
+    summary: null,
+    ieSummary: null,
+    ieTransactions: []
+  };
+}
+
+function selectPersonCandidateFinanceSection(
+  sections: PersonCandidateFinanceSection[],
+  personId: string
+): PersonCandidateFinanceSection | null {
+  if (sections.length === 0) {
+    return null;
+  }
+
+  for (const section of sections) {
+    if (section.candidate.person_id === personId) {
+      return section;
+    }
+  }
+
+  return sections[0];
+}
+
+export async function fetchContestCandidateFinanceByPersonId(
+  apiClient: ApiClient,
+  request: ContestCandidateFinanceRequest
+): Promise<ContestCandidateFinanceByPersonId> {
+  const personIds = [...new Set(request.candidacies.map((candidacy) => candidacy.personId))];
+  const entries = await Promise.all(
+    personIds.map(async (personId) => {
+      try {
+        const personSections = await fetchPersonCandidateFinanceSections(apiClient, {
+          personId,
+          limit: request.limitPerPerson ?? 10
+        });
+        const matchedSection = selectPersonCandidateFinanceSection(personSections, personId);
+        if (matchedSection === null) {
+          return [personId, createEmptyContestCandidateFinanceSection(personId)] as const;
+        }
+
+        const [summary, ieSummary, ieTransactions] = await Promise.all([
+          matchedSection.summary,
+          matchedSection.ieSummary,
+          matchedSection.ieTransactions
+        ]);
+        return [
+          personId,
+          {
+            personId,
+            candidateHref: buildCandidateHref(matchedSection.candidate),
+            summary,
+            ieSummary,
+            ieTransactions
+          }
+        ] as const;
+      } catch {
+        return [personId, createEmptyContestCandidateFinanceSection(personId)] as const;
+      }
+    })
+  );
+
+  return Object.fromEntries(entries);
 }
 
 export async function fetchCommitteeList(
@@ -165,37 +386,71 @@ export async function fetchCommitteesBySlug(
   return fetchByRequest(apiClient, request, ({ slug }) => buildCommitteesBySlugPath(slug));
 }
 
-/** Loads the candidate detail bundle and tolerates missing IE endpoints as empty state. */
+export async function fetchCountyCampaignFinanceSummary(
+  apiClient: ApiClient,
+  request: CountyCampaignFinanceSummaryRequest
+): Promise<CountyCampaignFinanceSummaryResponse> {
+  return fetchByRequest(apiClient, request, ({ state, countySlug }) =>
+    buildCountyCampaignFinanceSummaryPath(state, countySlug)
+  );
+}
+
+/** Loads the candidate detail shell; secondary fields stream as unresolved promises. */
 export async function fetchCandidateDetailBundle(
   apiClient: ApiClient,
   request: CandidateDetailRequest
 ): Promise<CandidateDetailBundle> {
-  const [detail, summary, ieTransactions, ieSummary] = await Promise.all([
-    fetchCandidateDetail(apiClient, request),
-    fetchCandidateSummary(apiClient, request),
-    fetchOptionalCandidateData(
-      () => fetchCandidateIndependentExpenditures(apiClient, request),
-      []
-    ),
-    fetchOptionalCandidateData(
-      () => fetchCandidateIndependentExpendituresSummary(apiClient, request),
-      null
-    )
-  ]);
+  const detailPromise = fetchCandidateDetail(apiClient, request);
+  const summaryPromise = fetchCandidateSummary(apiClient, request);
+  const ieTransactionsPromise = fetchOptionalCandidateData(
+    () => fetchCandidateIndependentExpenditures(apiClient, request),
+    []
+  );
+  const ieSummaryPromise = fetchOptionalCandidateData(
+    () => fetchCandidateIndependentExpendituresSummary(apiClient, request),
+    null
+  );
+  guardUnhandledRejection(summaryPromise);
+  guardUnhandledRejection(ieTransactionsPromise);
+  guardUnhandledRejection(ieSummaryPromise);
 
-  return { detail, summary, ieTransactions, ieSummary };
+  try {
+    const detail = await detailPromise;
+    return {
+      detail,
+      summary: summaryPromise,
+      ieTransactions: ieTransactionsPromise,
+      ieSummary: ieSummaryPromise
+    };
+  } catch (error) {
+    void Promise.allSettled([summaryPromise, ieTransactionsPromise, ieSummaryPromise]);
+    throw error;
+  }
 }
 
+/** Loads the committee detail shell; secondary fields stream as unresolved promises. */
 export async function fetchCommitteeDetailBundle(
   apiClient: ApiClient,
   request: CommitteeDetailRequest
 ): Promise<CommitteeDetailBundle> {
-  const [detail, transactions, summary, filingBreakdown] = await Promise.all([
-    fetchCommitteeDetail(apiClient, request),
-    fetchCommitteeTransactions(apiClient, request),
-    fetchCommitteeSummary(apiClient, request),
-    fetchCommitteeFilingBreakdown(apiClient, request)
-  ]);
+  const detailPromise = fetchCommitteeDetail(apiClient, request);
+  const transactionsPromise = fetchCommitteeTransactions(apiClient, request);
+  const summaryPromise = fetchCommitteeSummary(apiClient, request);
+  const filingBreakdownPromise = fetchCommitteeFilingBreakdown(apiClient, request);
+  guardUnhandledRejection(transactionsPromise);
+  guardUnhandledRejection(summaryPromise);
+  guardUnhandledRejection(filingBreakdownPromise);
 
-  return { detail, transactions, summary, filingBreakdown };
+  try {
+    const detail = await detailPromise;
+    return {
+      detail,
+      transactions: transactionsPromise,
+      summary: summaryPromise,
+      filingBreakdown: filingBreakdownPromise
+    };
+  } catch (error) {
+    void Promise.allSettled([transactionsPromise, summaryPromise, filingBreakdownPromise]);
+    throw error;
+  }
 }

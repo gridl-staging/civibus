@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
 import pytest
+from pydantic import ValidationError
 
 from domains.campaign_finance.quality.models import CheckResult, QualityReport
 from domains.campaign_finance.quality.schedule_e_closeout import (
@@ -232,7 +233,10 @@ class TestScheduleECloseoutEvidence:
         assert anomalies[0]["status"] == "fail"
 
     def test_rejects_extra_fields(self) -> None:
-        with pytest.raises(Exception):
+        # Tightened from `pytest.raises(Exception)` so the test pins the
+        # actual contract (Pydantic strict-mode rejects extra fields)
+        # rather than passing on any unrelated exception.
+        with pytest.raises(ValidationError):
             ScheduleECloseoutEvidence(
                 cycle=2024,
                 data_source_id=str(uuid4()),

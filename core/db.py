@@ -13,7 +13,7 @@ from psycopg.sql import SQL, Identifier, Placeholder
 from psycopg.types.json import Jsonb
 
 from core import db_ingest
-from core.types.python.models import Address, DataSource, Organization, Person, SourceRecord
+from core.types.python.models import Address, DataSource, Organization, Person, PersonPortrait, RefreshRun, SourceRecord
 
 ConnectionOverrideValue = str | int
 PostConnectHook = Callable[[psycopg.Connection], None]
@@ -27,6 +27,12 @@ _PERSON_COLUMNS = (
     "middle_name",
     "last_name",
     "suffix",
+    "occupation",
+    "education",
+    "bio_text",
+    "bio_source_url",
+    "bio_license",
+    "bio_pulled_at",
     "date_of_birth",
     "year_of_birth",
     "identifiers",
@@ -102,6 +108,43 @@ _SOURCE_RECORD_COLUMNS = (
     "created_at",
 )
 
+_PERSON_PORTRAIT_COLUMNS = (
+    "id",
+    "person_id",
+    "source_record_id",
+    "status",
+    "rights_status",
+    "image_hash",
+    "dedup_key",
+    "mime_type",
+    "width_px",
+    "height_px",
+    "source_image_url",
+    "storage_uri",
+    "created_at",
+    "updated_at",
+)
+
+_REFRESH_RUN_COLUMNS = (
+    "id",
+    "job_key",
+    "domain",
+    "jurisdiction",
+    "data_source_names",
+    "pull_status",
+    "started_at",
+    "completed_at",
+    "inserted_count",
+    "skipped_count",
+    "quarantined_count",
+    "superseded_count",
+    "error_count",
+    "metadata_updates",
+    "message",
+    "error",
+    "created_at",
+)
+
 upsert_address = db_ingest.upsert_address
 find_organization_by_canonical_name = db_ingest.find_organization_by_canonical_name
 find_organization_by_identifier = db_ingest.find_organization_by_identifier
@@ -149,10 +192,11 @@ def _build_connection_parameters(
     overrides: Mapping[str, ConnectionOverrideValue],
 ) -> dict[str, ConnectionOverrideValue]:
     env_password = os.getenv("POSTGRES_PASSWORD")
-    # Remap Docker-internal hostname "db" to localhost for host-level execution.
-    # Mirrors env_lib.sh:load_civibus_env() which does the same for shell scripts.
+    # Remap Docker-internal hostname "db" to localhost for host-level execution,
+    # but keep "db" when this process runs inside a container on the compose network.
+    running_in_container = os.path.exists("/.dockerenv")
     raw_host = os.getenv("POSTGRES_HOST", "localhost")
-    pg_host = "127.0.0.1" if raw_host == "db" else raw_host
+    pg_host = "127.0.0.1" if raw_host == "db" and not running_in_container else raw_host
 
     connection_parameters: dict[str, ConnectionOverrideValue] = {
         "user": os.getenv("POSTGRES_USER", "civibus"),
@@ -290,6 +334,12 @@ def insert_person(conn: psycopg.Connection, person: Person) -> UUID:
             person.middle_name,
             person.last_name,
             person.suffix,
+            person.occupation,
+            person.education,
+            person.bio_text,
+            person.bio_source_url,
+            person.bio_license,
+            person.bio_pulled_at,
             person.date_of_birth,
             person.year_of_birth,
             Jsonb(person.identifiers),
@@ -310,6 +360,126 @@ def select_person(conn: psycopg.Connection, person_id: UUID) -> Person | None:
 
     row["identifiers"] = _normalize_json_dictionary(row["identifiers"], field_name="person.identifiers")
     return Person(**row)
+
+
+def update_person_bio_fields_if_missing(
+    conn: psycopg.Connection,
+    *,
+    person_id: UUID,
+    occupation: str | None,
+    education: str | None,
+    bio_text: str | None,
+    bio_source_url: str | None,
+    bio_license: str | None,
+) -> tuple[str, ...]:
+    """Fill empty person bio fields without overwriting existing non-empty values."""
+    def _normalize_optional_text(value: str | None) -> str | None:
+        if not isinstance(value, str):
+            return None
+        normalized = value.strip()
+        return normalized if normalized != "" else None
+
+    def _is_blank(value: str | None) -> bool:
+        return value is None or value.strip() == ""
+
+    with conn.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT occupation, education, bio_text, bio_source_url, bio_license
+            FROM core.person
+            WHERE id = %s
+            """,
+            (person_id,),
+        )
+        existing_row = cursor.fetchone()
+
+    if existing_row is None:
+        return ()
+
+    (
+        existing_occupation,
+        existing_education,
+        existing_bio_text,
+        _,
+        _,
+    ) = existing_row
+
+    normalized_occupation = _normalize_optional_text(occupation)
+    normalized_education = _normalize_optional_text(education)
+    normalized_bio_text = _normalize_optional_text(bio_text)
+    normalized_bio_source_url = _normalize_optional_text(bio_source_url)
+    normalized_bio_license = _normalize_optional_text(bio_license)
+
+    assignments: list[str] = []
+    params: list[object] = []
+    updated_fields: list[str] = []
+
+    if normalized_occupation and _is_blank(existing_occupation):
+        assignments.append("occupation = %s")
+        params.append(normalized_occupation)
+        updated_fields.append("occupation")
+
+    if normalized_education and _is_blank(existing_education):
+        assignments.append("education = %s")
+        params.append(normalized_education)
+        updated_fields.append("education")
+
+    if normalized_bio_text and _is_blank(existing_bio_text):
+        assignments.append("bio_text = %s")
+        params.append(normalized_bio_text)
+        updated_fields.append("bio_text")
+
+        # Bio metadata is companion state for biography and should move together.
+        if normalized_bio_source_url is not None:
+            assignments.append("bio_source_url = %s")
+            params.append(normalized_bio_source_url)
+            updated_fields.append("bio_source_url")
+        if normalized_bio_license is not None:
+            assignments.append("bio_license = %s")
+            params.append(normalized_bio_license)
+            updated_fields.append("bio_license")
+
+        assignments.append("bio_pulled_at = NOW()")
+
+    if not assignments:
+        return ()
+
+    params.append(person_id)
+    update_sql = f"""
+        UPDATE core.person
+        SET {", ".join(assignments)},
+            updated_at = NOW()
+        WHERE id = %s
+    """
+    with conn.cursor() as cursor:
+        cursor.execute(update_sql, tuple(params))
+
+    return tuple(updated_fields)
+
+
+def merge_person_identifiers(
+    conn: psycopg.Connection,
+    *,
+    person_id: UUID,
+    identifiers: dict[str, str],
+) -> None:
+    """Merge new identifier key-value pairs into a person's JSONB identifiers column;
+    keys present in both are taken from the new payload (right-side-wins semantics
+    inherent to the JSONB ``||`` operator). The ``@>`` guard avoids no-op writes
+    when the new payload is already a subset of what is already stored."""
+    if not identifiers:
+        return
+    with conn.cursor() as cursor:
+        cursor.execute(
+            """
+            UPDATE core.person
+            SET identifiers = identifiers || %s,
+                updated_at = NOW()
+            WHERE id = %s
+              AND NOT identifiers @> %s
+            """,
+            (Jsonb(identifiers), person_id, Jsonb(identifiers)),
+        )
 
 
 def insert_organization(conn: psycopg.Connection, org: Organization) -> UUID:
@@ -450,3 +620,231 @@ def select_source_record(conn: psycopg.Connection, sr_id: UUID) -> SourceRecord 
 
     row["raw_fields"] = _normalize_json_dictionary(row["raw_fields"], field_name="source_record.raw_fields")
     return SourceRecord(**row)
+
+
+def select_active_source_record_by_key(
+    conn: psycopg.Connection,
+    *,
+    data_source_id: UUID,
+    source_record_key: str,
+) -> SourceRecord | None:
+    """Return the active source record for a (data_source_id, source_record_key) pair."""
+    with conn.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT id
+            FROM core.source_record
+            WHERE data_source_id = %s
+              AND source_record_key = %s
+              AND superseded_by IS NULL
+            LIMIT 1
+            """,
+            (data_source_id, source_record_key),
+        )
+        row = cursor.fetchone()
+    if row is None:
+        return None
+    return select_source_record(conn, row[0])
+
+
+def _person_portrait_values(portrait: PersonPortrait) -> tuple[object, ...]:
+    return (
+        portrait.id,
+        portrait.person_id,
+        portrait.source_record_id,
+        portrait.status,
+        portrait.rights_status,
+        portrait.image_hash,
+        portrait.dedup_key,
+        portrait.mime_type,
+        portrait.width_px,
+        portrait.height_px,
+        portrait.source_image_url,
+        portrait.storage_uri,
+        portrait.created_at,
+        portrait.updated_at,
+    )
+
+
+def insert_person_portrait(conn: psycopg.Connection, portrait: PersonPortrait) -> UUID:
+    statement = SQL(
+        """
+        INSERT INTO core.person_portrait ({columns})
+        VALUES ({values})
+        ON CONFLICT (person_id, dedup_key)
+        DO UPDATE SET
+            source_record_id = CASE
+                WHEN core.person_portrait.status = 'takedown_requested' THEN core.person_portrait.source_record_id
+                ELSE EXCLUDED.source_record_id
+            END,
+            status = CASE
+                WHEN core.person_portrait.status = 'takedown_requested' THEN core.person_portrait.status
+                ELSE EXCLUDED.status
+            END,
+            rights_status = CASE
+                WHEN core.person_portrait.status = 'takedown_requested' THEN core.person_portrait.rights_status
+                ELSE EXCLUDED.rights_status
+            END,
+            mime_type = CASE
+                WHEN core.person_portrait.status = 'takedown_requested' THEN core.person_portrait.mime_type
+                ELSE EXCLUDED.mime_type
+            END,
+            width_px = CASE
+                WHEN core.person_portrait.status = 'takedown_requested' THEN core.person_portrait.width_px
+                ELSE EXCLUDED.width_px
+            END,
+            height_px = CASE
+                WHEN core.person_portrait.status = 'takedown_requested' THEN core.person_portrait.height_px
+                ELSE EXCLUDED.height_px
+            END,
+            source_image_url = CASE
+                WHEN core.person_portrait.status = 'takedown_requested' THEN core.person_portrait.source_image_url
+                ELSE EXCLUDED.source_image_url
+            END,
+            storage_uri = CASE
+                WHEN core.person_portrait.status = 'takedown_requested' THEN core.person_portrait.storage_uri
+                ELSE EXCLUDED.storage_uri
+            END,
+            updated_at = CASE
+                WHEN core.person_portrait.status = 'takedown_requested' THEN core.person_portrait.updated_at
+                ELSE EXCLUDED.updated_at
+            END
+        RETURNING id
+        """
+    ).format(
+        columns=SQL(", ").join(Identifier(column_name) for column_name in _PERSON_PORTRAIT_COLUMNS),
+        values=SQL(", ").join(Placeholder() for _ in _PERSON_PORTRAIT_COLUMNS),
+    )
+
+    with conn.cursor() as cursor:
+        cursor.execute(statement, _person_portrait_values(portrait))
+        row = cursor.fetchone()
+
+    if row is None:
+        raise RuntimeError("insert_person_portrait expected RETURNING id row")
+    return row[0]
+
+
+def select_person_portrait(conn: psycopg.Connection, portrait_id: UUID) -> PersonPortrait | None:
+    row = _select_row_by_id(conn, "person_portrait", _PERSON_PORTRAIT_COLUMNS, portrait_id)
+    if row is None:
+        return None
+    return PersonPortrait(**row)
+
+
+def select_active_roster_portrait_for_person(
+    conn: psycopg.Connection,
+    *,
+    person_id: UUID,
+) -> PersonPortrait | None:
+    """Return the newest active portrait whose provenance points at a registered roster source."""
+    with conn.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT pp.id
+            FROM core.person_portrait AS pp
+            JOIN core.source_record AS sr ON sr.id = pp.source_record_id
+            JOIN core.data_source AS ds ON ds.id = sr.data_source_id
+            WHERE pp.person_id = %s
+              AND pp.status = 'active'
+              AND sr.superseded_by IS NULL
+              AND ds.domain = 'civics'
+              AND CASE
+                    WHEN ds.notes ~ '^\s*\\{'
+                    THEN COALESCE(ds.notes::jsonb->>'roster_source', 'false') = 'true'
+                    ELSE FALSE
+                  END
+            ORDER BY pp.updated_at DESC, pp.created_at DESC, pp.id DESC
+            LIMIT 1
+            """,
+            (person_id,),
+        )
+        row = cursor.fetchone()
+    if row is None:
+        return None
+    return select_person_portrait(conn, row[0])
+
+
+def mark_person_portrait_takedown_requested(
+    conn: psycopg.Connection,
+    portrait_id: UUID,
+) -> PersonPortrait | None:
+    """Mark a portrait row as takedown requested and return the updated row."""
+    with conn.cursor(row_factory=dict_row) as cursor:
+        cursor.execute(
+            """
+            UPDATE core.person_portrait
+            SET status = 'takedown_requested', updated_at = now()
+            WHERE id = %s
+            RETURNING id, person_id, source_record_id, status, rights_status, image_hash, dedup_key,
+                      mime_type, width_px, height_px, source_image_url, storage_uri, created_at, updated_at
+            """,
+            (portrait_id,),
+        )
+        row = cursor.fetchone()
+    if row is None:
+        return None
+    return PersonPortrait(**row)
+
+
+def person_has_takedown_requested_portrait_source_image(
+    conn: psycopg.Connection,
+    *,
+    person_id: UUID,
+    source_image_url: str,
+) -> bool:
+    """Return whether a takedown-requested portrait exists for the person+source URL pair."""
+    with conn.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT EXISTS (
+                SELECT 1
+                FROM core.person_portrait
+                WHERE person_id = %s
+                  AND source_image_url = %s
+                  AND status = 'takedown_requested'
+            )
+            """,
+            (person_id, source_image_url),
+        )
+        row = cursor.fetchone()
+    return bool(row and row[0])
+
+
+def _refresh_run_values(refresh_run: RefreshRun) -> tuple[object, ...]:
+    return (
+        refresh_run.id,
+        refresh_run.job_key,
+        refresh_run.domain,
+        refresh_run.jurisdiction,
+        refresh_run.data_source_names,
+        refresh_run.pull_status,
+        refresh_run.started_at,
+        refresh_run.completed_at,
+        refresh_run.inserted_count,
+        refresh_run.skipped_count,
+        refresh_run.quarantined_count,
+        refresh_run.superseded_count,
+        refresh_run.error_count,
+        refresh_run.metadata_updates,
+        refresh_run.message,
+        refresh_run.error,
+        refresh_run.created_at,
+    )
+
+
+def insert_refresh_run(conn: psycopg.Connection, refresh_run: RefreshRun) -> UUID:
+    _insert_row(
+        conn,
+        "refresh_run",
+        _REFRESH_RUN_COLUMNS,
+        _refresh_run_values(refresh_run),
+    )
+    return refresh_run.id
+
+
+def select_refresh_run(conn: psycopg.Connection, refresh_run_id: UUID) -> RefreshRun | None:
+    row = _select_row_by_id(conn, "refresh_run", _REFRESH_RUN_COLUMNS, refresh_run_id)
+    if row is None:
+        return None
+    return RefreshRun(**row)

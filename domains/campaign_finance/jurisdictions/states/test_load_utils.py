@@ -394,6 +394,27 @@ class TestEnsureDataSource:
         with pytest.raises(RuntimeError, match="insert reported a conflict"):
             ensure_data_source(MagicMock(), data_source)
 
+    def test_accepts_civics_roster_shaped_data_source(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        connection = MagicMock()
+        civics_source = DataSource(
+            domain="civics",
+            jurisdiction="city/NC/Durham",
+            name="Durham City Council Roster",
+            source_url="https://www.durhamnc.gov/1396/City-Council-Members",
+            source_format="html",
+        )
+        inserted_id = uuid4()
+        select_mock = MagicMock(return_value=None)
+        try_insert_mock = MagicMock(return_value=inserted_id)
+        monkeypatch.setattr(load_utils, "select_data_source_id", select_mock)
+        monkeypatch.setattr(load_utils, "try_insert_data_source", try_insert_mock)
+
+        result = ensure_data_source(connection, civics_source)
+
+        assert result == inserted_id
+        select_mock.assert_called_once_with(connection, "civics", "city/NC/Durham", "Durham City Council Roster")
+        try_insert_mock.assert_called_once()
+
 
 # ---------------------------------------------------------------------------
 # LoadResult

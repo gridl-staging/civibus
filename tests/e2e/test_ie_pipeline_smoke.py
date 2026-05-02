@@ -32,6 +32,9 @@ from domains.campaign_finance.jurisdictions.states.MN.scraper.load import (
 from domains.campaign_finance.jurisdictions.states.NE.scraper.load import (
     load_ne_expenditures_with_filings,
 )
+from domains.campaign_finance.jurisdictions.states.NY.scraper.load import (
+    load_ny_independent_expenditures_with_filings,
+)
 from domains.campaign_finance.jurisdictions.states.WA.scraper.load import (
     load_wa_independent_expenditures_with_filings,
 )
@@ -99,6 +102,13 @@ _STATE_IE_SOURCES: list[tuple[Callable[..., Any], Path, str, str, dict[str, Any]
         {"year": 2026, "year_from": 2022},
     ),
     (
+        load_ny_independent_expenditures_with_filings,
+        _state_fixture("NY", "sample_ie.csv"),
+        "NY IE",
+        "NY-",
+        {},
+    ),
+    (
         load_co_expenditures_with_filings,
         _state_fixture("CO", "sample_expenditures.csv"),
         "CO expenditures",
@@ -124,7 +134,7 @@ def _processed_rows(result: Any) -> int:
 
 
 def test_all_ie_sources_produce_transaction_rows(db_conn: psycopg.Connection) -> None:
-    """All eight IE pipelines land rows in cf.transaction with correct types."""
+    """All IE pipelines land rows in cf.transaction with correct types."""
 
     # --- FEC Schedule E (cycle 2024, first 5 rows) ---
     fec_ds_id = ensure_fec_bulk_data_source(db_conn)
@@ -155,7 +165,7 @@ def test_all_ie_sources_produce_transaction_rows(db_conn: psycopg.Connection) ->
         )
         ie_rows = cur.fetchall()
 
-    # Must have rows from all eight sources
+    # Must have rows from all sources.
     filing_ids = {row["filing_fec_id"] for row in ie_rows}
 
     has_fec = any(not fid.startswith(_STATE_PREFIXES) for fid in filing_ids)
@@ -178,8 +188,8 @@ def test_all_ie_sources_produce_transaction_rows(db_conn: psycopg.Connection) ->
     assert "S" in ne_so_values, f"Expected NE IE rows with support_oppose='S', got: {ne_so_values}"
     assert "O" in ne_so_values, f"Expected NE IE rows with support_oppose='O', got: {ne_so_values}"
 
-    # Verify total IE row count covers all sources
-    # Expected fixture minimums: FEC=5, CA=1, MN=1, WA=1, KY=1, NE=2, CO=1, WI=1.
+    # Verify total IE row count covers all sources.
+    # Expected fixture minimums: FEC=5, CA=1, MN=1, WA=1, KY=1, NE=2, NY=2, CO=1, WI=1.
     # Use fixed minima so the smoke test is rerunnable when upserts return inserted=0.
-    expected_min_ie_rows = 13
+    expected_min_ie_rows = 15
     assert len(ie_rows) >= expected_min_ie_rows

@@ -52,11 +52,11 @@ def test_stage5_ga_files_exist():
 
 def test_data_sources_are_web_portal_only_and_bulk_api_are_explicit_null():
     config_text = read(CONFIG_PATH)
-    assert len(extract_source_blocks(config_text)) == 2
-    assert config_text.count('format: "web_portal"') == 2
-    assert config_text.count("bulk_download_url: null") == 2
-    assert config_text.count("api_base_url: null") == 2
-    assert config_text.count("auth_required: false") == 2
+    assert len(extract_source_blocks(config_text)) == 3
+    assert config_text.count('format: "web_portal"') == 3
+    assert config_text.count("bulk_download_url: null") == 3
+    assert config_text.count("api_base_url: null") == 3
+    assert config_text.count("auth_required: false") == 3
 
 
 def test_contribution_field_mappings_match_downloaded_export_headers():
@@ -82,8 +82,8 @@ def test_known_issues_document_stateful_export_workflow_and_scrape_only_constrai
 
 def test_coverage_regression_uses_observed_year_floor_and_sub_jurisdiction_presence():
     config_text = read(CONFIG_PATH)
-    assert config_text.count("start_year: 2000") == 2
-    assert config_text.count("covers_sub_jurisdictions: true") == 2
+    assert config_text.count("start_year: 2000") == 3
+    assert config_text.count("covers_sub_jurisdictions: true") == 3
     assert "county" in config_text
     assert "municipal" in config_text
 
@@ -123,10 +123,19 @@ def test_data_semantics_documents_export_formats_and_playwright_navigation():
 def test_readme_documents_verification_date_and_recheck_instructions():
     config_text = read(CONFIG_PATH)
     readme_text = read(README_PATH)
-    source_verified = shared_data_source_scalar(config_text, "last_verified_working")
+    primary_source_blocks = [
+        block
+        for block in extract_source_blocks(config_text)
+        if "Independent Expenditures Search Export" not in block
+    ]
+    source_verified_values = {scalar_value(source_block, "last_verified_working") for source_block in primary_source_blocks}
+    assert source_verified_values == {"2026-03-26"}
+    source_verified = "2026-03-26"
     laws_verified = scalar_value(extract_named_block(config_text, "laws"), "last_verified")
 
     assert f"Source access and portal workflow verified: {source_verified}" in readme_text
+    assert "Independent expenditures surface re-check: 2026-04-29" in readme_text
+    assert "HTTP 404" in readme_text
     assert f"Laws research verified: {laws_verified}" in readme_text
     assert "Re-verify by running a one-page contribution search" in readme_text
 

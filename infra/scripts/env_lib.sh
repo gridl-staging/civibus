@@ -65,6 +65,13 @@ load_civibus_env() {
   export POSTGRES_HOST="127.0.0.1"
   export POSTGRES_PORT="5432"
 
+  # libpq-standard vars so bare psycopg.connect() works without explicit DSN
+  export PGHOST="${POSTGRES_HOST}"
+  export PGPORT="${POSTGRES_PORT}"
+  export PGUSER="${POSTGRES_USER:-civibus}"
+  export PGPASSWORD="${POSTGRES_PASSWORD}"
+  export PGDATABASE="${POSTGRES_DB:-civibus}"
+
   # Use system CA bundle instead of Python's certifi. Certifi's bundle is
   # missing some government-site cert chains (IL/Cloudflare, CO/Entrust).
   export SSL_CERT_FILE="/etc/ssl/certs/ca-certificates.crt"

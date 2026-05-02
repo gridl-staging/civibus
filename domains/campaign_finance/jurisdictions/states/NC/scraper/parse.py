@@ -1,10 +1,10 @@
-"""NC campaign finance CSV parsing helpers."""
 
 from __future__ import annotations
 
 import csv
 import logging
-from datetime import datetime
+from collections.abc import Mapping
+from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from functools import lru_cache
 from pathlib import Path
@@ -29,6 +29,7 @@ _AMENDMENT_FLAG_MAPPING = {
     "Y": True,
     "N": False,
 }
+_NC_IE_DOC_NAMES = frozenset({"independent expenditure report"})
 
 
 @lru_cache(maxsize=None)
@@ -60,6 +61,7 @@ def _load_columns(source_name: str) -> tuple[str, ...]:
 
 TRANSACTION_COLUMNS = _load_columns(_TRANSACTION_SOURCE_NAME)
 COMMITTEE_DOC_COLUMNS = _load_columns(_COMMITTEE_DOC_SOURCE_NAME)
+NCCommitteeDocumentRowKey = tuple[str, ...]
 
 
 class NCSBoECsvParser:
@@ -70,14 +72,20 @@ class NCSBoECsvParser:
         *,
         columns: tuple[str, ...] = TRANSACTION_COLUMNS,
         row_label: str = "transaction",
+        year_from: int | None = None,
+        date_column: str = "Date Occured",
     ):
         self.path = path
         self.columns = columns
         self.row_label = row_label
+        self.year_from = year_from
+        self.date_column = date_column
         self.skipped = 0
+        self.filtered = 0
 
     def __iter__(self) -> Iterator[dict[str, str | None]]:
         self.skipped = 0
+        self.filtered = 0
 
         with self.path.open("r", encoding="utf-8", newline="") as csv_file:
             reader = csv.DictReader(
@@ -96,7 +104,34 @@ class NCSBoECsvParser:
                     )
                     continue
 
-                yield _normalize_row(raw_row)
+                normalized = _normalize_row(raw_row)
+
+                if self.year_from is not None:
+                    row_year = _extract_year_from_date(normalized.get(self.date_column))
+                    if row_year is not None and row_year < self.year_from:
+                        self.filtered += 1
+                        continue
+
+                yield normalized
+
+
+def _extract_year_from_date(raw_date: str | None) -> int | None:
+    normalized = normalize_optional_text(raw_date)
+    if normalized is None:
+        return None
+
+    for fmt in ("%m/%d/%Y", "%m/%d/%y", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(normalized, fmt).year
+        except ValueError:
+            continue
+    return None
+
+
+def _resolve_year_from(year_from: int | None) -> int:
+    if year_from is not None:
+        return year_from
+    return datetime.now(timezone.utc).year - 4
 
 
 def _validate_header(
@@ -126,8 +161,8 @@ def _normalize_row(raw_row: dict[object, object]) -> dict[str, str | None]:
     return normalized_row
 
 
-def parse_transactions(path: Path) -> NCSBoECsvParser:
-    return NCSBoECsvParser(path=path)
+def parse_transactions(path: Path, *, year_from: int | None = None) -> NCSBoECsvParser:
+    return NCSBoECsvParser(path=path, year_from=_resolve_year_from(year_from))
 
 
 def parse_committee_docs(path: Path) -> NCSBoECsvParser:
@@ -136,6 +171,58 @@ def parse_committee_docs(path: Path) -> NCSBoECsvParser:
         columns=COMMITTEE_DOC_COLUMNS,
         row_label="committee_document",
     )
+
+
+# Cross-endpoint inconsistency in the NC SBoE portal: the CFDocLkup
+# /ExportSearchResults CSV reports the real "Doc Type" per filing (which can
+# be either "Disclosure Report" or "Informational Report"), while the
+# CFDocLkup/DocumentResult HTML grid does NOT carry a Doc Type column at all
+# — the parser hardcodes "Disclosure Report" for every row when synthesizing
+# the linkage key. Including "Doc Type" in the linkage key therefore drops
+# every CSV row whose Doc Type is "Informational Report" — a real loss
+# observed live 2026-04-25 (6 of 47 IE candidates were silently un-URL'd).
+# Excluded from the linkage key for cross-endpoint robustness; the remaining
+# 11 columns are unique enough to identify a specific filing.
+_LINKAGE_KEY_COLUMNS = tuple(c for c in COMMITTEE_DOC_COLUMNS if c != "Doc Type")
+
+
+def build_nc_committee_doc_linkage_key(
+    row: Mapping[str, str | None],
+) -> NCCommitteeDocumentRowKey:
+    """Build the Stage 1 linkage key from parse_committee_docs-owned columns.
+
+    Doc Type is intentionally excluded — see _LINKAGE_KEY_COLUMNS for why.
+    """
+    return tuple(
+        "" if row.get(column) is None else str(row.get(column))
+        for column in _LINKAGE_KEY_COLUMNS
+    )
+
+
+def classify_ie_filing(row: Mapping[str, str | None]) -> bool:
+    doc_name = normalize_optional_text(row.get("Doc Name"))
+    if doc_name is None:
+        return False
+    return doc_name.lower() in _NC_IE_DOC_NAMES
+
+
+def is_within_ie_year_window(
+    row: Mapping[str, str | None],
+    *,
+    current_year: int | None = None,
+) -> bool:
+    normalized_year = normalize_optional_text(row.get("Year"))
+    if normalized_year is None:
+        return False
+
+    try:
+        filing_year = int(normalized_year)
+    except ValueError:
+        return False
+
+    window_end = datetime.now(timezone.utc).year if current_year is None else current_year
+    window_start = window_end - 4
+    return window_start <= filing_year <= window_end
 
 
 def parse_amendment_flag(raw: str | None) -> bool | None:

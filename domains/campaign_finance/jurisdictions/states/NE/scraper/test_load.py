@@ -192,7 +192,53 @@ class TestNeExpenditureIeClassification:
         assert captured[0].transaction_type == "Independent Expenditure"
         assert captured[0].support_oppose == "O"
 
-    def test_blank_support_oppose_stays_expenditure(self, monkeypatch) -> None:
+    def test_ie_transaction_type_with_null_support_oppose_gets_ie(self, monkeypatch) -> None:
+        """IE classification should fire when transaction type says IE even without support/oppose."""
+        captured = self._stub_db_calls(monkeypatch)
+        row = {
+            "Expenditure ID": "2005",
+            "Org ID": "9001",
+            "Filer Type": "Independent Committee",
+            "Filer Name": "NE Citizens PAC",
+            "Candidate Name": "",
+            "Expenditure Transaction Type": "Independent Expenditure",
+            "Expenditure Sub Type": "Unknown",
+            "Expenditure Date": "03/25/2026",
+            "Expenditure Amount": "1500.00",
+            "Description": "IE with no support/oppose",
+            "Payee or Recipient or In-Kind Contributor Type": "Business",
+            "Payee or Recipient or In-Kind Contributor Name": "AD AGENCY LLC",
+            "First Name": "",
+            "Middle Name": "",
+            "Suffix": "",
+            "Address 1": "500 PINE ST",
+            "Address 2": "",
+            "City": "LINCOLN",
+            "State": "NE",
+            "Zip": "68501",
+            "Filed Date": "03/26/2026",
+            "Support Or Oppose": "",
+            "Candidate Name or Ballot Issue": "",
+            "Jurisdiction - Office - District or Ballot Description": "",
+            "Amended": "N",
+            "Employer": "",
+            "Occupation": "",
+            "Principal Place of Business": "",
+        }
+        filing_id, committee_id, source_record_id = uuid4(), uuid4(), uuid4()
+        load._upsert_ne_transaction_with_filing(
+            MagicMock(),
+            row,
+            filing_id=filing_id,
+            committee_id=committee_id,
+            source_record_id=source_record_id,
+            data_type="expenditures",
+        )
+        assert len(captured) == 1
+        assert captured[0].transaction_type == "Independent Expenditure"
+        assert captured[0].support_oppose is None
+
+    def test_blank_support_oppose_campaign_expense_stays_expenditure(self, monkeypatch) -> None:
         captured = self._stub_db_calls(monkeypatch)
         row = {
             "Expenditure ID": "2002",

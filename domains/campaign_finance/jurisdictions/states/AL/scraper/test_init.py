@@ -61,10 +61,10 @@ def test_supported_data_types_include_contributions_and_expenditures() -> None:
 
 
 def test_semantic_path_resolution_for_transaction_fields() -> None:
-    assert _load_column_for_semantic_path("contributions", "transaction.date") == "receivedDate"
-    assert _load_column_for_semantic_path("contributions", "transaction.amount") == "amount"
-    assert _load_column_for_semantic_path("expenditures", "transaction.date") == "expendedDate"
-    assert _load_column_for_semantic_path("expenditures", "transaction.amount") == "amount"
+    assert _load_column_for_semantic_path("contributions", "transaction.date") == "TRANSACTIONDATE"
+    assert _load_column_for_semantic_path("contributions", "transaction.amount") == "AMOUNT"
+    assert _load_column_for_semantic_path("expenditures", "transaction.date") == "TRANSACTIONDATE"
+    assert _load_column_for_semantic_path("expenditures", "transaction.amount") == "AMOUNT"
 
 
 def test_api_base_url_resolution() -> None:

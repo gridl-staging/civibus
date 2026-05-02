@@ -11,6 +11,7 @@ from domains.campaign_finance.jurisdictions.states.NY.scraper.extract import (
 from domains.campaign_finance.jurisdictions.states.NY.scraper.parse import (
     parse_contributions,
     parse_expenditures,
+    parse_independent_expenditures,
 )
 
 _FIXTURES_DIR = Path(__file__).parent / "test_fixtures"
@@ -92,4 +93,23 @@ class TestNYExpenditureExtraction:
 
         assert extracted["payee_person"] is not None
         assert extracted["payee_person"].last_name == "Brown"
+        assert extracted["payee_org"] is None
+
+    def test_ie_org_payee_extracts_organization(self) -> None:
+        parser = parse_independent_expenditures(_FIXTURES_DIR / "sample_ie.csv")
+        row = next(iter(parser))
+        extracted = extract_ny_expenditure(row)
+
+        assert extracted["payee_org"] is not None
+        assert "Metro Media Group" in extracted["payee_org"].canonical_name
+        assert extracted["payee_person"] is None
+
+    def test_ie_individual_payee_extracts_person(self) -> None:
+        parser = parse_independent_expenditures(_FIXTURES_DIR / "sample_ie.csv")
+        rows = list(parser)
+        extracted = extract_ny_expenditure(rows[1])
+
+        assert extracted["payee_person"] is not None
+        assert extracted["payee_person"].first_name == "Robert"
+        assert extracted["payee_person"].last_name == "Jones"
         assert extracted["payee_org"] is None

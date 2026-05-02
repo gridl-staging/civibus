@@ -187,6 +187,12 @@ def test_create_app_registers_versioned_routers(monkeypatch: pytest.MonkeyPatch)
         "entity_resolution_router",
         build_probe_router("/entity-resolution-probe", "entity_resolution"),
     )
+    monkeypatch.setattr(
+        api_main,
+        "portrait_admin_router",
+        build_probe_router("/admin/portraits/probe/takedown", "portrait_admin"),
+        raising=False,
+    )
     monkeypatch.setattr(api_main, "property_router", build_probe_router("/property-probe", "property"))
     monkeypatch.setattr(api_main, "investigate_router", build_probe_router("/investigate-probe", "investigate"))
     monkeypatch.setattr(api_main, "graph_router", build_probe_router("/graph-probe", "graph"))
@@ -202,6 +208,9 @@ def test_create_app_registers_versioned_routers(monkeypatch: pytest.MonkeyPatch)
     }
     assert client.get("/v1/entity-resolution-probe", headers=admin_request_headers).json() == {
         "router": "entity_resolution"
+    }
+    assert client.get("/v1/admin/portraits/probe/takedown", headers=admin_request_headers).json() == {
+        "router": "portrait_admin"
     }
     assert client.get("/v1/property-probe", headers=public_request_headers).json() == {"router": "property"}
     assert client.get("/v1/investigate-probe", headers=public_request_headers).json() == {"router": "investigate"}
@@ -237,7 +246,16 @@ def test_create_app_registers_unique_expected_v1_get_routes(monkeypatch: pytest.
         "/v1/candidates/{candidate_id}/summary",
         "/v1/candidates/{candidate_id}/independent-expenditures",
         "/v1/candidates/{candidate_id}/independent-expenditures/summary",
+        "/v1/campaign-finance/states/summary",
+        "/v1/campaign-finance/states/{state_code}",
+        "/v1/coverage/registry",
+        "/v1/counties/{state}/{county_slug}/campaign-finance-summary",
+        "/v1/data-sources",
+        "/v1/elections/{election_date}",
+        "/v1/elections/timeline/upcoming",
         "/v1/filings/{filing_id}",
+        "/v1/geometry",
+        "/v1/civics/geometry",
         "/v1/transactions",
         "/v1/parcels/{parcel_id}",
         "/v1/parcels",
@@ -269,6 +287,20 @@ def test_health_endpoint_returns_ok_without_api_key(monkeypatch: pytest.MonkeyPa
 
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
+
+
+def test_people_enrichment_provenance_endpoint_is_owner_backed_without_api_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    api_main = _load_api_main(monkeypatch)
+    client = TestClient(api_main.create_app())
+    response = client.get("/provenance/people-enrichment")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "source": "people-enrichment",
+        "contract": "core.people.enrichment.orchestrator",
+    }
 
 
 def test_create_app_registers_logging_middleware_once_per_app_instance(

@@ -1,3 +1,7 @@
+"""
+Stub summary for /Users/stuart/parallel_development/civibus_dev/MAR18_api_graph_routes_and_property_endpoints/civibus_dev/domains/campaign_finance/ingest/bulk_cli.py.
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -24,9 +28,10 @@ from domains.campaign_finance.ingest.bulk_loader import (
     load_contributions,
     sync_data_source_metadata,
 )
+from domains.campaign_finance.ingest.schedule_b_loader import load_schedule_b
 from domains.campaign_finance.ingest.schedule_e_loader import load_schedule_e
 
-FILE_TYPES: tuple[str, ...] = ("cm", "cn", "ccl", "itcont", "itpas2", "schedule_e")
+FILE_TYPES: tuple[str, ...] = ("cm", "cn", "ccl", "itcont", "itpas2", "schedule_e", "schedule_b")
 FULL_CYCLE_FILE_ORDER: tuple[str, ...] = ("cm", "cn", "ccl", "itcont", "itpas2")
 TRANSACTION_FILE_TYPES: frozenset[str] = frozenset({"itcont", "itpas2"})
 _BULK_FILE_EXTENSIONS = {".txt", ".zip"}
@@ -48,6 +53,11 @@ def fec_baseline_url(cycle: int, file_type: str) -> str:
     slug = _FEC_BULK_URL_SLUGS[file_type]
     yy = str(cycle)[-2:]
     return f"{_FEC_BULK_DOWNLOAD_BASE}/{cycle}/{slug}{yy}.zip"
+
+
+def fec_schedule_b_url(cycle: int) -> str:
+    yy = str(cycle)[-2:]
+    return f"{_FEC_BULK_DOWNLOAD_BASE}/{cycle}/oppexp{yy}.zip"
 
 
 def fec_schedule_e_url(cycle: int) -> str:
@@ -118,6 +128,7 @@ FILE_TYPE_LOADERS: dict[str, LoaderSpec] = {
     "itcont": LoaderSpec(loader=load_contributions, requires_cycle=False, supports_graph=True),
     "itpas2": LoaderSpec(loader=load_committee_transactions, requires_cycle=False, supports_graph=True),
     "schedule_e": LoaderSpec(loader=load_schedule_e, requires_cycle=True, supports_graph=True),
+    "schedule_b": LoaderSpec(loader=load_schedule_b, requires_cycle=True, supports_graph=True),
 }
 
 

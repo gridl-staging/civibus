@@ -3,8 +3,6 @@ from __future__ import annotations
 from pathlib import Path
 import re
 
-from infra.tests.test_compose_prod import _EXPECTED_DB_INIT_MOUNTS
-
 REPO_ROOT = Path(__file__).resolve().parents[1]
 _AGE_BOOTSTRAP_SQL_PATH = "infra/db/09-age-graph-bootstrap.sql"
 
@@ -70,7 +68,11 @@ def test_docker_compose_targets_image_and_mounted_schema_files():
     assert "timeout: 5s" in compose
     assert "retries: 5" in compose
     assert "container_name:" not in compose
-    assert _compose_init_mounts(compose) == _EXPECTED_DB_INIT_MOUNTS
+    compose_init_mounts = _compose_init_mounts(compose)
+    assert (
+        "../domains/campaign_finance/schema/nc_orchestrator_tables.sql:"
+        "/docker-entrypoint-initdb.d/07-nc-orchestrator.sql"
+    ) in compose_init_mounts
 
 
 def test_docker_compose_init_mounts_stay_in_sync_with_makefile_db_sql_files() -> None:
@@ -158,10 +160,42 @@ def test_makefile_exports_and_targets_database_reset_command():
         "api-dev: require-postgres-password\n"
         "\tuv run --extra dev --extra api uvicorn api.main:app --host 127.0.0.1 --port 8000 --reload"
     ) in makefile
-    assert "lint:\n\tuv run --extra dev ruff check ." in makefile
+    assert "lint:\n\t$(MAKE) check-retired-symbols\n\tuv run --extra dev ruff check ." in makefile
     assert "ruff format --check ." in makefile
     assert "quality-check:" in makefile
     assert "python -m domains.campaign_finance.quality.cli" in makefile
+
+
+def test_makefile_retired_symbols_lint_guard_wiring():
+    makefile = read_repo_text("Makefile")
+
+    retired_symbols = re.search(r"^RETIRED_SYMBOLS := (.+)$", makefile, re.M)
+    assert retired_symbols is not None
+    assert retired_symbols.group(1).split() == [
+        "INDIANA_" "FRESHNESS_NOTE",
+        "_CASE_" "FIXTURE_SOURCES",
+        "_PILOT_" "SUPPORTED_STATES",
+        "is_autopublish_" "enabled",
+    ]
+    assert re.search(
+        r"^RETIRED_ALLOWLIST := \\\n"
+        r"^\tcore/keel_gate_l11\.py \\\n"
+        r"^\ttests/keel/test_gate_l15\.py \\\n"
+        r"^\tdocs/keel/\*\* \\\n"
+        r"^\tchats/\*\* \\\n"
+        r"^\t\.matt/projects/\*\* \\\n"
+        r"^\tMakefile$",
+        makefile,
+        re.M,
+    )
+    assert re.search(
+        r"^lint:\n"
+        r"^\t\$\(MAKE\) check-retired-symbols\n"
+        r"^\tuv run --extra dev ruff check \.\n"
+        r"^\tuv run --extra dev ruff format --check \.$",
+        makefile,
+        re.M,
+    )
 
 
 def test_makefile_stage6_state_sample_ingest_targets_wiring():
@@ -336,6 +370,43 @@ def test_schema_sql_defines_stage1_indexes_used_by_later_stages():
         schema_text = read_repo_text(relative_path)
         for index_name in index_names:
             assert index_name in schema_text
+
+
+def test_stage1_person_and_portrait_schema_contract() -> None:
+    entities_sql = read_repo_text("core/schema/entities.sql")
+    provenance_sql = read_repo_text("core/schema/provenance.sql")
+
+    assert "occupation" in entities_sql
+    assert "education" in entities_sql
+    assert "bio_text" in entities_sql
+    assert "bio_source_url" in entities_sql
+    assert "bio_license" in entities_sql
+    assert "bio_pulled_at" in entities_sql
+    assert "CREATE TABLE core.person_portrait (" in entities_sql
+
+    required_portrait_fields = [
+        "person_id",
+        "status",
+        "rights_status",
+        "image_hash",
+        "width_px",
+        "height_px",
+        "source_record_id",
+        "source_image_url",
+        "storage_uri",
+        "dedup_key",
+    ]
+    for field_name in required_portrait_fields:
+        assert field_name in entities_sql
+
+    assert "idx_person_portrait_active_per_person" in entities_sql
+    assert "idx_person_portrait_dedup" in entities_sql
+    assert "idx_person_portrait_source_record" in entities_sql
+    for status_value in ("active", "not_found", "too_small", "face_too_small", "takedown_requested", "superseded"):
+        assert status_value in entities_sql
+    assert "bio_provenance" not in entities_sql
+    assert "bio_provenance" not in provenance_sql
+    assert "fk_person_portrait_source_record" in provenance_sql
 
 
 def test_jurisdiction_schema_relies_on_entities_sql_for_shared_definitions():

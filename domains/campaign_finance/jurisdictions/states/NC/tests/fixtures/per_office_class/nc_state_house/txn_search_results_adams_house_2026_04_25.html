@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+
+<html>
+	<head>
+		<meta http-equiv="Content-Type" content="text/html; charset=utf-8"/>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1.0">
+		<meta http-equiv="X-UA-Compatible" content="IE=edge">
+
+		<title>Transaction Search By Entity - Results</title>
+
+        <link rel="icon" href="/Content/img/favicon.ico" />
+		<link href='https://fonts.googleapis.com/css?family=Open+Sans:400,300,600,700' rel='stylesheet' type='text/css'>
+		<!-- Add local styles, mostly for plugins css file -->
+		
+	<link href="/Scripts/plugins/jquery-ui/jquery-ui.min.css" rel="stylesheet"/>
+
+	<link href="/Content/plugins/igniteui/css/themes/bootstrap4/infragistics.theme.css" rel="stylesheet"/>
+
+	<link href="/Content/plugins/igniteui/css/structure/infragistics.css" rel="stylesheet"/>
+
+    <link href="/Content/plugins/sweetalert/sweetalert.css" rel="stylesheet"/>
+
+	<link href="/Content/css/seims.css" rel="stylesheet"/>
+
+	<link href="/Content/css/cftxnlkup.css" rel="stylesheet"/>
+
+
+
+		<!-- Primary Inspinia style -->     
+		<link href="/Content/css/bootstrap.min.css" rel="stylesheet"/>
+<link href="/Content/css/animate.css" rel="stylesheet"/>
+<link href="/Content/css/style.css" rel="stylesheet"/>
+
+
+		<link href="/Content/font-awesome/css/font-awesome.min.css" rel="stylesheet"/>
+
+	</head>
+
+	<body class="top-navigation">
+		<!-- Page wraper -->
+		<div id="page-wrapper" class="gray-bg">
+
+			<!-- Top Navbar -->
+			<div class="row border-bottom white-bg" style="white-space: nowrap;">
+	<nav class="navbar navbar-static-top" role="navigation" style="padding: 5px;">
+		<div class="navbar-header">
+			<button aria-controls="navbar" aria-expanded="false" data-target="#navbar" data-toggle="collapse" class="navbar-toggle collapsed" type="button">
+				<i class="fa fa-reorder"></i>
+			</button>
+			<a href="https://www.ncsbe.gov/"><img style="padding-right: 12px;" src="/Content/img/logo_sbe_small.png" /></a>
+		</div>
+		<div class="navbar-collapse collapse navbar-right" id="navbar" style="width:224px;">
+			<ul id="menu_mobile" class="nav navbar-nav" style="float:right;">
+                <li class="dropdown hidden-xs">
+                    <a aria-expanded="false" role="button" class="dropdown-toggle" data-toggle="dropdown">Applications<span class="caret"></span></a>
+                    <ul id="menu_desktop" role="menu" class="dropdown-menu">
+                        
+                    </ul>
+                </li>
+				
+				
+			</ul>
+		</div>
+        <div class="text-center" style="white-space: normal;">
+            <h2 style="margin-top: 12px;">Transaction Search By Entity - Results</h2>
+        </div>
+	</nav>
+</div>
+
+
+			<div class="container-fluid">
+				<div class="wrapper-content">
+					<!-- Main view  -->
+					
+
+
+<form action="/CFTxnLkup/TxnSearchResults/" method="post">	<div class="center-alignment">
+		<input type="button" id="btnNewSearch" class="btn btn-success button-search m-l-xs" value="New Search" onclick="window.location.href=&#39;/CFTxnLkup/&#39;;" />
+		<input type="button" id="btnExportResults" style="display: none;" class="btn btn-success button-search m-l-xs" value="Export to .CSV" />
+		<br />
+		<br />
+	</div>
+	<div id="divGrid" class="hidden-field">
+		<table id="gridResults"></table>
+	</div>
+	<div id="divLoading" class="bold-text center-alignment">
+		Loading Results...
+	</div>
+	<div id="divNoRecords" class="bold-text center-alignment hidden-field">
+		No Results Found.
+	</div>
+</form>
+<form action="/CFTxnLkup/ExportResults/" method="post">    <input name="Params" type="hidden" />
+</form>
+
+
+				</div>
+			</div>
+
+			<!-- Footer -->
+			
+<div class="footer">
+    <div class="pull-right">
+        
+        Data current as of - Friday, April 24, 2026 3:18AM
+    </div>
+	<div>
+		© 2014-2026
+		<a type="button" class="btn-link" href="https://www.ncsbe.gov/" style="white-space: nowrap;"><strong>NC State Board of Elections</strong></a>
+	</div>
+</div>
+
+<div class="modal inmodal" id="myModal" tabindex="-1" role="dialog" aria-hidden="true" style="display: none;">
+    <div class="modal-dialog">
+		<div class="modal-content">
+            <div class="modal-header">
+                <button type="button" class="close" data-dismiss="modal">
+					<span aria-hidden="true">×</span>
+					<span class="sr-only">Close</span>
+                </button>
+                <h4 class="modal-title">Site Feedback</h4>
+                <small class="font-bold">Please fill out the form and click Submit to provide feedback.</small>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+					<label>Feedback</label>
+					<textarea class="form-control" placeholder="Enter feedback here..." style="height:100px; resize: none;"></textarea>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-white" data-dismiss="modal">Close</button>
+                <button type="button" class="btn btn-primary">Submit</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+
+		</div>
+		<!-- End page wrapper-->
+		<!-- Section for main scripts render -->
+		<script src="/Scripts/jquery-2.1.1.min.js"></script>
+
+		<script src="/Scripts/bootstrap.min.js"></script>
+
+		<script src="/Scripts/plugins/slimscroll/jquery.slimscroll.min.js"></script>
+
+		<script src="/Scripts/inspinia.js"></script>
+
+
+		<!-- Handler for local scripts -->
+
+		<!-- Global site tag (gtag.js) - Google Analytics -->
+		<script async src="https://www.googletagmanager.com/gtag/js?id=UA-159880906-2"></script>
+		<script>
+			window.dataLayer = window.dataLayer || [];
+			function gtag() { dataLayer.push(arguments); }
+			gtag('js', new Date());
+
+			gtag('config', 'UA-159880906-2');
+		</script>
+
+		<script type="text/javascript">
+			//load the menus with the sites in /Content/sites.txt
+			$(document).ready(function () {
+				var fileSites = new XMLHttpRequest();
+				var arrSites;
+				var timeDayHourMinute = String(new Date().getDate()) + '-' + String(new Date().getHours()) + '-' + String(new Date().getMinutes());
+
+				fileSites.open('get', "/Content/sites.txt" + '?v=' + timeDayHourMinute, false);
+				fileSites.send(null);
+
+				arrSites = JSON.parse(fileSites.responseText);
+
+				arrSites.sort(function (a, b) {
+					if (a.name > b.name) { return 1 }
+					if (a.name < b.name) { return -1 }
+					return 0;
+				});
+
+				for (i = 0; i < arrSites.length; i++) {
+					$('#menu_mobile').append('<li class="visible-xs-block">' + '<a href="/CFTxnLkup/_url_/">_name_</a>'.replace('_name_', arrSites[i].name).replace('_url_', arrSites[i].url) + '</li>');
+					$('#menu_desktop').append('<li>' + '<a href="/CFTxnLkup/_url_/">_name_</a>'.replace('_name_', arrSites[i].name).replace('_url_', arrSites[i].url) + '</li>');
+					if ($('#menu_index').length) {
+						$('#menu_index').append('<li>' + '<a href="/CFTxnLkup/_url_/">_name_</a>'.replace('_name_', arrSites[i].name).replace('_url_', arrSites[i].url) + '</li>');
+					}
+				}
+			});
+		</script>
+
+		
+	<script src="/Scripts/plugins/jquery-ui/jquery-ui.min.js"></script>
+
+	<script src="/Scripts/plugins/igniteui/js/infragistics.core.js"></script>
+<script src="/Scripts/plugins/igniteui/js/infragistics.lob.js"></script>
+
+    <script src="/Scripts/plugins/sweetalert/sweetalert.min.js"></script>
+
+
+	<script type="text/javascript">
+        var timer;
+
+        $(document).ready(function () {
+            SetupGrid();
+
+			$(window).resize(function() {
+				var newHeight = $(window).height() - 199;
+				$("#gridResults_container").height(newHeight);
+			});
+        });
+
+        function SetupGrid() {
+			$("#gridResults").igGrid({
+				autoGenerateColumns: false,
+				enableResizeContainerCheck: true,
+				height: $(window).height() - 199,
+				width: "100%",
+				dataSource:"../GetPagedResults",
+			    responseDataKey: "Data.results",
+			    requestError: function (evt, ui) {
+                    $("#divNoRecords").css('color', 'red');
+                    $("#divNoRecords").text(ui.response.statusText);
+
+                    $("#btnExportResults").hide();
+                    $("#divGrid").hide();
+                    $("#divLoading").hide();
+                    $("#divNoRecords").show();
+
+                    return false;
+				},
+				columns: [
+					{ key: "FullName", headerText: "Name", dataType: "string", width: "350px" },
+					{ key: "Street1", headerText: "Street Line 1", dataType: "string", width: "250px" },
+					{ key: "Street2", headerText: "Street Line 2", dataType: "string", width: "250px" },
+					{ key: "City", headerText: "City", dataType: "string", width: "160px" },
+					{ key: "State", headerText: "State", dataType: "string", width: "50px" },
+					{ key: "FullZip", headerText: "Zip", dataType: "string", width: "90px" },
+					{ key: "ProfJobTitle", headerText: "Profession/Job Title", dataType: "string", width: "370px" },
+					{ key: "EmpSpecFld", headerText: "Employer's Name/Specific Field", dataType: "string", width: "370px" },
+					{ key: "TransType", headerText: "Transaction Type", dataType: "string", width: "120px" },
+					{ key: "CommName", headerText: "Committee Name", dataType: "string", width: "430px" },
+					{ key: "SboeID", headerText: "Committee SBoE ID", dataType: "string", width: "140px" },
+					{ key: "CommStreet1", headerText: "Committee Street 1", dataType: "string", width: "250px" },
+					{ key: "CommStreet2", headerText: "Committee Street 2", dataType: "string", width: "250px" },
+					{ key: "CommCity", headerText: "Committee City", dataType: "string", width: "160px" },
+					{ key: "CommState", headerText: "Committee State", dataType: "string", width: "120px" },
+					{ key: "CommZip", headerText: "Committee Zip Code", dataType: "string", width: "140px" },
+					{ key: "Report", headerText: "Report Name", dataType: "string", width: "340px" },
+					{ key: "OccurDate", headerText: "Date Occured", dataType: "string", width: "100px", columnCssClass: "center-alignment" },
+					{ key: "AmountAbbr", headerText: "Account Code", dataType: "string", width: "100px" },
+					{ key: "Amount", headerText: "Amount", dataType: "decimal", format: "currency", width: "100px", columnCssClass: "monetary-alignment" },
+					{ key: "FormOfPaymentDesc", headerText: "Form of Payment", dataType: "string", width: "180px" },
+					{ key: "Purpose", headerText: "Purpose", dataType: "string", width: "390px" },
+					{ key: "RelatedCommitteeName", headerText: "Candidate/Referendum Name", dataType: "string", width: "430px" },
+					{ key: "DeclareDesc", headerText: "Declaration", dataType: "string", width: "100px" }
+				],
+				autoGenerateLayouts: false,
+				features: [{
+					name: "Paging",
+					type: "remote",
+					pageSize: 500,
+					showPageSizeDropDown: false,
+					recordCountKey: "Data.recordCountKey",
+					pageIndexUrlKey: "page",
+					pageSizeUrlKey: "pageSize"
+				}],
+				rendered: function (event, args) {
+				    if (args.owner.dataSource.dataView().length === 0) {
+						$("#btnExportResults").hide();
+						$("#divGrid").hide();
+						$("#divLoading").hide();
+						$("#divNoRecords").show();
+					}
+					else {
+						$("#btnExportResults").show();
+						$("#divGrid").show();
+						$("#divLoading").hide();
+						$("#divNoRecords").hide();
+					}
+				}
+			})
+        }
+
+        $('#btnExportResults').click(function (e) {
+            e.preventDefault();
+
+            var cookie = getCookie("CanUseCookies")
+
+            if (cookie != "") {
+                swal({
+                    title: "Exporting",
+                    text: "Exporting results...please wait. <br/> <br/>	<div class='sk-spinner sk-spinner-wave'><div class='sk-rect1'></div> <div class='sk-rect2'></div> <div class='sk-rect3'></div> <div class='sk-rect4'></div> <div class='sk-rect5'></div></div>",
+                    html: true,
+                    showConfirmButton: false,
+                    animation: false
+                });
+            }
+
+            setTimeout(function () {
+                if (cookie != "")
+                {
+                    timer = setInterval(checkForDownload, 1000);
+                }
+                $('input[name="Params"]').val('{"ReceiptType":"","ExpenditureType":"","CommitteeType":"","PartyType":"","OfficeType":"","CommitteeIDs":"","CommitteeName":"ADAMS FOR NC HOUSE","Cities":"","Counties":"","State":"","ZipCodes":"","DateFrom":"01/01/2026","DateTo":"03/14/2026","OrganizationName":"","FirstName":"","LastName":"ADAMS","NameSoundsLike":false,"NameIsOrg":false,"Purpose":"","AmountFrom":"","AmountTo":"","JobProfession":"","JobProfSoundsLike":false,"Employer":"","EmployerSoundsLike":false,"PaymentType":"","Page":0,"Debug":false}');
+                $('input[name="Params"]').closest("form").submit();
+            }, 2000);
+        });
+
+
+        function setCookie(cname, cvalue, exdays) {
+            var d = new Date();
+            d.setTime(d.getTime() + (exdays * 24 * 60 * 60 * 1000));
+            var expires = "expires=" + d.toGMTString();
+            document.cookie = cname + "=" + cvalue + ";" + expires + ";path=/";
+        }
+
+        function getCookie(cname) {
+            var name = cname + "=";
+            var decodedCookie = decodeURIComponent(document.cookie);
+            var ca = decodedCookie.split(';');
+            for (var i = 0; i < ca.length; i++) {
+                var c = ca[i];
+                while (c.charAt(0) == ' ') {
+                    c = c.substring(1);
+                }
+                if (c.indexOf(name) == 0) {
+                    return c.substring(name.length, c.length);
+                }
+            }
+            return "";
+        }
+
+        function checkForDownload() {
+            var download = getCookie("DownloadReady")
+            var error = getCookie("DownloadError")
+            if (download != "") {
+                clearInterval(timer);
+                setCookie("DownloadReady", "", -1);
+                swal.close();
+            }
+            if (error != "") {
+                clearInterval(timer);
+                setCookie("DownloadError", "", -1);
+                swal({
+                    title: "Exporting Error",
+                    text: "There was an error trying to export the results. <br /><br /> Please try again.",
+                    type: "error",
+                    html: true,
+                    animation: false
+                });
+            }
+        }
+	</script>
+
+	</body>
+</html>

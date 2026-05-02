@@ -122,8 +122,8 @@ class Filing8872(CampaignFinanceBaseModel):
     form_type: str
     form_id_number: str
     ein: str = Field(pattern=EIN_REGEX)
-    period_begin_date: date
-    period_end_date: date
+    period_begin_date: Optional[date] = None
+    period_end_date: Optional[date] = None
 
     # Organization info (denormalized from the filing record)
     organization_name: Optional[str] = None
@@ -187,8 +187,9 @@ class Filing8872(CampaignFinanceBaseModel):
 
     @model_validator(mode="after")
     def _validate_coverage_date_ordering(self) -> Filing8872:
-        if self.period_begin_date > self.period_end_date:
-            raise ValueError("period_begin_date must be <= period_end_date")
+        if self.period_begin_date is not None and self.period_end_date is not None:
+            if self.period_begin_date > self.period_end_date:
+                raise ValueError("period_begin_date must be <= period_end_date")
         return self
 
 
@@ -204,7 +205,7 @@ class Contribution527(CampaignFinanceBaseModel):
     ein: str = Field(pattern=EIN_REGEX)
     contributor_name: str
     amount: Decimal = Field(max_digits=14, decimal_places=2)
-    contribution_date: date
+    contribution_date: Optional[date] = None
     aggregate_ytd: Decimal = Field(max_digits=14, decimal_places=2)
 
     # Optional org name (denormalized)
@@ -239,8 +240,8 @@ class Expenditure527(CampaignFinanceBaseModel):
     ein: str = Field(pattern=EIN_REGEX)
     recipient_name: str
     amount: Decimal = Field(max_digits=14, decimal_places=2)
-    expenditure_date: date
-    purpose: str
+    expenditure_date: Optional[date] = None
+    purpose: Optional[str] = None
 
     # Optional org name (denormalized)
     org_name: Optional[str] = None

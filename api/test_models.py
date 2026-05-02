@@ -36,6 +36,11 @@ from api.models import (
     PropertyOwnershipResponse,
     SearchParams,
     SearchResult,
+    StateCandidateTopEntry,
+    StateCommitteeTopEntry,
+    StateDetailResponse,
+    StateIndependentExpenditureTopSpender,
+    StateSummaryItem,
     SourceInfo,
     TopSpenderEntry,
     TransactionListParams,
@@ -107,6 +112,10 @@ def test_person_response_serializes_optional_fields_as_null_and_round_trips() ->
     assert dumped["suffix"] is None
     assert dumped["date_of_birth"] is None
     assert dumped["year_of_birth"] is None
+    assert dumped["bio_text"] is None
+    assert dumped["bio_source_url"] is None
+    assert dumped["bio_license"] is None
+    assert dumped["bio_pulled_at"] is None
     assert dumped["primary_address_id"] is None
     assert dumped["er_cluster_id"] is None
     assert dumped["er_confidence"] is None
@@ -920,6 +929,64 @@ def test_search_result_serializes_and_round_trips() -> None:
         "entity_type": "committee",
         "entity_id": str(result_id),
         "name": "Civibus Committee",
+        "state": None,
+        "party": None,
+        "office_name": None,
+        "committee_type": None,
+        "total_raised": None,
+    }
+    assert SearchResult.model_validate(dumped).model_dump(mode="json") == dumped
+
+
+def test_search_result_minimal_payload_defaults_optional_fields_to_null() -> None:
+    result_id = UUID("00000000-0000-0000-0000-000000000124")
+    result = SearchResult.model_validate(
+        {
+            "entity_type": "person",
+            "entity_id": result_id,
+            "name": "Civibus Person",
+        }
+    )
+
+    dumped = result.model_dump(mode="json")
+    assert dumped == {
+        "entity_type": "person",
+        "entity_id": str(result_id),
+        "name": "Civibus Person",
+        "state": None,
+        "party": None,
+        "office_name": None,
+        "committee_type": None,
+        "total_raised": None,
+    }
+    assert SearchResult.model_validate(dumped).model_dump(mode="json") == dumped
+
+
+def test_search_result_enriched_payload_round_trips() -> None:
+    result_id = UUID("00000000-0000-0000-0000-000000000125")
+    result = SearchResult.model_validate(
+        {
+            "entity_type": "candidate",
+            "entity_id": result_id,
+            "name": "Civibus Candidate",
+            "state": "WA",
+            "party": "DEM",
+            "office_name": "Governor",
+            "committee_type": "PAC",
+            "total_raised": Decimal("12345.67"),
+        }
+    )
+
+    dumped = result.model_dump(mode="json")
+    assert dumped == {
+        "entity_type": "candidate",
+        "entity_id": str(result_id),
+        "name": "Civibus Candidate",
+        "state": "WA",
+        "party": "DEM",
+        "office_name": "Governor",
+        "committee_type": "PAC",
+        "total_raised": "12345.67",
     }
     assert SearchResult.model_validate(dumped).model_dump(mode="json") == dumped
 
@@ -1016,6 +1083,13 @@ def test_committee_fundraising_summary_serializes_decimal_fields_and_round_trips
             "transaction_count": 42,
             "jurisdiction": "federal/fec",
             "data_through": datetime(2026, 3, 15, 12, 0, tzinfo=timezone.utc),
+            "cash_receipts_total": Decimal("120000.00"),
+            "in_kind_receipts_total": Decimal("20000.50"),
+            "loan_receipts_total": Decimal("10000.00"),
+            "contribution_receipts_total": Decimal("150000.50"),
+            "top_donors": [{"name": "Donor One", "total_amount": Decimal("10000.00"), "transaction_count": 4}],
+            "top_vendors": [{"name": "Vendor One", "total_amount": Decimal("5000.00"), "transaction_count": 2}],
+            "spend_categories": [{"category": "media", "total_amount": Decimal("7000.00"), "transaction_count": 2}],
         }
     )
 
@@ -1030,6 +1104,13 @@ def test_committee_fundraising_summary_serializes_decimal_fields_and_round_trips
     assert dumped["transaction_count"] == 42
     assert dumped["jurisdiction"] == "federal/fec"
     assert dumped["data_through"] == "2026-03-15T12:00:00Z"
+    assert dumped["cash_receipts_total"] == "120000.00"
+    assert dumped["in_kind_receipts_total"] == "20000.50"
+    assert dumped["loan_receipts_total"] == "10000.00"
+    assert dumped["contribution_receipts_total"] == "150000.50"
+    assert dumped["top_donors"][0]["name"] == "Donor One"
+    assert dumped["top_vendors"][0]["name"] == "Vendor One"
+    assert dumped["spend_categories"][0]["category"] == "media"
     assert CommitteeFundraisingSummary.model_validate(dumped).model_dump(mode="json") == dumped
 
 
@@ -1044,6 +1125,13 @@ def test_committee_fundraising_summary_allows_null_jurisdiction_and_data_through
             "transaction_count": 0,
             "jurisdiction": None,
             "data_through": None,
+            "cash_receipts_total": Decimal("0.00"),
+            "in_kind_receipts_total": Decimal("0.00"),
+            "loan_receipts_total": Decimal("0.00"),
+            "contribution_receipts_total": Decimal("0.00"),
+            "top_donors": [],
+            "top_vendors": [],
+            "spend_categories": None,
         }
     )
 
@@ -1055,6 +1143,7 @@ def test_committee_fundraising_summary_allows_null_jurisdiction_and_data_through
     assert dumped["transaction_count"] == 0
     assert dumped["jurisdiction"] is None
     assert dumped["data_through"] is None
+    assert dumped["spend_categories"] is None
     assert CommitteeFundraisingSummary.model_validate(dumped).model_dump(mode="json") == dumped
 
 
@@ -1103,6 +1192,136 @@ def test_candidate_fundraising_summary_serializes_decimals_and_nested_committees
     assert CandidateFundraisingSummary.model_validate(dumped).model_dump(mode="json") == dumped
 
 
+def test_state_summary_item_serializes_decimal_date_and_nullable_ie_fields() -> None:
+    summary_item = StateSummaryItem.model_validate(
+        {
+            "state_code": "NC",
+            "total_raised": Decimal("275.00"),
+            "total_spent": Decimal("90.00"),
+            "net": Decimal("185.00"),
+            "committee_count": 1,
+            "transaction_count": 4,
+            "federal_candidate_count": 2,
+            "ie_support_total": Decimal("40.00"),
+            "ie_oppose_total": Decimal("0.00"),
+            "ie_support_count": 1,
+            "ie_oppose_count": 0,
+            "coverage_tier": "launch-support candidate",
+            "support_status": "supported",
+            "supported": True,
+            "warning_text": None,
+            "data_through": datetime(2026, 3, 23, 12, 0, tzinfo=timezone.utc),
+        }
+    )
+
+    dumped = summary_item.model_dump(mode="json")
+
+    assert dumped["state_code"] == "NC"
+    assert dumped["total_raised"] == "275.00"
+    assert dumped["total_spent"] == "90.00"
+    assert dumped["net"] == "185.00"
+    assert dumped["committee_count"] == 1
+    assert dumped["transaction_count"] == 4
+    assert dumped["federal_candidate_count"] == 2
+    assert dumped["ie_support_total"] == "40.00"
+    assert dumped["ie_oppose_total"] == "0.00"
+    assert dumped["ie_support_count"] == 1
+    assert dumped["ie_oppose_count"] == 0
+    assert dumped["coverage_tier"] == "launch-support candidate"
+    assert dumped["support_status"] == "supported"
+    assert dumped["supported"] is True
+    assert dumped["warning_text"] is None
+    assert dumped["data_through"] == "2026-03-23T12:00:00Z"
+    assert StateSummaryItem.model_validate(dumped).model_dump(mode="json") == dumped
+
+
+def test_state_detail_response_round_trips_with_top_lists_and_null_ie_values() -> None:
+    detail = StateDetailResponse.model_validate(
+        {
+            "state_code": "DC",
+            "total_raised": Decimal("0.00"),
+            "total_spent": Decimal("0.00"),
+            "net": Decimal("0.00"),
+            "committee_count": 0,
+            "transaction_count": 0,
+            "federal_candidate_count": 0,
+            "ie_support_total": None,
+            "ie_oppose_total": None,
+            "ie_support_count": None,
+            "ie_oppose_count": None,
+            "coverage_tier": "freshness-limited",
+            "support_status": "warning",
+            "supported": False,
+            "warning_text": "Observed cadence signal is below weekly launch threshold.",
+            "data_through": None,
+            "top_candidates": [
+                {
+                    "candidate_id": UUID("d0000000-0000-0000-0000-000000000211"),
+                    "candidate_name": "NC Candidate One",
+                    "total_raised": Decimal("200.00"),
+                }
+            ],
+            "top_committees": [
+                {
+                    "committee_id": UUID("d3333333-3333-3333-3333-333333333333"),
+                    "committee_name": "NC Committee A",
+                    "total_raised": Decimal("270.00"),
+                }
+            ],
+            "top_ie_spenders": [
+                {
+                    "committee_id": UUID("d4444444-4444-4444-4444-444444444444"),
+                    "committee_name": "NC Committee B",
+                    "total_amount": Decimal("80.00"),
+                }
+            ],
+        }
+    )
+
+    dumped = detail.model_dump(mode="json")
+
+    assert dumped["state_code"] == "DC"
+    assert dumped["ie_support_total"] is None
+    assert dumped["ie_oppose_total"] is None
+    assert dumped["ie_support_count"] is None
+    assert dumped["ie_oppose_count"] is None
+    assert dumped["support_status"] == "warning"
+    assert dumped["supported"] is False
+    assert dumped["data_through"] is None
+    assert dumped["top_candidates"][0]["total_raised"] == "200.00"
+    assert dumped["top_committees"][0]["total_raised"] == "270.00"
+    assert dumped["top_ie_spenders"][0]["total_amount"] == "80.00"
+    assert StateDetailResponse.model_validate(dumped).model_dump(mode="json") == dumped
+
+
+def test_state_top_entry_models_round_trip_and_preserve_decimal_precision() -> None:
+    candidate_entry = StateCandidateTopEntry.model_validate(
+        {
+            "candidate_id": UUID("d0000000-0000-0000-0000-000000000211"),
+            "candidate_name": "NC Candidate One",
+            "total_raised": Decimal("200.00"),
+        }
+    )
+    committee_entry = StateCommitteeTopEntry.model_validate(
+        {
+            "committee_id": UUID("d3333333-3333-3333-3333-333333333333"),
+            "committee_name": "NC Committee A",
+            "total_raised": Decimal("270.00"),
+        }
+    )
+    ie_entry = StateIndependentExpenditureTopSpender.model_validate(
+        {
+            "committee_id": UUID("d4444444-4444-4444-4444-444444444444"),
+            "committee_name": "NC Committee B",
+            "total_amount": Decimal("80.00"),
+        }
+    )
+
+    assert candidate_entry.model_dump(mode="json")["total_raised"] == "200.00"
+    assert committee_entry.model_dump(mode="json")["total_raised"] == "270.00"
+    assert ie_entry.model_dump(mode="json")["total_amount"] == "80.00"
+
+
 def test_filing_period_summary_serializes_decimal_and_date_fields_and_round_trips() -> None:
     filing_id = uuid4()
     summary = FilingPeriodSummary.model_validate(
@@ -1119,6 +1338,8 @@ def test_filing_period_summary_serializes_decimal_and_date_fields_and_round_trip
             "total_spent": Decimal("500.25"),
             "net": Decimal("750.25"),
             "transaction_count": 3,
+            "cash_on_hand": Decimal("750.25"),
+            "row_id": f"{filing_id}:A",
         }
     )
 
@@ -1136,6 +1357,8 @@ def test_filing_period_summary_serializes_decimal_and_date_fields_and_round_trip
     assert dumped["total_spent"] == "500.25"
     assert dumped["net"] == "750.25"
     assert dumped["transaction_count"] == 3
+    assert dumped["cash_on_hand"] == "750.25"
+    assert dumped["row_id"] == f"{filing_id}:A"
     assert FilingPeriodSummary.model_validate(dumped).model_dump(mode="json") == dumped
 
 
@@ -1160,6 +1383,8 @@ def test_committee_filing_breakdown_serializes_nested_filings_shape_and_round_tr
                     "total_spent": Decimal("0.00"),
                     "net": Decimal("0.00"),
                     "transaction_count": 0,
+                    "cash_on_hand": None,
+                    "row_id": f"{filing_id}:N",
                 }
             ],
         }
@@ -1177,6 +1402,7 @@ def test_committee_filing_breakdown_serializes_nested_filings_shape_and_round_tr
     assert dumped["filings"][0]["coverage_end_date"] is None
     assert dumped["filings"][0]["receipt_date"] is None
     assert dumped["filings"][0]["transaction_count"] == 0
+    assert dumped["filings"][0]["row_id"] == f"{filing_id}:N"
     assert CommitteeFilingBreakdown.model_validate(dumped).model_dump(mode="json") == dumped
 
 
@@ -1214,6 +1440,11 @@ def test_models_package_reexports_public_response_and_params_models() -> None:
         "ERSummaryResponse",
         "SearchParams",
         "SearchResult",
+        "StateCandidateTopEntry",
+        "StateCommitteeTopEntry",
+        "StateDetailResponse",
+        "StateIndependentExpenditureTopSpender",
+        "StateSummaryItem",
         "GraphNeighbor",
         "EntityRelationshipsResponse",
     }

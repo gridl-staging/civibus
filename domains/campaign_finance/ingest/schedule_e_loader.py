@@ -1,8 +1,10 @@
+"""
+Stub summary for /Users/stuart/parallel_development/civibus_dev/mar22_03_fec_schedule_e_independent_expenditures/civibus_dev/domains/campaign_finance/ingest/schedule_e_loader.py.
+"""
+
 from __future__ import annotations
 
 from collections.abc import Mapping
-from datetime import date
-from decimal import Decimal
 import logging
 from pathlib import Path
 from uuid import UUID
@@ -14,6 +16,11 @@ from core.types.python.models import SourceRecord, compute_record_hash, utc_now
 from domains.campaign_finance.ingest.bulk_stage4_loader import LoadResult
 from domains.campaign_finance.ingest.fec_lookup import find_candidate_id_by_fec_id, find_committee_id_by_fec_id
 from domains.campaign_finance.ingest.filing_loader import upsert_filing, upsert_transaction
+from domains.campaign_finance.ingest.schedule_loader_common import (
+    create_schedule_loader_field_parsers,
+    json_compatible_raw_fields,
+    validate_batch_size,
+)
 from domains.campaign_finance.ingest.schedule_e_parser import read_schedule_e_file
 from domains.campaign_finance.ingest.text_utils import normalize_optional_text
 from domains.campaign_finance.types.models import Filing, Transaction
@@ -23,45 +30,14 @@ LOGGER = logging.getLogger(__name__)
 _SCHEDULE_E_ROW_SAVEPOINT = "schedule_e_row"
 
 _normalize_optional_text = normalize_optional_text
+_field_parsers = create_schedule_loader_field_parsers("Schedule E")
 
-
-def _validate_batch_size(batch_size: int) -> None:
-    if batch_size <= 0:
-        raise ValueError("batch_size must be greater than zero")
-
-
-def _require_text(row: Mapping[str, object], field_name: str) -> str:
-    value = _normalize_optional_text(row.get(field_name))
-    if value is None:
-        raise ValueError(f"{field_name} is required for Schedule E ingest")
-    return value
-
-
-def _require_decimal(row: Mapping[str, object], field_name: str) -> Decimal:
-    value = row.get(field_name)
-    if not isinstance(value, Decimal):
-        raise ValueError(f"{field_name} must be a Decimal for Schedule E ingest")
-    return value
-
-
-def _optional_date(row: Mapping[str, object], field_name: str) -> date | None:
-    value = row.get(field_name)
-    if value is None:
-        return None
-    if not isinstance(value, date):
-        raise ValueError(f"{field_name} must be a date for Schedule E ingest")
-    return value
-
-
-def _normalize_amendment_indicator(value: object) -> str:
-    normalized_value = _normalize_optional_text(value)
-    if normalized_value is None:
-        return "N"
-    if normalized_value in {"N", "T"}:
-        return normalized_value
-    if normalized_value in {"A", "A1", "A2", "A3", "A4"}:
-        return "A"
-    raise ValueError(f"Unsupported Schedule E amendment indicator: {normalized_value!r}")
+_validate_batch_size = validate_batch_size
+_require_text = _field_parsers.require_text
+_require_decimal = _field_parsers.require_decimal
+_optional_date = _field_parsers.optional_date
+_normalize_amendment_indicator = _field_parsers.normalize_amendment_indicator
+_json_compatible_raw_fields = json_compatible_raw_fields
 
 
 def _normalize_support_oppose(value: object) -> str | None:
@@ -71,18 +47,6 @@ def _normalize_support_oppose(value: object) -> str | None:
     if normalized_value not in {"S", "O"}:
         raise ValueError(f"Unsupported Schedule E support/oppose value: {normalized_value!r}")
     return normalized_value
-
-
-def _json_compatible_raw_fields(row: Mapping[str, object]) -> dict[str, object]:
-    raw_fields: dict[str, object] = {}
-    for key, value in row.items():
-        if isinstance(value, Decimal):
-            raw_fields[key] = str(value)
-        elif isinstance(value, date):
-            raw_fields[key] = value.isoformat()
-        else:
-            raw_fields[key] = value
-    return raw_fields
 
 
 def _build_source_record_key(*, cycle: int, row: Mapping[str, object]) -> str:

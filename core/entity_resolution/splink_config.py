@@ -1,5 +1,7 @@
+
 from __future__ import annotations
 
+from copy import deepcopy
 from typing import Any
 
 try:
@@ -30,8 +32,30 @@ def _require_splink() -> None:
         ) from _SPLINK_IMPORT_ERROR
 
 
-def _build_person_settings():
+PERSON_TUNING_DEFAULTS: dict[str, list[float]] = {
+    "canonical_name": [0.95, 0.88, 0.80],
+    "first_name": [0.95, 0.88],
+    "last_name": [0.95, 0.88],
+    "normalized_address": [0.92, 0.80],
+    "employer": [0.92, 0.80],
+    "occupation": [0.92],
+}
+
+
+def _resolved_person_tuning_overrides(overrides: dict[str, list[float]] | None) -> dict[str, list[float]]:
+    resolved = deepcopy(PERSON_TUNING_DEFAULTS)
+    if not overrides:
+        return resolved
+    for key, values in overrides.items():
+        resolved[key] = list(values)
+    return resolved
+
+
+def _build_person_settings(
+    tuning_overrides: dict[str, list[float]] | None = None,
+):
     _require_splink()
+    tuning = _resolved_person_tuning_overrides(tuning_overrides)
     return SettingsCreator(
         link_type="dedupe_only",
         unique_id_column_name="id",
@@ -58,23 +82,23 @@ def _build_person_settings():
             # Name comparison: Jaro-Winkler (good for typos/transpositions in names)
             cl.JaroWinklerAtThresholds(
                 "canonical_name",
-                score_threshold_or_thresholds=[0.95, 0.88, 0.80],
+                score_threshold_or_thresholds=tuning["canonical_name"],
             ),
             # First name: handles nicknames, abbreviations
             cl.JaroWinklerAtThresholds(
                 "first_name",
-                score_threshold_or_thresholds=[0.95, 0.88],
+                score_threshold_or_thresholds=tuning["first_name"],
             ),
             # Last name: exact + fuzzy
             cl.JaroWinklerAtThresholds(
                 "last_name",
-                score_threshold_or_thresholds=[0.95, 0.88],
+                score_threshold_or_thresholds=tuning["last_name"],
             ),
             # Address: token sort ratio handles word order differences
             # "123 Main St Apt 4" vs "Apt 4, 123 Main Street"
             cl.JaroWinklerAtThresholds(
                 "normalized_address",
-                score_threshold_or_thresholds=[0.92, 0.80],
+                score_threshold_or_thresholds=tuning["normalized_address"],
             ),
             # Date of birth: exact match is very strong signal
             cl.DateOfBirthComparison(
@@ -88,12 +112,12 @@ def _build_person_settings():
             # Employer: when available, strong signal
             cl.JaroWinklerAtThresholds(
                 "employer",
-                score_threshold_or_thresholds=[0.92, 0.80],
+                score_threshold_or_thresholds=tuning["employer"],
             ),
             # Occupation: when available, supporting signal
             cl.JaroWinklerAtThresholds(
                 "occupation",
-                score_threshold_or_thresholds=[0.92],
+                score_threshold_or_thresholds=tuning["occupation"],
             ),
         ],
         retain_intermediate_calculation_columns=False,
@@ -287,6 +311,13 @@ def get_probabilistic_settings(entity_type: str) -> Any:
     raise ValueError(f"entity_type must be 'person' or 'organization', got {entity_type!r}")
 
 
+def build_person_probabilistic_settings(
+    tuning_overrides: dict[str, list[float]] | None = None,
+) -> Any:
+    """Build person probabilistic settings with optional threshold overrides."""
+    return _build_person_settings(tuning_overrides=tuning_overrides)
+
+
 def _blocking_rule_to_sql(rule: Any) -> Any:
     # Splink 4 blocking-rule objects must be passed through to training APIs.
     if hasattr(rule, "create_sql") or hasattr(rule, "get_blocking_rule"):
@@ -296,9 +327,12 @@ def _blocking_rule_to_sql(rule: Any) -> Any:
     return str(rule)
 
 
-def get_blocking_rule_sqls(entity_type: str) -> list[Any]:
+def get_blocking_rule_sqls(
+    entity_type: str,
+    probabilistic_settings: Any | None = None,
+) -> list[Any]:
     """Return blocking rules in training-compatible form from settings."""
-    settings = get_probabilistic_settings(entity_type)
+    settings = probabilistic_settings if probabilistic_settings is not None else get_probabilistic_settings(entity_type)
     if settings is None:
         return []
 

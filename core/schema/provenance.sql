@@ -41,6 +41,37 @@ CREATE INDEX idx_data_source_jurisdiction ON core.data_source (jurisdiction);
 CREATE UNIQUE INDEX idx_data_source_dedup ON core.data_source (domain, jurisdiction, name);
 
 -- ============================================================================
+-- Refresh Run Ledger
+-- ============================================================================
+-- Operational record of every refresh-run attempt. This is the Keel L5 owner:
+-- runner truthfulness comes from committed per-run statuses rather than
+-- inferring health from today's last_pull_status snapshot on core.data_source.
+
+CREATE TABLE core.refresh_run (
+    id               UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    job_key          TEXT NOT NULL,
+    domain           TEXT NOT NULL,
+    jurisdiction     TEXT NOT NULL,
+    data_source_names TEXT[] NOT NULL DEFAULT '{}',
+    pull_status      TEXT NOT NULL CHECK (pull_status IN ('crashed', 'empty', 'degraded', 'success')),
+    started_at       TIMESTAMPTZ NOT NULL,
+    completed_at     TIMESTAMPTZ NOT NULL,
+    inserted_count   INTEGER NOT NULL DEFAULT 0,
+    skipped_count    INTEGER NOT NULL DEFAULT 0,
+    quarantined_count INTEGER NOT NULL DEFAULT 0,
+    superseded_count INTEGER NOT NULL DEFAULT 0,
+    error_count      INTEGER NOT NULL DEFAULT 0,
+    metadata_updates INTEGER NOT NULL DEFAULT 0,
+    message          TEXT NOT NULL,
+    error            TEXT,
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_refresh_run_job_key_completed_at ON core.refresh_run (job_key, completed_at DESC);
+CREATE INDEX idx_refresh_run_completed_at ON core.refresh_run (completed_at DESC);
+CREATE INDEX idx_refresh_run_pull_status ON core.refresh_run (pull_status);
+
+-- ============================================================================
 -- Source Record
 -- ============================================================================
 -- An individual record from a data source. This is the atomic unit of provenance.
@@ -85,6 +116,11 @@ ALTER TABLE core.entity_address
 -- Cross-file FK: contact_point.source_record_id (defined in entities.sql, resolved here)
 ALTER TABLE core.contact_point
     ADD CONSTRAINT fk_contact_point_source_record
+    FOREIGN KEY (source_record_id) REFERENCES core.source_record(id);
+
+-- Cross-file FK: person_portrait.source_record_id (defined in entities.sql, resolved here)
+ALTER TABLE core.person_portrait
+    ADD CONSTRAINT fk_person_portrait_source_record
     FOREIGN KEY (source_record_id) REFERENCES core.source_record(id);
 
 -- ============================================================================

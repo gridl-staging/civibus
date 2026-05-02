@@ -1,11 +1,20 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from uuid import UUID
 
 from pydantic import BaseModel, Field
 
 from api.models.provenance import SourceInfo
+
+
+class PersonPortraitResponse(BaseModel):
+    status: str
+    rights_status: str
+    source_image_url: str | None = None
+    mime_type: str | None = None
+    width_px: int | None = None
+    height_px: int | None = None
 
 
 class PersonResponse(BaseModel):
@@ -16,12 +25,19 @@ class PersonResponse(BaseModel):
     middle_name: str | None = None
     last_name: str | None = None
     suffix: str | None = None
+    occupation: str | None = None
+    education: str | None = None
+    bio_text: str | None = None
+    bio_source_url: str | None = None
+    bio_license: str | None = None
+    bio_pulled_at: datetime | None = None
     date_of_birth: date | None = None
     year_of_birth: int | None = None
     identifiers: dict[str, str] = Field(default_factory=dict)
     primary_address_id: UUID | None = None
     er_cluster_id: UUID | None = None
     er_confidence: float | None = None
+    portrait: PersonPortraitResponse | None = None
     sources: list[SourceInfo]
 
 

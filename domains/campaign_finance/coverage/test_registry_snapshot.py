@@ -157,6 +157,7 @@ def test_registry_seed_owned_fields_match_fresh_seed_build() -> None:
         "operational_reason",
         "next_action",
         "evidence_date",
+        "ie_coverage_available",
     }
     for row in registry.rows:
         seeded_row = seeded_rows.get(row.jurisdiction_code)
@@ -217,8 +218,8 @@ def test_stage4_new_jersey_contract_gate_uses_verified_export_and_api_paths() ->
     assert "144.5MB" in nj_row.evidence_summary
     assert "export-generation recency, not filing-level recency" in nj_row.evidence_summary
     assert (
-        nj_row.next_action == "Prototype NJ package from verified endpoints; prove filing-recency from downloaded data "
-        "before launch support classification."
+        nj_row.next_action
+        == "Maintain NJ freshness-limited classification; only reclassify if a fresher official export path is proven."
     )
     assert nj_row.evidence_date is not None
 
@@ -231,7 +232,7 @@ def test_stage5_idaho_stays_freshness_limited_until_weekly_plus_proof() -> None:
     assert id_row.tier == "freshness-limited"
     assert id_row.best_update_frequency == "monthly"
     assert id_row.best_last_verified_working is not None
-    assert id_row.best_last_verified_working.isoformat() == "2026-03-30"
+    assert id_row.best_last_verified_working.isoformat() == "2026-04-29"
     assert id_row.evidence_summary is not None
     assert "monthly reporting plus timed-report exceptions" in id_row.evidence_summary
     assert id_row.operational_reason == (
@@ -264,25 +265,36 @@ def test_runner_wired_rows_do_not_claim_pending_runner_work() -> None:
     )
 
     assert rows_by_code["IN"].runner_wired is True
-    assert (
-        rows_by_code["IN"].evidence_summary == "Stage 1 freshness recheck (in-freshness-investigation-2026-03-29.md): "
-        "download surface reachable with default and browser-like user agents; 2026 contribution/expenditure "
-        "ZIPs show Last-Modified 2026-03-17 with non-trivial content lengths, confirming intra-year "
-        "regeneration. Prior-year 2025 ZIP also updated in March 2026. Annual cadence remains the "
-        "operational bottleneck for launch support despite runner wiring."
-    )
+    in_evidence_summary = rows_by_code["IN"].evidence_summary
+    assert in_evidence_summary is not None
+    assert "in_freshness_recheck_2026_04_26.md" in in_evidence_summary
+    assert "in_mn_nj_freshness_stage1_baseline_2026_04_28.md" in in_evidence_summary
+    assert "weekly-or-better" in in_evidence_summary
+    assert "three valid probes" in in_evidence_summary
+    assert "Apr 16, Apr 17, Apr 26" in in_evidence_summary
     assert (
         rows_by_code["IN"].next_action
-        == "Poll IN bulk ZIPs repeatedly to establish weekly update regularity before launch support classification."
+        == "Launch-ready for cadence: keep weekly-or-better monitoring in routine refresh evidence and only "
+        "reclassify if a future dated probe shows regression."
+    )
+    assert rows_by_code["IN"].tier == "launch-support candidate"
+    assert rows_by_code["IN"].best_last_verified_working is not None
+    assert rows_by_code["IN"].best_last_verified_working.isoformat() == "2026-04-26"
+    assert (
+        rows_by_code["IN"].operational_reason
+        == "Cadence is resolved positive: three valid probes across 10 days (2026-04-16, 2026-04-17, "
+        "2026-04-26) show source advancement consistent with weekly-or-better launch support."
     )
     assert (
-        rows_by_code["IN_FORT_WAYNE"].next_action == "Inherit parent-state path: IN -> "
-        "Poll IN bulk ZIPs repeatedly to establish weekly update regularity before launch support classification."
+        rows_by_code["IN_FORT_WAYNE"].next_action
+        == f"Inherit parent-state path: IN -> {rows_by_code['IN'].next_action}"
     )
     assert (
-        rows_by_code["IN_INDIANAPOLIS_CITY_BALANCE"].next_action == "Inherit parent-state path: IN -> "
-        "Poll IN bulk ZIPs repeatedly to establish weekly update regularity before launch support classification."
+        rows_by_code["IN_INDIANAPOLIS_CITY_BALANCE"].next_action
+        == f"Inherit parent-state path: IN -> {rows_by_code['IN'].next_action}"
     )
+    assert rows_by_code["IN_FORT_WAYNE"].tier == rows_by_code["IN"].tier
+    assert rows_by_code["IN_INDIANAPOLIS_CITY_BALANCE"].tier == rows_by_code["IN"].tier
 
 
 def test_stage5_parent_reclassifications_propagate_to_covered_municipalities() -> None:
@@ -353,7 +365,7 @@ def test_stage5_municipality_layer_snapshot_invariants() -> None:
                 assert parent.covers_sub_jurisdictions is False
 
 
-_IMPLEMENTED_CITY_PIPELINES = frozenset({"CA_LOS_ANGELES", "NY_NEW_YORK"})
+_IMPLEMENTED_CITY_PIPELINES = frozenset({"CA_LOS_ANGELES", "NY_NEW_YORK", "PA_PHILADELPHIA"})
 _PRE_BUILD_INDEPENDENT_CITIES = _BROWSER_VERIFIED_INDEPENDENT_CITIES - _IMPLEMENTED_CITY_PIPELINES
 
 
@@ -386,6 +398,33 @@ def test_stage1_city_portal_reclassifications() -> None:
         assert row.tier == "implemented but unproven", f"{code} tier should be 'implemented but unproven'"
         assert row.evidence_summary is not None
         assert "Pipeline implemented" in row.evidence_summary, f"{code} evidence must cite pipeline implementation"
+
+
+def test_stage4_phl_row_matches_shipped_pipeline_and_closeout_status() -> None:
+    registry = _load_coverage_registry()
+    rows_by_code = {row.jurisdiction_code: row for row in registry.rows}
+    row = rows_by_code["PA_PHILADELPHIA"]
+
+    assert row.source_count == 2
+    assert row.source_names == [
+        "PHL Campaign Finance Contributions",
+        "PHL Campaign Finance Expenditures",
+    ]
+    assert row.runner_wired is True
+    assert row.tier == "implemented but unproven"
+    assert row.best_last_verified_working is not None
+    assert row.best_last_verified_working.isoformat() == "2026-04-25"
+    assert row.evidence_date is not None
+    assert row.evidence_date.isoformat() == "2026-04-29"
+    assert row.evidence_summary is not None
+    assert "Pipeline implemented" in row.evidence_summary
+    assert "phl_full_backfill_closeout_2026_04_29.md" in row.evidence_summary
+    assert "phl_freshness_probe_2026_04_26.md" in row.evidence_summary
+    assert row.operational_reason is not None
+    assert "full-scale closeout remains incomplete" in row.operational_reason
+    assert "freshness-limited" in row.operational_reason
+    assert row.next_action is not None
+    assert "Complete the detached full-scale closeout rerun" in row.next_action
 
 
 def test_stage1_chicago_seattle_remain_covered_by_parent() -> None:

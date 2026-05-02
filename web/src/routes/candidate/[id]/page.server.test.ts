@@ -117,7 +117,15 @@ describe("/candidate/[id] +page.server load", () => {
 
     expect(data.routeKind).toBe("canonical-detail");
     expect(data.detail).toEqual(detail);
-    expect(data.summary).toEqual(summary);
+
+    expect(data.summary).toBeInstanceOf(Promise);
+    expect(data.ieTransactions).toBeInstanceOf(Promise);
+    expect(data.ieSummary).toBeInstanceOf(Promise);
+
+    expect(await data.summary).toEqual(summary);
+    expect(await data.ieTransactions).toEqual([]);
+    expect(await data.ieSummary).toBeNull();
+
     expect(requestJson.mock.calls.map(([path]) => path)).toEqual([
       buildCandidateDetailPath(CANDIDATE_ID),
       buildCandidateSummaryPath(CANDIDATE_ID),
@@ -320,8 +328,12 @@ describe("/candidate/[id] +page.server load", () => {
 
     expect(data.routeKind).toBe("canonical-detail");
     expect(data.detail.name).toBe("Candidate Empty");
-    expect(data.ieTransactions).toEqual([]);
-    expect(data.ieSummary).toBeNull();
+
+    expect(data.ieTransactions).toBeInstanceOf(Promise);
+    expect(data.ieSummary).toBeInstanceOf(Promise);
+
+    expect(await data.ieTransactions).toEqual([]);
+    expect(await data.ieSummary).toBeNull();
   });
 
   it("preserves backend 404 payloads", async () => {

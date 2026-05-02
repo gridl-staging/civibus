@@ -11,6 +11,7 @@ import pytest
 from core.db import insert_data_source, insert_source_record
 from core.types.python.models import DataSource, SourceRecord, utc_now
 from domains.campaign_finance.quality.cli import _discover_and_run, main
+from domains.campaign_finance.quality.conftest import EXPECTED_EDGE_FAMILIES
 
 
 pytestmark = pytest.mark.integration
@@ -27,6 +28,11 @@ class _ConnectionNoClose:
 
     def close(self) -> None:
         return None
+
+
+def _test_jurisdiction(prefix: str) -> str:
+    """Return a per-test synthetic jurisdiction to avoid ambient DB collisions."""
+    return f"state/{prefix}-{uuid4().hex[:8]}"
 
 
 def _insert_data_source_fixture(
@@ -74,10 +80,11 @@ def test_main_discovers_campaign_finance_jurisdictions_from_live_data_source(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
+    jurisdiction = _test_jurisdiction("CO")
     included_source = _insert_data_source_fixture(
         db_conn,
         domain="campaign_finance",
-        jurisdiction="state/CO",
+        jurisdiction=jurisdiction,
         name="CO Campaign Source",
         record_count=1,
     )
@@ -85,7 +92,7 @@ def test_main_discovers_campaign_finance_jurisdictions_from_live_data_source(
     _insert_data_source_fixture(
         db_conn,
         domain="corporate_filings",
-        jurisdiction="state/CO",
+        jurisdiction=jurisdiction,
         name="CO Corporate Source",
         record_count=1,
     )
@@ -101,8 +108,8 @@ def test_main_discovers_campaign_finance_jurisdictions_from_live_data_source(
     assert exit_code in (0, 1), f"unexpected exit code {exit_code}: {captured.err}"
     payload = json.loads(captured.out)
     jurisdictions = [summary["jurisdiction"] for summary in payload["summaries"]]
-    assert "state/CO" in jurisdictions
-    co_summary = next(s for s in payload["summaries"] if s["jurisdiction"] == "state/CO")
+    assert jurisdiction in jurisdictions
+    co_summary = next(s for s in payload["summaries"] if s["jurisdiction"] == jurisdiction)
     assert co_summary["record_count"] == 1
     check_names = [result["name"] for result in co_summary["check_results"]]
     assert check_names == ["record_count_reconciliation"]
@@ -113,10 +120,12 @@ def test_main_unknown_jurisdiction_filter_returns_empty_live_db_report(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
+    present_jurisdiction = _test_jurisdiction("NC")
+    missing_jurisdiction = _test_jurisdiction("ZZ")
     _insert_data_source_fixture(
         db_conn,
         domain="campaign_finance",
-        jurisdiction="state/NC",
+        jurisdiction=present_jurisdiction,
         name="NC Campaign Source",
         record_count=0,
     )
@@ -126,13 +135,13 @@ def test_main_unknown_jurisdiction_filter_returns_empty_live_db_report(
         lambda: _ConnectionNoClose(db_conn),
     )
 
-    exit_code = main(["--jurisdiction", "state/ZZ", "--check", "record_count"])
+    exit_code = main(["--jurisdiction", missing_jurisdiction, "--check", "record_count"])
     captured = capsys.readouterr()
 
     assert exit_code == 0
     assert captured.err == ""
     payload = json.loads(captured.out)
-    assert payload["jurisdiction_filter"] == "state/ZZ"
+    assert payload["jurisdiction_filter"] == missing_jurisdiction
     assert payload["summaries"] == []
     assert payload["total_checks"] == 0
 
@@ -207,11 +216,12 @@ def test_discover_and_run_additively_includes_ca_mn_wa_jurisdictions(
 def test_discover_and_run_deduplicates_baseline_urls_for_multiple_data_sources(
     db_conn: psycopg.Connection,
 ) -> None:
+    jurisdiction = _test_jurisdiction("GA")
     shared_url = "https://example.com/shared/ga"
     ga_source_a = _insert_data_source_fixture(
         db_conn,
         domain="campaign_finance",
-        jurisdiction="state/GA",
+        jurisdiction=jurisdiction,
         name="GA Campaign Source A",
         record_count=1,
         source_url=shared_url,
@@ -219,7 +229,7 @@ def test_discover_and_run_deduplicates_baseline_urls_for_multiple_data_sources(
     ga_source_b = _insert_data_source_fixture(
         db_conn,
         domain="campaign_finance",
-        jurisdiction="state/GA",
+        jurisdiction=jurisdiction,
         name="GA Campaign Source B",
         record_count=1,
         source_url=shared_url,
@@ -227,11 +237,11 @@ def test_discover_and_run_deduplicates_baseline_urls_for_multiple_data_sources(
     _insert_source_record_fixture(db_conn, data_source_id=ga_source_a.id, source_record_key="ga-1")
     _insert_source_record_fixture(db_conn, data_source_id=ga_source_b.id, source_record_key="ga-2")
 
-    report = _discover_and_run(db_conn, jurisdiction_filter="state/GA", check_filter="record_count")
+    report = _discover_and_run(db_conn, jurisdiction_filter=jurisdiction, check_filter="record_count")
 
     assert len(report.summaries) == 1
     summary = report.summaries[0]
-    assert summary.jurisdiction == "state/GA"
+    assert summary.jurisdiction == jurisdiction
     assert summary.baseline_urls == [shared_url]
     assert summary.record_count == 2
     assert len(summary.data_source_ids) == 2
@@ -244,10 +254,11 @@ def test_discover_and_run_deduplicates_baseline_urls_for_multiple_data_sources(
 def test_discover_and_run_orders_multi_source_output_by_name(
     db_conn: psycopg.Connection,
 ) -> None:
+    jurisdiction = _test_jurisdiction("TX")
     zulu_source = _insert_data_source_fixture(
         db_conn,
         domain="campaign_finance",
-        jurisdiction="state/TX",
+        jurisdiction=jurisdiction,
         name="Zulu Campaign Source",
         record_count=1,
         source_url="https://example.com/zulu",
@@ -255,7 +266,7 @@ def test_discover_and_run_orders_multi_source_output_by_name(
     alpha_source = _insert_data_source_fixture(
         db_conn,
         domain="campaign_finance",
-        jurisdiction="state/TX",
+        jurisdiction=jurisdiction,
         name="Alpha Campaign Source",
         record_count=1,
         source_url="https://example.com/alpha",
@@ -263,7 +274,7 @@ def test_discover_and_run_orders_multi_source_output_by_name(
     _insert_source_record_fixture(db_conn, data_source_id=zulu_source.id, source_record_key="tx-zulu")
     _insert_source_record_fixture(db_conn, data_source_id=alpha_source.id, source_record_key="tx-alpha")
 
-    report = _discover_and_run(db_conn, jurisdiction_filter="state/TX", check_filter="record_count")
+    report = _discover_and_run(db_conn, jurisdiction_filter=jurisdiction, check_filter="record_count")
 
     assert len(report.summaries) == 1
     summary = report.summaries[0]
@@ -307,10 +318,11 @@ def test_discover_and_run_ignores_data_sources_with_null_jurisdiction(
 def test_discover_and_run_record_count_uses_active_records_only(
     db_conn: psycopg.Connection,
 ) -> None:
+    jurisdiction = _test_jurisdiction("NC")
     data_source = _insert_data_source_fixture(
         db_conn,
         domain="campaign_finance",
-        jurisdiction="state/NC",
+        jurisdiction=jurisdiction,
         name="NC Campaign Source",
         record_count=1,
     )
@@ -326,7 +338,7 @@ def test_discover_and_run_record_count_uses_active_records_only(
         superseded_by=active_record.id,
     )
 
-    report = _discover_and_run(db_conn, jurisdiction_filter="state/NC", check_filter="record_count")
+    report = _discover_and_run(db_conn, jurisdiction_filter=jurisdiction, check_filter="record_count")
 
     assert len(report.summaries) == 1
     summary = report.summaries[0]
@@ -334,3 +346,82 @@ def test_discover_and_run_record_count_uses_active_records_only(
     assert len(summary.check_results) == 1
     assert summary.check_results[0].name == "record_count_reconciliation"
     assert summary.check_results[0].status == "pass"
+
+
+def test_main_graph_edges_filter_emits_graph_edge_presence_only(
+    graph_conn: psycopg.Connection,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    jurisdiction = _test_jurisdiction("GE")
+    _insert_data_source_fixture(
+        graph_conn,
+        domain="campaign_finance",
+        jurisdiction=jurisdiction,
+        name="Graph Edges Source",
+        record_count=0,
+    )
+    monkeypatch.setattr(
+        "domains.campaign_finance.quality.cli.get_connection",
+        lambda: _ConnectionNoClose(graph_conn),
+    )
+
+    exit_code = main(["--jurisdiction", jurisdiction, "--check", "graph_edges"])
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert captured.err == ""
+    payload = json.loads(captured.out)
+    assert payload["check_filter"] == "graph_edges"
+    assert len(payload["summaries"]) == 1
+    summary = payload["summaries"][0]
+    assert summary["jurisdiction"] == jurisdiction
+    assert [result["name"] for result in summary["check_results"]] == ["graph_edge_presence"]
+    graph_edge_result = summary["check_results"][0]
+    assert graph_edge_result["metric_name"] == "edge_population_ratio"
+    assert set(graph_edge_result["details"]["edge_families"]) == set(EXPECTED_EDGE_FAMILIES)
+
+
+def test_main_default_run_includes_graph_edge_presence_with_db_checks(
+    graph_conn: psycopg.Connection,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    jurisdiction = _test_jurisdiction("DG")
+    _insert_data_source_fixture(
+        graph_conn,
+        domain="campaign_finance",
+        jurisdiction=jurisdiction,
+        name="Default Graph Source",
+        record_count=0,
+    )
+    monkeypatch.setattr(
+        "domains.campaign_finance.quality.cli.get_connection",
+        lambda: _ConnectionNoClose(graph_conn),
+    )
+    monkeypatch.setattr(
+        "domains.campaign_finance.quality.cli.run_freshness_checks",
+        lambda _jurisdiction: [],
+    )
+
+    exit_code = main(["--jurisdiction", jurisdiction])
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert captured.err == ""
+    payload = json.loads(captured.out)
+    assert payload["check_filter"] is None
+    assert len(payload["summaries"]) == 1
+    summary = payload["summaries"][0]
+    assert summary["jurisdiction"] == jurisdiction
+    check_names = {result["name"] for result in summary["check_results"]}
+    assert "graph_edge_presence" in check_names
+    assert "record_count_reconciliation" in check_names
+    assert "duplicate_records" in check_names
+    assert "amount_sanity" in check_names
+    assert "date_range" in check_names
+    assert "completeness_source_record_key" in check_names
+    assert "completeness_source_url" in check_names
+    assert "completeness_raw_fields" in check_names
+    assert "null_rate_source_record_key" in check_names
+    assert "null_rate_source_url" in check_names

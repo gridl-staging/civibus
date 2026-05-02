@@ -1,4 +1,3 @@
-"""Lifecycle maturity tracking for implemented campaign finance jurisdictions."""
 
 from __future__ import annotations
 
@@ -39,6 +38,11 @@ CompletenessIntelligenceMaturityLiteral = Literal[
     "observed_only",
     "gap_detection_ready",
 ]
+CivicsCandidacyStatusLiteral = Literal[
+    "not_started",
+    "loaded",
+    "full_csv_proven",
+]
 
 DEFAULT_IMPLEMENTED_REGION_LIFECYCLE_PATH = (
     Path(__file__).resolve().parents[3] / "docs" / "research" / "implemented-region-lifecycle.json"
@@ -65,6 +69,7 @@ class ImplementedRegionLifecycleRow(LifecycleBaseModel):
     operational_maturity: OperationalMaturityLiteral
     public_claim_status: TierLiteral
     completeness_intelligence_maturity: CompletenessIntelligenceMaturityLiteral
+    civics_candidacy_status: CivicsCandidacyStatusLiteral
     main_blocker: str
 
     @model_validator(mode="after")
@@ -145,9 +150,9 @@ def render_lifecycle_summary_markdown(lifecycle: ImplementedRegionLifecycleRegis
         (
             "| Jurisdiction | Acquisition Pattern | Discovery | Source Contract | "
             "Legal / Filing Semantics | Implementation | Operations | Public Claim | "
-            "Completeness Intelligence | Main Blocker |"
+            "Completeness Intelligence | Civics Candidacy | Main Blocker |"
         ),
-        ("| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"),
+        ("| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"),
     ]
     for row in lifecycle.rows:
         lines.append(
@@ -160,6 +165,7 @@ def render_lifecycle_summary_markdown(lifecycle: ImplementedRegionLifecycleRegis
             f"{_escape_markdown_cell(row.operational_maturity)} | "
             f"{_escape_markdown_cell(row.public_claim_status)} | "
             f"{_escape_markdown_cell(row.completeness_intelligence_maturity)} | "
+            f"{_escape_markdown_cell(row.civics_candidacy_status)} | "
             f"{_escape_markdown_cell(row.main_blocker)} |"
         )
     return "\n".join(lines) + "\n"

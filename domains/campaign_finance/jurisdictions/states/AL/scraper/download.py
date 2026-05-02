@@ -2,7 +2,10 @@
 
 The FCPA portal at fcpa.alabamavotes.gov provides a paginated JSON search API.
 Contributions use the contributionsearchresults page; expenditures use
-expendituresearchresults. Both return JSON with {"success": true, "totalRecords": N, "data": [...]}.
+expendituresearchresults. The live API returns nested JSON:
+``{"success": true, "data": {"totalRecords": N, "list": [...]}}``.
+This module normalizes the response to ``{"totalRecords": N, "data": [...]}``
+for downstream parse compatibility.
 """
 
 from __future__ import annotations
@@ -67,12 +70,16 @@ def build_al_search_url(
         f"&pageSize={page_size}"
         f"&sortDirection={sort_direction}"
         f"&sortBy={sort_field}"
-        f"&criteria=[]"
+        f"&criteria=%5B%5D"
     )
 
 
 def _fetch_al_page(url: str) -> dict:
-    """Fetch a single FCPA API page and return parsed JSON."""
+    """Fetch a single FCPA API page and return normalized dict.
+
+    The live FCPA API returns ``{"success": true, "data": {"totalRecords": N, "list": [...]}}``.
+    This function normalizes to ``{"totalRecords": N, "data": [...]}``.
+    """
     with httpx.Client(timeout=REQUEST_TIMEOUT_SECONDS) as client:
         response = client.get(url, follow_redirects=True)
         response.raise_for_status()
@@ -81,7 +88,18 @@ def _fetch_al_page(url: str) -> dict:
     if not isinstance(payload, dict) or not payload.get("success"):
         raise ValueError(f"FCPA API returned unexpected response: {json.dumps(payload)[:200]}")
 
-    return payload
+    raw_data = payload.get("data")
+    if isinstance(raw_data, dict):
+        return {
+            "totalRecords": raw_data.get("totalRecords", 0),
+            "data": raw_data.get("list", []),
+        }
+    if isinstance(raw_data, list):
+        return {
+            "totalRecords": payload.get("totalRecords", 0),
+            "data": raw_data,
+        }
+    raise ValueError(f"FCPA API 'data' field has unexpected type: {type(raw_data)}")
 
 
 def download_al_json(

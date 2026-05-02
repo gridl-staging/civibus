@@ -162,6 +162,81 @@ data_sources:
       - "Dataset ajsb-8pni is a filtered view of parent e9ss-239a showing only Schedule F (expenditures)"
       - "Same schema as contributions — differentiated by filing_sched_abbrev field"
 
+  - name: "NY BoE Independent Expenditures"
+    url: "https://data.ny.gov/Government-Finance/Campaign-Finance-Disclosure-Reports-All-Transactio/e9ss-239a"
+    bulk_download_url: "https://data.ny.gov/resource/e9ss-239a.csv"
+    api_base_url: "https://data.ny.gov/resource"
+    format: "api"
+    auth_required: false
+    update_frequency: "daily"
+    coverage:
+      start_year: 1999
+      covers_sub_jurisdictions: true
+      office_levels:
+        - governor
+        - lieutenant_governor
+        - attorney_general
+        - comptroller
+        - state_senate
+        - state_assembly
+        - county
+        - municipal
+      transaction_types:
+        - independent_expenditures
+    field_mappings:
+      filer_id: "committee.id"
+      filer_previous_id: "ny.filer_previous_id"
+      cand_comm_name: "committee.name"
+      election_year: "transaction.year"
+      election_type: "ny.election_type"
+      county_desc: "jurisdiction.county"
+      filing_abbrev: "ny.filing_abbrev"
+      filing_desc: "ny.filing_desc"
+      r_amend: "ny.r_amend"
+      filing_cat_desc: "ny.filing_cat_desc"
+      filing_sched_abbrev: "ny.filing_sched_abbrev"
+      filing_sched_desc: "ny.filing_sched_desc"
+      loan_lib_number: "ny.loan_lib_number"
+      trans_number: "ny.trans_number"
+      trans_mapping: "ny.trans_mapping"
+      sched_date: "transaction.date"
+      org_date: "ny.org_date"
+      cntrbr_type_desc: "ny.cntrbr_type_desc"
+      cntrbn_type_desc: "ny.cntrbn_type_desc"
+      transfer_type_desc: "ny.transfer_type_desc"
+      receipt_type_desc: "ny.receipt_type_desc"
+      receipt_code_desc: "ny.receipt_code_desc"
+      purpose_code_desc: "ny.purpose_code_desc"
+      r_subcontractor: "ny.r_subcontractor"
+      flng_ent_name: "payee.org_name"
+      flng_ent_first_name: "payee.first_name"
+      flng_ent_middle_name: "payee.middle_name"
+      flng_ent_last_name: "payee.last_name"
+      flng_ent_add1: "payee.address.street1"
+      flng_ent_city: "payee.address.city"
+      flng_ent_state: "payee.address.state"
+      flng_ent_zip: "payee.address.zip"
+      flng_ent_country: "ny.flng_ent_country"
+      payment_type_desc: "ny.payment_type_desc"
+      pay_number: "ny.pay_number"
+      owed_amt: "ny.owed_amt"
+      org_amt: "transaction.amount"
+      loan_other_desc: "ny.loan_other_desc"
+      trans_explntn: "transaction.description"
+      r_itemized: "ny.r_itemized"
+      r_liability: "ny.r_liability"
+      election_year_r: "ny.election_year_r"
+      office_desc: "jurisdiction.office"
+      district: "jurisdiction.district"
+      dist_off_cand_bal_prop: "ny.dist_off_cand_bal_prop"
+    scraper: null
+    last_successful_pull: null
+    last_verified_working: null
+    known_issues:
+      - "IE data comes from parent dataset e9ss-239a filtered by filing_cat_desc='IE 24 Hour/Weekly Notices'"
+      - "Same 45-column schema as contributions/expenditures — payee-style semantic paths match expenditures"
+      - "Currently 0 rows match the IE predicate in the SODA API (as of 2026-04-17); schema slot is ready for when data appears"
+
 laws:
   source_url: "https://www.nysenate.gov/legislation/laws/ELN/14-100"
   last_verified: "2026-03-29"

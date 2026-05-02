@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-03-30",
+  "updated_at": "2026-04-30",
   "rows": [
     {
       "jurisdiction_code": "FEC",
@@ -12,6 +12,7 @@
       "operational_maturity": "runner_wired",
       "public_claim_status": "implemented but unproven",
       "completeness_intelligence_maturity": "not_started",
+      "civics_candidacy_status": "not_started",
       "main_blocker": "First non-dry live ingest proof is still missing."
     },
     {
@@ -23,9 +24,10 @@
       "legal_filing_semantics_maturity": "partial",
       "implementation_maturity": "fixture_tested",
       "operational_maturity": "runner_wired",
-      "public_claim_status": "launch-support candidate",
+      "public_claim_status": "deferred/blocked",
       "completeness_intelligence_maturity": "not_started",
-      "main_blocker": "First live refresh on Hetzner VM not yet run."
+      "civics_candidacy_status": "not_started",
+      "main_blocker": "Portal offline (fcpainfo.alabama.gov NXDOMAIN since Apr 12, 2026)."
     },
     {
       "jurisdiction_code": "CA",
@@ -38,6 +40,7 @@
       "operational_maturity": "operational",
       "public_claim_status": "launch-support candidate",
       "completeness_intelligence_maturity": "not_started",
+      "civics_candidacy_status": "not_started",
       "main_blocker": "Recurring refresh-dump-restore automation and state-specific production counts are still manual."
     },
     {
@@ -51,6 +54,7 @@
       "operational_maturity": "runner_wired",
       "public_claim_status": "launch-support candidate",
       "completeness_intelligence_maturity": "not_started",
+      "civics_candidacy_status": "not_started",
       "main_blocker": "Current deployed production proof is stale; re-run additive production proof and capture state-specific production counts."
     },
     {
@@ -64,6 +68,7 @@
       "operational_maturity": "operational",
       "public_claim_status": "launch-support candidate",
       "completeness_intelligence_maturity": "not_started",
+      "civics_candidacy_status": "not_started",
       "main_blocker": "Recurring ops evidence and automated state-specific production counts are still manual."
     },
     {
@@ -77,6 +82,7 @@
       "operational_maturity": "runner_wired",
       "public_claim_status": "launch-support candidate",
       "completeness_intelligence_maturity": "not_started",
+      "civics_candidacy_status": "not_started",
       "main_blocker": "Current deployed production proof is stale; re-run additive production proof and capture state-specific production counts."
     },
     {
@@ -90,6 +96,7 @@
       "operational_maturity": "runner_wired",
       "public_claim_status": "implemented but unproven",
       "completeness_intelligence_maturity": "not_started",
+      "civics_candidacy_status": "not_started",
       "main_blocker": "Portal filing activity is continuous (A-1 reports daily), but bulk-export recency (whether Receipts.txt includes same-day filings) is not directly confirmed. Committee enrichment and full-history operational proof are still missing."
     },
     {
@@ -101,9 +108,10 @@
       "legal_filing_semantics_maturity": "substantial",
       "implementation_maturity": "fixture_tested",
       "operational_maturity": "runner_wired",
-      "public_claim_status": "freshness-limited",
+      "public_claim_status": "launch-support candidate",
       "completeness_intelligence_maturity": "not_started",
-      "main_blocker": "Intra-year ZIP regeneration confirmed (Last-Modified 2026-03-17), but weekly update regularity is not yet established. Annual cadence remains the launch-support bottleneck."
+      "civics_candidacy_status": "not_started",
+      "main_blocker": "Cadence is resolved weekly-or-better after three valid probes over 10 days (Apr 16, Apr 17, Apr 26); remaining work is routine operational proof refresh, not freshness classification."
     },
     {
       "jurisdiction_code": "KY",
@@ -116,6 +124,7 @@
       "operational_maturity": "runner_wired",
       "public_claim_status": "launch-support candidate",
       "completeness_intelligence_maturity": "not_started",
+      "civics_candidacy_status": "not_started",
       "main_blocker": "First live refresh on Hetzner VM not yet run."
     },
     {
@@ -129,6 +138,7 @@
       "operational_maturity": "runner_wired",
       "public_claim_status": "launch-support candidate",
       "completeness_intelligence_maturity": "not_started",
+      "civics_candidacy_status": "not_started",
       "main_blocker": "First live refresh on Hetzner VM not yet run."
     },
     {
@@ -140,8 +150,9 @@
       "legal_filing_semantics_maturity": "partial",
       "implementation_maturity": "fixture_tested",
       "operational_maturity": "runner_wired",
-      "public_claim_status": "launch-support candidate",
+      "public_claim_status": "implemented but unproven",
       "completeness_intelligence_maturity": "not_started",
+      "civics_candidacy_status": "not_started",
       "main_blocker": "Pipeline built but not yet proven on Hetzner. Nightly bulk ZIPs from OCPF, daily refresh."
     },
     {
@@ -155,6 +166,7 @@
       "operational_maturity": "runner_wired",
       "public_claim_status": "freshness-limited",
       "completeness_intelligence_maturity": "not_started",
+      "civics_candidacy_status": "not_started",
       "main_blocker": "All three canonical CSV download IDs confirmed operational. /reports/api/ returns placeholder responses with no proven incremental contract. Quarterly-or-batch bulk is still the only proven cadence class."
     },
     {
@@ -168,7 +180,8 @@
       "operational_maturity": "operational",
       "public_claim_status": "launch-support candidate",
       "completeness_intelligence_maturity": "not_started",
-      "main_blocker": "Broader statewide proof beyond the currently proven committee-scoped workflows is still missing."
+      "civics_candidacy_status": "loaded",
+      "main_blocker": "Statewide committee discovery is proven (13,612 committees via CFOrgLkup crawl, 2026-04-25). Remaining gap is transaction-level IE spending amounts."
     },
     {
       "jurisdiction_code": "NE",
@@ -181,6 +194,7 @@
       "operational_maturity": "runner_wired",
       "public_claim_status": "launch-support candidate",
       "completeness_intelligence_maturity": "not_started",
+      "civics_candidacy_status": "not_started",
       "main_blocker": "First live refresh on Hetzner VM not yet run."
     },
     {
@@ -194,6 +208,7 @@
       "operational_maturity": "runner_wired",
       "public_claim_status": "freshness-limited",
       "completeness_intelligence_maturity": "not_started",
+      "civics_candidacy_status": "not_started",
       "main_blocker": "All three DownlodDataCSV export endpoints confirmed operational via POST (contributions, expenses at 144.5MB, entity filing). Blob timestamps reflect export-generation recency, not filing-level recency. Quarterly cadence and legal normalization gaps still block launch."
     },
     {
@@ -205,8 +220,9 @@
       "legal_filing_semantics_maturity": "partial",
       "implementation_maturity": "fixture_tested",
       "operational_maturity": "runner_wired",
-      "public_claim_status": "launch-support candidate",
+      "public_claim_status": "implemented but unproven",
       "completeness_intelligence_maturity": "not_started",
+      "civics_candidacy_status": "not_started",
       "main_blocker": "Pipeline built but not yet proven on Hetzner. SODA API, daily refresh, ~3.2M rows for 2022+."
     },
     {
@@ -220,6 +236,7 @@
       "operational_maturity": "manual_only",
       "public_claim_status": "deferred/blocked",
       "completeness_intelligence_maturity": "not_started",
+      "civics_candidacy_status": "not_started",
       "main_blocker": "Protected portal behavior still blocks a trustworthy live downloader contract."
     },
     {
@@ -231,8 +248,9 @@
       "legal_filing_semantics_maturity": "partial",
       "implementation_maturity": "fixture_tested",
       "operational_maturity": "runner_wired",
-      "public_claim_status": "launch-support candidate",
+      "public_claim_status": "deferred/blocked",
       "completeness_intelligence_maturity": "not_started",
+      "civics_candidacy_status": "not_started",
       "main_blocker": "First live refresh on Hetzner VM not yet run."
     },
     {
@@ -246,6 +264,7 @@
       "operational_maturity": "runner_wired",
       "public_claim_status": "launch-support candidate",
       "completeness_intelligence_maturity": "not_started",
+      "civics_candidacy_status": "not_started",
       "main_blocker": "RESOLVED (MAR28 PM1): PA ZIPs are weekly (~4 day lag). 3K rows loaded on Hetzner."
     },
     {
@@ -259,6 +278,7 @@
       "operational_maturity": "runner_wired",
       "public_claim_status": "launch-support candidate",
       "completeness_intelligence_maturity": "not_started",
+      "civics_candidacy_status": "not_started",
       "main_blocker": "Current deployed production proof is stale; re-run additive production proof and capture state-specific production counts."
     },
     {
@@ -272,6 +292,7 @@
       "operational_maturity": "runner_wired",
       "public_claim_status": "implemented but unproven",
       "completeness_intelligence_maturity": "not_started",
+      "civics_candidacy_status": "not_started",
       "main_blocker": "Load module is stub-only; needs full DB loading implementation before production ingest."
     },
     {
@@ -285,6 +306,7 @@
       "operational_maturity": "operational",
       "public_claim_status": "launch-support candidate",
       "completeness_intelligence_maturity": "not_started",
+      "civics_candidacy_status": "not_started",
       "main_blocker": "Recurring production evidence logging and an explicit independent-expenditures ingest decision are still missing."
     },
     {
@@ -298,6 +320,7 @@
       "operational_maturity": "operational",
       "public_claim_status": "launch-support candidate",
       "completeness_intelligence_maturity": "not_started",
+      "civics_candidacy_status": "not_started",
       "main_blocker": "Bounded runner proof and broader reports/committees operational evidence are still missing."
     }
   ]

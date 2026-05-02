@@ -120,6 +120,88 @@ def test_load_ca_member_directory_with_filings_builds_relational_rows_and_is_ide
     ) = _build_isolated_member_fixture(tmp_path)
     expected_transaction_identifiers = sorted(expected_by_identifier)
 
+    def _fetch_relational_snapshot() -> tuple[int, int, list[dict[str, object]]]:
+        with db_conn.cursor(row_factory=dict_row) as cursor:
+            cursor.execute(
+                """
+                SELECT COUNT(*) AS count
+                FROM cf.filing
+                WHERE filing_fec_id = %s
+                """,
+                (expected_filing_fec_id,),
+            )
+            filing_count = cursor.fetchone()["count"]
+
+            cursor.execute(
+                """
+                SELECT COUNT(*) AS count
+                FROM cf.committee c
+                JOIN core.organization o
+                  ON o.id = c.organization_id
+                WHERE c.state = 'CA'
+                  AND o.identifiers ->> 'ca_filer_id' = %s
+                """,
+                (expected_filer_id,),
+            )
+            committee_count = cursor.fetchone()["count"]
+
+            cursor.execute(
+                """
+                SELECT t.transaction_identifier,
+                       t.transaction_type,
+                       t.amount::text AS amount,
+                       f.filing_fec_id,
+                       t.source_record_id,
+                       t.contributor_person_id,
+                       t.contributor_organization_id,
+                       t.contributor_address_id,
+                       (
+                           SELECT es.entity_id
+                           FROM core.entity_source es
+                           WHERE es.source_record_id = t.source_record_id
+                             AND es.entity_type = 'person'
+                             AND es.extraction_role IN ('donor', 'payee', 'lender')
+                           LIMIT 1
+                       ) AS expected_contributor_person_id,
+                       (
+                           SELECT es.entity_id
+                           FROM core.entity_source es
+                           WHERE es.source_record_id = t.source_record_id
+                             AND es.entity_type = 'organization'
+                             AND es.extraction_role IN ('contributor', 'payee', 'lender')
+                           LIMIT 1
+                       ) AS expected_contributor_organization_id,
+                       (
+                           SELECT es.entity_id
+                           FROM core.entity_source es
+                           WHERE es.source_record_id = t.source_record_id
+                             AND es.entity_type = 'address'
+                             AND es.extraction_role IN ('donor_address', 'payee_address', 'lender_address')
+                           LIMIT 1
+                       ) AS expected_contributor_address_id,
+                       (
+                           SELECT es.entity_id
+                           FROM core.entity_source es
+                           WHERE es.source_record_id = t.source_record_id
+                             AND es.entity_type = 'organization'
+                             AND es.extraction_role IN ('recipient', 'payer', 'borrower')
+                           LIMIT 1
+                       ) AS linked_committee_organization_id,
+                       (
+                           SELECT c.organization_id
+                           FROM cf.committee c
+                           WHERE c.id = t.recipient_committee_id
+                       ) AS expected_committee_organization_id
+                FROM cf.transaction t
+                JOIN cf.filing f
+                  ON f.id = t.filing_id
+                WHERE t.transaction_identifier = ANY(%s)
+                ORDER BY t.transaction_identifier
+                """,
+                (expected_transaction_identifiers,),
+            )
+            return filing_count, committee_count, cursor.fetchall()
+
     first_result = load_ca_member_directory_with_filings(db_conn, isolated_member_dir)
 
     assert isinstance(first_result, LoadResult)
@@ -129,89 +211,26 @@ def test_load_ca_member_directory_with_filings_builds_relational_rows_and_is_ide
     assert first_result.superseded == 0
     assert first_result.errors == 0
 
+    filing_count, committee_count, transaction_rows = _fetch_relational_snapshot()
+    data_source_id = ensure_ca_data_source(db_conn)
     with db_conn.cursor(row_factory=dict_row) as cursor:
         cursor.execute(
             """
-            SELECT COUNT(*) AS count
-            FROM cf.filing
-            WHERE filing_fec_id = %s
+            SELECT id, source_record_key, record_hash, raw_fields
+            FROM core.source_record
+            WHERE data_source_id = %s
+              AND source_record_key = ANY(%s)
+              AND superseded_by IS NULL
+            ORDER BY source_record_key
             """,
-            (expected_filing_fec_id,),
+            (data_source_id, expected_transaction_identifiers),
         )
-        filing_count = cursor.fetchone()["count"]
-
-        cursor.execute(
-            """
-            SELECT COUNT(*) AS count
-            FROM cf.committee c
-            JOIN core.organization o
-              ON o.id = c.organization_id
-            WHERE c.state = 'CA'
-              AND o.identifiers ->> 'ca_filer_id' = %s
-            """,
-            (expected_filer_id,),
-        )
-        committee_count = cursor.fetchone()["count"]
-
-        cursor.execute(
-            """
-            SELECT t.transaction_identifier,
-                   t.transaction_type,
-                   t.amount::text AS amount,
-                   f.filing_fec_id,
-                   t.contributor_person_id,
-                   t.contributor_organization_id,
-                   t.contributor_address_id,
-                   (
-                       SELECT es.entity_id
-                       FROM core.entity_source es
-                       WHERE es.source_record_id = t.source_record_id
-                         AND es.entity_type = 'person'
-                         AND es.extraction_role IN ('donor', 'payee', 'lender')
-                       LIMIT 1
-                   ) AS expected_contributor_person_id,
-                   (
-                       SELECT es.entity_id
-                       FROM core.entity_source es
-                       WHERE es.source_record_id = t.source_record_id
-                         AND es.entity_type = 'organization'
-                         AND es.extraction_role IN ('contributor', 'payee', 'lender')
-                       LIMIT 1
-                   ) AS expected_contributor_organization_id,
-                   (
-                       SELECT es.entity_id
-                       FROM core.entity_source es
-                       WHERE es.source_record_id = t.source_record_id
-                         AND es.entity_type = 'address'
-                         AND es.extraction_role IN ('donor_address', 'payee_address', 'lender_address')
-                       LIMIT 1
-                   ) AS expected_contributor_address_id,
-                   (
-                       SELECT es.entity_id
-                       FROM core.entity_source es
-                       WHERE es.source_record_id = t.source_record_id
-                         AND es.entity_type = 'organization'
-                         AND es.extraction_role IN ('recipient', 'payer', 'borrower')
-                       LIMIT 1
-                   ) AS linked_committee_organization_id,
-                   (
-                       SELECT c.organization_id
-                       FROM cf.committee c
-                       WHERE c.id = t.recipient_committee_id
-                   ) AS expected_committee_organization_id
-            FROM cf.transaction t
-            JOIN cf.filing f
-              ON f.id = t.filing_id
-            WHERE t.transaction_identifier = ANY(%s)
-            ORDER BY t.transaction_identifier
-            """,
-            (expected_transaction_identifiers,),
-        )
-        transaction_rows = cursor.fetchall()
+        source_record_snapshot = cursor.fetchall()
 
     assert filing_count == 1
     assert committee_count == 1
     assert [row["transaction_identifier"] for row in transaction_rows] == expected_transaction_identifiers
+    assert [row["source_record_key"] for row in source_record_snapshot] == expected_transaction_identifiers
 
     expected_filing_fec_ids = {expected_filing_fec_id, _expected_filing_fec_id_2}
     for row in transaction_rows:
@@ -230,6 +249,26 @@ def test_load_ca_member_directory_with_filings_builds_relational_rows_and_is_ide
     assert rerun_result.quarantined == 0
     assert rerun_result.superseded == 0
     assert rerun_result.errors == 0
+
+    rerun_filing_count, rerun_committee_count, rerun_transaction_rows = _fetch_relational_snapshot()
+    with db_conn.cursor(row_factory=dict_row) as cursor:
+        cursor.execute(
+            """
+            SELECT id, source_record_key, record_hash, raw_fields
+            FROM core.source_record
+            WHERE data_source_id = %s
+              AND source_record_key = ANY(%s)
+              AND superseded_by IS NULL
+            ORDER BY source_record_key
+            """,
+            (data_source_id, expected_transaction_identifiers),
+        )
+        rerun_source_record_snapshot = cursor.fetchall()
+
+    assert rerun_filing_count == filing_count
+    assert rerun_committee_count == committee_count
+    assert rerun_transaction_rows == transaction_rows
+    assert rerun_source_record_snapshot == source_record_snapshot
 
 
 def test_load_ca_member_directory_clears_preexisting_outer_transaction_and_commits(
@@ -346,10 +385,63 @@ def test_load_ca_member_directory_skips_malformed_cvr_rows_missing_filing_id(
 
     assert isinstance(result, LoadResult)
     assert result.inserted == 0
-    assert result.skipped == 0
+    assert result.skipped == 4
     assert result.quarantined == 0
     assert result.superseded == 0
-    assert result.errors == 4
+    assert result.errors == 0
+
+
+def test_load_ca_member_directory_falls_back_to_amendment_zero_when_transaction_amendment_missing(
+    db_conn: psycopg.Connection,
+    tmp_path: Path,
+) -> None:
+    (
+        isolated_member_dir,
+        _expected_filer_id,
+        expected_filing_fec_id,
+        _expected_filing_fec_id_2,
+        expected_by_identifier,
+    ) = _build_isolated_member_fixture(tmp_path)
+    rcpt_path = isolated_member_dir / "RCPT_CD.TSV"
+
+    with rcpt_path.open(encoding="utf-8", newline="") as input_file:
+        reader = csv.DictReader(input_file, delimiter="\t")
+        assert reader.fieldnames is not None
+        rcpt_rows = list(reader)
+
+    assert rcpt_rows
+    rcpt_rows[0]["AMEND_ID"] = "1"
+
+    with rcpt_path.open("w", encoding="utf-8", newline="") as output_file:
+        writer = csv.DictWriter(output_file, fieldnames=reader.fieldnames, delimiter="\t", lineterminator="\n")
+        writer.writeheader()
+        writer.writerows(rcpt_rows)
+
+    result = load_ca_member_directory_with_filings(db_conn, isolated_member_dir)
+
+    rcpt_identifier = next(identifier for identifier in expected_by_identifier if identifier.startswith("RCPT_CD:"))
+    rcpt_parts = rcpt_identifier.split(":")
+    amended_rcpt_identifier = f"{rcpt_parts[0]}:{rcpt_parts[1]}:1:{rcpt_parts[3]}"
+
+    assert result.inserted == 4
+    assert result.skipped == 0
+    assert result.errors == 0
+
+    with db_conn.cursor(row_factory=dict_row) as cursor:
+        cursor.execute(
+            """
+            SELECT t.transaction_identifier, f.filing_fec_id
+            FROM cf.transaction t
+            JOIN cf.filing f ON f.id = t.filing_id
+            WHERE t.transaction_identifier = %s
+            """,
+            (amended_rcpt_identifier,),
+        )
+        row = cursor.fetchone()
+
+    assert row is not None
+    assert row["transaction_identifier"] == amended_rcpt_identifier
+    assert row["filing_fec_id"] == expected_filing_fec_id
 
 
 def test_f496_filing_classifies_expn_as_independent_expenditure(

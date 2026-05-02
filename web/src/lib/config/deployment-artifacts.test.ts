@@ -14,6 +14,8 @@ const routeFiles = [
   "src/routes/candidate/[id]/+page.svelte",
   "src/routes/committees/+page.svelte",
   "src/routes/committee/[id]/+page.svelte",
+  "src/routes/coverage/+page.svelte",
+  "src/routes/data-sources/+page.svelte",
   "src/routes/methodology/+page.svelte",
   "src/routes/office/[id]/+page.svelte",
   "src/routes/org/[id]/+page.svelte",

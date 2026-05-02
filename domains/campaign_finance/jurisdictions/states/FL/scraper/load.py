@@ -1,3 +1,4 @@
+
 from __future__ import annotations
 
 import logging
@@ -130,6 +131,9 @@ _FL_COUNTERPARTY_NAME_PATH = {
     "transfers": "payee.name",
     "other": "payee.name",
 }
+# Stage 3 assumption from PRIORITIES.md field-investigation notes for FL:
+# transaction type token IND (and IE shorthand) indicates independent expenditures.
+_FL_IE_TRANSACTION_TYPE_CODES = frozenset({"IND", "IE"})
 
 
 # -- Data source helpers --
@@ -439,6 +443,18 @@ def _transaction_type_from_row(row: Mapping[str, str | None], data_type: str) ->
     return data_type
 
 
+def _fl_is_independent_expenditure(row: Mapping[str, str | None], *, data_type: str) -> bool:
+    """Return True when an expenditure row has an assumed FL IE type token."""
+    if data_type != "expenditures":
+        return False
+
+    type_column = _load_column_for_semantic_path(data_type, "transaction.type")
+    raw_type = normalize_optional_text(row.get(type_column))
+    if raw_type is None:
+        return False
+    return raw_type.upper() in _FL_IE_TRANSACTION_TYPE_CODES
+
+
 def _build_fl_filing_fec_id(row: Mapping[str, str | None], data_type: str) -> str:
     """Build a synthetic filing ID from committee name + date + data type.
 
@@ -616,12 +632,18 @@ def _upsert_fl_transaction_with_filing(
     contributor_zip = counterparty_addr.zip5 if counterparty_addr is not None else None
 
     amount_field = _transaction_field(data_type, "transaction.amount")
+    transaction_type = (
+        "Independent Expenditure"
+        if _fl_is_independent_expenditure(row, data_type=data_type)
+        else _transaction_type_from_row(row, data_type)
+    )
+
     upsert_transaction(
         conn,
         Transaction(
             filing_id=filing_id,
             committee_id=committee_id,
-            transaction_type=_transaction_type_from_row(row, data_type),
+            transaction_type=transaction_type,
             transaction_identifier=_fl_source_record_key(row),
             transaction_date=_parse_optional_fl_date(row.get(_transaction_field(data_type, "transaction.date"))),
             amount=_parse_required_fl_amount(row.get(amount_field), amount_field),

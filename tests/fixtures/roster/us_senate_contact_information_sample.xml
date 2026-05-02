@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<senate_contact_snapshot>
+  <member>
+    <bioguide_id>S009999</bioguide_id>
+    <member_full>Pat Smith</member_full>
+    <first_name>Pat</first_name>
+    <last_name>Smith</last_name>
+    <state>GA</state>
+    <party>R</party>
+    <class>2</class>
+    <phone>202-224-1001</phone>
+    <email>pat_smith@senate.gov</email>
+    <website>https://smith.senate.gov</website>
+    <address>123 Hart Senate Office Building</address>
+    <appointed>false</appointed>
+  </member>
+  <member>
+    <bioguide_id></bioguide_id>
+    <member_full>VACANT</member_full>
+    <first_name></first_name>
+    <last_name></last_name>
+    <state>GA</state>
+    <party></party>
+    <class>2</class>
+    <phone></phone>
+    <email></email>
+    <website></website>
+    <address></address>
+    <appointed>false</appointed>
+  </member>
+</senate_contact_snapshot>

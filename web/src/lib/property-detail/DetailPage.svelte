@@ -10,6 +10,10 @@
 
   let viewModel: PropertyDetailPresentation;
   $: viewModel = buildPropertyDetailPresentation(data);
+
+  function buildOwnerRecordAriaLabel(recordType: "person" | "organization", ownerName: string): string {
+    return `View ${recordType} record for ${ownerName}`;
+  }
 </script>
 
 <section class="card detail" aria-label="Property detail">
@@ -51,23 +55,55 @@
         {#if viewModel.ownershipRows.length === 0}
           <p>{viewModel.ownershipEmptyMessage}</p>
         {:else}
-          <ul class="detail__list">
-            {#each viewModel.ownershipRows as row (row.id)}
-              <li>
-                <p>owner: {row.ownerName}</p>
-                <p>recorded at: {row.ownershipRecordedAt}</p>
-                <p>valid period: {row.validPeriod}</p>
-                <p>date precision: {row.datePrecision}</p>
-                <p>mailing address: {row.mailingAddress}</p>
-                {#if row.ownerPersonHref}
-                  <p><a href={row.ownerPersonHref}>linked person</a></p>
-                {/if}
-                {#if row.ownerOrganizationHref}
-                  <p><a href={row.ownerOrganizationHref}>linked organization</a></p>
-                {/if}
-              </li>
-            {/each}
-          </ul>
+          <div class="detail__table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Owner</th>
+                  <th>Recorded at</th>
+                  <th>Valid period</th>
+                  <th>Date precision</th>
+                  <th>Mailing address</th>
+                  <th>Linked records</th>
+                </tr>
+              </thead>
+              <tbody>
+                {#each viewModel.ownershipRows as row (row.id)}
+                  <tr>
+                    <td class="detail__table-cell-wrap">{row.ownerName}</td>
+                    <td>{row.ownershipRecordedAt}</td>
+                    <td class="detail__table-cell-wrap">{row.validPeriod}</td>
+                    <td>{row.datePrecision}</td>
+                    <td class="detail__table-cell-wrap">{row.mailingAddress}</td>
+                    <td class="detail__table-cell-wrap">
+                      {#if row.ownerPersonHref || row.ownerOrganizationHref}
+                        <div class="detail__inline-links">
+                          {#if row.ownerPersonHref}
+                            <a
+                              href={row.ownerPersonHref}
+                              aria-label={buildOwnerRecordAriaLabel("person", row.ownerName)}
+                            >
+                              View person record
+                            </a>
+                          {/if}
+                          {#if row.ownerOrganizationHref}
+                            <a
+                              href={row.ownerOrganizationHref}
+                              aria-label={buildOwnerRecordAriaLabel("organization", row.ownerName)}
+                            >
+                              View organization record
+                            </a>
+                          {/if}
+                        </div>
+                      {:else}
+                        —
+                      {/if}
+                    </td>
+                  </tr>
+                {/each}
+              </tbody>
+            </table>
+          </div>
         {/if}
       </section>
 
@@ -76,23 +112,38 @@
         {#if viewModel.assessmentRows.length === 0}
           <p>{viewModel.assessmentEmptyMessage}</p>
         {:else}
-          <ul class="detail__list">
-            {#each viewModel.assessmentRows as row (row.id)}
-              <li>
-                <p>tax year: {row.taxYear}</p>
-                <p>land assessed value: {row.landAssessedValue}</p>
-                <p>improvement assessed value: {row.improvementAssessedValue}</p>
-                <p>total assessed value: {row.totalAssessedValue}</p>
-                <p>assessed at: {row.assessedAt}</p>
-                <p>heated area: {row.heatedArea}</p>
-                <p>exemption: {row.exemptionDescription}</p>
-              </li>
-            {/each}
-          </ul>
+          <div class="detail__table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Tax year</th>
+                  <th>Land assessed value</th>
+                  <th>Improvement assessed value</th>
+                  <th>Total assessed value</th>
+                  <th>Assessed at</th>
+                  <th>Heated area</th>
+                  <th>Exemption</th>
+                </tr>
+              </thead>
+              <tbody>
+                {#each viewModel.assessmentRows as row (row.id)}
+                  <tr>
+                    <td>{row.taxYear}</td>
+                    <td>{row.landAssessedValue}</td>
+                    <td>{row.improvementAssessedValue}</td>
+                    <td>{row.totalAssessedValue}</td>
+                    <td>{row.assessedAt}</td>
+                    <td>{row.heatedArea}</td>
+                    <td class="detail__table-cell-wrap">{row.exemptionDescription}</td>
+                  </tr>
+                {/each}
+              </tbody>
+            </table>
+          </div>
         {/if}
       </section>
     {:else if sectionKey === "caveats"}
-      <section class="detail__panel" aria-label="Parcel geometry placeholder">
+      <section class="detail__panel caveat-banner" role="note" aria-label="Parcel geometry placeholder">
         <h3>Map and geometry</h3>
         <p>{viewModel.geometryPlaceholderMessage}</p>
       </section>

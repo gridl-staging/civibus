@@ -1,3 +1,7 @@
+"""
+Stub summary for /Users/stuart/parallel_development/civibus_dev/MAR18_state_expansion_batch_2/civibus_dev/domains/campaign_finance/normalize/names.py.
+"""
+
 from dataclasses import dataclass
 
 KNOWN_SUFFIXES = frozenset({"JR", "SR", "II", "III", "IV", "V", "MD", "PHD", "ESQ", "DDS", "DVM", "RN", "CPA"})

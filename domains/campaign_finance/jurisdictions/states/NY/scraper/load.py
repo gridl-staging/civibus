@@ -58,7 +58,7 @@ from . import (
     _load_data_source_url_for_data_type,
 )
 from .extract import extract_ny_contribution, extract_ny_expenditure
-from .parse import parse_contributions, parse_expenditures
+from .parse import parse_contributions, parse_expenditures, parse_independent_expenditures
 
 LOGGER = logging.getLogger(__name__)
 
@@ -86,18 +86,21 @@ class _NYFilingLookupEntry:
 _NY_ENTITY_KEYS: dict[str, tuple[str, str]] = {
     "contributions": ("donor_person", "donor_org"),
     "expenditures": ("payee_person", "payee_org"),
+    "independent_expenditures": ("payee_person", "payee_org"),
 }
 
 # Maps data_type -> extraction function.
 _NY_EXTRACT_FN = {
     "contributions": extract_ny_contribution,
     "expenditures": extract_ny_expenditure,
+    "independent_expenditures": extract_ny_expenditure,
 }
 
 # Maps data_type -> parser function.
 _NY_PARSER_FN = {
     "contributions": parse_contributions,
     "expenditures": parse_expenditures,
+    "independent_expenditures": parse_independent_expenditures,
 }
 
 # Semantic path for the counterparty name (for contributor_name_raw on Transaction).
@@ -105,12 +108,14 @@ _NY_COUNTERPARTY_NAME_PATHS: dict[str, list[str]] = {
     # For contributions, try org name first, then last name.
     "contributions": ["donor.org_name", "donor.last_name"],
     "expenditures": ["payee.org_name", "payee.last_name"],
+    "independent_expenditures": ["payee.org_name", "payee.last_name"],
 }
 
 # Semantic path for donor employer.
 _NY_COUNTERPARTY_EMPLOYER_PATH: dict[str, str | None] = {
     "contributions": None,  # NY SODA doesn't have employer fields
     "expenditures": None,
+    "independent_expenditures": None,
 }
 
 # Entity roles for entity_source linkage.
@@ -127,12 +132,19 @@ _NY_ENTITY_ROLES: dict[str, dict[str, str]] = {
         "committee": "paying_committee",
         "address": "payee_address",
     },
+    "independent_expenditures": {
+        "person": "payee",
+        "organization": "payee_org",
+        "committee": "paying_committee",
+        "address": "payee_address",
+    },
 }
 
 # For resolve_transaction_counterparty_ids: (person_roles, organization_roles).
 _NY_COUNTERPARTY_ROLES: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
     "contributions": (("donor",), ("donor_org",)),
     "expenditures": (("payee",), ("payee_org",)),
+    "independent_expenditures": (("payee",), ("payee_org",)),
 }
 
 
@@ -585,6 +597,14 @@ def _resolve_ny_transaction_address_id(
     return result[0] if result else None
 
 
+def _resolve_ny_transaction_type(row: Mapping[str, str | None], *, data_type: str) -> str:
+    """Resolve transaction_type with canonical IE labeling."""
+    if data_type == "independent_expenditures":
+        return "Independent Expenditure"
+    sched_col = _load_column_for_semantic_path(data_type, "ny.filing_sched_abbrev")
+    return _normalize_optional_text(row.get(sched_col)) or data_type.rstrip("s")
+
+
 def _upsert_ny_transaction_with_filing(
     conn: psycopg.Connection,
     row: Mapping[str, str | None],
@@ -618,9 +638,7 @@ def _upsert_ny_transaction_with_filing(
     amount_col = _load_column_for_semantic_path(data_type, "transaction.amount")
     date_col = _load_column_for_semantic_path(data_type, "transaction.date")
 
-    # Use filing_sched_abbrev as transaction type (A/B/C/D/F/G).
-    sched_col = _load_column_for_semantic_path(data_type, "ny.filing_sched_abbrev")
-    txn_type = _normalize_optional_text(row.get(sched_col)) or data_type.rstrip("s")
+    txn_type = _resolve_ny_transaction_type(row, data_type=data_type)
 
     # Use trans_number as the unique transaction identifier.
     trans_num_col = _load_column_for_semantic_path(data_type, "ny.trans_number")
@@ -672,6 +690,7 @@ def _select_ny_source_record_id(
             FROM core.source_record
             WHERE data_source_id = %s
               AND source_record_key = %s
+              AND superseded_by IS NULL
             LIMIT 1
             """,
             (data_source_id, source_record_key),
@@ -707,6 +726,8 @@ def _load_ny_relational_transactions(
         if source_record_id is None:
             continue
 
+        filing_fec_id = _build_ny_filing_fec_id(row, data_type)
+        was_cached = filing_fec_id in filing_lookup
         try:
             if manages_outer:
                 ensure_transaction_open(conn)
@@ -727,6 +748,8 @@ def _load_ny_relational_transactions(
                     data_type=data_type,
                 )
         except Exception:  # noqa: BLE001
+            if not was_cached:
+                filing_lookup.pop(filing_fec_id, None)
             relational_errors += 1
             LOGGER.exception("Failed linking NY %s row to filing", data_type.rstrip("s"))
 
@@ -747,6 +770,9 @@ def _load_ny_with_filings(
     """Full two-pass load: source records + entities, then filings + transactions."""
     validated_row_limit = validated_limit(limit)
     data_source_id = ensure_ny_data_source(conn, data_type=data_type)
+    # ensure_ny_data_source leaves conn IN_TRANSACTION; commit so _load_ny_rows
+    # sees IDLE and enables periodic commits every 1000 rows.
+    conn.commit()
 
     # Pass 1: source records + entity resolution.
     load_result = _load_ny_file(
@@ -780,3 +806,10 @@ def load_ny_expenditures_with_filings(
 ) -> LoadResult:
     """Load NY expenditures from CSV with filing + transaction creation."""
     return _load_ny_with_filings(conn, fp, data_type="expenditures", limit=limit)
+
+
+def load_ny_independent_expenditures_with_filings(
+    conn: psycopg.Connection, fp: str | Path, *, limit: int | None = None
+) -> LoadResult:
+    """Load NY independent expenditures from CSV with filing + transaction creation."""
+    return _load_ny_with_filings(conn, fp, data_type="independent_expenditures", limit=limit)

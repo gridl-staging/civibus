@@ -1,0 +1,34 @@
+schema_version: 1
+cases:
+  - corpus_id: organization_national_committee_suffix_collision
+    entity_type: organization
+    fixture_payload:
+      canonical_name: Citizens for Working Families
+      alt_name: Citizens for Working Families PAC
+      jurisdictions:
+        - state/wa
+        - state/or
+      source_record_keys:
+        - wa-ie-410
+        - or-ie-212
+    rationale: Common PAC suffix variation frequently triggers false-positive matches without extra evidence.
+    source_notes:
+      - https://www.pdc.wa.gov/
+      - https://secure.sos.state.or.us/
+  - corpus_id: person_public_figure_name_collision
+    entity_type: person
+    fixture_payload:
+      canonical_name: Alex Johnson
+      jurisdictions:
+        - state/ny
+        - state/ma
+      source_record_keys:
+        - ny-contrib-5501
+        - ma-contrib-7720
+      disambiguators:
+        - employer
+        - primary_address
+    rationale: High-frequency public name collisions require conservative ER behavior.
+    source_notes:
+      - https://www.elections.ny.gov/
+      - https://www.ocpf.us/

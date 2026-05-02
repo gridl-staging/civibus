@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { buildTrustSection } from "$lib/detail-trust/presentation";
+import {
+  buildTrustSection,
+  TRUST_SECTION_EMPTY_MESSAGE,
+  TRUST_SECTION_LAST_PULLED_UNAVAILABLE
+} from "$lib/detail-trust/presentation";
 import {
   buildAssessmentRows,
   buildOwnershipRows,
@@ -56,6 +60,68 @@ describe("property detail presentation", () => {
     ]);
   });
 
+  it("renders null optional parcel fields as fallback dash values", () => {
+    const rows = buildParcelFactRows({
+      id: PARCEL_ID,
+      reid: "200000001",
+      pin: "0999999999",
+      site_address: "123 MAIN ST",
+      property_description: null,
+      city: null,
+      zoning_class: null,
+      land_class: null,
+      acreage: null,
+      neighborhood: null,
+      fire_district: null,
+      is_pending: false,
+      deed_date: null,
+      deed_book: null,
+      deed_page: null,
+      jurisdiction_id: null,
+      sources: [],
+      ownership: [],
+      assessments: []
+    });
+
+    const valueByLabel = new Map(rows.map((row) => [row.label, row.value]));
+    expect(valueByLabel.get("Property description")).toBe("—");
+    expect(valueByLabel.get("City")).toBe("—");
+    expect(valueByLabel.get("Zoning class")).toBe("—");
+    expect(valueByLabel.get("Land class")).toBe("—");
+    expect(valueByLabel.get("Acreage")).toBe("—");
+    expect(valueByLabel.get("Neighborhood")).toBe("—");
+    expect(valueByLabel.get("Fire district")).toBe("—");
+    expect(valueByLabel.get("Deed date")).toBe("—");
+    expect(valueByLabel.get("Deed book")).toBe("—");
+    expect(valueByLabel.get("Deed page")).toBe("—");
+  });
+
+  it('renders "Yes" when the parcel pending flag is true', () => {
+    const rows = buildParcelFactRows({
+      id: PARCEL_ID,
+      reid: "200000001",
+      pin: "0999999999",
+      site_address: "123 MAIN ST",
+      property_description: "Single family home",
+      city: "Durham",
+      zoning_class: "R-20",
+      land_class: "Residential",
+      acreage: "1.2500",
+      neighborhood: "Northside",
+      fire_district: "Durham",
+      is_pending: true,
+      deed_date: "2024-01-15",
+      deed_book: "1234",
+      deed_page: "567",
+      jurisdiction_id: null,
+      sources: [],
+      ownership: [],
+      assessments: []
+    });
+
+    expect(rows.find((row) => row.label === "Pending")?.value).toBe("Yes");
+  });
+
   it("preserves backend ownership order and derives owner links only from person/org ids", () => {
     const rows = buildOwnershipRows([
       {
@@ -104,6 +170,30 @@ describe("property detail presentation", () => {
     expect(rows[1].ownerOrganizationHref).toBeNull();
   });
 
+  it("renders fallback dash for ownership mailing address when all parts are null", () => {
+    const [row] = buildOwnershipRows([
+      {
+        id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        owner_name: "Org Owner",
+        owner_mail_line1: null,
+        owner_mail_line2: null,
+        owner_mail_line3: null,
+        owner_mail_city: null,
+        owner_mail_state: null,
+        owner_mail_zip5: null,
+        ownership_recorded_at: "2024-02-01",
+        valid_period: "[2024-02-01,2025-02-01)",
+        date_precision: "month",
+        owner_person_id: null,
+        owner_organization_id: ORG_ID,
+        owner_address_id: null,
+        sources: []
+      }
+    ]);
+
+    expect(row.mailingAddress).toBe("—");
+  });
+
   it("preserves backend assessment order with no frontend sorting", () => {
     const rows = buildAssessmentRows([
       {
@@ -136,6 +226,29 @@ describe("property detail presentation", () => {
     ]);
     expect(rows[0].taxYear).toBe(2025);
     expect(rows[1].taxYear).toBe(2024);
+  });
+
+  it("renders fallback dash for null assessment value fields", () => {
+    const [row] = buildAssessmentRows([
+      {
+        id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+        tax_year: 2025,
+        land_assessed_value: null,
+        improvement_assessed_value: null,
+        total_assessed_value: null,
+        assessed_at: null,
+        heated_area: null,
+        exemption_description: null,
+        sources: []
+      }
+    ]);
+
+    expect(row.landAssessedValue).toBe("—");
+    expect(row.improvementAssessedValue).toBe("—");
+    expect(row.totalAssessedValue).toBe("—");
+    expect(row.assessedAt).toBe("—");
+    expect(row.heatedArea).toBe("—");
+    expect(row.exemptionDescription).toBe("—");
   });
 
   it("builds parcel trust-section data from the shared trust contract", () => {
@@ -208,6 +321,9 @@ describe("property detail presentation", () => {
     });
 
     expect(viewModel.trustSection).toEqual(buildTrustSection(sources));
+    expect(viewModel.trustSection.lastPulledSummary).toBe(TRUST_SECTION_LAST_PULLED_UNAVAILABLE);
+    expect(viewModel.trustSection.freshnessSeverity).toBe("unknown");
+    expect(viewModel.trustSection.emptyMessage).toBe(TRUST_SECTION_EMPTY_MESSAGE);
   });
 
   it("emits summary-first hierarchy with trust before records, count metrics, and next-step empty copy", () => {
@@ -250,6 +366,7 @@ describe("property detail presentation", () => {
     expect(viewModel.assessmentEmptyMessage).toBe(
       "No assessment history is available yet. Check back after the next county refresh."
     );
+    expect(viewModel.geometryPlaceholderMessage).toBe(PROPERTY_GEOMETRY_PLACEHOLDER_MESSAGE);
   });
 
   it("derives key metrics directly from ownership and assessment payload counts", () => {
@@ -320,6 +437,8 @@ describe("property detail presentation", () => {
       { label: "Ownership records", value: "1" },
       { label: "Assessments", value: "2" }
     ]);
+    expect(viewModel.ownershipEmptyMessage).toBeNull();
+    expect(viewModel.assessmentEmptyMessage).toBeNull();
   });
 
   it("does not duplicate route metadata inside the property detail view model", () => {

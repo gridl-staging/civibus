@@ -69,9 +69,67 @@ def test_parse_loans_filters_year_window() -> None:
 def test_parse_expenditures_filters_year_window() -> None:
     rows = list(parse_expenditures(_SAMPLE_EXPENDITURES_PATH, year=2026, year_from=2025))
 
-    assert len(rows) == 2
+    assert len(rows) == 4
     assert rows[0]["ExpenditureDate"].endswith("2025 12:00:00 AM")
     assert rows[1]["ExpenditureDate"].endswith("2026 12:00:00 AM")
+    assert rows[2]["Schedule"] == "E-2"
+    assert rows[3]["Schedule"] == "E-3"
+
+
+def test_parse_expenditures_preserves_f305_f306_contract_fields(tmp_path: Path) -> None:
+    zip_path = tmp_path / "la_expenditures_ie_contract.zip"
+    _build_zip_with_members(
+        zip_path,
+        {
+            "Expenditures_2024_to_2027.csv": _rows_to_csv_payload(
+                EXPENDITURE_COLUMNS,
+                [
+                    {
+                        "FilerNumber": "4521",
+                        "FilerLastName": "Citizens for Progress",
+                        "FilerFirstName": "",
+                        "ReportCode": "F305",
+                        "ReportType": "40G",
+                        "ReportNumber": "LA-200001",
+                        "Schedule": "E-1",
+                        "RecipientName": "ACME MEDIA GROUP",
+                        "ExpenditureDescription": "Supports Jane Candidate for Mayor",
+                        "CandidateBeneficiary": "Jane Candidate",
+                        "ExpenditureDate": "3/15/2026 12:00:00 AM",
+                        "ExpenditureAmt": "50000.00",
+                    },
+                    {
+                        "FilerNumber": "4521",
+                        "FilerLastName": "Citizens for Progress",
+                        "FilerFirstName": "",
+                        "ReportCode": "F306",
+                        "ReportType": "40G",
+                        "ReportNumber": "LA-200002",
+                        "Schedule": "E-4",
+                        "RecipientName": "DELTA PRINT SHOP",
+                        "ExpenditureDescription": "Opposes John Candidate through mailers",
+                        "CandidateBeneficiary": "John Candidate",
+                        "ExpenditureDate": "4/01/2026 12:00:00 AM",
+                        "ExpenditureAmt": "12500.00",
+                    },
+                ],
+            )
+        },
+    )
+
+    rows = list(parse_expenditures(zip_path, year=2026, year_from=2025))
+
+    assert len(rows) == 2
+    assert rows[0]["ReportCode"] == "F305"
+    assert rows[0]["CandidateBeneficiary"] == "Jane Candidate"
+    assert rows[0]["ExpenditureDescription"] == "Supports Jane Candidate for Mayor"
+    assert rows[0]["ExpenditureDate"] == "3/15/2026 12:00:00 AM"
+    assert rows[0]["ExpenditureAmt"] == "50000.00"
+    assert rows[1]["ReportCode"] == "F306"
+    assert rows[1]["CandidateBeneficiary"] == "John Candidate"
+    assert rows[1]["ExpenditureDescription"] == "Opposes John Candidate through mailers"
+    assert rows[1]["ExpenditureDate"] == "4/01/2026 12:00:00 AM"
+    assert rows[1]["ExpenditureAmt"] == "12500.00"
 
 
 def test_parse_normalizes_empty_strings_to_none() -> None:

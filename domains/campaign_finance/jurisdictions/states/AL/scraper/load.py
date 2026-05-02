@@ -37,7 +37,12 @@ from domains.campaign_finance.jurisdictions.states.load_utils import (
 )
 from domains.campaign_finance.types.models import Filing, Transaction
 
-from . import _load_column_for_semantic_path, _load_data_source_name_for_data_type, _load_data_source_url_for_data_type
+from . import (
+    _load_column_for_semantic_path,
+    _load_data_source_name_for_data_type,
+    _load_data_source_url_for_data_type,
+    _try_load_column_for_semantic_path,
+)
 from .extract import extract_al_contribution, extract_al_expenditure
 from .parse import parse_contributions, parse_expenditures
 
@@ -102,6 +107,9 @@ _AL_TRANSACTION_KIND: dict[str, str] = {
     "contributions": "contribution",
     "expenditures": "expenditure",
 }
+# Stage 3 assumption from PRIORITIES.md field-investigation notes for AL:
+# expenditureType values "Independent Expenditure" / "IE" indicate IE spending.
+_AL_IE_EXPENDITURE_TYPE_TOKENS = frozenset({"INDEPENDENT EXPENDITURE", "IE"})
 
 
 def ensure_al_data_source(conn: psycopg.Connection, data_type: str) -> UUID:
@@ -381,6 +389,15 @@ def _amendment_indicator(raw_value: str | None) -> str:
     return "N"
 
 
+def _al_is_independent_expenditure(row: Mapping[str, str | None]) -> bool:
+    """Return True when the AL expenditureType field uses an assumed IE token."""
+    expenditure_type_column = _load_column_for_semantic_path("expenditures", "al.expenditure_type")
+    raw_expenditure_type = _normalize_optional_text(row.get(expenditure_type_column))
+    if raw_expenditure_type is None:
+        return False
+    return raw_expenditure_type.upper() in _AL_IE_EXPENDITURE_TYPE_TOKENS
+
+
 def _build_al_filing_fec_id(row: Mapping[str, str | None], data_type: str) -> str:
     """Build a synthetic filing ID from committee + filed date + data type."""
     committee_id_col = _load_column_for_semantic_path(data_type, "committee.id")
@@ -420,14 +437,14 @@ def _build_al_filing(
 ) -> Filing:
     """Construct a Filing model from a parsed AL row."""
     filed_date_col = _load_column_for_semantic_path(data_type, "filing.submitted_date")
-    amended_col = _load_column_for_semantic_path(data_type, "al.amended")
+    amended_col = _try_load_column_for_semantic_path(data_type, "al.amended")
     filed_date = _parse_optional_al_date(row.get(filed_date_col))
 
     return Filing(
         filing_fec_id=_build_al_filing_fec_id(row, data_type),
         committee_id=committee_id,
         report_type=data_type,
-        amendment_indicator=_amendment_indicator(row.get(amended_col)),
+        amendment_indicator=_amendment_indicator(row.get(amended_col) if amended_col else None),
         receipt_date=filed_date,
         accepted_date=filed_date,
         source_record_id=source_record_id,
@@ -472,25 +489,29 @@ def _upsert_al_filing(
 
 def _counterparty_name_raw(row: Mapping[str, str | None], *, data_type: str) -> str | None:
     if data_type == "contributions":
-        name_col = _load_column_for_semantic_path(data_type, "donor.org_name")
+        name_col = _load_column_for_semantic_path(data_type, "donor.name")
     else:
-        name_col = _load_column_for_semantic_path(data_type, "payee.org_name")
+        name_col = _load_column_for_semantic_path(data_type, "payee.name")
     return _normalize_optional_text(row.get(name_col))
 
 
 def _counterparty_employer(row: Mapping[str, str | None], *, data_type: str) -> str | None:
     if data_type == "contributions":
-        employer_col = _load_column_for_semantic_path(data_type, "donor.employer")
+        employer_col = _try_load_column_for_semantic_path(data_type, "donor.employer")
     else:
-        employer_col = _load_column_for_semantic_path(data_type, "payee.employer")
+        employer_col = _try_load_column_for_semantic_path(data_type, "payee.employer")
+    if employer_col is None:
+        return None
     return _normalize_optional_text(row.get(employer_col))
 
 
 def _counterparty_occupation(row: Mapping[str, str | None], *, data_type: str) -> str | None:
     if data_type == "contributions":
-        occupation_col = _load_column_for_semantic_path(data_type, "donor.occupation")
+        occupation_col = _try_load_column_for_semantic_path(data_type, "donor.occupation")
     else:
-        occupation_col = _load_column_for_semantic_path(data_type, "payee.occupation")
+        occupation_col = _try_load_column_for_semantic_path(data_type, "payee.occupation")
+    if occupation_col is None:
+        return None
     return _normalize_optional_text(row.get(occupation_col))
 
 
@@ -569,18 +590,24 @@ def _upsert_al_transaction_with_filing(
 
     amount_col = _load_column_for_semantic_path(data_type, "transaction.amount")
     date_col = _load_column_for_semantic_path(data_type, "transaction.date")
-    memo_col = _load_column_for_semantic_path(data_type, "transaction.description")
-    amended_col = _load_column_for_semantic_path(data_type, "al.amended")
+    memo_col = _try_load_column_for_semantic_path(data_type, "transaction.description")
+    amended_col = _try_load_column_for_semantic_path(data_type, "al.amended")
 
     # AL JSON has no native transaction ID — use source record hash.
     transaction_identifier = _al_source_record_key(row)
+
+    transaction_type = (
+        "Independent Expenditure"
+        if data_type == "expenditures" and _al_is_independent_expenditure(row)
+        else _AL_TRANSACTION_KIND[data_type]
+    )
 
     upsert_transaction(
         conn,
         Transaction(
             filing_id=filing_id,
             committee_id=committee_id,
-            transaction_type=_AL_TRANSACTION_KIND[data_type],
+            transaction_type=transaction_type,
             transaction_identifier=transaction_identifier,
             transaction_date=_parse_optional_al_date(row.get(date_col)),
             amount=_parse_required_al_amount(row.get(amount_col), amount_col),
@@ -594,8 +621,8 @@ def _upsert_al_transaction_with_filing(
             contributor_organization_id=org_id,
             contributor_address_id=address_id,
             recipient_committee_id=committee_id,
-            amendment_indicator=_amendment_indicator(row.get(amended_col)),
-            memo_text=_normalize_optional_text(row.get(memo_col)),
+            amendment_indicator=_amendment_indicator(row.get(amended_col) if amended_col else None),
+            memo_text=_normalize_optional_text(row.get(memo_col) if memo_col else None),
             source_record_id=source_record_id,
         ),
     )
@@ -666,6 +693,9 @@ def _load_al_with_filings(
     """Full two-pass load: source records + entities, then filings + transactions."""
     validated_row_limit = validated_limit(limit)
     data_source_id = ensure_al_data_source(conn, data_type=data_type)
+    # ensure_al_data_source leaves conn IN_TRANSACTION; commit so _load_al_rows
+    # sees IDLE and enables periodic commits every 1000 rows.
+    conn.commit()
 
     load_result = _load_al_file(
         conn,

@@ -25,6 +25,7 @@ def test_stage3_makefile_appends_property_schema_to_db_sql_files_in_order() -> N
         r"core/schema/entity_resolution\.sql "
         r"core/schema/er_views\.sql "
         r"domains/campaign_finance/schema/tables\.sql "
+        r"domains/campaign_finance/schema/nc_orchestrator_tables\.sql "
         r"domains/campaign_finance/schema/dark_money_tables\.sql "
         r"domains/property/schema/tables\.sql "
         r"domains/civics/schema/tables\.sql "

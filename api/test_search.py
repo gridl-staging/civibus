@@ -60,6 +60,11 @@ def test_search_filters_by_entity_type(
             "entity_type": entity_type,
             "entity_id": str(expected_id),
             "name": expected_name,
+            "state": None,
+            "party": None,
+            "office_name": None,
+            "committee_type": None,
+            "total_raised": None,
         }
     ]
 
@@ -108,11 +113,21 @@ def test_search_without_entity_type_returns_union_with_stable_order_and_paginati
             "entity_type": "org",
             "entity_id": "00000000-0000-0000-0000-000000000090",
             "name": "Civibus Alliance",
+            "state": None,
+            "party": None,
+            "office_name": None,
+            "committee_type": None,
+            "total_raised": None,
         },
         {
             "entity_type": "person",
             "entity_id": "00000000-0000-0000-0000-000000000100",
             "name": "Civibus Alliance",
+            "state": None,
+            "party": None,
+            "office_name": None,
+            "committee_type": None,
+            "total_raised": None,
         },
     ]
     assert second_page.json() == [
@@ -120,11 +135,21 @@ def test_search_without_entity_type_returns_union_with_stable_order_and_paginati
             "entity_type": "committee",
             "entity_id": "00000000-0000-0000-0000-000000000110",
             "name": "Civibus Alliance",
+            "state": None,
+            "party": None,
+            "office_name": None,
+            "committee_type": None,
+            "total_raised": None,
         },
         {
             "entity_type": "org",
             "entity_id": "00000000-0000-0000-0000-000000000200",
             "name": "Civibus Network",
+            "state": None,
+            "party": None,
+            "office_name": None,
+            "committee_type": None,
+            "total_raised": None,
         },
     ]
 
@@ -161,11 +186,21 @@ def test_search_single_entity_hybrid_contains_outranks_trigram_fallback(
             "entity_type": "person",
             "entity_id": str(contains_match_id),
             "name": "Alexandria Stone",
+            "state": None,
+            "party": None,
+            "office_name": None,
+            "committee_type": None,
+            "total_raised": None,
         },
         {
             "entity_type": "person",
             "entity_id": str(trigram_only_id),
             "name": "Stone, Alexandria",
+            "state": None,
+            "party": None,
+            "office_name": None,
+            "committee_type": None,
+            "total_raised": None,
         },
     ]
 
@@ -200,11 +235,126 @@ def test_search_union_hybrid_contains_outranks_trigram_fallback(
             "entity_type": "org",
             "entity_id": str(contains_match_id),
             "name": "Alexandria Stone Project",
+            "state": None,
+            "party": None,
+            "office_name": None,
+            "committee_type": None,
+            "total_raised": None,
         },
         {
             "entity_type": "committee",
             "entity_id": str(trigram_only_id),
             "name": "Stone Alexandria PAC",
+            "state": None,
+            "party": None,
+            "office_name": None,
+            "committee_type": None,
+            "total_raised": None,
+        },
+    ]
+
+
+def test_search_office_contains_outranks_trigram_fallback(
+    api_client: TestClient,
+    db_conn: psycopg.Connection,
+) -> None:
+    contains_match_id = _insert_office(
+        db_conn,
+        id=UUID("00000000-0000-0000-0000-000000000370"),
+        name="Alpha Beta Office",
+        office_level="state",
+        state="OR",
+    )
+    trigram_only_id = _insert_office(
+        db_conn,
+        id=UUID("00000000-0000-0000-0000-000000000371"),
+        name="Office, Beta Alpha",
+        office_level="state",
+        state="OR",
+    )
+
+    response = api_client.get(
+        "/v1/search",
+        params={"q": "alpha beta office", "entity_type": "office"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == [
+        {
+            "entity_type": "office",
+            "entity_id": str(contains_match_id),
+            "name": "Alpha Beta Office",
+            "state": "OR",
+            "party": None,
+            "office_name": None,
+            "committee_type": None,
+            "total_raised": None,
+        },
+        {
+            "entity_type": "office",
+            "entity_id": str(trigram_only_id),
+            "name": "Office, Beta Alpha",
+            "state": "OR",
+            "party": None,
+            "office_name": None,
+            "committee_type": None,
+            "total_raised": None,
+        },
+    ]
+
+
+def test_search_contest_contains_outranks_trigram_fallback(
+    api_client: TestClient,
+    db_conn: psycopg.Connection,
+) -> None:
+    office_id = _insert_office(
+        db_conn,
+        id=UUID("00000000-0000-0000-0000-000000000372"),
+        name="Ranking Contest Office",
+        office_level="state",
+        state="OR",
+    )
+    contains_match_id = _insert_contest(
+        db_conn,
+        id=UUID("00000000-0000-0000-0000-000000000373"),
+        name="Alpha Beta Contest",
+        office_id=office_id,
+        election_type="general",
+    )
+    trigram_only_id = _insert_contest(
+        db_conn,
+        id=UUID("00000000-0000-0000-0000-000000000374"),
+        name="Contest Beta Alpha",
+        office_id=office_id,
+        election_type="primary",
+    )
+
+    response = api_client.get(
+        "/v1/search",
+        params={"q": "alpha beta contest", "entity_type": "contest"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == [
+        {
+            "entity_type": "contest",
+            "entity_id": str(contains_match_id),
+            "name": "Alpha Beta Contest",
+            "state": "OR",
+            "party": None,
+            "office_name": "Ranking Contest Office",
+            "committee_type": None,
+            "total_raised": None,
+        },
+        {
+            "entity_type": "contest",
+            "entity_id": str(trigram_only_id),
+            "name": "Contest Beta Alpha",
+            "state": "OR",
+            "party": None,
+            "office_name": "Ranking Contest Office",
+            "committee_type": None,
+            "total_raised": None,
         },
     ]
 
@@ -241,11 +391,21 @@ def test_search_trigram_similarity_tie_breaks_by_name_then_entity_id(
             "entity_type": "org",
             "entity_id": str(lower_id),
             "name": "Civibus Alliance",
+            "state": None,
+            "party": None,
+            "office_name": None,
+            "committee_type": None,
+            "total_raised": None,
         },
         {
             "entity_type": "org",
             "entity_id": str(higher_id),
             "name": "Civibus Alliance",
+            "state": None,
+            "party": None,
+            "office_name": None,
+            "committee_type": None,
+            "total_raised": None,
         },
     ]
 
@@ -279,6 +439,11 @@ def test_search_treats_like_wildcards_as_literal_characters(
             "entity_type": "person",
             "entity_id": str(percent_name_id),
             "name": "Donor 100% Group",
+            "state": None,
+            "party": None,
+            "office_name": None,
+            "committee_type": None,
+            "total_raised": None,
         }
     ]
 
@@ -324,6 +489,131 @@ def test_search_invalid_query_params_return_422(
 # ---------------------------------------------------------------------------
 
 
+def test_search_populates_committee_context_fields(
+    api_client: TestClient,
+    db_conn: psycopg.Connection,
+) -> None:
+    insert_committee_row(
+        db_conn,
+        CommitteeRowSeed(
+            id=UUID("00000000-0000-0000-0000-000000000560"),
+            fec_committee_id="C20000020",
+            name="Context Search Committee",
+            state="CA",
+            party="DEM",
+            committee_type="Q",
+        ),
+    )
+
+    response = api_client.get(
+        "/v1/search",
+        params={"q": "context search committee", "entity_type": "committee"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == [
+        {
+            "entity_type": "committee",
+            "entity_id": "00000000-0000-0000-0000-000000000560",
+            "name": "Context Search Committee",
+            "state": "CA",
+            "party": "DEM",
+            "office_name": None,
+            "committee_type": "Q",
+            "total_raised": None,
+        }
+    ]
+
+
+def test_search_populates_candidate_context_fields(
+    api_client: TestClient,
+    db_conn: psycopg.Connection,
+) -> None:
+    candidate_person = Person(
+        id=UUID("00000000-0000-0000-0000-000000000561"),
+        canonical_name="Context Candidate Person",
+    )
+    insert_person(db_conn, candidate_person)
+    office_id = _insert_office(
+        db_conn,
+        id=UUID("00000000-0000-0000-0000-000000000562"),
+        name="Context Candidate Office",
+        office_level="state",
+        state="OR",
+    )
+    contest_id = _insert_contest(
+        db_conn,
+        id=UUID("00000000-0000-0000-0000-000000000563"),
+        name="Candidate Election 2026",
+        office_id=office_id,
+    )
+    _insert_candidacy(
+        db_conn,
+        id=UUID("00000000-0000-0000-0000-000000000564"),
+        person_id=candidate_person.id,
+        contest_id=contest_id,
+        party="NPP",
+        status="qualified",
+    )
+
+    response = api_client.get(
+        "/v1/search",
+        params={"q": "context candidate person", "entity_type": "candidate"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == [
+        {
+            "entity_type": "candidate",
+            "entity_id": "00000000-0000-0000-0000-000000000561",
+            "name": "Context Candidate Person",
+            "state": "OR",
+            "party": "NPP",
+            "office_name": "Context Candidate Office",
+            "committee_type": None,
+            "total_raised": None,
+        }
+    ]
+
+
+def test_search_populates_contest_context_fields(
+    api_client: TestClient,
+    db_conn: psycopg.Connection,
+) -> None:
+    office_id = _insert_office(
+        db_conn,
+        id=UUID("00000000-0000-0000-0000-000000000565"),
+        name="Context Contest Office",
+        office_level="state",
+        state="WA",
+    )
+    contest_id = _insert_contest(
+        db_conn,
+        id=UUID("00000000-0000-0000-0000-000000000566"),
+        name="Context Contest Name",
+        office_id=office_id,
+    )
+
+    response = api_client.get(
+        "/v1/search",
+        params={"q": "context contest name", "entity_type": "contest"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == [
+        {
+            "entity_type": "contest",
+            "entity_id": str(contest_id),
+            "name": "Context Contest Name",
+            "state": "WA",
+            "party": None,
+            "office_name": "Context Contest Office",
+            "committee_type": None,
+            "total_raised": None,
+        }
+    ]
+
+
 def test_search_candidate_entity_type(
     api_client: TestClient,
     db_conn: psycopg.Connection,
@@ -355,8 +645,89 @@ def test_search_candidate_entity_type(
             "entity_type": "candidate",
             "entity_id": str(person.id),
             "name": "Candidate Searchable",
+            "state": None,
+            "party": "DEM",
+            "office_name": "test_search_office_cand",
+            "committee_type": None,
+            "total_raised": None,
         }
     ]
+
+
+def test_search_contest_entity_type(
+    api_client: TestClient,
+    db_conn: psycopg.Connection,
+) -> None:
+    office_id = _insert_office(
+        db_conn,
+        id=UUID("00000000-0000-0000-0000-000000000505"),
+        name="Contest Search Office",
+        office_level="federal",
+    )
+    contest_id = _insert_contest(
+        db_conn,
+        id=UUID("00000000-0000-0000-0000-000000000506"),
+        name="Contest Searchable Name",
+        office_id=office_id,
+    )
+
+    response = api_client.get(
+        "/v1/search",
+        params={"q": "contest searchable", "entity_type": "contest"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == [
+        {
+            "entity_type": "contest",
+            "entity_id": str(contest_id),
+            "name": "Contest Searchable Name",
+            "state": None,
+            "party": None,
+            "office_name": "Contest Search Office",
+            "committee_type": None,
+            "total_raised": None,
+        }
+    ]
+
+
+def test_search_contest_matches_via_office_name(
+    api_client: TestClient,
+    db_conn: psycopg.Connection,
+) -> None:
+    """Contest search should match on the joined office name, not just the contest name."""
+    office_id = _insert_office(
+        db_conn,
+        id=UUID("00000000-0000-0000-0000-000000000507"),
+        name="Xylophone Marsupial Tribunal",
+        office_level="state",
+        state="WA",
+    )
+    contest_id = _insert_contest(
+        db_conn,
+        id=UUID("00000000-0000-0000-0000-000000000508"),
+        name="WA General 2026",
+        office_id=office_id,
+    )
+
+    response = api_client.get(
+        "/v1/search",
+        params={"q": "xylophone marsupial", "entity_type": "contest"},
+    )
+
+    assert response.status_code == 200
+    results = response.json()
+    assert len(results) == 1
+    assert results[0] == {
+        "entity_type": "contest",
+        "entity_id": str(contest_id),
+        "name": "WA General 2026",
+        "state": "WA",
+        "party": None,
+        "office_name": "Xylophone Marsupial Tribunal",
+        "committee_type": None,
+        "total_raised": None,
+    }
 
 
 def test_search_office_entity_type(
@@ -381,11 +752,16 @@ def test_search_office_entity_type(
             "entity_type": "office",
             "entity_id": str(office_id),
             "name": "test_xyzunique_quartzelbow",
+            "state": None,
+            "party": None,
+            "office_name": None,
+            "committee_type": None,
+            "total_raised": None,
         }
     ]
 
 
-def test_search_union_includes_all_five_entity_types(
+def test_search_union_includes_all_six_entity_types(
     api_client: TestClient,
     db_conn: psycopg.Connection,
 ) -> None:
@@ -431,12 +807,19 @@ def test_search_union_includes_all_five_entity_types(
         party="IND",
         status="filed",
     )
+    _insert_contest(
+        db_conn,
+        id=UUID("00000000-0000-0000-0000-000000000525"),
+        name="Fiveway Match Contest",
+        office_id=office_id,
+        election_type="primary",
+    )
 
     response = api_client.get("/v1/search", params={"q": "fiveway match", "limit": 10})
 
     assert response.status_code == 200
     result_types = {r["entity_type"] for r in response.json()}
-    assert result_types == {"person", "org", "committee", "office", "candidate"}
+    assert result_types == {"person", "org", "committee", "office", "candidate", "contest"}
 
 
 def test_search_candidate_does_not_return_non_candidate_persons(

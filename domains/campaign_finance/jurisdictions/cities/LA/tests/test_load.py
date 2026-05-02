@@ -60,34 +60,11 @@ class TestEnsureLaDataSource:
         assert first == second
 
 
-class TestSourceRecordDedupe:
-    """Tests for source-record deduplication via try_insert_source_record."""
-
-    def test_skips_duplicate_source_record(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        conn = MagicMock()
-        conn.info.transaction_status = 0  # IDLE
-
-        mock_ensure_ds = MagicMock(return_value=_DS_UUID)
-        monkeypatch.setattr(
-            "domains.campaign_finance.jurisdictions.cities.LA.scraper.load.ensure_data_source",
-            mock_ensure_ds,
-        )
-
-        insert_calls = [MagicMock(return_value="sr-uuid-1"), MagicMock(return_value=None)]
-        call_index = {"i": 0}
-
-        def mock_try_insert(conn, sr):
-            result = insert_calls[min(call_index["i"], 1)].return_value
-            call_index["i"] += 1
-            return result
-
-        monkeypatch.setattr(
-            "domains.campaign_finance.jurisdictions.cities.LA.scraper.load.try_insert_source_record",
-            mock_try_insert,
-        )
-
-        # Structure test - dedup tested indirectly through load_la_transactions_with_filings
-        assert True
+# Removed test_skips_duplicate_source_record (false positive 2026-04-26):
+# the previous version set up mocks but never called the loader,
+# asserting `True` and silently passing without exercising the dedupe
+# path. Real dedupe coverage lives implicitly in
+# TestLoadLaTransactionsWithFilings tests.
 
 
 class TestLoadLaTransactionsWithFilings:

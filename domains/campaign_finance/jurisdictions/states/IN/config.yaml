@@ -15,7 +15,7 @@ data_sources:
     api_base_url: null
     format: "csv"
     auth_required: false
-    update_frequency: "annual"
+    update_frequency: "weekly"
     coverage:
       start_year: 2000
       covers_sub_jurisdictions: true
@@ -50,7 +50,7 @@ data_sources:
       Amended: "transaction.amended"
     scraper: null
     last_successful_pull: null
-    last_verified_working: "2026-03-23"
+    last_verified_working: "2026-04-26"
     known_issues:
       - "No row-unique transaction identifier is exposed; FileNumber is filing-level and repeated across rows"
       - "2025 contribution export contains malformed quoted rows (for example unescaped double quotes in Received_By) that can shift CSV columns in strict parsers"
@@ -63,7 +63,7 @@ data_sources:
     api_base_url: null
     format: "csv"
     auth_required: false
-    update_frequency: "annual"
+    update_frequency: "weekly"
     coverage:
       start_year: 2000
       covers_sub_jurisdictions: true
@@ -99,7 +99,7 @@ data_sources:
       Amended: "transaction.amended"
     scraper: null
     last_successful_pull: null
-    last_verified_working: "2026-03-23"
+    last_verified_working: "2026-04-26"
     known_issues:
       - "No row-unique transaction identifier is exposed; FileNumber is filing-level and repeated across rows"
       - "2025 expenditure export includes multiline free-text descriptions with embedded quotes that can trigger parser edge cases"

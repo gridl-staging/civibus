@@ -115,6 +115,46 @@ def test_extract_tx_contribution_handles_zip_with_dash() -> None:
     assert extracted["address"].zip4 == "6162"
 
 
+def test_extract_tx_contribution_drops_short_zip_instead_of_failing_validation() -> None:
+    """TX live data sometimes carries 1-4 digit garbage in the ZIP column ('693', '966').
+
+    Why: the TEC bulk export contains malformed ZIP values that fail
+    Address.zip5 validation (Pydantic requires exactly 5 digits). Before this
+    fix, the loader emitted a Pydantic ValidationError for every such row and
+    spammed the refresh log with hundreds of MB of stack traces, eventually
+    appearing to hang the priority refresh runner. The extractor must drop the
+    malformed ZIP (zip5=None, zip4=None) and keep the rest of the address so
+    the row still loads.
+
+    Live evidence: 2026-04-25 priority refresh log showed the same row
+    repeatedly failing with `zip5='693'` / `zip5='966'`.
+    """
+    row = dict(_contribution_rows()[0])
+    row["contributorStreetPostalCode"] = "693"
+
+    extracted = extract_tx_contribution(row)
+
+    assert extracted["address"] is not None
+    assert extracted["address"].zip5 is None, (
+        "3-digit ZIP must not be passed to Address.zip5 (Pydantic requires 5 digits)"
+    )
+    assert extracted["address"].zip4 is None
+    # Other address parts must still be present so the row is not silently dropped.
+    assert extracted["address"].city is not None or extracted["address"].state is not None or extracted["address"].raw_address
+
+
+def test_extract_tx_contribution_drops_8digit_zip_as_malformed() -> None:
+    """8-digit ZIP is neither a 5-digit nor a 9-digit ZIP+4 — treat as malformed."""
+    row = dict(_contribution_rows()[0])
+    row["contributorStreetPostalCode"] = "12345678"
+
+    extracted = extract_tx_contribution(row)
+
+    assert extracted["address"] is not None
+    assert extracted["address"].zip5 is None
+    assert extracted["address"].zip4 is None
+
+
 def test_extractors_route_by_persent_type_without_name_heuristics() -> None:
     contribution_row = dict(_contribution_rows()[0])
     contribution_row["contributorPersentTypeCd"] = "ENTITY"

@@ -6,7 +6,7 @@ from uuid import UUID, uuid4
 import pytest
 from pydantic import ValidationError
 
-from core.types.python.models import DataSource, SourceRecord, compute_record_hash
+from core.types.python.models import DataSource, RefreshRun, SourceRecord, compute_record_hash
 
 
 class TestDataSourceModel:
@@ -152,3 +152,40 @@ class TestSourceRecordModel:
     def test_compute_record_hash_rejects_non_json_safe_raw_fields(self, raw_fields: dict[str, object]) -> None:
         with pytest.raises(ValueError):
             compute_record_hash(raw_fields)
+
+
+class TestRefreshRunModel:
+    def test_refresh_run_round_trip_preserves_all_fields(self) -> None:
+        original = RefreshRun(
+            job_key="state-co-contributions",
+            domain="campaign_finance",
+            jurisdiction="state/CO",
+            data_source_names=["TRACER Bulk Download - Contributions"],
+            pull_status="degraded",
+            started_at=datetime(2026, 4, 24, 12, 0, tzinfo=timezone.utc),
+            completed_at=datetime(2026, 4, 24, 12, 5, tzinfo=timezone.utc),
+            inserted_count=80,
+            skipped_count=4,
+            quarantined_count=1,
+            superseded_count=0,
+            error_count=0,
+            metadata_updates=1,
+            message="Refresh job completed below historical median",
+        )
+
+        dumped = original.model_dump()
+        recreated = RefreshRun(**dumped)
+
+        assert recreated == original
+
+    def test_refresh_run_rejects_unknown_pull_status(self) -> None:
+        with pytest.raises(ValidationError, match="Input should be"):
+            RefreshRun(
+                job_key="state-co-contributions",
+                domain="campaign_finance",
+                jurisdiction="state/CO",
+                pull_status="partial",
+                started_at=datetime(2026, 4, 24, 12, 0, tzinfo=timezone.utc),
+                completed_at=datetime(2026, 4, 24, 12, 5, tzinfo=timezone.utc),
+                message="bad",
+            )

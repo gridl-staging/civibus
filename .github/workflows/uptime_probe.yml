@@ -1,0 +1,149 @@
+name: Uptime probe — /api/health/content
+
+# External-infrastructure verifier. Hits civibus.org/api/health/content
+# every 5 minutes and opens / comments-on / closes a GitHub issue with
+# the `uptime-incident` label based on the response.
+#
+# Anchored postmortem: docs/operations/postmortems/2026_04_30_prod_data_link_severed.md
+# Apr 30 incident hid for 16h because every observer ran on or near the
+# prod VM. This workflow is structurally outside that loop — it runs on
+# GitHub's infrastructure, not Hetzner — so when the prod stack is
+# broken, *something on different infrastructure* still notices.
+#
+# Sync flow: dev repo (gridl-dev/civibus_dev) has Actions disabled, so
+# this file does not execute here. debbie syncs it to staging + prod
+# public repos where it does execute.
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  probe:
+    name: probe
+    runs-on: ubuntu-latest
+    steps:
+      - name: Probe content health endpoint
+        id: probe
+        run: |
+          set +e
+          STATUS=$(curl -sS \
+            --max-time 30 \
+            --write-out '%{http_code}' \
+            --output /tmp/body.json \
+            https://civibus.org/api/health/content)
+          CURL_EXIT=$?
+          set -e
+
+          # Healthiness logic:
+          #   - curl error (timeout, connection refused) => unhealthy
+          #   - HTTP 200 + body.healthy == true        => healthy
+          #   - anything else                          => unhealthy
+          HEALTHY=false
+          DETAIL=""
+          if [ "$CURL_EXIT" -ne 0 ]; then
+            DETAIL="curl exit $CURL_EXIT (timeout, connection refused, or DNS failure)"
+          elif [ "$STATUS" = "200" ]; then
+            if jq -e '.healthy == true' /tmp/body.json > /dev/null 2>&1; then
+              HEALTHY=true
+            else
+              BODY_EXCERPT=$(jq -c . /tmp/body.json 2>/dev/null | head -c 500 || head -c 500 /tmp/body.json)
+              DETAIL="HTTP 200 but body.healthy not true: ${BODY_EXCERPT}"
+            fi
+          else
+            BODY_EXCERPT=$(head -c 500 /tmp/body.json 2>/dev/null || true)
+            DETAIL="HTTP ${STATUS} body=${BODY_EXCERPT}"
+          fi
+
+          echo "healthy=${HEALTHY}" >> "$GITHUB_OUTPUT"
+          echo "status=${STATUS}" >> "$GITHUB_OUTPUT"
+          # Multi-line-safe output for DETAIL (may contain JSON / newlines).
+          {
+            echo "detail<<DETAIL_DELIMITER_$$"
+            echo "${DETAIL}"
+            echo "DETAIL_DELIMITER_$$"
+          } >> "$GITHUB_OUTPUT"
+          echo "Probe result: healthy=${HEALTHY} status=${STATUS}"
+
+      - name: Find existing open uptime-incident issue
+        id: find
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          NUMBER=$(gh issue list \
+            --label uptime-incident \
+            --state open \
+            --json number \
+            --limit 1 \
+            --jq '.[0].number // empty')
+          echo "number=${NUMBER}" >> "$GITHUB_OUTPUT"
+          echo "Existing open uptime-incident issue: ${NUMBER:-none}"
+
+      - name: Close existing issue (endpoint recovered)
+        if: steps.probe.outputs.healthy == 'true' && steps.find.outputs.number != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          gh issue comment "${{ steps.find.outputs.number }}" \
+            --body "Probe at ${NOW} returned 200 healthy. Endpoint recovered. Closing."
+          gh issue close "${{ steps.find.outputs.number }}"
+
+      - name: Comment on existing issue (endpoint still failing)
+        if: steps.probe.outputs.healthy == 'false' && steps.find.outputs.number != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          DETAIL="${{ steps.probe.outputs.detail }}"
+          STATUS="${{ steps.probe.outputs.status }}"
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          gh issue comment "${{ steps.find.outputs.number }}" \
+            --body "Probe at ${NOW} — still failing. Status: ${STATUS}. Detail: ${DETAIL}. Run: ${RUN_URL}"
+
+      - name: Open new uptime-incident issue (endpoint failing, no existing issue)
+        if: steps.probe.outputs.healthy == 'false' && steps.find.outputs.number == ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Idempotent label create. --force lets us update the color/description
+          # without erroring if the label already exists.
+          gh label create uptime-incident \
+            --color FF6B6B \
+            --description "Civibus.org uptime probe failure" \
+            --force 2>/dev/null || true
+
+          NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          STATUS="${{ steps.probe.outputs.status }}"
+          DETAIL="${{ steps.probe.outputs.detail }}"
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+          BODY="The civibus.org content health probe failed.
+
+          **Status:** ${STATUS}
+          **Detail:** ${DETAIL}
+          **Probe time:** ${NOW}
+          **Workflow run:** ${RUN_URL}
+
+          This issue was auto-created by .github/workflows/uptime_probe.yml.
+          Subsequent failures will comment here (not open new issues). The
+          workflow will auto-close this issue when the endpoint returns 200
+          healthy again.
+
+          - Endpoint: https://civibus.org/api/health/content
+          - Owner: api/health_content.py + api/main.py:186
+          - Anchored postmortem: docs/operations/postmortems/2026_04_30_prod_data_link_severed.md"
+
+          gh issue create \
+            --label uptime-incident \
+            --title "[uptime] /api/health/content returned ${STATUS} at ${NOW}" \
+            --body "${BODY}"
+
+      # The job ALWAYS exits 0. The issue is the alert; a non-zero job exit
+      # would create a second notification path (workflow-failed email)
+      # and risk masking real failures behind workflow-noise emails.

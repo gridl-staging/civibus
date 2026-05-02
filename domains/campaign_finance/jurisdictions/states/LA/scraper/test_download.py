@@ -30,7 +30,7 @@ def _failing_response(chunks: list[bytes], error: httpx.HTTPError) -> MagicMock:
 
 def test_download_la_archive_uses_data_type_url_resolution(tmp_path: Path) -> None:
     destination_dir = tmp_path / "downloads"
-    expected_url = "https://example.test/la-contributions.zip"
+    expected_url = "https://example.test/la-expenditures.zip"
     mock_response = _streaming_response([b"zip-bytes"])
 
     with (
@@ -43,10 +43,10 @@ def test_download_la_archive_uses_data_type_url_resolution(tmp_path: Path) -> No
         mock_client = mock_client_type.return_value.__enter__.return_value
         mock_client.stream.return_value.__enter__.return_value = mock_response
 
-        archive_path = download_la_archive("contributions", destination_dir)
+        archive_path = download_la_archive("expenditures", destination_dir)
 
-    assert archive_path == destination_dir / "LA_contributions.zip"
-    load_url.assert_called_once_with("contributions")
+    assert archive_path == destination_dir / "LA_expenditures.zip"
+    load_url.assert_called_once_with("expenditures")
     mock_client.stream.assert_called_once_with("GET", expected_url, follow_redirects=True)
 
 

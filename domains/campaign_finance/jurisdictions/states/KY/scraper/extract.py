@@ -100,7 +100,8 @@ def _normalize_state_code(state: str | None) -> str | None:
     if text is None:
         return None
     upper = text.upper()
-    if len(upper) != 2:
+    # Must be exactly 2 uppercase letters (not FIPS numeric codes like "17")
+    if len(upper) != 2 or not upper.isalpha():
         return None
     return upper
 

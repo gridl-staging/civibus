@@ -417,14 +417,53 @@ def test_load_ga_contributions_batch_loads_fixture_and_is_idempotent(
 ) -> None:
     rows = _build_unique_fixture_rows(parsed_contribution_rows(), prefix="contribution-batch")
     fixture_row_count = len(rows)
+    expected_source_record_counts = {_ga_record_hash(row): 1 for row in rows}
 
     first_result = load_ga_contributions(db_conn, rows)
-    second_result = load_ga_contributions(db_conn, rows)
 
     _assert_load_result(first_result, inserted=fixture_row_count)
     assert first_result.elapsed_seconds > 0
+    assert {
+        source_record_key: source_record_count_for_key(db_conn, "contributions", source_record_key)
+        for source_record_key in expected_source_record_counts
+    } == expected_source_record_counts
+    contribution_data_source_id = ensure_ga_data_source(db_conn, "contributions")
+    with db_conn.cursor(row_factory=dict_row) as cursor:
+        cursor.execute(
+            """
+            SELECT id, source_record_key, record_hash, raw_fields
+            FROM core.source_record
+            WHERE data_source_id = %s
+              AND source_record_key = ANY(%s)
+              AND superseded_by IS NULL
+            ORDER BY source_record_key
+            """,
+            (contribution_data_source_id, sorted(expected_source_record_counts)),
+        )
+        first_source_record_snapshot = cursor.fetchall()
+    assert [row["source_record_key"] for row in first_source_record_snapshot] == sorted(expected_source_record_counts)
+
+    second_result = load_ga_contributions(db_conn, rows)
 
     _assert_load_result(second_result, inserted=0, skipped=fixture_row_count)
+    assert {
+        source_record_key: source_record_count_for_key(db_conn, "contributions", source_record_key)
+        for source_record_key in expected_source_record_counts
+    } == expected_source_record_counts
+    with db_conn.cursor(row_factory=dict_row) as cursor:
+        cursor.execute(
+            """
+            SELECT id, source_record_key, record_hash, raw_fields
+            FROM core.source_record
+            WHERE data_source_id = %s
+              AND source_record_key = ANY(%s)
+              AND superseded_by IS NULL
+            ORDER BY source_record_key
+            """,
+            (contribution_data_source_id, sorted(expected_source_record_counts)),
+        )
+        second_source_record_snapshot = cursor.fetchall()
+    assert second_source_record_snapshot == first_source_record_snapshot
 
     assert ga_data_source_count(db_conn, "contributions") == 1
 
@@ -519,6 +558,7 @@ def test_load_ga_contributions_with_filings_builds_relational_rows_and_is_idempo
             SELECT t.transaction_identifier,
                    t.amendment_indicator,
                    f.filing_fec_id,
+                   t.source_record_id,
                    t.contributor_person_id,
                    t.contributor_organization_id,
                    (
@@ -560,15 +600,35 @@ def test_load_ga_contributions_with_filings_builds_relational_rows_and_is_idempo
         )
         committee_count = cursor.fetchone()["count"]
 
+    contribution_data_source_id = ensure_ga_data_source(db_conn, "contributions")
+    with db_conn.cursor(row_factory=dict_row) as cursor:
+        cursor.execute(
+            """
+            SELECT id, source_record_key, record_hash, raw_fields
+            FROM core.source_record
+            WHERE data_source_id = %s
+              AND source_record_key = ANY(%s)
+              AND superseded_by IS NULL
+            ORDER BY source_record_key
+            """,
+            (contribution_data_source_id, expected_record_hashes),
+        )
+        source_record_snapshot = cursor.fetchall()
+
     assert [row["filing_fec_id"] for row in filing_rows] == expected_filing_fec_ids
     assert all(row["amendment_indicator"] == "N" for row in filing_rows)
     assert committee_count == 1
     assert [row["transaction_identifier"] for row in transaction_rows] == expected_record_hashes
+    assert [row["source_record_key"] for row in source_record_snapshot] == expected_record_hashes
     assert all(row["amendment_indicator"] == "N" for row in transaction_rows)
     for row in transaction_rows:
         assert row["filing_fec_id"] == expected_by_identifier[row["transaction_identifier"]]
         assert row["contributor_person_id"] == row["expected_contributor_person_id"]
         assert row["contributor_organization_id"] == row["expected_contributor_organization_id"]
+
+    first_filing_rows = filing_rows
+    first_transaction_rows = transaction_rows
+    first_committee_count = committee_count
 
     rerun_result = load_ga_contributions_with_filings(db_conn, CONTRIBUTION_FIXTURE_PATH)
     _assert_load_result(rerun_result, inserted=0, skipped=len(rows))
@@ -576,26 +636,79 @@ def test_load_ga_contributions_with_filings_builds_relational_rows_and_is_idempo
     with db_conn.cursor(row_factory=dict_row) as cursor:
         cursor.execute(
             """
-            SELECT COUNT(*) AS count
+            SELECT filing_fec_id, amendment_indicator
             FROM cf.filing
             WHERE filing_fec_id = ANY(%s)
+            ORDER BY filing_fec_id
             """,
             (expected_filing_fec_ids,),
         )
-        filing_count = cursor.fetchone()["count"]
+        rerun_filing_rows = cursor.fetchall()
+
+        cursor.execute(
+            """
+            SELECT t.transaction_identifier,
+                   t.amendment_indicator,
+                   f.filing_fec_id,
+                   t.source_record_id,
+                   t.contributor_person_id,
+                   t.contributor_organization_id,
+                   (
+                       SELECT es.entity_id
+                       FROM core.entity_source es
+                       WHERE es.source_record_id = t.source_record_id
+                         AND es.entity_type = 'person'
+                         AND es.extraction_role = 'donor'
+                       LIMIT 1
+                   ) AS expected_contributor_person_id,
+                   (
+                       SELECT es.entity_id
+                       FROM core.entity_source es
+                       WHERE es.source_record_id = t.source_record_id
+                         AND es.entity_type = 'organization'
+                         AND es.extraction_role = 'contributor'
+                       LIMIT 1
+                   ) AS expected_contributor_organization_id
+            FROM cf.transaction t
+            JOIN cf.filing f
+              ON f.id = t.filing_id
+            WHERE transaction_identifier = ANY(%s)
+            ORDER BY t.transaction_identifier
+            """,
+            (expected_record_hashes,),
+        )
+        rerun_transaction_rows = cursor.fetchall()
+
+        cursor.execute(
+            """
+            SELECT id, source_record_key, record_hash, raw_fields
+            FROM core.source_record
+            WHERE data_source_id = %s
+              AND source_record_key = ANY(%s)
+              AND superseded_by IS NULL
+            ORDER BY source_record_key
+            """,
+            (contribution_data_source_id, expected_record_hashes),
+        )
+        rerun_source_record_snapshot = cursor.fetchall()
 
         cursor.execute(
             """
             SELECT COUNT(*) AS count
-            FROM cf.transaction
-            WHERE transaction_identifier = ANY(%s)
+            FROM cf.committee c
+            JOIN core.organization o
+              ON o.id = c.organization_id
+            WHERE c.state = 'GA'
+              AND o.identifiers ->> 'ga_filer_id' = %s
             """,
-            (expected_record_hashes,),
+            (expected_filer_id,),
         )
-        transaction_count = cursor.fetchone()["count"]
+        rerun_committee_count = cursor.fetchone()["count"]
 
-    assert filing_count == len(expected_filing_fec_ids)
-    assert transaction_count == len(expected_record_hashes)
+    assert rerun_filing_rows == first_filing_rows
+    assert rerun_transaction_rows == first_transaction_rows
+    assert rerun_committee_count == first_committee_count
+    assert rerun_source_record_snapshot == source_record_snapshot
 
 
 def test_load_ga_expenditures_with_filings_uses_paid_as_primary_amount(

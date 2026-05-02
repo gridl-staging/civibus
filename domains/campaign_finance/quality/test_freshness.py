@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import date
 import inspect
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
 
 from domains.campaign_finance.quality.freshness import (
@@ -26,6 +29,188 @@ from domains.campaign_finance.quality.models import CheckResult
 
 def _fake_check(status: str) -> CheckResult:
     return CheckResult(name="freshness", status=status, message="ok")
+
+
+@dataclass(frozen=True)
+class _ProbeWiringCase:
+    case_id: str
+    probe_func: Callable[[], CheckResult]
+    download_attr: str
+    parse_attr: str
+    column_attr: str
+    source_attr: str
+    artifact_attr: str
+    date_attr: str
+    download_call_style: str
+    download_filename: str
+    download_is_binary: bool
+    parsed_rows: tuple[dict[str, str], ...]
+    parsed_dates: tuple[date, ...]
+    date_column: str
+    source_url: str
+    patched_artifact_url: str
+    jurisdiction: str
+    escaped_filename: str
+
+
+_FRESHNESS_MODULE = "domains.campaign_finance.quality.freshness"
+
+
+def _write_download_file(destination_dir: Path, filename: str, *, binary: bool = False) -> Path:
+    download_path = destination_dir / filename
+    if binary:
+        download_path.write_bytes(b"zip-placeholder")
+    else:
+        download_path.write_text("placeholder", encoding="utf-8")
+    return download_path
+
+
+def _source_return_value(case: _ProbeWiringCase) -> object:
+    if case.download_call_style == "in":
+        return MagicMock(url=case.source_url)
+    return case.source_url
+
+
+def _download_side_effect(case: _ProbeWiringCase) -> Callable[..., Path]:
+    if case.download_call_style == "in":
+        return lambda **kwargs: _write_download_file(
+            kwargs["dest_dir"],
+            case.download_filename,
+            binary=case.download_is_binary,
+        )
+    if case.download_call_style == "il":
+        return lambda data_type, *, dest_dir, tail_data_rows: _write_download_file(
+            dest_dir,
+            case.download_filename,
+            binary=case.download_is_binary,
+        )
+    return lambda data_type, dest_dir: _write_download_file(
+        dest_dir,
+        case.download_filename,
+        binary=case.download_is_binary,
+    )
+
+
+def _assert_download_called(case: _ProbeWiringCase, mock_download: MagicMock) -> None:
+    if case.download_call_style == "in":
+        mock_download.assert_called_once()
+        assert mock_download.call_args.kwargs["data_type"] == "contributions"
+        return
+
+    if case.download_call_style == "il":
+        mock_download.assert_called_once_with(
+            "contributions",
+            dest_dir=mock_download.call_args.kwargs["dest_dir"],
+            tail_data_rows=_IL_FRESHNESS_TAIL_ROWS,
+        )
+        return
+
+    mock_download.assert_called_once_with(
+        data_type="contributions",
+        dest_dir=mock_download.call_args.kwargs["dest_dir"],
+    )
+
+
+def _expected_artifact_url(case: _ProbeWiringCase) -> str:
+    if case.download_call_style == "in":
+        return case.patched_artifact_url.replace("{YEAR}", str(date.today().year))
+    return case.patched_artifact_url
+
+
+_PROBE_WIRING_CASES = (
+    _ProbeWiringCase(
+        case_id="in",
+        probe_func=_probe_in_contributions,
+        download_attr="download_in_data",
+        parse_attr="parse_in_contributions",
+        column_attr="in_column_for_semantic_path",
+        source_attr="in_data_source_for_data_type",
+        artifact_attr="in_bulk_download_url_for_data_type",
+        date_attr="parse_in_date",
+        download_call_style="in",
+        download_filename="in_contributions.csv.zip",
+        download_is_binary=True,
+        parsed_rows=(
+            {"ContributionDate": "2026-03-25 14:01:00"},
+            {"ContributionDate": "2026-03-10 10:00:00"},
+        ),
+        parsed_dates=(date(2026, 3, 25), date(2026, 3, 10)),
+        date_column="ContributionDate",
+        source_url="https://example.com/in/source",
+        patched_artifact_url="https://example.com/in/contributions/{YEAR}.zip",
+        jurisdiction="state/IN",
+        escaped_filename="escaped.csv",
+    ),
+    _ProbeWiringCase(
+        case_id="il",
+        probe_func=_probe_il_contributions,
+        download_attr="download_il_data",
+        parse_attr="parse_il_contributions",
+        column_attr="il_column_for_semantic_path",
+        source_attr="il_data_source_url_for_data_type",
+        artifact_attr="il_bulk_download_url_for_data_type",
+        date_attr="parse_il_date",
+        download_call_style="il",
+        download_filename="Receipts.txt",
+        download_is_binary=False,
+        parsed_rows=(
+            {"RcvDate": "2026-03-29 15:10:00"},
+            {"RcvDate": "2026-03-27 10:13:00"},
+        ),
+        parsed_dates=(date(2026, 3, 29), date(2026, 3, 27)),
+        date_column="RcvDate",
+        source_url="https://elections.il.gov/CampaignDisclosure/DownloadCDDataFiles.aspx",
+        patched_artifact_url="https://elections.il.gov/CampaignDisclosure/DownloadCDDataFiles.aspx",
+        jurisdiction="state/IL",
+        escaped_filename="escaped.txt",
+    ),
+    _ProbeWiringCase(
+        case_id="mn",
+        probe_func=_probe_mn_contributions,
+        download_attr="download_mn_csv",
+        parse_attr="parse_mn_contributions",
+        column_attr="mn_column_for_semantic_path",
+        source_attr="mn_source_url_for_data_type",
+        artifact_attr="build_mn_download_url",
+        date_attr="parse_mn_date",
+        download_call_style="keyword",
+        download_filename="mn_contributions.csv",
+        download_is_binary=False,
+        parsed_rows=(
+            {"transaction_date": "2026-03-18"},
+            {"transaction_date": "2026-03-01"},
+        ),
+        parsed_dates=(date(2026, 3, 18), date(2026, 3, 1)),
+        date_column="transaction_date",
+        source_url="https://register.cfb.mn.gov/reports-and-data/self-help/data-downloads/campaign-finance/",
+        patched_artifact_url="https://register.cfb.mn.gov/downloads/contributions.csv",
+        jurisdiction="state/MN",
+        escaped_filename="escaped.csv",
+    ),
+    _ProbeWiringCase(
+        case_id="nj",
+        probe_func=_probe_nj_contributions,
+        download_attr="download_nj_csv",
+        parse_attr="parse_nj_contributions",
+        column_attr="nj_column_for_semantic_path",
+        source_attr="nj_source_url_for_data_type",
+        artifact_attr="build_nj_download_url",
+        date_attr="parse_nj_date",
+        download_call_style="keyword",
+        download_filename="nj_contributions.csv",
+        download_is_binary=False,
+        parsed_rows=(
+            {"ContributionDate": "2026-03-21"},
+            {"ContributionDate": "2026-03-03"},
+        ),
+        parsed_dates=(date(2026, 3, 21), date(2026, 3, 3)),
+        date_column="ContributionDate",
+        source_url="https://www.njelecefilesearch.com/",
+        patched_artifact_url="https://www.njelecefilesearch.com/download/contributions.csv",
+        jurisdiction="state/NJ",
+        escaped_filename="escaped.csv",
+    ),
+)
 
 
 class TestFreshnessClassification:
@@ -154,26 +339,6 @@ class TestFreshnessProbeDispatch:
         mock_mn_probe.assert_called_once()
         mock_nj_probe.assert_called_once()
 
-    @patch("domains.campaign_finance.quality.freshness._probe_nj_contributions", return_value=_fake_check("pass"))
-    @patch("domains.campaign_finance.quality.freshness._probe_mn_contributions", return_value=_fake_check("warn"))
-    @patch("domains.campaign_finance.quality.freshness._probe_in_contributions", return_value=_fake_check("fail"))
-    @patch("domains.campaign_finance.quality.freshness._probe_il_contributions", return_value=_fake_check("pass"))
-    def test_dispatches_in_mn_nj_probes(
-        self,
-        mock_il_probe: MagicMock,
-        mock_in_probe: MagicMock,
-        mock_mn_probe: MagicMock,
-        mock_nj_probe: MagicMock,
-    ) -> None:
-        summaries = run_freshness_checks(None)
-
-        assert [summary.jurisdiction for summary in summaries] == ["state/IL", "state/IN", "state/MN", "state/NJ"]
-        assert [summary.check_results[0].status for summary in summaries] == ["pass", "fail", "warn", "pass"]
-        mock_il_probe.assert_called_once()
-        mock_in_probe.assert_called_once()
-        mock_mn_probe.assert_called_once()
-        mock_nj_probe.assert_called_once()
-
     @patch(
         "domains.campaign_finance.quality.freshness._probe_in_contributions", side_effect=RuntimeError("network error")
     )
@@ -210,164 +375,164 @@ class TestFreshnessProbeDispatch:
         assert "timeout" in by_jurisdiction["state/NJ"].check_results[0].message
 
 
-def test_probe_in_uses_download_and_configured_date_column(tmp_path: Path) -> None:
-    current_year = date.today().year
-    parsed_rows = [
-        {"ContributionDate": "2026-03-25 14:01:00"},
-        {"ContributionDate": "2026-03-10 10:00:00"},
-    ]
-
-    def _write_download_to(destination_dir: Path) -> Path:
-        download_path = destination_dir / "in_contributions.csv.zip"
-        download_path.write_bytes(b"zip-placeholder")
-        return download_path
-
+@pytest.mark.parametrize("case", _PROBE_WIRING_CASES, ids=[case.case_id for case in _PROBE_WIRING_CASES])
+def test_probe_uses_download_and_configured_date_column(case: _ProbeWiringCase) -> None:
     with (
         patch(
-            "domains.campaign_finance.quality.freshness.download_in_data",
-            side_effect=lambda **kwargs: _write_download_to(kwargs["dest_dir"]),
+            f"{_FRESHNESS_MODULE}.{case.download_attr}",
+            side_effect=_download_side_effect(case),
         ) as mock_download,
         patch(
-            "domains.campaign_finance.quality.freshness.parse_in_contributions",
-            return_value=iter(parsed_rows),
+            f"{_FRESHNESS_MODULE}.{case.parse_attr}",
+            return_value=iter(case.parsed_rows),
         ),
         patch(
-            "domains.campaign_finance.quality.freshness.in_column_for_semantic_path",
-            return_value="ContributionDate",
+            f"{_FRESHNESS_MODULE}.{case.column_attr}",
+            return_value=case.date_column,
         ),
         patch(
-            "domains.campaign_finance.quality.freshness.in_data_source_for_data_type",
-            return_value=MagicMock(url="https://example.com/in/source"),
+            f"{_FRESHNESS_MODULE}.{case.source_attr}",
+            return_value=_source_return_value(case),
         ),
         patch(
-            "domains.campaign_finance.quality.freshness.in_bulk_download_url_for_data_type",
-            return_value="https://example.com/in/contributions/{YEAR}.zip",
+            f"{_FRESHNESS_MODULE}.{case.artifact_attr}",
+            return_value=case.patched_artifact_url,
         ),
         patch(
-            "domains.campaign_finance.quality.freshness.parse_in_date",
-            side_effect=[date(2026, 3, 25), date(2026, 3, 10)],
+            f"{_FRESHNESS_MODULE}.{case.date_attr}",
+            side_effect=case.parsed_dates,
         ),
         patch(
-            "domains.campaign_finance.quality.freshness._build_freshness_check_result",
+            f"{_FRESHNESS_MODULE}._build_freshness_check_result",
             return_value=_fake_check("pass"),
         ) as mock_build_check,
     ):
-        result = _probe_in_contributions()
+        result = case.probe_func()
 
     assert result.status == "pass"
-    mock_download.assert_called_once()
-    assert mock_download.call_args.kwargs["data_type"] == "contributions"
+    _assert_download_called(case, mock_download)
     mock_build_check.assert_called_once()
     observed_payload = mock_build_check.call_args.args[0]
-    assert observed_payload.jurisdiction == "state/IN"
-    assert observed_payload.date_column == "ContributionDate"
-    assert observed_payload.source_url == "https://example.com/in/source"
-    assert observed_payload.artifact_url == f"https://example.com/in/contributions/{current_year}.zip"
+    assert observed_payload.jurisdiction == case.jurisdiction
+    assert observed_payload.date_column == case.date_column
+    assert observed_payload.source_url == case.source_url
+    assert observed_payload.artifact_url == _expected_artifact_url(case)
     assert observed_payload.parsed_row_count == 2
-    assert observed_payload.max_transaction_date == date(2026, 3, 25)
+    assert observed_payload.max_transaction_date == case.parsed_dates[0]
 
-    escaped_path = tmp_path / "escaped.csv"
+
+@pytest.mark.parametrize("case", _PROBE_WIRING_CASES, ids=[case.case_id for case in _PROBE_WIRING_CASES])
+def test_probe_rejects_download_paths_outside_temp_directory(case: _ProbeWiringCase, tmp_path: Path) -> None:
+    escaped_path = tmp_path / case.escaped_filename
     with (
         patch(
-            "domains.campaign_finance.quality.freshness.download_in_data",
+            f"{_FRESHNESS_MODULE}.{case.download_attr}",
             return_value=escaped_path,
         ),
         patch(
-            "domains.campaign_finance.quality.freshness.in_column_for_semantic_path",
-            return_value="ContributionDate",
+            f"{_FRESHNESS_MODULE}.{case.column_attr}",
+            return_value=case.date_column,
         ),
         patch(
-            "domains.campaign_finance.quality.freshness.in_data_source_for_data_type",
-            return_value=MagicMock(url="https://example.com/in/source"),
+            f"{_FRESHNESS_MODULE}.{case.source_attr}",
+            return_value=_source_return_value(case),
         ),
         patch(
-            "domains.campaign_finance.quality.freshness.in_bulk_download_url_for_data_type",
-            return_value="https://example.com/in/contributions/{YEAR}.zip",
-        ),
-    ):
-        with pytest.raises(ValueError, match="escaped the temporary directory"):
-            _probe_in_contributions()
-
-
-def test_probe_il_uses_download_and_configured_date_column(tmp_path: Path) -> None:
-    parsed_rows = [
-        {"RcvDate": "2026-03-29 15:10:00"},
-        {"RcvDate": "2026-03-27 10:13:00"},
-    ]
-
-    def _write_download_to(destination_dir: Path) -> Path:
-        download_path = destination_dir / "Receipts.txt"
-        download_path.write_text("placeholder", encoding="utf-8")
-        return download_path
-
-    with (
-        patch(
-            "domains.campaign_finance.quality.freshness.download_il_data",
-            side_effect=lambda data_type, *, dest_dir, tail_data_rows: _write_download_to(dest_dir),
-        ) as mock_download,
-        patch(
-            "domains.campaign_finance.quality.freshness.parse_il_contributions",
-            return_value=iter(parsed_rows),
-        ),
-        patch(
-            "domains.campaign_finance.quality.freshness.il_column_for_semantic_path",
-            return_value="RcvDate",
-        ),
-        patch(
-            "domains.campaign_finance.quality.freshness.il_data_source_url_for_data_type",
-            return_value="https://elections.il.gov/CampaignDisclosure/DownloadCDDataFiles.aspx",
-        ),
-        patch(
-            "domains.campaign_finance.quality.freshness.il_bulk_download_url_for_data_type",
-            return_value="https://elections.il.gov/CampaignDisclosure/DownloadCDDataFiles.aspx",
-        ),
-        patch(
-            "domains.campaign_finance.quality.freshness.parse_il_date",
-            side_effect=[date(2026, 3, 29), date(2026, 3, 27)],
-        ),
-        patch(
-            "domains.campaign_finance.quality.freshness._build_freshness_check_result",
-            return_value=_fake_check("pass"),
-        ) as mock_build_check,
-    ):
-        result = _probe_il_contributions()
-
-    assert result.status == "pass"
-    mock_download.assert_called_once_with(
-        "contributions",
-        dest_dir=mock_download.call_args.kwargs["dest_dir"],
-        tail_data_rows=_IL_FRESHNESS_TAIL_ROWS,
-    )
-    mock_build_check.assert_called_once()
-    observed_payload = mock_build_check.call_args.args[0]
-    assert observed_payload.jurisdiction == "state/IL"
-    assert observed_payload.date_column == "RcvDate"
-    assert observed_payload.source_url == "https://elections.il.gov/CampaignDisclosure/DownloadCDDataFiles.aspx"
-    assert observed_payload.artifact_url == "https://elections.il.gov/CampaignDisclosure/DownloadCDDataFiles.aspx"
-    assert observed_payload.parsed_row_count == 2
-    assert observed_payload.max_transaction_date == date(2026, 3, 29)
-
-    escaped_path = tmp_path / "escaped.txt"
-    with (
-        patch(
-            "domains.campaign_finance.quality.freshness.download_il_data",
-            return_value=escaped_path,
-        ),
-        patch(
-            "domains.campaign_finance.quality.freshness.il_column_for_semantic_path",
-            return_value="RcvDate",
-        ),
-        patch(
-            "domains.campaign_finance.quality.freshness.il_data_source_url_for_data_type",
-            return_value="https://elections.il.gov/CampaignDisclosure/DownloadCDDataFiles.aspx",
-        ),
-        patch(
-            "domains.campaign_finance.quality.freshness.il_bulk_download_url_for_data_type",
-            return_value="https://elections.il.gov/CampaignDisclosure/DownloadCDDataFiles.aspx",
+            f"{_FRESHNESS_MODULE}.{case.artifact_attr}",
+            return_value=case.patched_artifact_url,
         ),
     ):
         with pytest.raises(ValueError, match="escaped the temporary directory"):
-            _probe_il_contributions()
+            case.probe_func()
+
+
+@pytest.mark.parametrize(
+    ("probe_func", "download_attr", "column_attr", "source_attr", "artifact_attr", "date_column"),
+    [
+        (
+            _probe_il_contributions,
+            "download_il_data",
+            "il_column_for_semantic_path",
+            "il_data_source_url_for_data_type",
+            "il_bulk_download_url_for_data_type",
+            "RcvDate",
+        ),
+        (
+            _probe_mn_contributions,
+            "download_mn_csv",
+            "mn_column_for_semantic_path",
+            "mn_source_url_for_data_type",
+            "build_mn_download_url",
+            "transaction_date",
+        ),
+        (
+            _probe_nj_contributions,
+            "download_nj_csv",
+            "nj_column_for_semantic_path",
+            "nj_source_url_for_data_type",
+            "build_nj_download_url",
+            "ContributionDate",
+        ),
+    ],
+)
+def test_direct_probe_connection_errors_propagate(
+    probe_func,
+    download_attr: str,
+    column_attr: str,
+    source_attr: str,
+    artifact_attr: str,
+    date_column: str,
+) -> None:
+    with (
+        patch(
+            f"domains.campaign_finance.quality.freshness.{column_attr}",
+            return_value=date_column,
+        ),
+        patch(
+            f"domains.campaign_finance.quality.freshness.{source_attr}",
+            return_value="https://example.com/source",
+        ),
+        patch(
+            f"domains.campaign_finance.quality.freshness.{artifact_attr}",
+            return_value="https://example.com/artifact",
+        ),
+        patch(
+            f"domains.campaign_finance.quality.freshness.{download_attr}",
+            side_effect=RuntimeError("connection refused"),
+        ),
+    ):
+        with pytest.raises(RuntimeError, match="connection refused"):
+            probe_func()
+
+
+def test_probe_mn_timeout_propagates_and_dispatcher_returns_error() -> None:
+    with (
+        patch(
+            "domains.campaign_finance.quality.freshness.mn_column_for_semantic_path",
+            return_value="transaction_date",
+        ),
+        patch(
+            "domains.campaign_finance.quality.freshness.mn_source_url_for_data_type",
+            return_value="https://example.com/mn/source",
+        ),
+        patch(
+            "domains.campaign_finance.quality.freshness.build_mn_download_url",
+            return_value="https://example.com/mn/contributions.csv",
+        ),
+        patch(
+            "domains.campaign_finance.quality.freshness.download_mn_csv",
+            side_effect=httpx.ReadTimeout("read timed out"),
+        ),
+    ):
+        with pytest.raises(httpx.ReadTimeout, match="read timed out"):
+            _probe_mn_contributions()
+        summaries = run_freshness_checks("state/MN")
+
+    assert len(summaries) == 1
+    assert summaries[0].jurisdiction == "state/MN"
+    result = summaries[0].check_results[0]
+    assert result.status == "error"
+    assert "read timed out" in result.message
 
 
 @patch("domains.campaign_finance.quality.freshness._probe_contributions", return_value=_fake_check("pass"))

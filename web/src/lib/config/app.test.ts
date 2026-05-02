@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { APP_SHELL } from './app';
+import { APP_SHELL, MAP_LAYERS } from './app';
 
 describe('APP_SHELL shared static-route contract', () => {
   it('keeps shell branding and default app title in shared config', () => {
@@ -85,10 +85,31 @@ describe('APP_SHELL shared static-route contract', () => {
       description:
         'Coverage scope, confidence labels, and source guidance for campaign-finance, civic office, and property records.'
     });
+    expect(APP_SHELL.staticRoutes.calendar).toEqual({
+      title: 'Election Calendar | Civibus',
+      description:
+        'Track upcoming elections with contest-level counts and linked civic coverage across supported jurisdictions.'
+    });
+    expect(APP_SHELL.staticRoutes.coverage).toEqual({
+      title: 'Coverage Registry | Civibus',
+      description:
+        'Review runtime coverage registry rows grouped by domain and jurisdiction with latest pull timestamps.'
+    });
+    expect(APP_SHELL.staticRoutes.dataSources).toEqual({
+      title: 'Data Sources | Civibus',
+      description:
+        'Inspect runtime data-source metadata, pull status, and source-record pointers from the backend registry.'
+    });
   });
 
   it('limits static-route metadata ownership to static pages only', () => {
-    expect(Object.keys(APP_SHELL.staticRoutes).sort()).toEqual(['home', 'methodology']);
+    expect(Object.keys(APP_SHELL.staticRoutes).sort()).toEqual([
+      'calendar',
+      'coverage',
+      'dataSources',
+      'home',
+      'methodology'
+    ]);
   });
 
   it('captures methodology confidence labels from classify_confidence tiers', () => {
@@ -141,5 +162,38 @@ describe('APP_SHELL shared static-route contract', () => {
       label: 'Report a data issue',
       href: 'mailto:team@civibus.org?subject=Civibus%20data%20issue'
     });
+  });
+});
+
+describe('MAP_LAYERS shared map-layer contract', () => {
+  it('defines required map-layer fields in the shared config owner', () => {
+    expect(MAP_LAYERS.length).toBeGreaterThan(0);
+
+    for (const layer of MAP_LAYERS) {
+      expect(layer).toEqual(
+        expect.objectContaining({
+          id: expect.any(String),
+          level: expect.any(String),
+          divisionType: expect.any(String),
+          alwaysOn: expect.any(Boolean),
+          label: expect.any(String),
+          defaultVisible: expect.any(Boolean),
+          applicableLevels: expect.arrayContaining([expect.any(String)])
+        })
+      );
+    }
+  });
+
+  it('keeps NC congressional-district layer defaults for state and county drilldown', () => {
+    const ncCongressionalLayer = MAP_LAYERS.find((layer) => layer.id === 'nc_congressional_districts');
+
+    expect(ncCongressionalLayer).toBeDefined();
+    expect(ncCongressionalLayer).toMatchObject({
+      alwaysOn: false,
+      defaultVisible: false
+    });
+    expect(ncCongressionalLayer?.applicableLevels).toEqual(
+      expect.arrayContaining(['state', 'county'])
+    );
   });
 });

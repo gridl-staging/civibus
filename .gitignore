@@ -19,3 +19,8 @@ docs/research/artifacts/2026-03-production-proof/*.dump
 
 # Auto-generated scrai caches (large, change frequently)
 .scrai/codemap_graph_cache.json
+
+# Large shapefile downloads — too big for git
+docs/research/artifacts/*/downloads/**/*.shp
+docs/research/artifacts/*/downloads/**/*.zip
+

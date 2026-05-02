@@ -1,0 +1,100 @@
+schema_version: 1
+must_match:
+  - case_id: nc_organization_adams_for_nc_house_suffix_normalization
+    entity_type: organization
+    left_entity:
+      canonical_name: ADAMS FOR NC HOUSE
+      jurisdiction: state/nc
+      source_record_key: nc-sboe-sta-b6ip24-c-001-export
+    right_entity:
+      canonical_name: Adams for NC House Committee
+      jurisdiction: state/nc
+      source_record_key: nc-sboe-sta-b6ip24-c-001-disclosure
+    rationale: NC committee naming varies by suffix in committee export/report labels but should resolve to one organization.
+    source_notes:
+      - tests/fixtures/roster/nc_general_assembly_house.html
+      - domains/campaign_finance/jurisdictions/states/NC/tests/fixtures/per_office_class/nc_state_house/committee_export_adams_house_2026_04_25.csv
+  - case_id: nc_person_julia_c_howard_middle_initial_normalization
+    entity_type: person
+    left_entity:
+      canonical_name: Julia C. Howard
+      jurisdiction: state/nc
+      source_record_key: ncga-house-h53
+    right_entity:
+      canonical_name: Julia Howard
+      jurisdiction: state/nc
+      source_record_key: ncga-house-h53-normalized
+    rationale: NC roster naming includes optional middle initials that should normalize to the same legislator identity.
+    source_notes:
+      - tests/fixtures/roster/nc_general_assembly_house.html
+      - docs/research/artifacts/2026_04_29_roster_pilot_closeout/nc_house_counts_after_rerun.txt
+  - case_id: organization_suffix_normalization
+    entity_type: organization
+    left_entity:
+      canonical_name: Citizens for Transit Committee
+      jurisdiction: city/la
+      source_record_key: la-org-001
+    right_entity:
+      canonical_name: Citizens for Transit Cmte
+      jurisdiction: state/ca
+      source_record_key: ca-org-889
+    rationale: Same committee appears with common name abbreviation across city and state filings.
+    source_notes:
+      - https://ethics.lacity.org/
+      - https://cal-access.sos.ca.gov/
+  - case_id: person_cross_source_exact_name_address
+    entity_type: person
+    left_entity:
+      canonical_name: Jordan A Rivera
+      primary_address: 101 Main St, Sacramento, CA
+      source_record_key: ca-contrib-1001
+    right_entity:
+      canonical_name: Jordan A Rivera
+      primary_address: 101 Main Street, Sacramento, CA
+      source_record_key: fec-sched-a-9231
+    rationale: Same donor appears across sources with normalized street suffix variation only.
+    source_notes:
+      - https://www.fec.gov/data/
+      - https://cal-access.sos.ca.gov/
+must_not_match:
+  - case_id: nc_person_julia_howard_vs_mitchell_setzer_distinct_legislators
+    entity_type: person
+    left_entity:
+      canonical_name: Julia C. Howard
+      jurisdiction: state/nc
+      source_record_key: ncga-house-h53
+    right_entity:
+      canonical_name: Mitchell S. Setzer
+      jurisdiction: state/nc
+      source_record_key: ncga-house-h149
+    rationale: Distinct NC House members in different districts must never auto-merge despite shared office scope.
+    source_notes:
+      - tests/fixtures/roster/nc_general_assembly_house.html
+      - docs/research/artifacts/2026_04_29_roster_pilot_closeout/nc_house_counts_after_rerun.txt
+  - case_id: organization_similar_name_distinct_committees
+    entity_type: organization
+    left_entity:
+      canonical_name: Committee for Better Schools
+      jurisdiction: city/sf
+      source_record_key: sf-committee-310
+    right_entity:
+      canonical_name: Committee for Better Schools Action Fund
+      jurisdiction: state/ca
+      source_record_key: ca-committee-901
+    rationale: Distinct legal committees with similar branding should not auto-merge.
+    source_notes:
+      - https://sfethics.org/
+      - https://cal-access.sos.ca.gov/
+  - case_id: person_same_name_different_middle_initial
+    entity_type: person
+    left_entity:
+      canonical_name: Taylor M Lee
+      primary_address: 500 Oak Ave, Denver, CO
+      source_record_key: co-contrib-772
+    right_entity:
+      canonical_name: Taylor J Lee
+      primary_address: 890 Pine Ave, Denver, CO
+      source_record_key: co-contrib-901
+    rationale: Similar first and last names but distinct middle initial and address indicate separate people.
+    source_notes:
+      - https://www.coloradosos.gov/pubs/elections/main.html

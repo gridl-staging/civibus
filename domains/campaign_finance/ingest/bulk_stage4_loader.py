@@ -1,3 +1,7 @@
+"""
+Stub summary for /Users/stuart/parallel_development/civibus_dev/MAR18_api_graph_routes_and_property_endpoints/civibus_dev/domains/campaign_finance/ingest/bulk_stage4_loader.py.
+"""
+
 from __future__ import annotations
 
 from collections.abc import Iterable
@@ -31,6 +35,8 @@ _LEGACY_STAGE4_OPTION_KEYS = frozenset({"batch_size", "limit", "graph_enabled", 
 class LoadResult:
     inserted: int = 0
     skipped: int = 0
+    quarantined: int = 0
+    superseded: int = 0
     errors: int = 0
 
 

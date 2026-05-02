@@ -14,6 +14,7 @@ from psycopg.sql import SQL, Identifier, Placeholder
 from core.db import try_insert_source_record
 from core.types.python.models import DataSource, SourceRecord, compute_record_hash, utc_now
 from domains.campaign_finance.ingest.bulk_stage4_loader import LoadResult
+from domains.campaign_finance.ingest.dark_money.download import IRS_527_FULL_DATA_URL
 from domains.campaign_finance.ingest.dark_money.parser import (
     Irs527Record,
     read_irs_527_records,
@@ -26,7 +27,6 @@ LOGGER = logging.getLogger(__name__)
 _IRS_527_DATA_SOURCE_DOMAIN = "campaign_finance"
 _IRS_527_DATA_SOURCE_JURISDICTION = "federal/irs_527"
 _IRS_527_DATA_SOURCE_NAME = "IRS Form 8872 Political Organizations"
-_IRS_527_DATA_SOURCE_URL = "https://forms.irs.gov/app/pod/dataDownload/fullData"
 _IRS_527_DATA_SOURCE_FORMAT = "pipe_delimited"
 
 _IRS_527_ROW_SAVEPOINT = "irs_527_row"
@@ -37,7 +37,7 @@ def ensure_irs_527_data_source(conn: psycopg.Connection) -> UUID:
         domain=_IRS_527_DATA_SOURCE_DOMAIN,
         jurisdiction=_IRS_527_DATA_SOURCE_JURISDICTION,
         name=_IRS_527_DATA_SOURCE_NAME,
-        source_url=_IRS_527_DATA_SOURCE_URL,
+        source_url=IRS_527_FULL_DATA_URL,
         source_format=_IRS_527_DATA_SOURCE_FORMAT,
     )
     return ensure_data_source(conn, data_source)
@@ -193,7 +193,7 @@ def _build_source_record(
     return SourceRecord(
         data_source_id=data_source_id,
         source_record_key=_source_record_key(record),
-        source_url=_IRS_527_DATA_SOURCE_URL,
+        source_url=IRS_527_FULL_DATA_URL,
         raw_fields=raw_fields,
         pull_date=utc_now(),
         record_hash=compute_record_hash(raw_fields),

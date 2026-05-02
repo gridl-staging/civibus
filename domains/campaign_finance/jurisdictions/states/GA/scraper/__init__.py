@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -15,6 +16,9 @@ class _GADataSourceBlock:
     url: str
     transaction_types: tuple[str, ...]
     field_mapping_keys: tuple[str, ...]
+    date_selectors: tuple[str, str] | None
+    last_verified_working: date | None
+    known_issues: tuple[str, ...]
 
 
 @lru_cache(maxsize=1)
@@ -30,6 +34,14 @@ def _load_ga_data_source_blocks() -> tuple[_GADataSourceBlock, ...]:
             url=data_source.url,
             transaction_types=tuple(data_source.coverage.transaction_types),
             field_mapping_keys=tuple(data_source.field_mappings.keys()),
+            date_selectors=(
+                data_source.date_start_selector,
+                data_source.date_end_selector,
+            )
+            if data_source.date_start_selector and data_source.date_end_selector
+            else None,
+            last_verified_working=data_source.last_verified_working,
+            known_issues=tuple(data_source.known_issues),
         )
         for data_source in config.data_sources
     )
@@ -71,6 +83,19 @@ def _load_columns_for_transaction_type(transaction_type: str) -> tuple[str, ...]
     raise RuntimeError(f"Could not load GA columns from config.yaml for transaction type {transaction_type!r}")
 
 
+@lru_cache(maxsize=None)
+def _load_date_selectors_for_transaction_type(transaction_type: str) -> tuple[str, str]:
+    data_source_block = _find_ga_data_source_block_by_transaction_type(transaction_type)
+    if data_source_block is None:
+        raise RuntimeError(f"Could not load GA date selectors from config.yaml for transaction type {transaction_type!r}")
+    if data_source_block.date_selectors is None:
+        raise RuntimeError(
+            "Could not load GA date selectors from config.yaml for transaction type "
+            f"{transaction_type!r}: expected non-empty date_start_selector/date_end_selector"
+        )
+    return data_source_block.date_selectors
+
+
 CONTRIBUTION_COLUMNS = _load_columns_for_transaction_type("contributions")
 EXPENDITURE_COLUMNS = _load_columns_for_transaction_type("expenditures")
 
@@ -78,5 +103,7 @@ __all__ = [
     "CONTRIBUTION_COLUMNS",
     "EXPENDITURE_COLUMNS",
     "_find_ga_data_source_block",
+    "_find_ga_data_source_block_by_transaction_type",
+    "_load_date_selectors_for_transaction_type",
     "_load_ga_data_source_blocks",
 ]

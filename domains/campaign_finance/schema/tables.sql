@@ -8,13 +8,14 @@
 --    - domains/campaign_finance/schema/tables.sql
 --
 -- Schema ownership
--- This file owns exactly six tables:
+-- This file owns exactly seven tables:
 --   - cf.committee
 --   - cf.candidate
 --   - cf.election
 --   - cf.filing
 --   - cf.transaction
 --   - cf.candidate_committee_link
+--   - cf.nc_committee_registry
 --
 -- Shared conventions for this stage
 --   - UUID primary keys use uuid_generate_v4().
@@ -186,6 +187,7 @@ CREATE TABLE cf.transaction (
     committee_id               UUID NOT NULL REFERENCES cf.committee(id),
     transaction_type           TEXT NOT NULL,
     transaction_identifier      TEXT,
+    back_ref_transaction_id    TEXT,
     sub_id                     NUMERIC(19,0),
     transaction_date           DATE,
     amount                     NUMERIC(14,2) NOT NULL,
@@ -282,6 +284,43 @@ CREATE INDEX idx_candidate_committee_election_lookup
 -- GiST index on (candidate_id, committee_id, designation null-flag/value, valid_period) is
 -- already created by the candidate_committee_link_non_overlapping EXCLUDE constraint.
 
+CREATE TABLE cf.nc_committee_registry (
+    id               UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    org_group_id     INTEGER NOT NULL,
+    sboe_id          TEXT NOT NULL,
+    committee_name   TEXT NOT NULL,
+    status_desc      TEXT NOT NULL,
+    old_id           TEXT,
+    candidate_name   TEXT,
+    data_source_id   UUID NOT NULL REFERENCES core.data_source(id),
+    first_seen_at    TIMESTAMPTZ NOT NULL,
+    last_seen_at     TIMESTAMPTZ NOT NULL,
+    -- last_filing_date: most recent filing date observed for this committee.
+    -- Populated by downstream filing ingest, NULL if no filings have been observed.
+    -- Used by the NC orchestrator (orchestrator_progress.seed_progress_from_registry)
+    -- to filter "recently active" committees within a window.
+    last_filing_date DATE,
+    -- is_active: derived from status_desc. Authoritative committee state from CFOrgLkup
+    -- discovery uses the values 'ACTIVE (NON-EXEMPT)', 'ACTIVE (EXEMPT)', 'INACTIVE',
+    -- 'CLOSED', 'CLOSED (PENDING)', 'CONDITIONALLY CLOSED', 'TERMINATED'. Active rows
+    -- are exactly those whose status_desc starts with 'ACTIVE'. Stored as a generated
+    -- column so the orchestrator filter stays in sync with discovery state without
+    -- requiring the registry loader to know about orchestrator semantics.
+    is_active        BOOLEAN GENERATED ALWAYS AS (status_desc LIKE 'ACTIVE%') STORED,
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+    CONSTRAINT ck_nc_committee_registry_seen_order
+        CHECK (last_seen_at >= first_seen_at)
+);
+
+CREATE UNIQUE INDEX uq_nc_committee_registry_org_group_id
+    ON cf.nc_committee_registry (org_group_id);
+CREATE INDEX idx_nc_committee_registry_sboe_id
+    ON cf.nc_committee_registry (sboe_id);
+CREATE INDEX idx_nc_committee_registry_status_desc
+    ON cf.nc_committee_registry (status_desc);
+
 CREATE TRIGGER trg_committee_updated_at
     BEFORE UPDATE ON cf.committee
     FOR EACH ROW
@@ -309,5 +348,10 @@ CREATE TRIGGER trg_transaction_updated_at
 
 CREATE TRIGGER trg_candidate_committee_link_updated_at
     BEFORE UPDATE ON cf.candidate_committee_link
+    FOR EACH ROW
+    EXECUTE FUNCTION core.set_updated_at();
+
+CREATE TRIGGER trg_nc_committee_registry_updated_at
+    BEFORE UPDATE ON cf.nc_committee_registry
     FOR EACH ROW
     EXECUTE FUNCTION core.set_updated_at();

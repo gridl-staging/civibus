@@ -403,15 +403,15 @@ def read_irs_527_records(txt_path: Path) -> Iterator[Irs527Record]:
                     yield _type_1_to_model(row)
                 elif record_type == "2":
                     model = _type_2_to_model(row)
-                    if model.period_begin_date >= cutoff:
+                    if model.period_begin_date is None or model.period_begin_date >= cutoff:
                         yield model
                 elif record_type == "A":
                     model = _type_a_to_model(row)
-                    if model.contribution_date >= cutoff:
+                    if model.contribution_date is None or model.contribution_date >= cutoff:
                         yield model
                 elif record_type == "B":
                     model = _type_b_to_model(row)
-                    if model.expenditure_date >= cutoff:
+                    if model.expenditure_date is None or model.expenditure_date >= cutoff:
                         yield model
             except Exception:
                 LOGGER.warning(

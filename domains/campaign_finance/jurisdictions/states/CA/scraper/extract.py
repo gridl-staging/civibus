@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from functools import lru_cache
 from typing import TypedDict
 
@@ -287,3 +288,29 @@ def _split_zip(raw_zip: str | None) -> tuple[str | None, str | None]:
     if zip4 is not None and (len(zip4) != 4 or not zip4.isdigit()):
         zip4 = None
     return zip5, zip4
+
+
+def extract_name_raw(extracted: Mapping[str, object]) -> str | None:
+    for key in ("donor_person", "payee_person", "lender_person"):
+        person = extracted.get(key)
+        if person is not None:
+            return person.canonical_name  # type: ignore[return-value]
+    for key in ("donor_org", "payee_org", "lender_org"):
+        organization = extracted.get(key)
+        if organization is not None:
+            return organization.canonical_name  # type: ignore[return-value]
+    return None
+
+
+def extract_employer(extracted: Mapping[str, object]) -> str | None:
+    donor_person = extracted.get("donor_person")
+    if donor_person is None:
+        return None
+    return donor_person.identifiers.get("employer")  # type: ignore[return-value]
+
+
+def extract_occupation(extracted: Mapping[str, object]) -> str | None:
+    donor_person = extracted.get("donor_person")
+    if donor_person is None:
+        return None
+    return donor_person.identifiers.get("occupation")  # type: ignore[return-value]

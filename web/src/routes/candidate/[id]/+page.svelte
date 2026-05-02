@@ -18,21 +18,24 @@
   let routePresentation: CandidateDetailRoutePresentation;
   let detailRouteSeo: DetailRouteSeoModel | null = null;
   let detailPageJsonLd: JsonLdObject | null = null;
+  let canonicalName: string | null = null;
 
   $: routePresentation = buildCandidateRoutePresentation(data as Parameters<typeof buildCandidateRoutePresentation>[0]);
+  $: canonicalName =
+    routePresentation.routeKind === "canonical-detail" ? routePresentation.shell.canonicalName : null;
 
   $: breadcrumbCrumbs = routePresentation.routeKind === "canonical-detail"
-    ? [{ label: "Home", href: "/" }, { label: routePresentation.detail.canonicalName }]
+    ? [{ label: "Home", href: "/" }, { label: routePresentation.shell.canonicalName }]
     : [{ label: "Home", href: "/" }, { label: "Candidates" }];
 
-  $: if (routePresentation.routeKind === "canonical-detail") {
-    const metadata = buildCandidateDetailMetadata(routePresentation.detail.canonicalName);
+  $: if (canonicalName !== null) {
+    const metadata = buildCandidateDetailMetadata(canonicalName);
 
     detailRouteSeo = buildDetailRouteSeo({
       metadata,
       ogType: "profile",
       schemaType: "Person",
-      name: routePresentation.detail.canonicalName,
+      name: canonicalName,
       pageUrl: $page.url,
       publicOrigin: env.PUBLIC_ORIGIN
     });

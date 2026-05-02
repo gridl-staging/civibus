@@ -29,9 +29,8 @@ def test_parse_contributions_filters_old_rows_by_year() -> None:
     """Fixture has 1 row from 2021 and 3 from 2026. year_from=2022 should drop the 2021 row."""
     rows = list(parse_contributions(_SAMPLE_CONTRIBUTIONS_PATH, year_from=2022))
     assert len(rows) == 3
-    # All remaining rows should be from 2026.
     for row in rows:
-        assert "2026" in row["receivedDate"]
+        assert "2026" in row["TRANSACTIONDATE"]
 
 
 def test_parse_contributions_includes_all_when_year_from_is_low() -> None:
@@ -44,25 +43,23 @@ def test_parse_expenditures_filters_old_rows_by_year() -> None:
     """Fixture has 1 row from 2021 and 1 from 2026. year_from=2022 should keep only the 2026 row."""
     rows = list(parse_expenditures(_SAMPLE_EXPENDITURES_PATH, year_from=2022))
     assert len(rows) == 1
-    assert "2026" in rows[0]["expendedDate"]
+    assert "2026" in rows[0]["TRANSACTIONDATE"]
 
 
 def test_parse_normalizes_empty_strings_to_none() -> None:
     """Empty string fields in the JSON should be normalized to None."""
     rows = list(parse_contributions(_SAMPLE_CONTRIBUTIONS_PATH, year_from=2022))
-    # The second fixture row (WILLIAMS) has empty middleName and description.
-    williams_row = next(r for r in rows if r.get("lastName") == "WILLIAMS")
-    assert williams_row["middleName"] is None
-    assert williams_row["description"] is None
+    williams_row = next(r for r in rows if r.get("CONTRIBUTOR") == "SARAH WILLIAMS")
+    assert williams_row["DESCRIPTION"] is None
 
 
 def test_parse_preserves_non_empty_field_values() -> None:
     """Non-empty fields should be preserved with leading/trailing whitespace stripped."""
     rows = list(parse_contributions(_SAMPLE_CONTRIBUTIONS_PATH, year_from=2022))
-    williams_row = next(r for r in rows if r.get("lastName") == "WILLIAMS")
-    assert williams_row["firstName"] == "SARAH"
-    assert williams_row["amount"] == "1000.00"
-    assert williams_row["city"] == "Montgomery"
+    williams_row = next(r for r in rows if r.get("CONTRIBUTOR") == "SARAH WILLIAMS")
+    assert williams_row["CONTRIBUTOR"] == "SARAH WILLIAMS"
+    assert williams_row["AMOUNT"] == "1000.00"
+    assert williams_row["CITYSTATE"] == "Montgomery, AL"
 
 
 def test_parse_only_includes_config_columns() -> None:
@@ -96,33 +93,21 @@ def test_parse_handles_bare_list_json(tmp_path: Path) -> None:
     """Parser should accept a bare JSON array (not wrapped in {data: [...]})."""
     bare = [
         {
-            "orgId": "CC1",
-            "committeeType": "PAC",
-            "filerName": "Test PAC",
-            "candidateName": "",
-            "contributionType": "Monetary",
-            "sourceType": "Individual",
-            "sourceName": "TEST",
-            "firstName": "JANE",
-            "lastName": "TEST",
-            "middleName": "",
-            "suffix": "",
-            "address1": "1 Main St",
-            "address2": "",
-            "city": "Test City",
-            "state": "AL",
-            "zipCode": "35000",
-            "receivedDate": "01/01/2026",
-            "amount": "100.00",
-            "description": "",
-            "employer": "",
-            "occupation": "",
-            "filedDate": "01/05/2026",
-            "amended": "N",
+            "TRANSACTIONID": "999",
+            "COMMITTEEID": "CC1",
+            "RECIPIENTNAME": "Test PAC",
+            "CONTRIBUTOR": "JANE TEST",
+            "CONTRIBUTIONTYPE": "Monetary",
+            "CITYSTATE": "Test City, AL",
+            "ZIP": "35000",
+            "TRANSACTIONDATE": "01/01/2026",
+            "FILINGDATE": "01/05/2026",
+            "AMOUNT": "100.00",
+            "DESCRIPTION": "",
         }
     ]
     bare_path = tmp_path / "bare.json"
     bare_path.write_text(json.dumps(bare))
     rows = list(parse_contributions(bare_path, year_from=2022))
     assert len(rows) == 1
-    assert rows[0]["firstName"] == "JANE"
+    assert rows[0]["CONTRIBUTOR"] == "JANE TEST"

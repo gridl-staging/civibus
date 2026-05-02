@@ -18,6 +18,7 @@ from domains.campaign_finance.jurisdictions.states.IN.scraper import (
     _load_columns_for_data_type,
 )
 from domains.campaign_finance.jurisdictions.states.IN.scraper import load as in_load_module
+from domains.campaign_finance.jurisdictions.states.IN.scraper import load_helpers as in_load_helpers
 from domains.campaign_finance.jurisdictions.states.IN.scraper.load import (
     LoadResult,
     _in_amendment_indicator,
@@ -285,15 +286,10 @@ def test_ingest_in_contributions_is_idempotent_and_sets_relational_keys(
     db_conn: psycopg.Connection,
 ) -> None:
     first_result = load_in_contributions_with_filings(db_conn, _SAMPLE_CONTRIBUTIONS_PATH)
-    second_result = load_in_contributions_with_filings(db_conn, _SAMPLE_CONTRIBUTIONS_PATH)
 
     assert isinstance(first_result, LoadResult)
     assert first_result.inserted == 8
     assert first_result.errors == 0
-
-    assert isinstance(second_result, LoadResult)
-    assert second_result.inserted == 0
-    assert second_result.skipped == 8
 
     expected_row = _parsed_contributions()[0]
     expected_filing = _in_filing_fec_id(expected_row, data_type="contributions")
@@ -305,7 +301,8 @@ def test_ingest_in_contributions_is_idempotent_and_sets_relational_keys(
             SELECT f.filing_fec_id,
                    f.receipt_date,
                    t.transaction_identifier,
-                   t.amendment_indicator
+                   t.amendment_indicator,
+                   t.source_record_id
             FROM cf.transaction t
             JOIN cf.filing f ON f.id = t.filing_id
             WHERE f.filing_fec_id = %s
@@ -315,8 +312,42 @@ def test_ingest_in_contributions_is_idempotent_and_sets_relational_keys(
             (expected_filing, expected_identifier),
         )
         row = cursor.fetchone()
+        cursor.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM cf.filing
+            WHERE filing_fec_id LIKE 'IN-%-contributions'
+            """,
+        )
+        first_filing_count = cursor.fetchone()["count"]
+        cursor.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM cf.transaction t
+            JOIN cf.filing f
+              ON f.id = t.filing_id
+            WHERE f.filing_fec_id LIKE 'IN-%-contributions'
+            """,
+        )
+        first_transaction_count = cursor.fetchone()["count"]
+
+    contribution_data_source_id = ensure_in_data_source(db_conn, data_type="contributions")
+    with db_conn.cursor(row_factory=dict_row) as cursor:
+        cursor.execute(
+            """
+            SELECT id, source_record_key, record_hash, raw_fields, pull_date
+            FROM core.source_record
+            WHERE data_source_id = %s
+              AND source_record_key = %s
+              AND superseded_by IS NULL
+            LIMIT 1
+            """,
+            (contribution_data_source_id, expected_identifier),
+        )
+        source_record_snapshot = cursor.fetchone()
 
     assert row is not None
+    assert source_record_snapshot is not None
     assert row["filing_fec_id"] == expected_filing
     # receipt_date reflects the last-processed row for this filing: upsert_filing uses
     # COALESCE(EXCLUDED.receipt_date, existing) so each non-null date overwrites the prior.
@@ -325,6 +356,65 @@ def test_ingest_in_contributions_is_idempotent_and_sets_relational_keys(
     assert row["transaction_identifier"] == expected_identifier
     assert row["amendment_indicator"] == "N"
 
+    second_result = load_in_contributions_with_filings(db_conn, _SAMPLE_CONTRIBUTIONS_PATH)
+
+    assert isinstance(second_result, LoadResult)
+    assert second_result.inserted == 0
+    assert second_result.skipped == 8
+
+    with db_conn.cursor(row_factory=dict_row) as cursor:
+        cursor.execute(
+            """
+            SELECT f.filing_fec_id,
+                   f.receipt_date,
+                   t.transaction_identifier,
+                   t.amendment_indicator,
+                   t.source_record_id
+            FROM cf.transaction t
+            JOIN cf.filing f ON f.id = t.filing_id
+            WHERE f.filing_fec_id = %s
+              AND t.transaction_identifier = %s
+            LIMIT 1
+            """,
+            (expected_filing, expected_identifier),
+        )
+        rerun_row = cursor.fetchone()
+        cursor.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM cf.filing
+            WHERE filing_fec_id LIKE 'IN-%-contributions'
+            """,
+        )
+        second_filing_count = cursor.fetchone()["count"]
+        cursor.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM cf.transaction t
+            JOIN cf.filing f
+              ON f.id = t.filing_id
+            WHERE f.filing_fec_id LIKE 'IN-%-contributions'
+            """,
+        )
+        second_transaction_count = cursor.fetchone()["count"]
+
+        cursor.execute(
+            """
+            SELECT id, source_record_key, record_hash, raw_fields, pull_date
+            FROM core.source_record
+            WHERE data_source_id = %s
+              AND source_record_key = %s
+              AND superseded_by IS NULL
+            LIMIT 1
+            """,
+            (contribution_data_source_id, expected_identifier),
+        )
+        rerun_source_record_snapshot = cursor.fetchone()
+
+    assert rerun_row == row
+    assert second_filing_count == first_filing_count
+    assert second_transaction_count == first_transaction_count
+    assert rerun_source_record_snapshot == source_record_snapshot
 
 @pytest.mark.integration
 def test_ingest_in_expenditures_maps_amended_rows_to_indicator_a(db_conn: psycopg.Connection) -> None:
@@ -415,3 +505,42 @@ def test_ingest_in_reports_quarantined_rows_from_parser_skip_count(
     assert result.skipped == 0
     assert result.errors == 0
     assert result.quarantined == 1
+
+
+# --- IE classification tests (load_helpers) ---
+
+
+def test_in_is_independent_expenditure_true_for_ie_code() -> None:
+    row = {"ExpenditureCode": "Independent Expenditure"}
+    assert in_load_helpers._in_is_independent_expenditure(row, data_type="expenditures") is True
+
+
+def test_in_is_independent_expenditure_case_insensitive() -> None:
+    row = {"ExpenditureCode": "INDEPENDENT EXPENDITURE"}
+    assert in_load_helpers._in_is_independent_expenditure(row, data_type="expenditures") is True
+
+
+def test_in_is_independent_expenditure_false_for_non_ie_code() -> None:
+    row = {"ExpenditureCode": "Advertising"}
+    assert in_load_helpers._in_is_independent_expenditure(row, data_type="expenditures") is False
+
+
+@pytest.mark.parametrize("raw_value", ["", None])
+def test_in_is_independent_expenditure_false_for_blank_or_null(raw_value: str | None) -> None:
+    row = {"ExpenditureCode": raw_value}
+    assert in_load_helpers._in_is_independent_expenditure(row, data_type="expenditures") is False
+
+
+def test_in_is_independent_expenditure_false_for_non_expenditure_data_type() -> None:
+    row = {"ExpenditureCode": "Independent Expenditure"}
+    assert in_load_helpers._in_is_independent_expenditure(row, data_type="contributions") is False
+
+
+def test_in_transaction_type_returns_ie_when_expenditure_code_is_ie() -> None:
+    row = {"ExpenditureCode": "Independent Expenditure", "ExpenditureType": "Direct"}
+    assert in_load_helpers._in_transaction_type(row, data_type="expenditures") == "Independent Expenditure"
+
+
+def test_in_transaction_type_returns_normal_type_for_non_ie() -> None:
+    row = {"ExpenditureCode": "Advertising", "ExpenditureType": "Direct"}
+    assert in_load_helpers._in_transaction_type(row, data_type="expenditures") == "direct"

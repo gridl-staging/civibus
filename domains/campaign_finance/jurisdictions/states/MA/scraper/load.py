@@ -107,6 +107,31 @@ _MA_COUNTERPARTY_ROLES: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
     "expenditures": (("payee",), ("payee_org",)),
 }
 
+# MA OCPF Is_Supported field maps to support/oppose for IE classification.
+# When Is_Supported is populated on an expenditure row, the row is an IE.
+# "1"/"True" = supports candidate, "0"/"False" = opposes candidate.
+_MA_SUPPORT_OPPOSE_MAP: dict[str, str] = {
+    "1": "S",
+    "TRUE": "S",
+    "YES": "S",
+    "Y": "S",
+    "0": "O",
+    "FALSE": "O",
+    "NO": "O",
+    "N": "O",
+}
+
+
+def _ma_support_oppose(row: Mapping[str, str | None]) -> str | None:
+    is_supported_col = _load_column_for_semantic_path("contributions", "ma.is_supported")
+    raw_value = _normalize_optional_text(row.get(is_supported_col))
+    if raw_value is None:
+        return None
+    try:
+        return _MA_SUPPORT_OPPOSE_MAP[raw_value.upper()]
+    except KeyError as error:
+        raise ValueError(f"Unsupported MA Is_Supported value: {raw_value!r}") from error
+
 
 # ---------- Data source ----------
 
@@ -373,10 +398,15 @@ def _required_ma_text(value: str | None, field_name: str) -> str:
     return normalized
 
 
+_TWO_PLACES = Decimal("0.01")
+
+
 def _parse_required_ma_amount(raw_value: str | None, field_name: str) -> Decimal:
     normalized = _required_ma_text(raw_value, field_name)
     try:
-        return Decimal(normalized.replace(",", "").replace("$", ""))
+        # MA source data occasionally has >2 decimal places (e.g. 100.0010).
+        # Quantize to 2 places to match the Transaction model's decimal_places=2.
+        return Decimal(normalized.replace(",", "").replace("$", "")).quantize(_TWO_PLACES)
     except InvalidOperation as exc:
         raise ValueError(f"MA row has invalid {field_name}: {raw_value!r}") from exc
 
@@ -397,19 +427,34 @@ def _resolve_ma_filing_committee_id(
 ) -> UUID:
     extracted = _MA_EXTRACT_FN[data_type](dict(row))
     org_id = _resolve_ma_committee_id(conn, extracted["committee"])
-    # Use CPF_ID as native committee identifier.
-    cpf_id_col = _load_column_for_semantic_path("contributions", "ma.related_cpf_id")
-    native_id = _normalize_optional_text(row.get(cpf_id_col))
-    if native_id is None:
-        # Fall back to report_id if no CPF_ID.
-        report_id_col = _load_column_for_semantic_path("contributions", "ma.report_id")
-        native_id = _required_ma_text(row.get(report_id_col), report_id_col)
     return ensure_state_committee(
         conn,
         state="MA",
-        native_committee_id=native_id,
+        native_committee_id=_resolve_ma_filing_native_committee_id(row),
         organization_id=org_id,
     )
+
+
+def _resolve_ma_filing_native_committee_id(row: Mapping[str, str | None]) -> str:
+    """Resolve MA filing committee key used for cf.committee synthetic ID generation."""
+    cpf_id_col = _load_column_for_semantic_path("contributions", "ma.related_cpf_id")
+    native_id = _normalize_optional_text(row.get(cpf_id_col))
+    if native_id is not None:
+        return native_id
+    report_id_col = _load_column_for_semantic_path("contributions", "ma.report_id")
+    return _required_ma_text(row.get(report_id_col), report_id_col)
+
+
+def _resolve_ma_filing_committee_id_in_short_transaction(
+    conn: psycopg.Connection,
+    row: Mapping[str, str | None],
+    data_type: str,
+) -> UUID:
+    """Resolve committee id with a short transaction to avoid long-held upsert locks."""
+    if conn.info.transaction_status != psycopg.pq.TransactionStatus.IDLE:
+        return _resolve_ma_filing_committee_id(conn, row, data_type)
+    with conn.transaction():
+        return _resolve_ma_filing_committee_id(conn, row, data_type)
 
 
 def _build_ma_filing(
@@ -440,12 +485,14 @@ def _upsert_ma_filing(
     source_record_id: UUID,
     data_type: str,
     filing_lookup: dict[str, _MAFilingLookupEntry],
+    committee_id: UUID | None = None,
 ) -> _MAFilingLookupEntry:
     filing_fec_id = _build_ma_filing_fec_id(row, data_type)
     existing = filing_lookup.get(filing_fec_id)
 
     if existing is None:
-        committee_id = _resolve_ma_filing_committee_id(conn, row, data_type)
+        if committee_id is None:
+            committee_id = _resolve_ma_filing_committee_id(conn, row, data_type)
         filing_src = source_record_id
     else:
         committee_id = existing.committee_id
@@ -484,7 +531,9 @@ def _select_ma_source_record_id(
         cursor.execute(
             """
             SELECT id FROM core.source_record
-            WHERE data_source_id = %s AND source_record_key = %s
+            WHERE data_source_id = %s
+              AND source_record_key = %s
+              AND superseded_by IS NULL
             LIMIT 1
             """,
             (data_source_id, source_record_key),
@@ -547,8 +596,12 @@ def _upsert_ma_transaction_with_filing(
     record_type_col = _load_column_for_semantic_path("contributions", "ma.record_type_id")
     item_id_col = _load_column_for_semantic_path("contributions", "ma.item_id")
 
-    # Use Record_Type_ID as transaction type (e.g., "201", "301").
-    txn_type = _normalize_optional_text(row.get(record_type_col)) or data_type.rstrip("s")
+    support_oppose = _ma_support_oppose(row) if data_type == "expenditures" else None
+    txn_type = (
+        "Independent Expenditure"
+        if support_oppose is not None
+        else (_normalize_optional_text(row.get(record_type_col)) or data_type.rstrip("s"))
+    )
     txn_identifier = _normalize_optional_text(row.get(item_id_col)) or _ma_source_record_key(row)
 
     # Employer/occupation from MA data.
@@ -575,6 +628,7 @@ def _upsert_ma_transaction_with_filing(
             contributor_address_id=address_id,
             recipient_committee_id=committee_id,
             amendment_indicator="N",
+            support_oppose=support_oppose,
             memo_text=_normalize_optional_text(row.get(desc_col)),
             source_record_id=source_record_id,
         ),
@@ -589,7 +643,14 @@ def _load_ma_relational_transactions(
     data_type: str,
     limit: int | None,
 ) -> int:
+    if conn.info.transaction_status == psycopg.pq.TransactionStatus.INTRANS:
+        # This pass owns its own transaction boundaries. Commit any ambient transaction
+        # (for example, statement_timeout setup) so committee upserts can run in short
+        # independent transactions before filing+transaction writes.
+        conn.commit()
+
     filing_lookup: dict[str, _MAFilingLookupEntry] = {}
+    committee_lookup: dict[str, UUID] = {}
     relational_errors = 0
     manages_outer = conn.info.transaction_status == psycopg.pq.TransactionStatus.IDLE
 
@@ -607,7 +668,20 @@ def _load_ma_relational_transactions(
         if source_record_id is None:
             continue
 
+        filing_fec_id = _build_ma_filing_fec_id(row, data_type)
+        was_cached = filing_fec_id in filing_lookup
         try:
+            committee_id: UUID | None = None
+            if not was_cached:
+                # Keep MA committee upserts in short transactions before filing+transaction writes.
+                # Contribution and expenditure lanes can share one Related_CPF_ID; if committee
+                # upsert stays inside the longer relational transaction, one lane can time out
+                # waiting on the cf.committee index tuple lock held by the other lane.
+                native_committee_id = _resolve_ma_filing_native_committee_id(row)
+                committee_id = committee_lookup.get(native_committee_id)
+                if committee_id is None:
+                    committee_id = _resolve_ma_filing_committee_id_in_short_transaction(conn, row, data_type)
+                    committee_lookup[native_committee_id] = committee_id
             if manages_outer:
                 ensure_transaction_open(conn)
             with conn.transaction():
@@ -617,6 +691,7 @@ def _load_ma_relational_transactions(
                     source_record_id=source_record_id,
                     data_type=data_type,
                     filing_lookup=filing_lookup,
+                    committee_id=committee_id,
                 )
                 _upsert_ma_transaction_with_filing(
                     conn,
@@ -627,6 +702,8 @@ def _load_ma_relational_transactions(
                     data_type=data_type,
                 )
         except Exception:  # noqa: BLE001
+            if not was_cached:
+                filing_lookup.pop(filing_fec_id, None)
             relational_errors += 1
             LOGGER.exception("Failed linking MA %s row to filing", data_type.rstrip("s"))
 
@@ -646,6 +723,9 @@ def _load_ma_with_filings(
 ) -> LoadResult:
     validated_row_limit = validated_limit(limit)
     data_source_id = ensure_ma_data_source(conn)
+    # ensure_ma_data_source leaves conn IN_TRANSACTION; commit so _load_ma_rows
+    # sees IDLE and enables periodic commits every 1000 rows.
+    conn.commit()
 
     load_result = _load_ma_file(
         conn,

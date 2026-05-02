@@ -16,6 +16,7 @@ from domains.campaign_finance.ingest.filing_loader import (
     ensure_state_committee,
     generate_synthetic_committee_id,
     resolve_transaction_counterparty_ids,
+    update_transaction_contributor_identity_ids,
     upsert_filing,
     upsert_transaction,
 )
@@ -168,7 +169,7 @@ def _select_transaction_row(db_conn: psycopg.Connection, transaction_id: UUID) -
     with db_conn.cursor(row_factory=dict_row) as cursor:
         cursor.execute(
             """
-            SELECT id, amendment_indicator
+            SELECT id, amendment_indicator, back_ref_transaction_id
             FROM cf.transaction
             WHERE id = %s
             """,
@@ -430,6 +431,87 @@ def test_upsert_transaction_is_idempotent_by_sub_id(db_conn: psycopg.Connection)
     assert transaction_count == 1
 
 
+def test_upsert_transaction_persists_back_ref_transaction_id(db_conn: psycopg.Connection) -> None:
+    committee_id = _insert_test_committee(db_conn, "Back Ref Persist", suffix=11)
+    filing_id = _insert_test_filing(db_conn, committee_id, "back-ref-persist")
+    sub_id = _TEST_SUB_ID_BASE + 11
+    back_ref_transaction_id = f"{_TEST_TRANSACTION_PREFIX}back-ref-001"
+
+    transaction_id = upsert_transaction(
+        db_conn,
+        _build_test_transaction(
+            filing_id,
+            committee_id,
+            "31.00",
+            sub_id=sub_id,
+            back_ref_transaction_id=back_ref_transaction_id,
+        ),
+    )
+
+    row = _select_transaction_row(db_conn, transaction_id)
+    assert row["back_ref_transaction_id"] == back_ref_transaction_id
+
+
+def test_upsert_transaction_allows_missing_back_ref_transaction_id(db_conn: psycopg.Connection) -> None:
+    committee_id = _insert_test_committee(db_conn, "Back Ref Missing", suffix=12)
+    filing_id = _insert_test_filing(db_conn, committee_id, "back-ref-missing")
+    sub_id = _TEST_SUB_ID_BASE + 12
+
+    transaction_id = upsert_transaction(
+        db_conn,
+        _build_test_transaction(filing_id, committee_id, "32.00", sub_id=sub_id),
+    )
+    assert _select_transaction_row(db_conn, transaction_id)["back_ref_transaction_id"] is None
+
+    updated_id = upsert_transaction(
+        db_conn,
+        _build_test_transaction(
+            filing_id,
+            committee_id,
+            "33.00",
+            id=uuid4(),
+            sub_id=sub_id,
+        ),
+    )
+    assert updated_id == transaction_id
+    assert _select_transaction_row(db_conn, transaction_id)["back_ref_transaction_id"] is None
+
+
+def test_upsert_transaction_preserves_existing_back_ref_transaction_id_when_omitted(
+    db_conn: psycopg.Connection,
+) -> None:
+    committee_id = _insert_test_committee(db_conn, "Back Ref Preserve On Omit", suffix=13)
+    filing_id = _insert_test_filing(db_conn, committee_id, "back-ref-preserve-on-omit")
+    sub_id = _TEST_SUB_ID_BASE + 13
+    back_ref_transaction_id = f"{_TEST_TRANSACTION_PREFIX}back-ref-keep-001"
+
+    transaction_id = upsert_transaction(
+        db_conn,
+        _build_test_transaction(
+            filing_id,
+            committee_id,
+            "34.00",
+            sub_id=sub_id,
+            back_ref_transaction_id=back_ref_transaction_id,
+        ),
+    )
+    assert _select_transaction_row(db_conn, transaction_id)["back_ref_transaction_id"] == back_ref_transaction_id
+
+    updated_id = upsert_transaction(
+        db_conn,
+        _build_test_transaction(
+            filing_id,
+            committee_id,
+            "35.00",
+            id=uuid4(),
+            sub_id=sub_id,
+        ),
+    )
+
+    assert updated_id == transaction_id
+    assert _select_transaction_row(db_conn, transaction_id)["back_ref_transaction_id"] == back_ref_transaction_id
+
+
 def test_upsert_transaction_is_idempotent_by_filing_and_identifier(db_conn: psycopg.Connection) -> None:
     committee_id = _insert_test_committee(db_conn, "Filing Identifier", suffix=4)
     filing_id = _insert_test_filing(db_conn, committee_id, "filing-identifier")
@@ -671,6 +753,42 @@ def test_upsert_transaction_persists_schedule_e_columns(db_conn: psycopg.Connect
     assert row["aggregate_amount"] == Decimal("130.75")
 
 
+def test_upsert_transaction_treats_blank_back_ref_as_null_on_insert(db_conn: psycopg.Connection) -> None:
+    committee_id = _insert_test_committee(db_conn, "Blank BackRef Insert", suffix=14)
+    filing_id = _insert_test_filing(db_conn, committee_id, "blank-backref-insert")
+    sub_id = _TEST_SUB_ID_BASE + 14
+
+    transaction_id = upsert_transaction(
+        db_conn,
+        _build_test_transaction(filing_id, committee_id, "70.00", sub_id=sub_id, back_ref_transaction_id="   "),
+    )
+
+    assert _select_transaction_row(db_conn, transaction_id)["back_ref_transaction_id"] is None
+
+
+def test_upsert_transaction_blank_back_ref_does_not_overwrite_existing(db_conn: psycopg.Connection) -> None:
+    committee_id = _insert_test_committee(db_conn, "Blank BackRef Preserve", suffix=15)
+    filing_id = _insert_test_filing(db_conn, committee_id, "blank-backref-preserve")
+    sub_id = _TEST_SUB_ID_BASE + 15
+    real_back_ref = f"{_TEST_TRANSACTION_PREFIX}back-ref-real-001"
+
+    transaction_id = upsert_transaction(
+        db_conn,
+        _build_test_transaction(filing_id, committee_id, "71.00", sub_id=sub_id, back_ref_transaction_id=real_back_ref),
+    )
+    assert _select_transaction_row(db_conn, transaction_id)["back_ref_transaction_id"] == real_back_ref
+
+    updated_id = upsert_transaction(
+        db_conn,
+        _build_test_transaction(
+            filing_id, committee_id, "72.00", id=uuid4(), sub_id=sub_id, back_ref_transaction_id="   "
+        ),
+    )
+
+    assert updated_id == transaction_id
+    assert _select_transaction_row(db_conn, transaction_id)["back_ref_transaction_id"] == real_back_ref
+
+
 def test_upsert_transaction_requires_at_least_one_idempotency_key(db_conn: psycopg.Connection) -> None:
     committee_id = _insert_test_committee(db_conn, "No Keys", suffix=6)
     filing_id = _insert_test_filing(db_conn, committee_id, "no-keys")
@@ -680,3 +798,104 @@ def test_upsert_transaction_requires_at_least_one_idempotency_key(db_conn: psyco
             db_conn,
             _build_test_transaction(filing_id, committee_id, "42.00"),
         )
+
+
+def test_update_transaction_contributor_identity_ids_updates_only_identity_columns(
+    db_conn: psycopg.Connection,
+) -> None:
+    committee_id = _insert_test_committee(db_conn, "Contributor IDs", suffix=21)
+    filing_id = _insert_test_filing(db_conn, committee_id, "contributor-identity-only-update")
+    transaction = _build_test_transaction(
+        filing_id,
+        committee_id,
+        "91.00",
+        sub_id=_TEST_SUB_ID_BASE + 21,
+        transaction_identifier=f"{_TEST_TRANSACTION_PREFIX}contributor-update-001",
+        contributor_name_raw="Test Contributor",
+        contributor_city="Raleigh",
+        contributor_state="NC",
+        contributor_zip="27601",
+    )
+    transaction_id = upsert_transaction(db_conn, transaction)
+    person_id = _insert_test_person(db_conn, "Contributor Update Person")
+
+    with db_conn.cursor(row_factory=dict_row) as cursor:
+        cursor.execute(
+            """
+            SELECT
+                id,
+                amount,
+                contributor_name_raw,
+                contributor_city,
+                contributor_state,
+                contributor_zip,
+                contributor_person_id,
+                contributor_organization_id
+            FROM cf.transaction
+            WHERE id = %s
+            """,
+            (transaction_id,),
+        )
+        before_row = cursor.fetchone()
+    assert before_row is not None
+
+    updated = update_transaction_contributor_identity_ids(
+        db_conn,
+        transaction_id=transaction_id,
+        contributor_person_id=person_id,
+        contributor_organization_id=None,
+    )
+    assert updated is True
+
+    with db_conn.cursor(row_factory=dict_row) as cursor:
+        cursor.execute(
+            """
+            SELECT
+                id,
+                amount,
+                contributor_name_raw,
+                contributor_city,
+                contributor_state,
+                contributor_zip,
+                contributor_person_id,
+                contributor_organization_id
+            FROM cf.transaction
+            WHERE id = %s
+            """,
+            (transaction_id,),
+        )
+        after_row = cursor.fetchone()
+    assert after_row is not None
+    assert after_row["id"] == before_row["id"]
+    assert after_row["amount"] == before_row["amount"]
+    assert after_row["contributor_name_raw"] == before_row["contributor_name_raw"]
+    assert after_row["contributor_city"] == before_row["contributor_city"]
+    assert after_row["contributor_state"] == before_row["contributor_state"]
+    assert after_row["contributor_zip"] == before_row["contributor_zip"]
+    assert after_row["contributor_person_id"] == person_id
+    assert after_row["contributor_organization_id"] is None
+
+
+def test_update_transaction_contributor_identity_ids_is_idempotent_when_values_match(
+    db_conn: psycopg.Connection,
+) -> None:
+    committee_id = _insert_test_committee(db_conn, "Contributor IDs Idempotent", suffix=22)
+    filing_id = _insert_test_filing(db_conn, committee_id, "contributor-identity-idempotent")
+    person_id = _insert_test_person(db_conn, "Contributor Idempotent Person")
+    transaction = _build_test_transaction(
+        filing_id,
+        committee_id,
+        "92.00",
+        sub_id=_TEST_SUB_ID_BASE + 22,
+        transaction_identifier=f"{_TEST_TRANSACTION_PREFIX}contributor-idempotent-001",
+        contributor_person_id=person_id,
+    )
+    transaction_id = upsert_transaction(db_conn, transaction)
+
+    updated = update_transaction_contributor_identity_ids(
+        db_conn,
+        transaction_id=transaction_id,
+        contributor_person_id=person_id,
+        contributor_organization_id=None,
+    )
+    assert updated is False

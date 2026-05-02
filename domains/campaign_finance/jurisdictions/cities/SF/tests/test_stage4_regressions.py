@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from core.refresh import runner
+from core.refresh import job_builders
 
 
 _SF_SCRAPER_DIR = Path(__file__).resolve().parent.parent / "scraper"
@@ -41,14 +41,14 @@ def test_sf_cli_exports_public_api() -> None:
 
 
 def test_build_refresh_plan_all_scope_includes_sf_city_job() -> None:
-    jobs = runner.build_refresh_plan(scope="all")
+    jobs = job_builders.build_refresh_plan(scope="all")
     job_keys = {job.key for job in jobs}
 
     assert "city-sf-transactions" in job_keys
 
 
 def test_sf_city_job_metadata_matches_config() -> None:
-    jobs = runner.build_refresh_plan(scope="all")
+    jobs = job_builders.build_refresh_plan(scope="all")
     sf_jobs = [job for job in jobs if job.key == "city-sf-transactions"]
 
     assert len(sf_jobs) == 1

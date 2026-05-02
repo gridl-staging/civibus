@@ -1,6 +1,7 @@
 import { ApiResponseError } from '$lib/server/api/client';
+import { buildSearchPagePath } from '$lib/search/contract';
 import { describe, expect, it, vi } from 'vitest';
-import { load } from './+page.server';
+import { actions, load } from './+page.server';
 
 function createLoadEvent(url: string, requestJson: ReturnType<typeof vi.fn>) {
   return {
@@ -11,6 +12,41 @@ function createLoadEvent(url: string, requestJson: ReturnType<typeof vi.fn>) {
       }
     }
   } as unknown as Parameters<typeof load>[0];
+}
+
+function createActionEvent(
+  formValues: { q?: string; entity_type?: string },
+  requestJson: ReturnType<typeof vi.fn>
+) {
+  const formData = new FormData();
+
+  if (formValues.q !== undefined) {
+    formData.set('q', formValues.q);
+  }
+
+  if (formValues.entity_type !== undefined) {
+    formData.set('entity_type', formValues.entity_type);
+  }
+
+  return {
+    request: new Request('https://web.civibus.local/search', { method: 'POST', body: formData }),
+    locals: {
+      api: {
+        requestJson
+      }
+    }
+  } as unknown as Parameters<NonNullable<typeof actions.default>>[0];
+}
+
+function createActionEventFromFormData(formData: FormData, requestJson: ReturnType<typeof vi.fn>) {
+  return {
+    request: new Request('https://web.civibus.local/search', { method: 'POST', body: formData }),
+    locals: {
+      api: {
+        requestJson
+      }
+    }
+  } as unknown as Parameters<NonNullable<typeof actions.default>>[0];
 }
 
 describe('/search +page.server load', () => {
@@ -84,11 +120,22 @@ describe('/search +page.server load', () => {
         new ApiResponseError(422, { detail: [{ loc: ['query', 'q'], msg: 'String should have at least 2 characters' }] })
       );
 
-    await expect(
-      load(createLoadEvent('https://web.civibus.local/search?q=c', failedRequestJson))
-    ).rejects.toMatchObject({
-      status: 422,
-      body: { detail: [{ loc: ['query', 'q'], msg: 'String should have at least 2 characters' }] }
+    await expect(load(createLoadEvent('https://web.civibus.local/search?q=c', failedRequestJson))).resolves.toEqual({
+      query: 'c',
+      entityType: '',
+      results: [],
+      validationMessage: 'query.q: String should have at least 2 characters'
+    });
+  });
+
+  it('falls back to default inline validation copy when backend 422 does not include a readable payload', async () => {
+    const requestJson = vi.fn().mockRejectedValue(new ApiResponseError(422, null));
+
+    await expect(load(createLoadEvent('https://web.civibus.local/search?q=c', requestJson))).resolves.toEqual({
+      query: 'c',
+      entityType: '',
+      results: [],
+      validationMessage: 'The search request could not be validated. Review your query and try again.'
     });
   });
 
@@ -101,9 +148,11 @@ describe('/search +page.server load', () => {
 
     await expect(
       load(createLoadEvent('https://web.civibus.local/search?q=%20civ%20&entity_type=%20', requestJson))
-    ).rejects.toMatchObject({
-      status: 422,
-      body: { detail: [{ loc: ['query', 'entity_type'], msg: 'Input should be person, org, or committee' }] }
+    ).resolves.toEqual({
+      query: ' civ ',
+      entityType: ' ',
+      results: [],
+      validationMessage: 'query.entity_type: Input should be person, org, or committee'
     });
     expect(requestJson).toHaveBeenCalledWith('/v1/search?q=+civ+&entity_type=+');
   });
@@ -118,6 +167,21 @@ describe('/search +page.server load', () => {
     expect(data).toEqual({
       query: '',
       entityType: 'candidate',
+      results: []
+    });
+    expect(requestJson).not.toHaveBeenCalled();
+  });
+
+  it('keeps blank state when only a contest filter is selected', async () => {
+    const requestJson = vi.fn();
+
+    const data = await load(
+      createLoadEvent('https://web.civibus.local/search?entity_type=contest', requestJson)
+    );
+
+    expect(data).toEqual({
+      query: '',
+      entityType: 'contest',
       results: []
     });
     expect(requestJson).not.toHaveBeenCalled();
@@ -194,11 +258,37 @@ describe('/search +page.server load', () => {
 
     await expect(
       load(createLoadEvent('https://web.civibus.local/search?q=&entity_type=person', requestJson))
-    ).rejects.toMatchObject({
-      status: 422,
-      body: { detail: [{ loc: ['query', 'q'], msg: 'String should have at least 2 characters' }] }
+    ).resolves.toEqual({
+      query: '',
+      entityType: 'person',
+      results: [],
+      validationMessage: 'query.q: String should have at least 2 characters'
     });
     expect(requestJson).toHaveBeenCalledWith('/v1/search?q=&entity_type=person');
+  });
+
+  it('keeps shared route error handling for backend 404 responses', async () => {
+    const requestJson = vi.fn().mockRejectedValue(new ApiResponseError(404, 'Search endpoint not found'));
+
+    await expect(
+      load(createLoadEvent('https://web.civibus.local/search?q=civ', requestJson))
+    ).rejects.toMatchObject({
+      status: 404,
+      body: { message: 'Search endpoint not found' }
+    });
+  });
+
+  it('keeps shared route error handling for backend 500 responses', async () => {
+    const requestJson = vi
+      .fn()
+      .mockRejectedValue(new ApiResponseError(500, { detail: [{ loc: ['server'], msg: 'Unexpected failure' }] }));
+
+    await expect(
+      load(createLoadEvent('https://web.civibus.local/search?q=civ', requestJson))
+    ).rejects.toMatchObject({
+      status: 500,
+      body: { detail: [{ loc: ['server'], msg: 'Unexpected failure' }] }
+    });
   });
 
   it('preserves backend plain-text failures through the shared route error mapper', async () => {
@@ -227,5 +317,83 @@ describe('/search +page.server load', () => {
       results: []
     });
     expect(requestJson).not.toHaveBeenCalled();
+  });
+});
+
+describe('/search +page.server actions', () => {
+  it('redirects successful submits through the shared search page path builder', async () => {
+    const requestJson = vi.fn().mockResolvedValue([]);
+
+    await expect(
+      actions.default(createActionEvent({ q: 'civ', entity_type: 'org' }, requestJson))
+    ).rejects.toMatchObject({
+      status: 303,
+      location: buildSearchPagePath({ q: 'civ', entityType: 'org' })
+    });
+    expect(requestJson).toHaveBeenCalledWith('/v1/search?q=civ&entity_type=org');
+  });
+
+  it('returns inline 422 payload data and preserves raw submitted query and entity_type values', async () => {
+    const requestJson = vi.fn().mockRejectedValue(
+      new ApiResponseError(422, {
+        detail: [
+          { loc: ['query', 'q'], msg: 'String should have at least 2 characters' },
+          { loc: ['query', 'entity_type'], msg: 'Input should be person, org, or committee' }
+        ]
+      })
+    );
+
+    const result = await actions.default(createActionEvent({ q: ' civ ', entity_type: ' ' }, requestJson));
+
+    expect(result).toMatchObject({
+      status: 422,
+      data: {
+        query: ' civ ',
+        entityType: ' ',
+        validationMessage:
+          'query.q: String should have at least 2 characters; query.entity_type: Input should be person, org, or committee'
+      }
+    });
+    expect(requestJson).toHaveBeenCalledWith('/v1/search?q=+civ+&entity_type=+');
+  });
+
+  it('returns default inline validation copy for submit 422 errors with unreadable payloads', async () => {
+    const requestJson = vi.fn().mockRejectedValue(new ApiResponseError(422, null));
+
+    const result = await actions.default(createActionEvent({ q: 'c', entity_type: 'candidate' }, requestJson));
+
+    expect(result).toMatchObject({
+      status: 422,
+      data: {
+        query: 'c',
+        entityType: 'candidate',
+        validationMessage: 'The search request could not be validated. Review your query and try again.'
+      }
+    });
+    expect(requestJson).toHaveBeenCalledWith('/v1/search?q=c&entity_type=candidate');
+  });
+
+  it('coerces non-string form values to empty strings before invoking backend search', async () => {
+    const requestJson = vi.fn().mockResolvedValue([]);
+    const formData = new FormData();
+    formData.set('q', new Blob(['query-bytes']), 'query.bin');
+    formData.set('entity_type', new Blob(['type-bytes']), 'entity_type.bin');
+
+    await expect(actions.default(createActionEventFromFormData(formData, requestJson))).rejects.toMatchObject({
+      status: 303,
+      location: buildSearchPagePath({ q: '', entityType: '' })
+    });
+    expect(requestJson).toHaveBeenCalledWith('/v1/search?q=');
+  });
+
+  it('keeps shared API error behavior for non-422 submit failures', async () => {
+    const requestJson = vi.fn().mockRejectedValue(new ApiResponseError(503, 'Backend unavailable'));
+
+    await expect(
+      actions.default(createActionEvent({ q: 'civ', entity_type: 'org' }, requestJson))
+    ).rejects.toMatchObject({
+      status: 503,
+      body: { message: 'Backend unavailable' }
+    });
   });
 });

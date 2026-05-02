@@ -7,6 +7,7 @@ import json
 import pytest
 from pydantic import ValidationError
 
+from domains.campaign_finance.quality.conftest import EXPECTED_EDGE_FAMILIES
 from domains.campaign_finance.quality.models import (
     CheckResult,
     JurisdictionSummary,
@@ -197,3 +198,64 @@ class TestQualityReport:
     def test_extra_fields_rejected(self) -> None:
         with pytest.raises(ValidationError):
             QualityReport(unexpected="field")  # type: ignore[call-arg]
+
+
+class TestQualityReportGraphEdgeSerialization:
+    """Verify that a QualityReport containing a graph-edge CheckResult with
+    per-family details serializes correctly via to_json() and retains nested
+    edge-family details plus rolled-up status/total fields."""
+
+    def test_graph_edge_check_result_round_trips_through_json(self) -> None:
+        edge_family_samples = {
+            "CONTRIBUTED_TO": {"expected": 100, "actual": 100, "ratio": 1.0},
+            "SPENT_ON": {"expected": 50, "actual": 48, "ratio": 0.96},
+            "SUPPORTS": {"expected": 20, "actual": 20, "ratio": 1.0},
+            "OPPOSES": {"expected": 10, "actual": 10, "ratio": 1.0},
+            "AFFILIATED_WITH": {"expected": 5, "actual": 5, "ratio": 1.0},
+            "FILED": {"expected": 30, "actual": 30, "ratio": 1.0},
+        }
+        edge_families = {family: edge_family_samples[family] for family in EXPECTED_EDGE_FAMILIES}
+        graph_check = CheckResult(
+            name="graph_edge_presence",
+            status="pass",
+            message="All edge families above threshold",
+            metric_name="edge_population_ratio",
+            metric_value=0.96,
+            threshold=0.95,
+            details={"edge_families": edge_families},
+        )
+        summary = JurisdictionSummary(
+            jurisdiction="state/CO",
+            check_results=[graph_check],
+        )
+        report = QualityReport(summaries=[summary])
+
+        raw = report.to_json()
+        parsed = json.loads(raw)
+
+        assert parsed["status"] == "pass"
+        assert parsed["total_checks"] == 1
+        assert parsed["total_pass"] == 1
+        assert parsed["total_fail"] == 0
+
+        s = parsed["summaries"][0]
+        assert s["jurisdiction"] == "state/CO"
+        assert s["status"] == "pass"
+        assert s["pass_count"] == 1
+        assert s["fail_count"] == 0
+        assert s["warn_count"] == 0
+        assert s["error_count"] == 0
+
+        cr = s["check_results"][0]
+        assert cr["name"] == "graph_edge_presence"
+        assert cr["metric_name"] == "edge_population_ratio"
+        assert cr["metric_value"] == pytest.approx(0.96)
+        assert cr["threshold"] == pytest.approx(0.95)
+
+        families = cr["details"]["edge_families"]
+        assert len(families) == 6
+        for fam_name in EXPECTED_EDGE_FAMILIES:
+            assert fam_name in families
+            assert families[fam_name]["expected"] == edge_families[fam_name]["expected"]
+            assert families[fam_name]["actual"] == edge_families[fam_name]["actual"]
+            assert families[fam_name]["ratio"] == pytest.approx(edge_families[fam_name]["ratio"])

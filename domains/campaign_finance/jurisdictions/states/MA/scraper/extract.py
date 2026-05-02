@@ -70,6 +70,10 @@ def _normalize_state_code(state: str | None) -> str | None:
     text = _normalized_text(state)
     if text is None:
         return None
+    # OCPF data has FIPS numeric codes (e.g. '25') and truncated single-char
+    # values (e.g. 'M') — skip anything that isn't a valid two-letter code.
+    if not text.isalpha() or len(text) < 2:
+        return None
     return text.upper()[:2]
 
 

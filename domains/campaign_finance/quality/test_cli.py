@@ -45,6 +45,12 @@ class TestArgumentParser:
         args = parser.parse_args(["--check", "record_count"])
         assert args.check == "record_count"
 
+    def test_graph_edges_check_filter(self) -> None:
+        parser = build_argument_parser()
+        args = parser.parse_args(["--check", "graph_edges"])
+        assert args.check == "graph_edges"
+        _validate_cli_arguments(args)
+
     def test_both_filters(self) -> None:
         parser = build_argument_parser()
         args = parser.parse_args(["--jurisdiction", "federal/fec", "--check", "null_rate"])
@@ -274,13 +280,59 @@ class TestFreshnessCliRouting:
         ]
         assert merged_mn["record_count"] == 5
 
-    def test_db_only_check_does_not_invoke_freshness(self) -> None:
+    @pytest.mark.parametrize(
+        ("freshness_jurisdiction", "expected_jurisdictions"),
+        [
+            ("state/MN", ["state/MN"]),
+            ("state/NJ", ["state/MN", "state/NJ"]),
+        ],
+    )
+    def test_unfiltered_main_any_freshness_fail_forces_report_fail(
+        self,
+        freshness_jurisdiction: str,
+        expected_jurisdictions: list[str],
+        capsys,
+    ) -> None:
+        db_report = QualityReport(
+            summaries=[
+                JurisdictionSummary(
+                    jurisdiction="state/MN",
+                    data_source_ids=["db-source-mn"],
+                    baseline_urls=["https://db.example/mn"],
+                    record_count=10,
+                    check_results=[CheckResult(name="record_count_reconciliation", status="pass", message="ok")],
+                )
+            ]
+        )
+        freshness_summaries = [
+            JurisdictionSummary(
+                jurisdiction=freshness_jurisdiction,
+                baseline_urls=[f"https://freshness.example/{freshness_jurisdiction.lower()}"],
+                check_results=[CheckResult(name="freshness", status="fail", message="stale")],
+            )
+        ]
+
+        with (
+            patch("domains.campaign_finance.quality.cli.get_connection", return_value=MagicMock()),
+            patch("domains.campaign_finance.quality.cli._discover_and_run", return_value=db_report),
+            patch("domains.campaign_finance.quality.cli.run_freshness_checks", return_value=freshness_summaries),
+        ):
+            exit_code = main([])
+
+        assert exit_code == 1
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["status"] == "fail"
+        assert any(summary["status"] == "fail" for summary in payload["summaries"])
+        assert [summary["jurisdiction"] for summary in payload["summaries"]] == expected_jurisdictions
+
+    @pytest.mark.parametrize("check_name", ["record_count", "graph_edges"])
+    def test_db_only_check_does_not_invoke_freshness(self, check_name: str) -> None:
         with (
             patch("domains.campaign_finance.quality.cli.get_connection", return_value=MagicMock()),
             patch("domains.campaign_finance.quality.cli._discover_and_run", return_value=QualityReport()),
             patch("domains.campaign_finance.quality.cli.run_freshness_checks") as mock_run_freshness,
         ):
-            exit_code = main(["--check", "record_count"])
+            exit_code = main(["--check", check_name])
 
         assert exit_code == 0
         mock_run_freshness.assert_not_called()
@@ -378,6 +430,34 @@ class TestArtifactWriting:
         assert json.loads(capsys.readouterr().out)["status"] == "pass"
         assert json.loads(artifact_path.read_text(encoding="utf-8"))["status"] == "pass"
 
+    def test_main_returns_1_when_artifact_write_fails(self, tmp_path: Path, capsys) -> None:
+        artifact_path = tmp_path / "quality-report.json"
+        freshness_summaries = [
+            JurisdictionSummary(
+                jurisdiction="state/IL",
+                check_results=[CheckResult(name="freshness", status="pass", message="ok")],
+            )
+        ]
+
+        with (
+            patch(
+                "domains.campaign_finance.quality.cli.run_freshness_checks",
+                return_value=freshness_summaries,
+            ),
+            patch(
+                "domains.campaign_finance.quality.cli._write_report_artifact",
+                side_effect=OSError("disk full"),
+            ),
+            patch("domains.campaign_finance.quality.cli.get_connection") as mock_get_connection,
+        ):
+            exit_code = main(["--check", "freshness", "--artifact-path", str(artifact_path)])
+
+        assert exit_code == 1
+        mock_get_connection.assert_not_called()
+        captured = capsys.readouterr()
+        assert json.loads(captured.out)["status"] == "pass"
+        assert "failed to write report artifact" in captured.err.lower()
+
 
 class TestRunChecksForDataSource:
     """Verify that _run_checks_for_data_source dispatches to the correct checks."""
@@ -397,7 +477,10 @@ class TestRunChecksForDataSource:
             ),
             patch(
                 "domains.campaign_finance.quality.cli.check_null_rate",
-                return_value=CheckResult(name="null_rate_source_record_key", status="pass"),
+                side_effect=[
+                    CheckResult(name="null_rate_source_record_key", status="pass"),
+                    CheckResult(name="null_rate_source_url", status="pass"),
+                ],
             ),
             patch(
                 "domains.campaign_finance.quality.cli.check_duplicate_records",
@@ -411,17 +494,26 @@ class TestRunChecksForDataSource:
                 "domains.campaign_finance.quality.cli.check_date_range",
                 return_value=CheckResult(name="date_range", status="pass"),
             ),
+            patch(
+                "domains.campaign_finance.quality.cli.check_graph_edge_presence",
+                return_value=CheckResult(name="graph_edge_presence", status="pass"),
+            ),
         ):
             results = _run_checks_for_data_source(MagicMock(), str(ds_id), "Test", check_filter)
         return [r.name for r in results]
 
     def test_no_filter_runs_all_checks(self) -> None:
         names = self._run_with_filter(None)
-        assert "record_count_reconciliation" in names
-        assert "duplicate_records" in names
-        assert "amount_sanity" in names
-        assert "date_range" in names
-        assert len(names) >= 6  # record_count + 3 completeness + 2 null_rate + duplicates + amount + date_range
+        assert names == [
+            "record_count_reconciliation",
+            "completeness_source_record_key",
+            "null_rate_source_record_key",
+            "null_rate_source_url",
+            "duplicate_records",
+            "amount_sanity",
+            "date_range",
+            "graph_edge_presence",
+        ]
 
     def test_record_count_filter(self) -> None:
         names = self._run_with_filter("record_count")
@@ -438,6 +530,10 @@ class TestRunChecksForDataSource:
     def test_date_range_filter(self) -> None:
         names = self._run_with_filter("date_range")
         assert names == ["date_range"]
+
+    def test_graph_edges_filter(self) -> None:
+        names = self._run_with_filter("graph_edges")
+        assert names == ["graph_edge_presence"]
 
     def test_completeness_filter(self) -> None:
         names = self._run_with_filter("completeness")

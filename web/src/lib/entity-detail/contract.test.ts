@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
+  assertPersonPayloadHasRequiredBioKeys,
   buildEntityDetailPath,
   buildEntityErMatchesPath,
   buildEntityGraphRelationshipsPath,
   buildEntityRouteHref,
   classifyGraphNeighborRoute,
+  type PersonDetailResponse,
   type Stage4EntityType
 } from "./contract";
 
@@ -71,5 +73,39 @@ describe("entity detail contract", () => {
     expect(buildEntityGraphRelationshipsPath("org", maliciousId)).toBe(
       "/v1/graph/org/..%2Fsearch%3Fentity_type%3Dorg/relationships"
     );
+  });
+
+  it("enforces runtime person payload bio attribution keys as required-nullable", () => {
+    const personPayloadWithoutBioKeys = {
+      id: PERSON_ID,
+      canonical_name: "Jane Doe",
+      name_variants: [],
+      first_name: "Jane",
+      middle_name: null,
+      last_name: "Doe",
+      suffix: null,
+      date_of_birth: null,
+      year_of_birth: 1980,
+      identifiers: {},
+      primary_address_id: null,
+      er_cluster_id: null,
+      er_confidence: null,
+      portrait: null,
+      sources: []
+    };
+
+    expect(() => assertPersonPayloadHasRequiredBioKeys(personPayloadWithoutBioKeys)).toThrow(
+      /bio_text|bio_source_url|bio_license|bio_pulled_at/
+    );
+
+    const personPayloadWithNullableBioKeys: PersonDetailResponse = {
+      ...personPayloadWithoutBioKeys,
+      bio_text: null,
+      bio_source_url: null,
+      bio_license: null,
+      bio_pulled_at: null
+    };
+
+    expect(() => assertPersonPayloadHasRequiredBioKeys(personPayloadWithNullableBioKeys)).not.toThrow();
   });
 });

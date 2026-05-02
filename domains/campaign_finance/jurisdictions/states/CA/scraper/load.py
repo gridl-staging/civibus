@@ -59,6 +59,9 @@ from .extract import (
     _split_zip,
     build_ca_data_source,
     extract_committee_from_cvr,
+    extract_employer,
+    extract_name_raw,
+    extract_occupation,
 )
 from .parse import parse_table
 
@@ -173,6 +176,32 @@ def _select_ca_source_record_id(
 
 def _build_filing_lookup_key(filing_id: str | None, amendment_id: str | None) -> tuple[str, str]:
     return (_required_text(filing_id, "FILING_ID"), _normalize_amendment_id(amendment_id))
+
+
+def _resolve_filing_lookup_entry(
+    *,
+    table_name: str,
+    filing_lookup: Mapping[tuple[str, str], CAFilingLookupEntry],
+    filing_lookup_key: tuple[str, str],
+) -> CAFilingLookupEntry | None:
+    filing_entry = filing_lookup.get(filing_lookup_key)
+    if filing_entry is not None:
+        return filing_entry
+
+    filing_id, amendment_id = filing_lookup_key
+    if amendment_id != "0":
+        fallback_key = (filing_id, "0")
+        filing_entry = filing_lookup.get(fallback_key)
+        if filing_entry is not None:
+            LOGGER.debug(
+                "CA filing lookup used amendment-zero fallback for %s key=%r fallback=%r",
+                table_name,
+                filing_lookup_key,
+                fallback_key,
+            )
+            return filing_entry
+
+    return None
 
 
 def _build_cvr_source_record(
@@ -559,32 +588,6 @@ def _load_counterparty_entities(
     return address_id
 
 
-def _extract_name_raw(extracted: Mapping[str, object]) -> str | None:
-    for key in ("donor_person", "payee_person", "lender_person"):
-        person = extracted.get(key)
-        if person is not None:
-            return person.canonical_name  # type: ignore[return-value]
-    for key in ("donor_org", "payee_org", "lender_org"):
-        organization = extracted.get(key)
-        if organization is not None:
-            return organization.canonical_name  # type: ignore[return-value]
-    return None
-
-
-def _extract_employer(extracted: Mapping[str, object]) -> str | None:
-    donor_person = extracted.get("donor_person")
-    if donor_person is None:
-        return None
-    return donor_person.identifiers.get("employer")  # type: ignore[return-value]
-
-
-def _extract_occupation(extracted: Mapping[str, object]) -> str | None:
-    donor_person = extracted.get("donor_person")
-    if donor_person is None:
-        return None
-    return donor_person.identifiers.get("occupation")  # type: ignore[return-value]
-
-
 def _ca_is_f496_independent_expenditure(table_name: str, filing_entry: CAFilingLookupEntry) -> bool:
     """True when an EXPN_CD row belongs to an F496 (24-hour IE report) filing."""
     return table_name == "EXPN_CD" and filing_entry.form_type is not None and filing_entry.form_type.upper() == "F496"
@@ -599,20 +602,23 @@ def _upsert_transaction_row(
     filing_lookup: Mapping[tuple[str, str], CAFilingLookupEntry],
 ) -> bool:
     table_fields = load_transaction_fields(table_config.table_name)
-    transaction_source_record = _build_transaction_source_record(table_config.table_name, data_source_id, row)
-    source_record_id = try_insert_source_record(conn, transaction_source_record)
-    if source_record_id is None:
-        return False
 
     filing_lookup_key = _build_filing_lookup_key(
         row.get(table_fields["filing_id"]),
         row.get(table_fields["amendment_id"]),
     )
-    filing_entry = filing_lookup.get(filing_lookup_key)
+    filing_entry = _resolve_filing_lookup_entry(
+        table_name=table_config.table_name,
+        filing_lookup=filing_lookup,
+        filing_lookup_key=filing_lookup_key,
+    )
     if filing_entry is None:
-        raise ValueError(
-            f"CA filing lookup missing transaction join for {table_config.table_name} key={filing_lookup_key!r}"
-        )
+        return False
+
+    transaction_source_record = _build_transaction_source_record(table_config.table_name, data_source_id, row)
+    source_record_id = try_insert_source_record(conn, transaction_source_record)
+    if source_record_id is None:
+        return False
 
     extracted = table_config.extract_row(dict(row))
     contributor_address_id = _load_counterparty_entities(
@@ -663,9 +669,9 @@ def _upsert_transaction_row(
             transaction_identifier=transaction_source_record.source_record_key,
             transaction_date=_parse_optional_ca_date(row.get(table_fields["transaction_date"])),
             amount=_parse_required_amount(row.get(table_fields["amount"]), table_fields["amount"]),
-            contributor_name_raw=_extract_name_raw(extracted),
-            contributor_employer=_extract_employer(extracted),
-            contributor_occupation=_extract_occupation(extracted),
+            contributor_name_raw=extract_name_raw(extracted),
+            contributor_employer=extract_employer(extracted),
+            contributor_occupation=extract_occupation(extracted),
             contributor_city=contributor_city,
             contributor_state=contributor_state,
             contributor_zip=contributor_zip,

@@ -33,10 +33,11 @@ services:
       - ../core/schema/entity_resolution.sql:/docker-entrypoint-initdb.d/04-entity_resolution.sql
       - ../core/schema/er_views.sql:/docker-entrypoint-initdb.d/05-er_views.sql
       - ../domains/campaign_finance/schema/tables.sql:/docker-entrypoint-initdb.d/06-campaign-finance.sql
-      - ../domains/campaign_finance/schema/dark_money_tables.sql:/docker-entrypoint-initdb.d/07-dark-money.sql
-      - ../domains/property/schema/tables.sql:/docker-entrypoint-initdb.d/08-property.sql
-      - ../domains/civics/schema/tables.sql:/docker-entrypoint-initdb.d/09-civics.sql
-      - ../infra/db/09-age-graph-bootstrap.sql:/docker-entrypoint-initdb.d/10-age-graph-bootstrap.sql
+      - ../domains/campaign_finance/schema/nc_orchestrator_tables.sql:/docker-entrypoint-initdb.d/07-nc-orchestrator.sql
+      - ../domains/campaign_finance/schema/dark_money_tables.sql:/docker-entrypoint-initdb.d/08-dark-money.sql
+      - ../domains/property/schema/tables.sql:/docker-entrypoint-initdb.d/09-property.sql
+      - ../domains/civics/schema/tables.sql:/docker-entrypoint-initdb.d/10-civics.sql
+      - ../infra/db/09-age-graph-bootstrap.sql:/docker-entrypoint-initdb.d/11-age-graph-bootstrap.sql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
       interval: 5s

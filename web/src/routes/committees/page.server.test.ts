@@ -84,11 +84,15 @@ describe("/committees +page.server load", () => {
     expect(requestJson).toHaveBeenCalledWith("/v1/committees?state=NC&limit=abc");
   });
 
-  it("forwards explicit blank committee filters unchanged", async () => {
+  it("drops explicit blank committee filters while keeping populated values", async () => {
     const requestJson = vi.fn().mockResolvedValue(COMMITTEE_LIST_RESPONSE);
 
     await load(createLoadEvent("https://web.civibus.local/committees?committee_type=&state=", requestJson));
+    await load(
+      createLoadEvent("https://web.civibus.local/committees?state=&committee_type=Q&offset=25", requestJson)
+    );
 
-    expect(requestJson).toHaveBeenCalledWith("/v1/committees?state=&committee_type=");
+    expect(requestJson).toHaveBeenNthCalledWith(1, "/v1/committees");
+    expect(requestJson).toHaveBeenNthCalledWith(2, "/v1/committees?committee_type=Q&offset=25");
   });
 });

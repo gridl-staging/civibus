@@ -98,3 +98,26 @@ def test_get_connection_remaps_docker_hostname_db_to_localhost(monkeypatch: pyte
         host="127.0.0.1",
         port=5432,
     )
+
+
+def test_get_connection_keeps_docker_hostname_inside_container(monkeypatch: pytest.MonkeyPatch) -> None:
+    """POSTGRES_HOST=db should remain db when code runs inside a container."""
+    monkeypatch.setenv("POSTGRES_USER", "env_user")
+    monkeypatch.setenv("POSTGRES_PASSWORD", "env_password")
+    monkeypatch.setenv("POSTGRES_DB", "env_database")
+    monkeypatch.setenv("POSTGRES_HOST", "db")
+    monkeypatch.setenv("POSTGRES_PORT", "5432")
+
+    mocked_connection = MagicMock()
+    monkeypatch.setattr("core.db.os.path.exists", lambda path: path == "/.dockerenv")
+
+    with patch("core.db.psycopg.connect", return_value=mocked_connection) as connect_mock:
+        get_connection()
+
+    connect_mock.assert_called_once_with(
+        user="env_user",
+        password="env_password",
+        dbname="env_database",
+        host="db",
+        port=5432,
+    )

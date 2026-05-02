@@ -290,6 +290,25 @@ def test_build_argument_parser_accepts_expected_flags() -> None:
     assert with_flags.min_threshold == pytest.approx(0.91)
     assert with_flags.dry_run is True
 
+    resolve_action = parser.parse_args(
+        [
+            "--entity-type",
+            "person",
+            "--action",
+            "resolve-transaction-counterparties",
+        ]
+    )
+    assert resolve_action.action == "resolve-transaction-counterparties"
+
+
+def test_build_argument_parser_allows_resolve_transaction_counterparties_without_entity_type() -> None:
+    parser = _build_argument_parser()
+
+    args = parser.parse_args(["--action", "resolve-transaction-counterparties"])
+
+    assert args.action == "resolve-transaction-counterparties"
+    assert args.entity_type is None
+
 
 @pytest.mark.parametrize(
     ("argv", "error_text"),
@@ -743,3 +762,96 @@ def test_main_action_run_logs_failed_audit_row_when_pipeline_raises(
     assert failed_audit["error_message"] == "boom during score"
     assert failed_audit["duration_seconds"] >= 0.0
     assert "Entity resolution CLI failed: boom during score" in capsys.readouterr().err
+
+
+def test_main_action_resolve_transaction_counterparties_dispatches_to_resolver(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    connection = _FakeConnection()
+    _install_connection_hooks(monkeypatch, connection)
+    resolver_calls: list[float | None] = []
+
+    monkeypatch.setattr("core.entity_resolution.cli._require_splink_runtime_available", lambda *_: None)
+
+    def _fake_resolver(
+        conn: object,
+        *,
+        auto_merge_threshold: float | None = None,
+    ) -> dict[str, int]:
+        assert conn is connection
+        resolver_calls.append(auto_merge_threshold)
+        return {
+            "candidate_transactions": 3,
+            "mutated_rows": 2,
+            "matched_person_rows": 1,
+            "matched_organization_rows": 1,
+            "skipped_rows": 1,
+            "ambiguous_rows": 1,
+            "dual_match_rows": 0,
+        }
+
+    monkeypatch.setattr(
+        "core.entity_resolution.cli.resolve_nc_transaction_counterparties",
+        _fake_resolver,
+    )
+
+    exit_code = main(
+        [
+            "--entity-type",
+            "person",
+            "--action",
+            "resolve-transaction-counterparties",
+        ]
+    )
+
+    assert exit_code == 0
+    assert resolver_calls == [None]
+    assert connection.commit_calls == 1
+    assert connection.close_calls == 1
+    assert "NC transaction counterparty resolver summary" in capsys.readouterr().out
+
+
+def test_main_action_resolve_transaction_counterparties_preflights_both_entity_runtimes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    connection = _FakeConnection()
+    _install_connection_hooks(monkeypatch, connection)
+    preflight_calls: list[tuple[str, str]] = []
+
+    monkeypatch.setattr(
+        "core.entity_resolution.cli.get_splink_runtime",
+        lambda: object(),
+    )
+
+    def _fake_require_probabilistic_settings(settings: object, *, entity_type: str) -> None:
+        preflight_calls.append((str(settings), entity_type))
+
+    monkeypatch.setattr(
+        "core.entity_resolution.cli.require_probabilistic_settings",
+        _fake_require_probabilistic_settings,
+    )
+    monkeypatch.setattr(
+        "core.entity_resolution.cli.get_probabilistic_settings",
+        lambda entity_type: f"settings:{entity_type}",
+    )
+    monkeypatch.setattr(
+        "core.entity_resolution.cli.resolve_nc_transaction_counterparties",
+        lambda *_args, **_kwargs: {
+            "candidate_transactions": 0,
+            "mutated_rows": 0,
+            "matched_person_rows": 0,
+            "matched_organization_rows": 0,
+            "skipped_rows": 0,
+            "ambiguous_rows": 0,
+            "dual_match_rows": 0,
+        },
+    )
+
+    exit_code = main(["--action", "resolve-transaction-counterparties"])
+
+    assert exit_code == 0
+    assert preflight_calls == [
+        ("settings:person", "person"),
+        ("settings:organization", "organization"),
+    ]

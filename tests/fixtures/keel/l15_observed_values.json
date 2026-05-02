@@ -1,0 +1,14 @@
+{
+  "candidate_detail_route": {
+    "observed_value": "Candidate Example"
+  },
+  "committee_detail_route": {
+    "observed_value": "Committee Example"
+  },
+  "candidate_summary_total_raised": {
+    "observed_value": 12345.67
+  },
+  "committee_summary_total_raised": {
+    "observed_value": "67890.120"
+  }
+}

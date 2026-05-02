@@ -43,6 +43,15 @@ def test_schedule_e_is_registered_as_a_stage3_loader() -> None:
 
 
 @pytest.mark.unit
+def test_schedule_b_is_registered_as_a_stage3_loader() -> None:
+    assert "schedule_b" in bulk_cli.FILE_TYPES
+    schedule_b_loader = bulk_cli.FILE_TYPE_LOADERS["schedule_b"]
+
+    assert schedule_b_loader.requires_cycle is True
+    assert schedule_b_loader.supports_graph is True
+
+
+@pytest.mark.unit
 def test_validate_cli_arguments_handles_with_transactions_flag(tmp_path: Path) -> None:
     itcont_path = tmp_path / "itcont_sample.txt"
     itcont_path.write_text("", encoding="latin-1")

@@ -11,6 +11,7 @@ from api.queries.campaign_finance import (
     CAMPAIGN_FINANCE_CANDIDATE_DETAIL_SQL,
     CAMPAIGN_FINANCE_COMMITTEE_DETAIL_SQL,
     CAMPAIGN_FINANCE_FILING_DETAIL_SQL,
+    UnknownCountySlugError,
     build_zero_committee_fundraising_summary,
     build_zero_candidate_fundraising_summary,
     fetch_candidate_list,
@@ -18,10 +19,13 @@ from api.queries.campaign_finance import (
     fetch_candidates_by_slug,
     fetch_candidate_ie_summary,
     fetch_candidate_ie_transactions,
+    fetch_cf_summary_by_county,
     fetch_committee_filing_breakdown,
     fetch_committee_fundraising_summary,
     fetch_committee_list,
     fetch_committees_by_slug,
+    fetch_state_campaign_finance_detail,
+    fetch_state_campaign_finance_summaries,
     fetch_persons_by_slug,
     fetch_transaction_list,
 )
@@ -48,11 +52,13 @@ from api.queries.civics import (
     fetch_offices_by_jurisdiction,
 )
 from api.queries.search import fetch_search_results
+from api.queries.metadata import fetch_data_sources_metadata, fetch_runtime_coverage_registry
 
 __all__ = [
     "CAMPAIGN_FINANCE_CANDIDATE_DETAIL_SQL",
     "CAMPAIGN_FINANCE_COMMITTEE_DETAIL_SQL",
     "CAMPAIGN_FINANCE_FILING_DETAIL_SQL",
+    "UnknownCountySlugError",
     "_MONEY_SCALE",
     "_build_paginated_response",
     "build_zero_committee_fundraising_summary",
@@ -66,10 +72,13 @@ __all__ = [
     "fetch_candidates_by_slug",
     "fetch_candidate_ie_summary",
     "fetch_candidate_ie_transactions",
+    "fetch_cf_summary_by_county",
     "fetch_committee_filing_breakdown",
     "fetch_committee_fundraising_summary",
     "fetch_committee_list",
     "fetch_committees_by_slug",
+    "fetch_state_campaign_finance_detail",
+    "fetch_state_campaign_finance_summaries",
     "fetch_donors_with_property",
     "fetch_entity_matches",
     "fetch_entity_provenance",
@@ -86,6 +95,8 @@ __all__ = [
     "fetch_parcel_detail",
     "fetch_parcel_list",
     "fetch_persons_by_slug",
+    "fetch_data_sources_metadata",
+    "fetch_runtime_coverage_registry",
     "fetch_search_results",
     "fetch_transaction_list",
 ]

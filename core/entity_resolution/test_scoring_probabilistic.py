@@ -625,3 +625,70 @@ def test_score_with_splink_ignores_same_entity_synthetic_row_pairs(
             "decided_by": "splink_v1",
         }
     ]
+
+
+def test_score_with_splink_uses_explicit_candidate_settings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    left_id = uuid4()
+    right_id = uuid4()
+    rows: list[RowDict] = [
+        {"id": left_id, "canonical_name": "Alpha"},
+        {"id": right_id, "canonical_name": "Beta"},
+    ]
+    candidate_settings = {"blocking_rules_to_generate_predictions": ["x"]}
+
+    class FakeDuckDBAPI:
+        pass
+
+    class FakePredictions:
+        def as_record_dict(self) -> list[dict[str, object]]:
+            return [
+                {
+                    "unique_id_l": str(left_id),
+                    "unique_id_r": str(right_id),
+                    "match_probability": 0.88,
+                }
+            ]
+
+    class FakeTraining:
+        def estimate_u_using_random_sampling(self, *, max_pairs: int) -> None:
+            assert max_pairs == 1_000_000
+
+        def estimate_parameters_using_expectation_maximisation(self, blocking_rule: str) -> None:
+            assert blocking_rule == "l.last_name = r.last_name"
+
+    class FakeInference:
+        def predict(self) -> FakePredictions:
+            return FakePredictions()
+
+    class FakeLinker:
+        def __init__(self, input_rows: list[RowDict], settings: object, db_api: object) -> None:
+            assert settings is candidate_settings
+            self.training = FakeTraining()
+            self.inference = FakeInference()
+
+    monkeypatch.setattr(
+        "core.entity_resolution.scoring.get_probabilistic_settings",
+        lambda entity_type: pytest.fail("global settings lookup should be bypassed"),
+    )
+    monkeypatch.setattr(
+        "core.entity_resolution.scoring.get_blocking_rule_sqls",
+        lambda entity_type, probabilistic_settings=None: ["l.last_name = r.last_name"],
+    )
+    monkeypatch.setattr(
+        "core.entity_resolution.scoring.get_splink_runtime",
+        lambda: (FakeLinker, FakeDuckDBAPI),
+    )
+
+    results = score_with_splink(rows, "person", probabilistic_settings=candidate_settings)
+
+    assert results == [
+        {
+            "entity_id_a": min(left_id, right_id),
+            "entity_id_b": max(left_id, right_id),
+            "confidence": 0.88,
+            "decision_method": "probabilistic",
+            "decided_by": "splink_v1",
+        }
+    ]

@@ -1,6 +1,6 @@
 # Coverage Registry Summary (Derived)
 
-Date: 2026-04-08
+Date: 2026-04-29
 
 Authoritative source: `docs/research/coverage-registry.json`.
 This summary is a derived view of the full coverage registry.
@@ -10,7 +10,7 @@ This summary is a derived view of the full coverage registry.
 | Jurisdiction | Tier | Best Cadence | Runner Wired | Source Count |
 | --- | --- | --- | --- | --- |
 | AK | deferred/blocked | annual | no | 1 |
-| AL | launch-support candidate | daily | yes | 2 |
+| AL | deferred/blocked | daily | yes | 2 |
 | AR | deferred/blocked | annual | no | 1 |
 | AS | deferred/blocked | annual | no | 0 |
 | AZ | deferred/blocked | annual | no | 1 |
@@ -21,17 +21,17 @@ This summary is a derived view of the full coverage registry.
 | DE | deferred/blocked | annual | no | 1 |
 | FEC | implemented but unproven | continuous | yes | 3 |
 | FL | launch-support candidate | daily | yes | 6 |
-| GA | launch-support candidate | continuous | yes | 2 |
+| GA | launch-support candidate | continuous | yes | 3 |
 | GU | deferred/blocked | annual | no | 0 |
 | HI | freshness-limited | annual | no | 1 |
 | IA | deferred/blocked | annual | no | 1 |
 | ID | freshness-limited | monthly | no | 4 |
 | IL | implemented but unproven | continuous | yes | 2 |
-| IN | freshness-limited | annual | yes | 2 |
+| IN | launch-support candidate | weekly | yes | 2 |
 | KS | deferred/blocked | annual | no | 1 |
 | KY | launch-support candidate | weekly | yes | 2 |
 | LA | launch-support candidate | daily | yes | 3 |
-| MA | launch-support candidate | daily | yes | 1 |
+| MA | implemented but unproven | daily | yes | 1 |
 | MD | freshness-limited | annual | no | 1 |
 | ME | freshness-limited | quarterly | no | 2 |
 | MI | deferred/blocked | annual | no | 1 |
@@ -40,17 +40,17 @@ This summary is a derived view of the full coverage registry.
 | MP | deferred/blocked | annual | no | 0 |
 | MS | deferred/blocked | monthly | no | 3 |
 | MT | deferred/blocked | annual | no | 1 |
-| NC | launch-support candidate | daily | yes | 2 |
+| NC | launch-support candidate | daily | yes | 3 |
 | ND | deferred/blocked | annual | no | 1 |
 | NE | launch-support candidate | weekly | yes | 2 |
 | NH | deferred/blocked | annual | no | 1 |
 | NJ | freshness-limited | quarterly | yes | 2 |
 | NM | freshness-limited | annual | no | 1 |
 | NV | deferred/blocked | annual | no | 1 |
-| NY | launch-support candidate | daily | yes | 2 |
+| NY | implemented but unproven | daily | yes | 3 |
 | OH | deferred/blocked | annual | no | 2 |
 | OK | freshness-limited | annual | no | 1 |
-| OR | launch-support candidate | weekly | yes | 2 |
+| OR | deferred/blocked | weekly | yes | 2 |
 | PA | launch-support candidate | weekly | yes | 5 |
 | PR | deferred/blocked | annual | no | 0 |
 | RI | deferred/blocked | annual | no | 1 |
@@ -109,8 +109,8 @@ This summary is a derived view of the full coverage registry.
 | GA_ATLANTA | GA | covered_by_parent | implemented but unproven | continuous | 1 |
 | ID_BOISE_CITY | ID | independent_target | deferred/blocked | annual | 1 |
 | IL_CHICAGO | IL | covered_by_parent | implemented but unproven | annual | 1 |
-| IN_FORT_WAYNE | IN | covered_by_parent | freshness-limited | annual | 1 |
-| IN_INDIANAPOLIS_CITY_BALANCE | IN | covered_by_parent | freshness-limited | annual | 1 |
+| IN_FORT_WAYNE | IN | covered_by_parent | launch-support candidate | annual | 1 |
+| IN_INDIANAPOLIS_CITY_BALANCE | IN | covered_by_parent | launch-support candidate | annual | 1 |
 | KS_WICHITA | KS | independent_target | deferred/blocked | annual | 1 |
 | KY_LEXINGTONFAYETTE_URBAN_COUNTY | KY | covered_by_parent | freshness-limited | annual | 1 |
 | KY_LOUISVILLEJEFFERSON_COUNTY_METRO_GOVERNMENT_BALANCE | KY | covered_by_parent | freshness-limited | annual | 1 |
@@ -145,7 +145,7 @@ This summary is a derived view of the full coverage registry.
 | OK_OKLAHOMA_CITY | OK | covered_by_parent | freshness-limited | annual | 1 |
 | OK_TULSA | OK | covered_by_parent | freshness-limited | annual | 1 |
 | OR_PORTLAND | OR | covered_by_parent | deferred/blocked | annual | 1 |
-| PA_PHILADELPHIA | PA | independent_target | deferred/blocked | daily | 1 |
+| PA_PHILADELPHIA | PA | independent_target | implemented but unproven | daily | 2 |
 | PA_PITTSBURGH | PA | covered_by_parent | freshness-limited | annual | 1 |
 | TN_MEMPHIS | TN | covered_by_parent | freshness-limited | annual | 1 |
 | TN_NASHVILLEDAVIDSON_METROPOLITAN_GOVERNMENT_BALANCE | TN | covered_by_parent | freshness-limited | annual | 1 |

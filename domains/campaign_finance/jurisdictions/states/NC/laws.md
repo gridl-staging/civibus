@@ -30,6 +30,13 @@ Additional statutory nuance:
 - Contributor identity fields (name, address, principal occupation) are not required for individuals contributing $50 or less in an election (`G.S. 163-278.11(b)`).
 - For contributions above that threshold, reports must include contributor identity plus occupation/employer field data (`G.S. 163-278.11(a)(1)`).
 
+## Sub-state committee registration exemption
+- `G.S. 163-278.10A` exempts certain sub-state candidates from full campaign-committee registration when total contributions, expenditures, AND loans each remain at or below $1,000 across the election.
+- Applies to: county, municipal, school-board, and special-district candidates only.
+- Does NOT apply to federal or state-level candidates (Governor, Council of State, NCGA, judicial), who must register a committee regardless of fundraising volume.
+- Statute reference: https://www.ncleg.gov/EnactedLegislation/Statutes/HTML/BySection/Chapter_163/GS_163-278.10A.html
+- Operational consequence: below-threshold sub-state candidates legitimately have NO NC CF data anywhere. UI must distinguish "expected absence (under threshold)" from "above threshold but missing (possible non-compliance)" from "transactions not yet ingested by us."
+
 ## Reporting periods and deadlines
 - `G.S. 163-278.9(a)` drives state-level candidate/political-committee schedules:
   - Organizational report due within 10 days.

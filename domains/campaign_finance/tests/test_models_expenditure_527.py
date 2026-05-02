@@ -35,17 +35,17 @@ class TestExpenditure527RequiredFields:
         with pytest.raises(ValidationError):
             Expenditure527.model_validate(payload)
 
-    def test_requires_expenditure_date(self):
+    def test_expenditure_date_defaults_none_when_omitted(self):
         payload = build_expenditure_527_payload()
         del payload["expenditure_date"]
-        with pytest.raises(ValidationError):
-            Expenditure527.model_validate(payload)
+        e = Expenditure527.model_validate(payload)
+        assert e.expenditure_date is None
 
-    def test_requires_purpose(self):
+    def test_purpose_defaults_none_when_omitted(self):
         payload = build_expenditure_527_payload()
         del payload["purpose"]
-        with pytest.raises(ValidationError):
-            Expenditure527.model_validate(payload)
+        e = Expenditure527.model_validate(payload)
+        assert e.purpose is None
 
     def test_requires_recipient_name(self):
         payload = build_expenditure_527_payload()
@@ -136,4 +136,5 @@ class TestExpenditure527RoundTrip:
     def test_schema_includes_required_fields(self):
         schema = Expenditure527.model_json_schema()
         assert "sched_b_id" in schema["properties"]
-        assert "purpose" in schema["required"]
+        assert "sched_b_id" in schema["required"]
+        assert "purpose" not in schema["required"]

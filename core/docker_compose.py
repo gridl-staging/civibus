@@ -1,3 +1,7 @@
+"""
+Stub summary for /Users/stuart/parallel_development/civibus_dev/MAR18_cross_domain_er_and_property_graph/civibus_dev/core/docker_compose.py.
+"""
+
 from __future__ import annotations
 
 import os

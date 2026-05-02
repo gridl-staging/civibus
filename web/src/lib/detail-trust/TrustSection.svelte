@@ -15,6 +15,9 @@
   <h3>Source and freshness</h3>
   <p class="detail__summary">{trustSection.lastPulledSummary}</p>
   <p class="detail__freshness detail__freshness--{trustSection.freshnessSeverity}">{freshnessCopy(trustSection.freshnessSeverity)}</p>
+  {#if trustSection.freshnessNote}
+    <p class="detail__freshness detail__freshness--stale">{trustSection.freshnessNote}</p>
+  {/if}
 
   {#if trustSection.rows.length === 0}
     <p>{trustSection.emptyMessage}</p>

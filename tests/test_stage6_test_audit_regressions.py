@@ -62,6 +62,7 @@ def test_makefile_db_reset_sql_files_include_property_schema() -> None:
         "core/schema/entity_resolution.sql "
         "core/schema/er_views.sql "
         "domains/campaign_finance/schema/tables.sql "
+        "domains/campaign_finance/schema/nc_orchestrator_tables.sql "
         "domains/campaign_finance/schema/dark_money_tables.sql "
         "domains/property/schema/tables.sql "
         "domains/civics/schema/tables.sql "
@@ -72,11 +73,11 @@ def test_makefile_db_reset_sql_files_include_property_schema() -> None:
 
     assert db_sql_files_lines == [expected_line]
     assert (
-        "../domains/campaign_finance/schema/dark_money_tables.sql:/docker-entrypoint-initdb.d/07-dark-money.sql"
+        "../domains/campaign_finance/schema/dark_money_tables.sql:/docker-entrypoint-initdb.d/08-dark-money.sql"
         in compose_dev
     )
     assert (
-        "../domains/campaign_finance/schema/dark_money_tables.sql:/docker-entrypoint-initdb.d/07-dark-money.sql"
+        "../domains/campaign_finance/schema/dark_money_tables.sql:/docker-entrypoint-initdb.d/08-dark-money.sql"
         in compose_prod
     )
 
@@ -134,6 +135,18 @@ def test_makefile_exposes_ingest_in_sample_target_with_expected_fixture_command(
     )
 
     assert expected_target in makefile
+
+
+def test_makefile_exposes_ingest_nc_past_results_2022_2024_target() -> None:
+    makefile = read_repo_text("Makefile")
+    phony_lines = re.findall(r"^\.PHONY:\s+(.+)$", makefile, re.M)
+
+    assert phony_lines, "Expected a .PHONY declaration in Makefile"
+    assert "ingest-nc-past-results-2022-2024" in phony_lines[0].split()
+    assert (
+        "ingest-nc-past-results-2022-2024:\n"
+        "\tuv run python -m core.refresh.runner --scope all --job-key-prefix civics-nc-past-results-2022-2024 $(REFRESH_CF_ARGS)"
+    ) in makefile
 
 
 def test_load_structure_test_skips_cleanly_without_locust_extra() -> None:

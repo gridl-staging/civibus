@@ -1,3 +1,4 @@
+
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
@@ -159,6 +160,7 @@ class Transaction(CampaignFinanceBaseModel):
     committee_id: UUID
     transaction_type: str
     transaction_identifier: Optional[str] = None
+    back_ref_transaction_id: Optional[str] = None
     sub_id: Optional[int] = None
     transaction_date: Optional[date] = None
     amount: Decimal = Field(max_digits=14, decimal_places=2)

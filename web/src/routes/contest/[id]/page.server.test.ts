@@ -6,6 +6,8 @@ import { load } from "./+page.server";
 const CONTEST_ID = "77777777-7777-4777-8777-777777777777";
 const OFFICE_ID = "33333333-3333-4333-8333-333333333333";
 const ELECTORAL_DIVISION_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+const PERSON_ID = "11111111-1111-4111-8111-111111111111";
+const GEOMETRY_PATH = "/v1/civics/geometry?level=county&state=NC";
 
 function createLoadEvent(requestJson: ReturnType<typeof vi.fn>, id = CONTEST_ID) {
   return {
@@ -17,7 +19,7 @@ function createLoadEvent(requestJson: ReturnType<typeof vi.fn>, id = CONTEST_ID)
 }
 
 describe("/contest/[id] +page.server load", () => {
-  it("returns contest detail from /v1/contests/{id} with no graph/ER/slug side lookups", async () => {
+  it("returns contest detail and deterministic contest geometry with no graph/ER/slug side lookups", async () => {
     const requestJson = vi.fn(async (path: string) => {
       if (path === `/v1/contests/${CONTEST_ID}`) {
         return {
@@ -27,26 +29,165 @@ describe("/contest/[id] +page.server load", () => {
           election_type: "general",
           office_id: OFFICE_ID,
           electoral_division_id: ELECTORAL_DIVISION_ID,
+          electoral_division_type: "county",
+          electoral_division_state: "NC",
           number_of_seats: 1,
           filing_deadline: "2026-09-01",
           is_partisan: true,
           candidate_list_incomplete: false,
+          result_winner_candidacy_id: null,
+          result_winner_person_id: null,
+          result_winner_person_name: null,
           candidacies: [],
           sources: []
         } satisfies ContestDetailResponse;
+      }
+      if (path === GEOMETRY_PATH) {
+        return {
+          type: "FeatureCollection",
+          features: []
+        };
       }
 
       throw new Error(`unexpected path: ${path}`);
     });
 
-    const data = (await load(createLoadEvent(requestJson))) as ContestDetailResponse;
+    const data = (await load(createLoadEvent(requestJson))) as {
+      contest: ContestDetailResponse;
+      geometryByLevel: Record<string, { type: string; features: unknown[] }>;
+      contestCandidateFinanceByPersonId: Record<string, unknown>;
+    };
 
-    expect(data.id).toBe(CONTEST_ID);
+    expect(data.contest.id).toBe(CONTEST_ID);
+    expect(data.geometryByLevel.county.features).toEqual([]);
+    expect(data.contestCandidateFinanceByPersonId).toEqual({});
     const calledPaths = requestJson.mock.calls.map(([path]) => String(path));
-    expect(calledPaths).toEqual([`/v1/contests/${CONTEST_ID}`]);
+    expect(calledPaths).toEqual([`/v1/contests/${CONTEST_ID}`, GEOMETRY_PATH]);
     expect(calledPaths.every((path) => !path.startsWith("/v1/graph/"))).toBe(true);
     expect(calledPaths.every((path) => !path.startsWith("/v1/er/"))).toBe(true);
     expect(calledPaths.every((path) => !path.includes("slug"))).toBe(true);
+  });
+
+  it("loads contest-linked candidate finance and IE sections by candidacy person id", async () => {
+    const requestJson = vi.fn(async (path: string) => {
+      if (path === `/v1/contests/${CONTEST_ID}`) {
+        return {
+          id: CONTEST_ID,
+          name: "Governor 2026 General Election",
+          election_date: "2026-11-03",
+          election_type: "general",
+          office_id: OFFICE_ID,
+          electoral_division_id: ELECTORAL_DIVISION_ID,
+          electoral_division_type: "county",
+          electoral_division_state: "NC",
+          number_of_seats: 1,
+          filing_deadline: "2026-09-01",
+          is_partisan: true,
+          candidate_list_incomplete: false,
+          result_winner_candidacy_id: null,
+          result_winner_person_id: null,
+          result_winner_person_name: null,
+          candidacies: [
+            {
+              candidacy_id: "candidacy-1",
+              person_id: PERSON_ID,
+              person_name: "Jane Candidate",
+              party: "DEM",
+              status: "won",
+              incumbent_challenge: "I"
+            }
+          ],
+          sources: []
+        } satisfies ContestDetailResponse;
+      }
+      if (path === GEOMETRY_PATH) {
+        return { type: "FeatureCollection", features: [] };
+      }
+      if (path === `/v1/candidates?person_id=${PERSON_ID}&limit=10&offset=0`) {
+        return {
+          items: [
+            {
+              id: "candidate-1",
+              fec_candidate_id: "H0NC01001",
+              name: "Jane Candidate",
+              person_id: PERSON_ID,
+              party: "DEM",
+              office: "H",
+              state: "NC",
+              district: "01",
+              slug: "jane-candidate",
+              slug_is_unique: true
+            }
+          ],
+          has_next: false,
+          offset: 0,
+          limit: 10
+        };
+      }
+      if (path === "/v1/candidates/candidate-1") {
+        return {
+          id: "candidate-1",
+          fec_candidate_id: "H0NC01001",
+          name: "Jane Candidate",
+          slug: "jane-candidate",
+          slug_is_unique: true,
+          person_id: PERSON_ID,
+          party: "DEM",
+          office: "H",
+          state: "NC",
+          district: "01",
+          incumbent_challenge: "I",
+          principal_committee_id: null,
+          sources: []
+        };
+      }
+      if (path === "/v1/candidates/candidate-1/summary") {
+        return {
+          candidate_id: "candidate-1",
+          candidate_name: "Jane Candidate",
+          total_raised: "5000.00",
+          total_spent: "2000.00",
+          net: "3000.00",
+          transaction_count: 42,
+          committees: []
+        };
+      }
+      if (path === "/v1/candidates/candidate-1/independent-expenditures") {
+        return [];
+      }
+      if (path === "/v1/candidates/candidate-1/independent-expenditures/summary") {
+        return {
+          candidate_id: "candidate-1",
+          support_total: "100.00",
+          oppose_total: "50.00",
+          support_count: 1,
+          oppose_count: 1,
+          top_spenders: []
+        };
+      }
+      throw new Error(`unexpected path: ${path}`);
+    });
+
+    const data = (await load(createLoadEvent(requestJson))) as {
+      contestCandidateFinanceByPersonId: Record<
+        string,
+        {
+          personId: string;
+          candidateHref: string | null;
+          summary: { total_raised: string };
+          ieSummary: { support_total: string } | null;
+          ieTransactions: unknown[];
+        }
+      >;
+    };
+
+    expect(data.contestCandidateFinanceByPersonId[PERSON_ID]).toMatchObject({
+      personId: PERSON_ID,
+      candidateHref: "/candidate/jane-candidate",
+      summary: { total_raised: "5000.00" },
+      ieSummary: { support_total: "100.00" },
+      ieTransactions: []
+    });
   });
 
   it("preserves backend-owned 404 Contest not found semantics", async () => {
@@ -78,5 +219,78 @@ describe("/contest/[id] +page.server load", () => {
     });
 
     expect(requestJson).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls back to empty contest geometry when civic geometry returns backend-owned 404", async () => {
+    const requestJson = vi.fn(async (path: string) => {
+      if (path === `/v1/contests/${CONTEST_ID}`) {
+        return {
+          id: CONTEST_ID,
+          name: "Governor 2026 General Election",
+          election_date: "2026-11-03",
+          election_type: "general",
+          office_id: OFFICE_ID,
+          electoral_division_id: ELECTORAL_DIVISION_ID,
+          electoral_division_type: "county",
+          electoral_division_state: "NC",
+          number_of_seats: 1,
+          filing_deadline: "2026-09-01",
+          is_partisan: true,
+          candidate_list_incomplete: false,
+          result_winner_candidacy_id: null,
+          result_winner_person_id: null,
+          result_winner_person_name: null,
+          candidacies: [],
+          sources: []
+        } satisfies ContestDetailResponse;
+      }
+      if (path === GEOMETRY_PATH) {
+        throw new ApiResponseError(404, { detail: "Geometry not found for state NC" });
+      }
+      throw new Error(`unexpected path: ${path}`);
+    });
+
+    const data = (await load(createLoadEvent(requestJson))) as {
+      contest: ContestDetailResponse;
+      geometryByLevel: Record<string, { type: string; features: unknown[] }>;
+    };
+    expect(data.geometryByLevel.county.features).toEqual([]);
+  });
+
+  it("falls back cleanly to empty geometry map when contest division type is unsupported", async () => {
+    const requestJson = vi.fn(async (path: string) => {
+      if (path === `/v1/contests/${CONTEST_ID}`) {
+        return {
+          id: CONTEST_ID,
+          name: "Governor 2026 General Election",
+          election_date: "2026-11-03",
+          election_type: "general",
+          office_id: OFFICE_ID,
+          electoral_division_id: ELECTORAL_DIVISION_ID,
+          electoral_division_type: "municipal_ward",
+          electoral_division_state: "NC",
+          number_of_seats: 1,
+          filing_deadline: "2026-09-01",
+          is_partisan: true,
+          candidate_list_incomplete: false,
+          result_winner_candidacy_id: null,
+          result_winner_person_id: null,
+          result_winner_person_name: null,
+          candidacies: [],
+          sources: []
+        } satisfies ContestDetailResponse;
+      }
+      throw new Error(`unexpected path: ${path}`);
+    });
+
+    const data = (await load(createLoadEvent(requestJson))) as {
+      geometryByLevel: Record<string, { type: string; features: unknown[] }>;
+    };
+
+    expect(data.geometryByLevel.state.features).toEqual([]);
+    expect(data.geometryByLevel.county.features).toEqual([]);
+    expect(data.geometryByLevel.congressional_district.features).toEqual([]);
+    const calledPaths = requestJson.mock.calls.map(([path]) => String(path));
+    expect(calledPaths).toEqual([`/v1/contests/${CONTEST_ID}`]);
   });
 });

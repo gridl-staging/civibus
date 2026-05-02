@@ -13,6 +13,8 @@ from _test_helpers import (
     shared_data_source_scalar,
     source_block_by_name,
 )
+from test_office_class_fixture_inventory import _in_scope_rows
+from test_office_universe_inventory import EVIDENCE_TOKEN_BY_FIXTURE_SLUG
 
 REPO_ROOT = Path(__file__).resolve().parents[6]
 NC_DIR = REPO_ROOT / "domains" / "campaign_finance" / "jurisdictions" / "states" / "NC"
@@ -29,6 +31,7 @@ COMMITTEE_DOC_SOURCE_NAME = "North Carolina SBoE Committee/Document Search"
 
 EXPECTED_COVERAGE_EXAMPLES = [
     "ADAMS FOR NC HOUSE",
+    "GALE ADCOCK FOR NC SENATE",
     "JOHN ADCOCK FOR COUNTY COMMISSIONER",
     "JASON MERRILL FOR CARRBORO TOWN COUNCIL",
     "RICHARD N ADAMS FOR DIST CT JUDGE",
@@ -82,7 +85,7 @@ def test_statewide_package_declares_sub_jurisdiction_coverage_and_target_office_
     assert_statewide_source_coverage_contract(source_block)
 
 
-def test_docs_lock_coverage_examples_used_to_prove_state_county_municipal_and_judicial_scope():
+def test_docs_lock_coverage_examples_used_to_prove_all_in_scope_office_classes():
     readme_text = read(README_PATH)
     semantics_text = read(SEMANTICS_PATH)
 
@@ -192,3 +195,33 @@ def test_config_field_mappings_use_participant_paths_for_role_ambiguous_fields()
     assert '"participant.address.street1"' in field_mappings_block
     assert '"participant.occupation"' in field_mappings_block
     assert '"participant.employer_or_business"' in field_mappings_block
+
+
+def test_coverage_examples_match_stage1_evidence_tokens():
+    in_scope = _in_scope_rows()
+    stage1_office_classes = {row["office_class"] for row in in_scope}
+    stage1_tokens = set(EVIDENCE_TOKEN_BY_FIXTURE_SLUG.values())
+
+    assert set(EXPECTED_COVERAGE_EXAMPLES) == stage1_tokens, (
+        f"EXPECTED_COVERAGE_EXAMPLES must match Stage 1 evidence tokens exactly; "
+        f"missing={stage1_tokens - set(EXPECTED_COVERAGE_EXAMPLES)}, "
+        f"extra={set(EXPECTED_COVERAGE_EXAMPLES) - stage1_tokens}"
+    )
+    assert len(stage1_office_classes) == len(EXPECTED_COVERAGE_EXAMPLES), (
+        f"one evidence token per in-scope office class; "
+        f"classes={len(stage1_office_classes)}, examples={len(EXPECTED_COVERAGE_EXAMPLES)}"
+    )
+
+
+def test_readme_names_per_class_proof_test_path():
+    readme_text = read(README_PATH)
+    assert "tests/test_office_class_coverage.py" in readme_text, (
+        "README must reference tests/test_office_class_coverage.py as the per-class proof owner"
+    )
+
+
+def test_readme_states_committee_document_level_classification():
+    readme_text = read(README_PATH)
+    assert "committee-document level" in readme_text, (
+        "README must state that office-level classification is proven at the committee-document level"
+    )

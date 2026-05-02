@@ -45,11 +45,42 @@ Acquisition workflow details were re-verified against live 2026-cycle transactio
   - `/CFOrgLkup/ExportSearchResults/?OGID={OrgGroupID}&Title={title}&Type=DocGen`
 - There is no known statewide bulk transaction or committee-document export contract.
 
+## `cf.nc_committee_registry` table
+
+Statewide committee registry populated by alphabetic crawl of the `CFOrgLkup` portal via `crawl_committee_registry_httpx()`.
+
+### Columns
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `org_group_id` | integer (PK) | NCSBE internal org-group identifier; UPSERT key |
+| `sboe_id` | text | SBoE committee ID (e.g. `STA-C0498N-C-002`) |
+| `committee_name` | text | Official registered committee name |
+| `status_desc` | text | Registration status (`Active`, `Dissolved`, `Inactive`, etc.) |
+| `old_id` | text | Legacy identifier from prior NCSBE system |
+| `candidate_name` | text | Associated candidate name (null for non-candidate committees) |
+| `data_source_id` | integer | Source identifier from portal JSON payload |
+| `first_seen_at` | timestamptz | Earliest crawl that observed this committee (LEAST on UPSERT) |
+| `last_seen_at` | timestamptz | Most recent crawl that observed this committee (GREATEST on UPSERT) |
+
+### Source
+
+Alphabetic enumeration of `https://cf.ncsbe.gov/CFOrgLkup/` — 26 letter-prefix searches (A-Z) with JSON response parsing from inline `window.dt` payloads.
+
+### UPSERT contract
+
+Keyed on `org_group_id`. On conflict: advances `last_seen_at` to current timestamp via `GREATEST(last_seen_at, EXCLUDED.last_seen_at)`, retains earliest `first_seen_at` via `LEAST(first_seen_at, EXCLUDED.first_seen_at)`.
+
+### Row count
+
+13,612 rows as of the Stage 5 proof (2026-04-25). Idempotent rerun confirmed: `inserted=0 updated=0 skipped=13612`.
+
 ## Coverage semantics
 - The NC package remains a single statewide source package that includes state, county, municipal, and judicial activity via shared NCSBE portals.
-- Coverage examples used to prove that cross-jurisdiction reach:
-  - `ADAMS FOR NC HOUSE`
-  - `JOHN ADCOCK FOR COUNTY COMMISSIONER`
-  - `JASON MERRILL FOR CARRBORO TOWN COUNCIL`
-  - `RICHARD N ADAMS FOR DIST CT JUDGE`
-- Office-level classification is derived from committee identifiers/names and committee-document linkage, because transaction exports do not carry explicit office/county/municipality columns.
+- Office-class evidence is proven at the committee-document level: committee-name patterns and `SBoE ID` identifiers from the committee/document portal (`CFOrgLkup`) provide the office-class signal, since transaction CSV exports carry no office column. The evidence path is committee-name token matching joined through `(SBoE ID, Year + Doc Name)` committee-document keys.
+- Coverage examples anchoring all five in-scope office classes:
+  - `ADAMS FOR NC HOUSE` (state_house)
+  - `GALE ADCOCK FOR NC SENATE` (state_senate)
+  - `JOHN ADCOCK FOR COUNTY COMMISSIONER` (county)
+  - `JASON MERRILL FOR CARRBORO TOWN COUNCIL` (municipal)
+  - `RICHARD N ADAMS FOR DIST CT JUDGE` (judicial)

@@ -23,6 +23,7 @@ _MISSING_FIELD_SENTINEL = object()
 # Column tuples derived from config.yaml field_mappings at import time.
 CONTRIBUTION_COLUMNS = _load_columns_for_data_type("contributions")
 EXPENDITURE_COLUMNS = _load_columns_for_data_type("expenditures")
+IE_COLUMNS = _load_columns_for_data_type("independent_expenditures")
 
 
 class NYCsvParser:
@@ -97,3 +98,7 @@ def parse_contributions(path: Path) -> NYCsvParser:
 def parse_expenditures(path: Path) -> NYCsvParser:
     """Return a streaming parser for NY expenditure CSV files."""
     return NYCsvParser(path=path, columns=EXPENDITURE_COLUMNS, row_label="expenditure")
+
+
+def parse_independent_expenditures(path: Path) -> NYCsvParser:
+    return NYCsvParser(path=path, columns=IE_COLUMNS, row_label="independent_expenditure")

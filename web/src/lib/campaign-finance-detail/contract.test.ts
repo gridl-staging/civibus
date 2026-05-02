@@ -1,16 +1,21 @@
 import { describe, expect, it } from "vitest";
 import {
+  CANDIDATES_PAGE_PATH,
+  COMMITTEES_PAGE_PATH,
   COMMITTEE_TRANSACTIONS_LIMIT,
   buildCandidateDetailPath,
   buildCandidateHref,
   buildCandidateListPath,
+  buildCandidatesPagePath,
   buildCandidateSummaryPath,
   buildCandidatesBySlugPath,
+  buildCountyCampaignFinanceSummaryPath,
   buildCommitteeDetailPath,
   buildCommitteeFilingBreakdownPath,
   buildCommitteeHref,
   buildCommitteeListPath,
   buildCommitteeSummaryPath,
+  buildCommitteesPagePath,
   buildCommitteeTransactionsPath,
   buildCommitteesBySlugPath,
   type CandidateDetailResponse,
@@ -39,6 +44,15 @@ describe("campaign-finance detail contract", () => {
 
   it("builds backend-owned candidate summary path", () => {
     expect(buildCandidateSummaryPath(CANDIDATE_ID)).toBe(`/v1/candidates/${CANDIDATE_ID}/summary`);
+  });
+
+  it("builds backend-owned county campaign-finance summary path", () => {
+    expect(buildCountyCampaignFinanceSummaryPath("NC", "wake")).toBe(
+      "/v1/counties/nc/wake/campaign-finance-summary"
+    );
+    expect(buildCountyCampaignFinanceSummaryPath("nc", "new_hanover")).toBe(
+      "/v1/counties/nc/new_hanover/campaign-finance-summary"
+    );
   });
 
   it("builds committee transactions with only committee_id + shared limit params", () => {
@@ -227,6 +241,111 @@ describe("campaign-finance by-slug and list path builders", () => {
     const parsed = new URL(path, "https://test.local");
     expect(parsed.searchParams.has("state")).toBe(false);
     expect(parsed.searchParams.get("office")).toBe("S");
+  });
+
+  it("drops blank string filter params from candidate list and page paths", () => {
+    const listPath = buildCandidateListPath({ state: "", office: "S", limit: 25 });
+    const pagePath = buildCandidatesPagePath({ state: "", office: "S", limit: 25 });
+    const parsedList = new URL(listPath, "https://test.local");
+    const parsedPage = new URL(pagePath, "https://test.local");
+
+    expect(parsedList.searchParams.has("state")).toBe(false);
+    expect(parsedList.searchParams.get("office")).toBe("S");
+    expect(parsedPage.searchParams.has("state")).toBe(false);
+    expect(parsedPage.searchParams.get("office")).toBe("S");
+  });
+
+  it("builds candidates page path with no params", () => {
+    expect(buildCandidatesPagePath({})).toBe(CANDIDATES_PAGE_PATH);
+  });
+
+  it("builds candidates page path with partial filter params", () => {
+    const path = buildCandidatesPagePath({ office: "H", limit: 25 });
+    const parsed = new URL(path, "https://test.local");
+
+    expect(parsed.pathname).toBe(CANDIDATES_PAGE_PATH);
+    expect(parsed.searchParams.get("office")).toBe("H");
+    expect(parsed.searchParams.get("limit")).toBe("25");
+    expect(parsed.searchParams.has("state")).toBe(false);
+    expect(parsed.searchParams.has("offset")).toBe(false);
+  });
+
+  it("builds candidates page path for offset-only pagination links", () => {
+    const path = buildCandidatesPagePath({ offset: 50, limit: 25 });
+    const parsed = new URL(path, "https://test.local");
+
+    expect(parsed.pathname).toBe(CANDIDATES_PAGE_PATH);
+    expect(parsed.searchParams.get("offset")).toBe("50");
+    expect(parsed.searchParams.get("limit")).toBe("25");
+    expect(parsed.searchParams.has("state")).toBe(false);
+    expect(parsed.searchParams.has("office")).toBe(false);
+  });
+});
+
+describe("buildCommitteesPagePath", () => {
+  it("builds committees page path with no params", () => {
+    expect(buildCommitteesPagePath({})).toBe(COMMITTEES_PAGE_PATH);
+  });
+
+  it("builds committees page path with state-only filter", () => {
+    const path = buildCommitteesPagePath({ state: "GA" });
+    const parsed = new URL(path, "https://test.local");
+
+    expect(parsed.pathname).toBe(COMMITTEES_PAGE_PATH);
+    expect(parsed.searchParams.get("state")).toBe("GA");
+    expect(parsed.searchParams.has("committee_type")).toBe(false);
+  });
+
+  it("builds committees page path with committee_type-only filter", () => {
+    const path = buildCommitteesPagePath({ committee_type: "Q" });
+    const parsed = new URL(path, "https://test.local");
+
+    expect(parsed.pathname).toBe(COMMITTEES_PAGE_PATH);
+    expect(parsed.searchParams.get("committee_type")).toBe("Q");
+    expect(parsed.searchParams.has("state")).toBe(false);
+  });
+
+  it("builds committees page path with pagination params", () => {
+    const path = buildCommitteesPagePath({ offset: 50, limit: 25 });
+    const parsed = new URL(path, "https://test.local");
+
+    expect(parsed.pathname).toBe(COMMITTEES_PAGE_PATH);
+    expect(parsed.searchParams.get("offset")).toBe("50");
+    expect(parsed.searchParams.get("limit")).toBe("25");
+    expect(parsed.searchParams.has("state")).toBe(false);
+    expect(parsed.searchParams.has("committee_type")).toBe(false);
+  });
+
+  it("builds committees page path with combined filters and pagination", () => {
+    const path = buildCommitteesPagePath({ state: "NC", committee_type: "P", offset: 25, limit: 25 });
+    const parsed = new URL(path, "https://test.local");
+
+    expect(parsed.pathname).toBe(COMMITTEES_PAGE_PATH);
+    expect(parsed.searchParams.get("state")).toBe("NC");
+    expect(parsed.searchParams.get("committee_type")).toBe("P");
+    expect(parsed.searchParams.get("offset")).toBe("25");
+    expect(parsed.searchParams.get("limit")).toBe("25");
+  });
+
+  it("omits undefined params from committees page path", () => {
+    const path = buildCommitteesPagePath({ state: undefined, committee_type: "Q", limit: 25 });
+    const parsed = new URL(path, "https://test.local");
+
+    expect(parsed.searchParams.has("state")).toBe(false);
+    expect(parsed.searchParams.get("committee_type")).toBe("Q");
+    expect(parsed.searchParams.get("limit")).toBe("25");
+  });
+
+  it("drops blank string filter params from committee list and page paths", () => {
+    const listPath = buildCommitteeListPath({ state: "", committee_type: "Q", limit: 25 });
+    const pagePath = buildCommitteesPagePath({ state: "", committee_type: "Q", limit: 25 });
+    const parsedList = new URL(listPath, "https://test.local");
+    const parsedPage = new URL(pagePath, "https://test.local");
+
+    expect(parsedList.searchParams.has("state")).toBe(false);
+    expect(parsedList.searchParams.get("committee_type")).toBe("Q");
+    expect(parsedPage.searchParams.has("state")).toBe(false);
+    expect(parsedPage.searchParams.get("committee_type")).toBe("Q");
   });
 });
 

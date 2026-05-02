@@ -28,6 +28,22 @@ the target VM as `root` and must remain idempotent. Current responsibilities:
 The GitHub Actions deploy workflow is the canonical caller for this script. Local agent
 sessions may also use it when they have the same authorized SSH + secret material.
 
+## Long-Running Dispatch Contract
+
+`long_running_dispatch.sh` is the generic wrapper for launching long-running background
+commands while writing deterministic dispatch metadata.
+
+```bash
+./infra/scripts/long_running_dispatch.sh \
+  --log-path docs/research/artifacts/<run>/dispatch.log \
+  --metadata-path docs/research/artifacts/<run>/dispatch_metadata.json \
+  -- uv run python -m core.entity_resolution.tuning --candidate-id c1
+```
+
+Dispatch failure means the wrapper itself could not start a child process and record
+its PID/metadata. Child-process failure happens after successful dispatch (including
+short-lived exits) and must be diagnosed from the log.
+
 ## Prerequisites
 
 1. Export `POSTGRES_PASSWORD` in your shell.

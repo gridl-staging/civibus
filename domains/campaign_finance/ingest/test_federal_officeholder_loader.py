@@ -8,6 +8,7 @@ with proper holder_status, term windows, and contact ownership semantics.
 from __future__ import annotations
 
 from datetime import date
+from pathlib import Path
 from uuid import UUID, uuid4
 
 import psycopg
@@ -24,6 +25,7 @@ OFFICE_US_HOUSE = UUID("00000000-0000-4000-8000-000000000101")
 OFFICE_US_SENATE = UUID("00000000-0000-4000-8000-000000000102")
 DIVISION_US_STATEWIDE = UUID("00000000-0000-4000-8000-000000000501")
 DIVISION_US_CONGRESSIONAL_DISTRICTS = UUID("00000000-0000-4000-8000-000000000504")
+_FIXTURE_DIR = Path(__file__).resolve().parents[3] / "tests" / "fixtures" / "roster"
 
 
 def _make_data_source(conn: psycopg.Connection) -> DataSource:
@@ -35,6 +37,34 @@ def _make_data_source(conn: psycopg.Connection) -> DataSource:
     )
     insert_data_source(conn, ds)
     return ds
+
+
+def _fixture_text(name: str) -> str:
+    return (_FIXTURE_DIR / name).read_text(encoding="utf-8")
+
+
+def test_normalize_house_xml_rows_contract() -> None:
+    from domains.campaign_finance.ingest.federal_officeholder_loader import normalize_house_xml_rows
+
+    rows = normalize_house_xml_rows(_fixture_text("us_house_member_data_sample.xml"))
+
+    assert len(rows) == 2
+    assert rows[0]["member_name"] == "Casey Brown"
+    assert rows[0]["state"] == "NC"
+    assert rows[0]["district"] == "12"
+    assert rows[0]["sworn_date"] == "2025-01-03"
+
+
+def test_normalize_senate_xml_rows_contract() -> None:
+    from domains.campaign_finance.ingest.federal_officeholder_loader import normalize_senate_xml_rows
+
+    rows = normalize_senate_xml_rows(_fixture_text("us_senate_contact_information_sample.xml"))
+
+    assert len(rows) == 2
+    assert rows[0]["member_full"] == "Pat Smith"
+    assert rows[0]["state"] == "GA"
+    assert rows[0]["class"] == "2"
+    assert rows[0]["email"] == "pat_smith@senate.gov"
 
 
 def _make_house_member_row(

@@ -1,3 +1,7 @@
+"""
+Stub summary for /Users/stuart/parallel_development/civibus_dev/mar22_pm_02_oh_state_pipeline/civibus_dev/domains/campaign_finance/jurisdictions/states/OH/scraper/load.py.
+"""
+
 from __future__ import annotations
 
 import logging

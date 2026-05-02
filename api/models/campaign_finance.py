@@ -1,3 +1,4 @@
+
 from __future__ import annotations
 
 from datetime import date, datetime
@@ -156,6 +157,7 @@ class CandidateListItem(BaseModel):
     id: UUID
     fec_candidate_id: str
     name: str
+    person_id: UUID | None = None
     party: str | None = None
     office: str
     state: str | None = None
@@ -178,6 +180,7 @@ class CommitteeListItem(BaseModel):
 class CandidateListParams(BaseModel):
     state: str | None = None
     office: str | None = None
+    person_id: UUID | None = None
     limit: int = Field(default=50, ge=1, le=200)
     offset: int = Field(default=0, ge=0)
 
@@ -203,6 +206,18 @@ class CommitteeListResponse(BaseModel):
     limit: int
 
 
+class RankedTransactionParty(BaseModel):
+    name: str
+    total_amount: Decimal
+    transaction_count: int
+
+
+class SpendCategorySummary(BaseModel):
+    category: str
+    total_amount: Decimal
+    transaction_count: int
+
+
 class CommitteeFundraisingSummary(BaseModel):
     committee_id: UUID
     committee_name: str
@@ -212,6 +227,13 @@ class CommitteeFundraisingSummary(BaseModel):
     transaction_count: int
     jurisdiction: str | None = None
     data_through: datetime | None = None
+    cash_receipts_total: Decimal = Decimal("0.00")
+    in_kind_receipts_total: Decimal = Decimal("0.00")
+    loan_receipts_total: Decimal = Decimal("0.00")
+    contribution_receipts_total: Decimal = Decimal("0.00")
+    top_donors: list[RankedTransactionParty] = Field(default_factory=list)
+    top_vendors: list[RankedTransactionParty] = Field(default_factory=list)
+    spend_categories: list[SpendCategorySummary] | None = None
 
 
 class CandidateFundraisingSummary(BaseModel):
@@ -222,6 +244,83 @@ class CandidateFundraisingSummary(BaseModel):
     net: Decimal
     transaction_count: int
     committees: list[CommitteeFundraisingSummary]
+
+
+StateCoverageTier = Literal[
+    "launch-support candidate",
+    "implemented but unproven",
+    "freshness-limited",
+    "deferred/blocked",
+]
+StateSupportStatus = Literal["supported", "warning", "unsupported"]
+
+
+class StateCandidateTopEntry(BaseModel):
+    candidate_id: UUID
+    candidate_name: str
+    total_raised: Decimal
+
+
+class StateCommitteeTopEntry(BaseModel):
+    committee_id: UUID
+    committee_name: str
+    total_raised: Decimal
+
+
+class StateIndependentExpenditureTopSpender(BaseModel):
+    committee_id: UUID
+    committee_name: str
+    total_amount: Decimal
+
+
+class StateSummaryItem(BaseModel):
+    state_code: str
+    total_raised: Decimal
+    total_spent: Decimal
+    net: Decimal
+    committee_count: int
+    transaction_count: int
+    federal_candidate_count: int
+    ie_support_total: Decimal | None = None
+    ie_oppose_total: Decimal | None = None
+    ie_support_count: int | None = None
+    ie_oppose_count: int | None = None
+    coverage_tier: StateCoverageTier | None = None
+    support_status: StateSupportStatus
+    supported: bool
+    warning_text: str | None = None
+    data_through: datetime | None = None
+
+
+class StateDetailResponse(StateSummaryItem):
+    sources: list[SourceInfo] = Field(default_factory=list)
+    top_candidates: list[StateCandidateTopEntry]
+    top_committees: list[StateCommitteeTopEntry]
+    top_ie_spenders: list[StateIndependentExpenditureTopSpender]
+
+
+class CountySummaryRecipientCommittee(BaseModel):
+    committee_id: UUID
+    committee_name: str
+    donor_total_cents: int
+    transaction_count: int
+
+
+class CountySummaryLinkedCandidate(BaseModel):
+    candidate_id: UUID
+    candidate_name: str
+    donor_total_cents: int
+    transaction_count: int
+
+
+class CountyCampaignFinanceSummary(BaseModel):
+    state: str
+    county_slug: str
+    donor_total_cents: int
+    transaction_count: int
+    top_recipient_committees: list[CountySummaryRecipientCommittee]
+    top_linked_candidates: list[CountySummaryLinkedCandidate]
+    sources: list[SourceInfo]
 
 
 class FilingPeriodSummary(BaseModel):
@@ -237,6 +336,8 @@ class FilingPeriodSummary(BaseModel):
     total_spent: Decimal
     net: Decimal
     transaction_count: int
+    cash_on_hand: Decimal | None = None
+    row_id: str
 
 
 class CommitteeFilingBreakdown(BaseModel):

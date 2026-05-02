@@ -1,3 +1,4 @@
+
 from __future__ import annotations
 
 import hashlib
@@ -113,6 +114,7 @@ def validate_temporal_range(start: date | None, end: date | None) -> None:
 
 
 DatePrecisionLiteral = Literal["day", "month", "quarter", "year", "approximate"]
+RefreshPullStatus = Literal["crashed", "empty", "degraded", "success"]
 
 
 class ValidDateRange(BaseModel):
@@ -146,6 +148,12 @@ class Person(BaseModel):
     middle_name: str | None = None
     last_name: str | None = None
     suffix: str | None = None
+    occupation: str | None = None
+    education: str | None = None
+    bio_text: str | None = None
+    bio_source_url: str | None = None
+    bio_license: PortraitRightsStatus | None = None
+    bio_pulled_at: datetime | None = None
     date_of_birth: date | None = None
     year_of_birth: int | None = None
     identifiers: dict[str, str] = Field(default_factory=dict)
@@ -315,6 +323,91 @@ class SourceRecord(BaseModel):
     @classmethod
     def validate_raw_fields(cls, value: object) -> dict[str, object]:
         return validate_json_dictionary(value, field_name="raw_fields")
+
+
+PortraitStatus = Literal[
+    "active",
+    "not_found",
+    "too_small",
+    "face_too_small",
+    "takedown_requested",
+    "superseded",
+    "rejected",
+]
+PortraitRightsStatus = Literal["public_domain", "licensed", "restricted", "unknown"]
+
+
+class PersonPortrait(BaseModel):
+    id: UUID = Field(default_factory=uuid4)
+    person_id: UUID
+    source_record_id: UUID
+    status: PortraitStatus = "active"
+    rights_status: PortraitRightsStatus = "unknown"
+    image_hash: str
+    dedup_key: str | None = None
+    mime_type: str | None = None
+    width_px: int | None = None
+    height_px: int | None = None
+    source_image_url: str | None = None
+    storage_uri: str | None = None
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+    @field_validator("image_hash")
+    @classmethod
+    def validate_image_hash(cls, value: str) -> str:
+        normalized_hash = value.strip().lower()
+        if fullmatch(r"[0-9a-f]{64}", normalized_hash) is None:
+            raise ValueError("image_hash must be a lowercase 64-character hex SHA-256 string")
+        return normalized_hash
+
+    @field_validator("width_px", "height_px")
+    @classmethod
+    def validate_positive_dimensions(cls, value: int | None) -> int | None:
+        if value is not None and value <= 0:
+            raise ValueError("portrait dimensions must be positive when provided")
+        return value
+
+    @model_validator(mode="after")
+    def ensure_dedup_key(self) -> PersonPortrait:
+        if self.dedup_key is None:
+            raw_key = self.image_hash
+            self.dedup_key = hashlib.sha256(raw_key.encode("utf-8")).hexdigest()
+        return self
+
+
+class RefreshRun(BaseModel):
+    id: UUID = Field(default_factory=uuid4)
+    job_key: str
+    domain: str
+    jurisdiction: str
+    data_source_names: list[str] = Field(default_factory=list)
+    pull_status: RefreshPullStatus
+    started_at: datetime
+    completed_at: datetime
+    inserted_count: int = 0
+    skipped_count: int = 0
+    quarantined_count: int = 0
+    superseded_count: int = 0
+    error_count: int = 0
+    metadata_updates: int = 0
+    message: str
+    error: str | None = None
+    created_at: datetime = Field(default_factory=utc_now)
+
+    @field_validator(
+        "inserted_count",
+        "skipped_count",
+        "quarantined_count",
+        "superseded_count",
+        "error_count",
+        "metadata_updates",
+    )
+    @classmethod
+    def validate_non_negative_counts(cls, value: int) -> int:
+        if value < 0:
+            raise ValueError("refresh-run counts must be non-negative")
+        return value
 
 
 CONTACT_POINT_OWNER_TYPES = Literal[

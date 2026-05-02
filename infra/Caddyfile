@@ -1,0 +1,22 @@
+{$PUBLIC_HOSTNAME} {
+  handle_path /api/* {
+    reverse_proxy api:8000
+  }
+
+  handle /robots.txt {
+    header Content-Type text/plain
+    respond <<EOF
+User-agent: *
+Allow: /
+Sitemap: https://{$PUBLIC_HOSTNAME}/sitemap.xml
+EOF
+  }
+
+  handle {
+    reverse_proxy web:3000
+  }
+}
+
+www.{$PUBLIC_HOSTNAME} {
+  redir https://{$PUBLIC_HOSTNAME}{uri} permanent
+}

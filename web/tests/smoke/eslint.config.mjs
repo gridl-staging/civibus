@@ -56,6 +56,10 @@ export default [
           message: "Arbitrary waits not allowed. Use Playwright auto-waiting."
         },
         {
+          selector: "CallExpression[callee.name='setTimeout']",
+          message: "setTimeout not allowed in spec files. Use deterministic route/listener gating."
+        },
+        {
           selector: "CallExpression[callee.property.name='dispatchEvent']",
           message: "Synthetic events not allowed. Use real user interactions."
         },

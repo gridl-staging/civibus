@@ -1,3 +1,7 @@
+"""
+Stub summary for /Users/stuart/parallel_development/civibus_dev/MAR18_api_graph_routes_and_property_endpoints/civibus_dev/domains/campaign_finance/jurisdictions/states/GA/scraper/load.py.
+"""
+
 from __future__ import annotations
 
 import logging
@@ -288,8 +292,18 @@ def _resolve_ga_person_id(
 
 
 def _resolve_ga_committee_id(conn: psycopg.Connection, committee: Organization) -> UUID:
+    """Find or insert a GA committee, serialized by advisory lock to prevent deadlocks.
+
+    When multiple concurrent A-Z letter iterations try to insert the same committee,
+    they can deadlock on the core.organization table. An advisory lock keyed on the
+    committee identifier serializes these find-or-insert operations.
+    """
     committee_identifier = committee.identifiers.get("ga_filer_id")
     if committee_identifier:
+        # Advisory lock prevents concurrent inserts for the same committee.
+        # pg_advisory_xact_lock is released automatically at transaction end.
+        lock_key = hash(f"ga_committee:{committee_identifier}") & 0x7FFFFFFFFFFFFFFF
+        conn.execute("SELECT pg_advisory_xact_lock(%s)", (lock_key,))
         existing_org_id = find_organization_by_identifier(conn, "ga_filer_id", committee_identifier)
         if existing_org_id is not None:
             return existing_org_id

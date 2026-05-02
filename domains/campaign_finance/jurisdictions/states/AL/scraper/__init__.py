@@ -57,6 +57,14 @@ def _load_column_for_semantic_path(data_type: str, semantic_path: str) -> str:
 
 
 @lru_cache(maxsize=None)
+def _try_load_column_for_semantic_path(data_type: str, semantic_path: str) -> str | None:
+    try:
+        return _load_column_for_semantic_path(data_type, semantic_path)
+    except RuntimeError:
+        return None
+
+
+@lru_cache(maxsize=None)
 def _load_api_base_url_for_data_type(data_type: str) -> str:
     data_source = _load_data_source_for_data_type(data_type)
     if data_source.api_base_url is None:

@@ -1,3 +1,4 @@
+
 from __future__ import annotations
 
 import csv
@@ -193,6 +194,42 @@ def extract_named_block(text: str, key: str) -> str:
         return "\n".join(block_lines)
 
     raise AssertionError(f"expected block for key '{key}'")
+
+
+def markdown_table_under_heading(markdown_text: str, heading: str) -> tuple[list[str], list[dict[str, str]]]:
+    heading_line = f"## {heading}"
+    lines = markdown_text.splitlines()
+    heading_index: int | None = None
+    for index, line in enumerate(lines):
+        if line.strip() == heading_line:
+            heading_index = index
+            break
+    if heading_index is None:
+        raise AssertionError(f"missing heading: {heading_line}")
+
+    section_lines: list[str] = []
+    for line in lines[heading_index + 1 :]:
+        if line.startswith("## "):
+            break
+        section_lines.append(line)
+
+    table_lines = [line.strip() for line in section_lines if line.strip().startswith("|")]
+    if len(table_lines) < 3:
+        raise AssertionError(f"expected markdown table under heading: {heading_line}")
+
+    headers = [column.strip() for column in table_lines[0].strip("|").split("|")]
+    divider = [column.strip() for column in table_lines[1].strip("|").split("|")]
+    if len(divider) != len(headers) or not all(set(column) <= {"-", ":"} and column for column in divider):
+        raise AssertionError(f"invalid markdown table separator under heading: {heading_line}")
+
+    rows: list[dict[str, str]] = []
+    for raw_line in table_lines[2:]:
+        values = [column.strip() for column in raw_line.strip("|").split("|")]
+        if len(values) != len(headers):
+            raise AssertionError(f"table row has {len(values)} columns, expected {len(headers)}: {raw_line}")
+        rows.append(dict(zip(headers, values, strict=True)))
+
+    return headers, rows
 
 
 def extract_source_blocks(config_text: str) -> list[str]:

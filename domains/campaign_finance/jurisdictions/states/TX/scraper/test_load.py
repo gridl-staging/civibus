@@ -3,6 +3,7 @@ import csv
 from datetime import date
 from pathlib import Path
 from unittest.mock import MagicMock
+from uuid import uuid4
 
 import psycopg
 import pytest
@@ -130,6 +131,59 @@ def test_amendment_indicator_uses_info_only_flag_and_form_type_code() -> None:
     assert _tx_amendment_indicator(expenditure_row, data_type="expenditures") == "A"
 
 
+def test_tx_is_independent_expenditure_true_for_dce_form_type() -> None:
+    row = {"formTypeCd": "DCE", "schedFormTypeCd": "F1"}
+    assert tx_load_module._tx_is_independent_expenditure(row, data_type="expenditures") is True
+
+
+def test_tx_is_independent_expenditure_false_for_non_ie_code() -> None:
+    row = {"formTypeCd": "CORCOH", "schedFormTypeCd": "F1"}
+    assert tx_load_module._tx_is_independent_expenditure(row, data_type="expenditures") is False
+
+
+@pytest.mark.parametrize("raw_value", ["", None])
+def test_tx_is_independent_expenditure_false_for_blank_or_null(raw_value: str | None) -> None:
+    row = {"formTypeCd": raw_value, "schedFormTypeCd": "F1"}
+    assert tx_load_module._tx_is_independent_expenditure(row, data_type="expenditures") is False
+
+
+def test_tx_is_independent_expenditure_false_for_non_expenditure_data_type() -> None:
+    row = {"formTypeCd": "DCE", "schedFormTypeCd": "F1"}
+    assert tx_load_module._tx_is_independent_expenditure(row, data_type="contributions") is False
+
+
+def test_upsert_tx_transaction_overrides_type_for_independent_expenditure(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: list[object] = []
+    monkeypatch.setattr(tx_load_module, "upsert_transaction", lambda _conn, txn: captured.append(txn))
+    monkeypatch.setattr(tx_load_module, "resolve_transaction_counterparty_ids", lambda _conn, **_kw: (None, None))
+    monkeypatch.setattr(tx_load_module, "_resolve_tx_transaction_address_id", lambda _conn, **_kw: None)
+    monkeypatch.setattr(tx_load_module, "_select_tx_transaction_id", lambda _conn, **_kw: None)
+    monkeypatch.setattr(
+        tx_load_module,
+        "_tx_extract_row",
+        lambda _row, _data_type: {"payee_person": None, "payee_org": None, "address": None},
+    )
+
+    row = dict(_parsed_expenditures()[0])
+    row["schedFormTypeCd"] = "F1"
+    row["formTypeCd"] = "DCE"
+    row["expendDt"] = "20260115"
+    row["expendAmount"] = "100.00"
+    row["expendInfoId"] = "TX-IE-SYNTH-1"
+
+    tx_load_module._upsert_tx_transaction_with_filing(
+        MagicMock(),
+        row,
+        filing_id=uuid4(),
+        committee_id=uuid4(),
+        source_record_id=uuid4(),
+        data_type="expenditures",
+    )
+
+    assert len(captured) == 1
+    assert captured[0].transaction_type == "Independent Expenditure"
+
+
 def test_load_tx_contribution_deduplicates_source_record_by_stage1_key(db_conn: psycopg.Connection) -> None:
     row = _parsed_contributions()[0]
     data_source_id = ensure_tx_data_source(db_conn, data_type="contributions")
@@ -158,11 +212,74 @@ def test_load_tx_contribution_deduplicates_source_record_by_stage1_key(db_conn: 
 
 def test_load_tx_contributions_with_filings_is_idempotent_and_sets_keys(db_conn: psycopg.Connection) -> None:
     first_result = load_tx_contributions_with_filings(db_conn, _SAMPLE_CONTRIBUTIONS_PATH)
-    second_result = load_tx_contributions_with_filings(db_conn, _SAMPLE_CONTRIBUTIONS_PATH)
 
     assert isinstance(first_result, LoadResult)
     assert first_result.inserted == 10
     assert first_result.errors == 0
+
+    expected_source_record_keys = sorted(
+        _tx_source_record_key(row, data_type="contributions")
+        for row in _parsed_contributions()
+    )
+    with db_conn.cursor(row_factory=dict_row) as cursor:
+        cursor.execute(
+            """
+            SELECT f.filing_fec_id,
+                   f.receipt_date,
+                   t.transaction_identifier,
+                   t.amendment_indicator,
+                   t.source_record_id
+            FROM cf.transaction t
+            JOIN cf.filing f ON f.id = t.filing_id
+            WHERE f.filing_fec_id = %s
+              AND t.transaction_identifier = %s
+            LIMIT 1
+            """,
+            ("TX-00057770-2008-contributions", "110000001"),
+        )
+        row = cursor.fetchone()
+        cursor.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM cf.filing
+            WHERE filing_fec_id LIKE 'TX-%-contributions'
+            """,
+        )
+        first_filing_count = cursor.fetchone()["count"]
+        cursor.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM cf.transaction t
+            JOIN cf.filing f
+              ON f.id = t.filing_id
+            WHERE f.filing_fec_id LIKE 'TX-%-contributions'
+            """,
+        )
+        first_transaction_count = cursor.fetchone()["count"]
+
+    contribution_data_source_id = ensure_tx_data_source(db_conn, data_type="contributions")
+    with db_conn.cursor(row_factory=dict_row) as cursor:
+        cursor.execute(
+            """
+            SELECT id, source_record_key, record_hash, raw_fields, pull_date
+            FROM core.source_record
+            WHERE data_source_id = %s
+              AND source_record_key = ANY(%s)
+              AND superseded_by IS NULL
+            ORDER BY source_record_key
+            """,
+            (contribution_data_source_id, expected_source_record_keys),
+        )
+        source_record_snapshot = cursor.fetchall()
+
+    assert row is not None
+    assert row["filing_fec_id"] == "TX-00057770-2008-contributions"
+    assert row["receipt_date"] == date(2008, 4, 10)
+    assert row["transaction_identifier"] == "110000001"
+    assert row["amendment_indicator"] == "T"
+    assert [record["source_record_key"] for record in source_record_snapshot] == expected_source_record_keys
+
+    second_result = load_tx_contributions_with_filings(db_conn, _SAMPLE_CONTRIBUTIONS_PATH)
 
     assert isinstance(second_result, LoadResult)
     assert second_result.inserted == 0
@@ -174,7 +291,8 @@ def test_load_tx_contributions_with_filings_is_idempotent_and_sets_keys(db_conn:
             SELECT f.filing_fec_id,
                    f.receipt_date,
                    t.transaction_identifier,
-                   t.amendment_indicator
+                   t.amendment_indicator,
+                   t.source_record_id
             FROM cf.transaction t
             JOIN cf.filing f ON f.id = t.filing_id
             WHERE f.filing_fec_id = %s
@@ -183,13 +301,43 @@ def test_load_tx_contributions_with_filings_is_idempotent_and_sets_keys(db_conn:
             """,
             ("TX-00057770-2008-contributions", "110000001"),
         )
-        row = cursor.fetchone()
+        rerun_row = cursor.fetchone()
+        cursor.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM cf.filing
+            WHERE filing_fec_id LIKE 'TX-%-contributions'
+            """,
+        )
+        second_filing_count = cursor.fetchone()["count"]
+        cursor.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM cf.transaction t
+            JOIN cf.filing f
+              ON f.id = t.filing_id
+            WHERE f.filing_fec_id LIKE 'TX-%-contributions'
+            """,
+        )
+        second_transaction_count = cursor.fetchone()["count"]
 
-    assert row is not None
-    assert row["filing_fec_id"] == "TX-00057770-2008-contributions"
-    assert row["receipt_date"] == date(2008, 4, 10)
-    assert row["transaction_identifier"] == "110000001"
-    assert row["amendment_indicator"] == "T"
+        cursor.execute(
+            """
+            SELECT id, source_record_key, record_hash, raw_fields, pull_date
+            FROM core.source_record
+            WHERE data_source_id = %s
+              AND source_record_key = ANY(%s)
+              AND superseded_by IS NULL
+            ORDER BY source_record_key
+            """,
+            (contribution_data_source_id, expected_source_record_keys),
+        )
+        rerun_source_record_snapshot = cursor.fetchall()
+
+    assert rerun_row == row
+    assert second_filing_count == first_filing_count
+    assert second_transaction_count == first_transaction_count
+    assert rerun_source_record_snapshot == source_record_snapshot
 
 
 def test_load_tx_expenditures_with_filings_maps_cor_form_type_to_amendment_a(db_conn: psycopg.Connection) -> None:

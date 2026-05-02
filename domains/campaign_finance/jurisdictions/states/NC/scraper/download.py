@@ -1,16 +1,22 @@
 
 from __future__ import annotations
 
+from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass
+from html.parser import HTMLParser
 import re
 from pathlib import Path
 import shutil
 import tempfile
 import time
-from urllib.parse import urlencode
+from urllib.parse import parse_qs, urlencode, urljoin, urlparse
 
 import httpx
+from .parse import (
+    NCCommitteeDocumentRowKey,
+    build_nc_committee_doc_linkage_key,
+)
 
 try:
     from playwright.sync_api import sync_playwright as _sync_playwright
@@ -27,6 +33,20 @@ _PARAMS_PATTERN = re.compile(
 
 class BrowserAutomationRequiredError(Exception):
     """Raised when the NC portal requires browser automation that httpx cannot handle."""
+
+
+class NCIEReportUnavailableError(Exception):
+    """Raised when a filing's NC IE report-detail export cannot be fetched as CSV."""
+
+
+class NCNoTransactionsForCriteriaError(Exception):
+    """Raised when the NC TxnLkup search returns 'No Results Found' for a window.
+
+    Distinct from BrowserAutomationRequiredError: this is a legitimate
+    completion (the committee genuinely has no transactions in the
+    requested window), not a portal/automation failure. Callers should
+    treat it as success-with-zero-rows rather than a retryable failure.
+    """
 
 
 def _require_playwright() -> None:
@@ -120,7 +140,16 @@ def _validate_csv_export_response(
     *,
     export_label: str,
     empty_csv_message: str,
+    empty_is_unavailable: bool = False,
 ) -> None:
+    """Validate that an httpx response is a non-empty CSV export.
+
+    For per-filing exports where an empty CSV is a legitimate "no rows
+    recorded yet" outcome (not a portal contract failure), pass
+    `empty_is_unavailable=True`. The empty case will then raise
+    NCIEReportUnavailableError so callers can skip just that filing
+    without crashing the whole job.
+    """
     if _is_html_response(response):
         raise BrowserAutomationRequiredError(
             f"{export_label} returned HTML instead of CSV; the portal may require browser automation"
@@ -133,6 +162,8 @@ def _validate_csv_export_response(
             "browser automation"
         )
     if _is_empty_csv(response):
+        if empty_is_unavailable:
+            raise NCIEReportUnavailableError(empty_csv_message)
         raise BrowserAutomationRequiredError(empty_csv_message)
 
 
@@ -150,7 +181,318 @@ _TXN_SEARCH_URL = f"{_NC_PORTAL_BASE}/CFTxnLkup/"
 _TXN_RESULTS_URL = f"{_NC_PORTAL_BASE}/CFTxnLkup/TxnSearchResults/"
 _TXN_EXPORT_URL = f"{_NC_PORTAL_BASE}/CFTxnLkup/ExportResults/"
 _COMMITTEE_EXPORT_BASE = f"{_NC_PORTAL_BASE}/CFOrgLkup/ExportSearchResults/"
+_COMMITTEE_DOCUMENT_RESULT_BASE = f"{_NC_PORTAL_BASE}/CFOrgLkup/DocumentGeneralResult/"
+_IE_EXPORT_URL = f"{_NC_PORTAL_BASE}/CFDocLkup/ExportSearchResults/"
+_IE_DOCUMENT_RESULT_URL = f"{_NC_PORTAL_BASE}/CFDocLkup/DocumentResult/"
 _REQUEST_TIMEOUT_SECONDS = 60.0
+_IE_REPORT_CODE_SEQUENCE = ("IRIEX", "IRCIX", "RPIER")
+IE_REPORT_CODES = frozenset(_IE_REPORT_CODE_SEQUENCE)
+_IE_REPORT_DETAIL_TYPE = "EXP"
+_IE_REPORT_DETAIL_URL = f"{_NC_PORTAL_BASE}/CFOrgLkup/ReportDetail/"
+_IE_REPORT_EXPORT_URL_FRAGMENT = "/CFOrgLkup/ExportDetailResults/"
+
+
+def build_ie_export_url(year: int) -> str:
+    if year <= 0:
+        raise ValueError("year must be positive")
+
+    query = urlencode(
+        {
+            "year": str(year),
+            # CFDocLkup expects the report codes in the quoted browser form
+            # captured during Stage 1 contract investigation.
+            "reports": ", ".join(f"'{report_code}'" for report_code in _IE_REPORT_CODE_SEQUENCE),
+        }
+    )
+    return f"{_IE_EXPORT_URL}?{query}"
+
+
+def build_ie_document_result_url(year: int) -> str:
+    if year <= 0:
+        raise ValueError("year must be positive")
+
+    query = urlencode(
+        {
+            "year": str(year),
+            # CFDocLkup expects the report codes in the quoted browser form
+            # captured during Stage 1 contract investigation.
+            "reports": ", ".join(f"'{report_code}'" for report_code in _IE_REPORT_CODE_SEQUENCE),
+        }
+    )
+    return f"{_IE_DOCUMENT_RESULT_URL}?{query}"
+
+
+def build_committee_document_result_url(sboe_id: str, org_group_id: str) -> str:
+    normalized_sboe_id = sboe_id.strip()
+    normalized_org_group_id = org_group_id.strip()
+    if not normalized_sboe_id:
+        raise ValueError("sboe_id must not be blank")
+    if not normalized_org_group_id:
+        raise ValueError("org_group_id must not be blank")
+    query = urlencode({"SID": normalized_sboe_id, "OGID": normalized_org_group_id})
+    return f"{_COMMITTEE_DOCUMENT_RESULT_BASE}?{query}"
+
+
+def build_ie_report_detail_url(report_id: str, *, detail_type: str = _IE_REPORT_DETAIL_TYPE) -> str:
+    normalized_report_id = report_id.strip()
+    if not normalized_report_id:
+        raise ValueError("report_id must not be blank")
+    query = urlencode({"RID": normalized_report_id, "TP": detail_type})
+    return f"{_IE_REPORT_DETAIL_URL}?{query}"
+
+
+def _normalize_table_cell_text(text: str) -> str:
+    return " ".join(text.replace("\xa0", " ").split())
+
+
+class _DocumentResultGridParser(HTMLParser):
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self._inside_grid_table = False
+        self._inside_row = False
+        self._inside_cell = False
+        self._current_row: list[tuple[str, str | None]] = []
+        self._current_cell_chunks: list[str] = []
+        self._current_cell_href: str | None = None
+        self.rows: list[list[tuple[str, str | None]]] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        attributes = {name: value for name, value in attrs}
+        if tag == "table" and attributes.get("id") == "gridDocumentResults":
+            self._inside_grid_table = True
+            return
+        if not self._inside_grid_table:
+            return
+        if tag == "tr":
+            self._inside_row = True
+            self._current_row = []
+            return
+        if tag == "td" and self._inside_row:
+            self._inside_cell = True
+            self._current_cell_chunks = []
+            self._current_cell_href = None
+            return
+        if tag == "a" and self._inside_cell and self._current_cell_href is None:
+            self._current_cell_href = attributes.get("href")
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == "table" and self._inside_grid_table:
+            self._inside_grid_table = False
+            return
+        if not self._inside_grid_table:
+            return
+        if tag == "td" and self._inside_cell:
+            normalized_cell_text = _normalize_table_cell_text("".join(self._current_cell_chunks))
+            self._current_row.append((normalized_cell_text, self._current_cell_href))
+            self._inside_cell = False
+            self._current_cell_chunks = []
+            self._current_cell_href = None
+            return
+        if tag == "tr" and self._inside_row:
+            if len(self._current_row) >= 10:
+                self.rows.append(list(self._current_row))
+            self._inside_row = False
+            self._current_row = []
+
+    def handle_data(self, data: str) -> None:
+        if self._inside_cell:
+            self._current_cell_chunks.append(data)
+
+
+def _extract_document_result_row_cells(document_result_html: str) -> list[list[tuple[str, str | None]]]:
+    parser = _DocumentResultGridParser()
+    parser.feed(document_result_html)
+    parser.close()
+    return parser.rows
+
+
+def _extract_sboe_id_from_data_href(data_href_raw: str | None) -> str:
+    if not data_href_raw:
+        return ""
+    parsed_data_href = urlparse(data_href_raw)
+    query = parse_qs(parsed_data_href.query)
+    return query.get("SID", [""])[0]
+
+
+def _normalize_report_section_url(
+    *,
+    document_result_url: str,
+    data_cell_text: str,
+    data_href_raw: str | None,
+) -> str | None:
+    if data_cell_text.upper() != "DATA":
+        return None
+    if not data_href_raw:
+        return None
+    absolute_url = urljoin(document_result_url, data_href_raw)
+    parsed_url = urlparse(absolute_url)
+    if "/CFOrgLkup/ReportSection/" not in parsed_url.path:
+        return None
+    rid = parse_qs(parsed_url.query).get("RID", [""])[0].strip()
+    if not rid:
+        return None
+    return absolute_url
+
+
+def _build_document_result_row_for_linkage_key(
+    row_cells: list[tuple[str, str | None]],
+) -> dict[str, str]:
+    committee_name = row_cells[0][0]
+    report_year = row_cells[1][0]
+    report_type = row_cells[2][0]
+    amend_flag = row_cells[3][0]
+    received_image = row_cells[4][0]
+    received_data = row_cells[5][0]
+    start_date = row_cells[6][0]
+    end_date = row_cells[7][0]
+    image_label = row_cells[8][0]
+    data_label = row_cells[9][0]
+    data_href_raw = row_cells[9][1]
+    return {
+        "Committee Name": committee_name,
+        "SBoE ID": _extract_sboe_id_from_data_href(data_href_raw),
+        "Year": report_year,
+        "Doc Type": "Disclosure Report",
+        "Doc Name": report_type,
+        "Amend": amend_flag,
+        "Received Image": received_image,
+        "Received Data": received_data,
+        "Start Date": start_date,
+        "End Date": end_date,
+        "Image": image_label,
+        "Data": data_label,
+    }
+
+
+def _fetch_document_result_html(document_result_url: str) -> str:
+    """Fetch the CFDocLkup DocumentResult page HTML with the gridDocumentResults rows rendered.
+
+    Why Playwright: the gridDocumentResults table is empty in the server-rendered
+    HTML — rows are populated client-side via DataTables JavaScript after the
+    page loads. A plain httpx GET returns the page shell with `<table id=...>
+    </table>`, yielding 0 row keys and breaking the IE-transactions step. Live
+    evidence: 2026-04-25 first prod-proof attempt found `len(result) == 0` from
+    the httpx-only fetch, while the page header still reads "Results Returned: 73".
+    """
+    _require_playwright()
+    with _sync_playwright() as playwright:  # type: ignore[misc]
+        browser = playwright.chromium.launch(headless=True)
+        try:
+            context = browser.new_context()
+            page = context.new_page()
+            try:
+                page.goto(document_result_url, wait_until="domcontentloaded")
+                # The grid is populated by DataTables AJAX; wait until at least
+                # one row appears OR the "no results" empty-state renders. The
+                # selector matches both populated rows and the DataTables
+                # "no records" placeholder, so we won't hang on legitimately
+                # empty result sets.
+                page.wait_for_selector(
+                    "#gridDocumentResults tbody tr",
+                    timeout=_RESULTS_READY_TIMEOUT_MS,
+                    state="attached",
+                )
+                return page.content()
+            finally:
+                page.close()
+                context.close()
+        finally:
+            browser.close()
+
+
+def fetch_ie_document_result_report_section_urls(
+    year: int,
+) -> dict[NCCommitteeDocumentRowKey, list[str | None]]:
+    """Fetch per-row ReportSection URLs keyed to the Stage 1 linkage contract."""
+    document_result_url = build_ie_document_result_url(year)
+    rendered_html = _fetch_document_result_html(document_result_url)
+    row_cells_by_result_row = _extract_document_result_row_cells(rendered_html)
+
+    report_section_urls_by_row_key: dict[NCCommitteeDocumentRowKey, list[str | None]] = defaultdict(list)
+    for row_cells in row_cells_by_result_row:
+        if len(row_cells) < 10:
+            continue
+        data_cell_text, data_href_raw = row_cells[9]
+        row_key = build_nc_committee_doc_linkage_key(_build_document_result_row_for_linkage_key(row_cells))
+        report_section_urls_by_row_key[row_key].append(
+            _normalize_report_section_url(
+                document_result_url=document_result_url,
+                data_cell_text=data_cell_text,
+                data_href_raw=data_href_raw,
+            )
+        )
+
+    return dict(report_section_urls_by_row_key)
+
+
+class _ReportDetailExportLinkParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.export_href: str | None = None
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag != "a" or self.export_href is not None:
+            return
+        attributes = {name: value for name, value in attrs}
+        href = attributes.get("href")
+        if href is None or _IE_REPORT_EXPORT_URL_FRAGMENT not in href:
+            return
+        self.export_href = href
+
+
+def _extract_report_id_from_report_section_url(report_section_url: str) -> str:
+    parsed_url = urlparse(report_section_url)
+    report_id = parse_qs(parsed_url.query).get("RID", [""])[0].strip()
+    if not report_id:
+        raise ValueError(f"Could not extract RID from NC report_section_url: {report_section_url!r}")
+    return report_id
+
+
+def _extract_report_export_url(report_detail_html: str, *, report_detail_url: str) -> str:
+    parser = _ReportDetailExportLinkParser()
+    parser.feed(report_detail_html)
+    parser.close()
+    if parser.export_href is None:
+        raise NCIEReportUnavailableError(
+            "NC IE report detail page did not expose an export link; the report may be unavailable or empty"
+        )
+    return urljoin(report_detail_url, parser.export_href)
+
+
+def fetch_ie_report_detail_export_csv(report_section_url: str) -> tuple[str, str, str]:
+    """Fetch the machine-readable EXP export for one NC IE filing.
+
+    The ReportDetail HTML is only a shell; the export link on that page is the stable row contract
+    verified in the Stage 1 re-probe. The return tuple is:
+    `(csv_text, report_detail_url, report_export_url)`.
+
+    An empty CSV payload from CFOrgLkup/ExportDetailResults is a legitimate
+    "no expenditure rows recorded for this filing" outcome (e.g. a filing that
+    has been received but contains no IE rows). It is NOT a portal contract
+    failure, so it is raised as NCIEReportUnavailableError so the caller skips
+    just this filing instead of crashing the whole IE transactions job.
+    """
+    report_detail_url = build_ie_report_detail_url(_extract_report_id_from_report_section_url(report_section_url))
+    with httpx.Client(timeout=_REQUEST_TIMEOUT_SECONDS) as client:
+        detail_response = client.get(report_detail_url, headers={"Referer": report_section_url})
+        detail_response.raise_for_status()
+        report_export_url = _extract_report_export_url(detail_response.text, report_detail_url=report_detail_url)
+
+        export_response = client.get(report_export_url, headers={"Referer": report_detail_url})
+        export_response.raise_for_status()
+        # empty_is_unavailable: per-filing empty CSV is "no rows recorded yet",
+        # not a portal contract failure. The validator raises
+        # NCIEReportUnavailableError so the IE-transactions loader skips just
+        # this filing without crashing. HTML / wrong-content-type still raise
+        # BrowserAutomationRequiredError.
+        _validate_csv_export_response(
+            export_response,
+            export_label="NC IE report detail export",
+            empty_csv_message="NC IE report detail export returned an empty CSV payload",
+            empty_is_unavailable=True,
+        )
+        return export_response.text, report_detail_url, report_export_url
 
 
 def _stream_response_to_path(response: httpx.Response, destination: Path) -> None:
@@ -228,6 +570,26 @@ def download_committee_document_export(
             export_label="Committee export",
             empty_csv_message=(
                 "Committee export returned empty CSV; the export URL or required portal state may have changed"
+            ),
+        )
+        _stream_response_to_path(response, dest_path)
+
+
+def download_ie_document_index_export(
+    year: int,
+    dest_path: Path,
+) -> None:
+    """Download the NC statewide IE/electioneering document index CSV."""
+    dest_path.parent.mkdir(parents=True, exist_ok=True)
+    url = build_ie_export_url(year)
+    with httpx.Client(timeout=_REQUEST_TIMEOUT_SECONDS) as client:
+        response = client.get(url)
+        response.raise_for_status()
+        _validate_csv_export_response(
+            response,
+            export_label="IE document index export",
+            empty_csv_message=(
+                "IE document index export returned empty CSV; the CFDocLkup export contract may have changed"
             ),
         )
         _stream_response_to_path(response, dest_path)
@@ -447,6 +809,20 @@ def _trigger_transaction_export_download(
     _write_part_file(dest_path, lambda temp_path: download.save_as(str(temp_path)))
 
 
+def _is_no_results_grid_state(body_text: str) -> bool:
+    """Detect the NC TxnLkup 'No Results Found' empty-grid state.
+
+    Why: NC TxnLkup renders 'No Results Found.' inline when the search
+    returned zero rows. The export button never appears in that state, so
+    the grid-wait poll otherwise runs to its 120s timeout and surfaces a
+    misleading 'Locator.wait_for: Timeout 1ms' error. Distinguishing this
+    case lets the orchestrator complete the committee with zero rows
+    rather than treating it as a retryable failure.
+    """
+    compact_body = " ".join(body_text.split())
+    return "No Results Found." in compact_body
+
+
 def _classify_results_grid_failure(
     *,
     body_text: str,
@@ -486,6 +862,13 @@ def _wait_for_results_grid_or_raise(
             return
 
         body_text = page.text_content("body") or ""  # type: ignore[union-attr]
+        # Zero-results case must be checked BEFORE the generic failure
+        # classifier — it's a legitimate completion, not a portal error.
+        if _is_no_results_grid_state(body_text):
+            raise NCNoTransactionsForCriteriaError(
+                "NC transaction search returned 'No Results Found' for the supplied "
+                "criteria; the committee genuinely has no transactions in this window."
+            )
         failure_message = _classify_results_grid_failure(
             body_text=body_text,
             grid_status_codes=tuple(grid_status_codes),
@@ -495,7 +878,15 @@ def _wait_for_results_grid_or_raise(
 
         page.wait_for_timeout(_RESULTS_POLL_INTERVAL_MS)  # type: ignore[union-attr]
 
-    export_button.wait_for(state="visible", timeout=1)
+    # Polling deadline exhausted without seeing the export button OR any
+    # of the recognized failure modes. Raise an explicit error that names
+    # the actual elapsed wait rather than the misleading "Timeout 1ms"
+    # that the prior `wait_for(timeout=1)` produced.
+    raise BrowserAutomationRequiredError(
+        f"NC transaction results grid did not become exportable within "
+        f"{_RESULTS_READY_TIMEOUT_MS}ms; export button never appeared and no known "
+        "failure signature matched."
+    )
 
 
 def download_transaction_export_playwright(

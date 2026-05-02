@@ -2,9 +2,10 @@
 from __future__ import annotations
 
 import logging
+import re
 import time
 from collections.abc import Iterable, Mapping
-from datetime import date
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 from uuid import UUID
@@ -19,9 +20,10 @@ from core.db import (
     try_insert_source_record,
     upsert_address,
 )
-from core.types.python.models import Organization, compute_record_hash
+from core.types.python.models import Organization, compute_record_hash, utc_now
 from domains.campaign_finance.ingest.filing_loader import (
     ensure_state_committee,
+    generate_synthetic_committee_id,
     resolve_transaction_counterparty_ids,
     upsert_filing,
     upsert_transaction,
@@ -36,6 +38,7 @@ from domains.campaign_finance.jurisdictions.states.load_utils import (
 from domains.campaign_finance.types.models import Filing, Transaction
 
 from . import load_support
+from .committee_registry import NCCommitteeRegistryRow
 from .extract import extract_nc_transaction
 from .load_support import (
     build_nc_source_record as _build_nc_source_record,
@@ -45,6 +48,7 @@ from .load_support import (
 )
 from .load_types import (
     LoadResult,
+    NCTransactionsLoadResult,
     NCFilingLookupEntry,
     _NCLoadCounts,
     _NCRowLoadConfig,
@@ -61,6 +65,7 @@ from .parse import (
 
 LOGGER = logging.getLogger(__name__)
 build_data_source = load_support.build_data_source
+ensure_nc_ie_document_index_data_source = load_support.ensure_nc_ie_document_index_data_source
 _NC_ROW_LOADER_TYPE = _NCRowLoader
 
 _NC_TRANSACTION_ENTITY_ROLES = {
@@ -71,6 +76,40 @@ _NC_TRANSACTION_ENTITY_ROLES = {
 }
 _NCFilingLookupKey = tuple[str, str]
 _normalize_optional_text = normalize_optional_text
+_NC_COMMITTEE_REGISTRY_ROW_LABEL = "committee_registry"
+_NC_COMMITTEE_REGISTRY_UPSERT_SQL = """
+INSERT INTO cf.nc_committee_registry (
+    org_group_id,
+    sboe_id,
+    committee_name,
+    status_desc,
+    old_id,
+    candidate_name,
+    data_source_id,
+    first_seen_at,
+    last_seen_at
+)
+VALUES (
+    %(org_group_id)s,
+    %(sboe_id)s,
+    %(committee_name)s,
+    %(status_desc)s,
+    %(old_id)s,
+    %(candidate_name)s,
+    %(data_source_id)s,
+    %(seen_at)s,
+    %(seen_at)s
+)
+ON CONFLICT (org_group_id) DO UPDATE
+SET sboe_id = EXCLUDED.sboe_id,
+    committee_name = EXCLUDED.committee_name,
+    status_desc = EXCLUDED.status_desc,
+    old_id = EXCLUDED.old_id,
+    candidate_name = EXCLUDED.candidate_name,
+    data_source_id = EXCLUDED.data_source_id,
+    first_seen_at = LEAST(cf.nc_committee_registry.first_seen_at, EXCLUDED.first_seen_at),
+    last_seen_at = GREATEST(cf.nc_committee_registry.last_seen_at, EXCLUDED.last_seen_at)
+"""
 
 
 def _iter_nc_rows(
@@ -82,6 +121,111 @@ def _iter_nc_rows(
         if not isinstance(row, Mapping):
             raise TypeError(f"Expected mapping row, got {type(row)!r}")
         yield row
+
+
+def _iter_nc_committee_registry_rows(
+    rows: Iterable[NCCommitteeRegistryRow],
+    *,
+    limit: int | None,
+) -> Iterable[NCCommitteeRegistryRow]:
+    for row in iter_rows_with_limit(rows, limit):
+        if not isinstance(row, NCCommitteeRegistryRow):
+            raise TypeError(f"Expected NCCommitteeRegistryRow, got {type(row)!r}")
+        yield row
+
+
+def _resolve_seen_at(seen_at: datetime | None) -> datetime:
+    resolved_seen_at = utc_now() if seen_at is None else seen_at
+    if resolved_seen_at.tzinfo is None:
+        raise ValueError("seen_at must be timezone-aware")
+    return resolved_seen_at.astimezone(timezone.utc)
+
+
+def _build_nc_committee_registry_upsert_params(
+    row: NCCommitteeRegistryRow,
+    *,
+    data_source_id: UUID,
+    seen_at: datetime,
+) -> Mapping[str, object]:
+    return {
+        "org_group_id": row.org_group_id,
+        "sboe_id": row.sboe_id,
+        "committee_name": row.committee_name,
+        "status_desc": row.status_desc,
+        "old_id": row.old_id,
+        "candidate_name": row.candidate_name,
+        "data_source_id": data_source_id,
+        "seen_at": seen_at,
+    }
+
+
+def _upsert_nc_committee_registry_row(
+    conn: psycopg.Connection,
+    row: NCCommitteeRegistryRow,
+    *,
+    data_source_id: UUID,
+    seen_at: datetime,
+) -> tuple[bool, bool, bool, str | None]:
+    existing_candidate_name: str | None = None
+    existing_sboe_id: str | None = None
+    with conn.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT candidate_name, sboe_id
+            FROM cf.nc_committee_registry
+            WHERE org_group_id = %s
+            LIMIT 1
+            """,
+            (row.org_group_id,),
+        )
+        existing_row = cursor.fetchone()
+        row_exists = existing_row is not None
+        if row_exists:
+            existing_candidate_name = existing_row[0]
+            existing_sboe_id = existing_row[1]
+        cursor.execute(
+            _NC_COMMITTEE_REGISTRY_UPSERT_SQL,
+            _build_nc_committee_registry_upsert_params(
+                row,
+                data_source_id=data_source_id,
+                seen_at=seen_at,
+            ),
+        )
+    candidate_name_changed = (
+        _normalize_candidate_name_for_bridge(existing_candidate_name)
+        != _normalize_candidate_name_for_bridge(row.candidate_name)
+    )
+    sboe_id_changed = normalize_optional_text(existing_sboe_id) != normalize_optional_text(row.sboe_id)
+    return (
+        not row_exists,
+        row_exists and candidate_name_changed,
+        row_exists and sboe_id_changed,
+        existing_sboe_id,
+    )
+
+
+def _select_nc_committee_id_by_native_sboe_id(
+    conn: psycopg.Connection,
+    *,
+    committee_sboe_id: str,
+) -> UUID | None:
+    """Return existing NC committee id for a native SBoE id; do not create rows."""
+    synthetic_fec_committee_id = generate_synthetic_committee_id("NC", committee_sboe_id)
+    with conn.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT id
+            FROM cf.committee
+            WHERE state = 'NC'
+              AND fec_committee_id = %s
+            LIMIT 1
+            """,
+            (synthetic_fec_committee_id,),
+        )
+        match = cursor.fetchone()
+    if match is None:
+        return None
+    return match[0]
 
 
 def _build_load_result(
@@ -290,6 +434,169 @@ def _resolve_nc_committee_bridge(
     )
 
 
+# Whitespace inside candidate names varies between SBoE registry exports and
+# civic.candidacy ingest sources (e.g. "ALEX  EXAMPLE" vs "ALEX EXAMPLE"). The
+# bridge match must be exact only after trimming and collapsing internal
+# whitespace runs to a single space — explicitly no fuzzy/alias logic.
+_NC_INTERNAL_WHITESPACE_RE = re.compile(r"\s+")
+
+
+def _normalize_candidate_name_for_bridge(value: str | None) -> str | None:
+    """Trim and collapse internal whitespace; return None for blank-equivalent input."""
+    trimmed = normalize_optional_text(value)
+    if trimmed is None:
+        return None
+    return _NC_INTERNAL_WHITESPACE_RE.sub(" ", trimmed)
+
+
+def _select_unique_nc_candidacy_id_for_normalized_bridge_name(
+    conn: psycopg.Connection,
+    *,
+    normalized_candidate_name: str,
+) -> UUID | None:
+    """Return one NC candidacy id for a normalized bridge name, else None."""
+    with conn.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT c.id
+            FROM civic.candidacy c
+            JOIN civic.contest co ON co.id = c.contest_id
+            JOIN civic.office o ON o.id = co.office_id
+            WHERE o.state = 'NC'
+              AND c.name_on_ballot IS NOT NULL
+              AND TRIM(REGEXP_REPLACE(c.name_on_ballot, '\\s+', ' ', 'g')) = %s
+            """,
+            (normalized_candidate_name,),
+        )
+        matches = cursor.fetchall()
+    if len(matches) != 1:
+        return None
+    return matches[0][0]
+
+
+def _match_and_update_nc_candidacy_committee(
+    conn: psycopg.Connection,
+    *,
+    candidate_name: str | None,
+    committee_id: UUID,
+) -> int:
+    """Bridge an NC committee to its unique NC candidacy by name_on_ballot.
+
+    Updates ``civic.candidacy.committee_id`` for the single NC candidacy whose
+    normalized ``name_on_ballot`` equals the normalized ``candidate_name``.
+    Skips zero-match and multi-match rows. Re-runs remain idempotent: if the
+    resolved row is already linked and already stamped as Stage 1-owned, this
+    no-ops. Returns the number of candidacy rows updated.
+    """
+    normalized_name = _normalize_candidate_name_for_bridge(candidate_name)
+    if normalized_name is None:
+        return 0
+    candidacy_id = _select_unique_nc_candidacy_id_for_normalized_bridge_name(
+        conn,
+        normalized_candidate_name=normalized_name,
+    )
+    if candidacy_id is None:
+        return 0
+    with conn.cursor() as cursor:
+        cursor.execute(
+            """
+            UPDATE civic.candidacy
+            SET committee_id = %s,
+                raw_fields = COALESCE(raw_fields, '{}'::jsonb) || '{"nc_stage1_bridge_owned": true}'::jsonb,
+                updated_at = NOW()
+            WHERE id = %s
+              AND (
+                    committee_id IS DISTINCT FROM %s
+                    OR NOT (
+                        COALESCE(raw_fields, '{}'::jsonb)
+                        @> '{"nc_stage1_bridge_owned": true}'::jsonb
+                    )
+              )
+            """,
+            (committee_id, candidacy_id, committee_id),
+        )
+        return cursor.rowcount
+
+
+def _clear_stale_nc_candidacy_committee_links(
+    conn: psycopg.Connection,
+    *,
+    committee_id: UUID,
+    keep_candidacy_id: UUID | None,
+) -> int:
+    """Clear committee links for the resolved NC committee except an optional keep row."""
+    with conn.cursor() as cursor:
+        cursor.execute(
+            """
+            UPDATE civic.candidacy
+            SET committee_id = NULL,
+                updated_at = NOW()
+            WHERE committee_id = %s
+              AND (%s::uuid IS NULL OR id IS DISTINCT FROM %s::uuid)
+            """,
+            (committee_id, keep_candidacy_id, keep_candidacy_id),
+        )
+        return cursor.rowcount
+
+
+def _select_unique_nc_candidacy_id_for_bridge_name(
+    conn: psycopg.Connection,
+    *,
+    candidate_name: str | None,
+) -> UUID | None:
+    """Return the single NC candidacy id matching candidate_name, else None."""
+    normalized_name = _normalize_candidate_name_for_bridge(candidate_name)
+    if normalized_name is None:
+        return None
+    return _select_unique_nc_candidacy_id_for_normalized_bridge_name(
+        conn,
+        normalized_candidate_name=normalized_name,
+    )
+
+
+def _bridge_nc_registry_row_to_candidacy(
+    conn: psycopg.Connection,
+    row: NCCommitteeRegistryRow,
+    *,
+    clear_stale_links: bool,
+) -> int:
+    """Resolve the registry row's committee through the existing NC bridge owner
+    and run the candidacy match-and-update pass. Rows without a usable
+    candidate_name are a no-op. Returns rows updated."""
+    normalized_candidate_name = _normalize_candidate_name_for_bridge(row.candidate_name)
+    if normalized_candidate_name is None and not clear_stale_links:
+        return 0
+
+    committee_id = _resolve_nc_committee_bridge(
+        conn,
+        row.sboe_id,
+        committee_name=row.committee_name,
+    )
+    keep_candidacy_id = (
+        _select_unique_nc_candidacy_id_for_normalized_bridge_name(
+            conn,
+            normalized_candidate_name=normalized_candidate_name,
+        )
+        if normalized_candidate_name is not None
+        else None
+    )
+    cleared_rows = 0
+    if clear_stale_links:
+        cleared_rows = _clear_stale_nc_candidacy_committee_links(
+            conn,
+            committee_id=committee_id,
+            keep_candidacy_id=keep_candidacy_id,
+        )
+    matched_rows = 0
+    if normalized_candidate_name is not None:
+        matched_rows = _match_and_update_nc_candidacy_committee(
+            conn,
+            candidate_name=normalized_candidate_name,
+            committee_id=committee_id,
+        )
+    return cleared_rows + matched_rows
+
+
 def build_nc_filing(
     row: Mapping[str, str | None],
     *,
@@ -331,6 +638,17 @@ def _resolve_committee_doc_source_record(
             "Committee-document source_record insert reported conflict but existing source_record row was not found"
         )
     return existing_source_record_id, False
+
+
+# Shared helper API for NC loader modules. Keep these names public so other
+# modules do not need to import underscore-prefixed implementation details.
+build_load_result = _build_load_result
+iter_nc_rows = _iter_nc_rows
+parse_optional_date = _parse_optional_date
+require_text = _require_text
+resolve_committee_doc_source_record = _resolve_committee_doc_source_record
+resolve_nc_committee_bridge = _resolve_nc_committee_bridge
+to_amendment_indicator = _to_amendment_indicator
 
 
 def _select_nc_filing_lookup_entry(
@@ -388,6 +706,13 @@ def _upsert_committee_document_filing(
     # Keep their source_record so committee-document provenance stays intact.
     raw_doc_name = _normalize_optional_text(row.get("Doc Name"))
     if raw_doc_name is None:
+        return inserted_source_record
+    # Only Disclosure Report rows with a live DATA export can participate in
+    # filing lookup joins. Other committee-document rows retain provenance but
+    # should not create cf.filing records used by transaction joins.
+    if _normalize_optional_text(row.get("Doc Type")) != "Disclosure Report":
+        return inserted_source_record
+    if _normalize_optional_text(row.get("Data")) is None:
         return inserted_source_record
     committee_sboe_id = _normalize_nc_sboe_id(row.get("SBoE ID"))
     report_key = normalize_nc_report_key(row.get("Year"), row.get("Doc Name"))
@@ -478,6 +803,103 @@ def load_nc_committee_documents(
         conn,
         parser,
         committee_document_data_source_id=data_source_id,
+        limit=limit,
+    )
+
+
+def load_nc_ie_document_index(
+    conn: psycopg.Connection,
+    file_path: str | Path,
+    *,
+    data_source_id: UUID,
+    limit: int | None = None,
+) -> LoadResult:
+    from .load_ie_document_index import load_nc_ie_document_index as _load_nc_ie_document_index
+
+    return _load_nc_ie_document_index(
+        conn,
+        file_path,
+        data_source_id=data_source_id,
+        limit=limit,
+    )
+
+
+def load_nc_committee_registry_rows(
+    conn: psycopg.Connection,
+    rows: Iterable[NCCommitteeRegistryRow],
+    *,
+    limit: int | None = None,
+    seen_at: datetime | None = None,
+) -> LoadResult:
+    """UPSERT CFOrgLkup committee discovery rows into cf.nc_committee_registry."""
+    started_at = time.monotonic()
+    counts = _NCLoadCounts()
+    manages_outer_transaction = conn.info.transaction_status == psycopg.pq.TransactionStatus.IDLE
+    committee_document_data_source_id = ensure_nc_committee_document_data_source(conn)
+    resolved_seen_at = _resolve_seen_at(seen_at)
+
+    for row in _iter_nc_committee_registry_rows(rows, limit=limit):
+        if manages_outer_transaction:
+            ensure_transaction_open(conn)
+        with conn.transaction():
+            inserted, candidate_name_changed, sboe_id_changed, previous_sboe_id = _upsert_nc_committee_registry_row(
+                conn,
+                row,
+                data_source_id=committee_document_data_source_id,
+                seen_at=resolved_seen_at,
+            )
+            if sboe_id_changed and previous_sboe_id is not None:
+                prior_committee_id = _select_nc_committee_id_by_native_sboe_id(
+                    conn,
+                    committee_sboe_id=previous_sboe_id,
+                )
+                if prior_committee_id is not None:
+                    _clear_stale_nc_candidacy_committee_links(
+                        conn,
+                        committee_id=prior_committee_id,
+                        keep_candidacy_id=None,
+                    )
+            # Bridge pass: cf.nc_committee_registry is now persisted (the
+            # SSOT for NC committee→candidacy mapping). Resolve the committee
+            # through the existing NC bridge owner and write
+            # civic.candidacy.committee_id where exactly one NC candidacy
+            # matches by normalized name_on_ballot. Same transaction so a
+            # rollback of the upsert also rolls back the bridge.
+            _bridge_nc_registry_row_to_candidacy(
+                conn,
+                row,
+                clear_stale_links=candidate_name_changed,
+            )
+        if inserted:
+            counts.inserted += 1
+        else:
+            counts.skipped += 1
+        _maybe_commit_and_log_progress(
+            conn,
+            row_type_label=_NC_COMMITTEE_REGISTRY_ROW_LABEL,
+            counts=counts,
+            manages_outer_transaction=manages_outer_transaction,
+        )
+
+    commit_managed_transaction(conn, manages_outer_transaction)
+    return _build_load_result(
+        counts,
+        rows=rows,
+        started_at=started_at,
+    )
+
+
+def load_nc_ie_transactions(
+    conn: psycopg.Connection,
+    *,
+    data_source_id: UUID,
+    limit: int | None = None,
+) -> LoadResult:
+    from .load_ie_transactions import load_nc_ie_transactions as _load_nc_ie_transactions
+
+    return _load_nc_ie_transactions(
+        conn,
+        data_source_id=data_source_id,
         limit=limit,
     )
 
@@ -661,8 +1083,9 @@ def load_nc_transactions(
     *,
     data_source_id: UUID,
     limit: int | None = None,
+    year_from: int | None = None,
 ) -> LoadResult:
-    parser = parse_transactions(Path(file_path))
+    parser = parse_transactions(Path(file_path), year_from=year_from)
     return _load_nc_rows(
         conn,
         parser,
@@ -678,7 +1101,8 @@ def load_nc_transactions_with_filings(
     *,
     limit: int | None = None,
     committee_document_limit: int | None = None,
-) -> LoadResult:
+    year_from: int | None = None,
+) -> NCTransactionsLoadResult:
     transaction_data_source_id = ensure_nc_data_source(conn)
     committee_document_data_source_id = ensure_nc_committee_document_data_source(conn)
     _, filing_lookup = load_nc_committee_documents(
@@ -687,7 +1111,7 @@ def load_nc_transactions_with_filings(
         data_source_id=committee_document_data_source_id,
         limit=committee_document_limit,
     )
-    parser = parse_transactions(Path(transaction_file_path))
+    parser = parse_transactions(Path(transaction_file_path), year_from=year_from)
     transaction_rows = list(parser)
     quarantined = parser.skipped
 
@@ -697,7 +1121,15 @@ def load_nc_transactions_with_filings(
         _build_transaction_row_load_config(transaction_data_source_id),
         limit=limit,
     )
-    transaction_load_result.quarantined = quarantined
+    transaction_result = NCTransactionsLoadResult(
+        inserted=transaction_load_result.inserted,
+        skipped=transaction_load_result.skipped,
+        quarantined=quarantined,
+        superseded=transaction_load_result.superseded,
+        errors=transaction_load_result.errors,
+        elapsed_seconds=transaction_load_result.elapsed_seconds,
+        year_filtered=parser.filtered,
+    )
 
     _load_nc_relational_transactions(
         conn,
@@ -706,4 +1138,4 @@ def load_nc_transactions_with_filings(
         filing_lookup=filing_lookup,
         limit=limit,
     )
-    return transaction_load_result
+    return transaction_result

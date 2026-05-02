@@ -11,10 +11,10 @@ import domains.campaign_finance.jurisdictions.states.GA.scraper.download as down
 from domains.campaign_finance.jurisdictions.config_schema import load_jurisdiction_config
 from domains.campaign_finance.jurisdictions.states.GA.scraper import (
     _CONFIG_PATH as _GA_CONFIG_PATH,
+    _load_date_selectors_for_transaction_type,
     _find_ga_data_source_block_by_transaction_type,
 )
 from domains.campaign_finance.jurisdictions.states.GA.scraper.download import (
-    _DATE_SELECTORS_BY_DATA_TYPE,
     _EXPORT_BUTTON_SELECTOR,
     _SEARCH_BUTTON_SELECTOR,
     build_search_url,
@@ -26,6 +26,21 @@ from domains.campaign_finance.jurisdictions.states.GA.scraper.parse import (
 )
 
 _ALLOWED_GA_SEARCH_URL = "https://media.ethics.ga.gov/search/Campaign/Campaign_ByContributions.aspx"
+_GA_IE_SOURCE_NAME = "Georgia Campaign Portal — Independent Expenditures Search Export"
+_STRICT_PLAYWRIGHT_FLOW_CASES = (
+    (
+        "contributions",
+        "#ctl00_ContentPlaceHolder1_txtReceivedDateFrom",
+        "#ctl00_ContentPlaceHolder1_txtReceivedDateTo",
+        "StateEthicsReport.csv",
+    ),
+    (
+        "expenditures",
+        "#ctl00_ContentPlaceHolder1_txtDateFrom",
+        "#ctl00_ContentPlaceHolder1_txtDateTo",
+        "EthicsReportExport.xls",
+    ),
+)
 
 # -- 2026-cycle portal-contract lock tests --
 
@@ -38,14 +53,14 @@ class TestGAPortalContract2026:
     """
 
     def test_contribution_date_selectors_match_portal_dom(self) -> None:
-        selectors = _DATE_SELECTORS_BY_DATA_TYPE["contributions"]
+        selectors = _load_date_selectors_for_transaction_type("contributions")
         assert selectors == (
             "#ctl00_ContentPlaceHolder1_txtReceivedDateFrom",
             "#ctl00_ContentPlaceHolder1_txtReceivedDateTo",
         )
 
     def test_expenditure_date_selectors_match_portal_dom(self) -> None:
-        selectors = _DATE_SELECTORS_BY_DATA_TYPE["expenditures"]
+        selectors = _load_date_selectors_for_transaction_type("expenditures")
         assert selectors == (
             "#ctl00_ContentPlaceHolder1_txtDateFrom",
             "#ctl00_ContentPlaceHolder1_txtDateTo",
@@ -67,15 +82,24 @@ class TestGAPortalContract2026:
         assert url.startswith("https://media.ethics.ga.gov/")
         assert "ByExpenditures" in url
 
+    def test_independent_expenditure_search_url_resolves_to_ga_ethics_portal(self) -> None:
+        url = build_search_url("independent_expenditures")
+        assert url.startswith("https://media.ethics.ga.gov/")
+        assert "ByIEFiler" in url
+
     def test_config_verified_for_2026_cycle(self) -> None:
-        """All GA data sources must show a 2026-cycle verification date."""
+        """All GA data sources must either verify working or capture explicit 2026-cycle breakage."""
         cycle_cutoff = date(2026, 3, 21)
         config = load_jurisdiction_config(_GA_CONFIG_PATH)
         for source in config.data_sources:
-            assert source.last_verified_working is not None, f"{source.name} has no last_verified_working date"
-            assert source.last_verified_working >= cycle_cutoff, (
-                f"{source.name} last_verified_working={source.last_verified_working} is before {cycle_cutoff}"
-            )
+            if source.last_verified_working is not None:
+                assert source.last_verified_working >= cycle_cutoff, (
+                    f"{source.name} last_verified_working={source.last_verified_working} is before {cycle_cutoff}"
+                )
+                continue
+
+            assert source.name == _GA_IE_SOURCE_NAME
+            assert any("2026-04-29" in issue and "HTTP 404" in issue for issue in source.known_issues)
 
 
 def _is_playwright_timeout(error: Exception) -> bool:
@@ -133,7 +157,7 @@ def _assert_integration_download_returns_nonempty_parseable_file(
     assert list(parser(export_path))
 
 
-@pytest.mark.parametrize("data_type", ["contributions", "expenditures"])
+@pytest.mark.parametrize("data_type", ["contributions", "expenditures", "independent_expenditures"])
 def test_build_search_url_resolves_url_from_config_transaction_type(data_type: str) -> None:
     source_block = _find_ga_data_source_block_by_transaction_type(data_type)
     assert source_block is not None
@@ -144,6 +168,10 @@ def test_build_search_url_resolves_url_from_config_transaction_type(data_type: s
 def test_build_search_url_raises_for_unknown_data_type() -> None:
     with pytest.raises(ValueError, match="Unsupported GA data type"):
         build_search_url("independent-expenditures")
+
+
+def test_strict_playwright_flow_cases_exclude_unverified_ie_contract() -> None:
+    assert tuple(case[0] for case in _STRICT_PLAYWRIGHT_FLOW_CASES) == ("contributions", "expenditures")
 
 
 @pytest.mark.parametrize(
@@ -180,22 +208,33 @@ def test_download_ga_export_rejects_untrusted_search_url(
     sync_playwright_mock.assert_not_called()
 
 
+def test_download_ga_export_rejects_unverified_ie_source_before_browser_launch(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    sync_playwright_mock = MagicMock()
+    build_search_url_mock = _patch_build_search_url(monkeypatch)
+    _set_playwright_available(monkeypatch, sync_playwright=sync_playwright_mock)
+
+    with pytest.raises(
+        RuntimeError,
+        match=r"independent_expenditures'.*HTTP 404",
+    ):
+        download_ga_export(
+            "independent_expenditures",
+            dest_dir=tmp_path / "downloads",
+            candidate="Jane Example",
+            date_start="01/01/2024",
+            date_end="01/31/2024",
+        )
+
+    build_search_url_mock.assert_not_called()
+    sync_playwright_mock.assert_not_called()
+
+
 @pytest.mark.parametrize(
     ("data_type", "date_start_selector", "date_end_selector", "suggested_filename"),
-    [
-        (
-            "contributions",
-            "#ctl00_ContentPlaceHolder1_txtReceivedDateFrom",
-            "#ctl00_ContentPlaceHolder1_txtReceivedDateTo",
-            "StateEthicsReport.csv",
-        ),
-        (
-            "expenditures",
-            "#ctl00_ContentPlaceHolder1_txtDateFrom",
-            "#ctl00_ContentPlaceHolder1_txtDateTo",
-            "EthicsReportExport.xls",
-        ),
-    ],
+    _STRICT_PLAYWRIGHT_FLOW_CASES,
 )
 def test_download_ga_export_runs_expected_playwright_flow(
     monkeypatch: pytest.MonkeyPatch,

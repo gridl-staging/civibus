@@ -1,5 +1,8 @@
+
 from __future__ import annotations
 
+import argparse
+from datetime import UTC, datetime
 import json
 from pathlib import Path
 from typing import Any
@@ -8,8 +11,19 @@ from uuid import UUID
 import psycopg
 from psycopg.rows import dict_row
 
+from core.db import get_connection
+
 _DEFAULT_ARTIFACT_PATH = (
     Path(__file__).resolve().parents[2] / "docs" / "research" / "artifacts" / "er-cross-jurisdiction-proof.json"
+)
+_DEFAULT_PERSISTED_STATE_ARTIFACT_PATH = (
+    Path(__file__).resolve().parents[2]
+    / "docs"
+    / "research"
+    / "artifacts"
+    / "2026_04_29_dwo_er"
+    / "stage8_hetzner_cutover"
+    / "persisted_state_proof.json"
 )
 
 
@@ -53,6 +67,202 @@ def _serialize_source_row(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _serialize_l8_pair_result(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "case_id": str(row["case_id"]),
+        "expected_relation": str(row["expected_relation"]),
+        "entity_type": str(row["entity_type"]),
+        "entity_id_a": str(row["entity_id_a"]),
+        "entity_id_b": str(row["entity_id_b"]),
+        "decision": str(row["decision"]),
+        "confidence": float(row["confidence"]),
+        "decision_method": str(row["decision_method"]),
+        "decided_by": str(row["decided_by"]),
+        "passed": bool(row["passed"]),
+    }
+
+
+def build_l8_regression_payload(
+    *,
+    scope: str,
+    produced_at: datetime,
+    repo_sha: str,
+    gate_command: str,
+    pair_results: list[dict[str, Any]],
+    false_positive_summary: dict[str, Any],
+) -> dict[str, Any]:
+    """Build the repo-owned L8 evidence payload from evaluated regression results."""
+    serialized_pair_results = sorted(
+        (_serialize_l8_pair_result(row) for row in pair_results),
+        key=lambda row: row["case_id"],
+    )
+    must_match_violations = sum(
+        1
+        for row in serialized_pair_results
+        if row["expected_relation"] == "must_match" and not row["passed"]
+    )
+    must_not_match_violations = sum(
+        1
+        for row in serialized_pair_results
+        if row["expected_relation"] == "must_not_match" and not row["passed"]
+    )
+    status = "pass" if must_match_violations == 0 and must_not_match_violations == 0 else "fail"
+    return {
+        "layer": "L8",
+        "scope": scope,
+        "schema_version": 1,
+        "produced_at_utc": produced_at.astimezone(UTC).isoformat().replace("+00:00", "Z"),
+        "repo_sha": repo_sha,
+        "gate_command": gate_command,
+        "status": status,
+        "regression_pairs_checked": len(serialized_pair_results),
+        "must_match_violations": must_match_violations,
+        "must_not_match_violations": must_not_match_violations,
+        "pair_results": serialized_pair_results,
+        "false_positive_summary": {
+            "cases_evaluated": int(false_positive_summary["cases_evaluated"]),
+            "flagged_false_positives": int(false_positive_summary["flagged_false_positives"]),
+            "flagged_case_ids": sorted(str(case_id) for case_id in false_positive_summary["flagged_case_ids"]),
+            "false_positive_rate": float(false_positive_summary["false_positive_rate"]),
+        },
+    }
+
+
+def write_l8_regression_artifact(
+    payload: dict[str, Any],
+    *,
+    artifact_path: Path | str,
+) -> dict[str, Any]:
+    """Persist a prepared L8 evidence payload to the requested artifact path."""
+    resolved_path = Path(artifact_path)
+    resolved_path.parent.mkdir(parents=True, exist_ok=True)
+    resolved_path.write_text(f"{json.dumps(payload, indent=2, sort_keys=False)}\n", encoding="utf-8")
+    return payload
+
+
+def evaluate_persisted_state_cohort_gate(
+    conn: psycopg.Connection,
+    *,
+    stage2_baseline_path: Path | None = None,
+) -> dict[str, Any]:
+    """Delegate persisted-state cohort gate evaluation to tuning owner code."""
+    from core.entity_resolution.tuning import evaluate_persisted_state_cohort_gate as _evaluate
+
+    return _evaluate(conn, stage2_baseline_path=stage2_baseline_path)
+
+
+def _latest_completed_run(conn: psycopg.Connection, *, entity_type: str) -> dict[str, Any] | None:
+    with conn.cursor(row_factory=dict_row) as cursor:
+        cursor.execute(
+            """
+            SELECT
+                id,
+                entity_type,
+                status,
+                started_at,
+                completed_at,
+                input_record_count,
+                pairs_compared,
+                matches_found,
+                auto_merged,
+                probable_matches,
+                possible_matches
+            FROM core.splink_run
+            WHERE entity_type = %s
+              AND status = 'completed'
+            ORDER BY completed_at DESC NULLS LAST, started_at DESC, id DESC
+            LIMIT 1
+            """,
+            (entity_type,),
+        )
+        return cursor.fetchone()
+
+
+def _active_entity_state_counts(conn: psycopg.Connection, *, entity_type: str) -> dict[str, int]:
+    with conn.cursor(row_factory=dict_row) as cursor:
+        cursor.execute(
+            "SELECT count(*)::int AS count FROM core.entity_cluster WHERE entity_type = %s",
+            (entity_type,),
+        )
+        cluster_count_row = cursor.fetchone()
+        cursor.execute(
+            """
+            SELECT count(*)::int AS count
+            FROM core.cluster_member
+            WHERE entity_type = %s
+              AND split_at IS NULL
+            """,
+            (entity_type,),
+        )
+        member_count_row = cursor.fetchone()
+    return {
+        "active_cluster_count": int(cluster_count_row["count"]) if cluster_count_row else 0,
+        "active_member_count": int(member_count_row["count"]) if member_count_row else 0,
+    }
+
+
+def build_persisted_state_cutover_proof(
+    conn: psycopg.Connection,
+    *,
+    stage2_baseline_path: Path | None = None,
+    scope: str = "stage8_hetzner_cutover",
+) -> dict[str, Any]:
+    """Build Stage 8 persisted-state proof payload from live relational state."""
+    latest_runs = {
+        "person": _latest_completed_run(conn, entity_type="person"),
+        "organization": _latest_completed_run(conn, entity_type="organization"),
+    }
+    serialized_runs = {
+        entity_type: _serialize_run_row(run_row) if run_row is not None else None
+        for entity_type, run_row in latest_runs.items()
+    }
+    missing_entity_types = sorted(entity_type for entity_type, run_row in latest_runs.items() if run_row is None)
+    cohort_payload = evaluate_persisted_state_cohort_gate(
+        conn,
+        stage2_baseline_path=stage2_baseline_path,
+    )
+
+    failures: list[str] = []
+    if missing_entity_types:
+        failures.append(f"missing completed core.splink_run rows for: {', '.join(missing_entity_types)}")
+    if cohort_payload["cohort_gate"]["status"] != "pass":
+        failures.append(
+            "cohort gate failed for: "
+            + ", ".join(cohort_payload["cohort_gate"]["failed_cohort_slugs"])
+        )
+
+    return {
+        "status": "pass" if not failures else "fail",
+        "scope": scope,
+        "produced_at_utc": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+        "latest_completed_runs": serialized_runs,
+        "entity_state": {
+            "person": _active_entity_state_counts(conn, entity_type="person"),
+            "organization": _active_entity_state_counts(conn, entity_type="organization"),
+        },
+        "cohort": cohort_payload,
+        "failures": failures,
+    }
+
+
+def write_persisted_state_cutover_proof_artifact(
+    conn: psycopg.Connection,
+    *,
+    artifact_path: Path | str | None = None,
+    stage2_baseline_path: Path | None = None,
+    scope: str = "stage8_hetzner_cutover",
+) -> dict[str, Any]:
+    payload = build_persisted_state_cutover_proof(
+        conn,
+        stage2_baseline_path=stage2_baseline_path,
+        scope=scope,
+    )
+    resolved_path = Path(artifact_path) if artifact_path is not None else _DEFAULT_PERSISTED_STATE_ARTIFACT_PATH
+    resolved_path.parent.mkdir(parents=True, exist_ok=True)
+    resolved_path.write_text(f"{json.dumps(payload, indent=2, sort_keys=False)}\n", encoding="utf-8")
+    return payload
+
+
 def _build_blocker_payload(
     *,
     status: str,
@@ -80,30 +290,7 @@ def _build_blocker_payload(
 
 
 def _latest_completed_person_run(conn: psycopg.Connection) -> dict[str, Any] | None:
-    with conn.cursor(row_factory=dict_row) as cursor:
-        cursor.execute(
-            """
-            SELECT
-                id,
-                entity_type,
-                status,
-                started_at,
-                completed_at,
-                input_record_count,
-                pairs_compared,
-                matches_found,
-                auto_merged,
-                probable_matches,
-                possible_matches
-            FROM core.splink_run
-            WHERE entity_type = 'person'
-              AND status = 'completed'
-            ORDER BY completed_at DESC NULLS LAST, started_at DESC, id DESC
-            LIMIT 1
-            """
-        )
-        row = cursor.fetchone()
-    return row
+    return _latest_completed_run(conn, entity_type="person")
 
 
 def _active_person_clusters(conn: psycopg.Connection) -> list[dict[str, Any]]:
@@ -314,3 +501,45 @@ def write_cross_jurisdiction_proof_artifact(
     resolved_path.parent.mkdir(parents=True, exist_ok=True)
     resolved_path.write_text(f"{json.dumps(payload, indent=2, sort_keys=False)}\n", encoding="utf-8")
     return payload
+
+
+def _build_argument_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Build persisted-state ER proof artifacts.")
+    parser.add_argument(
+        "--artifact-path",
+        type=Path,
+        default=_DEFAULT_PERSISTED_STATE_ARTIFACT_PATH,
+        help="Output path for persisted-state cutover proof JSON artifact.",
+    )
+    parser.add_argument(
+        "--stage2-baseline-path",
+        type=Path,
+        default=None,
+        help="Optional override for Stage 2 cohort baseline JSON path.",
+    )
+    parser.add_argument(
+        "--scope",
+        default="stage8_hetzner_cutover",
+        help="Proof scope label recorded in the artifact payload.",
+    )
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = _build_argument_parser().parse_args(argv)
+    conn = get_connection()
+    try:
+        payload = write_persisted_state_cutover_proof_artifact(
+            conn,
+            artifact_path=args.artifact_path,
+            stage2_baseline_path=args.stage2_baseline_path,
+            scope=args.scope,
+        )
+    finally:
+        conn.close()
+    print(json.dumps(payload, indent=2, sort_keys=False))
+    return 0 if payload["status"] == "pass" else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

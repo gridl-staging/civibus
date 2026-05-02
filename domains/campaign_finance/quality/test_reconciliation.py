@@ -2,10 +2,18 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import MagicMock
 from uuid import uuid4
 
 import pytest
+
+from domains.campaign_finance.quality.test_reconciliation_helpers import (
+    call_matches_family_route as _call_matches_family_route,
+    has_type_allowlist_in_sql_or_params as _has_type_allowlist,
+    routes_to_candidate_committee_link_table as _routes_to_candidate_committee_link_table,
+    routes_to_filing_table as _routes_to_filing_table,
+)
 
 from domains.campaign_finance.quality.reconciliation import (
     _validate_identifier,
@@ -22,6 +30,8 @@ from domains.campaign_finance.quality.reconciliation import (
     source_record_scope_where,
 )
 
+_TEST_FILE_LINE_HARD_LIMIT = 800
+
 
 def _mock_conn(rows: list[tuple], *, fetchone: bool = False) -> MagicMock:
     """Build a mock psycopg connection returning the given rows."""
@@ -34,6 +44,14 @@ def _mock_conn(rows: list[tuple], *, fetchone: bool = False) -> MagicMock:
     mock_conn.cursor.return_value.__enter__ = MagicMock(return_value=mock_cursor)
     mock_conn.cursor.return_value.__exit__ = MagicMock(return_value=False)
     return mock_conn
+
+
+class TestTestFileSizeGuard:
+    def test_reconciliation_file_stays_within_line_hard_limit(self) -> None:
+        line_count = len(Path(__file__).read_text().splitlines())
+        assert line_count <= _TEST_FILE_LINE_HARD_LIMIT, (
+            "test_reconciliation.py exceeds the 800-line hard limit and must be split"
+        )
 
 
 class TestResolveDataSourceIds:
@@ -371,3 +389,76 @@ class TestCheckKeyFieldCompleteness:
         url_check = next(r for r in results if r.name == "completeness_source_url")
         assert url_check.status == "fail"
         assert url_check.metric_value == pytest.approx(0.10)
+
+
+class TestDenominatorRouteContractHelpers:
+    """Regression coverage for denominator-route helper predicates."""
+
+    def test_allowlist_requires_complete_value_set(self) -> None:
+        full_allowlist = frozenset({"monetary", "monetary (itemized)", "monetary (non-itemized)"})
+        sql = "select * from cf.transaction where transaction_type = %s"
+        params_text = "('monetary',)"
+
+        assert not _has_type_allowlist(sql, params_text, full_allowlist), (
+            "Allowlist contract must reject partial route-type coverage"
+        )
+
+    def test_allowlist_accepts_complete_value_set_across_sql_and_params(self) -> None:
+        full_allowlist = frozenset({"monetary", "monetary (itemized)", "monetary (non-itemized)"})
+        sql = "select * from cf.transaction where transaction_type in ('monetary', 'monetary (itemized)')"
+        params_text = "('monetary (non-itemized)',)"
+
+        assert _has_type_allowlist(sql, params_text, full_allowlist)
+
+    def test_allowlist_rejects_substring_only_coverage(self) -> None:
+        full_allowlist = frozenset({"monetary", "monetary (itemized)", "monetary (non-itemized)"})
+        sql = """
+            select * from cf.transaction
+            where transaction_type in ('monetary (itemized)', 'monetary (non-itemized)')
+        """
+        params_text = "()"
+
+        assert not _has_type_allowlist(sql, params_text, full_allowlist), (
+            "Allowlist contract must require exact literal coverage for each type value;"
+            " substring overlap must not satisfy missing values"
+        )
+
+    def test_filed_route_rejects_incidental_filing_id_text(self) -> None:
+        sql = "select count(*) from cf.transaction where filing_id is not null"
+        assert not _routes_to_filing_table(sql)
+
+    def test_filed_route_requires_cf_filing_table(self) -> None:
+        sql = "select count(*) from cf.filing where data_source_id = %s"
+        assert _routes_to_filing_table(sql)
+
+    def test_affiliated_route_rejects_incidental_candidate_committee_link_text(self) -> None:
+        sql = """
+            select count(*)
+            from cf.transaction
+            where notes ilike '%candidate_committee_link%'
+        """
+        assert not _routes_to_candidate_committee_link_table(sql)
+
+    def test_affiliated_route_requires_cf_candidate_committee_link_table(self) -> None:
+        sql = "select count(*) from cf.candidate_committee_link where data_source_id = %s"
+        assert _routes_to_candidate_committee_link_table(sql)
+
+    def test_call_route_rejects_incidental_affiliated_with_link_text(self) -> None:
+        sql = "select count(*) from cf.transaction where metadata->>'route' = 'candidate_committee_link'"
+        assert not _call_matches_family_route(
+            sql,
+            "()",
+            "AFFILIATED_WITH",
+            contribution_types=frozenset(),
+            expenditure_types=frozenset(),
+        )
+
+    def test_call_route_accepts_affiliated_with_candidate_committee_link_table(self) -> None:
+        sql = "select count(*) from cf.candidate_committee_link where data_source_id = %s"
+        assert _call_matches_family_route(
+            sql,
+            "()",
+            "AFFILIATED_WITH",
+            contribution_types=frozenset(),
+            expenditure_types=frozenset(),
+        )

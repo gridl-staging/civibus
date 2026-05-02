@@ -1,8 +1,10 @@
 /** Tiny HTTP fixture backend used by browser smoke tests. */
 import { createServer } from "node:http";
 
-const { SMOKE_API_HOST, SMOKE_API_PORT, smokeFixtures } =
+const { SMOKE_API_HOST, SMOKE_API_PORT } =
   (await import(new URL("./fixtures.ts", import.meta.url).href)) as typeof import("./fixtures");
+const { smokeFixtures } =
+  (await import(new URL("./fixture-data.ts", import.meta.url).href)) as typeof import("./fixture-data");
 
 function writeJson(response: import("node:http").ServerResponse, status: number, body: unknown): void {
   response.writeHead(status, { "content-type": "application/json; charset=utf-8" });
@@ -16,7 +18,7 @@ function isCommitteeTransactionsRequest(url: URL): boolean {
   }
 
   const committeeId = url.searchParams.get("committee_id");
-  if (committeeId !== smokeFixtures.committee.id && committeeId !== smokeFixtures.committeeEmpty.id) {
+  if (getCommitteeFixtureById(committeeId) === null) {
     return false;
   }
 
@@ -66,12 +68,101 @@ function isCommitteeListRequest(url: URL): boolean {
   return hasOnlyAllowedQueryParams(url, ["state", "committee_type", "limit", "offset"]);
 }
 
+function isCivicGeometryRequest(url: URL): boolean {
+  if (url.pathname !== "/v1/civics/geometry") {
+    return false;
+  }
+
+  return hasOnlyAllowedQueryParams(url, ["level", "state"]);
+}
+
+function getNcCivicGeometryFixture(url: URL): unknown | null {
+  if (!isCivicGeometryRequest(url)) {
+    return null;
+  }
+
+  if (url.searchParams.get("state") !== smokeFixtures.ncCountyDrilldown.stateCode) {
+    return null;
+  }
+
+  const level = url.searchParams.get("level");
+  if (level === "state") {
+    return smokeFixtures.ncCountyDrilldown.geometryByLevel.state;
+  }
+  if (level === "county") {
+    return smokeFixtures.ncCountyDrilldown.geometryByLevel.county;
+  }
+  if (level === "congressional_district") {
+    return smokeFixtures.ncCountyDrilldown.geometryByLevel.congressional_district;
+  }
+
+  return null;
+}
+
+function getNcCountyCampaignFinanceSummary(pathname: string): unknown | null {
+  const expectedPath = `/v1/counties/${smokeFixtures.ncCountyDrilldown.stateCode.toLowerCase()}/${smokeFixtures.ncCountyDrilldown.countySlug}/campaign-finance-summary`;
+  if (pathname !== expectedPath) {
+    return null;
+  }
+
+  return smokeFixtures.ncCountyDrilldown.campaignFinanceSummary;
+}
+
 type PagedListResponse<TItem> = {
   items: TItem[];
   has_next: boolean;
   offset: number;
   limit: number;
 };
+
+type CommitteeFixture =
+  | (typeof smokeFixtures)["committee"]
+  | (typeof smokeFixtures)["committeeEmpty"]
+  | (typeof smokeFixtures)["committeePhl"];
+type PersonFixture =
+  | (typeof smokeFixtures)["person"]
+  | (typeof smokeFixtures)["personNoPortrait"]
+  | (typeof smokeFixtures)["rosterDurhamPerson"]
+  | (typeof smokeFixtures)["rosterNcHousePerson"]
+  | (typeof smokeFixtures)["personMissingPortraitField"];
+
+function getCommitteeFixtureById(committeeId: string | null): CommitteeFixture | null {
+  if (committeeId === smokeFixtures.committee.id) {
+    return smokeFixtures.committee;
+  }
+
+  if (committeeId === smokeFixtures.committeeEmpty.id) {
+    return smokeFixtures.committeeEmpty;
+  }
+
+  if (committeeId === smokeFixtures.committeePhl.id) {
+    return smokeFixtures.committeePhl;
+  }
+
+  return null;
+}
+
+function getCommitteeFixtureResponseByPath(pathname: string): { body: unknown } | null {
+  const summaryMatch = pathname.match(/^\/v1\/committees\/([^/]+)\/summary$/);
+  if (summaryMatch) {
+    const committeeFixture = getCommitteeFixtureById(summaryMatch[1]);
+    return committeeFixture === null ? null : { body: committeeFixture.summary };
+  }
+
+  const filingSummaryMatch = pathname.match(/^\/v1\/committees\/([^/]+)\/filings\/summary$/);
+  if (filingSummaryMatch) {
+    const committeeFixture = getCommitteeFixtureById(filingSummaryMatch[1]);
+    return committeeFixture === null ? null : { body: committeeFixture.filingBreakdown };
+  }
+
+  const detailMatch = pathname.match(/^\/v1\/committees\/([^/]+)$/);
+  if (detailMatch) {
+    const committeeFixture = getCommitteeFixtureById(detailMatch[1]);
+    return committeeFixture === null ? null : { body: committeeFixture.detail };
+  }
+
+  return null;
+}
 
 function buildPagedListResponse<TItem>(params: {
   url: URL;
@@ -152,7 +243,22 @@ function decodeBySlugPath(pathname: string, prefix: string): string | null {
   }
 }
 
-const server = createServer((request, response) => {
+const personFixturesById = new Map<string, PersonFixture>(
+  [
+    smokeFixtures.person,
+    smokeFixtures.personNoPortrait,
+    smokeFixtures.rosterDurhamPerson,
+    smokeFixtures.rosterNcHousePerson,
+    smokeFixtures.personMissingPortraitField
+  ].map((personFixture) => [personFixture.id, personFixture] as const)
+);
+
+function getPersonFixtureById(personId: string): PersonFixture | null {
+  const personFixture = personFixturesById.get(personId);
+  return personFixture ?? null;
+}
+
+const server = createServer(async (request, response) => {
   if (request.url === undefined) {
     writeJson(response, 500, { detail: "Fixture backend received a request without a URL." });
     return;
@@ -165,12 +271,106 @@ const server = createServer((request, response) => {
     return;
   }
 
+  const ncCivicGeometryFixture = getNcCivicGeometryFixture(url);
+  if (ncCivicGeometryFixture !== null) {
+    writeJson(response, 200, ncCivicGeometryFixture);
+    return;
+  }
+
+  const ncCountyCampaignFinanceSummary = getNcCountyCampaignFinanceSummary(url.pathname);
+  if (ncCountyCampaignFinanceSummary !== null) {
+    writeJson(response, 200, ncCountyCampaignFinanceSummary);
+    return;
+  }
+
+  if (url.pathname === "/v1/geometry" && url.searchParams.get("level") === "country" && url.searchParams.size === 1) {
+    writeJson(response, 200, smokeFixtures.landingMap.geometry);
+    return;
+  }
+
+  if (url.pathname === "/v1/campaign-finance/states/summary" && url.searchParams.size === 0) {
+    writeJson(response, 200, smokeFixtures.landingMap.summaries);
+    return;
+  }
+
+  if (url.pathname === "/v1/coverage/registry" && url.searchParams.size === 0) {
+    writeJson(response, 200, smokeFixtures.coverageRegistry);
+    return;
+  }
+
+  if (url.pathname === "/v1/data-sources" && url.searchParams.size === 0) {
+    writeJson(response, 200, smokeFixtures.dataSourcesMetadata);
+    return;
+  }
+
+  if (url.pathname === "/v1/elections/timeline/upcoming" && url.searchParams.size === 0) {
+    writeJson(response, 200, smokeFixtures.upcomingElectionTimeline);
+    return;
+  }
+
+  const electionDateAggregateMatch = url.pathname.match(/^\/v1\/elections\/(\d{4}-\d{2}-\d{2})$/);
+  if (electionDateAggregateMatch && electionDateAggregateMatch[1] === smokeFixtures.electionDateAggregate.date) {
+    writeJson(response, 200, smokeFixtures.electionDateAggregate);
+    return;
+  }
+
+  const stateDetailMatch = url.pathname.match(/^\/v1\/campaign-finance\/states\/([A-Z]{2})$/);
+  if (stateDetailMatch) {
+    const stateCode = stateDetailMatch[1] as keyof typeof smokeFixtures.stateDetails;
+    const detail = smokeFixtures.stateDetails[stateCode];
+    if (detail) {
+      writeJson(response, 200, detail);
+      return;
+    }
+    writeJson(response, 404, { detail: "State not found" });
+    return;
+  }
+
   if (
     url.pathname === "/v1/search" &&
     url.searchParams.get("q") === smokeFixtures.search.query &&
     url.searchParams.get("entity_type") === smokeFixtures.search.entityType
   ) {
     writeJson(response, 200, smokeFixtures.search.results);
+    return;
+  }
+
+  if (
+    url.pathname === "/v1/search" &&
+    url.searchParams.get("q") === smokeFixtures.searchValidation.query &&
+    url.searchParams.get("entity_type") === smokeFixtures.searchValidation.entityType
+  ) {
+    writeJson(response, smokeFixtures.searchValidation.status, {
+      detail: smokeFixtures.searchValidation.detail
+    });
+    return;
+  }
+
+  if (
+    url.pathname === "/v1/search" &&
+    url.searchParams.get("q") === smokeFixtures.searchSlow.query &&
+    url.searchParams.get("entity_type") === smokeFixtures.searchSlow.entityType
+  ) {
+    await new Promise((resolve) => setTimeout(resolve, smokeFixtures.searchSlow.delayMs));
+    writeJson(response, 200, smokeFixtures.searchSlow.results);
+    return;
+  }
+
+  if (
+    url.pathname === "/v1/search" &&
+    url.searchParams.get("q") === smokeFixtures.searchCandidate.query &&
+    url.searchParams.get("entity_type") === smokeFixtures.searchCandidate.entityType
+  ) {
+    writeJson(response, 200, smokeFixtures.searchCandidate.results);
+    return;
+  }
+
+  if (
+    url.pathname === "/v1/search" &&
+    url.searchParams.get("q") === smokeFixtures.searchContest.query &&
+    url.searchParams.get("entity_type") === smokeFixtures.searchContest.entityType
+  ) {
+    writeJson(response, 200, smokeFixtures.searchContest.results);
     return;
   }
 
@@ -198,19 +398,31 @@ const server = createServer((request, response) => {
     return;
   }
 
-  if (url.pathname === `/v1/person/${smokeFixtures.person.id}`) {
-    writeJson(response, 200, smokeFixtures.person.detail);
-    return;
+  const personDetailMatch = url.pathname.match(/^\/v1\/person\/([^/]+)$/);
+  if (personDetailMatch) {
+    const personFixture = getPersonFixtureById(personDetailMatch[1]);
+    if (personFixture !== null) {
+      writeJson(response, 200, personFixture.detail);
+      return;
+    }
   }
 
-  if (url.pathname === `/v1/er/person/${smokeFixtures.person.id}/matches`) {
-    writeJson(response, 200, smokeFixtures.person.matches);
-    return;
+  const personMatchesMatch = url.pathname.match(/^\/v1\/er\/person\/([^/]+)\/matches$/);
+  if (personMatchesMatch) {
+    const personFixture = getPersonFixtureById(personMatchesMatch[1]);
+    if (personFixture !== null) {
+      writeJson(response, 200, personFixture.matches);
+      return;
+    }
   }
 
-  if (url.pathname === `/v1/graph/person/${smokeFixtures.person.id}/relationships`) {
-    writeJson(response, 200, smokeFixtures.person.relationships);
-    return;
+  const personRelationshipsMatch = url.pathname.match(/^\/v1\/graph\/person\/([^/]+)\/relationships$/);
+  if (personRelationshipsMatch) {
+    const personFixture = getPersonFixtureById(personRelationshipsMatch[1]);
+    if (personFixture !== null) {
+      writeJson(response, 200, personFixture.relationships);
+      return;
+    }
   }
 
   if (url.pathname === `/v1/org/${smokeFixtures.org.id}`) {
@@ -228,45 +440,24 @@ const server = createServer((request, response) => {
     return;
   }
 
-  if (url.pathname === `/v1/committees/${smokeFixtures.committee.id}/summary`) {
-    writeJson(response, 200, smokeFixtures.committee.summary);
-    return;
-  }
-
-  if (url.pathname === `/v1/committees/${smokeFixtures.committee.id}/filings/summary`) {
-    writeJson(response, 200, smokeFixtures.committee.filingBreakdown);
-    return;
-  }
-
-  if (url.pathname === `/v1/committees/${smokeFixtures.committee.id}`) {
-    writeJson(response, 200, smokeFixtures.committee.detail);
+  const committeeFixtureResponse = getCommitteeFixtureResponseByPath(url.pathname);
+  if (committeeFixtureResponse !== null) {
+    writeJson(response, 200, committeeFixtureResponse.body);
     return;
   }
 
   if (isCommitteeTransactionsRequest(url)) {
     const committeeId = url.searchParams.get("committee_id");
+    const committeeFixture = getCommitteeFixtureById(committeeId);
+    if (committeeFixture === null) {
+      writeJson(response, 400, { detail: "Missing committee fixture for committee transaction request." });
+      return;
+    }
     writeJson(
       response,
       200,
-      committeeId === smokeFixtures.committee.id
-        ? smokeFixtures.committee.transactions
-        : smokeFixtures.committeeEmpty.transactions
+      committeeFixture.transactions
     );
-    return;
-  }
-
-  if (url.pathname === `/v1/committees/${smokeFixtures.committeeEmpty.id}/summary`) {
-    writeJson(response, 200, smokeFixtures.committeeEmpty.summary);
-    return;
-  }
-
-  if (url.pathname === `/v1/committees/${smokeFixtures.committeeEmpty.id}/filings/summary`) {
-    writeJson(response, 200, smokeFixtures.committeeEmpty.filingBreakdown);
-    return;
-  }
-
-  if (url.pathname === `/v1/committees/${smokeFixtures.committeeEmpty.id}`) {
-    writeJson(response, 200, smokeFixtures.committeeEmpty.detail);
     return;
   }
 
@@ -297,6 +488,36 @@ const server = createServer((request, response) => {
 
   if (url.pathname === `/v1/candidates/${smokeFixtures.candidateEmpty.id}`) {
     writeJson(response, 200, smokeFixtures.candidateEmpty.detail);
+    return;
+  }
+
+  if (url.pathname === `/v1/candidates/${smokeFixtures.candidateDeviant.id}/summary`) {
+    writeJson(response, 200, smokeFixtures.candidateDeviant.summary);
+    return;
+  }
+
+  if (url.pathname === `/v1/candidates/${smokeFixtures.candidateDeviant.id}`) {
+    writeJson(response, 200, smokeFixtures.candidateDeviant.detail);
+    return;
+  }
+
+  if (url.pathname === `/v1/candidates/${smokeFixtures.candidateAl.id}/summary`) {
+    writeJson(response, 200, smokeFixtures.candidateAl.summary);
+    return;
+  }
+
+  if (url.pathname === `/v1/candidates/${smokeFixtures.candidateAl.id}`) {
+    writeJson(response, 200, smokeFixtures.candidateAl.detail);
+    return;
+  }
+
+  if (url.pathname === `/v1/candidates/${smokeFixtures.candidateGa.id}/summary`) {
+    writeJson(response, 200, smokeFixtures.candidateGa.summary);
+    return;
+  }
+
+  if (url.pathname === `/v1/candidates/${smokeFixtures.candidateGa.id}`) {
+    writeJson(response, 200, smokeFixtures.candidateGa.detail);
     return;
   }
 

@@ -116,9 +116,15 @@ describe("/committee/[id] +page.server load", () => {
 
     expect(data.routeKind).toBe("canonical-detail");
     expect(data.detail).toEqual(detail);
-    expect(data.transactions).toEqual([]);
-    expect(data.summary).toEqual(summary);
-    expect(data.filingBreakdown).toEqual(filingBreakdown);
+
+    expect(data.transactions).toBeInstanceOf(Promise);
+    expect(data.summary).toBeInstanceOf(Promise);
+    expect(data.filingBreakdown).toBeInstanceOf(Promise);
+
+    expect(await data.transactions).toEqual([]);
+    expect(await data.summary).toEqual(summary);
+    expect(await data.filingBreakdown).toEqual(filingBreakdown);
+
     expect(requestJson.mock.calls.map(([path]) => path)).toEqual([
       buildCommitteeDetailPath(COMMITTEE_ID),
       `/v1/transactions?committee_id=${COMMITTEE_ID}&limit=${COMMITTEE_TRANSACTIONS_LIMIT}`,

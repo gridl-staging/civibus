@@ -16,6 +16,8 @@ from domains.campaign_finance.quality.checks import (
     check_raw_field_null_rate,
     check_source_count,
 )
+from domains.campaign_finance.quality.conftest import EXPECTED_EDGE_FAMILIES
+from domains.campaign_finance.quality.models import CheckResult
 
 
 def _mock_conn(fetchone_value: tuple | None = None, fetchall_value: list | None = None) -> MagicMock:
@@ -382,3 +384,205 @@ class TestCheckDuplicateRecordsWithPrefix:
             result = check_duplicate_records(_mock_conn(), uuid4(), "Test Source")
         assert result.name == "duplicate_records"
         assert mock_dup.call_args.kwargs.get("source_key_prefix") is None
+
+
+# ---------------------------------------------------------------------------
+# Graph-edge population contract tests (Stage 1 — graph_edge_population_audit)
+# ---------------------------------------------------------------------------
+
+
+def _edge_family_counts(
+    *,
+    default_expected: int = 10,
+    default_actual: int = 10,
+    overrides: dict[str, tuple[int, int]] | None = None,
+) -> tuple[dict[str, int], dict[str, int]]:
+    expected = {family: default_expected for family in EXPECTED_EDGE_FAMILIES}
+    actual = {family: default_actual for family in EXPECTED_EDGE_FAMILIES}
+    for family, (family_expected, family_actual) in (overrides or {}).items():
+        expected[family] = family_expected
+        actual[family] = family_actual
+    return expected, actual
+
+
+def _run_graph_edge_presence_with_mocked_helpers(
+    *,
+    expected_counts: dict[str, int],
+    actual_counts: dict[str, int],
+    threshold: float | None = None,
+) -> CheckResult:
+    from domains.campaign_finance.quality.checks import check_graph_edge_presence
+
+    conn = _mock_conn()
+    data_source_id = uuid4()
+    kwargs = {"threshold": threshold} if threshold is not None else {}
+    with (
+        patch(
+            "domains.campaign_finance.quality.checks.expected_edge_denominators",
+            return_value=expected_counts,
+            create=True,
+        ) as mock_expected_edge_denominators,
+        patch(
+            "domains.campaign_finance.quality.checks.count_graph_edges_by_family",
+            return_value=actual_counts,
+            create=True,
+        ) as mock_count_graph_edges_by_family,
+    ):
+        result = check_graph_edge_presence(conn, data_source_id, "Test Source", **kwargs)
+    mock_expected_edge_denominators.assert_called_once_with(conn, data_source_id)
+    mock_count_graph_edges_by_family.assert_called_once_with(conn, data_source_id)
+    return result
+
+
+class TestCheckGraphEdgePresenceContract:
+    """Lock the return contract for check_graph_edge_presence.
+
+    These tests use delayed imports so they fail with ImportError (the
+    expected missing-implementation failure) rather than collection errors.
+    """
+
+    def test_returns_check_result_instance(self) -> None:
+        expected_counts, actual_counts = _edge_family_counts()
+        result = _run_graph_edge_presence_with_mocked_helpers(
+            expected_counts=expected_counts,
+            actual_counts=actual_counts,
+        )
+        assert isinstance(result, CheckResult)
+
+    def test_check_name_is_graph_edge_presence(self) -> None:
+        expected_counts, actual_counts = _edge_family_counts(default_expected=5, default_actual=5)
+        result = _run_graph_edge_presence_with_mocked_helpers(
+            expected_counts=expected_counts,
+            actual_counts=actual_counts,
+        )
+        assert result.name == "graph_edge_presence"
+
+    def test_metric_name_is_edge_population_ratio(self) -> None:
+        expected_counts, actual_counts = _edge_family_counts(default_expected=5, default_actual=5)
+        result = _run_graph_edge_presence_with_mocked_helpers(
+            expected_counts=expected_counts,
+            actual_counts=actual_counts,
+        )
+        assert result.metric_name == "edge_population_ratio"
+
+    def test_metric_value_is_minimum_ratio_across_families(self) -> None:
+        expected_counts, actual_counts = _edge_family_counts(overrides={"SPENT_ON": (10, 8)})
+        result = _run_graph_edge_presence_with_mocked_helpers(
+            expected_counts=expected_counts,
+            actual_counts=actual_counts,
+        )
+        assert result.metric_value == pytest.approx(0.8)
+
+    def test_threshold_default_is_0_95(self) -> None:
+        expected_counts, actual_counts = _edge_family_counts()
+        result = _run_graph_edge_presence_with_mocked_helpers(
+            expected_counts=expected_counts,
+            actual_counts=actual_counts,
+        )
+        assert result.threshold == pytest.approx(0.95)
+
+    def test_details_contain_per_family_counts(self) -> None:
+        expected_counts, actual_counts = _edge_family_counts(
+            overrides={
+                "SPENT_ON": (5, 5),
+                "SUPPORTS": (3, 3),
+                "OPPOSES": (2, 2),
+                "AFFILIATED_WITH": (7, 7),
+                "FILED": (4, 4),
+            }
+        )
+        result = _run_graph_edge_presence_with_mocked_helpers(
+            expected_counts=expected_counts,
+            actual_counts=actual_counts,
+        )
+        assert "edge_families" in result.details
+        families = result.details["edge_families"]
+        assert isinstance(families, dict)
+        for fam in EXPECTED_EDGE_FAMILIES:
+            assert fam in families
+            entry = families[fam]
+            assert "expected" in entry
+            assert "actual" in entry
+            assert "ratio" in entry
+
+    def test_details_are_json_safe(self) -> None:
+        import json
+
+        expected_counts, actual_counts = _edge_family_counts()
+        result = _run_graph_edge_presence_with_mocked_helpers(
+            expected_counts=expected_counts,
+            actual_counts=actual_counts,
+        )
+        serialized = json.dumps(result.details)
+        parsed = json.loads(serialized)
+        assert "edge_families" in parsed
+
+
+class TestCheckGraphEdgePresenceThresholds:
+    """Lock threshold behavior for check_graph_edge_presence."""
+
+    def test_full_population_passes(self) -> None:
+        expected_counts, actual_counts = _edge_family_counts()
+        result = _run_graph_edge_presence_with_mocked_helpers(
+            expected_counts=expected_counts,
+            actual_counts=actual_counts,
+        )
+        assert result.status == "pass"
+        assert result.metric_value == pytest.approx(1.0)
+
+    def test_below_threshold_fails(self) -> None:
+        expected_counts, actual_counts = _edge_family_counts(
+            default_expected=100,
+            default_actual=100,
+            overrides={"CONTRIBUTED_TO": (100, 50)},
+        )
+        result = _run_graph_edge_presence_with_mocked_helpers(
+            expected_counts=expected_counts,
+            actual_counts=actual_counts,
+            threshold=0.95,
+        )
+        assert result.status == "fail"
+        assert result.metric_value == pytest.approx(0.5)
+
+    def test_exactly_at_threshold_passes(self) -> None:
+        expected_counts, actual_counts = _edge_family_counts(
+            default_expected=100,
+            default_actual=100,
+            overrides={"SPENT_ON": (100, 95)},
+        )
+        result = _run_graph_edge_presence_with_mocked_helpers(
+            expected_counts=expected_counts,
+            actual_counts=actual_counts,
+            threshold=0.95,
+        )
+        assert result.status == "pass"
+
+    def test_zero_denominator_passes(self) -> None:
+        expected_counts, actual_counts = _edge_family_counts(overrides={"OPPOSES": (0, 0)})
+        result = _run_graph_edge_presence_with_mocked_helpers(
+            expected_counts=expected_counts,
+            actual_counts=actual_counts,
+        )
+        assert result.status == "pass"
+
+    def test_all_zero_denominators_passes(self) -> None:
+        expected_counts, actual_counts = _edge_family_counts(default_expected=0, default_actual=0)
+        result = _run_graph_edge_presence_with_mocked_helpers(
+            expected_counts=expected_counts,
+            actual_counts=actual_counts,
+        )
+        assert result.status == "pass"
+
+    def test_custom_threshold(self) -> None:
+        expected_counts, actual_counts = _edge_family_counts(
+            default_expected=100,
+            default_actual=100,
+            overrides={"FILED": (100, 80)},
+        )
+        result = _run_graph_edge_presence_with_mocked_helpers(
+            expected_counts=expected_counts,
+            actual_counts=actual_counts,
+            threshold=0.75,
+        )
+        assert result.status == "pass"
+        assert result.metric_value == pytest.approx(0.8)

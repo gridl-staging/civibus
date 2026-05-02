@@ -144,9 +144,22 @@ def _skip_if_no_database_access() -> None:
         pytest.skip(f"Unable to connect to test database '{TEST_DATABASE}': {exc}")
 
 
+# Same protection as domains/campaign_finance/tests/test_tables_schema.py:
+# refuse to drop schemas against production-named databases. Without this
+# guard, running pytest against the live Hetzner DB would silently nuke
+# production prop/cf/core data.
+_PROTECTED_DATABASE_NAMES = frozenset({"civibus", "civibus_prod", "civibus_staging"})
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _prepared_schema() -> None:
     _skip_if_no_database_access()
+    if TEST_DATABASE in _PROTECTED_DATABASE_NAMES:
+        pytest.skip(
+            f"Refusing to DROP SCHEMA prop/cf/core CASCADE against protected "
+            f"production database {TEST_DATABASE!r}. Set the test-DB env var "
+            f"to a dedicated test database to run schema-prep tests."
+        )
 
     _run_psql_command(TEST_DATABASE, "DROP SCHEMA IF EXISTS prop CASCADE;")
     _run_psql_command(TEST_DATABASE, "DROP SCHEMA IF EXISTS cf CASCADE;")

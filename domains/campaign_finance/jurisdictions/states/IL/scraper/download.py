@@ -29,6 +29,10 @@ _ALLOWED_DOWNLOAD_PAGE_HOSTS = frozenset({"elections.il.gov", "www.elections.il.
 _ALLOWED_DOWNLOAD_LINK_PATH = "/NewDocDisplay.aspx"
 SUPPORTED_SSL_ERROR_HINTS = ("certificate", "ssl", "tls", "cert verify failed")
 INSECURE_TLS_RETRY_ENV_VAR = "CIVIBUS_ALLOW_INSECURE_TLS_RETRY"
+REMOTE_PROTOCOL_RETRY_ATTEMPTS = 3
+STREAM_RESUME_ATTEMPTS = 12
+INCOMPLETE_CHUNKED_READ_HINT = "incomplete chunked read"
+_CONTENT_RANGE_PATTERN = re.compile(r"^bytes (?P<start>\d+)-(?P<end>\d+)/(?:\d+|\*)$")
 _DATA_FILE_BY_DATA_TYPE = {
     "contributions": "Receipts.txt",
     "expenditures": "Expenditures.txt",
@@ -115,6 +119,23 @@ def _split_complete_lines(buffer: bytes) -> tuple[list[bytes], bytes]:
     return lines, b""
 
 
+def _validate_resume_response(response: httpx.Response, *, expected_start: int) -> bool:
+    """Return whether to continue appending to the existing partial file."""
+    if response.status_code == 206:
+        content_range = response.headers.get("Content-Range", "").strip()
+        content_range_match = _CONTENT_RANGE_PATTERN.match(content_range)
+        if content_range_match is None:
+            raise RuntimeError("IL resume response did not include a valid Content-Range header")
+        if int(content_range_match.group("start")) != expected_start:
+            raise RuntimeError("IL resume response returned an unexpected Content-Range start offset")
+        return True
+    if response.status_code == 200:
+        return False
+    raise RuntimeError(
+        "IL resume request returned unexpected HTTP status; expected 206 Partial Content or 200 OK fallback"
+    )
+
+
 def _stream_download_to_path(
     client: httpx.Client,
     download_url: str,
@@ -139,15 +160,56 @@ def _stream_download_to_path(
     truncated = False
 
     try:
-        with client.stream("GET", _validate_il_download_link(download_url)) as response:
-            response.raise_for_status()
-            with temporary_download_path.open("wb") as destination_file:
-                if max_data_rows is None and tail_data_rows is None:
-                    for chunk in response.iter_bytes():
-                        if chunk:
-                            destination_file.write(chunk)
-                            bytes_written += len(chunk)
-                elif max_data_rows is not None:
+        validated_download_url = _validate_il_download_link(download_url)
+        with temporary_download_path.open("wb") as destination_file:
+            if max_data_rows is None and tail_data_rows is None:
+                incomplete_chunk_retry_count = 0
+                while True:
+                    request_headers: dict[str, str] | None = None
+                    expected_resume_start = bytes_written
+                    if expected_resume_start > 0:
+                        request_headers = {"Range": f"bytes={expected_resume_start}-"}
+
+                    try:
+                        with client.stream("GET", validated_download_url, headers=request_headers) as response:
+                            response.raise_for_status()
+
+                            if request_headers is not None:
+                                should_append = _validate_resume_response(
+                                    response,
+                                    expected_start=expected_resume_start,
+                                )
+                                if not should_append:
+                                    # Some upstreams ignore Range and restart at byte 0.
+                                    destination_file.seek(0)
+                                    destination_file.truncate(0)
+                                    bytes_written = 0
+                                    warnings.warn(
+                                        "IL resume request returned 200 OK; restarting stream from byte 0.",
+                                        UserWarning,
+                                        stacklevel=2,
+                                    )
+
+                            for chunk in response.iter_bytes():
+                                if chunk:
+                                    destination_file.write(chunk)
+                                    bytes_written += len(chunk)
+                        break
+                    except httpx.RemoteProtocolError as error:
+                        if not _is_incomplete_chunked_read_error(error):
+                            raise
+                        incomplete_chunk_retry_count += 1
+                        if incomplete_chunk_retry_count >= STREAM_RESUME_ATTEMPTS:
+                            raise
+                        warnings.warn(
+                            "IL bulk stream closed early with incomplete chunked read; "
+                            f"retrying stream with resume offset {bytes_written}.",
+                            UserWarning,
+                            stacklevel=2,
+                        )
+            elif max_data_rows is not None:
+                with client.stream("GET", validated_download_url) as response:
+                    response.raise_for_status()
                     pending_bytes = b""
                     saw_header = False
 
@@ -183,7 +245,9 @@ def _stream_download_to_path(
                             data_rows_written += 1
                         else:
                             truncated = True
-                else:
+            else:
+                with client.stream("GET", validated_download_url) as response:
+                    response.raise_for_status()
                     pending_bytes = b""
                     header_line: bytes | None = None
                     trailing_data_lines: deque[bytes] = deque(maxlen=tail_data_rows)
@@ -246,6 +310,19 @@ def _is_ssl_or_certificate_error(error: httpx.HTTPError) -> bool:
     return any(hint in combined_error_message for hint in SUPPORTED_SSL_ERROR_HINTS)
 
 
+def _is_incomplete_chunked_read_error(error: httpx.HTTPError) -> bool:
+    if not isinstance(error, httpx.RemoteProtocolError):
+        return False
+
+    chained_error_messages = [
+        str(error).lower(),
+        str(error.__cause__).lower() if error.__cause__ else "",
+        str(error.__context__).lower() if error.__context__ else "",
+    ]
+    combined_error_message = " ".join(chained_error_messages)
+    return INCOMPLETE_CHUNKED_READ_HINT in combined_error_message
+
+
 def _break_glass_insecure_tls_retry_enabled() -> bool:
     return os.getenv(INSECURE_TLS_RETRY_ENV_VAR, "").strip() == "1"
 
@@ -260,6 +337,8 @@ def _download_il_raw_file_once(
     tail_data_rows: int | None = None,
 ) -> ILDownloadResult:
     download_page_url = page_url or _load_bulk_download_url_for_data_type("contributions")
+    if file_name not in _DATA_FILE_BY_DATA_TYPE.values():
+        raise ValueError("IL raw downloads must use an official IL raw file name")
     destination_path = dest_dir / file_name
 
     with httpx.Client(
@@ -288,40 +367,48 @@ def download_il_raw_file_with_metadata(
     tail_data_rows: int | None = None,
 ) -> ILDownloadResult:
     download_page_url = page_url or _load_bulk_download_url_for_data_type("contributions")
-    try:
-        return _download_il_raw_file_once(
-            file_name,
-            dest_dir=dest_dir,
-            page_url=download_page_url,
-            verify_certificates=True,
-            max_data_rows=max_data_rows,
-            tail_data_rows=tail_data_rows,
-        )
-    except httpx.HTTPError as error:
-        if not _is_ssl_or_certificate_error(error):
-            raise
-        if not allow_insecure_tls:
-            raise
-        if not _break_glass_insecure_tls_retry_enabled():
-            raise RuntimeError(
-                "Insecure TLS retry requested, but break-glass override is disabled. "
-                f"Set {INSECURE_TLS_RETRY_ENV_VAR}=1 to allow a one-off insecure retry."
-            ) from error
+    for attempt_number in range(1, REMOTE_PROTOCOL_RETRY_ATTEMPTS + 1):
+        try:
+            return _download_il_raw_file_once(
+                file_name,
+                dest_dir=dest_dir,
+                page_url=download_page_url,
+                verify_certificates=True,
+                max_data_rows=max_data_rows,
+                tail_data_rows=tail_data_rows,
+            )
+        except httpx.HTTPError as error:
+            if _is_incomplete_chunked_read_error(error) and attempt_number < REMOTE_PROTOCOL_RETRY_ATTEMPTS:
+                warnings.warn(
+                    "IL bulk stream closed early with incomplete chunked read; retrying download from scratch.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+                continue
+            if not _is_ssl_or_certificate_error(error):
+                raise
+            if not allow_insecure_tls:
+                raise
+            if not _break_glass_insecure_tls_retry_enabled():
+                raise RuntimeError(
+                    "Insecure TLS retry requested, but break-glass override is disabled. "
+                    f"Set {INSECURE_TLS_RETRY_ENV_VAR}=1 to allow a one-off insecure retry."
+                ) from error
 
-        warnings.warn(
-            "SSL certificate validation failed; retrying with certificate verification disabled "
-            f"because {INSECURE_TLS_RETRY_ENV_VAR}=1 was provided.",
-            UserWarning,
-            stacklevel=2,
-        )
-        return _download_il_raw_file_once(
-            file_name,
-            dest_dir=dest_dir,
-            page_url=download_page_url,
-            verify_certificates=False,
-            max_data_rows=max_data_rows,
-            tail_data_rows=tail_data_rows,
-        )
+            warnings.warn(
+                "SSL certificate validation failed; retrying with certificate verification disabled "
+                f"because {INSECURE_TLS_RETRY_ENV_VAR}=1 was provided.",
+                UserWarning,
+                stacklevel=2,
+            )
+            return _download_il_raw_file_once(
+                file_name,
+                dest_dir=dest_dir,
+                page_url=download_page_url,
+                verify_certificates=False,
+                max_data_rows=max_data_rows,
+                tail_data_rows=tail_data_rows,
+            )
 
 
 def download_il_raw_file(

@@ -76,6 +76,8 @@ jobs:
       DEPLOY_GIT_SHA: ${{ github.sha }}
       # Public repo URL; bootstrap/rollout use temporary credentials instead of persisting a tokenized origin URL.
       DEPLOY_REPO_URL: https://github.com/${{ github.repository }}.git
+      # Manual GitHub Actions secret: public URL used by production smoke assertions.
+      PROD_SMOKE_BASE_URL: ${{ secrets.PROD_SMOKE_BASE_URL }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
@@ -88,10 +90,27 @@ jobs:
             echo "Deploy workflow requires HETZNER_HOST, HETZNER_SSH_KEY, HETZNER_KNOWN_HOSTS, and PRODUCTION_ENV_FILE secrets" >&2
             exit 1
           fi
+          if [[ ! "$HETZNER_HOST" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*$ ]]; then
+            echo "Deploy workflow requires HETZNER_HOST to be a bare hostname or IPv4 address" >&2
+            exit 1
+          fi
           install -m 600 /dev/null ~/.ssh/hetzner_deploy_key
           install -m 600 /dev/null ~/.ssh/known_hosts
           printf '%s\n' "$HETZNER_SSH_KEY" > ~/.ssh/hetzner_deploy_key
           printf '%s\n' "$HETZNER_KNOWN_HOSTS" > ~/.ssh/known_hosts
+
+      - name: Capture currently deployed SHA
+        id: capture_prior_sha
+        shell: bash
+        run: |
+          set -euo pipefail
+          captured_sha="$(ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile=~/.ssh/known_hosts -i ~/.ssh/hetzner_deploy_key "root@${HETZNER_HOST}" \
+            "cd /root/civibus/civibus_dev && git rev-parse HEAD")"
+          if [[ -z "${captured_sha}" ]]; then
+            echo "Unable to capture prior deployment SHA before deploy rollback anchor" >&2
+            exit 1
+          fi
+          echo "CURRENT_DEPLOYED_SHA=${captured_sha}" >> "$GITHUB_OUTPUT"
 
       - name: Bootstrap remote host prerequisites
         shell: bash
@@ -168,6 +187,78 @@ jobs:
           git checkout --detach "$deploy_git_sha"
           cat "${deploy_token_file}" | docker login ghcr.io -u "${deploy_actor}" --password-stdin
           export IMAGE_TAG="$deploy_git_sha"
-          docker compose --env-file .env -f infra/docker-compose.prod.yml pull api web
-          docker compose --env-file .env -f infra/docker-compose.prod.yml up -d --wait --wait-timeout 180 api web
+          bash infra/scripts/prod_compose.sh up -d --wait --wait-timeout 180 db
+          bash infra/scripts/prod_compose.sh exec -T db psql -U civibus -d civibus -v ON_ERROR_STOP=1 < domains/civics/schema/migrations/2026_04_27_electoral_division_geometry.sql
+          bash infra/scripts/prod_compose.sh pull caddy api web
+          bash infra/scripts/prod_compose.sh up -d --force-recreate --wait --wait-timeout 180 api web caddy
           EOF
+
+      - name: Run production smoke gate
+        id: production_smoke_gate
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${PROD_SMOKE_BASE_URL}" ]]; then
+            echo "Deploy workflow requires PROD_SMOKE_BASE_URL secret for production smoke mode" >&2
+            exit 1
+          fi
+          pushd web >/dev/null
+          SMOKE_MODE=production SMOKE_BASE_URL="${PROD_SMOKE_BASE_URL}" \
+            ./tests/smoke/run-playwright.sh -- tests/smoke/dwo_mvp_release.spec.ts --reporter=line
+          popd >/dev/null
+
+      - name: Rollback to previously deployed SHA on smoke failure
+        if: steps.production_smoke_gate.outcome == 'failure'
+        shell: bash
+        run: |
+          set -euo pipefail
+          rollback_sha="${{ steps.capture_prior_sha.outputs.CURRENT_DEPLOYED_SHA }}"
+          if [[ -z "${rollback_sha}" ]]; then
+            echo "Missing captured CURRENT_DEPLOYED_SHA for rollback" >&2
+            exit 1
+          fi
+          cleanup_local() {
+            rm -f /tmp/civibus-github-token
+          }
+          trap cleanup_local EXIT
+          install -m 600 /dev/null /tmp/civibus-github-token
+          printf '%s\n' "$GITHUB_TOKEN" > /tmp/civibus-github-token
+          ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile=~/.ssh/known_hosts -i ~/.ssh/hetzner_deploy_key "root@${HETZNER_HOST}" \
+            "install -d -m 700 /tmp/civibus-deploy"
+          scp -o StrictHostKeyChecking=yes -o UserKnownHostsFile=~/.ssh/known_hosts -i ~/.ssh/hetzner_deploy_key \
+            /tmp/civibus-github-token "root@${HETZNER_HOST}:/tmp/civibus-deploy/"
+          ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile=~/.ssh/known_hosts -i ~/.ssh/hetzner_deploy_key "root@${HETZNER_HOST}" bash -se -- "$rollback_sha" "$GITHUB_ACTOR" <<'EOF'
+          set -euo pipefail
+          rollback_sha="$1"
+          deploy_actor="$2"
+          deploy_token_file="/tmp/civibus-deploy/civibus-github-token"
+          askpass_script="$(mktemp)"
+          cleanup() {
+            rm -f "${askpass_script}" "${deploy_token_file}"
+          }
+          trap cleanup EXIT
+          cat > "${askpass_script}" <<'EOS'
+          #!/usr/bin/env bash
+          case "$1" in
+            *Username*) printf '%s\n' 'x-access-token' ;;
+            *Password*) cat /tmp/civibus-deploy/civibus-github-token ;;
+            *) exit 1 ;;
+          esac
+          EOS
+          chmod 700 "${askpass_script}"
+          cd /root/civibus/civibus_dev
+          GIT_TERMINAL_PROMPT=0 GIT_ASKPASS="${askpass_script}" git fetch origin "$rollback_sha"
+          git checkout --detach "$rollback_sha"
+          cat "${deploy_token_file}" | docker login ghcr.io -u "${deploy_actor}" --password-stdin
+          export IMAGE_TAG="$rollback_sha"
+          bash infra/scripts/prod_compose.sh pull caddy api web
+          bash infra/scripts/prod_compose.sh up -d --force-recreate --wait --wait-timeout 180 api web caddy
+          EOF
+
+      - name: Fail deploy if production smoke failed after rollback
+        if: steps.production_smoke_gate.outcome == 'failure'
+        shell: bash
+        run: |
+          echo "Production smoke failed and rollback to prior SHA was executed." >&2
+          exit 1

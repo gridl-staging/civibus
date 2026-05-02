@@ -57,6 +57,7 @@ def test_contest_accepts_optional_fields() -> None:
     contest = Contest.model_validate(
         build_contest_payload(
             election_date="2024-11-05",
+            election_id=build_uuid_string(),
             electoral_division_id=build_uuid_string(),
             filing_deadline="2024-03-01",
             candidate_list_incomplete=True,
@@ -64,6 +65,7 @@ def test_contest_accepts_optional_fields() -> None:
         )
     )
     assert contest.election_date == date(2024, 11, 5)
+    assert isinstance(contest.election_id, UUID)
     assert isinstance(contest.electoral_division_id, UUID)
     assert contest.filing_deadline == date(2024, 3, 1)
     assert contest.candidate_list_incomplete is True

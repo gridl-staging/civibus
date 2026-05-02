@@ -1,3 +1,7 @@
+"""
+Stub summary for /Users/stuart/parallel_development/civibus_dev/mar22_03_fec_schedule_e_independent_expenditures/civibus_dev/domains/campaign_finance/quality/reconciliation.py.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -5,6 +9,9 @@ from datetime import datetime
 from uuid import UUID
 
 import psycopg
+
+from core.graph import GRAPH_NAME
+from core.graph.loader import CONTRIBUTION_LIKE_TYPES, EXPENDITURE_LIKE_TYPES
 
 from .models import CheckResult
 
@@ -14,6 +21,46 @@ from .models import CheckResult
 
 _DATA_SOURCE_ORDER_BY = "name, id"
 """Stable output order for multi-source jurisdiction reports."""
+
+_EDGE_FAMILIES: tuple[str, ...] = (
+    "CONTRIBUTED_TO",
+    "SPENT_ON",
+    "SUPPORTS",
+    "OPPOSES",
+    "AFFILIATED_WITH",
+    "FILED",
+)
+
+_TRANSACTION_SOURCE_RECORD_JOIN = "FROM cf.transaction t JOIN core.source_record sr ON t.source_record_id = sr.id "
+_IE_ELIGIBLE_TRANSACTION_JOIN = (
+    "FROM cf.transaction t "
+    "JOIN core.source_record sr ON t.source_record_id = sr.id "
+    "JOIN cf.candidate cand ON cand.id = t.recipient_candidate_id "
+)
+_CANDIDATE_COMMITTEE_LINK_SOURCE_RECORD_JOIN = (
+    "FROM cf.candidate_committee_link ccl JOIN core.source_record sr ON ccl.source_record_id = sr.id "
+)
+_FILING_SOURCE_RECORD_JOIN = "FROM cf.filing f JOIN core.source_record sr ON f.source_record_id = sr.id "
+_EDGE_DENOMINATOR_SQL_BY_FAMILY: dict[str, str] = {
+    "CONTRIBUTED_TO": (
+        "SELECT COUNT(*) "
+        f"{_TRANSACTION_SOURCE_RECORD_JOIN}"
+        "WHERE {sr_scope} "
+        "AND t.transaction_type = ANY(%s) "
+        "AND t.support_oppose IS NULL"
+    ),
+    "SPENT_ON": (
+        "SELECT COUNT(*) "
+        f"{_TRANSACTION_SOURCE_RECORD_JOIN}"
+        "WHERE {sr_scope} "
+        "AND t.transaction_type = ANY(%s) "
+        "AND t.support_oppose IS NULL"
+    ),
+    "SUPPORTS": (f"SELECT COUNT(*) {_IE_ELIGIBLE_TRANSACTION_JOIN}WHERE {{sr_scope}} AND t.support_oppose = %s"),
+    "OPPOSES": (f"SELECT COUNT(*) {_IE_ELIGIBLE_TRANSACTION_JOIN}WHERE {{sr_scope}} AND t.support_oppose = %s"),
+    "AFFILIATED_WITH": (f"SELECT COUNT(*) {_CANDIDATE_COMMITTEE_LINK_SOURCE_RECORD_JOIN}WHERE {{sr_scope}}"),
+    "FILED": (f"SELECT COUNT(*) {_FILING_SOURCE_RECORD_JOIN}WHERE {{sr_scope}}"),
+}
 
 
 def source_record_scope_where(*, alias: str = "sr", active_only: bool = True) -> str:
@@ -94,6 +141,60 @@ def count_source_records(
         return row[0] if row else 0
 
 
+def count_graph_edges_by_family(
+    conn: psycopg.Connection,
+    data_source_id: UUID,
+) -> dict[str, int]:
+    """Count graph edges per campaign-finance family for one data source."""
+    sr_scope = source_record_scope_where(alias="sr")
+    # AGE's ag_catalog.cypher(graph_name, ...) expects graph_name as a SQL string
+    # literal, not a bind parameter. Keep only data_source_id parameterized.
+    graph_name_literal = "'" + GRAPH_NAME.replace("'", "''") + "'"
+    counts: dict[str, int] = {}
+    with conn.cursor() as cur:
+        for family in _EDGE_FAMILIES:
+            sql = (
+                "SELECT COUNT(*) "
+                f"FROM ag_catalog.cypher({graph_name_literal}, $$ "
+                f"MATCH ()-[e:{family}]->() "
+                "RETURN e "
+                "$$) AS edge(v agtype) "
+                "JOIN core.source_record sr "
+                "ON ((edge.v->>'source_record_id')::uuid) = sr.id "
+                f"WHERE {sr_scope}"
+            )
+            cur.execute(sql, (data_source_id,))
+            row = cur.fetchone()
+            counts[family] = row[0] if row else 0
+    return counts
+
+
+def expected_edge_denominators(
+    conn: psycopg.Connection,
+    data_source_id: UUID,
+) -> dict[str, int]:
+    """Count expected edge baselines from relational campaign-finance tables."""
+    sr_scope = source_record_scope_where(alias="sr")
+    family_params: dict[str, tuple[object, ...]] = {
+        "CONTRIBUTED_TO": (data_source_id, sorted(CONTRIBUTION_LIKE_TYPES)),
+        "SPENT_ON": (data_source_id, sorted(EXPENDITURE_LIKE_TYPES)),
+        "SUPPORTS": (data_source_id, "S"),
+        "OPPOSES": (data_source_id, "O"),
+        "AFFILIATED_WITH": (data_source_id,),
+        "FILED": (data_source_id,),
+    }
+
+    counts: dict[str, int] = {}
+    with conn.cursor() as cur:
+        for family in _EDGE_FAMILIES:
+            sql = _EDGE_DENOMINATOR_SQL_BY_FAMILY[family].format(sr_scope=sr_scope)
+            params = family_params[family]
+            cur.execute(sql, params)
+            row = cur.fetchone()
+            counts[family] = row[0] if row else 0
+    return counts
+
+
 def fetch_aggregate(
     conn: psycopg.Connection,
     data_source_id: UUID,
@@ -105,8 +206,12 @@ def fetch_aggregate(
     """Run a single aggregate (COUNT, MIN, MAX, AVG) on source_record."""
     _validate_identifier(column)
     _validate_identifier(agg)
+    aggregate = agg.upper()
+    if aggregate not in {"COUNT", "MIN", "MAX", "AVG"}:
+        msg = f"Unsupported SQL aggregate: {agg!r}"
+        raise ValueError(msg)
     where = source_record_scope_where(active_only=active_only)
-    sql = f"SELECT {agg}(sr.{column}) FROM core.source_record sr WHERE {where}"  # noqa: S608
+    sql = f"SELECT {aggregate}(sr.{column}) FROM core.source_record sr WHERE {where}"  # noqa: S608
     with conn.cursor() as cur:
         cur.execute(sql, (data_source_id,))
         row = cur.fetchone()

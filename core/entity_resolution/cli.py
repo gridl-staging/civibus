@@ -1,3 +1,7 @@
+"""
+Stub summary for /Users/stuart/parallel_development/civibus_dev/MAR18_cross_domain_er_and_property_graph/civibus_dev/core/entity_resolution/cli.py.
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -30,11 +34,13 @@ from core.entity_resolution.splink_runtime import (
     get_splink_runtime,
     require_probabilistic_settings,
 )
+from core.entity_resolution.transaction_counterparty_resolver import resolve_nc_transaction_counterparties
 from core.graph import age_post_connect, ensure_graph
 
 _ENTITY_TYPE_CHOICES = ("person", "organization")
-_ACTION_CHOICES = ("run", "block", "score", "cluster")
+_ACTION_CHOICES = ("run", "block", "score", "cluster", "resolve-transaction-counterparties")
 _ACTIONS_REQUIRING_SPLINK = frozenset(_ACTION_CHOICES)
+_ACTIONS_REQUIRING_ENTITY_TYPE = frozenset(("run", "block", "score", "cluster"))
 _DECISION_TIERS = ("match", "probable_match", "possible_match", "no_match")
 _EDGE_DECISIONS = {"probable_match", "possible_match"}
 _THRESHOLD_ACTIONS = frozenset(("run", "score", "cluster"))
@@ -42,11 +48,10 @@ _RUN_EXECUTION_SAVEPOINT = "splink_run_execute"
 
 
 def _build_argument_parser() -> argparse.ArgumentParser:
-
     parser = argparse.ArgumentParser(description="Run entity resolution scoring, diagnostics, and persistence actions.")
     parser.add_argument(
         "--entity-type",
-        required=True,
+        required=False,
         choices=_ENTITY_TYPE_CHOICES,
         help="Entity type to resolve.",
     )
@@ -70,15 +75,32 @@ def _build_argument_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _require_splink_runtime_available(action: str, entity_type: str) -> None:
+def _require_splink_runtime_available(action: str, entity_type: str | None) -> None:
     if action not in _ACTIONS_REQUIRING_SPLINK:
         return
 
     get_splink_runtime()
+    if action == "resolve-transaction-counterparties":
+        for runtime_entity_type in _ENTITY_TYPE_CHOICES:
+            require_probabilistic_settings(
+                get_probabilistic_settings(runtime_entity_type),
+                entity_type=runtime_entity_type,
+            )
+        return
+
+    if entity_type is None:
+        raise ValueError("--entity-type is required for this action.")
+
     require_probabilistic_settings(
         get_probabilistic_settings(entity_type),
         entity_type=entity_type,
     )
+
+
+def _validate_required_entity_type(action: str, entity_type: str | None) -> str | None:
+    if action in _ACTIONS_REQUIRING_ENTITY_TYPE and entity_type is None:
+        raise ValueError("--entity-type is required for this action.")
+    return entity_type
 
 
 def _validate_threshold_arguments(
@@ -97,7 +119,6 @@ def _validate_threshold_arguments(
 
 
 def _resolve_splink_version() -> str:
-
     try:
         import splink  # type: ignore[import-not-found]
     except (ImportError, ModuleNotFoundError):
@@ -148,7 +169,6 @@ def _print_blocking_summary(
     blocking_rules: list[dict[str, Any]],
     blocked_pair_counts: list[dict[str, Any]],
 ) -> None:
-
     pair_counts_by_rule_index = {
         int(item["rule_index"]): int(item.get("pair_count", 0)) for item in blocked_pair_counts
     }
@@ -194,7 +214,6 @@ def _run_score_action(
     entity_type: str,
     auto_merge_threshold: float | None,
 ) -> list[dict[str, Any]]:
-
     classified_pairs = _score_and_classify_pairs(
         conn,
         entity_type=entity_type,
@@ -241,7 +260,6 @@ def _run_cluster_action(
     entity_type: str,
     auto_merge_threshold: float | None,
 ) -> dict[str, Any]:
-
     _, clustered_pairs = _score_and_cluster_pairs(
         conn,
         entity_type=entity_type,
@@ -254,12 +272,31 @@ def _run_cluster_action(
     return clustered_pairs
 
 
+def _run_transaction_counterparty_resolution_action(
+    conn: psycopg.Connection,
+    *,
+    auto_merge_threshold: float | None,
+) -> dict[str, int]:
+    summary = resolve_nc_transaction_counterparties(
+        conn,
+        auto_merge_threshold=auto_merge_threshold,
+    )
+    print("NC transaction counterparty resolver summary")
+    print(f"  candidate_transactions: {summary['candidate_transactions']}")
+    print(f"  mutated_rows: {summary['mutated_rows']}")
+    print(f"  matched_person_rows: {summary['matched_person_rows']}")
+    print(f"  matched_organization_rows: {summary['matched_organization_rows']}")
+    print(f"  skipped_rows: {summary['skipped_rows']}")
+    print(f"  ambiguous_rows: {summary['ambiguous_rows']}")
+    print(f"  dual_match_rows: {summary['dual_match_rows']}")
+    return summary
+
+
 def _run_counts(
     *,
     entity_rows: list[dict[str, Any]],
     clustered_pairs: dict[str, Any],
 ) -> dict[str, int]:
-
     decisions = clustered_pairs["pairwise_decisions"]
     decision_counts = _decision_counts(decisions)
     matches_found = decision_counts["match"] + decision_counts["probable_match"] + decision_counts["possible_match"]
@@ -383,7 +420,6 @@ def _run_full_pipeline_action(
     run_id: UUID | None,
     started_at: datetime | None,
 ) -> None:
-
     entity_rows, clustered_pairs = _score_and_cluster_pairs(
         conn,
         entity_type=entity_type,
@@ -424,7 +460,6 @@ def _dispatch_action(
     run_id: UUID | None = None,
     started_at: datetime | None = None,
 ) -> None:
-
     match action:
         case "block":
             _run_block_action(conn, entity_type=entity_type)
@@ -440,6 +475,11 @@ def _dispatch_action(
                 entity_type=entity_type,
                 auto_merge_threshold=auto_merge_threshold,
             )
+        case "resolve-transaction-counterparties":
+            _run_transaction_counterparty_resolution_action(
+                conn,
+                auto_merge_threshold=auto_merge_threshold,
+            )
         case _:
             _run_full_pipeline_action(
                 conn,
@@ -452,7 +492,6 @@ def _dispatch_action(
 
 
 def main(argv: list[str] | None = None) -> int:
-
     args = _build_argument_parser().parse_args(argv)
 
     conn: psycopg.Connection | None = None
@@ -464,14 +503,15 @@ def main(argv: list[str] | None = None) -> int:
             action=args.action,
             auto_merge_threshold=args.min_threshold,
         )
+        entity_type = _validate_required_entity_type(args.action, args.entity_type)
         conn = get_connection(post_connect=age_post_connect)
         ensure_graph(conn)
-        _require_splink_runtime_available(args.action, args.entity_type)
+        _require_splink_runtime_available(args.action, entity_type)
         run_id, started_at, execution_savepoint_created, start_error = _maybe_start_persisted_run(
             conn,
             action=args.action,
             dry_run=args.dry_run,
-            entity_type=args.entity_type,
+            entity_type=entity_type or "person",
             auto_merge_threshold=auto_merge_threshold,
         )
         if start_error is not None:
@@ -479,7 +519,7 @@ def main(argv: list[str] | None = None) -> int:
         _dispatch_action(
             conn,
             action=args.action,
-            entity_type=args.entity_type,
+            entity_type=entity_type or "person",
             auto_merge_threshold=auto_merge_threshold,
             dry_run=args.dry_run,
             run_id=run_id,

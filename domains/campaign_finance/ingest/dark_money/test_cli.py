@@ -96,6 +96,27 @@ def test_main_ingest_mode_extracts_zip_then_loads(monkeypatch: pytest.MonkeyPatc
     mock_connection.close.assert_called_once()
 
 
+@pytest.mark.unit
+def test_main_ingest_mode_returns_exit_1_on_runtime_error(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture,
+    tmp_path: Path,
+) -> None:
+    input_path = tmp_path / "irs_527_sample.zip"
+    input_path.write_text("zip", encoding="utf-8")
+
+    def _raise_runtime_error(**_: object) -> LoadResult:
+        raise RuntimeError("ingest exploded")
+
+    monkeypatch.setattr(cli, "run_ingest", _raise_runtime_error)
+
+    exit_code = cli.main(["ingest", "--path", str(input_path)])
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    assert "IRS 527 pipeline failed: ingest exploded" in captured.err
+
+
 @pytest.mark.integration
 def test_run_ingest_fixture_zip_returns_inserted_rows() -> None:
     fixture_path = Path(__file__).resolve().parents[4] / "tests" / "fixtures" / "bulk" / "irs_527_sample.zip"

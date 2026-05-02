@@ -9,12 +9,14 @@ import {
   buildCandidateHref,
   buildCommitteeHref
 } from "$lib/campaign-finance-detail/contract";
+import type { ChartSeries } from "$lib/charts/types";
 import type {
   CandidateDetailResponse,
   CandidateListItem,
   CampaignFinanceTransactionResponse,
   CommitteeDetailResponse,
   CommitteeFilingBreakdown,
+  CandidateFundraisingSummary,
   CommitteeFundraisingSummary,
   CommitteeListItem,
   IndependentExpenditureResponse,
@@ -43,6 +45,35 @@ export type CommitteeTransactionRow = {
   recipientCandidateLabel: string | null;
   recipientCommitteeHref: string | null;
   recipientCommitteeLabel: string | null;
+  ieStance: string;
+  disseminationDate: string;
+  aggregateAmount: string;
+};
+
+export type LabelValueRow = {
+  label: string;
+  value: string;
+};
+
+export type RankedPartyRow = {
+  name: string;
+  totalAmount: string;
+  transactionCountLabel: string;
+};
+
+export type SpendCategoryRow = {
+  category: string;
+  totalAmount: string;
+  transactionCountLabel: string;
+};
+
+export type CommitteeHighSignalSummaryPresentation = {
+  receiptSplit: LabelValueRow[];
+  topDonors: RankedPartyRow[];
+  topVendors: RankedPartyRow[];
+  spendCategories: SpendCategoryRow[];
+  spendCategoriesEmptyMessage: string | null;
+  cashOnHandTrendSeries: ChartSeries[];
 };
 
 export type FundraisingSummaryPresentation = {
@@ -78,16 +109,12 @@ export type KeyMetric = {
   value: string;
 };
 
-export type CommitteeDetailPresentation = {
+export type CommitteeDetailShellPresentation = {
   canonicalName: string;
   factRows: CampaignFinanceFactRow[];
   trustSection: TrustSectionViewModel;
   sectionOrder: string[];
-  keyMetrics: KeyMetric[];
-  fundraisingSummary: FundraisingSummaryPresentation;
-  filingBreakdown: FilingBreakdownPresentation;
-  transactionRows: CommitteeTransactionRow[];
-  transactionEmptyMessage: string | null;
+  committeeRouteRef: CommitteeTransactionRouteReferences;
 };
 
 export type CandidateAggregateSummaryPresentation = {
@@ -137,15 +164,24 @@ export type OutsideSpendingPresentation = {
   emptyMessage: string | null;
 };
 
-export type CandidateDetailPresentation = {
+export type CandidateDetailShellPresentation = {
   canonicalName: string;
   factRows: CampaignFinanceFactRow[];
   trustSection: TrustSectionViewModel;
   sectionOrder: string[];
-  keyMetrics: KeyMetric[];
-  fundraisingSummary: CandidateAggregateSummaryPresentation;
-  outsideSpending: OutsideSpendingPresentation;
-  committeeBreakdown: CandidateCommitteeBreakdownRow[];
+  l10Reference: CandidateL10Reference | null;
+};
+
+export type CandidateL10Reference = {
+  totalRaised: SerializedMoney;
+  sourceLabel: string;
+  methodologyHref: string;
+  deviationThresholdRatio: number;
+};
+
+export type CandidateCompletenessWarning = {
+  message: string;
+  methodologyHref: string;
 };
 
 export type CampaignFinanceDetailMetadata = {
@@ -159,16 +195,24 @@ export type SlugCollisionMatchPresentation = {
   href: string;
 };
 
-type CandidateCanonicalDetailRoutePresentation = {
+type Deferred<T> = T | Promise<T>;
+
+export type CandidateCanonicalDetailRoutePresentation = {
   routeKind: "canonical-detail";
   entityType: "candidate";
-  detail: CandidateDetailPresentation;
+  shell: CandidateDetailShellPresentation;
+  summary: Deferred<CandidateFundraisingSummary>;
+  ieTransactions: Deferred<IndependentExpenditureResponse[]>;
+  ieSummary: Deferred<IndependentExpenditureSummary | null>;
 };
 
-type CommitteeCanonicalDetailRoutePresentation = {
+export type CommitteeCanonicalDetailRoutePresentation = {
   routeKind: "canonical-detail";
   entityType: "committee";
-  detail: CommitteeDetailPresentation;
+  shell: CommitteeDetailShellPresentation;
+  transactions: Deferred<CampaignFinanceTransactionResponse[]>;
+  summary: Deferred<CommitteeFundraisingSummary>;
+  filingBreakdown: Deferred<CommitteeFilingBreakdown>;
 };
 
 type CandidateSlugCollisionRoutePresentation = {
@@ -209,6 +253,14 @@ export type CandidateRouteData =
       matches: CandidateListItem[];
     };
 
+type CandidateCanonicalRouteDataExtras = {
+  keelL10Reference?: CandidateL10Reference | null;
+};
+
+type CandidateDetailL10Extras = {
+  keel_l10_reference?: CandidateL10Reference | null;
+};
+
 export type CommitteeRouteData =
   | ({ routeKind: "canonical-detail" } & CommitteeDetailBundle)
   | {
@@ -223,6 +275,10 @@ const OUTSIDE_SPENDING_UNAVAILABLE_MESSAGE =
   "Outside-spending data is not yet available for this candidate. Coverage may be incomplete.";
 const OUTSIDE_SPENDING_NO_ACTIVITY_MESSAGE =
   "No outside spending is reported in available filings. Coverage may be incomplete.";
+const COMMITTEE_SPEND_CATEGORIES_UNAVAILABLE_MESSAGE =
+  "Spend categories are not available for this committee.";
+const CANDIDATE_EMPTY_COMPLETENESS_WARNING =
+  "No transactions loaded for this candidate yet. Coverage may be incomplete.";
 const PERSON_RECORD_LINK_VALUE_PREFIX = "Person record";
 const ORGANIZATION_RECORD_LINK_VALUE_PREFIX = "Organization record";
 const COMMITTEE_RECORD_LINK_VALUE_PREFIX = "Committee record";
@@ -243,6 +299,11 @@ function formatRowValue(value: string | null | undefined): string {
   }
 
   return value;
+}
+
+function resolveCanonicalName(rawName: string, fallbackLabel: "Candidate" | "Committee"): string {
+  const trimmedName = rawName.trim();
+  return trimmedName === "" ? fallbackLabel : trimmedName;
 }
 
 function parseSerializedMoney(value: SerializedMoney | number): number {
@@ -292,7 +353,7 @@ type AggregateSummarySource = {
   transaction_count: number;
 };
 
-function buildAggregateSummaryPresentation(
+export function buildCandidateAggregateSummaryPresentation(
   summary: AggregateSummarySource
 ): CandidateAggregateSummaryPresentation {
   return {
@@ -307,7 +368,7 @@ export function buildFundraisingSummaryPresentation(
   summary: CommitteeFundraisingSummary
 ): FundraisingSummaryPresentation {
   return {
-    ...buildAggregateSummaryPresentation(summary),
+    ...buildCandidateAggregateSummaryPresentation(summary),
     jurisdiction: formatRowValue(summary.jurisdiction),
     dataThrough: formatDateValue(summary.data_through)
   };
@@ -373,34 +434,13 @@ function buildOptionalSlugRouteHref(
   return buildHref(reference);
 }
 
-/** Prefers a detail name, then summary name, then a generic fallback label. */
-function resolveCanonicalName(
-  detailName: string,
-  summaryName: string,
-  fallbackLabel: "Candidate" | "Committee"
-): string {
-  const trimmedDetailName = detailName.trim();
-  if (trimmedDetailName !== "") {
-    return trimmedDetailName;
-  }
-
-  const trimmedSummaryName = summaryName.trim();
-  if (trimmedSummaryName !== "") {
-    return trimmedSummaryName;
-  }
-
-  return fallbackLabel;
-}
 
 export function buildCommitteeDetailMetadata(
-  canonicalName: string,
-  transactionCount: number
+  canonicalName: string
 ): CampaignFinanceDetailMetadata {
-  const transactionLabel = formatCountLabel(transactionCount, "recent transaction");
-
   return {
     title: `${canonicalName} | Committee | Civibus`,
-    description: `Committee profile with ${transactionLabel}.`
+    description: "Committee profile from campaign-finance records."
   };
 }
 
@@ -414,10 +454,7 @@ export function buildCandidateDetailMetadata(canonicalName: string): CampaignFin
 export function buildCommitteeDetailMetadataFromBundle(
   data: CommitteeDetailBundle
 ): CampaignFinanceDetailMetadata {
-  return buildCommitteeDetailMetadata(
-    resolveCanonicalName(data.detail.name, data.summary.committee_name, "Committee"),
-    data.transactions.length
-  );
+  return buildCommitteeDetailMetadata(resolveCanonicalName(data.detail.name, "Committee"));
 }
 
 function buildReadableRecordLinkValue(recordLabel: string, entityId: string | null): string {
@@ -514,7 +551,13 @@ export function buildCommitteeTransactionRows(
       buildCommitteeHref
     ),
     recipientCommitteeLabel:
-      transaction.recipient_committee_id === null ? null : RECIPIENT_COMMITTEE_LINK_LABEL
+      transaction.recipient_committee_id === null ? null : RECIPIENT_COMMITTEE_LINK_LABEL,
+    ieStance: formatOptionalStanceLabel(transaction.support_oppose),
+    disseminationDate: formatDateValue(transaction.dissemination_date ?? null),
+    aggregateAmount:
+      transaction.aggregate_amount === null || transaction.aggregate_amount === undefined
+        ? "—"
+        : formatCurrency(transaction.aggregate_amount)
   }));
 }
 
@@ -522,38 +565,232 @@ export function getCampaignFinanceEmptyMessage(): string {
   return COMMITTEE_TRANSACTION_EMPTY_MESSAGE;
 }
 
-/** Assembles the full committee detail presentation model from the fetched bundle. */
-export function buildCommitteeDetailPresentation(data: CommitteeDetailBundle): CommitteeDetailPresentation {
-  const trustSection = buildTrustSection(data.detail.sources);
-  const transactionRows = buildCommitteeTransactionRows(data.transactions, {
-    committeeById: {
-      [data.detail.id]: {
-        id: data.detail.id,
-        slug: data.detail.slug,
-        slug_is_unique: data.detail.slug_is_unique
+export function buildKeyMetrics(
+  summary: { total_raised: SerializedMoney; total_spent: SerializedMoney; transaction_count: number }
+): KeyMetric[] {
+  return [
+    { label: "Total raised", value: formatCurrency(summary.total_raised) },
+    { label: "Total spent", value: formatCurrency(summary.total_spent) },
+    { label: "Transactions", value: String(summary.transaction_count) }
+  ];
+}
+
+function buildRankedPartyRows(
+  parties: { name: string; total_amount: SerializedMoney; transaction_count: number }[]
+): RankedPartyRow[] {
+  return parties.map((party) => ({
+    name: party.name,
+    totalAmount: formatCurrency(party.total_amount),
+    transactionCountLabel: formatCountLabel(party.transaction_count, "transaction")
+  }));
+}
+
+function buildSpendCategoryRows(
+  categories: { category: string; total_amount: SerializedMoney; transaction_count: number }[]
+): SpendCategoryRow[] {
+  return categories.map((category) => ({
+    category: category.category,
+    totalAmount: formatCurrency(category.total_amount),
+    transactionCountLabel: formatCountLabel(category.transaction_count, "transaction")
+  }));
+}
+
+function buildCashOnHandTrendSeries(filingBreakdown: CommitteeFilingBreakdown): ChartSeries[] {
+  const points = filingBreakdown.filings
+    .filter((filing) => filing.cash_on_hand !== null)
+    .map((filing) => {
+      const y = parseSerializedMoney(filing.cash_on_hand as SerializedMoney);
+      if (Number.isNaN(y)) {
+        return null;
       }
+
+      return {
+        x: filing.coverage_end_date ?? filing.receipt_date ?? filing.row_id,
+        y
+      };
+    })
+    .filter((point): point is { x: string; y: number } => point !== null);
+
+  if (points.length === 0) {
+    return [];
+  }
+
+  return [
+    {
+      id: "cash-on-hand",
+      label: "Cash on hand",
+      points
     }
-  });
+  ];
+}
+
+export function buildCommitteeHighSignalSummaryPresentation(
+  summary: CommitteeFundraisingSummary,
+  filingBreakdown: CommitteeFilingBreakdown
+): CommitteeHighSignalSummaryPresentation {
+  const spendCategories = summary.spend_categories === null ? [] : buildSpendCategoryRows(summary.spend_categories);
 
   return {
-    canonicalName: resolveCanonicalName(data.detail.name, data.summary.committee_name, "Committee"),
-    factRows: buildCommitteeFactRows(data.detail),
-    trustSection,
-    sectionOrder: ["summary", "trust", "metrics", "records"],
-    keyMetrics: [
-      { label: "Total raised", value: formatCurrency(data.summary.total_raised) },
-      { label: "Total spent", value: formatCurrency(data.summary.total_spent) },
-      { label: "Transactions", value: String(data.summary.transaction_count) }
+    receiptSplit: [
+      { label: "Cash receipts", value: formatCurrency(summary.cash_receipts_total) },
+      { label: "In-kind receipts", value: formatCurrency(summary.in_kind_receipts_total) },
+      { label: "Loans", value: formatCurrency(summary.loan_receipts_total) },
+      { label: "Contributions", value: formatCurrency(summary.contribution_receipts_total) }
     ],
-    fundraisingSummary: buildFundraisingSummaryPresentation(data.summary),
-    filingBreakdown: buildFilingBreakdownPresentation(data.filingBreakdown),
-    transactionRows,
-    transactionEmptyMessage: transactionRows.length === 0 ? getCampaignFinanceEmptyMessage() : null
+    topDonors: buildRankedPartyRows(summary.top_donors),
+    topVendors: buildRankedPartyRows(summary.top_vendors),
+    spendCategories,
+    spendCategoriesEmptyMessage:
+      summary.spend_categories === null ? COMMITTEE_SPEND_CATEGORIES_UNAVAILABLE_MESSAGE : null,
+    cashOnHandTrendSeries: buildCashOnHandTrendSeries(filingBreakdown)
   };
+}
+
+export function buildCommitteeDetailShellPresentation(
+  detail: CommitteeDetailResponse
+): CommitteeDetailShellPresentation {
+  return {
+    canonicalName: resolveCanonicalName(detail.name, "Committee"),
+    factRows: buildCommitteeFactRows(detail),
+    trustSection: buildTrustSection(detail.sources, { includeJurisdictionFreshnessNote: true }),
+    sectionOrder: ["summary", "trust", "metrics", "records"],
+    committeeRouteRef: {
+      committeeById: {
+        [detail.id]: { id: detail.id, slug: detail.slug, slug_is_unique: detail.slug_is_unique }
+      }
+    }
+  };
+}
+
+export function buildCandidateDetailShellPresentation(
+  detail: CandidateDetailResponse,
+  options?: {
+    l10Reference?: CandidateL10Reference | null;
+  }
+): CandidateDetailShellPresentation {
+  const detailExtras = detail as CandidateDetailResponse & CandidateDetailL10Extras;
+
+  return {
+    canonicalName: resolveCanonicalName(detail.name, "Candidate"),
+    factRows: buildCandidateFactRows(detail),
+    trustSection: buildTrustSection(detail.sources, { includeJurisdictionFreshnessNote: true }),
+    sectionOrder: ["summary", "trust", "metrics", "outside-spending", "records"],
+    l10Reference: options?.l10Reference ?? detailExtras.keel_l10_reference ?? null
+  };
+}
+
+export function buildCommitteeDeferredFundraisingSummary(
+  summary: CommitteeFundraisingSummary
+): FundraisingSummaryPresentation {
+  return buildFundraisingSummaryPresentation(summary);
+}
+
+export function buildCommitteeDeferredFilingBreakdown(
+  filingBreakdown: CommitteeFilingBreakdown
+): FilingBreakdownPresentation {
+  return buildFilingBreakdownPresentation(filingBreakdown);
+}
+
+export function buildCommitteeDeferredTransactionRows(
+  transactions: CampaignFinanceTransactionResponse[],
+  routeReferences: CommitteeTransactionRouteReferences
+): CommitteeTransactionRow[] {
+  return buildCommitteeTransactionRows(transactions, routeReferences);
+}
+
+export function buildCommitteeDeferredKeyMetrics(summary: CommitteeFundraisingSummary): KeyMetric[] {
+  return buildKeyMetrics(summary);
+}
+
+export function buildCommitteeDeferredHighSignalSummary(
+  summary: CommitteeFundraisingSummary,
+  filingBreakdown: CommitteeFilingBreakdown
+): CommitteeHighSignalSummaryPresentation {
+  return buildCommitteeHighSignalSummaryPresentation(summary, filingBreakdown);
+}
+
+export function buildCandidateDeferredFundraisingSummary(
+  summary: CandidateFundraisingSummary
+): CandidateAggregateSummaryPresentation {
+  return buildCandidateAggregateSummaryPresentation(summary);
+}
+
+export function buildCandidateDeferredCommitteeBreakdown(
+  summary: CandidateFundraisingSummary
+): CandidateCommitteeBreakdownRow[] {
+  return buildCandidateCommitteeBreakdown(summary);
+}
+
+export function buildCandidateDeferredOutsideSpending(
+  ieSummary: IndependentExpenditureSummary | null,
+  ieTransactions: IndependentExpenditureResponse[]
+): OutsideSpendingPresentation {
+  return buildOutsideSpendingPresentation(ieSummary, ieTransactions);
+}
+
+export function buildCandidateDeferredKeyMetrics(summary: CandidateFundraisingSummary): KeyMetric[] {
+  return buildKeyMetrics(summary);
+}
+
+function _hasZeroAggregate(summary: CandidateFundraisingSummary): boolean {
+  return (
+    parseSerializedMoney(summary.total_raised) === 0 &&
+    parseSerializedMoney(summary.total_spent) === 0 &&
+    parseSerializedMoney(summary.net) === 0 &&
+    summary.transaction_count === 0
+  );
+}
+
+function _computeDeviationRatio(currentTotal: number, expectedTotal: number): number {
+  if (expectedTotal === 0) {
+    return currentTotal === 0 ? 0 : Number.POSITIVE_INFINITY;
+  }
+
+  return Math.abs(currentTotal - expectedTotal) / expectedTotal;
+}
+
+export function buildCandidateCompletenessWarnings(
+  summary: CandidateFundraisingSummary,
+  l10Reference: CandidateL10Reference | null
+): CandidateCompletenessWarning[] {
+  const warnings: CandidateCompletenessWarning[] = [];
+
+  if (_hasZeroAggregate(summary)) {
+    warnings.push({
+      message: CANDIDATE_EMPTY_COMPLETENESS_WARNING,
+      methodologyHref: "/methodology"
+    });
+  }
+
+  if (l10Reference !== null) {
+    const currentTotalRaised = parseSerializedMoney(summary.total_raised);
+    const referenceTotalRaised = parseSerializedMoney(l10Reference.totalRaised);
+    const deviationRatio = _computeDeviationRatio(currentTotalRaised, referenceTotalRaised);
+
+    if (deviationRatio > l10Reference.deviationThresholdRatio) {
+      warnings.push({
+        message:
+          `Civibus shows ${formatCurrency(currentTotalRaised)} raised, ` +
+          `but the ${l10Reference.sourceLabel} reference is ${formatCurrency(referenceTotalRaised)}. ` +
+          "Coverage may be incomplete.",
+        methodologyHref: l10Reference.methodologyHref
+      });
+    }
+  }
+
+  return warnings;
 }
 
 function formatStanceLabel(stance: "S" | "O"): string {
   return stance === "S" ? "Support" : "Oppose";
+}
+
+function formatOptionalStanceLabel(stance: "S" | "O" | null | undefined): string {
+  if (stance === "S" || stance === "O") {
+    return formatStanceLabel(stance);
+  }
+
+  return "—";
 }
 
 export function isOutsideSpendingSummaryEmpty(ieSummary: IndependentExpenditureSummary): boolean {
@@ -587,8 +824,7 @@ function buildOutsideSpendingTransactionRows(
   }));
 }
 
-/** Builds the outside-spending section, including explicit empty and unavailable states. */
-function buildOutsideSpendingPresentation(
+export function buildOutsideSpendingPresentation(
   ieSummary: IndependentExpenditureSummary | null,
   ieTransactions: IndependentExpenditureResponse[]
 ): OutsideSpendingPresentation {
@@ -642,12 +878,10 @@ function buildOutsideSpendingPresentation(
   };
 }
 
-/** Assembles the full candidate detail presentation model from the fetched bundle. */
-export function buildCandidateDetailPresentation(data: CandidateDetailBundle): CandidateDetailPresentation {
-  const trustSection = buildTrustSection(data.detail.sources);
-  const { summary } = data;
-
-  const committeeBreakdown: CandidateCommitteeBreakdownRow[] = summary.committees.map((c) => ({
+export function buildCandidateCommitteeBreakdown(
+  summary: CandidateFundraisingSummary
+): CandidateCommitteeBreakdownRow[] {
+  return summary.committees.map((c) => ({
     committeeId: c.committee_id,
     committeeName: c.committee_name,
     committeeHref: buildCommitteeHref({
@@ -662,21 +896,6 @@ export function buildCandidateDetailPresentation(data: CandidateDetailBundle): C
     jurisdiction: formatRowValue(c.jurisdiction),
     dataThrough: formatDateValue(c.data_through)
   }));
-
-  return {
-    canonicalName: resolveCanonicalName(data.detail.name, summary.candidate_name, "Candidate"),
-    factRows: buildCandidateFactRows(data.detail),
-    trustSection,
-    sectionOrder: ["summary", "trust", "metrics", "outside-spending", "records"],
-    keyMetrics: [
-      { label: "Total raised", value: formatCurrency(summary.total_raised) },
-      { label: "Total spent", value: formatCurrency(summary.total_spent) },
-      { label: "Transactions", value: String(summary.transaction_count) }
-    ],
-    fundraisingSummary: buildAggregateSummaryPresentation(summary),
-    outsideSpending: buildOutsideSpendingPresentation(data.ieSummary, data.ieTransactions),
-    committeeBreakdown
-  };
 }
 
 type SlugCollisionMatchItem = CandidateListItem | CommitteeListItem;
@@ -705,10 +924,17 @@ export function buildCandidateRoutePresentation(data: CandidateRouteData): Candi
     };
   }
 
+  const canonicalData = data as typeof data & CandidateCanonicalRouteDataExtras;
+
   return {
     routeKind: "canonical-detail",
     entityType: "candidate",
-    detail: buildCandidateDetailPresentation(data)
+    shell: buildCandidateDetailShellPresentation(data.detail, {
+      l10Reference: canonicalData.keelL10Reference ?? null
+    }),
+    summary: data.summary,
+    ieTransactions: data.ieTransactions,
+    ieSummary: data.ieSummary
   };
 }
 
@@ -728,6 +954,9 @@ export function buildCommitteeRoutePresentation(data: CommitteeRouteData): Commi
   return {
     routeKind: "canonical-detail",
     entityType: "committee",
-    detail: buildCommitteeDetailPresentation(data)
+    shell: buildCommitteeDetailShellPresentation(data.detail),
+    transactions: data.transactions,
+    summary: data.summary,
+    filingBreakdown: data.filingBreakdown
   };
 }

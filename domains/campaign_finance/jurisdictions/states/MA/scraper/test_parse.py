@@ -120,3 +120,13 @@ class TestMAParserRejectsInvalidHeader:
         parser = MAReportItemParser(path=tsv_path, columns=REPORT_ITEM_COLUMNS, row_label="test")
         with pytest.raises(ValueError, match="Unexpected MA test header"):
             list(parser)
+
+    def test_trailing_tab_in_header_is_tolerated(self, tmp_path: Path) -> None:
+        """Live OCPF data has a trailing tab producing an empty column."""
+        header = "\t".join(REPORT_ITEM_COLUMNS) + "\t\n"
+        row = "\t".join([""] * len(REPORT_ITEM_COLUMNS)) + "\t\n"
+        tsv_path = tmp_path / "trailing_tab.txt"
+        tsv_path.write_text(header + row)
+        parser = MAReportItemParser(path=tsv_path, columns=REPORT_ITEM_COLUMNS, row_label="contribution")
+        rows = list(parser)
+        assert len(rows) == 1

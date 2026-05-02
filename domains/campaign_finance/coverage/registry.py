@@ -55,6 +55,13 @@ class CoverageRegistryRow(CoverageRegistryBaseModel):
     operational_reason: str | None
     next_action: str | None
     evidence_date: date | None
+    loaded_count: StrictInt | None = None
+    expected_count: StrictInt | None = None
+    # Tri-state evidence flag for outside-spending coverage. None = not yet
+    # determined (existing tier-based behavior preserved). False is required when
+    # the source's evidence shows the current bulk export does not carry IE
+    # data, so the API must return null IE totals instead of misleading zeroes.
+    ie_coverage_available: bool | None = None
 
     # Municipality layer fields (Stage 5) — null for state-equivalent rows
     parent_jurisdiction_code: str | None = None

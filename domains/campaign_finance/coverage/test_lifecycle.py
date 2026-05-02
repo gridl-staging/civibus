@@ -32,6 +32,7 @@ def _valid_payload(*, jurisdiction_code: str = "EX") -> dict[str, object]:
                 "operational_maturity": "manual_only",
                 "public_claim_status": "implemented but unproven",
                 "completeness_intelligence_maturity": "not_started",
+                "civics_candidacy_status": "not_started",
                 "main_blocker": "Example blocker",
             }
         ],

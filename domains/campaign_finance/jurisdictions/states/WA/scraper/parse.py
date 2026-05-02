@@ -1,3 +1,7 @@
+"""
+Stub summary for /Users/stuart/parallel_development/civibus_dev/MAR18_state_expansion_batch_2/civibus_dev/domains/campaign_finance/jurisdictions/states/WA/scraper/parse.py.
+"""
+
 from __future__ import annotations
 
 import csv

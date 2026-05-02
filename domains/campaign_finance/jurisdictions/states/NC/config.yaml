@@ -56,7 +56,7 @@ data_sources:
       Declaration: "transaction.declaration"
     scraper: null
     last_successful_pull: null
-    last_verified_working: "2026-03-27"
+    last_verified_working: "2026-04-25"
     known_issues:
       - "No official bulk-download file or public API endpoint was found on CFTxnLkup or linked campaign-finance search applications; extraction is query/export driven."
       - "Transaction export is stateful and requires browser-side grid paging before CSV download; plain HTTP replay can still raise BrowserAutomationRequiredError."
@@ -99,14 +99,53 @@ data_sources:
       Image: "filing.image_link_label"
       Data: "filing.data_link_label"
     scraper: null
-    last_successful_pull: null
-    last_verified_working: "2026-03-27"
+    last_successful_pull: "2026-04-25"
+    last_verified_working: "2026-04-25"
     known_issues:
       - "Committee and document result grids are delivered as inline JSON payloads in HTML pages; large name searches can create very large response documents."
       - "Document export (`Type=DocGen`) is per-committee list export only; no statewide bulk document-index export path was found."
       - "Document rows mix DATA and scanned-image workflows; some filings have image receipt dates, data receipt dates, or both."
       - "Real committee-document exports can include blank `Doc Name` rows; loader retains source-record provenance for these rows but does not create filing lookup entries from them."
       - "Filing-aware transaction ingest depends on exact `(Committee SBoE ID, Year + Doc Name)` join keys from committee-document exports and will fail unmatched transaction rows."
+
+  - name: "North Carolina SBoE IE Document Index"
+    url: "https://cf.ncsbe.gov/CFDocLkup/"
+    bulk_download_url: null
+    api_base_url: null
+    format: "web_portal"
+    auth_required: false
+    update_frequency: "weekly"
+    coverage:
+      start_year: 2022
+      covers_sub_jurisdictions: true
+      office_levels:
+        - state_house
+        - state_senate
+        - county
+        - municipal
+        - judicial
+      transaction_types:
+        - independent_expenditures
+    field_mappings:
+      "Committee Name": "committee.name"
+      "SBoE ID": "committee.id"
+      Year: "filing.year"
+      "Doc Type": "filing.document_type"
+      "Doc Name": "filing.report_type"
+      Amend: "filing.is_amendment"
+      "Received Image": "filing.image_received_date"
+      "Received Data": "filing.data_received_date"
+      "Start Date": "filing.period_start_date"
+      "End Date": "filing.period_end_date"
+      Image: "filing.image_link_label"
+      Data: "filing.data_link_label"
+    scraper: null
+    last_successful_pull: "2026-04-19"
+    last_verified_working: "2026-04-25"
+    known_issues:
+      - "The statewide `CFDocLkup` export is document-index metadata only; transaction-level IE rows must be fetched per filing from the linked `CFOrgLkup` `ReportDetail` export."
+      - "Observed 2026 IE document-index rows can carry `SBoE ID = No Id`; loader uses deterministic committee fallback identifiers for bridge/upsert safety."
+      - "Production ingestion applies a rolling 5-year window for IE document-index rows (current year minus four)."
 
 laws:
   source_url: "https://www.ncleg.gov/EnactedLegislation/Statutes/HTML/BySection/Chapter_163/GS_163-278.13.html"

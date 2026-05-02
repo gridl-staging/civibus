@@ -1,0 +1,345 @@
+from __future__ import annotations
+
+import json
+from dataclasses import asdict
+from pathlib import Path
+from urllib.parse import urlparse
+
+import pytest
+
+from domains.civics.loaders.official_rosters.parsers import parse_roster_rows
+
+
+_DURHAM_SOURCE_URL = "https://www.durhamnc.gov/1396/City-Council-Members"
+_HOUSE_SOURCE_URL = "https://www.ncleg.gov/Members/MemberList/H"
+_NC_SHERIFFS_SOURCE_URL = "https://ncsheriffs.org/find-a-sheriff"
+_FIXTURE_DIR = Path(__file__).resolve().parents[4] / "tests" / "fixtures" / "roster"
+_STAGE2_ARTIFACT_DIR = (
+    Path(__file__).resolve().parents[4] / "docs" / "research" / "artifacts" / "2026_04_29_dwo_county_muni"
+)
+_MANIFEST_PATH = _STAGE2_ARTIFACT_DIR / "canonical_seat_manifest.json"
+
+
+def _read_fixture(name: str) -> str:
+    return (_FIXTURE_DIR / name).read_text(encoding="utf-8")
+
+
+def _manifest_sources() -> dict[str, dict[str, object]]:
+    payload = json.loads(_MANIFEST_PATH.read_text(encoding="utf-8"))
+    return {source["source_id"]: source for source in payload["sources"]}
+
+
+def _read_stage2_artifact(name: str) -> str:
+    return (_STAGE2_ARTIFACT_DIR / name).read_text(encoding="utf-8")
+
+
+def _manifest_sources_by_body_key(body_key: str) -> list[dict[str, object]]:
+    return [source for source in _manifest_sources().values() if source.get("body_key") == body_key]
+
+
+def _effective_port_from_url(value: str) -> int | None:
+    parsed_value = urlparse(value)
+    if parsed_value.port is not None:
+        return parsed_value.port
+    if parsed_value.scheme == "https":
+        return 443
+    if parsed_value.scheme == "http":
+        return 80
+    return None
+
+
+def _assert_same_origin_url(value: str, *, source_url: str) -> None:
+    parsed_value = urlparse(value)
+    parsed_source = urlparse(source_url)
+    assert parsed_value.scheme == parsed_source.scheme
+    assert parsed_value.hostname == parsed_source.hostname
+    assert _effective_port_from_url(value) == _effective_port_from_url(source_url)
+
+
+def test_parse_durham_member_cards_to_shared_row_contract() -> None:
+    rows = parse_roster_rows(
+        body_key="durham_city_council",
+        source_url=_DURHAM_SOURCE_URL,
+        html=_read_fixture("nc_durham_city_council.html"),
+    )
+
+    assert len(rows) == 3
+    assert {tuple(sorted(asdict(row).keys())) for row in rows} == {
+        ("bio_url", "district_number", "member_name", "portrait_url", "role_label")
+    }
+    assert rows[0].member_name == "Leonardo Williams"
+    assert rows[0].role_label == "Mayor"
+    assert rows[0].bio_url == "https://www.durhamnc.gov/1329/About-the-Mayor"
+    assert rows[0].portrait_url == (
+        "https://www.durhamnc.gov/ImageRepository/Document?documentID=41709&thumbnailSize=2"
+    )
+    assert rows[0].district_number is None
+    _assert_same_origin_url(rows[0].bio_url, source_url=_DURHAM_SOURCE_URL)
+    _assert_same_origin_url(rows[0].portrait_url, source_url=_DURHAM_SOURCE_URL)
+
+
+def test_parse_durham_rows_drop_off_origin_profile_and_portrait_links() -> None:
+    rows = parse_roster_rows(
+        body_key="durham_city_council",
+        source_url=_DURHAM_SOURCE_URL,
+        html="""
+        <li class="megaMenuItem widgetItem mediaLeft">
+          <div class="widgetTitle">
+            <a href="https://evil.example/profile">Mayor Jane Doe</a>
+          </div>
+          <p class="widgetDesc">Mayor</p>
+          <img class="media" src="https://evil.example/portrait.jpg" />
+        </li>
+        """,
+    )
+
+    assert len(rows) == 1
+    assert rows[0].bio_url is None
+    assert rows[0].portrait_url is None
+
+
+def test_parse_nc_house_rows_to_shared_row_contract_with_district() -> None:
+    rows = parse_roster_rows(
+        body_key="nc_house",
+        source_url=_HOUSE_SOURCE_URL,
+        html=_read_fixture("nc_general_assembly_house.html"),
+    )
+
+    assert len(rows) == 3
+    assert {tuple(sorted(asdict(row).keys())) for row in rows} == {
+        ("bio_url", "district_number", "member_name", "portrait_url", "role_label")
+    }
+    assert rows[0].member_name == "Julia C. Howard"
+    assert rows[0].role_label == "State Representative District 77"
+    assert rows[0].district_number == "77"
+    assert rows[0].bio_url == "https://www.ncleg.gov/Members/Biography/H/53"
+    assert rows[0].portrait_url == "https://www.ncleg.gov/Members/MemberImage/H/53/Low"
+
+    malicious_rows = parse_roster_rows(
+        body_key="nc_house",
+        source_url=_HOUSE_SOURCE_URL,
+        html="""
+        <div class="member-col">
+          <div class="member-info-col">
+            <a href="https://evil.example/Members/Biography/H/666">Injected Member</a>
+            <a href="/Redistricting/DistrictPlanMap/77">District 77</a>
+          </div>
+          <div class="member-image-col">
+            <img src="javascript:alert(1)" />
+          </div>
+        </div>
+        """,
+    )
+
+    assert len(malicious_rows) == 1
+    assert malicious_rows[0].bio_url is None
+    assert malicious_rows[0].portrait_url is None
+
+
+def test_parse_nc_sheriffs_rows_to_shared_row_contract_with_county_carried_in_district() -> None:
+    rows = parse_roster_rows(
+        body_key="nc_sheriffs",
+        source_url=_NC_SHERIFFS_SOURCE_URL,
+        html=_read_fixture("nc_sheriffs_directory.html"),
+    )
+
+    assert len(rows) >= 3
+    assert {tuple(sorted(asdict(row).keys())) for row in rows} == {
+        ("bio_url", "district_number", "member_name", "portrait_url", "role_label")
+    }
+    assert rows[0].member_name == "Terry S. Johnson"
+    assert rows[0].role_label == "Sheriff"
+    assert rows[0].district_number == "Alamance"
+    assert rows[0].bio_url == "https://ncsheriffs.org/people/terry-s-johnson"
+    assert rows[0].portrait_url is None
+    assert rows[1].member_name == "Chad Pennell"
+    assert rows[1].district_number == "Alexander"
+    assert rows[1].bio_url == "https://ncsheriffs.org/people/chad-pennell"
+    assert rows[2].member_name == "Shane Glenn"
+    assert rows[2].district_number == "Alleghany"
+    assert rows[2].bio_url == "https://ncsheriffs.org/people/bryan-maines"
+
+
+def test_parse_stage2_registers_of_deeds_rows_use_manifest_member_count() -> None:
+    source = _manifest_sources()["nc_registers_of_deeds_roster"]
+    rows = parse_roster_rows(
+        body_key=str(source["body_key"]),
+        source_url=str(source["source_url"]),
+        html=_read_stage2_artifact("nc_registers_of_deeds_directory.html"),
+    )
+
+    assert source["member_count"] == 100
+    assert rows == []
+
+
+def test_parse_stage2_county_commissioner_rows_from_three_counties() -> None:
+    manifest_sources = _manifest_sources()
+    expected = {
+        "nc_durham_county_commissioners_roster": "Durham",
+        "nc_wake_county_commissioners_roster": "Wake",
+        "nc_orange_county_commissioners_roster": "Orange",
+    }
+
+    for source_id, county_name in expected.items():
+        source = manifest_sources[source_id]
+        html_name = Path(str(source["artifact_path"])).name
+        rows = parse_roster_rows(
+            body_key=str(source["body_key"]),
+            source_url=str(source["source_url"]),
+            html=_read_stage2_artifact(html_name),
+        )
+
+        assert len(rows) == source["member_count"]
+        assert {tuple(sorted(asdict(row).keys())) for row in rows} == {
+            ("bio_url", "district_number", "member_name", "portrait_url", "role_label")
+        }
+        assert all(row.role_label == "County Commissioner" for row in rows)
+        assert all(row.district_number == county_name for row in rows)
+
+    orange_rows = parse_roster_rows(
+        body_key=str(manifest_sources["nc_orange_county_commissioners_roster"]["body_key"]),
+        source_url=str(manifest_sources["nc_orange_county_commissioners_roster"]["source_url"]),
+        html=_read_stage2_artifact("orange_county_commissioners.html"),
+    )
+    assert [row.member_name for row in orange_rows] == [
+        "Jean Hamilton",
+        "Amy Fowler",
+        "Jamezetta Bedford",
+        "Marilyn Carter",
+        "Sally Greene",
+        "Earl McKee",
+        "Phyllis Portie-Ascott",
+    ]
+    assert all(row.bio_url is not None for row in orange_rows)
+
+
+def test_parse_stage2_soil_water_rows_use_manifest_member_count_and_labels() -> None:
+    source = _manifest_sources()["nc_soil_water_supervisors_roster"]
+    rows = parse_roster_rows(
+        body_key=str(source["body_key"]),
+        source_url=str(source["source_url"]),
+        html=_read_stage2_artifact("nc_soil_water_supervisors_directory.html"),
+    )
+
+    assert len(rows) == source["member_count"]
+    assert all(row.role_label == "Soil and Water Supervisor" for row in rows)
+    assert rows[0].district_number is not None
+    assert rows[0].member_name == "David Michael Spruill"
+    assert rows[1].member_name == "Richard N. Reid"
+    assert rows[2].member_name == "Donna Vanhook"
+    assert all("Supervisor " not in row.member_name for row in rows[:25])
+    assert "George Tarkington" in {row.member_name for row in rows if row.district_number == "Camden"}
+    assert "Abner Wayne Staples" in {row.member_name for row in rows if row.district_number == "Camden"}
+    assert "Don Lee Keaton" in {row.member_name for row in rows if row.district_number == "Camden"}
+    assert all(
+        not row.member_name.startswith(("Secretary-Treasurer ", "Chair ", "Vice Chair ", "Vice-Chair "))
+        for row in rows
+    )
+
+
+def test_parse_roster_rows_rejects_unknown_body_key() -> None:
+    with pytest.raises(ValueError, match="Unsupported body_key"):
+        parse_roster_rows(body_key="unknown", source_url="https://example.com", html="<html></html>")
+
+
+@pytest.mark.parametrize("source", _manifest_sources_by_body_key("nc_municipal_council"))
+def test_parse_stage3_municipal_rows_from_manifest(source: dict[str, object]) -> None:
+    html_name = Path(str(source["artifact_path"])).name
+    rows = parse_roster_rows(
+        body_key=str(source["body_key"]),
+        source_url=str(source["source_url"]),
+        html=_read_stage2_artifact(html_name),
+    )
+
+    assert len(rows) == int(source["member_count"])
+    assert all("Council Seat " not in row.member_name for row in rows)
+    assert all(row.role_label.strip() != "" for row in rows)
+    assert all(row.district_number == str(source["division_name"]) for row in rows)
+    for row in rows:
+        if row.bio_url is None:
+            continue
+        _assert_same_origin_url(row.bio_url, source_url=str(source["source_url"]))
+        assert Path(row.bio_url).name != ""
+
+
+@pytest.mark.parametrize("source", _manifest_sources_by_body_key("nc_school_board"))
+def test_parse_stage3_school_board_rows_from_manifest(source: dict[str, object]) -> None:
+    html_name = Path(str(source["artifact_path"])).name
+    rows = parse_roster_rows(
+        body_key=str(source["body_key"]),
+        source_url=str(source["source_url"]),
+        html=_read_stage2_artifact(html_name),
+    )
+
+    assert len(rows) == int(source["member_count"])
+    assert all(" Board Seat " not in row.member_name for row in rows)
+    assert all(row.role_label.strip() != "" for row in rows)
+    assert all(row.district_number == str(source["division_name"]) for row in rows)
+    if str(source["source_id"]) in {"nc_dps_school_board_roster", "nc_wcpss_school_board_roster"}:
+        assert any("district" in row.role_label.lower() or "at-large" in row.role_label.lower() for row in rows)
+    for row in rows:
+        if row.bio_url is None:
+            continue
+        _assert_same_origin_url(row.bio_url, source_url=str(source["source_url"]))
+
+
+def test_parse_stage3_dps_school_board_rows_preserve_manifest_count_and_unicode_names() -> None:
+    source = _manifest_sources()["nc_dps_school_board_roster"]
+    html_name = Path(str(source["artifact_path"])).name
+    rows = parse_roster_rows(
+        body_key=str(source["body_key"]),
+        source_url=str(source["source_url"]),
+        html=_read_stage2_artifact(html_name),
+    )
+
+    assert len(rows) == int(source["member_count"])
+    assert "Emily Chávez" in {row.member_name for row in rows}
+    assert any("district" in row.role_label.lower() or "at-large" in row.role_label.lower() for row in rows)
+
+
+@pytest.mark.parametrize(
+    ("body_key", "source_url"),
+    (
+        ("nc_municipal_council", "https://raleighnc.gov/city-council"),
+        ("nc_school_board", "https://www.wcpss.net/Page/117"),
+    ),
+)
+def test_parse_stage3_rows_drop_off_origin_absolute_bio_links(body_key: str, source_url: str) -> None:
+    rows = parse_roster_rows(
+        body_key=body_key,
+        source_url=source_url,
+        html="""
+        <a href="https://evil.example/bio">Council Member Jane Doe</a>
+        """,
+    )
+
+    assert len(rows) == 1
+    assert rows[0].bio_url is None
+
+
+@pytest.mark.parametrize(
+    ("body_key", "source_url", "candidate_link"),
+    (
+        (
+            "nc_municipal_council",
+            "https://raleighnc.gov/city-council",
+            "https://raleighnc.gov:444/council/jane-doe",
+        ),
+        (
+            "nc_school_board",
+            "https://www.wcpss.net/Page/117",
+            "https://www.wcpss.net:444/Page/member-bio",
+        ),
+    ),
+)
+def test_parse_stage3_rows_drop_same_host_alternate_port_bio_links(
+    body_key: str, source_url: str, candidate_link: str
+) -> None:
+    rows = parse_roster_rows(
+        body_key=body_key,
+        source_url=source_url,
+        html=f'<a href="{candidate_link}">Council Member Jane Doe</a>',
+    )
+
+    assert len(rows) == 1
+    assert rows[0].bio_url is None

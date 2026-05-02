@@ -32,6 +32,7 @@ CREATE TABLE civic.office (
     state             TEXT CHECK (
                           state IS NULL OR state ~ '^[A-Z]{2}$'
                       ),                          -- Two-letter state code (NULL for federal-wide)
+    electoral_division_id UUID,
     is_elected        BOOLEAN NOT NULL DEFAULT TRUE,
     number_of_seats   SMALLINT NOT NULL DEFAULT 1 CHECK (number_of_seats >= 1),
     source_record_id  UUID,                       -- FK to core.source_record
@@ -40,11 +41,38 @@ CREATE TABLE civic.office (
 );
 
 CREATE UNIQUE INDEX uq_office_canonical_key
-    ON civic.office (office_level, COALESCE(state, ''), name);
+    ON civic.office (
+        office_level,
+        COALESCE(state, ''),
+        name,
+        COALESCE(electoral_division_id, '00000000-0000-0000-0000-000000000000'::uuid)
+    );
 
+CREATE INDEX idx_office_name_trgm ON civic.office USING GIN (name gin_trgm_ops);
 CREATE INDEX idx_office_level ON civic.office (office_level);
 CREATE INDEX idx_office_state ON civic.office (state) WHERE state IS NOT NULL;
 CREATE INDEX idx_office_jurisdiction ON civic.office (jurisdiction_id) WHERE jurisdiction_id IS NOT NULL;
+CREATE INDEX idx_office_electoral_division ON civic.office (electoral_division_id)
+    WHERE electoral_division_id IS NOT NULL;
+
+-- ============================================================================
+-- Office Roster Link
+-- ============================================================================
+-- Bridge table connecting canonical offices to canonical roster data sources.
+-- This remains source-registry metadata only: filing-level provenance is still
+-- owned by core.source_record + core.entity_source.
+
+CREATE TABLE civic.office_roster_link (
+    id                UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    office_id         UUID NOT NULL REFERENCES civic.office(id),
+    data_source_id    UUID NOT NULL REFERENCES core.data_source(id),
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT uq_office_roster_link_pair UNIQUE (office_id, data_source_id)
+);
+
+CREATE INDEX idx_office_roster_link_office_id ON civic.office_roster_link (office_id);
+CREATE INDEX idx_office_roster_link_data_source_id ON civic.office_roster_link (data_source_id);
 
 -- ============================================================================
 -- Electoral Division
@@ -69,6 +97,7 @@ CREATE TABLE civic.electoral_division (
     ocd_id            TEXT CHECK (
                           ocd_id IS NULL OR ocd_id LIKE 'ocd-division/%'
                       ),                          -- Open Civic Data ID (Stage 4)
+    geometry          GEOMETRY(MultiPolygon, 4326),
     is_container      BOOLEAN NOT NULL DEFAULT FALSE,
     parent_id         UUID REFERENCES civic.electoral_division(id),
     boundary_year     SMALLINT CHECK (
@@ -91,6 +120,59 @@ CREATE INDEX idx_electoral_division_type ON civic.electoral_division (division_t
 CREATE INDEX idx_electoral_division_state ON civic.electoral_division (state) WHERE state IS NOT NULL;
 CREATE UNIQUE INDEX uq_electoral_division_ocd_id ON civic.electoral_division (ocd_id) WHERE ocd_id IS NOT NULL;
 CREATE INDEX idx_electoral_division_ocd_id ON civic.electoral_division (ocd_id) WHERE ocd_id IS NOT NULL;
+CREATE INDEX idx_electoral_division_geometry
+    ON civic.electoral_division USING GIST (geometry)
+    WHERE geometry IS NOT NULL;
+
+ALTER TABLE civic.office
+    ADD CONSTRAINT fk_office_electoral_division
+    FOREIGN KEY (electoral_division_id) REFERENCES civic.electoral_division(id);
+
+-- ============================================================================
+-- Election
+-- ============================================================================
+-- Canonical election event for a jurisdiction scope. This normalizes election
+-- identity for reuse by contests, filing deadlines, and reporting periods.
+
+CREATE TABLE civic.election (
+    id                    UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    jurisdiction_scope    TEXT NOT NULL CHECK (jurisdiction_scope IN (
+                              'federal', 'state', 'county', 'municipal', 'judicial',
+                              'school_district', 'special_district'
+                          )),
+    state                 TEXT CHECK (
+                              state IS NULL OR state ~ '^[A-Z]{2}$'
+                          ),
+    county                TEXT,
+    municipality          TEXT,
+    election_date         DATE NOT NULL,
+    election_type         TEXT NOT NULL CHECK (election_type IN (
+                              'general', 'primary', 'runoff', 'special', 'recall'
+                          )),
+    is_special            BOOLEAN NOT NULL DEFAULT FALSE,
+    office_id             UUID REFERENCES civic.office(id),
+    electoral_division_id UUID REFERENCES civic.electoral_division(id),
+    source_record_id      UUID,                   -- FK to core.source_record
+    created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at            TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX uq_election_natural_key
+    ON civic.election (
+        jurisdiction_scope,
+        COALESCE(state, ''),
+        COALESCE(county, ''),
+        COALESCE(municipality, ''),
+        election_date,
+        election_type,
+        is_special,
+        COALESCE(office_id, '00000000-0000-0000-0000-000000000000'::uuid),
+        COALESCE(electoral_division_id, '00000000-0000-0000-0000-000000000000'::uuid)
+    );
+
+CREATE INDEX idx_election_date ON civic.election (election_date);
+CREATE INDEX idx_election_scope ON civic.election (jurisdiction_scope);
+CREATE INDEX idx_election_state ON civic.election (state) WHERE state IS NOT NULL;
 
 -- ============================================================================
 -- Contest
@@ -107,6 +189,7 @@ CREATE TABLE civic.contest (
                               'general', 'primary', 'runoff', 'special', 'recall'
                           )),
     office_id             UUID NOT NULL REFERENCES civic.office(id),
+    election_id           UUID REFERENCES civic.election(id),
     electoral_division_id UUID REFERENCES civic.electoral_division(id),
     number_of_seats       SMALLINT NOT NULL DEFAULT 1 CHECK (number_of_seats >= 1),
     filing_deadline       DATE,
@@ -125,10 +208,106 @@ CREATE UNIQUE INDEX uq_contest_canonical_key
         election_type
     );
 
+CREATE INDEX idx_contest_name_trgm ON civic.contest USING GIN (name gin_trgm_ops);
 CREATE INDEX idx_contest_office ON civic.contest (office_id);
 CREATE INDEX idx_contest_electoral_division ON civic.contest (electoral_division_id)
     WHERE electoral_division_id IS NOT NULL;
+CREATE INDEX idx_contest_election_id ON civic.contest (election_id) WHERE election_id IS NOT NULL;
 CREATE INDEX idx_contest_election_date ON civic.contest (election_date) WHERE election_date IS NOT NULL;
+
+-- ============================================================================
+-- Contest Result
+-- ============================================================================
+-- Canonical candidate-level result rows for one contest and one source record.
+
+CREATE TABLE civic.contest_result (
+    id                UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    contest_id        UUID NOT NULL REFERENCES civic.contest(id),
+    source_record_id  UUID NOT NULL REFERENCES core.source_record(id),
+    candidate_name    TEXT NOT NULL,
+    party             TEXT,
+    votes             INTEGER NOT NULL CHECK (votes >= 0),
+    vote_pct          NUMERIC(6,2) CHECK (vote_pct IS NULL OR (vote_pct >= 0 AND vote_pct <= 100)),
+    is_certified      BOOLEAN NOT NULL DEFAULT FALSE,
+    is_winner         BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT uq_contest_result_canonical UNIQUE (contest_id, source_record_id, candidate_name)
+);
+
+CREATE INDEX idx_contest_result_contest_id ON civic.contest_result (contest_id);
+CREATE INDEX idx_contest_result_source_record_id ON civic.contest_result (source_record_id);
+
+-- ============================================================================
+-- Filing Deadline
+-- ============================================================================
+-- Filing windows and cutoffs associated with elections and offices.
+
+CREATE TABLE civic.filing_deadline (
+    id                    UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    election_id           UUID NOT NULL REFERENCES civic.election(id),
+    office_id             UUID NOT NULL REFERENCES civic.office(id),
+    electoral_division_id UUID REFERENCES civic.electoral_division(id),
+    -- Jurisdiction columns are intentionally denormalized for direct filtering
+    -- without requiring a join to civic.election. Loaders must copy these values
+    -- from the linked election row to keep both representations consistent.
+    jurisdiction_scope    TEXT NOT NULL CHECK (jurisdiction_scope IN (
+                              'federal', 'state', 'county', 'municipal', 'judicial',
+                              'school_district', 'special_district'
+                          )),
+    state                 TEXT CHECK (
+                              state IS NULL OR state ~ '^[A-Z]{2}$'
+                          ),
+    county                TEXT,
+    municipality          TEXT,
+    deadline_date         DATE NOT NULL,
+    deadline_kind         TEXT NOT NULL CHECK (deadline_kind IN (
+                              'candidate_filing_open', 'candidate_filing', 'candidate_withdrawal', 'ballot_access'
+                          )),
+    source_record_id      UUID,                   -- FK to core.source_record
+    created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at            TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX uq_filing_deadline_natural_key
+    ON civic.filing_deadline (
+        election_id,
+        office_id,
+        COALESCE(electoral_division_id, '00000000-0000-0000-0000-000000000000'::uuid),
+        deadline_kind
+    );
+
+CREATE INDEX idx_filing_deadline_date ON civic.filing_deadline (deadline_date);
+CREATE INDEX idx_filing_deadline_scope ON civic.filing_deadline (jurisdiction_scope);
+
+-- ============================================================================
+-- Reporting Period
+-- ============================================================================
+-- Reporting period windows and due dates associated with elections.
+
+CREATE TABLE civic.reporting_period (
+    id                    UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    election_id           UUID NOT NULL REFERENCES civic.election(id),
+    period_name           TEXT NOT NULL,
+    period_start          DATE NOT NULL,
+    period_end            DATE NOT NULL,
+    report_due_date       DATE NOT NULL,
+    is_pre_election       BOOLEAN NOT NULL DEFAULT FALSE,
+    is_post_election      BOOLEAN NOT NULL DEFAULT FALSE,
+    disclosure_kind       TEXT CHECK (disclosure_kind IN (
+                              'periodic', 'pre_election', 'post_election', 'special'
+                          )),
+    source_record_id      UUID,                   -- FK to core.source_record
+    created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT ck_reporting_period_date_order CHECK (period_end >= period_start)
+);
+
+CREATE UNIQUE INDEX uq_reporting_period_natural_key
+    ON civic.reporting_period (election_id, period_name);
+
+CREATE INDEX idx_reporting_period_range ON civic.reporting_period (period_start, period_end);
+CREATE INDEX idx_reporting_period_due_date ON civic.reporting_period (report_due_date);
 
 -- ============================================================================
 -- Candidacy
@@ -141,10 +320,16 @@ CREATE TABLE civic.candidacy (
     person_id         UUID NOT NULL REFERENCES core.person(id),
     contest_id        UUID NOT NULL REFERENCES civic.contest(id),
     party             TEXT,
+    name_on_ballot    TEXT,                       -- Ballot display name captured from source
+    is_unexpired_term BOOLEAN NOT NULL DEFAULT FALSE, -- Unexpired-term indicator from source feed
+    raw_fields        JSONB NOT NULL DEFAULT '{}'::jsonb, -- Full source row snapshot for provenance/debugging
+    committee_id      UUID REFERENCES cf.committee(id), -- Optional canonical committee UUID when present
     filing_date       DATE,
     status            TEXT,                       -- filed, qualified, withdrawn, winner, lost
     incumbent_challenge TEXT,                     -- I, C, O (FEC convention)
     candidate_number  TEXT,                       -- Source-assigned candidate number
+    name_on_ballot    TEXT,                       -- Canonical ballot-display name from civic source
+    committee_id      UUID,                       -- Linked controlling committee (cf.committee.id when resolved)
     source_record_id  UUID,                       -- FK to core.source_record
     created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -156,6 +341,8 @@ CREATE UNIQUE INDEX uq_candidacy_canonical_key
 CREATE INDEX idx_candidacy_person ON civic.candidacy (person_id);
 CREATE INDEX idx_candidacy_contest ON civic.candidacy (contest_id);
 CREATE INDEX idx_candidacy_status ON civic.candidacy (status) WHERE status IS NOT NULL;
+CREATE INDEX idx_candidacy_committee_id ON civic.candidacy (committee_id) WHERE committee_id IS NOT NULL;
+CREATE INDEX idx_candidacy_name_on_ballot ON civic.candidacy (name_on_ballot) WHERE name_on_ballot IS NOT NULL;
 
 -- ============================================================================
 -- Officeholding
@@ -201,6 +388,18 @@ ALTER TABLE civic.electoral_division
 
 ALTER TABLE civic.contest
     ADD CONSTRAINT fk_contest_source_record
+    FOREIGN KEY (source_record_id) REFERENCES core.source_record(id);
+
+ALTER TABLE civic.election
+    ADD CONSTRAINT fk_election_source_record
+    FOREIGN KEY (source_record_id) REFERENCES core.source_record(id);
+
+ALTER TABLE civic.filing_deadline
+    ADD CONSTRAINT fk_filing_deadline_source_record
+    FOREIGN KEY (source_record_id) REFERENCES core.source_record(id);
+
+ALTER TABLE civic.reporting_period
+    ADD CONSTRAINT fk_reporting_period_source_record
     FOREIGN KEY (source_record_id) REFERENCES core.source_record(id);
 
 ALTER TABLE civic.candidacy
@@ -333,12 +532,32 @@ CREATE TRIGGER trg_office_updated_at
     BEFORE UPDATE ON civic.office
     FOR EACH ROW EXECUTE FUNCTION core.set_updated_at();
 
+CREATE TRIGGER trg_office_roster_link_updated_at
+    BEFORE UPDATE ON civic.office_roster_link
+    FOR EACH ROW EXECUTE FUNCTION core.set_updated_at();
+
 CREATE TRIGGER trg_electoral_division_updated_at
     BEFORE UPDATE ON civic.electoral_division
     FOR EACH ROW EXECUTE FUNCTION core.set_updated_at();
 
 CREATE TRIGGER trg_contest_updated_at
     BEFORE UPDATE ON civic.contest
+    FOR EACH ROW EXECUTE FUNCTION core.set_updated_at();
+
+CREATE TRIGGER trg_contest_result_updated_at
+    BEFORE UPDATE ON civic.contest_result
+    FOR EACH ROW EXECUTE FUNCTION core.set_updated_at();
+
+CREATE TRIGGER trg_election_updated_at
+    BEFORE UPDATE ON civic.election
+    FOR EACH ROW EXECUTE FUNCTION core.set_updated_at();
+
+CREATE TRIGGER trg_filing_deadline_updated_at
+    BEFORE UPDATE ON civic.filing_deadline
+    FOR EACH ROW EXECUTE FUNCTION core.set_updated_at();
+
+CREATE TRIGGER trg_reporting_period_updated_at
+    BEFORE UPDATE ON civic.reporting_period
     FOR EACH ROW EXECUTE FUNCTION core.set_updated_at();
 
 CREATE TRIGGER trg_candidacy_updated_at

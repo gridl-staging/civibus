@@ -19,12 +19,11 @@ from core.db import get_connection
 from .download import download_ny_csv
 from .load import (
     LoadResult,
-    load_ny_contributions_with_filings,
-    load_ny_expenditures_with_filings,
+    _NY_PARSER_FN,
+    _load_ny_with_filings,
 )
-from .parse import parse_contributions, parse_expenditures
 
-_SUPPORTED_DATA_TYPES = ("contributions", "expenditures")
+_SUPPORTED_DATA_TYPES = ("contributions", "expenditures", "independent_expenditures")
 
 
 def _non_negative_int(raw_value: str) -> int:
@@ -52,7 +51,11 @@ def _build_argument_parser() -> argparse.ArgumentParser:
         choices=list(_SUPPORTED_DATA_TYPES),
         help="NY data type to ingest",
     )
-    parser.add_argument("--limit", type=_non_negative_int, help="Max rows to load")
+    parser.add_argument(
+        "--limit",
+        type=_non_negative_int,
+        help="Max rows to process (download is also capped when using --download)",
+    )
     parser.add_argument("--dry-run", action="store_true", help="Parse and count without writing to DB")
     return parser
 
@@ -75,14 +78,22 @@ def _print_load_summary(result: LoadResult, data_type: str) -> None:
     )
 
 
-def _resolve_input_path(args: argparse.Namespace) -> tuple[Path, tempfile.TemporaryDirectory[str] | None]:
+def _resolve_input_path(
+    args: argparse.Namespace,
+    *,
+    download_limit: int | None = None,
+) -> tuple[Path, tempfile.TemporaryDirectory[str] | None]:
     """Resolve the input CSV path — either from --path or by downloading."""
     if args.path is not None:
         return args.path, None
 
     temp_dir = tempfile.TemporaryDirectory(prefix=f"ny-{args.data_type}-")
     try:
-        download_path = download_ny_csv(args.data_type, dest_dir=Path(temp_dir.name))
+        download_path = download_ny_csv(
+            args.data_type,
+            dest_dir=Path(temp_dir.name),
+            limit=download_limit,
+        )
         return download_path, temp_dir
     except Exception:
         temp_dir.cleanup()
@@ -92,7 +103,7 @@ def _resolve_input_path(args: argparse.Namespace) -> tuple[Path, tempfile.Tempor
 def _count_rows(path: Path, *, data_type: str, limit: int | None) -> int:
     """Dry-run: parse and count rows without loading."""
     normalized = _validate_data_type(data_type)
-    parser = parse_contributions(path) if normalized == "contributions" else parse_expenditures(path)
+    parser = _NY_PARSER_FN[normalized](path)
 
     count = 0
     for index, _row in enumerate(parser, start=1):
@@ -111,9 +122,7 @@ def _load_path(
 ) -> LoadResult:
     """Load a CSV file into the database."""
     normalized = _validate_data_type(data_type)
-    if normalized == "contributions":
-        return load_ny_contributions_with_filings(connection, input_path, limit=limit)
-    return load_ny_expenditures_with_filings(connection, input_path, limit=limit)
+    return _load_ny_with_filings(connection, input_path, data_type=normalized, limit=limit)
 
 
 def run_ny_refresh(
@@ -126,7 +135,7 @@ def run_ny_refresh(
     """Entry point for the refresh runner. Downloads and loads NY data.
 
     Args:
-        data_type: "contributions" or "expenditures"
+        data_type: "contributions", "expenditures", or "independent_expenditures"
         path: Path to a local CSV file (mutually exclusive with download)
         download: If True, download from SODA API first
         limit: Max rows to load (None = all)
@@ -150,7 +159,7 @@ def run_ny_refresh(
     temp_dir: tempfile.TemporaryDirectory[str] | None = None
     connection: psycopg.Connection | None = None
     try:
-        input_path, temp_dir = _resolve_input_path(args)
+        input_path, temp_dir = _resolve_input_path(args, download_limit=limit)
         connection = get_connection()
         load_result = _load_path(connection, input_path, data_type=data_type, limit=limit)
         connection.commit()
@@ -168,11 +177,13 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         if args.dry_run:
-            input_path, temp_dir = _resolve_input_path(args)
-            count = _count_rows(input_path, data_type=args.data_type, limit=args.limit)
-            print(f"NY {args.data_type} dry-run: parsed {count} rows")
-            if temp_dir is not None:
-                temp_dir.cleanup()
+            input_path, temp_dir = _resolve_input_path(args, download_limit=args.limit)
+            try:
+                count = _count_rows(input_path, data_type=args.data_type, limit=args.limit)
+            finally:
+                if temp_dir is not None:
+                    temp_dir.cleanup()
+            print(f"NY {args.data_type} dry-run: parsed_row_count={count}")
             return 0
 
         load_result = run_ny_refresh(

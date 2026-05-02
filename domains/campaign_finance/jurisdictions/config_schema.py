@@ -39,6 +39,8 @@ class DataSourceCoverageConfig(JurisdictionConfigBaseModel):
 class DataSourceConfig(JurisdictionConfigBaseModel):
     name: str
     url: str
+    date_start_selector: str | None = None
+    date_end_selector: str | None = None
     bulk_download_url: str | None
     api_base_url: str | None
     format: DataSourceFormatLiteral

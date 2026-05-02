@@ -13,10 +13,13 @@ import {
   buildCandidacyRoutePath,
   buildContestDetailPath,
   buildContestRoutePath,
+  buildElectionDateAggregatePath,
+  buildElectionDateRoutePath,
   buildOfficeholdingDetailPath,
   buildOfficeholdingRoutePath,
   buildOfficeDetailPath,
   buildOfficeRoutePath,
+  buildUpcomingElectionTimelinePath,
   type CandidacyDetailResponse,
   type ContestDetailResponse,
   type OfficeholdingDetailResponse,
@@ -30,6 +33,7 @@ const CONTEST_ID = "77777777-7777-4777-8777-777777777777";
 const CANDIDACY_ID = "88888888-8888-4888-8888-888888888888";
 const PERSON_ID = "11111111-1111-4111-8111-111111111111";
 const ELECTORAL_DIVISION_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+const ELECTION_DATE = "2026-11-03";
 const testFilePath = fileURLToPath(import.meta.url);
 const repoRoot = resolve(dirname(testFilePath), "../../../..");
 const civicTypesSource = readFileSync(resolve(repoRoot, "domains/civics/types/models.py"), "utf8");
@@ -88,6 +92,19 @@ describe("office detail contract", () => {
     );
   });
 
+  it("builds backend-owned election aggregate and timeline paths", () => {
+    expect(buildElectionDateAggregatePath(ELECTION_DATE)).toBe(`/v1/elections/${ELECTION_DATE}`);
+    expect(buildUpcomingElectionTimelinePath()).toBe("/v1/elections/timeline/upcoming");
+  });
+
+  it("builds slashless election-date route paths", () => {
+    const electionPath = new URL(buildElectionDateRoutePath(ELECTION_DATE), "https://web.civibus.local");
+
+    expect(electionPath.pathname).toBe(`/election/${ELECTION_DATE}`);
+    expect(electionPath.search).toBe("");
+    expect(electionPath.hash).toBe("");
+  });
+
   it("builds UUID-only frontend contest/candidacy/officeholding route paths", () => {
     const contestPath = new URL(buildContestRoutePath(CONTEST_ID), "https://web.civibus.local");
     const candidacyPath = new URL(buildCandidacyRoutePath(CANDIDACY_ID), "https://web.civibus.local");
@@ -124,6 +141,12 @@ describe("office detail contract", () => {
     expect(buildOfficeholdingRoutePath(maliciousId)).toBe(
       "/officeholding/..%2Fsearch%3Fentity_type%3Doffice"
     );
+    expect(buildElectionDateAggregatePath(maliciousId)).toBe(
+      "/v1/elections/..%2Fsearch%3Fentity_type%3Doffice"
+    );
+    expect(buildElectionDateRoutePath(maliciousId)).toBe(
+      "/election/..%2Fsearch%3Fentity_type%3Doffice"
+    );
   });
 
   it("matches OfficeResponse fields for officeholder, completeness, and source provenance", () => {
@@ -144,6 +167,51 @@ describe("office detail contract", () => {
       is_elected: true,
       number_of_seats: 1,
       current_officeholders: [officeholder],
+      current_holder_card: {
+        officeholding_id: OFFICEHOLDING_ID,
+        person_id: PERSON_ID,
+        person_name: "Jane Officeholder",
+        holder_status: "elected",
+        electoral_division_id: ELECTORAL_DIVISION_ID,
+        electoral_division_type: "county",
+        electoral_division_state: "NC",
+        valid_period_lower: "2025-01-01",
+        valid_period_upper: null,
+        date_precision: "day"
+      },
+      officeholding_timeline: [
+        {
+          officeholding_id: OFFICEHOLDING_ID,
+          person_id: PERSON_ID,
+          person_name: "Jane Officeholder",
+          holder_status: "elected",
+          electoral_division_id: ELECTORAL_DIVISION_ID,
+          electoral_division_type: "county",
+          electoral_division_state: "NC",
+          valid_period_lower: "2025-01-01",
+          valid_period_upper: null,
+          date_precision: "day",
+          is_active: true,
+          term_ended: false
+        }
+      ],
+      recent_contests: [
+        {
+          contest_id: CONTEST_ID,
+          contest_name: "Governor 2026 General Election",
+          election_date: "2026-11-03",
+          election_type: "general",
+          filing_deadline: "2026-09-01",
+          electoral_division_id: ELECTORAL_DIVISION_ID,
+          electoral_division_type: "county",
+          electoral_division_state: "NC",
+          is_partisan: true,
+          candidate_list_incomplete: false
+        }
+      ],
+      selected_electoral_division_id: ELECTORAL_DIVISION_ID,
+      selected_electoral_division_type: "county",
+      selected_electoral_division_state: "NC",
       incomplete_data_states: ["no_officeholder", "no_active_contest"],
       sources: [
         {
@@ -159,6 +227,10 @@ describe("office detail contract", () => {
     } satisfies OfficeDetailResponse;
 
     expect(response.current_officeholders[0].person_name).toBe("Jane Officeholder");
+    expect(response.current_holder_card?.valid_period_lower).toBe("2025-01-01");
+    expect(response.officeholding_timeline[0].is_active).toBe(true);
+    expect(response.recent_contests[0].contest_id).toBe(CONTEST_ID);
+    expect(response.selected_electoral_division_type).toBe("county");
     expect(response.incomplete_data_states).toEqual(["no_officeholder", "no_active_contest"]);
     expect(response.sources).toHaveLength(1);
   });

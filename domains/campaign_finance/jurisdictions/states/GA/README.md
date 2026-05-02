@@ -16,8 +16,9 @@ Configured sources:
 
 - Contributions search export (`Campaign_ByContributions.aspx`): `format: "web_portal"`, anonymous access, stateful ASP.NET workflow, export attachment `StateEthicsReport.csv`.
 - Expenditures search export (`Campaign_ByExpenditures.aspx`): `format: "web_portal"`, anonymous access, stateful ASP.NET workflow, export attachment `EthicsReportExport.xls` (HTML-table payload).
+- Independent expenditures search export (`Campaign_ByIEFiler.aspx`): configured as a tracked portal surface, but the URL returned HTTP 404 during the 2026-04-29 recheck so it remains documented-but-unproven.
 
-No official bulk-download URL or API base URL was found on campaign search surfaces during verification, so both are explicitly `null` in `config.yaml`.
+No official bulk-download URL or API base URL was found on campaign search surfaces during verification, so both are explicitly `null` in `config.yaml` for all three tracked portal surfaces.
 
 ## Coverage notes
 
@@ -26,6 +27,7 @@ Observed search and export behavior indicates:
 - Earliest reachable filing-year coverage is at least 2000.
 - Coverage includes sub-jurisdictions (`covers_sub_jurisdictions: true`) based on observed county and municipal office surfaces/results.
 - Transaction coverage includes contributions, loans (via the contribution search export `Type` field), and expenditures in this stage; additional transaction classes may require separate portal flows.
+- Independent expenditures are modeled as a separate portal surface, but the currently configured IE URL is still deferred pending recovery from the observed 2026-04-29 HTTP 404.
 
 ## Portal constraints and access behavior
 
@@ -50,11 +52,12 @@ See `data_semantics.md` and `config.yaml` `known_issues` for field-level normali
 ## Last verified date
 
 Source access and portal workflow verified: 2026-03-26.
+Independent expenditures surface re-check: 2026-04-29 (HTTP 404 at `Campaign_ByIEFiler.aspx`).
 Laws research verified: 2026-03-14.
 
 ## Update instructions
 
-Re-verify by running a one-page contribution search, then paginate once and trigger export in the same browser context to confirm hidden-state continuity and export behavior.
+Re-verify by running a one-page contribution search, then paginate once and trigger export in the same browser context to confirm hidden-state continuity and export behavior. Re-check the IE URL separately until the HTTP 404 is resolved.
 
 Recommended refresh steps:
 

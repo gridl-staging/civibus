@@ -2,6 +2,7 @@
   import { env } from "$env/dynamic/public";
   import { page } from "$app/stores";
   import Breadcrumb from "$lib/breadcrumb/Breadcrumb.svelte";
+  import { buildMapLayerVisibilityDefaults } from "$lib/config/app";
   import DetailPage from "$lib/civic-detail/DetailPage.svelte";
   import { buildOfficeDetailMetadataFromDetail } from "$lib/civic-detail/presentation";
   import SeoHead from "$lib/seo/SeoHead.svelte";
@@ -11,18 +12,18 @@
 
   export let data: PageData;
 
-  $: routeMetadata = buildOfficeDetailMetadataFromDetail(data);
+  $: routeMetadata = buildOfficeDetailMetadataFromDetail(data.office);
   $: detailRouteSeo = buildDetailRouteSeo({
     metadata: routeMetadata,
     ogType: "website",
     schemaType: "GovernmentOffice",
-    name: data.name,
+    name: data.office.name,
     pageUrl: $page.url,
     publicOrigin: env.PUBLIC_ORIGIN
   });
   $: breadcrumbCrumbs = [
     { label: "Home", href: "/" },
-    { label: data.name }
+    { label: data.office.name }
   ];
   $: breadcrumbJsonLd = buildBreadcrumbJsonLd({
     crumbs: breadcrumbCrumbs,
@@ -33,9 +34,15 @@
     "@context": "https://schema.org",
     "@graph": [detailJsonLdWithoutContext, breadcrumbJsonLd]
   } as JsonLdObject;
+  $: officeMap = {
+    pageLevel: "state" as const,
+    layerVisibility: buildMapLayerVisibilityDefaults("state"),
+    geometryByLevel: data.geometryByLevel ?? {},
+    stateCode: data.office.selected_electoral_division_state?.toUpperCase() ?? null
+  };
 </script>
 
 <SeoHead headModel={detailRouteSeo.headModel} jsonLd={detailPageJsonLd} />
 
 <Breadcrumb crumbs={breadcrumbCrumbs} />
-<DetailPage entityType="office" {data} />
+<DetailPage entityType="office" data={data.office} contestMap={officeMap} />

@@ -10,8 +10,10 @@ from unittest.mock import patch
 
 import pytest
 
+from domains.campaign_finance.ingest.dark_money import parser as dark_money_parser
 from domains.campaign_finance.ingest.dark_money.parser import (
     IRS_527_COLUMNS_BY_RECORD_TYPE,
+    _recency_cutoff_date,
     iter_irs_527_rows,
     read_irs_527_records,
 )
@@ -286,3 +288,96 @@ class TestReadIrs527RecordsRecencyFilter:
         filings = [r for r in records if isinstance(r, Filing8872)]
         # 2020 filing (period_begin_date 2020-01-01) should be filtered
         assert all(f.period_begin_date >= date(2022, 1, 1) for f in filings)
+
+    def test_recency_cutoff_date_computes_current_year_minus_4(self, monkeypatch: pytest.MonkeyPatch):
+        class FixedDate(date):
+            @classmethod
+            def today(cls) -> "FixedDate":
+                return cls(2026, 4, 10)
+
+        monkeypatch.setattr(dark_money_parser, "date", FixedDate)
+
+        assert _recency_cutoff_date() == date(2022, 1, 1)
+
+
+# ==========================================================================
+# Nullable date cutoff regression tests
+# ==========================================================================
+
+
+class TestReadIrs527NullableDateCutoff:
+    """Records with null dates must be included, not crash on cutoff comparison."""
+
+    @staticmethod
+    def _write_test_file(tmp_path: Path, lines: list[str]) -> Path:
+        p = tmp_path / "test_null_dates.txt"
+        p.write_text("".join(lines), encoding="latin-1")
+        return p
+
+    def test_type_a_null_contribution_date_included(self, tmp_path: Path):
+        fields = [
+            "A",
+            "300000001",
+            "A99999",
+            "TEST ORG",
+            "12-3456789",
+            "TEST DONOR",
+            "100 MAIN",
+            "",
+            "CITY",
+            "ST",
+            "12345",
+            "",
+            "ACME",
+            "1000.00",
+            "ENG",
+            "2000.00",
+            "",
+        ]
+        line = "|".join(fields) + "|\n"
+        txt = self._write_test_file(tmp_path, [line])
+        records = list(read_irs_527_records(txt))
+        contribs = [r for r in records if isinstance(r, Contribution527)]
+        assert len(contribs) == 1
+        assert contribs[0].contribution_date is None
+
+    def test_type_b_null_expenditure_date_and_purpose_included(self, tmp_path: Path):
+        fields = [
+            "B",
+            "300000001",
+            "B99999",
+            "TEST ORG",
+            "12-3456789",
+            "VENDOR",
+            "200 ELM",
+            "",
+            "TOWN",
+            "CA",
+            "90210",
+            "",
+            "MEDIA",
+            "5000.00",
+            "CONSULT",
+            "",
+            "",
+        ]
+        line = "|".join(fields) + "|\n"
+        txt = self._write_test_file(tmp_path, [line])
+        records = list(read_irs_527_records(txt))
+        expenditures = [r for r in records if isinstance(r, Expenditure527)]
+        assert len(expenditures) == 1
+        assert expenditures[0].expenditure_date is None
+        assert expenditures[0].purpose is None
+
+    def test_type_2_null_period_dates_included(self, tmp_path: Path):
+        fields = ["2", "8872", "300000001", "", ""]
+        fields.extend(["0", "0", "0", "0"])
+        fields.append("TEST ORG")
+        fields.append("12-3456789")
+        fields.extend([""] * (49 - len(fields)))
+        line = "|".join(fields) + "|\n"
+        txt = self._write_test_file(tmp_path, [line])
+        records = list(read_irs_527_records(txt))
+        filings = [r for r in records if isinstance(r, Filing8872)]
+        assert len(filings) == 1
+        assert filings[0].period_begin_date is None

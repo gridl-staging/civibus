@@ -1,3 +1,7 @@
+"""
+Stub summary for MAR18 property API models.
+"""
+
 from __future__ import annotations
 
 from datetime import date

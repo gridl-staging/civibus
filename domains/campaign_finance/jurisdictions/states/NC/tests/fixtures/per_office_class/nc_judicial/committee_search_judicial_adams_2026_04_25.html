@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+
+<html>
+	<head>
+		<meta http-equiv="Content-Type" content="text/html; charset=utf-8"/>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1.0">
+		<meta http-equiv="X-UA-Compatible" content="IE=edge">
+
+		<title>Campaign Document Search By Entity - Results</title>
+
+        <link rel="icon" href="/Content/img/favicon.ico" />
+		<link href='https://fonts.googleapis.com/css?family=Open+Sans:400,300,600,700' rel='stylesheet' type='text/css'>
+		<!-- Add local styles, mostly for plugins css file -->
+		
+    <link href="/Scripts/plugins/jquery-ui/jquery-ui.min.css" rel="stylesheet"/>
+ 
+    <link href="/Content/plugins/igniteui/css/themes/bootstrap4/infragistics.theme.css" rel="stylesheet"/>
+ 
+    <link href="/Content/plugins/igniteui/css/structure/infragistics.css" rel="stylesheet"/>
+
+    <link href="/Content/css/seims.css" rel="stylesheet"/>
+
+    
+
+		<!-- Primary Inspinia style -->     
+		<link href="/Content/css/bootstrap.min.css" rel="stylesheet"/>
+<link href="/Content/css/animate.css" rel="stylesheet"/>
+<link href="/Content/css/style.css" rel="stylesheet"/>
+
+
+		<link href="/Content/font-awesome/css/font-awesome.min.css" rel="stylesheet"/>
+
+	</head>
+
+	<body class="top-navigation">
+		<!-- Page wraper -->
+		<div id="page-wrapper" class="gray-bg">
+
+			<!-- Top Navbar -->
+			<div class="row border-bottom white-bg" style="white-space: nowrap;">
+	<nav class="navbar navbar-static-top" role="navigation" style="padding: 5px;">
+		<div class="navbar-header">
+			<button aria-controls="navbar" aria-expanded="false" data-target="#navbar" data-toggle="collapse" class="navbar-toggle collapsed" type="button">
+				<i class="fa fa-reorder"></i>
+			</button>
+			<a href="https://www.ncsbe.gov/"><img style="padding-right: 12px;" src="/Content/img/logo_sbe_small.png" /></a>
+		</div>
+		<div class="navbar-collapse collapse navbar-right" id="navbar" style="width:224px;">
+			<ul id="menu_mobile" class="nav navbar-nav" style="float:right;">
+                <li class="dropdown hidden-xs">
+                    <a aria-expanded="false" role="button" class="dropdown-toggle" data-toggle="dropdown">Applications<span class="caret"></span></a>
+                    <ul id="menu_desktop" role="menu" class="dropdown-menu">
+                        
+                    </ul>
+                </li>
+				
+				
+			</ul>
+		</div>
+        <div class="text-center" style="white-space: normal;">
+            <h2 style="margin-top: 12px;">Campaign Document Search By Entity - Results</h2>
+        </div>
+	</nav>
+</div>
+
+
+			<div class="container-fluid">
+				<div class="wrapper-content">
+					<!-- Main view  -->
+					
+
+
+<form action="/CFOrgLkup/CommitteeGeneralResult/" method="post">    <div class="ibox float-e-margins">
+        <div class="ibox-content">
+            <div style="text-align:center;" class="font-bold">
+                <a class="btn btn-success" href="/CFOrgLkup/">New Search</a>
+                <br />
+                <br />
+                Click on one of the link(s) below to view the available documents for that committee.
+                <br />
+                It may take a few seconds to return all of the documents.
+            </div>
+            
+            <div class="font-bold">
+                <br />
+                Results Returned: 1
+            </div>                     
+            <div id="divResults">
+                    <table id="gridCommitteeResults"></table>
+            </div>
+        </div>
+    </div>
+</form>
+				</div>
+			</div>
+
+			<!-- Footer -->
+			
+<div class="footer">
+    <div class="pull-right">
+        
+        
+    </div>
+	<div>
+		© 2014-2026
+		<a type="button" class="btn-link" href="https://www.ncsbe.gov/" style="white-space: nowrap;"><strong>NC State Board of Elections</strong></a>
+	</div>
+</div>
+
+<div class="modal inmodal" id="myModal" tabindex="-1" role="dialog" aria-hidden="true" style="display: none;">
+    <div class="modal-dialog">
+		<div class="modal-content">
+            <div class="modal-header">
+                <button type="button" class="close" data-dismiss="modal">
+					<span aria-hidden="true">×</span>
+					<span class="sr-only">Close</span>
+                </button>
+                <h4 class="modal-title">Site Feedback</h4>
+                <small class="font-bold">Please fill out the form and click Submit to provide feedback.</small>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+					<label>Feedback</label>
+					<textarea class="form-control" placeholder="Enter feedback here..." style="height:100px; resize: none;"></textarea>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-white" data-dismiss="modal">Close</button>
+                <button type="button" class="btn btn-primary">Submit</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+
+		</div>
+		<!-- End page wrapper-->
+		<!-- Section for main scripts render -->
+		<script src="/Scripts/jquery-2.1.1.min.js"></script>
+
+		<script src="/Scripts/bootstrap.min.js"></script>
+
+		<script src="/Scripts/plugins/slimscroll/jquery.slimscroll.min.js"></script>
+
+		<script src="/Scripts/inspinia.js"></script>
+
+
+		<!-- Handler for local scripts -->
+
+		<!-- Global site tag (gtag.js) - Google Analytics -->
+		<script async src="https://www.googletagmanager.com/gtag/js?id=UA-159880906-2"></script>
+		<script>
+			window.dataLayer = window.dataLayer || [];
+			function gtag() { dataLayer.push(arguments); }
+			gtag('js', new Date());
+
+			gtag('config', 'UA-159880906-2');
+		</script>
+
+		<script type="text/javascript">
+			//load the menus with the sites in /Content/sites.txt
+			$(document).ready(function () {
+				var fileSites = new XMLHttpRequest();
+				var arrSites;
+				var timeDayHourMinute = String(new Date().getDate()) + '-' + String(new Date().getHours()) + '-' + String(new Date().getMinutes());
+
+				fileSites.open('get', "/Content/sites.txt" + '?v=' + timeDayHourMinute, false);
+				fileSites.send(null);
+
+				arrSites = JSON.parse(fileSites.responseText);
+
+				arrSites.sort(function (a, b) {
+					if (a.name > b.name) { return 1 }
+					if (a.name < b.name) { return -1 }
+					return 0;
+				});
+
+				for (i = 0; i < arrSites.length; i++) {
+					$('#menu_mobile').append('<li class="visible-xs-block">' + '<a href="/CFOrgLkup/_url_/">_name_</a>'.replace('_name_', arrSites[i].name).replace('_url_', arrSites[i].url) + '</li>');
+					$('#menu_desktop').append('<li>' + '<a href="/CFOrgLkup/_url_/">_name_</a>'.replace('_name_', arrSites[i].name).replace('_url_', arrSites[i].url) + '</li>');
+					if ($('#menu_index').length) {
+						$('#menu_index').append('<li>' + '<a href="/CFOrgLkup/_url_/">_name_</a>'.replace('_name_', arrSites[i].name).replace('_url_', arrSites[i].url) + '</li>');
+					}
+				}
+			});
+		</script>
+
+		
+    <script src="/Scripts/plugins/jquery-ui/jquery-ui.min.js"></script>
+ 
+    <script src="/Scripts/plugins/igniteui/js/infragistics.core.js"></script>
+<script src="/Scripts/plugins/igniteui/js/infragistics.lob.js"></script>
+
+
+    <script id="colLinkTmpl" type="text/template">
+        <span>
+            <a href="/CFOrgLkup/DocumentGeneralResult/?SID=sboeid&amp;OGID=orgid" style="text-decoration:underline;">column_name</a>          
+        </span>
+    </script>
+   
+    <script type="text/javascript">
+
+        $(document).ready(function () {
+            SetupGrid();
+        });
+
+        function SetupGrid()
+        {          
+            var data = [{"OrgName":"RICHARD N ADAMS FOR DIST CT JUDGE (ADAMS, RICHARD N)","SBoEID":"STA-C3049N-C-001","OldID":"5729000","CandName":"RICHARD N ADAMS","StatusDesc":"CLOSED","OrgGroupID":3349,"Link":null}]
+                
+                $("#gridCommitteeResults").igGrid({
+                    width: "100%",
+                    autoGenerateColumns: false,
+                    dataSource: data,
+                    dataSourceType: "json",           
+                    columns: [                       
+                        { key: "OrgName", headerText: "Committee Name", dataType: "string", width: "35%", template: $("#colLinkTmpl").html().replace("column_name", "${OrgName}").replace("sboeid", "${SBoEID}").replace("orgid", "${OrgGroupID}") },
+                        { key: "SBoEID", headerText: "SBoE ID", dataType: "string", width: "15%", columnCssClass: "text-center", template: $("#colLinkTmpl").html().replace("column_name", "${SBoEID}").replace("sboeid", "${SBoEID}").replace("orgid", "${OrgGroupID}") },
+                        { key: "StatusDesc", headerText: "Status", dataType: "string", width: "15%", columnCssClass: "text-center", template: $("#colLinkTmpl").html().replace("column_name", "${StatusDesc}").replace("sboeid", "${SBoEID}").replace("orgid", "${OrgGroupID}") },
+                        { key: "CandName", headerText: "Candidate Name/Parent Entity Name", dataType: "string", width: "35%", template: $("#colLinkTmpl").html().replace("column_name", "${CandName}").replace("sboeid", "${SBoEID}").replace("orgid", "${OrgGroupID}") },
+                        { key: "OrgGroupID", headerText: "", dataType: "string", width: "0%", hidden: true }
+                    ],
+                    autoGenerateLayouts: false,
+                    features: [
+                        {
+                            name: "Sorting",
+                            type: "local",
+                            applySortedColumnCss: false,
+                            sortedColumnTooltip: "",
+                            unsortedColumnTooltip: ""
+                        }                       
+                    ]
+                })
+        }
+    </script>
+    
+	</body>
+</html>

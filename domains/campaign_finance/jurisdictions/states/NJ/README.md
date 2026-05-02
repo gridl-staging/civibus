@@ -5,6 +5,11 @@ New Jersey is a state-level jurisdiction (`fips: 34`) using the NJ Election Law 
 
 This package treats `config.yaml` as the single machine-readable source of truth for endpoint URLs, cadence, and field mappings.
 
+## Freshness routing status (2026-04-28)
+- Stage 1 baseline and the 2026-04-17 NJ IE investigation keep NJ on a `RESOLVED_NEGATIVE` freshness route.
+- Stage 4 closes this route in existing owners (`sources.yaml`) with `nj_elec_contribution_exports` deferred.
+- Reopen scraper-surface freshness work only if newer official evidence dated after 2026-04-17 overturns that closeout.
+
 ## Verified export contract (2026-03-26)
 Two official source surfaces are recorded in `config.yaml`:
 

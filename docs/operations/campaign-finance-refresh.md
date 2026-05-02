@@ -35,13 +35,19 @@ The installer is the single source of truth for schedule text and installs:
 
 ```cron
 0 */6 * * * bash /root/civibus/civibus_dev/infra/scripts/refresh_priority.sh >> /var/log/civibus/refresh-priority.log 2>&1
+20 */6 * * * bash /root/civibus/civibus_dev/infra/scripts/run_keel_gates.sh >> /var/log/civibus/keel-gates.log 2>&1
 0 3 * * * bash /root/civibus/civibus_dev/infra/scripts/refresh_fec_bulk.sh >> /var/log/civibus/refresh-fec-bulk.log 2>&1
+0 17 * * 0 bash /root/civibus/civibus_dev/infra/scripts/refresh_nc_orchestrator.sh >> /var/log/civibus/refresh-nc-orchestrator.log 2>&1
+30 2 * * * bash /root/civibus/civibus_dev/infra/scripts/backup_to_b2.sh >> /var/log/civibus/backup.log 2>&1
+0 6 * * * bash /root/civibus/civibus_dev/infra/scripts/check_cert_expiry.sh >> /var/log/civibus/check-cert.log 2>&1
 ```
 
 ## Wrapper runtime contract
 
-Both wrappers (`infra/scripts/refresh_priority.sh`,
-`infra/scripts/refresh_fec_bulk.sh`) enforce the same baseline contract:
+All wrappers (`infra/scripts/refresh_priority.sh`,
+`infra/scripts/refresh_fec_bulk.sh`, `infra/scripts/run_keel_gates.sh`,
+`infra/scripts/refresh_nc_orchestrator.sh`)
+enforce the same baseline contract:
 
 - load literal `KEY=VALUE` assignments from `.env` without executing shell code
 - `PATH="$HOME/.local/bin:$PATH"` for cron-safe `uv` discovery
@@ -68,6 +74,20 @@ FEC bulk wrapper specifics (`infra/scripts/refresh_fec_bulk.sh`):
   - `make download-fec-bulk`
   - `make ingest-fec-bulk`
 
+Keel gates wrapper specifics (`infra/scripts/run_keel_gates.sh`):
+
+- execution entrypoints:
+  - `make gate-L5`
+  - `make gate-L7`
+
+NC orchestrator wrapper specifics (`infra/scripts/refresh_nc_orchestrator.sh`):
+
+- execution entrypoint delegates to the existing NC CLI orchestrator:
+  `uv run --extra download python -m domains.campaign_finance.jurisdictions.states.NC.scraper.cli --data-type transactions --orchestrate-committees --window-start "${WINDOW_START}" --window-end "${WINDOW_END}"`
+- wrapper derives its rolling UTC date window internally:
+  - `WINDOW_START="$(date -u '+%Y-01-01')"`
+  - `WINDOW_END="$(date -u '+%Y-%m-%d')"`
+
 ## Priority-lane ownership
 
 Priority membership is code-owned by
@@ -89,6 +109,8 @@ Use wrapper scripts for manual execution so runtime behavior matches cron behavi
 ```bash
 bash infra/scripts/refresh_priority.sh
 bash infra/scripts/refresh_fec_bulk.sh
+bash infra/scripts/run_keel_gates.sh
+bash infra/scripts/refresh_nc_orchestrator.sh
 ```
 
 For ad-hoc priority runs that include NC transaction jobs:

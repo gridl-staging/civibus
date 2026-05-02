@@ -10,9 +10,12 @@ dependencies = [
   "pydantic",
   "pyyaml",
   "psycopg[binary]",
+  "psutil",
   "httpx",
+  "jsonschema",
   "beautifulsoup4>=4.14.3",
   "psycopg-pool>=3.3.0",
+  "pyshp",
 ]
 
 [project.optional-dependencies]
@@ -22,6 +25,7 @@ dev = [
   "pytest",
   "pytest-cov",
   "pytest-asyncio",
+  "pytest-timeout",
   "ruff",
 ]
 api = [
@@ -48,6 +52,7 @@ markers = [
   "integration: requires external services such as Postgres, Docker, or networked APIs",
   "e2e: end-to-end tests requiring Docker, database, and live API access",
 ]
+timeout = 120
 
 [tool.ruff]
 line-length = 120

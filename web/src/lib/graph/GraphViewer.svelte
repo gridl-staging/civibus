@@ -7,10 +7,31 @@
   export let elements: GraphElementDefinition[];
   export let totalCount: number;
   export let returnedCount: number;
+  export let subjectName: string;
+  export let describedById: string;
+
+  type CyNode = {
+    data: (key: string) => unknown;
+    select: () => void;
+  };
+
+  type CyInstance = {
+    on: (
+      eventName: string,
+      selector: string,
+      handler: (event: { target: CyNode }) => void
+    ) => void;
+    elements: () => { unselect: () => void };
+    nodes: (selector?: string) => CyNode[];
+    center: (node: CyNode) => void;
+    destroy: () => void;
+  };
 
   let containerEl: HTMLDivElement;
-  let cyInstance: unknown = null;
+  let cyInstance: CyInstance | null = null;
   let loadError = false;
+  let focusedIndex = -1;
+  let statusText = "";
 
   const GRAPH_STYLE = [
     {
@@ -59,29 +80,114 @@
         "border-width": 2,
         "border-color": "#2563eb"
       }
+    },
+    {
+      selector: "node:selected",
+      style: {
+        "border-width": 3,
+        "border-color": "#f59e0b",
+        "background-color": "#fbbf24"
+      }
     }
   ] as const satisfies cytoscape.StylesheetJson;
 
   $: isTruncated = totalCount > returnedCount;
   $: hasNeighbors = elements.length > 1;
+  $: ariaLabel = `Graph of ${subjectName} with ${returnedCount} relationship${returnedCount === 1 ? "" : "s"}`;
+
+  function getNavigableNodes(): CyNode[] {
+    if (cyInstance === null) {
+      return [];
+    }
+    return cyInstance.nodes("[!isSubject]");
+  }
+
+  function updateFocusedNode(index: number): void {
+    if (cyInstance === null) {
+      return;
+    }
+
+    const nodes = getNavigableNodes();
+    if (nodes.length === 0) {
+      return;
+    }
+
+    cyInstance.elements().unselect();
+    const node = nodes[index];
+    node.select();
+    cyInstance.center(node);
+
+    const label = node.data("label") as string;
+    const href = node.data("href");
+    const entityType = node.data("entityType") as string;
+
+    if (typeof href === "string") {
+      statusText = `${label} (${entityType}) — press Enter to open`;
+    } else {
+      statusText = `${label} (${entityType})`;
+    }
+  }
+
+  function clearSelection(): void {
+    if (cyInstance !== null) {
+      cyInstance.elements().unselect();
+    }
+    focusedIndex = -1;
+    statusText = "";
+  }
+
+  function handleKeydown(event: KeyboardEvent): void {
+    if (cyInstance === null) {
+      return;
+    }
+
+    const nodes = getNavigableNodes();
+    if (nodes.length === 0) {
+      return;
+    }
+
+    switch (event.key) {
+      case "ArrowRight":
+      case "ArrowDown": {
+        event.preventDefault();
+        focusedIndex = focusedIndex < nodes.length - 1 ? focusedIndex + 1 : 0;
+        updateFocusedNode(focusedIndex);
+        break;
+      }
+      case "ArrowLeft":
+      case "ArrowUp": {
+        event.preventDefault();
+        focusedIndex = focusedIndex > 0 ? focusedIndex - 1 : nodes.length - 1;
+        updateFocusedNode(focusedIndex);
+        break;
+      }
+      case "Enter": {
+        if (focusedIndex >= 0 && focusedIndex < nodes.length) {
+          const href = nodes[focusedIndex].data("href");
+          if (typeof href === "string") {
+            event.preventDefault();
+            goto(href);
+          }
+        }
+        break;
+      }
+      case "Escape": {
+        event.preventDefault();
+        clearSelection();
+        break;
+      }
+    }
+  }
 
   function destroyGraph(): void {
-    if (cyInstance && typeof (cyInstance as { destroy: () => void }).destroy === "function") {
-      (cyInstance as { destroy: () => void }).destroy();
+    if (cyInstance !== null) {
+      cyInstance.destroy();
       cyInstance = null;
     }
   }
 
-  function attachNodeNavigation(
-    cy: {
-      on: (
-        eventName: string,
-        selector: string,
-        handler: (event: { target: { data: (key: string) => unknown } }) => void
-      ) => void;
-    }
-  ): void {
-    cy.on("tap", "node", (event: { target: { data: (key: string) => unknown } }) => {
+  function attachNodeNavigation(cy: CyInstance): void {
+    cy.on("tap", "node", (event: { target: CyNode }) => {
       const href = event.target.data("href");
       if (typeof href === "string") {
         goto(href);
@@ -112,8 +218,8 @@
         boxSelectionEnabled: false
       });
 
-      attachNodeNavigation(cy);
-      cyInstance = cy;
+      attachNodeNavigation(cy as unknown as CyInstance);
+      cyInstance = cy as unknown as CyInstance;
     } catch {
       loadError = true;
     }
@@ -136,7 +242,33 @@
           Showing {returnedCount} of {totalCount} relationships
         </p>
       {/if}
-      <div class="graph-viewer__container" bind:this={containerEl}></div>
+      <!-- svelte-ignore a11y_no_noninteractive_tabindex a11y_no_noninteractive_element_interactions -->
+      <div
+        class="graph-viewer__container"
+        bind:this={containerEl}
+        tabindex="0"
+        role="img"
+        aria-label={ariaLabel}
+        aria-describedby={describedById}
+        on:keydown={handleKeydown}
+      ></div>
+      <div class="graph-viewer__status" role="status" aria-live="polite">
+        {statusText}
+      </div>
     {/if}
   </div>
 {/if}
+
+<style>
+  .graph-viewer__status {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+</style>

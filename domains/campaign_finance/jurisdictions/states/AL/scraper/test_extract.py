@@ -34,11 +34,10 @@ def _find_row(rows: list[dict], *, key: str, value: str) -> dict[str, str | None
 # ---------------------------------------------------------------------------
 
 
-def test_extract_contribution_individual_with_first_name() -> None:
-    """Row with firstName should extract as Person, not Organization."""
+def test_extract_contribution_individual_multi_word_name() -> None:
+    """Multi-word CONTRIBUTOR name should extract as Person."""
     rows = _load_fixture_rows(_SAMPLE_CONTRIBUTIONS_PATH)
-    # WILLIAMS row: individual with first/last name.
-    row = _find_row(rows, key="lastName", value="WILLIAMS")
+    row = _find_row(rows, key="CONTRIBUTOR", value="SARAH WILLIAMS")
 
     extracted = extract_al_contribution(row)
 
@@ -48,11 +47,10 @@ def test_extract_contribution_individual_with_first_name() -> None:
     assert extracted["donor_org"] is None
 
 
-def test_extract_contribution_organization_without_first_name() -> None:
-    """Row without firstName should extract as Organization."""
+def test_extract_contribution_organization_keyword() -> None:
+    """CONTRIBUTOR name with org keyword should extract as Organization."""
     rows = _load_fixture_rows(_SAMPLE_CONTRIBUTIONS_PATH)
-    # SOUTHERN STEEL CORPORATION row: business with no firstName.
-    row = _find_row(rows, key="sourceName", value="SOUTHERN STEEL CORPORATION")
+    row = _find_row(rows, key="CONTRIBUTOR", value="SOUTHERN STEEL CORPORATION")
 
     extracted = extract_al_contribution(row)
 
@@ -62,9 +60,9 @@ def test_extract_contribution_organization_without_first_name() -> None:
 
 
 def test_extract_contribution_committee_has_al_org_id() -> None:
-    """Committee should carry the al_org_id identifier from orgId field."""
+    """Committee should carry the al_org_id identifier from COMMITTEEID field."""
     rows = _load_fixture_rows(_SAMPLE_CONTRIBUTIONS_PATH)
-    row = _find_row(rows, key="lastName", value="WILLIAMS")
+    row = _find_row(rows, key="CONTRIBUTOR", value="SARAH WILLIAMS")
 
     extracted = extract_al_contribution(row)
 
@@ -72,10 +70,10 @@ def test_extract_contribution_committee_has_al_org_id() -> None:
     assert extracted["committee"].canonical_name == "Friends of Smith for Governor"
 
 
-def test_extract_contribution_address() -> None:
-    """Address should be extracted with city, state, zip5."""
+def test_extract_contribution_address_from_citystate() -> None:
+    """Address should be parsed from combined CITYSTATE and ZIP fields."""
     rows = _load_fixture_rows(_SAMPLE_CONTRIBUTIONS_PATH)
-    row = _find_row(rows, key="lastName", value="WILLIAMS")
+    row = _find_row(rows, key="CONTRIBUTOR", value="SARAH WILLIAMS")
 
     extracted = extract_al_contribution(row)
 
@@ -86,16 +84,16 @@ def test_extract_contribution_address() -> None:
 
 
 def test_extract_contribution_person_with_middle_name() -> None:
-    """Person with middleName should include it in canonical_name."""
+    """Person with middle initial in CONTRIBUTOR should include it."""
     rows = _load_fixture_rows(_SAMPLE_CONTRIBUTIONS_PATH)
-    row = _find_row(rows, key="lastName", value="JONES")
+    row = _find_row(rows, key="CONTRIBUTOR", value="ROBERT A JONES")
 
     extracted = extract_al_contribution(row)
 
     assert extracted["donor_person"] is not None
     assert extracted["donor_person"].first_name == "ROBERT"
     assert extracted["donor_person"].middle_name == "A"
-    assert "A" in extracted["donor_person"].canonical_name
+    assert extracted["donor_person"].last_name == "JONES"
 
 
 # ---------------------------------------------------------------------------
@@ -104,9 +102,9 @@ def test_extract_contribution_person_with_middle_name() -> None:
 
 
 def test_extract_expenditure_payee_person() -> None:
-    """Expenditure row with firstName should extract as payee Person."""
+    """Multi-word PAYEE name should extract as payee Person."""
     rows = _load_fixture_rows(_SAMPLE_EXPENDITURES_PATH)
-    row = _find_row(rows, key="lastName", value="DAVIS")
+    row = _find_row(rows, key="PAYEE", value="MARK DAVIS")
 
     extracted = extract_al_expenditure(row)
 
@@ -117,9 +115,9 @@ def test_extract_expenditure_payee_person() -> None:
 
 
 def test_extract_expenditure_payee_organization() -> None:
-    """Expenditure row without firstName should extract as payee Organization."""
+    """PAYEE name with org keyword should extract as payee Organization."""
     rows = _load_fixture_rows(_SAMPLE_EXPENDITURES_PATH)
-    row = _find_row(rows, key="payeeName", value="BIRMINGHAM PRINTING CO")
+    row = _find_row(rows, key="PAYEE", value="BIRMINGHAM PRINTING COMPANY")
 
     extracted = extract_al_expenditure(row)
 
@@ -131,7 +129,7 @@ def test_extract_expenditure_payee_organization() -> None:
 def test_extract_expenditure_committee() -> None:
     """Expenditure committee should have correct name and al_org_id."""
     rows = _load_fixture_rows(_SAMPLE_EXPENDITURES_PATH)
-    row = _find_row(rows, key="lastName", value="DAVIS")
+    row = _find_row(rows, key="PAYEE", value="MARK DAVIS")
 
     extracted = extract_al_expenditure(row)
 

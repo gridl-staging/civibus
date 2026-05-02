@@ -39,6 +39,18 @@ def test_parse_optional_ky_date_returns_none_for_empty() -> None:
     assert load._parse_optional_ky_date("") is None
 
 
+def test_parse_optional_ky_date_accepts_upstream_future_date() -> None:
+    # KREF CSV for 2022 Primary contains Receipt Date "9/30/2041" (data entry
+    # error, likely 9/30/2021). The parser must accept it without raising —
+    # upstream anomalies are preserved, not filtered. See
+    # docs/research/2026_04_29_ky_freshness_attribution.md.
+    assert load._parse_optional_ky_date("9/30/2041") == date(2041, 9, 30)
+
+
+def test_parse_optional_ky_date_accepts_iso_format() -> None:
+    assert load._parse_optional_ky_date("2026-02-19") == date(2026, 2, 19)
+
+
 def test_parse_required_ky_amount_accepts_decimal_format() -> None:
     assert load._parse_required_ky_amount("1234.50", "Amount") == Decimal("1234.50")
 

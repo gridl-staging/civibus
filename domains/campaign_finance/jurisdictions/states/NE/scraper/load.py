@@ -142,6 +142,34 @@ def _ne_support_oppose(row: Mapping[str, str | None]) -> str | None:
         raise ValueError(f"Unsupported NE independent expenditure support/oppose value: {raw_value!r}") from error
 
 
+# NE expenditure transaction type values that indicate independent expenditures,
+# even when the ``Support Or Oppose`` field is null.
+_NE_IE_TRANSACTION_TYPE_TOKENS: frozenset[str] = frozenset(
+    {
+        "INDEPENDENT EXPENDITURE",
+        "IND. EXPEND. CONTRIBUTOR SOURCE OVER $250",
+    }
+)
+
+
+def _ne_is_independent_expenditure(row: Mapping[str, str | None]) -> bool:
+    """Return True if the row is an independent expenditure by either signal.
+
+    NE has two IE signals: the ``Support Or Oppose`` field (non-null = IE with
+    direction) and the ``Expenditure Transaction Type`` field (contains "Independent
+    Expenditure" even when support/oppose is null). The Apr 2026 Hetzner proof found
+    42 raw IE rows but only 12 had support/oppose populated — the other 30 have the
+    transaction type but no direction. Both signals should classify as IE.
+    """
+    if _ne_support_oppose(row) is not None:
+        return True
+    type_col = _load_column_for_semantic_path("expenditures", "ne.expenditure_transaction_type")
+    raw_type = _normalize_optional_text(row.get(type_col))
+    if raw_type is None:
+        return False
+    return raw_type.upper() in _NE_IE_TRANSACTION_TYPE_TOKENS
+
+
 def ensure_ne_data_source(conn: psycopg.Connection, data_type: str) -> UUID:
     normalized = data_type.strip().lower()
     return ensure_data_source(
@@ -604,7 +632,8 @@ def _upsert_ne_transaction_with_filing(
     amended_col = _load_column_for_semantic_path(data_type, "ne.amended")
 
     support_oppose = _ne_support_oppose(row) if data_type == "expenditures" else None
-    transaction_type = "Independent Expenditure" if support_oppose is not None else _NE_TRANSACTION_KIND[data_type]
+    is_ie = _ne_is_independent_expenditure(row) if data_type == "expenditures" else False
+    transaction_type = "Independent Expenditure" if is_ie else _NE_TRANSACTION_KIND[data_type]
 
     upsert_transaction(
         conn,

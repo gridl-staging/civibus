@@ -81,3 +81,67 @@ class TestMAExpenditureExtraction:
         assert extracted["payee_person"] is not None
         assert extracted["payee_person"].first_name == "Alice"
         assert extracted["payee_person"].last_name == "Brown"
+
+
+class TestMAFIPSStateCodeHandling:
+    """OCPF data sometimes has FIPS numeric state codes instead of abbreviations."""
+
+    def test_fips_state_code_yields_none_address_state(self) -> None:
+        """Rows with numeric state (e.g. '25' for MA) should not crash extraction."""
+        row = {
+            "Item_ID": "999",
+            "Report_ID": "100",
+            "Record_Type_ID": "201",
+            "Date": "01/15/2025",
+            "Amount": "100.00",
+            "Name": "Smith",
+            "First_Name": "Jane",
+            "Street_Address": "123 Main St",
+            "City": "Boston",
+            "State": "25",
+            "Zip": "02101",
+            "Description": None,
+            "Related_CPF_ID": "10001",
+            "Occupation": None,
+            "Employer": None,
+            "Principal_Officer": None,
+            "Tender_Type_ID": None,
+            "Clarified_Name": None,
+            "Clarified_Purpose": None,
+            "Is_Supported": None,
+            "Is_Previous_Year_Receipt": None,
+        }
+        extracted = extract_ma_contribution(row)
+        assert extracted["address"] is not None
+        assert extracted["address"].state is None
+        assert extracted["address"].city == "Boston"
+
+    def test_single_char_state_code_yields_none(self) -> None:
+        """Single-char state like 'M' (truncated) should not crash extraction."""
+        row = {
+            "Item_ID": "998",
+            "Report_ID": "100",
+            "Record_Type_ID": "201",
+            "Date": "01/15/2025",
+            "Amount": "50.00",
+            "Name": "Doe",
+            "First_Name": "John",
+            "Street_Address": "456 Elm St",
+            "City": "Cambridge",
+            "State": "M",
+            "Zip": "02139",
+            "Description": None,
+            "Related_CPF_ID": "10002",
+            "Occupation": None,
+            "Employer": None,
+            "Principal_Officer": None,
+            "Tender_Type_ID": None,
+            "Clarified_Name": None,
+            "Clarified_Purpose": None,
+            "Is_Supported": None,
+            "Is_Previous_Year_Receipt": None,
+        }
+        extracted = extract_ma_contribution(row)
+        assert extracted["address"] is not None
+        assert extracted["address"].state is None
+        assert extracted["address"].city == "Cambridge"

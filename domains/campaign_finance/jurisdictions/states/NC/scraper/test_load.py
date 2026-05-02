@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID, uuid4
 
@@ -16,9 +17,13 @@ from domains.campaign_finance.jurisdictions.states.NC.scraper.load import (
     _build_nc_source_record,
     build_data_source,
     ensure_nc_data_source,
+    load_nc_committee_registry_rows,
     load_nc_transaction,
     load_nc_transactions,
     load_nc_transactions_with_filings,
+)
+from domains.campaign_finance.jurisdictions.states.NC.scraper.committee_registry import (
+    NCCommitteeRegistryRow,
 )
 from domains.campaign_finance.jurisdictions.states.NC.scraper.parse import (
     COMMITTEE_DOC_COLUMNS,
@@ -157,6 +162,33 @@ def _entity_source_entity_id(
     if row is None:
         return None
     return row["entity_id"]
+
+
+def _select_nc_committee_registry_row(
+    conn: psycopg.Connection,
+    *,
+    org_group_id: int,
+) -> dict[str, object]:
+    with conn.cursor(row_factory=dict_row) as cursor:
+        cursor.execute(
+            """
+            SELECT org_group_id,
+                   sboe_id,
+                   committee_name,
+                   status_desc,
+                   old_id,
+                   candidate_name,
+                   first_seen_at,
+                   last_seen_at
+            FROM cf.nc_committee_registry
+            WHERE org_group_id = %s
+            """,
+            (org_group_id,),
+        )
+        row = cursor.fetchone()
+
+    assert row is not None
+    return row
 
 
 def test_build_data_source_returns_expected_nc_transaction_metadata() -> None:
@@ -540,6 +572,122 @@ def test_load_nc_transactions_counts_malformed_rows_as_quarantined(
     assert result.skipped == 0
     assert result.quarantined == 1
     assert result.errors == 0
+
+
+def test_load_nc_committee_registry_rows_is_idempotent_and_advances_last_seen_at(
+    db_conn: psycopg.Connection,
+) -> None:
+    first_seen_at = datetime(2026, 4, 24, 9, 0, tzinfo=UTC)
+    second_seen_at = datetime(2026, 4, 24, 9, 15, tzinfo=UTC)
+    rows = [
+        NCCommitteeRegistryRow(
+            org_group_id=3970,
+            sboe_id="STA-C3672N-C-001",
+            committee_name="01ST CONG DIST BLACK LEADERSHIP CAUCUS",
+            status_desc="CLOSED",
+            old_id="7940000",
+            candidate_name="CIVIC",
+        )
+    ]
+
+    first_result = load_nc_committee_registry_rows(
+        db_conn,
+        rows,
+        seen_at=first_seen_at,
+    )
+    first_registry_row = _select_nc_committee_registry_row(db_conn, org_group_id=3970)
+    with db_conn.cursor(row_factory=dict_row) as cursor:
+        cursor.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM cf.nc_committee_registry
+            WHERE org_group_id = %s
+            """,
+            (3970,),
+        )
+        first_registry_count = cursor.fetchone()["count"]
+
+    second_result = load_nc_committee_registry_rows(
+        db_conn,
+        rows,
+        seen_at=second_seen_at,
+    )
+    second_registry_row = _select_nc_committee_registry_row(db_conn, org_group_id=3970)
+    with db_conn.cursor(row_factory=dict_row) as cursor:
+        cursor.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM cf.nc_committee_registry
+            WHERE org_group_id = %s
+            """,
+            (3970,),
+        )
+        second_registry_count = cursor.fetchone()["count"]
+
+    assert first_result.inserted == 1
+    assert first_result.skipped == 0
+    assert first_result.errors == 0
+    assert second_result.inserted == 0
+    assert second_result.skipped == 1
+    assert second_result.errors == 0
+    expected_second_registry_row = dict(first_registry_row)
+    expected_second_registry_row["last_seen_at"] = second_seen_at
+    assert first_registry_row["first_seen_at"] == first_seen_at
+    assert second_registry_row["first_seen_at"] == first_seen_at
+    assert first_registry_row["last_seen_at"] == first_seen_at
+    assert second_registry_row["last_seen_at"] == second_seen_at
+    assert second_registry_row == expected_second_registry_row
+    assert first_registry_count == 1
+    assert second_registry_count == first_registry_count
+
+
+def test_load_nc_committee_registry_rows_updates_mutable_fields_on_rerun(
+    db_conn: psycopg.Connection,
+) -> None:
+    initial_seen_at = datetime(2026, 4, 24, 10, 0, tzinfo=UTC)
+    rerun_seen_at = datetime(2026, 4, 24, 10, 30, tzinfo=UTC)
+    first_rows = [
+        NCCommitteeRegistryRow(
+            org_group_id=58871,
+            sboe_id="STA-MAX-C-001",
+            committee_name="MAX COMMITTEE",
+            status_desc="ACTIVE (EXEMPT)",
+            old_id="OLD-1",
+            candidate_name="OLD CANDIDATE",
+        )
+    ]
+    second_rows = [
+        NCCommitteeRegistryRow(
+            org_group_id=58871,
+            sboe_id="STA-MAX-C-001",
+            committee_name="MAX COMMITTEE UPDATED",
+            status_desc="TERMINATED",
+            old_id="OLD-UPDATED",
+            candidate_name="NEW CANDIDATE",
+        )
+    ]
+
+    first_result = load_nc_committee_registry_rows(
+        db_conn,
+        first_rows,
+        seen_at=initial_seen_at,
+    )
+    second_result = load_nc_committee_registry_rows(
+        db_conn,
+        second_rows,
+        seen_at=rerun_seen_at,
+    )
+    registry_row = _select_nc_committee_registry_row(db_conn, org_group_id=58871)
+
+    assert first_result.inserted == 1
+    assert second_result.inserted == 0
+    assert second_result.skipped == 1
+    assert registry_row["committee_name"] == "MAX COMMITTEE UPDATED"
+    assert registry_row["status_desc"] == "TERMINATED"
+    assert registry_row["candidate_name"] == "NEW CANDIDATE"
+    assert registry_row["old_id"] == "OLD-UPDATED"
+    assert registry_row["first_seen_at"] == initial_seen_at
+    assert registry_row["last_seen_at"] == rerun_seen_at
 
 
 def test_load_nc_transactions_with_filings_builds_relational_chain_from_stitched_fixture_rows(

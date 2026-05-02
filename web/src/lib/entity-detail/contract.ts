@@ -4,6 +4,12 @@ export const STAGE4_DETAIL_ENTITY_TYPES = ["person", "org"] as const;
 export type Stage4EntityType = (typeof STAGE4_DETAIL_ENTITY_TYPES)[number];
 export type Stage4ErEntityType = "person" | "organization";
 export type Stage4GraphEntityType = "person" | "org";
+const REQUIRED_PERSON_BIO_KEYS = [
+  "bio_text",
+  "bio_source_url",
+  "bio_license",
+  "bio_pulled_at"
+] as const;
 
 const DETAIL_PATH_SEGMENT_BY_ENTITY_TYPE: Record<Stage4EntityType, Stage4EntityType> = {
   person: "person",
@@ -57,8 +63,15 @@ export type PersonDetailResponse = BaseDetailResponse & {
   middle_name: string | null;
   last_name: string | null;
   suffix: string | null;
+  occupation?: string | null;
+  education?: string | null;
   date_of_birth: string | null;
   year_of_birth: number | null;
+  bio_text: string | null;
+  bio_source_url: string | null;
+  bio_license: string | null;
+  bio_pulled_at: string | null;
+  portrait?: PersonPortraitResponse | null;
 };
 
 export type OrgDetailResponse = BaseDetailResponse & {
@@ -66,6 +79,15 @@ export type OrgDetailResponse = BaseDetailResponse & {
   registered_state: string | null;
   formation_date: string | null;
   dissolution_date: string | null;
+};
+
+export type PersonPortraitResponse = {
+  status: string;
+  rights_status: string;
+  source_image_url: string | null;
+  mime_type: string | null;
+  width_px: number | null;
+  height_px: number | null;
 };
 
 export type EntityDetailResponse = PersonDetailResponse | OrgDetailResponse;
@@ -102,6 +124,36 @@ export type GraphNeighborRouteClassification = {
   href: string | null;
   isRoutable: boolean;
 };
+
+/**
+ * Runtime contract guard for `/v1/person/{id}` payloads consumed by the detail page.
+ * Stage 4 requires required-nullable bio attribution keys to always exist.
+ */
+export function assertPersonPayloadHasRequiredBioKeys(
+  payload: unknown
+): asserts payload is PersonDetailResponse {
+  if (payload === null || typeof payload !== "object" || Array.isArray(payload)) {
+    throw new Error("Person payload must be an object.");
+  }
+
+  const personPayload = payload as Record<string, unknown>;
+  const missingBioKeys = REQUIRED_PERSON_BIO_KEYS.filter((key) => !(key in personPayload));
+
+  if (missingBioKeys.length > 0) {
+    throw new Error(`Person payload missing required bio keys: ${missingBioKeys.join(", ")}`);
+  }
+
+  const invalidValueKeys = REQUIRED_PERSON_BIO_KEYS.filter((key) => {
+    const value = personPayload[key];
+    return value !== null && typeof value !== "string";
+  });
+
+  if (invalidValueKeys.length > 0) {
+    throw new Error(
+      `Person payload bio keys must be string or null: ${invalidValueKeys.join(", ")}`
+    );
+  }
+}
 
 export function encodeRoutePathSegment(value: string): string {
   return encodeURIComponent(value);

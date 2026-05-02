@@ -11,7 +11,9 @@ export POSTGRES_PORT
 export COMPOSE_PROJECT_NAME
 
 DB_HOST := localhost
-DB_SQL_FILES := core/schema/entities.sql core/schema/jurisdiction.sql core/schema/provenance.sql core/schema/entity_resolution.sql core/schema/er_views.sql domains/campaign_finance/schema/tables.sql domains/campaign_finance/schema/dark_money_tables.sql domains/property/schema/tables.sql domains/civics/schema/tables.sql infra/db/09-age-graph-bootstrap.sql
+# Keep the schema reset manifest repo-owned: db-reset interpolates this list into
+# shell and Python recipe bodies, so command-line overrides would become code execution.
+DB_SQL_FILES := core/schema/entities.sql core/schema/jurisdiction.sql core/schema/provenance.sql core/schema/entity_resolution.sql core/schema/er_views.sql domains/campaign_finance/schema/tables.sql domains/campaign_finance/schema/nc_orchestrator_tables.sql domains/campaign_finance/schema/dark_money_tables.sql domains/property/schema/tables.sql domains/civics/schema/tables.sql infra/db/09-age-graph-bootstrap.sql
 FEC_BULK_CYCLE ?= 2024
 FEC_BULK_DIR ?= data/fec/bulk/$(FEC_BULK_CYCLE)
 IRS_527_DATA_DIR ?= data/irs_527
@@ -20,9 +22,17 @@ IRS_527_BATCH_SIZE ?= 1000
 REFRESH_CF_ARGS ?= --dry-run
 QUALITY_CHECK_ARGS ?=
 QUALITY_FRESHNESS_ARGS ?=
+RETIRED_SYMBOLS := INDIANA_FRESHNESS_NOTE _CASE_FIXTURE_SOURCES _PILOT_SUPPORTED_STATES is_autopublish_enabled
+RETIRED_ALLOWLIST := \
+	core/keel_gate_l11.py \
+	tests/keel/test_gate_l15.py \
+	docs/keel/** \
+	chats/** \
+	.matt/projects/** \
+	Makefile
 
 
-.PHONY: db-up db-down db-reset test test-api test-e2e lint ingest-fec-sample ingest-fec-bulk-sample ingest-fec-bulk ingest-fec-ie-sample download-fec-bulk download-fec-schedule-e ingest-fec-schedule-e download-irs-527 ingest-irs-527-sample ingest-irs-527 validate-configs validate-registry render-coverage-views render-region-lifecycle ingest-co-sample ingest-durham-sample require-postgres-password ingest-nc-sample ingest-ga-sample ingest-ca-sample ingest-mn-sample ingest-wa-sample ingest-tx-sample ingest-pa-sample ingest-oh-sample ingest-in-sample ingest-il-sample ingest-nj-sample ingest-va-sample ingest-sf-sample ingest-la-city-sample ingest-nyc-sample download-ga quality-check quality-freshness entity-resolve entity-resolve-dry api-dev graph-load load-test refresh-cf-data refresh-cf-priority
+.PHONY: db-up db-down db-reset test test-api test-e2e lint check-retired-symbols ingest-fec-sample ingest-fec-bulk-sample ingest-fec-bulk ingest-fec-ie-sample download-fec-bulk download-fec-schedule-e ingest-fec-schedule-e download-irs-527 ingest-irs-527-sample ingest-irs-527 validate-configs validate-registry render-coverage-views render-region-lifecycle ingest-co-sample ingest-durham-sample require-postgres-password ingest-nc-sample ingest-nc-ie-sample ingest-ga-sample ingest-ca-sample ingest-mn-sample ingest-wa-sample ingest-tx-sample ingest-pa-sample ingest-oh-sample ingest-in-sample ingest-il-sample ingest-nj-sample ingest-va-sample ingest-sf-sample ingest-la-city-sample ingest-nyc-sample ingest-nc-past-results-2022-2024 download-ga quality-check quality-freshness entity-resolve entity-resolve-dry api-dev graph-load load-test refresh-cf-data refresh-cf-priority gate-L1 gate-L3 gate-L5 gate-L6 gate-L6-pilot gate-L7 gate-L10 gate-L14 keel-status keel-summary keel-current keel-reviews-status evidence-rotate
 
 require-postgres-password:
 	@test -n "$${POSTGRES_PASSWORD:-}" || { echo "POSTGRES_PASSWORD must be set in the environment" >&2; exit 1; }
@@ -70,7 +80,19 @@ api-dev: require-postgres-password
 load-test:
 	uv run --extra load locust -f tests/load/locustfile.py --headless -u 5 -r 1 -t 30s
 
+check-retired-symbols:
+	@set -eu; \
+	for symbol in $(RETIRED_SYMBOLS); do \
+		matches="$$(git grep -nw "$$symbol" -- . $(foreach path,$(RETIRED_ALLOWLIST),":(exclude)$(path)") || true)"; \
+		if [ -n "$$matches" ]; then \
+			echo "retired symbol '$$symbol' has non-allowlisted references:" >&2; \
+			echo "$$matches" >&2; \
+			exit 1; \
+		fi; \
+	done
+
 lint:
+	$(MAKE) check-retired-symbols
 	uv run --extra dev ruff check .
 	uv run --extra dev ruff format --check .
 
@@ -134,6 +156,9 @@ ingest-durham-sample:
 
 ingest-nc-sample:
 	uv run python -m domains.campaign_finance.jurisdictions.states.NC.scraper.cli --path domains/campaign_finance/jurisdictions/states/NC/tests/fixtures/transaction_export_sample.csv --data-type transactions
+
+ingest-nc-ie-sample:
+	uv run python -m domains.campaign_finance.jurisdictions.states.NC.scraper.cli --path domains/campaign_finance/jurisdictions/states/NC/tests/fixtures/cfdoclkup_ie_document_index_sample_2026_04_18.csv --data-type ie-document-index
 
 ingest-ga-sample:
 	uv run python -m domains.campaign_finance.jurisdictions.states.GA.scraper.cli --path domains/campaign_finance/jurisdictions/states/GA/tests/fixtures/contribution_export_sample.xls --data-type contributions
@@ -201,3 +226,45 @@ refresh-cf-data:
 
 refresh-cf-priority:
 	uv run python -m core.refresh.runner --scope priority $(REFRESH_CF_ARGS)
+
+ingest-nc-past-results-2022-2024:
+	uv run python -m core.refresh.runner --scope all --job-key-prefix civics-nc-past-results-2022-2024 $(REFRESH_CF_ARGS)
+
+gate-L1:
+	uv run python -m core.keel_gate_l1 --jurisdiction $(JURISDICTION)
+
+gate-L3:
+	uv run python -m core.keel_gate_l3 --jurisdiction $(JURISDICTION)
+
+gate-L5:
+	uv run python -m core.refresh.gate_l5
+
+gate-L6:
+	uv run python -m core.keel_gate_l6 --jurisdiction $(JURISDICTION) --data-type $(DATA_TYPE) --path $(FILE_PATH) --load-id $(LOAD_ID)
+
+gate-L6-pilot:
+	uv run python -m core.keel_gate_l6 --jurisdiction NC --pilot-fixture-suite
+
+gate-L7:
+	uv run python -m core.keel_gate_l7
+
+gate-L10:
+	uv run python -m core.keel_gate_l10 --scope $(JURISDICTION)
+
+gate-L14:
+	uv run python -m core.keel_gate_l14
+
+keel-status:
+	uv run python -m core.keel_status
+
+keel-summary:
+	uv run python -m core.keel_status --summary
+
+keel-current:
+	uv run python -m core.keel_current
+
+keel-reviews-status:
+	uv run python -m core.keel_review_schedule
+
+evidence-rotate:
+	uv run python -m core.keel_evidence_retention $(ROTATE_FLAGS)

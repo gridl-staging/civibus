@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import json
 import re
 from pathlib import Path
 
@@ -143,3 +144,97 @@ def test_stage_regression_files_do_not_reference_stage5_makefile_wiring_audit(
     assert "Makefile" not in text
     for target in _STAGE5_SAMPLE_INGEST_TARGETS:
         assert target not in text
+
+
+def _coverage_registry_rows_by_code() -> dict[str, dict[str, object]]:
+    registry_path = REPO_ROOT / "docs" / "research" / "coverage-registry.json"
+    payload = json.loads(_read_text(registry_path))
+    rows = payload["rows"]
+    return {row["jurisdiction_code"]: row for row in rows}
+
+
+def _matrix_row_line(jurisdiction_code: str) -> str:
+    matrix_path = REPO_ROOT / "docs" / "research" / "2026-launch-support-matrix.md"
+    for line in _read_text(matrix_path).splitlines():
+        if line.startswith(f"| {jurisdiction_code} |"):
+            return line
+    raise AssertionError(f"Missing matrix row for {jurisdiction_code}")
+
+
+def test_stage5_in_verdict_is_launch_ready_in_registry_and_matrix() -> None:
+    rows_by_code = _coverage_registry_rows_by_code()
+    in_row = rows_by_code["IN"]
+
+    assert in_row["tier"] == "launch-support candidate"
+    assert in_row["best_update_frequency"] == "weekly"
+    assert in_row["best_last_verified_working"] == "2026-04-26"
+    assert (
+        in_row["next_action"]
+        == "Launch-ready for cadence: keep weekly-or-better monitoring in routine refresh evidence and only "
+        "reclassify if a future dated probe shows regression."
+    )
+    assert "Ship with freshness warning" not in in_row["next_action"]
+
+    matrix_line = _matrix_row_line("IN")
+    assert "| IN | state | launch-support candidate | weekly | yes |" in matrix_line
+    assert "Ship with freshness warning" not in matrix_line
+
+    for child_code in ("IN_FORT_WAYNE", "IN_INDIANAPOLIS_CITY_BALANCE"):
+        child_row = rows_by_code[child_code]
+        assert child_row["tier"] == in_row["tier"]
+        assert child_row["next_action"] == f"Inherit parent-state path: IN -> {in_row['next_action']}"
+
+
+def test_stage5_mn_nj_resolved_negative_wording_is_maintenance_only() -> None:
+    rows_by_code = _coverage_registry_rows_by_code()
+
+    for state_code in ("MN", "NJ"):
+        row = rows_by_code[state_code]
+        assert row["tier"] == "freshness-limited"
+        assert "resolved negative" in row["operational_reason"].lower()
+        assert "Investigate" not in row["next_action"]
+
+    for child_code in ("MN_MINNEAPOLIS", "MN_ST_PAUL", "NJ_JERSEY_CITY", "NJ_NEWARK"):
+        child_row = rows_by_code[child_code]
+        assert "Investigate" not in child_row["next_action"]
+        assert "Inherit parent-state path:" in child_row["next_action"]
+
+
+def test_stage5_narrative_docs_remove_stale_in_mn_nj_investigation_claims() -> None:
+    roadmap_text = _read_text(REPO_ROOT / "ROADMAP.md")
+    priorities_text = _read_text(REPO_ROOT / "PRIORITIES.md")
+
+    assert "IN remains annual ZIP-first" not in roadmap_text
+    assert "IN is weekly-or-better / launch-ready while MN and NJ are resolved-negative freshness-limited." in roadmap_text
+    assert "IN is weekly-or-better / launch-ready while MN and NJ are resolved-negative freshness-limited." in priorities_text
+    assert "Check if CFA-12 IE forms are in annual bulk ZIP." not in priorities_text
+    assert "Investigate ELEC API for IE endpoints (Form IND)." not in priorities_text
+
+
+def test_stage6_ny_registry_row_uses_apr29_maintenance_closeout_wording() -> None:
+    rows_by_code = _coverage_registry_rows_by_code()
+    ny_row = rows_by_code["NY"]
+    buffalo_row = rows_by_code["NY_BUFFALO"]
+
+    assert ny_row["tier"] == "implemented but unproven"
+    assert ny_row["evidence_date"] == "2026-04-29"
+    assert "serial rerun still failed in contributions" in str(ny_row["evidence_summary"]).lower()
+    assert "expenditures and independent expenditures did not execute in that pass" in str(
+        ny_row["evidence_summary"]
+    ).lower()
+    assert "0 ny filings / transactions materialized" in str(ny_row["operational_reason"]).lower()
+    assert "maintenance_closeout.md" in str(ny_row["next_action"])
+    assert buffalo_row["municipal_audit_decision"] == "covered_by_parent"
+    assert buffalo_row["next_action"] == f"Inherit parent-state path: NY -> {ny_row['next_action']}"
+
+
+def test_stage6_ny_narrative_docs_match_apr29_maintenance_closeout() -> None:
+    roadmap_text = _read_text(REPO_ROOT / "ROADMAP.md")
+    priorities_text = _read_text(REPO_ROOT / "PRIORITIES.md")
+
+    assert "docs/research/artifacts/2026_04_29_ny_unstick/maintenance_closeout.md" in roadmap_text
+    assert "docs/research/artifacts/2026_04_29_ny_unstick/maintenance_closeout.md" in priorities_text
+    assert "Last updated: 2026-04-30" in roadmap_text
+    assert "**Last updated:** 2026-04-30" in priorities_text
+    assert "stage 2 dispatches failed (missing `uv` PATH, then upstream read timeout/hang/zero-row)" not in priorities_text
+    assert "`filing_sched_abbrev='E'` is \"Other Receipts\", NOT IE." in priorities_text

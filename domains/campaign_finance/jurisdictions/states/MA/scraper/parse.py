@@ -93,7 +93,11 @@ def _validate_header(
     expected_columns: tuple[str, ...],
     row_label: str,
 ) -> None:
-    if tuple(fieldnames or ()) != expected_columns:
+    # Live OCPF data has a trailing tab producing an empty column — strip it.
+    cleaned = list(fieldnames or ())
+    while cleaned and cleaned[-1] == "":
+        cleaned.pop()
+    if tuple(cleaned) != expected_columns:
         raise ValueError(f"Unexpected MA {row_label} header: got {fieldnames!r}, expected {list(expected_columns)!r}")
 
 

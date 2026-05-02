@@ -1,0 +1,11 @@
+schema_version: 1
+# Per-domain Keel gate config. Single source of truth for domain-specific
+# gate parameters that previously lived as Python constants.
+
+l6:
+  # Date-window for temporal-integrity validation. The window is
+  # [load_date.year - years_back, 1, 1] .. load_date inclusive. The five-year
+  # default matches the data-volume policy in CLAUDE.md ("only insert the
+  # past 5 years of data into the DB; current year minus 4").
+  date_window:
+    years_back: 4

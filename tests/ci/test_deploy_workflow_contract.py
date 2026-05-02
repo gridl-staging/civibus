@@ -4,12 +4,20 @@ from pathlib import Path
 
 import yaml
 
+import core.keel_gate_l13 as keel_gate_l13
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEPLOY_WORKFLOW_PATH = REPO_ROOT / ".github/workflows/deploy.yml"
 CHECKOUT_SHA = "11bd71901bbe5b1630ceea73d27597364c9af683"
 DOCKER_LOGIN_SHA = "b45d80f862d83dbcd57f89517bcf500b2ab88fb2"
 DOCKER_BUILD_PUSH_SHA = "d08e5c354a6adb9ed34480a06d141179aa583294"
+L13_OWNER_FILES = {
+    ".github/workflows/deploy.yml",
+    "infra/docker-compose.prod.yml",
+    ".env.production.example",
+    "infra/scripts/bootstrap_prod_vm.sh",
+}
 
 
 def _read_deploy_workflow() -> str:
@@ -42,6 +50,14 @@ def test_deploy_workflow_exists_and_parses_cleanly() -> None:
     text = _read_deploy_workflow()
     parsed = yaml.safe_load(text)
     assert isinstance(parsed, dict), "deploy.yml must parse as a YAML mapping"
+
+
+def test_stage1_l13_contract_owner_file_set_is_locked() -> None:
+    """Stage 1 L13 may only read the deploy workflow, compose, env example, and bootstrap owners."""
+    owner_files = set(keel_gate_l13.CONTRACT_OWNER_FILES.values())
+    assert owner_files == L13_OWNER_FILES
+    for relative_path in owner_files:
+        assert (REPO_ROOT / relative_path).is_file(), f"L13 owner file missing: {relative_path}"
 
 
 def test_deploy_workflow_triggers_on_push_to_main_only() -> None:
@@ -154,7 +170,7 @@ def test_deploy_job_uses_environment_protection() -> None:
 
 
 def test_deploy_job_performs_ssh_based_remote_rollout() -> None:
-    """Deploy job must SSH into the production host and run bootstrap + compose rollout."""
+    """Deploy job must SSH into the production host and run bootstrap + wrapper rollout."""
     parsed = _parse_deploy_workflow()
     deploy_job = parsed["jobs"]["deploy"]
     steps = deploy_job.get("steps", [])
@@ -169,7 +185,81 @@ def test_deploy_job_performs_ssh_based_remote_rollout() -> None:
     full_run_text = "\n".join(step_runs)
     assert "hetzner_deploy_key" in full_run_text.lower(), "deploy must configure SSH key for Hetzner"
     assert "bootstrap_prod_vm.sh" in full_run_text, "deploy must invoke bootstrap_prod_vm.sh on the remote host"
-    assert "docker compose" in full_run_text, "deploy must run docker compose on the remote host"
+    assert "infra/scripts/prod_compose.sh" in full_run_text, (
+        "deploy must invoke infra/scripts/prod_compose.sh for remote compose rollout"
+    )
+
+
+def _find_step(steps: list[dict], step_name: str) -> dict:
+    """Return a deploy step by exact name; fail with a clear contract message."""
+    for step in steps:
+        if step.get("name") == step_name:
+            return step
+    raise AssertionError(f"deploy step '{step_name}' is required by Stage 7 contract")
+
+
+def _find_step_index(steps: list[dict], step_name: str) -> int:
+    """Return a deploy step index by exact name; fail with a clear contract message."""
+    for index, step in enumerate(steps):
+        if step.get("name") == step_name:
+            return index
+    raise AssertionError(f"deploy step '{step_name}' is required by Stage 7 contract")
+
+
+def test_deploy_job_captures_prior_sha_before_rollout() -> None:
+    """Deploy must snapshot the currently running SHA before checking out the new one."""
+    parsed = _parse_deploy_workflow()
+    steps = parsed["jobs"]["deploy"].get("steps", [])
+    configure_step = _find_step(steps, "Configure SSH credentials")
+    capture_step = _find_step(steps, "Capture currently deployed SHA")
+    configure_script = configure_step.get("run", "")
+    run_script = capture_step.get("run", "")
+    assert "^[A-Za-z0-9][A-Za-z0-9.-]*$" in configure_script
+    assert "HETZNER_HOST to be a bare hostname or IPv4 address" in configure_script
+    assert "CURRENT_DEPLOYED_SHA" in run_script
+    assert "git rev-parse HEAD" in run_script
+    assert "GITHUB_OUTPUT" in run_script
+    assert "before deploy rollback anchor" in run_script
+
+
+def test_deploy_job_captures_prior_sha_before_bootstrap_checkout_mutates_head() -> None:
+    """Capture must run before bootstrap, because bootstrap checks out DEPLOY_GIT_SHA."""
+    parsed = _parse_deploy_workflow()
+    steps = parsed["jobs"]["deploy"].get("steps", [])
+
+    capture_index = _find_step_index(steps, "Capture currently deployed SHA")
+    bootstrap_index = _find_step_index(steps, "Bootstrap remote host prerequisites")
+
+    assert capture_index < bootstrap_index, (
+        "Capture currently deployed SHA must run before Bootstrap remote host prerequisites "
+        "or rollback captures the new SHA instead of the prior deployment."
+    )
+
+
+def test_deploy_job_runs_production_smoke_after_rollout() -> None:
+    """Deploy must run production-target smoke using the existing smoke owner path."""
+    parsed = _parse_deploy_workflow()
+    steps = parsed["jobs"]["deploy"].get("steps", [])
+    smoke_step = _find_step(steps, "Run production smoke gate")
+    run_script = smoke_step.get("run", "")
+    assert "./tests/smoke/run-playwright.sh" in run_script
+    assert "tests/smoke/dwo_mvp_release.spec.ts" in run_script
+    assert "SMOKE_MODE=production" in run_script
+    assert "SMOKE_BASE_URL=" in run_script
+
+
+def test_deploy_job_rolls_back_with_prod_compose_after_smoke_failure() -> None:
+    """Rollback must be conditional on smoke failure and use the same prod compose owner."""
+    parsed = _parse_deploy_workflow()
+    steps = parsed["jobs"]["deploy"].get("steps", [])
+    rollback_step = _find_step(steps, "Rollback to previously deployed SHA on smoke failure")
+
+    assert rollback_step.get("if") == "steps.production_smoke_gate.outcome == 'failure'"
+    run_script = rollback_step.get("run", "")
+    assert "git checkout --detach" in run_script
+    assert "CURRENT_DEPLOYED_SHA" in run_script
+    assert "infra/scripts/prod_compose.sh" in run_script
+    assert "up -d --force-recreate --wait --wait-timeout 180 api web caddy" in run_script
 
 
 def test_deploy_workflow_does_not_duplicate_ci_or_integration_concerns() -> None:

@@ -11,6 +11,8 @@ jurisdiction:
 data_sources:
   - name: "Georgia Campaign Portal — Contributions Search Export"
     url: "https://media.ethics.ga.gov/search/Campaign/Campaign_ByContributions.aspx"
+    date_start_selector: "#ctl00_ContentPlaceHolder1_txtReceivedDateFrom"
+    date_end_selector: "#ctl00_ContentPlaceHolder1_txtReceivedDateTo"
     bulk_download_url: null
     api_base_url: null
     format: "web_portal"
@@ -65,6 +67,8 @@ data_sources:
 
   - name: "Georgia Campaign Portal — Expenditures Search Export"
     url: "https://media.ethics.ga.gov/search/Campaign/Campaign_ByExpenditures.aspx"
+    date_start_selector: "#ctl00_ContentPlaceHolder1_txtDateFrom"
+    date_end_selector: "#ctl00_ContentPlaceHolder1_txtDateTo"
     bulk_download_url: null
     api_base_url: null
     format: "web_portal"
@@ -113,6 +117,59 @@ data_sources:
       - "Expenditure export is returned as application/vnd.ms-excel attachment EthicsReportExport.xls but payload is an HTML table, not BIFF/OOXML workbook bytes."
       - "Expenditure result pages are stateful ASP.NET postbacks and require continuous session + hidden-form token reuse."
       - "No official bulk download, API, or machine-readable feed was found on campaign search surfaces."
+
+  - name: "Georgia Campaign Portal — Independent Expenditures Search Export"
+    url: "https://media.ethics.ga.gov/search/Campaign/Campaign_ByIEFiler.aspx"
+    date_start_selector: "#ctl00_ContentPlaceHolder1_txtDateFrom"
+    date_end_selector: "#ctl00_ContentPlaceHolder1_txtDateTo"
+    bulk_download_url: null
+    api_base_url: null
+    format: "web_portal"
+    auth_required: false
+    update_frequency: "continuous"
+    coverage:
+      start_year: 2000
+      covers_sub_jurisdictions: true
+      office_levels:
+        - governor
+        - lieutenant_governor
+        - state_senate
+        - state_house
+        - judicial
+        - county
+        - municipal
+      transaction_types:
+        - independent_expenditures
+    field_mappings:
+      FilerID: "committee.id"
+      Key: "transaction.sequence"
+      Ref: "transaction.reference"
+      Type: "transaction.type"
+      LastName: "payee.name.last"
+      FirstName: "payee.name.first"
+      Address: "payee.address.street1"
+      City: "payee.address.city"
+      State: "payee.address.state"
+      Zip: "payee.address.zip"
+      Occupation_or_Employer: "payee.employer_or_occupation"
+      Date: "transaction.date"
+      Purpose: "transaction.purpose"
+      Paid: "transaction.amount"
+      Other: "transaction.other_amount"
+      Election: "transaction.election_type"
+      Election_Year: "election.year"
+      Candidate_FirstName: "candidate.name.first"
+      Candidate_MiddleName: "candidate.name.middle"
+      Candidate_LastName: "candidate.name.last"
+      Candidate_Suffix: "candidate.name.suffix"
+      Committee_Name: "committee.name"
+    scraper: null
+    last_successful_pull: null
+    last_verified_working: null
+    known_issues:
+      - "As of 2026-04-29, the configured URL returns HTTP 404 'The resource cannot be found' on media.ethics.ga.gov."
+      - "No navigation link to Campaign_ByIEFiler.aspx is exposed from current campaign search pages."
+      - "Date selectors are provisional and copied from the expenditure contract pending a live page recovery."
 
 laws:
   source_url: "https://media.ethics.ga.gov/Commission/pdf/EthicsInGovernmentAct.pdf"

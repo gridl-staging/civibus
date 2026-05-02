@@ -120,3 +120,42 @@ def test_score_entities_skips_probabilistic_when_all_rows_resolved(
 
     assert result == deterministic_pairs
     assert score_called is False
+
+
+def test_score_entities_threads_explicit_probabilistic_settings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    person_a = uuid4()
+    rows: list[RowDict] = [{"id": person_a, "canonical_name": "A"}]
+    candidate_settings = {"candidate": "stage3"}
+    captured_settings: list[object] = []
+
+    monkeypatch.setattr(
+        "core.entity_resolution.scoring.extract_rows_for_matching",
+        lambda conn, entity_type: rows,
+    )
+    monkeypatch.setattr(
+        "core.entity_resolution.scoring.run_deterministic_rules",
+        lambda conn, entity_type: [],
+    )
+
+    def _fake_score_with_splink(
+        unresolved: list[RowDict],
+        entity_type: str,
+        *,
+        probabilistic_settings: object | None = None,
+    ) -> list[dict]:
+        assert unresolved == rows
+        assert entity_type == "person"
+        captured_settings.append(probabilistic_settings)
+        return []
+
+    monkeypatch.setattr("core.entity_resolution.scoring.score_with_splink", _fake_score_with_splink)
+
+    score_entities(
+        object(),
+        "person",
+        probabilistic_settings=candidate_settings,
+    )
+
+    assert captured_settings == [candidate_settings]

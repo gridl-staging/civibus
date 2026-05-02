@@ -131,3 +131,21 @@ def test_transaction_round_trip_dump_and_validate():
     assert dumped["amount"] == "150.10"
     restored = Transaction.model_validate(dumped)
     assert restored == transaction
+
+
+def test_transaction_back_ref_transaction_id_round_trip_and_default_none():
+    baseline = Transaction.model_validate(build_transaction_payload())
+    assert baseline.back_ref_transaction_id is None
+
+    transaction = Transaction.model_validate(
+        build_transaction_payload(
+            transaction_identifier="TR-43",
+            back_ref_transaction_id="SB-BACKREF-001",
+            sub_id=43,
+        )
+    )
+    dumped = transaction.model_dump(mode="json")
+    assert dumped["back_ref_transaction_id"] == "SB-BACKREF-001"
+
+    restored = Transaction.model_validate(dumped)
+    assert restored.back_ref_transaction_id == "SB-BACKREF-001"

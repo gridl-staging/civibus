@@ -4,7 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from . import _find_ga_data_source_block_by_transaction_type
+from . import _find_ga_data_source_block_by_transaction_type, _load_date_selectors_for_transaction_type
 
 _SEARCH_BUTTON_SELECTOR = "#ctl00_ContentPlaceHolder1_Search"
 _EXPORT_BUTTON_SELECTOR = "#ctl00_ContentPlaceHolder1_Export"
@@ -13,17 +13,6 @@ _RESULTS_READY_TIMEOUT_MS = 120_000
 _DOWNLOAD_EVENT_TIMEOUT_MS = 180_000
 _ALLOWED_SEARCH_URL_SCHEME = "https"
 _ALLOWED_SEARCH_URL_HOSTS = frozenset({"media.ethics.ga.gov"})
-
-_DATE_SELECTORS_BY_DATA_TYPE: dict[str, tuple[str, str]] = {
-    "contributions": (
-        "#ctl00_ContentPlaceHolder1_txtReceivedDateFrom",
-        "#ctl00_ContentPlaceHolder1_txtReceivedDateTo",
-    ),
-    "expenditures": (
-        "#ctl00_ContentPlaceHolder1_txtDateFrom",
-        "#ctl00_ContentPlaceHolder1_txtDateTo",
-    ),
-}
 
 try:
     from playwright.sync_api import sync_playwright as _sync_playwright
@@ -70,12 +59,12 @@ def _validate_search_url(search_url: str) -> str:
 
 def _fill_search_form(
     page: object,
-    data_type: str,
+    date_selectors: tuple[str, str],
     candidate: str,
     date_start: str,
     date_end: str,
 ) -> None:
-    date_start_selector, date_end_selector = _DATE_SELECTORS_BY_DATA_TYPE[data_type]
+    date_start_selector, date_end_selector = date_selectors
     page.fill(_CANDIDATE_SELECTOR, candidate)
     page.fill(date_start_selector, date_start)
     page.fill(date_end_selector, date_end)
@@ -115,8 +104,16 @@ def download_ga_export(
     _require_playwright()
 
     normalized_data_type = _normalize_data_type(data_type)
-    if normalized_data_type not in _DATE_SELECTORS_BY_DATA_TYPE:
+    source_block = _find_ga_data_source_block_by_transaction_type(normalized_data_type)
+    if source_block is None:
         raise ValueError(f"Unsupported GA data type: {data_type}")
+    if source_block.last_verified_working is None:
+        source_issue_summary = source_block.known_issues[0] if source_block.known_issues else "missing last_verified_working"
+        raise RuntimeError(
+            "GA data type "
+            f"{normalized_data_type!r} is configured but not currently verified for live export: {source_issue_summary}"
+        )
+    date_selectors = _load_date_selectors_for_transaction_type(normalized_data_type)
 
     search_url = _validate_search_url(build_search_url(normalized_data_type))
     dest_dir.mkdir(parents=True, exist_ok=True)
@@ -131,7 +128,7 @@ def download_ga_export(
                 # alive via ViewState updates and polling, so DOM parsing is
                 # the stable readiness signal for this page.
                 page.goto(search_url, wait_until="domcontentloaded")
-                _fill_search_form(page, normalized_data_type, candidate, date_start, date_end)
+                _fill_search_form(page, date_selectors, candidate, date_start, date_end)
                 # ASP.NET WebForms uses __doPostBack for the search button.
                 # Clicking triggers a full page reload via form POST. We must
                 # wait for navigation to complete before looking for the

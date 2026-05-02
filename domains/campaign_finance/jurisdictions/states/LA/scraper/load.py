@@ -114,6 +114,20 @@ _LA_TRANSACTION_KIND: dict[str, str] = {
     "expenditures": "expenditure",
 }
 
+# LA Ethics IE rows are present in the standard expenditure bulk CSV.
+# Stage 1 contract evidence: ReportCode values F305/F306 identify Form EI rows
+# within the same ExpenditureReports export, while Form 202 rows remain
+# non-IE even when Schedule is E-1/E-2/E-3/E-4.
+_LA_IE_REPORT_CODES: frozenset[str] = frozenset({"F305", "F306"})
+
+
+def _la_is_independent_expenditure(row: Mapping[str, str | None]) -> bool:
+    report_code_col = _load_column_for_semantic_path("expenditures", "la.report_code")
+    raw = _normalize_optional_text(row.get(report_code_col))
+    if raw is None:
+        return False
+    return raw.upper() in _LA_IE_REPORT_CODES
+
 
 def ensure_la_data_source(conn: psycopg.Connection, data_type: str) -> UUID:
     normalized = data_type.strip().lower()
@@ -558,12 +572,15 @@ def _upsert_la_transaction_with_filing(
     date_col = _load_column_for_semantic_path(data_type, "transaction.date")
     memo_col = _load_column_for_semantic_path(data_type, "transaction.description")
 
+    is_ie = _la_is_independent_expenditure(row) if data_type == "expenditures" else False
+    transaction_type = "Independent Expenditure" if is_ie else _LA_TRANSACTION_KIND[data_type]
+
     upsert_transaction(
         conn,
         Transaction(
             filing_id=filing_id,
             committee_id=committee_id,
-            transaction_type=_LA_TRANSACTION_KIND[data_type],
+            transaction_type=transaction_type,
             transaction_identifier=_transaction_identifier(row, data_type=data_type),
             transaction_date=_parse_optional_la_date(row.get(date_col)),
             amount=_parse_required_la_amount(row.get(amount_col), amount_col),

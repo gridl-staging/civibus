@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from core.refresh import runner
+from core.refresh import job_builders
 
 
 _LA_SCRAPER_DIR = Path(__file__).resolve().parent.parent / "scraper"
@@ -41,14 +41,14 @@ def test_la_cli_exports_public_api() -> None:
 
 
 def test_build_refresh_plan_all_scope_includes_la_city_job() -> None:
-    jobs = runner.build_refresh_plan(scope="all")
+    jobs = job_builders.build_refresh_plan(scope="all")
     job_keys = {job.key for job in jobs}
 
     assert "city-la-transactions" in job_keys
 
 
 def test_la_city_job_metadata_matches_config() -> None:
-    jobs = runner.build_refresh_plan(scope="all")
+    jobs = job_builders.build_refresh_plan(scope="all")
     la_jobs = [job for job in jobs if job.key == "city-la-transactions"]
 
     assert len(la_jobs) == 1

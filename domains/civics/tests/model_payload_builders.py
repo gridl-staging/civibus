@@ -57,6 +57,47 @@ def build_contest_payload(**overrides: object) -> dict[str, object]:
     )
 
 
+def build_election_payload(**overrides: object) -> dict[str, object]:
+    return _payload_with_overrides(
+        {
+            "jurisdiction_scope": "state",
+            "state": "NC",
+            "election_date": "2024-11-05",
+            "election_type": "general",
+            "is_special": False,
+        },
+        overrides,
+    )
+
+
+def build_filing_deadline_payload(**overrides: object) -> dict[str, object]:
+    return _payload_with_overrides(
+        {
+            "election_id": build_uuid_string(),
+            "office_id": build_uuid_string(),
+            "jurisdiction_scope": "state",
+            "state": "NC",
+            "deadline_date": "2024-03-01",
+            "deadline_kind": "candidate_filing",
+        },
+        overrides,
+    )
+
+
+def build_reporting_period_payload(**overrides: object) -> dict[str, object]:
+    return _payload_with_overrides(
+        {
+            "election_id": build_uuid_string(),
+            "period_name": "pre_general_q3",
+            "period_start": "2024-07-01",
+            "period_end": "2024-09-30",
+            "report_due_date": "2024-10-15",
+            "is_pre_election": True,
+        },
+        overrides,
+    )
+
+
 def build_candidacy_payload(**overrides: object) -> dict[str, object]:
     return _payload_with_overrides(
         {
@@ -67,11 +108,44 @@ def build_candidacy_payload(**overrides: object) -> dict[str, object]:
     )
 
 
+def build_candidacy_mvp_fields_payload(**overrides: object) -> dict[str, object]:
+    return _payload_with_overrides(
+        {
+            "name_on_ballot": "ALEX EXAMPLE",
+            "is_unexpired_term": True,
+            "raw_fields": {"native_candidate_id": "123", "district": "01"},
+            "committee_id": build_uuid_string(),
+        },
+        overrides,
+    )
+
+
+def build_contest_result_payload(**overrides: object) -> dict[str, object]:
+    return _payload_with_overrides(
+        {
+            "contest_id": build_uuid_string(),
+            "candidate_name_on_ballot": "ALEX EXAMPLE",
+            "election_date": "2024-11-05",
+        },
+        overrides,
+    )
+
+
 def build_officeholding_payload(**overrides: object) -> dict[str, object]:
     return _payload_with_overrides(
         {
             "person_id": build_uuid_string(),
             "office_id": build_uuid_string(),
+        },
+        overrides,
+    )
+
+
+def build_office_roster_link_payload(**overrides: object) -> dict[str, object]:
+    return _payload_with_overrides(
+        {
+            "office_id": build_uuid_string(),
+            "data_source_id": build_uuid_string(),
         },
         overrides,
     )

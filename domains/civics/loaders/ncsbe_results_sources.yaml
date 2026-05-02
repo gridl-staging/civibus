@@ -1,0 +1,21 @@
+sources:
+  - source_id: nc_ncsbe_enrs_2020_11_03_general
+    election_date: "2020-11-03"
+    election_label: "General Election"
+    fixture_file: enrs_2020_11_03_general_sample.csv
+    source_url: "https://er.ncsbe.gov/downloads/enrs/2020_11_03/results.csv"
+  - source_id: nc_ncsbe_enrs_2022_11_08_general
+    election_date: "2022-11-08"
+    election_label: "General Election"
+    fixture_file: enrs_2022_11_08_general_sample.csv
+    source_url: "https://er.ncsbe.gov/downloads/enrs/2022_11_08/results.csv"
+  - source_id: nc_ncsbe_enrs_2024_03_05_primary
+    election_date: "2024-03-05"
+    election_label: "Primary Election"
+    fixture_file: enrs_2024_03_05_primary_sample.csv
+    source_url: "https://er.ncsbe.gov/downloads/enrs/2024_03_05/results.csv"
+  - source_id: nc_ncsbe_enrs_2024_11_05_general
+    election_date: "2024-11-05"
+    election_label: "General Election"
+    fixture_file: enrs_2024_11_05_general_sample.csv
+    source_url: "https://er.ncsbe.gov/downloads/enrs/2024_11_05/results.csv"

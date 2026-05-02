@@ -269,15 +269,42 @@ def test_load_co_contributions_is_idempotent_for_fixture(db_conn: psycopg.Connec
     data_source_id = ensure_co_data_source(db_conn)
 
     first_result = load_co_contributions(db_conn, SAMPLE_CONTRIBUTIONS_PATH, data_source_id=data_source_id)
-    second_result = load_co_contributions(db_conn, SAMPLE_CONTRIBUTIONS_PATH, data_source_id=data_source_id)
 
     assert isinstance(first_result, LoadResult)
     assert first_result.inserted == 11
     assert first_result.skipped == 0
 
+    with db_conn.cursor(row_factory=dict_row) as cursor:
+        cursor.execute(
+            """
+            SELECT id, source_record_key, record_hash, raw_fields, pull_date, superseded_by
+            FROM core.source_record
+            WHERE data_source_id = %s
+            ORDER BY source_record_key, superseded_by NULLS FIRST
+            """,
+            (data_source_id,),
+        )
+        first_source_record_snapshot = cursor.fetchall()
+
+    second_result = load_co_contributions(db_conn, SAMPLE_CONTRIBUTIONS_PATH, data_source_id=data_source_id)
+
     assert isinstance(second_result, LoadResult)
     assert second_result.inserted == 0
     assert second_result.skipped == 11
+
+    with db_conn.cursor(row_factory=dict_row) as cursor:
+        cursor.execute(
+            """
+            SELECT id, source_record_key, record_hash, raw_fields, pull_date, superseded_by
+            FROM core.source_record
+            WHERE data_source_id = %s
+            ORDER BY source_record_key, superseded_by NULLS FIRST
+            """,
+            (data_source_id,),
+        )
+        second_source_record_snapshot = cursor.fetchall()
+
+    assert second_source_record_snapshot == first_source_record_snapshot
 
 
 def test_load_co_contributions_tracks_superseded_rows_on_each_run(db_conn: psycopg.Connection) -> None:
@@ -438,6 +465,7 @@ def test_load_co_contributions_with_filings_builds_relational_rows_and_is_idempo
             SELECT t.transaction_identifier,
                    t.amendment_indicator,
                    f.filing_fec_id,
+                   t.source_record_id,
                    t.contributor_person_id,
                    t.contributor_organization_id,
                    (
@@ -466,9 +494,25 @@ def test_load_co_contributions_with_filings_builds_relational_rows_and_is_idempo
         )
         transaction_rows = cursor.fetchall()
 
+    contribution_data_source_id = ensure_co_data_source(db_conn, data_type="contributions")
+    with db_conn.cursor(row_factory=dict_row) as cursor:
+        cursor.execute(
+            """
+            SELECT id, source_record_key, record_hash, raw_fields
+            FROM core.source_record
+            WHERE data_source_id = %s
+              AND source_record_key = ANY(%s)
+              AND superseded_by IS NULL
+            ORDER BY source_record_key
+            """,
+            (contribution_data_source_id, expected_record_ids),
+        )
+        source_record_snapshot = cursor.fetchall()
+
     assert [row["filing_fec_id"] for row in filing_rows] == sorted(expected_filing_fec_ids)
     assert committee_count == len(expected_filing_fec_ids)
     assert [row["transaction_identifier"] for row in transaction_rows] == expected_record_ids
+    assert [row["source_record_key"] for row in source_record_snapshot] == expected_record_ids
 
     for transaction_row in transaction_rows:
         expected_filing_fec_id, expected_amendment_indicator = expected_by_record_id[
@@ -479,6 +523,10 @@ def test_load_co_contributions_with_filings_builds_relational_rows_and_is_idempo
         assert transaction_row["contributor_person_id"] == transaction_row["expected_contributor_person_id"]
         assert transaction_row["contributor_organization_id"] == transaction_row["expected_contributor_organization_id"]
 
+    first_filing_rows = filing_rows
+    first_transaction_rows = transaction_rows
+    first_committee_count = committee_count
+
     rerun_result = load_co_contributions_with_filings(db_conn, SAMPLE_CONTRIBUTIONS_PATH)
     assert rerun_result.inserted == 0
     assert rerun_result.skipped == 11
@@ -488,26 +536,78 @@ def test_load_co_contributions_with_filings_builds_relational_rows_and_is_idempo
     with db_conn.cursor(row_factory=dict_row) as cursor:
         cursor.execute(
             """
-            SELECT COUNT(*) AS count
+            SELECT filing_fec_id
             FROM cf.filing
             WHERE filing_fec_id = ANY(%s)
+            ORDER BY filing_fec_id
             """,
             (sorted(expected_filing_fec_ids),),
         )
-        filing_count = cursor.fetchone()["count"]
+        rerun_filing_rows = cursor.fetchall()
+
+        cursor.execute(
+            """
+            SELECT t.transaction_identifier,
+                   t.amendment_indicator,
+                   f.filing_fec_id,
+                   t.source_record_id,
+                   t.contributor_person_id,
+                   t.contributor_organization_id,
+                   (
+                       SELECT es.entity_id
+                       FROM core.entity_source es
+                       WHERE es.source_record_id = t.source_record_id
+                         AND es.entity_type = 'person'
+                         AND es.extraction_role = 'donor'
+                       LIMIT 1
+                   ) AS expected_contributor_person_id,
+                   (
+                       SELECT es.entity_id
+                       FROM core.entity_source es
+                       WHERE es.source_record_id = t.source_record_id
+                         AND es.entity_type = 'organization'
+                         AND es.extraction_role = 'contributor'
+                       LIMIT 1
+                   ) AS expected_contributor_organization_id
+            FROM cf.transaction t
+            JOIN cf.filing f
+              ON f.id = t.filing_id
+            WHERE transaction_identifier = ANY(%s)
+            ORDER BY t.transaction_identifier
+            """,
+            (expected_record_ids,),
+        )
+        rerun_transaction_rows = cursor.fetchall()
+
+        cursor.execute(
+            """
+            SELECT id, source_record_key, record_hash, raw_fields
+            FROM core.source_record
+            WHERE data_source_id = %s
+              AND source_record_key = ANY(%s)
+              AND superseded_by IS NULL
+            ORDER BY source_record_key
+            """,
+            (contribution_data_source_id, expected_record_ids),
+        )
+        rerun_source_record_snapshot = cursor.fetchall()
 
         cursor.execute(
             """
             SELECT COUNT(*) AS count
-            FROM cf.transaction
-            WHERE transaction_identifier = ANY(%s)
+            FROM cf.committee c
+            JOIN core.organization o
+              ON o.id = c.organization_id
+            WHERE c.state = 'CO'
+              AND o.identifiers ? 'co_committee_id'
             """,
-            (expected_record_ids,),
         )
-        transaction_count = cursor.fetchone()["count"]
+        rerun_committee_count = cursor.fetchone()["count"]
 
-    assert filing_count == len(expected_filing_fec_ids)
-    assert transaction_count == len(expected_record_ids)
+    assert rerun_filing_rows == first_filing_rows
+    assert rerun_transaction_rows == first_transaction_rows
+    assert rerun_committee_count == first_committee_count
+    assert rerun_source_record_snapshot == source_record_snapshot
 
 
 def test_load_co_contributions_reingest_keeps_transaction_linked_to_active_source_record(

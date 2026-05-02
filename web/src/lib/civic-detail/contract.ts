@@ -39,6 +39,50 @@ export type OfficeholderSummary = {
   holder_status: OfficeholderStatus;
 };
 
+export type OfficeCurrentHolderCard = {
+  officeholding_id: string;
+  person_id: string;
+  person_name: string;
+  holder_status: OfficeholderStatus;
+  electoral_division_id: string | null;
+  electoral_division_type: string | null;
+  electoral_division_state: string | null;
+  valid_period_lower: string | null;
+  valid_period_upper: string | null;
+  date_precision: DatePrecisionLiteral;
+};
+
+export type OfficeholdingTimelineRow = {
+  officeholding_id: string;
+  person_id: string;
+  person_name: string;
+  holder_status: OfficeholderStatus;
+  electoral_division_id: string | null;
+  electoral_division_type: string | null;
+  electoral_division_state: string | null;
+  valid_period_lower: string | null;
+  valid_period_upper: string | null;
+  date_precision: DatePrecisionLiteral;
+  is_active: boolean;
+  // Backend-owned ended-state flag. True iff the row's bounded valid_period
+  // upper bound has already passed on the server today. Presenters must use
+  // this rather than holder_status to decide whether to render ended copy.
+  term_ended: boolean;
+};
+
+export type OfficeRecentContestSummary = {
+  contest_id: string;
+  contest_name: string;
+  election_date: string | null;
+  election_type: ElectionTypeLiteral;
+  filing_deadline: string | null;
+  electoral_division_id: string | null;
+  electoral_division_type: string | null;
+  electoral_division_state: string | null;
+  is_partisan: boolean;
+  candidate_list_incomplete: boolean;
+};
+
 export type CandidacySummary = {
   candidacy_id: string;
   person_id: string;
@@ -58,6 +102,12 @@ export type OfficeDetailResponse = {
   is_elected: boolean;
   number_of_seats: number;
   current_officeholders: OfficeholderSummary[];
+  current_holder_card: OfficeCurrentHolderCard | null;
+  officeholding_timeline: OfficeholdingTimelineRow[];
+  recent_contests: OfficeRecentContestSummary[];
+  selected_electoral_division_id: string | null;
+  selected_electoral_division_type: string | null;
+  selected_electoral_division_state: string | null;
   incomplete_data_states: OfficeIncompleteDataState[];
   sources: SourceInfo[];
 };
@@ -69,10 +119,15 @@ export type ContestDetailResponse = {
   election_type: ElectionTypeLiteral;
   office_id: string;
   electoral_division_id: string | null;
+  electoral_division_type?: string | null;
+  electoral_division_state?: string | null;
   number_of_seats: number;
   filing_deadline: string | null;
   is_partisan: boolean;
   candidate_list_incomplete: boolean;
+  result_winner_candidacy_id?: string | null;
+  result_winner_person_id?: string | null;
+  result_winner_person_name?: string | null;
   candidacies: CandidacySummary[];
   sources: SourceInfo[];
 };
@@ -101,6 +156,33 @@ export type OfficeholdingDetailResponse = {
   valid_period_upper: string | null;
   date_precision: DatePrecisionLiteral;
   sources: SourceInfo[];
+};
+
+export type ElectionContestSummary = {
+  contest_id: string;
+  office_id: string;
+  name: string;
+  election_type: ElectionTypeLiteral;
+  office_name: string;
+  office_level: OfficeLevel;
+  state: string | null;
+  jurisdiction_id: string | null;
+  electoral_division_id: string | null;
+  candidate_count: number;
+  result_status: string | null;
+  winning_person_name: string | null;
+};
+
+export type ElectionDateAggregateResponse = {
+  date: string;
+  total_contests: number;
+  total_candidacies: number;
+  contests: ElectionContestSummary[];
+};
+
+export type UpcomingElectionTimelineEntry = {
+  date: string;
+  contests: ElectionContestSummary[];
 };
 
 export function buildOfficeDetailPath(officeId: string): string {
@@ -134,3 +216,17 @@ export function buildOfficeholdingDetailPath(officeholdingId: string): string {
 export function buildOfficeholdingRoutePath(officeholdingId: string): string {
   return `/officeholding/${encodeRoutePathSegment(officeholdingId)}`;
 }
+
+export function buildElectionDateAggregatePath(electionDate: string): string {
+  return `/v1/elections/${encodeRoutePathSegment(electionDate)}`;
+}
+
+export function buildUpcomingElectionTimelinePath(): string {
+  return "/v1/elections/timeline/upcoming";
+}
+
+export function buildElectionDateRoutePath(electionDate: string): string {
+  return `/election/${encodeRoutePathSegment(electionDate)}`;
+}
+
+export const CIVIC_ROUTE_PREFIXES = ["/office/", "/contest/", "/candidacy/", "/officeholding/"] as const;

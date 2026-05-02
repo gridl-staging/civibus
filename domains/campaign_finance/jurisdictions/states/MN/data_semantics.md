@@ -51,6 +51,10 @@ Decision:
 - The official `/reports/#/` search/export surface is date-filterable and API-backed, but current operator evidence only proves browser-session-backed access patterns and does not show fresher publication than quarterly download feeds.
 - Treat `/reports/#/` as a supplemental query interface, not a replacement freshness source.
 - `/reports/#/` and `/reports/api/` are supplemental evidence surfaces only and are not required for canonical ingest.
+- Stage 3 closeout reaffirmed this as a resolved-negative freshness route via dated evidence:
+  - `docs/research/mn-freshness-investigation-2026-03-29.md`
+  - `docs/research/artifacts/2026-04-09-freshness-quality-probes/state-MN.json`
+  - `docs/research/in_mn_nj_freshness_stage1_baseline_2026_04_28.md`
 
 Operator evidence captured:
 - Official quarterly contract page with direct file downloads: `https://register.cfb.mn.gov/reports-and-data/self-help/data-downloads/campaign-finance/`.

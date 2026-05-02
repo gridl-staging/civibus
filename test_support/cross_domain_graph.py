@@ -1,3 +1,4 @@
+
 from __future__ import annotations
 
 from datetime import date
@@ -119,7 +120,7 @@ def seed_cross_domain_possible_match_fixture(graph_conn: psycopg.Connection) -> 
     )
     assert (inserted, skipped, errors) == (1, 0, 0)
 
-    campaign_count, property_count, _ = _load_mixed_domain_edges(graph_conn, limit=1000)
+    campaign_count, property_count, _, _ = _load_mixed_domain_edges(graph_conn, limit=1000)
     assert campaign_count >= 1
     assert property_count >= 1
 

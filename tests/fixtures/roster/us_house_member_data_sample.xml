@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<member_data_snapshot>
+  <member>
+    <bioguide_id>B001234</bioguide_id>
+    <member_name>BROWN, Casey</member_name>
+    <first_name>Casey</first_name>
+    <last_name>BROWN</last_name>
+    <state>NC</state>
+    <district>12</district>
+    <party>D</party>
+    <phone>202-225-1001</phone>
+    <office_building>CHOB</office_building>
+    <office_room>1501</office_room>
+    <office_zip>20515-3312</office_zip>
+    <elected_date>2024-11-05</elected_date>
+    <sworn_date>2025-01-03</sworn_date>
+  </member>
+  <member>
+    <bioguide_id></bioguide_id>
+    <member_name>VACANT</member_name>
+    <first_name></first_name>
+    <last_name>VACANT</last_name>
+    <state>NC</state>
+    <district>02</district>
+    <party></party>
+    <phone></phone>
+    <office_building></office_building>
+    <office_room></office_room>
+    <office_zip></office_zip>
+    <elected_date></elected_date>
+    <sworn_date></sworn_date>
+  </member>
+</member_data_snapshot>

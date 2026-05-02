@@ -1,3 +1,4 @@
+
 from __future__ import annotations
 
 import hashlib
@@ -21,7 +22,7 @@ END
 """
 
 
-_TRANSACTION_AMENDMENT_INDICATOR_INDEX = 21
+_TRANSACTION_AMENDMENT_INDICATOR_INDEX = 22
 
 
 _normalize_optional_text = normalize_optional_text
@@ -142,6 +143,41 @@ def resolve_transaction_counterparty_ids(
     return None, None
 
 
+def update_transaction_contributor_identity_ids(
+    conn: psycopg.Connection,
+    *,
+    transaction_id: UUID,
+    contributor_person_id: UUID | None,
+    contributor_organization_id: UUID | None,
+) -> bool:
+    """Update only contributor identity IDs for an existing transaction row."""
+    if contributor_person_id is not None and contributor_organization_id is not None:
+        raise ValueError("Only one contributor identifier may be provided")
+
+    with conn.cursor() as cursor:
+        cursor.execute(
+            """
+            UPDATE cf.transaction
+            SET contributor_person_id = %s,
+                contributor_organization_id = %s
+            WHERE id = %s
+              AND (
+                    contributor_person_id IS DISTINCT FROM %s
+                 OR contributor_organization_id IS DISTINCT FROM %s
+              )
+            RETURNING id
+            """,
+            (
+                contributor_person_id,
+                contributor_organization_id,
+                transaction_id,
+                contributor_person_id,
+                contributor_organization_id,
+            ),
+        )
+        return cursor.fetchone() is not None
+
+
 def upsert_filing(conn: psycopg.Connection, filing: Filing) -> UUID:
     with conn.cursor() as cursor:
         cursor.execute(
@@ -237,9 +273,15 @@ def _select_transaction_id_by_filing_and_identifier(
 
 def _normalize_transaction(transaction: Transaction) -> Transaction:
     normalized_transaction_identifier = _normalize_optional_text(transaction.transaction_identifier)
-    if normalized_transaction_identifier == transaction.transaction_identifier:
+    normalized_back_ref = _normalize_optional_text(transaction.back_ref_transaction_id)
+    updates: dict[str, str | None] = {}
+    if normalized_transaction_identifier != transaction.transaction_identifier:
+        updates["transaction_identifier"] = normalized_transaction_identifier
+    if normalized_back_ref != transaction.back_ref_transaction_id:
+        updates["back_ref_transaction_id"] = normalized_back_ref
+    if not updates:
         return transaction
-    return transaction.model_copy(update={"transaction_identifier": normalized_transaction_identifier})
+    return transaction.model_copy(update=updates)
 
 
 def _resolve_existing_transaction_id(conn: psycopg.Connection, transaction: Transaction) -> UUID | None:
@@ -271,6 +313,7 @@ def _transaction_values(transaction: Transaction) -> tuple[object, ...]:
         transaction.committee_id,
         transaction.transaction_type,
         transaction.transaction_identifier,
+        transaction.back_ref_transaction_id,
         transaction.sub_id,
         transaction.transaction_date,
         transaction.amount,
@@ -322,6 +365,7 @@ def _update_transaction(
                 committee_id = %s,
                 transaction_type = %s,
                 transaction_identifier = COALESCE(%s, transaction_identifier),
+                back_ref_transaction_id = COALESCE(%s, back_ref_transaction_id),
                 sub_id = COALESCE(%s, sub_id),
                 transaction_date = %s,
                 amount = %s,
@@ -368,6 +412,7 @@ def _insert_transaction(conn: psycopg.Connection, transaction: Transaction) -> U
                 committee_id,
                 transaction_type,
                 transaction_identifier,
+                back_ref_transaction_id,
                 sub_id,
                 transaction_date,
                 amount,
@@ -394,7 +439,7 @@ def _insert_transaction(conn: psycopg.Connection, transaction: Transaction) -> U
                 aggregate_amount
             )
             VALUES (
-                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
             )
             RETURNING id
             """,
@@ -422,6 +467,7 @@ __all__ = [
     "ensure_state_committee",
     "generate_synthetic_committee_id",
     "resolve_transaction_counterparty_ids",
+    "update_transaction_contributor_identity_ids",
     "upsert_filing",
     "upsert_transaction",
 ]

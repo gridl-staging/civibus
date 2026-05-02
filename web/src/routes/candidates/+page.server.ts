@@ -5,12 +5,17 @@ import type { PageServerLoad } from "./$types";
 
 export const load: PageServerLoad = ({ url, locals }) =>
   withApiResponseErrorHandling(async () => {
-    const request: CandidateListRequest = readOptionalQueryParams(url.searchParams, [
+    const queryParams = readOptionalQueryParams(url.searchParams, [
       "state",
       "office",
       "offset",
       "limit"
     ] as const);
+    const request: CandidateListRequest = {
+      ...queryParams,
+      state: queryParams.state === "" ? undefined : queryParams.state,
+      office: queryParams.office === "" ? undefined : queryParams.office
+    };
 
     return fetchCandidateList(locals.api, request);
   }, "Backend candidate list request failed.");

@@ -19,6 +19,51 @@ from domains.campaign_finance.jurisdictions.states.IL.scraper.download import (
 _IL_CONFIG_PATH = Path(__file__).resolve().parents[1] / "config.yaml"
 
 
+class _FakeStreamingResponse:
+    def __init__(
+        self,
+        *,
+        chunks: list[bytes],
+        status_code: int = 200,
+        headers: dict[str, str] | None = None,
+        raise_during_iter: Exception | None = None,
+    ) -> None:
+        self._chunks = chunks
+        self.status_code = status_code
+        self.headers = headers or {}
+        self._raise_during_iter = raise_during_iter
+
+    def __enter__(self) -> "_FakeStreamingResponse":
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> bool:
+        return False
+
+    def raise_for_status(self) -> None:
+        if self.status_code >= 400:
+            raise httpx.HTTPStatusError(
+                "status error",
+                request=MagicMock(),
+                response=MagicMock(status_code=self.status_code),
+            )
+
+    def iter_bytes(self):  # noqa: ANN201
+        for chunk in self._chunks:
+            yield chunk
+        if self._raise_during_iter is not None:
+            raise self._raise_during_iter
+
+
+class _FakeClient:
+    def __init__(self, responses: list[_FakeStreamingResponse]) -> None:
+        self._responses = iter(responses)
+        self.calls: list[dict[str, object]] = []
+
+    def stream(self, method: str, url: str, headers: dict[str, str] | None = None):  # noqa: ANN201
+        self.calls.append({"method": method, "url": url, "headers": headers})
+        return next(self._responses)
+
+
 def _streaming_response(chunks: list[bytes], *, response_url: str) -> MagicMock:
     response = MagicMock(spec=httpx.Response)
     response.raise_for_status = MagicMock()
@@ -135,6 +180,9 @@ def test_download_il_raw_file_uses_unbounded_read_timeout_for_large_bulk_streams
     assert timeout.connect == il_download.REQUEST_TIMEOUT_SECONDS
     assert timeout.read is None
 
+    with pytest.raises(ValueError, match="official IL raw file name"):
+        download_il_raw_file("../Receipts.txt", dest_dir=tmp_path)
+
 
 def test_download_il_raw_file_retries_insecure_tls_only_with_break_glass(monkeypatch: pytest.MonkeyPatch) -> None:
     call_verify_values: list[bool] = []
@@ -167,6 +215,41 @@ def test_download_il_raw_file_retries_insecure_tls_only_with_break_glass(monkeyp
 
     assert output_path == Path("/tmp/Receipts.txt")
     assert call_verify_values == [True, False]
+
+
+def test_download_il_raw_file_with_metadata_retries_incomplete_chunked_read(monkeypatch: pytest.MonkeyPatch) -> None:
+    call_count = 0
+    remote_protocol_error = httpx.RemoteProtocolError(
+        "peer closed connection without sending complete message body (incomplete chunked read)"
+    )
+
+    def fake_download_once(
+        file_name: str,
+        *,
+        dest_dir: Path,
+        page_url: str,
+        verify_certificates: bool,
+        max_data_rows: int | None = None,
+        tail_data_rows: int | None = None,
+    ) -> il_download.ILDownloadResult:
+        del file_name, dest_dir, page_url, verify_certificates, max_data_rows, tail_data_rows
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise remote_protocol_error
+        return il_download.ILDownloadResult(
+            path=Path("/tmp/Receipts.txt"),
+            bytes_written=12,
+            data_rows_written=None,
+            truncated=False,
+        )
+
+    monkeypatch.setattr(il_download, "_download_il_raw_file_once", fake_download_once)
+
+    result = il_download.download_il_raw_file_with_metadata("Receipts.txt", dest_dir=Path("/tmp"))
+
+    assert result.path == Path("/tmp/Receipts.txt")
+    assert call_count == 2
 
 
 def test_download_il_data_with_metadata_stops_on_complete_row_boundaries(tmp_path: Path) -> None:
@@ -227,3 +310,32 @@ def test_download_il_data_with_metadata_rejects_conflicting_row_limit_modes(tmp_
             max_data_rows=2,
             tail_data_rows=2,
         )
+
+
+def test_stream_download_to_path_resumes_after_incomplete_chunked_read(tmp_path: Path) -> None:
+    destination_path = tmp_path / "Receipts.txt"
+    partial_stream_error = httpx.RemoteProtocolError(
+        "peer closed connection without sending complete message body (incomplete chunked read)"
+    )
+    fake_client = _FakeClient(
+        [
+            _FakeStreamingResponse(chunks=[b"ID\tCommitteeID\n", b"1\t42\n"], raise_during_iter=partial_stream_error),
+            _FakeStreamingResponse(
+                chunks=[b"2\t84\n"],
+                status_code=206,
+                headers={"Content-Range": "bytes 20-25/26"},
+            ),
+        ]
+    )
+
+    result = il_download._stream_download_to_path(
+        fake_client,
+        "https://elections.il.gov/NewDocDisplay.aspx?abc=123",
+        destination_path,
+    )
+
+    assert result.path == destination_path
+    assert result.bytes_written == len("ID\tCommitteeID\n1\t42\n2\t84\n".encode("utf-8"))
+    assert destination_path.read_text(encoding="utf-8") == "ID\tCommitteeID\n1\t42\n2\t84\n"
+    assert fake_client.calls[0]["headers"] is None
+    assert fake_client.calls[1]["headers"] == {"Range": "bytes=20-"}

@@ -111,3 +111,22 @@ export async function assertPrimaryNavTapTargetMinHeight(page: any, label: strin
   await expect(link).toBeVisible();
   await expect(link).toHaveCSS("min-height", "44px");
 }
+
+export function capturePageLoadErrors(page: any) {
+  const errors: string[] = [];
+
+  page.on("pageerror", (error: Error) => {
+    errors.push(`pageerror: ${error.message}`);
+  });
+  page.on("console", (message: any) => {
+    if (message.type() === "error") {
+      errors.push(`console.error: ${message.text()}`);
+    }
+  });
+
+  return {
+    async assertNoErrors() {
+      await expect(errors).toEqual([]);
+    }
+  };
+}

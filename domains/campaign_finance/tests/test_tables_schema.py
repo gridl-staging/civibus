@@ -28,6 +28,7 @@ CF_TABLES = [
     "filing",
     "transaction",
     "candidate_committee_link",
+    "nc_committee_registry",
 ]
 
 EXPECTED_FOREIGN_KEYS = [
@@ -55,6 +56,7 @@ EXPECTED_FOREIGN_KEYS = [
     ("candidate_committee_link", "committee_id", "committee", "id"),
     ("candidate_committee_link", "election_id", "election", "id"),
     ("candidate_committee_link", "source_record_id", "source_record", "id"),
+    ("nc_committee_registry", "data_source_id", "data_source", "id"),
 ]
 
 
@@ -261,9 +263,24 @@ def _skip_if_no_database_access() -> None:
         pytest.skip(f"Unable to connect to test database '{TEST_DATABASE}': {exc}")
 
 
+# Production-shaped database names that this test fixture MUST refuse to
+# drop the cf schema against. Without this guard, running `pytest` against
+# the live Hetzner DB silently nuked production cf data (live incident
+# 2026-04-26). The fixture below skips the schema-prep teardown when the
+# target DB is one of these names; opt in to destructive setup by setting
+# CF_SCHEMA_TEST_DATABASE to a dedicated test DB.
+_PROTECTED_DATABASE_NAMES = frozenset({"civibus", "civibus_prod", "civibus_staging"})
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _prepared_schema() -> None:
     _skip_if_no_database_access()
+    if TEST_DATABASE in _PROTECTED_DATABASE_NAMES:
+        pytest.skip(
+            f"Refusing to DROP SCHEMA cf CASCADE against protected production database "
+            f"{TEST_DATABASE!r}. Set CF_SCHEMA_TEST_DATABASE to a dedicated test "
+            f"database to run schema-prep tests."
+        )
     try:
         _load_core_if_needed(TEST_DATABASE)
     except Exception as exc:
@@ -300,6 +317,20 @@ def test_cf_schema_relationships_and_generated_columns():
     assert "greatest" in days_late
     assert "receipt_date" in days_late
     assert "due_date" in days_late
+
+
+def test_transaction_back_ref_transaction_id_column_is_nullable_text():
+    rows = _run_psql_command(
+        TEST_DATABASE,
+        """
+        SELECT data_type || '|' || is_nullable
+        FROM information_schema.columns
+        WHERE table_schema = 'cf'
+          AND table_name = 'transaction'
+          AND column_name = 'back_ref_transaction_id';
+        """,
+    )
+    assert rows == ["text|YES"]
 
 
 def test_cf_schema_updated_at_triggers():
@@ -452,4 +483,256 @@ def test_candidate_committee_non_overlap_blocks_null_designation_overlap():
             "H9ZZ00001",
             "C90000001",
             "daterange('2024-06-01', '2025-03-31', '[]')",
+        )
+
+
+# ---------------------------------------------------------------------------
+# NC Committee Registry storage contract tests
+# ---------------------------------------------------------------------------
+
+def _column_info(database: str, table: str, column: str) -> dict[str, str]:
+    rows = _run_psql_command(
+        database,
+        f"""
+        SELECT column_name || '|' || data_type || '|' || is_nullable
+               || '|' || COALESCE(column_default, '')
+        FROM information_schema.columns
+        WHERE table_schema = 'cf'
+          AND table_name = '{table}'
+          AND column_name = '{column}';
+        """,
+    )
+    if not rows:
+        return {}
+    parts = rows[0].split("|")
+    return {
+        "name": parts[0].strip() if len(parts) > 0 else "",
+        "type": parts[1].strip() if len(parts) > 1 else "",
+        "nullable": parts[2].strip() if len(parts) > 2 else "",
+        "default": parts[3].strip() if len(parts) > 3 else "",
+    }
+
+
+def _nc_registry_column_info(column: str) -> dict[str, str]:
+    return _column_info(TEST_DATABASE, "nc_committee_registry", column)
+
+
+def _check_constraint_exists(database: str, table_name: str, constraint_name: str) -> bool:
+    return _query_returns_truthy_first_row(
+        database,
+        f"""
+        SELECT EXISTS (
+            SELECT 1 FROM pg_constraint c
+            JOIN pg_class r ON c.conrelid = r.oid
+            WHERE r.relnamespace = 'cf'::regnamespace
+              AND r.relname = '{table_name}'
+              AND c.contype = 'c'
+              AND c.conname = '{constraint_name}'
+        )::text;
+        """,
+    )
+
+
+def test_nc_registry_required_columns():
+    for col in ("org_group_id", "sboe_id", "committee_name", "status_desc"):
+        info = _nc_registry_column_info(col)
+        assert info, f"Missing required column cf.nc_committee_registry.{col}"
+        assert info["nullable"] == "NO", (
+            f"cf.nc_committee_registry.{col} must be NOT NULL"
+        )
+
+
+def test_nc_registry_nullable_columns():
+    for col in ("old_id", "candidate_name"):
+        info = _nc_registry_column_info(col)
+        assert info, f"Missing nullable column cf.nc_committee_registry.{col}"
+        assert info["nullable"] == "YES", (
+            f"cf.nc_committee_registry.{col} should be nullable"
+        )
+
+
+def test_nc_registry_org_group_id_is_integer():
+    info = _nc_registry_column_info("org_group_id")
+    assert info["type"] == "integer", (
+        f"org_group_id should be integer, got {info['type']}"
+    )
+
+
+def test_nc_registry_unique_org_group_id():
+    assert _index_exists(TEST_DATABASE, "uq_nc_committee_registry_org_group_id"), (
+        "Missing unique index on org_group_id"
+    )
+
+
+def test_nc_registry_sboe_id_index():
+    assert _index_exists(TEST_DATABASE, "idx_nc_committee_registry_sboe_id"), (
+        "Missing lookup index on sboe_id"
+    )
+
+
+def test_nc_registry_status_desc_index():
+    assert _index_exists(TEST_DATABASE, "idx_nc_committee_registry_status_desc"), (
+        "Missing lookup index on status_desc"
+    )
+
+
+def test_nc_registry_lifecycle_timestamps():
+    for col in ("first_seen_at", "last_seen_at"):
+        info = _nc_registry_column_info(col)
+        assert info, f"Missing lifecycle column {col}"
+        assert "timestamp" in info["type"], (
+            f"{col} should be timestamptz, got {info['type']}"
+        )
+        assert info["nullable"] == "NO", f"{col} must be NOT NULL"
+
+
+def test_nc_registry_standard_timestamps():
+    for col in ("created_at", "updated_at"):
+        info = _nc_registry_column_info(col)
+        assert info, f"Missing standard timestamp column {col}"
+        assert info["nullable"] == "NO", f"{col} must be NOT NULL"
+        assert "now()" in (info.get("default") or "").lower(), (
+            f"{col} should default to NOW()"
+        )
+
+
+def test_nc_registry_monotonic_timestamp_check():
+    assert _check_constraint_exists(
+        TEST_DATABASE,
+        "nc_committee_registry",
+        "ck_nc_committee_registry_seen_order",
+    ), "Missing monotonic timestamp check (last_seen_at >= first_seen_at)"
+
+
+def test_nc_registry_data_source_fk():
+    assert _fk_exists(
+        TEST_DATABASE,
+        "nc_committee_registry",
+        "data_source_id",
+        "data_source",
+        "id",
+    ), "Missing FK nc_committee_registry.data_source_id -> data_source.id"
+
+
+def test_nc_registry_orchestrator_filter_columns():
+    """Orchestrator's seed_progress_from_registry queries is_active and last_filing_date.
+
+    Why: domains/campaign_finance/jurisdictions/states/NC/scraper/orchestrator_progress.py
+    uses `WHERE (is_active OR last_filing_date >= window_start)` to select committees
+    eligible for ingest. Both columns must exist on the production schema or the
+    orchestrator fails immediately with `column "is_active" does not exist`.
+    """
+    is_active = _nc_registry_column_info("is_active")
+    assert is_active, (
+        "Missing cf.nc_committee_registry.is_active column required by NC orchestrator"
+    )
+    assert is_active["type"] == "boolean", (
+        f"is_active should be boolean, got {is_active['type']}"
+    )
+
+    last_filing = _nc_registry_column_info("last_filing_date")
+    assert last_filing, (
+        "Missing cf.nc_committee_registry.last_filing_date column required by NC orchestrator"
+    )
+    assert last_filing["type"] == "date", (
+        f"last_filing_date should be date, got {last_filing['type']}"
+    )
+    assert last_filing["nullable"] == "YES", (
+        "last_filing_date should be nullable (no filing data yet for many committees)"
+    )
+
+
+def test_nc_registry_is_active_derived_from_status_desc():
+    """is_active should be a generated column derived from status_desc.
+
+    Why: status_desc is the authoritative committee state from CFOrgLkup discovery
+    (values like 'ACTIVE (NON-EXEMPT)', 'CLOSED', 'INACTIVE'). Storing is_active as
+    a generated column keeps the orchestrator filter in sync with discovery state
+    without requiring the loader to know about orchestrator semantics (single source
+    of truth: status_desc). Active rows are exactly those whose status_desc starts
+    with 'ACTIVE'.
+    """
+    info = _nc_registry_column_info("is_active")
+    assert info, "is_active column must exist"
+    # Postgres reports generated columns via is_generated/generation_expression.
+    rows = _run_psql_command(
+        TEST_DATABASE,
+        """
+        SELECT is_generated, generation_expression
+        FROM information_schema.columns
+        WHERE table_schema = 'cf'
+          AND table_name = 'nc_committee_registry'
+          AND column_name = 'is_active';
+        """,
+    )
+    assert rows and isinstance(rows, list), "is_active introspection returned no rows"
+    parts = rows[0].split("|")
+    is_generated = parts[0].strip()
+    expression = parts[1].strip() if len(parts) > 1 else ""
+    assert is_generated == "ALWAYS", (
+        f"is_active should be GENERATED ALWAYS, got is_generated={is_generated!r}"
+    )
+    # The generation expression must reference status_desc and the ACTIVE prefix.
+    assert "status_desc" in expression.lower(), (
+        f"is_active generation expression must derive from status_desc; got: {expression!r}"
+    )
+    assert "active" in expression.lower(), (
+        f"is_active generation expression must check the ACTIVE prefix; got: {expression!r}"
+    )
+
+
+def test_nc_registry_updated_at_trigger():
+    assert _has_updated_at_trigger(TEST_DATABASE, "nc_committee_registry"), (
+        "Missing BEFORE UPDATE core.set_updated_at() trigger on cf.nc_committee_registry"
+    )
+
+
+def test_nc_registry_insert_and_monotonic_constraint():
+    _run_psql_command(
+        TEST_DATABASE,
+        """
+        WITH seeded_data_source AS (
+            INSERT INTO core.data_source (
+                domain,
+                jurisdiction,
+                name,
+                source_url,
+                source_format
+            )
+            VALUES (
+                'campaign_finance',
+                'state/NC',
+                'NC Registry Schema Monotonic Test Source',
+                'https://cf.ncsbe.gov/CFOrgLkup/',
+                'csv'
+            )
+            ON CONFLICT (domain, jurisdiction, name)
+            DO UPDATE SET
+                source_url = EXCLUDED.source_url,
+                source_format = EXCLUDED.source_format
+            RETURNING id
+        )
+        INSERT INTO cf.nc_committee_registry
+            (org_group_id, sboe_id, committee_name, status_desc,
+             data_source_id, first_seen_at, last_seen_at)
+        SELECT 99999, 'STA-TEST1-C-001', 'Test Committee', 'ACTIVE (NON-EXEMPT)',
+               seeded_data_source.id, NOW(), NOW()
+        FROM seeded_data_source;
+        """,
+    )
+    _assert_row_exists(
+        TEST_DATABASE,
+        "SELECT count(*)::text FROM cf.nc_committee_registry WHERE org_group_id = 99999;",
+        "1",
+        message="NC registry monotonic check test must insert exactly one seed row",
+    )
+
+    with pytest.raises(RuntimeError, match="ck_nc_committee_registry_seen_order"):
+        _run_psql_command(
+            TEST_DATABASE,
+            """
+            UPDATE cf.nc_committee_registry
+            SET last_seen_at = first_seen_at - interval '1 day'
+            WHERE org_group_id = 99999;
+            """,
         )

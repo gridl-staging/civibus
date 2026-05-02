@@ -86,11 +86,23 @@ describe("/candidates +page.server load", () => {
     expect(requestJson).toHaveBeenCalledWith("/v1/candidates?offset=-1");
   });
 
-  it("forwards explicit blank filters unchanged so backend validation stays authoritative", async () => {
+  it("drops explicit blank state and office filters so all-option submits behave like no filter", async () => {
     const requestJson = vi.fn().mockResolvedValue(CANDIDATE_LIST_RESPONSE);
 
-    await load(createLoadEvent("https://web.civibus.local/candidates?state=&office=", requestJson));
+    await load(
+      createLoadEvent("https://web.civibus.local/candidates?state=&office=&limit=25", requestJson)
+    );
 
-    expect(requestJson).toHaveBeenCalledWith("/v1/candidates?state=&office=");
+    expect(requestJson).toHaveBeenCalledWith("/v1/candidates?limit=25");
+  });
+
+  it("keeps populated filters while dropping blank filters from mixed submissions", async () => {
+    const requestJson = vi.fn().mockResolvedValue(CANDIDATE_LIST_RESPONSE);
+
+    await load(
+      createLoadEvent("https://web.civibus.local/candidates?state=NC&office=&limit=25", requestJson)
+    );
+
+    expect(requestJson).toHaveBeenCalledWith("/v1/candidates?state=NC&limit=25");
   });
 });
