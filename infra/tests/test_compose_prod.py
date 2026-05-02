@@ -993,3 +993,14 @@ class TestComposeConfig:
         assert missing_env_var_name in output, (
             f"docker compose config error output must mention {missing_env_var_name}; output was:\n{output}"
         )
+
+
+def test_bootstrap_script_skips_base_package_install_when_prereqs_already_present() -> None:
+    """Repeated deploy runs must avoid unnecessary apt lock contention on already-provisioned hosts."""
+    script_text = _read_required_text(
+        BOOTSTRAP_SCRIPT_FILE,
+        f"Expected bootstrap script {BOOTSTRAP_SCRIPT_FILE} to exist",
+    )
+    assert "if command -v curl >/dev/null 2>&1" in script_text
+    assert "&& command -v git >/dev/null 2>&1" in script_text
+    assert "&& command -v gpg >/dev/null 2>&1" in script_text

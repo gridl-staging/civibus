@@ -19,6 +19,10 @@ require_root() {
 }
 
 install_base_packages() {
+  if command -v curl >/dev/null 2>&1 && command -v git >/dev/null 2>&1 && command -v gpg >/dev/null 2>&1; then
+    return
+  fi
+
   export DEBIAN_FRONTEND=noninteractive
   apt-get update
   apt-get install -y ca-certificates curl git gnupg
