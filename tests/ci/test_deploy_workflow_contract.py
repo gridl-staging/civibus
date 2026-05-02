@@ -243,6 +243,19 @@ def test_deploy_job_capture_prior_sha_handles_broken_worktree_checkout() -> None
         )
 
 
+def test_deploy_job_capture_prior_sha_uses_quoted_heredoc_for_remote_script() -> None:
+    """Remote SSH script must use a quoted heredoc so local set -u cannot expand remote vars."""
+    parsed = _parse_deploy_workflow()
+    steps = parsed["jobs"]["deploy"].get("steps", [])
+    capture_step = _find_step(steps, "Capture currently deployed SHA")
+    run_script = capture_step.get("run", "")
+
+    assert "bash -se <<'EOF'" in run_script, (
+        "Capture currently deployed SHA must use a quoted heredoc to prevent local shell expansion "
+        "of remote script variables like ${repo_dir}"
+    )
+
+
 def test_deploy_job_captures_prior_sha_before_bootstrap_checkout_mutates_head() -> None:
     """Capture must run before bootstrap, because bootstrap checks out DEPLOY_GIT_SHA."""
     parsed = _parse_deploy_workflow()
