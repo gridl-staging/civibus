@@ -114,14 +114,14 @@ jobs:
             echo "Broken git checkout at ${repo_dir}; using ${fallback_repo_dir} HEAD as rollback anchor" >&2
             git -C "${fallback_repo_dir}" rev-parse HEAD
           else
-            echo "Unable to capture prior deployment SHA from ${repo_dir} or ${fallback_repo_dir}" >&2
-            exit 1
+            echo "Unable to capture prior deployment SHA from ${repo_dir} or ${fallback_repo_dir}; rollback will be disabled" >&2
+            echo "UNAVAILABLE"
           fi
           EOF
           )"
           if [[ -z "${captured_sha}" ]]; then
-            echo "Unable to capture prior deployment SHA before deploy rollback anchor" >&2
-            exit 1
+            echo "Unable to capture prior deployment SHA before deploy rollback anchor; rollback will be disabled" >&2
+            captured_sha="UNAVAILABLE"
           fi
           echo "CURRENT_DEPLOYED_SHA=${captured_sha}" >> "$GITHUB_OUTPUT"
 
@@ -229,6 +229,10 @@ jobs:
           rollback_sha="${{ steps.capture_prior_sha.outputs.CURRENT_DEPLOYED_SHA }}"
           if [[ -z "${rollback_sha}" ]]; then
             echo "Missing captured CURRENT_DEPLOYED_SHA for rollback" >&2
+            exit 1
+          fi
+          if [[ "${rollback_sha}" == "UNAVAILABLE" ]]; then
+            echo "Rollback SHA unavailable; cannot rollback automatically" >&2
             exit 1
           fi
           cleanup_local() {

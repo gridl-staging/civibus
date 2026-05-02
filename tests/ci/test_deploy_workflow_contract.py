@@ -327,3 +327,25 @@ def test_deploy_workflow_does_not_duplicate_ci_or_integration_concerns() -> None
 
     for fragment in forbidden_fragments:
         assert fragment not in text, f"deploy.yml must not contain '{fragment}' — belongs to ci.yml or integration.yml"
+
+
+def test_deploy_job_capture_prior_sha_uses_unavailable_sentinel_when_anchor_missing() -> None:
+    """Capture step must not hard-stop deploy when prior git anchor cannot be found on the VM."""
+    parsed = _parse_deploy_workflow()
+    steps = parsed["jobs"]["deploy"].get("steps", [])
+    capture_step = _find_step(steps, "Capture currently deployed SHA")
+    run_script = capture_step.get("run", "")
+
+    assert "echo \"UNAVAILABLE\"" in run_script
+    assert "rollback will be disabled" in run_script
+
+
+def test_deploy_job_rollback_fails_fast_when_prior_sha_unavailable() -> None:
+    """Rollback step must explicitly reject the UNAVAILABLE sentinel instead of fetching it."""
+    parsed = _parse_deploy_workflow()
+    steps = parsed["jobs"]["deploy"].get("steps", [])
+    rollback_step = _find_step(steps, "Rollback to previously deployed SHA on smoke failure")
+    run_script = rollback_step.get("run", "")
+
+    assert "UNAVAILABLE" in run_script
+    assert "cannot rollback automatically" in run_script
