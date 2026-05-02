@@ -92,7 +92,12 @@ checkout_repo_revision() {
 ensure_repo_checkout() {
   install -d "$(dirname "${repo_dir}")"
 
-  if [[ ! -d "${repo_dir}/.git" ]]; then
+  if git -C "${repo_dir}" rev-parse HEAD >/dev/null 2>&1; then
+    :
+  else
+    # Recover from stale worktree metadata (for example, .git files that point
+    # at non-existent paths) by replacing the checkout with a fresh clone.
+    rm -rf "${repo_dir}"
     run_git_authenticated git clone "${repo_url}" "${repo_dir}"
   fi
 

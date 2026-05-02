@@ -217,9 +217,30 @@ def test_deploy_job_captures_prior_sha_before_rollout() -> None:
     assert "^[A-Za-z0-9][A-Za-z0-9.-]*$" in configure_script
     assert "HETZNER_HOST to be a bare hostname or IPv4 address" in configure_script
     assert "CURRENT_DEPLOYED_SHA" in run_script
-    assert "git rev-parse HEAD" in run_script
+    assert "rev-parse HEAD" in run_script
     assert "GITHUB_OUTPUT" in run_script
     assert "before deploy rollback anchor" in run_script
+
+
+def test_deploy_job_capture_prior_sha_handles_broken_worktree_checkout() -> None:
+    """Capture step must tolerate stale worktree metadata and use a valid rollback anchor."""
+    parsed = _parse_deploy_workflow()
+    steps = parsed["jobs"]["deploy"].get("steps", [])
+    capture_step = _find_step(steps, "Capture currently deployed SHA")
+    run_script = capture_step.get("run", "")
+
+    expected_fragments = [
+        "repo_dir=\"/root/civibus/civibus_dev\"",
+        "if git -C \"${repo_dir}\" rev-parse HEAD >/dev/null 2>&1; then",
+        "fallback_repo_dir=\"/root/civibus\"",
+        "git -C \"${fallback_repo_dir}\" rev-parse HEAD",
+        "Broken git checkout at ${repo_dir}; using ${fallback_repo_dir} HEAD as rollback anchor",
+    ]
+    for fragment in expected_fragments:
+        assert fragment in run_script, (
+            "Capture currently deployed SHA must degrade gracefully when /root/civibus/civibus_dev "
+            "is an invalid worktree checkout"
+        )
 
 
 def test_deploy_job_captures_prior_sha_before_bootstrap_checkout_mutates_head() -> None:

@@ -104,8 +104,21 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          captured_sha="$(ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile=~/.ssh/known_hosts -i ~/.ssh/hetzner_deploy_key "root@${HETZNER_HOST}" \
-            "cd /root/civibus/civibus_dev && git rev-parse HEAD")"
+          captured_sha="$(ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile=~/.ssh/known_hosts -i ~/.ssh/hetzner_deploy_key "root@${HETZNER_HOST}" bash -se <<EOF
+          set -euo pipefail
+          repo_dir="/root/civibus/civibus_dev"
+          fallback_repo_dir="/root/civibus"
+          if git -C "${repo_dir}" rev-parse HEAD >/dev/null 2>&1; then
+            git -C "${repo_dir}" rev-parse HEAD
+          elif git -C "${fallback_repo_dir}" rev-parse HEAD >/dev/null 2>&1; then
+            echo "Broken git checkout at ${repo_dir}; using ${fallback_repo_dir} HEAD as rollback anchor" >&2
+            git -C "${fallback_repo_dir}" rev-parse HEAD
+          else
+            echo "Unable to capture prior deployment SHA from ${repo_dir} or ${fallback_repo_dir}" >&2
+            exit 1
+          fi
+          EOF
+          )"
           if [[ -z "${captured_sha}" ]]; then
             echo "Unable to capture prior deployment SHA before deploy rollback anchor" >&2
             exit 1
