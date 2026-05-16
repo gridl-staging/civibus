@@ -73,7 +73,7 @@ services:
     build:
       context: ..
       dockerfile: infra/api/Dockerfile
-    image: "ghcr.io/gridl-dev/civibus_dev/api:${IMAGE_TAG:-latest}"
+    image: "${CIVIBUS_IMAGE_REPO:-ghcr.io/gridl-dev/civibus_dev}/api:${IMAGE_TAG:-latest}"
     environment:
       CIVIBUS_ENV: production
       POSTGRES_HOST: db
@@ -115,7 +115,7 @@ services:
     build:
       context: ../web
       dockerfile: Dockerfile
-    image: "ghcr.io/gridl-dev/civibus_dev/web:${IMAGE_TAG:-latest}"
+    image: "${CIVIBUS_IMAGE_REPO:-ghcr.io/gridl-dev/civibus_dev}/web:${IMAGE_TAG:-latest}"
     environment:
       CIVIBUS_API_BASE_URL: http://api:8000
       CIVIBUS_API_KEY: ${CIVIBUS_API_KEY:?Set CIVIBUS_API_KEY}

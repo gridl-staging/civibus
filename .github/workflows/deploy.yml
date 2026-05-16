@@ -199,6 +199,7 @@ jobs:
           GIT_TERMINAL_PROMPT=0 GIT_ASKPASS="${askpass_script}" git fetch origin "$deploy_git_sha"
           git checkout --detach "$deploy_git_sha"
           cat "${deploy_token_file}" | docker login ghcr.io -u "${deploy_actor}" --password-stdin
+          export CIVIBUS_IMAGE_REPO="ghcr.io/${{ github.repository }}"
           export IMAGE_TAG="$deploy_git_sha"
           bash infra/scripts/prod_compose.sh up -d --wait --wait-timeout 180 db
           bash infra/scripts/prod_compose.sh exec -T db psql -U civibus -d civibus -v ON_ERROR_STOP=1 < domains/civics/schema/migrations/2026_04_27_electoral_division_geometry.sql
@@ -218,7 +219,7 @@ jobs:
           fi
           pushd web >/dev/null
           SMOKE_MODE=production SMOKE_BASE_URL="${PROD_SMOKE_BASE_URL}" \
-            ./tests/smoke/run-playwright.sh -- tests/smoke/dwo_mvp_release.spec.ts --reporter=line
+            bash ./tests/smoke/run-playwright.sh -- tests/smoke/dwo_mvp_release.spec.ts --reporter=line
           popd >/dev/null
 
       - name: Rollback to previously deployed SHA on smoke failure
@@ -268,6 +269,7 @@ jobs:
           GIT_TERMINAL_PROMPT=0 GIT_ASKPASS="${askpass_script}" git fetch origin "$rollback_sha"
           git checkout --detach "$rollback_sha"
           cat "${deploy_token_file}" | docker login ghcr.io -u "${deploy_actor}" --password-stdin
+          export CIVIBUS_IMAGE_REPO="ghcr.io/${{ github.repository }}"
           export IMAGE_TAG="$rollback_sha"
           bash infra/scripts/prod_compose.sh pull caddy api web
           bash infra/scripts/prod_compose.sh up -d --force-recreate --wait --wait-timeout 180 api web caddy

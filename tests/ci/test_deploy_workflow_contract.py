@@ -190,6 +190,20 @@ def test_deploy_job_performs_ssh_based_remote_rollout() -> None:
     )
 
 
+def test_deploy_job_uses_single_image_repository_source_of_truth() -> None:
+    """Workflow rollout must export CIVIBUS_IMAGE_REPO for compose image references."""
+    parsed = _parse_deploy_workflow()
+    steps = parsed["jobs"]["deploy"].get("steps", [])
+    rollout_step = _find_step(steps, "Roll out api and web via remote compose")
+    run_script = rollout_step.get("run", "")
+
+    assert 'export CIVIBUS_IMAGE_REPO="ghcr.io/${{ github.repository }}"' in run_script
+
+    compose_text = (REPO_ROOT / "infra/docker-compose.prod.yml").read_text(encoding="utf-8")
+    assert 'image: "${CIVIBUS_IMAGE_REPO:-ghcr.io/gridl-dev/civibus_dev}/api:${IMAGE_TAG:-latest}"' in compose_text
+    assert 'image: "${CIVIBUS_IMAGE_REPO:-ghcr.io/gridl-dev/civibus_dev}/web:${IMAGE_TAG:-latest}"' in compose_text
+
+
 def _find_step(steps: list[dict], step_name: str) -> dict:
     """Return a deploy step by exact name; fail with a clear contract message."""
     for step in steps:
@@ -282,6 +296,16 @@ def test_deploy_job_runs_production_smoke_after_rollout() -> None:
     assert "SMOKE_BASE_URL=" in run_script
 
 
+def test_deploy_job_runs_production_smoke_via_bash_wrapper() -> None:
+    """Smoke gate must invoke the runner script via bash, not executable bit state."""
+    parsed = _parse_deploy_workflow()
+    steps = parsed["jobs"]["deploy"].get("steps", [])
+    smoke_step = _find_step(steps, "Run production smoke gate")
+    run_script = smoke_step.get("run", "")
+
+    assert "bash ./tests/smoke/run-playwright.sh -- tests/smoke/dwo_mvp_release.spec.ts --reporter=line" in run_script
+
+
 def test_deploy_job_rolls_back_with_prod_compose_after_smoke_failure() -> None:
     """Rollback must be conditional on smoke failure and use the same prod compose owner."""
     parsed = _parse_deploy_workflow()
@@ -349,3 +373,13 @@ def test_deploy_job_rollback_fails_fast_when_prior_sha_unavailable() -> None:
 
     assert "UNAVAILABLE" in run_script
     assert "cannot rollback automatically" in run_script
+
+
+def test_deploy_workflow_rollback_lane_uses_same_image_repository_source_of_truth() -> None:
+    """Rollback must export the same GHCR repo source as the publish and rollout lanes."""
+    parsed = _parse_deploy_workflow()
+    steps = parsed["jobs"]["deploy"].get("steps", [])
+    rollback_step = _find_step(steps, "Rollback to previously deployed SHA on smoke failure")
+    rollback_script = rollback_step.get("run", "")
+
+    assert 'export CIVIBUS_IMAGE_REPO="ghcr.io/${{ github.repository }}"' in rollback_script
