@@ -113,10 +113,12 @@ jobs:
         if: steps.probe.outputs.healthy == 'false' && steps.find.outputs.number != ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PROBE_DETAIL: ${{ steps.probe.outputs.detail }}
+          PROBE_STATUS: ${{ steps.probe.outputs.status }}
         run: |
           NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-          DETAIL="${{ steps.probe.outputs.detail }}"
-          STATUS="${{ steps.probe.outputs.status }}"
+          DETAIL="${PROBE_DETAIL}"
+          STATUS="${PROBE_STATUS}"
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           gh issue comment "${{ steps.find.outputs.number }}" \
             --repo "${{ github.repository }}" \
@@ -126,6 +128,9 @@ jobs:
         if: steps.probe.outputs.healthy == 'false' && steps.find.outputs.number == ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PROBE_DETAIL: ${{ steps.probe.outputs.detail }}
+          PROBE_STATUS: ${{ steps.probe.outputs.status }}
+          PROBE_TARGET: ${{ steps.probe.outputs.target }}
         run: |
           # Idempotent label create. --force lets us update the color/description
           # without erroring if the label already exists.
@@ -136,9 +141,9 @@ jobs:
             --force 2>/dev/null || true
 
           NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-          STATUS="${{ steps.probe.outputs.status }}"
-          DETAIL="${{ steps.probe.outputs.detail }}"
-          TARGET="${{ steps.probe.outputs.target }}"
+          STATUS="${PROBE_STATUS}"
+          DETAIL="${PROBE_DETAIL}"
+          TARGET="${PROBE_TARGET}"
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
           BODY="The ${{ env.PROBE_BASE_URL }} content health probe failed.

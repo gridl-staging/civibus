@@ -63,7 +63,19 @@ def test_workflow_dispatch_accepts_full_probe_url_override(workflow_parsed: dict
     assert 'TARGET="${PROBE_URL_OVERRIDE:-${PROBE_BASE_URL}/api/health/content}"' in workflow_text
     assert 'curl -sS "$TARGET"' in workflow_text
     assert 'echo "target=${TARGET}" >> "$GITHUB_OUTPUT"' in workflow_text
-    assert 'TARGET="${{ steps.probe.outputs.target }}"' in workflow_text
+    assert "PROBE_TARGET: ${{ steps.probe.outputs.target }}" in workflow_text
+
+
+def test_probe_outputs_are_passed_to_shell_via_env(workflow_text: str) -> None:
+    """Response-body JSON must not be interpolated directly into shell assignments."""
+    assert "PROBE_DETAIL: ${{ steps.probe.outputs.detail }}" in workflow_text
+    assert "PROBE_STATUS: ${{ steps.probe.outputs.status }}" in workflow_text
+    assert "PROBE_TARGET: ${{ steps.probe.outputs.target }}" in workflow_text
+    assert 'DETAIL="${PROBE_DETAIL}"' in workflow_text
+    assert 'STATUS="${PROBE_STATUS}"' in workflow_text
+    assert 'TARGET="${PROBE_TARGET}"' in workflow_text
+    assert 'DETAIL="${{ steps.probe.outputs.detail }}"' not in workflow_text
+    assert 'STATUS="${{ steps.probe.outputs.status }}"' not in workflow_text
 
 
 def test_workflow_uses_uptime_incident_label(workflow_text: str) -> None:
