@@ -161,8 +161,8 @@ def test_cli_main_passes_non_empty_rows_to_loader(
     fixture_path = (
         _REPO_ROOT
         / "docs"
-    / "reference"
-    / "research"
+        / "reference"
+        / "research"
         / "artifacts"
         / "2026_04_30_dwo_past_results"
         / "ncsbe"

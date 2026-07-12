@@ -6,7 +6,6 @@ from __future__ import annotations
 # not shapes) so a behavior change in either dispatch seam fails this file.
 
 from uuid import uuid4
-from pathlib import Path
 
 import pytest
 

@@ -28,7 +28,9 @@ MunicipalAuditDecisionLiteral = Literal[
 _STATE_EQUIVALENT_TYPES: frozenset[str] = frozenset({"federal", "state"})
 _MUNICIPALITY_TYPE = "municipality"
 
-DEFAULT_REGISTRY_PATH = Path(__file__).resolve().parents[3] / "docs" / "reference" / "research" / "coverage-registry.json"
+DEFAULT_REGISTRY_PATH = (
+    Path(__file__).resolve().parents[3] / "docs" / "reference" / "research" / "coverage-registry.json"
+)
 
 
 class CoverageRegistryBaseModel(BaseModel):

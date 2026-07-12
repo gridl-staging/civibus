@@ -14,7 +14,12 @@ from psycopg.rows import dict_row
 from core.db import get_connection
 
 _DEFAULT_ARTIFACT_PATH = (
-    Path(__file__).resolve().parents[2] / "docs" / "reference" / "research" / "artifacts" / "er-cross-jurisdiction-proof.json"
+    Path(__file__).resolve().parents[2]
+    / "docs"
+    / "reference"
+    / "research"
+    / "artifacts"
+    / "er-cross-jurisdiction-proof.json"
 )
 _DEFAULT_PERSISTED_STATE_ARTIFACT_PATH = (
     Path(__file__).resolve().parents[2]

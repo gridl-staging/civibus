@@ -9,7 +9,9 @@ import pytest
 
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
-_NCSBE_ARTIFACTS_DIR = _REPO_ROOT / "docs" / "reference" / "research" / "artifacts" / "2026_04_30_dwo_past_results" / "ncsbe"
+_NCSBE_ARTIFACTS_DIR = (
+    _REPO_ROOT / "docs" / "reference" / "research" / "artifacts" / "2026_04_30_dwo_past_results" / "ncsbe"
+)
 _RAW_EXTRACTS_DIR = _NCSBE_ARTIFACTS_DIR / "raw_extracts"
 
 

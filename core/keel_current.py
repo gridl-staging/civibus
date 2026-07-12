@@ -143,7 +143,9 @@ def render_current_md(*, repo_root: Path, today_utc: date) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Regenerate docs/reference/keel/CURRENT.md (casual-mode rollup artifact).")
+    parser = argparse.ArgumentParser(
+        description="Regenerate docs/reference/keel/CURRENT.md (casual-mode rollup artifact)."
+    )
     parser.add_argument("--repo-root", type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument("--date", help="UTC date override (YYYY-MM-DD); defaults to today UTC.")
     parser.add_argument(

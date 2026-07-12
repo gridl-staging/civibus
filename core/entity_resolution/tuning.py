@@ -184,7 +184,9 @@ def load_candidate_bundle(candidate_id: str) -> dict[str, Any]:
             "probabilistic_settings": get_probabilistic_settings("person"),
         }
 
-    candidates_path = _REPO_ROOT / "docs" / "reference" / "research" / "artifacts" / "2026_04_29_dwo_er" / "stage3_candidates.json"
+    candidates_path = (
+        _REPO_ROOT / "docs" / "reference" / "research" / "artifacts" / "2026_04_29_dwo_er" / "stage3_candidates.json"
+    )
     if not candidates_path.exists():
         raise ValueError(f"candidate {candidate_id!r} not found; expected candidate definition at {candidates_path}")
     payload = json.loads(candidates_path.read_text(encoding="utf-8"))

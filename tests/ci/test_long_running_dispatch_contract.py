@@ -299,7 +299,9 @@ def test_dispatch_json_schema_on_successful_run(test_repo: Path) -> None:
     # absolute path requirements
     assert os.path.isabs(payload["log_path"])
     assert os.path.isabs(payload["evidence_directory"])
-    assert payload["evidence_directory"].endswith(f"/docs/reference/research/artifacts/{artifact_id}/hetzner/{dispatch_id}")
+    assert payload["evidence_directory"].endswith(
+        f"/docs/reference/research/artifacts/{artifact_id}/hetzner/{dispatch_id}"
+    )
     assert payload["log_path"].endswith("/dispatch.log")
 
     # RFC3339 UTC timestamp

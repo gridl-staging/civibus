@@ -116,8 +116,8 @@ def test_stage3_probe_artifact_keeps_corrected_arizona_entrypoint() -> None:
     artifact_path = (
         Path(__file__).resolve().parents[3]
         / "docs"
-    / "reference"
-    / "research"
+        / "reference"
+        / "research"
         / "artifacts"
         / "stage3_state_portal_probe_2026-03-25.json"
     )
@@ -442,8 +442,8 @@ def test_stage5_census_artifact_excludes_non_incorporated_cdps() -> None:
     artifact_path = (
         Path(__file__).resolve().parents[3]
         / "docs"
-    / "reference"
-    / "research"
+        / "reference"
+        / "research"
         / "artifacts"
         / "stage5_sub_ip_est2024_pop_top100_2026-03-25.json"
     )
