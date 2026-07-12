@@ -188,7 +188,11 @@ def test_evaluate_content_health_runs_expected_sql_queries() -> None:
     )
 
     executed = fake._cursor.executed
-    assert any("cf.transaction" in q and "WHERE" not in q.upper() for q in executed), executed
+    transaction_total_query = executed[0]
+    assert "pg_stat_user_tables" in transaction_total_query
+    assert "n_live_tup" in transaction_total_query
+    assert "relname = 'transaction'" in transaction_total_query
+    assert "COUNT(*) FROM cf.transaction" not in transaction_total_query
     assert any("core.person" in q for q in executed), executed
     assert any("civic.officeholding" in q for q in executed), executed
     assert any("cf.committee_summary" in q and "WHERE" not in q.upper() for q in executed), executed

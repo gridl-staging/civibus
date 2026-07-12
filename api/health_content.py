@@ -9,11 +9,12 @@ monitor.
 
 Design constraints:
 
-* Stay simple. Each check is a static ``COUNT(*)`` probe over the narrowest
+* Stay simple. Most checks are static ``COUNT(*)`` probes over the narrowest
   table or serving-path contract that proves the launch surface is populated.
-  A bug in this watchdog must fail OPEN (alarms fire), not CLOSED (alarms
-  suppressed). Clever ER probes are rejected for that reason — too easy to
-  silently break.
+  The large ``cf.transaction`` total uses Postgres live-row statistics so the
+  endpoint stays fast enough for external uptime probes. A bug in this
+  watchdog must fail OPEN (alarms fire), not CLOSED (alarms suppressed).
+  Clever ER probes are rejected for that reason — too easy to silently break.
 * Floors are operator-tunable via env vars so the same image runs in dev
   (small DB) and prod (full DB) without code changes.
 * Defaults are the current federal-first prod launch floors. Operators can
@@ -78,7 +79,10 @@ _FLOOR_ENV_VAR_PREFIX = "CIVIBUS_HEALTH_CONTENT_FLOOR_"
 # Per-check SQL. Order is preserved so the cursor's ``executed`` log lines
 # up 1:1 with the failures returned — useful when reading test output.
 _CHECK_QUERIES: Mapping[str, str] = {
-    "cf_transaction_total": "SELECT COUNT(*) FROM cf.transaction",
+    "cf_transaction_total": (
+        "SELECT COALESCE((SELECT s.n_live_tup FROM pg_stat_user_tables s "
+        "WHERE s.schemaname = 'cf' AND s.relname = 'transaction'), 0)"
+    ),
     "core_person_total": "SELECT COUNT(*) FROM core.person",
     "civic_officeholding_total": "SELECT COUNT(*) FROM civic.officeholding",
     # Cross-domain link probe: at least N transactions resolved to a person
