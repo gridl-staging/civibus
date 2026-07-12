@@ -1,0 +1,1121 @@
+schema_version: 1
+jurisdictions:
+- scope: NC
+  phase: Phase 2
+  ownership: project-local pilot registry until matt-side absorption exists
+  sources:
+  - source_id: nc_transactions
+    current_state: validated
+    coverage_boundary: Receipt-side NC pilot transaction proof slice.
+    transitions:
+    - to_state: validated
+      recorded_on: 2026-04-24
+      rationale: L1 pilot anchor and transaction-path L6 evidence both pass for the
+        current NC pilot boundary.
+      evidence_refs:
+      - layer: L1
+        scope: NC
+        path: evidence/L1/NC/2026-04-24.json
+      - layer: L6
+        scope: NC_transactions
+        path: evidence/L6/nc-transactions-20260424T194145Z.json
+  - source_id: nc_committee_documents
+    current_state: validated
+    coverage_boundary: NC pilot committee-document loader surface.
+    transitions:
+    - to_state: validated
+      recorded_on: 2026-04-24
+      rationale: L1 pilot anchor and committee-document L6 evidence both pass for
+        the current NC pilot boundary.
+      evidence_refs:
+      - layer: L1
+        scope: NC
+        path: evidence/L1/NC/2026-04-24.json
+      - layer: L6
+        scope: NC_committee_documents
+        path: evidence/L6/nc-committee-documents-20260424T194145Z.json
+  - source_id: nc_ie_document_index
+    current_state: validated
+    coverage_boundary: Statewide NC IE filing-index lane proved in the Phase 1 pilot.
+    transitions:
+    - to_state: validated
+      recorded_on: 2026-04-24
+      rationale: L1 pilot anchor and IE document-index L6 evidence both pass for the
+        current NC pilot boundary.
+      evidence_refs:
+      - layer: L1
+        scope: NC
+        path: evidence/L1/NC/2026-04-24.json
+      - layer: L6
+        scope: NC_ie_document_index
+        path: evidence/L6/nc-ie-document-index-20260424T194145Z.json
+  - source_id: nc_tiger_county_shapefile
+    current_state: prototyped
+    coverage_boundary: TIGER 2024 national county shapefile feed constrained to Durham,
+      Wake, and Orange county records at ingest time for NC county geometry coverage.
+    transitions:
+    - to_state: prototyped
+      recorded_on: 2026-04-29
+      rationale: Stage 1 NC geometry contract captured the official TIGER county ZIP
+        URL, format, CRS, and cadence evidence for loader integration.
+      evidence_refs:
+      - layer: docs
+        scope: NC_geometry_source_contract_2026_04_29
+        path: docs/reference/research/2026_04_29_nc_geometry_source_contract.md
+  - source_id: nc_ncsbe_congressional_district_shapefile
+    current_state: prototyped
+    coverage_boundary: NCSBE statewide congressional district shapefile feed (Session
+      Law 2025-95 map vintage) discovered from the voting maps and redistricting page.
+    transitions:
+    - to_state: prototyped
+      recorded_on: 2026-04-29
+      rationale: Stage 1 NC geometry contract captured the official NCSBE congressional
+        listing path, concrete shapefile ZIP URL, CRS, and feature-count evidence
+        for loader integration.
+      evidence_refs:
+      - layer: docs
+        scope: NC_geometry_source_contract_2026_04_29
+        path: docs/reference/research/2026_04_29_nc_geometry_source_contract.md
+  - source_id: nc_ncsbe_state_senate_district_shapefile
+    current_state: prototyped
+    coverage_boundary: NCSBE statewide NCGA Senate district shapefile feed (Session
+      Law 2023-146 map vintage).
+    transitions:
+    - to_state: prototyped
+      recorded_on: 2026-04-29
+      rationale: Stage 1 NC geometry contract captured the official NCSBE Senate
+        listing path, concrete shapefile ZIP URL, CRS, and feature-count evidence
+        for loader integration.
+      evidence_refs:
+      - layer: docs
+        scope: NC_geometry_source_contract_2026_04_29
+        path: docs/reference/research/2026_04_29_nc_geometry_source_contract.md
+  - source_id: nc_ncsbe_state_house_district_shapefile
+    current_state: prototyped
+    coverage_boundary: NCSBE statewide NCGA House district shapefile feed (Session
+      Law 2023-149 map vintage).
+    transitions:
+    - to_state: prototyped
+      recorded_on: 2026-04-29
+      rationale: Stage 1 NC geometry contract captured the official NCSBE House listing
+        path, concrete shapefile ZIP URL, CRS, and feature-count evidence for loader
+        integration.
+      evidence_refs:
+      - layer: docs
+        scope: NC_geometry_source_contract_2026_04_29
+        path: docs/reference/research/2026_04_29_nc_geometry_source_contract.md
+  - source_id: nc_nconemap_municipal_shapefile
+    current_state: prototyped
+    coverage_boundary: NC OneMap statewide municipal boundary feed (2025 boundary
+      vintage) filtered to Durham/Wake/Orange at ingest time.
+    transitions:
+    - to_state: prototyped
+      recorded_on: 2026-04-29
+      rationale: Stage 1 NC geometry contract pinned the official OneMap municipal
+        FeatureServer endpoint, source CRS, and D/W/O expected row counts for loader
+        integration.
+      evidence_refs:
+      - layer: docs
+        scope: NC_geometry_source_contract_2026_04_29
+        path: docs/reference/research/2026_04_29_nc_geometry_source_contract.md
+  - source_id: nc_nconemap_school_district_shapefile
+    current_state: prototyped
+    coverage_boundary: NC OneMap statewide LEA boundary feed (2021 boundary vintage)
+      filtered to Durham/Wake/Orange at ingest time.
+    transitions:
+    - to_state: prototyped
+      recorded_on: 2026-04-29
+      rationale: Stage 1 NC geometry contract pinned the official OneMap LEA FeatureServer
+        endpoint, source CRS, and D/W/O expected row counts for loader integration.
+      evidence_refs:
+      - layer: docs
+        scope: NC_geometry_source_contract_2026_04_29
+        path: docs/reference/research/2026_04_29_nc_geometry_source_contract.md
+  - source_id: nc_durham_city_council_roster
+    current_state: validated
+    coverage_boundary: Durham, NC City Council membership roster page at the official
+      city portal.
+    roster_bootstrap:
+      name: Durham City Council Official Roster
+      source_url: https://www.durhamnc.gov/1396/City-Council-Members
+      body_key: durham_city_council
+      cadence: weekly
+      jurisdiction: state/NC
+    transitions:
+    - to_state: validated
+      recorded_on: 2026-04-30
+      rationale: Replay dispatch 2026-04-30T09:43:15Z completed with 7/7 resolved
+        rows and production loaded_count=7 matching the manifest expectation; source
+        remains validated with updated closeout evidence.
+      evidence_refs:
+      - layer: L1
+        scope: NC
+        path: evidence/L1/NC/2026-04-29.json
+      - layer: docs
+        scope: NC_roster_maintenance_closeout_2026_04_30
+        path: docs/reference/research/artifacts/2026_04_29_dwo_county_muni/maintenance_closeout.md
+  - source_id: nc_general_assembly_house_roster
+    current_state: validated
+    coverage_boundary: North Carolina House photo-card member roster at the official
+      NC General Assembly site.
+    roster_bootstrap:
+      name: North Carolina House Official Roster
+      source_url: https://www.ncleg.gov/Members/MemberList/H
+      body_key: nc_house
+      cadence: weekly
+      jurisdiction: state/NC
+    transitions:
+    - to_state: validated
+      recorded_on: 2026-04-30
+      rationale: Replay dispatch 2026-04-30T09:43:15Z completed with 124/124 resolved
+        rows and production loaded_count=124; source remains validated with refreshed
+        replay evidence.
+      evidence_refs:
+      - layer: L1
+        scope: NC
+        path: evidence/L1/NC/2026-04-29.json
+      - layer: docs
+        scope: NC_roster_maintenance_closeout_2026_04_30
+        path: docs/reference/research/artifacts/2026_04_29_dwo_county_muni/maintenance_closeout.md
+  - source_id: nc_sheriffs_association_roster
+    current_state: validated
+    coverage_boundary: North Carolina county sheriffs roster cards at the statewide
+      sheriffs association portal.
+    roster_bootstrap:
+      name: North Carolina Sheriffs Official Roster
+      source_url: https://ncsheriffs.org/find-a-sheriff
+      body_key: nc_sheriffs
+      cadence: weekly
+      jurisdiction: state/NC
+    transitions:
+    - to_state: validated
+      recorded_on: 2026-04-30
+      rationale: Replay dispatch 2026-04-30T09:43:15Z completed with 100/100 resolved
+        rows and production loaded_count=100 matching the manifest expectation; source
+        is promoted to validated.
+      evidence_refs:
+      - layer: L1
+        scope: NC
+        path: evidence/L1/NC/2026-04-29.json
+      - layer: docs
+        scope: NC_roster_maintenance_closeout_2026_04_30
+        path: docs/reference/research/artifacts/2026_04_29_dwo_county_muni/maintenance_closeout.md
+  - source_id: nc_registers_of_deeds_roster
+    current_state: prototyped
+    coverage_boundary: North Carolina county registers-of-deeds directory map at the
+      statewide association portal.
+    roster_bootstrap:
+      name: North Carolina Registers of Deeds Official Roster
+      source_url: https://www.ncard.us/find-your-register-of-deeds/
+      body_key: nc_registers_of_deeds
+      cadence: weekly
+      jurisdiction: state/NC
+    transitions:
+    - to_state: prototyped
+      recorded_on: 2026-04-30
+      rationale: Replay dispatch 2026-04-30T09:43:15Z completed but resolved_member_count
+        remained 0/100 and production loaded_count=0 vs manifest_expected=100; source
+        remains prototyped until extraction/load coverage closes.
+      evidence_refs:
+      - layer: docs
+        scope: NC_roster_maintenance_closeout_2026_04_30
+        path: docs/reference/research/artifacts/2026_04_29_dwo_county_muni/maintenance_closeout.md
+  - source_id: nc_durham_county_commissioners_roster
+    current_state: validated
+    coverage_boundary: Durham County Board of Commissioners roster page.
+    roster_bootstrap:
+      name: Durham County Commissioners Official Roster
+      source_url: https://www.dconc.gov/Board-of-Commissioners/Commissioners
+      body_key: nc_county_commissioners
+      cadence: weekly
+      jurisdiction: state/NC
+    transitions:
+    - to_state: validated
+      recorded_on: 2026-04-30
+      rationale: Replay dispatch 2026-04-30T09:43:15Z completed with 5/5 resolved
+        rows and production loaded_count=5 matching the manifest expectation; source
+        is promoted to validated.
+      evidence_refs:
+      - layer: L1
+        scope: NC
+        path: evidence/L1/NC/2026-04-29.json
+      - layer: docs
+        scope: NC_roster_maintenance_closeout_2026_04_30
+        path: docs/reference/research/artifacts/2026_04_29_dwo_county_muni/maintenance_closeout.md
+  - source_id: nc_wake_county_commissioners_roster
+    current_state: validated
+    coverage_boundary: Wake County Board of Commissioners contact roster page.
+    roster_bootstrap:
+      name: Wake County Commissioners Official Roster
+      source_url: https://www.wake.gov/departments-government/board-commissioners/contact-your-board-commissioners-office
+      body_key: nc_county_commissioners
+      cadence: weekly
+      jurisdiction: state/NC
+    transitions:
+    - to_state: validated
+      recorded_on: 2026-04-30
+      rationale: Replay dispatch 2026-04-30T09:43:15Z completed with 7/7 resolved
+        rows and production loaded_count=7 matching the manifest expectation; source
+        is promoted to validated.
+      evidence_refs:
+      - layer: L1
+        scope: NC
+        path: evidence/L1/NC/2026-04-29.json
+      - layer: docs
+        scope: NC_roster_maintenance_closeout_2026_04_30
+        path: docs/reference/research/artifacts/2026_04_29_dwo_county_muni/maintenance_closeout.md
+  - source_id: nc_orange_county_commissioners_roster
+    current_state: validated
+    coverage_boundary: Orange County Board of County Commissioners roster page.
+    roster_bootstrap:
+      name: Orange County Commissioners Official Roster
+      source_url: https://www.orangecountync.gov/953/Board-of-County-Commissioners-BOCC
+      body_key: nc_county_commissioners
+      cadence: weekly
+      jurisdiction: state/NC
+    transitions:
+    - to_state: validated
+      recorded_on: 2026-04-30
+      rationale: Replay dispatch 2026-04-30T09:43:15Z completed with 7/7 resolved
+        rows and production loaded_count=7 matching the manifest expectation; source
+        is promoted to validated.
+      evidence_refs:
+      - layer: L1
+        scope: NC
+        path: evidence/L1/NC/2026-04-29.json
+      - layer: docs
+        scope: NC_roster_maintenance_closeout_2026_04_30
+        path: docs/reference/research/artifacts/2026_04_29_dwo_county_muni/maintenance_closeout.md
+  - source_id: nc_soil_water_supervisors_roster
+    current_state: prototyped
+    coverage_boundary: North Carolina soil-and-water district supervisor directory.
+    roster_bootstrap:
+      name: North Carolina Soil and Water Supervisors Official Roster
+      source_url: https://www.ncagr.gov/divisions/soil-water/district-directory/open
+      body_key: nc_soil_water_supervisors
+      cadence: weekly
+      jurisdiction: state/NC
+    transitions:
+    - to_state: prototyped
+      recorded_on: 2026-04-30
+      rationale: Replay dispatch 2026-04-30T09:43:15Z completed with members=0 while
+        manifest_expected=492 and production loaded_count=0; source remains prototyped
+        pending parser contract closure.
+      evidence_refs:
+      - layer: docs
+        scope: NC_roster_maintenance_closeout_2026_04_30
+        path: docs/reference/research/artifacts/2026_04_29_dwo_county_muni/maintenance_closeout.md
+  - source_id: nc_raleigh_city_council_roster
+    current_state: validated
+    coverage_boundary: Raleigh official roster page.
+    roster_bootstrap:
+      name: Raleigh Official Roster
+      source_url: https://raleighnc.gov/city-council
+      body_key: nc_municipal_council
+      cadence: weekly
+      jurisdiction: state/NC
+    transitions:
+    - to_state: validated
+      recorded_on: 2026-04-30
+      rationale: Replay dispatch 2026-04-30T09:43:15Z completed with 8/8 resolved
+        rows and production loaded_count=8 matching the manifest expectation; source
+        is promoted to validated.
+      evidence_refs:
+      - layer: L1
+        scope: NC
+        path: evidence/L1/NC/2026-04-29.json
+      - layer: docs
+        scope: NC_roster_maintenance_closeout_2026_04_30
+        path: docs/reference/research/artifacts/2026_04_29_dwo_county_muni/maintenance_closeout.md
+  - source_id: nc_cary_town_council_roster
+    current_state: prototyped
+    coverage_boundary: Cary official roster page.
+    roster_bootstrap:
+      name: Cary Official Roster
+      source_url: https://www.carync.gov/mayor-council/town-council
+      body_key: nc_municipal_council
+      cadence: weekly
+      jurisdiction: state/NC
+    transitions:
+    - to_state: prototyped
+      recorded_on: 2026-04-30
+      rationale: 'Replay dispatch 2026-04-30T09:43:15Z crashed: Unable to fetch roster
+        HTML for source_id=nc_cary_town_council_roster url=https://www.carync.gov/mayor-council/town-council;
+        source remains prototyped.'
+      evidence_refs:
+      - layer: docs
+        scope: NC_roster_maintenance_closeout_2026_04_30
+        path: docs/reference/research/artifacts/2026_04_29_dwo_county_muni/maintenance_closeout.md
+  - source_id: nc_apex_town_council_roster
+    current_state: validated
+    coverage_boundary: Apex official roster page.
+    roster_bootstrap:
+      name: Apex Official Roster
+      source_url: https://www.apexnc.org/780/Meet-Your-Town-Council
+      body_key: nc_municipal_council
+      cadence: weekly
+      jurisdiction: state/NC
+    transitions:
+    - to_state: validated
+      recorded_on: 2026-04-30
+      rationale: Replay dispatch 2026-04-30T09:43:15Z completed with 6/6 resolved
+        rows and production loaded_count=6 matching the manifest expectation; source
+        is promoted to validated.
+      evidence_refs:
+      - layer: L1
+        scope: NC
+        path: evidence/L1/NC/2026-04-29.json
+      - layer: docs
+        scope: NC_roster_maintenance_closeout_2026_04_30
+        path: docs/reference/research/artifacts/2026_04_29_dwo_county_muni/maintenance_closeout.md
+  - source_id: nc_holly_springs_town_council_roster
+    current_state: validated
+    coverage_boundary: Holly Springs official roster page.
+    roster_bootstrap:
+      name: Holly Springs Official Roster
+      source_url: https://www.hollyspringsnc.gov/143/Mayor-Town-Council
+      body_key: nc_municipal_council
+      cadence: weekly
+      jurisdiction: state/NC
+    transitions:
+    - to_state: validated
+      recorded_on: 2026-04-30
+      rationale: Replay dispatch 2026-04-30T09:43:15Z completed with 6/6 resolved
+        rows and production loaded_count=6 matching the manifest expectation; source
+        is promoted to validated.
+      evidence_refs:
+      - layer: L1
+        scope: NC
+        path: evidence/L1/NC/2026-04-29.json
+      - layer: docs
+        scope: NC_roster_maintenance_closeout_2026_04_30
+        path: docs/reference/research/artifacts/2026_04_29_dwo_county_muni/maintenance_closeout.md
+  - source_id: nc_fuquay_varina_town_council_roster
+    current_state: validated
+    coverage_boundary: Fuquay Varina official roster page.
+    roster_bootstrap:
+      name: Fuquay Varina Official Roster
+      source_url: https://www.fuquay-varina.org/317/Board-of-Commissioners
+      body_key: nc_municipal_council
+      cadence: weekly
+      jurisdiction: state/NC
+    transitions:
+    - to_state: validated
+      recorded_on: 2026-04-30
+      rationale: Replay dispatch 2026-04-30T09:43:15Z completed with 6/6 resolved
+        rows and production loaded_count=6 matching the manifest expectation; source
+        is promoted to validated.
+      evidence_refs:
+      - layer: L1
+        scope: NC
+        path: evidence/L1/NC/2026-04-29.json
+      - layer: docs
+        scope: NC_roster_maintenance_closeout_2026_04_30
+        path: docs/reference/research/artifacts/2026_04_29_dwo_county_muni/maintenance_closeout.md
+  - source_id: nc_wake_forest_town_council_roster
+    current_state: validated
+    coverage_boundary: Wake Forest official roster page.
+    roster_bootstrap:
+      name: Wake Forest Official Roster
+      source_url: https://www.wakeforestnc.gov/board-commissioners/mayor-board-members
+      body_key: nc_municipal_council
+      cadence: weekly
+      jurisdiction: state/NC
+    transitions:
+    - to_state: validated
+      recorded_on: 2026-04-30
+      rationale: Replay dispatch 2026-04-30T09:43:15Z completed with 6/6 resolved
+        rows and production loaded_count=6 matching the manifest expectation; source
+        is promoted to validated.
+      evidence_refs:
+      - layer: L1
+        scope: NC
+        path: evidence/L1/NC/2026-04-29.json
+      - layer: docs
+        scope: NC_roster_maintenance_closeout_2026_04_30
+        path: docs/reference/research/artifacts/2026_04_29_dwo_county_muni/maintenance_closeout.md
+  - source_id: nc_garner_town_council_roster
+    current_state: prototyped
+    coverage_boundary: Garner official roster page.
+    roster_bootstrap:
+      name: Garner Official Roster
+      source_url: https://www.garnernc.gov/government/town-council/town-council-members
+      body_key: nc_municipal_council
+      cadence: weekly
+      jurisdiction: state/NC
+    transitions:
+    - to_state: prototyped
+      recorded_on: 2026-04-30
+      rationale: 'Replay dispatch 2026-04-30T09:43:15Z crashed: Unable to fetch roster
+        HTML for source_id=nc_garner_town_council_roster url=https://www.garnernc.gov/government/town-council/town-council-members;
+        source remains prototyped.'
+      evidence_refs:
+      - layer: docs
+        scope: NC_roster_maintenance_closeout_2026_04_30
+        path: docs/reference/research/artifacts/2026_04_29_dwo_county_muni/maintenance_closeout.md
+  - source_id: nc_morrisville_town_council_roster
+    current_state: prototyped
+    coverage_boundary: Morrisville official roster page.
+    roster_bootstrap:
+      name: Morrisville Official Roster
+      source_url: https://www.morrisvillenc.gov/government/meet-your-town-council
+      body_key: nc_municipal_council
+      cadence: weekly
+      jurisdiction: state/NC
+    transitions:
+    - to_state: prototyped
+      recorded_on: 2026-04-30
+      rationale: 'Replay dispatch 2026-04-30T09:43:15Z crashed: Unable to fetch roster
+        HTML for source_id=nc_morrisville_town_council_roster url=https://www.morrisvillenc.gov/government/meet-your-town-council;
+        source remains prototyped.'
+      evidence_refs:
+      - layer: docs
+        scope: NC_roster_maintenance_closeout_2026_04_30
+        path: docs/reference/research/artifacts/2026_04_29_dwo_county_muni/maintenance_closeout.md
+  - source_id: nc_knightdale_town_council_roster
+    current_state: validated
+    coverage_boundary: Knightdale official roster page.
+    roster_bootstrap:
+      name: Knightdale Official Roster
+      source_url: https://www.knightdalenc.gov/mayor-and-council/town-council
+      body_key: nc_municipal_council
+      cadence: weekly
+      jurisdiction: state/NC
+    transitions:
+    - to_state: validated
+      recorded_on: 2026-04-30
+      rationale: Replay dispatch 2026-04-30T09:43:15Z completed with 6/6 resolved
+        rows and production loaded_count=6 matching the manifest expectation; source
+        is promoted to validated.
+      evidence_refs:
+      - layer: L1
+        scope: NC
+        path: evidence/L1/NC/2026-04-29.json
+      - layer: docs
+        scope: NC_roster_maintenance_closeout_2026_04_30
+        path: docs/reference/research/artifacts/2026_04_29_dwo_county_muni/maintenance_closeout.md
+  - source_id: nc_wendell_town_council_roster
+    current_state: validated
+    coverage_boundary: Wendell official roster page.
+    roster_bootstrap:
+      name: Wendell Official Roster
+      source_url: https://townofwendellnc.gov/government/town_board/index.php
+      body_key: nc_municipal_council
+      cadence: weekly
+      jurisdiction: state/NC
+    transitions:
+    - to_state: validated
+      recorded_on: 2026-04-30
+      rationale: Replay dispatch 2026-04-30T09:43:15Z completed with 6/6 resolved
+        rows and production loaded_count=6 matching the manifest expectation; source
+        is promoted to validated.
+      evidence_refs:
+      - layer: L1
+        scope: NC
+        path: evidence/L1/NC/2026-04-29.json
+      - layer: docs
+        scope: NC_roster_maintenance_closeout_2026_04_30
+        path: docs/reference/research/artifacts/2026_04_29_dwo_county_muni/maintenance_closeout.md
+  - source_id: nc_zebulon_town_council_roster
+    current_state: prototyped
+    coverage_boundary: Zebulon official roster page.
+    roster_bootstrap:
+      name: Zebulon Official Roster
+      source_url: https://www.townofzebulon.org/o/toz/page/board-of-commissioners
+      body_key: nc_municipal_council
+      cadence: weekly
+      jurisdiction: state/NC
+    transitions:
+    - to_state: prototyped
+      recorded_on: 2026-04-30
+      rationale: Replay dispatch 2026-04-30T09:43:15Z completed with members=0 while
+        manifest_expected=6 and production loaded_count=0; source remains prototyped
+        pending parser contract closure.
+      evidence_refs:
+      - layer: docs
+        scope: NC_roster_maintenance_closeout_2026_04_30
+        path: docs/reference/research/artifacts/2026_04_29_dwo_county_muni/maintenance_closeout.md
+  - source_id: nc_rolesville_town_council_roster
+    current_state: validated
+    coverage_boundary: Rolesville official roster page.
+    roster_bootstrap:
+      name: Rolesville Official Roster
+      source_url: https://www.rolesvillenc.gov/boards-commissions
+      body_key: nc_municipal_council
+      cadence: weekly
+      jurisdiction: state/NC
+    transitions:
+    - to_state: validated
+      recorded_on: 2026-04-30
+      rationale: Replay dispatch 2026-04-30T09:43:15Z completed with 6/6 resolved
+        rows and production loaded_count=6 matching the manifest expectation; source
+        is promoted to validated.
+      evidence_refs:
+      - layer: L1
+        scope: NC
+        path: evidence/L1/NC/2026-04-29.json
+      - layer: docs
+        scope: NC_roster_maintenance_closeout_2026_04_30
+        path: docs/reference/research/artifacts/2026_04_29_dwo_county_muni/maintenance_closeout.md
+  - source_id: nc_chapel_hill_town_council_roster
+    current_state: prototyped
+    coverage_boundary: Chapel Hill official roster page.
+    roster_bootstrap:
+      name: Chapel Hill Official Roster
+      source_url: https://www.chapelhillnc.gov/government/mayor-and-council
+      body_key: nc_municipal_council
+      cadence: weekly
+      jurisdiction: state/NC
+    transitions:
+    - to_state: prototyped
+      recorded_on: 2026-04-30
+      rationale: 'Replay dispatch 2026-04-30T09:43:15Z crashed: Unable to fetch roster
+        HTML for source_id=nc_chapel_hill_town_council_roster url=https://www.chapelhillnc.gov/government/mayor-and-council;
+        source remains prototyped.'
+      evidence_refs:
+      - layer: docs
+        scope: NC_roster_maintenance_closeout_2026_04_30
+        path: docs/reference/research/artifacts/2026_04_29_dwo_county_muni/maintenance_closeout.md
+  - source_id: nc_carrboro_town_council_roster
+    current_state: validated
+    coverage_boundary: Carrboro official roster page.
+    roster_bootstrap:
+      name: Carrboro Official Roster
+      source_url: https://www.carrboronc.gov/248/Town-Council
+      body_key: nc_municipal_council
+      cadence: weekly
+      jurisdiction: state/NC
+    transitions:
+    - to_state: validated
+      recorded_on: 2026-04-30
+      rationale: Replay dispatch 2026-04-30T09:43:15Z completed with 7/7 resolved
+        rows and production loaded_count=7 matching the manifest expectation; source
+        is promoted to validated.
+      evidence_refs:
+      - layer: L1
+        scope: NC
+        path: evidence/L1/NC/2026-04-29.json
+      - layer: docs
+        scope: NC_roster_maintenance_closeout_2026_04_30
+        path: docs/reference/research/artifacts/2026_04_29_dwo_county_muni/maintenance_closeout.md
+  - source_id: nc_hillsborough_town_council_roster
+    current_state: prototyped
+    coverage_boundary: Hillsborough official roster page.
+    roster_bootstrap:
+      name: Hillsborough Official Roster
+      source_url: https://www.hillsboroughnc.gov/about-us/mayor-and-board/
+      body_key: nc_municipal_council
+      cadence: weekly
+      jurisdiction: state/NC
+    transitions:
+    - to_state: prototyped
+      recorded_on: 2026-04-30
+      rationale: 'Replay dispatch 2026-04-30T09:43:15Z crashed: Unable to fetch roster
+        HTML for source_id=nc_hillsborough_town_council_roster url=https://www.hillsboroughnc.gov/about-us/mayor-and-board/;
+        source remains prototyped.'
+      evidence_refs:
+      - layer: docs
+        scope: NC_roster_maintenance_closeout_2026_04_30
+        path: docs/reference/research/artifacts/2026_04_29_dwo_county_muni/maintenance_closeout.md
+  - source_id: nc_dps_school_board_roster
+    current_state: prototyped
+    coverage_boundary: Durham Public Schools official roster page.
+    roster_bootstrap:
+      name: Durham Public Schools Official Roster
+      source_url: https://www.dpsnc.net/o/dps/page/dps-board-members
+      body_key: nc_school_board
+      cadence: weekly
+      jurisdiction: state/NC
+    transitions:
+    - to_state: prototyped
+      recorded_on: 2026-04-30
+      rationale: Replay dispatch 2026-04-30T09:43:15Z completed with members=0 while
+        manifest_expected=7 and production loaded_count=0; source remains prototyped
+        pending parser contract closure.
+      evidence_refs:
+      - layer: docs
+        scope: NC_roster_maintenance_closeout_2026_04_30
+        path: docs/reference/research/artifacts/2026_04_29_dwo_county_muni/maintenance_closeout.md
+  - source_id: nc_wcpss_school_board_roster
+    current_state: validated
+    coverage_boundary: Wake County Public School System official roster page.
+    roster_bootstrap:
+      name: Wake County Public School System Official Roster
+      source_url: https://www.wcpss.net/fs/pages/571
+      body_key: nc_school_board
+      cadence: weekly
+      jurisdiction: state/NC
+    transitions:
+    - to_state: validated
+      recorded_on: 2026-04-30
+      rationale: Replay dispatch 2026-04-30T09:43:15Z completed with 9/9 resolved
+        rows and production loaded_count=9 matching the manifest expectation; source
+        is promoted to validated.
+      evidence_refs:
+      - layer: L1
+        scope: NC
+        path: evidence/L1/NC/2026-04-29.json
+      - layer: docs
+        scope: NC_roster_maintenance_closeout_2026_04_30
+        path: docs/reference/research/artifacts/2026_04_29_dwo_county_muni/maintenance_closeout.md
+  - source_id: nc_ocs_school_board_roster
+    current_state: validated
+    coverage_boundary: Orange County Schools official roster page.
+    roster_bootstrap:
+      name: Orange County Schools Official Roster
+      source_url: https://www.orangecountyfirst.com/our-district-main/board-new
+      body_key: nc_school_board
+      cadence: weekly
+      jurisdiction: state/NC
+    transitions:
+    - to_state: validated
+      recorded_on: 2026-04-30
+      rationale: Replay dispatch 2026-04-30T09:43:15Z completed with 7/7 resolved
+        rows and production loaded_count=7 matching the manifest expectation; source
+        is promoted to validated.
+      evidence_refs:
+      - layer: L1
+        scope: NC
+        path: evidence/L1/NC/2026-04-29.json
+      - layer: docs
+        scope: NC_roster_maintenance_closeout_2026_04_30
+        path: docs/reference/research/artifacts/2026_04_29_dwo_county_muni/maintenance_closeout.md
+  - source_id: nc_chccs_school_board_roster
+    current_state: validated
+    coverage_boundary: Chapel Hill-Carrboro City Schools official roster page.
+    roster_bootstrap:
+      name: Chapel Hill-Carrboro City Schools Official Roster
+      source_url: https://www.chccs.org/our-district/board-of-education/board-of-education-overview
+      body_key: nc_school_board
+      cadence: weekly
+      jurisdiction: state/NC
+    transitions:
+    - to_state: validated
+      recorded_on: 2026-04-30
+      rationale: Replay dispatch 2026-04-30T09:43:15Z completed with 7/7 resolved
+        rows and production loaded_count=7 matching the manifest expectation; source
+        is promoted to validated.
+      evidence_refs:
+      - layer: L1
+        scope: NC
+        path: evidence/L1/NC/2026-04-29.json
+      - layer: docs
+        scope: NC_roster_maintenance_closeout_2026_04_30
+        path: docs/reference/research/artifacts/2026_04_29_dwo_county_muni/maintenance_closeout.md
+  - source_id: ncsbe_candidate_listing_2026
+    current_state: prototyped
+    coverage_boundary: North Carolina 2026 statewide candidate listing CSV published
+      by NCSBE for election filing records.
+    transitions:
+    - to_state: prototyped
+      recorded_on: 2026-04-30
+      rationale: Candidate listing loader contract is staged with canonical source
+        identity alignment; source remains prototyped until non-doc promotion evidence
+        is captured.
+      evidence_refs:
+      - layer: docs
+        scope: NC_candidate_listing_2026
+        path: docs/reference/research/artifacts/nc_2026_civic_calendar_probe_2026_04_25/local_response_metadata.json
+  - source_id: nc_superior_court_judge_roster
+    current_state: prototyped
+    coverage_boundary: North Carolina Superior Court judge listing at the NC Courts
+      judicial-directory endpoint.
+    transitions:
+    - to_state: prototyped
+      recorded_on: 2026-04-29
+      rationale: Stage 1 judicial contract captured deterministic selectors and counts
+        for the Superior Court judicial-directory filter, but Stage 5/6 roster load
+        closure remains pending.
+      evidence_refs:
+      - layer: docs
+        scope: NC_judicial_contract_stage1_2026_04_29
+        path: docs/reference/research/artifacts/2026_04_29_dwo_judicial/nccourts/contract.md
+  - source_id: nc_district_court_judge_roster
+    current_state: prototyped
+    coverage_boundary: North Carolina District Court judge listing at the NC Courts
+      judicial-directory endpoint.
+    transitions:
+    - to_state: prototyped
+      recorded_on: 2026-04-29
+      rationale: Stage 1 judicial contract captured deterministic selectors and counts
+        for the District Court judicial-directory filter, but Stage 5/6 roster load
+        closure remains pending.
+      evidence_refs:
+      - layer: docs
+        scope: NC_judicial_contract_stage1_2026_04_29
+        path: docs/reference/research/artifacts/2026_04_29_dwo_judicial/nccourts/contract.md
+  - source_id: nc_clerk_of_superior_court_roster
+    current_state: prototyped
+    coverage_boundary: North Carolina Clerks of Superior Court listing at the NC
+      Courts judicial-directory endpoint.
+    transitions:
+    - to_state: prototyped
+      recorded_on: 2026-04-29
+      rationale: Stage 1 judicial contract captured deterministic selectors and counts
+        for the Clerk of Superior Court judicial-directory filter, but Stage 5/6
+        roster load closure remains pending.
+      evidence_refs:
+      - layer: docs
+        scope: NC_judicial_contract_stage1_2026_04_29
+        path: docs/reference/research/artifacts/2026_04_29_dwo_judicial/nccourts/contract.md
+  - source_id: nc_district_attorney_roster
+    current_state: prototyped
+    coverage_boundary: North Carolina District Attorneys listing at the NC Courts
+      judicial-directory endpoint.
+    transitions:
+    - to_state: prototyped
+      recorded_on: 2026-04-29
+      rationale: Stage 1 judicial contract captured deterministic fixture-backed selector
+        and row-field evidence for district attorneys, but Stage 5/6 roster load
+        closure remains pending.
+      evidence_refs:
+      - layer: docs
+        scope: NC_judicial_contract_stage1_2026_04_29
+        path: docs/reference/research/artifacts/2026_04_29_dwo_judicial/nccourts/contract.md
+  - source_id: nc_ncsbe_enrs_2020_11_03_general
+    current_state: deferred
+    coverage_boundary: NC NCSBE ENRS general-election contract artifact for Nov 3,
+      2020; kept out of runnable ingest to preserve the 5-year DB-load window.
+    transitions:
+    - to_state: deferred
+      recorded_on: 2026-04-30
+      rationale: Stage 3 registry closeout records NCSBE ENRS contract coverage only;
+        Stage 6 owns validated promotion and runtime evidence interpretation.
+      evidence_refs:
+      - layer: docs
+        scope: NC_NCSBE_ENRS_contract_2026_04_30
+        path: docs/reference/research/artifacts/2026_04_30_dwo_past_results/ncsbe/contract_note.md
+      - layer: docs
+        scope: NC_NCSBE_ENRS_stage1_prerequisite_2026_04_30
+        path: docs/reference/research/artifacts/2026_04_30_dwo_past_results/ncsbe/stage1_prerequisite_gate.md
+    - to_state: deferred
+      recorded_on: 2026-04-30
+      rationale: Stage 6 closeout confirms 2020 remains contract-only by the 5-year
+        load window boundary and captured dispatch logs do not provide runnable load
+        evidence for this source.
+      evidence_refs:
+      - layer: docs
+        scope: NC_NCSBE_ENRS_contract_2026_04_30
+        path: docs/reference/research/artifacts/2026_04_30_dwo_past_results/ncsbe/contract_note.md
+      - layer: docs
+        scope: NC_NCSBE_ENRS_stage1_prerequisite_2026_04_30
+        path: docs/reference/research/artifacts/2026_04_30_dwo_past_results/ncsbe/stage1_prerequisite_gate.md
+      - layer: docs
+        scope: NC_NCSBE_ENRS_stage5_dispatch_state_s148_2026_04_30
+        path: docs/reference/research/artifacts/2026_04_30_dwo_past_results/hetzner/dispatch_state_stage5_s148.md
+      - layer: docs
+        scope: NC_NCSBE_ENRS_stage6_hetzner_dispatch_2026_04_30
+        path: docs/reference/research/artifacts/2026_04_30_dwo_past_results/hetzner/stage6_evidence_summary.md
+  - source_id: nc_ncsbe_enrs_2022_11_08_general
+    current_state: deferred
+    coverage_boundary: NC NCSBE ENRS general-election contract artifact for Nov 8,
+      2022.
+    transitions:
+    - to_state: deferred
+      recorded_on: 2026-04-30
+      rationale: Stage 3 registry closeout records NCSBE ENRS contract coverage only;
+        Stage 6 owns validated promotion and runtime evidence interpretation.
+      evidence_refs:
+      - layer: docs
+        scope: NC_NCSBE_ENRS_contract_2026_04_30
+        path: docs/reference/research/artifacts/2026_04_30_dwo_past_results/ncsbe/contract_note.md
+      - layer: docs
+        scope: NC_NCSBE_ENRS_stage1_prerequisite_2026_04_30
+        path: docs/reference/research/artifacts/2026_04_30_dwo_past_results/ncsbe/stage1_prerequisite_gate.md
+    - to_state: deferred
+      recorded_on: 2026-04-30
+      rationale: Stage 6 closeout found both Stage 5 dispatch attempts exited on
+        runner lock contention before job execution, so no runtime load totals exist
+        to justify promotion.
+      evidence_refs:
+      - layer: docs
+        scope: NC_NCSBE_ENRS_contract_2026_04_30
+        path: docs/reference/research/artifacts/2026_04_30_dwo_past_results/ncsbe/contract_note.md
+      - layer: docs
+        scope: NC_NCSBE_ENRS_stage1_prerequisite_2026_04_30
+        path: docs/reference/research/artifacts/2026_04_30_dwo_past_results/ncsbe/stage1_prerequisite_gate.md
+      - layer: docs
+        scope: NC_NCSBE_ENRS_stage5_dispatch_state_s148_2026_04_30
+        path: docs/reference/research/artifacts/2026_04_30_dwo_past_results/hetzner/dispatch_state_stage5_s148.md
+      - layer: docs
+        scope: NC_NCSBE_ENRS_stage6_hetzner_dispatch_2026_04_30
+        path: docs/reference/research/artifacts/2026_04_30_dwo_past_results/hetzner/stage6_evidence_summary.md
+  - source_id: nc_ncsbe_enrs_2024_03_05_primary
+    current_state: deferred
+    coverage_boundary: NC NCSBE ENRS primary-election contract artifact for Mar 5,
+      2024.
+    transitions:
+    - to_state: deferred
+      recorded_on: 2026-04-30
+      rationale: Stage 3 registry closeout records NCSBE ENRS contract coverage only;
+        Stage 6 owns validated promotion and runtime evidence interpretation.
+      evidence_refs:
+      - layer: docs
+        scope: NC_NCSBE_ENRS_contract_2026_04_30
+        path: docs/reference/research/artifacts/2026_04_30_dwo_past_results/ncsbe/contract_note.md
+      - layer: docs
+        scope: NC_NCSBE_ENRS_stage1_prerequisite_2026_04_30
+        path: docs/reference/research/artifacts/2026_04_30_dwo_past_results/ncsbe/stage1_prerequisite_gate.md
+    - to_state: deferred
+      recorded_on: 2026-04-30
+      rationale: Stage 6 closeout found both Stage 5 dispatch attempts exited on
+        runner lock contention before job execution, so no runtime load totals exist
+        to justify promotion.
+      evidence_refs:
+      - layer: docs
+        scope: NC_NCSBE_ENRS_contract_2026_04_30
+        path: docs/reference/research/artifacts/2026_04_30_dwo_past_results/ncsbe/contract_note.md
+      - layer: docs
+        scope: NC_NCSBE_ENRS_stage1_prerequisite_2026_04_30
+        path: docs/reference/research/artifacts/2026_04_30_dwo_past_results/ncsbe/stage1_prerequisite_gate.md
+      - layer: docs
+        scope: NC_NCSBE_ENRS_stage5_dispatch_state_s148_2026_04_30
+        path: docs/reference/research/artifacts/2026_04_30_dwo_past_results/hetzner/dispatch_state_stage5_s148.md
+      - layer: docs
+        scope: NC_NCSBE_ENRS_stage6_hetzner_dispatch_2026_04_30
+        path: docs/reference/research/artifacts/2026_04_30_dwo_past_results/hetzner/stage6_evidence_summary.md
+  - source_id: nc_ncsbe_enrs_2024_11_05_general
+    current_state: deferred
+    coverage_boundary: NC NCSBE ENRS general-election contract artifact for Nov 5,
+      2024.
+    transitions:
+    - to_state: deferred
+      recorded_on: 2026-04-30
+      rationale: Stage 3 registry closeout records NCSBE ENRS contract coverage only;
+        Stage 6 owns validated promotion and runtime evidence interpretation.
+      evidence_refs:
+      - layer: docs
+        scope: NC_NCSBE_ENRS_contract_2026_04_30
+        path: docs/reference/research/artifacts/2026_04_30_dwo_past_results/ncsbe/contract_note.md
+      - layer: docs
+        scope: NC_NCSBE_ENRS_stage1_prerequisite_2026_04_30
+        path: docs/reference/research/artifacts/2026_04_30_dwo_past_results/ncsbe/stage1_prerequisite_gate.md
+    - to_state: deferred
+      recorded_on: 2026-04-30
+      rationale: Stage 6 closeout found both Stage 5 dispatch attempts exited on
+        runner lock contention before job execution, so no runtime load totals exist
+        to justify promotion.
+      evidence_refs:
+      - layer: docs
+        scope: NC_NCSBE_ENRS_contract_2026_04_30
+        path: docs/reference/research/artifacts/2026_04_30_dwo_past_results/ncsbe/contract_note.md
+      - layer: docs
+        scope: NC_NCSBE_ENRS_stage1_prerequisite_2026_04_30
+        path: docs/reference/research/artifacts/2026_04_30_dwo_past_results/ncsbe/stage1_prerequisite_gate.md
+      - layer: docs
+        scope: NC_NCSBE_ENRS_stage5_dispatch_state_s148_2026_04_30
+        path: docs/reference/research/artifacts/2026_04_30_dwo_past_results/hetzner/dispatch_state_stage5_s148.md
+      - layer: docs
+        scope: NC_NCSBE_ENRS_stage6_hetzner_dispatch_2026_04_30
+        path: docs/reference/research/artifacts/2026_04_30_dwo_past_results/hetzner/stage6_evidence_summary.md
+- scope: PHL
+  phase: Phase 2
+  ownership: city pipeline staged in source registry until weekly-or-better cadence
+    evidence is closed
+  sources:
+  - source_id: phl_contributions
+    current_state: deferred
+    coverage_boundary: Philadelphia campaign-finance contributions lane pending launch-cadence
+      closure.
+    transitions:
+    - to_state: deferred
+      recorded_on: 2026-04-29
+      rationale: Stage 3 closeout confirms detached full-scale lanes did not complete
+        and freshness remains below weekly launch policy, so source-registry state
+        stays deferred (docs/reference/research/phl_full_backfill_closeout_2026_04_29.md; docs/reference/research/phl_freshness_probe_2026_04_26.md).
+      evidence_refs:
+      - layer: docs
+        scope: PHL
+        path: docs/reference/research/phl_full_backfill_closeout_2026_04_29.md
+      - layer: docs
+        scope: PHL
+        path: docs/reference/research/phl_freshness_probe_2026_04_26.md
+  - source_id: phl_expenditures
+    current_state: deferred
+    coverage_boundary: Philadelphia campaign-finance expenditures lane pending launch-cadence
+      closure.
+    transitions:
+    - to_state: deferred
+      recorded_on: 2026-04-29
+      rationale: Stage 3 closeout confirms detached full-scale lanes did not complete
+        and freshness remains below weekly launch policy, so source-registry state
+        stays deferred (docs/reference/research/phl_full_backfill_closeout_2026_04_29.md; docs/reference/research/phl_freshness_probe_2026_04_26.md).
+      evidence_refs:
+      - layer: docs
+        scope: PHL
+        path: docs/reference/research/phl_full_backfill_closeout_2026_04_29.md
+      - layer: docs
+        scope: PHL
+        path: docs/reference/research/phl_freshness_probe_2026_04_26.md
+- scope: NY
+  phase: Phase 2
+  ownership: project-local pilot registry until matt-side absorption exists
+  sources:
+  - source_id: ny_contributions
+    current_state: prototyped
+    coverage_boundary: NY contributions lane remains prototyped after the Apr 29 serial
+      rerun timed out before load completion.
+    transitions:
+    - to_state: prototyped
+      recorded_on: 2026-04-29
+      rationale: Apr 29 serial rerun failed in contributions with read timeout; no
+        L1/L5-backed promotion evidence exists, so the lane remains prototyped.
+      evidence_refs:
+      - layer: docs
+        scope: NY_stage5_maintenance_closeout_2026_04_29
+        path: docs/reference/research/artifacts/2026_04_29_ny_unstick/maintenance_closeout.md
+  - source_id: ny_expenditures
+    current_state: prototyped
+    coverage_boundary: NY expenditures lane remains prototyped because the Apr 29
+      serial rerun stopped after the contributions timeout.
+    transitions:
+    - to_state: prototyped
+      recorded_on: 2026-04-29
+      rationale: Apr 29 serial rerun did not execute expenditures; Apr 28 closeout
+        remains the latest completed lane runtime evidence.
+      evidence_refs:
+      - layer: docs
+        scope: NY_stage5_maintenance_closeout_2026_04_29
+        path: docs/reference/research/artifacts/2026_04_29_ny_unstick/maintenance_closeout.md
+      - layer: docs
+        scope: NY_stage2_closeout_2026_04_28
+        path: docs/reference/research/2026-04-28-ny-stage2-closeout.md
+  - source_id: ny_independent_expenditures
+    current_state: prototyped
+    coverage_boundary: NY independent-expenditures lane remains prototyped because
+      the Apr 29 serial rerun stopped before this lane could execute.
+    transitions:
+    - to_state: prototyped
+      recorded_on: 2026-04-29
+      rationale: Apr 29 serial rerun did not execute independent expenditures; Apr
+        28 closeout remains the latest completed lane runtime evidence.
+      evidence_refs:
+      - layer: docs
+        scope: NY_stage5_maintenance_closeout_2026_04_29
+        path: docs/reference/research/artifacts/2026_04_29_ny_unstick/maintenance_closeout.md
+      - layer: docs
+        scope: NY_stage2_closeout_2026_04_28
+        path: docs/reference/research/2026-04-28-ny-stage2-closeout.md
+- scope: MA
+  phase: Phase 2
+  ownership: project-local pilot registry until matt-side absorption exists
+  sources:
+  - source_id: ma_contributions
+    current_state: prototyped
+    coverage_boundary: MA OCPF contributions lane (Record_Type_ID 200-series from
+      report-items.txt) was re-dispatched on 2026-04-29 (`20260429T0904Z`) but remains
+      non-comparable because runtime SHA drifted from the Stage 5 baseline and overlapping
+      detached MA lanes left rerun logs without final summaries.
+    transitions:
+    - to_state: prototyped
+      recorded_on: 2026-04-29
+      rationale: Stage 7 closeout recorded the Apr 29 rerun outcome as non-comparable/unproven
+        (SHA drift plus overlapping detached lanes and missing rerun summaries), so
+        MA stays prototyped.
+      evidence_refs:
+      - layer: docs
+        scope: MA_deadlock_fix_closeout_2026_04_29
+        path: docs/reference/research/2026-04-29-ma-deadlock-fix-closeout.md
+  - source_id: ma_expenditures
+    current_state: prototyped
+    coverage_boundary: MA OCPF expenditures lane (Record_Type_ID 300-series from report-items.txt,
+      including IE-tagged rows via Is_Supported) was re-dispatched on 2026-04-29 (`20260429T0904Z`)
+      but remains non-comparable because runtime SHA drifted from the Stage 5 baseline
+      and overlapping detached MA lanes left rerun logs without final summaries.
+    transitions:
+    - to_state: prototyped
+      recorded_on: 2026-04-29
+      rationale: Stage 7 closeout recorded the Apr 29 rerun outcome as non-comparable/unproven
+        (SHA drift plus overlapping detached lanes and missing rerun summaries), so
+        MA stays prototyped.
+      evidence_refs:
+      - layer: docs
+        scope: MA_deadlock_fix_closeout_2026_04_29
+        path: docs/reference/research/2026-04-29-ma-deadlock-fix-closeout.md
+- scope: IN
+  phase: Stage 2 freshness closeout
+  ownership: project-local Stage 2 registry closeout for freshness routing
+  sources:
+  - source_id: in_ied_bulk_exports
+    current_state: prototyped
+    coverage_boundary: Indiana IED bulk ZIP acquisition path with weekly-or-better
+      observed source advancement.
+    transitions:
+    - to_state: prototyped
+      recorded_on: 2026-04-28
+      rationale: Freshness is resolved positive (weekly-or-better) in Stage 1 baseline
+        plus the 2026-04-26 recheck evidence, while the source remains prototyped
+        in L3 until source-specific non-doc gate artifacts are declared.
+      evidence_refs:
+      - layer: docs
+        scope: IN_freshness_recheck_2026_04_26
+        path: docs/reference/research/in_freshness_recheck_2026_04_26.md
+      - layer: docs
+        scope: IN_MN_NJ_freshness_stage1_baseline_2026_04_28
+        path: docs/reference/research/in_mn_nj_freshness_stage1_baseline_2026_04_28.md
+- scope: MN
+  phase: Stage 3 freshness closeout
+  ownership: project-local Stage 3 registry closeout for freshness routing
+  sources:
+  - source_id: mn_cfb_bulk_exports
+    current_state: deferred
+    coverage_boundary: Minnesota CFB canonical contribution/expenditure/IE bulk exports.
+    transitions:
+    - to_state: deferred
+      recorded_on: 2026-04-28
+      rationale: Freshness route remains resolved negative after the dated Stage 1
+        baseline consolidation and the 2026-04-09 live stale-content probe; keep deferred
+        until an official weekly+ path is evidenced.
+      evidence_refs:
+      - layer: docs
+        scope: MN_freshness_negative_closeout
+        path: docs/reference/research/mn-freshness-investigation-2026-03-29.md
+      - layer: docs
+        scope: MN_freshness_probe_2026_04_09
+        path: docs/reference/research/artifacts/2026-04-09-freshness-quality-probes/state-MN.json
+      - layer: docs
+        scope: IN_MN_NJ_freshness_stage1_baseline_2026_04_28
+        path: docs/reference/research/in_mn_nj_freshness_stage1_baseline_2026_04_28.md
+- scope: NJ
+  phase: Stage 4 freshness closeout
+  ownership: project-local Stage 4 registry closeout for freshness routing
+  sources:
+  - source_id: nj_elec_contribution_exports
+    current_state: deferred
+    coverage_boundary: NJ ELEC contribution export and related freshness investigation
+      surfaces.
+    transitions:
+    - to_state: deferred
+      recorded_on: 2026-04-28
+      rationale: Freshness route remains resolved negative after the dated Stage 1
+        baseline consolidation, the 2026-04-17 NJ IE investigation closeout, and the
+        2026-04-09 stale-content probe; keep deferred until a fresher official export
+        path is proven.
+      evidence_refs:
+      - layer: docs
+        scope: NJ_ie_investigation_2026_04_17
+        path: docs/reference/research/nj-ie-investigation-2026-04-17.md
+      - layer: docs
+        scope: NJ_freshness_probe_2026_04_09
+        path: docs/reference/research/artifacts/2026-04-09-freshness-quality-probes/state-NJ.json
+      - layer: docs
+        scope: IN_MN_NJ_freshness_stage1_baseline_2026_04_28
+        path: docs/reference/research/in_mn_nj_freshness_stage1_baseline_2026_04_28.md
+- scope: CA
+  phase: Phase 2
+  ownership: project-local pilot registry until matt-side absorption exists
+  sources:
+  - source_id: ca_cal_access_raw_export
+    current_state: prototyped
+    coverage_boundary: CA CAL-ACCESS raw-export receipt boundary is currently zero
+      rows under the shared L1 receipt predicate documented in docs/reference/anchors/CA.md.
+    transitions:
+    - to_state: prototyped
+      recorded_on: 2026-04-29
+      rationale: Preserve the Stage 2 zero-row CA receipt boundary from docs/reference/anchors/CA.md
+        and docs/reference/research/ca_receipt_boundary_hetzner_live_proof_2026_04_29.md; keep
+        prototyped until a committed non-L1 pass artifact exists for this source.
+      evidence_refs:
+      - layer: L1
+        scope: CA
+        path: evidence/L1/CA/2026-04-29.json

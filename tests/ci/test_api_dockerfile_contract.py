@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import tomllib
 from pathlib import Path
 
 
@@ -7,6 +8,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 DOCKERFILE_PATH = REPO_ROOT / "infra/api/Dockerfile"
 ENTRYPOINT_PATH = REPO_ROOT / "infra/api/docker-entrypoint.sh"
 DOCKERIGNORE_PATH = REPO_ROOT / ".dockerignore"
+DEBBIE_CONFIG_PATH = REPO_ROOT / ".debbie.toml"
 MAKEFILE_PATH = REPO_ROOT / "Makefile"
 COMPOSE_PATH = REPO_ROOT / "infra/docker-compose.yml"
 
@@ -73,6 +75,14 @@ def test_api_dockerfile_contract_inputs_and_entrypoint() -> None:
     # script (docker-entrypoint.sh) is the ONLY runtime invocation surface, and
     # it lives at infra/api/docker-entrypoint.sh — not in the Dockerfile.
     assert "python -m" not in dockerfile_code
+
+
+def test_debbie_sync_includes_api_dockerfile_root_inputs() -> None:
+    assert DEBBIE_CONFIG_PATH.is_file(), ".debbie.toml must exist"
+    debbie_payload = tomllib.loads(DEBBIE_CONFIG_PATH.read_text(encoding="utf-8"))
+    sync_files = set(debbie_payload["sync"]["files"])
+
+    assert "sources.yaml" in sync_files
 
 
 def test_api_entrypoint_runtime_contract() -> None:
