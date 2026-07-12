@@ -817,8 +817,8 @@ def test_summarize_pair_run_supports_l14_pair_with_layer_summary_schema(tmp_path
         },
     ]
     shared_fields = {
-        "registry_path": "docs/research/coverage-registry.json",
-        "lifecycle_path": "docs/research/implemented-region-lifecycle.json",
+        "registry_path": "docs/reference/research/coverage-registry.json",
+        "lifecycle_path": "docs/reference/research/implemented-region-lifecycle.json",
         "lifecycle_updated_at": "2026-04-24",
         "rows": shared_rows,
     }
@@ -855,8 +855,8 @@ def test_summarize_pair_run_supports_l14_pair_with_layer_summary_schema(tmp_path
     assert summary["layer"] == "L14"
     assert summary["scope"] == "national_coverage"
     assert summary["status"] == "pass"
-    assert summary["registry_path"] == "docs/research/coverage-registry.json"
-    assert summary["lifecycle_path"] == "docs/research/implemented-region-lifecycle.json"
+    assert summary["registry_path"] == "docs/reference/research/coverage-registry.json"
+    assert summary["lifecycle_path"] == "docs/reference/research/implemented-region-lifecycle.json"
     assert summary["lifecycle_updated_at"] == "2026-04-24"
     assert summary["rows"] == shared_rows
     assert "escalation_path" not in summary

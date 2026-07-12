@@ -30,7 +30,8 @@ export const DEFAULT_COMMITTEE_DETAIL = {
   city: null,
   zip_code: null,
   treasurer_name: null,
-  sources: [] as DetailSource[]
+  sources: [] as DetailSource[],
+  linked_candidates: [] as import("$lib/campaign-finance-detail/contract").CandidateListItem[]
 };
 
 export const DEFAULT_SUMMARY = {
@@ -48,7 +49,10 @@ export const DEFAULT_SUMMARY = {
   contribution_receipts_total: "125.00",
   top_donors: [{ name: "Donor One", total_amount: "80.00", transaction_count: 2 }],
   top_vendors: [{ name: "Vendor One", total_amount: "50.00", transaction_count: 1 }],
-  spend_categories: [{ category: "media", total_amount: "25.00", transaction_count: 1 }]
+  spend_categories: [{ category: "media", total_amount: "25.00", transaction_count: 1 }],
+  itemized_transaction_count: 1,
+  cycle_summaries: [],
+  summary_source: "derived" as const
 };
 
 export const DEFAULT_FILING_PERIOD = {
@@ -72,6 +76,15 @@ export const DEFAULT_FILING_BREAKDOWN = {
   committee_id: COMMITTEE_ID,
   committee_name: "Committee One",
   filings: [DEFAULT_FILING_PERIOD]
+};
+
+export const DEFAULT_COMMITTEE_IE_ACTIVITY = {
+  committee_id: COMMITTEE_ID,
+  support_total: "0.00",
+  oppose_total: "0.00",
+  ie_transaction_count: 0,
+  excluded_outlier_count: 0,
+  targets: []
 };
 
 export const DEFAULT_TRANSACTION = {
@@ -122,7 +135,10 @@ export const DEFAULT_CANDIDATE_SUMMARY = {
   total_spent: "0.00",
   net: "0.00",
   transaction_count: 0,
-  committees: []
+  committees: [],
+  cash_on_hand: null,
+  summary_source: "derived" as const,
+  itemized_transaction_count: 0
 };
 
 export function buildCandidateBundle(): CandidateDetailBundle {
@@ -139,6 +155,7 @@ export function buildCommitteeBundle(): CommitteeDetailBundle {
     detail: DEFAULT_COMMITTEE_DETAIL,
     transactions: Promise.resolve([]),
     summary: Promise.resolve(DEFAULT_SUMMARY),
-    filingBreakdown: Promise.resolve(DEFAULT_FILING_BREAKDOWN)
+    filingBreakdown: Promise.resolve(DEFAULT_FILING_BREAKDOWN),
+    independentExpendituresMade: Promise.resolve(DEFAULT_COMMITTEE_IE_ACTIVITY)
   };
 }

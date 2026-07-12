@@ -29,10 +29,10 @@ class TestFecClientConstruction:
         client = FecClient()
         assert client._api_key == "my-env-key"
 
-    def test_falls_back_to_demo_key(self, monkeypatch):
+    def test_raises_without_api_key(self, monkeypatch):
         monkeypatch.delenv("FEC_API_KEY", raising=False)
-        client = FecClient()
-        assert client._api_key == "DEMO_KEY"
+        with pytest.raises(ValueError, match="FEC_API_KEY"):
+            FecClient()
 
     def test_caller_supplied_key_overrides(self, monkeypatch):
         monkeypatch.setenv("FEC_API_KEY", "my-env-key")

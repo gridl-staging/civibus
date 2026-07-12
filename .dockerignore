@@ -1,6 +1,8 @@
 .git/
 .github/
 .matt/
+# FEC bulk downloads land here (GBs); never part of an image build context.
+data/
 .env
 .env.*
 .venv/
@@ -12,6 +14,10 @@ __pycache__/
 *.pyd
 *.log
 docs/
+# ...except the coverage registry: api/queries reads it at request time
+# (DEFAULT_REGISTRY_PATH in domains/campaign_finance/coverage/registry.py);
+# without it every /campaign-finance/states/summary call 500s (ValueError).
+!docs/reference/research/coverage-registry.json
 tests/
 eval/
 infra/scripts/backups/

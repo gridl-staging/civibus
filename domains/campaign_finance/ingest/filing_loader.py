@@ -1,8 +1,10 @@
+"""Campaign-finance filing and transaction upsert helpers."""
 
 from __future__ import annotations
 
 import hashlib
 from collections.abc import Sequence
+from dataclasses import dataclass
 from uuid import UUID
 
 import psycopg
@@ -22,10 +24,16 @@ END
 """
 
 
-_TRANSACTION_AMENDMENT_INDICATOR_INDEX = 22
+_TRANSACTION_AMENDMENT_INDICATOR_INDEX = 23
 
 
 _normalize_optional_text = normalize_optional_text
+
+
+@dataclass(frozen=True, slots=True)
+class TransactionUpsertResult:
+    transaction_id: UUID
+    inserted: bool
 
 
 def _normalize_state_code(state: str) -> str:
@@ -245,6 +253,12 @@ def upsert_filing(conn: psycopg.Connection, filing: Filing) -> UUID:
         return cursor.fetchone()[0]
 
 
+def upsert_filings_bulk(conn: psycopg.Connection, filings: Sequence[Filing]) -> dict[str, UUID]:
+    from domains.campaign_finance.ingest import filing_loader_bulk
+
+    return filing_loader_bulk.upsert_filings_bulk(conn, filings)
+
+
 def _select_transaction_id_by_sub_id(conn: psycopg.Connection, sub_id: int) -> UUID | None:
     return _fetch_optional_scalar(
         conn,
@@ -318,6 +332,7 @@ def _transaction_values(transaction: Transaction) -> tuple[object, ...]:
         transaction.transaction_date,
         transaction.amount,
         transaction.contributor_name_raw,
+        transaction.contributor_entity_type,
         transaction.contributor_employer,
         transaction.contributor_occupation,
         transaction.contributor_city,
@@ -370,6 +385,7 @@ def _update_transaction(
                 transaction_date = %s,
                 amount = %s,
                 contributor_name_raw = %s,
+                contributor_entity_type = %s,
                 contributor_employer = %s,
                 contributor_occupation = %s,
                 contributor_city = %s,
@@ -417,6 +433,7 @@ def _insert_transaction(conn: psycopg.Connection, transaction: Transaction) -> U
                 transaction_date,
                 amount,
                 contributor_name_raw,
+                contributor_entity_type,
                 contributor_employer,
                 contributor_occupation,
                 contributor_city,
@@ -439,7 +456,7 @@ def _insert_transaction(conn: psycopg.Connection, transaction: Transaction) -> U
                 aggregate_amount
             )
             VALUES (
-                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
             )
             RETURNING id
             """,
@@ -448,19 +465,36 @@ def _insert_transaction(conn: psycopg.Connection, transaction: Transaction) -> U
         return cursor.fetchone()[0]
 
 
-def upsert_transaction(conn: psycopg.Connection, transaction: Transaction) -> UUID:
+def upsert_transaction_with_status(conn: psycopg.Connection, transaction: Transaction) -> TransactionUpsertResult:
     normalized_transaction = _normalize_transaction(transaction)
     if normalized_transaction.sub_id is None and normalized_transaction.transaction_identifier is None:
         raise ValueError("upsert_transaction requires at least one idempotency key")
 
     existing_transaction_id = _resolve_existing_transaction_id(conn, normalized_transaction)
     if existing_transaction_id is not None:
-        return _update_transaction(
+        transaction_id = _update_transaction(
             conn,
             existing_transaction_id=existing_transaction_id,
             transaction=normalized_transaction,
         )
-    return _insert_transaction(conn, normalized_transaction)
+        return TransactionUpsertResult(transaction_id=transaction_id, inserted=False)
+    return TransactionUpsertResult(
+        transaction_id=_insert_transaction(conn, normalized_transaction),
+        inserted=True,
+    )
+
+
+def upsert_transactions_with_status_bulk(
+    conn: psycopg.Connection,
+    transactions: Sequence[Transaction],
+) -> list[TransactionUpsertResult]:
+    from domains.campaign_finance.ingest import filing_loader_bulk
+
+    return filing_loader_bulk.upsert_transactions_with_status_bulk(conn, transactions)
+
+
+def upsert_transaction(conn: psycopg.Connection, transaction: Transaction) -> UUID:
+    return upsert_transaction_with_status(conn, transaction).transaction_id
 
 
 __all__ = [
@@ -469,5 +503,8 @@ __all__ = [
     "resolve_transaction_counterparty_ids",
     "update_transaction_contributor_identity_ids",
     "upsert_filing",
+    "upsert_filings_bulk",
     "upsert_transaction",
+    "upsert_transaction_with_status",
+    "upsert_transactions_with_status_bulk",
 ]

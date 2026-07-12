@@ -26,11 +26,7 @@ def _insert_ncsbe_data_source(conn: psycopg.Connection, *, source_id: str) -> UU
         jurisdiction="us/nc",
         name=f"NCSBE ENRS {source_id}",
         source_url=f"https://example.test/{source_id}",
-        notes=(
-            "{"
-            f"\"registry_source_id\": \"{source_id}\""
-            "}"
-        ),
+        notes=(f'{{"registry_source_id": "{source_id}"}}'),
     )
     insert_data_source(conn, data_source)
     return data_source.id
@@ -42,11 +38,7 @@ def _insert_stale_ncsbe_data_source_identity(conn: psycopg.Connection, *, source
         jurisdiction="state/NC",
         name=f"NC SBE ENRS {source_id}",
         source_url=f"https://example.test/stale/{source_id}",
-        notes=(
-            "{"
-            f"\"registry_source_id\": \"{source_id}\""
-            "}"
-        ),
+        notes=(f'{{"registry_source_id": "{source_id}"}}'),
     )
     insert_data_source(conn, data_source)
     return data_source.id
@@ -99,9 +91,7 @@ def _contest_result_rows(conn: psycopg.Connection, contest_id: UUID) -> list[tup
         return cursor.fetchall()
 
 
-def _contest_result_count_by_source_record(
-    conn: psycopg.Connection, source_record_ids: list[UUID]
-) -> dict[UUID, int]:
+def _contest_result_count_by_source_record(conn: psycopg.Connection, source_record_ids: list[UUID]) -> dict[UUID, int]:
     with conn.cursor() as cursor:
         cursor.execute(
             """
@@ -171,7 +161,8 @@ def test_cli_main_passes_non_empty_rows_to_loader(
     fixture_path = (
         _REPO_ROOT
         / "docs"
-        / "research"
+    / "reference"
+    / "research"
         / "artifacts"
         / "2026_04_30_dwo_past_results"
         / "ncsbe"
@@ -201,9 +192,7 @@ def test_loader_hard_fails_for_unknown_fixture_file(
         load_ncsbe_results(
             db_conn,
             metadata_path=_SOURCE_METADATA_PATH,
-            raw_rows_by_file={
-                "unknown_fixture.csv": ncsbe_contract_rows_by_file["enrs_2024_11_05_general_sample.csv"]
-            },
+            raw_rows_by_file={"unknown_fixture.csv": ncsbe_contract_rows_by_file["enrs_2024_11_05_general_sample.csv"]},
             pull_date=datetime(2026, 4, 30, tzinfo=timezone.utc),
         )
 
@@ -220,7 +209,9 @@ def test_loader_hard_fails_when_contest_mapping_is_unresolved(
         load_ncsbe_results(
             db_conn,
             metadata_path=_SOURCE_METADATA_PATH,
-            raw_rows_by_file={"enrs_2024_11_05_general_sample.csv": ncsbe_contract_rows_by_file["enrs_2024_11_05_general_sample.csv"]},
+            raw_rows_by_file={
+                "enrs_2024_11_05_general_sample.csv": ncsbe_contract_rows_by_file["enrs_2024_11_05_general_sample.csv"]
+            },
             pull_date=datetime(2026, 4, 30, tzinfo=timezone.utc),
         )
 
@@ -431,13 +422,17 @@ def test_loader_rerun_is_idempotent_on_uq_contest_result_canonical(
     first = load_ncsbe_results(
         db_conn,
         metadata_path=_SOURCE_METADATA_PATH,
-        raw_rows_by_file={"enrs_2024_11_05_general_sample.csv": ncsbe_contract_rows_by_file["enrs_2024_11_05_general_sample.csv"][:2]},
+        raw_rows_by_file={
+            "enrs_2024_11_05_general_sample.csv": ncsbe_contract_rows_by_file["enrs_2024_11_05_general_sample.csv"][:2]
+        },
         pull_date=datetime(2026, 4, 30, tzinfo=timezone.utc),
     )
     second = load_ncsbe_results(
         db_conn,
         metadata_path=_SOURCE_METADATA_PATH,
-        raw_rows_by_file={"enrs_2024_11_05_general_sample.csv": ncsbe_contract_rows_by_file["enrs_2024_11_05_general_sample.csv"][:2]},
+        raw_rows_by_file={
+            "enrs_2024_11_05_general_sample.csv": ncsbe_contract_rows_by_file["enrs_2024_11_05_general_sample.csv"][:2]
+        },
         pull_date=datetime(2026, 4, 30, tzinfo=timezone.utc),
     )
 
@@ -478,7 +473,9 @@ def test_loader_replaces_stale_data_source_identity_before_source_record_insert(
     summary = load_ncsbe_results(
         db_conn,
         metadata_path=_SOURCE_METADATA_PATH,
-        raw_rows_by_file={"enrs_2024_11_05_general_sample.csv": ncsbe_contract_rows_by_file["enrs_2024_11_05_general_sample.csv"][:2]},
+        raw_rows_by_file={
+            "enrs_2024_11_05_general_sample.csv": ncsbe_contract_rows_by_file["enrs_2024_11_05_general_sample.csv"][:2]
+        },
         pull_date=datetime(2026, 4, 30, tzinfo=timezone.utc),
     )
 

@@ -40,9 +40,13 @@ _CANDIDATE_INSERT_SQL = """
         party,
         state,
         district,
-        incumbent_challenge
+        incumbent_challenge,
+        total_receipts,
+        total_disbursements,
+        cash_on_hand,
+        summary_coverage_end_date
     )
-    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
 """
 
 _FILING_INSERT_SQL = """
@@ -76,6 +80,7 @@ _TRANSACTION_INSERT_SQL = """
         transaction_date,
         amount,
         contributor_name_raw,
+        contributor_entity_type,
         contributor_employer,
         contributor_occupation,
         contributor_city,
@@ -95,7 +100,7 @@ _TRANSACTION_INSERT_SQL = """
         dissemination_date,
         aggregate_amount
     )
-    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
 """
 
 _CANDIDATE_COMMITTEE_LINK_INSERT_SQL = """
@@ -110,6 +115,66 @@ _CANDIDATE_COMMITTEE_LINK_INSERT_SQL = """
         source_record_id
     )
     VALUES (%s, %s, %s, %s, %s, %s, %s::daterange, %s)
+"""
+
+_COMMITTEE_SUMMARY_INSERT_SQL = """
+    INSERT INTO cf.committee_summary (
+        committee_id,
+        cycle,
+        total_receipts,
+        total_disbursements,
+        cash_on_hand,
+        individual_unitemized_contributions,
+        coverage_start_date,
+        coverage_end_date
+    )
+    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+"""
+
+_ELECTORAL_DIVISION_INSERT_SQL = """
+    INSERT INTO civic.electoral_division (
+        id,
+        name,
+        division_type,
+        state,
+        district_number
+    )
+    VALUES (%s, %s, %s, %s, %s)
+"""
+
+_OFFICE_INSERT_SQL = """
+    INSERT INTO civic.office (
+        id,
+        name,
+        office_level,
+        title,
+        state,
+        electoral_division_id
+    )
+    VALUES (%s, %s, %s, %s, %s, %s)
+"""
+
+_OFFICEHOLDING_INSERT_SQL = """
+    INSERT INTO civic.officeholding (
+        id,
+        person_id,
+        office_id,
+        electoral_division_id,
+        valid_period
+    )
+    VALUES (%s, %s, %s, %s, %s::daterange)
+"""
+
+_ZCTA_DISTRICT_INSERT_SQL = """
+    INSERT INTO civic.zcta_district (
+        zcta5,
+        state_fips,
+        cd_geoid,
+        district_number,
+        land_share,
+        source_url
+    )
+    VALUES (%s, %s, %s, %s, %s, %s)
 """
 
 
@@ -142,6 +207,22 @@ class CandidateRowSeed:
     state: str | None = None
     district: str | None = None
     incumbent_challenge: str | None = None
+    total_receipts: Decimal | None = None
+    total_disbursements: Decimal | None = None
+    cash_on_hand: Decimal | None = None
+    summary_coverage_end_date: date | None = None
+
+
+@dataclass(frozen=True)
+class CommitteeSummaryRowSeed:
+    committee_id: UUID
+    cycle: int
+    total_receipts: Decimal | None = None
+    total_disbursements: Decimal | None = None
+    cash_on_hand: Decimal | None = None
+    individual_unitemized_contributions: Decimal | None = None
+    coverage_start_date: date | None = None
+    coverage_end_date: date | None = None
 
 
 @dataclass(frozen=True)
@@ -186,6 +267,7 @@ class TransactionRowSeed:
     transaction_identifier: str | None = None
     transaction_date: date | None = None
     contributor_name_raw: str | None = None
+    contributor_entity_type: str | None = None
     contributor_employer: str | None = None
     contributor_occupation: str | None = None
     contributor_city: str | None = None
@@ -342,6 +424,27 @@ def insert_candidate_row(conn: psycopg.Connection, candidate: CandidateRowSeed) 
             candidate.state,
             candidate.district,
             candidate.incumbent_challenge,
+            candidate.total_receipts,
+            candidate.total_disbursements,
+            candidate.cash_on_hand,
+            candidate.summary_coverage_end_date,
+        ),
+    )
+
+
+def insert_committee_summary_row(conn: psycopg.Connection, summary: CommitteeSummaryRowSeed) -> None:
+    _execute_insert(
+        conn,
+        query=_COMMITTEE_SUMMARY_INSERT_SQL,
+        params=(
+            summary.committee_id,
+            summary.cycle,
+            summary.total_receipts,
+            summary.total_disbursements,
+            summary.cash_on_hand,
+            summary.individual_unitemized_contributions,
+            summary.coverage_start_date,
+            summary.coverage_end_date,
         ),
     )
 
@@ -403,6 +506,7 @@ def insert_transaction_row(conn: psycopg.Connection, transaction: TransactionRow
             transaction.transaction_date,
             transaction.amount,
             transaction.contributor_name_raw,
+            transaction.contributor_entity_type,
             transaction.contributor_employer,
             transaction.contributor_occupation,
             transaction.contributor_city,
@@ -422,6 +526,70 @@ def insert_transaction_row(conn: psycopg.Connection, transaction: TransactionRow
             transaction.dissemination_date,
             transaction.aggregate_amount,
         ),
+    )
+
+
+def insert_electoral_division_row(
+    conn: psycopg.Connection,
+    *,
+    division_id: UUID,
+    name: str,
+    division_type: str,
+    state: str | None,
+    district_number: str | None,
+) -> None:
+    _execute_insert(
+        conn,
+        query=_ELECTORAL_DIVISION_INSERT_SQL,
+        params=(division_id, name, division_type, state, district_number),
+    )
+
+
+def insert_office_row(
+    conn: psycopg.Connection,
+    *,
+    office_id: UUID,
+    name: str,
+    title: str,
+    state: str | None,
+    electoral_division_id: UUID | None,
+) -> None:
+    _execute_insert(
+        conn,
+        query=_OFFICE_INSERT_SQL,
+        params=(office_id, name, "federal", title, state, electoral_division_id),
+    )
+
+
+def insert_officeholding_row(
+    conn: psycopg.Connection,
+    *,
+    officeholding_id: UUID,
+    person_id: UUID,
+    office_id: UUID,
+    electoral_division_id: UUID | None,
+    valid_period: str = "[2000-01-01,2100-01-01)",
+) -> None:
+    _execute_insert(
+        conn,
+        query=_OFFICEHOLDING_INSERT_SQL,
+        params=(officeholding_id, person_id, office_id, electoral_division_id, valid_period),
+    )
+
+
+def insert_zcta_district_row(
+    conn: psycopg.Connection,
+    *,
+    zcta5: str,
+    state_fips: str,
+    cd_geoid: str,
+    district_number: str,
+    land_share: Decimal = Decimal("1.00000"),
+) -> None:
+    _execute_insert(
+        conn,
+        query=_ZCTA_DISTRICT_INSERT_SQL,
+        params=(zcta5, state_fips, cd_geoid, district_number, land_share, "https://example.org/zcta"),
     )
 
 

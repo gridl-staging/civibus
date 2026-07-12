@@ -15,7 +15,7 @@ def test_build_session_summary_uses_l12_contract() -> None:
         produced_at=datetime(2026, 4, 24, 22, 0, tzinfo=UTC),
         repo_sha="abc1234",
         gate_command="uv run python scripts/stage_close_gate.py --session-id session-123",
-        changed_files=["docs/keel/checklist.md"],
+        changed_files=["docs/reference/keel/checklist.md"],
         touched_layers=[],
         produced_evidence_layers=["L12"],
     )
@@ -23,7 +23,7 @@ def test_build_session_summary_uses_l12_contract() -> None:
     assert summary["layer"] == "L12"
     assert summary["scope"] == "session-123"
     assert summary["status"] == "pass"
-    assert summary["changed_files"] == ["docs/keel/checklist.md"]
+    assert summary["changed_files"] == ["docs/reference/keel/checklist.md"]
     assert summary["produced_evidence_layers"] == ["L12"]
 
 
@@ -40,7 +40,7 @@ def test_write_session_summary_emits_schema_valid_payload(tmp_path: Path) -> Non
         produced_at=datetime(2026, 4, 24, 22, 0, tzinfo=UTC),
         repo_sha="abc1234",
         gate_command="uv run python scripts/stage_close_gate.py --session-id session-123",
-        changed_files=["docs/keel/checklist.md"],
+        changed_files=["docs/reference/keel/checklist.md"],
         touched_layers=[],
         produced_evidence_layers=["L12"],
     )

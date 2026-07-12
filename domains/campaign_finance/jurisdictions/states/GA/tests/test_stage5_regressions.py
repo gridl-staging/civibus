@@ -12,7 +12,6 @@ from _test_helpers import (
     nested_keys,
     read,
     scalar_value,
-    shared_data_source_scalar,
     source_block_by_name,
 )
 
@@ -124,11 +123,11 @@ def test_readme_documents_verification_date_and_recheck_instructions():
     config_text = read(CONFIG_PATH)
     readme_text = read(README_PATH)
     primary_source_blocks = [
-        block
-        for block in extract_source_blocks(config_text)
-        if "Independent Expenditures Search Export" not in block
+        block for block in extract_source_blocks(config_text) if "Independent Expenditures Search Export" not in block
     ]
-    source_verified_values = {scalar_value(source_block, "last_verified_working") for source_block in primary_source_blocks}
+    source_verified_values = {
+        scalar_value(source_block, "last_verified_working") for source_block in primary_source_blocks
+    }
     assert source_verified_values == {"2026-03-26"}
     source_verified = "2026-03-26"
     laws_verified = scalar_value(extract_named_block(config_text, "laws"), "last_verified")

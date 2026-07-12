@@ -42,6 +42,14 @@ _PERSON_COLUMNS = (
     "created_at",
     "updated_at",
 )
+_PERSON_BIO_COLUMNS = (
+    "bio_text",
+    "bio_source_url",
+    "bio_license",
+    "bio_pulled_at",
+)
+_PERSON_COLUMNS_WITHOUT_BIO = tuple(column for column in _PERSON_COLUMNS if column not in _PERSON_BIO_COLUMNS)
+_PERSON_HAS_BIO_COLUMNS: bool | None = None
 
 _ORGANIZATION_COLUMNS = (
     "id",
@@ -154,6 +162,7 @@ insert_entity_source = db_ingest.insert_entity_source
 insert_field_provenance = db_ingest.insert_field_provenance
 insert_entity_address = db_ingest.insert_entity_address
 try_insert_source_record = db_ingest.try_insert_source_record
+try_insert_source_records_bulk = db_ingest.try_insert_source_records_bulk
 
 
 def resolve_person_by_name_and_zip(
@@ -272,6 +281,29 @@ def _insert_row(
         cursor.execute(statement, values)
 
 
+def _person_has_bio_columns(conn: psycopg.Connection) -> bool:
+    global _PERSON_HAS_BIO_COLUMNS
+    if _PERSON_HAS_BIO_COLUMNS is None:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT COUNT(*)
+                FROM information_schema.columns
+                WHERE table_schema = 'core'
+                  AND table_name = 'person'
+                  AND column_name IN ('bio_text', 'bio_source_url', 'bio_license', 'bio_pulled_at')
+                """
+            )
+            _PERSON_HAS_BIO_COLUMNS = int(cursor.fetchone()[0]) == len(_PERSON_BIO_COLUMNS)
+    return _PERSON_HAS_BIO_COLUMNS
+
+
+def _person_columns_for_schema(conn: psycopg.Connection) -> tuple[str, ...]:
+    if _person_has_bio_columns(conn):
+        return _PERSON_COLUMNS
+    return _PERSON_COLUMNS_WITHOUT_BIO
+
+
 def _select_row_by_id(
     conn: psycopg.Connection,
     table_name: str,
@@ -302,6 +334,13 @@ def _normalize_json_dictionary(value: object, field_name: str) -> dict[str, Any]
     raise TypeError(f"{field_name} must deserialize to a dictionary, got {type(value).__name__}")
 
 
+def _normalize_string_identifier_dictionary(value: object, field_name: str) -> dict[str, str]:
+    normalized_value = _normalize_json_dictionary(value, field_name=field_name)
+    return {
+        key: dictionary_value for key, dictionary_value in normalized_value.items() if isinstance(dictionary_value, str)
+    }
+
+
 def _data_source_values(ds: DataSource) -> tuple[object, ...]:
     return (
         ds.id,
@@ -322,43 +361,45 @@ def _data_source_values(ds: DataSource) -> tuple[object, ...]:
 
 
 def insert_person(conn: psycopg.Connection, person: Person) -> UUID:
+    person_columns = _person_columns_for_schema(conn)
+    person_value_by_column: dict[str, object] = {
+        "id": person.id,
+        "canonical_name": person.canonical_name,
+        "name_variants": person.name_variants,
+        "first_name": person.first_name,
+        "middle_name": person.middle_name,
+        "last_name": person.last_name,
+        "suffix": person.suffix,
+        "occupation": person.occupation,
+        "education": person.education,
+        "bio_text": person.bio_text,
+        "bio_source_url": person.bio_source_url,
+        "bio_license": person.bio_license,
+        "bio_pulled_at": person.bio_pulled_at,
+        "date_of_birth": person.date_of_birth,
+        "year_of_birth": person.year_of_birth,
+        "identifiers": Jsonb(person.identifiers),
+        "primary_address_id": person.primary_address_id,
+        "er_cluster_id": person.er_cluster_id,
+        "er_confidence": person.er_confidence,
+        "created_at": person.created_at,
+        "updated_at": person.updated_at,
+    }
     _insert_row(
         conn,
         "person",
-        _PERSON_COLUMNS,
-        (
-            person.id,
-            person.canonical_name,
-            person.name_variants,
-            person.first_name,
-            person.middle_name,
-            person.last_name,
-            person.suffix,
-            person.occupation,
-            person.education,
-            person.bio_text,
-            person.bio_source_url,
-            person.bio_license,
-            person.bio_pulled_at,
-            person.date_of_birth,
-            person.year_of_birth,
-            Jsonb(person.identifiers),
-            person.primary_address_id,
-            person.er_cluster_id,
-            person.er_confidence,
-            person.created_at,
-            person.updated_at,
-        ),
+        person_columns,
+        tuple(person_value_by_column[column_name] for column_name in person_columns),
     )
     return person.id
 
 
 def select_person(conn: psycopg.Connection, person_id: UUID) -> Person | None:
-    row = _select_row_by_id(conn, "person", _PERSON_COLUMNS, person_id)
+    row = _select_row_by_id(conn, "person", _person_columns_for_schema(conn), person_id)
     if row is None:
         return None
 
-    row["identifiers"] = _normalize_json_dictionary(row["identifiers"], field_name="person.identifiers")
+    row["identifiers"] = _normalize_string_identifier_dictionary(row["identifiers"], field_name="person.identifiers")
     return Person(**row)
 
 
@@ -373,6 +414,7 @@ def update_person_bio_fields_if_missing(
     bio_license: str | None,
 ) -> tuple[str, ...]:
     """Fill empty person bio fields without overwriting existing non-empty values."""
+
     def _normalize_optional_text(value: str | None) -> str | None:
         if not isinstance(value, str):
             return None
@@ -382,27 +424,37 @@ def update_person_bio_fields_if_missing(
     def _is_blank(value: str | None) -> bool:
         return value is None or value.strip() == ""
 
+    has_bio_columns = _person_has_bio_columns(conn)
+    existing_row: tuple[object, ...] | None
     with conn.cursor() as cursor:
-        cursor.execute(
-            """
-            SELECT occupation, education, bio_text, bio_source_url, bio_license
-            FROM core.person
-            WHERE id = %s
-            """,
-            (person_id,),
-        )
+        if has_bio_columns:
+            cursor.execute(
+                """
+                SELECT occupation, education, bio_text, bio_source_url, bio_license
+                FROM core.person
+                WHERE id = %s
+                """,
+                (person_id,),
+            )
+        else:
+            cursor.execute(
+                """
+                SELECT occupation, education
+                FROM core.person
+                WHERE id = %s
+                """,
+                (person_id,),
+            )
         existing_row = cursor.fetchone()
 
     if existing_row is None:
         return ()
 
-    (
-        existing_occupation,
-        existing_education,
-        existing_bio_text,
-        _,
-        _,
-    ) = existing_row
+    existing_occupation = existing_row[0]
+    existing_education = existing_row[1]
+    existing_bio_text = existing_row[2] if has_bio_columns else None
+    existing_bio_source_url = existing_row[3] if has_bio_columns else None
+    existing_bio_license = existing_row[4] if has_bio_columns else None
 
     normalized_occupation = _normalize_optional_text(occupation)
     normalized_education = _normalize_optional_text(education)
@@ -424,22 +476,41 @@ def update_person_bio_fields_if_missing(
         params.append(normalized_education)
         updated_fields.append("education")
 
-    if normalized_bio_text and _is_blank(existing_bio_text):
-        assignments.append("bio_text = %s")
-        params.append(normalized_bio_text)
-        updated_fields.append("bio_text")
+    if has_bio_columns:
+        wrote_bio_companion_state = False
+        writing_first_bio_text = False
 
-        # Bio metadata is companion state for biography and should move together.
-        if normalized_bio_source_url is not None:
+        if normalized_bio_text and _is_blank(existing_bio_text):
+            assignments.append("bio_text = %s")
+            params.append(normalized_bio_text)
+            updated_fields.append("bio_text")
+            wrote_bio_companion_state = True
+            writing_first_bio_text = True
+
+        # Bio metadata is companion state for biography, but rights gating can suppress
+        # bio_text while still requiring source URL/license persistence.
+        should_update_bio_source_url = normalized_bio_source_url is not None and (
+            _is_blank(existing_bio_source_url)
+            or (writing_first_bio_text and existing_bio_source_url != normalized_bio_source_url)
+        )
+        if should_update_bio_source_url:
             assignments.append("bio_source_url = %s")
             params.append(normalized_bio_source_url)
             updated_fields.append("bio_source_url")
-        if normalized_bio_license is not None:
+            wrote_bio_companion_state = True
+
+        should_update_bio_license = normalized_bio_license is not None and (
+            _is_blank(existing_bio_license)
+            or (writing_first_bio_text and existing_bio_license != normalized_bio_license)
+        )
+        if should_update_bio_license:
             assignments.append("bio_license = %s")
             params.append(normalized_bio_license)
             updated_fields.append("bio_license")
+            wrote_bio_companion_state = True
 
-        assignments.append("bio_pulled_at = NOW()")
+        if wrote_bio_companion_state:
+            assignments.append("bio_pulled_at = NOW()")
 
     if not assignments:
         return ()

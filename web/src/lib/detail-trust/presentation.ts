@@ -41,7 +41,7 @@ export const CAMPAIGN_FINANCE_NO_DONOR_VENDOR_TRANSACTIONS_MESSAGE =
 // This avoids inventing a new backend field for a single urgent jurisdiction-specific warning.
 //
 // Indiana freshness banner retired 2026-04-26 after the IN re-verdict to
-// weekly-or-better (see docs/research/in_freshness_recheck_2026_04_26.md).
+// weekly-or-better (see docs/reference/research/in_freshness_recheck_2026_04_26.md).
 // The plumbing is intentionally retained so the next jurisdiction-specific
 // caveat can be added by a single one-line entry.
 export const PHL_FRESHNESS_NOTE =

@@ -1,6 +1,5 @@
 
 from __future__ import annotations
-"""Stub summary for keel_session_output.py."""
 
 import argparse
 import json

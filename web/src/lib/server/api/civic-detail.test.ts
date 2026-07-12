@@ -1,6 +1,7 @@
 import { ApiResponseError } from "$lib/server/api/client";
 import type {
   CandidacyDetailResponse,
+  CongressMemberSummary,
   ContestDetailResponse,
   ElectionDateAggregateResponse,
   OfficeDetailResponse,
@@ -11,6 +12,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { ApiClient } from "./client";
 import {
   fetchCandidacyDetail,
+  fetchCongressMembers,
   fetchContestDetail,
   fetchElectionDateAggregate,
   fetchOfficeDetail,
@@ -25,6 +27,63 @@ const OFFICEHOLDING_ID = "44444444-4444-4444-8444-444444444444";
 const PERSON_ID = "11111111-1111-4111-8111-111111111111";
 const ELECTORAL_DIVISION_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const ELECTION_DATE = "2026-11-03";
+
+const CONGRESS_MEMBER_SUMMARY: CongressMemberSummary = {
+  person_id: PERSON_ID,
+  person_name: "Jane Representative",
+  officeholding_id: OFFICEHOLDING_ID,
+  office_id: OFFICE_ID,
+  office_name: "U.S. Representative for North Carolina's 1st congressional district",
+  chamber: "House",
+  state: "NC",
+  district: "01",
+  district_or_class: "District 01",
+  party: "Democratic",
+  portrait_source_image_url: "https://example.test/jane.jpg",
+  person_detail_path: `/person/${PERSON_ID}`
+};
+
+describe("fetchCongressMembers", () => {
+  it("makes one request to /v1/congress/members and preserves every Stage 2 field", async () => {
+    const requestJson = vi.fn(async (path: string) => {
+      expect(path).toBe("/v1/congress/members");
+      return [CONGRESS_MEMBER_SUMMARY] satisfies CongressMemberSummary[];
+    });
+
+    const response = await fetchCongressMembers({
+      requestJson: requestJson as ApiClient["requestJson"]
+    });
+
+    expect(requestJson).toHaveBeenCalledTimes(1);
+    expect(requestJson).toHaveBeenCalledWith("/v1/congress/members");
+    expect(response).toEqual([CONGRESS_MEMBER_SUMMARY]);
+    expect(response[0]).toEqual({
+      person_id: PERSON_ID,
+      person_name: "Jane Representative",
+      officeholding_id: OFFICEHOLDING_ID,
+      office_id: OFFICE_ID,
+      office_name: "U.S. Representative for North Carolina's 1st congressional district",
+      chamber: "House",
+      state: "NC",
+      district: "01",
+      district_or_class: "District 01",
+      party: "Democratic",
+      portrait_source_image_url: "https://example.test/jane.jpg",
+      person_detail_path: `/person/${PERSON_ID}`
+    });
+  });
+
+  it("preserves backend ApiResponseError semantics", async () => {
+    const requestJson = vi.fn().mockRejectedValue(new ApiResponseError(503, { detail: "service unavailable" }));
+
+    await expect(
+      fetchCongressMembers({ requestJson: requestJson as ApiClient["requestJson"] })
+    ).rejects.toMatchObject({
+      status: 503,
+      body: { detail: "service unavailable" }
+    });
+  });
+});
 
 describe("fetchOfficeDetail", () => {
   it("makes one request to /v1/offices/{id} and no ER/graph/transactions side calls", async () => {

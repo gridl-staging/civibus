@@ -14,11 +14,12 @@ from psycopg.rows import dict_row
 from core.db import get_connection
 
 _DEFAULT_ARTIFACT_PATH = (
-    Path(__file__).resolve().parents[2] / "docs" / "research" / "artifacts" / "er-cross-jurisdiction-proof.json"
+    Path(__file__).resolve().parents[2] / "docs" / "reference" / "research" / "artifacts" / "er-cross-jurisdiction-proof.json"
 )
 _DEFAULT_PERSISTED_STATE_ARTIFACT_PATH = (
     Path(__file__).resolve().parents[2]
     / "docs"
+    / "reference"
     / "research"
     / "artifacts"
     / "2026_04_29_dwo_er"
@@ -97,14 +98,10 @@ def build_l8_regression_payload(
         key=lambda row: row["case_id"],
     )
     must_match_violations = sum(
-        1
-        for row in serialized_pair_results
-        if row["expected_relation"] == "must_match" and not row["passed"]
+        1 for row in serialized_pair_results if row["expected_relation"] == "must_match" and not row["passed"]
     )
     must_not_match_violations = sum(
-        1
-        for row in serialized_pair_results
-        if row["expected_relation"] == "must_not_match" and not row["passed"]
+        1 for row in serialized_pair_results if row["expected_relation"] == "must_not_match" and not row["passed"]
     )
     status = "pass" if must_match_violations == 0 and must_not_match_violations == 0 else "fail"
     return {
@@ -226,10 +223,7 @@ def build_persisted_state_cutover_proof(
     if missing_entity_types:
         failures.append(f"missing completed core.splink_run rows for: {', '.join(missing_entity_types)}")
     if cohort_payload["cohort_gate"]["status"] != "pass":
-        failures.append(
-            "cohort gate failed for: "
-            + ", ".join(cohort_payload["cohort_gate"]["failed_cohort_slugs"])
-        )
+        failures.append("cohort gate failed for: " + ", ".join(cohort_payload["cohort_gate"]["failed_cohort_slugs"]))
 
     return {
         "status": "pass" if not failures else "fail",

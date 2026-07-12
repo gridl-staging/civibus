@@ -22,7 +22,10 @@ def _execute_call(candidacy: Candidacy) -> tuple[str, tuple[object, ...]]:
 def test_upsert_candidacy_sql_preserves_unset_stage1_fields_on_conflict() -> None:
     sql, params = _execute_call(Candidacy(person_id=uuid4(), contest_id=uuid4(), party="DEM"))
 
-    assert "is_unexpired_term = CASE WHEN %s THEN EXCLUDED.is_unexpired_term ELSE civic.candidacy.is_unexpired_term END" in sql
+    assert (
+        "is_unexpired_term = CASE WHEN %s THEN EXCLUDED.is_unexpired_term ELSE civic.candidacy.is_unexpired_term END"
+        in sql
+    )
     assert "raw_fields = CASE WHEN %s THEN EXCLUDED.raw_fields ELSE civic.candidacy.raw_fields END" in sql
     assert params[13] is False
     assert params[14] is False
@@ -38,7 +41,10 @@ def test_upsert_candidacy_sql_updates_when_stage1_fields_are_explicit() -> None:
         )
     )
 
-    assert "is_unexpired_term = CASE WHEN %s THEN EXCLUDED.is_unexpired_term ELSE civic.candidacy.is_unexpired_term END" in sql
+    assert (
+        "is_unexpired_term = CASE WHEN %s THEN EXCLUDED.is_unexpired_term ELSE civic.candidacy.is_unexpired_term END"
+        in sql
+    )
     assert "raw_fields = CASE WHEN %s THEN EXCLUDED.raw_fields ELSE civic.candidacy.raw_fields END" in sql
     assert params[13] is True
     assert params[14] is True

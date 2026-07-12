@@ -6,6 +6,7 @@ import {
   buildCandidateSummaryPath,
   buildCommitteeDetailPath,
   buildCommitteeFilingBreakdownPath,
+  buildCommitteeIndependentExpendituresMadePath,
   buildCommitteeSummaryPath,
   buildCommitteeTransactionsPath
 } from "$lib/campaign-finance-detail/contract";
@@ -48,7 +49,10 @@ const COMMITTEE_SUMMARY = {
   contribution_receipts_total: "125.00",
   top_donors: [{ name: "Donor One", total_amount: "80.00", transaction_count: 2 }],
   top_vendors: [{ name: "Vendor One", total_amount: "50.00", transaction_count: 1 }],
-  spend_categories: [{ category: "media", total_amount: "25.00", transaction_count: 1 }]
+  spend_categories: [{ category: "media", total_amount: "25.00", transaction_count: 1 }],
+  itemized_transaction_count: 1,
+  cycle_summaries: [],
+  summary_source: "derived" as const
 };
 
 const COMMITTEE_FILING_BREAKDOWN = {
@@ -74,6 +78,15 @@ const COMMITTEE_FILING_BREAKDOWN = {
   ]
 };
 
+const COMMITTEE_IE_ACTIVITY = {
+  committee_id: COMMITTEE_ID,
+  support_total: "0.00",
+  oppose_total: "0.00",
+  ie_transaction_count: 0,
+  excluded_outlier_count: 0,
+  targets: []
+};
+
 function buildCommitteeDetailResponse() {
   return {
     id: COMMITTEE_ID,
@@ -89,7 +102,8 @@ function buildCommitteeDetailResponse() {
     city: null,
     zip_code: null,
     treasurer_name: null,
-    sources: []
+    sources: [],
+    linked_candidates: []
   };
 }
 
@@ -112,7 +126,10 @@ describe("campaign-finance detail api streaming bundle behavior", () => {
           total_spent: "100.00",
           net: "150.00",
           transaction_count: 5,
-          committees: [COMMITTEE_SUMMARY]
+          committees: [COMMITTEE_SUMMARY],
+          cash_on_hand: null,
+          summary_source: "derived",
+          itemized_transaction_count: 5
         });
       }
 
@@ -160,6 +177,10 @@ describe("campaign-finance detail api streaming bundle behavior", () => {
         return Promise.resolve(COMMITTEE_FILING_BREAKDOWN);
       }
 
+      if (path === buildCommitteeIndependentExpendituresMadePath(COMMITTEE_ID)) {
+        return Promise.resolve(COMMITTEE_IE_ACTIVITY);
+      }
+
       throw new Error(`unexpected path: ${path}`);
     });
 
@@ -168,7 +189,7 @@ describe("campaign-finance detail api streaming bundle behavior", () => {
       { id: COMMITTEE_ID }
     );
 
-    expect(requestJson).toHaveBeenCalledTimes(4);
+    expect(requestJson).toHaveBeenCalledTimes(5);
 
     resolveDetail(buildCommitteeDetailResponse());
     await bundlePromise;
@@ -182,7 +203,10 @@ describe("campaign-finance detail api streaming bundle behavior", () => {
       total_spent: "0.00",
       net: "0.00",
       transaction_count: 0,
-      committees: []
+      committees: [],
+      cash_on_hand: null,
+      summary_source: "derived",
+      itemized_transaction_count: 0
     };
     const missingIeError = new ApiResponseError(404, { detail: "No IE records found" });
 
@@ -251,7 +275,10 @@ describe("campaign-finance detail api streaming bundle behavior", () => {
           total_spent: "100.00",
           net: "150.00",
           transaction_count: 5,
-          committees: [COMMITTEE_SUMMARY]
+          committees: [COMMITTEE_SUMMARY],
+          cash_on_hand: null,
+          summary_source: "derived",
+          itemized_transaction_count: 5
         });
       }
 
@@ -319,6 +346,10 @@ describe("campaign-finance detail api streaming bundle behavior", () => {
         return Promise.resolve(COMMITTEE_FILING_BREAKDOWN);
       }
 
+      if (path === buildCommitteeIndependentExpendituresMadePath(COMMITTEE_ID)) {
+        return Promise.resolve(COMMITTEE_IE_ACTIVITY);
+      }
+
       throw new Error(`unexpected path: ${path}`);
     });
 
@@ -345,6 +376,7 @@ describe("campaign-finance detail api streaming bundle behavior", () => {
       const bundle = await bundlePromise;
       await expect(bundle.transactions).rejects.toThrow("transactions request failed");
       await expect(bundle.summary).resolves.toEqual(COMMITTEE_SUMMARY);
+      await expect(bundle.independentExpendituresMade).resolves.toEqual(COMMITTEE_IE_ACTIVITY);
       await expect(bundle.filingBreakdown).resolves.toEqual(COMMITTEE_FILING_BREAKDOWN);
       expect(unhandled).toEqual([]);
     } finally {
@@ -370,7 +402,10 @@ describe("campaign-finance detail api streaming bundle behavior", () => {
           total_spent: "100.00",
           net: "150.00",
           transaction_count: 5,
-          committees: [COMMITTEE_SUMMARY]
+          committees: [COMMITTEE_SUMMARY],
+          cash_on_hand: null,
+          summary_source: "derived",
+          itemized_transaction_count: 5
         });
       }
 
@@ -424,6 +459,10 @@ describe("campaign-finance detail api streaming bundle behavior", () => {
         return Promise.resolve(COMMITTEE_FILING_BREAKDOWN);
       }
 
+      if (path === buildCommitteeIndependentExpendituresMadePath(COMMITTEE_ID)) {
+        return Promise.resolve(COMMITTEE_IE_ACTIVITY);
+      }
+
       throw new Error(`unexpected path: ${path}`);
     });
 
@@ -438,7 +477,7 @@ describe("campaign-finance detail api streaming bundle behavior", () => {
       expect(allSettledSpy).toHaveBeenCalledTimes(1);
       const [secondaryPromises] = allSettledSpy.mock.calls[0];
       expect(Array.isArray(secondaryPromises)).toBe(true);
-      expect(secondaryPromises).toHaveLength(3);
+      expect(secondaryPromises).toHaveLength(4);
     } finally {
       allSettledSpy.mockRestore();
     }

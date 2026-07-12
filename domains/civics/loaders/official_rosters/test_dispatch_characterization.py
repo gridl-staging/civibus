@@ -6,11 +6,12 @@ from __future__ import annotations
 # not shapes) so a behavior change in either dispatch seam fails this file.
 
 from uuid import uuid4
+from pathlib import Path
 
 import pytest
 
 from domains.civics.loaders.official_rosters._test_fixtures import read_fixture
-from domains.civics.loaders.official_rosters.loader import _resolve_target
+from domains.civics.loaders.official_rosters.loader import _ROSTER_ARTIFACT_DIR, _resolve_target
 from domains.civics.loaders.official_rosters.parsers import (
     NormalizedRosterRow,
     parse_roster_rows,
@@ -19,8 +20,17 @@ from domains.civics.loaders.official_rosters.parsers import (
 
 _DURHAM_BODY_KEY = "durham_city_council"
 _NC_HOUSE_BODY_KEY = "nc_house"
+_NC_MUNICIPAL_COUNCIL_BODY_KEY = "nc_municipal_council"
+_NC_SCHOOL_BOARD_BODY_KEY = "nc_school_board"
 _DURHAM_SOURCE_URL = "https://www.durhamnc.gov/1396/City-Council-Members"
 _HOUSE_SOURCE_URL = "https://www.ncleg.gov/Members/MemberList/H"
+_APEX_SOURCE_URL = "https://www.apexnc.org/780/Meet-Your-Town-Council"
+_WCPSS_SOURCE_URL = "https://www.wcpss.net/fs/pages/571"
+_STAGE2_ARTIFACT_DIR = _ROSTER_ARTIFACT_DIR
+
+
+def _read_stage2_artifact(name: str) -> str:
+    return (_STAGE2_ARTIFACT_DIR / name).read_text(encoding="utf-8")
 
 
 # ----- parser dispatch: durham_city_council -----------------------------------
@@ -40,9 +50,7 @@ def test_parse_roster_rows_durham_first_row_concrete_field_values() -> None:
     assert first.role_label == "Mayor"
     assert first.district_number is None
     assert first.bio_url == "https://www.durhamnc.gov/1329/About-the-Mayor"
-    assert first.portrait_url == (
-        "https://www.durhamnc.gov/ImageRepository/Document?documentID=41709&thumbnailSize=2"
-    )
+    assert first.portrait_url == ("https://www.durhamnc.gov/ImageRepository/Document?documentID=41709&thumbnailSize=2")
 
 
 def test_parse_roster_rows_durham_council_member_row_role_label_dispatch() -> None:
@@ -59,9 +67,7 @@ def test_parse_roster_rows_durham_council_member_row_role_label_dispatch() -> No
     assert second.role_label == "City Council Member"
     assert second.district_number is None
     assert second.bio_url == "https://www.durhamnc.gov/3286/Javiera-Caballero"
-    assert second.portrait_url == (
-        "https://www.durhamnc.gov/ImageRepository/Document?documentID=53769&thumbnailSize=2"
-    )
+    assert second.portrait_url == ("https://www.durhamnc.gov/ImageRepository/Document?documentID=53769&thumbnailSize=2")
 
 
 # ----- parser dispatch: nc_house ---------------------------------------------
@@ -110,6 +116,51 @@ def test_parse_roster_rows_raises_value_error_for_unsupported_body_key() -> None
             source_url="https://example.invalid/",
             html="<html></html>",
         )
+
+
+def test_parse_roster_rows_nc_municipal_council_apex_concrete_outcome() -> None:
+    rows = parse_roster_rows(
+        body_key=_NC_MUNICIPAL_COUNCIL_BODY_KEY,
+        source_url=_APEX_SOURCE_URL,
+        html=_read_stage2_artifact("apex_town_council.html"),
+    )
+
+    assert [(row.member_name, row.role_label, row.district_number, row.bio_url) for row in rows] == [
+        ("Jacques Gilbert", "Mayor", "Apex", None),
+        ("Terry Mahaffey", "Mayor Pro Tem", "Apex", None),
+        ("Arno Zegerman", "Council Member", "Apex", None),
+        ("Edward Gray", "Council Member", "Apex", None),
+        ("Shane Reese", "Council Member", "Apex", None),
+        ("Sue Mu", "Council Member", "Apex", None),
+    ]
+
+
+def test_parse_roster_rows_nc_school_board_wcpss_concrete_outcome() -> None:
+    rows = parse_roster_rows(
+        body_key=_NC_SCHOOL_BOARD_BODY_KEY,
+        source_url=_WCPSS_SOURCE_URL,
+        html=_read_stage2_artifact("wcpss_school_board.html"),
+    )
+
+    assert len(rows) == 9
+    assert (rows[0].member_name, rows[0].role_label, rows[0].district_number, rows[0].bio_url) == (
+        "Tyler Swanson",
+        "Chair, District 9",
+        "Wake County Public School System",
+        "https://www.wcpss.net/board-member-by-school/post/district-9",
+    )
+    assert (rows[1].member_name, rows[1].role_label, rows[1].district_number, rows[1].bio_url) == (
+        "Sam Hershey",
+        "Vice-Chair, District 6",
+        "Wake County Public School System",
+        "https://www.wcpss.net/board-member-by-school/post/district-6",
+    )
+    assert (rows[2].member_name, rows[2].role_label, rows[2].district_number, rows[2].bio_url) == (
+        "Cheryl Caulfield",
+        "District 1",
+        "Wake County Public School System",
+        "https://www.wcpss.net/board-member-by-school/post/district-1",
+    )
 
 
 # ----- target resolution: durham_city_council --------------------------------
@@ -183,9 +234,7 @@ def _nc_house_row(district_number: str | None) -> NormalizedRosterRow:
     return NormalizedRosterRow(
         member_name="Julia C. Howard",
         role_label=(
-            "State Representative"
-            if district_number is None
-            else f"State Representative District {district_number}"
+            "State Representative" if district_number is None else f"State Representative District {district_number}"
         ),
         district_number=district_number,
         bio_url="https://www.ncleg.gov/Members/Biography/H/53",
@@ -233,6 +282,92 @@ def test_resolve_target_nc_house_returns_none_when_district_number_is_blank_whit
     )
 
     assert _resolve_target(_NC_HOUSE_BODY_KEY, blank_row, source_record_id) is None
+
+
+# ----- target resolution: launch-scope deterministic normalization ----------
+
+
+@pytest.mark.parametrize(
+    ("body_key", "district_number", "expected_office_name", "expected_division_name"),
+    (
+        ("nc_county_commissioners", "durham", "nc_county_commissioner", "nc_county_durham"),
+        ("nc_municipal_council", "raleigh", "nc_municipal_council_member", "nc_municipal_raleigh"),
+        (
+            "nc_school_board",
+            "wake county public school system",
+            "nc_school_board_member",
+            "nc_school_district_wake_county_public_school_system",
+        ),
+    ),
+)
+def test_resolve_target_launch_scope_division_matching_is_case_insensitive(
+    body_key: str,
+    district_number: str,
+    expected_office_name: str,
+    expected_division_name: str,
+) -> None:
+    source_record_id = uuid4()
+    row = NormalizedRosterRow(
+        member_name="Placeholder Member",
+        role_label="Placeholder Role",
+        district_number=district_number,
+        bio_url=None,
+        portrait_url=None,
+    )
+
+    target = _resolve_target(body_key, row, source_record_id)
+
+    assert target is not None
+    assert target.office.name == expected_office_name
+    assert target.electoral_division.name == expected_division_name
+    assert target.electoral_division.source_record_id == source_record_id
+    assert target.office.source_record_id == source_record_id
+
+
+def test_resolve_target_nc_municipal_council_apex_source_specific_outcome() -> None:
+    source_record_id = uuid4()
+    row = NormalizedRosterRow(
+        member_name="Jacques Gilbert",
+        role_label="Mayor",
+        district_number="Apex",
+        bio_url=None,
+        portrait_url=None,
+    )
+
+    target = _resolve_target(_NC_MUNICIPAL_COUNCIL_BODY_KEY, row, source_record_id)
+
+    assert target is not None
+    assert target.office.name == "nc_municipal_council_member"
+    assert target.office.title == "Council Member"
+    assert target.office.office_level == "municipal"
+    assert target.office.number_of_seats == 6
+    assert target.electoral_division.name == "nc_municipal_apex"
+    assert target.electoral_division.division_type == "municipal"
+    assert target.electoral_division.state == "NC"
+    assert target.electoral_division.district_number == "Apex"
+
+
+def test_resolve_target_nc_school_board_wcpss_source_specific_outcome() -> None:
+    source_record_id = uuid4()
+    row = NormalizedRosterRow(
+        member_name="Tyler Swanson",
+        role_label="Chair, District 9",
+        district_number="Wake County Public School System",
+        bio_url="https://www.wcpss.net/board-member-by-school/post/district-9",
+        portrait_url=None,
+    )
+
+    target = _resolve_target(_NC_SCHOOL_BOARD_BODY_KEY, row, source_record_id)
+
+    assert target is not None
+    assert target.office.name == "nc_school_board_member"
+    assert target.office.title == "School Board Member"
+    assert target.office.office_level == "school_board"
+    assert target.office.number_of_seats == 9
+    assert target.electoral_division.name == "nc_school_district_wake_county_public_school_system"
+    assert target.electoral_division.division_type == "school_district"
+    assert target.electoral_division.state == "NC"
+    assert target.electoral_division.district_number == "Wake County Public School System"
 
 
 # ----- target resolution: failure path ---------------------------------------

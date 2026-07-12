@@ -402,7 +402,7 @@ describe("detail trust presentation helper", () => {
 
   it("does not add the retired Indiana freshness note for Indiana campaign-finance provenance", () => {
     // IN re-verdicted to weekly-or-better 2026-04-26
-    // (see docs/research/in_freshness_recheck_2026_04_26.md):
+    // (see docs/reference/research/in_freshness_recheck_2026_04_26.md):
     // 3 valid probes (Apr 16, Apr 17, Apr 26) over 10 days now satisfy
     // the weekly-or-better rule. The freshness banner has been retired.
     const section = buildTrustSection([

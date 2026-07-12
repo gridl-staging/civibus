@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from uuid import UUID, uuid4
 
@@ -9,9 +10,14 @@ import psycopg
 import pytest
 from fastapi.testclient import TestClient
 
-from api.test_campaign_finance_support import insert_data_source_for_test, insert_source_record_for_test
-from core.db import insert_entity_source, insert_person
-from core.types.python.models import Person
+from api.test_campaign_finance_support import (
+    CandidateRowSeed,
+    insert_candidate_row,
+    insert_data_source_for_test,
+    insert_source_record_for_test,
+)
+from core.db import insert_entity_source, insert_person, insert_person_portrait, insert_source_record
+from core.types.python.models import Person, PersonPortrait, SourceRecord, compute_record_hash
 
 pytestmark = pytest.mark.integration
 
@@ -68,6 +74,62 @@ _ELECTORAL_DIVISION_INSERT_SQL = """
     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, ST_GeomFromText(%s, 4326), %s)
 """
 
+
+@dataclass(frozen=True)
+class _CongressMemberExpectation:
+    person_id: UUID
+    person_name: str
+    officeholding_id: UUID
+    office_id: UUID
+    office_name: str
+    chamber: str
+    state: str | None
+    district: str | None
+    district_or_class: str | None
+    party: str | None
+    portrait_source_image_url: str | None
+
+
+@dataclass(frozen=True)
+class _CongressOfficeSeed:
+    house_office_id: UUID
+    senate_office_id: UUID
+    delegate_office_id: UUID
+    president_office_id: UUID
+    vice_president_office_id: UUID
+    state_office_id: UUID
+    house_division_id: UUID
+    senate_division_id: UUID
+    delegate_division_id: UUID
+    office_names_by_id: dict[UUID, str]
+
+
+@dataclass(frozen=True)
+class _CongressCurrentMemberSpec:
+    person_name: str
+    office_id: UUID
+    division_id: UUID | None
+    party: str
+    chamber: str
+    state: str | None
+    district: str | None
+    district_or_class: str | None
+    portrait_url: str | None = None
+    portrait_status: str | None = None
+    portrait_rights_status: str | None = None
+    portrait_image_hash: str | None = None
+    party_election_date: date = date(2024, 11, 5)
+    senate_class: str | None = None
+    seed_civic_party: bool = True
+    fec_candidate_id: str | None = None
+    # Source-record `raw_fields["party"]` is the lowest-priority derivation
+    # path (FEC candidate -> civic.candidacy -> source_record raw_fields).
+    # Seed it only for specs that intentionally exercise the fallback so the
+    # higher-priority paths cannot be silently masked by the fallback when
+    # they regress.
+    seed_source_record_party_fallback: bool = False
+
+
 _JURISDICTION_INSERT_SQL = """
     INSERT INTO core.jurisdiction (id, name, jurisdiction_type, fips, state)
     VALUES (%s, %s, %s, %s, %s)
@@ -113,6 +175,36 @@ def _insert_office(conn: psycopg.Connection, **kwargs) -> UUID:
         ),
     )
     return oid
+
+
+def _upsert_canonical_congress_office(
+    conn: psycopg.Connection,
+    *,
+    office_id: UUID,
+    name: str,
+    title: str,
+) -> UUID:
+    conn.execute(
+        """
+        INSERT INTO civic.office (
+            id, name, office_level, title, jurisdiction_id, state,
+            electoral_division_id, is_elected, number_of_seats, source_record_id
+        )
+        VALUES (%s, %s, 'federal', %s, NULL, NULL, NULL, TRUE, 1, NULL)
+        ON CONFLICT (id)
+        DO UPDATE SET
+            name = EXCLUDED.name,
+            office_level = EXCLUDED.office_level,
+            title = EXCLUDED.title,
+            jurisdiction_id = EXCLUDED.jurisdiction_id,
+            state = EXCLUDED.state,
+            electoral_division_id = EXCLUDED.electoral_division_id,
+            is_elected = EXCLUDED.is_elected,
+            number_of_seats = EXCLUDED.number_of_seats
+        """,
+        (office_id, name, title),
+    )
+    return office_id
 
 
 def _insert_contest(conn: psycopg.Connection, **kwargs) -> UUID:
@@ -269,9 +361,431 @@ def _insert_electoral_division(conn: psycopg.Connection, **kwargs) -> UUID:
     return division_id
 
 
+def _insert_congress_party_seed(
+    conn: psycopg.Connection,
+    *,
+    person_id: UUID,
+    office_id: UUID,
+    party: str,
+    election_date: date = date(2024, 11, 5),
+) -> None:
+    contest_id = _insert_contest(
+        conn,
+        name=f"Congress party seed {person_id}",
+        office_id=office_id,
+        election_date=election_date,
+    )
+    _insert_candidacy(conn, person_id=person_id, contest_id=contest_id, party=party, status="elected")
+
+
+def _fec_office_code_for_congress_office(office_id: UUID, office_seed: _CongressOfficeSeed) -> str:
+    if office_id == office_seed.senate_office_id:
+        return "S"
+    if office_id in (office_seed.president_office_id, office_seed.vice_president_office_id):
+        return "P"
+    return "H"
+
+
+def _insert_congress_fec_candidate_party(
+    conn: psycopg.Connection,
+    *,
+    person_id: UUID,
+    spec: _CongressCurrentMemberSpec,
+    office_seed: _CongressOfficeSeed,
+) -> None:
+    if spec.fec_candidate_id is None:
+        return
+    insert_candidate_row(
+        conn,
+        CandidateRowSeed(
+            id=uuid4(),
+            fec_candidate_id=spec.fec_candidate_id,
+            name=spec.person_name,
+            office=_fec_office_code_for_congress_office(spec.office_id, office_seed),
+            person_id=person_id,
+            party=spec.party,
+            state=spec.state,
+            district=spec.district if spec.district is not None and spec.district != "AL" else None,
+            summary_coverage_end_date=date(2026, 3, 31),
+        ),
+    )
+
+
+def _insert_congress_portrait(
+    conn: psycopg.Connection,
+    *,
+    person_id: UUID,
+    source_record_id: UUID,
+    image_hash: str,
+    status: str,
+    rights_status: str,
+    source_image_url: str,
+) -> None:
+    insert_person_portrait(
+        conn,
+        PersonPortrait(
+            person_id=person_id,
+            source_record_id=source_record_id,
+            status=status,
+            rights_status=rights_status,
+            image_hash=image_hash,
+            mime_type="image/jpeg",
+            width_px=640,
+            height_px=480,
+            source_image_url=source_image_url,
+            storage_uri=f"s3://civibus/test-portraits/{image_hash}.jpg",
+        ),
+    )
+
+
+def _insert_congress_source_record(
+    conn: psycopg.Connection,
+    *,
+    data_source_id: UUID,
+    source_record_key: str,
+    raw_fields: dict[str, object],
+) -> UUID:
+    source_record_raw_fields = {"source_record_key": source_record_key, **raw_fields}
+    source_record = SourceRecord(
+        data_source_id=data_source_id,
+        source_record_key=source_record_key,
+        source_url=f"https://example.org/congress/{source_record_key}",
+        raw_fields=source_record_raw_fields,
+        pull_date=datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc),
+        record_hash=compute_record_hash(source_record_raw_fields),
+    )
+    insert_source_record(conn, source_record)
+    return source_record.id
+
+
+def _seed_congress_offices(conn: psycopg.Connection) -> _CongressOfficeSeed:
+    house_division_id = _insert_electoral_division(
+        conn,
+        name="nc_cd_01",
+        division_type="congressional_district",
+        state="NC",
+        district_number="01",
+    )
+    senate_division_id = _insert_electoral_division(
+        conn,
+        name="ca_statewide",
+        division_type="statewide",
+        state="CA",
+    )
+    delegate_division_id = _insert_electoral_division(
+        conn,
+        name="dc_at_large",
+        division_type="congressional_district",
+        state="DC",
+        district_number="AL",
+    )
+
+    house_office_id = _upsert_canonical_congress_office(
+        conn,
+        office_id=UUID("00000000-0000-4000-8000-000000000101"),
+        name="us_house",
+        title="Representative",
+    )
+    senate_office_id = _upsert_canonical_congress_office(
+        conn,
+        office_id=UUID("00000000-0000-4000-8000-000000000102"),
+        name="us_senate",
+        title="Senator",
+    )
+    president_office_id = _upsert_canonical_congress_office(
+        conn,
+        office_id=UUID("00000000-0000-4000-8000-000000000103"),
+        name="us_president",
+        title="President",
+    )
+    vice_president_office_id = _upsert_canonical_congress_office(
+        conn,
+        office_id=UUID("00000000-0000-4000-8000-000000000104"),
+        name="us_vice_president",
+        title="Vice President",
+    )
+    delegate_office_id = _upsert_canonical_congress_office(
+        conn,
+        office_id=UUID("00000000-0000-4000-8000-000000000105"),
+        name="us_house_delegate",
+        title="Delegate",
+    )
+    state_office_id = _insert_office(conn, name="NC Governor", office_level="state", title="Governor", state="NC")
+    office_names_by_id = {
+        house_office_id: "U.S. Representative NC-01",
+        senate_office_id: "U.S. Senator CA Class I",
+        president_office_id: "President of the United States",
+        vice_president_office_id: "Vice President of the United States",
+        delegate_office_id: "U.S. Delegate DC-AL",
+    }
+    return _CongressOfficeSeed(
+        house_office_id=house_office_id,
+        senate_office_id=senate_office_id,
+        delegate_office_id=delegate_office_id,
+        president_office_id=president_office_id,
+        vice_president_office_id=vice_president_office_id,
+        state_office_id=state_office_id,
+        house_division_id=house_division_id,
+        senate_division_id=senate_division_id,
+        delegate_division_id=delegate_division_id,
+        office_names_by_id=office_names_by_id,
+    )
+
+
+def _insert_current_congress_member(
+    conn: psycopg.Connection,
+    *,
+    spec: _CongressCurrentMemberSpec,
+    data_source_id: UUID,
+    office_seed: _CongressOfficeSeed,
+) -> _CongressMemberExpectation:
+    person = Person(canonical_name=spec.person_name)
+    insert_person(conn, person)
+    officeholding_raw_fields: dict[str, object] = {"member_name": spec.person_name}
+    if spec.senate_class is not None:
+        officeholding_raw_fields["class"] = spec.senate_class
+    if spec.seed_source_record_party_fallback and spec.party:
+        # Production officeholder loader persists term-level `party` into
+        # source_record raw_fields, but seeding it for every spec would mask
+        # regressions in the higher-priority FEC / civic.candidacy paths.
+        # Only the executive/VP regression spec opts in by default.
+        officeholding_raw_fields["party"] = spec.party
+    source_record_id = _insert_congress_source_record(
+        conn,
+        data_source_id=data_source_id,
+        source_record_key=f"officeholding-{person.id}",
+        raw_fields=officeholding_raw_fields,
+    )
+    officeholding_id = _insert_officeholding(
+        conn,
+        person_id=person.id,
+        office_id=spec.office_id,
+        electoral_division_id=spec.division_id,
+        valid_period="[2024-01-01,2100-01-01)",
+        source_record_id=source_record_id,
+    )
+    if spec.seed_civic_party:
+        _insert_congress_party_seed(
+            conn,
+            person_id=person.id,
+            office_id=spec.office_id,
+            party=spec.party,
+            election_date=spec.party_election_date,
+        )
+    _insert_congress_fec_candidate_party(conn, person_id=person.id, spec=spec, office_seed=office_seed)
+    if spec.portrait_url is not None:
+        assert spec.portrait_status is not None
+        assert spec.portrait_rights_status is not None
+        assert spec.portrait_image_hash is not None
+        _insert_congress_portrait(
+            conn,
+            person_id=person.id,
+            source_record_id=source_record_id,
+            image_hash=spec.portrait_image_hash,
+            status=spec.portrait_status,
+            rights_status=spec.portrait_rights_status,
+            source_image_url=spec.portrait_url,
+        )
+    expected_portrait_url = (
+        spec.portrait_url
+        if spec.portrait_status == "active" and spec.portrait_rights_status == "public_domain"
+        else None
+    )
+    return _CongressMemberExpectation(
+        person_id=person.id,
+        person_name=spec.person_name,
+        officeholding_id=officeholding_id,
+        office_id=spec.office_id,
+        office_name=office_seed.office_names_by_id[spec.office_id],
+        chamber=spec.chamber,
+        state=spec.state,
+        district=spec.district,
+        district_or_class=spec.district_or_class,
+        party=spec.party,
+        portrait_source_image_url=expected_portrait_url,
+    )
+
+
+def _congress_member_specs(office_seed: _CongressOfficeSeed) -> list[_CongressCurrentMemberSpec]:
+    return [
+        _CongressCurrentMemberSpec(
+            "Alice Representative",
+            office_seed.house_office_id,
+            office_seed.house_division_id,
+            "DEM",
+            "House",
+            "NC",
+            "01",
+            "01",
+            "https://images.example.org/alice.jpg",
+            "active",
+            "public_domain",
+            "a" * 64,
+        ),
+        _CongressCurrentMemberSpec(
+            "Blair Senator",
+            office_seed.senate_office_id,
+            office_seed.senate_division_id,
+            "REP",
+            "Senate",
+            "CA",
+            None,
+            "Class I",
+            senate_class="1",
+            seed_civic_party=False,
+            fec_candidate_id="S0CA00001",
+        ),
+        _CongressCurrentMemberSpec(
+            "Casey Delegate",
+            office_seed.delegate_office_id,
+            office_seed.delegate_division_id,
+            "IND",
+            "House",
+            "DC",
+            "AL",
+            "Delegate",
+        ),
+        _CongressCurrentMemberSpec(
+            "Dana President", office_seed.president_office_id, None, "DEM", "Executive", None, None, None
+        ),
+        _CongressCurrentMemberSpec(
+            "Evan Vice President",
+            office_seed.vice_president_office_id,
+            None,
+            "DEM",
+            "Executive",
+            None,
+            None,
+            None,
+            # Production VP rows have no linked cf.candidate and no civic.candidacy;
+            # party must still flow from core.source_record.raw_fields -> 'party'.
+            seed_civic_party=False,
+            seed_source_record_party_fallback=True,
+        ),
+        _CongressCurrentMemberSpec(
+            "Erin Restricted Portrait",
+            office_seed.house_office_id,
+            office_seed.house_division_id,
+            "DEM",
+            "House",
+            "NC",
+            "01",
+            "01",
+            "https://images.example.org/restricted.jpg",
+            "active",
+            "restricted",
+            "b" * 64,
+            date(2024, 11, 6),
+        ),
+        _CongressCurrentMemberSpec(
+            "Finley Superseded Portrait",
+            office_seed.senate_office_id,
+            office_seed.senate_division_id,
+            "REP",
+            "Senate",
+            "CA",
+            None,
+            "Class I",
+            "https://images.example.org/superseded.jpg",
+            "superseded",
+            "public_domain",
+            "c" * 64,
+            date(2024, 11, 6),
+            senate_class="1",
+        ),
+    ]
+
+
+def _insert_excluded_congress_controls(conn: psycopg.Connection, office_seed: _CongressOfficeSeed) -> None:
+    # `civic.office` accepts arbitrary names at office_level='federal' (see
+    # domains/civics/ingest.py::upsert_office). A non-canonical federal office
+    # such as a federal judgeship must NEVER appear in the Congress directory.
+    non_directory_federal_office_id = _insert_office(
+        conn,
+        name="us_federal_judge_test_excluded",
+        office_level="federal",
+        title="Federal Judge",
+    )
+    for excluded_name, office_id, valid_period in [
+        ("Gale Expired", office_seed.house_office_id, "[2000-01-01,2001-01-01)"),
+        ("Harper Future", office_seed.senate_office_id, "[2100-01-01,2110-01-01)"),
+        ("Indigo State", office_seed.state_office_id, "[2024-01-01,2100-01-01)"),
+        ("Jordan Federal Judge", non_directory_federal_office_id, "[2024-01-01,2100-01-01)"),
+    ]:
+        person = Person(canonical_name=excluded_name)
+        insert_person(conn, person)
+        _insert_officeholding(conn, person_id=person.id, office_id=office_id, valid_period=valid_period)
+
+
+def _seed_current_federal_members_mix(conn: psycopg.Connection) -> list[_CongressMemberExpectation]:
+    data_source = insert_data_source_for_test(conn, jurisdiction="federal/us", name_suffix=f"congress-{uuid4()}")
+
+    office_seed = _seed_congress_offices(conn)
+    expectations = [
+        _insert_current_congress_member(
+            conn,
+            spec=spec,
+            data_source_id=data_source.id,
+            office_seed=office_seed,
+        )
+        for spec in _congress_member_specs(office_seed)
+    ]
+    _insert_excluded_congress_controls(conn, office_seed)
+    return sorted(expectations, key=lambda item: item.person_name)
+
+
+def _expected_congress_query_rows(expectations: list[_CongressMemberExpectation]) -> list[dict[str, object]]:
+    return [
+        {
+            "person_id": expected.person_id,
+            "person_name": expected.person_name,
+            "officeholding_id": expected.officeholding_id,
+            "office_id": expected.office_id,
+            "office_name": expected.office_name,
+            "chamber": expected.chamber,
+            "state": expected.state,
+            "district": expected.district,
+            "district_or_class": expected.district_or_class,
+            "party": expected.party,
+            "portrait_source_image_url": expected.portrait_source_image_url,
+        }
+        for expected in expectations
+    ]
+
+
+def _expected_congress_http_rows(expectations: list[_CongressMemberExpectation]) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for row in _expected_congress_query_rows(expectations):
+        http_row = {key: str(value) if isinstance(value, UUID) else value for key, value in row.items()}
+        http_row["person_detail_path"] = f"/person/{http_row['person_id']}"
+        rows.append(http_row)
+    return rows
+
+
 # ---------------------------------------------------------------------------
 # Sprint 1: Detail endpoints
 # ---------------------------------------------------------------------------
+
+
+class TestCongressMembers:
+    def test_current_federal_members_query_returns_ordered_current_federal_officeholders(
+        self, db_conn: psycopg.Connection
+    ) -> None:
+        from api.queries.civics import fetch_current_federal_members
+
+        expectations = _seed_current_federal_members_mix(db_conn)
+
+        assert fetch_current_federal_members(db_conn) == _expected_congress_query_rows(expectations)
+
+    def test_congress_members_endpoint_returns_ordered_directory_contract(
+        self, api_client: TestClient, db_conn: psycopg.Connection
+    ) -> None:
+        expectations = _seed_current_federal_members_mix(db_conn)
+
+        response = api_client.get("/v1/congress/members")
+
+        assert response.status_code == 200
+        assert response.json() == _expected_congress_http_rows(expectations)
 
 
 class TestMapContextHelpers:

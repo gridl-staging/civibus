@@ -24,9 +24,7 @@ from domains.campaign_finance.jurisdictions.cities.PHL.scraper.load import LoadR
 
 def test_cli_supports_three_subcommands() -> None:
     parser = _build_argument_parser()
-    args = parser.parse_args(
-        ["download", "--data-type", "contributions", "--output", "/tmp/out.jsonl"]
-    )
+    args = parser.parse_args(["download", "--data-type", "contributions", "--output", "/tmp/out.jsonl"])
     assert args.command == "download"
     assert args.data_type == "contributions"
     assert args.output == Path("/tmp/out.jsonl")
@@ -37,9 +35,7 @@ def test_cli_load_requires_path() -> None:
     with pytest.raises(SystemExit):
         parser.parse_args(["load", "--data-type", "contributions"])
 
-    args = parser.parse_args(
-        ["load", "--data-type", "contributions", "--path", "/tmp/in.jsonl"]
-    )
+    args = parser.parse_args(["load", "--data-type", "contributions", "--path", "/tmp/in.jsonl"])
     assert args.command == "load"
     assert args.path == Path("/tmp/in.jsonl")
 
@@ -65,18 +61,14 @@ def test_cli_data_type_supports_both_canonical_values() -> None:
 def test_cli_limit_rejects_negative() -> None:
     parser = _build_argument_parser()
     with pytest.raises(SystemExit):
-        parser.parse_args(
-            ["refresh", "--data-type", "contributions", "--limit", "-1"]
-        )
+        parser.parse_args(["refresh", "--data-type", "contributions", "--limit", "-1"])
 
 
 def test_cli_limit_accepts_zero() -> None:
     """`--limit 0` is a valid no-op pull (lets ops sanity-check the auth/path
     without writing rows)."""
     parser = _build_argument_parser()
-    args = parser.parse_args(
-        ["refresh", "--data-type", "contributions", "--limit", "0"]
-    )
+    args = parser.parse_args(["refresh", "--data-type", "contributions", "--limit", "0"])
     assert args.limit == 0
 
 
@@ -95,7 +87,12 @@ def test_refresh_runs_pass1_then_pass2_in_order(
     # regression makes call_order != ["pass1", "pass2"] and fails loudly.
     call_order: list[str] = []
     stub_result = LoadResult(
-        inserted=0, skipped=0, quarantined=0, superseded=0, errors=0, elapsed_seconds=0.0,
+        inserted=0,
+        skipped=0,
+        quarantined=0,
+        superseded=0,
+        errors=0,
+        elapsed_seconds=0.0,
     )
 
     def record_pass1(*_args: object, **_kwargs: object) -> LoadResult:
@@ -126,9 +123,7 @@ def test_refresh_runs_pass1_then_pass2_in_order(
 
     # Single equality assertion catches all three failure modes:
     # pass-1 missing, pass-2 missing, or wrong order.
-    assert call_order == ["pass1", "pass2"], (
-        f"refresh must call pass-1 then pass-2; got {call_order}"
-    )
+    assert call_order == ["pass1", "pass2"], f"refresh must call pass-1 then pass-2; got {call_order}"
 
 
 def test_run_phl_refresh_emits_pass_markers_for_detached_logs(

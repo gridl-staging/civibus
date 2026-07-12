@@ -1,5 +1,4 @@
 
-
 from __future__ import annotations
 
 from collections.abc import Mapping
@@ -7,6 +6,8 @@ from typing import Literal, Protocol
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
+
+from core.types.python.models import PortraitRightsStatus
 
 ENRICHMENT_FIELDS: tuple[str, ...] = (
     "occupation",
@@ -31,6 +32,7 @@ class PortraitBinaryMetadata(BaseModel):
     width_px: int
     height_px: int
     source_image_url: str
+    rights_status: PortraitRightsStatus = "unknown"
 
 
 class CandidateEnrichmentTarget(BaseModel):
@@ -45,6 +47,7 @@ class CandidateEnrichmentTarget(BaseModel):
     sboe_candidate_id: str | None = None
     ballotpedia_url: str | None = None
     wikidata_entity_id: str | None = None
+    bioguide_id: str | None = None
     verified_campaign_site_url: str | None = None
     roster_bio_url: str | None = None
 
@@ -185,8 +188,7 @@ class CandidateEnrichmentStrategy(Protocol):
         self,
         target: CandidateEnrichmentTarget,
         missing_fields: tuple[str, ...],
-    ) -> tuple[CandidateEnrichmentRecord, EnrichmentAttempt]:
-        ...
+    ) -> tuple[CandidateEnrichmentRecord, EnrichmentAttempt]: ...
 
 
 JsonLikeMapping = Mapping[str, object]

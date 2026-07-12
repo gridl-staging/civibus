@@ -27,7 +27,7 @@ must_match:
     rationale: NC roster naming includes optional middle initials that should normalize to the same legislator identity.
     source_notes:
       - tests/fixtures/roster/nc_general_assembly_house.html
-      - docs/research/artifacts/2026_04_29_roster_pilot_closeout/nc_house_counts_after_rerun.txt
+      - docs/reference/research/artifacts/2026_04_29_roster_pilot_closeout/nc_house_counts_after_rerun.txt
   - case_id: organization_suffix_normalization
     entity_type: organization
     left_entity:
@@ -70,7 +70,7 @@ must_not_match:
     rationale: Distinct NC House members in different districts must never auto-merge despite shared office scope.
     source_notes:
       - tests/fixtures/roster/nc_general_assembly_house.html
-      - docs/research/artifacts/2026_04_29_roster_pilot_closeout/nc_house_counts_after_rerun.txt
+      - docs/reference/research/artifacts/2026_04_29_roster_pilot_closeout/nc_house_counts_after_rerun.txt
   - case_id: organization_similar_name_distinct_committees
     entity_type: organization
     left_entity:

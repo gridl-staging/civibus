@@ -60,3 +60,15 @@ LAUNCH_SCOPE_STATE_FIPS_TO_USPS: tuple[tuple[str, str], ...] = (
 
 LAUNCH_SCOPE_STATE_FIPS: frozenset[str] = frozenset(fips for fips, _ in LAUNCH_SCOPE_STATE_FIPS_TO_USPS)
 LAUNCH_SCOPE_USPS_STATES: tuple[str, ...] = tuple(usps for _, usps in LAUNCH_SCOPE_STATE_FIPS_TO_USPS)
+
+# Canonical office.name values that make up the federal Congress + executive
+# directory. The civics ingest layer accepts arbitrary names at
+# office_level='federal', so callers presenting the Congress directory MUST
+# restrict membership to this set rather than every federal office row.
+CANONICAL_FEDERAL_DIRECTORY_OFFICE_NAMES: tuple[str, ...] = (
+    "us_house",
+    "us_senate",
+    "us_house_delegate",
+    "us_president",
+    "us_vice_president",
+)

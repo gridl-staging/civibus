@@ -1,3 +1,4 @@
+
 from __future__ import annotations
 
 import argparse
@@ -233,9 +234,7 @@ def _validate_degraded_transition(
         _check(
             "degraded_has_passing_l5_evidence_history",
             has_passing,
-            None
-            if has_passing
-            else "degraded sources must also cite a previously-passing L5 evidence_ref",
+            None if has_passing else "degraded sources must also cite a previously-passing L5 evidence_ref",
         ),
     ]
 
@@ -249,19 +248,13 @@ def _validate_deferred_transition(
     is under `docs/` and exists. The docs file documents the deferral reason.
     """
     docs_refs = [ref for ref in transition.evidence_refs if ref.layer == "docs"]
-    valid_docs = [
-        ref
-        for ref in docs_refs
-        if ref.path.startswith("docs/") and (repo_root / ref.path).is_file()
-    ]
+    valid_docs = [ref for ref in docs_refs if ref.path.startswith("docs/") and (repo_root / ref.path).is_file()]
     ok = len(valid_docs) >= 1
     return [
         _check(
             "deferred_has_docs_citation",
             ok,
-            None
-            if ok
-            else "deferred sources must cite at least one layer=docs evidence_ref with a path under docs/",
+            None if ok else "deferred sources must cite at least one layer=docs evidence_ref with a path under docs/",
         ),
     ]
 
@@ -331,10 +324,7 @@ def validate_source(
             and isinstance(payload, dict)
             and payload.get("layer") == evidence_ref.layer
             and payload.get("scope") == evidence_ref.scope
-            and (
-                observed_status == "pass"
-                or (accepts_failing_ref and observed_status in {"pass", "fail"})
-            )
+            and (observed_status == "pass" or (accepts_failing_ref and observed_status in {"pass", "fail"}))
         )
         checks.append(
             _check(
@@ -357,9 +347,7 @@ def validate_source(
             )
         )
     elif state == "operationalized":
-        checks.extend(
-            _validate_operationalized_transition(linked_evidence=linked_evidence)
-        )
+        checks.extend(_validate_operationalized_transition(linked_evidence=linked_evidence))
     elif state == "degraded":
         checks.extend(_validate_degraded_transition(linked_evidence=linked_evidence))
     elif state == "deferred":

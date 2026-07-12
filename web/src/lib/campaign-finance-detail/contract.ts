@@ -30,6 +30,7 @@ export type CommitteeDetailResponse = {
   zip_code: string | null;
   treasurer_name: string | null;
   sources: SourceInfo[];
+  linked_candidates: CandidateListItem[];
 };
 
 export type CandidateDetailResponse = {
@@ -161,6 +162,42 @@ export type IndependentExpenditureSummary = {
   support_count: number;
   oppose_count: number;
   top_spenders: TopSpenderEntry[];
+  excluded_outlier_count: number;
+};
+
+export type CommitteeIndependentExpenditureTarget = {
+  candidate_id: string;
+  fec_candidate_id: string;
+  candidate_name: string;
+  person_id: string | null;
+  party: string | null;
+  office: string;
+  state: string | null;
+  district: string | null;
+  slug: string;
+  slug_is_unique: boolean;
+  support_total: SerializedMoney;
+  oppose_total: SerializedMoney;
+  transaction_count: number;
+  sources: SourceInfo[];
+};
+
+export type CommitteeIndependentExpenditureActivity = {
+  committee_id: string;
+  support_total: SerializedMoney;
+  oppose_total: SerializedMoney;
+  ie_transaction_count: number;
+  excluded_outlier_count: number;
+  targets: CommitteeIndependentExpenditureTarget[];
+};
+
+export type CommitteeCycleSummary = {
+  cycle: number;
+  total_receipts: SerializedMoney;
+  total_disbursements: SerializedMoney;
+  cash_on_hand: SerializedMoney | null;
+  coverage_start_date: string | null;
+  coverage_end_date: string | null;
 };
 
 export type CommitteeFundraisingSummary = {
@@ -181,6 +218,9 @@ export type CommitteeFundraisingSummary = {
   top_donors: RankedTransactionParty[];
   top_vendors: RankedTransactionParty[];
   spend_categories: SpendCategorySummary[] | null;
+  itemized_transaction_count: number;
+  cycle_summaries: CommitteeCycleSummary[];
+  summary_source: "fec_committee_summary" | "derived";
 };
 
 export type RankedTransactionParty = {
@@ -216,6 +256,105 @@ export type CommitteeFilingBreakdown = {
   committee_id: string;
   committee_name: string;
   filings: FilingPeriodSummary[];
+};
+
+export type ContributionInsightsMonthlyTotal = {
+  month: string;
+  total_amount: SerializedMoney;
+  transaction_count: number;
+};
+
+export type ContributionInsightsItemizedBucket = {
+  label: string;
+  min_amount: SerializedMoney;
+  max_amount: SerializedMoney | null;
+  total_amount: SerializedMoney;
+  transaction_count: number;
+};
+
+export type ContributionInsightsDollarsBucket = {
+  label: string;
+  total_amount: SerializedMoney;
+  source: "transactions" | "committee_summary";
+};
+
+export type ContributionInsightsGeographyRow = {
+  label: string;
+  total_amount: SerializedMoney;
+  transaction_count: number;
+};
+
+export type ContributionInsightsDistrictShare = {
+  in_district_amount: SerializedMoney | null;
+  out_of_district_amount: SerializedMoney | null;
+  unknown_district_amount: SerializedMoney | null;
+  share: SerializedMoney | null;
+  available: boolean;
+};
+
+export type ContributionInsightsGeography = {
+  by_state: ContributionInsightsGeographyRow[];
+  by_district: ContributionInsightsGeographyRow[];
+  district_share: ContributionInsightsDistrictShare;
+};
+
+export type ContributionInsightsMetadata = {
+  coverage_start_date: string;
+  coverage_end_date: string | null;
+  cycles_included: number[];
+  committee_count: number;
+  approximate_geography: boolean;
+  excluded_geography: string | null;
+  caveats: string[];
+};
+
+export type ContributionInsightsSmallDollarShare = {
+  small_dollar_amount: SerializedMoney | null;
+  total_contribution_amount: SerializedMoney | null;
+  share: SerializedMoney | null;
+  available: boolean;
+};
+
+export type ContributionInsightsTotalsSource =
+  | "committee_summary"
+  | "itemized_transactions"
+  | "mixed_sources"
+  | "none";
+
+export type ContributionInsightsCycleTotal = {
+  cycle: number;
+  itemized_individual_contribution_amount: SerializedMoney;
+  itemized_transaction_count: number;
+  unitemized_individual_contribution_amount: SerializedMoney;
+  total_individual_contribution_amount: SerializedMoney;
+  source: ContributionInsightsTotalsSource;
+};
+
+export type ContributionInsightsCareerTotals = {
+  itemized_individual_contribution_amount: SerializedMoney;
+  itemized_transaction_count: number;
+  unitemized_individual_contribution_amount: SerializedMoney;
+  total_individual_contribution_amount: SerializedMoney;
+  source: ContributionInsightsTotalsSource;
+};
+
+export type PersonContributionInsights = {
+  person_id: string;
+  has_data: boolean;
+  metadata: ContributionInsightsMetadata;
+  monthly_totals: ContributionInsightsMonthlyTotal[];
+  itemized_size_buckets: ContributionInsightsItemizedBucket[];
+  dollars_by_size: ContributionInsightsDollarsBucket[];
+  cycle_totals: ContributionInsightsCycleTotal[];
+  career_totals: ContributionInsightsCareerTotals;
+  geography: ContributionInsightsGeography;
+  small_dollar_share: ContributionInsightsSmallDollarShare;
+};
+
+export type PersonTopEmployerRow = {
+  employer: string;
+  total_amount: SerializedMoney;
+  transaction_count: number;
 };
 
 function buildCampaignFinancePath(resource: string, id: string, suffix = ""): string {
@@ -275,6 +414,10 @@ export function buildCommitteeFilingBreakdownPath(committeeId: string): string {
   return buildCampaignFinancePath("committees", committeeId, "/filings/summary");
 }
 
+export function buildCommitteeIndependentExpendituresMadePath(committeeId: string): string {
+  return buildCampaignFinancePath("committees", committeeId, "/independent-expenditures-made");
+}
+
 export type CandidateFundraisingSummary = {
   candidate_id: string;
   candidate_name: string;
@@ -283,6 +426,11 @@ export type CandidateFundraisingSummary = {
   net: SerializedMoney;
   transaction_count: number;
   committees: CommitteeFundraisingSummary[];
+  // Stage 3: official FEC weball cash-on-hand; null when no weball totals are loaded.
+  cash_on_hand: SerializedMoney | null;
+  // Stage 3: which backend source produced total_raised/total_spent/net.
+  summary_source: "fec_weball" | "derived";
+  itemized_transaction_count: number;
 };
 
 export type CountySummaryRecipientCommittee = {
@@ -335,6 +483,18 @@ export function buildCandidateHref(item: SlugRoutableItem): string {
 
 export function buildCandidateSummaryPath(candidateId: string): string {
   return buildCampaignFinancePath("candidates", candidateId, "/summary");
+}
+
+export function buildPersonContributionInsightsPath(personId: string): string {
+  return buildCampaignFinancePath("person", personId, "/contribution-insights");
+}
+
+export function buildPersonTopDonorsPath(personId: string): string {
+  return buildCampaignFinancePath("person", personId, "/top-donors");
+}
+
+export function buildPersonTopEmployersPath(personId: string): string {
+  return buildCampaignFinancePath("person", personId, "/top-employers");
 }
 
 export function buildCountyCampaignFinanceSummaryPath(state: string, countySlug: string): string {

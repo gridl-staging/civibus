@@ -216,11 +216,7 @@ def _office_level_for_contest(contest_name: str) -> str:
         return "federal"
     if "BOARD OF EDUCATION" in uppercase_name or "SCHOOL" in uppercase_name:
         return "school_board"
-    if (
-        "COURT" in uppercase_name
-        or "JUDGE" in uppercase_name
-        or "DISTRICT ATTORNEY" in uppercase_name
-    ):
+    if "COURT" in uppercase_name or "JUDGE" in uppercase_name or "DISTRICT ATTORNEY" in uppercase_name:
         return "judicial"
     if "CITY OF" in uppercase_name or "TOWN OF" in uppercase_name or "COUNCIL" in uppercase_name:
         return "municipal"
@@ -260,9 +256,7 @@ def _derive_division_scope(parsed_row: CandidateListingRow) -> _DivisionScope:
                 district_number=district_number,
             )
 
-    if uppercase_name.startswith("NC SENATE DISTRICT ") or uppercase_name.startswith(
-        "NC STATE SENATE DISTRICT "
-    ):
+    if uppercase_name.startswith("NC SENATE DISTRICT ") or uppercase_name.startswith("NC STATE SENATE DISTRICT "):
         district_number = _extract_trailing_district_number(uppercase_name)
         if district_number is not None:
             return _DivisionScope(
@@ -289,18 +283,10 @@ def _derive_division_scope(parsed_row: CandidateListingRow) -> _DivisionScope:
                 district_number=district_number,
             )
 
-    if (
-        "CITY OF " in uppercase_name
-        or "TOWN OF " in uppercase_name
-        or "VILLAGE OF " in uppercase_name
-    ):
+    if "CITY OF " in uppercase_name or "TOWN OF " in uppercase_name or "VILLAGE OF " in uppercase_name:
         return _DivisionScope(division_name=f"NC {parsed_row.county_name}", division_type="municipal")
 
-    if (
-        county_name in uppercase_name
-        or f"{county_name}-" in uppercase_name
-        or " COUNTY " in uppercase_name
-    ):
+    if county_name in uppercase_name or f"{county_name}-" in uppercase_name or " COUNTY " in uppercase_name:
         return _DivisionScope(division_name=f"NC {parsed_row.county_name}", division_type="county")
 
     return _DivisionScope(division_name="NC", division_type="statewide")
@@ -370,10 +356,7 @@ def _resolve_source_record_id(
         source_record_key=source_record_key,
     )
     if active_source_record is None:
-        raise RuntimeError(
-            "Expected active source_record after idempotent insert miss for "
-            f"key={source_record_key}"
-        )
+        raise RuntimeError(f"Expected active source_record after idempotent insert miss for key={source_record_key}")
     return active_source_record.id, False
 
 
@@ -605,8 +588,7 @@ def load_candidate_listing(
 
     if len(raw_rows) != len(parsed.rows):
         raise RuntimeError(
-            "Candidate listing parser/raw row mismatch: "
-            f"parsed_rows={len(parsed.rows)} raw_rows={len(raw_rows)}"
+            f"Candidate listing parser/raw row mismatch: parsed_rows={len(parsed.rows)} raw_rows={len(raw_rows)}"
         )
 
     resolved_today = today or datetime.now().date()

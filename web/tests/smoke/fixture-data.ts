@@ -17,6 +17,9 @@ const {
   SMOKE_COLLIDING_COMMITTEE_ID,
   SMOKE_COLLIDING_COMMITTEE_SLUG,
   SMOKE_COMMITTEE_ID,
+  SMOKE_COMMITTEE_IE_SOURCE_NAME,
+  SMOKE_COMMITTEE_IE_SOURCE_RECORD_KEY,
+  SMOKE_COMMITTEE_IE_SOURCE_URL,
   SMOKE_COMMITTEE_NAME,
   SMOKE_COMMITTEE_SLUG,
   SMOKE_CONTEST_ID,
@@ -46,17 +49,26 @@ const {
   SMOKE_OFFICE_OFFICEHOLDER_NAME,
   SMOKE_ORG_CANONICAL_NAME,
   SMOKE_ORG_ID,
-  SMOKE_ORG_RELATIONSHIP_NAME,
   SMOKE_PHL_COMMITTEE_ID,
   SMOKE_PHL_COMMITTEE_NAME,
   SMOKE_PERSON_CANONICAL_NAME,
-  SMOKE_PERSON_GRAPH_ORG_NAME,
   SMOKE_PERSON_ID,
+  SMOKE_PERSON_ITEMIZED_DOLLARS,
+  SMOKE_PERSON_LARGE_ITEMIZED_DOLLARS,
   SMOKE_PERSON_MISSING_PORTRAIT_CANONICAL_NAME,
   SMOKE_PERSON_MISSING_PORTRAIT_FIELD_ID,
   SMOKE_PERSON_NO_PORTRAIT_CANONICAL_NAME,
   SMOKE_PERSON_NO_PORTRAIT_ID,
-  SMOKE_PERSON_RELATIONSHIP_NAME,
+  SMOKE_PERSON_PRIOR_UNITEMIZED_DOLLARS,
+  SMOKE_PERSON_SMALL_DOLLAR_DOLLARS,
+  SMOKE_PERSON_SMALL_DOLLAR_SHARE,
+  SMOKE_PERSON_SMALL_ITEMIZED_DOLLARS,
+  SMOKE_PERSON_TOP_DONOR_ONE_NAME,
+  SMOKE_PERSON_TOP_DONOR_TWO_NAME,
+  SMOKE_PERSON_TOP_EMPLOYER_ONE_NAME,
+  SMOKE_PERSON_TOP_EMPLOYER_TWO_NAME,
+  SMOKE_PERSON_TOTAL_CONTRIBUTION_DOLLARS,
+  SMOKE_PERSON_UNITEMIZED_DOLLARS,
   SMOKE_ROSTER_DURHAM_PERSON_CANONICAL_NAME,
   SMOKE_ROSTER_DURHAM_PERSON_ID,
   SMOKE_ROSTER_DURHAM_PORTRAIT_URL,
@@ -133,6 +145,22 @@ export const smokeFixtures = {
       }
     ]
   },
+  congressMembers: [
+    {
+      person_id: SMOKE_PERSON_ID,
+      person_name: SMOKE_PERSON_CANONICAL_NAME,
+      officeholding_id: SMOKE_OFFICEHOLDING_ID,
+      office_id: SMOKE_OFFICE_ID,
+      office_name: "U.S. Representative for North Carolina's 1st congressional district",
+      chamber: "House",
+      state: "NC",
+      district: "01",
+      district_or_class: "District 01",
+      party: "Democratic",
+      portrait_source_image_url: "https://images.example.org/jane-doe.jpg",
+      person_detail_path: `/person/${SMOKE_PERSON_ID}`
+    }
+  ],
   coverageRegistry: [
     {
       domain: SMOKE_COVERAGE_DOMAIN,
@@ -243,28 +271,114 @@ export const smokeFixtures = {
         }
       ]
     },
-    matches: [],
-    relationships: {
-      entity_type: "person",
-      entity_id: SMOKE_PERSON_ID,
-      neighbors: [
+    contributionInsights: {
+      person_id: SMOKE_PERSON_ID,
+      has_data: true,
+      metadata: {
+        coverage_start_date: "2022-01-01",
+        coverage_end_date: "2026-06-30",
+        cycles_included: [2022, 2024, 2026],
+        committee_count: 1,
+        approximate_geography: true,
+        excluded_geography: null,
+        caveats: []
+      },
+      monthly_totals: [
+        { month: "2026-01", total_amount: SMOKE_PERSON_SMALL_ITEMIZED_DOLLARS, transaction_count: 1 },
+        { month: "2026-02", total_amount: SMOKE_PERSON_LARGE_ITEMIZED_DOLLARS, transaction_count: 1 }
+      ],
+      itemized_size_buckets: [
         {
-          entity_type: "filing",
-          entity_id: SMOKE_FILING_ID,
-          name: SMOKE_PERSON_RELATIONSHIP_NAME,
-          relationship_type: "FILED",
-          direction: "inbound"
+          label: "$1-$200",
+          min_amount: "0.01",
+          max_amount: "200.00",
+          total_amount: SMOKE_PERSON_SMALL_ITEMIZED_DOLLARS,
+          transaction_count: 1
         },
         {
-          entity_type: "org",
-          entity_id: SMOKE_ORG_ID,
-          name: SMOKE_PERSON_GRAPH_ORG_NAME,
-          relationship_type: "AFFILIATED_WITH",
-          direction: "outbound"
+          label: "$201-$500",
+          min_amount: "200.01",
+          max_amount: "500.00",
+          total_amount: SMOKE_PERSON_LARGE_ITEMIZED_DOLLARS,
+          transaction_count: 1
         }
       ],
-      total_count: 2
-    }
+      dollars_by_size: [
+        { label: "Unitemized (<$200)", total_amount: SMOKE_PERSON_UNITEMIZED_DOLLARS, source: "committee_summary" as const },
+        { label: "$1-$200 itemized", total_amount: SMOKE_PERSON_SMALL_ITEMIZED_DOLLARS, source: "transactions" as const },
+        { label: "$201-$500 itemized", total_amount: SMOKE_PERSON_LARGE_ITEMIZED_DOLLARS, source: "transactions" as const }
+      ],
+      cycle_totals: [
+        {
+          cycle: 2026,
+          itemized_individual_contribution_amount: SMOKE_PERSON_ITEMIZED_DOLLARS,
+          itemized_transaction_count: 2,
+          unitemized_individual_contribution_amount: SMOKE_PERSON_UNITEMIZED_DOLLARS,
+          total_individual_contribution_amount: SMOKE_PERSON_TOTAL_CONTRIBUTION_DOLLARS,
+          source: "mixed_sources" as const
+        }
+      ],
+      career_totals: {
+        itemized_individual_contribution_amount: SMOKE_PERSON_ITEMIZED_DOLLARS,
+        itemized_transaction_count: 2,
+        unitemized_individual_contribution_amount: String(
+          Number(SMOKE_PERSON_UNITEMIZED_DOLLARS) + Number(SMOKE_PERSON_PRIOR_UNITEMIZED_DOLLARS)
+        ),
+        total_individual_contribution_amount: String(
+          Number(SMOKE_PERSON_TOTAL_CONTRIBUTION_DOLLARS) + Number(SMOKE_PERSON_PRIOR_UNITEMIZED_DOLLARS)
+        ),
+        source: "mixed_sources" as const
+      },
+      geography: {
+        by_state: [{ label: "NC", total_amount: SMOKE_PERSON_ITEMIZED_DOLLARS, transaction_count: 2 }],
+        by_district: [
+          { label: "In district", total_amount: SMOKE_PERSON_SMALL_ITEMIZED_DOLLARS, transaction_count: 1 },
+          { label: "Out of district", total_amount: SMOKE_PERSON_LARGE_ITEMIZED_DOLLARS, transaction_count: 1 }
+        ],
+        district_share: {
+          in_district_amount: SMOKE_PERSON_SMALL_ITEMIZED_DOLLARS,
+          out_of_district_amount: SMOKE_PERSON_LARGE_ITEMIZED_DOLLARS,
+          unknown_district_amount: "0.00",
+          share: String(
+            Number(SMOKE_PERSON_SMALL_ITEMIZED_DOLLARS) /
+              (Number(SMOKE_PERSON_SMALL_ITEMIZED_DOLLARS) + Number(SMOKE_PERSON_LARGE_ITEMIZED_DOLLARS))
+          ),
+          available: true
+        }
+      },
+      small_dollar_share: {
+        small_dollar_amount: SMOKE_PERSON_SMALL_DOLLAR_DOLLARS,
+        total_contribution_amount: String(
+          Number(SMOKE_PERSON_TOTAL_CONTRIBUTION_DOLLARS) + Number(SMOKE_PERSON_PRIOR_UNITEMIZED_DOLLARS)
+        ),
+        share: SMOKE_PERSON_SMALL_DOLLAR_SHARE,
+        available: true
+      }
+    },
+    topDonors: [
+      {
+        name: SMOKE_PERSON_TOP_DONOR_ONE_NAME,
+        total_amount: SMOKE_PERSON_LARGE_ITEMIZED_DOLLARS,
+        transaction_count: 1
+      },
+      {
+        name: SMOKE_PERSON_TOP_DONOR_TWO_NAME,
+        total_amount: SMOKE_PERSON_SMALL_ITEMIZED_DOLLARS,
+        transaction_count: 1
+      }
+    ],
+    topEmployers: [
+      {
+        employer: SMOKE_PERSON_TOP_EMPLOYER_ONE_NAME,
+        total_amount: SMOKE_PERSON_LARGE_ITEMIZED_DOLLARS,
+        transaction_count: 1
+      },
+      {
+        employer: SMOKE_PERSON_TOP_EMPLOYER_TWO_NAME,
+        total_amount: SMOKE_PERSON_SMALL_ITEMIZED_DOLLARS,
+        transaction_count: 1
+      }
+    ]
   },
   personNoPortrait: {
     id: SMOKE_PERSON_NO_PORTRAIT_ID,
@@ -289,13 +403,6 @@ export const smokeFixtures = {
       portrait: null,
       sources: []
     },
-    matches: [],
-    relationships: {
-      entity_type: "person",
-      entity_id: SMOKE_PERSON_NO_PORTRAIT_ID,
-      neighbors: [],
-      total_count: 0
-    }
   },
   rosterDurhamPerson: {
     id: SMOKE_ROSTER_DURHAM_PERSON_ID,
@@ -337,13 +444,6 @@ export const smokeFixtures = {
         }
       ]
     },
-    matches: [],
-    relationships: {
-      entity_type: "person",
-      entity_id: SMOKE_ROSTER_DURHAM_PERSON_ID,
-      neighbors: [],
-      total_count: 0
-    }
   },
   rosterNcHousePerson: {
     id: SMOKE_ROSTER_NC_HOUSE_PERSON_ID,
@@ -385,13 +485,6 @@ export const smokeFixtures = {
         }
       ]
     },
-    matches: [],
-    relationships: {
-      entity_type: "person",
-      entity_id: SMOKE_ROSTER_NC_HOUSE_PERSON_ID,
-      neighbors: [],
-      total_count: 0
-    }
   },
   personMissingPortraitField: {
     id: SMOKE_PERSON_MISSING_PORTRAIT_FIELD_ID,
@@ -415,13 +508,6 @@ export const smokeFixtures = {
       er_confidence: null,
       sources: []
     },
-    matches: [],
-    relationships: {
-      entity_type: "person",
-      entity_id: SMOKE_PERSON_MISSING_PORTRAIT_FIELD_ID,
-      neighbors: [],
-      total_count: 0
-    }
   },
   org: {
     id: SMOKE_ORG_ID,
@@ -451,21 +537,6 @@ export const smokeFixtures = {
         }
       ]
     },
-    matches: [],
-    relationships: {
-      entity_type: "org",
-      entity_id: SMOKE_ORG_ID,
-      neighbors: [
-        {
-          entity_type: "filing",
-          entity_id: SMOKE_FILING_ID,
-          name: SMOKE_ORG_RELATIONSHIP_NAME,
-          relationship_type: "FILED",
-          direction: "inbound"
-        }
-      ],
-      total_count: 1
-    }
   },
   committee: {
     id: SMOKE_COMMITTEE_ID,
@@ -483,6 +554,20 @@ export const smokeFixtures = {
       city: "Raleigh",
       zip_code: "27601",
       treasurer_name: "Jordan Treasurer",
+      linked_candidates: [
+        {
+          id: SMOKE_CANDIDATE_ID,
+          fec_candidate_id: "H0NC01001",
+          name: SMOKE_CANDIDATE_NAME,
+          person_id: SMOKE_PERSON_ID,
+          party: "DEM",
+          office: "H",
+          state: "NC",
+          district: "01",
+          slug: SMOKE_CANDIDATE_SLUG,
+          slug_is_unique: true
+        }
+      ],
       sources: [
         {
           domain: "campaign_finance",
@@ -536,7 +621,10 @@ export const smokeFixtures = {
       contribution_receipts_total: "125.00",
       top_donors: [],
       top_vendors: [],
-      spend_categories: null
+      spend_categories: null,
+      itemized_transaction_count: 3,
+      cycle_summaries: [],
+      summary_source: "derived" as const
     },
     filingBreakdown: {
       committee_id: SMOKE_COMMITTEE_ID,
@@ -558,6 +646,41 @@ export const smokeFixtures = {
           cash_on_hand: null
         }
       ]
+    },
+    independentExpendituresMade: {
+      committee_id: SMOKE_COMMITTEE_ID,
+      support_total: "1500.00",
+      oppose_total: "250.00",
+      ie_transaction_count: 3,
+      excluded_outlier_count: 1,
+      targets: [
+        {
+          candidate_id: SMOKE_CANDIDATE_ID,
+          fec_candidate_id: "H0NC01001",
+          candidate_name: SMOKE_CANDIDATE_NAME,
+          person_id: SMOKE_PERSON_ID,
+          party: "DEM",
+          office: "H",
+          state: "NC",
+          district: "01",
+          slug: SMOKE_CANDIDATE_SLUG,
+          slug_is_unique: true,
+          support_total: "1500.00",
+          oppose_total: "250.00",
+          transaction_count: 3,
+          sources: [
+            {
+              domain: "campaign_finance",
+              jurisdiction: "federal/fec",
+              data_source_name: SMOKE_COMMITTEE_IE_SOURCE_NAME,
+              data_source_url: "https://www.fec.gov",
+              source_record_key: SMOKE_COMMITTEE_IE_SOURCE_RECORD_KEY,
+              record_url: SMOKE_COMMITTEE_IE_SOURCE_URL,
+              pull_date: "2026-03-19T00:00:00Z"
+            }
+          ]
+        }
+      ]
     }
   },
   committeeEmpty: {
@@ -576,6 +699,7 @@ export const smokeFixtures = {
       city: null,
       zip_code: null,
       treasurer_name: null,
+      linked_candidates: [],
       sources: []
     },
     transactions: [],
@@ -594,12 +718,23 @@ export const smokeFixtures = {
       contribution_receipts_total: "0.00",
       top_donors: [],
       top_vendors: [],
-      spend_categories: []
+      spend_categories: [],
+      itemized_transaction_count: 0,
+      cycle_summaries: [],
+      summary_source: "derived" as const
     },
     filingBreakdown: {
       committee_id: SMOKE_EMPTY_COMMITTEE_ID,
       committee_name: "Committee Empty",
       filings: []
+    },
+    independentExpendituresMade: {
+      committee_id: SMOKE_EMPTY_COMMITTEE_ID,
+      support_total: "0.00",
+      oppose_total: "0.00",
+      ie_transaction_count: 0,
+      excluded_outlier_count: 0,
+      targets: []
     }
   },
   committeePhl: {
@@ -618,6 +753,7 @@ export const smokeFixtures = {
       city: "Philadelphia",
       zip_code: "19107",
       treasurer_name: "Taylor Treasurer",
+      linked_candidates: [],
       sources: [
         {
           domain: "campaign_finance",
@@ -671,7 +807,10 @@ export const smokeFixtures = {
       contribution_receipts_total: "2100.00",
       top_donors: [],
       top_vendors: [],
-      spend_categories: null
+      spend_categories: null,
+      itemized_transaction_count: 1,
+      cycle_summaries: [],
+      summary_source: "derived" as const
     },
     filingBreakdown: {
       committee_id: SMOKE_PHL_COMMITTEE_ID,
@@ -693,6 +832,14 @@ export const smokeFixtures = {
           cash_on_hand: null
         }
       ]
+    },
+    independentExpendituresMade: {
+      committee_id: SMOKE_PHL_COMMITTEE_ID,
+      support_total: "0.00",
+      oppose_total: "0.00",
+      ie_transaction_count: 0,
+      excluded_outlier_count: 0,
+      targets: []
     }
   },
   candidate: {
@@ -954,6 +1101,7 @@ export const smokeFixtures = {
         id: SMOKE_CANDIDATE_ID,
         fec_candidate_id: "H0NC01001",
         name: SMOKE_CANDIDATE_NAME,
+        person_id: SMOKE_PERSON_ID,
         party: "DEM",
         office: "H",
         state: "NC",
@@ -965,6 +1113,7 @@ export const smokeFixtures = {
         id: SMOKE_EMPTY_CANDIDATE_ID,
         fec_candidate_id: "H0NC99998",
         name: "Candidate Empty",
+        person_id: null,
         party: null,
         office: "H",
         state: null,
@@ -1290,6 +1439,51 @@ export const smokeFixtures = {
           holder_status: "elected"
         }
       ],
+      current_holder_card: {
+        officeholding_id: SMOKE_OFFICE_OFFICEHOLDER_ID,
+        person_id: SMOKE_PERSON_ID,
+        person_name: SMOKE_OFFICE_OFFICEHOLDER_NAME,
+        holder_status: "elected",
+        electoral_division_id: null,
+        electoral_division_type: "state",
+        electoral_division_state: "NC",
+        valid_period_lower: "2021-01-03",
+        valid_period_upper: null,
+        date_precision: "day" as const
+      },
+      officeholding_timeline: [
+        {
+          officeholding_id: SMOKE_OFFICE_OFFICEHOLDER_ID,
+          person_id: SMOKE_PERSON_ID,
+          person_name: SMOKE_OFFICE_OFFICEHOLDER_NAME,
+          holder_status: "elected",
+          electoral_division_id: null,
+          electoral_division_type: "state",
+          electoral_division_state: "NC",
+          valid_period_lower: "2021-01-03",
+          valid_period_upper: null,
+          date_precision: "day" as const,
+          is_active: true,
+          term_ended: false
+        }
+      ],
+      recent_contests: [
+        {
+          contest_id: SMOKE_CONTEST_ID,
+          contest_name: SMOKE_CONTEST_NAME,
+          election_date: "2026-11-03",
+          election_type: "general" as const,
+          filing_deadline: "2026-06-15",
+          electoral_division_id: null,
+          electoral_division_type: "state",
+          electoral_division_state: "NC",
+          is_partisan: true,
+          candidate_list_incomplete: false
+        }
+      ],
+      selected_electoral_division_id: null,
+      selected_electoral_division_type: "state",
+      selected_electoral_division_state: "NC",
       incomplete_data_states: [],
       sources: [
         {
@@ -1316,6 +1510,12 @@ export const smokeFixtures = {
       is_elected: true,
       number_of_seats: 1,
       current_officeholders: [],
+      current_holder_card: null,
+      officeholding_timeline: [],
+      recent_contests: [],
+      selected_electoral_division_id: null,
+      selected_electoral_division_type: null,
+      selected_electoral_division_state: null,
       incomplete_data_states: ["no_officeholder"],
       sources: []
     }
@@ -1333,6 +1533,9 @@ export const smokeFixtures = {
       filing_deadline: "2026-06-15",
       is_partisan: true,
       candidate_list_incomplete: false,
+      result_winner_candidacy_id: SMOKE_CANDIDACY_ID,
+      result_winner_person_id: SMOKE_PERSON_ID,
+      result_winner_person_name: SMOKE_CANDIDACY_PERSON_NAME,
       candidacies: [
         {
           candidacy_id: SMOKE_CANDIDACY_ID,

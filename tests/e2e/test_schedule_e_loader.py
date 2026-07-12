@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import csv
 from collections.abc import Iterator
-from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
@@ -26,7 +25,12 @@ from core.db import get_connection
 from domains.campaign_finance.ingest.bulk_loader import ensure_fec_bulk_data_source
 from domains.campaign_finance.ingest.schedule_e_loader import load_schedule_e
 from domains.campaign_finance.ingest.schedule_e_parser import SCHEDULE_E_COLUMNS
-from test_support.schedule_e import SeededCommittee, seed_schedule_e_committee
+from test_support.schedule_e import (
+    SeededCandidate,
+    SeededCommittee,
+    seed_schedule_e_candidate,
+    seed_schedule_e_committee,
+)
 
 pytestmark = [pytest.mark.integration, pytest.mark.e2e]
 
@@ -137,13 +141,6 @@ def _make_row(
 # ---------------------------------------------------------------------------
 
 
-@dataclass(frozen=True, slots=True)
-class SeededCandidate:
-    id: UUID
-    fec_candidate_id: str
-    person_id: UUID
-
-
 def _seed_committee(
     conn: psycopg.Connection,
     fec_id: str,
@@ -158,23 +155,7 @@ def _seed_candidate(
     name: str = "Test Candidate",
     office: str | None = None,
 ) -> SeededCandidate:
-    """Insert a minimal candidate + person into the test DB."""
-    # Derive office from first char of FEC ID
-    if office is None:
-        office = fec_id[0]  # H, S, or P
-    person_id = uuid4()
-    candidate_id = uuid4()
-    with conn.cursor() as cur:
-        cur.execute(
-            "INSERT INTO core.person (id, canonical_name, identifiers) VALUES (%s, %s, %s::jsonb)",
-            (person_id, name, f'{{"fec_candidate_id": "{fec_id}"}}'),
-        )
-        cur.execute(
-            "INSERT INTO cf.candidate (id, fec_candidate_id, name, person_id, office) VALUES (%s, %s, %s, %s, %s)",
-            (candidate_id, fec_id, name, person_id, office),
-        )
-    conn.commit()
-    return SeededCandidate(id=candidate_id, fec_candidate_id=fec_id, person_id=person_id)
+    return seed_schedule_e_candidate(conn, fec_id, name, office)
 
 
 # ---------------------------------------------------------------------------

@@ -52,10 +52,10 @@ def valid_diagnostic_row() -> dict[str, object]:
         "disposition": "recovered",
         "reason": "export returned rows",
         "artifacts": {
-            "export_csv_path": "docs/research/artifacts/example/079/committee_export.csv",
-            "export_raw_path": "docs/research/artifacts/example/079/export_response.bin",
-            "portal_html_path": "docs/research/artifacts/example/079/committee_document_page.html",
-            "portal_screenshot_path": "docs/research/artifacts/example/079/committee_document_page.png",
+            "export_csv_path": "docs/reference/research/artifacts/example/079/committee_export.csv",
+            "export_raw_path": "docs/reference/research/artifacts/example/079/export_response.bin",
+            "portal_html_path": "docs/reference/research/artifacts/example/079/committee_document_page.html",
+            "portal_screenshot_path": "docs/reference/research/artifacts/example/079/committee_document_page.png",
         },
     }
 

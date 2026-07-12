@@ -77,7 +77,7 @@ layers:
     required_evidence:
       schema: evidence_schemas/L1.json
     file_path_triggers:
-      - docs/anchors/**
+      - docs/reference/anchors/**
     gate_command: make gate-L1 JURISDICTION={{scope}}
   - id: L5
     name: runner_level_determinism
@@ -355,7 +355,7 @@ def test_collect_status_rows_reports_fixed_scope_pass_stale_and_missing_error(tm
             "current_total": 1500,
             "expected_range": {"minimum": 1000, "maximum": 2000},
             "ratio": 1.5,
-            "anchor_path": "docs/anchors/NC.md",
+            "anchor_path": "docs/reference/anchors/NC.md",
             "anchor_schema_version": 1,
         },
     )
@@ -515,9 +515,13 @@ def test_collect_status_rows_supports_nested_emitted_source_id_scope_filters(tmp
         evidence_subpath="SC/nc_ie_document_index",
     )
 
-    l3_layer = next(layer for layer in keel_status._load_yaml(repo_root / "layers.yaml")["layers"] if layer["id"] == "L3")
+    l3_layer = next(
+        layer for layer in keel_status._load_yaml(repo_root / "layers.yaml")["layers"] if layer["id"] == "L3"
+    )
     emitted_rows = keel_status._emitted_scope_rows(repo_root=repo_root, layer=l3_layer, today_utc=today_utc)
-    collected_rows = [row for row in keel_status.collect_status_rows(repo_root=repo_root, today_utc=today_utc) if row.layer_id == "L3"]
+    collected_rows = [
+        row for row in keel_status.collect_status_rows(repo_root=repo_root, today_utc=today_utc) if row.layer_id == "L3"
+    ]
 
     assert [(row.scope, row.status, row.detail) for row in emitted_rows] == [
         ("nc_ie_document_index", "error", "missing evidence"),
@@ -647,7 +651,7 @@ def test_main_prints_one_line_summary_per_status_row(tmp_path: Path, capsys) -> 
             "current_total": 1500,
             "expected_range": {"minimum": 1000, "maximum": 2000},
             "ratio": 1.5,
-            "anchor_path": "docs/anchors/NC.md",
+            "anchor_path": "docs/reference/anchors/NC.md",
             "anchor_schema_version": 1,
         },
     )

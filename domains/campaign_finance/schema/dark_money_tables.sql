@@ -96,6 +96,8 @@ CREATE TABLE cf.political_organization_527 (
 
 -- ein already has an implicit index from the UNIQUE constraint
 CREATE INDEX idx_political_org_527_form_id ON cf.political_organization_527 (form_id_number);
+CREATE INDEX idx_political_organization_527_source_record_id
+    ON cf.political_organization_527 (source_record_id);
 
 -- ============================================================
 -- cf.filing_8872 — Form 8872 periodic disclosure (record type 2)
@@ -183,6 +185,7 @@ CREATE TABLE cf.filing_8872 (
 
 CREATE INDEX idx_filing_8872_ein ON cf.filing_8872 (ein);
 CREATE INDEX idx_filing_8872_period ON cf.filing_8872 (period_begin_date, period_end_date);
+CREATE INDEX idx_filing_8872_source_record_id ON cf.filing_8872 (source_record_id);
 
 -- ============================================================
 -- cf.contribution_527 — Schedule A (record type A)
@@ -228,6 +231,7 @@ CREATE TABLE cf.contribution_527 (
 CREATE INDEX idx_contribution_527_ein ON cf.contribution_527 (ein);
 CREATE INDEX idx_contribution_527_form_id ON cf.contribution_527 (form_id_number);
 CREATE INDEX idx_contribution_527_date ON cf.contribution_527 (contribution_date);
+CREATE INDEX idx_contribution_527_source_record_id ON cf.contribution_527 (source_record_id);
 
 -- ============================================================
 -- cf.expenditure_527 — Schedule B (record type B)
@@ -273,6 +277,7 @@ CREATE TABLE cf.expenditure_527 (
 CREATE INDEX idx_expenditure_527_ein ON cf.expenditure_527 (ein);
 CREATE INDEX idx_expenditure_527_form_id ON cf.expenditure_527 (form_id_number);
 CREATE INDEX idx_expenditure_527_date ON cf.expenditure_527 (expenditure_date);
+CREATE INDEX idx_expenditure_527_source_record_id ON cf.expenditure_527 (source_record_id);
 
 -- ============================================================
 -- Triggers

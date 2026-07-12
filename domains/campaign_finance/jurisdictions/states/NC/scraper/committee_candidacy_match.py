@@ -18,8 +18,8 @@ def _materialize_nc_committees_for_name_match(conn: psycopg.Connection) -> None:
         f"""
         SELECT DISTINCT trim(regexp_replace(r.sboe_id, '\\s+', ' ', 'g')) AS sboe_id
         FROM cf.nc_committee_registry r
-        WHERE {_NORMALIZED_NONEMPTY_TEXT_PREDICATE.format(value='r.sboe_id')}
-          AND {_NORMALIZED_NONEMPTY_TEXT_PREDICATE.format(value='r.candidate_name')}
+        WHERE {_NORMALIZED_NONEMPTY_TEXT_PREDICATE.format(value="r.sboe_id")}
+          AND {_NORMALIZED_NONEMPTY_TEXT_PREDICATE.format(value="r.candidate_name")}
         """,
     ).fetchall()
 
@@ -52,8 +52,8 @@ def _log_ambiguous_candidate_name_count(conn: psycopg.Connection) -> None:
             JOIN cf.committee c
               ON c.organization_id = o.id
              AND c.state = 'NC'
-            WHERE {_NORMALIZED_NONEMPTY_TEXT_PREDICATE.format(value='r.candidate_name')}
-              AND {_NORMALIZED_NONEMPTY_TEXT_PREDICATE.format(value='r.sboe_id')}
+            WHERE {_NORMALIZED_NONEMPTY_TEXT_PREDICATE.format(value="r.candidate_name")}
+              AND {_NORMALIZED_NONEMPTY_TEXT_PREDICATE.format(value="r.sboe_id")}
         )
         SELECT COUNT(*)::int
         FROM (
@@ -91,8 +91,8 @@ def run_name_match_pass(conn: psycopg.Connection) -> int:
                 JOIN cf.committee c
                   ON c.organization_id = o.id
                  AND c.state = 'NC'
-                WHERE {_NORMALIZED_NONEMPTY_TEXT_PREDICATE.format(value='r.candidate_name')}
-                  AND {_NORMALIZED_NONEMPTY_TEXT_PREDICATE.format(value='r.sboe_id')}
+                WHERE {_NORMALIZED_NONEMPTY_TEXT_PREDICATE.format(value="r.candidate_name")}
+                  AND {_NORMALIZED_NONEMPTY_TEXT_PREDICATE.format(value="r.sboe_id")}
             ),
             unambiguous AS (
                 SELECT

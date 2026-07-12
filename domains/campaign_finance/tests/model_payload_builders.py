@@ -1,4 +1,3 @@
-"""Shared payload builders for campaign-finance model tests."""
 
 from __future__ import annotations
 
@@ -23,6 +22,35 @@ def build_committee_payload(**overrides: object) -> dict[str, object]:
             "name": "Neighbors for Better Roads",
             "committee_type": "H",
             "state": "NC",
+        },
+        overrides,
+    )
+
+
+def build_committee_summary_payload(**overrides: object) -> dict[str, object]:
+    return _payload_with_overrides(
+        {
+            "committee_id": build_uuid_string(),
+            "cycle": 2024,
+            "link_image": "https://www.fec.gov/data/committee/C12345678/?cycle=2024",
+            "committee_name": "Neighbors for Better Roads",
+            "committee_type": "H",
+            "committee_designation": "P",
+            "committee_filing_frequency": "Q",
+            "committee_street_1": "123 Main St",
+            "committee_street_2": "Suite 4",
+            "committee_city": "Raleigh",
+            "committee_state": "NC",
+            "committee_zip": "27601",
+            "treasurer_name": "Jordan Smith",
+            "coverage_start_date": date(2024, 1, 1),
+            "coverage_end_date": date(2024, 12, 31),
+            "total_receipts": Decimal("12345.67"),
+            "total_disbursements": Decimal("7654.32"),
+            "cash_on_hand": Decimal("4691.35"),
+            "individual_itemized_contributions": Decimal("1000.10"),
+            "individual_unitemized_contributions": Decimal("2000.20"),
+            "independent_expenditures": Decimal("3000.30"),
         },
         overrides,
     )
@@ -60,6 +88,7 @@ def build_transaction_payload(**overrides: object) -> dict[str, object]:
             "committee_id": build_uuid_string(),
             "transaction_type": "CONTRIBUTION",
             "amount": Decimal("150.00"),
+            "contributor_entity_type": None,
             "amendment_indicator": "N",
         },
         overrides,

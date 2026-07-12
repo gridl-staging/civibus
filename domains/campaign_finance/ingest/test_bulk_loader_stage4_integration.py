@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 import sys
+import zipfile
 from uuid import UUID, uuid4
 
 import psycopg
@@ -12,7 +14,9 @@ from psycopg.rows import dict_row
 
 from core.db import insert_organization
 from core.types.python.models import Organization
+from domains.campaign_finance.ingest import bulk_stage4_loader
 from domains.campaign_finance.ingest.bulk_loader import (
+    Stage4LoadOptions,
     ensure_fec_bulk_data_source,
     load_candidates,
     load_committee_transactions,
@@ -20,6 +24,12 @@ from domains.campaign_finance.ingest.bulk_loader import (
     load_contributions,
 )
 from domains.campaign_finance.ingest.bulk_parser import ITCONT_COLUMNS, ITPAS2_COLUMNS
+from domains.campaign_finance.ingest.bulk_stage4_loader import (
+    Stage4ResumeCheckpoint,
+    _build_stage4_archive_reference,
+    build_stage4_resume_identity,
+)
+from domains.campaign_finance.ingest.field_mapper import parse_fec_date
 from domains.campaign_finance.ingest.test_bulk_loader_integration import (
     _COMMITTEE_FIXTURE_PATH,
     _CANDIDATE_FIXTURE_PATH,
@@ -163,6 +173,43 @@ def _delete_stage4_entity_rows(conn: psycopg.Connection, source_record_ids: Sequ
         cursor.execute("DELETE FROM core.source_record WHERE id = ANY(%s)", (list(source_record_ids),))
 
 
+def _delete_stage4_resume_checkpoint(conn: psycopg.Connection, data_source_id: UUID, cycle: int) -> None:
+    with conn.cursor() as cursor:
+        cursor.execute(
+            """
+            DELETE FROM cf.stage4_resume_checkpoint
+            WHERE data_source_id = %s
+              AND cycle = %s
+              AND file_type = 'itcont'
+            """,
+            (data_source_id, cycle),
+        )
+
+
+def _select_stage4_resume_next_row(conn: psycopg.Connection, data_source_id: UUID, cycle: int) -> int:
+    with conn.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT next_source_row_number
+            FROM cf.stage4_resume_checkpoint
+            WHERE data_source_id = %s
+              AND cycle = %s
+              AND file_type = 'itcont'
+            """,
+            (data_source_id, cycle),
+        )
+        row = cursor.fetchone()
+    assert row is not None
+    return row[0]
+
+
+def _write_stage4_fixture_zip(tmp_path: Path, fixture_path: Path) -> Path:
+    zip_path = tmp_path / "indiv_stage4_unique.zip"
+    with zipfile.ZipFile(zip_path, "w") as archive:
+        archive.write(fixture_path, arcname="nested/itcont_stage4_unique.txt")
+    return zip_path
+
+
 def _count_stage4_relational_rows(conn: psycopg.Connection, source_record_ids: Sequence[UUID]) -> tuple[int, int]:
     if not source_record_ids:
         return 0, 0
@@ -204,6 +251,101 @@ def _select_stage4_transaction_links(
             (list(source_record_ids),),
         )
         return list(cursor.fetchall())
+
+
+def _count_entities_created_by_stage4_source_records(
+    conn: psycopg.Connection,
+    source_record_ids: Sequence[UUID],
+) -> dict[str, int]:
+    if not source_record_ids:
+        return {"person": 0, "address": 0, "contributor_entity_source": 0}
+
+    with conn.cursor(row_factory=dict_row) as cursor:
+        cursor.execute(
+            """
+            SELECT COUNT(*) AS row_count
+            FROM core.person person
+            WHERE EXISTS (
+                SELECT 1
+                FROM core.entity_source entity_source
+                WHERE entity_source.entity_type = 'person'
+                  AND entity_source.entity_id = person.id
+                  AND entity_source.source_record_id = ANY(%s)
+            )
+            """,
+            (list(source_record_ids),),
+        )
+        person_count = cursor.fetchone()["row_count"]
+        cursor.execute(
+            """
+            SELECT COUNT(*) AS row_count
+            FROM core.address address
+            WHERE EXISTS (
+                SELECT 1
+                FROM core.entity_source entity_source
+                WHERE entity_source.entity_type = 'address'
+                  AND entity_source.entity_id = address.id
+                  AND entity_source.source_record_id = ANY(%s)
+            )
+            """,
+            (list(source_record_ids),),
+        )
+        address_count = cursor.fetchone()["row_count"]
+        cursor.execute(
+            """
+            SELECT COUNT(*) AS row_count
+            FROM core.entity_source
+            WHERE source_record_id = ANY(%s)
+              AND extraction_role IN ('donor', 'contributor')
+            """,
+            (list(source_record_ids),),
+        )
+        contributor_entity_source_count = cursor.fetchone()["row_count"]
+
+    return {
+        "person": person_count,
+        "address": address_count,
+        "contributor_entity_source": contributor_entity_source_count,
+    }
+
+
+def _select_stage4_schedule_a_rows(
+    conn: psycopg.Connection,
+    source_record_ids: Sequence[UUID],
+) -> list[dict[str, object]]:
+    if not source_record_ids:
+        return []
+
+    with conn.cursor(row_factory=dict_row) as cursor:
+        cursor.execute(
+            """
+            SELECT source_record.source_record_key,
+                   filing.filing_fec_id,
+                   committee.fec_committee_id,
+                   transaction_row.sub_id::text AS sub_id,
+                   transaction_row.transaction_date,
+                   transaction_row.amount,
+                   transaction_row.contributor_name_raw,
+                   transaction_row.contributor_person_id,
+                   transaction_row.contributor_organization_id
+            FROM core.source_record
+            JOIN cf.filing filing
+              ON filing.source_record_id = source_record.id
+            JOIN cf.transaction transaction_row
+              ON transaction_row.source_record_id = source_record.id
+            JOIN cf.committee committee
+              ON committee.id = transaction_row.committee_id
+            WHERE source_record.id = ANY(%s)
+            ORDER BY source_record.source_record_key
+            """,
+            (list(source_record_ids),),
+        )
+        return list(cursor.fetchall())
+
+
+def _itcont_row_on_or_after(row: dict[str, str | None], minimum_date: date) -> bool:
+    parsed_transaction_date = parse_fec_date(row["TRANSACTION_DT"])
+    return parsed_transaction_date is not None and date.fromisoformat(parsed_transaction_date) >= minimum_date
 
 
 def _assert_no_stage4_relational_leakage(
@@ -310,6 +452,12 @@ def _cleanup_stage4_rows(
     stage4_fixture_set: Stage4FixtureSet,
 ) -> None:
     data_source_id = _select_bulk_data_source_id(conn)
+    if data_source_id is not None:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "DELETE FROM cf.stage4_resume_checkpoint WHERE data_source_id = %s",
+                (data_source_id,),
+            )
     source_record_ids = _select_source_record_ids(
         conn,
         data_source_id,
@@ -484,6 +632,175 @@ def test_load_contributions_is_idempotent(
         stage4_fixture_set.contribution_sub_ids,
     )
     assert len(source_record_ids) == expected_row_count
+
+
+def test_load_contributions_resets_stale_stage4_resume_checkpoint(
+    bulk_loader_conn: psycopg.Connection,
+    bulk_loader_fixture_set: BulkLoaderFixtureSet,
+    stage4_fixture_set: Stage4FixtureSet,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    data_source_id = ensure_fec_bulk_data_source(bulk_loader_conn)
+    _load_stage3_committees(bulk_loader_conn, bulk_loader_fixture_set, data_source_id)
+    expected_identity = build_stage4_resume_identity(
+        data_source_id=data_source_id,
+        cycle=_PRIMARY_CYCLE,
+        file_type="itcont",
+    )
+    stale_checkpoint = Stage4ResumeCheckpoint(
+        resume_identity=expected_identity,
+        archive_fingerprint="stale-fingerprint",
+        archive_member_name="stale-itcont.txt",
+        next_source_row_number=50_000,
+    )
+    selected_identities: list[object] = []
+    written_checkpoints: list[Stage4ResumeCheckpoint] = []
+
+    def _select_checkpoint(conn: object, resume_identity: object) -> Stage4ResumeCheckpoint:
+        del conn
+        selected_identities.append(resume_identity)
+        return stale_checkpoint
+
+    def _write_checkpoint(conn: object, checkpoint: Stage4ResumeCheckpoint) -> None:
+        del conn
+        written_checkpoints.append(checkpoint)
+
+    monkeypatch.setattr(bulk_stage4_loader, "_select_stage4_resume_checkpoint", _select_checkpoint)
+    monkeypatch.setattr(bulk_stage4_loader, "_write_stage4_resume_checkpoint", _write_checkpoint)
+
+    result = load_contributions(
+        bulk_loader_conn,
+        stage4_fixture_set.itcont_path,
+        cycle=_PRIMARY_CYCLE,
+        data_source_id=data_source_id,
+        canonical_resume_enabled=True,
+        batch_size=2,
+    )
+
+    archive_reference = _build_stage4_archive_reference(stage4_fixture_set.itcont_path, "itcont")
+    assert (result.inserted, result.skipped, result.errors) == (len(stage4_fixture_set.itcont_rows), 0, 0)
+    assert selected_identities == [expected_identity]
+    assert written_checkpoints == [
+        Stage4ResumeCheckpoint(
+            resume_identity=expected_identity,
+            archive_fingerprint=archive_reference.archive_fingerprint,
+            archive_member_name=archive_reference.archive_member_name,
+            next_source_row_number=0,
+        ),
+        Stage4ResumeCheckpoint(
+            resume_identity=expected_identity,
+            archive_fingerprint=archive_reference.archive_fingerprint,
+            archive_member_name=archive_reference.archive_member_name,
+            next_source_row_number=2,
+        ),
+        Stage4ResumeCheckpoint(
+            resume_identity=expected_identity,
+            archive_fingerprint=archive_reference.archive_fingerprint,
+            archive_member_name=archive_reference.archive_member_name,
+            next_source_row_number=4,
+        ),
+        Stage4ResumeCheckpoint(
+            resume_identity=expected_identity,
+            archive_fingerprint=archive_reference.archive_fingerprint,
+            archive_member_name=archive_reference.archive_member_name,
+            next_source_row_number=6,
+        ),
+    ]
+
+
+@pytest.mark.parametrize("archive_format", ["txt", "zip"])
+def test_load_contributions_resume_rerun_skips_committed_prefix(
+    bulk_loader_conn: psycopg.Connection,
+    bulk_loader_fixture_set: BulkLoaderFixtureSet,
+    stage4_fixture_set: Stage4FixtureSet,
+    tmp_path: Path,
+    archive_format: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    data_source_id = ensure_fec_bulk_data_source(bulk_loader_conn)
+    cycle = 802_600 + (1 if archive_format == "txt" else 2)
+    input_path = (
+        stage4_fixture_set.itcont_path
+        if archive_format == "txt"
+        else _write_stage4_fixture_zip(tmp_path, stage4_fixture_set.itcont_path)
+    )
+    _delete_stage4_resume_checkpoint(bulk_loader_conn, data_source_id, cycle)
+    _load_stage3_committees(bulk_loader_conn, bulk_loader_fixture_set, data_source_id)
+    archive_reference = _build_stage4_archive_reference(input_path, "itcont")
+    bulk_stage4_loader._write_stage4_resume_checkpoint(
+        bulk_loader_conn,
+        Stage4ResumeCheckpoint(
+            resume_identity=build_stage4_resume_identity(
+                data_source_id=data_source_id,
+                cycle=cycle,
+                file_type="itcont",
+            ),
+            archive_fingerprint=archive_reference.archive_fingerprint,
+            archive_member_name=archive_reference.archive_member_name,
+            next_source_row_number=0,
+        ),
+    )
+    bulk_loader_conn.commit()
+
+    original_read_bulk_file = bulk_stage4_loader.read_bulk_file
+
+    def _interrupt_after_first_batch(
+        path: object,
+        file_type: str,
+        limit: int | None = None,
+        *,
+        next_source_row_number: int = 0,
+    ) -> object:
+        row_iterator = original_read_bulk_file(
+            path,
+            file_type,
+            limit=limit,
+            next_source_row_number=next_source_row_number,
+        )
+        for row_number, row in enumerate(row_iterator, start=1):
+            if row_number > 2:
+                raise RuntimeError("interrupted after first committed Stage 4 batch")
+            yield row
+
+    monkeypatch.setattr(bulk_stage4_loader, "read_bulk_file", _interrupt_after_first_batch)
+    with pytest.raises(RuntimeError):
+        load_contributions(
+            bulk_loader_conn,
+            input_path,
+            cycle=cycle,
+            data_source_id=data_source_id,
+            canonical_resume_enabled=True,
+            batch_size=2,
+        )
+    monkeypatch.setattr(bulk_stage4_loader, "read_bulk_file", original_read_bulk_file)
+
+    partial_source_record_ids = _select_source_record_ids(
+        bulk_loader_conn,
+        data_source_id,
+        stage4_fixture_set.contribution_sub_ids,
+    )
+    assert len(partial_source_record_ids) == 2
+    assert _select_stage4_resume_next_row(bulk_loader_conn, data_source_id, cycle) == 2
+
+    rerun_result = load_contributions(
+        bulk_loader_conn,
+        input_path,
+        cycle=cycle,
+        data_source_id=data_source_id,
+        canonical_resume_enabled=True,
+        batch_size=2,
+    )
+
+    expected_total = len(stage4_fixture_set.itcont_rows)
+    source_record_ids = _select_source_record_ids(
+        bulk_loader_conn,
+        data_source_id,
+        stage4_fixture_set.contribution_sub_ids,
+    )
+
+    assert (rerun_result.inserted, rerun_result.skipped, rerun_result.errors) == (expected_total - 2, 0, 0)
+    assert len(source_record_ids) == expected_total
+    assert _select_stage4_resume_next_row(bulk_loader_conn, data_source_id, cycle) == expected_total
 
 
 def test_load_contributions_reuses_preloaded_committee_organizations(
@@ -775,3 +1092,62 @@ def test_stage4_transaction_backfill_reuses_existing_provenance_and_sets_source_
     assert len(transaction_links) == expected_stage4_row_count
     assert {row["transaction_source_record_id"] for row in transaction_links} == set(all_source_record_ids)
     assert {row["filing_source_record_id"] for row in transaction_links} == set(all_source_record_ids)
+
+
+def test_transactions_only_bounded_schedule_a_writes_relational_rows_without_contributor_entities(
+    bulk_loader_conn: psycopg.Connection,
+    bulk_loader_fixture_set: BulkLoaderFixtureSet,
+    stage4_fixture_set: Stage4FixtureSet,
+) -> None:
+    data_source_id = ensure_fec_bulk_data_source(bulk_loader_conn)
+    _load_stage3_committees_and_candidates(bulk_loader_conn, bulk_loader_fixture_set, data_source_id)
+
+    kept_committee_id = stage4_fixture_set.itcont_rows[0]["CMTE_ID"]
+    skipped_committee_id = stage4_fixture_set.itcont_rows[1]["CMTE_ID"]
+    kept_sub_ids = [
+        row["SUB_ID"]
+        for row in stage4_fixture_set.itcont_rows
+        if row["CMTE_ID"] == kept_committee_id and _itcont_row_on_or_after(row, date(2022, 1, 1))
+    ]
+    skipped_sub_ids = [
+        row["SUB_ID"] for row in stage4_fixture_set.itcont_rows if row["CMTE_ID"] == skipped_committee_id
+    ]
+
+    result = load_contributions(
+        bulk_loader_conn,
+        stage4_fixture_set.itcont_path,
+        data_source_id=data_source_id,
+        options=Stage4LoadOptions(
+            batch_size=2,
+            with_transactions=True,
+            entity_extraction=False,
+            committee_fec_ids=frozenset({kept_committee_id}),
+            min_transaction_date=date(2022, 1, 1),
+        ),
+    )
+
+    kept_source_record_ids = _select_source_record_ids(bulk_loader_conn, data_source_id, kept_sub_ids)
+    skipped_source_record_ids = _select_source_record_ids(bulk_loader_conn, data_source_id, skipped_sub_ids)
+    relational_rows = _select_stage4_schedule_a_rows(bulk_loader_conn, kept_source_record_ids)
+
+    expected_result = (
+        len(kept_sub_ids),
+        len(stage4_fixture_set.itcont_rows) - len(kept_sub_ids),
+        0,
+    )
+    expected_contributor_name = stage4_fixture_set.itcont_rows[0]["NAME"]
+
+    assert (result.inserted, result.skipped, result.errors) == expected_result
+    assert skipped_source_record_ids == []
+    assert [row["source_record_key"] for row in relational_rows] == kept_sub_ids
+    assert [row["fec_committee_id"] for row in relational_rows] == [kept_committee_id]
+    assert [row["transaction_date"] for row in relational_rows] == [date(2024, 1, 15)]
+    assert [str(row["amount"]) for row in relational_rows] == ["250.00"]
+    assert [row["contributor_name_raw"] for row in relational_rows] == [expected_contributor_name]
+    assert {row["contributor_person_id"] for row in relational_rows} == {None}
+    assert {row["contributor_organization_id"] for row in relational_rows} == {None}
+    assert _count_entities_created_by_stage4_source_records(bulk_loader_conn, kept_source_record_ids) == {
+        "person": 0,
+        "address": 0,
+        "contributor_entity_source": 0,
+    }

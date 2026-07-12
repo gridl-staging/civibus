@@ -21,6 +21,22 @@ from unittest.mock import MagicMock
 import pytest
 from fastapi.testclient import TestClient
 
+from api._federal_first_test_support import (
+    FEDERAL_FIRST_COUNTS,
+    FEDERAL_FIRST_FLOORS,
+    FakeConnection,
+)
+
+EXPECTED_FEDERAL_FIRST_CHECKS = {
+    "cf_transaction_total",
+    "core_person_total",
+    "civic_officeholding_total",
+    "cf_transaction_with_resolved_person",
+    "cf_committee_summary_total",
+    "cf_transaction_with_support_oppose",
+    "cf_transaction_contribution_insights_sentinel",
+}
+
 
 def _load_api_main(monkeypatch: pytest.MonkeyPatch) -> ModuleType:
     """Mirror api/test_main.py loader: env must be set before import."""
@@ -33,42 +49,13 @@ def _load_api_main(monkeypatch: pytest.MonkeyPatch) -> ModuleType:
     return importlib.import_module("api.main")
 
 
-class _FakeCursor:
-    """Cursor that returns counts in declaration order of ``_CHECK_QUERIES``.
-
-    The contract under test: ``evaluate_content_health`` runs each query in
-    a fixed order and reads ``COUNT(*)`` from row[0]. We verify both the
-    query *text* (so a typo in the SQL fails the test) and the count
-    handling, hence we assert on ``self.executed`` in the corresponding
-    test below.
-    """
-
-    def __init__(self, counts: list[int]) -> None:
-        self._counts = list(counts)
-        self.executed: list[str] = []
-
-    def __enter__(self) -> "_FakeCursor":
-        return self
-
-    def __exit__(self, *args: object) -> None:
-        return None
-
-    def execute(self, query: object) -> None:
-        # Implementation may pass psycopg.sql.SQL or a plain string; coerce
-        # to str so assertions on ``self.executed`` are uniform.
-        self.executed.append(str(query))
-
-    def fetchone(self) -> tuple[int]:
-        # Fail loud if test setup gives wrong number of counts.
-        return (self._counts.pop(0),)
-
-
-class _FakeConnection:
-    def __init__(self, counts: list[int]) -> None:
-        self._cursor = _FakeCursor(counts)
-
-    def cursor(self) -> _FakeCursor:
-        return self._cursor
+def test_federal_first_owner_declares_expected_checks() -> None:
+    assert set(FEDERAL_FIRST_COUNTS) == EXPECTED_FEDERAL_FIRST_CHECKS
+    assert set(FEDERAL_FIRST_FLOORS) == EXPECTED_FEDERAL_FIRST_CHECKS
+    assert FEDERAL_FIRST_COUNTS["cf_transaction_with_support_oppose"] > 0
+    assert FEDERAL_FIRST_FLOORS["cf_transaction_with_support_oppose"] > 0
+    assert FEDERAL_FIRST_COUNTS["cf_transaction_contribution_insights_sentinel"] > 0
+    assert FEDERAL_FIRST_FLOORS["cf_transaction_contribution_insights_sentinel"] > 0
 
 
 def test_floors_from_env_returns_defaults_when_unset() -> None:
@@ -76,12 +63,7 @@ def test_floors_from_env_returns_defaults_when_unset() -> None:
 
     floors = floors_from_env(env={})
 
-    # Defaults must reflect prod data volumes; if these defaults regress
-    # to zero or a placeholder the watchdog becomes a rubber stamp.
-    assert floors["cf_transaction_total"] >= 1_000_000
-    assert floors["core_person_total"] >= 1_000
-    assert floors["civic_officeholding_total"] >= 100
-    assert floors["cf_transaction_with_resolved_person"] >= 1_000
+    assert floors == FEDERAL_FIRST_FLOORS
 
 
 def test_floors_from_env_overrides_specific_keys() -> None:
@@ -90,6 +72,12 @@ def test_floors_from_env_overrides_specific_keys() -> None:
     floors = floors_from_env(env={"CIVIBUS_HEALTH_CONTENT_FLOOR_CF_TRANSACTION_TOTAL": "42"})
 
     assert floors["cf_transaction_total"] == 42
+    assert floors["cf_committee_summary_total"] == FEDERAL_FIRST_FLOORS["cf_committee_summary_total"]
+    assert floors["cf_transaction_with_support_oppose"] == FEDERAL_FIRST_FLOORS["cf_transaction_with_support_oppose"]
+    assert (
+        floors["cf_transaction_contribution_insights_sentinel"]
+        == FEDERAL_FIRST_FLOORS["cf_transaction_contribution_insights_sentinel"]
+    )
     # Unrelated keys must still get defaults — partial override must not zero
     # out other floors.
     assert floors["core_person_total"] >= 1_000
@@ -117,12 +105,44 @@ def test_evaluate_content_health_returns_empty_when_all_floors_met() -> None:
         "core_person_total": 10,
         "civic_officeholding_total": 5,
         "cf_transaction_with_resolved_person": 50,
+        "cf_committee_summary_total": 20,
+        "cf_transaction_with_support_oppose": 5,
+        "cf_transaction_contribution_insights_sentinel": 25,
     }
     # Every count is at least the floor — this is a healthy DB.
-    counts = [100, 10, 5, 50]
-    failures = evaluate_content_health(_FakeConnection(counts), floors=floors)
+    counts = [100, 10, 5, 50, 20, 5, 25]
+    failures = evaluate_content_health(FakeConnection(counts), floors=floors)
 
     assert failures == []
+
+
+def test_evaluate_content_health_accepts_federal_first_floors() -> None:
+    from api.health_content import evaluate_content_health
+
+    counts = list(FEDERAL_FIRST_COUNTS.values())
+
+    failures = evaluate_content_health(
+        FakeConnection(counts),
+        floors=FEDERAL_FIRST_FLOORS,
+    )
+
+    assert failures == []
+
+
+@pytest.mark.parametrize("check_name", FEDERAL_FIRST_COUNTS.keys())
+def test_evaluate_content_health_rejects_federal_floor_above_actual(check_name: str) -> None:
+    from api.health_content import evaluate_content_health
+
+    floors = dict(FEDERAL_FIRST_FLOORS)
+    floors[check_name] = FEDERAL_FIRST_COUNTS[check_name] + 1
+    counts = list(FEDERAL_FIRST_COUNTS.values())
+
+    failures = evaluate_content_health(FakeConnection(counts), floors=floors)
+
+    assert len(failures) == 1
+    assert failures[0].check == check_name
+    assert failures[0].actual == FEDERAL_FIRST_COUNTS[check_name]
+    assert failures[0].floor == FEDERAL_FIRST_COUNTS[check_name] + 1
 
 
 def test_evaluate_content_health_flags_table_below_floor() -> None:
@@ -133,10 +153,13 @@ def test_evaluate_content_health_flags_table_below_floor() -> None:
         "core_person_total": 1_000,
         "civic_officeholding_total": 100,
         "cf_transaction_with_resolved_person": 1_000,
+        "cf_committee_summary_total": 1_000,
+        "cf_transaction_with_support_oppose": 1,
+        "cf_transaction_contribution_insights_sentinel": 1,
     }
     # cf.transaction returning 0 is the literal Apr 30 failure mode.
-    counts = [0, 5_000, 500, 2_500]
-    failures = evaluate_content_health(_FakeConnection(counts), floors=floors)
+    counts = [0, 5_000, 500, 2_500, 32_404, 1, 1]
+    failures = evaluate_content_health(FakeConnection(counts), floors=floors)
 
     assert len(failures) == 1
     failure = failures[0]
@@ -150,7 +173,7 @@ def test_evaluate_content_health_runs_expected_sql_queries() -> None:
     schema/table names that a smoke test would miss."""
     from api.health_content import evaluate_content_health
 
-    fake = _FakeConnection([100, 10, 5, 50])
+    fake = FakeConnection([100, 10, 5, 50, 20, 5, 25])
     evaluate_content_health(
         fake,
         floors={
@@ -158,6 +181,9 @@ def test_evaluate_content_health_runs_expected_sql_queries() -> None:
             "core_person_total": 1,
             "civic_officeholding_total": 1,
             "cf_transaction_with_resolved_person": 1,
+            "cf_committee_summary_total": 1,
+            "cf_transaction_with_support_oppose": 1,
+            "cf_transaction_contribution_insights_sentinel": 1,
         },
     )
 
@@ -165,7 +191,46 @@ def test_evaluate_content_health_runs_expected_sql_queries() -> None:
     assert any("cf.transaction" in q and "WHERE" not in q.upper() for q in executed), executed
     assert any("core.person" in q for q in executed), executed
     assert any("civic.officeholding" in q for q in executed), executed
+    assert any("cf.committee_summary" in q and "WHERE" not in q.upper() for q in executed), executed
     assert any("cf.transaction" in q and "contributor_person_id IS NOT NULL" in q for q in executed), executed
+    assert any("cf.transaction" in q and "support_oppose IS NOT NULL" in q for q in executed), executed
+    assert any(
+        all(
+            fragment in q
+            for fragment in (
+                "cf.transaction",
+                "lower(t.contributor_name_raw) LIKE 'bofinger%'",
+                "transaction_date >= DATE '2022-01-01'",
+                "transaction_type LIKE '1%%'",
+                "contributor_entity_type = 'IND'",
+                "is_memo = FALSE",
+                "amendment_indicator != 'T'",
+                "LEFT JOIN core.source_record sr",
+                "ON sr.id = t.source_record_id AND sr.superseded_by IS NULL",
+                "(t.source_record_id IS NULL OR sr.id IS NOT NULL)",
+            )
+        )
+        for q in executed
+    ), executed
+
+
+def test_evaluate_content_health_reports_contribution_insights_floor_values() -> None:
+    from api.health_content import ContentHealthFailure
+    from api.health_content import evaluate_content_health
+
+    floors = {key: 0 for key in EXPECTED_FEDERAL_FIRST_CHECKS}
+    floors["cf_transaction_contribution_insights_sentinel"] = 42
+    counts = [100, 10, 5, 50, 20, 5, 41]
+
+    failures = evaluate_content_health(FakeConnection(counts), floors=floors)
+
+    assert failures == [
+        ContentHealthFailure(
+            check="cf_transaction_contribution_insights_sentinel",
+            actual=41,
+            floor=42,
+        )
+    ]
 
 
 def test_content_health_endpoint_returns_200_when_healthy(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -191,7 +256,7 @@ def test_content_health_endpoint_returns_200_when_healthy(monkeypatch: pytest.Mo
     monkeypatch.setattr(api_main, "_build_app_connection_pool", lambda: _FakePool())
 
     with TestClient(api_main.create_app()) as client:
-        response = client.get("/api/health/content")
+        response = client.get("/health/content")
 
     assert response.status_code == 200
     assert response.json() == {"healthy": True}
@@ -224,7 +289,7 @@ def test_content_health_endpoint_returns_503_when_failing(monkeypatch: pytest.Mo
     monkeypatch.setattr(api_main, "_build_app_connection_pool", lambda: _FakePool())
 
     with TestClient(api_main.create_app()) as client:
-        response = client.get("/api/health/content")
+        response = client.get("/health/content")
 
     assert response.status_code == 503
     body = response.json()
@@ -252,7 +317,7 @@ def test_content_health_endpoint_returns_503_when_db_unreachable(
     monkeypatch.setattr(api_main, "_build_app_connection_pool", lambda: _BrokenPool())
 
     with TestClient(api_main.create_app()) as client:
-        response = client.get("/api/health/content")
+        response = client.get("/health/content")
 
     assert response.status_code == 503
     body = response.json()
@@ -285,6 +350,6 @@ def test_content_health_endpoint_does_not_require_api_key(monkeypatch: pytest.Mo
 
     with TestClient(api_main.create_app()) as client:
         # No X-API-Key header.
-        response = client.get("/api/health/content")
+        response = client.get("/health/content")
 
     assert response.status_code == 200

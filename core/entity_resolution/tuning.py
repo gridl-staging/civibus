@@ -24,10 +24,10 @@ from domains.civics.scripts.er_cohort_baseline_probe import (
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _DEFAULT_STAGE2_BASELINE_PATH = (
-    _REPO_ROOT / "docs" / "research" / "artifacts" / "2026_04_29_dwo_er" / "stage2_cohort_baseline.json"
+    _REPO_ROOT / "docs" / "reference" / "research" / "artifacts" / "2026_04_29_dwo_er" / "stage2_cohort_baseline.json"
 )
 _DEFAULT_SUMMARY_PATH = (
-    _REPO_ROOT / "docs" / "research" / "artifacts" / "2026_04_29_dwo_er" / "stage3_tuning_summary.jsonl"
+    _REPO_ROOT / "docs" / "reference" / "research" / "artifacts" / "2026_04_29_dwo_er" / "stage3_tuning_summary.jsonl"
 )
 _STAGE7_L8_FILENAME = "stage7_final_l8_regression.json"
 _STAGE7_COHORT_FILENAME = "stage7_final_cohort_gate.json"
@@ -68,9 +68,7 @@ def load_stage2_cohort_baseline(path: Path | None = None) -> dict[str, Any]:
         if isinstance(values, dict) and "pct_resolved" in values
     ]
     if baseline_pcts and not any(pct > 0.0 for pct in baseline_pcts):
-        raise ValueError(
-            "stage2 cohort baseline must include at least one cohort baseline with pct_resolved > 0.0"
-        )
+        raise ValueError("stage2 cohort baseline must include at least one cohort baseline with pct_resolved > 0.0")
     return cohorts
 
 
@@ -186,11 +184,9 @@ def load_candidate_bundle(candidate_id: str) -> dict[str, Any]:
             "probabilistic_settings": get_probabilistic_settings("person"),
         }
 
-    candidates_path = _REPO_ROOT / "docs" / "research" / "artifacts" / "2026_04_29_dwo_er" / "stage3_candidates.json"
+    candidates_path = _REPO_ROOT / "docs" / "reference" / "research" / "artifacts" / "2026_04_29_dwo_er" / "stage3_candidates.json"
     if not candidates_path.exists():
-        raise ValueError(
-            f"candidate {candidate_id!r} not found; expected candidate definition at {candidates_path}"
-        )
+        raise ValueError(f"candidate {candidate_id!r} not found; expected candidate definition at {candidates_path}")
     payload = json.loads(candidates_path.read_text(encoding="utf-8"))
     candidates = payload.get("candidates")
     if not isinstance(candidates, list):

@@ -311,6 +311,7 @@ def test_build_ingest_config_maps_closeout_options(tmp_path: Path) -> None:
     assert ingest_config.batch_size == 500
     assert ingest_config.limit == 2500
     assert ingest_config.graph_enabled is True
+    assert ingest_config.canonical_stage4_resume_enabled is False
 
 
 @pytest.mark.unit

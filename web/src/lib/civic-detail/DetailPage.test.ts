@@ -414,6 +414,82 @@ describe("civic detail page rendering", () => {
     expect(rendered.body).toContain('href="/contest/contest-newer"');
   });
 
+  it("treats missing officeholding_timeline payloads as an empty timeline section", () => {
+    const malformedOfficePayload = {
+      ...OFFICE_DETAIL,
+      officeholding_timeline: undefined
+    } as unknown as OfficeDetailResponse;
+
+    const rendered = render(DetailPage, {
+      props: {
+        entityType: "office",
+        data: malformedOfficePayload
+      }
+    });
+
+    expect(rendered.body).toContain("<h3>Officeholding timeline</h3>");
+    expect(rendered.body).toContain(
+      "No officeholding history is linked yet. Check back after the next records refresh."
+    );
+  });
+
+  it("treats missing recent_contests payloads as an empty recent contests section", () => {
+    const malformedOfficePayload = {
+      ...OFFICE_DETAIL,
+      recent_contests: undefined
+    } as unknown as OfficeDetailResponse;
+
+    const rendered = render(DetailPage, {
+      props: {
+        entityType: "office",
+        data: malformedOfficePayload
+      }
+    });
+
+    expect(rendered.body).toContain("<h3>Recent contests</h3>");
+    expect(rendered.body).toContain(
+      "No recent contests are linked yet. Check back after the next records refresh."
+    );
+  });
+
+  it("treats non-object current_holder_card payloads as missing and renders empty current-holder copy", () => {
+    const malformedOfficePayload = {
+      ...OFFICE_DETAIL,
+      current_holder_card: "invalid"
+    } as unknown as OfficeDetailResponse;
+
+    const rendered = render(DetailPage, {
+      props: {
+        entityType: "office",
+        data: malformedOfficePayload
+      }
+    });
+
+    expect(rendered.body).toContain("<h3>Current holder</h3>");
+    expect(rendered.body).toContain(
+      "No active officeholder is linked yet. Check back after the next records refresh."
+    );
+  });
+
+  it("shows current-holder section when current_holder_card is missing but officeholders exist", () => {
+    const malformedOfficePayload = {
+      ...OFFICE_DETAIL_WITH_HOMONYMS,
+      current_holder_card: undefined
+    } as unknown as OfficeDetailResponse;
+
+    const rendered = render(DetailPage, {
+      props: {
+        entityType: "office",
+        data: malformedOfficePayload
+      }
+    });
+
+    expect(rendered.body).toContain("<h3>Current holder</h3>");
+    expect(rendered.body).toContain(
+      "No active officeholder is linked yet. Check back after the next records refresh."
+    );
+  });
+
   it("does not show no-active-holder copy when multiple current officeholders exist", () => {
     const rendered = render(DetailPage, {
       props: {
@@ -428,6 +504,27 @@ describe("civic detail page rendering", () => {
     );
     expect(rendered.body).toContain("<h3>Current officeholders</h3>");
     expect(rendered.body).toContain("Jane Smith");
+  });
+
+  it("renders office empty-state record copy and incomplete-data caveat when linked rows are missing", () => {
+    const rendered = render(DetailPage, {
+      props: {
+        entityType: "office",
+        data: OFFICE_DETAIL_WITH_INCOMPLETE_DATA
+      }
+    });
+
+    expect(rendered.body).toContain(
+      "No current officeholders are linked yet. Check back after the next records refresh."
+    );
+    expect(rendered.body).toContain(
+      "No officeholding history is linked yet. Check back after the next records refresh."
+    );
+    expect(rendered.body).toContain(
+      "No recent contests are linked yet. Check back after the next records refresh."
+    );
+    expect(rendered.body).toContain("Current officeholder data is incomplete for this office.");
+    expect(rendered.body).toContain("Data coverage warning");
   });
 
   it("renders contest records as semantic tables without debug labels or pipe delimiters", () => {
@@ -474,6 +571,9 @@ describe("civic detail page rendering", () => {
               total_spent: "2000.00",
               net: "3000.00",
               transaction_count: 42,
+              itemized_transaction_count: 42,
+              cash_on_hand: null,
+              summary_source: "derived" as const,
               committees: []
             },
             ieSummary: {
@@ -482,7 +582,8 @@ describe("civic detail page rendering", () => {
               oppose_total: "50.00",
               support_count: 1,
               oppose_count: 1,
-              top_spenders: []
+              top_spenders: [],
+              excluded_outlier_count: 0
             },
             ieTransactions: []
           }
@@ -491,12 +592,28 @@ describe("civic detail page rendering", () => {
     });
 
     expect(rendered.body).toContain("<h3>Results</h3>");
+    expect(rendered.body).toContain('data-testid="contest-results-panel"');
     expect(rendered.body).toContain("Jane Candidate");
     expect(rendered.body).toContain("<h3>Candidate finance and outside spending</h3>");
     expect(rendered.body).toContain("Fundraising summary");
     expect(rendered.body).toContain("Outside Spending");
     expect(rendered.body).toContain("Finance chart for Jane Candidate");
     expect(rendered.body).toContain("Outside spending chart for Jane Candidate");
+  });
+
+  it("renders contest empty-state and degraded-coverage caveat when candidacies are unavailable", () => {
+    const rendered = render(DetailPage, {
+      props: {
+        entityType: "contest",
+        data: CONTEST_DETAIL_WITH_INCOMPLETE_CANDIDACY_DATA
+      }
+    });
+
+    expect(rendered.body).toContain(
+      "No candidacies are linked yet. Check back after the next records refresh."
+    );
+    expect(rendered.body).toContain("Candidate list coverage is incomplete for this contest.");
+    expect(rendered.body).toContain("Data coverage warning");
   });
 
   it("passes contest division highlight metadata to the shared RegionMap seam", () => {

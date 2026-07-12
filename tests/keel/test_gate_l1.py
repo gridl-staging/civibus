@@ -226,7 +226,7 @@ def test_select_primary_metric_prefers_contribution_total_over_ie_filing_index_r
 
 
 def test_nc_anchor_keeps_ie_filing_index_non_primary_and_contribution_total_primary() -> None:
-    nc_anchor_path = Path(__file__).resolve().parents[2] / "docs" / "anchors" / "NC.md"
+    nc_anchor_path = Path(__file__).resolve().parents[2] / "docs" / "reference" / "anchors" / "NC.md"
 
     anchor = keel_gate_l1.load_anchor_file(nc_anchor_path)
     ie_metric_rows = [row for row in anchor.aggregate_expectations if row.metric == "ie_document_index_filings"]
@@ -559,7 +559,7 @@ def test_main_returns_error_when_anchor_file_is_missing(tmp_path: Path) -> None:
 
 
 def test_repo_audited_anchor_files_are_schema_valid() -> None:
-    anchors_root = Path(__file__).resolve().parents[2] / "docs" / "anchors"
+    anchors_root = Path(__file__).resolve().parents[2] / "docs" / "reference" / "anchors"
     jurisdictions = ("NC", "IN", "NE", "LA", "AL", "GA", "PA", "TX", "CA")
 
     for jurisdiction in jurisdictions:

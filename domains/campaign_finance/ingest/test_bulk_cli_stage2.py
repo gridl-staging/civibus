@@ -42,6 +42,15 @@ class TestFecBaselineUrl:
         assert all(url.startswith("https://www.fec.gov/files/bulk-downloads/2024/") for url in urls.values())
 
 
+@pytest.mark.unit
+def test_committee_summary_url_is_separate_from_baseline_bulk_urls() -> None:
+    assert (
+        bulk_cli.fec_committee_summary_url(2024)
+        == "https://www.fec.gov/files/bulk-downloads/2024/committee_summary_2024.csv"
+    )
+    assert "committee_summary" not in bulk_cli.fec_baseline_urls(2024)
+
+
 class TestEffectiveLimitForDispatch:
     """Tests for selective limit: cm/cn/ccl unlimited, itcont/itpas2 capped in full-cycle mode."""
 

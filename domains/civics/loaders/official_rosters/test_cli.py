@@ -202,21 +202,21 @@ def test_cli_source_id_dispatches_to_loader_path(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setattr(
         cli,
         "harvest_official_roster",
-        lambda conn, *, source_id, fixture_path, dry_run, timeout_seconds: calls.append(
-            (source_id, str(fixture_path) if fixture_path is not None else None, dry_run, timeout_seconds)
-        )
-        or roster_loader.OfficialRosterHarvestResult(
-            source_id=source_id,
-            body_key="nc_school_board",
-            member_count=7,
-            resolved_member_count=7,
-            unresolved_member_count=0,
-            officeholding_upserts=7,
-            portrait_writes=0,
-            source_record_key=f"official_roster:{source_id}:snapshot",
-            source_record_id=None,
-            source_record_inserted=False,
-            dry_run=dry_run,
+        lambda conn, *, source_id, fixture_path, dry_run, timeout_seconds: (
+            calls.append((source_id, str(fixture_path) if fixture_path is not None else None, dry_run, timeout_seconds))
+            or roster_loader.OfficialRosterHarvestResult(
+                source_id=source_id,
+                body_key="nc_school_board",
+                member_count=7,
+                resolved_member_count=7,
+                unresolved_member_count=0,
+                officeholding_upserts=7,
+                portrait_writes=0,
+                source_record_key=f"official_roster:{source_id}:snapshot",
+                source_record_id=None,
+                source_record_inserted=False,
+                dry_run=dry_run,
+            )
         ),
     )
     exit_code = cli.main(
@@ -232,3 +232,66 @@ def test_cli_source_id_dispatches_to_loader_path(monkeypatch: pytest.MonkeyPatch
     assert calls == [
         ("nc_wake_county_commissioners_roster", str(_fixture_path("wake_county_commissioners.html")), False, 30.0)
     ]
+
+
+@pytest.mark.parametrize(
+    "source_id",
+    (
+        "nc_chccs_school_board_roster",
+        "nc_rolesville_town_council_roster",
+    ),
+)
+def test_cli_source_id_dispatch_stays_on_harvest_official_roster_path_for_launch_scope_sources(
+    monkeypatch: pytest.MonkeyPatch,
+    source_id: str,
+) -> None:
+    from domains.civics.loaders.official_rosters import cli
+
+    class _FakeConnection:
+        def transaction(self):  # type: ignore[no-untyped-def]
+            class _Ctx:
+                def __enter__(self_inner):  # type: ignore[no-untyped-def]
+                    return None
+
+                def __exit__(self_inner, exc_type, exc, tb):  # type: ignore[no-untyped-def]
+                    return False
+
+            return _Ctx()
+
+        def rollback(self) -> None:
+            return None
+
+        def commit(self) -> None:
+            return None
+
+        def close(self) -> None:
+            return None
+
+    calls: list[tuple[str, str | None, bool, float]] = []
+
+    monkeypatch.setattr(cli, "get_connection", lambda **_: _FakeConnection())
+    monkeypatch.setattr(
+        cli,
+        "harvest_official_roster",
+        lambda conn, *, source_id, fixture_path, dry_run, timeout_seconds: (
+            calls.append((source_id, str(fixture_path) if fixture_path is not None else None, dry_run, timeout_seconds))
+            or roster_loader.OfficialRosterHarvestResult(
+                source_id=source_id,
+                body_key="nc_school_board",
+                member_count=7,
+                resolved_member_count=7,
+                unresolved_member_count=0,
+                officeholding_upserts=7,
+                portrait_writes=0,
+                source_record_key=f"official_roster:{source_id}:snapshot",
+                source_record_id=None,
+                source_record_inserted=False,
+                dry_run=dry_run,
+            )
+        ),
+    )
+
+    exit_code = cli.main(["--source-id", source_id, "--dry-run"])
+
+    assert exit_code == 0
+    assert calls == [(source_id, None, True, 30.0)]

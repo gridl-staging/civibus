@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from datetime import date
+from decimal import Decimal
 from pathlib import Path
 from uuid import uuid4
 
@@ -11,6 +12,7 @@ from domains.campaign_finance.entity_extractors.extract import extract_contribut
 from domains.campaign_finance.ingest.bulk_parser import read_bulk_file
 from domains.campaign_finance.ingest.field_mapper import (
     map_candidate_fields,
+    map_candidate_summary_fields,
     map_ccl_fields,
     map_committee_fields,
     map_contribution_fields,
@@ -21,6 +23,147 @@ from domains.campaign_finance.types import Candidate, CandidateCommitteeLink, Co
 
 
 _FIXTURE_DIR = Path(__file__).resolve().parents[3] / "tests" / "fixtures" / "bulk"
+
+_EXPECTED_ITCONT_CONTRIBUTION_MAPPINGS = {
+    "900000000000001": {
+        "committee_id": "C00100001",
+        "contributor_name": "GARCÍA, JOSE L",
+        "entity_type": "IND",
+        "contributor_state": "FL",
+        "contributor_city": "MIAMI",
+        "contributor_zip": "331010001",
+        "contributor_employer": "ACME ENERGY",
+        "contributor_occupation": "ENGINEER",
+        "contribution_receipt_amount": 250.0,
+        "contribution_receipt_date": "2024-01-15",
+        "contribution_receipt_date_is_reliable": True,
+        "sub_id": "900000000000001",
+        "amendment_indicator": "N",
+        "report_type": "Q1",
+        "transaction_type": "15",
+        "image_number": "202402019123456789",
+        "file_number": "1900001",
+        "memo_code": None,
+        "memo_text": None,
+        "transaction_identifier": "A1001",
+        "other_id": None,
+    },
+    "900000000000002": {
+        "committee_id": "C00100002",
+        "contributor_name": "LEE, MAYA",
+        "entity_type": "IND",
+        "contributor_state": "TX",
+        "contributor_city": "AUSTIN",
+        "contributor_zip": "733010123",
+        "contributor_employer": "LONE STAR TECH",
+        "contributor_occupation": "ANALYST",
+        "contribution_receipt_amount": 125.5,
+        "contribution_receipt_date": "2024-02-12",
+        "contribution_receipt_date_is_reliable": True,
+        "sub_id": "900000000000002",
+        "amendment_indicator": "N",
+        "report_type": "Q1",
+        "transaction_type": "15",
+        "image_number": "202402029123456790",
+        "file_number": "1900002",
+        "memo_code": "X",
+        "memo_text": "EARMARKED THROUGH PLATFORM",
+        "transaction_identifier": "A1002",
+        "other_id": None,
+    },
+    "900000000000003": {
+        "committee_id": "C00100003",
+        "contributor_name": "NATIONAL EDUCATORS PAC",
+        "entity_type": "COM",
+        "contributor_state": "OH",
+        "contributor_city": "COLUMBUS",
+        "contributor_zip": "430850000",
+        "contributor_employer": None,
+        "contributor_occupation": None,
+        "contribution_receipt_amount": 5000.0,
+        "contribution_receipt_date": "2024-02-20",
+        "contribution_receipt_date_is_reliable": True,
+        "sub_id": "900000000000003",
+        "amendment_indicator": "N",
+        "report_type": "Q1",
+        "transaction_type": "15",
+        "image_number": "202402039123456791",
+        "file_number": "1900003",
+        "memo_code": None,
+        "memo_text": None,
+        "transaction_identifier": "A1003",
+        "other_id": "C00100004",
+    },
+    "900000000000004": {
+        "committee_id": "C00100004",
+        "contributor_name": "PATEL, RINA",
+        "entity_type": "IND",
+        "contributor_state": "NC",
+        "contributor_city": "DURHAM",
+        "contributor_zip": "277010555",
+        "contributor_employer": "CIVIC DATA LLC",
+        "contributor_occupation": "FOUNDER",
+        "contribution_receipt_amount": 75.0,
+        "contribution_receipt_date": "2024-03-01",
+        "contribution_receipt_date_is_reliable": True,
+        "sub_id": "900000000000004",
+        "amendment_indicator": "N",
+        "report_type": "Q1",
+        "transaction_type": "15E",
+        "image_number": "202402049123456792",
+        "file_number": "1900004",
+        "memo_code": None,
+        "memo_text": None,
+        "transaction_identifier": "A1004",
+        "other_id": None,
+    },
+    "900000000000005": {
+        "committee_id": "C00100005",
+        "contributor_name": "CITIZENS FOR TRANSPARENCY",
+        "entity_type": "COM",
+        "contributor_state": "AZ",
+        "contributor_city": "PHOENIX",
+        "contributor_zip": "850040777",
+        "contributor_employer": None,
+        "contributor_occupation": None,
+        "contribution_receipt_amount": -45.0,
+        "contribution_receipt_date": "2024-03-05",
+        "contribution_receipt_date_is_reliable": True,
+        "sub_id": "900000000000005",
+        "amendment_indicator": "A",
+        "report_type": "Q1",
+        "transaction_type": "22Y",
+        "image_number": "202402059123456793",
+        "file_number": "1900005",
+        "memo_code": "X",
+        "memo_text": "REFUND CHECK RETURNED",
+        "transaction_identifier": "A1005",
+        "other_id": "C00100002",
+    },
+    "900000000000006": {
+        "committee_id": "C00100001",
+        "contributor_name": "MORGAN, TAYLOR",
+        "entity_type": "IND",
+        "contributor_state": "FL",
+        "contributor_city": "MIAMI",
+        "contributor_zip": "331010001",
+        "contributor_employer": "ACME ENERGY",
+        "contributor_occupation": "ENGINEER",
+        "contribution_receipt_amount": 10.0,
+        "contribution_receipt_date": "2021-12-31",
+        "contribution_receipt_date_is_reliable": True,
+        "sub_id": "900000000000006",
+        "amendment_indicator": "N",
+        "report_type": "YE",
+        "transaction_type": "15",
+        "image_number": "202101319123456794",
+        "file_number": "1900006",
+        "memo_code": None,
+        "memo_text": None,
+        "transaction_identifier": "A1006",
+        "other_id": None,
+    },
+}
 
 
 @pytest.mark.unit
@@ -78,6 +221,7 @@ def test_map_contribution_fields_itcont_contract_and_extractor_compatibility() -
         "contributor_occupation",
         "contribution_receipt_amount",
         "contribution_receipt_date",
+        "contribution_receipt_date_is_reliable",
         "sub_id",
         "amendment_indicator",
         "report_type",
@@ -102,6 +246,17 @@ def test_map_contribution_fields_itcont_contract_and_extractor_compatibility() -
 
 
 @pytest.mark.unit
+def test_map_contribution_fields_itcont_contract_rows_have_exact_typed_values() -> None:
+    rows = list(read_bulk_file(_FIXTURE_DIR / "itcont_sample.txt", "itcont"))
+
+    mapped_by_sub_id = {row["SUB_ID"]: map_contribution_fields(row) for row in rows}
+
+    assert mapped_by_sub_id == _EXPECTED_ITCONT_CONTRIBUTION_MAPPINGS
+    assert mapped_by_sub_id["900000000000001"]["contributor_zip"] == "331010001"
+    assert mapped_by_sub_id["900000000000005"]["contribution_receipt_amount"] == -45.0
+
+
+@pytest.mark.unit
 def test_map_contribution_fields_itpas2_adds_candidate_fec_id() -> None:
     row = next(read_bulk_file(_FIXTURE_DIR / "itpas2_sample.txt", "itpas2"))
 
@@ -110,7 +265,22 @@ def test_map_contribution_fields_itpas2_adds_candidate_fec_id() -> None:
     assert mapped["candidate_fec_id"] == row["CAND_ID"]
     assert mapped["contribution_receipt_amount"] == 1000.0
     assert mapped["contribution_receipt_date"] == "2024-02-01"
-    assert mapped["sub_id"] == row["SUB_ID"]
+
+
+@pytest.mark.unit
+def test_map_contribution_fields_marks_invalid_transaction_date_unreliable() -> None:
+    mapped = map_contribution_fields(
+        {
+            "CMTE_ID": "C00100001",
+            "TRANSACTION_DT": "13012024",
+            "TRANSACTION_AMT": "25.00",
+            "SUB_ID": "1",
+        }
+    )
+
+    assert mapped["contribution_receipt_date"] is None
+    assert mapped["contribution_receipt_date_is_reliable"] is False
+    assert mapped["sub_id"] == "1"
 
     extracted = extract_contribution(mapped)
     assert extracted["organization"].identifiers["fec_committee_id"] == mapped["committee_id"]
@@ -151,6 +321,37 @@ def test_map_candidate_fields_creates_candidate_compatible_rows_with_principal_c
 
 
 @pytest.mark.unit
+def test_map_candidate_summary_fields_uses_exact_decimal_totals_and_coverage_date() -> None:
+    row = next(read_bulk_file(_FIXTURE_DIR / "weball_sample.txt", "weball"))
+
+    mapped = map_candidate_summary_fields(row)
+
+    assert mapped == {
+        "fec_candidate_id": "H0NC01001",
+        "total_receipts": Decimal("12345.67"),
+        "total_disbursements": Decimal("8910.11"),
+        "cash_on_hand": Decimal("3535.56"),
+        "summary_coverage_end_date": "2024-12-31",
+    }
+
+    candidate = Candidate.model_validate(
+        {
+            "fec_candidate_id": "H0NC01001",
+            "name": "RIVERS, ALEX",
+            "office": "H",
+            "total_receipts": mapped["total_receipts"],
+            "total_disbursements": mapped["total_disbursements"],
+            "cash_on_hand": mapped["cash_on_hand"],
+            "summary_coverage_end_date": mapped["summary_coverage_end_date"],
+        }
+    )
+    assert candidate.total_receipts == Decimal("12345.67")
+    assert candidate.total_disbursements == Decimal("8910.11")
+    assert candidate.cash_on_hand == Decimal("3535.56")
+    assert candidate.summary_coverage_end_date == date(2024, 12, 31)
+
+
+@pytest.mark.unit
 def test_map_ccl_fields_creates_loader_friendly_values_and_model_compatible_payload() -> None:
     row = next(read_bulk_file(_FIXTURE_DIR / "ccl_sample.txt", "ccl"))
 
@@ -182,6 +383,7 @@ def test_map_ccl_fields_creates_loader_friendly_values_and_model_compatible_payl
         ("cm", "cm_sample.txt", map_committee_fields),
         ("cn", "cn_sample.txt", map_candidate_fields),
         ("ccl", "ccl_sample.txt", map_ccl_fields),
+        ("weball", "weball_sample.txt", map_candidate_summary_fields),
     ],
 )
 def test_end_to_end_stage1_row_to_stage2_mapper_contract(

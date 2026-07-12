@@ -75,7 +75,7 @@ data_sources:
     last_successful_pull: null
     last_verified_working: "2026-03-27"
     known_issues:
-      - "Cadence evidence (2026-03-29): ReportsFiled.aspx showed 25 electronically filed reports across 2026-03-27 through 2026-03-29 (docs/research/il-freshness-investigation-2026-03-29.md); open question: confirm whether Receipts.txt reflects same-day portal filings."
+      - "Cadence evidence (2026-03-29): ReportsFiled.aspx showed 25 electronically filed reports across 2026-03-27 through 2026-03-29 (docs/reference/research/il-freshness-investigation-2026-03-29.md); open question: confirm whether Receipts.txt reflects same-day portal filings."
       - "The ASP.NET flow is two-step: post back the dropdown selection, then follow the rendered NewDocDisplay.aspx link."
       - "Rows do not include committee names; the initial loader synthesizes committee display names from CommitteeID until auxiliary files are ingested."
 
@@ -134,7 +134,7 @@ data_sources:
     last_successful_pull: null
     last_verified_working: "2026-03-27"
     known_issues:
-      - "Cadence evidence (2026-03-29): ReportsFiled.aspx showed 25 electronically filed reports across 2026-03-27 through 2026-03-29 (docs/research/il-freshness-investigation-2026-03-29.md); open question: confirm whether Expenditures.txt reflects same-day portal filings."
+      - "Cadence evidence (2026-03-29): ReportsFiled.aspx showed 25 electronically filed reports across 2026-03-27 through 2026-03-29 (docs/reference/research/il-freshness-investigation-2026-03-29.md); open question: confirm whether Expenditures.txt reflects same-day portal filings."
       - "The ASP.NET flow is two-step: post back the dropdown selection, then follow the rendered NewDocDisplay.aspx link."
       - "Rows do not include committee names; the initial loader synthesizes committee display names from CommitteeID until auxiliary files are ingested."
 

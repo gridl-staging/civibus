@@ -147,13 +147,13 @@ def test_collect_coverage_matrix_reuses_registry_and_lifecycle_owners(monkeypatc
     monkeypatch.setattr(keel_gate_l14, "get_connection", lambda: _FakeConn())
 
     collection = keel_gate_l14.collect_coverage_matrix(
-        registry_path=Path("docs/research/coverage-registry.json"),
-        lifecycle_path=Path("docs/research/implemented-region-lifecycle.json"),
+        registry_path=Path("docs/reference/research/coverage-registry.json"),
+        lifecycle_path=Path("docs/reference/research/implemented-region-lifecycle.json"),
     )
 
     assert load_calls == [
-        ("registry", Path("docs/research/coverage-registry.json")),
-        ("lifecycle", Path("docs/research/implemented-region-lifecycle.json")),
+        ("registry", Path("docs/reference/research/coverage-registry.json")),
+        ("lifecycle", Path("docs/reference/research/implemented-region-lifecycle.json")),
     ]
     assert collection.scope == keel_gate_l14.L14_SCOPE
     assert [row.jurisdiction_code for row in collection.rows] == ["B", "A"]
@@ -332,8 +332,8 @@ def test_collect_coverage_matrix_includes_roster_source_rows_with_loaded_expecte
     monkeypatch.setattr(keel_gate_l14, "get_connection", lambda: _FakeConn())
 
     collection = keel_gate_l14.collect_coverage_matrix(
-        registry_path=Path("docs/research/coverage-registry.json"),
-        lifecycle_path=Path("docs/research/implemented-region-lifecycle.json"),
+        registry_path=Path("docs/reference/research/coverage-registry.json"),
+        lifecycle_path=Path("docs/reference/research/implemented-region-lifecycle.json"),
     )
 
     roster_rows = [row for row in collection.rows if row.jurisdiction_type == "civics_roster_source"]
@@ -408,8 +408,8 @@ def test_collect_coverage_matrix_nc_geometry_summary_detects_off_by_one(monkeypa
     monkeypatch.setattr(keel_gate_l14, "get_connection", lambda: _FakeConn())
 
     collection = keel_gate_l14.collect_coverage_matrix(
-        registry_path=Path("docs/research/coverage-registry.json"),
-        lifecycle_path=Path("docs/research/implemented-region-lifecycle.json"),
+        registry_path=Path("docs/reference/research/coverage-registry.json"),
+        lifecycle_path=Path("docs/reference/research/implemented-region-lifecycle.json"),
         nc_geometry_summary=keel_gate_l14.NcGeometrySummary(total_count=209, srid_4326_count=209),
     )
 
@@ -429,9 +429,7 @@ def test_collect_coverage_matrix_nc_geometry_summary_detects_off_by_one(monkeypa
     assert in_row["nc_geometry_counts_match_expected"] is None
 
 
-def test_main_returns_non_zero_when_nc_geometry_summary_mismatches(
-    tmp_path: Path, monkeypatch, capsys
-) -> None:
+def test_main_returns_non_zero_when_nc_geometry_summary_mismatches(tmp_path: Path, monkeypatch, capsys) -> None:
     source_repo_root = Path(__file__).resolve().parents[2]
     repo_root = tmp_path / "repo"
     repo_root.mkdir()
@@ -631,8 +629,8 @@ def test_main_writes_l14_evidence_from_registry_lifecycle_projection(tmp_path: P
     assert payload["layer"] == "L14"
     assert payload["scope"] == keel_gate_l14.L14_SCOPE
     assert payload["status"] == "pass"
-    assert payload["registry_path"] == "docs/research/coverage-registry.json"
-    assert payload["lifecycle_path"] == "docs/research/implemented-region-lifecycle.json"
+    assert payload["registry_path"] == "docs/reference/research/coverage-registry.json"
+    assert payload["lifecycle_path"] == "docs/reference/research/implemented-region-lifecycle.json"
     assert payload["lifecycle_updated_at"] == "2026-04-24"
     assert [row["jurisdiction_code"] for row in payload["rows"]] == ["NC", "IN"]
     assert "loaded_count" in payload["rows"][0]
@@ -668,11 +666,8 @@ def test_main_writes_l14_evidence_from_registry_lifecycle_projection(tmp_path: P
 
 
 def test_lifecycle_updated_at_tracks_civics_loaded_status() -> None:
-    lifecycle = coverage_lifecycle.load_lifecycle(Path("docs/research/implemented-region-lifecycle.json"))
-    has_loaded_civics = any(
-        row.civics_candidacy_status in {"loaded", "full_csv_proven"}
-        for row in lifecycle.rows
-    )
+    lifecycle = coverage_lifecycle.load_lifecycle(Path("docs/reference/research/implemented-region-lifecycle.json"))
+    has_loaded_civics = any(row.civics_candidacy_status in {"loaded", "full_csv_proven"} for row in lifecycle.rows)
     assert has_loaded_civics
     # Stage 7 set NC civics coverage to loaded on April 30, 2026.
     assert lifecycle.updated_at >= date(2026, 4, 30)
@@ -869,8 +864,8 @@ def test_collect_coverage_matrix_defaults_missing_loaded_count_to_zero(monkeypat
     monkeypatch.setattr(keel_gate_l14, "get_connection", lambda: _FakeConn())
 
     collection = keel_gate_l14.collect_coverage_matrix(
-        registry_path=Path("docs/research/coverage-registry.json"),
-        lifecycle_path=Path("docs/research/implemented-region-lifecycle.json"),
+        registry_path=Path("docs/reference/research/coverage-registry.json"),
+        lifecycle_path=Path("docs/reference/research/implemented-region-lifecycle.json"),
     )
 
     roster_rows = [row for row in collection.rows if row.jurisdiction_type == "civics_roster_source"]

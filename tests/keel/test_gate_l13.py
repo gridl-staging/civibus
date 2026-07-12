@@ -14,10 +14,15 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 L13_SCHEMA_PATH = REPO_ROOT / "evidence_schemas" / "L13.json"
 EXPECTED_OWNER_FILES = {
     ".github/workflows/deploy.yml",
-    "infra/docker-compose.prod.yml",
-    ".env.production.example",
-    "infra/scripts/bootstrap_prod_vm.sh",
+    "infra/fly/api.fly.toml",
+    "infra/fly/web.fly.toml",
+    "infra/fly/caddy.fly.toml",
 }
+EXPECTED_FLY_DEPLOY_COMMANDS = [
+    "flyctl deploy -c infra/fly/api.fly.toml --remote-only",
+    "flyctl deploy web -c infra/fly/web.fly.toml --remote-only",
+    "flyctl deploy -c infra/fly/caddy.fly.toml --remote-only",
+]
 
 
 def _read_json(path: Path) -> dict[str, object]:
@@ -27,61 +32,32 @@ def _read_json(path: Path) -> dict[str, object]:
 def _sample_live_snapshot() -> dict[str, object]:
     return {
         "workflow": {
+            "deploy_if": "github.repository == 'gridl-hq/civibus'",
             "deploy_env": {
-                "DEPLOY_GIT_SHA": "${{ github.sha }}",
-                "DEPLOY_REPO_URL": "https://github.com/${{ github.repository }}.git",
-                "PRODUCTION_ENV_FILE": "POSTGRES_PASSWORD=prod-db-password\n"
-                "CIVIBUS_API_KEYS=prod-api-keys\n"
-                "CIVIBUS_ADMIN_API_KEYS=prod-admin-keys\n"
-                "CIVIBUS_API_KEY=prod-web-key\n"
-                "FEC_BULK_CYCLE=2026\n",
-            }
-        },
-        "compose": {
-            "images": {
-                "api": "ghcr.io/gridl-dev/civibus_dev/api:${IMAGE_TAG:-latest}",
-                "web": "ghcr.io/gridl-dev/civibus_dev/web:${IMAGE_TAG:-latest}",
+                "FLY_API_TOKEN": "fly-secret-token",
+                "PROD_SMOKE_BASE_URL": "${{ vars.PROD_SMOKE_BASE_URL }}",
             },
-            "required_env": {
-                "POSTGRES_PASSWORD": "prod-db-password",
-                "ORIGIN": "${ORIGIN:?Set ORIGIN}",
-                "CIVIBUS_API_KEYS": "prod-api-keys",
-                "CIVIBUS_ADMIN_API_KEYS": "prod-admin-keys",
-                "CIVIBUS_API_KEY": "prod-web-key",
-            },
+            "fly_deploy_commands": EXPECTED_FLY_DEPLOY_COMMANDS,
         },
-        "bootstrap": {
-            "required_env_keys": [
-                "POSTGRES_PASSWORD",
-                "ORIGIN",
-                "CIVIBUS_API_KEYS",
-                "CIVIBUS_ADMIN_API_KEYS",
-                "CIVIBUS_API_KEY",
-                "FEC_BULK_CYCLE",
-            ]
-        },
-        "env_example": {
-            "keys": [
-                "POSTGRES_PASSWORD",
-                "ORIGIN",
-                "CIVIBUS_API_KEYS",
-                "CIVIBUS_ADMIN_API_KEYS",
-                "CIVIBUS_API_KEY",
-                "FEC_BULK_CYCLE",
-            ]
+        "fly_apps": {
+            "api": "civibus-api",
+            "web": "civibus-web",
+            "caddy": "civibus-caddy",
         },
     }
 
 
-def test_extract_repo_contract_locks_stage1_owner_files() -> None:
+def test_extract_repo_contract_locks_fly_deploy_owner_files() -> None:
     contract = keel_gate_l13.extract_repo_contract(repo_root=REPO_ROOT)
 
     assert set(contract["owner_files"]) == EXPECTED_OWNER_FILES
-    assert contract["non_secret"]["workflow.deploy_env.DEPLOY_GIT_SHA"] == "${{ github.sha }}"
-    assert contract["non_secret"]["workflow.deploy_env.DEPLOY_REPO_URL"] == "https://github.com/${{ github.repository }}.git"
-    assert contract["non_secret"]["compose.images.api"] == "ghcr.io/gridl-dev/civibus_dev/api:${IMAGE_TAG:-latest}"
-    assert contract["non_secret"]["compose.images.web"] == "ghcr.io/gridl-dev/civibus_dev/web:${IMAGE_TAG:-latest}"
-    assert contract["secret_presence"]["workflow.deploy_env.PRODUCTION_ENV_FILE"] is True
+    assert contract["non_secret"]["workflow.deploy_if"] == "github.repository == 'gridl-hq/civibus'"
+    assert contract["non_secret"]["workflow.deploy_env.PROD_SMOKE_BASE_URL"] == "${{ vars.PROD_SMOKE_BASE_URL }}"
+    assert contract["non_secret"]["workflow.fly_deploy_commands"] == sorted(EXPECTED_FLY_DEPLOY_COMMANDS)
+    assert contract["non_secret"]["fly_apps.api"] == "civibus-api"
+    assert contract["non_secret"]["fly_apps.web"] == "civibus-web"
+    assert contract["non_secret"]["fly_apps.caddy"] == "civibus-caddy"
+    assert contract["secret_presence"]["workflow.deploy_env.FLY_API_TOKEN"] is True
 
 
 def test_normalize_live_snapshot_hashes_secret_values() -> None:
@@ -89,34 +65,33 @@ def test_normalize_live_snapshot_hashes_secret_values() -> None:
     normalized = keel_gate_l13.normalize_live_snapshot(raw_snapshot)
     serialized = json.dumps(normalized, sort_keys=True)
 
-    assert "prod-db-password" not in serialized
-    assert "prod-api-keys" not in serialized
-    assert "prod-admin-keys" not in serialized
-    assert "prod-web-key" not in serialized
+    assert "fly-secret-token" not in serialized
 
-    secret_fingerprint = normalized["secret_fingerprints"]["compose.required_env.POSTGRES_PASSWORD"]
+    secret_fingerprint = normalized["secret_fingerprints"]["workflow.deploy_env.FLY_API_TOKEN"]
     assert secret_fingerprint["present"] is True
     assert str(secret_fingerprint["fingerprint"]).startswith("sha256:")
-    assert normalized["non_secret"]["workflow.deploy_env.DEPLOY_REPO_URL"] == "https://github.com/${{ github.repository }}.git"
+    assert normalized["non_secret"]["fly_apps.api"] == "civibus-api"
 
 
 def test_evaluate_contract_drift_fails_on_outside_diff_surface_paths() -> None:
     repo_contract = keel_gate_l13.extract_repo_contract(repo_root=REPO_ROOT)
     raw_snapshot = _sample_live_snapshot()
-    raw_snapshot["compose"]["required_env"]["UNTRACKED_RUNTIME_KEY"] = "sensitive-runtime-value"  # type: ignore[index]
+    raw_snapshot["workflow"]["deploy_env"]["UNTRACKED_RUNTIME_KEY"] = "sensitive-runtime-value"  # type: ignore[index]
 
     evaluation = keel_gate_l13.evaluate_contract_drift(
         repo_contract=repo_contract,
         normalized_live_snapshot=keel_gate_l13.normalize_live_snapshot(raw_snapshot),
         deploy_id="outside-surface",
         debt_entries=[],
-        produced_at=datetime(2026, 4, 24, 21, 30, tzinfo=UTC),
+        produced_at=datetime(2026, 7, 7, 12, 30, tzinfo=UTC),
     )
 
     assert evaluation.status == "fail"
-    outside_surface_entries = [entry for entry in evaluation.diff_entries if entry["drift_type"] == "outside_diff_surface"]
+    outside_surface_entries = [
+        entry for entry in evaluation.diff_entries if entry["drift_type"] == "outside_diff_surface"
+    ]
     assert outside_surface_entries
-    assert outside_surface_entries[0]["path"] == "compose.required_env.UNTRACKED_RUNTIME_KEY"
+    assert outside_surface_entries[0]["path"] == "workflow.deploy_env.UNTRACKED_RUNTIME_KEY"
     assert outside_surface_entries[0]["live_value"] == "<redacted-outside-surface>"
     assert "sensitive-runtime-value" not in json.dumps(evaluation.diff_entries, sort_keys=True)
 
@@ -134,18 +109,18 @@ def test_evaluate_contract_drift_flags_expired_and_unmatched_debt_entries(tmp_pa
                     {
                         "entry_id": "expired-hot-patch",
                         "deploy_id": "test-deploy",
-                        "path": "compose.images.api",
-                        "expected_live_value": "ghcr.io/gridl-dev/civibus_dev/api:hotfix",
+                        "path": "fly_apps.api",
+                        "expected_live_value": "civibus-api-hotfix",
                         "reason": "expired allowlist should fail",
                         "expires_at_utc": "2026-01-01T00:00:00Z",
                     },
                     {
                         "entry_id": "active-but-unmatched",
                         "deploy_id": "test-deploy",
-                        "path": "workflow.deploy_env.DEPLOY_REPO_URL",
-                        "expected_live_value": "https://github.com/gridl-dev/hotfix.git",
+                        "path": "workflow.deploy_if",
+                        "expected_live_value": "github.repository == 'gridl-hq/hotfix'",
                         "reason": "unmatched allowlist should fail",
-                        "expires_at_utc": "2026-06-01T00:00:00Z",
+                        "expires_at_utc": "2026-08-01T00:00:00Z",
                     },
                 ],
             },
@@ -159,7 +134,7 @@ def test_evaluate_contract_drift_flags_expired_and_unmatched_debt_entries(tmp_pa
         normalized_live_snapshot=normalized_live_snapshot,
         deploy_id="test-deploy",
         debt_entries=debt_entries,
-        produced_at=datetime(2026, 4, 24, 21, 30, tzinfo=UTC),
+        produced_at=datetime(2026, 7, 7, 12, 30, tzinfo=UTC),
     )
 
     assert evaluation.status == "fail"
@@ -170,20 +145,20 @@ def test_evaluate_contract_drift_flags_expired_and_unmatched_debt_entries(tmp_pa
 def test_write_l13_evidence_emits_expected_diff_summary_shape(tmp_path: Path) -> None:
     repo_contract = keel_gate_l13.extract_repo_contract(repo_root=REPO_ROOT)
     live_snapshot = _sample_live_snapshot()
-    live_snapshot["workflow"]["deploy_env"]["DEPLOY_REPO_URL"] = "https://github.com/gridl-dev/hotfix.git"  # type: ignore[index]
+    live_snapshot["fly_apps"]["api"] = "civibus-api-hotfix"  # type: ignore[index]
 
     evaluation = keel_gate_l13.evaluate_contract_drift(
         repo_contract=repo_contract,
         normalized_live_snapshot=keel_gate_l13.normalize_live_snapshot(live_snapshot),
         deploy_id="test-deploy",
         debt_entries=[],
-        produced_at=datetime(2026, 4, 24, 22, 0, tzinfo=UTC),
+        produced_at=datetime(2026, 7, 7, 13, 0, tzinfo=UTC),
     )
     evidence_path = keel_gate_l13.write_l13_evidence(
         evaluation=evaluation,
         deploy_id="test-deploy",
         repo_sha="abc12345",
-        produced_at=datetime(2026, 4, 24, 22, 0, tzinfo=UTC),
+        produced_at=datetime(2026, 7, 7, 13, 0, tzinfo=UTC),
         evidence_root=tmp_path,
     )
     payload = _read_json(evidence_path)
@@ -210,13 +185,13 @@ def test_schema_canary_validates_l13_schema_and_generated_payload(tmp_path: Path
         normalized_live_snapshot=keel_gate_l13.normalize_live_snapshot(_sample_live_snapshot()),
         deploy_id="schema-canary",
         debt_entries=[],
-        produced_at=datetime(2026, 4, 24, 22, 15, tzinfo=UTC),
+        produced_at=datetime(2026, 7, 7, 13, 15, tzinfo=UTC),
     )
     evidence_path = keel_gate_l13.write_l13_evidence(
         evaluation=evaluation,
         deploy_id="schema-canary",
         repo_sha="abc12345",
-        produced_at=datetime(2026, 4, 24, 22, 15, tzinfo=UTC),
+        produced_at=datetime(2026, 7, 7, 13, 15, tzinfo=UTC),
         evidence_root=tmp_path,
     )
     payload = _read_json(evidence_path)
@@ -224,14 +199,14 @@ def test_schema_canary_validates_l13_schema_and_generated_payload(tmp_path: Path
     assert list(validator.iter_errors(payload)) == []
 
 
-def test_main_writes_evidence_without_live_ssh(monkeypatch, tmp_path: Path) -> None:
+def test_main_writes_evidence_without_live_fly_probe(monkeypatch, tmp_path: Path) -> None:
     live_snapshot_path = tmp_path / "live_snapshot.json"
     live_snapshot_path.write_text(json.dumps(_sample_live_snapshot(), indent=2) + "\n", encoding="utf-8")
     debt_file_path = tmp_path / "deploy_hot_patch_debt.yaml"
     debt_file_path.write_text("schema_version: 1\nentries: []\n", encoding="utf-8")
 
     monkeypatch.setattr(keel_gate_l13, "_repo_sha", lambda repo_root=None: "abc12345")
-    monkeypatch.setattr(keel_gate_l13, "_utc_now", lambda: datetime(2026, 4, 24, 23, 0, tzinfo=UTC))
+    monkeypatch.setattr(keel_gate_l13, "_utc_now", lambda: datetime(2026, 7, 7, 14, 0, tzinfo=UTC))
 
     exit_code = keel_gate_l13.main(
         [
@@ -275,7 +250,7 @@ def test_main_uses_cli_repo_root_for_repo_sha(monkeypatch, tmp_path: Path) -> No
         return f"{expected_repo_sha}\n"
 
     monkeypatch.setattr(keel_gate_l13.subprocess, "check_output", _fake_check_output)
-    monkeypatch.setattr(keel_gate_l13, "_utc_now", lambda: datetime(2026, 4, 24, 23, 0, tzinfo=UTC))
+    monkeypatch.setattr(keel_gate_l13, "_utc_now", lambda: datetime(2026, 7, 7, 14, 0, tzinfo=UTC))
 
     exit_code = keel_gate_l13.main(
         [

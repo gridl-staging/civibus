@@ -1,6 +1,3 @@
-"""
-Stub summary for /Users/stuart/parallel_development/civibus_dev/mar26_am_3_new_state_pipeline_builds/civibus_dev/infra/scripts/postgres_local.py.
-"""
 
 from __future__ import annotations
 
@@ -61,11 +58,47 @@ def _run_command(
     *,
     cwd: Path | None = None,
     stdin=None,
+    input: bytes | None = None,
     stdout=None,
     env: dict[str, str] | None = None,
 ) -> None:
     child_env = None if env is None else {**os.environ, **env}
-    subprocess.run(command, cwd=cwd, check=True, stdin=stdin, stdout=stdout, env=child_env)
+    subprocess.run(command, cwd=cwd, check=True, stdin=stdin, input=input, stdout=stdout, env=child_env)
+
+
+_CONTAINER_PGPASS_PATH = "/tmp/.pgpass"
+
+
+def _pgpass_field(value: str) -> str:
+    if "\n" in value or "\r" in value:
+        raise RuntimeError(".pgpass fields must not contain newline characters")
+    return value.replace("\\", "\\\\").replace(":", "\\:")
+
+
+def _write_container_pgpass(
+    container: str,
+    *,
+    user: str,
+    database: str,
+    password: str,
+) -> None:
+    pgpass_line = f"*:*:{_pgpass_field(database)}:{_pgpass_field(user)}:{_pgpass_field(password)}\n"
+    _run_command(
+        [
+            "docker",
+            "exec",
+            "-i",
+            container,
+            "sh",
+            "-c",
+            f'umask 077 && tmp=$(mktemp {_CONTAINER_PGPASS_PATH}.XXXXXX) && cat > "$tmp" && mv -f "$tmp" "{_CONTAINER_PGPASS_PATH}"',
+        ],
+        input=pgpass_line.encode(),
+    )
+
+
+def _remove_container_pgpass(container: str) -> None:
+    _run_command(["docker", "exec", container, "rm", "-f", _CONTAINER_PGPASS_PATH])
 
 
 def create_backup(*, output_dir: Path, repo_root: Path = REPO_ROOT) -> Path:
@@ -81,23 +114,33 @@ def create_backup(*, output_dir: Path, repo_root: Path = REPO_ROOT) -> Path:
         or "postgres"
     )
     backup_path = output_dir / f"{safe_database_name}-{timestamp}.dump"
-    pg_dump_command = [
-        "docker",
-        "exec",
-        "-e",
-        "PGPASSWORD",
+
+    _write_container_pgpass(
         runtime.container_name,
-        "pg_dump",
-        "-U",
-        str(runtime.connection_parameters["user"]),
-        "-d",
-        runtime.database_name,
-        "--format=custom",
-        "--no-owner",
-        "--no-privileges",
-    ]
-    with backup_path.open("wb") as dump_file:
-        _run_command(pg_dump_command, stdout=dump_file, env={"PGPASSWORD": postgres_password})
+        user=str(runtime.connection_parameters["user"]),
+        database=runtime.database_name,
+        password=postgres_password,
+    )
+    try:
+        pg_dump_command = [
+            "docker",
+            "exec",
+            "-e",
+            f"PGPASSFILE={_CONTAINER_PGPASS_PATH}",
+            runtime.container_name,
+            "pg_dump",
+            "-U",
+            str(runtime.connection_parameters["user"]),
+            "-d",
+            runtime.database_name,
+            "--format=custom",
+            "--no-owner",
+            "--no-privileges",
+        ]
+        with backup_path.open("wb") as dump_file:
+            _run_command(pg_dump_command, stdout=dump_file)
+    finally:
+        _remove_container_pgpass(runtime.container_name)
 
     return backup_path
 
@@ -111,25 +154,34 @@ def restore_backup(*, dump_path: Path, repo_root: Path = REPO_ROOT) -> None:
 
     _run_command(["make", "db-reset"], cwd=repo_root)
 
-    pg_restore_command = [
-        "docker",
-        "exec",
-        "-i",
-        "-e",
-        "PGPASSWORD",
+    _write_container_pgpass(
         runtime.container_name,
-        "pg_restore",
-        "-U",
-        str(runtime.connection_parameters["user"]),
-        "-d",
-        runtime.database_name,
-        "--clean",
-        "--if-exists",
-        "--no-owner",
-        "--no-privileges",
-    ]
-    with dump_path.open("rb") as dump_file:
-        _run_command(pg_restore_command, cwd=repo_root, stdin=dump_file, env={"PGPASSWORD": postgres_password})
+        user=str(runtime.connection_parameters["user"]),
+        database=runtime.database_name,
+        password=postgres_password,
+    )
+    try:
+        pg_restore_command = [
+            "docker",
+            "exec",
+            "-i",
+            "-e",
+            f"PGPASSFILE={_CONTAINER_PGPASS_PATH}",
+            runtime.container_name,
+            "pg_restore",
+            "-U",
+            str(runtime.connection_parameters["user"]),
+            "-d",
+            runtime.database_name,
+            "--clean",
+            "--if-exists",
+            "--no-owner",
+            "--no-privileges",
+        ]
+        with dump_path.open("rb") as dump_file:
+            _run_command(pg_restore_command, cwd=repo_root, stdin=dump_file)
+    finally:
+        _remove_container_pgpass(runtime.container_name)
 
 
 def _build_argument_parser() -> argparse.ArgumentParser:

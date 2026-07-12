@@ -42,9 +42,7 @@ def test_workflow_runs_on_5_minute_cron(workflow_parsed: dict) -> None:
     on_block = workflow_parsed.get("on") or workflow_parsed.get(True)
     assert on_block is not None, "workflow has no `on:` trigger block"
     schedules = on_block["schedule"]
-    assert any(s["cron"] == "*/5 * * * *" for s in schedules), (
-        f"expected '*/5 * * * *' cron, found {schedules}"
-    )
+    assert any(s["cron"] == "*/5 * * * *" for s in schedules), f"expected '*/5 * * * *' cron, found {schedules}"
 
 
 def test_workflow_hits_canonical_health_endpoint(workflow_text: str) -> None:
@@ -93,3 +91,29 @@ def test_workflow_uses_jq_for_body_healthy_check(workflow_text: str) -> None:
     # check would have caught the empty DB. The probe's contract is that 200 is
     # necessary but not sufficient — body.healthy must also be true.
     assert ".healthy == true" in workflow_text
+
+
+def test_issue_commands_include_explicit_repository_context(workflow_text: str) -> None:
+    """Issue commands must not depend on a local git checkout for repo context."""
+    required_issue_commands = (
+        "gh issue list",
+        "gh issue comment",
+        "gh issue close",
+        "gh issue create",
+    )
+    for command in required_issue_commands:
+        command_index = workflow_text.find(command)
+        assert command_index >= 0, f"missing expected command `{command}`"
+        repo_arg_index = workflow_text.find('--repo "${{ github.repository }}"', command_index)
+        assert repo_arg_index >= 0, (
+            f'`{command}` must include `--repo "${{{{ github.repository }}}}"` '
+            "to avoid git-checkout-dependent repository discovery"
+        )
+
+
+def test_label_create_command_includes_explicit_repository_context(workflow_text: str) -> None:
+    """Label management must also target the current mirror explicitly."""
+    label_command_index = workflow_text.find("gh label create uptime-incident")
+    assert label_command_index >= 0, "missing label-create command for uptime-incident"
+    repo_arg_index = workflow_text.find('--repo "${{ github.repository }}"', label_command_index)
+    assert repo_arg_index >= 0, "gh label create must include explicit --repo context"

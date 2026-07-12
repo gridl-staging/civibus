@@ -17,7 +17,8 @@ describe("buildHomepageJsonLd", () => {
   it("returns a plain, serializable WebSite payload with absolute URL fields", () => {
     const jsonLd = buildHomepageJsonLd({
       pageUrl: fakePageUrl("https://internal.host:5173/?utm_source=test"),
-      publicOrigin: "https://civibus.us"
+      publicOrigin: "https://civibus.us",
+      description: "stale hard-coded homepage description"
     });
 
     expect(jsonLd).toEqual({

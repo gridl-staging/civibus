@@ -45,8 +45,7 @@ def test_build_carto_sql_default_order_by_has_deterministic_tiebreaker() -> None
     sql = build_carto_sql(PHLCartoQuery(table="campfin_contributions"))
     assert "transaction_date DESC" in sql
     assert "cartodb_id DESC" in sql, (
-        f"ORDER BY must include cartodb_id tiebreaker for deterministic paging; "
-        f"got: {sql!r}"
+        f"ORDER BY must include cartodb_id tiebreaker for deterministic paging; got: {sql!r}"
     )
 
 
@@ -65,9 +64,7 @@ def test_build_carto_sql_applies_recent_history_cutoff() -> None:
 def test_build_carto_sql_appends_caller_where_with_AND() -> None:
     """Caller-supplied where MUST be ANDed to the canonical date filter, not
     replace it; preserves the date filter as a hard floor."""
-    sql = build_carto_sql(
-        PHLCartoQuery(table="campfin_expenditures", where="filer_state = 'PA'")
-    )
+    sql = build_carto_sql(PHLCartoQuery(table="campfin_expenditures", where="filer_state = 'PA'"))
     assert f"transaction_date >= '{RECENT_HISTORY_CUTOFF}'" in sql
     assert "(filer_state = 'PA')" in sql
     assert " AND " in sql
@@ -99,9 +96,7 @@ def test_fetch_carto_page_returns_parsed_payload_on_200() -> None:
     client = MagicMock(spec=httpx.Client)
     client.get = MagicMock(return_value=response)
 
-    payload = fetch_carto_page(
-        PHLCartoQuery(table="campfin_contributions"), client=client
-    )
+    payload = fetch_carto_page(PHLCartoQuery(table="campfin_contributions"), client=client)
     assert isinstance(payload, dict)
     assert "rows" in payload
     assert isinstance(payload["rows"], list)
@@ -182,8 +177,7 @@ def test_iter_all_rows_stops_at_total_limit_not_page_size() -> None:
     # Critically: iter_all_rows must NOT request page 2 once the total cap
     # is hit. Anything more is unbounded pagination, which is the bug.
     assert client.get.call_count == 1, (
-        f"iter_all_rows should stop after total_limit rows; called Carto "
-        f"{client.get.call_count} times (expected 1)"
+        f"iter_all_rows should stop after total_limit rows; called Carto {client.get.call_count} times (expected 1)"
     )
 
 

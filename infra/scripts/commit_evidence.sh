@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # VM-side: commit continuous-gate evidence and findings artifacts back to origin.
 #
-# Resolves docs/keel/open_questions.md item 2. The publish set is restricted to
+# Resolves docs/reference/keel/open_questions.md item 2. The publish set is restricted to
 # evidence/L*/, evidence/review/, and findings/ trees; the redaction blocklist
 # rejects anything resembling a secret or credential. Public sync stays opt-in
 # via .debbie.toml (which by design does not list these trees in its allowlist).

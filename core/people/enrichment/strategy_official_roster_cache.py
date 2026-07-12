@@ -87,4 +87,5 @@ def _portrait_binary_metadata_from_cached_portrait(cached_portrait: Any) -> Port
         width_px=cached_portrait.width_px,
         height_px=cached_portrait.height_px,
         source_image_url=cached_portrait.source_image_url,
+        rights_status=cached_portrait.rights_status,
     )

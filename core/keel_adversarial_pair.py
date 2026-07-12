@@ -1,6 +1,5 @@
 
 from __future__ import annotations
-"""Stub summary for keel_adversarial_pair.py."""
 
 import argparse
 import json
@@ -116,7 +115,11 @@ def _build_non_l4_summary_payload(
                 "non-L4 pair summary missing required field from verdict payloads: "
                 f"{required_field} (required by {summary_schema_path})"
             )
-        if primary_has_field and skeptic_has_field and primary_payload[required_field] != skeptic_payload[required_field]:
+        if (
+            primary_has_field
+            and skeptic_has_field
+            and primary_payload[required_field] != skeptic_payload[required_field]
+        ):
             raise ValueError(
                 "non-L4 pair verdicts disagree on required summary field "
                 f"{required_field}: primary={primary_payload[required_field]!r}, "

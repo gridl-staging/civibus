@@ -6,7 +6,7 @@ plus a small number of pass-through fields that the loader needs (e.g.
 office level for routing). Anything else is preserved on the source-record
 `raw_fields` JSON for future-loader use.
 
-See `docs/research/phl_campaign_finance_contract_2026_04_25.md` for the
+See `docs/reference/research/phl_campaign_finance_contract_2026_04_25.md` for the
 full live column inventory.
 """
 

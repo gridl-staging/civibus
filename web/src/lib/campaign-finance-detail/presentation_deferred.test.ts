@@ -11,6 +11,7 @@ import {
   buildCommitteeDeferredFundraisingSummary,
   buildCommitteeDeferredHighSignalSummary,
   buildCommitteeDeferredKeyMetrics,
+  buildCommitteeDeferredOutsideSpending,
   buildCommitteeDeferredTransactionRows,
   buildCommitteeTransactionRows,
   buildFilingBreakdownPresentation,
@@ -46,7 +47,10 @@ describe("campaign finance deferred detail presentation", () => {
       net: "$75.00",
       transactionCount: 1,
       jurisdiction: "federal/fec",
-      dataThrough: "2026-03-19"
+      dataThrough: "2026-03-19",
+      summarySourceLabel: "Derived from itemized transactions",
+      itemizedCoverageNote:
+        "Itemized transactions loaded: 1. Totals above are derived from these itemized transactions."
     });
   });
 
@@ -130,6 +134,9 @@ describe("campaign finance deferred detail presentation", () => {
       total_spent: "2000.00",
       net: "3000.00",
       transaction_count: 42,
+      itemized_transaction_count: 42,
+      cash_on_hand: null,
+      summary_source: "derived" as const,
       committees: [
         {
           ...DEFAULT_SUMMARY,
@@ -280,19 +287,20 @@ describe("campaign finance deferred detail presentation", () => {
     expect(buildCandidateDeferredKeyMetrics(summary)).toEqual([
       { label: "Total raised", value: "$5,000.00" },
       { label: "Total spent", value: "$2,000.00" },
-      { label: "Transactions", value: "42" }
+      { label: "Itemized transactions loaded", value: "42" }
     ]);
     expect(
       buildCandidateDeferredOutsideSpending(
-        {
-          candidate_id: CANDIDATE_ID,
-          support_total: "100.00",
-          oppose_total: "0.00",
-          support_count: 1,
-          oppose_count: 0,
-          top_spenders: []
-        },
-        []
+      {
+        candidate_id: CANDIDATE_ID,
+        support_total: "100.00",
+        oppose_total: "0.00",
+        support_count: 1,
+        oppose_count: 0,
+        top_spenders: [],
+        excluded_outlier_count: 0
+      },
+      []
       ).explanatoryBlock
     ).toBe("Outside spending is independent and not controlled by the candidate committee.");
   });
@@ -308,7 +316,10 @@ describe("campaign finance deferred detail presentation", () => {
       net: "$75.00",
       transactionCount: 1,
       jurisdiction: "federal/fec",
-      dataThrough: "2026-03-19"
+      dataThrough: "2026-03-19",
+      summarySourceLabel: "Derived from itemized transactions",
+      itemizedCoverageNote:
+        "Itemized transactions loaded: 1. Totals above are derived from these itemized transactions."
     });
     expect(buildCommitteeDeferredFilingBreakdown(filingBreakdown).rows).toHaveLength(1);
     expect(
@@ -324,7 +335,7 @@ describe("campaign finance deferred detail presentation", () => {
     expect(buildCommitteeDeferredKeyMetrics(summary)).toEqual([
       { label: "Total raised", value: "$125.00" },
       { label: "Total spent", value: "$50.00" },
-      { label: "Transactions", value: "1" }
+      { label: "Itemized transactions loaded", value: "1" }
     ]);
 
     expect(buildCommitteeDeferredHighSignalSummary(summary, filingBreakdown)).toEqual({
@@ -348,6 +359,60 @@ describe("campaign finance deferred detail presentation", () => {
         }
       ]
     });
+  });
+
+  it("builds committee deferred outside-spending empty and populated states", () => {
+    expect(
+      buildCommitteeDeferredOutsideSpending({
+        committee_id: COMMITTEE_ID,
+        support_total: "0.00",
+        oppose_total: "0.00",
+        ie_transaction_count: 0,
+        excluded_outlier_count: 0,
+        targets: []
+      })
+    ).toEqual({
+      supportTotal: "$0.00",
+      opposeTotal: "$0.00",
+      ieCountLabel: "0 expenditures",
+      outlierNote: null,
+      targetRows: [],
+      sourceRows: [],
+      emptyMessage: "This committee reported no independent expenditures"
+    });
+
+    const populated = buildCommitteeDeferredOutsideSpending({
+      committee_id: COMMITTEE_ID,
+      support_total: "200.00",
+      oppose_total: "25.00",
+      ie_transaction_count: 2,
+      excluded_outlier_count: 2,
+      targets: [
+        {
+          candidate_id: CANDIDATE_ID,
+          fec_candidate_id: "H0NC01001",
+          candidate_name: "Target Candidate",
+          person_id: PERSON_ID,
+          party: "DEM",
+          office: "H",
+          state: "NC",
+          district: "01",
+          slug: "target-candidate",
+          slug_is_unique: true,
+          support_total: "200.00",
+          oppose_total: "25.00",
+          transaction_count: 2,
+          sources: []
+        }
+      ]
+    });
+
+    expect(populated.emptyMessage).toBeNull();
+    expect(populated.ieCountLabel).toBe("2 expenditures");
+    expect(populated.outlierNote).toBe(
+      "2 reported independent expenditures were excluded from these totals as outliers."
+    );
+    expect(populated.targetRows[0].targetHref).toBe(`/person/${PERSON_ID}`);
   });
 
   it("builds explicit no-category and no-trend states when committee category data is unavailable", () => {
@@ -394,7 +459,8 @@ describe("campaign finance deferred detail presentation", () => {
         oppose_total: "50.00",
         support_count: 1,
         oppose_count: 1,
-        top_spenders: []
+        top_spenders: [],
+        excluded_outlier_count: 0
       },
       []
     );
@@ -412,7 +478,8 @@ describe("campaign finance deferred detail presentation", () => {
         oppose_total: "50.00",
         support_count: 1,
         oppose_count: 1,
-        top_spenders: []
+        top_spenders: [],
+        excluded_outlier_count: 0
       },
       [
         {
@@ -458,7 +525,8 @@ describe("campaign finance deferred detail presentation", () => {
         oppose_total: "0.00",
         support_count: 0,
         oppose_count: 0,
-        top_spenders: []
+        top_spenders: [],
+        excluded_outlier_count: 0
       },
       []
     );
@@ -478,7 +546,7 @@ describe("campaign finance deferred detail presentation", () => {
     expect(keyMetrics).toEqual([
       { label: "Total raised", value: "$5,000.00" },
       { label: "Total spent", value: "$2,000.00" },
-      { label: "Transactions", value: "42" }
+      { label: "Itemized transactions loaded", value: "42" }
     ]);
   });
 
@@ -492,7 +560,7 @@ describe("campaign finance deferred detail presentation", () => {
     expect(keyMetrics).toEqual([
       { label: "Total raised", value: "$10,000.00" },
       { label: "Total spent", value: "$3,000.00" },
-      { label: "Transactions", value: "100" }
+      { label: "Itemized transactions loaded", value: "100" }
     ]);
   });
 

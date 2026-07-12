@@ -50,7 +50,7 @@ FIXTURE_BY_BODY_KEY = {
 }
 
 STAGE5_LOCAL_PROOF_ARTIFACT_RELATIVE_PATH = Path(
-    "docs/research/artifacts/2026_04_29_dwo_rosters/local/stage5_statewide_roster_local_proof.json"
+    "docs/reference/research/artifacts/2026_04_29_dwo_rosters/local/stage5_statewide_roster_local_proof.json"
 )
 
 
@@ -317,7 +317,9 @@ def build_stage5_local_proof_payload(
         assert officeholding_count == first_officeholding_counts[source_id]
         second_counts_by_source[source_id] = officeholding_count
         source_record_key = first_results[source_id].source_record_key
-        active_snapshot_count, officeholding_count_for_key = resolve_snapshot_stats(db_conn, source_id, source_record_key)
+        active_snapshot_count, officeholding_count_for_key = resolve_snapshot_stats(
+            db_conn, source_id, source_record_key
+        )
         assert active_snapshot_count == 1
         assert officeholding_count_for_key == expected_count
 
@@ -331,12 +333,10 @@ def build_stage5_local_proof_payload(
         "snapshot_keys": {k: first_results[k].source_record_key for k in first_results},
         "idempotency": {
             "second_run_reused_source_record_ids": all(
-                second_results[k].source_record_id == first_results[k].source_record_id
-                for k in first_results
+                second_results[k].source_record_id == first_results[k].source_record_id for k in first_results
             ),
             "second_run_reused_source_record_keys": all(
-                second_results[k].source_record_key == first_results[k].source_record_key
-                for k in first_results
+                second_results[k].source_record_key == first_results[k].source_record_key for k in first_results
             ),
             "exact_second_run_officeholding_total": sum(second_counts_by_source.values()),
         },

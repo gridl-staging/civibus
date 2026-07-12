@@ -1,0 +1,31 @@
+# civibus-caddy — the single PUBLIC app. Fly's edge terminates TLS and
+# forwards plain HTTP to Caddy on :80; Caddy path-routes /api/* -> api and
+# everything else -> web, preserving the /api/*-under-main-host contract the
+# health probes depend on (same infra/Caddyfile as compose, env-parameterized).
+#
+# Deploy from repo root: flyctl deploy -c infra/fly/caddy.fly.toml
+# No secrets. PUBLIC_HOSTNAME switches to civibus.shareborough.com at DNS
+# cutover (Phase C), when the domain + cert are attached to this app.
+app = "civibus-caddy"
+primary_region = "sjc"
+
+# dockerfile is resolved relative to this file's directory.
+[build]
+  dockerfile = "../caddy/Dockerfile"
+
+[env]
+  PUBLIC_HOSTNAME = "civibus-caddy.fly.dev"
+  CIVIBUS_SITE_SCHEME = "http://"
+  CIVIBUS_API_UPSTREAM = "civibus-api.flycast:8000"
+  CIVIBUS_WEB_UPSTREAM = "civibus-web.internal:3000"
+
+[http_service]
+  internal_port = 80
+  force_https = true
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"

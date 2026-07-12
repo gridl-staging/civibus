@@ -1,5 +1,4 @@
 
-
 from __future__ import annotations
 
 import re
@@ -27,6 +26,7 @@ _TAG_PATTERN = re.compile(r"<[^>]+>")
 
 
 class BallotpediaEnrichmentStrategy:
+
     source_name = "ballotpedia"
 
     def __init__(

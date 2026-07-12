@@ -370,13 +370,13 @@ def test_main_passes_ny_prototyped_postcloseout_contract_with_lane_specific_docs
     repo_root = tmp_path / "repo"
     repo_root.mkdir()
     _write_schema_files(repo_root)
-    (repo_root / "docs/research/artifacts/2026_04_29_ny_unstick").mkdir(parents=True, exist_ok=True)
-    (repo_root / "docs/research/artifacts/2026_04_29_ny_unstick/maintenance_closeout.md").write_text(
+    (repo_root / "docs/reference/research/artifacts/2026_04_29_ny_unstick").mkdir(parents=True, exist_ok=True)
+    (repo_root / "docs/reference/research/artifacts/2026_04_29_ny_unstick/maintenance_closeout.md").write_text(
         "# NY maintenance closeout\n",
         encoding="utf-8",
     )
-    (repo_root / "docs/research").mkdir(parents=True, exist_ok=True)
-    (repo_root / "docs/research/2026-04-28-ny-stage2-closeout.md").write_text(
+    (repo_root / "docs/reference/research").mkdir(parents=True, exist_ok=True)
+    (repo_root / "docs/reference/research/2026-04-28-ny-stage2-closeout.md").write_text(
         "# NY stage2 closeout\n",
         encoding="utf-8",
     )
@@ -404,7 +404,7 @@ def test_main_passes_ny_prototyped_postcloseout_contract_with_lane_specific_docs
                                             {
                                                 "layer": "docs",
                                                 "scope": "NY_stage5_maintenance_closeout_2026_04_29",
-                                                "path": "docs/research/artifacts/2026_04_29_ny_unstick/maintenance_closeout.md",
+                                                "path": "docs/reference/research/artifacts/2026_04_29_ny_unstick/maintenance_closeout.md",
                                             },
                                         ],
                                     }
@@ -423,12 +423,12 @@ def test_main_passes_ny_prototyped_postcloseout_contract_with_lane_specific_docs
                                             {
                                                 "layer": "docs",
                                                 "scope": "NY_stage5_maintenance_closeout_2026_04_29",
-                                                "path": "docs/research/artifacts/2026_04_29_ny_unstick/maintenance_closeout.md",
+                                                "path": "docs/reference/research/artifacts/2026_04_29_ny_unstick/maintenance_closeout.md",
                                             },
                                             {
                                                 "layer": "docs",
                                                 "scope": "NY_stage2_closeout_2026_04_28",
-                                                "path": "docs/research/2026-04-28-ny-stage2-closeout.md",
+                                                "path": "docs/reference/research/2026-04-28-ny-stage2-closeout.md",
                                             },
                                         ],
                                     }
@@ -447,12 +447,12 @@ def test_main_passes_ny_prototyped_postcloseout_contract_with_lane_specific_docs
                                             {
                                                 "layer": "docs",
                                                 "scope": "NY_stage5_maintenance_closeout_2026_04_29",
-                                                "path": "docs/research/artifacts/2026_04_29_ny_unstick/maintenance_closeout.md",
+                                                "path": "docs/reference/research/artifacts/2026_04_29_ny_unstick/maintenance_closeout.md",
                                             },
                                             {
                                                 "layer": "docs",
                                                 "scope": "NY_stage2_closeout_2026_04_28",
-                                                "path": "docs/research/2026-04-28-ny-stage2-closeout.md",
+                                                "path": "docs/reference/research/2026-04-28-ny-stage2-closeout.md",
                                             },
                                         ],
                                     }
@@ -511,7 +511,7 @@ def test_main_writes_pass_evidence_for_validated_source_with_l1_and_source_speci
             "current_total": 70280.85,
             "expected_range": {"minimum": 70000, "maximum": 71000},
             "ratio": 1.004,
-            "anchor_path": "docs/anchors/NC.md",
+            "anchor_path": "docs/reference/anchors/NC.md",
             "anchor_schema_version": 1,
         },
     )
@@ -580,7 +580,7 @@ def test_main_fails_when_validated_source_has_only_l1_anchor_and_no_source_speci
             "current_total": 70280.85,
             "expected_range": {"minimum": 70000, "maximum": 71000},
             "ratio": 1.004,
-            "anchor_path": "docs/anchors/NC.md",
+            "anchor_path": "docs/reference/anchors/NC.md",
             "anchor_schema_version": 1,
         },
     )
@@ -871,7 +871,7 @@ def test_main_passes_deferred_with_a_docs_path_evidence_ref(
     repo_root.mkdir()
     _write_schema_files(repo_root)
     _write_l5_schema(repo_root)
-    docs_path = repo_root / "docs" / "research" / "deferral_note.md"
+    docs_path = repo_root / "docs" / "reference" / "research" / "deferral_note.md"
     docs_path.parent.mkdir(parents=True)
     docs_path.write_text("Deferred per T4 policy.\n", encoding="utf-8")
 
@@ -879,7 +879,7 @@ def test_main_passes_deferred_with_a_docs_path_evidence_ref(
         repo_root,
         current_state="deferred",
         evidence_refs=[
-            {"layer": "docs", "scope": "research", "path": "docs/research/deferral_note.md"},
+            {"layer": "docs", "scope": "research", "path": "docs/reference/research/deferral_note.md"},
         ],
     )
     monkeypatch.setattr(keel_gate_l3, "_repo_sha", lambda: "d54355d6")
@@ -917,7 +917,7 @@ def test_emitted_deferred_l3_evidence_validates_against_real_repo_schema(
     repo_root.mkdir()
     _write_schema_files(repo_root)
     _write_l5_schema(repo_root)
-    docs_path = repo_root / "docs" / "research" / "deferral_note.md"
+    docs_path = repo_root / "docs" / "reference" / "research" / "deferral_note.md"
     docs_path.parent.mkdir(parents=True)
     docs_path.write_text("Deferred per T4 policy.\n", encoding="utf-8")
 
@@ -925,7 +925,7 @@ def test_emitted_deferred_l3_evidence_validates_against_real_repo_schema(
         repo_root,
         current_state="deferred",
         evidence_refs=[
-            {"layer": "docs", "scope": "research", "path": "docs/research/deferral_note.md"},
+            {"layer": "docs", "scope": "research", "path": "docs/reference/research/deferral_note.md"},
         ],
     )
     monkeypatch.setattr(keel_gate_l3, "_repo_sha", lambda: "d54355d6")

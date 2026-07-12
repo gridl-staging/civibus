@@ -585,9 +585,7 @@ def test_indiana_closeout_package_metadata_matches_stage2_evidence() -> None:
     in_source = in_entry["sources"][0]
     last_transition = in_source["transitions"][-1]
     docs_scopes = {
-        evidence_ref["scope"]
-        for evidence_ref in last_transition["evidence_refs"]
-        if evidence_ref["layer"] == "docs"
+        evidence_ref["scope"] for evidence_ref in last_transition["evidence_refs"] if evidence_ref["layer"] == "docs"
     }
 
     assert docs_scopes >= {
@@ -601,8 +599,6 @@ def test_indiana_closeout_package_metadata_matches_stage2_evidence() -> None:
     assert source_dates == {"2026-04-26"}
     assert source_frequencies == {"weekly"}
 
-    readme_text = (repo_root / "domains/campaign_finance/jurisdictions/states/IN/README.md").read_text(
-        encoding="utf-8"
-    )
-    assert "docs/research/in_freshness_recheck_2026_04_26.md" in readme_text
-    assert "docs/research/in_mn_nj_freshness_stage1_baseline_2026_04_28.md" in readme_text
+    readme_text = (repo_root / "domains/campaign_finance/jurisdictions/states/IN/README.md").read_text(encoding="utf-8")
+    assert "docs/reference/research/in_freshness_recheck_2026_04_26.md" in readme_text
+    assert "docs/reference/research/in_mn_nj_freshness_stage1_baseline_2026_04_28.md" in readme_text

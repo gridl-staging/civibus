@@ -227,6 +227,9 @@ def test_create_app_registers_unique_expected_v1_get_routes(monkeypatch: pytest.
     }
     expected_paths = {
         "/v1/person/{person_id}",
+        "/v1/person/{person_id}/contribution-insights",
+        "/v1/person/{person_id}/top-donors",
+        "/v1/person/{person_id}/top-employers",
         "/v1/person/by-slug/{slug}",
         "/v1/org/{organization_id}",
         "/v1/offices/{office_id}",
@@ -240,6 +243,7 @@ def test_create_app_registers_unique_expected_v1_get_routes(monkeypatch: pytest.
         "/v1/committees/{committee_id}",
         "/v1/committees/{committee_id}/summary",
         "/v1/committees/{committee_id}/filings/summary",
+        "/v1/committees/{committee_id}/independent-expenditures-made",
         "/v1/candidates",
         "/v1/candidates/by-slug/{slug}",
         "/v1/candidates/{candidate_id}",
@@ -251,11 +255,13 @@ def test_create_app_registers_unique_expected_v1_get_routes(monkeypatch: pytest.
         "/v1/coverage/registry",
         "/v1/counties/{state}/{county_slug}/campaign-finance-summary",
         "/v1/data-sources",
+        "/v1/donors/search",
         "/v1/elections/{election_date}",
         "/v1/elections/timeline/upcoming",
         "/v1/filings/{filing_id}",
         "/v1/geometry",
         "/v1/civics/geometry",
+        "/v1/congress/members",
         "/v1/transactions",
         "/v1/parcels/{parcel_id}",
         "/v1/parcels",
@@ -287,6 +293,29 @@ def test_health_endpoint_returns_ok_without_api_key(monkeypatch: pytest.MonkeyPa
 
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
+
+
+def test_content_health_endpoint_uses_post_strip_health_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    api_main = _load_api_main(monkeypatch)
+    monkeypatch.setattr(api_main._health_content_module, "evaluate_content_health", lambda _connection: [])
+
+    class FakePool:
+        def connection(self) -> "FakePool":
+            return self
+
+        def __enter__(self) -> "FakePool":
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+    app = api_main.create_app()
+    app.state.db_pool = FakePool()
+    client = TestClient(app)
+    response = client.get("/health/content")
+
+    assert response.status_code == 200
+    assert response.json() == {"healthy": True}
 
 
 def test_people_enrichment_provenance_endpoint_is_owner_backed_without_api_key(

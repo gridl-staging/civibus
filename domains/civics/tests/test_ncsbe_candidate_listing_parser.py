@@ -19,6 +19,7 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 CSV_PATH = (
     REPO_ROOT
     / "docs"
+    / "reference"
     / "research"
     / "artifacts"
     / "nc_2026_civic_calendar_probe_2026_04_25"

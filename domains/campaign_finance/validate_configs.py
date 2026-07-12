@@ -1,5 +1,5 @@
 """
-Stub summary for /Users/stuart/parallel_development/civibus_dev/MAR18_api_graph_routes_and_property_endpoints/civibus_dev/domains/campaign_finance/validate_configs.py.
+Stub summary for MAR18_api_graph_routes_and_property_endpoints/civibus_dev/domains/campaign_finance/validate_configs.py.
 """
 
 from __future__ import annotations

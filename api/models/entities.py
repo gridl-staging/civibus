@@ -1,3 +1,7 @@
+"""
+Stub summary for jun04_3pm_3_member_photo_bio_enrichment/civibus_dev/api/models/entities.py.
+"""
+
 from __future__ import annotations
 
 from datetime import date, datetime
@@ -18,6 +22,7 @@ class PersonPortraitResponse(BaseModel):
 
 
 class PersonResponse(BaseModel):
+
     id: UUID
     canonical_name: str
     name_variants: list[str] = Field(default_factory=list)
@@ -33,7 +38,7 @@ class PersonResponse(BaseModel):
     bio_pulled_at: datetime | None = None
     date_of_birth: date | None = None
     year_of_birth: int | None = None
-    identifiers: dict[str, str] = Field(default_factory=dict)
+    identifiers: dict[str, str | list[str]] = Field(default_factory=dict)
     primary_address_id: UUID | None = None
     er_cluster_id: UUID | None = None
     er_confidence: float | None = None

@@ -244,6 +244,7 @@ _FilingWindowPairKey = tuple[str, str, str, str, str, str, str]
 
 def _filing_window_pair_key(row: dict[str, object]) -> _FilingWindowPairKey:
     """Return the natural identity used to pair a filing-open row with its filing-close row."""
+
     def _str_or_empty(value: object) -> str:
         return "" if value is None else str(value)
 
@@ -302,9 +303,7 @@ def resolve_candidate_listing_filing_windows(
         resolved_calendar_path = _default_calendar_path(resolved_year)
 
     payload = _load_calendar_payload(resolved_calendar_path)
-    open_rows, close_rows = _scan_candidate_filing_rows(
-        payload["filing_deadlines"], resolved_calendar_path
-    )
+    open_rows, close_rows = _scan_candidate_filing_rows(payload["filing_deadlines"], resolved_calendar_path)
 
     paired_keys = open_rows.keys() & close_rows.keys()
     unmatched_open = open_rows.keys() - paired_keys
@@ -345,9 +344,7 @@ def resolve_candidate_listing_refresh_cadence(
     calendar_path: Path | None = None,
 ) -> str:
     """Return daily during any filing window; quarterly outside all filing windows."""
-    filing_windows = resolve_candidate_listing_filing_windows(
-        year=year, calendar_path=calendar_path
-    )
+    filing_windows = resolve_candidate_listing_filing_windows(year=year, calendar_path=calendar_path)
     effective_date = date.today() if on_date is None else on_date
     for window in filing_windows:
         if window.start_date <= effective_date <= window.end_date:

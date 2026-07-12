@@ -55,9 +55,7 @@ def _build_argument_parser() -> argparse.ArgumentParser:
         help="Download from Carto SQL API to a JSONL file",
     )
     _add_data_type_argument(download_parser)
-    download_parser.add_argument(
-        "--output", type=Path, required=True, help="Destination JSONL path"
-    )
+    download_parser.add_argument("--output", type=Path, required=True, help="Destination JSONL path")
     download_parser.add_argument(
         "--limit",
         type=_non_negative_int,
@@ -70,18 +68,14 @@ def _build_argument_parser() -> argparse.ArgumentParser:
     )
     _add_data_type_argument(load_parser)
     load_parser.add_argument("--path", type=Path, required=True, help="Source JSONL")
-    load_parser.add_argument(
-        "--limit", type=_non_negative_int, help="Optional max rows to load"
-    )
+    load_parser.add_argument("--limit", type=_non_negative_int, help="Optional max rows to load")
 
     refresh_parser = subparsers.add_parser(
         "refresh",
         help="Download + load in one shot (uses a temporary JSONL file)",
     )
     _add_data_type_argument(refresh_parser)
-    refresh_parser.add_argument(
-        "--limit", type=_non_negative_int, help="Optional row cap"
-    )
+    refresh_parser.add_argument("--limit", type=_non_negative_int, help="Optional row cap")
 
     return parser
 

@@ -193,10 +193,7 @@ def build_nc_committee_doc_linkage_key(
 
     Doc Type is intentionally excluded — see _LINKAGE_KEY_COLUMNS for why.
     """
-    return tuple(
-        "" if row.get(column) is None else str(row.get(column))
-        for column in _LINKAGE_KEY_COLUMNS
-    )
+    return tuple("" if row.get(column) is None else str(row.get(column)) for column in _LINKAGE_KEY_COLUMNS)
 
 
 def classify_ie_filing(row: Mapping[str, str | None]) -> bool:

@@ -19,7 +19,10 @@ pytestmark = pytest.mark.integration
 
 def test_stage5_local_proof_emitter_defaults_to_canonical_artifact_path(tmp_path: Path) -> None:
     payload = {"combined_officeholding_total": 98}
-    assert canonical_stage5_local_proof_artifact_path() == Path(__file__).resolve().parents[3] / STAGE5_LOCAL_PROOF_ARTIFACT_RELATIVE_PATH
+    assert (
+        canonical_stage5_local_proof_artifact_path()
+        == Path(__file__).resolve().parents[3] / STAGE5_LOCAL_PROOF_ARTIFACT_RELATIVE_PATH
+    )
     emitted_path = emit_stage5_local_proof_artifact(payload=payload, output_path=tmp_path / "proof.json")
     assert emitted_path == tmp_path / "proof.json"
 

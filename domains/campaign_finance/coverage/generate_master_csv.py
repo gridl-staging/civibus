@@ -4,8 +4,8 @@ import json
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-REGISTRY_PATH = REPO_ROOT / "docs" / "research" / "coverage-registry.json"
-OUTPUT_PATH = REPO_ROOT / "docs" / "research" / "jurisdiction-master.csv"
+REGISTRY_PATH = REPO_ROOT / "docs" / "reference" / "research" / "coverage-registry.json"
+OUTPUT_PATH = REPO_ROOT / "docs" / "reference" / "research" / "jurisdiction-master.csv"
 
 # 2020 US Census state populations (source: census.gov/2020census)
 STATE_POPULATIONS_2020: dict[str, int] = {

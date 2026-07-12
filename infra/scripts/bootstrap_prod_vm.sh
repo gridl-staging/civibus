@@ -127,7 +127,7 @@ validate_required_env_keys() {
   local missing=0
   local required_key
 
-  for required_key in POSTGRES_PASSWORD ORIGIN CIVIBUS_API_KEYS CIVIBUS_ADMIN_API_KEYS CIVIBUS_API_KEY FEC_BULK_CYCLE; do
+  for required_key in POSTGRES_PASSWORD ORIGIN PUBLIC_HOSTNAME CIVIBUS_API_KEYS CIVIBUS_ADMIN_API_KEYS CIVIBUS_API_KEY FEC_BULK_CYCLE CIVIBUS_DB_DATA_PATH; do
     if ! grep -Eq "^${required_key}=.+$" "${env_file}"; then
       echo "Missing required ${required_key} entry in ${env_file}" >&2
       missing=1

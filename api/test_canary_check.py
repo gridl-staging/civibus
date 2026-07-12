@@ -21,6 +21,13 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from api._federal_first_test_support import (
+    FEDERAL_FIRST_COUNTS,
+    FEDERAL_FIRST_FLOORS,
+    FakeConnection,
+    set_federal_floor_env,
+)
+
 
 def _fresh_canary_module() -> ModuleType:
     sys.modules.pop("api.canary_check", None)
@@ -71,6 +78,36 @@ def test_canary_exits_one_when_health_fails(monkeypatch: pytest.MonkeyPatch) -> 
     # Even on failure the connection must close, otherwise repeated boot
     # attempts leak DB connections.
     fake_connection.close.assert_called_once()
+
+
+def test_canary_exits_zero_with_federal_first_floors(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("CIVIBUS_STARTUP_CANARY", raising=False)
+    set_federal_floor_env(monkeypatch, FEDERAL_FIRST_FLOORS)
+    canary = _fresh_canary_module()
+
+    fake_connection = FakeConnection(list(FEDERAL_FIRST_COUNTS.values()))
+    monkeypatch.setattr(canary, "get_connection", lambda: fake_connection)
+
+    assert canary.main() == 0
+    assert fake_connection.closed is True
+
+
+@pytest.mark.parametrize("check_name", FEDERAL_FIRST_COUNTS.keys())
+def test_canary_exits_one_when_any_federal_floor_exceeds_actual(
+    monkeypatch: pytest.MonkeyPatch,
+    check_name: str,
+) -> None:
+    monkeypatch.delenv("CIVIBUS_STARTUP_CANARY", raising=False)
+    floors = dict(FEDERAL_FIRST_FLOORS)
+    floors[check_name] = FEDERAL_FIRST_COUNTS[check_name] + 1
+    set_federal_floor_env(monkeypatch, floors)
+    canary = _fresh_canary_module()
+
+    fake_connection = FakeConnection(list(FEDERAL_FIRST_COUNTS.values()))
+    monkeypatch.setattr(canary, "get_connection", lambda: fake_connection)
+
+    assert canary.main() == 1
+    assert fake_connection.closed is True
 
 
 def test_canary_exits_one_when_db_unreachable_past_deadline(monkeypatch: pytest.MonkeyPatch) -> None:

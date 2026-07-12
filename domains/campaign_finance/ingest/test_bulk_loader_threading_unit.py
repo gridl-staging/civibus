@@ -136,7 +136,12 @@ def test_stage4_loaders_forward_limit_and_graph_enabled(
         graph_enabled=True,
     )
 
-    assert captured_limits == [11]
+    # The streaming stage4 loader reads the source unbounded (limit=None) and
+    # enforces the caller's limit downstream via _stage4_limit_reached early-break,
+    # rather than forwarding the limit into read_bulk_file. Asserting [None] pins
+    # that throughput contract: forwarding a concrete limit here would signal a
+    # regression back to the pre-throughput eager-read design.
+    assert captured_limits == [None]
     assert captured_graph_flags == [True]
     assert (result.inserted, result.skipped, result.errors) == (1, 0, 0)
 

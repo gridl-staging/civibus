@@ -37,30 +37,34 @@ def test_run_tuning_candidate_threads_candidate_settings_and_emits_artifacts(
     )
     monkeypatch.setattr(
         "core.entity_resolution.tuning.run_l8_regression_gate",
-        lambda **kwargs: observed_gate_settings.append(kwargs["probabilistic_settings"])
-        or {
-            "status": "pass",
-            "produced_at_utc": "2026-04-30T00:00:00Z",
-            "pair_results": [
-                {"case_id": "a", "passed": True},
-                {"case_id": "b", "passed": True},
-                {"case_id": "c", "passed": False},
-            ],
-            "false_positive_summary": {
-                "cases_evaluated": 5,
-                "flagged_false_positives": 1,
-                "flagged_case_ids": ["fp_1"],
-                "false_positive_rate": 0.2,
-            },
-        },
+        lambda **kwargs: (
+            observed_gate_settings.append(kwargs["probabilistic_settings"])
+            or {
+                "status": "pass",
+                "produced_at_utc": "2026-04-30T00:00:00Z",
+                "pair_results": [
+                    {"case_id": "a", "passed": True},
+                    {"case_id": "b", "passed": True},
+                    {"case_id": "c", "passed": False},
+                ],
+                "false_positive_summary": {
+                    "cases_evaluated": 5,
+                    "flagged_false_positives": 1,
+                    "flagged_case_ids": ["fp_1"],
+                    "false_positive_rate": 0.2,
+                },
+            }
+        ),
     )
     monkeypatch.setattr(
         "core.entity_resolution.tuning.compute_all_cohort_baselines_for_candidate",
-        lambda settings: observed_cohort_settings.append(settings)
-        or {
-            "ncga_house": {"pct_resolved": 0.82, "gate_target_pct": 0.8},
-            "federal": {"pct_resolved": 0.85, "gate_target_pct": 0.8},
-        },
+        lambda settings: (
+            observed_cohort_settings.append(settings)
+            or {
+                "ncga_house": {"pct_resolved": 0.82, "gate_target_pct": 0.8},
+                "federal": {"pct_resolved": 0.85, "gate_target_pct": 0.8},
+            }
+        ),
     )
     monkeypatch.setattr(
         "core.entity_resolution.tuning.load_stage2_cohort_baseline",
@@ -274,8 +278,9 @@ def test_compute_all_cohort_baselines_for_candidate_persists_candidate_clusters_
     )
     monkeypatch.setattr(
         "core.entity_resolution.tuning.persist_auto_merge_clusters",
-        lambda conn, auto_merge_clusters, entity_type: call_order.append("persist")
-        or [uuid4() for _ in auto_merge_clusters],
+        lambda conn, auto_merge_clusters, entity_type: (
+            call_order.append("persist") or [uuid4() for _ in auto_merge_clusters]
+        ),
     )
     monkeypatch.setattr(
         "core.entity_resolution.tuning.compute_all_cohort_baselines",
@@ -335,18 +340,20 @@ def test_run_tuning_candidate_l8_artifact_includes_full_command_metadata(
     )
     monkeypatch.setattr(
         "core.entity_resolution.tuning.run_l8_regression_gate",
-        lambda **kwargs: captured_kwargs.append(kwargs)
-        or {
-            "status": "pass",
-            "produced_at_utc": "2026-04-30T00:00:00Z",
-            "pair_results": [],
-            "false_positive_summary": {
-                "cases_evaluated": 0,
-                "flagged_false_positives": 0,
-                "flagged_case_ids": [],
-                "false_positive_rate": 0.0,
-            },
-        },
+        lambda **kwargs: (
+            captured_kwargs.append(kwargs)
+            or {
+                "status": "pass",
+                "produced_at_utc": "2026-04-30T00:00:00Z",
+                "pair_results": [],
+                "false_positive_summary": {
+                    "cases_evaluated": 0,
+                    "flagged_false_positives": 0,
+                    "flagged_case_ids": [],
+                    "false_positive_rate": 0.0,
+                },
+            }
+        ),
     )
     monkeypatch.setattr(
         "core.entity_resolution.tuning.compute_all_cohort_baselines_for_candidate",
@@ -445,8 +452,9 @@ def test_evaluate_persisted_state_cohort_gate_reuses_stage2_loader_and_stage7_ev
     )
     monkeypatch.setattr(
         "core.entity_resolution.tuning._evaluate_stage7_cohort_gate",
-        lambda *, stage2_baseline, candidate_cohorts: observed_args.append((stage2_baseline, candidate_cohorts))
-        or expected_gate,
+        lambda *, stage2_baseline, candidate_cohorts: (
+            observed_args.append((stage2_baseline, candidate_cohorts)) or expected_gate
+        ),
     )
 
     result = evaluate_persisted_state_cohort_gate(

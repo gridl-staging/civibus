@@ -131,6 +131,44 @@ def _make_senate_member_row(
     }
 
 
+def _house_officeholding_rows_by_bioguide(
+    conn: psycopg.Connection,
+    bioguide_ids: list[str],
+) -> dict[str, tuple[UUID, str, date | None, date | None, bool, UUID | None]]:
+    rows = conn.execute(
+        """
+        SELECT
+            p.identifiers ->> 'bioguide_id',
+            p.id,
+            oh.holder_status,
+            lower(oh.valid_period),
+            upper(oh.valid_period),
+            upper_inf(oh.valid_period),
+            oh.electoral_division_id
+        FROM civic.officeholding oh
+        JOIN core.person p ON p.id = oh.person_id
+        WHERE p.identifiers ->> 'bioguide_id' = ANY(%s)
+        """,
+        (bioguide_ids,),
+    ).fetchall()
+    return {row[0]: row[1:] for row in rows}
+
+
+# ---------------------------------------------------------------------------
+# Federal office UUID constants contract
+# ---------------------------------------------------------------------------
+
+
+def test_federal_office_uuid_constants_expose_vp_and_delegate() -> None:
+    from domains.campaign_finance.ingest.federal_officeholder_loader import (
+        OFFICE_US_HOUSE_DELEGATE,
+        OFFICE_US_VICE_PRESIDENT,
+    )
+
+    assert OFFICE_US_VICE_PRESIDENT == UUID("00000000-0000-4000-8000-000000000104")
+    assert OFFICE_US_HOUSE_DELEGATE == UUID("00000000-0000-4000-8000-000000000105")
+
+
 # ---------------------------------------------------------------------------
 # House officeholder ingestion
 # ---------------------------------------------------------------------------
@@ -191,15 +229,14 @@ class TestFederalHouseOfficeholderIngest:
         load_federal_house_officeholders(db_conn, rows, data_source_id=ds.id)
 
         row = db_conn.execute(
-            "SELECT lower(valid_period), upper(valid_period) FROM civic.officeholding "
+            "SELECT lower(valid_period), upper_inf(valid_period) FROM civic.officeholding "
             "JOIN core.person p ON p.id = civic.officeholding.person_id "
             "WHERE p.identifiers @> %s",
             ('{"bioguide_id": "H-TERM-1"}',),
         ).fetchone()
         assert row is not None
         assert row[0] == date(2023, 1, 3)
-        # House terms end at start of next Congress (Jan 3, odd year + 2)
-        assert row[1] == date(2025, 1, 3)
+        assert row[1] is True
 
 
 # ---------------------------------------------------------------------------
@@ -616,12 +653,15 @@ class TestFederalIncumbencyDerivation:
         result = derive_incumbent_challenge(db_conn, person[0], OFFICE_US_HOUSE, as_of=date(2024, 6, 1))
         assert result == "I"
 
-    def test_former_officeholder_not_incumbent(self, db_conn: psycopg.Connection) -> None:
+    def test_open_ended_house_holder_remains_incumbent_until_vacancy_or_successor(
+        self, db_conn: psycopg.Connection
+    ) -> None:
         from domains.campaign_finance.ingest.federal_officeholder_loader import load_federal_house_officeholders
         from domains.civics.ingest import derive_incumbent_challenge
 
         ds = _make_data_source(db_conn)
-        # Sworn in 2021 → term ends 2023-01-03 → checking as_of 2024 should NOT be incumbent
+        # Diagnosis: a current House directory row is open-ended until a vacancy
+        # or same-seat successor load closes it; sworn_date alone is not an end date.
         rows = [_make_house_member_row(bioguide_id="INC-2", sworn_date="2021-01-03")]
         load_federal_house_officeholders(db_conn, rows, data_source_id=ds.id)
 
@@ -632,7 +672,52 @@ class TestFederalIncumbencyDerivation:
         assert person is not None
 
         result = derive_incumbent_challenge(db_conn, person[0], OFFICE_US_HOUSE, as_of=date(2024, 6, 1))
-        assert result is None
+        assert result == "I"
+
+    def test_house_successor_supersedes_prior_holder_for_same_district(self, db_conn: psycopg.Connection) -> None:
+        # Diagnosis: House rows are loaded as open-ended active terms, so the
+        # production contract must close the prior same-seat holder when a
+        # successor loads; otherwise both people derive as incumbents.
+        from domains.campaign_finance.ingest.federal_officeholder_loader import load_federal_house_officeholders
+        from domains.civics.ingest import derive_incumbent_challenge
+
+        ds = _make_data_source(db_conn)
+        initial_holder = _make_house_member_row(
+            bioguide_id="INC-SUCCESSOR-OLD",
+            first_name="Alex",
+            last_name="Former",
+            state="NC",
+            district="03",
+            sworn_date="2023-01-03",
+        )
+        successor = _make_house_member_row(
+            bioguide_id="INC-SUCCESSOR-NEW",
+            first_name="Blair",
+            last_name="Current",
+            state="NC",
+            district="03",
+            sworn_date="2025-01-03",
+        )
+
+        load_federal_house_officeholders(db_conn, [initial_holder], data_source_id=ds.id)
+        load_federal_house_officeholders(db_conn, [successor], data_source_id=ds.id)
+
+        rows = _house_officeholding_rows_by_bioguide(
+            db_conn,
+            ["INC-SUCCESSOR-OLD", "INC-SUCCESSOR-NEW"],
+        )
+        assert len(rows) == 2
+
+        current_row = rows["INC-SUCCESSOR-NEW"]
+        former_row = rows["INC-SUCCESSOR-OLD"]
+        current_division_id = current_row[5]
+        assert current_row[1:] == ("elected", date(2025, 1, 3), None, True, current_division_id)
+        assert former_row[1:] == ("former", date(2023, 1, 3), date(2025, 1, 3), False, current_division_id)
+
+        derive = derive_incumbent_challenge
+        assert derive(db_conn, former_row[0], OFFICE_US_HOUSE, current_division_id, as_of=date(2024, 11, 5)) == "I"
+        assert derive(db_conn, former_row[0], OFFICE_US_HOUSE, current_division_id, as_of=date(2026, 11, 3)) is None
+        assert derive(db_conn, current_row[0], OFFICE_US_HOUSE, current_division_id, as_of=date(2026, 11, 3)) == "I"
 
     def test_no_officeholding_returns_none(self, db_conn: psycopg.Connection) -> None:
         from domains.civics.ingest import derive_incumbent_challenge

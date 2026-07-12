@@ -1,8 +1,12 @@
 import {
-  fetchEntityDetailBundle,
-  fetchPersonCivicHistorySections
+  fetchEntityDetailBundle
 } from "$lib/server/api/entity-detail";
-import { fetchPersonCandidateFinanceSections } from "$lib/server/api/campaign-finance-detail";
+import {
+  fetchPersonCandidateFinanceSections,
+  fetchPersonContributionInsights,
+  fetchPersonTopDonors,
+  fetchPersonTopEmployers
+} from "$lib/server/api/campaign-finance-detail";
 import { withApiResponseErrorHandling } from "$lib/server/api/error";
 import type { PageServerLoad } from "./$types";
 
@@ -17,19 +21,29 @@ export const load: PageServerLoad = ({ params, locals }) =>
         entityType: "person",
         id: params.id
       });
-      const personCivicHistory = bundle.relationships.then((relationships) =>
-        fetchPersonCivicHistorySections(locals.api, relationships)
-      );
       const personFinanceSections = fetchPersonCandidateFinanceSections(locals.api, {
         personId: params.id
       });
-      guardUnhandledRejection(personCivicHistory);
+      const personContributionInsights = fetchPersonContributionInsights(locals.api, {
+        id: params.id
+      });
+      const personTopDonors = fetchPersonTopDonors(locals.api, {
+        id: params.id
+      });
+      const personTopEmployers = fetchPersonTopEmployers(locals.api, {
+        id: params.id
+      });
       guardUnhandledRejection(personFinanceSections);
+      guardUnhandledRejection(personContributionInsights);
+      guardUnhandledRejection(personTopDonors);
+      guardUnhandledRejection(personTopEmployers);
 
       return {
         ...bundle,
-        personCivicHistory,
-        personFinanceSections
+        personFinanceSections,
+        personContributionInsights,
+        personTopDonors,
+        personTopEmployers
       };
     },
     "Backend person detail request failed."

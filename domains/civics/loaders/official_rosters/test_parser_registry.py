@@ -16,8 +16,8 @@ from domains.civics.loaders.official_rosters.parsers import (
 )
 
 
-def test_parser_registry_keys_are_exactly_durham_and_nc_house() -> None:
-    assert set(PARSER_REGISTRY.keys()) == {"durham_city_council", "nc_house"}
+def test_parser_registry_includes_stage2_dispatch_keys() -> None:
+    assert {"durham_city_council", "nc_house"}.issubset(PARSER_REGISTRY)
 
 
 def test_parser_registry_values_resolve_to_existing_parser_functions() -> None:

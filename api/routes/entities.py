@@ -1,3 +1,7 @@
+"""
+Stub summary for jun04_3pm_4_congress_directory_ui/civibus_dev/api/routes/entities.py.
+"""
+
 from __future__ import annotations
 
 from uuid import UUID
@@ -7,6 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from api.deps import get_db
 from api.models import OrgResponse, PersonResponse, PersonSlugResult
+from api.portrait_policy import suppress_non_reusable_portrait_url
 from api.queries import fetch_entity_provenance, fetch_one_row, fetch_persons_by_slug
 
 router = APIRouter()
@@ -101,6 +106,10 @@ def _build_entity_response(
             response_key: entity_row.pop(column_name, None)
             for column_name, response_key in _PERSON_PORTRAIT_COLUMN_TO_RESPONSE_KEY.items()
         }
+        portrait_payload["source_image_url"] = suppress_non_reusable_portrait_url(
+            portrait_payload.get("source_image_url"),
+            portrait_payload.get("rights_status"),
+        )
         entity_row["portrait"] = portrait_payload if portrait_status is not None else None
     entity_row["sources"] = fetch_entity_provenance(conn, entity_type, entity_id)
     return response_model.model_validate(entity_row)

@@ -45,12 +45,12 @@ CivicsCandidacyStatusLiteral = Literal[
 ]
 
 DEFAULT_IMPLEMENTED_REGION_LIFECYCLE_PATH = (
-    Path(__file__).resolve().parents[3] / "docs" / "research" / "implemented-region-lifecycle.json"
+    Path(__file__).resolve().parents[3] / "docs" / "reference" / "research" / "implemented-region-lifecycle.json"
 )
 DEFAULT_IMPLEMENTED_REGION_LIFECYCLE_SUMMARY_PATH = (
-    Path(__file__).resolve().parents[3] / "docs" / "research" / "implemented-region-lifecycle-summary.md"
+    Path(__file__).resolve().parents[3] / "docs" / "reference" / "research" / "implemented-region-lifecycle-summary.md"
 )
-_LIFECYCLE_AUTHORITY_NOTE = "Authoritative source: `docs/research/implemented-region-lifecycle.json`."
+_LIFECYCLE_AUTHORITY_NOTE = "Authoritative source: `docs/reference/research/implemented-region-lifecycle.json`."
 
 
 class LifecycleBaseModel(BaseModel):

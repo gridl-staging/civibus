@@ -57,5 +57,5 @@ See `data_sources[].known_issues` in `config.yaml` and `data_semantics.md` for f
 1. **Refresh data**: Download new year files from `https://tracer.sos.colorado.gov/PublicSite/DataDownload.aspx`. Files are cumulative within each year — re-download the current year file to capture new filings.
 2. **Check contribution limits**: Colorado adjusts limits every 4 years by CPI. Current limits effective 2023-02-15. Next adjustment expected 2027. Check [SOS limits page](https://www.coloradosos.gov/pubs/elections/CampaignFinance/limits/contributions.html).
 3. **Verify field key**: The TRACER field key was last revised 07/2011. If CSV column headers change, update `field_mappings` in `config.yaml` and re-verify against `data_semantics.md`.
-4. **Check SOS terms**: Portal terms at https://www.coloradosos.gov/pubs/info_center/terms.html may change. See `docs/research/data-licensing.md` for current constraints.
+4. **Check SOS terms**: Portal terms at https://www.coloradosos.gov/pubs/info_center/terms.html may change. See `docs/reference/research/data-licensing.md` for current constraints.
 5. **Update `laws.last_verified`** and `last_verified_working` dates after each refresh.

@@ -1,5 +1,5 @@
 """
-Stub summary for /Users/stuart/parallel_development/civibus_dev/mar19_02_backend_hardening/civibus_dev/api/middleware/access.py.
+Stub summary for mar19_02_backend_hardening/civibus_dev/api/middleware/access.py.
 """
 
 from __future__ import annotations
@@ -103,12 +103,20 @@ def _enforce_fixed_window_rate_limit(
     request: Request,
     api_key: str,
 ) -> None:
+    _enforce_fixed_window_rate_limit_for_key(request=request, key=api_key)
+
+
+def _enforce_fixed_window_rate_limit_for_key(
+    request: Request,
+    key: str,
+) -> None:
+    """Enforce the shared fixed-window rate limit for a caller key."""
     max_requests, window_seconds, buckets, lock = _rate_limit_state_for_request(request)
     with lock:
         now_seconds = _current_epoch_seconds()
-        current_bucket = buckets.get(api_key)
+        current_bucket = buckets.get(key)
         if current_bucket is None or now_seconds - current_bucket.window_started_at >= window_seconds:
-            buckets[api_key] = _FixedWindowBucket(window_started_at=now_seconds, request_count=1)
+            buckets[key] = _FixedWindowBucket(window_started_at=now_seconds, request_count=1)
             return
         if current_bucket.request_count < max_requests:
             current_bucket.request_count += 1
@@ -123,6 +131,13 @@ def _enforce_fixed_window_rate_limit(
         detail=_RATE_LIMIT_EXCEEDED_DETAIL,
         headers={_RETRY_AFTER_HEADER: str(retry_after_seconds)},
     )
+
+
+def enforce_public_ip_rate_limit(request: Request) -> None:
+    """Rate-limit authless public routes by client host."""
+    if request.client is None:
+        return
+    _enforce_fixed_window_rate_limit_for_key(request=request, key=request.client.host)
 
 
 def _require_api_key_from_config(

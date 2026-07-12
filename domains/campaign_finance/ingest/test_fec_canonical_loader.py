@@ -519,7 +519,9 @@ class TestFederalOfficeholderDirectoryContract:
         assert row is not None
         assert row[0] == "elected"
         assert row[1] == date(2025, 1, 3)
-        assert row[2] == date(2027, 1, 3)
+        # Diagnosis: House directory rows are open-ended at load time; successor
+        # and vacancy owner paths close departed holders later.
+        assert row[2] is None
 
         vacant_person = db_conn.execute(
             "SELECT id FROM core.person WHERE canonical_name = 'VACANT'",

@@ -42,6 +42,27 @@ def test_run_strategy_fetch_attaches_active_portrait_metadata_when_bytes_pass_qu
     assert attempt.portrait_metadata.mime_type == "image/png"
     assert attempt.portrait_metadata.width_px == 400
     assert attempt.portrait_metadata.height_px == 400
+    assert attempt.portrait_metadata.rights_status == "unknown"
+
+
+def test_run_strategy_fetch_applies_source_supplied_portrait_rights_without_changing_binary_metadata() -> None:
+    record, attempt = run_strategy_fetch(
+        source_name="unitedstates/images",
+        missing_fields=("portrait_image_url",),
+        fetch_payload=lambda: {"portrait_image_url": "https://images.example.org/candidate.jpg"},
+        fetch_portrait_bytes=lambda _url: PNG_400X400,
+        portrait_rights_status="public_domain",
+    )
+
+    assert record.portrait_image_url == "https://images.example.org/candidate.jpg"
+    assert attempt.status == "succeeded"
+    assert attempt.portrait_status == "active"
+    assert attempt.portrait_metadata is not None
+    assert attempt.portrait_metadata.image_hash == sha256(PNG_400X400).hexdigest()
+    assert attempt.portrait_metadata.mime_type == "image/png"
+    assert attempt.portrait_metadata.width_px == 400
+    assert attempt.portrait_metadata.height_px == 400
+    assert attempt.portrait_metadata.rights_status == "public_domain"
 
 
 def test_run_strategy_fetch_marks_not_found_only_for_unfetchable_portrait_url() -> None:

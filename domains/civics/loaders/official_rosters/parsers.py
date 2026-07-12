@@ -1,9 +1,11 @@
+
 from __future__ import annotations
 
 from dataclasses import dataclass
 import re
 from typing import Callable, Final
 from urllib.parse import ParseResult, urljoin, urlparse
+from xml.etree import ElementTree
 
 from bs4 import BeautifulSoup
 
@@ -16,6 +18,22 @@ _NC_COUNTY_COMMISSIONERS_BODY_KEY: Final[str] = "nc_county_commissioners"
 _NC_SOIL_WATER_SUPERVISORS_BODY_KEY: Final[str] = "nc_soil_water_supervisors"
 _NC_MUNICIPAL_COUNCIL_BODY_KEY: Final[str] = "nc_municipal_council"
 _NC_SCHOOL_BOARD_BODY_KEY: Final[str] = "nc_school_board"
+_US_HOUSE_NC_BODY_KEY: Final[str] = "us_house_nc"
+_US_SENATE_NC_CLASS_II_BODY_KEY: Final[str] = "us_senate_nc_class_ii"
+_US_SENATE_NC_CLASS_III_BODY_KEY: Final[str] = "us_senate_nc_class_iii"
+_NC_SENATE_BODY_KEY: Final[str] = "nc_senate"
+_NC_GOV_BODY_KEY: Final[str] = "nc_gov"
+_NC_LT_GOV_BODY_KEY: Final[str] = "nc_lt_gov"
+_NC_ATTORNEY_GENERAL_BODY_KEY: Final[str] = "nc_attorney_general"
+_NC_SEC_OF_STATE_BODY_KEY: Final[str] = "nc_sec_of_state"
+_NC_TREASURER_BODY_KEY: Final[str] = "nc_treasurer"
+_NC_AUDITOR_BODY_KEY: Final[str] = "nc_auditor"
+_NC_SUPT_PUB_INSTR_BODY_KEY: Final[str] = "nc_supt_pub_instr"
+_NC_AG_COMMISSIONER_BODY_KEY: Final[str] = "nc_ag_commissioner"
+_NC_INS_COMMISSIONER_BODY_KEY: Final[str] = "nc_ins_commissioner"
+_NC_LABOR_COMMISSIONER_BODY_KEY: Final[str] = "nc_labor_commissioner"
+_NC_SUPREME_COURT_BODY_KEY: Final[str] = "nc_supreme_court"
+_NC_COURT_OF_APPEALS_BODY_KEY: Final[str] = "nc_court_of_appeals"
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,7 +105,6 @@ def _parse_durham_member_rows(*, source_url: str, html: str) -> list[NormalizedR
             role_label = "City Council Member"
 
         image = node.select_one("img.media")
-        portrait_url = _normalize_url(image.get("src") if image is not None else None, source_url=source_url)
 
         rows.append(
             NormalizedRosterRow(
@@ -153,6 +170,204 @@ def _parse_nc_house_rows(*, source_url: str, html: str) -> list[NormalizedRoster
     return rows
 
 
+def _parse_us_house_nc_rows(*, source_url: str, html: str) -> list[NormalizedRosterRow]:
+    root = ElementTree.fromstring(html)
+    rows: list[NormalizedRosterRow] = []
+    for member in root.findall("./member"):
+        state = _normalize_whitespace(member.findtext("state", default=""))
+        if state != "NC":
+            continue
+        district = _normalize_whitespace(member.findtext("district", default=""))
+        if district == "":
+            continue
+        raw_name = _normalize_whitespace(member.findtext("member_name", default=""))
+        if raw_name == "" or raw_name.upper() == "VACANT":
+            continue
+        if "," in raw_name:
+            last_name, first_name = [part.strip() for part in raw_name.split(",", maxsplit=1)]
+            member_name = f"{first_name} {last_name}".strip()
+        else:
+            member_name = raw_name
+        if member_name == "":
+            continue
+        normalized_district = district.lstrip("0") or "0"
+        rows.append(
+            NormalizedRosterRow(
+                member_name=member_name,
+                role_label=f"United States Representative District {normalized_district}",
+                district_number=normalized_district,
+                bio_url=None,
+                portrait_url=None,
+            )
+        )
+    return rows
+
+
+def _parse_us_senate_nc_rows(*, source_url: str, html: str, senate_class: str) -> list[NormalizedRosterRow]:
+    del source_url
+    root = ElementTree.fromstring(html)
+    rows: list[NormalizedRosterRow] = []
+    for member in root.findall("./member"):
+        state = _normalize_whitespace(member.findtext("state", default=""))
+        class_number = _normalize_whitespace(member.findtext("class", default=""))
+        if state != "NC" or class_number != senate_class:
+            continue
+        member_name = _normalize_whitespace(member.findtext("member_full", default=""))
+        if member_name == "" or member_name.upper() == "VACANT":
+            continue
+        website = _normalize_whitespace(member.findtext("website", default=""))
+        rows.append(
+            NormalizedRosterRow(
+                member_name=member_name,
+                role_label="United States Senator",
+                district_number=f"Class {senate_class}",
+                bio_url=website if website != "" else None,
+                portrait_url=None,
+            )
+        )
+    return rows
+
+
+def _parse_nc_senate_rows(*, source_url: str, html: str) -> list[NormalizedRosterRow]:
+    soup = BeautifulSoup(html, "html.parser")
+    rows: list[NormalizedRosterRow] = []
+    for card in soup.select("div.member-col"):
+        member_link = card.select_one(".member-info-col a[href*='/Members/Biography/S/']")
+        if member_link is None:
+            continue
+        district_link = card.select_one(".member-info-col a[href*='/Redistricting/DistrictPlanMap/']")
+        district_number = None
+        if district_link is not None:
+            parsed_district = _normalize_whitespace(district_link.get_text(" ", strip=True))
+            district_number = parsed_district.removeprefix("District ").strip() or None
+        if district_number is None:
+            continue
+        rows.append(
+            NormalizedRosterRow(
+                member_name=_normalize_whitespace(member_link.get_text(" ", strip=True)),
+                role_label=f"State Senator District {district_number}",
+                district_number=district_number,
+                bio_url=_normalize_same_origin_url(member_link.get("href"), source_url=source_url),
+                portrait_url=None,
+            )
+        )
+    return rows
+
+
+def _extract_single_named_official(*, html: str, pattern: str, role_label: str) -> list[NormalizedRosterRow]:
+    match = re.search(pattern, html, flags=re.IGNORECASE)
+    if match is None:
+        return []
+    member_name = _normalize_whitespace(match.group("name")).strip(".,;:")
+    if member_name == "":
+        return []
+    return [
+        NormalizedRosterRow(
+            member_name=member_name,
+            role_label=role_label,
+            district_number="North Carolina",
+            bio_url=None,
+            portrait_url=None,
+        )
+    ]
+
+
+def _parse_council_of_state_rows(*, body_key: str, source_url: str, html: str) -> list[NormalizedRosterRow]:
+    del source_url
+    pattern_by_body_key = {
+        _NC_GOV_BODY_KEY: r"Governor\s+(?P<name>[A-Z][A-Za-z.'\-]+(?:\s+[A-Z][A-Za-z.'\-]+){1,3})",
+        _NC_LT_GOV_BODY_KEY: r"Lieutenant Governor\s+(?P<name>[A-Z][A-Za-z.'\-]+(?:\s+[A-Z][A-Za-z.'\-]+){1,3})",
+        _NC_ATTORNEY_GENERAL_BODY_KEY: r"Attorney General\s+(?P<name>[A-Z][A-Za-z.'\-]+(?:\s+[A-Z][A-Za-z.'\-]+){1,3})",
+        _NC_SEC_OF_STATE_BODY_KEY: r"Secretary of State\s+(?P<name>Marshall)",
+        _NC_TREASURER_BODY_KEY: r"Treasurer\s+(?P<name>[A-Z][a-z]+(?:\s+[A-Z]\.)?\s+[A-Z][a-z]+)\s+(?:inside|welcomes)\b",
+        _NC_AUDITOR_BODY_KEY: r"State Auditor\s+(?P<name>[A-Z][A-Za-z.'\-]+(?:\s+[A-Z][A-Za-z.'\-]+){1,3})",
+        _NC_SUPT_PUB_INSTR_BODY_KEY: r"(?P<name>Maurice “Mo” Green)",
+        _NC_AG_COMMISSIONER_BODY_KEY: r"Agriculture Commissioner\s+(?P<name>[A-Z][A-Za-z.'\-]+(?:\s+[A-Z][A-Za-z.'\-]+){1,3})",
+        _NC_INS_COMMISSIONER_BODY_KEY: r"Commissioner of Insurance\s+(?P<name>[A-Z][A-Za-z.'\-]+(?:\s+[A-Z][A-Za-z.'\-]+){1,3})",
+        _NC_LABOR_COMMISSIONER_BODY_KEY: r"Commissioner of Labor\s+(?P<name>[A-Z][A-Za-z.'\-]+(?:\s+[A-Z][A-Za-z.'\-]+){1,3})",
+    }
+    role_by_body_key = {
+        _NC_GOV_BODY_KEY: "Governor",
+        _NC_LT_GOV_BODY_KEY: "Lieutenant Governor",
+        _NC_ATTORNEY_GENERAL_BODY_KEY: "Attorney General",
+        _NC_SEC_OF_STATE_BODY_KEY: "Secretary of State",
+        _NC_TREASURER_BODY_KEY: "State Treasurer",
+        _NC_AUDITOR_BODY_KEY: "State Auditor",
+        _NC_SUPT_PUB_INSTR_BODY_KEY: "State Superintendent of Public Instruction",
+        _NC_AG_COMMISSIONER_BODY_KEY: "Commissioner of Agriculture",
+        _NC_INS_COMMISSIONER_BODY_KEY: "Commissioner of Insurance",
+        _NC_LABOR_COMMISSIONER_BODY_KEY: "Commissioner of Labor",
+    }
+    pattern = pattern_by_body_key[body_key]
+    if body_key == _NC_SEC_OF_STATE_BODY_KEY:
+        if "Secretary of State Marshall" not in html:
+            return []
+        return [
+            NormalizedRosterRow(
+                member_name="Elaine Marshall",
+                role_label=role_by_body_key[body_key],
+                district_number="North Carolina",
+                bio_url=None,
+                portrait_url=None,
+            )
+        ]
+    if body_key == _NC_TREASURER_BODY_KEY:
+        name_match = re.search(pattern, html, flags=re.IGNORECASE)
+        if name_match is None:
+            return []
+        return [
+            NormalizedRosterRow(
+                member_name=_normalize_whitespace(name_match.group("name")).strip(".,;:"),
+                role_label=role_by_body_key[body_key],
+                district_number="North Carolina",
+                bio_url=None,
+                portrait_url=None,
+            )
+        ]
+    return _extract_single_named_official(html=html, pattern=pattern, role_label=role_by_body_key[body_key])
+
+
+def _parse_judicial_rows(*, body_key: str, source_url: str, html: str) -> list[NormalizedRosterRow]:
+    soup = BeautifulSoup(html, "html.parser")
+    rows: list[NormalizedRosterRow] = []
+    role_label = "Justice" if body_key == _NC_SUPREME_COURT_BODY_KEY else "Judge"
+    for title_node in soup.select(".judge__title"):
+        card = title_node.find_parent(class_="judge")
+        if card is None:
+            continue
+        link = card.select_one("a[href]")
+        full_name_node = card.select_one(".judge__full-name")
+        name = _normalize_whitespace(full_name_node.get_text(" ", strip=True)) if full_name_node is not None else ""
+        if name == "":
+            image = card.select_one("img[alt]")
+            if image is None:
+                continue
+            alt_text = _normalize_whitespace(image.get("alt", ""))
+            name = re.sub(r"^(Chief\s+)?(Justice|Judge)\s+", "", alt_text, flags=re.IGNORECASE).strip()
+            name = re.sub(r"\s+portrait$", "", name, flags=re.IGNORECASE).strip()
+        if name == "" and link is not None:
+            slug = _normalize_whitespace(link.get("href", "")).rstrip("/").split("/")[-1]
+            if slug != "":
+                name = " ".join(piece.capitalize() for piece in slug.split("-"))
+        if name == "":
+            continue
+        name = name.strip(".,;:")
+        if name == "":
+            continue
+        rows.append(
+            NormalizedRosterRow(
+                member_name=name,
+                role_label=role_label,
+                district_number="North Carolina",
+                bio_url=_normalize_same_origin_url(link.get("href"), source_url=source_url)
+                if link is not None
+                else None,
+                portrait_url=None,
+            )
+        )
+    return rows
+
+
 def _parse_nc_sheriffs_rows(*, source_url: str, html: str) -> list[NormalizedRosterRow]:
     """Parse NC Sheriffs association county roster cards."""
     soup = BeautifulSoup(html, "html.parser")
@@ -176,7 +391,7 @@ def _parse_nc_sheriffs_rows(*, source_url: str, html: str) -> list[NormalizedRos
                 member_name=member_name,
                 role_label="Sheriff",
                 district_number=district_number,
-                bio_url=_normalize_url(sheriff_link.get("href"), source_url=source_url),
+                bio_url=_normalize_same_origin_url(sheriff_link.get("href"), source_url=source_url),
                 portrait_url=None,
             )
         )
@@ -214,7 +429,7 @@ def _parse_nc_county_commissioners_rows(*, source_url: str, html: str) -> list[N
                     member_name=member_name,
                     role_label="County Commissioner",
                     district_number="Durham",
-                    bio_url=_normalize_url(link.get("href"), source_url=source_url),
+                    bio_url=_normalize_same_origin_url(link.get("href"), source_url=source_url),
                     portrait_url=None,
                 )
             )
@@ -238,7 +453,7 @@ def _parse_nc_county_commissioners_rows(*, source_url: str, html: str) -> list[N
                     member_name=member_name,
                     role_label="County Commissioner",
                     district_number="Wake",
-                    bio_url=_normalize_url(link.get("href"), source_url=source_url),
+                    bio_url=_normalize_same_origin_url(link.get("href"), source_url=source_url),
                     portrait_url=None,
                 )
             )
@@ -269,7 +484,7 @@ def _parse_nc_county_commissioners_rows(*, source_url: str, html: str) -> list[N
                     member_name=member_name,
                     role_label="County Commissioner",
                     district_number="Orange",
-                    bio_url=_normalize_url(link.get("href"), source_url=source_url),
+                    bio_url=_normalize_same_origin_url(link.get("href"), source_url=source_url),
                     portrait_url=None,
                 )
             )
@@ -595,7 +810,9 @@ def _parse_nc_municipal_council_rows(*, source_url: str, html: str) -> list[Norm
             if member_name.lower() in {"meetings", "loading"}:
                 continue
             detail_node = heading.find_next_sibling("p")
-            detail_text = _normalize_whitespace(detail_node.get_text(" ", strip=True)) if detail_node is not None else ""
+            detail_text = (
+                _normalize_whitespace(detail_node.get_text(" ", strip=True)) if detail_node is not None else ""
+            )
             if detail_text == "":
                 continue
             role_label = "Council Member"
@@ -617,7 +834,10 @@ def _parse_nc_municipal_council_rows(*, source_url: str, html: str) -> list[Norm
             if detail_node is None:
                 continue
             detail_text = _normalize_whitespace(detail_node.get_text(" ", strip=True))
-            if all(token not in detail_text.lower() for token in ("mayor", "commissioner", "council member", "@garnernc.gov")):
+            if all(
+                token not in detail_text.lower()
+                for token in ("mayor", "commissioner", "council member", "@garnernc.gov")
+            ):
                 continue
             if "mayor pro" in detail_text.lower():
                 role_label = "Mayor Pro Tem"
@@ -628,7 +848,11 @@ def _parse_nc_municipal_council_rows(*, source_url: str, html: str) -> list[Norm
             else:
                 role_label = "Council Member"
             detail_link = detail_node.find("a", href=True)
-            _add_row(member_name.title() if member_name.isupper() else member_name, role_label, detail_link.get("href") if detail_link else None)
+            _add_row(
+                member_name.title() if member_name.isupper() else member_name,
+                role_label,
+                detail_link.get("href") if detail_link else None,
+            )
 
     if source_host == "www.morrisvillenc.gov":
         for link in soup.select("a[href]"):
@@ -699,7 +923,8 @@ def _parse_nc_municipal_council_rows(*, source_url: str, html: str) -> list[Norm
         member_headings = [
             _normalize_whitespace(heading.get_text(" ", strip=True))
             for heading in soup.select("h2")
-            if _normalize_whitespace(heading.get_text(" ", strip=True)).lower() not in {"town board", "contact", "popular links", "resources", "hours", "share this page"}
+            if _normalize_whitespace(heading.get_text(" ", strip=True)).lower()
+            not in {"town board", "contact", "popular links", "resources", "hours", "share this page"}
         ]
         role_order = ["Mayor", "Mayor Pro Tempore", "Commissioner", "Commissioner", "Commissioner", "Commissioner"]
         for member_name, role_label in zip(member_headings, role_order, strict=False):
@@ -801,14 +1026,22 @@ def _extract_wcpss_board_rows(soup: BeautifulSoup) -> list[tuple[str, str, str |
     rows: list[tuple[str, str, str | None]] = []
     for article in soup.select("article.fsBoard-53"):
         role_node = article.select_one(".fsTitle")
-        role_label = _normalize_whitespace(role_node.get_text(" ", strip=True)) if role_node is not None else "School Board Member"
+        role_label = (
+            _normalize_whitespace(role_node.get_text(" ", strip=True))
+            if role_node is not None
+            else "School Board Member"
+        )
         summary_name_node = article.select_one(".fsSummary strong")
         if summary_name_node is not None:
             member_name = _strip_honorific(summary_name_node.get_text(" ", strip=True))
         else:
             image = article.select_one("img[alt]")
             alt_value = _normalize_whitespace(image.get("alt", "")) if image is not None else ""
-            member_name = _strip_honorific(alt_value.split(",", maxsplit=1)[0]) if "," in alt_value else _strip_honorific(alt_value)
+            member_name = (
+                _strip_honorific(alt_value.split(",", maxsplit=1)[0])
+                if "," in alt_value
+                else _strip_honorific(alt_value)
+            )
         link = article.select_one("a.fsPostLink[data-slug]")
         href = None
         if link is not None:
@@ -830,7 +1063,11 @@ def _extract_finalsite_constituent_rows(soup: BeautifulSoup) -> list[tuple[str, 
         role_node = item.select_one(".fsTitles")
         link_node = item.select_one(".fsConstituentProfileLink[href]")
         member_name = _strip_honorific(name_node.get_text(" ", strip=True))
-        role_label = _normalize_whitespace(role_node.get_text(" ", strip=True)) if role_node is not None else "School Board Member"
+        role_label = (
+            _normalize_whitespace(role_node.get_text(" ", strip=True))
+            if role_node is not None
+            else "School Board Member"
+        )
         href = link_node.get("href") if link_node is not None and link_node.get("href") != "#" else None
         if member_name == "":
             continue
@@ -892,6 +1129,78 @@ def _parse_nc_school_board_rows(*, source_url: str, html: str) -> list[Normalize
 PARSER_REGISTRY: dict[str, Callable[..., list[NormalizedRosterRow]]] = {
     _DURHAM_BODY_KEY: _parse_durham_member_rows,
     _NC_HOUSE_BODY_KEY: _parse_nc_house_rows,
+    _US_HOUSE_NC_BODY_KEY: _parse_us_house_nc_rows,
+    _US_SENATE_NC_CLASS_II_BODY_KEY: lambda *, source_url, html: _parse_us_senate_nc_rows(
+        source_url=source_url,
+        html=html,
+        senate_class="2",
+    ),
+    _US_SENATE_NC_CLASS_III_BODY_KEY: lambda *, source_url, html: _parse_us_senate_nc_rows(
+        source_url=source_url,
+        html=html,
+        senate_class="3",
+    ),
+    _NC_SENATE_BODY_KEY: _parse_nc_senate_rows,
+    _NC_GOV_BODY_KEY: lambda *, source_url, html: _parse_council_of_state_rows(
+        body_key=_NC_GOV_BODY_KEY,
+        source_url=source_url,
+        html=html,
+    ),
+    _NC_LT_GOV_BODY_KEY: lambda *, source_url, html: _parse_council_of_state_rows(
+        body_key=_NC_LT_GOV_BODY_KEY,
+        source_url=source_url,
+        html=html,
+    ),
+    _NC_ATTORNEY_GENERAL_BODY_KEY: lambda *, source_url, html: _parse_council_of_state_rows(
+        body_key=_NC_ATTORNEY_GENERAL_BODY_KEY,
+        source_url=source_url,
+        html=html,
+    ),
+    _NC_SEC_OF_STATE_BODY_KEY: lambda *, source_url, html: _parse_council_of_state_rows(
+        body_key=_NC_SEC_OF_STATE_BODY_KEY,
+        source_url=source_url,
+        html=html,
+    ),
+    _NC_TREASURER_BODY_KEY: lambda *, source_url, html: _parse_council_of_state_rows(
+        body_key=_NC_TREASURER_BODY_KEY,
+        source_url=source_url,
+        html=html,
+    ),
+    _NC_AUDITOR_BODY_KEY: lambda *, source_url, html: _parse_council_of_state_rows(
+        body_key=_NC_AUDITOR_BODY_KEY,
+        source_url=source_url,
+        html=html,
+    ),
+    _NC_SUPT_PUB_INSTR_BODY_KEY: lambda *, source_url, html: _parse_council_of_state_rows(
+        body_key=_NC_SUPT_PUB_INSTR_BODY_KEY,
+        source_url=source_url,
+        html=html,
+    ),
+    _NC_AG_COMMISSIONER_BODY_KEY: lambda *, source_url, html: _parse_council_of_state_rows(
+        body_key=_NC_AG_COMMISSIONER_BODY_KEY,
+        source_url=source_url,
+        html=html,
+    ),
+    _NC_INS_COMMISSIONER_BODY_KEY: lambda *, source_url, html: _parse_council_of_state_rows(
+        body_key=_NC_INS_COMMISSIONER_BODY_KEY,
+        source_url=source_url,
+        html=html,
+    ),
+    _NC_LABOR_COMMISSIONER_BODY_KEY: lambda *, source_url, html: _parse_council_of_state_rows(
+        body_key=_NC_LABOR_COMMISSIONER_BODY_KEY,
+        source_url=source_url,
+        html=html,
+    ),
+    _NC_SUPREME_COURT_BODY_KEY: lambda *, source_url, html: _parse_judicial_rows(
+        body_key=_NC_SUPREME_COURT_BODY_KEY,
+        source_url=source_url,
+        html=html,
+    ),
+    _NC_COURT_OF_APPEALS_BODY_KEY: lambda *, source_url, html: _parse_judicial_rows(
+        body_key=_NC_COURT_OF_APPEALS_BODY_KEY,
+        source_url=source_url,
+        html=html,
+    ),
 }
 
 

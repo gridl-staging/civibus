@@ -1,4 +1,4 @@
-import { defineConfig } from 'playwright/test';
+import { defineConfig, devices } from 'playwright/test';
 import { resolveSmokeApiPort } from "./src/lib/server/api/smoke-port.ts";
 
 const API_PORT = resolveSmokeApiPort(process.env);
@@ -26,6 +26,14 @@ export default defineConfig({
   testDir: './tests/smoke',
   timeout: 30_000,
   fullyParallel: true,
+  projects: [
+    {
+      name: "chromium",
+      use: {
+        ...devices["Desktop Chrome"]
+      }
+    }
+  ],
   use: {
     baseURL
   },

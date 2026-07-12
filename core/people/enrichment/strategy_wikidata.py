@@ -1,4 +1,6 @@
-
+"""
+Stub summary for jun04_3pm_3_member_photo_bio_enrichment/civibus_dev/core/people/enrichment/strategy_wikidata.py.
+"""
 
 from __future__ import annotations
 
@@ -18,15 +20,18 @@ _WIKIDATA_SPARQL_URL = "https://query.wikidata.org/sparql"
 
 
 class WikidataEnrichmentStrategy:
+
     source_name = "wikidata"
 
     def __init__(
         self,
         *,
         fetcher: Callable[[CandidateEnrichmentTarget], JsonLikeMapping | None] | None = None,
+        require_wikidata_entity_id: bool = False,
         timeout_seconds: float = 15.0,
         portrait_fetcher: Callable[[str], bytes | None] | None = None,
     ) -> None:
+        self._require_wikidata_entity_id = require_wikidata_entity_id
         self._fetcher = fetcher or (lambda target: self._fetch_from_http(target, timeout_seconds=timeout_seconds))
         self._portrait_fetcher = portrait_fetcher or (
             lambda url: fetch_bytes_via_http(url, timeout_seconds=timeout_seconds)
@@ -37,6 +42,16 @@ class WikidataEnrichmentStrategy:
         target: CandidateEnrichmentTarget,
         missing_fields: tuple[str, ...],
     ) -> tuple[CandidateEnrichmentRecord, EnrichmentAttempt]:
+        if self._require_wikidata_entity_id and _normalize_wikidata_entity_id(target.wikidata_entity_id) is None:
+            return (
+                CandidateEnrichmentRecord(),
+                EnrichmentAttempt.skipped(
+                    source=self.source_name,
+                    requested_fields=missing_fields,
+                    skip_reason="missing_valid_wikidata_entity_id",
+                ),
+            )
+
         return run_strategy_fetch(
             source_name=self.source_name,
             missing_fields=missing_fields,
@@ -50,7 +65,7 @@ class WikidataEnrichmentStrategy:
             headers={**DEFAULT_HTTP_HEADERS, "Accept": "application/sparql-results+json"},
             params={
                 "format": "json",
-                "query": _build_query(target.canonical_name),
+                "query": _build_query(target.canonical_name, wikidata_entity_id=target.wikidata_entity_id),
             },
             timeout=timeout_seconds,
             follow_redirects=True,
@@ -66,8 +81,8 @@ class WikidataEnrichmentStrategy:
         return _payload_from_bindings(bindings)
 
 
-def _build_query(canonical_name: str) -> str:
-    escaped_name = canonical_name.replace("\\", "\\\\").replace('"', '\\"')
+def _build_query(canonical_name: str, wikidata_entity_id: str | None = None) -> str:
+    item_selector = _build_item_selector(canonical_name, wikidata_entity_id=wikidata_entity_id)
     return f"""
 SELECT
   ?item
@@ -78,8 +93,7 @@ SELECT
   (GROUP_CONCAT(DISTINCT ?occupationLabel; separator="; ") AS ?occupations)
   (GROUP_CONCAT(DISTINCT ?educationLabel; separator="; ") AS ?educations)
 WHERE {{
-  VALUES ?label {{ "{escaped_name}"@en }}
-  ?item rdfs:label ?label .
+  {item_selector}
   OPTIONAL {{ ?item wdt:P18 ?image . }}
   OPTIONAL {{ ?item wdt:P856 ?website . }}
   OPTIONAL {{
@@ -101,6 +115,29 @@ WHERE {{
 GROUP BY ?item ?itemLabel ?image ?article ?website
 LIMIT 10
 """.strip()
+
+
+def _build_item_selector(canonical_name: str, *, wikidata_entity_id: str | None) -> str:
+    normalized_entity_id = _normalize_wikidata_entity_id(wikidata_entity_id)
+    if normalized_entity_id is not None:
+        return f"BIND(wd:{normalized_entity_id} AS ?item)"
+
+    escaped_name = canonical_name.replace("\\", "\\\\").replace('"', '\\"')
+    return f'VALUES ?label {{ "{escaped_name}"@en }}\n  ?item rdfs:label ?label .'
+
+
+def _normalize_wikidata_entity_id(wikidata_entity_id: str | None) -> str | None:
+    if not isinstance(wikidata_entity_id, str):
+        return None
+
+    normalized_entity_id = wikidata_entity_id.strip()
+    if len(normalized_entity_id) < 2:
+        return None
+    if normalized_entity_id[0].upper() != "Q":
+        return None
+    if not normalized_entity_id[1:].isdecimal():
+        return None
+    return f"Q{normalized_entity_id[1:]}"
 
 
 def _payload_from_bindings(bindings: list[object]) -> JsonLikeMapping | None:

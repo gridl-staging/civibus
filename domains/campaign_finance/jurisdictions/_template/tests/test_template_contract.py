@@ -12,7 +12,7 @@ CONFIG_PATH = TEMPLATE_DIR / "config.yaml"
 README_PATH = TEMPLATE_DIR / "README.md"
 LAWS_PATH = TEMPLATE_DIR / "laws.md"
 SEMANTICS_PATH = TEMPLATE_DIR / "data_semantics.md"
-SPEC_PATH = REPO_ROOT / "docs" / "specs" / "jurisdiction-config.md"
+SPEC_PATH = REPO_ROOT / "docs" / "reference" / "specs" / "jurisdiction-config.md"
 
 
 def load_spec_example_text() -> str:

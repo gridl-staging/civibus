@@ -180,10 +180,6 @@ class Candidacy(CivicBaseModel):
     status: str | None = None
     incumbent_challenge: str | None = None
     candidate_number: str | None = None
-    name_on_ballot: str | None = None
-    is_unexpired_term: bool = False
-    raw_fields: dict[str, object] = Field(default_factory=dict)
-    committee_id: UUID | None = None
     source_record_id: UUID | None = None
 
     @field_validator("name_on_ballot")

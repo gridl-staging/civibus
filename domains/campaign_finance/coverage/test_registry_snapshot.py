@@ -13,7 +13,7 @@ from domains.campaign_finance.coverage.seed_registry import build_seed_registry
 
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[3]
-_REGISTRY_PATH = _PROJECT_ROOT / "docs" / "research" / "coverage-registry.json"
+_REGISTRY_PATH = _PROJECT_ROOT / "docs" / "reference" / "research" / "coverage-registry.json"
 _EXPECTED_JURISDICTION_CODES = {
     "FEC",
     "AL",
@@ -116,7 +116,8 @@ def test_stage3_probe_artifact_keeps_corrected_arizona_entrypoint() -> None:
     artifact_path = (
         Path(__file__).resolve().parents[3]
         / "docs"
-        / "research"
+    / "reference"
+    / "research"
         / "artifacts"
         / "stage3_state_portal_probe_2026-03-25.json"
     )
@@ -318,7 +319,7 @@ def test_stage5_parent_reclassifications_propagate_to_covered_municipalities() -
 
 # Cities with browser-verified materially separate filing systems may be
 # independent_target even when parent has covers_sub_jurisdictions=True.
-# See docs/research/coverage-audit-contract.md §4 and docs/research/city-portal-research.md.
+# See docs/reference/research/coverage-audit-contract.md §4 and docs/reference/research/city-portal-research.md.
 _BROWSER_VERIFIED_INDEPENDENT_CITIES = frozenset(
     {
         "NY_NEW_YORK",
@@ -441,7 +442,8 @@ def test_stage5_census_artifact_excludes_non_incorporated_cdps() -> None:
     artifact_path = (
         Path(__file__).resolve().parents[3]
         / "docs"
-        / "research"
+    / "reference"
+    / "research"
         / "artifacts"
         / "stage5_sub_ip_est2024_pop_top100_2026-03-25.json"
     )
@@ -461,13 +463,13 @@ def test_render_outputs_match_committed_markdown_artifacts() -> None:
     )
 
     assert publication.summary_markdown == (
-        _PROJECT_ROOT / "docs" / "research" / "coverage-registry-summary.md"
+        _PROJECT_ROOT / "docs" / "reference" / "research" / "coverage-registry-summary.md"
     ).read_text(encoding="utf-8")
     assert publication.queue_markdown == (
-        _PROJECT_ROOT / "docs" / "research" / "coverage-build-priority-queue.md"
+        _PROJECT_ROOT / "docs" / "reference" / "research" / "coverage-build-priority-queue.md"
     ).read_text(encoding="utf-8")
     assert publication.matrix_markdown == (
-        _PROJECT_ROOT / "docs" / "research" / "2026-launch-support-matrix.md"
+        _PROJECT_ROOT / "docs" / "reference" / "research" / "2026-launch-support-matrix.md"
     ).read_text(encoding="utf-8")
 
 
@@ -479,7 +481,7 @@ def test_rendered_queue_and_matrix_headers_reference_registry_authority() -> Non
         implemented_jurisdiction_codes=derive_implemented_jurisdiction_codes(),
     )
 
-    expected_authority_note = "Authoritative source: `docs/research/coverage-registry.json`."
+    expected_authority_note = "Authoritative source: `docs/reference/research/coverage-registry.json`."
     assert expected_authority_note in publication.summary_markdown
     assert expected_authority_note in publication.queue_markdown
     assert expected_authority_note in publication.matrix_markdown

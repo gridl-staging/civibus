@@ -95,4 +95,88 @@ describe("/election/[date] +page.server load", () => {
       body: { detail: "Election date not found" }
     });
   });
+
+  it("preserves backend plain-text error payloads for election date lookups", async () => {
+    fetchElectionDateAggregateMock.mockRejectedValueOnce(
+      new ApiResponseError(503, "Election service unavailable")
+    );
+
+    const { event } = createLoadEvent();
+
+    await expect(load(event)).rejects.toMatchObject({
+      status: 503,
+      body: { message: "Election service unavailable" }
+    });
+  });
+
+  it("forwards malformed date params unchanged so backend validation remains authoritative", async () => {
+    const malformedDate = "2026_11_03";
+    fetchElectionDateAggregateMock.mockRejectedValueOnce(
+      new ApiResponseError(422, {
+        detail: [{ loc: ["path", "date"], msg: "Input should be a valid date string" }]
+      })
+    );
+
+    const { event } = createLoadEvent(malformedDate);
+
+    await expect(load(event)).rejects.toMatchObject({
+      status: 422,
+      body: { detail: [{ loc: ["path", "date"], msg: "Input should be a valid date string" }] }
+    });
+    expect(fetchElectionDateAggregateMock).toHaveBeenCalledWith(event.locals.api, {
+      date: malformedDate
+    });
+  });
+
+  it("passes through an empty election aggregate without coercing zero-count fields", async () => {
+    const emptyAggregate: ElectionDateAggregateResponse = {
+      date: ELECTION_DATE,
+      total_contests: 0,
+      total_candidacies: 0,
+      contests: []
+    };
+    fetchElectionDateAggregateMock.mockResolvedValueOnce(emptyAggregate);
+
+    const { event } = createLoadEvent();
+    const data = (await load(event)) as ElectionDateAggregateResponse;
+
+    expect(data).toBe(emptyAggregate);
+    expect(data.contests).toEqual([]);
+    expect(data.total_contests).toBe(0);
+    expect(data.total_candidacies).toBe(0);
+    expect(data.date).toBe(ELECTION_DATE);
+  });
+
+  it("passes contest payloads through unchanged including unrecognized result_status and null winning_person_name", async () => {
+    const malformedAggregate = {
+      date: ELECTION_DATE,
+      total_contests: 1,
+      total_candidacies: 0,
+      contests: [
+        {
+          contest_id: CONTEST_ID,
+          office_id: OFFICE_ID,
+          name: "Governor 2026 General Election",
+          election_type: "general",
+          office_name: "Governor",
+          office_level: "state",
+          state: "NC",
+          jurisdiction_id: null,
+          electoral_division_id: ELECTORAL_DIVISION_ID,
+          candidate_count: 0,
+          result_status: "audit_in_progress",
+          winning_person_name: null
+        }
+      ]
+    } as unknown as ElectionDateAggregateResponse;
+    fetchElectionDateAggregateMock.mockResolvedValueOnce(malformedAggregate);
+
+    const { event } = createLoadEvent();
+    const data = (await load(event)) as ElectionDateAggregateResponse;
+
+    expect(data).toBe(malformedAggregate);
+    expect(data.contests[0]?.result_status).toBe("audit_in_progress");
+    expect(data.contests[0]?.candidate_count).toBe(0);
+    expect(data.contests[0]?.winning_person_name).toBeNull();
+  });
 });

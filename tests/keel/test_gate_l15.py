@@ -152,7 +152,9 @@ def test_sync_l15_findings_reuses_l7_owner_seam(monkeypatch: pytest.MonkeyPatch,
 
     monkeypatch.setattr(keel_gate_l15, "sync_findings_section", _fake_sync_findings_section)
 
-    written_path = keel_gate_l15.sync_l15_findings(findings_root=findings_root, evidence_date=date(2026, 4, 25), summary=summary)
+    written_path = keel_gate_l15.sync_l15_findings(
+        findings_root=findings_root, evidence_date=date(2026, 4, 25), summary=summary
+    )
 
     assert written_path == findings_root / "2026-04-25.md"
     assert captured["findings_root"] == findings_root

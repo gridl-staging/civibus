@@ -125,7 +125,9 @@ class TestUpsertOffice:
         id_fl = upsert_office(db_conn, fl)
         assert id_wa != id_fl
 
-    def test_late_arriving_division_updates_existing_office_without_duplicate(self, db_conn: psycopg.Connection) -> None:
+    def test_late_arriving_division_updates_existing_office_without_duplicate(
+        self, db_conn: psycopg.Connection
+    ) -> None:
         from domains.civics.ingest import upsert_office
 
         division_id = self._make_division(db_conn)
@@ -227,9 +229,7 @@ class TestUpsertElectoralDivision:
             (id1,),
         ).fetchone()
         assert row[0] == "ocd-division/country:us/state:wa/cd:1"
-        assert row[1] == (
-            "MULTIPOLYGON(((-123.6 47.1,-123.45 47.1,-123.45 47.25,-123.6 47.25,-123.6 47.1)))"
-        )
+        assert row[1] == ("MULTIPOLYGON(((-123.6 47.1,-123.45 47.1,-123.45 47.25,-123.6 47.25,-123.6 47.1)))")
 
     def test_insert_persists_geometry(self, db_conn: psycopg.Connection) -> None:
         from domains.civics.ingest import upsert_electoral_division
@@ -570,7 +570,9 @@ class TestUpsertElection:
         id2 = upsert_election(db_conn, election.model_copy(update={"id": uuid4()}))
         assert id1 == id2
 
-    def test_county_or_municipality_change_creates_distinct_election_identity(self, db_conn: psycopg.Connection) -> None:
+    def test_county_or_municipality_change_creates_distinct_election_identity(
+        self, db_conn: psycopg.Connection
+    ) -> None:
         from domains.civics.ingest import upsert_election
 
         election = Election(
@@ -595,8 +597,12 @@ class TestUpsertElection:
         )
         assert updated_id != election_id
 
-        original_row = db_conn.execute("SELECT county, municipality FROM civic.election WHERE id = %s", (election_id,)).fetchone()
-        updated_row = db_conn.execute("SELECT county, municipality FROM civic.election WHERE id = %s", (updated_id,)).fetchone()
+        original_row = db_conn.execute(
+            "SELECT county, municipality FROM civic.election WHERE id = %s", (election_id,)
+        ).fetchone()
+        updated_row = db_conn.execute(
+            "SELECT county, municipality FROM civic.election WHERE id = %s", (updated_id,)
+        ).fetchone()
         assert original_row == ("Wake", None)
         assert updated_row == ("Durham", "Durham")
 
@@ -880,7 +886,10 @@ class TestUpsertReportingPeriod:
         upsert_reporting_period(connection, period)
 
         executed_sql = cursor.execute.call_args.args[0]
-        assert "disclosure_kind = COALESCE(EXCLUDED.disclosure_kind, civic.reporting_period.disclosure_kind)" in executed_sql
+        assert (
+            "disclosure_kind = COALESCE(EXCLUDED.disclosure_kind, civic.reporting_period.disclosure_kind)"
+            in executed_sql
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -961,7 +970,7 @@ class TestUpsertCandidacy:
 
         _, contest_id = self._make_contest(db_conn)
         person_id = _make_person(db_conn)
-        committee_id = uuid4()
+        committee_id = self._make_committee(db_conn)
 
         initial_id = upsert_candidacy(
             db_conn,
@@ -1289,6 +1298,24 @@ class TestUpsertOfficeholding:
         id2 = upsert_officeholding(db_conn, current_term)
         assert id1 != id2
 
+    def test_bounded_former_officeholding_does_not_derive_incumbent(self, db_conn: psycopg.Connection) -> None:
+        from domains.civics.ingest import derive_incumbent_challenge, upsert_officeholding
+
+        office_id = self._make_office(db_conn)
+        person_id = _make_person(db_conn, name=f"Former Officeholder {uuid4()}")
+        upsert_officeholding(
+            db_conn,
+            Officeholding(
+                person_id=person_id,
+                office_id=office_id,
+                holder_status="former",
+                valid_period={"start_date": date(2021, 1, 3), "end_date": date(2025, 1, 3)},
+            ),
+        )
+
+        result = derive_incumbent_challenge(db_conn, person_id, office_id, as_of=date(2024, 6, 1))
+        assert result is None
+
 
 # ---------------------------------------------------------------------------
 # Office roster link upsert tests
@@ -1299,7 +1326,9 @@ class TestUpsertOfficeRosterLink:
     def test_insert_returns_uuid_and_persists_row(self, db_conn: psycopg.Connection) -> None:
         from domains.civics.ingest import upsert_office, upsert_office_roster_link
 
-        office_id = upsert_office(db_conn, Office(name=f"durham_nc_mayor_{uuid4()}", office_level="municipal", state="NC"))
+        office_id = upsert_office(
+            db_conn, Office(name=f"durham_nc_mayor_{uuid4()}", office_level="municipal", state="NC")
+        )
         data_source = _make_data_source(db_conn)
 
         link_id = upsert_office_roster_link(
@@ -1463,14 +1492,18 @@ class TestProvenanceWiring:
         assert row[1] == officeholding_id
         assert row[2] == sr.id
 
-    def test_repoint_candidacy_person_merge_preserves_candidacy_entity_source(self, db_conn: psycopg.Connection) -> None:
+    def test_repoint_candidacy_person_merge_preserves_candidacy_entity_source(
+        self, db_conn: psycopg.Connection
+    ) -> None:
         from domains.civics.ingest import repoint_candidacy_person, upsert_candidacy, upsert_contest, upsert_office
 
         data_source = _make_data_source(db_conn)
         target_source_record = _make_source_record(db_conn, data_source.id, f"target-candidacy-source-{uuid4()}")
         source_source_record = _make_source_record(db_conn, data_source.id, f"source-candidacy-source-{uuid4()}")
 
-        office_id = upsert_office(db_conn, Office(name=f"merge-prov-office-{uuid4()}", office_level="state", state="NC"))
+        office_id = upsert_office(
+            db_conn, Office(name=f"merge-prov-office-{uuid4()}", office_level="state", state="NC")
+        )
         contest_id = upsert_contest(
             db_conn,
             Contest(

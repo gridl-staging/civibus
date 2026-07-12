@@ -172,6 +172,7 @@ describe("GET /sitemap.xml", () => {
     // Static pages
     expect(xml).toContain("<loc>https://civibus.org/</loc>");
     expect(xml).toContain("<loc>https://civibus.org/candidates</loc>");
+    expect(xml).toContain("<loc>https://civibus.org/congress</loc>");
     expect(xml).toContain("<loc>https://civibus.org/committees</loc>");
     expect(xml).toContain("<loc>https://civibus.org/coverage</loc>");
     expect(xml).toContain("<loc>https://civibus.org/calendar</loc>");
@@ -291,6 +292,7 @@ describe("GET /sitemap.xml", () => {
     const xml = await response.text();
 
     expect(xml).toContain("<loc>https://civibus.org/</loc>");
+    expect(xml).toContain("<loc>https://civibus.org/congress</loc>");
     expect(xml).toContain("<loc>https://civibus.org/calendar</loc>");
     expect(xml).toContain("<loc>https://civibus.org/election/2026-11-03</loc>");
     expect(xml).not.toContain("/candidate/");

@@ -408,9 +408,7 @@ class TestIEDocumentResultLinkAcquisition:
         """
         from domains.campaign_finance.jurisdictions.states.NC.scraper import download as download_module
 
-        sentinel_html = (
-            "<html><body><table id='gridDocumentResults'><tbody></tbody></table></body></html>"
-        )
+        sentinel_html = "<html><body><table id='gridDocumentResults'><tbody></tbody></table></body></html>"
         seen_urls: list[str] = []
 
         def _capturing_renderer(url: str) -> str:
@@ -461,16 +459,14 @@ class TestIEReportDetailExportFetch:
         from domains.campaign_finance.jurisdictions.states.NC.scraper.download import (
             _is_no_results_grid_state,
         )
-        empty_body = (
-            "Loading Results... No Results Found. requestError: function (evt, ui) {"
-        )
+
+        empty_body = "Loading Results... No Results Found. requestError: function (evt, ui) {"
         assert _is_no_results_grid_state(empty_body) is True
         assert _is_no_results_grid_state("Some other portal text") is False
         assert _is_no_results_grid_state("") is False
         # Whitespace tolerance — the grid may render with line breaks or
         # extra spaces inside the matched phrase.
         assert _is_no_results_grid_state("...\n\nNo  Results  Found.\n...") is True
-
 
     def test_fetch_ie_report_detail_export_csv_raises_unavailable_on_empty_csv(self) -> None:
         """An empty CSV from CFOrgLkup/ExportDetailResults must raise NCIEReportUnavailableError.

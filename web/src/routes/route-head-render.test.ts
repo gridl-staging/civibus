@@ -7,8 +7,10 @@ import ElectionPage from "./election/[date]/+page.svelte";
 import CalendarPage from "./calendar/+page.svelte";
 import CoveragePage from "./coverage/+page.svelte";
 import DataSourcesPage from "./data-sources/+page.svelte";
+import DevelopersPage from "./developers/+page.svelte";
 import CandidatesPage from "./candidates/+page.svelte";
 import CommitteesPage from "./committees/+page.svelte";
+import CongressPage from "./congress/+page.svelte";
 import PersonPage from "./person/[id]/+page.svelte";
 import OrgPage from "./org/[id]/+page.svelte";
 import PropertyPage from "./property/[id]/+page.svelte";
@@ -22,6 +24,7 @@ import {
   FEC_CANDIDATE_OFFICE_OPTIONS,
   US_STATE_OPTIONS
 } from "$lib/campaign-finance-detail/filter-options";
+import type { PersonContributionInsights } from "$lib/campaign-finance-detail/contract";
 import { APP_SHELL } from "$lib/config/app";
 import { createEmptyFeatureCollection } from "$lib/server/api/civic-geometry";
 
@@ -60,6 +63,20 @@ const CANDIDACY_ID = "88888888-8888-4888-8888-888888888888";
 const OFFICEHOLDING_ID = "44444444-4444-4444-8444-444444444444";
 const ELECTORAL_DIVISION_ID = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 const DEFAULT_OG_IMAGE = "https://civibus.test/og-default.png";
+const CONGRESS_MEMBER = {
+  person_id: PERSON_ID,
+  person_name: "Jane Representative",
+  officeholding_id: OFFICEHOLDING_ID,
+  office_id: OFFICE_ID,
+  office_name: "U.S. Representative for North Carolina's 1st congressional district",
+  chamber: "House",
+  state: "NC",
+  district: "01",
+  district_or_class: "01",
+  party: "Democratic",
+  portrait_source_image_url: null,
+  person_detail_path: `/person/${PERSON_ID}`
+};
 
 function expectDefaultShareHead(
   head: string,
@@ -118,18 +135,11 @@ function expectListLoadingState(body: string, loadingLabel: string, emptyStateMe
   expect(body).not.toContain("Showing 0–0");
 }
 
-function buildEntityPageData(entityType: "person" | "org", entityId: string, detail: object) {
+function buildEntityPageData(entityType: "person" | "org", _entityId: string, detail: object) {
   return {
     data: {
       entityType,
-      detail,
-      matches: Promise.resolve([]),
-      relationships: Promise.resolve({
-        entity_type: entityType,
-        entity_id: entityId,
-        neighbors: [],
-        total_count: 0
-      })
+      detail
     }
   } as any;
 }
@@ -138,6 +148,14 @@ function expectMarkers(markup: string, markers: readonly string[]): void {
   for (const marker of markers) {
     expect(markup).toContain(marker);
   }
+}
+
+function getPrimaryNavigationLinks(body: string): Array<{ href: string; label: string }> {
+  const primaryNav = body.match(/<nav[^>]*aria-label="Primary"[^>]*>([\s\S]*?)<\/nav>/);
+  expect(primaryNav).not.toBeNull();
+  return [...(primaryNav?.[1] ?? "").matchAll(/<a\b[^>]*href="([^"]+)"[^>]*>([^<]+)<\/a>/g)].map(
+    ([, href, label]) => ({ href, label })
+  );
 }
 
 const PERSON_DETAIL = {
@@ -159,6 +177,48 @@ const PERSON_DETAIL = {
   er_cluster_id: null,
   er_confidence: null,
   sources: []
+};
+
+const EMPTY_PERSON_CONTRIBUTION_INSIGHTS: PersonContributionInsights = {
+  person_id: PERSON_ID,
+  has_data: false,
+  metadata: {
+    coverage_start_date: "2022-01-01",
+    coverage_end_date: null,
+    cycles_included: [2022, 2024, 2026],
+    committee_count: 0,
+    approximate_geography: false,
+    excluded_geography: "no_linked_candidate",
+    caveats: []
+  },
+  monthly_totals: [],
+  itemized_size_buckets: [],
+  dollars_by_size: [],
+  cycle_totals: [],
+  career_totals: {
+    itemized_individual_contribution_amount: "0.00",
+    itemized_transaction_count: 0,
+    unitemized_individual_contribution_amount: "0.00",
+    total_individual_contribution_amount: "0.00",
+    source: "none"
+  },
+  geography: {
+    by_state: [],
+    by_district: [],
+    district_share: {
+      in_district_amount: null,
+      out_of_district_amount: null,
+      unknown_district_amount: null,
+      share: null,
+      available: false
+    }
+  },
+  small_dollar_share: {
+    small_dollar_amount: null,
+    total_contribution_amount: null,
+    share: null,
+    available: false
+  }
 };
 
 const ORG_DETAIL = {
@@ -244,11 +304,15 @@ describe("route head rendering", () => {
 
     expect(rendered.head).toContain('<meta property="og:site_name" content="Civibus"');
     expect(rendered.body).toContain("Universal public-records intelligence");
-    expect(rendered.body).toContain('href="/"');
-    expect(rendered.body).toContain('href="/search"');
-    expect(rendered.body).toContain('href="/candidates"');
-    expect(rendered.body).toContain('href="/committees"');
-    expect(rendered.body).toContain('href="/methodology"');
+    expect(getPrimaryNavigationLinks(rendered.body)).toEqual([
+      { label: "Home", href: "/" },
+      { label: "Search", href: "/search" },
+      { label: "Donor Lookup", href: "/donors" },
+      { label: "Congress", href: "/congress" },
+      { label: "Methodology", href: "/methodology" }
+    ]);
+    expect(rendered.body).not.toContain('href="/candidates"');
+    expect(rendered.body).not.toContain('href="/committees"');
     expect(rendered.body).toContain("<footer");
     expect(rendered.body).toContain('aria-label="Footer"');
     expect(rendered.body).toMatch(
@@ -275,30 +339,34 @@ describe("route head rendering", () => {
 
   it("renders homepage with shared canonical/OG/Twitter tags plus serialized homepage JSON-LD", () => {
     currentPageUrl = new URL("https://preview.internal:5173/?utm_source=newsletter");
-    const rendered = render(HomePage, {
-      props: {
-        data: {
-          geometry: { type: "FeatureCollection", features: [] },
-          stateSummaries: []
-        }
-      }
-    });
+    const rendered = render(HomePage);
     expectDefaultShareHead(rendered.head, {
       canonicalPath: "/",
       ogType: "website",
       expectsOgUrl: true
     });
     expect(rendered.head).toContain(
-      '<meta name="description" content="Investigate campaign-finance, civic office, and property records with source-linked evidence in Civibus search."'
+      `<meta name="description" content="${APP_SHELL.staticRoutes.home.description}"`
     );
     expect(rendered.head).toContain('"@type":"WebSite"');
     expect(rendered.head).toContain('"url":"https://civibus.test/"');
-    expect(rendered.body).toContain(
-      "Trace people, organizations, committees, and offices across jurisdictions."
-    );
-    expect(rendered.body).toContain("Browse candidates");
-    expect(rendered.body).toContain('href="/committees"');
-    expect(rendered.body).toContain("Understand coverage");
+    expect(rendered.head).toContain(`"description":"${APP_SHELL.staticRoutes.home.description}"`);
+    expect(rendered.body).toContain(APP_SHELL.landing.eyebrow);
+    expect(rendered.body).toContain(APP_SHELL.landing.heading);
+    expect(rendered.body).toContain(APP_SHELL.landing.body);
+    expect(rendered.body).toContain(APP_SHELL.landing.coverageHeading);
+    expect(rendered.body).toContain(APP_SHELL.landing.coverageSummary);
+    expect(rendered.body).toContain("Browse Congress");
+    expect(rendered.body).toContain('href="/congress"');
+    expect(rendered.body).toContain("Search");
+    expect(rendered.body).toContain('href="/search"');
+    expect(rendered.body).toContain("Methodology");
+    expect(rendered.body).toContain('href="/methodology"');
+    expect(rendered.body).not.toContain("Browse candidates");
+    expect(rendered.body).not.toContain("Browse committees");
+    expect(rendered.body).not.toContain(["Browse coverage", "by state"].join(" "));
+    expect(rendered.body).not.toContain("Loading state coverage map");
+    expect(rendered.body).not.toContain("State coverage data is unavailable right now");
   });
 
   it("renders methodology with shared canonical/OG/Twitter tags plus serialized methodology JSON-LD", () => {
@@ -440,6 +508,36 @@ describe("route head rendering", () => {
     expect(rendered.body).toContain("No runtime data-source rows are available right now.");
   });
 
+  it("renders developers page with static public API reference anchors and docs links", () => {
+    currentPageUrl = new URL("https://preview.internal:5173/developers?utm_source=test");
+    const rendered = render(DevelopersPage);
+
+    expectDefaultShareHead(rendered.head, {
+      canonicalPath: "/developers",
+      ogType: "website",
+      expectsJsonLd: false,
+      expectsOgUrl: true
+    });
+    expect(rendered.head).toContain(APP_SHELL.staticRoutes.developers.title);
+    expect(rendered.head).toContain(APP_SHELL.staticRoutes.developers.description);
+    expect(rendered.body).toContain("<h2>Public API</h2>");
+    expectMarkers(rendered.body, [
+      "GET /api/public/v1/federal/officials",
+      "GET /api/public/v1/federal/officials/{person_id}/money",
+      "GET /api/public/v1/federal/export.json",
+      "GET /api/public/v1/federal/export.csv",
+      "ie_support_total",
+      '"ie_oppose_total": "0.00"',
+      ",fec_weball,5000.00,0.00,2,0,",
+      "OpenSecrets and ProPublica migration mapping"
+    ]);
+    expect(rendered.body).not.toContain('"ie_oppose_total": "0",');
+    expect(rendered.body).not.toContain(",fec_weball,5000.00,0,2,0,");
+    expect(rendered.body).toContain('href="/api/openapi.json">/api/openapi.json</a>');
+    expect(rendered.body).toContain('href="/api/docs">/api/docs</a>');
+    expect(rendered.body).toContain('href="/api/redoc">/api/redoc</a>');
+  });
+
   it("renders candidates list with shared canonical/OG/Twitter tags, filter controls, and unchanged pagination links", () => {
     currentPageUrl = new URL(
       "https://preview.internal:5173/candidates?state=NC&office=S&offset=25&limit=25"
@@ -555,6 +653,27 @@ describe("route head rendering", () => {
     );
   });
 
+  it("renders Congress directory with shared canonical/OG/Twitter tags and no route-level JSON-LD", () => {
+    currentPageUrl = new URL("https://preview.internal:5173/congress?search=jane");
+    const rendered = render(CongressPage, {
+      props: {
+        data: {
+          members: [CONGRESS_MEMBER]
+        }
+      }
+    });
+
+    expectDefaultShareHead(rendered.head, {
+      canonicalPath: "/congress",
+      ogType: "website",
+      expectsJsonLd: false
+    });
+    expect(rendered.head).toContain("Congress | Civibus");
+    expect(rendered.head).toContain("Browse current federal officeholders");
+    expect(rendered.body).toContain("Jane Representative");
+    expect(rendered.body).toContain('href="/person/11111111-1111-4111-8111-111111111111"');
+  });
+
   it("renders person detail with shared canonical/OG/Twitter tags and one detail JSON-LD block", () => {
     currentPageUrl = new URL(`https://preview.internal:5173/person/${PERSON_ID}?tab=graph`);
     const rendered = render(PersonPage, {
@@ -568,6 +687,9 @@ describe("route head rendering", () => {
     expect(rendered.head).toContain('"@type":"Person"');
     expect(rendered.head).toContain('"@type":"BreadcrumbList"');
     expect(rendered.head).toContain('"name":"Jane Doe"');
+    expect((rendered.head.match(/<link rel="canonical"/g) ?? []).length).toBe(1);
+    expect((rendered.head.match(/<meta name="twitter:card"/g) ?? []).length).toBe(1);
+    expect((rendered.head.match(/<script type="application\/ld\+json">/g) ?? []).length).toBe(1);
   });
 
   it("renders person detail trust section with freshness severity, source labels, and dual-date summary", () => {
@@ -599,22 +721,10 @@ describe("route head rendering", () => {
               }
             ]
           },
-          matches: Promise.resolve([]),
-          relationships: Promise.resolve({
-            entity_type: "person",
-            entity_id: PERSON_ID,
-            neighbors: [],
-            total_count: 0
-          }),
-          personCivicHistory: Promise.resolve({
-            officeholdings: [],
-            candidacies: [],
-            officeholdingLabelsById: {},
-            officeLabelsById: {},
-            candidacyLabelsById: {},
-            contestLabelsById: {}
-          }),
-          personFinanceSections: Promise.resolve([])
+          personFinanceSections: Promise.resolve([]),
+          personContributionInsights: Promise.resolve(EMPTY_PERSON_CONTRIBUTION_INSIGHTS),
+          personTopDonors: Promise.resolve([]),
+          personTopEmployers: Promise.resolve([])
         }
       }
     });
@@ -640,68 +750,27 @@ describe("route head rendering", () => {
     expect(rendered.body).not.toContain("Source record link unavailable.");
   });
 
-  it("renders a person civic record section from candidacy/officeholding relationships without replacing entity internals", () => {
+  it("renders person detail without public civic-record or entity-internals sections", () => {
     currentPageUrl = new URL(`https://preview.internal:5173/person/${PERSON_ID}`);
     const rendered = render(PersonPage, {
       props: {
         data: {
           entityType: "person",
           detail: PERSON_DETAIL,
-          matches: Promise.resolve([]),
-          relationships: Promise.resolve({
-            entity_type: "person",
-            entity_id: PERSON_ID,
-            neighbors: [
-              {
-                entity_type: "candidacy",
-                entity_id: CANDIDACY_ID,
-                name: "Jane Doe candidacy",
-                relationship_type: "CANDIDACY_OF",
-                direction: "outbound" as const
-              },
-              {
-                entity_type: "officeholding",
-                entity_id: OFFICEHOLDING_ID,
-                name: "Jane Doe officeholding",
-                relationship_type: "HOLDS",
-                direction: "outbound" as const
-              },
-              {
-                entity_type: "contest",
-                entity_id: CONTEST_ID,
-                name: "NC-01 General",
-                relationship_type: "RUNS_IN",
-                direction: "outbound" as const
-              },
-              {
-                entity_type: "office",
-                entity_id: OFFICE_ID,
-                name: "US House NC-01",
-                relationship_type: "HOLDS",
-                direction: "outbound" as const
-              }
-            ],
-            total_count: 4
-          }),
-          personCivicHistory: Promise.resolve({
-            officeholdings: [],
-            candidacies: [],
-            officeholdingLabelsById: {},
-            officeLabelsById: {},
-            candidacyLabelsById: {},
-            contestLabelsById: {}
-          }),
-          personFinanceSections: Promise.resolve([])
+          personFinanceSections: Promise.resolve([]),
+          personContributionInsights: Promise.resolve(EMPTY_PERSON_CONTRIBUTION_INSIGHTS),
+          personTopDonors: Promise.resolve([]),
+          personTopEmployers: Promise.resolve([])
         }
       }
     });
 
-    // Deferred sections render skeleton placeholders during SSR; resolved content streams in after hydration
-    expect(rendered.body).toContain('aria-label="Civic Record"');
-    expect(rendered.body).toContain('aria-busy="true"');
-    expect(rendered.body).toContain("skeleton-panel");
-    // Entity internals also deferred
-    expect(rendered.body).toContain('aria-label="Entity internals"');
+    expect(rendered.body).toContain("<h3>Key metrics</h3>");
+    expect(rendered.body).toContain("<dt>Identifiers</dt>");
+    expect(rendered.body).not.toContain("Civic Record");
+    expect(rendered.body).not.toContain("Officeholding timeline");
+    expect(rendered.body).not.toContain('aria-label="Entity internals"');
+    expect(rendered.body).not.toContain("Graph relationships");
   });
 
   it("renders office detail trust section with unknown freshness when sources have no parseable dates", () => {
@@ -895,6 +964,7 @@ describe("route head rendering", () => {
         `<meta name="description" content="${testCase.expectedDescription}"`
       );
       expect(rendered.head).toContain('<meta name="robots" content="noindex"');
+      expect((rendered.head.match(/<meta name="robots" content="noindex"/g) ?? []).length).toBe(1);
       expectNoRouteSocialTags(rendered.head);
       expect(rendered.body).toContain(testCase.expectedHeading);
       expect(rendered.body).toContain(testCase.expectedSummary);

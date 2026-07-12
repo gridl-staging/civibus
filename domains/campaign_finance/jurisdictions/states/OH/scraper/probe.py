@@ -1,5 +1,5 @@
 """
-Stub summary for /Users/stuart/parallel_development/civibus_dev/mar26_pm_1_prod_data_deploy_and_runner_cleanup/civibus_dev/domains/campaign_finance/jurisdictions/states/OH/scraper/probe.py.
+Stub summary for mar26_pm_1_prod_data_deploy_and_runner_cleanup/civibus_dev/domains/campaign_finance/jurisdictions/states/OH/scraper/probe.py.
 """
 
 from __future__ import annotations

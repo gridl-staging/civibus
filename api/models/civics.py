@@ -1,3 +1,6 @@
+"""
+Stub summary for jun04_3pm_4_congress_directory_ui/civibus_dev/api/models/civics.py.
+"""
 
 from __future__ import annotations
 
@@ -52,6 +55,7 @@ class OfficeCurrentHolderCard(OfficeholdingPersonPeriodSummary):
 
 class OfficeholdingTimelineSummary(OfficeholdingPersonPeriodSummary):
     """Timeline row for officeholding history shown on office detail pages."""
+
     is_active: bool
     # Backend-owned ended-state flag derived from the same CURRENT_DATE
     # active-period semantics as is_active: a row is term_ended only when its
@@ -93,6 +97,7 @@ class OfficeRecentContestSummary(BaseModel):
 
 
 class OfficeResponse(BaseModel):
+
     id: UUID
     name: str
     office_level: OfficeLevelLiteral
@@ -114,6 +119,7 @@ class OfficeResponse(BaseModel):
 
 
 class ContestResponse(BaseModel):
+
     id: UUID
     name: str
     election_date: date | None = None
@@ -172,6 +178,21 @@ class OfficeListItem(BaseModel):
     state: str | None = None
     is_elected: bool
     number_of_seats: int
+
+
+class CongressMemberSummary(BaseModel):
+    person_id: UUID
+    person_name: str
+    officeholding_id: UUID
+    office_id: UUID
+    office_name: str
+    chamber: str
+    state: str | None = None
+    district: str | None = None
+    district_or_class: str | None = None
+    party: str | None = None
+    portrait_source_image_url: str | None = None
+    person_detail_path: str
 
 
 class ContactSummary(BaseModel):

@@ -17,9 +17,7 @@ def test_enumerate_publishable_accepts_evidence_and_findings_trees(tmp_path: Pat
     p2 = _touch(repo_root / "evidence" / "review" / "calibration_audit" / "2026-04-25.json")
     p3 = _touch(repo_root / "findings" / "2026-04-25.md", "# findings\n")
 
-    result = keel_evidence_commit.enumerate_publishable(
-        repo_root=repo_root, candidate_paths=[p1, p2, p3]
-    )
+    result = keel_evidence_commit.enumerate_publishable(repo_root=repo_root, candidate_paths=[p1, p2, p3])
 
     assert sorted(p.relative_to(repo_root).as_posix() for p in result.allowed) == [
         "evidence/L7/global/2026-04-25.json",
@@ -34,16 +32,10 @@ def test_enumerate_publishable_rejects_paths_outside_allowlist(tmp_path: Path) -
     inside = _touch(repo_root / "evidence" / "L7" / "global" / "2026-04-25.json")
     outside = _touch(repo_root / "core" / "keel_gate_l7.py", "# code\n")
 
-    result = keel_evidence_commit.enumerate_publishable(
-        repo_root=repo_root, candidate_paths=[inside, outside]
-    )
+    result = keel_evidence_commit.enumerate_publishable(repo_root=repo_root, candidate_paths=[inside, outside])
 
-    assert [p.relative_to(repo_root).as_posix() for p in result.allowed] == [
-        "evidence/L7/global/2026-04-25.json"
-    ]
-    assert [p.relative_to(repo_root).as_posix() for p in result.rejected] == [
-        "core/keel_gate_l7.py"
-    ]
+    assert [p.relative_to(repo_root).as_posix() for p in result.allowed] == ["evidence/L7/global/2026-04-25.json"]
+    assert [p.relative_to(repo_root).as_posix() for p in result.rejected] == ["core/keel_gate_l7.py"]
 
 
 def test_enumerate_publishable_rejects_redaction_blocklist(tmp_path: Path) -> None:
@@ -52,9 +44,7 @@ def test_enumerate_publishable_rejects_redaction_blocklist(tmp_path: Path) -> No
     p_env = _touch(repo_root / "evidence" / "L7" / "global" / ".env.local")
     p_ok = _touch(repo_root / "evidence" / "L7" / "global" / "2026-04-25.json")
 
-    result = keel_evidence_commit.enumerate_publishable(
-        repo_root=repo_root, candidate_paths=[p_secret, p_env, p_ok]
-    )
+    result = keel_evidence_commit.enumerate_publishable(repo_root=repo_root, candidate_paths=[p_secret, p_env, p_ok])
 
     allowed_names = {p.name for p in result.allowed}
     rejected_names = {p.name for p in result.rejected}
@@ -122,8 +112,7 @@ def test_run_keel_gates_uses_strict_equality_one_for_autopublish_opt_in() -> Non
     # The full bash conditional is harder to fake by comment text.
     expected_conditional = '[[ "${KEEL_AUTOPUBLISH_EVIDENCE:-}" == "1" ]]'
     assert expected_conditional in runner, (
-        "runner must use the strict-equality opt-in conditional verbatim: "
-        f"{expected_conditional}"
+        f"runner must use the strict-equality opt-in conditional verbatim: {expected_conditional}"
     )
     assert "commit_evidence.sh" in runner, "runner must reference commit_evidence.sh"
 
@@ -148,8 +137,7 @@ def test_runner_does_not_short_circuit_on_individual_gate_failure() -> None:
     invocation_lines = [
         line
         for line in runner.splitlines()
-        if line.lstrip().startswith("make ")
-        and ("gate-" in line or "keel-reviews-status" in line)
+        if line.lstrip().startswith("make ") and ("gate-" in line or "keel-reviews-status" in line)
     ]
     assert len(invocation_lines) >= 3, (
         f"expected at least 3 make invocations (gate-L5, gate-L7, keel-reviews-status); "

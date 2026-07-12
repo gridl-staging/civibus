@@ -1,3 +1,4 @@
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -96,6 +97,7 @@ def _score_candidate_pairs(
     candidate_person_ids: set[UUID],
     auto_merge_threshold: float | None,
 ) -> dict[tuple[UUID, UUID], _PairDecision]:
+    """Score candidate rows, falling back to deterministic-only matches when Splink is unavailable."""
     if len(candidate_person_ids) < 2:
         return {}
 
@@ -108,11 +110,18 @@ def _score_candidate_pairs(
         conn,
         candidate_person_ids=candidate_person_ids,
     )
-    scored_pairs = score_rows(
-        candidate_rows,
-        "person",
-        deterministic_pairs=deterministic_pairs,
-    )
+    try:
+        scored_pairs = score_rows(
+            candidate_rows,
+            "person",
+            deterministic_pairs=deterministic_pairs,
+        )
+    except RuntimeError as exc:
+        if "Splink settings are unavailable" not in str(exc):
+            raise
+        # Roster/candidacy repair should still apply exact deterministic matches
+        # even in lightweight environments that omit the probabilistic runtime.
+        scored_pairs = deterministic_pairs
     if not scored_pairs:
         return {}
 

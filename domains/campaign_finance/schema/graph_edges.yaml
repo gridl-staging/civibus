@@ -1,6 +1,6 @@
 # Campaign finance domain graph edge declarations.
 #
-# This file follows the plugin-contract shape from docs/specs/domain-plugin-contract.md.
+# This file follows the plugin-contract shape from docs/reference/specs/domain-plugin-contract.md.
 # The graph builder reads this to know which node labels and edge types the CF domain adds.
 #
 # Edge set decision (Stage 5):

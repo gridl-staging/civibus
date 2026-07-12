@@ -10,10 +10,14 @@ import {
   buildCountyCampaignFinanceSummaryPath,
   buildCommitteeDetailPath,
   buildCommitteeFilingBreakdownPath,
+  buildCommitteeIndependentExpendituresMadePath,
   buildCommitteeListPath,
   buildCommitteeSummaryPath,
   buildCommitteeTransactionsPath,
   buildCommitteesBySlugPath,
+  buildPersonContributionInsightsPath,
+  buildPersonTopDonorsPath,
+  buildPersonTopEmployersPath,
   type CandidateDetailResponse,
   type CandidateFundraisingSummary,
   type CandidateListRequest as CandidateListPathRequest,
@@ -24,11 +28,15 @@ import {
   type CommitteeDetailResponse,
   type CommitteeFilingBreakdown,
   type CommitteeFundraisingSummary,
+  type CommitteeIndependentExpenditureActivity,
   type CommitteeListRequest as CommitteeListPathRequest,
   type CommitteeListResponse,
   type CommitteeSlugMatchResponse,
   type IndependentExpenditureResponse,
-  type IndependentExpenditureSummary
+  type IndependentExpenditureSummary,
+  type PersonContributionInsights,
+  type PersonTopEmployerRow,
+  type RankedTransactionParty
 } from "$lib/campaign-finance-detail/contract";
 import { ApiResponseError, type ApiClient } from "./client";
 
@@ -51,6 +59,7 @@ export type CommitteeDetailBundle = {
   transactions: Promise<CampaignFinanceTransactionResponse[]>;
   summary: Promise<CommitteeFundraisingSummary>;
   filingBreakdown: Promise<CommitteeFilingBreakdown>;
+  independentExpendituresMade: Promise<CommitteeIndependentExpenditureActivity>;
 };
 
 function fetchByRequest<TResponse, TRequest>(
@@ -104,6 +113,13 @@ export async function fetchCommitteeFilingBreakdown(
   return fetchById(apiClient, request, buildCommitteeFilingBreakdownPath);
 }
 
+export async function fetchCommitteeIndependentExpendituresMade(
+  apiClient: ApiClient,
+  request: CommitteeDetailRequest
+): Promise<CommitteeIndependentExpenditureActivity> {
+  return fetchById(apiClient, request, buildCommitteeIndependentExpendituresMadePath);
+}
+
 export type CandidateDetailBundle = {
   detail: CandidateDetailResponse;
   summary: Promise<CandidateFundraisingSummary>;
@@ -115,7 +131,7 @@ export type PersonCandidateFinanceSection = {
   candidate: CandidateDetailResponse;
   summary: Promise<CandidateFundraisingSummary>;
   ieTransactions: Promise<IndependentExpenditureResponse[]>;
-  ieSummary: Promise<IndependentExpenditureSummary | null>;
+  ieSummary: IndependentExpenditureSummary | null;
   donorVendorTransactions: Promise<CampaignFinanceTransactionResponse[]>;
 };
 
@@ -162,6 +178,27 @@ export async function fetchCandidateIndependentExpendituresSummary(
   request: CandidateDetailRequest
 ): Promise<IndependentExpenditureSummary | null> {
   return fetchById(apiClient, request, buildCandidateIndependentExpendituresSummaryPath);
+}
+
+export async function fetchPersonContributionInsights(
+  apiClient: ApiClient,
+  request: IdRequest
+): Promise<PersonContributionInsights> {
+  return fetchById(apiClient, request, buildPersonContributionInsightsPath);
+}
+
+export async function fetchPersonTopDonors(
+  apiClient: ApiClient,
+  request: IdRequest
+): Promise<RankedTransactionParty[]> {
+  return fetchById(apiClient, request, buildPersonTopDonorsPath);
+}
+
+export async function fetchPersonTopEmployers(
+  apiClient: ApiClient,
+  request: IdRequest
+): Promise<PersonTopEmployerRow[]> {
+  return fetchById(apiClient, request, buildPersonTopEmployersPath);
 }
 
 function guardUnhandledRejection(promise: Promise<unknown>): void {
@@ -285,12 +322,13 @@ export async function fetchPersonCandidateFinanceSections(
         return sortMergedDonorVendorTransactions(transactionsByCommittee.flat());
       });
       guardUnhandledRejection(donorVendorTransactions);
+      const ieSummary = await candidateBundle.ieSummary;
 
       return {
         candidate: candidateBundle.detail,
         summary: candidateBundle.summary,
         ieTransactions: candidateBundle.ieTransactions,
-        ieSummary: candidateBundle.ieSummary,
+        ieSummary,
         donorVendorTransactions
       };
     })
@@ -437,9 +475,11 @@ export async function fetchCommitteeDetailBundle(
   const transactionsPromise = fetchCommitteeTransactions(apiClient, request);
   const summaryPromise = fetchCommitteeSummary(apiClient, request);
   const filingBreakdownPromise = fetchCommitteeFilingBreakdown(apiClient, request);
+  const independentExpendituresMadePromise = fetchCommitteeIndependentExpendituresMade(apiClient, request);
   guardUnhandledRejection(transactionsPromise);
   guardUnhandledRejection(summaryPromise);
   guardUnhandledRejection(filingBreakdownPromise);
+  guardUnhandledRejection(independentExpendituresMadePromise);
 
   try {
     const detail = await detailPromise;
@@ -447,10 +487,16 @@ export async function fetchCommitteeDetailBundle(
       detail,
       transactions: transactionsPromise,
       summary: summaryPromise,
-      filingBreakdown: filingBreakdownPromise
+      filingBreakdown: filingBreakdownPromise,
+      independentExpendituresMade: independentExpendituresMadePromise
     };
   } catch (error) {
-    void Promise.allSettled([transactionsPromise, summaryPromise, filingBreakdownPromise]);
+    void Promise.allSettled([
+      transactionsPromise,
+      summaryPromise,
+      filingBreakdownPromise,
+      independentExpendituresMadePromise
+    ]);
     throw error;
   }
 }

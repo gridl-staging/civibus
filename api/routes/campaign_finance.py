@@ -1,9 +1,7 @@
-"""
-Campaign finance API routes — committees, candidates, transactions, independent expenditures.
-"""
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from uuid import UUID
 
@@ -20,6 +18,7 @@ from api.models import (
     CandidateResponse,
     CommitteeFilingBreakdown,
     CommitteeFundraisingSummary,
+    CommitteeIndependentExpenditureActivity,
     CommitteeListItem,
     CommitteeListParams,
     CommitteeListResponse,
@@ -27,6 +26,9 @@ from api.models import (
     FilingResponse,
     IndependentExpenditureResponse,
     IndependentExpenditureSummary,
+    PersonContributionInsights,
+    PersonTopEmployerRow,
+    RankedTransactionParty,
     StateDetailResponse,
     StateSummaryItem,
     TransactionListParams,
@@ -37,7 +39,6 @@ from api.queries import (
     CAMPAIGN_FINANCE_COMMITTEE_DETAIL_SQL,
     CAMPAIGN_FINANCE_FILING_DETAIL_SQL,
     UnknownCountySlugError,
-    build_zero_candidate_fundraising_summary,
     build_zero_committee_fundraising_summary,
     fetch_campaign_finance_provenance,
     fetch_cf_summary_by_county,
@@ -48,9 +49,14 @@ from api.queries import (
     fetch_candidates_by_slug,
     fetch_committee_filing_breakdown,
     fetch_committee_fundraising_summary,
+    fetch_committee_ie_activity,
+    fetch_committee_linked_candidates,
     fetch_committee_list,
     fetch_committees_by_slug,
     fetch_one_row,
+    fetch_person_contribution_insights,
+    fetch_person_top_donors,
+    fetch_person_top_employers,
     fetch_state_campaign_finance_detail,
     fetch_state_campaign_finance_summaries,
     fetch_transaction_list,
@@ -112,6 +118,7 @@ def _build_detail_response(
     not_found_detail: str,
     provenance: _ProvenanceContext,
     response_model: type[CommitteeResponse] | type[CandidateResponse] | type[FilingResponse],
+    extra_detail_fields: Callable[[psycopg.Connection, UUID], dict[str, object]] | None = None,
 ) -> CommitteeResponse | CandidateResponse | FilingResponse:
     detail_row = _fetch_row_or_404(conn, query, row_id, not_found_detail)
 
@@ -123,6 +130,8 @@ def _build_detail_response(
         canonical_entity_type=provenance.canonical_entity_type,
         canonical_entity_id=canonical_entity_id,
     )
+    if extra_detail_fields is not None:
+        detail_row.update(extra_detail_fields(conn, row_id))
     return response_model.model_validate(detail_row)
 
 
@@ -154,6 +163,9 @@ def get_committee(committee_id: UUID, conn: psycopg.Connection = Depends(get_db)
             canonical_entity_id_key="organization_id",
         ),
         response_model=CommitteeResponse,
+        extra_detail_fields=lambda db_conn, current_committee_id: {
+            "linked_candidates": fetch_committee_linked_candidates(db_conn, current_committee_id)
+        },
     )
 
 
@@ -214,6 +226,41 @@ def list_transactions(
     return [TransactionResponse.model_validate(transaction_row) for transaction_row in transaction_rows]
 
 
+@router.get("/person/{person_id}/contribution-insights", response_model=PersonContributionInsights)
+def get_person_contribution_insights(
+    person_id: UUID,
+    conn: psycopg.Connection = Depends(get_db),
+) -> PersonContributionInsights:
+    insights = fetch_person_contribution_insights(conn, person_id)
+    if insights is None:
+        raise HTTPException(status_code=404, detail="Person not found")
+    return PersonContributionInsights.model_validate(insights)
+
+
+@router.get("/person/{person_id}/top-donors", response_model=list[RankedTransactionParty])
+def get_person_top_donors(
+    person_id: UUID,
+    limit: int = Query(default=10, ge=1, le=100),
+    conn: psycopg.Connection = Depends(get_db),
+) -> list[RankedTransactionParty]:
+    donor_rows = fetch_person_top_donors(conn, person_id, limit)
+    if donor_rows is None:
+        raise HTTPException(status_code=404, detail="Person not found")
+    return [RankedTransactionParty.model_validate(donor_row) for donor_row in donor_rows]
+
+
+@router.get("/person/{person_id}/top-employers", response_model=list[PersonTopEmployerRow])
+def get_person_top_employers(
+    person_id: UUID,
+    limit: int = Query(default=10, ge=1, le=100),
+    conn: psycopg.Connection = Depends(get_db),
+) -> list[PersonTopEmployerRow]:
+    employer_rows = fetch_person_top_employers(conn, person_id, limit)
+    if employer_rows is None:
+        raise HTTPException(status_code=404, detail="Person not found")
+    return [PersonTopEmployerRow.model_validate(employer_row) for employer_row in employer_rows]
+
+
 @router.get("/committees/{committee_id}/summary", response_model=CommitteeFundraisingSummary)
 def get_committee_summary(
     committee_id: UUID, conn: psycopg.Connection = Depends(get_db)
@@ -258,15 +305,16 @@ def get_committee_filings_summary(
 def get_candidate_summary(
     candidate_id: UUID, conn: psycopg.Connection = Depends(get_db)
 ) -> CandidateFundraisingSummary:
+    """Return the FEC weball / derived fundraising summary for a candidate."""
     detail_row = _fetch_row_or_404(conn, CAMPAIGN_FINANCE_CANDIDATE_DETAIL_SQL, candidate_id, "Candidate not found")
 
-    candidate_name = detail_row["name"]
-    summary = fetch_candidate_summary(conn, candidate_id, candidate_name)
+    # ``fetch_candidate_summary`` owns the zero-payload / no-linked-committee branch
+    # itself, so the route does not need a fallback. ``None`` would mean the
+    # candidate row has been deleted between the 404 check above and the summary
+    # read; that race surfaces as 500 deliberately.
+    summary = fetch_candidate_summary(conn, candidate_id, detail_row["name"])
     if summary is None:
-        summary = build_zero_candidate_fundraising_summary(
-            candidate_id=candidate_id,
-            candidate_name=candidate_name,
-        )
+        raise HTTPException(status_code=500, detail="Candidate summary unavailable")
     return CandidateFundraisingSummary.model_validate(summary)
 
 
@@ -320,3 +368,18 @@ def get_campaign_finance_state_detail(
     if detail is None:
         raise HTTPException(status_code=404, detail="State not found")
     return StateDetailResponse.model_validate(detail)
+
+
+@router.get(
+    "/committees/{committee_id}/independent-expenditures-made",
+    response_model=CommitteeIndependentExpenditureActivity,
+)
+def get_committee_independent_expenditures_made(
+    committee_id: UUID,
+    limit: int = Query(default=10, ge=1, le=100),
+    conn: psycopg.Connection = Depends(get_db),
+) -> CommitteeIndependentExpenditureActivity:
+    _fetch_row_or_404(conn, CAMPAIGN_FINANCE_COMMITTEE_DETAIL_SQL, committee_id, "Committee not found")
+    return CommitteeIndependentExpenditureActivity.model_validate(
+        fetch_committee_ie_activity(conn, committee_id, limit)
+    )

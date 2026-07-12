@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import importlib
-import os
 import sys
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -15,18 +13,13 @@ from core.db import get_connection
 from core.graph import age_post_connect, ensure_graph
 from core.graph.loader import merge_committee_node, merge_person_node
 from core.graph.loader_test_support import seed_committee, seed_person
+from test_support.api_real_path import (
+    build_real_path_client,
+    configure_real_path_environment,
+    restore_environment,
+)
 
 pytestmark = [pytest.mark.integration, pytest.mark.e2e]
-
-_PUBLIC_API_KEY = "stage1-public-key"
-_ADMIN_API_KEY = "stage1-admin-key"
-_REAL_PATH_ENVIRONMENT = {
-    "CIVIBUS_ENV": "production",
-    "CIVIBUS_API_KEYS": _PUBLIC_API_KEY,
-    "CIVIBUS_ADMIN_API_KEYS": _ADMIN_API_KEY,
-    "CIVIBUS_RATE_LIMIT_REQUESTS": "100",
-    "CIVIBUS_RATE_LIMIT_WINDOW_SECONDS": "60",
-}
 
 
 @dataclass(frozen=True)
@@ -34,46 +27,8 @@ class SeededRouteFixture:
     search_query: str
 
 
-def _resolve_postgres_password() -> str:
-    return os.getenv("POSTGRES_PASSWORD", "civibus_dev")
-
-
-def _real_path_environment_values() -> dict[str, str]:
-    return {
-        **_REAL_PATH_ENVIRONMENT,
-        "POSTGRES_USER": os.getenv("POSTGRES_USER", "civibus"),
-        "POSTGRES_PASSWORD": _resolve_postgres_password(),
-        "POSTGRES_DB": os.getenv("POSTGRES_DB", "civibus"),
-        "POSTGRES_HOST": os.getenv("POSTGRES_HOST", "localhost"),
-        "POSTGRES_PORT": os.getenv("POSTGRES_PORT", "5433"),
-    }
-
-
-def _configure_real_path_environment() -> dict[str, str | None]:
-    environment_overrides = _real_path_environment_values()
-    previous_environment = {env_var_name: os.environ.get(env_var_name) for env_var_name in environment_overrides}
-    os.environ.update(environment_overrides)
-    return previous_environment
-
-
-def _restore_environment(previous_environment: dict[str, str | None]) -> None:
-    for env_var_name, previous_value in previous_environment.items():
-        if previous_value is None:
-            os.environ.pop(env_var_name, None)
-            continue
-        os.environ[env_var_name] = previous_value
-
-
 def _build_real_path_client() -> tuple[TestClient, dict[str, str], dict[str, str]]:
-    sys.modules.pop("api.main", None)
-    api_main = importlib.import_module("api.main")
-    client = TestClient(api_main.create_app())
-
-    assert client.app.dependency_overrides == {}
-
-    public_headers = {"X-API-Key": _PUBLIC_API_KEY}
-    admin_headers = {"X-API-Key": _ADMIN_API_KEY}
-    return client, public_headers, admin_headers
+    return build_real_path_client()
 
 
 def _seed_route_fixture_data() -> SeededRouteFixture:
@@ -117,11 +72,11 @@ def real_path_client(real_path_environment: None) -> tuple[TestClient, dict[str,
 
 @pytest.fixture(scope="module")
 def real_path_environment() -> Iterator[None]:
-    previous_environment = _configure_real_path_environment()
+    previous_environment = configure_real_path_environment()
     try:
         yield
     finally:
-        _restore_environment(previous_environment)
+        restore_environment(previous_environment)
         sys.modules.pop("api.main", None)
 
 

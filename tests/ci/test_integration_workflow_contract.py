@@ -40,6 +40,7 @@ def test_integration_workflow_reuses_repo_db_contract_commands() -> None:
         assert f"run: {command}" in workflow_text
 
     assert "POSTGRES_PASSWORD: ci-postgres-password" in workflow_text
+    assert 'CIVIBUS_REQUIRE_DB: "1"' in workflow_text
     assert "if: always()" in workflow_text
 
     forbidden_fragments = (

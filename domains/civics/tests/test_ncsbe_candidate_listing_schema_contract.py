@@ -19,10 +19,7 @@ REQUIRED_CANDIDACY_COLUMNS = ["name_on_ballot", "is_unexpired_term", "raw_fields
 @pytest.mark.integration
 def test_pm_pre_a_migration_files_exist_on_disk() -> None:
     missing = [str(path.relative_to(REPO_ROOT)) for path in PM_PRE_A_MIGRATION_FILES if not path.exists()]
-    assert not missing, (
-        "Missing required civics migration files for Stage 1 schema contract: "
-        f"{missing}"
-    )
+    assert not missing, f"Missing required civics migration files for Stage 1 schema contract: {missing}"
 
 
 @pytest.mark.integration

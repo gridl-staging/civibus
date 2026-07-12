@@ -116,9 +116,7 @@ def _normalize_header_rows(csv_text: str) -> str:
     if not stripped_lines:
         raise NCIEReportParseError("NC IE report export is empty")
     if stripped_lines[0].strip().upper() != _DETAIL_EXPORT_SECTION_HEADER:
-        raise NCIEReportParseError(
-            "NC IE report export does not start with the EXPENDITURES section header"
-        )
+        raise NCIEReportParseError("NC IE report export does not start with the EXPENDITURES section header")
     if len(stripped_lines) < 2:
         raise NCIEReportParseError("NC IE report export is missing the CSV header row")
     return "\n".join(stripped_lines[1:])
@@ -128,10 +126,7 @@ def _validate_header(fieldnames: list[str] | None) -> tuple[str, ...]:
     observed_columns = tuple(fieldnames or ())
     missing_columns = [column for column in _REQUIRED_EXPORT_COLUMNS if column not in observed_columns]
     if missing_columns:
-        raise NCIEReportParseError(
-            "NC IE report export is missing required columns: "
-            + ", ".join(missing_columns)
-        )
+        raise NCIEReportParseError("NC IE report export is missing required columns: " + ", ".join(missing_columns))
     return observed_columns
 
 
@@ -224,8 +219,7 @@ def parse_ie_report_section_csv(
         )
         if expenditure_type != _INDEPENDENT_EXPENDITURE_TYPE:
             raise NCIEReportParseError(
-                "NC IE report export contained a non-independent-expenditure row: "
-                f"{expenditure_type!r}"
+                f"NC IE report export contained a non-independent-expenditure row: {expenditure_type!r}"
             )
 
         parsed_rows.append(

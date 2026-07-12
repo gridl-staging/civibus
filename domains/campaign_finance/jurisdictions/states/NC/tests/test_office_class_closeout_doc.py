@@ -47,5 +47,5 @@ def test_closeout_doc_matrix_tracks_stage1_office_classes_once_with_required_fie
         assert row["proof_tests"].strip()
         assert "test_office_class_coverage.py::" in row["proof_tests"]
         assert row["gap_artifacts"].strip()
-        assert row["gap_artifacts"].startswith("docs/research/artifacts/2026_04_24_nc_office_universe/")
+        assert row["gap_artifacts"].startswith("docs/reference/research/artifacts/2026_04_24_nc_office_universe/")
         assert row["final_notes"].strip()

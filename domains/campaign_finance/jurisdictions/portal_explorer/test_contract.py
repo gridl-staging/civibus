@@ -59,7 +59,7 @@ def test_contract_models_round_trip_json() -> None:
         request=request,
         summary=summary,
         steps=[],
-        checkpoint_path="docs/research/portal_contracts/runs/nc_seed.json",
+        checkpoint_path="docs/reference/research/portal_contracts/runs/nc_seed.json",
     )
 
     for model in (request, summary, result):
@@ -270,7 +270,7 @@ def test_stage4_run_artifacts_support_terminal_statuses() -> None:
             request=request,
             summary=summary,
             steps=[step],
-            checkpoint_path="docs/research/portal_contracts/runs/stage_4.json",
+            checkpoint_path="docs/reference/research/portal_contracts/runs/stage_4.json",
         )
         payload = result.model_dump(mode="json")
         restored = contract.PortalExplorerRunResult.model_validate(payload)
@@ -319,7 +319,7 @@ def test_stage4_run_artifacts_reject_unknown_fields_and_invalid_status() -> None
                     "steps_completed": 0,
                 },
                 "steps": [],
-                "checkpoint_path": "docs/research/portal_contracts/runs/sample.json",
+                "checkpoint_path": "docs/reference/research/portal_contracts/runs/sample.json",
                 "unexpected": "reject me",
             }
         )

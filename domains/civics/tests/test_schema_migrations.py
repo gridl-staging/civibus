@@ -84,9 +84,13 @@ def test_contest_result_table_migration_contract() -> None:
     assert "is_certified" in migration_sql and "boolean not null default false" in migration_sql
     assert "is_winner" in migration_sql and "boolean not null default false" in migration_sql
     assert "source_record_id" in migration_sql and "references core.source_record(id)" in migration_sql
-    assert "constraint uq_contest_result_canonical unique (contest_id, source_record_id, candidate_name)" in migration_sql
+    assert (
+        "constraint uq_contest_result_canonical unique (contest_id, source_record_id, candidate_name)" in migration_sql
+    )
     assert "create index idx_contest_result_contest_id on civic.contest_result (contest_id);" in migration_sql
-    assert "create index idx_contest_result_source_record_id on civic.contest_result (source_record_id);" in migration_sql
+    assert (
+        "create index idx_contest_result_source_record_id on civic.contest_result (source_record_id);" in migration_sql
+    )
     assert "drop trigger if exists trg_contest_result_updated_at on civic.contest_result;" in migration_sql
     assert "create trigger trg_contest_result_updated_at" in migration_sql
     assert "before update on civic.contest_result" in migration_sql

@@ -107,7 +107,8 @@ def test_load_phl_source_records_skips_malformed_jsonl_lines(
         "transaction_id": "GOOD-1",
         "transaction_amount": 75,
         "transaction_date": "2026-04-01",
-        "filer_name": "Good", "donor_name": "Good Donor",
+        "filer_name": "Good",
+        "donor_name": "Good Donor",
     }
     with jsonl.open("w", encoding="utf-8") as fp:
         fp.write(json.dumps(good) + "\n")
@@ -137,13 +138,27 @@ def test_load_phl_source_records_quarantines_malformed_rows(
     be QUARANTINED, not error the whole batch."""
     jsonl = tmp_path / "phl_mixed.jsonl"
     rows = [
-        {"transaction_id": "T1", "transaction_amount": 100, "transaction_date": "2026-04-01",
-         "filer_name": "Good Filer", "donor_name": "Good Donor"},
-        {"transaction_id": "T2", "transaction_amount": "not-a-number",
-         "transaction_date": "2026-04-02",
-         "filer_name": "Bad", "donor_name": "Bad"},
-        {"transaction_id": "T3", "transaction_amount": 250, "transaction_date": "2026-04-03",
-         "filer_name": "Good Filer 2", "donor_name": "Good Donor 2"},
+        {
+            "transaction_id": "T1",
+            "transaction_amount": 100,
+            "transaction_date": "2026-04-01",
+            "filer_name": "Good Filer",
+            "donor_name": "Good Donor",
+        },
+        {
+            "transaction_id": "T2",
+            "transaction_amount": "not-a-number",
+            "transaction_date": "2026-04-02",
+            "filer_name": "Bad",
+            "donor_name": "Bad",
+        },
+        {
+            "transaction_id": "T3",
+            "transaction_amount": 250,
+            "transaction_date": "2026-04-03",
+            "filer_name": "Good Filer 2",
+            "donor_name": "Good Donor 2",
+        },
     ]
     with jsonl.open("w", encoding="utf-8") as fp:
         for row in rows:
@@ -206,9 +221,7 @@ def test_load_phl_relational_requires_pass1_provenance_first(
     # Skip pass 1 entirely; jump straight to pass 2.
     result = load_phl_relational(db_conn, jsonl, is_expenditure=False)
 
-    assert result.inserted == 0, (
-        f"pass 2 must skip rows without pass-1 provenance; got inserted={result.inserted}"
-    )
+    assert result.inserted == 0, f"pass 2 must skip rows without pass-1 provenance; got inserted={result.inserted}"
     assert result.skipped == 5
     assert result.errors == 0
 
@@ -278,8 +291,7 @@ def test_load_phl_relational_is_idempotent(
     assert count_after_first_row is not None
     count_after_first = count_after_first_row[0]
     assert count_after_first == 5, (
-        f"pass-2 first run should produce 5 cf.transaction rows under PHL-% "
-        f"filings; got {count_after_first}"
+        f"pass-2 first run should produce 5 cf.transaction rows under PHL-% filings; got {count_after_first}"
     )
 
     # Now run pass 2 again and assert the count is unchanged. This is the

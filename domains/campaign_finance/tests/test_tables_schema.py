@@ -12,6 +12,7 @@ from core.schema_sql_runner import (
     run_psql_command,
     run_psql_file,
 )
+from domains.campaign_finance.ingest.bulk_stage4_loader import STAGE4_RESUME_IDENTITY_COLUMNS
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -23,6 +24,8 @@ TEST_DATABASE = os.getenv("CF_SCHEMA_TEST_DATABASE", "civibus")
 
 CF_TABLES = [
     "committee",
+    "committee_summary",
+    "stage4_resume_checkpoint",
     "candidate",
     "election",
     "filing",
@@ -34,6 +37,9 @@ CF_TABLES = [
 EXPECTED_FOREIGN_KEYS = [
     ("committee", "organization_id", "organization", "id"),
     ("committee", "source_record_id", "source_record", "id"),
+    ("committee_summary", "committee_id", "committee", "id"),
+    ("committee_summary", "source_record_id", "source_record", "id"),
+    ("stage4_resume_checkpoint", "data_source_id", "data_source", "id"),
     ("candidate", "person_id", "person", "id"),
     ("candidate", "principal_committee_id", "committee", "id"),
     ("candidate", "source_record_id", "source_record", "id"),
@@ -256,6 +262,18 @@ def _has_exclusion_constraint(database: str, table_name: str, constraint_name: s
     )
 
 
+def _has_check_constraint(database: str, table_name: str, constraint_name: str) -> bool:
+    return _query_returns_truthy_first_row(
+        database,
+        (
+            "SELECT EXISTS ("
+            "  SELECT 1 FROM pg_constraint"
+            f"  WHERE conrelid = '{table_name}'::regclass AND contype = 'c' AND conname = '{constraint_name}'"
+            ")::text;"
+        ),
+    )
+
+
 def _skip_if_no_database_access() -> None:
     try:
         _run_psql_command(TEST_DATABASE, "SELECT 1;")
@@ -331,6 +349,313 @@ def test_transaction_back_ref_transaction_id_column_is_nullable_text():
         """,
     )
     assert rows == ["text|YES"]
+
+
+def test_transaction_contributor_entity_type_column_is_nullable_text_without_check_constraint():
+    rows = _run_psql_command(
+        TEST_DATABASE,
+        """
+        SELECT data_type || '|' || is_nullable
+        FROM information_schema.columns
+        WHERE table_schema = 'cf'
+          AND table_name = 'transaction'
+          AND column_name = 'contributor_entity_type';
+        """,
+    )
+    assert rows == ["text|YES"]
+
+    rows = _run_psql_command(
+        TEST_DATABASE,
+        """
+        SELECT COUNT(*)::int
+        FROM pg_constraint c
+        JOIN pg_class r ON c.conrelid = r.oid
+        WHERE r.relnamespace = 'cf'::regnamespace
+          AND r.relname = 'transaction'
+          AND c.contype = 'c'
+          AND pg_get_constraintdef(c.oid) ILIKE '%contributor_entity_type%';
+        """,
+    )
+    assert rows == ["0"]
+
+
+def test_transaction_committee_date_index_contract():
+    assert _index_exists(TEST_DATABASE, "idx_transaction_committee_date"), (
+        "Missing committee/date transaction lookup index"
+    )
+    assert not _index_exists(TEST_DATABASE, "idx_transaction_committee_lookup"), (
+        "Committee-only transaction lookup is redundant with idx_transaction_committee_date"
+    )
+    assert _index_exists(TEST_DATABASE, "idx_transaction_date_lookup"), (
+        "Date-only transaction lookup remains useful for date-first filters"
+    )
+
+
+def test_candidate_official_summary_columns_are_nullable_money_and_date():
+    expected_columns = {
+        "total_receipts": "numeric|YES",
+        "total_disbursements": "numeric|YES",
+        "cash_on_hand": "numeric|YES",
+        "summary_coverage_end_date": "date|YES",
+    }
+
+    for column_name, expected in expected_columns.items():
+        rows = _run_psql_command(
+            TEST_DATABASE,
+            f"""
+            SELECT data_type || '|' || is_nullable
+            FROM information_schema.columns
+            WHERE table_schema = 'cf'
+              AND table_name = 'candidate'
+              AND column_name = '{column_name}';
+            """,
+        )
+        assert rows == [expected]
+
+
+def test_committee_summary_storage_contract():
+    required_columns = {
+        "committee_id": "uuid|NO",
+        "cycle": "integer|NO",
+    }
+    for column_name, expected in required_columns.items():
+        rows = _run_psql_command(
+            TEST_DATABASE,
+            f"""
+            SELECT data_type || '|' || is_nullable
+            FROM information_schema.columns
+            WHERE table_schema = 'cf'
+              AND table_name = 'committee_summary'
+              AND column_name = '{column_name}';
+            """,
+        )
+        assert rows == [expected]
+
+    assert _index_exists(TEST_DATABASE, "uq_committee_summary_committee_cycle"), (
+        "Missing committee-summary uniqueness on (committee_id, cycle)"
+    )
+    assert _fk_exists(
+        TEST_DATABASE,
+        "committee_summary",
+        "source_record_id",
+        "source_record",
+        "id",
+    ), "Missing FK committee_summary.source_record_id -> source_record.id"
+    assert _has_check_constraint(
+        TEST_DATABASE,
+        "cf.committee_summary",
+        "ck_committee_summary_coverage_order",
+    ), "Missing coverage date order check on committee_summary"
+
+    _insert_committee("C90000003", "Committee Summary Constraint Committee")
+    _run_psql_command(
+        TEST_DATABASE,
+        """
+        INSERT INTO cf.committee_summary (committee_id, cycle, total_receipts)
+        SELECT id, 2024, 123.45
+        FROM cf.committee
+        WHERE fec_committee_id = 'C90000003';
+        """,
+    )
+    with pytest.raises(RuntimeError, match="uq_committee_summary_committee_cycle"):
+        _run_psql_command(
+            TEST_DATABASE,
+            """
+            INSERT INTO cf.committee_summary (committee_id, cycle, total_receipts)
+            SELECT id, 2024, 678.90
+            FROM cf.committee
+            WHERE fec_committee_id = 'C90000003';
+            """,
+        )
+
+    date_columns = ("coverage_start_date", "coverage_end_date")
+    for column_name in date_columns:
+        rows = _run_psql_command(
+            TEST_DATABASE,
+            f"""
+            SELECT data_type || '|' || is_nullable
+            FROM information_schema.columns
+            WHERE table_schema = 'cf'
+              AND table_name = 'committee_summary'
+              AND column_name = '{column_name}';
+            """,
+        )
+        assert rows == ["date|YES"]
+
+    money_columns = (
+        "total_receipts",
+        "total_disbursements",
+        "cash_on_hand",
+        "individual_itemized_contributions",
+        "individual_unitemized_contributions",
+        "independent_expenditures",
+    )
+    for column_name in money_columns:
+        rows = _run_psql_command(
+            TEST_DATABASE,
+            f"""
+            SELECT data_type || '|' || is_nullable || '|' || numeric_precision || '|' || numeric_scale
+            FROM information_schema.columns
+            WHERE table_schema = 'cf'
+              AND table_name = 'committee_summary'
+              AND column_name = '{column_name}';
+            """,
+        )
+        assert rows == ["numeric|YES|14|2"]
+
+    forbidden_candidate_columns = ("candidate_fec_id", "fec_election_year")
+    for column_name in forbidden_candidate_columns:
+        rows = _run_psql_command(
+            TEST_DATABASE,
+            f"""
+            SELECT count(*)::text
+            FROM information_schema.columns
+            WHERE table_schema = 'cf'
+              AND table_name = 'committee_summary'
+              AND column_name = '{column_name}';
+            """,
+        )
+        assert rows == ["0"], f"cf.committee_summary must not own candidate relationship column {column_name}"
+
+
+def test_stage4_resume_checkpoint_storage_contract():
+    required_columns = {
+        "data_source_id": "uuid|NO",
+        "cycle": "integer|NO",
+        "file_type": "text|NO",
+        "archive_fingerprint": "text|NO",
+        "archive_member_name": "text|YES",
+        "next_source_row_number": "bigint|NO",
+    }
+    for column_name, expected in required_columns.items():
+        rows = _run_psql_command(
+            TEST_DATABASE,
+            f"""
+            SELECT data_type || '|' || is_nullable
+            FROM information_schema.columns
+            WHERE table_schema = 'cf'
+              AND table_name = 'stage4_resume_checkpoint'
+              AND column_name = '{column_name}';
+            """,
+        )
+        assert rows == [expected]
+
+    identity_columns = ",".join(STAGE4_RESUME_IDENTITY_COLUMNS)
+    rows = _run_psql_command(
+        TEST_DATABASE,
+        """
+        SELECT string_agg(a.attname, ',' ORDER BY array_position(i.indkey, a.attnum)) AS columns
+        FROM pg_class t
+        JOIN pg_index i ON i.indrelid = t.oid
+        JOIN pg_class idx ON idx.oid = i.indexrelid
+        JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = ANY(i.indkey)
+        WHERE t.oid = 'cf.stage4_resume_checkpoint'::regclass
+          AND idx.relname = 'uq_stage4_resume_checkpoint_identity'
+          AND i.indisunique
+        GROUP BY idx.relname;
+        """,
+    )
+    assert rows == [identity_columns]
+    assert _fk_exists(
+        TEST_DATABASE,
+        "stage4_resume_checkpoint",
+        "data_source_id",
+        "data_source",
+        "id",
+    ), "Missing FK stage4_resume_checkpoint.data_source_id -> data_source.id"
+    assert _index_exists(TEST_DATABASE, "idx_stage4_resume_checkpoint_data_source_id"), (
+        "Missing Stage 4 checkpoint data-source lookup index"
+    )
+    assert _index_exists(TEST_DATABASE, "idx_stage4_resume_checkpoint_updated_at"), (
+        "Missing Stage 4 checkpoint updated_at lookup index"
+    )
+    assert _has_check_constraint(
+        TEST_DATABASE,
+        "cf.stage4_resume_checkpoint",
+        "ck_stage4_resume_checkpoint_file_type",
+    ), "Missing itcont-only file_type check on stage4_resume_checkpoint"
+    assert _has_check_constraint(
+        TEST_DATABASE,
+        "cf.stage4_resume_checkpoint",
+        "ck_stage4_resume_checkpoint_next_source_row_number",
+    ), "Missing non-negative cursor check on stage4_resume_checkpoint"
+
+    rows = _run_psql_command(
+        TEST_DATABASE,
+        """
+        SELECT count(*)::text
+        FROM information_schema.columns
+        WHERE table_schema = 'cf'
+          AND table_name = 'stage4_resume_checkpoint'
+          AND column_name = 'source_record_id';
+        """,
+    )
+    assert rows == ["0"], "Stage 4 resume checkpoints must not overload core.source_record"
+
+    _run_psql_command(
+        TEST_DATABASE,
+        """
+        WITH test_data_source AS (
+            SELECT id
+            FROM core.data_source
+            WHERE domain = 'campaign_finance'
+              AND jurisdiction = 'federal/fec'
+              AND name = 'Stage 4 Resume Checkpoint Contract'
+        )
+        DELETE FROM cf.stage4_resume_checkpoint
+        WHERE data_source_id IN (SELECT id FROM test_data_source);
+
+        DELETE FROM core.data_source
+        WHERE domain = 'campaign_finance'
+          AND jurisdiction = 'federal/fec'
+          AND name = 'Stage 4 Resume Checkpoint Contract';
+        """,
+    )
+    _run_psql_command(
+        TEST_DATABASE,
+        """
+        WITH seeded_data_source AS (
+            INSERT INTO core.data_source (
+                domain, jurisdiction, name, source_url, source_format
+            )
+            VALUES (
+                'campaign_finance',
+                'federal/fec',
+                'Stage 4 Resume Checkpoint Contract',
+                'https://www.fec.gov/data/browse-data/?tab=bulk-data',
+                'pipe_delimited'
+            )
+            RETURNING id
+        )
+        INSERT INTO cf.stage4_resume_checkpoint (
+            data_source_id,
+            cycle,
+            file_type,
+            archive_fingerprint,
+            archive_member_name,
+            next_source_row_number
+        )
+        SELECT id, 2026, 'itcont', 'fingerprint-a', 'itcont.txt', 1200
+        FROM seeded_data_source;
+        """,
+    )
+    with pytest.raises(RuntimeError, match="uq_stage4_resume_checkpoint_identity"):
+        _run_psql_command(
+            TEST_DATABASE,
+            """
+            INSERT INTO cf.stage4_resume_checkpoint (
+                data_source_id,
+                cycle,
+                file_type,
+                archive_fingerprint,
+                archive_member_name,
+                next_source_row_number
+            )
+            SELECT id, 2026, 'itcont', 'fingerprint-b', 'itcont.txt', 0
+            FROM core.data_source
+            WHERE name = 'Stage 4 Resume Checkpoint Contract';
+            """,
+        )
 
 
 def test_cf_schema_updated_at_triggers():
@@ -490,6 +815,7 @@ def test_candidate_committee_non_overlap_blocks_null_designation_overlap():
 # NC Committee Registry storage contract tests
 # ---------------------------------------------------------------------------
 
+
 def _column_info(database: str, table: str, column: str) -> dict[str, str]:
     rows = _run_psql_command(
         database,
@@ -537,52 +863,38 @@ def test_nc_registry_required_columns():
     for col in ("org_group_id", "sboe_id", "committee_name", "status_desc"):
         info = _nc_registry_column_info(col)
         assert info, f"Missing required column cf.nc_committee_registry.{col}"
-        assert info["nullable"] == "NO", (
-            f"cf.nc_committee_registry.{col} must be NOT NULL"
-        )
+        assert info["nullable"] == "NO", f"cf.nc_committee_registry.{col} must be NOT NULL"
 
 
 def test_nc_registry_nullable_columns():
     for col in ("old_id", "candidate_name"):
         info = _nc_registry_column_info(col)
         assert info, f"Missing nullable column cf.nc_committee_registry.{col}"
-        assert info["nullable"] == "YES", (
-            f"cf.nc_committee_registry.{col} should be nullable"
-        )
+        assert info["nullable"] == "YES", f"cf.nc_committee_registry.{col} should be nullable"
 
 
 def test_nc_registry_org_group_id_is_integer():
     info = _nc_registry_column_info("org_group_id")
-    assert info["type"] == "integer", (
-        f"org_group_id should be integer, got {info['type']}"
-    )
+    assert info["type"] == "integer", f"org_group_id should be integer, got {info['type']}"
 
 
 def test_nc_registry_unique_org_group_id():
-    assert _index_exists(TEST_DATABASE, "uq_nc_committee_registry_org_group_id"), (
-        "Missing unique index on org_group_id"
-    )
+    assert _index_exists(TEST_DATABASE, "uq_nc_committee_registry_org_group_id"), "Missing unique index on org_group_id"
 
 
 def test_nc_registry_sboe_id_index():
-    assert _index_exists(TEST_DATABASE, "idx_nc_committee_registry_sboe_id"), (
-        "Missing lookup index on sboe_id"
-    )
+    assert _index_exists(TEST_DATABASE, "idx_nc_committee_registry_sboe_id"), "Missing lookup index on sboe_id"
 
 
 def test_nc_registry_status_desc_index():
-    assert _index_exists(TEST_DATABASE, "idx_nc_committee_registry_status_desc"), (
-        "Missing lookup index on status_desc"
-    )
+    assert _index_exists(TEST_DATABASE, "idx_nc_committee_registry_status_desc"), "Missing lookup index on status_desc"
 
 
 def test_nc_registry_lifecycle_timestamps():
     for col in ("first_seen_at", "last_seen_at"):
         info = _nc_registry_column_info(col)
         assert info, f"Missing lifecycle column {col}"
-        assert "timestamp" in info["type"], (
-            f"{col} should be timestamptz, got {info['type']}"
-        )
+        assert "timestamp" in info["type"], f"{col} should be timestamptz, got {info['type']}"
         assert info["nullable"] == "NO", f"{col} must be NOT NULL"
 
 
@@ -591,9 +903,7 @@ def test_nc_registry_standard_timestamps():
         info = _nc_registry_column_info(col)
         assert info, f"Missing standard timestamp column {col}"
         assert info["nullable"] == "NO", f"{col} must be NOT NULL"
-        assert "now()" in (info.get("default") or "").lower(), (
-            f"{col} should default to NOW()"
-        )
+        assert "now()" in (info.get("default") or "").lower(), f"{col} should default to NOW()"
 
 
 def test_nc_registry_monotonic_timestamp_check():
@@ -623,20 +933,12 @@ def test_nc_registry_orchestrator_filter_columns():
     orchestrator fails immediately with `column "is_active" does not exist`.
     """
     is_active = _nc_registry_column_info("is_active")
-    assert is_active, (
-        "Missing cf.nc_committee_registry.is_active column required by NC orchestrator"
-    )
-    assert is_active["type"] == "boolean", (
-        f"is_active should be boolean, got {is_active['type']}"
-    )
+    assert is_active, "Missing cf.nc_committee_registry.is_active column required by NC orchestrator"
+    assert is_active["type"] == "boolean", f"is_active should be boolean, got {is_active['type']}"
 
     last_filing = _nc_registry_column_info("last_filing_date")
-    assert last_filing, (
-        "Missing cf.nc_committee_registry.last_filing_date column required by NC orchestrator"
-    )
-    assert last_filing["type"] == "date", (
-        f"last_filing_date should be date, got {last_filing['type']}"
-    )
+    assert last_filing, "Missing cf.nc_committee_registry.last_filing_date column required by NC orchestrator"
+    assert last_filing["type"] == "date", f"last_filing_date should be date, got {last_filing['type']}"
     assert last_filing["nullable"] == "YES", (
         "last_filing_date should be nullable (no filing data yet for many committees)"
     )
@@ -669,9 +971,7 @@ def test_nc_registry_is_active_derived_from_status_desc():
     parts = rows[0].split("|")
     is_generated = parts[0].strip()
     expression = parts[1].strip() if len(parts) > 1 else ""
-    assert is_generated == "ALWAYS", (
-        f"is_active should be GENERATED ALWAYS, got is_generated={is_generated!r}"
-    )
+    assert is_generated == "ALWAYS", f"is_active should be GENERATED ALWAYS, got is_generated={is_generated!r}"
     # The generation expression must reference status_desc and the ACTIVE prefix.
     assert "status_desc" in expression.lower(), (
         f"is_active generation expression must derive from status_desc; got: {expression!r}"

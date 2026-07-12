@@ -20,7 +20,7 @@ def _build_argument_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "Override output path for the proof artifact. "
-            "Defaults to docs/research/artifacts/2026_04_29_dwo_rosters/local/"
+            "Defaults to docs/reference/research/artifacts/2026_04_29_dwo_rosters/local/"
             "stage5_statewide_roster_local_proof.json"
         ),
     )

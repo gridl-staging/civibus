@@ -10,11 +10,14 @@ from pydantic import ValidationError
 import api.models as api_models
 from api.models import (
     CandidateFundraisingSummary,
+    CandidateListItem,
     CandidateResponse,
+    CommitteeCycleSummary,
     CommitteeFilingBreakdown,
     ClusterMemberResponse,
     CommitteeFundraisingSummary,
     CommitteeResponse,
+    PersonContributionInsights,
     DonorsWithPropertyParams,
     DonorsWithPropertyResult,
     ERClusterDetailResponse,
@@ -31,6 +34,7 @@ from api.models import (
     ParcelListParams,
     ParcelSummaryResponse,
     PersonResponse,
+    PersonPortraitResponse,
     PersonSlugResult,
     PropertyAssessmentResponse,
     PropertyOwnershipResponse,
@@ -93,11 +97,22 @@ def test_person_response_requires_canonical_name() -> None:
 
 def test_person_response_serializes_optional_fields_as_null_and_round_trips() -> None:
     person_id = uuid4()
+    portrait_payload = PersonPortraitResponse.model_validate(
+        {
+            "status": "active",
+            "rights_status": "licensed",
+            "source_image_url": "https://images.example.org/jane-doe.jpg",
+            "mime_type": "image/jpeg",
+            "width_px": 640,
+            "height_px": 480,
+        }
+    )
     response = PersonResponse.model_validate(
         {
             "id": person_id,
             "canonical_name": "Jane Doe",
             "name_variants": [],
+            "portrait": portrait_payload,
             "identifiers": {},
             "sources": [_source_info_payload()],
         }
@@ -119,6 +134,14 @@ def test_person_response_serializes_optional_fields_as_null_and_round_trips() ->
     assert dumped["primary_address_id"] is None
     assert dumped["er_cluster_id"] is None
     assert dumped["er_confidence"] is None
+    assert dumped["portrait"] == {
+        "status": "active",
+        "rights_status": "licensed",
+        "source_image_url": "https://images.example.org/jane-doe.jpg",
+        "mime_type": "image/jpeg",
+        "width_px": 640,
+        "height_px": 480,
+    }
     assert PersonResponse.model_validate(dumped).model_dump(mode="json") == dumped
 
 
@@ -241,6 +264,64 @@ def test_candidate_response_serializes_optional_fields_as_null_and_round_trips()
     assert "created_at" not in dumped
     assert "updated_at" not in dumped
     assert CandidateResponse.model_validate(dumped).model_dump(mode="json") == dumped
+
+
+def test_person_contribution_insights_round_trips_money_and_metadata() -> None:
+    person_id = uuid4()
+    response = PersonContributionInsights.model_validate(
+        {
+            "person_id": person_id,
+            "has_data": True,
+            "metadata": {
+                "coverage_start_date": date(2022, 1, 1),
+                "coverage_end_date": date(2026, 6, 30),
+                "cycles_included": [2024, 2026],
+                "committee_count": 2,
+                "approximate_geography": True,
+                "excluded_geography": None,
+                "caveats": ["missing_committee_summary"],
+            },
+            "monthly_totals": [{"month": "2024-02", "total_amount": Decimal("250.00"), "transaction_count": 2}],
+            "itemized_size_buckets": [
+                {
+                    "label": "$1-$200",
+                    "min_amount": Decimal("0.01"),
+                    "max_amount": Decimal("200.00"),
+                    "total_amount": Decimal("250.00"),
+                    "transaction_count": 2,
+                }
+            ],
+            "dollars_by_size": [
+                {"label": "Unitemized (<$200)", "total_amount": Decimal("500.00"), "source": "committee_summary"}
+            ],
+            "geography": {
+                "by_state": [{"label": "NC", "total_amount": Decimal("250.00"), "transaction_count": 2}],
+                "by_district": [{"label": "In district", "total_amount": Decimal("250.00"), "transaction_count": 2}],
+                "district_share": {
+                    "in_district_amount": Decimal("250.00"),
+                    "out_of_district_amount": Decimal("0.00"),
+                    "unknown_district_amount": Decimal("0.00"),
+                    "share": Decimal("1.0000"),
+                    "available": True,
+                },
+            },
+            "small_dollar_share": {
+                "small_dollar_amount": Decimal("750.00"),
+                "total_contribution_amount": Decimal("1000.00"),
+                "share": Decimal("0.7500"),
+                "available": True,
+            },
+        }
+    )
+
+    dumped = response.model_dump(mode="json")
+
+    assert dumped["person_id"] == str(person_id)
+    assert dumped["metadata"]["coverage_start_date"] == "2022-01-01"
+    assert dumped["monthly_totals"][0]["total_amount"] == "250.00"
+    assert dumped["geography"]["district_share"]["share"] == "1.0000"
+    assert dumped["small_dollar_share"]["share"] == "0.7500"
+    assert PersonContributionInsights.model_validate(dumped).model_dump(mode="json") == dumped
 
 
 def test_filing_response_requires_required_fields() -> None:
@@ -1170,6 +1251,7 @@ def test_candidate_fundraising_summary_serializes_decimals_and_nested_committees
                     "data_through": datetime(2026, 3, 20, 12, 0, tzinfo=timezone.utc),
                 }
             ],
+            "summary_source": "derived",
         }
     )
 
@@ -1189,7 +1271,67 @@ def test_candidate_fundraising_summary_serializes_decimals_and_nested_committees
     assert dumped["committees"][0]["transaction_count"] == 4
     assert dumped["committees"][0]["jurisdiction"] == "state/nc"
     assert dumped["committees"][0]["data_through"] == "2026-03-20T12:00:00Z"
+    assert dumped["cash_on_hand"] is None
+    assert dumped["summary_source"] == "derived"
     assert CandidateFundraisingSummary.model_validate(dumped).model_dump(mode="json") == dumped
+
+
+def test_candidate_fundraising_summary_serializes_cash_on_hand_and_summary_source_literal() -> None:
+    """Stage 3 contract: cash_on_hand is money-or-null and summary_source is 'fec_weball' / 'derived'."""
+    candidate_id = uuid4()
+    weball_summary = CandidateFundraisingSummary.model_validate(
+        {
+            "candidate_id": candidate_id,
+            "candidate_name": "Weball Candidate",
+            "total_raised": Decimal("9000.00"),
+            "total_spent": Decimal("3500.00"),
+            "net": Decimal("5500.00"),
+            "transaction_count": 0,
+            "committees": [],
+            "cash_on_hand": Decimal("5500.00"),
+            "summary_source": "fec_weball",
+        }
+    )
+
+    dumped = weball_summary.model_dump(mode="json")
+
+    assert dumped["cash_on_hand"] == "5500.00"
+    assert dumped["summary_source"] == "fec_weball"
+    # Round-trip preserves the literal and the money field.
+    assert CandidateFundraisingSummary.model_validate(dumped).model_dump(mode="json") == dumped
+
+    derived_summary = CandidateFundraisingSummary.model_validate(
+        {
+            "candidate_id": candidate_id,
+            "candidate_name": "Derived Candidate",
+            "total_raised": Decimal("0.00"),
+            "total_spent": Decimal("0.00"),
+            "net": Decimal("0.00"),
+            "transaction_count": 0,
+            "committees": [],
+            "cash_on_hand": None,
+            "summary_source": "derived",
+        }
+    )
+    derived_dumped = derived_summary.model_dump(mode="json")
+    assert derived_dumped["cash_on_hand"] is None
+    assert derived_dumped["summary_source"] == "derived"
+
+    # Invalid summary_source literal is rejected.
+    with pytest.raises(ValidationError):
+        CandidateFundraisingSummary.model_validate(
+            {
+                "candidate_id": candidate_id,
+                "candidate_name": "Invalid",
+                "total_raised": Decimal("0.00"),
+                "total_spent": Decimal("0.00"),
+                "net": Decimal("0.00"),
+                "transaction_count": 0,
+                "committees": [],
+                "cash_on_hand": None,
+                "summary_source": "not_a_valid_source",
+            }
+        )
 
 
 def test_state_summary_item_serializes_decimal_date_and_nullable_ie_fields() -> None:
@@ -1406,13 +1548,208 @@ def test_committee_filing_breakdown_serializes_nested_filings_shape_and_round_tr
     assert CommitteeFilingBreakdown.model_validate(dumped).model_dump(mode="json") == dumped
 
 
+def test_committee_cycle_summary_round_trips_supported_cycle_row() -> None:
+    """Stage 5: ``CommitteeCycleSummary`` carries per-cycle official totals."""
+    cycle_row = CommitteeCycleSummary.model_validate(
+        {
+            "cycle": 2024,
+            "total_receipts": Decimal("9000.00"),
+            "total_disbursements": Decimal("3500.00"),
+            "cash_on_hand": Decimal("5500.00"),
+            "coverage_start_date": date(2023, 1, 1),
+            "coverage_end_date": date(2024, 12, 31),
+        }
+    )
+    dumped = cycle_row.model_dump(mode="json")
+
+    assert dumped["cycle"] == 2024
+    assert dumped["total_receipts"] == "9000.00"
+    assert dumped["total_disbursements"] == "3500.00"
+    assert dumped["cash_on_hand"] == "5500.00"
+    assert dumped["coverage_start_date"] == "2023-01-01"
+    assert dumped["coverage_end_date"] == "2024-12-31"
+    assert CommitteeCycleSummary.model_validate(dumped).model_dump(mode="json") == dumped
+
+
+def test_committee_fundraising_summary_round_trips_stage5_official_fields() -> None:
+    """Stage 5: cycle_summaries + itemized_transaction_count + summary_source round-trip."""
+    committee_id = uuid4()
+    summary = CommitteeFundraisingSummary.model_validate(
+        {
+            "committee_id": committee_id,
+            "committee_name": "Official Totals Committee",
+            "total_raised": Decimal("10000.00"),
+            "total_spent": Decimal("4000.00"),
+            "net": Decimal("6000.00"),
+            "transaction_count": 2,
+            "itemized_transaction_count": 2,
+            "cycle_summaries": [
+                {
+                    "cycle": 2024,
+                    "total_receipts": Decimal("9000.00"),
+                    "total_disbursements": Decimal("3500.00"),
+                    "cash_on_hand": Decimal("5500.00"),
+                },
+                {
+                    "cycle": 2026,
+                    "total_receipts": Decimal("1000.00"),
+                    "total_disbursements": Decimal("500.00"),
+                },
+            ],
+            "summary_source": "fec_committee_summary",
+        }
+    )
+    dumped = summary.model_dump(mode="json")
+
+    assert dumped["itemized_transaction_count"] == 2
+    assert dumped["summary_source"] == "fec_committee_summary"
+    assert len(dumped["cycle_summaries"]) == 2
+    assert dumped["cycle_summaries"][0]["cycle"] == 2024
+    assert dumped["cycle_summaries"][0]["total_receipts"] == "9000.00"
+    assert dumped["cycle_summaries"][1]["cash_on_hand"] is None
+    assert CommitteeFundraisingSummary.model_validate(dumped).model_dump(mode="json") == dumped
+
+
+def test_committee_fundraising_summary_rejects_invalid_summary_source_literal() -> None:
+    with pytest.raises(ValidationError):
+        CommitteeFundraisingSummary.model_validate(
+            {
+                "committee_id": uuid4(),
+                "committee_name": "Invalid Source Committee",
+                "total_raised": Decimal("0.00"),
+                "total_spent": Decimal("0.00"),
+                "net": Decimal("0.00"),
+                "transaction_count": 0,
+                "summary_source": "not_a_valid_source",
+            }
+        )
+
+
+def test_committee_response_round_trips_linked_candidates_reusing_candidate_list_item_shape() -> None:
+    """Stage 5: ``linked_candidates`` reuses ``CandidateListItem`` and carries person_id."""
+    committee_id = uuid4()
+    candidate_id = uuid4()
+    person_id = uuid4()
+    response = CommitteeResponse.model_validate(
+        {
+            "id": committee_id,
+            "fec_committee_id": "C12345678",
+            "name": "Linked Candidates Committee",
+            "slug": "linked-candidates-committee",
+            "slug_is_unique": True,
+            "sources": [_source_info_payload()],
+            "linked_candidates": [
+                {
+                    "id": candidate_id,
+                    "fec_candidate_id": "H0NC01001",
+                    "name": "Alpha Candidate",
+                    "person_id": person_id,
+                    "party": "DEM",
+                    "office": "H",
+                    "state": "NC",
+                    "district": "01",
+                    "slug": "alpha-candidate",
+                    "slug_is_unique": True,
+                }
+            ],
+        }
+    )
+    dumped = response.model_dump(mode="json")
+
+    assert isinstance(response.linked_candidates[0], CandidateListItem)
+    linked = dumped["linked_candidates"][0]
+    assert linked["id"] == str(candidate_id)
+    assert linked["person_id"] == str(person_id)
+    assert linked["office"] == "H"
+    assert linked["slug"] == "alpha-candidate"
+    assert linked["slug_is_unique"] is True
+    assert CommitteeResponse.model_validate(dumped).model_dump(mode="json") == dumped
+
+
+def test_committee_response_linked_candidates_defaults_to_empty_list() -> None:
+    response = CommitteeResponse.model_validate(
+        {
+            "id": uuid4(),
+            "fec_committee_id": "C12345678",
+            "name": "Empty Committee",
+            "slug": "empty-committee",
+            "slug_is_unique": True,
+            "sources": [_source_info_payload()],
+        }
+    )
+    assert response.linked_candidates == []
+    dumped = response.model_dump(mode="json")
+    assert dumped["linked_candidates"] == []
+
+
+def test_candidate_fundraising_summary_round_trips_itemized_transaction_count() -> None:
+    """Stage 5: ``itemized_transaction_count`` mirrors the derived transaction count."""
+    summary = CandidateFundraisingSummary.model_validate(
+        {
+            "candidate_id": uuid4(),
+            "candidate_name": "Weball Candidate",
+            "total_raised": Decimal("9000.00"),
+            "total_spent": Decimal("3500.00"),
+            "net": Decimal("5500.00"),
+            "transaction_count": 4,
+            "itemized_transaction_count": 4,
+            "committees": [],
+            "cash_on_hand": Decimal("5500.00"),
+            "summary_source": "fec_weball",
+        }
+    )
+    dumped = summary.model_dump(mode="json")
+    assert dumped["itemized_transaction_count"] == 4
+    assert CandidateFundraisingSummary.model_validate(dumped).model_dump(mode="json") == dumped
+
+
+def test_independent_expenditure_summary_round_trips_excluded_outlier_count() -> None:
+    """Stage 5: ``excluded_outlier_count`` reports rows filtered from the aggregate."""
+    summary = IndependentExpenditureSummary.model_validate(
+        {
+            "candidate_id": str(uuid4()),
+            "support_total": Decimal("250.00"),
+            "oppose_total": Decimal("0.00"),
+            "support_count": 1,
+            "oppose_count": 0,
+            "top_spenders": [],
+            "excluded_outlier_count": 3,
+        }
+    )
+    dumped = summary.model_dump(mode="json")
+    assert dumped["excluded_outlier_count"] == 3
+    assert IndependentExpenditureSummary.model_validate(dumped).model_dump(mode="json") == dumped
+
+    # Default is 0 when omitted.
+    without_count = IndependentExpenditureSummary.model_validate(
+        {
+            "candidate_id": str(uuid4()),
+            "support_total": Decimal("0.00"),
+            "oppose_total": Decimal("0.00"),
+            "support_count": 0,
+            "oppose_count": 0,
+            "top_spenders": [],
+        }
+    )
+    assert without_count.excluded_outlier_count == 0
+
+
 def test_models_package_reexports_public_response_and_params_models() -> None:
     expected_exports = {
         "SourceInfo",
         "PersonResponse",
+        "PersonContributionInsights",
         "OrgResponse",
         "CommitteeFilingBreakdown",
         "CommitteeFundraisingSummary",
+        "ContributionInsightsDistrictShare",
+        "ContributionInsightsDollarsBucket",
+        "ContributionInsightsGeography",
+        "ContributionInsightsGeographyRow",
+        "ContributionInsightsItemizedBucket",
+        "ContributionInsightsMetadata",
+        "ContributionInsightsMonthlyTotal",
+        "ContributionInsightsSmallDollarShare",
         "CandidateFundraisingSummary",
         "CommitteeResponse",
         "CandidateResponse",

@@ -2,8 +2,6 @@
 export const STAGE4_DETAIL_ENTITY_TYPES = ["person", "org"] as const;
 
 export type Stage4EntityType = (typeof STAGE4_DETAIL_ENTITY_TYPES)[number];
-export type Stage4ErEntityType = "person" | "organization";
-export type Stage4GraphEntityType = "person" | "org";
 const REQUIRED_PERSON_BIO_KEYS = [
   "bio_text",
   "bio_source_url",
@@ -12,16 +10,6 @@ const REQUIRED_PERSON_BIO_KEYS = [
 ] as const;
 
 const DETAIL_PATH_SEGMENT_BY_ENTITY_TYPE: Record<Stage4EntityType, Stage4EntityType> = {
-  person: "person",
-  org: "org"
-};
-
-const ER_PATH_SEGMENT_BY_ENTITY_TYPE: Record<Stage4EntityType, Stage4ErEntityType> = {
-  person: "person",
-  org: "organization"
-};
-
-const GRAPH_PATH_SEGMENT_BY_ENTITY_TYPE: Record<Stage4EntityType, Stage4GraphEntityType> = {
   person: "person",
   org: "org"
 };
@@ -92,39 +80,6 @@ export type PersonPortraitResponse = {
 
 export type EntityDetailResponse = PersonDetailResponse | OrgDetailResponse;
 
-export type ErMatchDecision = {
-  id: string;
-  entity_type: Stage4ErEntityType;
-  entity_id_a: string;
-  entity_id_b: string;
-  decision: string;
-  confidence: number;
-  decided_by: string;
-  decision_method: string;
-  match_evidence: Record<string, unknown> | null;
-  decided_at: string;
-};
-
-export type GraphNeighbor = {
-  entity_type: string;
-  entity_id: string;
-  name: string | null;
-  relationship_type: string;
-  direction: "outbound" | "inbound";
-};
-
-export type EntityGraphRelationshipsResponse = {
-  entity_type: string;
-  entity_id: string;
-  neighbors: GraphNeighbor[];
-  total_count: number;
-};
-
-export type GraphNeighborRouteClassification = {
-  href: string | null;
-  isRoutable: boolean;
-};
-
 /**
  * Runtime contract guard for `/v1/person/{id}` payloads consumed by the detail page.
  * Stage 4 requires required-nullable bio attribution keys to always exist.
@@ -173,31 +128,4 @@ export function buildEntityRouteHref(entityType: string, entityId: string): stri
 
 export function buildEntityDetailPath(entityType: Stage4EntityType, entityId: string): string {
   return `/v1/${DETAIL_PATH_SEGMENT_BY_ENTITY_TYPE[entityType]}/${encodeRoutePathSegment(entityId)}`;
-}
-
-export function buildEntityErMatchesPath(entityType: Stage4EntityType, entityId: string): string {
-  return `/v1/er/${ER_PATH_SEGMENT_BY_ENTITY_TYPE[entityType]}/${encodeRoutePathSegment(entityId)}/matches`;
-}
-
-export function buildEntityGraphRelationshipsPath(entityType: Stage4EntityType, entityId: string): string {
-  return `/v1/graph/${GRAPH_PATH_SEGMENT_BY_ENTITY_TYPE[entityType]}/${encodeRoutePathSegment(entityId)}/relationships`;
-}
-
-/** Marks graph neighbors as routeable when the frontend has a matching detail page. */
-export function classifyGraphNeighborRoute(
-  neighbor: Pick<GraphNeighbor, "entity_type" | "entity_id">
-): GraphNeighborRouteClassification {
-  const href = buildEntityRouteHref(neighbor.entity_type, neighbor.entity_id);
-
-  if (href === null) {
-    return {
-      href: null,
-      isRoutable: false
-    };
-  }
-
-  return {
-    href,
-    isRoutable: true
-  };
 }

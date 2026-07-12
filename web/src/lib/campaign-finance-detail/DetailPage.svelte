@@ -8,10 +8,12 @@
     buildCandidateDeferredFundraisingSummary,
     buildCandidateDeferredKeyMetrics,
     buildCandidateDeferredOutsideSpending,
+    buildCommitteeCycleSummaryRows,
     buildCommitteeDeferredFilingBreakdown,
     buildCommitteeDeferredFundraisingSummary,
     buildCommitteeDeferredHighSignalSummary,
     buildCommitteeDeferredKeyMetrics,
+    buildCommitteeDeferredOutsideSpending,
     buildCommitteeDeferredTransactionRows,
     getCampaignFinanceEmptyMessage,
     type CampaignFinanceDetailRoutePresentation
@@ -73,6 +75,19 @@
               </div>
             {/each}
           </dl>
+          {#if shellViewModel.linkedCandidates.length > 0}
+            <div data-testid="committee-linked-candidates">
+              <h4>Linked candidates</h4>
+              <ul class="detail__list" aria-label="Linked candidates">
+                {#each shellViewModel.linkedCandidates as candidate (candidate.candidateId)}
+                  <li>
+                    <a href={candidate.href}>{candidate.name}</a>
+                    <span> — {candidate.context}</span>
+                  </li>
+                {/each}
+              </ul>
+            </div>
+          {/if}
         </section>
       {:else if sectionKey === "trust"}
         <TrustSection trustSection={shellViewModel.trustSection} />
@@ -81,6 +96,7 @@
           <SkeletonPanel label="Key metrics" lines={3} />
         {:then summary}
           {@const keyMetrics = buildCommitteeDeferredKeyMetrics(summary)}
+          {@const fundraisingSummaryForMetrics = buildCommitteeDeferredFundraisingSummary(summary)}
           {#if keyMetrics.length > 0}
             <section class="detail__panel" data-testid="key-metrics">
               <h3>Key metrics</h3>
@@ -92,12 +108,111 @@
                   </div>
                 {/each}
               </dl>
+              <p class="detail__metric-source">{fundraisingSummaryForMetrics.summarySourceLabel}</p>
+              <p class="detail__metric-coverage-note">{fundraisingSummaryForMetrics.itemizedCoverageNote}</p>
             </section>
           {/if}
         {:catch}
           <section class="detail__panel" data-testid="key-metrics">
             <h3>Key metrics</h3>
             <p>Committee metrics are temporarily unavailable.</p>
+          </section>
+        {/await}
+      {:else if sectionKey === "outside-spending"}
+        {#await presentation.independentExpendituresMade}
+          <SkeletonPanel label="Outside spending" lines={5} />
+        {:then independentExpendituresMade}
+          {@const outsideSpending = buildCommitteeDeferredOutsideSpending(independentExpendituresMade)}
+          <section class="detail__panel" data-testid="committee-outside-spending">
+            <h3>Outside Spending</h3>
+            {#if outsideSpending.emptyMessage}
+              <p>{outsideSpending.emptyMessage}</p>
+            {:else}
+              <dl class="detail__rows">
+                <div class="detail__row">
+                  <dt>Support spending</dt>
+                  <dd>{outsideSpending.supportTotal}</dd>
+                </div>
+                <div class="detail__row">
+                  <dt>Oppose spending</dt>
+                  <dd>{outsideSpending.opposeTotal}</dd>
+                </div>
+                <div class="detail__row">
+                  <dt>Independent expenditures</dt>
+                  <dd>{outsideSpending.ieCountLabel}</dd>
+                </div>
+              </dl>
+              {#if outsideSpending.targetRows.length > 0}
+                <h4>Target candidates</h4>
+                <div class="detail__table-scroll" data-testid="committee-outside-spending-targets">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Target</th>
+                        <th>Context</th>
+                        <th>Support</th>
+                        <th>Oppose</th>
+                        <th>Expenditures</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {#each outsideSpending.targetRows as target (target.rowKey)}
+                        <tr>
+                          <td>
+                            {#if target.targetHref}
+                              <a href={target.targetHref}>{target.candidateName}</a>
+                            {:else}
+                              {target.candidateName}
+                            {/if}
+                          </td>
+                          <td>{target.context}</td>
+                          <td>{target.supportTotal}</td>
+                          <td>{target.opposeTotal}</td>
+                          <td>{target.transactionCountLabel}</td>
+                        </tr>
+                      {/each}
+                    </tbody>
+                  </table>
+                </div>
+              {/if}
+              {#if outsideSpending.sourceRows.length > 0}
+                <h4>Source filings</h4>
+                <div class="detail__table-scroll" data-testid="committee-outside-spending-sources">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Target</th>
+                        <th>Source</th>
+                        <th>Record</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {#each outsideSpending.sourceRows as source (source.rowKey)}
+                        <tr>
+                          <td>{source.candidateName}</td>
+                          <td>
+                            {#if source.href}
+                              <a href={source.href}>{source.sourceName}</a>
+                            {:else}
+                              {source.sourceName}
+                            {/if}
+                          </td>
+                          <td>{source.sourceRecordKey}</td>
+                        </tr>
+                      {/each}
+                    </tbody>
+                  </table>
+                </div>
+              {/if}
+            {/if}
+            {#if outsideSpending.outlierNote}
+              <p role="note">{outsideSpending.outlierNote}</p>
+            {/if}
+          </section>
+        {:catch}
+          <section class="detail__panel" data-testid="committee-outside-spending">
+            <h3>Outside Spending</h3>
+            <p>Committee independent-expenditure data is temporarily unavailable.</p>
           </section>
         {/await}
       {:else if sectionKey === "records"}
@@ -251,6 +366,39 @@
             {:catch}
               <p>Cash-on-hand trend is not available from reported filing periods.</p>
             {/await}
+          </section>
+
+          {@const cycleSummaryRows = buildCommitteeCycleSummaryRows(summary)}
+          <section class="detail__panel">
+            <h3>Per-cycle history</h3>
+            {#if cycleSummaryRows.length === 0}
+              <p>No cycle-level FEC totals loaded for this committee yet.</p>
+            {:else}
+              <div class="detail__table-scroll" data-testid="committee-cycle-summaries-scroll">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Cycle</th>
+                      <th>Coverage</th>
+                      <th>Total receipts</th>
+                      <th>Total disbursements</th>
+                      <th>Cash on hand</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {#each cycleSummaryRows as cycle (cycle.cycle)}
+                      <tr>
+                        <td>{cycle.cycleLabel}</td>
+                        <td>{cycle.coveragePeriod}</td>
+                        <td>{cycle.totalReceipts}</td>
+                        <td>{cycle.totalDisbursements}</td>
+                        <td>{cycle.cashOnHand}</td>
+                      </tr>
+                    {/each}
+                  </tbody>
+                </table>
+              </div>
+            {/if}
           </section>
 
           {#await presentation.filingBreakdown}

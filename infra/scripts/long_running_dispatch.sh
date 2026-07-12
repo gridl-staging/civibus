@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Canonical foreground wrapper for long-running ingest dispatch on the Hetzner VM.
 #
-# Owner: Stage 2 of docs/operations/long_running_ingest_discipline.md.
+# Owner: Stage 2 of docs/howto/operations/long_running_ingest_discipline.md.
 # Responsibility: launch the wrapped command in the foreground, capture stdout/
 # stderr to dispatch.log, write dispatch.json before launch and closeout.json
 # exactly once at terminal completion. Does not detach, daemonize, or alter
@@ -24,7 +24,7 @@ Usage: long_running_dispatch.sh \
   -- <wrapped-command> [args...]
 
 Required:
-  --artifact-id   Evidence directory key under docs/research/artifacts/.
+  --artifact-id   Evidence directory key under docs/reference/research/artifacts/.
   --dispatch-id   Unique dispatch slug, regex ^[a-z0-9][a-z0-9_-]{7,63}$.
   --probe-sql     Non-empty monitor probe SQL recorded in dispatch.json.
   --              Separator before the wrapped command and its arguments.
@@ -82,12 +82,12 @@ done
 (( saw_separator == 1 )) || fail "missing '--' separator before wrapped command"
 (( ${#wrapped_cmd[@]} > 0 )) || fail "wrapped command is required after '--'"
 
-# Frozen contract regex from docs/operations/long_running_ingest_discipline.md.
+# Frozen contract regex from docs/howto/operations/long_running_ingest_discipline.md.
 if [[ ! "${dispatch_id}" =~ ^[a-z0-9][a-z0-9_-]{7,63}$ ]]; then
   fail "invalid --dispatch-id '${dispatch_id}'; must match ^[a-z0-9][a-z0-9_-]{7,63}\$"
 fi
 
-evidence_directory="${repo_root}/docs/research/artifacts/${artifact_id}/hetzner/${dispatch_id}"
+evidence_directory="${repo_root}/docs/reference/research/artifacts/${artifact_id}/hetzner/${dispatch_id}"
 log_path="${evidence_directory}/dispatch.log"
 dispatch_json_path="${evidence_directory}/dispatch.json"
 closeout_json_path="${evidence_directory}/closeout.json"

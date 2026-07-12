@@ -48,9 +48,9 @@ Documentation-only (not loaded in Stage 2): lobbying tables, schedule/memo/split
 
 ## Sources
 - [S1] https://www.sos.ca.gov/campaign-lobbying/cal-access-resources/raw-data-campaign-finance-and-lobbying-activity
-- [S2] `docs/research/stage2-ca-archive-member-investigation.md`
+- [S2] `docs/reference/research/stage2-ca-archive-member-investigation.md`
 - [S3] `domains/campaign_finance/jurisdictions/states/CA/config.yaml`
-- [S4] `docs/research/stage2-ca-coverage-verification.md`
+- [S4] `docs/reference/research/stage2-ca-coverage-verification.md`
 - [S5] https://www.fppc.ca.gov/learn/campaign-rules/state-contribution-limits-and-voluntary-expenditure-ceilings/
 - [S6] https://www.sos.ca.gov/campaign-lobbying/helpful-resources/how-to-file-electronically
 - [S7] https://www.leginfo.legislature.ca.gov/faces/codes_displayText.xhtml?article=2.&chapter=4.&division=&lawCode=GOV&part=&title=9.

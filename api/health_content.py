@@ -9,14 +9,15 @@ monitor.
 
 Design constraints:
 
-* Stay simple. Each check is a single ``COUNT(*)`` against a single table.
+* Stay simple. Each check is a static ``COUNT(*)`` probe over the narrowest
+  table or serving-path contract that proves the launch surface is populated.
   A bug in this watchdog must fail OPEN (alarms fire), not CLOSED (alarms
-  suppressed). Joins, subqueries, and clever ER probes were rejected for
-  that reason — too easy to silently break.
+  suppressed). Clever ER probes are rejected for that reason — too easy to
+  silently break.
 * Floors are operator-tunable via env vars so the same image runs in dev
   (small DB) and prod (full DB) without code changes.
-* Defaults are intended for prod. Tests override via ``floors=`` kwarg or
-  the env-var prefix ``CIVIBUS_HEALTH_CONTENT_FLOOR_``.
+* Defaults are the current federal-first prod launch floors. Operators can
+  tighten them through env vars as data volumes grow.
 """
 
 from __future__ import annotations
@@ -28,18 +29,48 @@ from typing import Mapping
 import psycopg
 from psycopg.sql import SQL
 
+from api.contribution_insights_contract import (
+    CONTRIBUTION_INSIGHTS_MIN_DATE,
+    CONTRIBUTION_INSIGHTS_SOURCE_RECORD_JOIN_SQL,
+    CONTRIBUTION_INSIGHTS_SOURCE_RECORD_WHERE_SQL,
+    contribution_insights_transaction_where_sql,
+)
 
-# Default floors aimed at the live prod data set as it stood pre-incident
-# (cf.transaction ~10M rows, core.person O(50K), civic.officeholding O(8K)).
-# These are intentionally conservative so a future partial-load doesn't
-# silently flip the gate green; tighten them upward as data grows, never
-# downward to "make the alert green again."
-_DEFAULT_FLOORS: Mapping[str, int] = {
-    "cf_transaction_total": 1_000_000,
-    "core_person_total": 1_000,
-    "civic_officeholding_total": 100,
-    "cf_transaction_with_resolved_person": 1_000,
+
+_CONTRIBUTION_INSIGHTS_SENTINEL_DONOR_PREFIX = "bofinger%"
+_CONTRIBUTION_INSIGHTS_MIN_DATE_SQL = f"DATE '{CONTRIBUTION_INSIGHTS_MIN_DATE.isoformat()}'"
+_CONTRIBUTION_INSIGHTS_TRANSACTION_WHERE_SQL = contribution_insights_transaction_where_sql(
+    min_date_sql=_CONTRIBUTION_INSIGHTS_MIN_DATE_SQL
+)
+
+
+# Federal-first production counts verified during the July 2026 Fly load.
+# ``civic_officeholding_total`` is the unfiltered
+# ``SELECT COUNT(*) FROM civic.officeholding`` total.
+FEDERAL_FIRST_CONTENT_COUNTS: Mapping[str, int] = {
+    "cf_transaction_total": 16_050_580,
+    "core_person_total": 8_705,
+    "civic_officeholding_total": 543,
+    "cf_transaction_with_resolved_person": 0,
+    "cf_committee_summary_total": 32_404,
+    "cf_transaction_with_support_oppose": 10_409,
+    "cf_transaction_contribution_insights_sentinel": 4_495,
 }
+
+# Current prod launch floors. These are 80% of the current Fly production
+# counts where populated. Unresolved optional links stay pinned to zero until
+# those refresh paths are populated.
+FEDERAL_FIRST_CONTENT_FLOORS: Mapping[str, int] = {
+    "cf_transaction_total": 12_840_464,
+    "core_person_total": 6_964,
+    "civic_officeholding_total": 434,
+    "cf_transaction_with_resolved_person": 0,
+    "cf_committee_summary_total": 25_923,
+    "cf_transaction_with_support_oppose": 8_327,
+    "cf_transaction_contribution_insights_sentinel": 3_596,
+}
+
+_DEFAULT_FLOORS: Mapping[str, int] = FEDERAL_FIRST_CONTENT_FLOORS
 
 _FLOOR_ENV_VAR_PREFIX = "CIVIBUS_HEALTH_CONTENT_FLOOR_"
 
@@ -55,6 +86,15 @@ _CHECK_QUERIES: Mapping[str, str] = {
     # never landed in core.person" partial-failure modes.
     "cf_transaction_with_resolved_person": (
         "SELECT COUNT(*) FROM cf.transaction WHERE contributor_person_id IS NOT NULL"
+    ),
+    "cf_committee_summary_total": "SELECT COUNT(*) FROM cf.committee_summary",
+    "cf_transaction_with_support_oppose": "SELECT COUNT(*) FROM cf.transaction WHERE support_oppose IS NOT NULL",
+    "cf_transaction_contribution_insights_sentinel": (
+        "SELECT COUNT(*) FROM cf.transaction t "
+        f"{CONTRIBUTION_INSIGHTS_SOURCE_RECORD_JOIN_SQL}"
+        f"WHERE lower(t.contributor_name_raw) LIKE '{_CONTRIBUTION_INSIGHTS_SENTINEL_DONOR_PREFIX}'"
+        f"{_CONTRIBUTION_INSIGHTS_TRANSACTION_WHERE_SQL}"
+        f"{CONTRIBUTION_INSIGHTS_SOURCE_RECORD_WHERE_SQL}"
     ),
 }
 

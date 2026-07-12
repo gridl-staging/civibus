@@ -54,6 +54,7 @@ CREATE INDEX idx_office_state ON civic.office (state) WHERE state IS NOT NULL;
 CREATE INDEX idx_office_jurisdiction ON civic.office (jurisdiction_id) WHERE jurisdiction_id IS NOT NULL;
 CREATE INDEX idx_office_electoral_division ON civic.office (electoral_division_id)
     WHERE electoral_division_id IS NOT NULL;
+CREATE INDEX idx_office_source_record_id ON civic.office (source_record_id);
 
 -- ============================================================================
 -- Office Roster Link
@@ -123,6 +124,8 @@ CREATE INDEX idx_electoral_division_ocd_id ON civic.electoral_division (ocd_id) 
 CREATE INDEX idx_electoral_division_geometry
     ON civic.electoral_division USING GIST (geometry)
     WHERE geometry IS NOT NULL;
+CREATE INDEX idx_electoral_division_source_record_id
+    ON civic.electoral_division (source_record_id);
 
 ALTER TABLE civic.office
     ADD CONSTRAINT fk_office_electoral_division
@@ -173,6 +176,7 @@ CREATE UNIQUE INDEX uq_election_natural_key
 CREATE INDEX idx_election_date ON civic.election (election_date);
 CREATE INDEX idx_election_scope ON civic.election (jurisdiction_scope);
 CREATE INDEX idx_election_state ON civic.election (state) WHERE state IS NOT NULL;
+CREATE INDEX idx_civic_election_source_record_id ON civic.election (source_record_id);
 
 -- ============================================================================
 -- Contest
@@ -214,6 +218,7 @@ CREATE INDEX idx_contest_electoral_division ON civic.contest (electoral_division
     WHERE electoral_division_id IS NOT NULL;
 CREATE INDEX idx_contest_election_id ON civic.contest (election_id) WHERE election_id IS NOT NULL;
 CREATE INDEX idx_contest_election_date ON civic.contest (election_date) WHERE election_date IS NOT NULL;
+CREATE INDEX idx_civic_contest_source_record_id ON civic.contest (source_record_id);
 
 -- ============================================================================
 -- Contest Result
@@ -279,6 +284,7 @@ CREATE UNIQUE INDEX uq_filing_deadline_natural_key
 
 CREATE INDEX idx_filing_deadline_date ON civic.filing_deadline (deadline_date);
 CREATE INDEX idx_filing_deadline_scope ON civic.filing_deadline (jurisdiction_scope);
+CREATE INDEX idx_filing_deadline_source_record_id ON civic.filing_deadline (source_record_id);
 
 -- ============================================================================
 -- Reporting Period
@@ -308,6 +314,7 @@ CREATE UNIQUE INDEX uq_reporting_period_natural_key
 
 CREATE INDEX idx_reporting_period_range ON civic.reporting_period (period_start, period_end);
 CREATE INDEX idx_reporting_period_due_date ON civic.reporting_period (report_due_date);
+CREATE INDEX idx_reporting_period_source_record_id ON civic.reporting_period (source_record_id);
 
 -- ============================================================================
 -- Candidacy
@@ -328,8 +335,6 @@ CREATE TABLE civic.candidacy (
     status            TEXT,                       -- filed, qualified, withdrawn, winner, lost
     incumbent_challenge TEXT,                     -- I, C, O (FEC convention)
     candidate_number  TEXT,                       -- Source-assigned candidate number
-    name_on_ballot    TEXT,                       -- Canonical ballot-display name from civic source
-    committee_id      UUID,                       -- Linked controlling committee (cf.committee.id when resolved)
     source_record_id  UUID,                       -- FK to core.source_record
     created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -343,6 +348,7 @@ CREATE INDEX idx_candidacy_contest ON civic.candidacy (contest_id);
 CREATE INDEX idx_candidacy_status ON civic.candidacy (status) WHERE status IS NOT NULL;
 CREATE INDEX idx_candidacy_committee_id ON civic.candidacy (committee_id) WHERE committee_id IS NOT NULL;
 CREATE INDEX idx_candidacy_name_on_ballot ON civic.candidacy (name_on_ballot) WHERE name_on_ballot IS NOT NULL;
+CREATE INDEX idx_candidacy_source_record_id ON civic.candidacy (source_record_id);
 
 -- ============================================================================
 -- Officeholding
@@ -371,6 +377,30 @@ CREATE INDEX idx_officeholding_person ON civic.officeholding (person_id);
 CREATE INDEX idx_officeholding_office ON civic.officeholding (office_id);
 CREATE INDEX idx_officeholding_current ON civic.officeholding (person_id, office_id)
     WHERE upper_inf(valid_period);
+CREATE INDEX idx_officeholding_source_record_id ON civic.officeholding (source_record_id);
+
+-- ============================================================================
+-- ZCTA District Reference
+-- ============================================================================
+-- Approximate ZCTA5 -> 119th congressional district mapping derived from the
+-- Census 2020-ZCTA relationship file. This is a static reference table for
+-- fundraising geography summaries, not a geometry join owner.
+
+CREATE TABLE civic.zcta_district (
+    zcta5           TEXT PRIMARY KEY CHECK (zcta5 ~ '^[0-9]{5}$'),
+    state_fips      TEXT NOT NULL CHECK (state_fips ~ '^[0-9]{2}$'),
+    cd_geoid        TEXT NOT NULL CHECK (cd_geoid ~ '^[0-9A-Z]{4}$'),
+    district_number TEXT NOT NULL CHECK (char_length(district_number) = 2),
+    land_share      NUMERIC(7,5) NOT NULL CHECK (land_share >= 0 AND land_share <= 1),
+    source_url      TEXT NOT NULL,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_zcta_district_cd_geoid ON civic.zcta_district (cd_geoid);
+CREATE INDEX idx_zcta_district_state_fips ON civic.zcta_district (state_fips);
+
+COMMENT ON TABLE civic.zcta_district IS
+    'Approximate ZCTA5-to-119th-congressional-district mapping derived from the Census 2020-ZCTA relationship file for fundraising geography summaries; not a parcel- or geometry-level district assignment.';
 
 -- ============================================================================
 -- Cross-schema foreign keys: source_record_id
@@ -448,6 +478,8 @@ VALUES
     ('00000000-0000-4000-8000-000000000101', 'us_house', 'federal', 'Representative', NULL, NULL, TRUE, 435),
     ('00000000-0000-4000-8000-000000000102', 'us_senate', 'federal', 'Senator', NULL, NULL, TRUE, 100),
     ('00000000-0000-4000-8000-000000000103', 'us_president', 'federal', 'President', NULL, NULL, TRUE, 1),
+    ('00000000-0000-4000-8000-000000000104', 'us_vice_president', 'federal', 'Vice President', NULL, NULL, TRUE, 1),
+    ('00000000-0000-4000-8000-000000000105', 'us_house_delegate', 'federal', 'Delegate', NULL, NULL, TRUE, 6),
 
     -- WA office levels (15) from state config coverage.office_levels
     ('00000000-0000-4000-8000-000000000201', 'attorney_general', 'state', 'Attorney General', (SELECT id FROM core.jurisdiction WHERE fips = '53' LIMIT 1), 'WA', TRUE, 1),

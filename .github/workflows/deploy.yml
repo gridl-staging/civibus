@@ -9,275 +9,47 @@ permissions:
   contents: read
 
 jobs:
-  publish-api:
-    name: publish-api
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - uses: docker/login-action@b45d80f862d83dbcd57f89517bcf500b2ab88fb2 # v4.0.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - uses: docker/build-push-action@d08e5c354a6adb9ed34480a06d141179aa583294 # v7.0.0
-        with:
-          context: .
-          file: infra/api/Dockerfile
-          push: true
-          tags: |
-            ghcr.io/${{ github.repository }}/api:${{ github.sha }}
-            ghcr.io/${{ github.repository }}/api:latest
-
-  publish-web:
-    name: publish-web
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - uses: docker/login-action@b45d80f862d83dbcd57f89517bcf500b2ab88fb2 # v4.0.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - uses: docker/build-push-action@d08e5c354a6adb9ed34480a06d141179aa583294 # v7.0.0
-        with:
-          context: ./web
-          file: web/Dockerfile
-          push: true
-          tags: |
-            ghcr.io/${{ github.repository }}/web:${{ github.sha }}
-            ghcr.io/${{ github.repository }}/web:latest
-
   deploy:
     name: deploy
-    needs: [publish-api, publish-web]
+    if: github.repository == 'gridl-hq/civibus'
     runs-on: ubuntu-latest
     environment: production
     permissions:
       contents: read
-      packages: read
     env:
-      # Automatic GitHub token for private repo clone/fetch and GHCR image pull.
-      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      # Manual GitHub Actions secret: Hetzner VM host/IP for deploy SSH target.
-      HETZNER_HOST: ${{ secrets.HETZNER_HOST }}
-      # Manual GitHub Actions secret: private key authorized for root@$HETZNER_HOST.
-      HETZNER_SSH_KEY: ${{ secrets.HETZNER_SSH_KEY }}
-      # Manual GitHub Actions secret: pinned known_hosts entry for the deploy target.
-      HETZNER_KNOWN_HOSTS: ${{ secrets.HETZNER_KNOWN_HOSTS }}
-      # Manual GitHub Actions secret: full production .env file contents.
-      PRODUCTION_ENV_FILE: ${{ secrets.PRODUCTION_ENV_FILE }}
-      # Workflow-triggering commit SHA; remote checkout must match the images published in this run.
-      DEPLOY_GIT_SHA: ${{ github.sha }}
-      # Public repo URL; bootstrap/rollout use temporary credentials instead of persisting a tokenized origin URL.
-      DEPLOY_REPO_URL: https://github.com/${{ github.repository }}.git
-      # Manual GitHub Actions secret: public URL used by production smoke assertions.
-      PROD_SMOKE_BASE_URL: ${{ secrets.PROD_SMOKE_BASE_URL }}
+      FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+      PROD_SMOKE_BASE_URL: ${{ vars.PROD_SMOKE_BASE_URL }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
-      - name: Configure SSH credentials
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p ~/.ssh
-          if [[ -z "$HETZNER_HOST" || -z "$HETZNER_SSH_KEY" || -z "$HETZNER_KNOWN_HOSTS" || -z "$PRODUCTION_ENV_FILE" ]]; then
-            echo "Deploy workflow requires HETZNER_HOST, HETZNER_SSH_KEY, HETZNER_KNOWN_HOSTS, and PRODUCTION_ENV_FILE secrets" >&2
-            exit 1
-          fi
-          if [[ ! "$HETZNER_HOST" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*$ ]]; then
-            echo "Deploy workflow requires HETZNER_HOST to be a bare hostname or IPv4 address" >&2
-            exit 1
-          fi
-          install -m 600 /dev/null ~/.ssh/hetzner_deploy_key
-          install -m 600 /dev/null ~/.ssh/known_hosts
-          printf '%s\n' "$HETZNER_SSH_KEY" > ~/.ssh/hetzner_deploy_key
-          printf '%s\n' "$HETZNER_KNOWN_HOSTS" > ~/.ssh/known_hosts
+      - uses: superfly/flyctl-actions/setup-flyctl@master
 
-      - name: Capture currently deployed SHA
-        id: capture_prior_sha
+      - name: Deploy API to Fly
         shell: bash
         run: |
           set -euo pipefail
-          captured_sha="$(ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile=~/.ssh/known_hosts -i ~/.ssh/hetzner_deploy_key "root@${HETZNER_HOST}" bash -se <<'EOF'
-          set -euo pipefail
-          repo_dir="/root/civibus/civibus_dev"
-          fallback_repo_dir="/root/civibus"
-          if git -C "${repo_dir}" rev-parse HEAD >/dev/null 2>&1; then
-            git -C "${repo_dir}" rev-parse HEAD
-          elif git -C "${fallback_repo_dir}" rev-parse HEAD >/dev/null 2>&1; then
-            echo "Broken git checkout at ${repo_dir}; using ${fallback_repo_dir} HEAD as rollback anchor" >&2
-            git -C "${fallback_repo_dir}" rev-parse HEAD
-          else
-            echo "Unable to capture prior deployment SHA from ${repo_dir} or ${fallback_repo_dir}; rollback will be disabled" >&2
-            echo "UNAVAILABLE"
-          fi
-          EOF
-          )"
-          if [[ -z "${captured_sha}" ]]; then
-            echo "Unable to capture prior deployment SHA before deploy rollback anchor; rollback will be disabled" >&2
-            captured_sha="UNAVAILABLE"
-          fi
-          echo "CURRENT_DEPLOYED_SHA=${captured_sha}" >> "$GITHUB_OUTPUT"
+          flyctl deploy -c infra/fly/api.fly.toml --remote-only
 
-      - name: Bootstrap remote host prerequisites
+      - name: Deploy web to Fly
         shell: bash
         run: |
           set -euo pipefail
-          cleanup_local() {
-            rm -f /tmp/civibus-production.env /tmp/civibus-github-token
-          }
-          trap cleanup_local EXIT
-          install -m 600 /dev/null /tmp/civibus-production.env
-          install -m 600 /dev/null /tmp/civibus-github-token
-          printf '%s\n' "$PRODUCTION_ENV_FILE" > /tmp/civibus-production.env
-          printf '%s\n' "$GITHUB_TOKEN" > /tmp/civibus-github-token
-          ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile=~/.ssh/known_hosts -i ~/.ssh/hetzner_deploy_key "root@${HETZNER_HOST}" \
-            "install -d -m 700 /tmp/civibus-deploy"
-          scp -o StrictHostKeyChecking=yes -o UserKnownHostsFile=~/.ssh/known_hosts -i ~/.ssh/hetzner_deploy_key \
-            infra/scripts/bootstrap_prod_vm.sh /tmp/civibus-production.env /tmp/civibus-github-token "root@${HETZNER_HOST}:/tmp/civibus-deploy/"
-          ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile=~/.ssh/known_hosts -i ~/.ssh/hetzner_deploy_key "root@${HETZNER_HOST}" bash -se -- "$DEPLOY_GIT_SHA" "$DEPLOY_REPO_URL" <<'EOF'
-          set -euo pipefail
-          deploy_git_sha="$1"
-          deploy_repo_url="$2"
-          cleanup_remote() {
-            rm -f /tmp/civibus-deploy/civibus-production.env
-            rm -f /tmp/civibus-deploy/civibus-github-token
-          }
-          trap cleanup_remote EXIT
-          export DEPLOY_GIT_SHA="$deploy_git_sha"
-          export REPO_URL="$deploy_repo_url"
-          export REPO_DIR="/root/civibus/civibus_dev"
-          export ENV_FILE_SOURCE="/tmp/civibus-deploy/civibus-production.env"
-          export GITHUB_TOKEN_FILE="/tmp/civibus-deploy/civibus-github-token"
-          bash /tmp/civibus-deploy/bootstrap_prod_vm.sh
-          EOF
+          flyctl deploy web -c infra/fly/web.fly.toml --remote-only
 
-      - name: Roll out api and web via remote compose
+      - name: Deploy Caddy to Fly
         shell: bash
         run: |
           set -euo pipefail
-          cleanup_local() {
-            rm -f /tmp/civibus-github-token
-          }
-          trap cleanup_local EXIT
-          install -m 600 /dev/null /tmp/civibus-github-token
-          printf '%s\n' "$GITHUB_TOKEN" > /tmp/civibus-github-token
-          ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile=~/.ssh/known_hosts -i ~/.ssh/hetzner_deploy_key "root@${HETZNER_HOST}" \
-            "install -d -m 700 /tmp/civibus-deploy"
-          scp -o StrictHostKeyChecking=yes -o UserKnownHostsFile=~/.ssh/known_hosts -i ~/.ssh/hetzner_deploy_key \
-            /tmp/civibus-github-token "root@${HETZNER_HOST}:/tmp/civibus-deploy/"
-          ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile=~/.ssh/known_hosts -i ~/.ssh/hetzner_deploy_key "root@${HETZNER_HOST}" bash -se -- "$DEPLOY_GIT_SHA" "$GITHUB_ACTOR" <<'EOF'
-          set -euo pipefail
-          deploy_git_sha="$1"
-          deploy_actor="$2"
-          deploy_token_file="/tmp/civibus-deploy/civibus-github-token"
-          if [[ ! -s "${deploy_token_file}" ]]; then
-            echo "Missing deploy token file at ${deploy_token_file}" >&2
-            exit 1
-          fi
-          askpass_script="$(mktemp)"
-          cleanup() {
-            rm -f "${askpass_script}" "${deploy_token_file}"
-          }
-          trap cleanup EXIT
-          cat > "${askpass_script}" <<'EOS'
-          #!/usr/bin/env bash
-          case "$1" in
-            *Username*) printf '%s\n' 'x-access-token' ;;
-            *Password*) cat /tmp/civibus-deploy/civibus-github-token ;;
-            *) exit 1 ;;
-          esac
-          EOS
-          chmod 700 "${askpass_script}"
-          cd /root/civibus/civibus_dev
-          GIT_TERMINAL_PROMPT=0 GIT_ASKPASS="${askpass_script}" git fetch origin "$deploy_git_sha"
-          git checkout --detach "$deploy_git_sha"
-          cat "${deploy_token_file}" | docker login ghcr.io -u "${deploy_actor}" --password-stdin
-          export CIVIBUS_IMAGE_REPO="ghcr.io/${{ github.repository }}"
-          export IMAGE_TAG="$deploy_git_sha"
-          bash infra/scripts/prod_compose.sh up -d --wait --wait-timeout 180 db
-          bash infra/scripts/prod_compose.sh exec -T db psql -U civibus -d civibus -v ON_ERROR_STOP=1 < domains/civics/schema/migrations/2026_04_27_electoral_division_geometry.sql
-          bash infra/scripts/prod_compose.sh pull caddy api web
-          bash infra/scripts/prod_compose.sh up -d --force-recreate --wait --wait-timeout 180 api web caddy
-          EOF
+          flyctl deploy -c infra/fly/caddy.fly.toml --remote-only
 
       - name: Run production smoke gate
-        id: production_smoke_gate
-        continue-on-error: true
         shell: bash
+        working-directory: web
         run: |
           set -euo pipefail
           if [[ -z "${PROD_SMOKE_BASE_URL}" ]]; then
-            echo "Deploy workflow requires PROD_SMOKE_BASE_URL secret for production smoke mode" >&2
+            echo "Deploy workflow requires PROD_SMOKE_BASE_URL Actions variable for production smoke mode" >&2
             exit 1
           fi
-          pushd web >/dev/null
           SMOKE_MODE=production SMOKE_BASE_URL="${PROD_SMOKE_BASE_URL}" \
-            bash ./tests/smoke/run-playwright.sh -- tests/smoke/dwo_mvp_release.spec.ts --reporter=line
-          popd >/dev/null
-
-      - name: Rollback to previously deployed SHA on smoke failure
-        if: steps.production_smoke_gate.outcome == 'failure'
-        shell: bash
-        run: |
-          set -euo pipefail
-          rollback_sha="${{ steps.capture_prior_sha.outputs.CURRENT_DEPLOYED_SHA }}"
-          if [[ -z "${rollback_sha}" ]]; then
-            echo "Missing captured CURRENT_DEPLOYED_SHA for rollback" >&2
-            exit 1
-          fi
-          if [[ "${rollback_sha}" == "UNAVAILABLE" ]]; then
-            echo "Rollback SHA unavailable; cannot rollback automatically" >&2
-            exit 1
-          fi
-          cleanup_local() {
-            rm -f /tmp/civibus-github-token
-          }
-          trap cleanup_local EXIT
-          install -m 600 /dev/null /tmp/civibus-github-token
-          printf '%s\n' "$GITHUB_TOKEN" > /tmp/civibus-github-token
-          ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile=~/.ssh/known_hosts -i ~/.ssh/hetzner_deploy_key "root@${HETZNER_HOST}" \
-            "install -d -m 700 /tmp/civibus-deploy"
-          scp -o StrictHostKeyChecking=yes -o UserKnownHostsFile=~/.ssh/known_hosts -i ~/.ssh/hetzner_deploy_key \
-            /tmp/civibus-github-token "root@${HETZNER_HOST}:/tmp/civibus-deploy/"
-          ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile=~/.ssh/known_hosts -i ~/.ssh/hetzner_deploy_key "root@${HETZNER_HOST}" bash -se -- "$rollback_sha" "$GITHUB_ACTOR" <<'EOF'
-          set -euo pipefail
-          rollback_sha="$1"
-          deploy_actor="$2"
-          deploy_token_file="/tmp/civibus-deploy/civibus-github-token"
-          askpass_script="$(mktemp)"
-          cleanup() {
-            rm -f "${askpass_script}" "${deploy_token_file}"
-          }
-          trap cleanup EXIT
-          cat > "${askpass_script}" <<'EOS'
-          #!/usr/bin/env bash
-          case "$1" in
-            *Username*) printf '%s\n' 'x-access-token' ;;
-            *Password*) cat /tmp/civibus-deploy/civibus-github-token ;;
-            *) exit 1 ;;
-          esac
-          EOS
-          chmod 700 "${askpass_script}"
-          cd /root/civibus/civibus_dev
-          GIT_TERMINAL_PROMPT=0 GIT_ASKPASS="${askpass_script}" git fetch origin "$rollback_sha"
-          git checkout --detach "$rollback_sha"
-          cat "${deploy_token_file}" | docker login ghcr.io -u "${deploy_actor}" --password-stdin
-          export CIVIBUS_IMAGE_REPO="ghcr.io/${{ github.repository }}"
-          export IMAGE_TAG="$rollback_sha"
-          bash infra/scripts/prod_compose.sh pull caddy api web
-          bash infra/scripts/prod_compose.sh up -d --force-recreate --wait --wait-timeout 180 api web caddy
-          EOF
-
-      - name: Fail deploy if production smoke failed after rollback
-        if: steps.production_smoke_gate.outcome == 'failure'
-        shell: bash
-        run: |
-          echo "Production smoke failed and rollback to prior SHA was executed." >&2
-          exit 1
+            bash ./tests/smoke/run-playwright.sh -- tests/smoke/production_deploy.spec.ts --reporter=line

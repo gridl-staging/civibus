@@ -35,9 +35,18 @@ import {
   SMOKE_COMMITTEE_FILING_ROW_LABEL,
   SMOKE_COMMITTEE_FILING_SUMMARY_EMPTY_STATE,
   SMOKE_COMMITTEE_ID,
+  SMOKE_COMMITTEE_IE_COUNT_LABEL,
+  SMOKE_COMMITTEE_IE_OPPOSE_TOTAL,
+  SMOKE_COMMITTEE_IE_OUTLIER_NOTE,
+  SMOKE_COMMITTEE_IE_SOURCE_NAME,
+  SMOKE_COMMITTEE_IE_SOURCE_RECORD_KEY,
+  SMOKE_COMMITTEE_IE_SOURCE_URL,
+  SMOKE_COMMITTEE_IE_SUPPORT_TOTAL,
+  SMOKE_COMMITTEE_IE_TARGET_NAME,
   SMOKE_COMMITTEE_NAME,
   SMOKE_COMMITTEE_NET_TOTAL,
   SMOKE_COMMITTEE_ORG_LINK_TEXT,
+  SMOKE_COMMITTEE_OUTSIDE_SPENDING_EMPTY,
   SMOKE_COMMITTEE_RECIPIENT_CANDIDATE_LINK_TEXT,
   SMOKE_COMMITTEE_RECIPIENT_COMMITTEE_LINK_TEXT,
   SMOKE_COMMITTEE_SLUG,
@@ -232,7 +241,7 @@ test.describe("campaign finance smoke", () => {
     await expect(page.getByText(SMOKE_CAMPAIGN_FINANCE_IN_PROVENANCE_SOURCE_NAME)).toBeVisible();
     await expect(page.getByText(SMOKE_PROVENANCE_LAST_PULLED)).toHaveCount(1);
     // IN freshness banner retired 2026-04-26 after the IN re-verdict to
-    // weekly-or-better; see docs/research/in_freshness_recheck_2026_04_26.md.
+    // weekly-or-better; see docs/reference/research/in_freshness_recheck_2026_04_26.md.
     // Negative-assertion left in place as defense-in-depth so a typo'd map
     // re-entry can't silently resurrect the retired copy on the live page.
     await expect(
@@ -240,6 +249,27 @@ test.describe("campaign finance smoke", () => {
     ).toHaveCount(0);
     await expect(page.getByText(SMOKE_TRUST_ADVISORY)).toBeVisible();
     await expect(page.getByRole("link", { name: SMOKE_COMMITTEE_ORG_LINK_TEXT })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Outside Spending" })).toBeVisible();
+    const committeeOutsideSpending = page.getByTestId("committee-outside-spending");
+    await expect(
+      committeeOutsideSpending.getByRole("definition").filter({ hasText: SMOKE_COMMITTEE_IE_SUPPORT_TOTAL })
+    ).toBeVisible();
+    await expect(
+      committeeOutsideSpending.getByRole("definition").filter({ hasText: SMOKE_COMMITTEE_IE_OPPOSE_TOTAL })
+    ).toBeVisible();
+    await expect(
+      committeeOutsideSpending.getByRole("definition").filter({ hasText: SMOKE_COMMITTEE_IE_COUNT_LABEL })
+    ).toBeVisible();
+    await expect(committeeOutsideSpending.getByText(SMOKE_COMMITTEE_IE_OUTLIER_NOTE)).toBeVisible();
+    const committeeOutsideSpendingTargets = page.getByTestId("committee-outside-spending-targets");
+    await expect(
+      committeeOutsideSpendingTargets.getByRole("link", { name: SMOKE_COMMITTEE_IE_TARGET_NAME })
+    ).toHaveAttribute("href", `/person/${SMOKE_PERSON_ID}`);
+    const committeeOutsideSpendingSources = page.getByTestId("committee-outside-spending-sources");
+    await expect(
+      committeeOutsideSpendingSources.getByRole("link", { name: SMOKE_COMMITTEE_IE_SOURCE_NAME })
+    ).toHaveAttribute("href", SMOKE_COMMITTEE_IE_SOURCE_URL);
+    await expect(committeeOutsideSpendingSources.getByText(SMOKE_COMMITTEE_IE_SOURCE_RECORD_KEY)).toBeVisible();
     await expect(page.getByRole("heading", { name: "Fundraising summary" })).toBeVisible();
     const committeeFundraisingSummary = page.getByRole("region", { name: "Fundraising summary" });
     await expect(committeeFundraisingSummary.getByText(SMOKE_COMMITTEE_TOTAL_RAISED)).toBeVisible();
@@ -373,6 +403,7 @@ test.describe("campaign finance smoke", () => {
     await expect(fundraisingSummary.getByText("$0.00")).toHaveCount(3);
     await expect(page.getByRole("heading", { name: "Filing-period breakdown" })).toBeVisible();
     await expect(page.getByText(SMOKE_COMMITTEE_FILING_SUMMARY_EMPTY_STATE)).toBeVisible();
+    await expect(page.getByText(SMOKE_COMMITTEE_OUTSIDE_SPENDING_EMPTY)).toBeVisible();
     await expect(page.getByText(SMOKE_COMMITTEE_EMPTY_STATE)).toBeVisible();
     await expect(page.getByText(SMOKE_TRUST_LAST_PULLED_UNAVAILABLE)).toBeVisible();
     await expect(page.getByText(SMOKE_TRUST_EMPTY_MESSAGE)).toBeVisible();
@@ -465,38 +496,25 @@ test.describe("campaign finance smoke", () => {
   });
 });
 
-test.describe("sitemap.xml", () => {
-  // The sitemap assertions reference fixture-only IDs (SMOKE_EMPTY_*) and the
-  // fixture seed list, so this block is fixture-mode only.
-  test.skip(SMOKE_USE_LIVE_API, "fixture-only — sitemap content reflects fixture seed");
+test.describe("sitemap.xml fixture detail URLs", () => {
+  // Detail URL assertions remain fixture-only because they depend on the
+  // synthetic fixture seed and fixture-only IDs/slugs.
+  test.skip(SMOKE_USE_LIVE_API, "fixture-only — sitemap detail URLs reflect fixture seed");
 
-  test("returns valid sitemap XML with static and detail URLs", async ({ page }: { page: any }) => {
+  test("contains fixture-specific candidate and committee detail URLs", async ({ page }: { page: any }) => {
     const response = (await page.goto("/sitemap.xml"))!;
-
-    expect(response.status()).toBe(200);
-    expect(response.headers()["content-type"]).toContain("xml");
-
     const xml = await response.text();
 
-    // Valid XML structure
-    expect(xml).toContain('<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">');
-
-    // Static pages
-    expect(xml).toContain("<url><loc>");
-    expect(xml).toContain(`<loc>${new URL("/", response.url()).href}</loc>`);
-    expect(xml).toMatch(/<loc>[^<]*\/candidates<\/loc>/);
-    expect(xml).toMatch(/<loc>[^<]*\/committees<\/loc>/);
-
-    // Slug-based detail URL from fixture (pat-candidate has slug_is_unique: true)
+    // Slug-based detail URL from fixture (pat-candidate has slug_is_unique: true).
     expect(xml).toContain(`/candidate/${SMOKE_CANDIDATE_SLUG}</loc>`);
 
-    // UUID-based detail URL for slug_is_unique: false fixture
+    // UUID-based detail URL for slug_is_unique: false fixture.
     expect(xml).toContain(`/candidate/${SMOKE_EMPTY_CANDIDATE_ID}</loc>`);
 
-    // Committee slug-based detail URL
+    // Committee slug-based detail URL.
     expect(xml).toContain(`/committee/${SMOKE_COMMITTEE_SLUG}</loc>`);
 
-    // Committee UUID-based detail URL (slug_is_unique: false)
+    // Committee UUID-based detail URL (slug_is_unique: false).
     expect(xml).toContain(`/committee/${SMOKE_EMPTY_COMMITTEE_ID}</loc>`);
   });
 });

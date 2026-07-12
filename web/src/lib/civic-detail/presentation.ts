@@ -352,10 +352,49 @@ function buildOfficeKeyMetricRows(officeholderRows: OfficeholderRow[]): CivicFac
   return [{ label: "Current officeholders", value: String(officeholderRows.length) }];
 }
 
+type OfficeCurrentHolderCardLike = {
+  officeholding_id: string;
+  person_id: string;
+  person_name: string;
+  holder_status: string;
+  valid_period_lower?: string | null;
+  valid_period_upper?: string | null;
+};
+
+function isOfficeCurrentHolderCardValue(value: unknown): value is OfficeCurrentHolderCardLike {
+  if (value === null || value === undefined || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+
+  const candidate = value as Record<string, unknown>;
+  return (
+    typeof candidate.officeholding_id === "string" &&
+    typeof candidate.person_id === "string" &&
+    typeof candidate.person_name === "string" &&
+    typeof candidate.holder_status === "string"
+  );
+}
+
 function buildOfficeCurrentHolderCard(detail: OfficeDetailResponse): OfficeCurrentHolderCard | null {
   const holder = detail.current_holder_card;
-  if (holder === null) {
-    return null;
+  if (!isOfficeCurrentHolderCardValue(holder)) {
+    const fallbackOfficeholders = Array.isArray(detail.current_officeholders)
+      ? detail.current_officeholders
+      : [];
+    if (fallbackOfficeholders.length !== 1) {
+      return null;
+    }
+    const fallbackHolder = fallbackOfficeholders[0];
+    return {
+      officeholdingId: fallbackHolder.officeholding_id,
+      personName: fallbackHolder.person_name,
+      personHref: buildEntityRouteHref("person", fallbackHolder.person_id),
+      officeholdingHref: buildOfficeholdingRoutePath(fallbackHolder.officeholding_id),
+      holderStatus: fallbackHolder.holder_status,
+      validFrom: formatDateValue(null),
+      validThrough: formatDateValue(null),
+      termEndEmphasis: null
+    };
   }
 
   return {
@@ -372,10 +411,20 @@ function buildOfficeCurrentHolderCard(detail: OfficeDetailResponse): OfficeCurre
 
 function buildOfficeCurrentHolderEmptyMessage(
   detail: OfficeDetailResponse,
-  officeholderRows: OfficeholderRow[]
+  officeholderRows: OfficeholderRow[],
+  currentHolderCard: OfficeCurrentHolderCard | null
 ): string | null {
-  if (detail.current_holder_card !== null) {
+  if (currentHolderCard !== null) {
     return null;
+  }
+  if (detail.current_holder_card === undefined) {
+    return OFFICE_CURRENT_HOLDER_EMPTY_MESSAGE;
+  }
+  if (
+    detail.current_holder_card !== null &&
+    !isOfficeCurrentHolderCardValue(detail.current_holder_card)
+  ) {
+    return OFFICE_CURRENT_HOLDER_EMPTY_MESSAGE;
   }
   if (officeholderRows.length > 0) {
     return null;
@@ -384,7 +433,11 @@ function buildOfficeCurrentHolderEmptyMessage(
 }
 
 function buildOfficeTimelineRows(detail: OfficeDetailResponse): OfficeTimelineRow[] {
-  const rows = [...detail.officeholding_timeline];
+  // Some smoke fixtures can lag the backend contract during staged rollout.
+  // Keep the renderer resilient by treating missing timeline payloads as empty.
+  const rows = Array.isArray(detail.officeholding_timeline)
+    ? [...detail.officeholding_timeline]
+    : [];
   rows.sort((a, b) => {
     if (a.is_active !== b.is_active) {
       return a.is_active ? -1 : 1;
@@ -421,7 +474,7 @@ function buildOfficeTimelineRows(detail: OfficeDetailResponse): OfficeTimelineRo
 }
 
 function buildOfficeRecentContestRows(detail: OfficeDetailResponse): OfficeRecentContestRow[] {
-  const rows = [...detail.recent_contests];
+  const rows = Array.isArray(detail.recent_contests) ? [...detail.recent_contests] : [];
   rows.sort((a, b) => {
     const electionDiff = parseDateSortValue(b.election_date) - parseDateSortValue(a.election_date);
     if (electionDiff !== 0) {
@@ -674,7 +727,11 @@ export function buildOfficeDetailPresentation(detail: OfficeDetailResponse): Off
     keyMetricRows: buildOfficeKeyMetricRows(officeholderRows),
     officeholderRows,
     currentHolderCard,
-    currentHolderEmptyMessage: buildOfficeCurrentHolderEmptyMessage(detail, officeholderRows),
+    currentHolderEmptyMessage: buildOfficeCurrentHolderEmptyMessage(
+      detail,
+      officeholderRows,
+      currentHolderCard
+    ),
     timelineRows,
     recentContestRows,
     selectedElectoralDivisionId: detail.selected_electoral_division_id,

@@ -3,6 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 import re
 
+from test_support.makefile_contract_helpers import parse_makefile_db_sql_files
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 _AGE_BOOTSTRAP_SQL_PATH = "infra/db/09-age-graph-bootstrap.sql"
 
@@ -17,12 +19,6 @@ def _compose_init_mounts(compose_text: str) -> list[str]:
 
 def _normalized_compose_init_repo_paths(compose_text: str) -> list[str]:
     return [mount.split(":", 1)[0].removeprefix("../") for mount in _compose_init_mounts(compose_text)]
-
-
-def _makefile_db_sql_files(makefile_text: str) -> list[str]:
-    match = re.search(r"^DB_SQL_FILES := (.+)$", makefile_text, re.M)
-    assert match is not None
-    return match.group(1).split()
 
 
 def test_entities_sql_enables_age_extension_after_btree_gist():
@@ -71,7 +67,7 @@ def test_docker_compose_targets_image_and_mounted_schema_files():
     compose_init_mounts = _compose_init_mounts(compose)
     assert (
         "../domains/campaign_finance/schema/nc_orchestrator_tables.sql:"
-        "/docker-entrypoint-initdb.d/07-nc-orchestrator.sql"
+        "/docker-entrypoint-initdb.d/08-nc-orchestrator.sql"
     ) in compose_init_mounts
 
 
@@ -80,7 +76,7 @@ def test_docker_compose_init_mounts_stay_in_sync_with_makefile_db_sql_files() ->
     makefile = read_repo_text("Makefile")
 
     compose_schema_paths = _normalized_compose_init_repo_paths(compose)
-    makefile_schema_paths = _makefile_db_sql_files(makefile)
+    makefile_schema_paths = parse_makefile_db_sql_files(makefile)
 
     # Stage 2 allows one explicit exception: AGE graph bootstrap can remain reset-time-only.
     assert compose_schema_paths in (
@@ -89,6 +85,30 @@ def test_docker_compose_init_mounts_stay_in_sync_with_makefile_db_sql_files() ->
     )
     if compose_schema_paths != makefile_schema_paths:
         assert compose_schema_paths[-1] == _AGE_BOOTSTRAP_SQL_PATH
+
+
+def test_bio_migration_bootstrap_manifest_sync() -> None:
+    compose = read_repo_text("infra/docker-compose.yml")
+    makefile = read_repo_text("Makefile")
+    bio_migration = "core/schema/migrations/2026_04_30_person_bio_fields.sql"
+
+    makefile_files = parse_makefile_db_sql_files(makefile)
+    compose_paths = _normalized_compose_init_repo_paths(compose)
+
+    in_makefile = bio_migration in makefile_files
+    in_compose = bio_migration in compose_paths
+
+    assert in_makefile == in_compose, (
+        f"Bio migration presence must agree: Makefile={in_makefile}, docker-compose={in_compose}"
+    )
+
+    if in_makefile:
+        entities_idx = makefile_files.index("core/schema/entities.sql")
+        bio_idx = makefile_files.index(bio_migration)
+        assert bio_idx == entities_idx + 1, (
+            f"Bio migration must immediately follow entities.sql in DB_SQL_FILES; "
+            f"entities at index {entities_idx}, bio at index {bio_idx}"
+        )
 
 
 def test_db_dockerfile_installs_postgis_and_age_for_postgres_18():
@@ -148,10 +168,12 @@ def test_makefile_exports_and_targets_database_reset_command():
     assert re.search(
         r"^db-down: require-postgres-password\n^\tdocker compose -f infra/docker-compose.yml down", makefile, re.M
     )
-    db_sql_files_lines = re.findall(r"^DB_SQL_FILES := .+$", makefile, re.M)
+    db_sql_files_lines = re.findall(r"^override DB_SQL_FILES := .+$", makefile, re.M)
     assert len(db_sql_files_lines) == 1
     assert "domains/campaign_finance/schema/tables.sql" in db_sql_files_lines[0]
+    assert "# shell and Python recipe bodies, so command-line overrides would become code execution." in makefile
     assert "db-reset: require-postgres-password" in makefile
+    assert "db-reset: require-postgres-password\n\t@set -e; if command -v psql >/dev/null 2>&1; then \\" in makefile
     assert "DROP SCHEMA IF EXISTS core CASCADE;" in makefile
     assert 'test:\n\tuv run --extra dev --extra entity-resolution pytest -m "not integration and not e2e"' in makefile
     assert "test-api:\n\tuv run --extra dev --extra api pytest api/" in makefile
@@ -171,17 +193,21 @@ def test_makefile_retired_symbols_lint_guard_wiring():
 
     retired_symbols = re.search(r"^RETIRED_SYMBOLS := (.+)$", makefile, re.M)
     assert retired_symbols is not None
+    # fmt: off
+    # Split literals keep the retired-symbol git-grep guard from matching this
+    # test file itself; fmt guards stop ruff format from re-joining them.
     assert retired_symbols.group(1).split() == [
         "INDIANA_" "FRESHNESS_NOTE",
         "_CASE_" "FIXTURE_SOURCES",
         "_PILOT_" "SUPPORTED_STATES",
         "is_autopublish_" "enabled",
     ]
+    # fmt: on
     assert re.search(
         r"^RETIRED_ALLOWLIST := \\\n"
         r"^\tcore/keel_gate_l11\.py \\\n"
         r"^\ttests/keel/test_gate_l15\.py \\\n"
-        r"^\tdocs/keel/\*\* \\\n"
+        r"^\tdocs/reference/keel/\*\* \\\n"
         r"^\tchats/\*\* \\\n"
         r"^\t\.matt/projects/\*\* \\\n"
         r"^\tMakefile$",
@@ -259,6 +285,15 @@ def test_makefile_stage2_bulk_targets_wiring():
         "\tuv run python -m domains.campaign_finance.ingest.bulk_cli "
         "--cycle $(FEC_BULK_CYCLE) --all --directory $(FEC_BULK_DIR) --batch-size 1000"
     ) in makefile
+    assert "download-fec-weball:" in makefile
+    assert "from domains.campaign_finance.ingest.bulk_cli import fec_weball_url;" in makefile
+    assert (
+        "ingest-fec-federal:\n"
+        "\tuv run python -m domains.campaign_finance.ingest.bulk_cli "
+        "--cycle $(FEC_BULK_CYCLE) --federal --directory $(FEC_BULK_DIR) --batch-size 1000"
+    ) in makefile
+    assert "download-fec-bulk:" in makefile
+    assert "fec_baseline_urls" in makefile
 
 
 def test_makefile_refresh_targets_route_through_runner_with_dry_run_default():

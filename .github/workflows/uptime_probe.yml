@@ -4,7 +4,7 @@ name: Uptime probe — /api/health/content
 # every 5 minutes and opens / comments-on / closes a GitHub issue with
 # the `uptime-incident` label based on the response.
 #
-# Anchored postmortem: docs/operations/postmortems/2026_04_30_prod_data_link_severed.md
+# Anchored postmortem: docs/howto/operations/postmortems/2026_04_30_prod_data_link_severed.md
 # Apr 30 incident hid for 16h because every observer ran on or near the
 # prod VM. This workflow is structurally outside that loop — it runs on
 # GitHub's infrastructure, not Hetzner — so when the prod stack is
@@ -76,6 +76,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           NUMBER=$(gh issue list \
+            --repo "${{ github.repository }}" \
             --label uptime-incident \
             --state open \
             --json number \
@@ -91,8 +92,10 @@ jobs:
         run: |
           NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           gh issue comment "${{ steps.find.outputs.number }}" \
+            --repo "${{ github.repository }}" \
             --body "Probe at ${NOW} returned 200 healthy. Endpoint recovered. Closing."
-          gh issue close "${{ steps.find.outputs.number }}"
+          gh issue close "${{ steps.find.outputs.number }}" \
+            --repo "${{ github.repository }}"
 
       - name: Comment on existing issue (endpoint still failing)
         if: steps.probe.outputs.healthy == 'false' && steps.find.outputs.number != ''
@@ -104,6 +107,7 @@ jobs:
           STATUS="${{ steps.probe.outputs.status }}"
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           gh issue comment "${{ steps.find.outputs.number }}" \
+            --repo "${{ github.repository }}" \
             --body "Probe at ${NOW} — still failing. Status: ${STATUS}. Detail: ${DETAIL}. Run: ${RUN_URL}"
 
       - name: Open new uptime-incident issue (endpoint failing, no existing issue)
@@ -114,6 +118,7 @@ jobs:
           # Idempotent label create. --force lets us update the color/description
           # without erroring if the label already exists.
           gh label create uptime-incident \
+            --repo "${{ github.repository }}" \
             --color FF6B6B \
             --description "Civibus.org uptime probe failure" \
             --force 2>/dev/null || true
@@ -137,9 +142,10 @@ jobs:
 
           - Endpoint: https://civibus.org/api/health/content
           - Owner: api/health_content.py + api/main.py:186
-          - Anchored postmortem: docs/operations/postmortems/2026_04_30_prod_data_link_severed.md"
+          - Anchored postmortem: docs/howto/operations/postmortems/2026_04_30_prod_data_link_severed.md"
 
           gh issue create \
+            --repo "${{ github.repository }}" \
             --label uptime-incident \
             --title "[uptime] /api/health/content returned ${STATUS} at ${NOW}" \
             --body "${BODY}"

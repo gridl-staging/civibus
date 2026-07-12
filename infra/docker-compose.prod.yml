@@ -86,25 +86,26 @@ services:
       CIVIBUS_ADMIN_API_KEYS: ${CIVIBUS_ADMIN_API_KEYS:?Set CIVIBUS_ADMIN_API_KEYS}
       CIVIBUS_RATE_LIMIT_REQUESTS: ${CIVIBUS_RATE_LIMIT_REQUESTS:-100}
       CIVIBUS_RATE_LIMIT_WINDOW_SECONDS: ${CIVIBUS_RATE_LIMIT_WINDOW_SECONDS:-60}
-      # Startup canary floors. Defaults in api/health_content.py are
-      # prod-sized; override here only when promoting a smaller-than-prod
-      # snapshot (and never to zero).
-      CIVIBUS_HEALTH_CONTENT_FLOOR_CF_TRANSACTION_TOTAL: ${CIVIBUS_HEALTH_CONTENT_FLOOR_CF_TRANSACTION_TOTAL:-1000000}
-      CIVIBUS_HEALTH_CONTENT_FLOOR_CORE_PERSON_TOTAL: ${CIVIBUS_HEALTH_CONTENT_FLOOR_CORE_PERSON_TOTAL:-1000}
-      CIVIBUS_HEALTH_CONTENT_FLOOR_CIVIC_OFFICEHOLDING_TOTAL: ${CIVIBUS_HEALTH_CONTENT_FLOOR_CIVIC_OFFICEHOLDING_TOTAL:-100}
-      CIVIBUS_HEALTH_CONTENT_FLOOR_CF_TRANSACTION_WITH_RESOLVED_PERSON: ${CIVIBUS_HEALTH_CONTENT_FLOOR_CF_TRANSACTION_WITH_RESOLVED_PERSON:-1000}
+      # Startup canary floors. These federal-first floors come from the
+      # Stage 1 clean local load counts at 80% of observed data volume.
+      # TODO: Raise CF_TRANSACTION_WITH_RESOLVED_PERSON above zero after
+      # federal contributor-to-person ER is wired into the refresh scope.
+      CIVIBUS_HEALTH_CONTENT_FLOOR_CF_TRANSACTION_TOTAL: ${CIVIBUS_HEALTH_CONTENT_FLOOR_CF_TRANSACTION_TOTAL:-58752}
+      CIVIBUS_HEALTH_CONTENT_FLOOR_CORE_PERSON_TOTAL: ${CIVIBUS_HEALTH_CONTENT_FLOOR_CORE_PERSON_TOTAL:-8468}
+      CIVIBUS_HEALTH_CONTENT_FLOOR_CIVIC_OFFICEHOLDING_TOTAL: ${CIVIBUS_HEALTH_CONTENT_FLOOR_CIVIC_OFFICEHOLDING_TOTAL:-434}
+      CIVIBUS_HEALTH_CONTENT_FLOOR_CF_TRANSACTION_WITH_RESOLVED_PERSON: ${CIVIBUS_HEALTH_CONTENT_FLOOR_CF_TRANSACTION_WITH_RESOLVED_PERSON:-0}
     healthcheck:
       # Use the content-aware probe so the API container is only marked
       # healthy when the DB actually contains data above floors. This
       # prevents Caddy from routing traffic to an empty DB after a
       # wrong-volume bootstrap.
-      test: ["CMD-SHELL", "python3 -c \"import urllib.request, sys; r = urllib.request.urlopen('http://localhost:8000/api/health/content', timeout=5); sys.exit(0 if r.status == 200 else 1)\""]
-      interval: 30s
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request, sys; r = urllib.request.urlopen('http://localhost:8000/health/content', timeout=10); sys.exit(0 if r.status == 200 else 1)\""]
+      interval: 20s
       timeout: 10s
-      retries: 3
+      retries: 6
       # Long start_period because the canary itself does a DB query at
       # boot; a slow DB or migration replay must not flap the gate.
-      start_period: 60s
+      start_period: 120s
     depends_on:
       db:
         condition: service_healthy

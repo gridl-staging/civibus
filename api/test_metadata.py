@@ -92,9 +92,7 @@ class TestMetadataEndpoints:
         assert response.status_code == 200
         payload = response.json()
         seeded_rows = [
-            row
-            for row in payload
-            if row["data_source_id"] in {str(data_source_alpha.id), str(data_source_beta.id)}
+            row for row in payload if row["data_source_id"] in {str(data_source_alpha.id), str(data_source_beta.id)}
         ]
         assert len(seeded_rows) == 2
 
@@ -367,9 +365,7 @@ class TestMetadataEndpoints:
         assert response.status_code == 200
         payload = response.json()
         by_jurisdiction = {
-            row["jurisdiction"]: row
-            for row in payload
-            if row["jurisdiction"] == transaction_only_jurisdiction
+            row["jurisdiction"]: row for row in payload if row["jurisdiction"] == transaction_only_jurisdiction
         }
         assert set(by_jurisdiction) == {transaction_only_jurisdiction}
         assert by_jurisdiction[transaction_only_jurisdiction]["data_source_count"] == 1

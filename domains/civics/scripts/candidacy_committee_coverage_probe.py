@@ -52,8 +52,8 @@ registry_matches AS (
     JOIN cf.committee c
       ON c.organization_id = o.id
      AND c.state = 'NC'
-    WHERE {_NORMALIZED_NONEMPTY_TEXT_PREDICATE.format(value='r.candidate_name')}
-      AND {_NORMALIZED_NONEMPTY_TEXT_PREDICATE.format(value='r.sboe_id')}
+    WHERE {_NORMALIZED_NONEMPTY_TEXT_PREDICATE.format(value="r.candidate_name")}
+      AND {_NORMALIZED_NONEMPTY_TEXT_PREDICATE.format(value="r.sboe_id")}
 ),
 registry_target_counts AS (
     SELECT
@@ -118,8 +118,8 @@ registry_matches AS (
     JOIN cf.committee c
       ON c.organization_id = o.id
      AND c.state = 'NC'
-    WHERE {_NORMALIZED_NONEMPTY_TEXT_PREDICATE.format(value='r.candidate_name')}
-      AND {_NORMALIZED_NONEMPTY_TEXT_PREDICATE.format(value='r.sboe_id')}
+    WHERE {_NORMALIZED_NONEMPTY_TEXT_PREDICATE.format(value="r.candidate_name")}
+      AND {_NORMALIZED_NONEMPTY_TEXT_PREDICATE.format(value="r.sboe_id")}
 ),
 registry_target_counts AS (
     SELECT
@@ -133,7 +133,7 @@ FROM nc_candidacies nc
 LEFT JOIN registry_target_counts rt
   ON rt.norm_candidate_name = nc.norm_name_on_ballot
 WHERE nc.committee_id IS NULL
-  AND {_NORMALIZED_NONEMPTY_TEXT_PREDICATE.format(value='nc.norm_name_on_ballot')}
+  AND {_NORMALIZED_NONEMPTY_TEXT_PREDICATE.format(value="nc.norm_name_on_ballot")}
 ORDER BY nc.norm_name_on_ballot
 LIMIT %(sample_limit)s
 """

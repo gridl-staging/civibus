@@ -191,10 +191,9 @@ def _upsert_nc_committee_registry_row(
                 seen_at=seen_at,
             ),
         )
-    candidate_name_changed = (
-        _normalize_candidate_name_for_bridge(existing_candidate_name)
-        != _normalize_candidate_name_for_bridge(row.candidate_name)
-    )
+    candidate_name_changed = _normalize_candidate_name_for_bridge(
+        existing_candidate_name
+    ) != _normalize_candidate_name_for_bridge(row.candidate_name)
     sboe_id_changed = normalize_optional_text(existing_sboe_id) != normalize_optional_text(row.sboe_id)
     return (
         not row_exists,

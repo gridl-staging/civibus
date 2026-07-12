@@ -35,8 +35,8 @@ Retrieval behavior:
 | IED Contributions | `{YEAR}_ContributionData.csv.zip` | ZIP containing one CSV | weekly | none |
 | IED Expenditures | `{YEAR}_ExpenditureData.csv.zip` | ZIP containing one CSV | weekly | none |
 
-Launch-readiness note: the portal keeps yearly ZIP URL templates but republishes them on a weekly-or-better cadence (`docs/research/in_freshness_recheck_2026_04_26.md`).
-Stage 2 baseline routing and disposition remain anchored by `docs/research/in_mn_nj_freshness_stage1_baseline_2026_04_28.md`.
+Launch-readiness note: the portal keeps yearly ZIP URL templates but republishes them on a weekly-or-better cadence (`docs/reference/research/in_freshness_recheck_2026_04_26.md`).
+Stage 2 baseline routing and disposition remain anchored by `docs/reference/research/in_mn_nj_freshness_stage1_baseline_2026_04_28.md`.
 
 ## Last verified date
 - Portal access + download flow verified: 2026-03-23

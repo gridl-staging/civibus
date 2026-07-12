@@ -51,7 +51,7 @@ data_sources:
       - "Direct CSV links are parameterized with ?download=<id>; IDs can drift over time"
       - "Covers state-board registered filers; local campaign reporting is a separate source surface"
       - "The /reports/#/ UI and /reports/api/ endpoints are supplemental evidence surfaces only; cadence is unproven and they are not required for canonical ingest"
-      - "Freshness remains launch-limited: 2026-04-09 live probe found max Receipt date 2025-12-31 in the canonical contributions export (see docs/research/artifacts/2026-04-09-freshness-quality-probes/state-MN.json)"
+      - "Freshness remains launch-limited: 2026-04-09 live probe found max Receipt date 2025-12-31 in the canonical contributions export (see docs/reference/research/artifacts/2026-04-09-freshness-quality-probes/state-MN.json)"
 
   - name: "MN CFB Expenditures (All)"
     url: "https://register.cfb.mn.gov/reports-and-data/self-help/data-downloads/campaign-finance/"
@@ -99,7 +99,7 @@ data_sources:
     known_issues:
       - "Direct CSV links are parameterized with ?download=<id>; IDs can drift over time"
       - "The /reports/#/ UI and /reports/api/ endpoints are supplemental evidence surfaces only; cadence is unproven and they are not required for canonical ingest"
-      - "Freshness remains launch-limited pending an official weekly+ publication path beyond the quarterly bulk exports (see docs/research/mn-freshness-investigation-2026-03-29.md)"
+      - "Freshness remains launch-limited pending an official weekly+ publication path beyond the quarterly bulk exports (see docs/reference/research/mn-freshness-investigation-2026-03-29.md)"
 
   - name: "MN CFB Independent Expenditures (All)"
     url: "https://register.cfb.mn.gov/reports-and-data/self-help/data-downloads/campaign-finance/"
@@ -149,7 +149,7 @@ data_sources:
       - "Direct CSV links are parameterized with ?download=<id>; IDs can drift over time"
       - "Stage 3 ingests contributions and expenditures; independent expenditures remain documented until loader support is enabled"
       - "The /reports/#/ UI and /reports/api/ endpoints are supplemental evidence surfaces only; cadence is unproven and they are not required for canonical ingest"
-      - "Freshness disposition remains resolved negative for launch cadence per Stage 1 baseline consolidation (docs/research/in_mn_nj_freshness_stage1_baseline_2026_04_28.md)"
+      - "Freshness disposition remains resolved negative for launch cadence per Stage 1 baseline consolidation (docs/reference/research/in_mn_nj_freshness_stage1_baseline_2026_04_28.md)"
 
 laws:
   source_url: "https://www.revisor.mn.gov/statutes/cite/10A.27"

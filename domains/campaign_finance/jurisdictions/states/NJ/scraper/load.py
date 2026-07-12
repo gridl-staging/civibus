@@ -1,5 +1,5 @@
 """
-Stub summary for /Users/stuart/parallel_development/civibus_dev/mar26_am_3_new_state_pipeline_builds/civibus_dev/domains/campaign_finance/jurisdictions/states/NJ/scraper/load.py.
+Stub summary for mar26_am_3_new_state_pipeline_builds/civibus_dev/domains/campaign_finance/jurisdictions/states/NJ/scraper/load.py.
 """
 
 from __future__ import annotations

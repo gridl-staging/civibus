@@ -1,3 +1,4 @@
+"""L14 coverage registry projection gate."""
 
 from __future__ import annotations
 
@@ -15,6 +16,7 @@ from pydantic import BaseModel
 
 from core.db import get_connection
 from core.keel_gate_l3 import _load_registry as load_sources_registry
+from core.people.federal_officeholders import current_federal_officeholder_predicate
 from domains.campaign_finance.coverage import lifecycle as coverage_lifecycle
 from domains.campaign_finance.coverage import registry as coverage_registry
 from domains.civics.loaders.official_rosters.loader import manifest_member_counts_by_source_id
@@ -22,8 +24,8 @@ from domains.civics.loaders.official_rosters.loader import manifest_member_count
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 
 L14_SCOPE = "coverage_registry_projection"
-_DEFAULT_REGISTRY_PATH = Path("docs/research/coverage-registry.json")
-_DEFAULT_LIFECYCLE_PATH = Path("docs/research/implemented-region-lifecycle.json")
+_DEFAULT_REGISTRY_PATH = Path("docs/reference/research/coverage-registry.json")
+_DEFAULT_LIFECYCLE_PATH = Path("docs/reference/research/implemented-region-lifecycle.json")
 _DEFAULT_SOURCES_PATH = Path("sources.yaml")
 _NC_GEOMETRY_EXPECTED_COUNT_BY_DIVISION_TYPE: Mapping[str, int] = {
     "county": 3,
@@ -69,12 +71,22 @@ class L14CoverageRow(BaseModel, extra="forbid"):
     nc_geometry_counts_match_expected: bool | None = None
 
 
+class FederalCoverageGate(BaseModel, extra="forbid"):
+    active_officeholders: int
+    total_seats: int
+    portrait_coverage_pct: float
+    bio_coverage_pct: float
+    candidate_link_coverage_pct: float
+    ie_coverage_pct: float
+
+
 class L14CoverageCollection(BaseModel, extra="forbid"):
     scope: str
     registry_path: str
     lifecycle_path: str
     lifecycle_updated_at: date
     rows: list[L14CoverageRow]
+    federal_gate: FederalCoverageGate | None = None
 
 
 class L14Evidence(BaseModel, extra="forbid"):
@@ -89,6 +101,7 @@ class L14Evidence(BaseModel, extra="forbid"):
     lifecycle_path: str
     lifecycle_updated_at: date
     rows: list[L14CoverageRow]
+    federal_gate: FederalCoverageGate | None = None
 
 
 def _utc_now() -> datetime:
@@ -205,6 +218,103 @@ def _collect_nc_geometry_summary() -> NcGeometrySummary | None:
     return observed_summary
 
 
+FEDERAL_OFFICE_NAMES = ("us_house", "us_senate", "us_house_delegate", "us_president", "us_vice_president")
+_EXPECTED_FEDERAL_SEATS = 543
+_MIN_FEDERAL_ACTIVE_OFFICEHOLDERS = 535
+_MIN_FEDERAL_PORTRAIT_COVERAGE_PERCENT = 90.0
+_MIN_FEDERAL_BIO_COVERAGE_PERCENT = 80.0
+_MIN_FEDERAL_CANDIDATE_LINK_COVERAGE_PERCENT = 95.0
+_MIN_FEDERAL_IE_COVERAGE_PERCENT = 1.0
+
+
+def _collect_federal_gate(conn: Any) -> FederalCoverageGate:
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT COUNT(DISTINCT oh.person_id)::int
+            FROM civic.officeholding oh
+            JOIN civic.office o ON o.id = oh.office_id
+            WHERE {current_federal_officeholder_predicate()}
+            """,
+        )
+        active = cur.fetchone()[0]
+
+        cur.execute(
+            "SELECT COALESCE(SUM(number_of_seats), 0)::int FROM civic.office "
+            "WHERE office_level = 'federal' AND name = ANY(%s)",
+            (list(FEDERAL_OFFICE_NAMES),),
+        )
+        total_seats = cur.fetchone()[0]
+
+        cur.execute(
+            f"""
+            SELECT
+                COUNT(DISTINCT oh.person_id) FILTER (WHERE pp.person_id IS NOT NULL)::int,
+                COUNT(DISTINCT oh.person_id)::int
+            FROM civic.officeholding oh
+            JOIN civic.office o ON o.id = oh.office_id
+            LEFT JOIN core.person_portrait pp
+                ON pp.person_id = oh.person_id
+               AND pp.status = 'active'
+            WHERE {current_federal_officeholder_predicate()}
+            """,
+        )
+        portrait_num, portrait_denom = cur.fetchone()
+
+        cur.execute(
+            f"""
+            SELECT
+                COUNT(DISTINCT oh.person_id) FILTER (WHERE NULLIF(BTRIM(p.bio_text), '') IS NOT NULL)::int,
+                COUNT(DISTINCT oh.person_id)::int
+            FROM civic.officeholding oh
+            JOIN civic.office o ON o.id = oh.office_id
+            JOIN core.person p ON p.id = oh.person_id
+            WHERE {current_federal_officeholder_predicate()}
+            """,
+        )
+        bio_num, bio_denom = cur.fetchone()
+
+        cur.execute(
+            f"""
+            SELECT
+                COUNT(DISTINCT oh.person_id) FILTER (WHERE c.id IS NOT NULL)::int,
+                COUNT(DISTINCT oh.person_id)::int
+            FROM civic.officeholding oh
+            JOIN civic.office o ON o.id = oh.office_id
+            JOIN core.person p ON p.id = oh.person_id
+            LEFT JOIN cf.candidate c ON c.person_id = p.id
+            WHERE {current_federal_officeholder_predicate()}
+            """,
+        )
+        cand_num, cand_denom = cur.fetchone()
+
+        cur.execute(
+            f"""
+            SELECT COUNT(DISTINCT oh.person_id)::int
+            FROM civic.officeholding oh
+            JOIN civic.office o ON o.id = oh.office_id
+            JOIN core.person p ON p.id = oh.person_id
+            JOIN cf.candidate c ON c.person_id = p.id
+            JOIN cf.transaction t ON t.recipient_candidate_id = c.id
+            WHERE {current_federal_officeholder_predicate()}
+              AND t.transaction_type = 'Independent Expenditure'
+            """,
+        )
+        ie_candidates = cur.fetchone()[0]
+
+    def _pct(num: int, denom: int) -> float:
+        return round((num / denom) * 100, 2) if denom > 0 else 0.0
+
+    return FederalCoverageGate(
+        active_officeholders=active,
+        total_seats=total_seats,
+        portrait_coverage_pct=_pct(portrait_num, portrait_denom),
+        bio_coverage_pct=_pct(bio_num, bio_denom),
+        candidate_link_coverage_pct=_pct(cand_num, cand_denom),
+        ie_coverage_pct=_pct(ie_candidates, cand_num),
+    )
+
+
 def collect_coverage_matrix(
     *,
     registry_path: Path,
@@ -227,6 +337,13 @@ def collect_coverage_matrix(
         loaded_counts = {}
     resolved_nc_geometry_summary = nc_geometry_summary or _collect_nc_geometry_summary()
     nc_geometry_expected_count = _nc_geometry_expected_count()
+
+    federal_gate: FederalCoverageGate | None = None
+    try:
+        with get_connection() as fed_conn:
+            federal_gate = _collect_federal_gate(fed_conn)
+    except (psycopg.Error, RuntimeError, AttributeError):
+        pass
 
     rows = []
     for registry_row in registry.rows:
@@ -307,12 +424,44 @@ def collect_coverage_matrix(
             )
         )
 
+    if federal_gate is not None:
+        rows.append(
+            L14CoverageRow(
+                jurisdiction_code="FEDERAL",
+                name="Federal Aggregate",
+                jurisdiction_type="federal_aggregate",
+                best_update_frequency="weekly",
+                runner_wired=True,
+                tier="launch-support candidate",
+                operational_reason=None,
+                next_action=None,
+                evidence_date=None,
+                acquisition_pattern=None,
+                discovery_maturity=None,
+                source_contract_maturity=None,
+                legal_filing_semantics_maturity=None,
+                implementation_maturity="live_proven",
+                operational_maturity="runner_wired",
+                public_claim_status="launch-support candidate",
+                completeness_intelligence_maturity=None,
+                civics_candidacy_status=None,
+                main_blocker=None,
+                loaded_count=federal_gate.active_officeholders,
+                expected_count=_EXPECTED_FEDERAL_SEATS,
+                nc_geometry_total_count=None,
+                nc_geometry_srid_4326_count=None,
+                nc_geometry_expected_count=None,
+                nc_geometry_counts_match_expected=None,
+            )
+        )
+
     return L14CoverageCollection(
         scope=L14_SCOPE,
         registry_path=str(registry_path),
         lifecycle_path=str(lifecycle_path),
         lifecycle_updated_at=lifecycle.updated_at,
         rows=rows,
+        federal_gate=federal_gate,
     )
 
 
@@ -320,10 +469,24 @@ def _evidence_status(collection: L14CoverageCollection) -> str:
     if not collection.rows:
         return "fail"
 
+    if collection.federal_gate is not None:
+        return "pass" if _federal_gate_passes(collection.federal_gate) else "fail"
+
     nc_rows = [row for row in collection.rows if row.jurisdiction_code == "NC"]
     if not nc_rows:
         return "pass"
     return "pass" if all(row.nc_geometry_counts_match_expected is True for row in nc_rows) else "fail"
+
+
+def _federal_gate_passes(gate: FederalCoverageGate) -> bool:
+    return (
+        gate.total_seats == _EXPECTED_FEDERAL_SEATS
+        and gate.active_officeholders >= _MIN_FEDERAL_ACTIVE_OFFICEHOLDERS
+        and gate.portrait_coverage_pct >= _MIN_FEDERAL_PORTRAIT_COVERAGE_PERCENT
+        and gate.bio_coverage_pct >= _MIN_FEDERAL_BIO_COVERAGE_PERCENT
+        and gate.candidate_link_coverage_pct >= _MIN_FEDERAL_CANDIDATE_LINK_COVERAGE_PERCENT
+        and gate.ie_coverage_pct >= _MIN_FEDERAL_IE_COVERAGE_PERCENT
+    )
 
 
 def write_l14_evidence(
@@ -350,6 +513,7 @@ def write_l14_evidence(
         lifecycle_path=collection.lifecycle_path,
         lifecycle_updated_at=collection.lifecycle_updated_at,
         rows=collection.rows,
+        federal_gate=collection.federal_gate,
     )
     serialized_payload = payload.model_dump(mode="json")
     schema_path = repo_root / "evidence_schemas" / "L14.json"

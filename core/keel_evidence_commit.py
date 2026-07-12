@@ -109,7 +109,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--repo-root", default=str(Path(__file__).resolve().parents[1]))
     parser.add_argument("--print-paths", action="store_true", help="Print one publishable path per line.")
     parser.add_argument("--print-rejected", action="store_true", help="Print rejected paths (informational).")
-    parser.add_argument("--print-commit-message", action="store_true", help="Print the deterministic commit message body.")
+    parser.add_argument(
+        "--print-commit-message", action="store_true", help="Print the deterministic commit message body."
+    )
     args = parser.parse_args(argv)
 
     repo_root = Path(args.repo_root)

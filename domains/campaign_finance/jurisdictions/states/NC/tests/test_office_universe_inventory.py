@@ -7,8 +7,8 @@ from _test_helpers import markdown_table_under_heading, read
 
 
 REPO_ROOT = Path(__file__).resolve().parents[6]
-UNIVERSE_DOC_PATH = REPO_ROOT / "docs" / "research" / "nc_office_universe_2026_04_24.md"
-ARTIFACT_ROOT = REPO_ROOT / "docs" / "research" / "artifacts" / "2026_04_24_nc_office_universe"
+UNIVERSE_DOC_PATH = REPO_ROOT / "docs" / "reference" / "research" / "nc_office_universe_2026_04_24.md"
+ARTIFACT_ROOT = REPO_ROOT / "docs" / "reference" / "research" / "artifacts" / "2026_04_24_nc_office_universe"
 
 REQUIRED_COLUMNS = [
     "office_class",
@@ -58,7 +58,7 @@ def test_universe_table_contract_has_required_columns_unique_keys_and_allowed_ow
         artifact_paths = [path.strip() for path in row["artifact_paths"].split(";") if path.strip()]
         assert artifact_paths, f"artifact_paths must include at least one retained path: {row}"
         for artifact_path in artifact_paths:
-            assert artifact_path.startswith("docs/research/artifacts/2026_04_24_nc_office_universe/")
+            assert artifact_path.startswith("docs/reference/research/artifacts/2026_04_24_nc_office_universe/")
             assert (REPO_ROOT / artifact_path).exists()
             assert (REPO_ROOT / artifact_path).is_file()
 

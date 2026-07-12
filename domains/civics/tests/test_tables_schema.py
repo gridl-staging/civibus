@@ -66,6 +66,18 @@ EXPECTED_SPATIAL_INDEXES = [
 EXPECTED_GIST_INDEXES = [
     "idx_electoral_division_geometry",
 ]
+EXPECTED_ZCTA_DISTRICT_COLUMNS = [
+    "zcta5|text|NO|",
+    "state_fips|text|NO|",
+    "cd_geoid|text|NO|",
+    "district_number|text|NO|",
+    "land_share|numeric|NO|",
+    "source_url|text|NO|",
+]
+EXPECTED_ZCTA_DISTRICT_COMMENT = (
+    "Approximate ZCTA5-to-119th-congressional-district mapping derived from the Census 2020-ZCTA "
+    "relationship file for fundraising geography summaries; not a parcel- or geometry-level district assignment."
+)
 
 EXPECTED_FOREIGN_KEYS = [
     ("office", "jurisdiction_id", "jurisdiction", "id"),
@@ -109,6 +121,8 @@ FEC_OFFICE_CODE_TO_SEED_ID = {
     OfficeType.SENATE.value: "00000000-0000-4000-8000-000000000102",
     OfficeType.PRESIDENT.value: "00000000-0000-4000-8000-000000000103",
 }
+VICE_PRESIDENT_SEED_ID = "00000000-0000-4000-8000-000000000104"
+HOUSE_DELEGATE_SEED_ID = "00000000-0000-4000-8000-000000000105"
 STATE_CODE_TO_FIPS = {"WA": "53", "FL": "12"}
 STATE_CODES_WITH_STAGE4_OFFICE_SEEDS = tuple(STATE_CODE_TO_FIPS.keys())
 
@@ -337,6 +351,42 @@ def test_civic_schema_file_exists() -> None:
 def test_civic_schema_tables_created() -> None:
     for table in CIVIC_TABLES:
         assert _table_exists(TEST_DATABASE, table), f"Missing civic.{table} table"
+
+
+def test_zcta_district_reference_table_contract() -> None:
+    assert _table_exists(TEST_DATABASE, "zcta_district")
+
+    rows = _run_psql_command(
+        TEST_DATABASE,
+        """
+        SELECT column_name || '|' || data_type || '|' || is_nullable || '|' || COALESCE(column_default, '')
+        FROM information_schema.columns
+        WHERE table_schema = 'civic'
+          AND table_name = 'zcta_district'
+          AND column_name IN ('zcta5', 'state_fips', 'cd_geoid', 'district_number', 'land_share', 'source_url')
+        ORDER BY ordinal_position;
+        """,
+    )
+    assert rows == EXPECTED_ZCTA_DISTRICT_COLUMNS
+    assert _column_format_type(TEST_DATABASE, "zcta_district", "land_share") == "numeric(7,5)"
+
+    comment_rows = _run_psql_command(
+        TEST_DATABASE,
+        """
+        SELECT obj_description('civic.zcta_district'::regclass, 'pg_class');
+        """,
+    )
+    assert comment_rows == [EXPECTED_ZCTA_DISTRICT_COMMENT]
+
+
+def test_zcta_district_lookup_indexes() -> None:
+    cd_geoid_index = _index_definition(TEST_DATABASE, "idx_zcta_district_cd_geoid")
+    assert cd_geoid_index is not None
+    assert "(cd_geoid)" in cd_geoid_index.lower()
+
+    state_fips_index = _index_definition(TEST_DATABASE, "idx_zcta_district_state_fips")
+    assert state_fips_index is not None
+    assert "(state_fips)" in state_fips_index.lower()
 
 
 def test_civic_schema_unique_indexes() -> None:
@@ -575,6 +625,7 @@ def test_seeded_federal_offices_expand_hsp_with_deterministic_ids() -> None:
         TEST_DATABASE,
         """
         SELECT id::text || '|' || name || '|' || office_level || '|' || COALESCE(state, '') || '|' || title
+              || '|' || number_of_seats::text || '|' || is_elected::text
         FROM civic.office
         WHERE state IS NULL
           AND office_level = 'federal'
@@ -582,9 +633,11 @@ def test_seeded_federal_offices_expand_hsp_with_deterministic_ids() -> None:
         """,
     )
     expected_rows = [
-        f"{FEC_OFFICE_CODE_TO_SEED_ID['H']}|{FEC_OFFICE_CODE_TO_CANONICAL_NAME['H']}|federal||Representative",
-        f"{FEC_OFFICE_CODE_TO_SEED_ID['S']}|{FEC_OFFICE_CODE_TO_CANONICAL_NAME['S']}|federal||Senator",
-        f"{FEC_OFFICE_CODE_TO_SEED_ID['P']}|{FEC_OFFICE_CODE_TO_CANONICAL_NAME['P']}|federal||President",
+        f"{FEC_OFFICE_CODE_TO_SEED_ID['H']}|{FEC_OFFICE_CODE_TO_CANONICAL_NAME['H']}|federal||Representative|435|true",
+        f"{FEC_OFFICE_CODE_TO_SEED_ID['S']}|{FEC_OFFICE_CODE_TO_CANONICAL_NAME['S']}|federal||Senator|100|true",
+        f"{FEC_OFFICE_CODE_TO_SEED_ID['P']}|{FEC_OFFICE_CODE_TO_CANONICAL_NAME['P']}|federal||President|1|true",
+        f"{VICE_PRESIDENT_SEED_ID}|us_vice_president|federal||Vice President|1|true",
+        f"{HOUSE_DELEGATE_SEED_ID}|us_house_delegate|federal||Delegate|6|true",
     ]
     assert rows == expected_rows
 

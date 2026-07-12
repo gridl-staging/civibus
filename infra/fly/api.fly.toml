@@ -1,0 +1,59 @@
+# civibus-api — FastAPI (same infra/api image as compose). Internal-only:
+# no [[services]] block; civibus-caddy reaches it at civibus-api.internal:8000.
+#
+# Deploy from repo root: flyctl deploy -c infra/fly/api.fly.toml
+# Secrets (set once, never in this file): POSTGRES_PASSWORD, CIVIBUS_API_KEYS,
+# CIVIBUS_ADMIN_API_KEYS.
+# NO FEC_API_KEY here — the serving path is pure DB-read (verified: no live
+# OpenFEC/httpx calls under api/routes or api/queries).
+app = "civibus-api"
+primary_region = "sjc"
+
+# dockerfile is resolved relative to this file's directory.
+[build]
+  dockerfile = "../api/Dockerfile"
+
+[env]
+  CIVIBUS_ENV = "production"
+  POSTGRES_HOST = "civibus-db.internal"
+  POSTGRES_PORT = "5432"
+  POSTGRES_USER = "civibus"
+  POSTGRES_DB = "civibus"
+  CIVIBUS_CORS_ORIGIN = "https://civibus-caddy.fly.dev"
+  CIVIBUS_RATE_LIMIT_REQUESTS = "100"
+  CIVIBUS_RATE_LIMIT_WINDOW_SECONDS = "60"
+  # Startup-canary / health floors intentionally NOT set here: the canonical
+  # federal-first floors live in api/health_content.py (FEDERAL_FIRST_CONTENT_FLOORS)
+  # and the 2026-07-06 Fly load clears them (73,640 tx / 10,440 persons / 543
+  # officeholdings). Set CIVIBUS_HEALTH_CONTENT_FLOOR_* only to override.
+
+# Content-aware health check: machine is only healthy when the DB holds data
+# above floors (mirrors the compose healthcheck; Apr 30 incident guard).
+[checks.content]
+  type = "http"
+  port = 8000
+  path = "/health/content"
+  interval = "30s"
+  timeout = "10s"
+  grace_period = "120s"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "1gb"
+
+# Private flycast service (no public IP — allocate with
+# `flyctl ips allocate-v6 --private -a civibus-api`). Needed because uvicorn
+# (asyncio) sets IPV6_V6ONLY when bound to "::", so one socket cannot serve
+# both Fly's machine health checks (which dial the private IPv4) and caddy's
+# 6PN dial (IPv6). With flycast, the app keeps the Dockerfile's 0.0.0.0 bind:
+# checks dial IPv4 directly, and caddy dials civibus-api.flycast:8000, which
+# fly-proxy routes to the machine's internal port over its own channel.
+[[services]]
+  protocol = "tcp"
+  internal_port = 8000
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[services.ports]]
+    port = 8000

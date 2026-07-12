@@ -1,51 +1,45 @@
-/**
- * Presentation builders for canonical person and organization detail pages.
- * These helpers keep display logic, civic-record shaping, and technical-disclosure
- * formatting out of the Svelte components.
- */
-import { formatCountLabel } from "$lib/count-label";
-import {
-  buildCandidacyRoutePath,
-  buildContestRoutePath,
-  buildOfficeRoutePath,
-  buildOfficeholdingRoutePath,
-  type CandidacyDetailResponse,
-  type OfficeholdingDetailResponse
-} from "$lib/civic-detail/contract";
+/** Presentation builders for public person and organization detail pages. */
 import {
   buildCandidateDeferredFundraisingSummary,
   buildCandidateDeferredOutsideSpending,
   buildCandidateCommitteeBreakdown,
   buildCommitteeDeferredTransactionRows,
+  buildRankedPartyRows,
+  formatCurrency,
   type CandidateAggregateSummaryPresentation,
   type CandidateCommitteeBreakdownRow,
   type CommitteeTransactionRow,
-  type OutsideSpendingPresentation
+  type OutsideSpendingPresentation,
+  type RankedPartyRow
 } from "$lib/campaign-finance-detail/presentation";
 import type {
   CandidateFundraisingSummary,
   CampaignFinanceTransactionResponse,
+  ContributionInsightsCareerTotals,
+  ContributionInsightsCycleTotal,
+  ContributionInsightsDistrictShare,
+  ContributionInsightsTotalsSource,
   IndependentExpenditureResponse,
   IndependentExpenditureSummary,
+  PersonContributionInsights,
+  PersonTopEmployerRow,
+  RankedTransactionParty,
   SerializedMoney
 } from "$lib/campaign-finance-detail/contract";
 import type { ChartSeries } from "$lib/charts/types";
 import { formatDisplayValue } from "$lib/detail-format";
+import { formatCountLabel } from "$lib/count-label";
 import {
   buildDonorVendorEmptyStateBanner,
   buildLinkedCommitteeEmptyStateBanner,
   buildTrustSection,
   type TrustSectionViewModel
 } from "$lib/detail-trust/presentation";
-import {
-  classifyGraphNeighborRoute,
-  type EntityDetailResponse,
-  type EntityGraphRelationshipsResponse,
-  type GraphNeighbor,
-  type Stage4EntityType,
-  type ErMatchDecision,
-  type OrgDetailResponse,
-  type PersonDetailResponse
+import type {
+  EntityDetailResponse,
+  OrgDetailResponse,
+  PersonDetailResponse,
+  Stage4EntityType
 } from "$lib/entity-detail/contract";
 
 export type DetailFactRow = {
@@ -53,48 +47,12 @@ export type DetailFactRow = {
   value: string;
 };
 
-export type ErMatchSummaryRow = {
-  counterpartEntityId: string;
-  decision: string;
-  confidence: string;
-  decidedAt: string;
-};
-
-export type GraphNeighborDisplayRow = {
-  title: string;
-  entityType: string;
-  relationshipType: string;
-  direction: "outbound" | "inbound";
-  href: string | null;
-};
-
-export type EmptyPanelKey = "identifiers" | "matches" | "neighbors";
 export type EntityDetailSectionKey =
   | "summary"
   | "trust"
   | "metrics"
   | "records"
-  | "civic-record"
-  | "person-civic-history"
-  | "person-campaign-finance"
-  | "technical-disclosure";
-
-type CivicContextLabel = "Office" | "Contest";
-
-export type CivicRecordRow = {
-  recordType: "Candidacy" | "Officeholding";
-  recordName: string;
-  recordHref: string;
-  contextLabel: CivicContextLabel | null;
-  contextName: string | null;
-  contextHref: string | null;
-};
-
-export type CivicRecordSection = {
-  title: string;
-  rows: CivicRecordRow[];
-  emptyMessage: string | null;
-};
+  | "person-campaign-finance";
 
 export type DetailRouteMetadata = {
   title: string;
@@ -105,8 +63,6 @@ export type EntityDetailMetadataInput = {
   entityType: Stage4EntityType;
   canonicalName: string;
   identifierCount: number;
-  matchCount: number;
-  neighborCount: number;
 };
 
 export type EntityDetailMetadataFromDetailInput = {
@@ -117,30 +73,6 @@ export type EntityDetailMetadataFromDetailInput = {
 export type EntityDetailShellInput = {
   entityType: Stage4EntityType;
   detail: EntityDetailResponse;
-};
-
-export type ResolvedEntityDetailBundle = {
-  entityType: Stage4EntityType;
-  detail: EntityDetailResponse;
-  matches: ErMatchDecision[];
-  relationships: EntityGraphRelationshipsResponse;
-};
-
-export type EntityDetailPresentation = {
-  entityType: Stage4EntityType;
-  canonicalName: string;
-  sectionOrder: EntityDetailSectionKey[];
-  coreFactRows: DetailFactRow[];
-  keyMetricRows: DetailFactRow[];
-  identifierRows: DetailFactRow[];
-  trustSection: TrustSectionViewModel;
-  matchRows: ErMatchSummaryRow[];
-  neighborRows: GraphNeighborDisplayRow[];
-  technicalDisclosure: TechnicalDisclosureSection;
-  civicRecordSection: CivicRecordSection | null;
-  identifierEmptyMessage: string | null;
-  matchEmptyMessage: string | null;
-  neighborEmptyMessage: string | null;
 };
 
 export type EntityDetailShellPresentation = {
@@ -154,35 +86,45 @@ export type EntityDetailShellPresentation = {
   identifierEmptyMessage: string | null;
 };
 
-export type TechnicalDisclosureSection = {
-  summary: string;
-  matchRows: ErMatchSummaryRow[];
-  neighborRows: GraphNeighborDisplayRow[];
-  matchEmptyMessage: string | null;
-  neighborEmptyMessage: string | null;
+export type EntityDetailPresentation = EntityDetailShellPresentation;
+
+export type PersonContributionInsightsPresentation = {
+  emptyMessage: string | null;
+  caveatMessages: string[];
+  coverageLabel: string;
+  topDonors: RankedPartyRow[];
+  topDonorsEmptyMessage: string | null;
+  topEmployers: RankedPartyRow[];
+  topEmployersEmptyMessage: string | null;
+  topEmployerDisclaimer: string;
+  topEmployerMethodologyReference: string;
+  totalSummaryViews: PersonContributionTotalSummaryView[];
+  defaultTotalSummaryKey: PersonContributionTotalSummaryKey | null;
+  totalsEmptyMessage: string | null;
+  smallDollarHeadline: string;
+  smallDollarSummary: string;
+  districtShareHeadline: string;
+  districtShareSummary: string;
+  monthlyTotalsSeries: ChartSeries[];
+  itemizedCountSeries: ChartSeries[];
+  dollarsBySizeSeries: ChartSeries[];
+  stateGeographySeries: ChartSeries[];
+  districtGeographySeries: ChartSeries[];
+  preferredGeographySeries: ChartSeries[];
+  unitemizedExclusionNote: string;
+  geographyNote: string;
 };
 
-export type PersonOfficeholdingTimelineRow = {
-  officeholdingId: string;
-  officeholdingLabel: string;
-  officeholdingHref: string;
-  officeLabel: string;
-  officeHref: string;
-  holderStatus: string;
-  validFrom: string;
-  validThrough: string;
-};
+export type PersonContributionTotalSummaryKey = "cycle" | "career";
 
-export type PersonCandidacyRow = {
-  candidacyId: string;
-  candidacyLabel: string;
-  candidacyHref: string;
-  contestLabel: string;
-  contestHref: string;
-  filingDate: string;
-  party: string;
-  status: string;
-  incumbentChallenge: string;
+export type PersonContributionTotalSummaryView = {
+  key: PersonContributionTotalSummaryKey;
+  label: string;
+  amountLabel: string;
+  itemizedAmountLabel: string;
+  unitemizedAmountLabel: string;
+  transactionCountLabel: string;
+  caveatMessage: string | null;
 };
 
 const ENTITY_TYPE_LABELS: Record<Stage4EntityType, string> = {
@@ -190,68 +132,78 @@ const ENTITY_TYPE_LABELS: Record<Stage4EntityType, string> = {
   org: "Organization"
 };
 
-const EMPTY_PANEL_MESSAGES: Record<EmptyPanelKey, string> = {
-  identifiers: "No identifiers are available yet. Check related records after the next refresh.",
-  matches: "No entity-resolution matches are available yet. Check back after the next ER refresh.",
-  neighbors: "No graph relationships are available yet. Linked records will appear after future ingests."
+const IDENTIFIER_EMPTY_MESSAGE =
+  "No identifiers are available yet. Check related records after the next refresh.";
+const DEFAULT_UNITEMIZED_EXCLUSION_NOTE =
+  "Unitemized contributions are excluded from count and geography charts.";
+const SMALL_DOLLAR_UNAVAILABLE_SUMMARY = "Committee summary totals are not available yet.";
+const PERSON_TOP_DONORS_EMPTY_MESSAGE = "No donor rankings available.";
+const PERSON_TOP_EMPLOYERS_EMPTY_MESSAGE = "No employer rankings available.";
+const PERSON_TOP_EMPLOYER_DISCLAIMER =
+  "Top employers aggregate raw employer names from itemized individual contributions only.";
+const PERSON_TOP_EMPLOYER_METHODOLOGY_REFERENCE =
+  "They are not industry- or sector-coded; see Methodology for source-linking and evidence limitations.";
+const PERSON_TOTALS_EMPTY_MESSAGE = "No itemized individual-contribution totals are available yet.";
+const DISTRICT_SHARE_UNAVAILABLE_HEADLINE = "District share unavailable";
+const DISTRICT_SHARE_UNAVAILABLE_SUMMARY =
+  "District-share geography is unavailable until in-district and out-of-district itemized totals are available.";
+const ITEMIZED_TOTALS_CAVEAT =
+  "Only itemized individual contributions are included; unitemized totals are unavailable for this view.";
+const MIXED_TOTALS_CAVEAT =
+  "Totals combine itemized transactions with available committee-summary data; unitemized coverage may be incomplete.";
+const APPROXIMATE_DISTRICT_GEOGRAPHY_NOTE =
+  "District geography uses a Census 119th-Congress / 2020-ZCTA approximation.";
+const STATE_GEOGRAPHY_NOTE = "Contributor geography by state.";
+const CONTRIBUTION_INSIGHTS_EMPTY_MESSAGES: Record<string, string> = {
+  missing_committee_summary:
+    "Committee summary totals are required before dollars by size can be shown.",
+  missing_zcta_district:
+    "District geography is unavailable until ZCTA district reference data is loaded."
 };
-
-function getOptionalEmptyMessage(rows: unknown[], panel: EmptyPanelKey): string | null {
-  return rows.length === 0 ? EMPTY_PANEL_MESSAGES[panel] : null;
-}
+const CONTRIBUTION_INSIGHTS_LOADED_CAVEAT_MESSAGES: Record<string, string> = {
+  missing_committee_summary:
+    "Committee summary totals are unavailable, so summary-backed unitemized dollars are not included."
+};
+const CONTRIBUTION_INSIGHTS_EXCLUDED_GEOGRAPHY_MESSAGES: Record<string, string> = {
+  no_linked_candidate: "No linked candidate is available for fundraising detail.",
+  statewide_office: "Statewide offices use state-level fundraising geography.",
+  federal_executive: "Federal executive offices use national fundraising geography.",
+  no_current_federal_officeholding:
+    "District geography is unavailable until a current federal officeholding is linked.",
+  missing_member_district:
+    "District geography is unavailable until the linked federal office has a state and district."
+};
 
 const PERSON_SECTION_ORDER: EntityDetailSectionKey[] = [
   "summary",
   "trust",
   "metrics",
   "records",
-  "civic-record",
-  "person-civic-history",
-  "person-campaign-finance",
-  "technical-disclosure"
+  "person-campaign-finance"
 ];
-const ORG_SECTION_ORDER: EntityDetailSectionKey[] = ["summary", "trust", "metrics", "records", "technical-disclosure"];
-
-const TECHNICAL_DISCLOSURE_SUMMARY = "Entity-resolution and graph internals";
-const CIVIC_RECORD_TITLE = "Civic Record";
-const CIVIC_RECORD_EMPTY_MESSAGE = "No civic record relationships are available yet.";
-const LOADING_METRIC_VALUE = "Loading...";
-const UNAVAILABLE_METRIC_VALUE = "Unavailable";
-const DEFAULT_OFFICEHOLDING_LABEL = "Officeholding record";
-const DEFAULT_OFFICE_LABEL = "Office record";
-const DEFAULT_CANDIDACY_LABEL = "Candidacy record";
-const DEFAULT_CONTEST_LABEL = "Contest record";
+const ORG_SECTION_ORDER: EntityDetailSectionKey[] = ["summary", "trust", "metrics", "records"];
 
 export function buildEntityDetailMetadata(input: EntityDetailMetadataInput): DetailRouteMetadata {
-  const identifierLabel = formatCountLabel(input.identifierCount, "identifier");
-  const matchLabel = formatCountLabel(input.matchCount, "ER match", "ER matches");
-  const relationshipLabel = formatCountLabel(input.neighborCount, "graph relationship");
   const entityTypeLabel = ENTITY_TYPE_LABELS[input.entityType];
 
   return {
     title: `${input.canonicalName} | ${entityTypeLabel} | Civibus`,
-    description: `${entityTypeLabel} profile with ${identifierLabel}, ${matchLabel}, and ${relationshipLabel}.`
+    description: `${entityTypeLabel} profile with ${input.identifierCount} ${formatIdentifierLabel(input.identifierCount)} and source-linked records.`
   };
 }
 
 export function buildEntityDetailMetadataFromDetail(
   input: EntityDetailMetadataFromDetailInput
 ): DetailRouteMetadata {
-  const identifierLabel = formatCountLabel(Object.keys(input.detail.identifiers).length, "identifier");
-  const entityTypeLabel = ENTITY_TYPE_LABELS[input.entityType];
-
-  return {
-    title: `${input.detail.canonical_name} | ${entityTypeLabel} | Civibus`,
-    description: `${entityTypeLabel} profile with ${identifierLabel} and source-linked records.`
-  };
+  return buildEntityDetailMetadata({
+    entityType: input.entityType,
+    canonicalName: input.detail.canonical_name,
+    identifierCount: Object.keys(input.detail.identifiers).length
+  });
 }
 
-function formatConfidence(value: number | null): string {
-  if (value === null) {
-    return "—";
-  }
-
-  return value.toFixed(2);
+function formatIdentifierLabel(count: number): string {
+  return count === 1 ? "identifier" : "identifiers";
 }
 
 function buildSharedFactRows(detail: EntityDetailResponse): DetailFactRow[] {
@@ -273,8 +225,7 @@ export function buildCanonicalDetailFacts(
       { label: "Last name", value: formatDisplayValue(personDetail.last_name) },
       { label: "Occupation", value: formatDisplayValue(personDetail.occupation) },
       { label: "Education", value: formatDisplayValue(personDetail.education) },
-      { label: "Year of birth", value: formatDisplayValue(personDetail.year_of_birth) },
-      { label: "ER confidence", value: formatConfidence(personDetail.er_confidence) }
+      { label: "Year of birth", value: formatDisplayValue(personDetail.year_of_birth) }
     ];
   }
 
@@ -284,8 +235,7 @@ export function buildCanonicalDetailFacts(
     ...sharedRows,
     { label: "Organization type", value: formatDisplayValue(organizationDetail.org_type) },
     { label: "Registered state", value: formatDisplayValue(organizationDetail.registered_state) },
-    { label: "Formation date", value: formatDisplayValue(organizationDetail.formation_date) },
-    { label: "ER confidence", value: formatConfidence(organizationDetail.er_confidence) }
+    { label: "Formation date", value: formatDisplayValue(organizationDetail.formation_date) }
   ];
 }
 
@@ -295,154 +245,12 @@ export function buildIdentifierRows(identifiers: Record<string, string>): Detail
     .map(([label, value]) => ({ label, value }));
 }
 
-function buildCounterpartEntityId(match: ErMatchDecision, subjectEntityId: string): string {
-  if (match.entity_id_a === subjectEntityId) {
-    return match.entity_id_b;
-  }
-
-  return match.entity_id_a;
+export function buildIdentifierKeyMetrics(identifierRows: DetailFactRow[]): DetailFactRow[] {
+  return [{ label: "Identifiers", value: String(identifierRows.length) }];
 }
 
-export function buildErMatchSummaries(
-  matches: ErMatchDecision[],
-  subjectEntityId: string
-): ErMatchSummaryRow[] {
-  return matches.map((match) => ({
-    counterpartEntityId: buildCounterpartEntityId(match, subjectEntityId),
-    decision: match.decision,
-    confidence: match.confidence.toFixed(2),
-    decidedAt: match.decided_at
-  }));
-}
-
-export function buildNeighborTitle(neighbor: GraphNeighbor): string {
-  if (neighbor.name) {
-    return neighbor.name;
-  }
-
-  return `${neighbor.entity_type} ${neighbor.entity_id}`;
-}
-
-export function buildGraphNeighborRows(neighbors: GraphNeighbor[]): GraphNeighborDisplayRow[] {
-  return neighbors.map((neighbor) => {
-    const route = classifyGraphNeighborRoute(neighbor);
-
-    return {
-      title: buildNeighborTitle(neighbor),
-      entityType: neighbor.entity_type,
-      relationshipType: neighbor.relationship_type,
-      direction: neighbor.direction,
-      href: route.href
-    };
-  });
-}
-
-export function getEmptyPanelMessage(panel: EmptyPanelKey): string {
-  return EMPTY_PANEL_MESSAGES[panel];
-}
-
-function formatDateForTimeline(value: string | null): string {
-  if (value === null) {
-    return "—";
-  }
-
-  if (/^\d{4}-\d{2}-\d{2}/.test(value)) {
-    return value.slice(0, 10);
-  }
-
-  return value;
-}
-
-function resolveDisplayLabel(value: string | null | undefined, fallback: string): string {
-  if (typeof value !== "string") {
-    return fallback;
-  }
-
-  const trimmed = value.trim();
-  return trimmed === "" ? fallback : trimmed;
-}
-
-function compareDateDesc(left: string | null, right: string | null): number {
-  if (left === right) {
-    return 0;
-  }
-  if (left === null) {
-    return 1;
-  }
-  if (right === null) {
-    return -1;
-  }
-
-  return right.localeCompare(left);
-}
-
-/** Builds deterministic officeholding timeline rows for person detail pages. */
-export function buildPersonOfficeholdingTimelineRows(
-  officeholdings: OfficeholdingDetailResponse[],
-  labelLookups: {
-    officeholdingLabelsById?: Record<string, string>;
-    officeLabelsById?: Record<string, string>;
-  } = {}
-): PersonOfficeholdingTimelineRow[] {
-  return [...officeholdings]
-    .sort((left, right) => {
-      const lowerBoundOrder = compareDateDesc(left.valid_period_lower, right.valid_period_lower);
-      if (lowerBoundOrder !== 0) {
-        return lowerBoundOrder;
-      }
-      return left.id.localeCompare(right.id);
-    })
-    .map((officeholding) => ({
-      officeholdingId: officeholding.id,
-      officeholdingLabel: resolveDisplayLabel(
-        labelLookups.officeholdingLabelsById?.[officeholding.id],
-        DEFAULT_OFFICEHOLDING_LABEL
-      ),
-      officeholdingHref: buildOfficeholdingRoutePath(officeholding.id),
-      officeLabel: resolveDisplayLabel(
-        labelLookups.officeLabelsById?.[officeholding.office_id],
-        DEFAULT_OFFICE_LABEL
-      ),
-      officeHref: buildOfficeRoutePath(officeholding.office_id),
-      holderStatus: officeholding.holder_status,
-      validFrom: formatDateForTimeline(officeholding.valid_period_lower),
-      validThrough: officeholding.valid_period_upper === null ? "Present" : formatDateForTimeline(officeholding.valid_period_upper)
-    }));
-}
-
-/** Builds deterministic candidacy rows for person detail pages. */
-export function buildPersonCandidacyRows(
-  candidacies: CandidacyDetailResponse[],
-  labelLookups: {
-    candidacyLabelsById?: Record<string, string>;
-    contestLabelsById?: Record<string, string>;
-  } = {}
-): PersonCandidacyRow[] {
-  return [...candidacies]
-    .sort((left, right) => {
-      const filingDateOrder = compareDateDesc(left.filing_date, right.filing_date);
-      if (filingDateOrder !== 0) {
-        return filingDateOrder;
-      }
-      return left.id.localeCompare(right.id);
-    })
-    .map((candidacy) => ({
-      candidacyId: candidacy.id,
-      candidacyLabel: resolveDisplayLabel(
-        labelLookups.candidacyLabelsById?.[candidacy.id],
-        DEFAULT_CANDIDACY_LABEL
-      ),
-      candidacyHref: buildCandidacyRoutePath(candidacy.id),
-      contestLabel: resolveDisplayLabel(
-        labelLookups.contestLabelsById?.[candidacy.contest_id],
-        DEFAULT_CONTEST_LABEL
-      ),
-      contestHref: buildContestRoutePath(candidacy.contest_id),
-      filingDate: formatDateForTimeline(candidacy.filing_date),
-      party: formatDisplayValue(candidacy.party),
-      status: formatDisplayValue(candidacy.status),
-      incumbentChallenge: formatDisplayValue(candidacy.incumbent_challenge)
-    }));
+export function getIdentifierEmptyMessage(): string {
+  return IDENTIFIER_EMPTY_MESSAGE;
 }
 
 function parseMoney(value: SerializedMoney): number {
@@ -450,7 +258,302 @@ function parseMoney(value: SerializedMoney): number {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
-/** Converts candidate fundraising totals into shared chart-series input. */
+function formatCoverageLabel(startDate: string, endDate: string | null): string {
+  return endDate === null ? `from ${startDate}` : `${startDate} to ${endDate}`;
+}
+
+function formatSharePercent(value: SerializedMoney | null): string {
+  if (value === null) {
+    return "Small-dollar share unavailable";
+  }
+
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return "Small-dollar share unavailable";
+  }
+
+  return `${Math.round(parsed * 100)}%`;
+}
+
+function buildSingleSeries(
+  id: string,
+  label: string,
+  points: { x: string; y: number }[]
+): ChartSeries[] {
+  return [{ id, label, points }];
+}
+
+function resolveContributionInsightsEmptyMessage(insights: PersonContributionInsights): string | null {
+  if (insights.has_data) {
+    return null;
+  }
+
+  const excludedGeographyMessage = resolveExcludedGeographyMessage(insights);
+  if (excludedGeographyMessage !== null) {
+    return excludedGeographyMessage;
+  }
+
+  for (const caveat of insights.metadata.caveats) {
+    const message = CONTRIBUTION_INSIGHTS_EMPTY_MESSAGES[caveat];
+    if (message !== undefined) {
+      return message;
+    }
+  }
+
+  return "Itemized contribution rows are not loaded yet.";
+}
+
+function resolveContributionInsightsCaveatMessages(insights: PersonContributionInsights): string[] {
+  if (!insights.has_data) {
+    return [];
+  }
+
+  return insights.metadata.caveats.flatMap((caveat) => {
+    const message = CONTRIBUTION_INSIGHTS_LOADED_CAVEAT_MESSAGES[caveat];
+    return message === undefined ? [] : [message];
+  });
+}
+
+function resolveExcludedGeographyMessage(insights: PersonContributionInsights): string | null {
+  const excludedGeography = insights.metadata.excluded_geography;
+  if (excludedGeography === null) {
+    return null;
+  }
+
+  return CONTRIBUTION_INSIGHTS_EXCLUDED_GEOGRAPHY_MESSAGES[excludedGeography] ?? null;
+}
+
+function resolveContributionInsightsGeographyNote(
+  insights: PersonContributionInsights,
+  hasDistrictGeography: boolean
+): string {
+  const excludedGeographyMessage = resolveExcludedGeographyMessage(insights);
+  if (
+    excludedGeographyMessage !== null &&
+    insights.metadata.excluded_geography !== "no_linked_candidate"
+  ) {
+    return excludedGeographyMessage;
+  }
+
+  if (!hasDistrictGeography && insights.metadata.caveats.includes("missing_zcta_district")) {
+    return CONTRIBUTION_INSIGHTS_EMPTY_MESSAGES.missing_zcta_district;
+  }
+
+  if (hasDistrictGeography && insights.metadata.approximate_geography) {
+    return APPROXIMATE_DISTRICT_GEOGRAPHY_NOTE;
+  }
+
+  return STATE_GEOGRAPHY_NOTE;
+}
+
+function buildSmallDollarSummary(insights: PersonContributionInsights): string {
+  const share = insights.small_dollar_share;
+  if (
+    !share.available ||
+    share.small_dollar_amount === null ||
+    share.total_contribution_amount === null
+  ) {
+    return SMALL_DOLLAR_UNAVAILABLE_SUMMARY;
+  }
+
+  return `${formatCurrency(share.small_dollar_amount)} of ${formatCurrency(
+    share.total_contribution_amount
+  )} from small-dollar sources`;
+}
+
+function formatDistrictShareHeadline(share: SerializedMoney | null): string {
+  if (share === null) {
+    return DISTRICT_SHARE_UNAVAILABLE_HEADLINE;
+  }
+
+  const parsed = Number(share);
+  if (!Number.isFinite(parsed)) {
+    return DISTRICT_SHARE_UNAVAILABLE_HEADLINE;
+  }
+
+  return `${Math.round(parsed * 100)}% in district`;
+}
+
+function buildDistrictShareSummary(districtShare: ContributionInsightsDistrictShare): string {
+  if (
+    !districtShare.available ||
+    districtShare.in_district_amount === null ||
+    districtShare.out_of_district_amount === null
+  ) {
+    return DISTRICT_SHARE_UNAVAILABLE_SUMMARY;
+  }
+
+  const baseSummary = `${formatCurrency(districtShare.in_district_amount)} in district and ${formatCurrency(
+    districtShare.out_of_district_amount
+  )} out of district`;
+  if (
+    districtShare.unknown_district_amount === null ||
+    parseMoney(districtShare.unknown_district_amount) === 0
+  ) {
+    return `${baseSummary}.`;
+  }
+
+  // The backend share denominator excludes Unknown district; keep that rule explicit in copy.
+  return `${baseSummary}; ${formatCurrency(
+    districtShare.unknown_district_amount
+  )} unknown district excluded from the share.`;
+}
+
+function buildTopEmployerRows(personTopEmployers: PersonTopEmployerRow[]): RankedPartyRow[] {
+  // Employer rows are raw employer-name buckets, not industry or sector classifications.
+  return buildRankedPartyRows(
+    personTopEmployers.map((row) => ({
+      name: row.employer,
+      total_amount: row.total_amount,
+      transaction_count: row.transaction_count
+    }))
+  );
+}
+
+function resolveTotalsCaveat(source: ContributionInsightsTotalsSource): string | null {
+  if (source === "itemized_transactions") {
+    return ITEMIZED_TOTALS_CAVEAT;
+  }
+
+  if (source === "mixed_sources") {
+    return MIXED_TOTALS_CAVEAT;
+  }
+
+  return null;
+}
+
+function hasContributionTotals(source: ContributionInsightsTotalsSource): boolean {
+  return source !== "none";
+}
+
+function buildTotalSummaryView(
+  key: PersonContributionTotalSummaryKey,
+  label: string,
+  totals: ContributionInsightsCycleTotal | ContributionInsightsCareerTotals
+): PersonContributionTotalSummaryView | null {
+  if (!hasContributionTotals(totals.source)) {
+    return null;
+  }
+
+  return {
+    key,
+    label,
+    amountLabel: formatCurrency(totals.total_individual_contribution_amount),
+    itemizedAmountLabel: formatCurrency(totals.itemized_individual_contribution_amount),
+    unitemizedAmountLabel: formatCurrency(totals.unitemized_individual_contribution_amount),
+    transactionCountLabel: formatCountLabel(totals.itemized_transaction_count, "transaction"),
+    caveatMessage: resolveTotalsCaveat(totals.source)
+  };
+}
+
+function getLatestCycleTotal(
+  cycleTotals: ContributionInsightsCycleTotal[]
+): ContributionInsightsCycleTotal | null {
+  return cycleTotals.reduce<ContributionInsightsCycleTotal | null>(
+    (latest, current) => (latest === null || current.cycle > latest.cycle ? current : latest),
+    null
+  );
+}
+
+function buildTotalSummaryViews(
+  insights: PersonContributionInsights
+): PersonContributionTotalSummaryView[] {
+  const latestCycle = getLatestCycleTotal(insights.cycle_totals);
+  const views: PersonContributionTotalSummaryView[] = [];
+
+  if (latestCycle !== null) {
+    const cycleView = buildTotalSummaryView("cycle", `${latestCycle.cycle} cycle`, latestCycle);
+    if (cycleView !== null) {
+      views.push(cycleView);
+    }
+  }
+
+  const careerView = buildTotalSummaryView("career", "Career", insights.career_totals);
+  if (careerView !== null) {
+    views.push(careerView);
+  }
+
+  return views;
+}
+
+export function buildPersonContributionInsightsPresentation(
+  insights: PersonContributionInsights,
+  personTopDonors: RankedTransactionParty[] = [],
+  personTopEmployers: PersonTopEmployerRow[] = []
+): PersonContributionInsightsPresentation {
+  const totalSummaryViews = buildTotalSummaryViews(insights);
+  const stateGeographySeries = buildSingleSeries(
+    "state-geography",
+    "State geography",
+    insights.geography.by_state.map((row) => ({
+      x: row.label,
+      y: parseMoney(row.total_amount)
+    }))
+  );
+  const districtGeographySeries = buildSingleSeries(
+    "district-geography",
+    "District geography",
+    insights.geography.by_district.map((row) => ({
+      x: row.label,
+      y: parseMoney(row.total_amount)
+    }))
+  );
+  const hasDistrictGeography = insights.geography.by_district.length > 0;
+
+  return {
+    emptyMessage: resolveContributionInsightsEmptyMessage(insights),
+    caveatMessages: resolveContributionInsightsCaveatMessages(insights),
+    coverageLabel: formatCoverageLabel(
+      insights.metadata.coverage_start_date,
+      insights.metadata.coverage_end_date
+    ),
+    topDonors: buildRankedPartyRows(personTopDonors),
+    topDonorsEmptyMessage:
+      personTopDonors.length === 0 ? PERSON_TOP_DONORS_EMPTY_MESSAGE : null,
+    topEmployers: buildTopEmployerRows(personTopEmployers),
+    topEmployersEmptyMessage:
+      personTopEmployers.length === 0 ? PERSON_TOP_EMPLOYERS_EMPTY_MESSAGE : null,
+    topEmployerDisclaimer: PERSON_TOP_EMPLOYER_DISCLAIMER,
+    topEmployerMethodologyReference: PERSON_TOP_EMPLOYER_METHODOLOGY_REFERENCE,
+    totalSummaryViews,
+    defaultTotalSummaryKey: totalSummaryViews[0]?.key ?? null,
+    totalsEmptyMessage: totalSummaryViews.length === 0 ? PERSON_TOTALS_EMPTY_MESSAGE : null,
+    smallDollarHeadline: formatSharePercent(insights.small_dollar_share.share),
+    smallDollarSummary: buildSmallDollarSummary(insights),
+    districtShareHeadline: formatDistrictShareHeadline(insights.geography.district_share.share),
+    districtShareSummary: buildDistrictShareSummary(insights.geography.district_share),
+    monthlyTotalsSeries: buildSingleSeries(
+      "monthly-totals",
+      "Donations over time",
+      insights.monthly_totals.map((row) => ({
+        x: row.month,
+        y: parseMoney(row.total_amount)
+      }))
+    ),
+    itemizedCountSeries: buildSingleSeries(
+      "itemized-counts",
+      "Donation count by size bucket",
+      insights.itemized_size_buckets.map((bucket) => ({
+        x: bucket.label,
+        y: bucket.transaction_count
+      }))
+    ),
+    dollarsBySizeSeries: buildSingleSeries(
+      "dollars-by-size",
+      "Dollars by size bucket",
+      insights.dollars_by_size.map((bucket) => ({
+        x: bucket.label,
+        y: parseMoney(bucket.total_amount)
+      }))
+    ),
+    stateGeographySeries,
+    districtGeographySeries,
+    preferredGeographySeries: hasDistrictGeography ? districtGeographySeries : stateGeographySeries,
+    unitemizedExclusionNote: DEFAULT_UNITEMIZED_EXCLUSION_NOTE,
+    geographyNote: resolveContributionInsightsGeographyNote(insights, hasDistrictGeography)
+  };
+}
+
 export function buildPersonSummaryChartSeries(summary: {
   total_raised: SerializedMoney;
   total_spent: SerializedMoney;
@@ -469,7 +572,6 @@ export function buildPersonSummaryChartSeries(summary: {
   ];
 }
 
-/** Converts IE support/oppose totals into shared chart-series input. */
 export function buildPersonOutsideSpendingChartSeries(summary: {
   support_total: SerializedMoney;
   oppose_total: SerializedMoney;
@@ -490,21 +592,18 @@ export function buildPersonOutsideSpendingChartSeries(summary: {
   ];
 }
 
-/** Delegates person finance summary formatting to the shared finance owner. */
 export function buildPersonFinanceSummaryPresentation(
   summary: CandidateFundraisingSummary
 ): CandidateAggregateSummaryPresentation {
   return buildCandidateDeferredFundraisingSummary(summary);
 }
 
-/** Delegates linked-committee row formatting to the shared finance owner. */
 export function buildPersonLinkedCommitteeRows(
   summary: CandidateFundraisingSummary
 ): CandidateCommitteeBreakdownRow[] {
   return buildCandidateCommitteeBreakdown(summary);
 }
 
-/** Delegates donor/vendor transaction formatting to the shared finance owner. */
 export function buildPersonDonorVendorRows(
   transactions: CampaignFinanceTransactionResponse[]
 ): CommitteeTransactionRow[] {
@@ -519,162 +618,11 @@ export function buildPersonDonorVendorEmptyStateBanner(donorVendorTransactionCou
   return buildDonorVendorEmptyStateBanner(donorVendorTransactionCount);
 }
 
-/** Delegates IE section formatting to the shared finance owner. */
 export function buildPersonOutsideSpendingSection(
   ieSummary: IndependentExpenditureSummary | null,
   ieTransactions: IndependentExpenditureResponse[]
 ): OutsideSpendingPresentation {
   return buildCandidateDeferredOutsideSpending(ieSummary, ieTransactions);
-}
-
-function buildKeyMetricRows(
-  identifierCount: string,
-  erMatchCount: string,
-  graphRelationshipCount: string
-): DetailFactRow[] {
-  return [
-    { label: "Identifiers", value: identifierCount },
-    { label: "ER matches", value: erMatchCount },
-    { label: "Graph relationships", value: graphRelationshipCount }
-  ];
-}
-
-function buildLoadingKeyMetrics(identifierRows: DetailFactRow[]): DetailFactRow[] {
-  return buildKeyMetricRows(
-    String(identifierRows.length),
-    LOADING_METRIC_VALUE,
-    LOADING_METRIC_VALUE
-  );
-}
-
-export function buildResolvedKeyMetrics(
-  identifierRows: DetailFactRow[],
-  matches: ErMatchDecision[],
-  relationships: EntityGraphRelationshipsResponse
-): DetailFactRow[] {
-  return buildKeyMetricRows(
-    String(identifierRows.length),
-    String(matches.length),
-    String(relationships.total_count)
-  );
-}
-
-export function buildUnavailableKeyMetrics(identifierRows: DetailFactRow[]): DetailFactRow[] {
-  return buildKeyMetricRows(
-    String(identifierRows.length),
-    UNAVAILABLE_METRIC_VALUE,
-    UNAVAILABLE_METRIC_VALUE
-  );
-}
-
-type CivicContext = {
-  label: CivicContextLabel;
-  name: string;
-  href: string;
-};
-
-function buildCivicContext(neighbor: GraphNeighbor): CivicContext | null {
-  if (neighbor.entity_type === "office") {
-    return {
-      label: "Office",
-      name: buildNeighborTitle(neighbor),
-      href: buildOfficeRoutePath(neighbor.entity_id)
-    };
-  }
-
-  if (neighbor.entity_type === "contest") {
-    return {
-      label: "Contest",
-      name: buildNeighborTitle(neighbor),
-      href: buildContestRoutePath(neighbor.entity_id)
-    };
-  }
-
-  return null;
-}
-
-function getPreferredCivicContext(
-  contexts: CivicContext[],
-  preferredLabel: CivicContextLabel
-): CivicContext | null {
-  const preferredContext = contexts.find((context) => context.label === preferredLabel);
-
-  if (preferredContext !== undefined) {
-    return preferredContext;
-  }
-
-  return contexts[0] ?? null;
-}
-
-function buildCivicRecordRows(neighbors: GraphNeighbor[]): CivicRecordRow[] {
-  const contexts = neighbors
-    .map((neighbor) => buildCivicContext(neighbor))
-    .filter((context): context is CivicContext => context !== null);
-  const contestContext = getPreferredCivicContext(contexts, "Contest");
-  const officeContext = getPreferredCivicContext(contexts, "Office");
-
-  return neighbors.flatMap((neighbor): CivicRecordRow[] => {
-    if (neighbor.entity_type === "candidacy" && neighbor.relationship_type === "CANDIDACY_OF") {
-      return [
-        {
-          recordType: "Candidacy" as const,
-          recordName: buildNeighborTitle(neighbor),
-          recordHref: buildCandidacyRoutePath(neighbor.entity_id),
-          contextLabel: contestContext?.label ?? null,
-          contextName: contestContext?.name ?? null,
-          contextHref: contestContext?.href ?? null
-        }
-      ];
-    }
-
-    if (neighbor.entity_type === "officeholding" && neighbor.relationship_type === "HOLDS") {
-      return [
-        {
-          recordType: "Officeholding" as const,
-          recordName: buildNeighborTitle(neighbor),
-          recordHref: buildOfficeholdingRoutePath(neighbor.entity_id),
-          contextLabel: officeContext?.label ?? null,
-          contextName: officeContext?.name ?? null,
-          contextHref: officeContext?.href ?? null
-        }
-      ];
-    }
-
-    return [];
-  });
-}
-
-export function buildCivicRecordSection(
-  entityType: Stage4EntityType,
-  neighbors: GraphNeighbor[]
-): CivicRecordSection | null {
-  if (entityType !== "person") {
-    return null;
-  }
-
-  const rows = buildCivicRecordRows(neighbors);
-  return {
-    title: CIVIC_RECORD_TITLE,
-    rows,
-    emptyMessage: rows.length === 0 ? CIVIC_RECORD_EMPTY_MESSAGE : null
-  };
-}
-
-export function buildTechnicalDisclosureSection(
-  matches: ErMatchDecision[],
-  neighbors: GraphNeighbor[],
-  subjectEntityId: string
-): TechnicalDisclosureSection {
-  const matchRows = buildErMatchSummaries(matches, subjectEntityId);
-  const neighborRows = buildGraphNeighborRows(neighbors);
-
-  return {
-    summary: TECHNICAL_DISCLOSURE_SUMMARY,
-    matchRows,
-    neighborRows,
-    matchEmptyMessage: getOptionalEmptyMessage(matchRows, "matches"),
-    neighborEmptyMessage: getOptionalEmptyMessage(neighborRows, "neighbors")
-  };
 }
 
 export function buildEntityDetailShellPresentation(
@@ -687,36 +635,15 @@ export function buildEntityDetailShellPresentation(
     canonicalName: input.detail.canonical_name,
     sectionOrder: input.entityType === "person" ? PERSON_SECTION_ORDER : ORG_SECTION_ORDER,
     coreFactRows: buildCanonicalDetailFacts(input.entityType, input.detail),
-    keyMetricRows: buildLoadingKeyMetrics(identifierRows),
+    keyMetricRows: buildIdentifierKeyMetrics(identifierRows),
     identifierRows,
     trustSection: buildTrustSection(input.detail.sources),
-    identifierEmptyMessage: getOptionalEmptyMessage(identifierRows, "identifiers")
+    identifierEmptyMessage: identifierRows.length === 0 ? getIdentifierEmptyMessage() : null
   };
 }
 
-export function buildEntityDetailPresentation(data: ResolvedEntityDetailBundle): EntityDetailPresentation {
-  const identifierRows = buildIdentifierRows(data.detail.identifiers);
-  const technicalDisclosure = buildTechnicalDisclosureSection(
-    data.matches,
-    data.relationships.neighbors,
-    data.detail.id
-  );
-  const civicRecordSection = buildCivicRecordSection(data.entityType, data.relationships.neighbors);
-
-  return {
-    entityType: data.entityType,
-    canonicalName: data.detail.canonical_name,
-    sectionOrder: data.entityType === "person" ? PERSON_SECTION_ORDER : ORG_SECTION_ORDER,
-    coreFactRows: buildCanonicalDetailFacts(data.entityType, data.detail),
-    keyMetricRows: buildResolvedKeyMetrics(identifierRows, data.matches, data.relationships),
-    identifierRows,
-    trustSection: buildTrustSection(data.detail.sources),
-    matchRows: technicalDisclosure.matchRows,
-    neighborRows: technicalDisclosure.neighborRows,
-    civicRecordSection,
-    technicalDisclosure,
-    identifierEmptyMessage: getOptionalEmptyMessage(identifierRows, "identifiers"),
-    matchEmptyMessage: technicalDisclosure.matchEmptyMessage,
-    neighborEmptyMessage: technicalDisclosure.neighborEmptyMessage
-  };
+export function buildEntityDetailPresentation(
+  input: EntityDetailShellInput
+): EntityDetailPresentation {
+  return buildEntityDetailShellPresentation(input);
 }

@@ -104,3 +104,83 @@ def test_update_person_bio_fields_if_missing_is_idempotent_for_non_empty_fields(
     assert after[3] == "https://www.ncleg.gov/Members/Biography/H/149"
     assert after[4] == "public_domain"
     assert before[5] == after[5]
+
+
+def test_update_person_bio_fields_if_missing_allows_metadata_only_bio_write_when_text_suppressed(
+    db_conn: psycopg.Connection,
+) -> None:
+    person = Person(canonical_name="Morgan Candidate")
+    insert_person(db_conn, person)
+
+    updated_fields = update_person_bio_fields_if_missing(
+        db_conn,
+        person_id=person.id,
+        occupation=None,
+        education=None,
+        bio_text=None,
+        bio_source_url="https://www.ncleg.gov/Members/Biography/H/149",
+        bio_license="restricted",
+    )
+
+    with db_conn.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT bio_text, bio_source_url, bio_license, bio_pulled_at
+            FROM core.person
+            WHERE id = %s
+            """,
+            (person.id,),
+        )
+        row = cursor.fetchone()
+
+    assert updated_fields == ("bio_source_url", "bio_license")
+    assert row is not None
+    assert row[0] is None
+    assert row[1] == "https://www.ncleg.gov/Members/Biography/H/149"
+    assert row[2] == "restricted"
+    assert row[3] is not None
+
+
+def test_update_person_bio_fields_if_missing_first_bio_text_write_replaces_suppressed_metadata(
+    db_conn: psycopg.Connection,
+) -> None:
+    person = Person(canonical_name="Morgan Candidate")
+    insert_person(db_conn, person)
+
+    metadata_only_updated_fields = update_person_bio_fields_if_missing(
+        db_conn,
+        person_id=person.id,
+        occupation=None,
+        education=None,
+        bio_text=None,
+        bio_source_url="https://restricted.example.org/biography",
+        bio_license="restricted",
+    )
+    assert metadata_only_updated_fields == ("bio_source_url", "bio_license")
+
+    first_bio_text_updated_fields = update_person_bio_fields_if_missing(
+        db_conn,
+        person_id=person.id,
+        occupation=None,
+        education=None,
+        bio_text="Reusable biography text.",
+        bio_source_url="https://licensed.example.org/biography",
+        bio_license="licensed",
+    )
+
+    with db_conn.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT bio_text, bio_source_url, bio_license
+            FROM core.person
+            WHERE id = %s
+            """,
+            (person.id,),
+        )
+        row = cursor.fetchone()
+
+    assert first_bio_text_updated_fields == ("bio_text", "bio_source_url", "bio_license")
+    assert row is not None
+    assert row[0] == "Reusable biography text."
+    assert row[1] == "https://licensed.example.org/biography"
+    assert row[2] == "licensed"

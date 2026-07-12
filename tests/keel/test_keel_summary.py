@@ -226,7 +226,7 @@ layers:
     required_evidence:
       schema: evidence_schemas/L1.json
     file_path_triggers:
-      - docs/anchors/**
+      - docs/reference/anchors/**
     gate_command: make gate-L1 JURISDICTION={scope}
   - id: L12
     name: session_output_summary
@@ -250,8 +250,13 @@ _L1_SCHEMA = {
     "type": "object",
     "additionalProperties": False,
     "required": [
-        "layer", "scope", "schema_version", "produced_at_utc",
-        "repo_sha", "gate_command", "status",
+        "layer",
+        "scope",
+        "schema_version",
+        "produced_at_utc",
+        "repo_sha",
+        "gate_command",
+        "status",
     ],
     "properties": {
         "layer": {"const": "L1"},

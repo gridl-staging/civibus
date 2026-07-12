@@ -57,7 +57,7 @@ function isCandidateListRequest(url: URL): boolean {
     return false;
   }
 
-  return hasOnlyAllowedQueryParams(url, ["state", "office", "limit", "offset"]);
+  return hasOnlyAllowedQueryParams(url, ["state", "office", "person_id", "limit", "offset"]);
 }
 
 function isCommitteeListRequest(url: URL): boolean {
@@ -115,6 +115,8 @@ type PagedListResponse<TItem> = {
   limit: number;
 };
 
+type CandidateListItem = (typeof smokeFixtures.candidateList.items)[number];
+
 type CommitteeFixture =
   | (typeof smokeFixtures)["committee"]
   | (typeof smokeFixtures)["committeeEmpty"]
@@ -155,6 +157,14 @@ function getCommitteeFixtureResponseByPath(pathname: string): { body: unknown } 
     return committeeFixture === null ? null : { body: committeeFixture.filingBreakdown };
   }
 
+  const independentExpendituresMadeMatch = pathname.match(
+    /^\/v1\/committees\/([^/]+)\/independent-expenditures-made$/
+  );
+  if (independentExpendituresMadeMatch) {
+    const committeeFixture = getCommitteeFixtureById(independentExpendituresMadeMatch[1]);
+    return committeeFixture === null ? null : { body: committeeFixture.independentExpendituresMade };
+  }
+
   const detailMatch = pathname.match(/^\/v1\/committees\/([^/]+)$/);
   if (detailMatch) {
     const committeeFixture = getCommitteeFixtureById(detailMatch[1]);
@@ -186,7 +196,17 @@ function buildPagedListResponse<TItem>(params: {
 }
 
 /** Builds the filtered, paginated candidate list fixture response. */
-function buildCandidateListResponse(url: URL): PagedListResponse<(typeof smokeFixtures.candidateList.items)[number]> {
+function getCandidatePersonId(candidate: CandidateListItem): string | null {
+  if (!("person_id" in candidate)) {
+    return null;
+  }
+
+  const personId = candidate.person_id;
+  return typeof personId === "string" ? personId : null;
+}
+
+/** Builds the filtered, paginated candidate list fixture response. */
+function buildCandidateListResponse(url: URL): PagedListResponse<CandidateListItem> {
   return buildPagedListResponse({
     url,
     items: smokeFixtures.candidateList.items,
@@ -195,11 +215,13 @@ function buildCandidateListResponse(url: URL): PagedListResponse<(typeof smokeFi
     applyFilters: (items, currentUrl) => {
       const stateFilter = currentUrl.searchParams.get("state");
       const officeFilter = currentUrl.searchParams.get("office");
+      const personFilter = currentUrl.searchParams.get("person_id");
 
       return items.filter(
         (item) =>
           (stateFilter === null || item.state === stateFilter) &&
-          (officeFilter === null || item.office === officeFilter)
+          (officeFilter === null || item.office === officeFilter) &&
+          (personFilter === null || getCandidatePersonId(item) === personFilter)
       );
     }
   });
@@ -308,6 +330,11 @@ const server = createServer(async (request, response) => {
     return;
   }
 
+  if (url.pathname === "/v1/congress/members" && url.searchParams.size === 0) {
+    writeJson(response, 200, smokeFixtures.congressMembers);
+    return;
+  }
+
   const electionDateAggregateMatch = url.pathname.match(/^\/v1\/elections\/(\d{4}-\d{2}-\d{2})$/);
   if (electionDateAggregateMatch && electionDateAggregateMatch[1] === smokeFixtures.electionDateAggregate.date) {
     writeJson(response, 200, smokeFixtures.electionDateAggregate);
@@ -407,36 +434,41 @@ const server = createServer(async (request, response) => {
     }
   }
 
-  const personMatchesMatch = url.pathname.match(/^\/v1\/er\/person\/([^/]+)\/matches$/);
-  if (personMatchesMatch) {
-    const personFixture = getPersonFixtureById(personMatchesMatch[1]);
-    if (personFixture !== null) {
-      writeJson(response, 200, personFixture.matches);
+  const personContributionInsightsMatch = url.pathname.match(/^\/v1\/person\/([^/]+)\/contribution-insights$/);
+  if (personContributionInsightsMatch) {
+    const personFixture = getPersonFixtureById(personContributionInsightsMatch[1]);
+    if (personFixture !== null && "contributionInsights" in personFixture) {
+      writeJson(response, 200, personFixture.contributionInsights);
       return;
     }
+    writeJson(response, 404, { detail: "Contribution insights fixture not found." });
+    return;
   }
 
-  const personRelationshipsMatch = url.pathname.match(/^\/v1\/graph\/person\/([^/]+)\/relationships$/);
-  if (personRelationshipsMatch) {
-    const personFixture = getPersonFixtureById(personRelationshipsMatch[1]);
-    if (personFixture !== null) {
-      writeJson(response, 200, personFixture.relationships);
+  const personTopDonorsMatch = url.pathname.match(/^\/v1\/person\/([^/]+)\/top-donors$/);
+  if (personTopDonorsMatch) {
+    const personFixture = getPersonFixtureById(personTopDonorsMatch[1]);
+    if (personFixture !== null && "topDonors" in personFixture) {
+      writeJson(response, 200, personFixture.topDonors);
       return;
     }
+    writeJson(response, 404, { detail: "Person top donors fixture not found." });
+    return;
+  }
+
+  const personTopEmployersMatch = url.pathname.match(/^\/v1\/person\/([^/]+)\/top-employers$/);
+  if (personTopEmployersMatch) {
+    const personFixture = getPersonFixtureById(personTopEmployersMatch[1]);
+    if (personFixture !== null && "topEmployers" in personFixture) {
+      writeJson(response, 200, personFixture.topEmployers);
+      return;
+    }
+    writeJson(response, 404, { detail: "Person top employers fixture not found." });
+    return;
   }
 
   if (url.pathname === `/v1/org/${smokeFixtures.org.id}`) {
     writeJson(response, 200, smokeFixtures.org.detail);
-    return;
-  }
-
-  if (url.pathname === `/v1/er/organization/${smokeFixtures.org.id}/matches`) {
-    writeJson(response, 200, smokeFixtures.org.matches);
-    return;
-  }
-
-  if (url.pathname === `/v1/graph/org/${smokeFixtures.org.id}/relationships`) {
-    writeJson(response, 200, smokeFixtures.org.relationships);
     return;
   }
 

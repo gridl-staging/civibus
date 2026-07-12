@@ -15,7 +15,7 @@ def _build_tiny_county_shapefile_zip(tmp_path: Path) -> Path:
         "shp": b"fixture-shp",
         "shx": b"fixture-shx",
         "dbf": b"fixture-dbf",
-        "prj": b"GEOGCS[\"WGS 84\"]",
+        "prj": b'GEOGCS["WGS 84"]',
     }
 
     zip_path = tmp_path / "tiny_fixture.zip"
@@ -379,7 +379,4 @@ def test_feature_matches_state_applies_dw_o_county_scope_for_nc_onemap_levels(
 ) -> None:
     from domains.civics.loaders.tiger_geometry import _feature_matches_state
 
-    assert (
-        _feature_matches_state(level=level, state="NC", state_fips="37", properties=properties)
-        is expected_matches
-    )
+    assert _feature_matches_state(level=level, state="NC", state_fips="37", properties=properties) is expected_matches

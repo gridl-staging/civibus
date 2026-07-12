@@ -1,7 +1,7 @@
 """Structural tests for the Apr 30 wrong-volume recovery script.
 
 The script wraps the recovery sequence documented in
-`docs/operations/apr30_volume_recovery_runbook.md` into a single
+`docs/howto/operations/apr30_volume_recovery_runbook.md` into a single
 artifact with four verification gates (per `prod_ops_discipline.md`):
 
 1. Bare-docker calls are NOT used — every container-lifecycle action
@@ -147,13 +147,12 @@ def test_script_refuses_empty_volume(script_code: str) -> None:
 
 def test_script_runs_canary_after_swap(script_code: str) -> None:
     """Gate 3: post-action canary check must run before declaring success."""
-    # The canary endpoint is /api/health/content (per api/health_content.py).
-    # The script must hit it after restoring the volume, either by curling
-    # localhost from the api container or via the public hostname. Asserted
-    # against script_code so a doc-comment mentioning the path cannot pass.
-    assert "/api/health/content" in script_code or "canary_check" in script_code, (
-        "script must verify content health endpoint or run canary_check.py after restoring the volume"
+    # The script curls localhost from inside the api container, so it must use
+    # the FastAPI post-Caddy-strip path.
+    assert 'CANARY_PATH="/health/content"' in script_code or "canary_check" in script_code, (
+        "script must verify the internal content health endpoint or run canary_check.py after restoring the volume"
     )
+    assert "/api/health/content" not in script_code, "internal api-container canary must not use the public /api prefix"
 
 
 def test_script_refuses_to_run_without_confirm(script_code: str) -> None:

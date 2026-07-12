@@ -37,6 +37,7 @@ class DataSourceCoverageConfig(JurisdictionConfigBaseModel):
 
 
 class DataSourceConfig(JurisdictionConfigBaseModel):
+
     name: str
     url: str
     date_start_selector: str | None = None

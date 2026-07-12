@@ -12,7 +12,9 @@ from domains.civics.loaders.official_rosters.loader import harvest_official_rost
 
 def _build_argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Harvest one official roster source into canonical civic owners")
-    parser.add_argument("--source-id", required=True, help="Roster source registry id (for example: nc_durham_city_council_roster)")
+    parser.add_argument(
+        "--source-id", required=True, help="Roster source registry id (for example: nc_durham_city_council_roster)"
+    )
     parser.add_argument("--fixture-path", type=Path, help="Optional local HTML fixture path")
     parser.add_argument("--dry-run", action="store_true", help="Parse + resolve only; never write to DB")
     parser.add_argument(

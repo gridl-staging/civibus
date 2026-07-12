@@ -9,6 +9,7 @@ import {
   buildCandidateHref,
   buildCommitteeHref
 } from "$lib/campaign-finance-detail/contract";
+import { sanitizeExternalUrl } from "$lib/url/sanitize-external-url";
 import type { ChartSeries } from "$lib/charts/types";
 import type {
   CandidateDetailResponse,
@@ -18,12 +19,22 @@ import type {
   CommitteeFilingBreakdown,
   CandidateFundraisingSummary,
   CommitteeFundraisingSummary,
+  CommitteeIndependentExpenditureActivity,
+  CommitteeIndependentExpenditureTarget,
   CommitteeListItem,
   IndependentExpenditureResponse,
   IndependentExpenditureSummary,
   SerializedMoney
 } from "$lib/campaign-finance-detail/contract";
 import type { CandidateDetailBundle, CommitteeDetailBundle } from "$lib/server/api/campaign-finance-detail";
+export {
+  COMMITTEE_SUMMARY_SOURCE_LABELS,
+  buildCommitteeItemizedCoverageNote
+} from "$lib/campaign-finance-detail/summary-source";
+import {
+  COMMITTEE_SUMMARY_SOURCE_LABELS,
+  buildCommitteeItemizedCoverageNote
+} from "$lib/campaign-finance-detail/summary-source";
 
 export type CampaignFinanceFactRow = {
   label: string;
@@ -83,6 +94,24 @@ export type FundraisingSummaryPresentation = {
   transactionCount: number;
   jurisdiction: string;
   dataThrough: string;
+  summarySourceLabel: string;
+  itemizedCoverageNote: string;
+};
+
+export type CommitteeCycleSummaryRow = {
+  cycle: number;
+  cycleLabel: string;
+  coveragePeriod: string;
+  totalReceipts: string;
+  totalDisbursements: string;
+  cashOnHand: string;
+};
+
+export type LinkedCandidateLink = {
+  candidateId: string;
+  name: string;
+  context: string;
+  href: string;
 };
 
 export type FilingBreakdownRowPresentation = {
@@ -115,6 +144,7 @@ export type CommitteeDetailShellPresentation = {
   trustSection: TrustSectionViewModel;
   sectionOrder: string[];
   committeeRouteRef: CommitteeTransactionRouteReferences;
+  linkedCandidates: LinkedCandidateLink[];
 };
 
 export type CandidateAggregateSummaryPresentation = {
@@ -161,6 +191,34 @@ export type OutsideSpendingPresentation = {
   topSpenders: OutsideSpendingTopSpenderRow[];
   explanatoryBlock: string | null;
   transactionRows: OutsideSpendingTransactionRow[];
+  emptyMessage: string | null;
+};
+
+export type CommitteeOutsideSpendingTargetRow = {
+  rowKey: string;
+  candidateName: string;
+  targetHref: string | null;
+  context: string;
+  supportTotal: string;
+  opposeTotal: string;
+  transactionCountLabel: string;
+};
+
+export type CommitteeOutsideSpendingSourceRow = {
+  rowKey: string;
+  candidateName: string;
+  sourceName: string;
+  sourceRecordKey: string;
+  href: string | null;
+};
+
+export type CommitteeOutsideSpendingPresentation = {
+  supportTotal: string;
+  opposeTotal: string;
+  ieCountLabel: string;
+  outlierNote: string | null;
+  targetRows: CommitteeOutsideSpendingTargetRow[];
+  sourceRows: CommitteeOutsideSpendingSourceRow[];
   emptyMessage: string | null;
 };
 
@@ -213,6 +271,7 @@ export type CommitteeCanonicalDetailRoutePresentation = {
   transactions: Deferred<CampaignFinanceTransactionResponse[]>;
   summary: Deferred<CommitteeFundraisingSummary>;
   filingBreakdown: Deferred<CommitteeFilingBreakdown>;
+  independentExpendituresMade: Deferred<CommitteeIndependentExpenditureActivity>;
 };
 
 type CandidateSlugCollisionRoutePresentation = {
@@ -275,6 +334,8 @@ const OUTSIDE_SPENDING_UNAVAILABLE_MESSAGE =
   "Outside-spending data is not yet available for this candidate. Coverage may be incomplete.";
 const OUTSIDE_SPENDING_NO_ACTIVITY_MESSAGE =
   "No outside spending is reported in available filings. Coverage may be incomplete.";
+const COMMITTEE_OUTSIDE_SPENDING_EMPTY_MESSAGE =
+  "This committee reported no independent expenditures";
 const COMMITTEE_SPEND_CATEGORIES_UNAVAILABLE_MESSAGE =
   "Spend categories are not available for this committee.";
 const CANDIDATE_EMPTY_COMPLETENESS_WARNING =
@@ -370,8 +431,58 @@ export function buildFundraisingSummaryPresentation(
   return {
     ...buildCandidateAggregateSummaryPresentation(summary),
     jurisdiction: formatRowValue(summary.jurisdiction),
-    dataThrough: formatDateValue(summary.data_through)
+    dataThrough: formatDateValue(summary.data_through),
+    summarySourceLabel: COMMITTEE_SUMMARY_SOURCE_LABELS[summary.summary_source],
+    itemizedCoverageNote: buildCommitteeItemizedCoverageNote(summary)
   };
+}
+
+export function buildCommitteeCycleSummaryRows(
+  summary: CommitteeFundraisingSummary
+): CommitteeCycleSummaryRow[] {
+  return summary.cycle_summaries.map((cycle) => ({
+    cycle: cycle.cycle,
+    cycleLabel: String(cycle.cycle),
+    coveragePeriod: buildCoveragePeriodLabel(cycle.coverage_start_date, cycle.coverage_end_date),
+    totalReceipts: formatCurrency(cycle.total_receipts),
+    totalDisbursements: formatCurrency(cycle.total_disbursements),
+    cashOnHand: cycle.cash_on_hand === null ? "—" : formatCurrency(cycle.cash_on_hand)
+  }));
+}
+
+type CandidateContextSource = {
+  office: string;
+  state: string | null;
+  district: string | null;
+  party: string | null;
+};
+
+function buildCandidateContext(candidate: CandidateContextSource): string {
+  const parts: string[] = [];
+  parts.push(candidate.office);
+  if (candidate.state !== null && candidate.state !== "") {
+    parts.push(candidate.state);
+  }
+  if (candidate.district !== null && candidate.district !== "") {
+    parts.push(`District ${candidate.district}`);
+  }
+  if (candidate.party !== null && candidate.party !== "") {
+    parts.push(candidate.party);
+  }
+  return parts.join(" · ");
+}
+
+function buildLinkedCandidateContext(candidate: CandidateListItem): string {
+  return buildCandidateContext(candidate);
+}
+
+export function buildLinkedCandidateLinks(detail: CommitteeDetailResponse): LinkedCandidateLink[] {
+  return detail.linked_candidates.map((candidate) => ({
+    candidateId: candidate.id,
+    name: candidate.name,
+    context: buildLinkedCandidateContext(candidate),
+    href: buildCandidateHref(candidate)
+  }));
 }
 
 /** Converts backend filing breakdown rows into table-ready presentation data. */
@@ -571,11 +682,11 @@ export function buildKeyMetrics(
   return [
     { label: "Total raised", value: formatCurrency(summary.total_raised) },
     { label: "Total spent", value: formatCurrency(summary.total_spent) },
-    { label: "Transactions", value: String(summary.transaction_count) }
+    { label: "Itemized transactions loaded", value: String(summary.transaction_count) }
   ];
 }
 
-function buildRankedPartyRows(
+export function buildRankedPartyRows(
   parties: { name: string; total_amount: SerializedMoney; transaction_count: number }[]
 ): RankedPartyRow[] {
   return parties.map((party) => ({
@@ -653,12 +764,13 @@ export function buildCommitteeDetailShellPresentation(
     canonicalName: resolveCanonicalName(detail.name, "Committee"),
     factRows: buildCommitteeFactRows(detail),
     trustSection: buildTrustSection(detail.sources, { includeJurisdictionFreshnessNote: true }),
-    sectionOrder: ["summary", "trust", "metrics", "records"],
+    sectionOrder: ["summary", "trust", "metrics", "outside-spending", "records"],
     committeeRouteRef: {
       committeeById: {
         [detail.id]: { id: detail.id, slug: detail.slug, slug_is_unique: detail.slug_is_unique }
       }
-    }
+    },
+    linkedCandidates: buildLinkedCandidateLinks(detail)
   };
 }
 
@@ -707,6 +819,12 @@ export function buildCommitteeDeferredHighSignalSummary(
   filingBreakdown: CommitteeFilingBreakdown
 ): CommitteeHighSignalSummaryPresentation {
   return buildCommitteeHighSignalSummaryPresentation(summary, filingBreakdown);
+}
+
+export function buildCommitteeDeferredOutsideSpending(
+  activity: CommitteeIndependentExpenditureActivity
+): CommitteeOutsideSpendingPresentation {
+  return buildCommitteeOutsideSpendingPresentation(activity);
 }
 
 export function buildCandidateDeferredFundraisingSummary(
@@ -878,6 +996,72 @@ export function buildOutsideSpendingPresentation(
   };
 }
 
+function buildCommitteeOutsideSpendingTargetRows(
+  targets: CommitteeIndependentExpenditureTarget[]
+): CommitteeOutsideSpendingTargetRow[] {
+  return targets.map((target) => ({
+    rowKey: target.candidate_id,
+    candidateName: target.candidate_name,
+    targetHref: buildOptionalEntityHref("person", target.person_id),
+    context: buildCandidateContext(target),
+    supportTotal: formatCurrency(target.support_total),
+    opposeTotal: formatCurrency(target.oppose_total),
+    transactionCountLabel: formatCountLabel(target.transaction_count, "expenditure")
+  }));
+}
+
+function buildCommitteeOutsideSpendingSourceRows(
+  targets: CommitteeIndependentExpenditureTarget[]
+): CommitteeOutsideSpendingSourceRow[] {
+  return targets.flatMap((target) =>
+    target.sources.map((source, sourceIndex) => ({
+      rowKey: `${target.candidate_id}:${source.source_record_key ?? "unknown"}:${sourceIndex}`,
+      candidateName: target.candidate_name,
+      sourceName: source.data_source_name,
+      sourceRecordKey: source.source_record_key ?? "—",
+      href: sanitizeExternalUrl(source.record_url) ?? sanitizeExternalUrl(source.data_source_url)
+    }))
+  );
+}
+
+function buildCommitteeOutsideSpendingOutlierNote(excludedOutlierCount: number): string | null {
+  if (excludedOutlierCount === 0) {
+    return null;
+  }
+
+  if (excludedOutlierCount === 1) {
+    return "1 reported independent expenditure was excluded from these totals as an outlier.";
+  }
+
+  return `${excludedOutlierCount} reported independent expenditures were excluded from these totals as outliers.`;
+}
+
+function isCommitteeOutsideSpendingEmpty(activity: CommitteeIndependentExpenditureActivity): boolean {
+  return (
+    parseSerializedMoney(activity.support_total) === 0 &&
+    parseSerializedMoney(activity.oppose_total) === 0 &&
+    activity.ie_transaction_count === 0 &&
+    activity.targets.length === 0
+  );
+}
+
+export function buildCommitteeOutsideSpendingPresentation(
+  activity: CommitteeIndependentExpenditureActivity
+): CommitteeOutsideSpendingPresentation {
+  const targetRows = buildCommitteeOutsideSpendingTargetRows(activity.targets);
+  const sourceRows = buildCommitteeOutsideSpendingSourceRows(activity.targets);
+
+  return {
+    supportTotal: formatCurrency(activity.support_total),
+    opposeTotal: formatCurrency(activity.oppose_total),
+    ieCountLabel: formatCountLabel(activity.ie_transaction_count, "expenditure"),
+    outlierNote: buildCommitteeOutsideSpendingOutlierNote(activity.excluded_outlier_count),
+    targetRows,
+    sourceRows,
+    emptyMessage: isCommitteeOutsideSpendingEmpty(activity) ? COMMITTEE_OUTSIDE_SPENDING_EMPTY_MESSAGE : null
+  };
+}
+
 export function buildCandidateCommitteeBreakdown(
   summary: CandidateFundraisingSummary
 ): CandidateCommitteeBreakdownRow[] {
@@ -957,6 +1141,7 @@ export function buildCommitteeRoutePresentation(data: CommitteeRouteData): Commi
     shell: buildCommitteeDetailShellPresentation(data.detail),
     transactions: data.transactions,
     summary: data.summary,
-    filingBreakdown: data.filingBreakdown
+    filingBreakdown: data.filingBreakdown,
+    independentExpendituresMade: data.independentExpendituresMade
   };
 }

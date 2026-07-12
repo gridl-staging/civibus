@@ -6,7 +6,11 @@ import httpx
 import pytest
 
 from core.people.enrichment.models import CandidateEnrichmentTarget
-from core.people.enrichment.strategy_official_bio import OfficialBioStrategy, _license_for_url
+from core.people.enrichment.strategy_official_bio import (
+    OfficialBioStrategy,
+    _is_allowed_bio_source_url,
+    _license_for_url,
+)
 
 
 def _fixture_text(name: str) -> str:
@@ -64,7 +68,9 @@ def test_official_bio_strategy_unexpected_html_fallback_returns_no_data() -> Non
 def test_official_bio_strategy_missing_url_returns_no_data_instead_of_throwing() -> None:
     strategy = OfficialBioStrategy(html_fetcher=lambda _url: "")
 
-    record, attempt = strategy.fetch(CandidateEnrichmentTarget(canonical_name="Jordan Lee"), missing_fields=("biography",))
+    record, attempt = strategy.fetch(
+        CandidateEnrichmentTarget(canonical_name="Jordan Lee"), missing_fields=("biography",)
+    )
 
     assert record == record.__class__()
     assert attempt.status == "no_data"
@@ -83,6 +89,22 @@ def test_official_bio_strategy_rejects_non_allowlisted_bio_url_without_network_f
 
     assert record == record.__class__()
     assert attempt.status == "no_data"
+
+
+def test_official_bio_strategy_skips_when_biography_is_not_requested() -> None:
+    strategy = OfficialBioStrategy(
+        html_fetcher=lambda _url: (_ for _ in ()).throw(AssertionError("fetcher should not be called")),
+    )
+    target = CandidateEnrichmentTarget(
+        canonical_name="Jordan Lee",
+        roster_bio_url="https://www.ncleg.gov/Members/Biography/H/149",
+    )
+
+    record, attempt = strategy.fetch(target, missing_fields=("portrait_image_url",))
+
+    assert record == record.__class__()
+    assert attempt.status == "skipped"
+    assert attempt.skip_reason == "biography_not_requested"
 
 
 def test_official_bio_strategy_transport_failure_returns_failed_attempt() -> None:
@@ -158,3 +180,27 @@ def test_official_bio_strategy_http_5xx_failure_returns_failed_attempt() -> None
     assert attempt.status == "failed"
     assert attempt.source == "official_bio"
     assert attempt.error_message not in (None, "")
+
+
+def test_congress_gov_url_is_allowed_by_bio_source_allowlist() -> None:
+    assert _is_allowed_bio_source_url("https://bioguide.congress.gov/search/bio/A000382") is True
+
+
+def test_official_bio_strategy_parses_congress_gov_article_layout() -> None:
+    strategy = OfficialBioStrategy(
+        html_fetcher=lambda _url: _fixture_text("official_bio_congress_gov.html"),
+    )
+    target = CandidateEnrichmentTarget(
+        canonical_name="Alma Adams",
+        roster_bio_url="https://bioguide.congress.gov/search/bio/A000370",
+    )
+
+    record, attempt = strategy.fetch(target, missing_fields=("biography",))
+
+    assert attempt.status == "succeeded"
+    assert "U.S. House of Representatives since 2014" in record.biography
+    assert "practiced law in North Carolina" in record.biography
+    assert record.bio_source_url == "https://bioguide.congress.gov/search/bio/A000370"
+    assert record.bio_license == "public_domain"
+    paragraphs = record.biography.split("\n\n")
+    assert len(paragraphs) == 2

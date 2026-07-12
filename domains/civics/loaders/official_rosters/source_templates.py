@@ -1,12 +1,18 @@
+
 from __future__ import annotations
 
 from dataclasses import dataclass
 
 from core.types.python.models import DataSource
+from domains.civics.loaders.official_rosters.source_registry import (
+    RosterSourceMetadata,
+    list_nc_roster_source_metadata,
+)
 
 
 @dataclass(frozen=True, slots=True)
 class RosterSourceTemplate:
+
     registry_source_id: str
     name: str
     source_url: str
@@ -242,7 +248,7 @@ _NC_DISTRICT_ATTORNEY_ROSTER = RosterSourceTemplate(
     body_key="nc_district_attorney",
 )
 
-_ROSTER_SOURCE_TEMPLATES = (
+_STATIC_ROSTER_SOURCE_TEMPLATES = (
     _NC_DURHAM_CITY_COUNCIL_ROSTER,
     _NC_GENERAL_ASSEMBLY_HOUSE_ROSTER,
     _US_HOUSE_NC_ROSTER,
@@ -268,9 +274,32 @@ _ROSTER_SOURCE_TEMPLATES = (
 )
 
 
+def _registry_backed_template(
+    metadata: RosterSourceMetadata,
+    *,
+    existing_template: RosterSourceTemplate | None,
+) -> RosterSourceTemplate:
+    return RosterSourceTemplate(
+        registry_source_id=metadata.source_id,
+        name=metadata.name,
+        source_url=metadata.source_url,
+        body_key=metadata.body_key,
+        data_source_jurisdiction=metadata.jurisdiction,
+        refresh_job_key=None if existing_template is None else existing_template.refresh_job_key,
+        refresh_jurisdiction=None if existing_template is None else existing_template.refresh_jurisdiction,
+    )
+
+
 def roster_source_templates() -> tuple[RosterSourceTemplate, ...]:
-    return _ROSTER_SOURCE_TEMPLATES
+    templates_by_source_id = {template.registry_source_id: template for template in _STATIC_ROSTER_SOURCE_TEMPLATES}
+    for metadata in list_nc_roster_source_metadata():
+        existing_template = templates_by_source_id.get(metadata.source_id)
+        templates_by_source_id[metadata.source_id] = _registry_backed_template(
+            metadata,
+            existing_template=existing_template,
+        )
+    return tuple(templates_by_source_id[source_id] for source_id in sorted(templates_by_source_id))
 
 
 def civic_roster_refresh_templates() -> tuple[RosterSourceTemplate, ...]:
-    return tuple(template for template in _ROSTER_SOURCE_TEMPLATES if template.refresh_job_key is not None)
+    return tuple(template for template in roster_source_templates() if template.refresh_job_key is not None)

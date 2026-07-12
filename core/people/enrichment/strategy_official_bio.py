@@ -1,9 +1,13 @@
+"""
+Stub summary for jun04_3pm_5_launch_gate_and_golive/civibus_dev/core/people/enrichment/strategy_official_bio.py.
+"""
+
 from __future__ import annotations
 
+import ipaddress
 import re
 from collections.abc import Callable
 from urllib.parse import urlparse
-import ipaddress
 
 import httpx
 
@@ -14,13 +18,18 @@ _BIOGRAPHY_CONTAINER_PATTERN = re.compile(
     r"""<div\b[^>]*class=["'][^"']*nchouseBiography[^"']*["'][^>]*>(.*?)</div>""",
     re.IGNORECASE | re.DOTALL,
 )
+_ARTICLE_CONTAINER_PATTERN = re.compile(
+    r"<article\b[^>]*>(.*?)</article>",
+    re.IGNORECASE | re.DOTALL,
+)
 _PARAGRAPH_PATTERN = re.compile(r"<p\b[^>]*>(.*?)</p>", re.IGNORECASE | re.DOTALL)
 _TAG_PATTERN = re.compile(r"<[^>]+>")
 _CAMPAIGN_DOMAIN_TOKENS = ("for", "elect", "vote")
-_ALLOWED_BIO_HOST_SUFFIXES = ("ncleg.gov", "wikipedia.org", "ballotpedia.org")
+_ALLOWED_BIO_HOST_SUFFIXES = ("ncleg.gov", "congress.gov", "wikipedia.org", "ballotpedia.org")
 
 
 class OfficialBioStrategy:
+
     source_name = "official_bio"
 
     def __init__(
@@ -36,6 +45,13 @@ class OfficialBioStrategy:
         target: CandidateEnrichmentTarget,
         missing_fields: tuple[str, ...],
     ) -> tuple[CandidateEnrichmentRecord, EnrichmentAttempt]:
+        if "biography" not in missing_fields:
+            return CandidateEnrichmentRecord(), EnrichmentAttempt.skipped(
+                source=self.source_name,
+                requested_fields=missing_fields,
+                skip_reason="biography_not_requested",
+            )
+
         roster_bio_url = (target.roster_bio_url or "").strip()
         if roster_bio_url == "":
             return CandidateEnrichmentRecord(), EnrichmentAttempt.no_data(
@@ -98,6 +114,8 @@ class OfficialBioStrategy:
 
 def _extract_biography_text(html: str) -> str | None:
     block_match = _BIOGRAPHY_CONTAINER_PATTERN.search(html)
+    if block_match is None:
+        block_match = _ARTICLE_CONTAINER_PATTERN.search(html)
     if block_match is None:
         return None
 

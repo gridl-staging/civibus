@@ -7,6 +7,7 @@ from uuid import UUID, uuid4
 
 import psycopg
 import pytest
+import yaml
 
 from scripts.register_roster_pilot_sources import register_roster_pilot_sources
 
@@ -19,6 +20,37 @@ from domains.civics.loaders.official_rosters.loader import (
     _resolve_nc_house_target,
 )
 from domains.civics.loaders.official_rosters.parsers import NormalizedRosterRow
+from domains.civics.loaders.official_rosters.source_registry import list_nc_roster_source_metadata
+
+_LAUNCH_SCOPE_ROSTER_SOURCE_IDS = (
+    "nc_apex_town_council_roster",
+    "nc_carrboro_town_council_roster",
+    "nc_cary_town_council_roster",
+    "nc_chapel_hill_town_council_roster",
+    "nc_chccs_school_board_roster",
+    "nc_dps_school_board_roster",
+    "nc_durham_city_council_roster",
+    "nc_durham_county_commissioners_roster",
+    "nc_fuquay_varina_town_council_roster",
+    "nc_garner_town_council_roster",
+    "nc_general_assembly_house_roster",
+    "nc_hillsborough_town_council_roster",
+    "nc_holly_springs_town_council_roster",
+    "nc_knightdale_town_council_roster",
+    "nc_morrisville_town_council_roster",
+    "nc_ocs_school_board_roster",
+    "nc_orange_county_commissioners_roster",
+    "nc_raleigh_city_council_roster",
+    "nc_registers_of_deeds_roster",
+    "nc_rolesville_town_council_roster",
+    "nc_sheriffs_association_roster",
+    "nc_soil_water_supervisors_roster",
+    "nc_wake_county_commissioners_roster",
+    "nc_wake_forest_town_council_roster",
+    "nc_wcpss_school_board_roster",
+    "nc_wendell_town_council_roster",
+    "nc_zebulon_town_council_roster",
+)
 
 
 def _durham_row() -> NormalizedRosterRow:
@@ -61,8 +93,57 @@ def _sample_office(source_record_id: UUID) -> loader.Office:
     )
 
 
+def _launch_scope_roster_bootstrap_by_source_id() -> dict[str, dict[str, object]]:
+    sources_payload = yaml.safe_load((Path(__file__).resolve().parents[4] / "sources.yaml").read_text(encoding="utf-8"))
+    jurisdictions = sources_payload.get("jurisdictions", [])
+    nc_jurisdiction = next(
+        jurisdiction
+        for jurisdiction in jurisdictions
+        if isinstance(jurisdiction, dict) and jurisdiction.get("scope") == "NC"
+    )
+
+    roster_bootstrap_by_source_id: dict[str, dict[str, object]] = {}
+    for source in nc_jurisdiction.get("sources", []):
+        if not isinstance(source, dict):
+            continue
+        source_id = source.get("source_id")
+        roster_bootstrap = source.get("roster_bootstrap")
+        if not isinstance(source_id, str) or not isinstance(roster_bootstrap, dict):
+            continue
+        roster_bootstrap_by_source_id[source_id] = roster_bootstrap
+
+    return roster_bootstrap_by_source_id
+
+
 def test_target_resolver_registry_keys_are_exactly_durham_and_nc_house() -> None:
     assert set(TARGET_RESOLVER_REGISTRY.keys()) == {"durham_city_council", "nc_house"}
+
+
+def test_sources_yaml_launch_scope_roster_bootstrap_includes_required_metadata_fields() -> None:
+    roster_bootstrap_by_source_id = _launch_scope_roster_bootstrap_by_source_id()
+
+    assert set(roster_bootstrap_by_source_id) == set(_LAUNCH_SCOPE_ROSTER_SOURCE_IDS)
+    for source_id in _LAUNCH_SCOPE_ROSTER_SOURCE_IDS:
+        roster_bootstrap = roster_bootstrap_by_source_id[source_id]
+        for field_name in ("body_key", "source_url", "cadence", "jurisdiction"):
+            field_value = roster_bootstrap.get(field_name)
+            assert isinstance(field_value, str)
+            assert field_value.strip() != ""
+        assert roster_bootstrap["jurisdiction"] == "state/NC"
+
+
+def test_list_nc_roster_source_metadata_matches_launch_scope_sources_yaml_contract() -> None:
+    roster_bootstrap_by_source_id = _launch_scope_roster_bootstrap_by_source_id()
+    metadata_by_source_id = {metadata.source_id: metadata for metadata in list_nc_roster_source_metadata()}
+
+    assert set(metadata_by_source_id) == set(_LAUNCH_SCOPE_ROSTER_SOURCE_IDS)
+    for source_id in _LAUNCH_SCOPE_ROSTER_SOURCE_IDS:
+        metadata = metadata_by_source_id[source_id]
+        roster_bootstrap = roster_bootstrap_by_source_id[source_id]
+        assert metadata.body_key == roster_bootstrap["body_key"]
+        assert metadata.source_url == roster_bootstrap["source_url"]
+        assert metadata.cadence == roster_bootstrap["cadence"]
+        assert metadata.jurisdiction == roster_bootstrap["jurisdiction"]
 
 
 @pytest.mark.integration

@@ -13,6 +13,7 @@ import pytest
 from domains.campaign_finance.ingest.dark_money import parser as dark_money_parser
 from domains.campaign_finance.ingest.dark_money.parser import (
     IRS_527_COLUMNS_BY_RECORD_TYPE,
+    _parse_date,
     _recency_cutoff_date,
     iter_irs_527_rows,
     read_irs_527_records,
@@ -71,7 +72,7 @@ class TestIterIrs527Rows:
         assert row["organization_name"] == "TEST ORG"
 
     def test_dispatches_type_2_with_correct_columns(self):
-        fields = ["2", "8872", "200000001", "01012025", "06302025"]
+        fields = ["2", "8872", "200000001", "20250101", "20250630"]
         fields.extend([""] * (49 - len(fields)))
         line = "|".join(fields) + "|\n"
         rows = list(iter_irs_527_rows(StringIO(line)))
@@ -79,10 +80,10 @@ class TestIterIrs527Rows:
         record_type, row = rows[0]
         assert record_type == "2"
         assert row["form_type"] == "8872"
-        assert row["period_begin_date"] == "01012025"
+        assert row["period_begin_date"] == "20250101"
 
     def test_dispatches_type_a_with_correct_columns(self):
-        line = "A|200000001|A00001|TEST ORG|12-3456789|JANE DONOR|100 LN||PORTLAND|OR|97201||ACME|5000.00|ENGINEER|10000.00|03152025|\n"
+        line = "A|200000001|A00001|TEST ORG|12-3456789|JANE DONOR|100 LN||PORTLAND|OR|97201||ACME|5000.00|ENGINEER|10000.00|20250315|\n"
         rows = list(iter_irs_527_rows(StringIO(line)))
         assert len(rows) == 1
         record_type, row = rows[0]
@@ -92,7 +93,7 @@ class TestIterIrs527Rows:
         assert row["contribution_amount"] == "5000.00"
 
     def test_dispatches_type_b_with_correct_columns(self):
-        line = "B|200000001|B00001|TEST ORG|12-3456789|AD AGENCY|200 BLVD||NEW YORK|NY|10001||MEDIA LLC|25000.00|CONSULTING|04012025|TV ADS|\n"
+        line = "B|200000001|B00001|TEST ORG|12-3456789|AD AGENCY|200 BLVD||NEW YORK|NY|10001||MEDIA LLC|25000.00|CONSULTING|20250401|TV ADS|\n"
         rows = list(iter_irs_527_rows(StringIO(line)))
         assert len(rows) == 1
         record_type, row = rows[0]
@@ -127,7 +128,7 @@ class TestIterIrs527Rows:
 
     def test_handles_pipe_terminated_rows(self):
         """Rows end with trailing pipe — should not create an extra empty field."""
-        line = "A|200000001|A00001|ORG|12-3456789|DONOR|ADDR||CITY|ST|ZIP||EMP|1000.00|OCC|2000.00|01012025|\n"
+        line = "A|200000001|A00001|ORG|12-3456789|DONOR|ADDR||CITY|ST|ZIP||EMP|1000.00|OCC|2000.00|20250101|\n"
         rows = list(iter_irs_527_rows(StringIO(line)))
         assert len(rows) == 1
 
@@ -153,6 +154,28 @@ class TestIterIrs527Rows:
         assert record_types.count("B") == 2
         assert "H" not in record_types
         assert "D" not in record_types
+
+
+class TestParseDate:
+    """IRS FullDataFile dates are YYYYMMDD — verified against the live file
+    2026-07-06 (all 9.4M dated type-A rows start with '20'; type-B, type-2
+    period, established, and header dates all match). The parser originally
+    assumed MMDDYYYY, which made every real date parse to None and silently
+    disabled the 5-year recency filter."""
+
+    def test_parses_yyyymmdd(self):
+        assert _parse_date("20250709") == date(2025, 7, 9)
+        assert _parse_date("20200115") == date(2020, 1, 15)
+
+    def test_rejects_mmddyyyy_as_none(self):
+        # An MMDDYYYY string is not a valid YYYYMMDD date; must not misparse.
+        assert _parse_date("03152025") is None
+
+    def test_empty_and_malformed_return_none(self):
+        assert _parse_date(None) is None
+        assert _parse_date("") is None
+        assert _parse_date("2025-07-09 00:00:00") is None
+        assert _parse_date("20251340") is None
 
 
 # ==========================================================================

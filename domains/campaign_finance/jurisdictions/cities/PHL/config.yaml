@@ -1,6 +1,6 @@
 # Philadelphia campaign finance jurisdiction config
 # Source: Philadelphia Board of Ethics campaign finance disclosure data via Carto SQL API
-# Contract reference: docs/research/phl_campaign_finance_contract_2026_04_25.md
+# Contract reference: docs/reference/research/phl_campaign_finance_contract_2026_04_25.md
 
 jurisdiction:
   name: "Philadelphia"
@@ -126,7 +126,7 @@ laws:
   public_financing: false  # PHL has no formal city-level public-financing program at this time
   notes:
     - "Philadelphia administers campaign-finance oversight via the Board of Ethics"
-    - "Limits research deferred to a future research pass; see docs/research/phl_campaign_finance_contract_2026_04_25.md"
+    - "Limits research deferred to a future research pass; see docs/reference/research/phl_campaign_finance_contract_2026_04_25.md"
 
 status:
   discovery: "complete"

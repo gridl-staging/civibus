@@ -19,6 +19,8 @@ test.describe("NC county map toggle smoke", () => {
 
     await page.getByRole("checkbox", { name: "Congressional districts" }).check();
     await expect(page.getByText(SMOKE_NC_SHOWCASE_DISTRICT_DIVISION_NAME)).toBeVisible();
+    await page.getByRole("checkbox", { name: "Congressional districts" }).uncheck();
+    await expect(page.getByText(SMOKE_NC_SHOWCASE_DISTRICT_DIVISION_NAME)).toHaveCount(0);
 
     await page.getByRole("link", { name: SMOKE_NC_SHOWCASE_COUNTY_DIVISION_NAME }).click();
     await expect(page).toHaveURL(new RegExp(`/state/NC/county/${SMOKE_NC_SHOWCASE_COUNTY_SLUG}$`));

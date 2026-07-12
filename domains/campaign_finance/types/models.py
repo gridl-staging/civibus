@@ -1,10 +1,11 @@
+"""Campaign finance domain models."""
 
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
 from decimal import Decimal
 from enum import Enum
-from typing import Any, Literal, Optional
+from typing import Annotated, Any, Literal, Optional
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -17,6 +18,7 @@ FEC_CANDIDATE_ID_REGEX = r"^[HSP]\d[A-Z0-9]{2}\d{5}$"
 JurisdictionTypeLiteral = Literal["federal", "state", "other"]
 IncumbentChallengeLiteral = Literal["I", "C", "O"]
 AmendmentIndicatorLiteral = Literal["N", "A", "T"]
+CommitteeSummaryMoney = Annotated[Decimal, Field(max_digits=14, decimal_places=2)]
 
 
 def _utc_now() -> datetime:
@@ -83,6 +85,111 @@ class Committee(CampaignFinanceBaseModel):
     source_record_id: Optional[UUID] = None
 
 
+class CommitteeSummary(CampaignFinanceBaseModel):
+
+    committee_id: UUID
+    cycle: int
+    link_image: Optional[str] = None
+    committee_name: Optional[str] = None
+    committee_type: Optional[str] = None
+    committee_designation: Optional[str] = None
+    committee_filing_frequency: Optional[str] = None
+    committee_street_1: Optional[str] = None
+    committee_street_2: Optional[str] = None
+    committee_city: Optional[str] = None
+    committee_state: Optional[str] = None
+    committee_zip: Optional[str] = None
+    treasurer_name: Optional[str] = None
+    individual_contributions: Optional[CommitteeSummaryMoney] = None
+    party_committee_contributions: Optional[CommitteeSummaryMoney] = None
+    other_committee_contributions: Optional[CommitteeSummaryMoney] = None
+    total_contributions: Optional[CommitteeSummaryMoney] = None
+    transfers_from_other_authorized_committees: Optional[CommitteeSummaryMoney] = None
+    offsets_to_operating_expenditures: Optional[CommitteeSummaryMoney] = None
+    other_receipts: Optional[CommitteeSummaryMoney] = None
+    total_receipts: Optional[CommitteeSummaryMoney] = None
+    transfers_to_other_authorized_committees: Optional[CommitteeSummaryMoney] = None
+    other_loan_repayments: Optional[CommitteeSummaryMoney] = None
+    individual_refunds: Optional[CommitteeSummaryMoney] = None
+    political_party_committee_refunds: Optional[CommitteeSummaryMoney] = None
+    total_contribution_refunds: Optional[CommitteeSummaryMoney] = None
+    other_disbursements: Optional[CommitteeSummaryMoney] = None
+    total_disbursements: Optional[CommitteeSummaryMoney] = None
+    net_contributions: Optional[CommitteeSummaryMoney] = None
+    net_operating_expenditures: Optional[CommitteeSummaryMoney] = None
+    cash_on_hand_beginning_of_period: Optional[CommitteeSummaryMoney] = None
+    coverage_start_date: Optional[date] = None
+    cash_on_hand: Optional[CommitteeSummaryMoney] = None
+    coverage_end_date: Optional[date] = None
+    debts_owed_by_committee: Optional[CommitteeSummaryMoney] = None
+    debts_owed_to_committee: Optional[CommitteeSummaryMoney] = None
+    individual_itemized_contributions: Optional[CommitteeSummaryMoney] = None
+    individual_unitemized_contributions: Optional[CommitteeSummaryMoney] = None
+    other_loans: Optional[CommitteeSummaryMoney] = None
+    transfers_from_nonfederal_account: Optional[CommitteeSummaryMoney] = None
+    transfers_from_nonfederal_levin: Optional[CommitteeSummaryMoney] = None
+    total_nonfederal_transfers: Optional[CommitteeSummaryMoney] = None
+    loan_repayments_received: Optional[CommitteeSummaryMoney] = None
+    offsets_to_fundraising: Optional[CommitteeSummaryMoney] = None
+    offsets_to_legal_accounting: Optional[CommitteeSummaryMoney] = None
+    federal_candidate_contribution_refunds: Optional[CommitteeSummaryMoney] = None
+    total_federal_receipts: Optional[CommitteeSummaryMoney] = None
+    shared_federal_operating_expenditures: Optional[CommitteeSummaryMoney] = None
+    shared_nonfederal_operating_expenditures: Optional[CommitteeSummaryMoney] = None
+    other_federal_operating_expenditures: Optional[CommitteeSummaryMoney] = None
+    total_operating_expenditures: Optional[CommitteeSummaryMoney] = None
+    federal_candidate_committee_contributions: Optional[CommitteeSummaryMoney] = None
+    independent_expenditures: Optional[CommitteeSummaryMoney] = None
+    coordinated_expenditures_by_party_committee: Optional[CommitteeSummaryMoney] = None
+    loans_made: Optional[CommitteeSummaryMoney] = None
+    shared_federal_activity_federal_share: Optional[CommitteeSummaryMoney] = None
+    shared_federal_activity_nonfederal: Optional[CommitteeSummaryMoney] = None
+    nonallocated_federal_election_activity: Optional[CommitteeSummaryMoney] = None
+    total_federal_election_activity: Optional[CommitteeSummaryMoney] = None
+    total_federal_disbursements: Optional[CommitteeSummaryMoney] = None
+    candidate_contributions: Optional[CommitteeSummaryMoney] = None
+    candidate_loans: Optional[CommitteeSummaryMoney] = None
+    total_loans: Optional[CommitteeSummaryMoney] = None
+    operating_expenditures: Optional[CommitteeSummaryMoney] = None
+    candidate_loan_repayments: Optional[CommitteeSummaryMoney] = None
+    total_loan_repayments: Optional[CommitteeSummaryMoney] = None
+    other_committee_refunds: Optional[CommitteeSummaryMoney] = None
+    total_offsets_to_operating_expenditures: Optional[CommitteeSummaryMoney] = None
+    exempt_legal_accounting_disbursements: Optional[CommitteeSummaryMoney] = None
+    fundraising_disbursements: Optional[CommitteeSummaryMoney] = None
+    itemized_refunds_rebates_returns: Optional[CommitteeSummaryMoney] = None
+    subtotal_refunds_rebates_returns: Optional[CommitteeSummaryMoney] = None
+    unitemized_refunds_rebates_returns: Optional[CommitteeSummaryMoney] = None
+    itemized_other_refunds_rebates_returns: Optional[CommitteeSummaryMoney] = None
+    unitemized_other_refunds_rebates_returns: Optional[CommitteeSummaryMoney] = None
+    subtotal_other_refunds_rebates_returns: Optional[CommitteeSummaryMoney] = None
+    itemized_other_income: Optional[CommitteeSummaryMoney] = None
+    unitemized_other_income: Optional[CommitteeSummaryMoney] = None
+    expenditures_prior_years_subject_to_limits: Optional[CommitteeSummaryMoney] = None
+    expenditures_subject_to_limits: Optional[CommitteeSummaryMoney] = None
+    federal_funds: Optional[CommitteeSummaryMoney] = None
+    itemized_convention_expenditures_disbursements: Optional[CommitteeSummaryMoney] = None
+    itemized_other_disbursements: Optional[CommitteeSummaryMoney] = None
+    subtotal_convention_expenditures_disbursements: Optional[CommitteeSummaryMoney] = None
+    total_expenditures_subject_to_limits: Optional[CommitteeSummaryMoney] = None
+    unitemized_convention_expenditures_disbursements: Optional[CommitteeSummaryMoney] = None
+    unitemized_other_disbursements: Optional[CommitteeSummaryMoney] = None
+    total_communication_cost: Optional[CommitteeSummaryMoney] = None
+    cash_on_hand_beginning_of_year: Optional[CommitteeSummaryMoney] = None
+    cash_on_hand_close_of_year: Optional[CommitteeSummaryMoney] = None
+    source_record_id: Optional[UUID] = None
+
+    @model_validator(mode="after")
+    def _validate_coverage_dates(self) -> CommitteeSummary:
+        if (
+            self.coverage_start_date is not None
+            and self.coverage_end_date is not None
+            and self.coverage_start_date > self.coverage_end_date
+        ):
+            raise ValueError("coverage_start_date must be <= coverage_end_date")
+        return self
+
+
 class Candidate(CampaignFinanceBaseModel):
 
     fec_candidate_id: str = Field(pattern=FEC_CANDIDATE_ID_REGEX)
@@ -94,6 +201,10 @@ class Candidate(CampaignFinanceBaseModel):
     district: Optional[str] = Field(default=None, min_length=2, max_length=2)
     incumbent_challenge: Optional[IncumbentChallengeLiteral] = None
     principal_committee_id: Optional[UUID] = None
+    total_receipts: Optional[Decimal] = None
+    total_disbursements: Optional[Decimal] = None
+    cash_on_hand: Optional[Decimal] = None
+    summary_coverage_end_date: Optional[date] = None
     source_record_id: Optional[UUID] = None
 
     @model_validator(mode="after")
@@ -165,6 +276,7 @@ class Transaction(CampaignFinanceBaseModel):
     transaction_date: Optional[date] = None
     amount: Decimal = Field(max_digits=14, decimal_places=2)
     contributor_name_raw: Optional[str] = None
+    contributor_entity_type: Optional[str] = None
     contributor_employer: Optional[str] = None
     contributor_occupation: Optional[str] = None
     contributor_city: Optional[str] = None

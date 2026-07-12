@@ -2,10 +2,13 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Mapping
+import errno
 import fcntl
 import os
 import statistics
 import sys
+import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -58,13 +61,13 @@ _CADENCE_INTERVALS = {
     "quarterly": timedelta(days=90),
     "annual": timedelta(days=365),
 }
+_REFRESH_HISTORY_CADENCE_PULL_STATUSES = ("success",)
 
 
 @dataclass(frozen=True, slots=True)
 class RunnerParameters:
 
-    fec_state: str = "NC"
-    fec_cycle: int = 2024
+    fec_cycle: int = 2026
     fec_limit: int = 100
     co_year: int | None = None
     pa_year: int | None = None
@@ -93,6 +96,7 @@ class RefreshJob:
     cadence: str
     data_source_names: tuple[str, ...]
     run_callable: Callable[[], object]
+    refresh_history_key: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -182,6 +186,23 @@ def _select_data_source_id(
 
 
 def _select_latest_pull_at(connection: psycopg.Connection, job: RefreshJob) -> datetime | None:
+    if job.refresh_history_key is not None:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT MAX(completed_at)
+                FROM core.refresh_run
+                WHERE job_key = %s
+                  AND pull_status = ANY(%s)
+                """,
+                (job.refresh_history_key, list(_REFRESH_HISTORY_CADENCE_PULL_STATUSES)),
+            )
+            row = cursor.fetchone()
+
+        if row is None:
+            return None
+        return row[0]
+
     with connection.cursor() as cursor:
         cursor.execute(
             """
@@ -228,23 +249,49 @@ def _dry_run_result(job_key: str) -> RefreshRunResult:
     return _build_result(key=job_key, status="dry_run", message="Dry-run: job not executed")
 
 
+_LOADER_COUNT_FIELDS = ("inserted", "skipped", "quarantined", "superseded", "errors")
+
+
+def _zero_loader_counts() -> dict[str, int]:
+    return {field_name: 0 for field_name in _LOADER_COUNT_FIELDS}
+
+
+def _single_loader_counts(execution_result: object) -> dict[str, int] | None:
+    if isinstance(execution_result, Mapping) and all(
+        field_name in execution_result for field_name in _LOADER_COUNT_FIELDS
+    ):
+        return {field_name: int(execution_result[field_name]) for field_name in _LOADER_COUNT_FIELDS}
+
+    if all(hasattr(execution_result, field_name) for field_name in _LOADER_COUNT_FIELDS):
+        return {field_name: int(getattr(execution_result, field_name)) for field_name in _LOADER_COUNT_FIELDS}
+
+    if hasattr(execution_result, "result_row_count"):
+        return {
+            "inserted": int(getattr(execution_result, "result_row_count")),
+            "skipped": 0,
+            "quarantined": 0,
+            "superseded": 0,
+            "errors": 0,
+        }
+    return None
+
+
 def _loader_counts(execution_result: object | None) -> dict[str, int] | None:
+    """Extract loader activity counters from single-file or multi-file loader results."""
     if execution_result is None:
         return None
 
-    count_fields = ("inserted", "skipped", "quarantined", "superseded", "errors")
-    if not all(hasattr(execution_result, field_name) for field_name in count_fields):
-        if hasattr(execution_result, "result_row_count"):
-            return {
-                "inserted": int(getattr(execution_result, "result_row_count")),
-                "skipped": 0,
-                "quarantined": 0,
-                "superseded": 0,
-                "errors": 0,
-            }
-        return None
+    if isinstance(execution_result, list):
+        aggregate_counts = _zero_loader_counts()
+        for item in execution_result:
+            item_counts = _single_loader_counts(item)
+            if item_counts is None:
+                return None
+            for field_name in _LOADER_COUNT_FIELDS:
+                aggregate_counts[field_name] += item_counts[field_name]
+        return aggregate_counts
 
-    return {field_name: int(getattr(execution_result, field_name)) for field_name in count_fields}
+    return _single_loader_counts(execution_result)
 
 
 def _recent_nonempty_insert_counts(
@@ -292,12 +339,18 @@ def _derive_pull_status(
             ("Refresh job succeeded"),
         )
 
-    if counts["inserted"] == 0 and counts["skipped"] == 0 and counts["quarantined"] == 0 and counts["superseded"] == 0:
-        return "empty", counts, "Refresh job completed with no loader activity"
+    if (
+        counts["inserted"] == 0
+        and counts["skipped"] == 0
+        and counts["quarantined"] == 0
+        and counts["superseded"] == 0
+        and counts["errors"] == 0
+    ):
+        return "empty", counts, "Refresh job completed with no inserted rows"
 
     lookback_floor = completed_at - timedelta(days=_DEGRADED_LOOKBACK_DAYS)
     prior_insert_counts = _recent_nonempty_insert_counts(connection, job, completed_after=lookback_floor)
-    if prior_insert_counts:
+    if counts["inserted"] > 0 and prior_insert_counts:
         median_insert_count = int(statistics.median(prior_insert_counts))
         if counts["inserted"] < max(1, int(median_insert_count * _DEGRADED_VOLUME_RATIO_THRESHOLD)):
             return (
@@ -512,7 +565,9 @@ def run_all_jobs(
 
 def build_argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run campaign-finance refresh jobs from config-driven cadence")
-    parser.add_argument("--scope", choices=["all", "priority"], default="all", help="Refresh scope to execute")
+    parser.add_argument(
+        "--scope", choices=["all", "priority", "federal"], default="all", help="Refresh scope to execute"
+    )
     parser.add_argument(
         "--job-key-prefix",
         dest="job_key_prefixes",
@@ -522,8 +577,7 @@ def build_argument_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--dry-run", action="store_true", help="Plan and report without executing jobs")
     parser.add_argument("--force", action="store_true", help="Ignore cadence gating and execute all scoped jobs")
-    parser.add_argument("--fec-state", default="NC", help="Default FEC state filter")
-    parser.add_argument("--fec-cycle", default=2024, type=int, help="Default FEC cycle")
+    parser.add_argument("--fec-cycle", default=2026, type=int, help="Default FEC cycle")
     parser.add_argument("--fec-limit", default=100, type=int, help="Default FEC row limit")
     parser.add_argument("--co-year", type=int, help="CO year override (defaults to current year)")
     parser.add_argument("--pa-year", type=int, help="PA year override (defaults to current year)")
@@ -578,13 +632,21 @@ def build_argument_parser() -> argparse.ArgumentParser:
 
 def _acquire_runner_lock(lock_path: Path) -> int | None:
     """Try to acquire a global flock. Returns the fd on success, None on contention."""
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR)
     try:
-        lock_path.parent.mkdir(parents=True, exist_ok=True)
-        fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR)
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         return fd
-    except OSError:
-        return None
+    except OSError as error:
+        os.close(fd)
+        if error.errno in {errno.EACCES, errno.EAGAIN}:
+            return None
+        raise
+
+
+def _fallback_runner_lock_path() -> Path:
+    """Return a same-host lock path for environments where /var/lock is unavailable."""
+    return Path(tempfile.gettempdir()) / f"civibus-refresh-runner-{os.getuid()}.lock"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -594,7 +656,26 @@ def main(argv: list[str] | None = None) -> int:
 
     lock_fd: int | None = None
     if not args.dry_run and not args.no_lock:
-        lock_fd = _acquire_runner_lock(_RUNNER_LOCK_PATH)
+        try:
+            lock_fd = _acquire_runner_lock(_RUNNER_LOCK_PATH)
+        except OSError as primary_lock_error:
+            fallback_lock_path = _fallback_runner_lock_path()
+            try:
+                lock_fd = _acquire_runner_lock(fallback_lock_path)
+            except OSError as fallback_lock_error:
+                print(
+                    "Refresh runner lock setup failed "
+                    f"(primary: {_RUNNER_LOCK_PATH}: {primary_lock_error}; "
+                    f"fallback: {fallback_lock_path}: {fallback_lock_error}).",
+                    file=sys.stderr,
+                )
+                return 2
+            print(
+                "Refresh runner using fallback lock "
+                f"(primary: {_RUNNER_LOCK_PATH}: {primary_lock_error}; "
+                f"fallback: {fallback_lock_path}).",
+                file=sys.stderr,
+            )
         if lock_fd is None:
             print(
                 "Another refresh runner is already active "
@@ -604,7 +685,6 @@ def main(argv: list[str] | None = None) -> int:
             return 2
 
     parameters = RunnerParameters(
-        fec_state=args.fec_state,
         fec_cycle=args.fec_cycle,
         fec_limit=args.fec_limit,
         co_year=args.co_year,

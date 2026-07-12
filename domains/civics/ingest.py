@@ -24,6 +24,8 @@ from domains.civics.types.models import (
 
 _UNSET_ELECTORAL_DIVISION = object()
 _ELECTORAL_DIVISION_HAS_GEOMETRY: bool | None = None
+_OFFICE_HAS_ELECTORAL_DIVISION_COLUMN: bool | None = None
+_FEDERAL_HOUSE_OFFICE_ID = UUID("00000000-0000-4000-8000-000000000101")
 
 
 def _find_existing_officeholding_id(
@@ -116,9 +118,45 @@ def retire_officeholdings_for_vacancy(
         return cur.rowcount
 
 
+def supersede_officeholdings_for_successor(
+    conn: psycopg.Connection,
+    *,
+    office_id: UUID,
+    electoral_division_id: UUID | None,
+    successor_person_id: UUID,
+    successor_start_date: date,
+) -> int:
+    """Close active same-seat officeholdings when a successor starts."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE civic.officeholding AS oh
+            SET holder_status = 'former',
+                valid_period = daterange(lower(oh.valid_period), %s, '[)'),
+                updated_at = NOW()
+            WHERE oh.office_id = %s
+              AND oh.electoral_division_id IS NOT DISTINCT FROM %s
+              AND oh.person_id <> %s
+              AND oh.holder_status IN ('elected', 'appointed', 'acting')
+              AND oh.valid_period @> %s::date
+              AND (lower_inf(oh.valid_period) OR lower(oh.valid_period) < %s::date)
+            """,
+            (
+                successor_start_date,
+                office_id,
+                electoral_division_id,
+                successor_person_id,
+                successor_start_date,
+                successor_start_date,
+            ),
+        )
+        return cur.rowcount
+
+
 def upsert_office(conn: psycopg.Connection, office: Office) -> UUID:
     """Upsert an office row keyed by the canonical office natural key."""
-    if office.electoral_division_id is not None:
+    office_has_electoral_division_column = _office_has_electoral_division_column(conn)
+    if office_has_electoral_division_column and office.electoral_division_id is not None:
         with conn.cursor() as cur:
             # Preserve legacy office identity rows that were inserted before division ids were known.
             cur.execute(
@@ -158,42 +196,77 @@ def upsert_office(conn: psycopg.Connection, office: Office) -> UUID:
                 return row_id
 
     with conn.cursor() as cur:
-        cur.execute(
-            """
-            INSERT INTO civic.office (
-                id, name, office_level, title, jurisdiction_id, state,
-                electoral_division_id, is_elected, number_of_seats, source_record_id
+        if office_has_electoral_division_column:
+            cur.execute(
+                """
+                INSERT INTO civic.office (
+                    id, name, office_level, title, jurisdiction_id, state,
+                    electoral_division_id, is_elected, number_of_seats, source_record_id
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (
+                    office_level,
+                    COALESCE(state, ''),
+                    name,
+                    COALESCE(electoral_division_id, '00000000-0000-0000-0000-000000000000'::uuid)
+                )
+                DO UPDATE SET
+                    title = EXCLUDED.title,
+                    jurisdiction_id = EXCLUDED.jurisdiction_id,
+                    is_elected = EXCLUDED.is_elected,
+                    number_of_seats = EXCLUDED.number_of_seats,
+                    electoral_division_id = COALESCE(EXCLUDED.electoral_division_id, civic.office.electoral_division_id),
+                    source_record_id = COALESCE(EXCLUDED.source_record_id, civic.office.source_record_id),
+                    updated_at = NOW()
+                RETURNING id
+                """,
+                (
+                    office.id,
+                    office.name,
+                    office.office_level,
+                    office.title,
+                    office.jurisdiction_id,
+                    office.state,
+                    office.electoral_division_id,
+                    office.is_elected,
+                    office.number_of_seats,
+                    office.source_record_id,
+                ),
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (
-                office_level,
-                COALESCE(state, ''),
-                name,
-                COALESCE(electoral_division_id, '00000000-0000-0000-0000-000000000000'::uuid)
+        else:
+            cur.execute(
+                """
+                INSERT INTO civic.office (
+                    id, name, office_level, title, jurisdiction_id, state,
+                    is_elected, number_of_seats, source_record_id
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (
+                    office_level,
+                    COALESCE(state, ''),
+                    name
+                )
+                DO UPDATE SET
+                    title = EXCLUDED.title,
+                    jurisdiction_id = EXCLUDED.jurisdiction_id,
+                    is_elected = EXCLUDED.is_elected,
+                    number_of_seats = EXCLUDED.number_of_seats,
+                    source_record_id = COALESCE(EXCLUDED.source_record_id, civic.office.source_record_id),
+                    updated_at = NOW()
+                RETURNING id
+                """,
+                (
+                    office.id,
+                    office.name,
+                    office.office_level,
+                    office.title,
+                    office.jurisdiction_id,
+                    office.state,
+                    office.is_elected,
+                    office.number_of_seats,
+                    office.source_record_id,
+                ),
             )
-            DO UPDATE SET
-                title = EXCLUDED.title,
-                jurisdiction_id = EXCLUDED.jurisdiction_id,
-                is_elected = EXCLUDED.is_elected,
-                number_of_seats = EXCLUDED.number_of_seats,
-                electoral_division_id = COALESCE(EXCLUDED.electoral_division_id, civic.office.electoral_division_id),
-                source_record_id = COALESCE(EXCLUDED.source_record_id, civic.office.source_record_id),
-                updated_at = NOW()
-            RETURNING id
-            """,
-            (
-                office.id,
-                office.name,
-                office.office_level,
-                office.title,
-                office.jurisdiction_id,
-                office.state,
-                office.electoral_division_id,
-                office.is_elected,
-                office.number_of_seats,
-                office.source_record_id,
-            ),
-        )
         row_id: UUID = cur.fetchone()[0]
 
     if office.source_record_id is not None:
@@ -298,6 +371,25 @@ def upsert_electoral_division(conn: psycopg.Connection, division: ElectoralDivis
         insert_entity_source(conn, "electoral_division", row_id, division.source_record_id, "electoral_division")
 
     return row_id
+
+
+def _office_has_electoral_division_column(conn: psycopg.Connection) -> bool:
+    global _OFFICE_HAS_ELECTORAL_DIVISION_COLUMN
+    if _OFFICE_HAS_ELECTORAL_DIVISION_COLUMN is None:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT EXISTS (
+                    SELECT 1
+                    FROM information_schema.columns
+                    WHERE table_schema = 'civic'
+                      AND table_name = 'office'
+                      AND column_name = 'electoral_division_id'
+                )
+                """
+            )
+            _OFFICE_HAS_ELECTORAL_DIVISION_COLUMN = bool(cur.fetchone()[0])
+    return _OFFICE_HAS_ELECTORAL_DIVISION_COLUMN
 
 
 def upsert_contest(conn: psycopg.Connection, contest: Contest) -> UUID:
@@ -636,6 +728,120 @@ def upsert_candidacy(conn: psycopg.Connection, candidacy: Candidacy) -> UUID:
     return row_id
 
 
+def repoint_candidacy_person(
+    conn: psycopg.Connection,
+    *,
+    candidacy_id: UUID,
+    expected_person_id: UUID,
+    target_person_id: UUID,
+) -> bool:
+    """Move one candidacy row to a canonical person with conflict-safe merge semantics.
+
+    When the target person already has a candidacy in the same contest, we merge
+    the source row into the canonical target row and copy the source provenance
+    links before deleting the now-redundant source row.
+    """
+    if expected_person_id == target_person_id:
+        return False
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT contest_id
+            FROM civic.candidacy
+            WHERE id = %s
+              AND person_id = %s
+            """,
+            (candidacy_id, expected_person_id),
+        )
+        source_row = cur.fetchone()
+        if source_row is None:
+            return False
+        contest_id = source_row[0]
+
+        cur.execute(
+            """
+            SELECT id
+            FROM civic.candidacy
+            WHERE person_id = %s
+              AND contest_id = %s
+            LIMIT 1
+            """,
+            (target_person_id, contest_id),
+        )
+        existing_target_row = cur.fetchone()
+
+        if existing_target_row is not None:
+            target_candidacy_id = existing_target_row[0]
+            cur.execute(
+                """
+                UPDATE civic.candidacy AS target
+                SET
+                    party = COALESCE(target.party, source.party),
+                    name_on_ballot = COALESCE(target.name_on_ballot, source.name_on_ballot),
+                    is_unexpired_term = COALESCE(target.is_unexpired_term, source.is_unexpired_term),
+                    raw_fields = COALESCE(target.raw_fields, source.raw_fields),
+                    committee_id = COALESCE(target.committee_id, source.committee_id),
+                    filing_date = COALESCE(target.filing_date, source.filing_date),
+                    status = COALESCE(target.status, source.status),
+                    incumbent_challenge = COALESCE(target.incumbent_challenge, source.incumbent_challenge),
+                    candidate_number = COALESCE(target.candidate_number, source.candidate_number),
+                    source_record_id = COALESCE(target.source_record_id, source.source_record_id),
+                    updated_at = NOW()
+                FROM civic.candidacy AS source
+                WHERE target.id = %s
+                  AND source.id = %s
+                """,
+                (target_candidacy_id, candidacy_id),
+            )
+            # Preserve every source link that pointed at the redundant source row.
+            cur.execute(
+                """
+                INSERT INTO core.entity_source (
+                    entity_type,
+                    entity_id,
+                    source_record_id,
+                    extraction_role,
+                    confidence,
+                    extracted_fields
+                )
+                SELECT
+                    entity_type,
+                    %s,
+                    source_record_id,
+                    extraction_role,
+                    confidence,
+                    extracted_fields
+                FROM core.entity_source
+                WHERE entity_type = 'candidacy'
+                  AND entity_id = %s
+                ON CONFLICT (entity_type, entity_id, source_record_id, extraction_role)
+                DO NOTHING
+                """,
+                (target_candidacy_id, candidacy_id),
+            )
+            cur.execute(
+                """
+                DELETE FROM civic.candidacy
+                WHERE id = %s
+                """,
+                (candidacy_id,),
+            )
+            return True
+
+        cur.execute(
+            """
+            UPDATE civic.candidacy
+            SET person_id = %s,
+                updated_at = NOW()
+            WHERE id = %s
+              AND person_id = %s
+            """,
+            (target_person_id, candidacy_id, expected_person_id),
+        )
+        return cur.rowcount == 1
+
+
 def upsert_officeholding(conn: psycopg.Connection, officeholding: Officeholding) -> UUID:
     valid_period = DateRange(officeholding.valid_period.start_date, officeholding.valid_period.end_date)
 
@@ -732,22 +938,34 @@ def derive_incumbent_challenge(
 ) -> str | None:
     """Derive FEC-style incumbent/challenger code from canonical officeholding.
 
-    Returns "I" if person_id currently holds the requested office as of `as_of`,
-    None otherwise. When callers pass an electoral_division_id, the match is
-    seat-specific (office_id + electoral_division_id) so district-scoped races
-    do not leak incumbency across seats. Callers that omit the division filter
-    keep the older office-level behavior used by officeholder-focused tests.
-    Does NOT persist anything; callers decide whether to store the result.
+    Returns "I" if person_id holds the requested office as of `as_of`, None
+    otherwise. Same-seat House successor rows are stored as bounded former rows
+    and still count for pre-successor dates when the caller supplies the seat.
+    Generic former rows do not derive incumbency.
+    When callers pass an electoral_division_id, the match is seat-specific
+    (office_id + electoral_division_id) so district-scoped races do not leak
+    incumbency across seats. Callers that omit the division filter keep the older
+    office-level behavior used by officeholder-focused tests. Does NOT persist
+    anything; callers decide whether to store the result.
 
     When `as_of` is None, defaults to today.
     """
     check_date = as_of or date.today()
-    query = """
+    include_bounded_house_former = (
+        office_id == _FEDERAL_HOUSE_OFFICE_ID
+        and electoral_division_id is not _UNSET_ELECTORAL_DIVISION
+        and electoral_division_id is not None
+    )
+    holder_status_filter = "holder_status IN ('elected', 'appointed', 'acting')"
+    if include_bounded_house_former:
+        holder_status_filter = f"({holder_status_filter} OR (holder_status = 'former' AND NOT upper_inf(valid_period)))"
+
+    query = f"""
         SELECT 1
         FROM civic.officeholding
         WHERE person_id = %s
           AND office_id = %s
-          AND holder_status IN ('elected', 'appointed', 'acting')
+          AND {holder_status_filter}
           AND (
               valid_period IS NULL
               OR valid_period @> %s::date

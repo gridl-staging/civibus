@@ -125,7 +125,7 @@ layers:
     file_path_triggers:
       - layers.yaml
       - core/keel_gate_l1.py
-      - docs/anchors/**
+      - docs/reference/anchors/**
       - domains/campaign_finance/jurisdictions/states/NC/scraper/**
     gate_command: make gate-L1 JURISDICTION={{scope}}
   - id: L5
@@ -1023,7 +1023,9 @@ def test_latest_emitted_payload_by_key_honors_l3_source_id_scope_filter(tmp_path
         produced_at=produced_at,
     )
 
-    l3_layer = next(layer for layer in stage_close_gate._load_yaml(repo_root / "layers.yaml")["layers"] if layer["id"] == "L3")
+    l3_layer = next(
+        layer for layer in stage_close_gate._load_yaml(repo_root / "layers.yaml")["layers"] if layer["id"] == "L3"
+    )
     latest_payload_by_source_id = stage_close_gate._latest_emitted_payload_by_key(
         repo_root=repo_root,
         layer=l3_layer,
@@ -1034,7 +1036,9 @@ def test_latest_emitted_payload_by_key_honors_l3_source_id_scope_filter(tmp_path
 
     assert sorted(latest_payload_by_source_id) == ["nc_committee_documents", "nc_transactions"]
     for source_id, (evidence_path, schema_valid, payload) in latest_payload_by_source_id.items():
-        assert evidence_path.relative_to(repo_root).as_posix() == f"evidence/L3/NC/{source_id}/validated_2026-04-24.json"
+        assert (
+            evidence_path.relative_to(repo_root).as_posix() == f"evidence/L3/NC/{source_id}/validated_2026-04-24.json"
+        )
         assert schema_valid is True
         assert payload is not None
         assert payload["scope"] == "NC"
@@ -1137,7 +1141,7 @@ def test_stage_close_gate_requires_fresh_l12_summary_when_session_id_provided(tm
 
     result = stage_close_gate.evaluate_stage_close(
         repo_root=repo_root,
-        changed_files=["docs/keel/checklist.md"],
+        changed_files=["docs/reference/keel/checklist.md"],
         today_utc=date(2026, 4, 24),
         session_id="session-123",
     )
@@ -1155,14 +1159,14 @@ def test_stage_close_gate_rejects_l12_summary_with_mismatched_touched_layers(tmp
         repo_root,
         session_id="session-123",
         produced_at=datetime(2026, 4, 24, 12, 0, tzinfo=timezone.utc),
-        changed_files=["docs/keel/checklist.md"],
+        changed_files=["docs/reference/keel/checklist.md"],
         touched_layers=["L10"],
         produced_evidence_layers=["L12"],
     )
 
     result = stage_close_gate.evaluate_stage_close(
         repo_root=repo_root,
-        changed_files=["docs/keel/checklist.md"],
+        changed_files=["docs/reference/keel/checklist.md"],
         today_utc=date(2026, 4, 24),
         session_id="session-123",
     )
@@ -1179,14 +1183,14 @@ def test_stage_close_gate_accepts_valid_l12_summary_for_non_layer_changes(tmp_pa
         repo_root,
         session_id="session-123",
         produced_at=datetime(2026, 4, 24, 12, 0, tzinfo=timezone.utc),
-        changed_files=["docs/keel/checklist.md"],
+        changed_files=["docs/reference/keel/checklist.md"],
         touched_layers=[],
         produced_evidence_layers=["L12"],
     )
 
     result = stage_close_gate.evaluate_stage_close(
         repo_root=repo_root,
-        changed_files=["docs/keel/checklist.md"],
+        changed_files=["docs/reference/keel/checklist.md"],
         today_utc=date(2026, 4, 24),
         session_id="session-123",
     )

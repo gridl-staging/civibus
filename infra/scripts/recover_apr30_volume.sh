@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
 # recover_apr30_volume.sh — Apr 30 wrong-volume recovery driver.
 #
-# Wraps docs/operations/apr30_volume_recovery_runbook.md into a single
+# Wraps docs/howto/operations/apr30_volume_recovery_runbook.md into a single
 # artifact with the four verification gates from
-# docs/operations/prod_ops_discipline.md:
+# docs/howto/operations/prod_ops_discipline.md:
 #
 #   Gate 1 — bare `docker compose` calls forbidden; only prod_compose.sh.
 #            (Direct `docker stop <name>` / `docker rm <name>` against
 #             a specific named container is permitted — see
-#             docs/operations/prod_ops_discipline.md for the exact line.)
+#             docs/howto/operations/prod_ops_discipline.md for the exact line.)
 #   Gate 2 — canonical 163 GB volume size confirmed before mount.
-#   Gate 3 — post-action canary (/api/health/content) must pass.
+#   Gate 3 — post-action canary (/health/content) must pass.
 #   Gate 4 — state changes only with explicit --confirm flag.
 #
 # Modes:
@@ -22,7 +22,7 @@
 # This script is the artifact. Whether to RUN it (especially --confirm)
 # against the live Hetzner stack depends on operator clarification of
 # the deployment topology — see
-# docs/research/2026_05_01_deployment_topology_finding.md. Until that
+# docs/reference/research/2026_05_01_deployment_topology_finding.md. Until that
 # clarification lands, --confirm should be invoked only by the operator,
 # not by an autonomous session.
 
@@ -48,8 +48,9 @@ MIN_VOLUME_GB=100
 # any partial-restore failure mode.
 MIN_CF_TRANSACTION_ROWS=1000000
 
-# Canary endpoint — same path the api startup canary and uptime probe use.
-CANARY_PATH="/api/health/content"
+# Canary endpoint on the API container. Caddy strips /api before proxying,
+# so direct localhost probes use the FastAPI post-strip path.
+CANARY_PATH="/health/content"
 
 # The prod compose file declares `${CIVIBUS_DB_DATA_PATH:?Set CIVIBUS_DB_DATA_PATH}`
 # as a mandatory env var. If it is missing on the VM, the prod compose
@@ -79,11 +80,11 @@ Gates enforced by this script:
      all container-lifecycle actions go through infra/scripts/prod_compose.sh.
   2. Canonical volume at ${CANONICAL_VOLUME_PATH} must be >= ${MIN_VOLUME_GB} GB
      before any mount swap. Empty volume = Apr 30 fingerprint, halts immediately.
-  3. After swap, /api/health/content on the api container must respond healthy
+  3. After swap, /health/content on the api container must respond healthy
      before the script claims success.
   4. No state changes without an explicit --confirm flag.
 
-See docs/operations/prod_ops_discipline.md for the discipline this enforces.
+See docs/howto/operations/prod_ops_discipline.md for the discipline this enforces.
 EOF
 }
 
@@ -138,7 +139,9 @@ gate_required_env_var() {
     print_step "Gate 0: ${REQUIRED_ENV_VAR} set in ${PROD_ENV_FILE}"
     local current_value
     # Allow `=` either with or without surrounding whitespace; tolerate quotes.
-    current_value="$(ssh_remote "grep -E '^${REQUIRED_ENV_VAR}=' ${PROD_ENV_FILE} 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '\"' | tr -d \"'\"" || true)"
+    if ! current_value="$(ssh_remote "test -r ${PROD_ENV_FILE} && grep -E '^[[:space:]]*${REQUIRED_ENV_VAR}[[:space:]]*=' ${PROD_ENV_FILE} | tail -1 | cut -d= -f2- | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | tr -d '\"' | tr -d \"'\"")"; then
+        die "Unable to read ${PROD_ENV_FILE} on the VM. Check SSH access and file readability before re-running recovery."
+    fi
     if [[ -z "${current_value}" ]]; then
         die "${REQUIRED_ENV_VAR} is not set in ${PROD_ENV_FILE} on the VM. \
 The prod compose requires it (\`?Set CIVIBUS_DB_DATA_PATH\`). Add it before \
@@ -170,14 +173,18 @@ This is the Apr 30 fingerprint — refusing to proceed."
 
 # ---------- Gate 3: Post-action canary ----------
 gate_post_action_canary() {
-    print_step "Gate 3: Post-action canary (/api/health/content)"
+    print_step "Gate 3: Post-action canary (${CANARY_PATH})"
     # Curl from inside the api container, not from the public hostname,
     # because the topology finding (2026-05-01) is unclear about which
     # public hostname this stack actually serves. Localhost from the api
     # container is unambiguous.
     local http_code
-    http_code="$(ssh_remote "docker exec infra-api-1 curl -s -o /tmp/canary_body -w '%{http_code}' http://localhost:8000${CANARY_PATH}")"
-    echo "  /api/health/content -> HTTP ${http_code}"
+    if ! http_code="$(ssh_remote "docker exec infra-api-1 curl -s -o /tmp/canary_body -w '%{http_code}' http://localhost:8000${CANARY_PATH}")"; then
+        local body
+        body="$(ssh_remote "docker exec infra-api-1 cat /tmp/canary_body" || echo "<no body captured>")"
+        die "Canary probe transport failed before an HTTP response. Body: ${body}"
+    fi
+    echo "  ${CANARY_PATH} -> HTTP ${http_code}"
     if [[ "${http_code}" != "200" ]]; then
         local body
         body="$(ssh_remote "docker exec infra-api-1 cat /tmp/canary_body" || echo "<no body captured>")"
@@ -260,7 +267,7 @@ Step P7. Bring up rest of stack via wrapper, pulling fresh images:
              --pull always --wait api web caddy"
          (--pull always: deployed api image pre-dates canary endpoint
          commit; without fresh pull, Gate 3 would 404.)
-Step P8. Run gate_post_action_canary (curl /api/health/content from inside
+Step P8. Run gate_post_action_canary (curl /health/content from inside
          api container; expect HTTP 200).
 
 This plan does NOT include the loader-replay work (apr29_pm_2 statewide
@@ -280,7 +287,7 @@ run_confirm() {
     echo ""
     echo "===> Confirm: executing recovery against ${HETZNER_HOST}"
     echo "===> NOTE: The deployment topology finding from 2026-05-01 (see"
-    echo "===> docs/research/2026_05_01_deployment_topology_finding.md) suggests"
+    echo "===> docs/reference/research/2026_05_01_deployment_topology_finding.md) suggests"
     echo "===> civibus.org may not depend on this Hetzner stack at all."
     echo "===> If this script is being invoked autonomously without operator"
     echo "===> confirmation of the recovery goal, abort now (Ctrl-C)."
@@ -302,7 +309,7 @@ run_confirm() {
     # recognize it as its own service. Acting on the container by NAME has
     # no wrong-compose-pickup risk (the Apr 30 failure mode required a bare
     # `docker compose ...` invocation; direct docker on a named container
-    # cannot trigger it). The discipline at docs/operations/prod_ops_discipline.md
+    # cannot trigger it). The discipline at docs/howto/operations/prod_ops_discipline.md
     # explicitly permits this exception.
     ssh_remote "docker stop infra-db-1 && docker rm infra-db-1"
 

@@ -338,6 +338,7 @@ PortraitRightsStatus = Literal["public_domain", "licensed", "restricted", "unkno
 
 
 class PersonPortrait(BaseModel):
+
     id: UUID = Field(default_factory=uuid4)
     person_id: UUID
     source_record_id: UUID
@@ -377,6 +378,7 @@ class PersonPortrait(BaseModel):
 
 
 class RefreshRun(BaseModel):
+
     id: UUID = Field(default_factory=uuid4)
     job_key: str
     domain: str

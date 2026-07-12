@@ -1,3 +1,0 @@
-User-agent: *
-Allow: /
-Sitemap: https://civibus.org/sitemap.xml

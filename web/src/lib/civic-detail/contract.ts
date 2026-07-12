@@ -185,6 +185,27 @@ export type UpcomingElectionTimelineEntry = {
   contests: ElectionContestSummary[];
 };
 
+export type CongressMemberSummary = {
+  person_id: string;
+  person_name: string;
+  officeholding_id: string;
+  office_id: string;
+  office_name: string;
+  chamber: string;
+  state: string | null;
+  district: string | null;
+  district_or_class: string | null;
+  party: string | null;
+  portrait_source_image_url: string | null;
+  person_detail_path: string;
+};
+
+export const CONGRESS_PAGE_PATH = "/congress";
+
+export function buildCongressMembersPath(): string {
+  return "/v1/congress/members";
+}
+
 export function buildOfficeDetailPath(officeId: string): string {
   return `/v1/offices/${encodeRoutePathSegment(officeId)}`;
 }

@@ -24,6 +24,7 @@ _L15_FINDINGS_END = "<!-- keel:L15:end -->"
 _NUMERIC_PATTERN = re.compile(r"^[-+]?\d+(?:\.\d+)?$")
 _ROUTE_RENDER_FIXTURE_PATH = Path("web/src/lib/campaign-finance-detail/route-render.test-fixtures.ts")
 
+
 @dataclass(frozen=True, slots=True)
 class L15CorpusCase:
     case_id: str
@@ -234,7 +235,9 @@ def collect_observed_values(*, repo_root: Path, corpus: list[L15CorpusCase]) -> 
     fixture_source = (repo_root / _ROUTE_RENDER_FIXTURE_PATH).read_text(encoding="utf-8")
     observed_values: dict[str, object] = {}
     for case in sorted(corpus, key=lambda item: item.case_id):
-        if not _owner_symbols_exist(repo_root=repo_root, owner_paths=case.owner_paths, owner_symbols=case.owner_symbols):
+        if not _owner_symbols_exist(
+            repo_root=repo_root, owner_paths=case.owner_paths, owner_symbols=case.owner_symbols
+        ):
             observed_values[case.case_id] = "<missing-owner>"
             continue
         observed_values[case.case_id] = _extract_fixture_case_value(fixture_source=fixture_source, case=case)
@@ -379,7 +382,7 @@ def main(argv: list[str] | None = None) -> int:
         corpus = load_l15_corpus(corpus_path)
         observed_values = collect_observed_values(repo_root=repo_root, corpus=corpus)
         summary = execute_corpus(corpus=corpus, observed_values=observed_values)
-        gate_command = "python -m core.keel_gate_l15 " f"--corpus-path {corpus_path.relative_to(repo_root)}"
+        gate_command = f"python -m core.keel_gate_l15 --corpus-path {corpus_path.relative_to(repo_root)}"
         evidence_path = write_l15_evidence(
             repo_root=repo_root,
             evidence_root=evidence_root,

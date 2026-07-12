@@ -1,5 +1,5 @@
 """
-Stub summary for /Users/stuart/parallel_development/civibus_dev/MAR18_state_expansion_batch_2/civibus_dev/domains/campaign_finance/ingest/fec_client.py.
+Stub summary for MAR18_state_expansion_batch_2/civibus_dev/domains/campaign_finance/ingest/fec_client.py.
 """
 
 import os
@@ -21,7 +21,9 @@ class FecClient:
         if api_key is not None:
             self._api_key = api_key
         else:
-            self._api_key = os.environ.get("FEC_API_KEY", "DEMO_KEY")
+            self._api_key = os.environ.get("FEC_API_KEY")
+            if not self._api_key:
+                raise ValueError("FEC_API_KEY environment variable is required")
 
     def fetch_contributions(
         self,

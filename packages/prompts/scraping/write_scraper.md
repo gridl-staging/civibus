@@ -21,7 +21,7 @@ The scraper must preserve raw-source fidelity — download the authoritative fil
 
 ## Expected Input Format
 
-The agent receives a single `data_sources[]` entry from the jurisdiction's `config.yaml`. The canonical schema for this object is defined in `docs/specs/jurisdiction-config.md`. Do not redefine it here.
+The agent receives a single `data_sources[]` entry from the jurisdiction's `config.yaml`. The canonical schema for this object is defined in `docs/reference/specs/jurisdiction-config.md`. Do not redefine it here.
 
 The prompt consumes these fields from the entry:
 
@@ -115,7 +115,7 @@ Every successful run must produce exactly three artifacts:
 - Use bounded concurrency with a configurable maximum (default: 1 concurrent request).
 - Respect `robots.txt` and terms of service where applicable.
 - Identify with a stable user-agent string (e.g., `Civibus/1.0 (public-records-research; +https://civibus.org)`).
-- **Never** bypass authentication, captchas, or anti-bot controls. If encountered, stop and reclassify the source as T4 (out of scope). Civibus does not invest in anti-bot circumvention — no residential proxies, CAPTCHA solving, IP rotation, or trust-accumulation. See `docs/research/acquisition-taxonomy.md`.
+- **Never** bypass authentication, captchas, or anti-bot controls. If encountered, stop and reclassify the source as T4 (out of scope). Civibus does not invest in anti-bot circumvention — no residential proxies, CAPTCHA solving, IP rotation, or trust-accumulation. See `docs/reference/research/acquisition-taxonomy.md`.
 
 ---
 

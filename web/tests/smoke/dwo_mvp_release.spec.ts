@@ -14,6 +14,8 @@ import {
   SMOKE_COMMITTEES_TITLE,
   SMOKE_HOME_DESCRIPTION,
   SMOKE_HOME_HEADING,
+  SMOKE_HOME_PRIMARY_ACTION,
+  SMOKE_HOME_PRIMARY_ACTION_HREF,
   SMOKE_HOME_TITLE,
   SMOKE_IE_COMMITTEE_A_NAME,
   SMOKE_SEARCH_DESCRIPTION,
@@ -102,7 +104,10 @@ test.describe("DWO MVP release smoke", () => {
     });
     await expect(page.getByRole("heading", { name: "Civibus" })).toBeVisible();
     await expect(page.getByRole("heading", { name: SMOKE_HOME_HEADING })).toBeVisible();
-    await expect(page.getByRole("link", { name: "Start with search" })).toHaveAttribute("href", "/search");
+    await expect(page.getByRole("link", { name: SMOKE_HOME_PRIMARY_ACTION })).toHaveAttribute(
+      "href",
+      SMOKE_HOME_PRIMARY_ACTION_HREF
+    );
   });
 
   test("search journey executes deterministic query flow", async ({ page }: { page: any }) => {

@@ -29,8 +29,8 @@ def test_schedule_e_fixture_parses_with_dict_reader_contract() -> None:
 
 
 def test_schedule_e_research_docs_stay_empirical_and_cross_referenced() -> None:
-    format_doc = (REPO_ROOT / "docs" / "research" / "fec-schedule-e-format.md").read_text(encoding="utf-8")
-    bulk_doc = (REPO_ROOT / "docs" / "research" / "fec-bulk-data.md").read_text(encoding="utf-8")
+    format_doc = (REPO_ROOT / "docs" / "reference" / "research" / "fec-schedule-e-format.md").read_text(encoding="utf-8")
+    bulk_doc = (REPO_ROOT / "docs" / "reference" / "research" / "fec-bulk-data.md").read_text(encoding="utf-8")
 
     assert "## Fixture Validation (csv.DictReader)" in format_doc
     assert "Implication for schema:" not in format_doc

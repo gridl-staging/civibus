@@ -11,6 +11,7 @@ import {
   type CommitteeListResponse
 } from "$lib/campaign-finance-detail/contract";
 import {
+  CONGRESS_PAGE_PATH,
   buildElectionDateRoutePath,
   type UpcomingElectionTimelineEntry
 } from "$lib/civic-detail/contract";
@@ -22,7 +23,15 @@ import type { RequestHandler } from "@sveltejs/kit";
 const BATCH_LIMIT = 200;
 
 /** Static paths that always appear in the sitemap. */
-const STATIC_PATHS = ["/", "/candidates", "/committees", "/coverage", "/calendar", "/data-sources"];
+const STATIC_PATHS = [
+  "/",
+  CONGRESS_PAGE_PATH,
+  "/candidates",
+  "/committees",
+  "/coverage",
+  "/calendar",
+  "/data-sources"
+];
 
 /**
  * Walks a paginated list endpoint until `has_next` is false,

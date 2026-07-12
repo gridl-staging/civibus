@@ -1,6 +1,6 @@
 """PHL Carto SQL API downloader — paged JSON GET with httpx.
 
-Source contract evidence: docs/research/phl_campaign_finance_contract_2026_04_25.md.
+Source contract evidence: docs/reference/research/phl_campaign_finance_contract_2026_04_25.md.
 
 The Carto SQL endpoint returns JSON with a top-level `rows` array. Large
 result sets are paged via SQL `OFFSET` / `LIMIT` because the public
@@ -25,7 +25,7 @@ import httpx
 
 CARTO_SQL_ENDPOINT = "https://phl.carto.com/api/v2/sql"
 
-# Per `docs/research/phl_campaign_finance_contract_2026_04_25.md` —
+# Per `docs/reference/research/phl_campaign_finance_contract_2026_04_25.md` —
 # observed rate limit is 81 req/sec; default page size is the documented
 # Carto safe-default. Larger pages reduce request count but risk timeouts
 # on heavy filters.
@@ -117,23 +117,17 @@ def fetch_carto_page(
         if owns_client:
             client.close()
     if response.status_code != 200:
-        raise PHLCartoFetchError(
-            f"Carto SQL request returned HTTP {response.status_code}: {response.text[:200]}"
-        )
+        raise PHLCartoFetchError(f"Carto SQL request returned HTTP {response.status_code}: {response.text[:200]}")
     try:
         payload = response.json()
     except json.JSONDecodeError as exc:
         raise PHLCartoFetchError(f"Carto SQL response was not valid JSON: {exc}") from exc
     if not isinstance(payload, dict):
-        raise PHLCartoFetchError(
-            f"Carto SQL response was not a JSON object (got {type(payload).__name__})"
-        )
+        raise PHLCartoFetchError(f"Carto SQL response was not a JSON object (got {type(payload).__name__})")
     if "error" in payload:
         raise PHLCartoFetchError(f"Carto SQL error: {payload['error']!r}")
     if "rows" not in payload:
-        raise PHLCartoFetchError(
-            "Carto SQL response missing required 'rows' key"
-        )
+        raise PHLCartoFetchError("Carto SQL response missing required 'rows' key")
     return payload
 
 
@@ -223,9 +217,7 @@ def write_rows_to_jsonl(
     row_count = 0
     try:
         with temp_path.open("w", encoding="utf-8") as fp:
-            for row in iter_all_rows(
-                query, client=client, endpoint=endpoint, total_limit=total_limit
-            ):
+            for row in iter_all_rows(query, client=client, endpoint=endpoint, total_limit=total_limit):
                 fp.write(json.dumps(row, default=str) + "\n")
                 row_count += 1
         temp_path.replace(dest_path)

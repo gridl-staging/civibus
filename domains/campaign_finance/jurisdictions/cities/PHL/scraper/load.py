@@ -151,9 +151,7 @@ def load_phl_source_records(
     # don't require full in-memory materialization before pass-1 writes.
     for raw in raw_rows:
         try:
-            parsed = next(
-                iter(parse_phl_carto_rows([raw], is_expenditure=is_expenditure))
-            )
+            parsed = next(iter(parse_phl_carto_rows([raw], is_expenditure=is_expenditure)))
         except StopIteration:
             counts.skipped += 1
             continue
@@ -292,9 +290,7 @@ def _phl_transaction(
         # PHL Carto's transaction_type vocabulary (e.g. "Monetary Contributions",
         # "In-Kind") is preserved verbatim so downstream consumers can group;
         # IE classification (when needed) lives in a future enrichment pass.
-        transaction_type=parsed.transaction_type or (
-            "expenditure" if parsed.is_expenditure else "contribution"
-        ),
+        transaction_type=parsed.transaction_type or ("expenditure" if parsed.is_expenditure else "contribution"),
         transaction_identifier=parsed.transaction_id,
         transaction_date=parsed.transaction_date,
         amount=parsed.transaction_amount,
@@ -316,17 +312,13 @@ def _ensure_phl_committee(
 ) -> UUID:
     """Resolve organization → ensure cf.committee, return committee_id."""
     canonical_name = (parsed.filer_name or "Unknown PHL Filer").strip()
-    organization_id = resolve_organization_by_canonical_name(
-        conn, Organization(canonical_name=canonical_name)
-    )
+    organization_id = resolve_organization_by_canonical_name(conn, Organization(canonical_name=canonical_name))
     if organization_id is None:
         # resolve_organization_by_canonical_name only returns None when its
         # `organization` argument is None; we pass a non-None Organization so
         # the result is always a UUID. The narrowing is a Pyright affordance,
         # not a real runtime branch.
-        raise RuntimeError(
-            f"Failed to resolve PHL filer organization for canonical_name={canonical_name!r}"
-        )
+        raise RuntimeError(f"Failed to resolve PHL filer organization for canonical_name={canonical_name!r}")
     return ensure_state_committee(
         conn,
         state=_PHL_STATE_CODE,
@@ -386,9 +378,7 @@ def load_phl_relational(
             if manages_outer:
                 ensure_transaction_open(conn)
             with conn.transaction():
-                source_record_id = _select_source_record_id_by_hash(
-                    conn, record_hash, is_expenditure=is_expenditure
-                )
+                source_record_id = _select_source_record_id_by_hash(conn, record_hash, is_expenditure=is_expenditure)
                 if source_record_id is None:
                     # No pass-1 row → can't carry provenance; skip rather
                     # than create an orphan filing/transaction.
@@ -423,9 +413,7 @@ def load_phl_relational(
             commit_managed_transaction(conn, manages_outer)
         except Exception:  # noqa: BLE001
             counts.errors += 1
-            LOGGER.exception(
-                "Failed PHL pass-2 upsert (transaction_id=%s)", parsed.transaction_id
-            )
+            LOGGER.exception("Failed PHL pass-2 upsert (transaction_id=%s)", parsed.transaction_id)
 
     commit_managed_transaction(conn, manages_outer)
 

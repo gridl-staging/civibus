@@ -91,15 +91,15 @@ export const APP_SHELL = {
   shellNavigation: [
     { label: "Home", href: "/" },
     { label: "Search", href: "/search" },
-    { label: "Candidates", href: "/candidates" },
-    { label: "Committees", href: "/committees" },
+    { label: "Donor Lookup", href: "/donors" },
+    { label: "Congress", href: "/congress" },
     { label: "Methodology", href: "/methodology" }
   ],
   staticRoutes: {
     home: {
-      title: "Civibus | Public-records intelligence for journalists",
+      title: "Civibus | Federal public-records intelligence",
       description:
-        "Investigate campaign-finance, civic office, and property records with source-linked evidence in Civibus search."
+        "Browse federal-first Civibus profiles for Congress and the White House with source-linked FEC money summaries and independent expenditures."
     },
     methodology: {
       title: "Methodology | Civibus",
@@ -120,49 +120,46 @@ export const APP_SHELL = {
       title: "Data Sources | Civibus",
       description:
         "Inspect runtime data-source metadata, pull status, and source-record pointers from the backend registry."
+    },
+    developers: {
+      title: "Public API | Civibus",
+      description:
+        "Static reference for developers and journalists migrating from OpenSecrets or ProPublica APIs to Civibus's nonpartisan, source-linked federal public-record endpoints."
     }
   },
   reportingLink: REPORTING_LINK,
   footer: {
-    links: [{ label: "Methodology", href: "/methodology" }, REPORTING_LINK]
+    links: [
+      { label: "Methodology", href: "/methodology" },
+      { label: "Public API", href: "/developers" },
+      REPORTING_LINK
+    ]
   },
   landing: {
-    eyebrow: "Public-records intelligence for journalists",
-    heading: "Trace people, organizations, committees, and offices across jurisdictions.",
+    eyebrow: "Federal-first public records",
+    heading: "Follow money around Congress and the White House.",
     body:
-      "Civibus is a universal public-records intelligence platform with shared search and source-linked evidence.",
-    coverageHeading: "Coverage at a glance",
+      "Civibus v1 covers 543 elected federal officials: 435 House members, 100 senators, 6 non-voting delegates, the President, and the Vice President. Each profile is intended to connect photo, short bio, office, FEC campaign-finance summary, and Schedule E independent expenditures for and against.",
+    coverageHeading: "Federal scope",
     coverageSummary:
-      "Coverage spans federal and state campaign-finance records, civic offices, and a property pilot. See methodology for current operational scope by jurisdiction.",
-    mapHeading: "Browse coverage by state",
-    mapLoadingLabel: "Loading state coverage map",
-    mapEmptyMessage:
-      "State coverage data is unavailable right now. Use search or the candidates and committees lists instead.",
-    mapTitle: "United States campaign-finance coverage",
+      "Current launch scope is the 543 elected federal officials only, with source-linked photos, bios, offices, FEC money summaries, and Schedule E independent expenditures. State, city, property, candidate-list, and committee-list breadth is not advertised from the homepage.",
     mapUnsupportedLabel: "Coverage not yet available",
     actions: [
       {
-        label: "Browse candidates",
-        href: "/candidates",
-        description: "Review candidate records and filings by jurisdiction."
+        label: "Search",
+        href: "/search",
+        description: "Search source-linked federal people, offices, committees, and filings."
       },
       {
-        label: "Browse committees",
-        href: "/committees",
-        description: "Inspect committee registrations and campaign-finance activity."
-      },
-      {
-        label: "Understand coverage",
+        label: "Methodology",
         href: "/methodology",
-        description:
-          "Read data freshness policy, entity resolution methods, and source-linking standards."
+        description: "Read source, refresh, and coverage methods for the federal-first dataset."
       }
     ],
     cta: {
-      label: "Start with search",
-      href: "/search",
-      description:
-        "Use the shared entity search to start from a person, organization, office, or address."
+      label: "Browse Congress",
+      href: "/congress",
+      description: "Open the federal directory for members of Congress and delegates."
     }
   },
   methodology: {
@@ -183,7 +180,7 @@ export const APP_SHELL = {
       {
         heading: "Source-linking and evidence",
         body:
-          "Every surfaced record is tied to provenance metadata and source links so users can trace claims back to official filings or source systems. Civibus prioritizes verifiable evidence over inferred narrative summaries."
+          "Every surfaced record is tied to provenance metadata and source links so users can trace claims back to official filings or source systems. Civibus prioritizes verifiable evidence over inferred narrative summaries. Person-page Top employers aggregate raw employer names from itemized individual contributions; they are not industry- or sector-coded."
       }
     ],
     confidenceHeading: "Entity resolution confidence labels",

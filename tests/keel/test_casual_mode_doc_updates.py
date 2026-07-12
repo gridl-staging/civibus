@@ -11,8 +11,8 @@ import re
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-CHECKLIST = REPO_ROOT / "docs" / "keel" / "checklist.md"
-ROADMAP = REPO_ROOT / "docs" / "keel" / "roadmap.md"
+CHECKLIST = REPO_ROOT / "docs" / "reference" / "keel" / "checklist.md"
+ROADMAP = REPO_ROOT / "docs" / "reference" / "keel" / "roadmap.md"
 
 
 def test_checklist_references_casual_md() -> None:
@@ -38,5 +38,6 @@ def test_roadmap_references_casual_md() -> None:
 def test_checklist_session_log_has_today_entry() -> None:
     body = CHECKLIST.read_text(encoding="utf-8")
     # New session-log entry for casual-mode landing dated today.
-    assert re.search(r"^### 2026-04-26\b", body, re.MULTILINE), \
+    assert re.search(r"^### 2026-04-26\b", body, re.MULTILINE), (
         "checklist must have a 2026-04-26 session-log entry summarizing casual-mode landing"
+    )

@@ -266,10 +266,7 @@ def _deterministic_pairs_for_person_candidates(
     for candidate_row in candidate_rows:
         candidate_id = candidate_row["id"]
         candidate_identifier_key = candidate_row.get("identifier_key")
-        if (
-            transaction_identifier_key is not None
-            and candidate_identifier_key == transaction_identifier_key
-        ):
+        if transaction_identifier_key is not None and candidate_identifier_key == transaction_identifier_key:
             matched_candidate_ids.add(candidate_id)
             continue
 
@@ -551,9 +548,7 @@ def resolve_nc_transaction_counterparties(
             unresolved=unresolved,
             entity_type="organization",
             candidate_ids=(
-                unresolved.organization_candidate_ids
-                if "organization" in candidate_entity_types
-                else set()
+                unresolved.organization_candidate_ids if "organization" in candidate_entity_types else set()
             ),
             rows_by_id=organization_rows_by_id,
             auto_merge_threshold=auto_merge_threshold,

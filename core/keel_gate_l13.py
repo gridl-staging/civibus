@@ -7,6 +7,7 @@ import json
 import re
 import subprocess
 import sys
+import tomllib
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -19,33 +20,24 @@ _REPO_ROOT = Path(__file__).resolve().parents[1]
 _DEFAULT_EVIDENCE_ROOT = _REPO_ROOT / "evidence" / "L13"
 _DEFAULT_DEBT_FILE = _REPO_ROOT / "infra" / "deploy_hot_patch_debt.yaml"
 _MISSING = object()
+_DEPLOY_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 
-# Stage 1 scope guard: L13 only reads these four owner files.
 CONTRACT_OWNER_FILES = {
     "workflow": ".github/workflows/deploy.yml",
-    "compose": "infra/docker-compose.prod.yml",
-    "env_example": ".env.production.example",
-    "bootstrap": "infra/scripts/bootstrap_prod_vm.sh",
+    "api_fly": "infra/fly/api.fly.toml",
+    "web_fly": "infra/fly/web.fly.toml",
+    "caddy_fly": "infra/fly/caddy.fly.toml",
 }
 
-_SECRET_PATHS = (
-    "workflow.deploy_env.PRODUCTION_ENV_FILE",
-    "compose.required_env.POSTGRES_PASSWORD",
-    "compose.required_env.CIVIBUS_API_KEYS",
-    "compose.required_env.CIVIBUS_ADMIN_API_KEYS",
-    "compose.required_env.CIVIBUS_API_KEY",
-)
+_SECRET_PATHS = ("workflow.deploy_env.FLY_API_TOKEN",)
 _NON_SECRET_PATHS = (
-    "workflow.deploy_env.DEPLOY_GIT_SHA",
-    "workflow.deploy_env.DEPLOY_REPO_URL",
-    "compose.images.api",
-    "compose.images.web",
-    "compose.required_env.ORIGIN",
-    "bootstrap.required_env_keys",
-    "env_example.keys",
+    "workflow.deploy_if",
+    "workflow.deploy_env.PROD_SMOKE_BASE_URL",
+    "workflow.fly_deploy_commands",
+    "fly_apps.api",
+    "fly_apps.web",
+    "fly_apps.caddy",
 )
-_ENV_ASSIGNMENT_PATTERN = re.compile(r"^([A-Z][A-Z0-9_]*)=")
-_BOOTSTRAP_REQUIRED_KEYS_PATTERN = re.compile(r"for\s+required_key\s+in\s+(.+?);\s*do")
 
 
 class DeployHotPatchDebtEntry(BaseModel, extra="forbid"):
@@ -119,6 +111,13 @@ def _read_yaml(path: Path) -> dict[str, Any]:
     return payload
 
 
+def _read_toml(path: Path) -> dict[str, Any]:
+    payload = tomllib.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError(f"{path} must parse as a TOML mapping")
+    return payload
+
+
 def _path_lookup(payload: dict[str, Any], dotted_path: str) -> Any:
     current: Any = payload
     for token in dotted_path.split("."):
@@ -160,7 +159,7 @@ def _canonical_live_value(value: Any) -> str:
 
 
 def _normalize_non_secret_value(path: str, value: Any) -> Any:
-    if path in {"bootstrap.required_env_keys", "env_example.keys"} and isinstance(value, list):
+    if path == "workflow.fly_deploy_commands" and isinstance(value, list):
         return sorted(str(item) for item in value)
     return value
 
@@ -178,59 +177,39 @@ def _iter_leaf_paths(payload: Any, prefix: str = "") -> list[str]:
     return [prefix] if prefix else []
 
 
-def _parse_env_keys(env_example_text: str) -> list[str]:
-    keys: list[str] = []
-    for line in env_example_text.splitlines():
-        stripped_line = line.strip()
-        if not stripped_line or stripped_line.startswith("#"):
-            continue
-        match = _ENV_ASSIGNMENT_PATTERN.match(stripped_line)
-        if match:
-            keys.append(match.group(1))
-    return sorted(set(keys))
-
-
-def _parse_bootstrap_required_keys(bootstrap_script_text: str) -> list[str]:
-    match = _BOOTSTRAP_REQUIRED_KEYS_PATTERN.search(bootstrap_script_text)
-    if match is None:
-        raise ValueError("bootstrap script must declare a required_key loop for env validation")
-    return sorted({token for token in match.group(1).split() if token})
-
-
 def _repo_owner_path(repo_root: Path, owner_key: str) -> Path:
     return repo_root / CONTRACT_OWNER_FILES[owner_key]
 
 
+def _workflow_deploy_commands(deploy_job: dict[str, Any]) -> list[str]:
+    commands: list[str] = []
+    for step in deploy_job.get("steps", []):
+        if not isinstance(step, dict):
+            continue
+        run_script = step.get("run", "")
+        if not isinstance(run_script, str):
+            continue
+        commands.extend(line.strip() for line in run_script.splitlines() if line.strip().startswith("flyctl deploy"))
+    return commands
+
+
 def _extract_repo_snapshot(repo_root: Path) -> dict[str, Any]:
     workflow = _read_yaml(_repo_owner_path(repo_root, "workflow"))
-    compose = _read_yaml(_repo_owner_path(repo_root, "compose"))
-    env_example_text = _repo_owner_path(repo_root, "env_example").read_text(encoding="utf-8")
-    bootstrap_script_text = _repo_owner_path(repo_root, "bootstrap").read_text(encoding="utf-8")
+    api_fly = _read_toml(_repo_owner_path(repo_root, "api_fly"))
+    web_fly = _read_toml(_repo_owner_path(repo_root, "web_fly"))
+    caddy_fly = _read_toml(_repo_owner_path(repo_root, "caddy_fly"))
 
     deploy_job = workflow["jobs"]["deploy"]
     deploy_env = deploy_job["env"]
-    compose_services = compose["services"]
 
     snapshot: dict[str, Any] = {}
-    _path_set(snapshot, "workflow.deploy_env.DEPLOY_GIT_SHA", deploy_env["DEPLOY_GIT_SHA"])
-    _path_set(snapshot, "workflow.deploy_env.DEPLOY_REPO_URL", deploy_env["DEPLOY_REPO_URL"])
-    _path_set(snapshot, "workflow.deploy_env.PRODUCTION_ENV_FILE", deploy_env["PRODUCTION_ENV_FILE"])
-    _path_set(snapshot, "compose.images.api", compose_services["api"]["image"])
-    _path_set(snapshot, "compose.images.web", compose_services["web"]["image"])
-
-    db_env = compose_services["db"]["environment"]
-    api_env = compose_services["api"]["environment"]
-    web_env = compose_services["web"]["environment"]
-    _path_set(snapshot, "compose.required_env.POSTGRES_PASSWORD", db_env["POSTGRES_PASSWORD"])
-    _path_set(snapshot, "compose.required_env.ORIGIN", web_env["ORIGIN"])
-    _path_set(snapshot, "compose.required_env.CIVIBUS_API_KEYS", api_env["CIVIBUS_API_KEYS"])
-    _path_set(snapshot, "compose.required_env.CIVIBUS_ADMIN_API_KEYS", api_env["CIVIBUS_ADMIN_API_KEYS"])
-    _path_set(snapshot, "compose.required_env.CIVIBUS_API_KEY", web_env["CIVIBUS_API_KEY"])
-    required_key_set = set(_parse_bootstrap_required_keys(bootstrap_script_text))
-    env_example_key_set = set(_parse_env_keys(env_example_text))
-    # Keep the diff surface narrow: only keys explicitly enforced by bootstrap are compared.
-    _path_set(snapshot, "bootstrap.required_env_keys", sorted(required_key_set))
-    _path_set(snapshot, "env_example.keys", sorted(env_example_key_set & required_key_set))
+    _path_set(snapshot, "workflow.deploy_if", deploy_job["if"])
+    _path_set(snapshot, "workflow.deploy_env.FLY_API_TOKEN", deploy_env["FLY_API_TOKEN"])
+    _path_set(snapshot, "workflow.deploy_env.PROD_SMOKE_BASE_URL", deploy_env["PROD_SMOKE_BASE_URL"])
+    _path_set(snapshot, "workflow.fly_deploy_commands", _workflow_deploy_commands(deploy_job))
+    _path_set(snapshot, "fly_apps.api", api_fly["app"])
+    _path_set(snapshot, "fly_apps.web", web_fly["app"])
+    _path_set(snapshot, "fly_apps.caddy", caddy_fly["app"])
 
     return snapshot
 
@@ -243,10 +222,7 @@ def extract_repo_contract(*, repo_root: Path) -> dict[str, Any]:
         if value is _MISSING:
             continue
         non_secret[path] = _normalize_non_secret_value(path, value)
-    secret_presence = {
-        path: _is_present(_path_lookup(snapshot, path))
-        for path in _SECRET_PATHS
-    }
+    secret_presence = {path: _is_present(_path_lookup(snapshot, path)) for path in _SECRET_PATHS}
 
     return {
         "owner_files": list(CONTRACT_OWNER_FILES.values()),
@@ -273,11 +249,7 @@ def normalize_live_snapshot(raw_snapshot: dict[str, Any]) -> dict[str, Any]:
 
     allowed_surface = set(_NON_SECRET_PATHS) | set(_SECRET_PATHS)
     outside_diff_surface_paths = sorted(
-        {
-            dotted_path
-            for dotted_path in _iter_leaf_paths(raw_snapshot)
-            if dotted_path not in allowed_surface
-        }
+        {dotted_path for dotted_path in _iter_leaf_paths(raw_snapshot) if dotted_path not in allowed_surface}
     )
 
     # Guard against accidental secret leakage if a caller mixes secret fields into non_secret.
@@ -321,6 +293,14 @@ def _build_drift_entry(
     }
 
 
+def _validate_deploy_id(deploy_id: str) -> str:
+    if not _DEPLOY_ID_PATTERN.fullmatch(deploy_id) or "/" in deploy_id or "\\" in deploy_id:
+        raise ValueError("deploy_id must be 1-128 file-safe characters: letters, digits, '.', '_', or '-'")
+    if deploy_id in {".", ".."}:
+        raise ValueError("deploy_id must not be a relative path segment")
+    return deploy_id
+
+
 def evaluate_contract_drift(
     *,
     repo_contract: dict[str, Any],
@@ -329,6 +309,7 @@ def evaluate_contract_drift(
     debt_entries: list[DeployHotPatchDebtEntry],
     produced_at: datetime,
 ) -> ContractDriftEvaluation:
+    deploy_id = _validate_deploy_id(deploy_id)
     repo_non_secret: dict[str, Any] = dict(repo_contract.get("non_secret", {}))
     repo_secret_presence: dict[str, bool] = dict(repo_contract.get("secret_presence", {}))
     live_non_secret: dict[str, Any] = dict(normalized_live_snapshot.get("non_secret", {}))
@@ -451,6 +432,7 @@ def write_l13_evidence(
     produced_at: datetime,
     evidence_root: Path,
 ) -> Path:
+    deploy_id = _validate_deploy_id(deploy_id)
     evidence_root.mkdir(parents=True, exist_ok=True)
     payload = L13Evidence(
         layer="L13",

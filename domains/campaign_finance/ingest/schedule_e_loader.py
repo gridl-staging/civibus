@@ -1,5 +1,5 @@
 """
-Stub summary for /Users/stuart/parallel_development/civibus_dev/mar22_03_fec_schedule_e_independent_expenditures/civibus_dev/domains/campaign_finance/ingest/schedule_e_loader.py.
+Stub summary for mar22_03_fec_schedule_e_independent_expenditures/civibus_dev/domains/campaign_finance/ingest/schedule_e_loader.py.
 """
 
 from __future__ import annotations

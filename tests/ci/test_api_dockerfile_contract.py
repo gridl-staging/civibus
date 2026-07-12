@@ -5,13 +5,14 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DOCKERFILE_PATH = REPO_ROOT / "infra/api/Dockerfile"
+ENTRYPOINT_PATH = REPO_ROOT / "infra/api/docker-entrypoint.sh"
 DOCKERIGNORE_PATH = REPO_ROOT / ".dockerignore"
 MAKEFILE_PATH = REPO_ROOT / "Makefile"
 COMPOSE_PATH = REPO_ROOT / "infra/docker-compose.yml"
 
 
-def _dockerfile_code(text: str) -> str:
-    """Return Dockerfile text with comment lines stripped.
+def _non_comment_code(text: str) -> str:
+    """Return code text with full-line comments stripped.
 
     Used by the runtime-shape assertions below so a comment about a forbidden
     runtime form (e.g. a comment explaining why we removed `uv run`) cannot
@@ -22,6 +23,14 @@ def _dockerfile_code(text: str) -> str:
     return "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
 
 
+def _dockerfile_code(text: str) -> str:
+    return _non_comment_code(text)
+
+
+def _shell_code(text: str) -> str:
+    return _non_comment_code(text)
+
+
 def test_api_dockerfile_contract_inputs_and_entrypoint() -> None:
     assert DOCKERFILE_PATH.is_file(), "infra/api/Dockerfile must exist"
 
@@ -30,16 +39,25 @@ def test_api_dockerfile_contract_inputs_and_entrypoint() -> None:
 
     # Build inputs: source dirs + lockfile must be present so `uv sync` resolves.
     assert "COPY pyproject.toml uv.lock ./" in dockerfile_text
+    assert "COPY sources.yaml ./sources.yaml" in dockerfile_text
     assert "COPY api ./api" in dockerfile_text
     assert "COPY core ./core" in dockerfile_text
     assert "COPY domains ./domains" in dockerfile_text
     assert "uv sync --locked --extra api" in dockerfile_text
 
+    # Docker preserves local source file modes in COPY. Deployment worktrees can
+    # contain restrictive 0600 modes even when Git tracks the file as 100644, so
+    # normalize runtime source readability before dropping to the non-root user.
+    assert "chmod -R a+rX /app/api /app/core /app/domains /app/docs" in dockerfile_text
+    assert dockerfile_text.index("chmod -R a+rX /app/api /app/core /app/domains /app/docs") < (
+        dockerfile_text.index("USER civibus")
+    )
+
     # Runtime CMD must NOT use `uv run`. `uv run` re-syncs the venv on every
     # container start, which fails for the non-root `civibus` user because the
     # venv was created by root during build (see Dockerfile CMD comment + the
     # 2026-05-01 :latest image bug postmortem in
-    # docs/research/2026_05_01_pre_launch_scope_audit.md). The CMD must call
+    # docs/reference/research/2026_05_01_pre_launch_scope_audit.md). The CMD must call
     # uvicorn directly via the venv's PATH.
     assert "uv run" not in dockerfile_code, (
         "CMD must call uvicorn directly via PATH, not `uv run` (the latter "
@@ -55,6 +73,31 @@ def test_api_dockerfile_contract_inputs_and_entrypoint() -> None:
     # script (docker-entrypoint.sh) is the ONLY runtime invocation surface, and
     # it lives at infra/api/docker-entrypoint.sh — not in the Dockerfile.
     assert "python -m" not in dockerfile_code
+
+
+def test_api_entrypoint_runtime_contract() -> None:
+    assert ENTRYPOINT_PATH.is_file(), "infra/api/docker-entrypoint.sh must exist"
+    entrypoint_text = ENTRYPOINT_PATH.read_text(encoding="utf-8")
+    entrypoint_code = _shell_code(entrypoint_text)
+
+    assert "python -m api.canary_check" in entrypoint_code
+    assert 'exec "$@"' in entrypoint_code
+    assert "uv run" not in entrypoint_code
+
+
+def test_api_entrypoint_contract_rejects_prefixed_uv_run_runtime_shape() -> None:
+    # Synthetic pre-fix proof: this mirrors the removed runtime anti-pattern
+    # without mutating the checked-in entrypoint owner file.
+    synthetic_prefixed_entrypoint = "\n".join(
+        [
+            "#!/bin/sh",
+            "set -e",
+            "uv run --extra api python -m api.canary_check",
+            'exec "$@"',
+        ]
+    )
+    synthetic_code = _shell_code(synthetic_prefixed_entrypoint)
+    assert "uv run" in synthetic_code
 
 
 def test_dockerignore_excludes_non_runtime_paths() -> None:

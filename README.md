@@ -2,17 +2,21 @@
 
 Universal public-records intelligence platform. Civibus links campaign finance, property, corporate, environmental, court, and legislative records into a single provenance-first knowledge graph.
 
-Campaign finance is the active launch domain. The current work is proving live government-data acquisition, keeping coverage status truthful, and expanding runner-wired state support.
+Campaign finance is the active launch domain.
 
 ## Current Status
 
-Real government campaign-finance data is now served from the production VM, and the main bottleneck is coverage validation, not frontend polish.
+Status, scope, and coverage are maintained in `PROJECT_OVERVIEW.md` and `ROADMAP.md`,
+not duplicated here. As of 2026-06-03 the project is on a **federal-first v1**
+scope — a bounded directory of 543 elected federal officials (Congress +
+delegates + President/VP) with FEC money and Schedule E independent expenditures.
+The prior multi-state stack is parked, and its Hetzner prod deployment is
+currently down (verified 2026-06-03). See `PROJECT_OVERVIEW.md` and
+`decisions/2026-06-03_federal_first_v1_a_congress_directory_fec_money_as_the_launch_slice.md`.
 
-- Public production is live at `https://civibus.shareborough.com`
-- Coverage, live-proof, and freshness status are intentionally maintained in `ROADMAP.md` and `PRIORITIES.md` rather than duplicated here
-- Keel rollout work is active under `docs/keel/`
-
-`ROADMAP.md` is the project SSOT for open work. `PRIORITIES.md` explains what matters now and what not to work on.
+`ROADMAP.md` is the project SSOT for open work, current gates, and priority
+ordering. Fresh-laptop setup:
+`docs/howto/operations/dev_environment_setup.md`.
 
 ## Running
 
@@ -43,8 +47,8 @@ Prefer focused pytest runs during routine work. Repo guidance says to ask before
 
 ## Read Next
 
-1. [`ROADMAP.md`](/Users/stuart/repos/gridl-dev/civibus_dev/ROADMAP.md)
-2. [`PRIORITIES.md`](/Users/stuart/repos/gridl-dev/civibus_dev/PRIORITIES.md)
-3. [`AGENTS.md`](/Users/stuart/repos/gridl-dev/civibus_dev/AGENTS.md)
-4. [`docs/research/coverage-registry.json`](/Users/stuart/repos/gridl-dev/civibus_dev/docs/research/coverage-registry.json)
-5. [`docs/research/coverage-audit-contract.md`](/Users/stuart/repos/gridl-dev/civibus_dev/docs/research/coverage-audit-contract.md)
+1. [`PROJECT_OVERVIEW.md`](PROJECT_OVERVIEW.md)
+2. [`ROADMAP.md`](ROADMAP.md)
+3. [`AGENTS.md`](AGENTS.md)
+4. [`docs/reference/research/coverage-registry.json`](docs/reference/research/coverage-registry.json)
+5. [`docs/reference/research/coverage-audit-contract.md`](docs/reference/research/coverage-audit-contract.md)

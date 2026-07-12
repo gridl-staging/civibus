@@ -26,53 +26,52 @@ def test_collect_editorial_rows_uses_only_explicit_owner_files_and_emits_user_fa
     assert collection.scope == keel_gate_l11.L11_SCOPE
     assert collection.owner_files == list(keel_gate_l11.L11_OWNER_FILES)
     assert {row.owner_file for row in collection.rows} <= set(keel_gate_l11.L11_OWNER_FILES)
+    # `web/src/lib/config/app.ts` owns APP_SHELL copy; these rows anchor the federal-first v1 scope.
     expected_rows = [
-        ("app-shell-static-routes-home-title", "web/src/lib/config/app.ts", "Civibus | Public-records intelligence for journalists"),
+        (
+            "app-shell-static-routes-home-title",
+            "web/src/lib/config/app.ts",
+            "Civibus | Federal public-records intelligence",
+        ),
         (
             "app-shell-static-routes-home-description",
             "web/src/lib/config/app.ts",
-            "Investigate campaign-finance, civic office, and property records with source-linked evidence in Civibus search.",
+            "Browse federal-first Civibus profiles for Congress and the White House with source-linked FEC money summaries and independent expenditures.",
         ),
-        ("app-shell-landing-eyebrow", "web/src/lib/config/app.ts", "Public-records intelligence for journalists"),
+        ("app-shell-landing-eyebrow", "web/src/lib/config/app.ts", "Federal-first public records"),
         (
             "app-shell-landing-heading",
             "web/src/lib/config/app.ts",
-            "Trace people, organizations, committees, and offices across jurisdictions.",
+            "Follow money around Congress and the White House.",
         ),
         (
             "app-shell-landing-body",
             "web/src/lib/config/app.ts",
-            "Civibus is a universal public-records intelligence platform with shared search and source-linked evidence.",
+            "Civibus v1 covers 543 elected federal officials: 435 House members, 100 senators, 6 non-voting delegates, the President, and the Vice President. Each profile is intended to connect photo, short bio, office, FEC campaign-finance summary, and Schedule E independent expenditures for and against.",
         ),
-        ("app-shell-landing-coverage-heading", "web/src/lib/config/app.ts", "Coverage at a glance"),
+        ("app-shell-landing-coverage-heading", "web/src/lib/config/app.ts", "Federal scope"),
         (
             "app-shell-landing-coverage-summary",
             "web/src/lib/config/app.ts",
-            "Coverage spans federal and state campaign-finance records, civic offices, and a property pilot. See methodology for current operational scope by jurisdiction.",
+            "Current launch scope is the 543 elected federal officials only, with source-linked photos, bios, offices, FEC money summaries, and Schedule E independent expenditures. State, city, property, candidate-list, and committee-list breadth is not advertised from the homepage.",
         ),
-        ("app-shell-landing-cta-label", "web/src/lib/config/app.ts", "Start with search"),
+        ("app-shell-landing-cta-label", "web/src/lib/config/app.ts", "Browse Congress"),
         (
             "app-shell-landing-cta-description",
             "web/src/lib/config/app.ts",
-            "Use the shared entity search to start from a person, organization, office, or address.",
+            "Open the federal directory for members of Congress and delegates.",
         ),
-        ("app-shell-landing-action-001-label", "web/src/lib/config/app.ts", "Browse candidates"),
+        ("app-shell-landing-action-001-label", "web/src/lib/config/app.ts", "Search"),
         (
             "app-shell-landing-action-001-description",
             "web/src/lib/config/app.ts",
-            "Review candidate records and filings by jurisdiction.",
+            "Search source-linked federal people, offices, committees, and filings.",
         ),
-        ("app-shell-landing-action-002-label", "web/src/lib/config/app.ts", "Browse committees"),
+        ("app-shell-landing-action-002-label", "web/src/lib/config/app.ts", "Methodology"),
         (
             "app-shell-landing-action-002-description",
             "web/src/lib/config/app.ts",
-            "Inspect committee registrations and campaign-finance activity.",
-        ),
-        ("app-shell-landing-action-003-label", "web/src/lib/config/app.ts", "Understand coverage"),
-        (
-            "app-shell-landing-action-003-description",
-            "web/src/lib/config/app.ts",
-            "Read data freshness policy, entity resolution methods, and source-linking standards.",
+            "Read source, refresh, and coverage methods for the federal-first dataset.",
         ),
         ("app-shell-methodology-heading", "web/src/lib/config/app.ts", "Methodology"),
         (
@@ -96,7 +95,7 @@ def test_collect_editorial_rows_uses_only_explicit_owner_files_and_emits_user_fa
         (
             "app-shell-methodology-section-003-body",
             "web/src/lib/config/app.ts",
-            "Every surfaced record is tied to provenance metadata and source links so users can trace claims back to official filings or source systems. Civibus prioritizes verifiable evidence over inferred narrative summaries.",
+            "Every surfaced record is tied to provenance metadata and source links so users can trace claims back to official filings or source systems. Civibus prioritizes verifiable evidence over inferred narrative summaries. Person-page Top employers aggregate raw employer names from itemized individual contributions; they are not industry- or sector-coded.",
         ),
         (
             "app-shell-methodology-confidence-heading",
@@ -181,7 +180,9 @@ def test_collect_editorial_rows_uses_top_level_methodology_when_nested_methodolo
     )
     app_source_with_nested_methodology = app_owner_path.read_text(encoding="utf-8")
     top_level_methodology_anchor = "\n  methodology: {\n"
-    app_shell_prefix, separator, app_shell_suffix = app_source_with_nested_methodology.rpartition(top_level_methodology_anchor)
+    app_shell_prefix, separator, app_shell_suffix = app_source_with_nested_methodology.rpartition(
+        top_level_methodology_anchor
+    )
     assert separator == top_level_methodology_anchor
     app_owner_path.write_text(
         app_shell_prefix

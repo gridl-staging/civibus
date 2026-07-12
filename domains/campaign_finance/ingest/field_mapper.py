@@ -1,11 +1,10 @@
-"""
-Stub summary for /Users/stuart/parallel_development/civibus_dev/MAR18_api_graph_routes_and_property_endpoints/civibus_dev/domains/campaign_finance/ingest/field_mapper.py.
-"""
+"""Field mapping helpers for FEC bulk ingest rows."""
 
 from __future__ import annotations
 
 from collections.abc import Mapping
 from datetime import datetime
+from decimal import Decimal, InvalidOperation
 from math import isfinite
 
 
@@ -34,10 +33,14 @@ def parse_fec_date(value: str | None) -> str | None:
     normalized_value = _normalize_optional_text(value)
     if normalized_value in {None, "00000000"}:
         return None
-    if len(normalized_value) != 8 or not normalized_value.isdigit():
+    if "/" in normalized_value:
+        date_format = "%m/%d/%Y"
+    elif len(normalized_value) == 8 and normalized_value.isdigit():
+        date_format = "%m%d%Y"
+    else:
         return None
     try:
-        parsed_date = datetime.strptime(normalized_value, "%m%d%Y").date()
+        parsed_date = datetime.strptime(normalized_value, date_format).date()
     except ValueError:
         return None
     return parsed_date.isoformat()
@@ -56,7 +59,22 @@ def parse_fec_amount(value: str | None) -> float | None:
     return parsed_amount
 
 
+def parse_fec_decimal_amount(value: str | None) -> Decimal | None:
+    normalized_value = _normalize_optional_text(value)
+    if normalized_value is None:
+        return None
+    try:
+        parsed_amount = Decimal(normalized_value)
+    except InvalidOperation:
+        return None
+    if not parsed_amount.is_finite():
+        return None
+    return parsed_amount
+
+
 def _map_base_contribution_fields(row: Mapping[str, str | None]) -> dict[str, object]:
+    raw_transaction_date = _normalize_optional_text(row.get("TRANSACTION_DT"))
+    parsed_transaction_date = parse_fec_date(raw_transaction_date)
     return {
         "committee_id": _normalize_optional_text(row.get("CMTE_ID")),
         "contributor_name": _normalize_optional_text(row.get("NAME")),
@@ -67,7 +85,8 @@ def _map_base_contribution_fields(row: Mapping[str, str | None]) -> dict[str, ob
         "contributor_employer": _normalize_optional_text(row.get("EMPLOYER")),
         "contributor_occupation": _normalize_optional_text(row.get("OCCUPATION")),
         "contribution_receipt_amount": parse_fec_amount(row.get("TRANSACTION_AMT")),
-        "contribution_receipt_date": parse_fec_date(row.get("TRANSACTION_DT")),
+        "contribution_receipt_date": parsed_transaction_date,
+        "contribution_receipt_date_is_reliable": parsed_transaction_date is not None or raw_transaction_date is None,
         "sub_id": _normalize_optional_text(row.get("SUB_ID")),
         "amendment_indicator": _normalize_optional_text(row.get("AMNDT_IND")),
         "report_type": _normalize_optional_text(row.get("RPT_TP")),
@@ -118,6 +137,16 @@ def map_candidate_fields(row: Mapping[str, str | None]) -> dict[str, object]:
     }
 
 
+def map_candidate_summary_fields(row: Mapping[str, str | None]) -> dict[str, object]:
+    return {
+        "fec_candidate_id": _normalize_optional_text(row.get("CAND_ID")),
+        "total_receipts": parse_fec_decimal_amount(row.get("TTL_RECEIPTS")),
+        "total_disbursements": parse_fec_decimal_amount(row.get("TTL_DISB")),
+        "cash_on_hand": parse_fec_decimal_amount(row.get("COH_COP")),
+        "summary_coverage_end_date": parse_fec_date(row.get("CVG_END_DT")),
+    }
+
+
 def map_ccl_fields(row: Mapping[str, str | None]) -> dict[str, object]:
     return {
         "candidate_fec_id": _normalize_optional_text(row.get("CAND_ID")),
@@ -133,8 +162,10 @@ def map_ccl_fields(row: Mapping[str, str | None]) -> dict[str, object]:
 __all__ = [
     "parse_fec_date",
     "parse_fec_amount",
+    "parse_fec_decimal_amount",
     "map_contribution_fields",
     "map_committee_fields",
     "map_candidate_fields",
+    "map_candidate_summary_fields",
     "map_ccl_fields",
 ]

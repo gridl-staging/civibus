@@ -1,4 +1,6 @@
-
+"""
+Stub summary for jun04_3pm_3_member_photo_bio_enrichment/civibus_dev/core/people/enrichment/strategy_sboe.py.
+"""
 
 from __future__ import annotations
 
@@ -6,6 +8,7 @@ import csv
 import io
 import re
 from collections.abc import Callable
+from urllib.parse import urlparse
 
 import httpx
 
@@ -19,9 +22,12 @@ from core.people.enrichment.strategy_shared import DEFAULT_HTTP_HEADERS, fetch_b
 
 _CANDIDATE_LISTS_PAGE_URL = "https://www.ncsbe.gov/results-data/candidate-lists"
 _CSV_URL_PATTERN = re.compile(r'https://[^"\']+Candidate[^"\']+_(\d{4})\.csv')
+_SBOE_STATE_CODE = "NC"
+_NON_NC_TARGET_SKIP_REASON = "state_not_nc"
 
 
 class SboeEnrichmentStrategy:
+
     source_name = "sboe"
 
     def __init__(
@@ -41,6 +47,13 @@ class SboeEnrichmentStrategy:
         target: CandidateEnrichmentTarget,
         missing_fields: tuple[str, ...],
     ) -> tuple[CandidateEnrichmentRecord, EnrichmentAttempt]:
+        if not _is_nc_sboe_target(target):
+            return CandidateEnrichmentRecord(), EnrichmentAttempt.skipped(
+                source=self.source_name,
+                requested_fields=missing_fields,
+                skip_reason=_NON_NC_TARGET_SKIP_REASON,
+            )
+
         return run_strategy_fetch(
             source_name=self.source_name,
             missing_fields=missing_fields,
@@ -49,26 +62,28 @@ class SboeEnrichmentStrategy:
         )
 
     def _fetch_from_http(self, target: CandidateEnrichmentTarget, *, timeout_seconds: float) -> JsonLikeMapping | None:
-        if target.state_code not in {None, "NC"}:
+        if not _is_nc_sboe_target(target):
             return None
 
         response = httpx.get(
             _CANDIDATE_LISTS_PAGE_URL,
             headers=DEFAULT_HTTP_HEADERS,
             timeout=timeout_seconds,
-            follow_redirects=True,
+            follow_redirects=False,
         )
         response.raise_for_status()
 
         csv_url = _extract_candidate_csv_url(response.text, preferred_year=2026)
         if csv_url is None:
             return None
+        if not _is_allowed_candidate_csv_url(csv_url):
+            return None
 
         csv_response = httpx.get(
             csv_url,
             headers=DEFAULT_HTTP_HEADERS,
             timeout=timeout_seconds,
-            follow_redirects=True,
+            follow_redirects=False,
         )
         csv_response.raise_for_status()
 
@@ -79,6 +94,12 @@ class SboeEnrichmentStrategy:
         # The official candidate-list CSV exposes filing/party/contact fields but not the
         # portrait/occupation/education/website fields in the current enrichment DTO.
         return _payload_from_candidate_row(matched_row)
+
+
+def _is_nc_sboe_target(target: CandidateEnrichmentTarget) -> bool:
+    if target.state_code is None:
+        return False
+    return target.state_code.strip().upper() == _SBOE_STATE_CODE
 
 
 def _extract_candidate_csv_url(html: str, *, preferred_year: int) -> str | None:
@@ -92,6 +113,20 @@ def _extract_candidate_csv_url(html: str, *, preferred_year: int) -> str | None:
 
     latest_match = max(matches, key=lambda match: int(match.group(1)))
     return latest_match.group(0)
+
+
+def _is_allowed_candidate_csv_url(csv_url: str) -> bool:
+    parsed_url = urlparse(csv_url)
+    if parsed_url.scheme != "https":
+        return False
+    if parsed_url.params or parsed_url.query or parsed_url.fragment:
+        return False
+
+    hostname = (parsed_url.hostname or "").lower()
+    if hostname.endswith(".ncsbe.gov") or hostname == "ncsbe.gov":
+        return True
+
+    return hostname == "s3.amazonaws.com" and parsed_url.path.startswith("/dl.ncsbe.gov/")
 
 
 def _normalize_candidate_name(value: str) -> str:

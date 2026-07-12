@@ -11,16 +11,23 @@ import {
   buildCountyCampaignFinanceSummaryPath,
   buildCommitteeDetailPath,
   buildCommitteeFilingBreakdownPath,
+  buildCommitteeIndependentExpendituresMadePath,
   buildCommitteeListPath,
   buildCommitteeSummaryPath,
   buildCommitteeTransactionsPath,
-  buildCommitteesBySlugPath
+  buildCommitteesBySlugPath,
+  buildPersonContributionInsightsPath,
+  buildPersonTopDonorsPath,
+  buildPersonTopEmployersPath
 } from "$lib/campaign-finance-detail/contract";
 import {
   fetchCandidateDetail,
   fetchCandidateDetailBundle,
   fetchCandidateList,
   fetchPersonCandidateFinanceSections,
+  fetchPersonContributionInsights,
+  fetchPersonTopDonors,
+  fetchPersonTopEmployers,
   fetchCandidatesBySlug,
   fetchCandidateSummary,
   fetchCountyCampaignFinanceSummary,
@@ -28,6 +35,7 @@ import {
   fetchCommitteesBySlug,
   fetchCommitteeDetailBundle,
   fetchCommitteeFilingBreakdown,
+  fetchCommitteeIndependentExpendituresMade,
   fetchCommitteeSummary
 } from "./campaign-finance-detail";
 import type { ApiClient } from "./client";
@@ -35,6 +43,7 @@ import type { ApiClient } from "./client";
 const COMMITTEE_ID = "33333333-3333-4333-8333-333333333333";
 const SECOND_COMMITTEE_ID = "99999999-9999-4999-8999-999999999999";
 const CANDIDATE_ID = "44444444-4444-4444-8444-444444444444";
+const PERSON_ID = "11111111-1111-4111-8111-111111111111";
 const FILING_ID = "77777777-7777-4777-8777-777777777777";
 
 const CANDIDATE_DETAIL = {
@@ -68,7 +77,10 @@ const COMMITTEE_SUMMARY = {
   contribution_receipts_total: "125.00",
   top_donors: [{ name: "Donor One", total_amount: "80.00", transaction_count: 2 }],
   top_vendors: [{ name: "Vendor One", total_amount: "50.00", transaction_count: 1 }],
-  spend_categories: [{ category: "media", total_amount: "25.00", transaction_count: 1 }]
+  spend_categories: [{ category: "media", total_amount: "25.00", transaction_count: 1 }],
+  itemized_transaction_count: 1,
+  cycle_summaries: [],
+  summary_source: "derived" as const
 };
 
 const COMMITTEE_FILING_BREAKDOWN = {
@@ -90,6 +102,42 @@ const COMMITTEE_FILING_BREAKDOWN = {
       transaction_count: 1,
       cash_on_hand: "75.00",
       row_id: `${FILING_ID}:N`
+    }
+  ]
+};
+
+const COMMITTEE_IE_ACTIVITY = {
+  committee_id: COMMITTEE_ID,
+  support_total: "1500.00",
+  oppose_total: "250.00",
+  ie_transaction_count: 3,
+  excluded_outlier_count: 1,
+  targets: [
+    {
+      candidate_id: CANDIDATE_ID,
+      fec_candidate_id: "H0NC01001",
+      candidate_name: "Target Candidate",
+      person_id: PERSON_ID,
+      party: "DEM",
+      office: "H",
+      state: "NC",
+      district: "01",
+      slug: "target-candidate",
+      slug_is_unique: true,
+      support_total: "1500.00",
+      oppose_total: "250.00",
+      transaction_count: 3,
+      sources: [
+        {
+          domain: "campaign_finance",
+          jurisdiction: "federal/fec",
+          data_source_name: "FEC Schedule E",
+          data_source_url: "https://www.fec.gov",
+          source_record_key: "schedule-e-source",
+          record_url: "https://www.fec.gov/data/independent-expenditures/",
+          pull_date: "2026-07-08T00:00:00Z"
+        }
+      ]
     }
   ]
 };
@@ -134,6 +182,7 @@ const CANDIDATE_LIST_RESPONSE = {
       id: CANDIDATE_ID,
       fec_candidate_id: "H0NC01001",
       name: "Candidate One",
+      person_id: PERSON_ID,
       party: "DEM",
       office: "H",
       state: "NC",
@@ -146,6 +195,81 @@ const CANDIDATE_LIST_RESPONSE = {
   offset: 0,
   limit: 25
 };
+
+const PERSON_CONTRIBUTION_INSIGHTS = {
+  person_id: PERSON_ID,
+  has_data: true,
+  metadata: {
+    coverage_start_date: "2022-01-01",
+    coverage_end_date: null,
+    cycles_included: [2022, 2024, 2026],
+    committee_count: 1,
+    approximate_geography: false,
+    excluded_geography: "Unitemized contributions are excluded from geography.",
+    caveats: []
+  },
+  monthly_totals: [{ month: "2026-01", total_amount: "1234.56", transaction_count: 4 }],
+  itemized_size_buckets: [
+    {
+      label: "$1-$199",
+      min_amount: "1.00",
+      max_amount: "199.99",
+      total_amount: "250.00",
+      transaction_count: 3
+    }
+  ],
+  dollars_by_size: [
+    {
+      label: "Unitemized (<$200)",
+      total_amount: "100.00",
+      source: "committee_summary" as const
+    }
+  ],
+  cycle_totals: [
+    {
+      cycle: 2026,
+      itemized_individual_contribution_amount: "1234.56",
+      itemized_transaction_count: 4,
+      unitemized_individual_contribution_amount: "0.00",
+      total_individual_contribution_amount: "1234.56",
+      source: "itemized_transactions" as const
+    }
+  ],
+  career_totals: {
+    itemized_individual_contribution_amount: "1234.56",
+    itemized_transaction_count: 4,
+    unitemized_individual_contribution_amount: "0.00",
+    total_individual_contribution_amount: "1234.56",
+    source: "itemized_transactions" as const
+  },
+  geography: {
+    by_state: [{ label: "NC", total_amount: "900.00", transaction_count: 3 }],
+    by_district: [],
+    district_share: {
+      in_district_amount: null,
+      out_of_district_amount: null,
+      unknown_district_amount: null,
+      share: null,
+      available: false
+    }
+  },
+  small_dollar_share: {
+    small_dollar_amount: "350.00",
+    total_contribution_amount: "1000.00",
+    share: "0.3500",
+    available: true
+  }
+};
+
+const PERSON_TOP_DONORS = [
+  { name: "Top Person Donor", total_amount: "500.00", transaction_count: 2 },
+  { name: "Second Person Donor", total_amount: "250.00", transaction_count: 1 }
+];
+
+const PERSON_TOP_EMPLOYERS = [
+  { employer: "ACME CORP", total_amount: "500.00", transaction_count: 2 },
+  { employer: "STATE UNIVERSITY", total_amount: "250.00", transaction_count: 1 }
+];
 
 const COMMITTEE_LIST_RESPONSE = {
   items: [
@@ -214,7 +338,7 @@ const COMMITTEE_SLUG_MATCHES = [
 ];
 
 describe("campaign-finance detail api", () => {
-  it("fetches committee detail bundle with detail, transactions, summary, and filing breakdown", async () => {
+  it("fetches committee detail bundle with detail, transactions, summary, filing breakdown, and IE activity", async () => {
     const requestJson = vi.fn(async (path: string) => {
       if (path === buildCommitteeDetailPath(COMMITTEE_ID)) {
         return {
@@ -231,7 +355,8 @@ describe("campaign-finance detail api", () => {
           city: null,
           zip_code: null,
           treasurer_name: null,
-          sources: []
+          sources: [],
+          linked_candidates: []
         };
       }
 
@@ -272,6 +397,10 @@ describe("campaign-finance detail api", () => {
         return COMMITTEE_FILING_BREAKDOWN;
       }
 
+      if (path === buildCommitteeIndependentExpendituresMadePath(COMMITTEE_ID)) {
+        return COMMITTEE_IE_ACTIVITY;
+      }
+
       throw new Error(`unexpected path: ${path}`);
     });
 
@@ -285,17 +414,39 @@ describe("campaign-finance detail api", () => {
     expect(data.transactions).toBeInstanceOf(Promise);
     expect(data.summary).toBeInstanceOf(Promise);
     expect(data.filingBreakdown).toBeInstanceOf(Promise);
+    expect(data.independentExpendituresMade).toBeInstanceOf(Promise);
 
     expect(await data.transactions).toHaveLength(1);
     expect(await data.summary).toEqual(COMMITTEE_SUMMARY);
     expect(await data.filingBreakdown).toEqual(COMMITTEE_FILING_BREAKDOWN);
+    expect(await data.independentExpendituresMade).toEqual(COMMITTEE_IE_ACTIVITY);
 
     expect(requestJson.mock.calls.map(([path]) => path)).toEqual([
       buildCommitteeDetailPath(COMMITTEE_ID),
       `/v1/transactions?committee_id=${COMMITTEE_ID}&limit=${COMMITTEE_TRANSACTIONS_LIMIT}`,
       buildCommitteeSummaryPath(COMMITTEE_ID),
-      buildCommitteeFilingBreakdownPath(COMMITTEE_ID)
+      buildCommitteeFilingBreakdownPath(COMMITTEE_ID),
+      buildCommitteeIndependentExpendituresMadePath(COMMITTEE_ID)
     ]);
+  });
+
+  it("fetches committee-made independent expenditures only from the committee IE endpoint", async () => {
+    const requestJson = vi.fn(async (path: string) => {
+      if (path === buildCommitteeIndependentExpendituresMadePath(COMMITTEE_ID)) {
+        return COMMITTEE_IE_ACTIVITY;
+      }
+
+      throw new Error(`unexpected path: ${path}`);
+    });
+
+    const activity = await fetchCommitteeIndependentExpendituresMade(
+      { requestJson: requestJson as ApiClient["requestJson"] },
+      { id: COMMITTEE_ID }
+    );
+
+    expect(activity).toEqual(COMMITTEE_IE_ACTIVITY);
+    expect(requestJson).toHaveBeenCalledTimes(1);
+    expect(requestJson).toHaveBeenCalledWith(buildCommitteeIndependentExpendituresMadePath(COMMITTEE_ID));
   });
 
   it("fetches candidate detail without calling transactions", async () => {
@@ -377,7 +528,10 @@ describe("campaign-finance detail api", () => {
       total_spent: "100.00",
       net: "150.00",
       transaction_count: 5,
-      committees: [COMMITTEE_SUMMARY]
+      committees: [COMMITTEE_SUMMARY],
+      cash_on_hand: null,
+      summary_source: "derived" as const,
+      itemized_transaction_count: 5
     };
 
     const requestJson = vi.fn(async (path: string) => {
@@ -396,6 +550,39 @@ describe("campaign-finance detail api", () => {
     expect(summary).toEqual(candidateSummary);
     expect(requestJson).toHaveBeenCalledTimes(1);
     expect(requestJson).toHaveBeenCalledWith(buildCandidateSummaryPath(CANDIDATE_ID));
+  });
+
+  it("fetches candidate summary with FEC weball cash_on_hand and summary_source pass-through", async () => {
+    const weballSummary = {
+      candidate_id: CANDIDATE_ID,
+      candidate_name: "Weball Candidate",
+      total_raised: "9000.00",
+      total_spent: "3500.00",
+      net: "5500.00",
+      transaction_count: 0,
+      committees: [],
+      cash_on_hand: "5500.00",
+      summary_source: "fec_weball" as const,
+      itemized_transaction_count: 0
+    };
+
+    const requestJson = vi.fn(async (path: string) => {
+      if (path === buildCandidateSummaryPath(CANDIDATE_ID)) {
+        return weballSummary;
+      }
+
+      throw new Error(`unexpected path: ${path}`);
+    });
+
+    const summary = await fetchCandidateSummary(
+      { requestJson: requestJson as ApiClient["requestJson"] },
+      { id: CANDIDATE_ID }
+    );
+
+    // The fetcher must pass cash_on_hand and summary_source through without rewriting.
+    expect(summary.cash_on_hand).toBe("5500.00");
+    expect(summary.summary_source).toBe("fec_weball");
+    expect(summary).toEqual(weballSummary);
   });
 
   it("fetches county campaign-finance summary from the county summary endpoint", async () => {
@@ -417,6 +604,65 @@ describe("campaign-finance detail api", () => {
     expect(requestJson).toHaveBeenCalledWith(buildCountyCampaignFinanceSummaryPath("NC", "wake"));
   });
 
+  it("fetches person contribution insights from the person insights endpoint", async () => {
+    const requestJson = vi.fn(async (path: string) => {
+      if (path === buildPersonContributionInsightsPath(PERSON_ID)) {
+        return PERSON_CONTRIBUTION_INSIGHTS;
+      }
+
+      throw new Error(`unexpected path: ${path}`);
+    });
+
+    const insights = await fetchPersonContributionInsights(
+      { requestJson: requestJson as ApiClient["requestJson"] },
+      { id: PERSON_ID }
+    );
+
+    expect(insights.monthly_totals[0].total_amount).toBe("1234.56");
+    expect(insights.small_dollar_share.share).toBe("0.3500");
+    expect(insights).toEqual(PERSON_CONTRIBUTION_INSIGHTS);
+    expect(requestJson).toHaveBeenCalledTimes(1);
+    expect(requestJson).toHaveBeenCalledWith(buildPersonContributionInsightsPath(PERSON_ID));
+  });
+
+  it("fetches person top donors from the person top-donors endpoint", async () => {
+    const requestJson = vi.fn(async (path: string) => {
+      if (path === buildPersonTopDonorsPath(PERSON_ID)) {
+        return PERSON_TOP_DONORS;
+      }
+
+      throw new Error(`unexpected path: ${path}`);
+    });
+
+    const donors = await fetchPersonTopDonors(
+      { requestJson: requestJson as ApiClient["requestJson"] },
+      { id: PERSON_ID }
+    );
+
+    expect(donors).toEqual(PERSON_TOP_DONORS);
+    expect(requestJson).toHaveBeenCalledTimes(1);
+    expect(requestJson).toHaveBeenCalledWith(buildPersonTopDonorsPath(PERSON_ID));
+  });
+
+  it("fetches person top employers from the person top-employers endpoint", async () => {
+    const requestJson = vi.fn(async (path: string) => {
+      if (path === buildPersonTopEmployersPath(PERSON_ID)) {
+        return PERSON_TOP_EMPLOYERS;
+      }
+
+      throw new Error(`unexpected path: ${path}`);
+    });
+
+    const employers = await fetchPersonTopEmployers(
+      { requestJson: requestJson as ApiClient["requestJson"] },
+      { id: PERSON_ID }
+    );
+
+    expect(employers).toEqual(PERSON_TOP_EMPLOYERS);
+    expect(requestJson).toHaveBeenCalledTimes(1);
+    expect(requestJson).toHaveBeenCalledWith(buildPersonTopEmployersPath(PERSON_ID));
+  });
+
   it("fetches candidate detail bundle with detail, summary, and IE data in parallel", async () => {
     const candidateSummary = {
       candidate_id: CANDIDATE_ID,
@@ -425,7 +671,10 @@ describe("campaign-finance detail api", () => {
       total_spent: "100.00",
       net: "150.00",
       transaction_count: 5,
-      committees: [COMMITTEE_SUMMARY]
+      committees: [COMMITTEE_SUMMARY],
+      cash_on_hand: null,
+      summary_source: "derived" as const,
+      itemized_transaction_count: 5
     };
 
     const ieTransactions = [
@@ -449,7 +698,8 @@ describe("campaign-finance detail api", () => {
       oppose_total: "0.00",
       support_count: 1,
       oppose_count: 0,
-      top_spenders: []
+      top_spenders: [],
+      excluded_outlier_count: 0
     };
 
     const requestJson = vi.fn(async (path: string) => {
@@ -653,7 +903,10 @@ describe("campaign-finance detail api", () => {
               committee_id: SECOND_COMMITTEE_ID,
               committee_name: "Committee Two"
             }
-          ]
+          ],
+          cash_on_hand: null,
+          summary_source: "derived" as const,
+          itemized_transaction_count: 5
         };
       }
 
@@ -668,8 +921,13 @@ describe("campaign-finance detail api", () => {
           oppose_total: "0.00",
           support_count: 0,
           oppose_count: 0,
-          top_spenders: []
+          top_spenders: [],
+          excluded_outlier_count: 0
         };
+      }
+
+      if (path === buildPersonContributionInsightsPath(PERSON_ID)) {
+        return PERSON_CONTRIBUTION_INSIGHTS;
       }
 
       if (path === buildCommitteeTransactionsPath(COMMITTEE_ID)) {
@@ -741,7 +999,7 @@ describe("campaign-finance detail api", () => {
     expect(sections).toHaveLength(1);
     expect(sections[0].candidate.id).toBe(CANDIDATE_ID);
     await expect(sections[0].summary).resolves.toMatchObject({ candidate_id: CANDIDATE_ID });
-    await expect(sections[0].ieSummary).resolves.toMatchObject({ candidate_id: CANDIDATE_ID });
+    expect(sections[0].ieSummary).toMatchObject({ candidate_id: CANDIDATE_ID });
     await expect(sections[0].ieTransactions).resolves.toEqual([]);
     await expect(sections[0].donorVendorTransactions).resolves.toMatchObject([
       { committee_id: SECOND_COMMITTEE_ID, transaction_identifier: "TX-2" },
@@ -801,7 +1059,10 @@ describe("campaign-finance detail api", () => {
               committee_name: "Committee Two"
             },
             COMMITTEE_SUMMARY
-          ]
+          ],
+          cash_on_hand: null,
+          summary_source: "derived" as const,
+          itemized_transaction_count: 5
         };
       }
 
@@ -816,8 +1077,13 @@ describe("campaign-finance detail api", () => {
           oppose_total: "0.00",
           support_count: 0,
           oppose_count: 0,
-          top_spenders: []
+          top_spenders: [],
+          excluded_outlier_count: 0
         };
+      }
+
+      if (path === buildPersonContributionInsightsPath(PERSON_ID)) {
+        return PERSON_CONTRIBUTION_INSIGHTS;
       }
 
       if (path === buildCommitteeTransactionsPath(COMMITTEE_ID)) {

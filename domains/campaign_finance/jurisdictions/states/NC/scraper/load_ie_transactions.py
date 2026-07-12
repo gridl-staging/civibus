@@ -271,9 +271,7 @@ def _load_filing_transactions(
         return counts
 
     try:
-        export_csv_text, report_detail_url, report_export_url = fetch_ie_report_detail_export_csv(
-            report_section_url
-        )
+        export_csv_text, report_detail_url, report_export_url = fetch_ie_report_detail_export_csv(report_section_url)
         parsed_rows = parse_ie_report_section_csv(
             export_csv_text,
             spender_committee_name=filing.committee_name,

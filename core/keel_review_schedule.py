@@ -69,9 +69,7 @@ def load_schedule(schedule_path: Path) -> list[ReviewEntry]:
     seen_ids: set[str] = set()
     for review in validated.reviews:
         if not _REVIEW_ID_PATTERN.fullmatch(review.review_id):
-            raise ValueError(
-                f"review_id must be lowercase alnum/underscore: {review.review_id}"
-            )
+            raise ValueError(f"review_id must be lowercase alnum/underscore: {review.review_id}")
         if review.review_id in seen_ids:
             raise ValueError(f"duplicate review_id: {review.review_id}")
         seen_ids.add(review.review_id)
@@ -158,8 +156,7 @@ def format_status_table(rows: list[ReviewStatusRow]) -> str:
     for row in rows:
         last = row.last_evidence_date.isoformat() if row.last_evidence_date else "-"
         lines.append(
-            f"{row.review_id}\t{row.cadence}\t{last}\t{row.next_due_date.isoformat()}\t"
-            f"{row.status}\t{row.days_overdue}"
+            f"{row.review_id}\t{row.cadence}\t{last}\t{row.next_due_date.isoformat()}\t{row.status}\t{row.days_overdue}"
         )
     return "\n".join(lines)
 

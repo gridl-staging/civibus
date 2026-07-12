@@ -2,14 +2,17 @@ from __future__ import annotations
 
 import zipfile
 from datetime import datetime, timedelta, timezone
+from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
 
 from core.refresh import job_builders, runner
+from core.refresh.test_job_builders import _EXPECTED_FEDERAL_JOB_KEYS
+from domains.campaign_finance.ingest.federal_spine_loader import SpineLoadResult
 from domains.civics.loaders.ncsbe_results import NcsbeResultsLoadSummary
 from domains.civics.loaders.official_rosters.source_registry import list_nc_roster_source_metadata
 
@@ -45,7 +48,11 @@ def test_build_refresh_plan_all_scope_emits_canonical_stage6_job_keys() -> None:
     job_keys = {job.key for job in jobs}
     expected_job_keys = {
         "federal-fec-schedule-a",
+        "federal-fec-masters",
         "federal-fec-schedule-b",
+        "federal-fec-committee-summary",
+        "federal-congress-spine",
+        "federal-enrichment",
         "federal-fec-schedule-e",
         "federal-irs-527",
         "state-al-contributions",
@@ -126,13 +133,11 @@ def test_build_refresh_plan_all_scope_emits_canonical_stage6_job_keys() -> None:
         "civic-rosters-nc-supreme",
         "civic-rosters-nc-appeals",
     }
-    expected_job_keys.update(
-        {f"civics-roster-{metadata.source_id}" for metadata in list_nc_roster_source_metadata()}
-    )
+    expected_job_keys.update({f"civics-roster-{metadata.source_id}" for metadata in list_nc_roster_source_metadata()})
 
     assert job_keys == expected_job_keys
 
-    assert len(job_keys) == 108
+    assert len(job_keys) == 112
     assert "state-nc-ie-transactions" not in job_keys
     assert "state-nc-transactions" not in job_keys
     assert "state-nc-ie-document-index" not in job_keys
@@ -173,10 +178,10 @@ def test_build_refresh_plan_adds_nc_jobs_from_independent_input_paths() -> None:
     job_keys_with_ie_nc = {job.key for job in jobs_with_ie_nc}
     job_keys_with_both_nc = {job.key for job in jobs_with_both_nc}
 
-    assert len(job_keys_without_nc) == 108
-    assert len(job_keys_with_transaction_nc) == 109
-    assert len(job_keys_with_ie_nc) == 110
-    assert len(job_keys_with_both_nc) == 111
+    assert len(job_keys_without_nc) == 112
+    assert len(job_keys_with_transaction_nc) == 113
+    assert len(job_keys_with_ie_nc) == 114
+    assert len(job_keys_with_both_nc) == 115
     assert "state-nc-ie-transactions" not in job_keys_without_nc
     assert "state-nc-ie-transactions" not in job_keys_with_transaction_nc
     assert "state-nc-ie-transactions" in job_keys_with_ie_nc
@@ -196,7 +201,6 @@ def test_build_refresh_plan_adds_nc_jobs_from_independent_input_paths() -> None:
 
 
 def test_build_refresh_plan_wires_stage_locked_parameters(monkeypatch: pytest.MonkeyPatch) -> None:
-    run_fec_refresh = MagicMock()
     run_co_refresh = MagicMock()
     run_pa_refresh = MagicMock()
     run_ne_refresh = MagicMock()
@@ -204,7 +208,6 @@ def test_build_refresh_plan_wires_stage_locked_parameters(monkeypatch: pytest.Mo
     run_ga_refresh = MagicMock()
     now = datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc)
 
-    monkeypatch.setattr(job_builders, "run_fec_refresh", run_fec_refresh)
     monkeypatch.setattr(job_builders, "run_co_refresh", run_co_refresh)
     monkeypatch.setattr(job_builders, "run_pa_refresh", run_pa_refresh)
     monkeypatch.setattr(job_builders, "run_ne_refresh", run_ne_refresh)
@@ -214,7 +217,6 @@ def test_build_refresh_plan_wires_stage_locked_parameters(monkeypatch: pytest.Mo
     jobs = job_builders.build_refresh_plan(
         scope="all",
         parameters=runner.RunnerParameters(
-            fec_state="NC",
             fec_cycle=2024,
             fec_limit=50,
             co_year=2026,
@@ -227,14 +229,12 @@ def test_build_refresh_plan_wires_stage_locked_parameters(monkeypatch: pytest.Mo
     )
     jobs_by_key = {job.key: job for job in jobs}
 
-    jobs_by_key["federal-fec-schedule-a"].run_callable()
     jobs_by_key["state-co-contributions"].run_callable()
     jobs_by_key["state-pa-contributions"].run_callable()
     jobs_by_key["state-ne-contributions"].run_callable()
     jobs_by_key["state-la-contributions"].run_callable()
     jobs_by_key["state-ga-contributions"].run_callable()
 
-    run_fec_refresh.assert_called_once_with(state="NC", cycle=2024, limit=50)
     run_co_refresh.assert_called_once_with(year=2026, data_type="contributions", download=True, allow_insecure_tls=True)
     run_pa_refresh.assert_called_once_with(year=2025, data_type="contributions", download=True)
     run_ne_refresh.assert_called_once_with(year=2026, data_type="contributions", download=True)
@@ -246,6 +246,138 @@ def test_build_refresh_plan_wires_stage_locked_parameters(monkeypatch: pytest.Mo
         data_type="contributions",
         download=True,
     )
+
+
+def test_build_refresh_plan_wires_federal_schedule_a_bulk_job_parameters(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    repo_root = tmp_path / "fec-cache-root"
+    connection = MagicMock()
+    data_source_id = UUID("6f93a177-c7ca-4a16-88e6-932245a1ddaf")
+    load_result = object()
+
+    def _fake_download(url: str, destination_path: Path) -> tuple[Path, object]:
+        with zipfile.ZipFile(destination_path, "w") as archive:
+            archive.writestr("itcont24.txt", "ignored")
+        return destination_path, None
+
+    urlretrieve = MagicMock(side_effect=_fake_download)
+    ensure_fec_bulk_data_source = MagicMock(return_value=data_source_id)
+    dispatch_load = MagicMock(return_value=load_result)
+    get_connection = MagicMock(return_value=connection)
+
+    monkeypatch.setattr(job_builders, "_REPO_ROOT", repo_root)
+    monkeypatch.setattr(job_builders, "urlretrieve", urlretrieve)
+    monkeypatch.setattr(job_builders, "get_connection", get_connection)
+    monkeypatch.setattr(job_builders, "ensure_fec_bulk_data_source", ensure_fec_bulk_data_source)
+    monkeypatch.setattr(job_builders, "dispatch_load", dispatch_load)
+
+    jobs = job_builders.build_refresh_plan(
+        scope="all",
+        parameters=runner.RunnerParameters(fec_cycle=2024, fec_limit=50),
+    )
+    jobs_by_key = {job.key: job for job in jobs}
+    job = jobs_by_key["federal-fec-schedule-a"]
+
+    result = job.run_callable()
+
+    assert result == load_result
+    assert job.data_source_names == (job_builders.FEC_BULK_DATA_SOURCE_NAME,)
+    assert urlretrieve.call_args.args[0] == job_builders.fec_baseline_url(2024, "itcont")
+    assert Path(urlretrieve.call_args.args[1]).name == "itcont24.zip.part"
+
+    get_connection.assert_called_once_with()
+    connection.transaction.assert_called_once_with()
+    ensure_fec_bulk_data_source.assert_called_once_with(connection)
+    connection.close.assert_called_once_with()
+
+    dispatch_load.assert_called_once()
+    dispatch_call = dispatch_load.call_args.kwargs
+    config = dispatch_call["config"]
+    request = dispatch_call["request"]
+
+    assert dispatch_call["conn"] is connection
+    assert dispatch_call["data_source_id"] == data_source_id
+    assert config.mode == "single"
+    assert config.cycle == 2024
+    assert config.file_type == "itcont"
+    assert config.batch_size == 1000
+    assert config.limit == 50
+    assert config.graph_enabled is False
+    assert config.with_transactions is False
+    assert config.transactions_only is True
+    assert config.spine_only is True
+    assert config.min_date == date(2022, 1, 1)
+    assert request.file_type == "itcont"
+    assert request.path == config.path
+    assert request.path == repo_root / "data" / "fec" / "bulk" / "2024" / "itcont24.zip"
+
+
+def test_federal_schedule_a_reuses_cached_bulk_file(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    cached_file = tmp_path / "data" / "fec" / "bulk" / "2024" / "itcont24.zip"
+    cached_file.parent.mkdir(parents=True)
+    cached_file.write_bytes(b"cached")
+    connection = MagicMock()
+
+    monkeypatch.setattr(job_builders, "_REPO_ROOT", tmp_path)
+    monkeypatch.setattr(job_builders, "urlretrieve", MagicMock())
+    monkeypatch.setattr(job_builders, "get_connection", MagicMock(return_value=connection))
+    monkeypatch.setattr(job_builders, "ensure_fec_bulk_data_source", MagicMock(return_value=uuid4()))
+    dispatch_load = MagicMock(return_value=object())
+    monkeypatch.setattr(job_builders, "dispatch_load", dispatch_load)
+
+    jobs = job_builders.build_refresh_plan(
+        scope="all",
+        parameters=runner.RunnerParameters(fec_cycle=2024, fec_limit=50),
+    )
+    {job.key: job for job in jobs}["federal-fec-schedule-a"].run_callable()
+
+    job_builders.urlretrieve.assert_not_called()
+    assert dispatch_load.call_args.kwargs["request"].path == cached_file
+
+
+def test_federal_schedule_a_uses_refresh_data_dir_override(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    refresh_data_dir = tmp_path / "fly-data"
+    connection = MagicMock()
+    load_result = object()
+
+    def _fake_download(url: str, destination_path: Path) -> tuple[Path, object]:
+        with zipfile.ZipFile(destination_path, "w") as archive:
+            archive.writestr("itcont24.txt", "ignored")
+        return destination_path, None
+
+    monkeypatch.setenv("CIVIBUS_REFRESH_DATA_DIR", str(refresh_data_dir))
+    monkeypatch.setattr(job_builders, "urlretrieve", MagicMock(side_effect=_fake_download))
+    monkeypatch.setattr(job_builders, "get_connection", MagicMock(return_value=connection))
+    monkeypatch.setattr(job_builders, "ensure_fec_bulk_data_source", MagicMock(return_value=uuid4()))
+    dispatch_load = MagicMock(return_value=load_result)
+    monkeypatch.setattr(job_builders, "dispatch_load", dispatch_load)
+
+    jobs = job_builders.build_refresh_plan(
+        scope="federal",
+        parameters=runner.RunnerParameters(fec_cycle=2024, fec_limit=50),
+    )
+    result = {job.key: job for job in jobs}["federal-fec-schedule-a"].run_callable()
+
+    assert result == load_result
+    assert dispatch_load.call_args.kwargs["request"].path == (
+        refresh_data_dir / "fec" / "bulk" / "2024" / "itcont24.zip"
+    )
+
+
+def test_federal_temporary_refresh_directory_uses_refresh_data_dir_override(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    refresh_data_dir = tmp_path / "fly-data"
+    monkeypatch.setenv("CIVIBUS_REFRESH_DATA_DIR", str(refresh_data_dir))
+
+    with job_builders._temporary_refresh_directory(prefix="refresh-contract-") as temp_dir:
+        temp_dir_path = Path(temp_dir)
+        assert temp_dir_path.parent == refresh_data_dir / "tmp"
+        assert temp_dir_path.name.startswith("refresh-contract-")
+        assert temp_dir_path.exists()
+
+    assert not temp_dir_path.exists()
 
 
 def test_build_refresh_plan_wires_federal_schedule_b_job_parameters(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -301,6 +433,357 @@ def test_build_refresh_plan_wires_federal_schedule_b_job_parameters(monkeypatch:
     assert config.with_transactions is False
     assert request.file_type == "schedule_b"
     assert request.path == config.path
+
+
+def test_build_refresh_plan_wires_federal_fec_masters_job_parameters(monkeypatch: pytest.MonkeyPatch) -> None:
+    connection = MagicMock()
+    data_source_id = UUID("6f93a177-c7ca-4a16-88e6-932245a1ddaf")
+    load_results = [object(), object(), object(), object()]
+    downloaded_payloads = {
+        "cm": "cm24.txt",
+        "cn": "cn24.txt",
+        "ccl": "ccl24.txt",
+        "weball": "weball24.txt",
+    }
+
+    def _fake_download(url: str, destination_path: Path) -> tuple[Path, object]:
+        file_type = destination_path.stem.removesuffix("24")
+        with zipfile.ZipFile(destination_path, "w") as archive:
+            archive.writestr(downloaded_payloads[file_type], "ignored")
+        return destination_path, None
+
+    urlretrieve = MagicMock(side_effect=_fake_download)
+    ensure_fec_bulk_data_source = MagicMock(return_value=data_source_id)
+    dispatch_load = MagicMock(side_effect=load_results)
+    get_connection = MagicMock(return_value=connection)
+
+    monkeypatch.setattr(job_builders, "urlretrieve", urlretrieve)
+    monkeypatch.setattr(job_builders, "get_connection", get_connection)
+    monkeypatch.setattr(job_builders, "ensure_fec_bulk_data_source", ensure_fec_bulk_data_source)
+    monkeypatch.setattr(job_builders, "dispatch_load", dispatch_load)
+
+    jobs = job_builders.build_refresh_plan(
+        scope="all",
+        parameters=runner.RunnerParameters(fec_cycle=2024, fec_limit=50),
+    )
+    job = {candidate.key: candidate for candidate in jobs}["federal-fec-masters"]
+
+    result = job.run_callable()
+
+    assert result == load_results
+    assert job.domain == "campaign_finance"
+    assert job.jurisdiction == "federal/fec"
+    assert job.cadence == "weekly"
+    assert job.data_source_names == (job_builders.FEC_BULK_DATA_SOURCE_NAME,)
+    assert job.refresh_history_key == "federal-fec-masters"
+    assert [call.args[0] for call in urlretrieve.call_args_list] == [
+        job_builders.fec_baseline_url(2024, "cm"),
+        job_builders.fec_baseline_url(2024, "cn"),
+        job_builders.fec_baseline_url(2024, "ccl"),
+        job_builders.fec_weball_url(2024),
+    ]
+    downloaded_paths = [Path(call.args[1]) for call in urlretrieve.call_args_list]
+    assert [path.name for path in downloaded_paths] == ["cm24.zip", "cn24.zip", "ccl24.zip", "weball24.zip"]
+
+    get_connection.assert_called_once_with()
+    connection.transaction.assert_called_once_with()
+    ensure_fec_bulk_data_source.assert_called_once_with(connection)
+    connection.close.assert_called_once_with()
+
+    assert dispatch_load.call_count == 4
+    assert [call.kwargs["conn"] for call in dispatch_load.call_args_list] == [connection] * 4
+    assert [call.kwargs["data_source_id"] for call in dispatch_load.call_args_list] == [data_source_id] * 4
+    assert [call.kwargs["request"].file_type for call in dispatch_load.call_args_list] == [
+        "cm",
+        "cn",
+        "ccl",
+        "weball",
+    ]
+    assert [call.kwargs["request"].path for call in dispatch_load.call_args_list] == downloaded_paths
+
+    for file_type, path, call in zip(("cm", "cn", "ccl", "weball"), downloaded_paths, dispatch_load.call_args_list):
+        assert call.kwargs["config"] == job_builders.CliConfig(
+            mode="single",
+            cycle=2024,
+            file_type=file_type,
+            path=path,
+            directory=None,
+            batch_size=1000,
+            limit=None,
+            graph_enabled=False,
+            with_transactions=False,
+        )
+        assert call.kwargs["request"].path == path
+
+
+def test_build_refresh_plan_wires_federal_congress_spine_job_callable(monkeypatch: pytest.MonkeyPatch) -> None:
+    events: list[str] = []
+    raw_entries = [{"id": {"bioguide": "A000001"}}]
+    adapted_legislators = object()
+    historical_entries = [{"id": {"bioguide": "OLD0001"}}]
+    vacancy_predecessors = object()
+    data_source_id = UUID("a5eb7397-d8c9-41ee-8a7a-4179114819c1")
+    load_result = object()
+
+    class _Transaction:
+        def __enter__(self) -> None:
+            events.append("transaction_enter")
+
+        def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
+            events.append("transaction_exit")
+
+    class _Connection:
+        def transaction(self) -> _Transaction:
+            events.append("transaction")
+            return _Transaction()
+
+        def close(self) -> None:
+            events.append("close")
+
+    connection = _Connection()
+
+    def _fetch_legislators_entries() -> list[dict[str, object]]:
+        events.append("fetch")
+        return raw_entries
+
+    def _adapt_legislators_yaml(entries: list[dict[str, object]]) -> object:
+        events.append("adapt")
+        assert entries is raw_entries
+        return adapted_legislators
+
+    def _fetch_historical_entries() -> list[dict[str, object]]:
+        events.append("fetch_historical")
+        return historical_entries
+
+    def _select_most_recent_vacancy_predecessors(adapted: object, history: list[dict[str, object]]) -> object:
+        events.append("select_vacancies")
+        assert adapted is adapted_legislators
+        assert history is historical_entries
+        return vacancy_predecessors
+
+    def _get_connection() -> _Connection:
+        events.append("get_connection")
+        return connection
+
+    def _ensure_federal_spine_data_source(conn: _Connection) -> UUID:
+        events.append("ensure_data_source")
+        assert conn is connection
+        return data_source_id
+
+    def _load_federal_spine(conn: _Connection, adapted: object, *, data_source_id: UUID) -> object:
+        events.append("load")
+        assert conn is connection
+        assert adapted is adapted_legislators
+        assert data_source_id == UUID("a5eb7397-d8c9-41ee-8a7a-4179114819c1")
+        return load_result
+
+    def _load_vacancy_predecessors(conn: _Connection, predecessors: object, *, data_source_id: UUID) -> int:
+        events.append("load_vacancies")
+        assert conn is connection
+        assert predecessors is vacancy_predecessors
+        assert data_source_id == UUID("a5eb7397-d8c9-41ee-8a7a-4179114819c1")
+        return 5
+
+    monkeypatch.setattr(job_builders, "fetch_legislators_entries", _fetch_legislators_entries)
+    monkeypatch.setattr(job_builders, "adapt_legislators_yaml", _adapt_legislators_yaml)
+    monkeypatch.setattr(job_builders, "fetch_historical_entries", _fetch_historical_entries)
+    monkeypatch.setattr(
+        job_builders,
+        "select_most_recent_vacancy_predecessors",
+        _select_most_recent_vacancy_predecessors,
+    )
+    monkeypatch.setattr(job_builders, "get_connection", _get_connection)
+    monkeypatch.setattr(job_builders, "ensure_federal_spine_data_source", _ensure_federal_spine_data_source)
+    monkeypatch.setattr(job_builders, "load_federal_spine", _load_federal_spine)
+    monkeypatch.setattr(job_builders, "load_vacancy_predecessors", _load_vacancy_predecessors)
+
+    job = job_builders.build_refresh_plan(scope="all", job_key_prefixes=("federal-congress-spine",))[0]
+
+    result = job.run_callable()
+
+    assert result is load_result
+    assert job.domain == "campaign_finance"
+    assert job.jurisdiction == "federal/congress"
+    assert job.cadence == "weekly"
+    assert job.data_source_names == (job_builders.FEDERAL_SPINE_DATA_SOURCE_NAME,)
+    assert events == [
+        "fetch",
+        "adapt",
+        "fetch_historical",
+        "select_vacancies",
+        "get_connection",
+        "transaction",
+        "transaction_enter",
+        "ensure_data_source",
+        "load",
+        "load_vacancies",
+        "transaction_exit",
+        "close",
+    ]
+
+
+def test_federal_congress_spine_job_closes_connection_when_load_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    events: list[str] = []
+    load_error = RuntimeError("load failed")
+
+    class _Transaction:
+        def __enter__(self) -> None:
+            events.append("transaction_enter")
+
+        def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
+            events.append("transaction_exit")
+
+    class _Connection:
+        def transaction(self) -> _Transaction:
+            events.append("transaction")
+            return _Transaction()
+
+        def close(self) -> None:
+            events.append("close")
+
+    connection = _Connection()
+
+    monkeypatch.setattr(job_builders, "fetch_legislators_entries", lambda: [])
+    monkeypatch.setattr(job_builders, "adapt_legislators_yaml", lambda entries: object())
+    monkeypatch.setattr(job_builders, "fetch_historical_entries", lambda: [])
+    monkeypatch.setattr(
+        job_builders,
+        "select_most_recent_vacancy_predecessors",
+        lambda adapted, history: object(),
+    )
+    monkeypatch.setattr(job_builders, "get_connection", lambda: connection)
+    monkeypatch.setattr(
+        job_builders, "ensure_federal_spine_data_source", lambda conn: UUID("8878d325-f9f3-4e06-8f55-d5a7de1f7f67")
+    )
+
+    def _load_federal_spine(conn: _Connection, adapted: object, *, data_source_id: UUID) -> object:
+        events.append("load")
+        raise load_error
+
+    monkeypatch.setattr(job_builders, "load_federal_spine", _load_federal_spine)
+    monkeypatch.setattr(job_builders, "load_vacancy_predecessors", lambda conn, predecessors, *, data_source_id: 0)
+    job = job_builders.build_refresh_plan(scope="all", job_key_prefixes=("federal-congress-spine",))[0]
+
+    with pytest.raises(RuntimeError, match="load failed"):
+        job.run_callable()
+
+    assert events == ["transaction", "transaction_enter", "load", "transaction_exit", "close"]
+
+
+def test_federal_fec_masters_uses_refresh_run_history_for_cadence_gate() -> None:
+    job = job_builders.build_refresh_plan(scope="all", job_key_prefixes=("federal-fec-masters",))[0]
+    connection = MagicMock()
+    cursor = connection.cursor.return_value.__enter__.return_value
+    cursor.fetchone.return_value = (datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc),)
+
+    latest_pull_at = runner._select_latest_pull_at(connection, job)
+
+    assert latest_pull_at == datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc)
+    query = cursor.execute.call_args.args[0]
+    params = cursor.execute.call_args.args[1]
+    assert "FROM core.refresh_run" in query
+    assert "job_key = %s" in query
+    assert "pull_status = ANY(%s)" in query
+    assert params == ("federal-fec-masters", ["success"])
+
+
+def test_refresh_history_key_cadence_gate_ignores_crashed_runs() -> None:
+    job = job_builders.build_refresh_plan(scope="all", job_key_prefixes=("federal-fec-masters",))[0]
+    connection = MagicMock()
+    cursor = connection.cursor.return_value.__enter__.return_value
+    cursor.fetchone.return_value = (None,)
+
+    latest_pull_at = runner._select_latest_pull_at(connection, job)
+
+    assert latest_pull_at is None
+    query = cursor.execute.call_args.args[0]
+    params = cursor.execute.call_args.args[1]
+    assert "pull_status = ANY(%s)" in query
+    assert params == ("federal-fec-masters", ["success"])
+
+
+def test_federal_fec_masters_refresh_history_key_cadence_gate_ignores_degraded_runs() -> None:
+    job = job_builders.build_refresh_plan(scope="all", job_key_prefixes=("federal-fec-masters",))[0]
+    degraded_completed_at = datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc)
+
+    class _Cursor:
+        def __enter__(self) -> _Cursor:
+            return self
+
+        def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
+            return None
+
+        def execute(self, query: str, params: tuple[str, list[str]]) -> None:
+            self.query = query
+            self.params = params
+
+        def fetchone(self) -> tuple[datetime | None]:
+            _, accepted_pull_statuses = self.params
+            if "degraded" in accepted_pull_statuses:
+                return (degraded_completed_at,)
+            return (None,)
+
+    class _Connection:
+        def __init__(self) -> None:
+            self.cursor_instance = _Cursor()
+
+        def cursor(self) -> _Cursor:
+            return self.cursor_instance
+
+    connection = _Connection()
+
+    latest_pull_at = runner._select_latest_pull_at(connection, job)  # type: ignore[arg-type]
+
+    assert latest_pull_at is None
+    assert "pull_status = ANY(%s)" in connection.cursor_instance.query
+    assert connection.cursor_instance.params == ("federal-fec-masters", ["success"])
+
+
+def test_build_refresh_plan_orders_federal_jobs_by_stage_critical_prerequisites() -> None:
+    """Stage 2 prerequisite contract: federal-fec-masters must run before every
+    federal job that depends on the FEC master tables, and federal-enrichment
+    must run after the upstream federal jobs that produce the people, FEC
+    transactions, and Schedule E rows it joins on.
+
+    This test deliberately checks only stage-critical prerequisites — the full
+    federal key inventory (and its incidental tuple order) is owned by the
+    prefix-filter contract in core/refresh/test_job_builders.py.
+    """
+    job_keys = [job.key for job in job_builders.build_refresh_plan(scope="all")]
+    job_index = {job_key: position for position, job_key in enumerate(job_keys)}
+
+    masters_dependents = (
+        "federal-fec-schedule-a",
+        "federal-congress-spine",
+        "federal-fec-schedule-b",
+        "federal-fec-schedule-e",
+        "federal-enrichment",
+    )
+    for dependent_key in masters_dependents:
+        assert dependent_key in job_index, (
+            f"Stage 2 prerequisite contract requires federal job {dependent_key!r} in the plan"
+        )
+        assert job_index["federal-fec-masters"] < job_index[dependent_key], (
+            f"federal-fec-masters must precede {dependent_key} so master tables exist before dependents run"
+        )
+
+    enrichment_prerequisites = (
+        "federal-congress-spine",
+        "federal-fec-schedule-b",
+        "federal-fec-schedule-e",
+    )
+    for prerequisite_key in enrichment_prerequisites:
+        assert job_index[prerequisite_key] < job_index["federal-enrichment"], (
+            f"{prerequisite_key} must precede federal-enrichment so enrichment joins on populated upstream rows"
+        )
+
+
+def test_build_refresh_plan_federal_scope_emits_only_ordered_federal_jobs() -> None:
+    jobs = job_builders.build_refresh_plan(scope="federal")
+    job_keys = tuple(job.key for job in jobs)
+
+    assert job_keys == _EXPECTED_FEDERAL_JOB_KEYS
+    assert not any(job_key.startswith(("state-", "city-", "civic-", "civics-")) for job_key in job_keys)
 
 
 def test_build_refresh_plan_includes_fec_and_state_jobs() -> None:
@@ -749,11 +1232,14 @@ def test_build_refresh_plan_priority_scope_includes_tx_and_excludes_non_priority
         "TEC Campaign Finance — Contributions",
         "TEC Campaign Finance — Expenditures",
         "TEC Campaign Finance — Loans",
+        job_builders.FEDERAL_SPINE_DATA_SOURCE_NAME,
+        job_builders.FEDERAL_ENRICHMENT_DATA_SOURCE_NAME,
         "ncsbe_candidate_listing_2026",
     }
+    assert "federal/congress" in jurisdictions
     assert "state/TX" in jurisdictions
     assert "state/NC" in jurisdictions
-    assert set(cadence_by_source.values()) == {"daily", "quarterly"}
+    assert set(cadence_by_source.values()) == {"daily", "quarterly", "weekly"}
 
     for excluded_source in (
         "FEC Schedule A API",
@@ -763,6 +1249,18 @@ def test_build_refresh_plan_priority_scope_includes_tx_and_excludes_non_priority
         "TRACER Bulk Download — Loans",
     ):
         assert excluded_source not in source_names
+
+
+def test_build_refresh_plan_priority_scope_includes_federal_congress_spine() -> None:
+    jobs = job_builders.build_refresh_plan(scope="priority")
+    spine_jobs = [job for job in jobs if job.key == "federal-congress-spine"]
+
+    assert len(spine_jobs) == 1
+    spine_job = spine_jobs[0]
+    assert spine_job.domain == "campaign_finance"
+    assert spine_job.jurisdiction == "federal/congress"
+    assert spine_job.cadence == "weekly"
+    assert spine_job.data_source_names == (job_builders.FEDERAL_SPINE_DATA_SOURCE_NAME,)
 
 
 def test_build_refresh_plan_priority_scope_includes_nc_ie_with_dedicated_ie_path() -> None:
@@ -794,6 +1292,12 @@ def test_build_refresh_plan_can_be_filtered_to_wa_job_prefix() -> None:
     ]
 
 
+def test_build_refresh_plan_can_be_filtered_to_federal_congress_spine_job() -> None:
+    jobs = job_builders.build_refresh_plan(scope="all", job_key_prefixes=("federal-congress-spine",))
+
+    assert [job.key for job in jobs] == ["federal-congress-spine"]
+
+
 def test_build_refresh_plan_job_key_prefix_filter_preserves_matching_fec_and_nc_jobs() -> None:
     committee_docs_path = Path("/tmp/nc-committee-docs.csv")
     ie_document_index_path = Path("/tmp/nc-ie-document-index.csv")
@@ -810,6 +1314,8 @@ def test_build_refresh_plan_job_key_prefix_filter_preserves_matching_fec_and_nc_
     )
 
     assert [job.key for job in jobs] == [
+        "federal-fec-masters",
+        "federal-fec-committee-summary",
         "federal-fec-schedule-a",
         "federal-fec-schedule-b",
         "federal-fec-schedule-e",
@@ -931,6 +1437,34 @@ def test_run_job_includes_loader_counts_in_success_message(monkeypatch: pytest.M
     assert result.message == "Refresh job succeeded: inserted=12 skipped=3 quarantined=1 superseded=0 errors=0"
 
 
+def test_run_job_records_federal_spine_result_counts(monkeypatch: pytest.MonkeyPatch) -> None:
+    connection = MagicMock()
+    spine_result = SpineLoadResult()
+    spine_result.house.inserted = 435
+    spine_result.senate.inserted = 100
+    spine_result.delegate.inserted = 6
+    spine_result.delegate.skipped = 1
+    spine_result.vice_president.errors = 1
+    run_callable = MagicMock(return_value=spine_result)
+    job = _job_for_tests(key="federal-congress-spine", run_callable=run_callable)
+    insert_refresh_run = MagicMock()
+
+    monkeypatch.setattr(runner, "_select_data_source_id", MagicMock(return_value=None))
+    monkeypatch.setattr(runner, "sync_data_source_metadata", MagicMock())
+    monkeypatch.setattr(runner, "insert_refresh_run", insert_refresh_run)
+
+    result = runner.run_job(connection, job)
+
+    assert result.status == "success"
+    assert result.message == "Refresh job succeeded: inserted=541 skipped=1 quarantined=0 superseded=0 errors=1"
+    refresh_run = insert_refresh_run.call_args.args[1]
+    assert refresh_run.inserted_count == 541
+    assert refresh_run.skipped_count == 1
+    assert refresh_run.quarantined_count == 0
+    assert refresh_run.superseded_count == 0
+    assert refresh_run.error_count == 1
+
+
 def test_run_job_keeps_generic_success_message_when_callable_returns_non_loader_object(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -976,10 +1510,10 @@ def test_run_job_maps_ncsbe_refresh_summary_to_loader_counts(monkeypatch: pytest
     assert refresh_run.error_count == 0
 
 
-def test_run_job_records_empty_pull_status_for_zero_activity_loader_result(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_run_job_maps_dictionary_loader_counts(monkeypatch: pytest.MonkeyPatch) -> None:
     connection = MagicMock()
-    run_callable = MagicMock(return_value=SimpleNamespace(inserted=0, skipped=0, quarantined=0, superseded=0, errors=0))
-    job = _job_for_tests(key="empty-job", run_callable=run_callable)
+    run_callable = MagicMock(return_value={"inserted": 4, "skipped": 2, "quarantined": 0, "superseded": 0, "errors": 0})
+    job = _job_for_tests(key="mapping-counts-job", run_callable=run_callable)
     insert_refresh_run = MagicMock()
 
     monkeypatch.setattr(runner, "_select_data_source_id", MagicMock(return_value=None))
@@ -988,9 +1522,83 @@ def test_run_job_records_empty_pull_status_for_zero_activity_loader_result(monke
 
     result = runner.run_job(connection, job)
 
+    assert result.status == "success"
+    assert result.message == "Refresh job succeeded: inserted=4 skipped=2 quarantined=0 superseded=0 errors=0"
+    refresh_run = insert_refresh_run.call_args.args[1]
+    assert refresh_run.inserted_count == 4
+    assert refresh_run.skipped_count == 2
+
+
+def test_run_job_aggregates_loader_counts_from_multi_file_result(monkeypatch: pytest.MonkeyPatch) -> None:
+    connection = MagicMock()
+    run_callable = MagicMock(
+        return_value=[
+            SimpleNamespace(inserted=10, skipped=1, quarantined=0, superseded=0, errors=0),
+            SimpleNamespace(inserted=20, skipped=2, quarantined=1, superseded=0, errors=0),
+            SimpleNamespace(inserted=30, skipped=3, quarantined=0, superseded=1, errors=1),
+        ]
+    )
+    job = _job_for_tests(key="multi-file-job", run_callable=run_callable)
+    insert_refresh_run = MagicMock()
+
+    monkeypatch.setattr(runner, "_select_data_source_id", MagicMock(return_value=None))
+    monkeypatch.setattr(runner, "sync_data_source_metadata", MagicMock())
+    monkeypatch.setattr(runner, "insert_refresh_run", insert_refresh_run)
+
+    result = runner.run_job(connection, job)
+
+    assert result.status == "success"
+    assert result.message == "Refresh job succeeded: inserted=60 skipped=6 quarantined=1 superseded=1 errors=1"
+    refresh_run = insert_refresh_run.call_args.args[1]
+    assert refresh_run.inserted_count == 60
+    assert refresh_run.skipped_count == 6
+    assert refresh_run.quarantined_count == 1
+    assert refresh_run.superseded_count == 1
+    assert refresh_run.error_count == 1
+
+
+def test_run_job_records_empty_pull_status_for_zero_activity_loader_result(monkeypatch: pytest.MonkeyPatch) -> None:
+    connection = MagicMock()
+    run_callable = MagicMock(return_value=SimpleNamespace(inserted=0, skipped=0, quarantined=0, superseded=0, errors=0))
+    job = _job_for_tests(key="empty-job", run_callable=run_callable)
+    insert_refresh_run = MagicMock()
+    sync_data_source_metadata = MagicMock()
+
+    monkeypatch.setattr(runner, "_select_data_source_id", MagicMock(return_value=None))
+    monkeypatch.setattr(runner, "sync_data_source_metadata", sync_data_source_metadata)
+    monkeypatch.setattr(runner, "insert_refresh_run", insert_refresh_run)
+
+    result = runner.run_job(connection, job)
+
     assert result.status == "empty"
-    assert result.message == "Refresh job completed with no loader activity"
+    assert result.message == "Refresh job completed with no inserted rows"
     assert insert_refresh_run.call_args.args[1].pull_status == "empty"
+    # Honest reruns must NOT backfill a fake success state into core.data_source.
+    sync_data_source_metadata.assert_not_called()
+
+
+def test_run_job_records_success_pull_status_for_skipped_only_loader_result(monkeypatch: pytest.MonkeyPatch) -> None:
+    connection = MagicMock()
+    run_callable = MagicMock(
+        return_value=SimpleNamespace(inserted=0, skipped=37, quarantined=0, superseded=0, errors=0)
+    )
+    job = _job_for_tests(key="skipped-only-job", run_callable=run_callable)
+    insert_refresh_run = MagicMock()
+    sync_data_source_metadata = MagicMock()
+
+    monkeypatch.setattr(runner, "_select_data_source_id", MagicMock(return_value=None))
+    monkeypatch.setattr(runner, "_recent_nonempty_insert_counts", MagicMock(return_value=[120, 140, 160]))
+    monkeypatch.setattr(runner, "sync_data_source_metadata", sync_data_source_metadata)
+    monkeypatch.setattr(runner, "insert_refresh_run", insert_refresh_run)
+
+    result = runner.run_job(connection, job)
+
+    assert result.status == "success"
+    assert result.message == "Refresh job succeeded: inserted=0 skipped=37 quarantined=0 superseded=0 errors=0"
+    refresh_run = insert_refresh_run.call_args.args[1]
+    assert refresh_run.pull_status == "success"
+    assert refresh_run.inserted_count == 0
+    assert refresh_run.skipped_count == 37
 
 
 def test_run_job_records_degraded_pull_status_when_inserted_count_is_below_recent_median(
@@ -1286,6 +1894,14 @@ def test_build_argument_parser_accepts_civic_candidate_listing_flags() -> None:
     assert args.candidate_listing_path == Path("/tmp/nc-candidate-listing.csv")
 
 
+def test_build_argument_parser_accepts_federal_scope() -> None:
+    parser = runner.build_argument_parser()
+
+    args = parser.parse_args(["--scope", "federal"])
+
+    assert args.scope == "federal"
+
+
 def test_main_threads_civic_candidate_listing_parameters_to_runner_and_job_builder(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1319,3 +1935,82 @@ def test_main_threads_civic_candidate_listing_parameters_to_runner_and_job_build
     assert isinstance(parameters, runner.RunnerParameters)
     assert parameters.year_from == 2022
     assert parameters.candidate_listing_path == Path("/tmp/candidate_listing_fixture.csv")
+
+
+def _federal_result(key: str, status: str) -> runner.RefreshRunResult:
+    return runner.RefreshRunResult(key=key, status=status, metadata_updates=0, message=f"{status} for {key}")
+
+
+def test_main_threads_federal_prefix_to_build_refresh_plan_and_exits_zero_on_all_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+    all_success_results = [
+        _federal_result("federal-fec-schedule-a", "success"),
+        _federal_result("federal-fec-masters", "success"),
+        _federal_result("federal-congress-spine", "success"),
+        _federal_result("federal-fec-schedule-b", "success"),
+        _federal_result("federal-fec-schedule-e", "success"),
+        _federal_result("federal-enrichment", "success"),
+        _federal_result("federal-irs-527", "success"),
+    ]
+
+    def _fake_build_refresh_plan(*, scope: str, parameters: runner.RunnerParameters, job_key_prefixes: tuple[str, ...]):
+        captured["scope"] = scope
+        captured["parameters"] = parameters
+        captured["job_key_prefixes"] = job_key_prefixes
+        return []
+
+    monkeypatch.setattr(job_builders, "build_refresh_plan", _fake_build_refresh_plan)
+    monkeypatch.setattr(runner, "run_all_jobs", lambda *args, **kwargs: all_success_results)
+
+    exit_code = runner.main(["--dry-run", "--force", "--job-key-prefix", "federal-"])
+
+    assert exit_code == 0
+    assert captured["job_key_prefixes"] == ("federal-",)
+    assert captured["scope"] == "all"
+
+
+def test_main_threads_federal_scope_to_build_refresh_plan(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, object] = {}
+
+    def _fake_build_refresh_plan(*, scope: str, parameters: runner.RunnerParameters, job_key_prefixes: tuple[str, ...]):
+        captured["scope"] = scope
+        captured["parameters"] = parameters
+        captured["job_key_prefixes"] = job_key_prefixes
+        return []
+
+    monkeypatch.setattr(job_builders, "build_refresh_plan", _fake_build_refresh_plan)
+    monkeypatch.setattr(runner, "run_all_jobs", lambda *args, **kwargs: [])
+
+    exit_code = runner.main(["--dry-run", "--scope", "federal"])
+
+    assert exit_code == 0
+    assert captured["scope"] == "federal"
+    assert captured["job_key_prefixes"] == ()
+    assert isinstance(captured["parameters"], runner.RunnerParameters)
+
+
+@pytest.mark.parametrize("failing_status", ["empty", "degraded", "failed", "crashed"])
+def test_main_returns_non_zero_when_any_federal_result_is_failing(
+    monkeypatch: pytest.MonkeyPatch,
+    failing_status: str,
+) -> None:
+    mixed_results = [
+        _federal_result("federal-fec-schedule-a", "success"),
+        _federal_result("federal-fec-masters", failing_status),
+        _federal_result("federal-congress-spine", "success"),
+    ]
+    monkeypatch.setattr(
+        job_builders,
+        "build_refresh_plan",
+        lambda **kwargs: [],
+    )
+    monkeypatch.setattr(runner, "run_all_jobs", lambda *args, **kwargs: mixed_results)
+
+    exit_code = runner.main(["--dry-run", "--force", "--job-key-prefix", "federal-"])
+
+    assert exit_code == 1, (
+        f"runner.main() must exit non-zero when any federal result is {failing_status!r} so an honest "
+        "rerun cannot silently look successful"
+    )

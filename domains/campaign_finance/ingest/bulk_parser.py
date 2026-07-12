@@ -1,5 +1,5 @@
 """
-Stub summary for /Users/stuart/parallel_development/civibus_dev/MAR18_api_graph_routes_and_property_endpoints/civibus_dev/domains/campaign_finance/ingest/bulk_parser.py.
+Stub summary for MAR18_api_graph_routes_and_property_endpoints/civibus_dev/domains/campaign_finance/ingest/bulk_parser.py.
 """
 
 from __future__ import annotations
@@ -107,12 +107,46 @@ CCL_COLUMNS: tuple[str, ...] = (
     "LINKAGE_ID",
 )
 
+WEBALL_COLUMNS: tuple[str, ...] = (
+    "CAND_ID",
+    "CAND_NAME",
+    "CAND_ICI",
+    "PTY_CD",
+    "CAND_PTY_AFFILIATION",
+    "TTL_RECEIPTS",
+    "TRANS_FROM_AUTH",
+    "TTL_DISB",
+    "TRANS_TO_AUTH",
+    "COH_BOP",
+    "COH_COP",
+    "CAND_CONTRIB",
+    "CAND_LOANS",
+    "OTHER_LOANS",
+    "CAND_LOAN_REPAY",
+    "OTHER_LOAN_REPAY",
+    "DEBTS_OWED_BY",
+    "TTL_INDIV_CONTRIB",
+    "CAND_OFFICE_ST",
+    "CAND_OFFICE_DISTRICT",
+    "SPEC_ELECTION",
+    "PRIM_ELECTION",
+    "RUN_ELECTION",
+    "GEN_ELECTION",
+    "GEN_ELECTION_PRECENT",
+    "OTHER_POL_CMTE_CONTRIB",
+    "POL_PTY_CONTRIB",
+    "CVG_END_DT",
+    "INDIV_REFUNDS",
+    "CMTE_REFUNDS",
+)
+
 COLUMNS_BY_FILE_TYPE: dict[str, tuple[str, ...]] = {
     "itcont": ITCONT_COLUMNS,
     "itpas2": ITPAS2_COLUMNS,
     "cm": CM_COLUMNS,
     "cn": CN_COLUMNS,
     "ccl": CCL_COLUMNS,
+    "weball": WEBALL_COLUMNS,
 }
 
 
@@ -169,13 +203,31 @@ def _iter_limited(rows: Iterable[dict[str, str | None]], limit: int | None) -> I
         yield row
 
 
-def read_bulk_file(path: str | Path, file_type: str, limit: int | None = None) -> Iterator[dict[str, str | None]]:
+def _iter_from_source_row(
+    rows: Iterable[dict[str, str | None]],
+    next_source_row_number: int,
+) -> Iterator[dict[str, str | None]]:
+    for row_index, row in enumerate(rows):
+        if row_index < next_source_row_number:
+            continue
+        yield row
+
+
+def read_bulk_file(
+    path: str | Path,
+    file_type: str,
+    limit: int | None = None,
+    *,
+    next_source_row_number: int = 0,
+) -> Iterator[dict[str, str | None]]:
     normalized_file_type = file_type.lower()
     if normalized_file_type not in COLUMNS_BY_FILE_TYPE:
         raise ValueError(f"Unsupported file_type '{file_type}'. Expected one of {sorted(COLUMNS_BY_FILE_TYPE)}")
 
     if limit is not None and limit < 0:
         raise ValueError("limit must be >= 0")
+    if next_source_row_number < 0:
+        raise ValueError("next_source_row_number must be >= 0")
     if limit == 0:
         return
 
@@ -187,8 +239,10 @@ def read_bulk_file(path: str | Path, file_type: str, limit: int | None = None) -
         with ZipFile(file_path) as archive:
             with archive.open(member_name, "r") as binary_stream:
                 with io.TextIOWrapper(binary_stream, encoding="latin-1") as text_stream:
-                    yield from _iter_limited(parse_pipe_delimited(text_stream, columns), limit)
+                    rows = _iter_from_source_row(parse_pipe_delimited(text_stream, columns), next_source_row_number)
+                    yield from _iter_limited(rows, limit)
         return
 
     with file_path.open("r", encoding="latin-1") as text_stream:
-        yield from _iter_limited(parse_pipe_delimited(text_stream, columns), limit)
+        rows = _iter_from_source_row(parse_pipe_delimited(text_stream, columns), next_source_row_number)
+        yield from _iter_limited(rows, limit)

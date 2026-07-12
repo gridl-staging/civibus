@@ -39,6 +39,7 @@ def test_transaction_allows_nullable_stage2_fields_and_uuid_fk_parsing():
             sub_id=123456789,
             transaction_date=date(2024, 1, 15),
             contributor_name_raw="Jane Doe",
+            contributor_entity_type="IND",
             contributor_employer="Acme, Inc",
             contributor_occupation="Engineer",
             contributor_city="Atlanta",
@@ -58,6 +59,7 @@ def test_transaction_allows_nullable_stage2_fields_and_uuid_fk_parsing():
     assert transaction.sub_id == 123456789
     assert transaction.transaction_date == date(2024, 1, 15)
     assert transaction.contributor_name_raw == "Jane Doe"
+    assert transaction.contributor_entity_type == "IND"
     assert transaction.contributor_employer == "Acme, Inc"
     assert transaction.contributor_occupation == "Engineer"
     assert transaction.contributor_city == "Atlanta"
@@ -149,3 +151,21 @@ def test_transaction_back_ref_transaction_id_round_trip_and_default_none():
 
     restored = Transaction.model_validate(dumped)
     assert restored.back_ref_transaction_id == "SB-BACKREF-001"
+
+
+def test_transaction_contributor_entity_type_round_trip_and_default_none():
+    baseline = Transaction.model_validate(build_transaction_payload())
+    assert baseline.contributor_entity_type is None
+
+    transaction = Transaction.model_validate(
+        build_transaction_payload(
+            transaction_identifier="TR-44",
+            contributor_entity_type="ORG",
+            sub_id=44,
+        )
+    )
+    dumped = transaction.model_dump(mode="json")
+    assert dumped["contributor_entity_type"] == "ORG"
+
+    restored = Transaction.model_validate(dumped)
+    assert restored.contributor_entity_type == "ORG"

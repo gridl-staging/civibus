@@ -231,7 +231,22 @@ function normalizeContextValue(value: string | null | undefined): string | null 
   return trimmedValue === '' ? null : trimmedValue;
 }
 
-function buildContextLine(result: SearchResultCardData): string {
+/**
+ */
+function joinContextSegments(segments: Array<string | null>): string {
+  return segments.filter((segment): segment is string => segment != null).join(' · ');
+}
+
+function buildPersonContextLine(result: SearchResultCardData): string {
+  const party = normalizeContextValue(result.party);
+  return joinContextSegments([
+    normalizeContextValue(result.office_name),
+    normalizeContextValue(result.state),
+    party == null ? null : expandPartyLabel(party)
+  ]);
+}
+
+function buildGenericContextLine(result: SearchResultCardData): string {
   const contextSegments: string[] = [];
 
   const party = normalizeContextValue(result.party);
@@ -260,6 +275,14 @@ function buildContextLine(result: SearchResultCardData): string {
   }
 
   return contextSegments.join(' · ');
+}
+
+function buildContextLine(result: SearchResultCardData): string {
+  if (result.entity_type === 'person') {
+    return buildPersonContextLine(result);
+  }
+
+  return buildGenericContextLine(result);
 }
 
 export function buildSearchResultCards(results: SearchResultCardData[]): SearchResultCard[] {

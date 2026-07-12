@@ -7,7 +7,13 @@ import pytest
 from fastapi.testclient import TestClient
 
 from api.test_campaign_finance_support import CommitteeRowSeed, insert_committee_row
-from api.test_civics import _insert_candidacy, _insert_contest, _insert_office, _insert_officeholding
+from api.test_civics import (
+    _insert_candidacy,
+    _insert_contest,
+    _insert_office,
+    _insert_officeholding,
+    _seed_current_federal_members_mix,
+)
 from core.db import insert_organization, insert_person
 from core.types.python.models import Organization, Person
 
@@ -864,3 +870,77 @@ def test_search_officeholder_not_confused_with_candidate(
 
     assert response.status_code == 200
     assert response.json() == []
+
+
+def test_search_officeholder_person_ranks_before_same_name_committee_and_bare_person(
+    api_client: TestClient,
+    db_conn: psycopg.Connection,
+) -> None:
+    expectations = _seed_current_federal_members_mix(db_conn)
+    officeholder = next(row for row in expectations if row.person_name == "Alice Representative")
+    bare_person_id = UUID("00000000-0000-0000-0000-000000000041")
+    committee_id = UUID("00000000-0000-0000-0000-000000000042")
+    insert_person(db_conn, Person(id=bare_person_id, canonical_name=officeholder.person_name))
+    insert_committee_row(
+        db_conn,
+        CommitteeRowSeed(
+            id=committee_id,
+            fec_committee_id="C20000041",
+            name=officeholder.person_name,
+        ),
+    )
+
+    response = api_client.get("/v1/search", params={"q": officeholder.person_name, "limit": 10})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload[0] == {
+        "entity_type": "person",
+        "entity_id": str(officeholder.person_id),
+        "name": "Alice Representative",
+        "state": "NC-01",
+        "party": "DEM",
+        "office_name": "U.S. Representative",
+        "committee_type": None,
+        "total_raised": None,
+    }
+    result_keys = {(row["entity_type"], row["entity_id"]) for row in payload}
+    assert ("committee", str(committee_id)) in result_keys
+    assert ("person", str(bare_person_id)) in result_keys
+
+
+def test_search_officeholder_person_context_values_do_not_enrich_bare_person(
+    api_client: TestClient,
+    db_conn: psycopg.Connection,
+) -> None:
+    expectations = _seed_current_federal_members_mix(db_conn)
+    president = next(row for row in expectations if row.person_name == "Dana President")
+    bare_person_id = UUID("00000000-0000-0000-0000-000000000043")
+    insert_person(db_conn, Person(id=bare_person_id, canonical_name="Dana President Bare"))
+
+    president_response = api_client.get("/v1/search", params={"q": president.person_name, "limit": 10})
+    bare_response = api_client.get("/v1/search", params={"q": "Dana President Bare", "limit": 10})
+
+    assert president_response.status_code == 200
+    assert bare_response.status_code == 200
+    president_rows = president_response.json()
+    assert {
+        "entity_type": "person",
+        "entity_id": str(president.person_id),
+        "name": "Dana President",
+        "state": None,
+        "party": "DEM",
+        "office_name": "President of the United States",
+        "committee_type": None,
+        "total_raised": None,
+    } in president_rows
+    assert bare_response.json()[0] == {
+        "entity_type": "person",
+        "entity_id": str(bare_person_id),
+        "name": "Dana President Bare",
+        "state": None,
+        "party": None,
+        "office_name": None,
+        "committee_type": None,
+        "total_raised": None,
+    }

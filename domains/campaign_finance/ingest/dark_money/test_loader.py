@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from datetime import date
 from decimal import Decimal
-import os
 from pathlib import Path
 from typing import NamedTuple
 from uuid import UUID
@@ -11,7 +10,6 @@ import psycopg
 import pytest
 from psycopg.rows import dict_row
 
-from core.db import get_connection
 from domains.campaign_finance.ingest.bulk_stage4_loader import LoadResult
 from domains.campaign_finance.ingest.dark_money import loader as loader_module
 from domains.campaign_finance.ingest.dark_money.download import extract_irs_527_txt
@@ -26,7 +24,6 @@ from domains.campaign_finance.ingest.dark_money.parser import read_irs_527_recor
 from domains.campaign_finance.types import Contribution527, Expenditure527, Filing8872, PoliticalOrganization527
 
 _FIXTURE_ZIP = Path(__file__).resolve().parents[4] / "tests" / "fixtures" / "bulk" / "irs_527_sample.zip"
-_POSTGRES_UNAVAILABLE_PREFIX = "Unable to connect to PostgreSQL at "
 _EXPECTED_FIXTURE_MODEL_COUNTS = {
     "political_organization_527": 2,
     "filing_8872": 1,
@@ -43,18 +40,8 @@ class Irs527LoadEnv(NamedTuple):
 
 
 @pytest.fixture
-def irs_527_conn() -> psycopg.Connection:
-    os.environ.setdefault("POSTGRES_PASSWORD", "civibus_dev")
-    try:
-        connection = get_connection()
-    except RuntimeError as error:
-        if str(error).startswith(_POSTGRES_UNAVAILABLE_PREFIX):
-            pytest.skip(str(error))
-        raise
-    try:
-        yield connection
-    finally:
-        connection.close()
+def irs_527_conn(committing_db_conn: psycopg.Connection) -> psycopg.Connection:
+    yield committing_db_conn
 
 
 def _extract_fixture_txt(tmp_path: Path) -> Path:
@@ -326,6 +313,66 @@ def test_load_irs_527_records_counts_duplicate_natural_keys_as_skips(
 
 
 @pytest.mark.integration
+def test_load_irs_527_records_inserts_fresh_fixture_without_row_source_record_writes(
+    irs_527_load_env: Irs527LoadEnv,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    env = irs_527_load_env
+    records = list(read_irs_527_records(env.txt_path))
+
+    def fail_row_source_record_insert(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("fresh unique rows must use the batch source-record insert path")
+
+    monkeypatch.setattr(loader_module, "try_insert_source_record", fail_row_source_record_insert)
+
+    result = load_irs_527_records(
+        env.conn,
+        env.txt_path,
+        data_source_id=env.data_source_id,
+        batch_size=100,
+        limit=None,
+    )
+
+    assert result.inserted == len(records)
+    assert result.skipped == 0
+    assert result.errors == 0
+
+
+@pytest.mark.integration
+def test_load_irs_527_records_rerun_skips_identical_source_records_before_row_insert(
+    irs_527_load_env: Irs527LoadEnv,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    env = irs_527_load_env
+    records = list(read_irs_527_records(env.txt_path))
+    first_result = load_irs_527_records(
+        env.conn,
+        env.txt_path,
+        data_source_id=env.data_source_id,
+        batch_size=100,
+        limit=None,
+    )
+    assert first_result.inserted == len(records)
+
+    def fail_row_source_record_insert(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("identical reruns must skip before row-level source-record writes")
+
+    monkeypatch.setattr(loader_module, "try_insert_source_record", fail_row_source_record_insert)
+
+    second_result = load_irs_527_records(
+        env.conn,
+        env.txt_path,
+        data_source_id=env.data_source_id,
+        batch_size=100,
+        limit=None,
+    )
+
+    assert second_result.inserted == 0
+    assert second_result.skipped == len(records)
+    assert second_result.errors == 0
+
+
+@pytest.mark.integration
 def test_load_irs_527_records_updates_existing_org_on_changed_type_1_row(
     irs_527_load_env: Irs527LoadEnv,
     monkeypatch: pytest.MonkeyPatch,
@@ -423,6 +470,10 @@ def test_load_irs_527_records_rolls_back_failed_row_and_continues_ingest(
     monkeypatch.setattr(
         "domains.campaign_finance.ingest.dark_money.loader._insert_irs_527_row",
         flaky_insert_irs_527_row,
+    )
+    monkeypatch.setattr(
+        "domains.campaign_finance.ingest.dark_money.loader._insert_source_records_bulk",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("forced bulk fallback")),
     )
 
     result = load_irs_527_records(

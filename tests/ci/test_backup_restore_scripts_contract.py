@@ -10,6 +10,8 @@ BACKUP_SCRIPT_PATH = REPO_ROOT / "infra/scripts/backup.sh"
 RESTORE_SCRIPT_PATH = REPO_ROOT / "infra/scripts/restore.sh"
 POSTGRES_LOCAL_HELPER_PATH = REPO_ROOT / "infra/scripts/postgres_local.py"
 README_PATH = REPO_ROOT / "infra/scripts/README.md"
+DB_BACKUP_RUNBOOK_PATH = REPO_ROOT / "docs/howto/operations/db-backup-runbook.md"
+FLY_BACKUP_BASELINE_PATH = REPO_ROOT / "docs/reference/research/2026-07-11-fly-backup-restore-rowcounts.txt"
 BACKUPS_DIRECTORY_PATH = REPO_ROOT / "infra/scripts/backups"
 BACKUPS_GITIGNORE_PATH = BACKUPS_DIRECTORY_PATH / ".gitignore"
 
@@ -110,3 +112,17 @@ def test_scripts_readme_points_back_to_repo_runtime_contracts() -> None:
         "overwrites the current local database",
     ):
         assert required_fragment in readme_text
+
+
+def test_db_backup_runbook_uses_current_fly_growth_floor_baseline() -> None:
+    assert DB_BACKUP_RUNBOOK_PATH.is_file(), "docs/howto/operations/db-backup-runbook.md must exist"
+    assert FLY_BACKUP_BASELINE_PATH.is_file(), "current Fly backup baseline evidence must exist"
+
+    runbook_text = _read_text(DB_BACKUP_RUNBOOK_PATH)
+
+    assert "docs/reference/research/2026-07-11-fly-backup-restore-rowcounts.txt" in runbook_text
+    assert "growth-aware floor" in runbook_text
+    assert "pg_dump --format=custom" in runbook_text
+    assert "2026-04-18-backup-restore-smoke-rowcounts.txt" not in runbook_text
+    assert "drifts by more than 5%" not in runbook_text
+    assert ">5% drift" not in runbook_text

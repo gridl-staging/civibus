@@ -9,15 +9,18 @@ Validates that infra/docker-compose.prod.yml and deploy rollout contracts:
 
 from __future__ import annotations
 
+import importlib
 import json
 import os
 import re
 import shutil
 import subprocess
+import sys
 import yaml
 import pytest
 from pathlib import Path
 
+from api.health_content import FEDERAL_FIRST_CONTENT_FLOORS
 import core.keel_gate_l13 as keel_gate_l13
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -205,20 +208,33 @@ def test_declares_exactly_four_services(compose_config: dict):
 
 
 def test_api_and_web_have_ghcr_image_fields(compose_config: dict):
-    """api and web must include GHCR image refs with an overrideable deploy tag."""
-    ghcr_prefix = "ghcr.io/gridl-dev/civibus_dev/"
+    """api and web must share the CIVIBUS_IMAGE_REPO contract with IMAGE_TAG override support."""
+    image_repo_expr = "${CIVIBUS_IMAGE_REPO:-ghcr.io/gridl-dev/civibus_dev}"
     services = compose_config["services"]
     for service_name in ("api", "web"):
         image_value = services[service_name].get("image")
         assert image_value, f"{service_name} service must declare an image field"
-        assert ghcr_prefix in image_value, (
-            f"{service_name} image must include GHCR prefix {ghcr_prefix!r}, got {image_value!r}"
+        assert image_repo_expr in image_value, (
+            f"{service_name} image must include image repo expression {image_repo_expr!r}, got {image_value!r}"
         )
-        expected_image = f"{ghcr_prefix}{service_name}:${{IMAGE_TAG:-latest}}"
+        expected_image = f"{image_repo_expr}/{service_name}:${{IMAGE_TAG:-latest}}"
         assert image_value == expected_image, (
-            f"{service_name} image must default to latest while allowing IMAGE_TAG override; "
+            f"{service_name} image must use the CIVIBUS_IMAGE_REPO source of truth while allowing IMAGE_TAG override; "
             f"expected {expected_image!r}, got {image_value!r}"
         )
+
+
+def test_api_service_uses_federal_first_content_floor_defaults(compose_config: dict):
+    api_environment = compose_config["services"]["api"]["environment"]
+
+    expected_floors = {
+        f"CIVIBUS_HEALTH_CONTENT_FLOOR_{check_name.upper()}": (
+            f"${{CIVIBUS_HEALTH_CONTENT_FLOOR_{check_name.upper()}:-{floor}}}"
+        )
+        for check_name, floor in FEDERAL_FIRST_CONTENT_FLOORS.items()
+    }
+
+    assert {key: api_environment[key] for key in expected_floors} == expected_floors
 
 
 def test_only_caddy_may_bind_to_all_interfaces(compose_config: dict):
@@ -454,11 +470,13 @@ def test_caddyfile_routes_api_prefix_to_api_service():
         f"Expected ingress config {CADDYFILE_FILE} to exist",
     )
     canonical_host_block = re.search(
-        r"^\{\$PUBLIC_HOSTNAME\}\s*\{(?P<body>.*?)^\}$",
+        r"^\{\$CIVIBUS_SITE_SCHEME\}\{\$PUBLIC_HOSTNAME\}\s*\{(?P<body>.*?)^\}$",
         caddyfile_text,
         re.MULTILINE | re.DOTALL,
     )
-    assert canonical_host_block is not None, "Caddyfile must define a canonical {$PUBLIC_HOSTNAME} site block"
+    assert canonical_host_block is not None, (
+        "Caddyfile must define a canonical {$CIVIBUS_SITE_SCHEME}{$PUBLIC_HOSTNAME} site block"
+    )
 
     api_route_block = re.search(
         r"handle_path\s+/api/\*\s*\{(?P<body>.*?)\}",
@@ -466,8 +484,43 @@ def test_caddyfile_routes_api_prefix_to_api_service():
         re.DOTALL,
     )
     assert api_route_block is not None, "Caddyfile must route /api/* requests to the backend API service"
-    assert re.search(r"^\s*reverse_proxy\s+api:8000\s*$", api_route_block.group("body"), re.MULTILINE), (
-        "Caddyfile must proxy /api/* traffic to api:8000 inside the /api/* handler"
+    assert re.search(r"^\s*reverse_proxy\s+\{\$CIVIBUS_API_UPSTREAM:api:8000\}\s*$", caddyfile_text, re.MULTILINE), (
+        "Caddyfile must proxy /api/* traffic to the CIVIBUS_API_UPSTREAM placeholder "
+        "with api:8000 as the compose default"
+    )
+
+
+def test_fastapi_routes_match_caddy_stripped_api_prefix(monkeypatch: pytest.MonkeyPatch) -> None:
+    caddyfile_text = _read_required_text(
+        CADDYFILE_FILE,
+        f"Expected ingress config {CADDYFILE_FILE} to exist",
+    )
+    assert re.search(r"handle_path\s+/api/\*", caddyfile_text), (
+        "Caddyfile must keep using handle_path /api/* for this route mapping contract"
+    )
+
+    monkeypatch.setenv("CIVIBUS_ENV", "production")
+    monkeypatch.setenv("CIVIBUS_API_KEYS", "compose-route-test-key")
+    monkeypatch.setenv("CIVIBUS_RATE_LIMIT_REQUESTS", "5")
+    monkeypatch.setenv("CIVIBUS_RATE_LIMIT_WINDOW_SECONDS", "10")
+    sys.modules.pop("api.main", None)
+    api_main = importlib.import_module("api.main")
+    app = api_main.create_app()
+
+    get_route_paths = {
+        route.path
+        for route in app.routes
+        if route.path.startswith("/") and route.methods and "GET" in route.methods and route.path.startswith("/api/")
+    }
+    unmirrored_paths = {
+        route_path: route_path.removeprefix("/api")
+        for route_path in get_route_paths
+        if route_path.removeprefix("/api") not in {route.path for route in app.routes}
+    }
+
+    assert not unmirrored_paths, (
+        "FastAPI routes registered under /api/... must also be reachable at the "
+        f"Caddy post-strip path; missing mirrors: {unmirrored_paths}"
     )
 
 
@@ -565,130 +618,82 @@ def _workflow_triggers(workflow_config: dict) -> dict:
     return workflow_config.get("on", workflow_config.get(True, {}))
 
 
-def _deploy_ssh_rollout_run(workflow_config: dict) -> str:
-    """Return the only SSH rollout script defined under jobs.deploy."""
+def _deploy_run_scripts(workflow_config: dict) -> list[str]:
     deploy_steps = workflow_config["jobs"]["deploy"].get("steps", [])
-    ssh_rollout_steps = [
-        step
-        for step in deploy_steps
-        if isinstance(step, dict) and step.get("name") == "Roll out api and web via remote compose"
-    ]
-    assert len(ssh_rollout_steps) == 1, "deploy job must define exactly one SSH remote command block"
-    return ssh_rollout_steps[0]["run"]
-
-
-def _deploy_bootstrap_run(workflow_config: dict) -> str:
-    """Return the only remote bootstrap script defined under jobs.deploy."""
-    deploy_steps = workflow_config["jobs"]["deploy"].get("steps", [])
-    bootstrap_steps = [
-        step
-        for step in deploy_steps
-        if isinstance(step, dict) and step.get("name") == "Bootstrap remote host prerequisites"
-    ]
-    assert len(bootstrap_steps) == 1, "deploy job must define exactly one bootstrap step"
-    return bootstrap_steps[0]["run"]
+    return [step.get("run", "") for step in deploy_steps if isinstance(step, dict) and "run" in step]
 
 
 def _sample_l13_live_snapshot() -> dict[str, object]:
     """Build a deterministic live snapshot fixture with secret-bearing values."""
     return {
         "workflow": {
+            "deploy_if": "github.repository == 'gridl-hq/civibus'",
             "deploy_env": {
-                "DEPLOY_GIT_SHA": "${{ github.sha }}",
-                "DEPLOY_REPO_URL": "https://github.com/${{ github.repository }}.git",
-                "PRODUCTION_ENV_FILE": _L13_SECRET_FIXTURE_VALUES["PRODUCTION_ENV_FILE"],
-            }
-        },
-        "compose": {
-            "images": {
-                "api": "ghcr.io/gridl-dev/civibus_dev/api:${IMAGE_TAG:-latest}",
-                "web": "ghcr.io/gridl-dev/civibus_dev/web:${IMAGE_TAG:-latest}",
+                "FLY_API_TOKEN": _L13_SECRET_FIXTURE_VALUES["PRODUCTION_ENV_FILE"],
+                "PROD_SMOKE_BASE_URL": "${{ vars.PROD_SMOKE_BASE_URL }}",
             },
-            "required_env": {
-                "POSTGRES_PASSWORD": _L13_SECRET_FIXTURE_VALUES["POSTGRES_PASSWORD"],
-                "ORIGIN": "${ORIGIN:?Set ORIGIN}",
-                "CIVIBUS_API_KEYS": _L13_SECRET_FIXTURE_VALUES["CIVIBUS_API_KEYS"],
-                "CIVIBUS_ADMIN_API_KEYS": _L13_SECRET_FIXTURE_VALUES["CIVIBUS_ADMIN_API_KEYS"],
-                "CIVIBUS_API_KEY": _L13_SECRET_FIXTURE_VALUES["CIVIBUS_API_KEY"],
-            },
+            "fly_deploy_commands": [
+                "flyctl deploy -c infra/fly/api.fly.toml --remote-only",
+                "flyctl deploy web -c infra/fly/web.fly.toml --remote-only",
+                "flyctl deploy -c infra/fly/caddy.fly.toml --remote-only",
+            ],
         },
-        "bootstrap": {
-            "required_env_keys": [
-                "POSTGRES_PASSWORD",
-                "ORIGIN",
-                "CIVIBUS_API_KEYS",
-                "CIVIBUS_ADMIN_API_KEYS",
-                "CIVIBUS_API_KEY",
-            ]
-        },
-        "env_example": {
-            "keys": [
-                "POSTGRES_PASSWORD",
-                "ORIGIN",
-                "CIVIBUS_API_KEYS",
-                "CIVIBUS_ADMIN_API_KEYS",
-                "CIVIBUS_API_KEY",
-            ]
+        "fly_apps": {
+            "api": "civibus-api",
+            "web": "civibus-web",
+            "caddy": "civibus-caddy",
         },
     }
 
 
-def test_deploy_workflow_replaces_placeholder_with_ssh_compose_rollout():
+def test_deploy_workflow_replaces_ssh_compose_rollout_with_fly_deploys():
     workflow_text, workflow_config = _load_deploy_workflow()
+    deploy_scripts = _deploy_run_scripts(workflow_config)
 
     assert "Deploy placeholder" not in workflow_text, (
         "deploy workflow must remove placeholder message and run the real rollout"
     )
-
-    rollout_run = _deploy_ssh_rollout_run(workflow_config)
-    expected_command_sequence = [
-        "cd /root/civibus/civibus_dev",
-        "bash infra/scripts/prod_compose.sh pull caddy api web",
-        "bash infra/scripts/prod_compose.sh up -d --force-recreate --wait --wait-timeout 180 api web caddy",
+    expected_deploy_commands = [
+        "flyctl deploy -c infra/fly/api.fly.toml --remote-only",
+        "flyctl deploy web -c infra/fly/web.fly.toml --remote-only",
+        "flyctl deploy -c infra/fly/caddy.fly.toml --remote-only",
     ]
-    for expected_command in expected_command_sequence:
-        assert expected_command in rollout_run, f"deploy SSH rollout command block must include {expected_command!r}"
+    assert sum("flyctl deploy" in script for script in deploy_scripts) == 3
+    for expected_command in expected_deploy_commands:
+        assert workflow_text.count(expected_command) == 1
+    command_order_indexes = [workflow_text.index(command) for command in expected_deploy_commands]
+    assert command_order_indexes == sorted(command_order_indexes)
 
-    assert "fetch origin " in rollout_run, "deploy SSH rollout command block must refresh the VM checkout"
-    assert rollout_run.index("fetch origin ") < rollout_run.index(
-        "bash infra/scripts/prod_compose.sh pull caddy api web"
-    ), "deploy SSH rollout must refresh the checkout before compose pull"
-    command_order_indexes = [rollout_run.index(command) for command in expected_command_sequence]
-    assert command_order_indexes == sorted(command_order_indexes), (
-        "deploy SSH rollout must run repo sync before compose pull, then compose up"
-    )
-    assert "docker pull ghcr.io/" not in workflow_text, (
-        "workflow must avoid duplicating raw GHCR docker pull commands and rely on compose"
-    )
+    for obsolete_fragment in ("prod_compose.sh", "bootstrap_prod_vm.sh", "docker pull ghcr.io/", "ssh "):
+        assert obsolete_fragment not in workflow_text
 
 
-def test_deploy_workflow_applies_civics_geometry_migration_during_rollout() -> None:
-    _, workflow_config = _load_deploy_workflow()
-    rollout_run = _deploy_ssh_rollout_run(workflow_config)
+def test_deploy_workflow_excludes_db_refresh_and_local_bootstrap_concerns() -> None:
+    workflow_text, _ = _load_deploy_workflow()
 
-    expected_migration_command = (
-        "bash infra/scripts/prod_compose.sh exec -T db psql -U civibus -d civibus -v ON_ERROR_STOP=1 "
-        "< domains/civics/schema/migrations/2026_04_27_electoral_division_geometry.sql"
+    forbidden_fragments = (
+        "infra/fly/db.fly.toml",
+        "infra/fly/refresh.fly.toml",
+        "civibus-db",
+        "civibus-refresh",
+        "domains/civics/schema/migrations/2026_04_27_electoral_division_geometry.sql",
+        "make db-up",
+        "make refresh",
     )
-    assert expected_migration_command in rollout_run, (
-        "deploy SSH rollout must apply civic.electoral_division geometry migration for existing databases"
-    )
-    assert rollout_run.index(expected_migration_command) < rollout_run.index(
-        "bash infra/scripts/prod_compose.sh up -d --force-recreate --wait --wait-timeout 180 api web caddy"
-    ), "deploy SSH rollout must apply migration before recreating api/web services"
+    for forbidden_fragment in forbidden_fragments:
+        assert forbidden_fragment not in workflow_text
 
 
 def test_l13_contract_owners_align_with_deploy_and_compose_helpers() -> None:
-    """Reuse existing workflow helper seams while pinning Stage 1 owner files for L13."""
+    """Reuse existing workflow helper seams while pinning Fly L13 owner files."""
     _, workflow_config = _load_deploy_workflow()
-    _deploy_bootstrap_run(workflow_config)
-    _deploy_ssh_rollout_run(workflow_config)
+    assert len(_deploy_run_scripts(workflow_config)) >= 4
 
     expected_owner_files = {
         ".github/workflows/deploy.yml",
-        "infra/docker-compose.prod.yml",
-        ".env.production.example",
-        "infra/scripts/bootstrap_prod_vm.sh",
+        "infra/fly/api.fly.toml",
+        "infra/fly/web.fly.toml",
+        "infra/fly/caddy.fly.toml",
     }
     assert set(keel_gate_l13.CONTRACT_OWNER_FILES.values()) == expected_owner_files
 
@@ -696,7 +701,7 @@ def test_l13_contract_owners_align_with_deploy_and_compose_helpers() -> None:
 def test_l13_diff_output_redacts_secret_values_and_keeps_non_secret_comparison(tmp_path: Path) -> None:
     repo_contract = keel_gate_l13.extract_repo_contract(repo_root=REPO_ROOT)
     live_snapshot = _sample_l13_live_snapshot()
-    live_snapshot["workflow"]["deploy_env"]["DEPLOY_REPO_URL"] = "https://github.com/gridl-dev/hotfix.git"  # type: ignore[index]
+    live_snapshot["fly_apps"]["api"] = "civibus-api-hotfix"  # type: ignore[index]
 
     result = keel_gate_l13.evaluate_contract_drift(
         repo_contract=repo_contract,
@@ -720,27 +725,17 @@ def test_l13_diff_output_redacts_secret_values_and_keeps_non_secret_comparison(t
         assert secret_value not in serialized_diff
         assert secret_value not in evidence_text
 
-    assert any(entry["path"] == "workflow.deploy_env.DEPLOY_REPO_URL" for entry in result.diff_entries)
-    assert "workflow.deploy_env.DEPLOY_REPO_URL" in evidence_text
+    assert any(entry["path"] == "fly_apps.api" for entry in result.diff_entries)
+    assert "fly_apps.api" in evidence_text
 
 
-def test_deploy_workflow_uses_github_secrets_not_runtime_env_file():
+def test_deploy_workflow_uses_fly_secret_and_public_smoke_variable():
     workflow_text, _ = _load_deploy_workflow()
     env_example = REPO_ROOT / ".env.production.example"
     env_example_text = env_example.read_text()
 
-    assert "secrets.HETZNER_HOST" in workflow_text, (
-        "deploy workflow must read host connection endpoint from secrets.HETZNER_HOST"
-    )
-    assert "secrets.HETZNER_SSH_KEY" in workflow_text, (
-        "deploy workflow must read private key material from secrets.HETZNER_SSH_KEY"
-    )
-    assert "secrets.HETZNER_KNOWN_HOSTS" in workflow_text, (
-        "deploy workflow must read the pinned host key from secrets.HETZNER_KNOWN_HOSTS"
-    )
-    assert "secrets.PRODUCTION_ENV_FILE" in workflow_text, (
-        "deploy workflow must read the production .env payload from secrets.PRODUCTION_ENV_FILE"
-    )
+    assert "secrets.FLY_API_TOKEN" in workflow_text
+    assert "vars.PROD_SMOKE_BASE_URL" in workflow_text
     for secret_name in (
         "HETZNER_HOST",
         "HETZNER_SSH_KEY",
@@ -752,103 +747,16 @@ def test_deploy_workflow_uses_github_secrets_not_runtime_env_file():
         )
 
 
-def test_deploy_workflow_pins_remote_checkout_to_trigger_sha():
-    workflow_text, workflow_config = _load_deploy_workflow()
-    rollout_run = _deploy_ssh_rollout_run(workflow_config)
-    deploy_env = workflow_config["jobs"]["deploy"].get("env", {})
-
-    assert deploy_env.get("DEPLOY_GIT_SHA") == "${{ github.sha }}", (
-        "deploy workflow must pass the triggering commit SHA into the remote rollout"
-    )
-
-    expected_command_sequence = [
-        'ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile=~/.ssh/known_hosts -i ~/.ssh/hetzner_deploy_key "root@${HETZNER_HOST}" bash -se -- "$DEPLOY_GIT_SHA" "$GITHUB_ACTOR" <<\'EOF\'',
-        'deploy_git_sha="$1"',
-        'fetch origin "$deploy_git_sha"',
-        'git checkout --detach "$deploy_git_sha"',
-        'export IMAGE_TAG="$deploy_git_sha"',
-        "bash infra/scripts/prod_compose.sh pull caddy api web",
-        "bash infra/scripts/prod_compose.sh up -d --force-recreate --wait --wait-timeout 180 api web caddy",
-    ]
-    for expected_command in expected_command_sequence:
-        assert expected_command in rollout_run, f"deploy SSH rollout command block must include {expected_command!r}"
-
-    for forbidden_command in ("git pull --ff-only origin main", "git fetch origin main\n"):
-        assert forbidden_command not in rollout_run, (
-            "deploy workflow must not sync the VM checkout to the mutable branch tip"
-        )
-
-    command_order_indexes = [rollout_run.index(command) for command in expected_command_sequence]
-    assert command_order_indexes == sorted(command_order_indexes), (
-        "deploy SSH rollout must pin the checkout before compose pull and compose up"
-    )
-
-
-def test_deploy_workflow_bootstraps_the_remote_host_before_rollout() -> None:
+def test_deploy_workflow_has_guarded_fly_production_job():
     workflow_text, workflow_config = _load_deploy_workflow()
     deploy_env = workflow_config["jobs"]["deploy"].get("env", {})
-    bootstrap_run = _deploy_bootstrap_run(workflow_config)
 
-    assert deploy_env.get("PRODUCTION_ENV_FILE") == "${{ secrets.PRODUCTION_ENV_FILE }}", (
-        "deploy workflow must inject the production .env payload via CI secrets"
-    )
-    expected_bootstrap_fragments = [
-        "install -m 600 /dev/null /tmp/civibus-production.env",
-        "printf '%s\\n' \"$PRODUCTION_ENV_FILE\" > /tmp/civibus-production.env",
-        "infra/scripts/bootstrap_prod_vm.sh /tmp/civibus-production.env",
-        '"root@${HETZNER_HOST}:/tmp/civibus-deploy/"',
-        'export REPO_URL="$deploy_repo_url"',
-        'export REPO_DIR="/root/civibus/civibus_dev"',
-        'export ENV_FILE_SOURCE="/tmp/civibus-deploy/civibus-production.env"',
-        "bash /tmp/civibus-deploy/bootstrap_prod_vm.sh",
-    ]
-    for fragment in expected_bootstrap_fragments:
-        assert fragment in bootstrap_run, f"bootstrap step must include {fragment!r}"
-
-    assert "Bootstrap remote host prerequisites" in workflow_text, (
-        "deploy workflow must define an explicit bootstrap phase before rollout"
-    )
-
-
-def test_bootstrap_script_installs_prereqs_and_materializes_env_file() -> None:
-    assert BOOTSTRAP_SCRIPT_FILE.exists(), f"Expected {BOOTSTRAP_SCRIPT_FILE} to exist"
-    script_text = BOOTSTRAP_SCRIPT_FILE.read_text()
-
-    required_fragments = [
-        'repo_dir="${REPO_DIR:-/root/civibus/civibus_dev}"',
-        'repo_url="${REPO_URL:-https://github.com/gridl-dev/civibus_dev.git}"',
-        'env_file_source="${ENV_FILE_SOURCE:-}"',
-        "apt-get install -y ca-certificates curl git gnupg",
-        "docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin",
-        'git clone "${repo_url}" "${repo_dir}"',
-        'install -m 0600 "${env_file_source}" "${repo_dir}/.env"',
-        'grep -Eq "^${required_key}=.+$" "${env_file}"',
-        "docker compose version >/dev/null",
-    ]
-    for fragment in required_fragments:
-        assert fragment in script_text, f"bootstrap script must include {fragment!r}"
-
-
-def test_deploy_workflow_pins_the_remote_host_key() -> None:
-    workflow_text, workflow_config = _load_deploy_workflow()
-    deploy_env = workflow_config["jobs"]["deploy"].get("env", {})
-    rollout_run = _deploy_ssh_rollout_run(workflow_config)
-
-    assert deploy_env.get("HETZNER_KNOWN_HOSTS") == "${{ secrets.HETZNER_KNOWN_HOSTS }}", (
-        "deploy workflow must inject the pinned known_hosts entry via CI secrets"
-    )
-    assert "printf '%s\\n' \"$HETZNER_KNOWN_HOSTS\" > ~/.ssh/known_hosts" in workflow_text, (
-        "deploy workflow must write the pinned known_hosts entry before SSH"
-    )
-    assert "StrictHostKeyChecking=accept-new" not in workflow_text, (
-        "deploy workflow must not trust-first-use a production SSH host key"
-    )
-    assert "StrictHostKeyChecking=yes" in rollout_run, (
-        "deploy workflow must enforce host-key verification during SSH rollout"
-    )
-    assert "UserKnownHostsFile=~/.ssh/known_hosts" in rollout_run, (
-        "deploy workflow must point SSH at the pinned known_hosts file"
-    )
+    assert workflow_config["jobs"].keys() == {"deploy"}
+    assert workflow_config["jobs"]["deploy"]["if"] == "github.repository == 'gridl-hq/civibus'"
+    assert workflow_config["jobs"]["deploy"]["environment"] == "production"
+    assert deploy_env.get("FLY_API_TOKEN") == "${{ secrets.FLY_API_TOKEN }}"
+    assert deploy_env.get("PROD_SMOKE_BASE_URL") == "${{ vars.PROD_SMOKE_BASE_URL }}"
+    assert "superfly/flyctl-actions/setup-flyctl" in workflow_text
 
 
 def test_deploy_workflow_has_workflow_dispatch_trigger():
@@ -861,35 +769,22 @@ def test_deploy_workflow_has_workflow_dispatch_trigger():
     assert "push" in triggers, "deploy workflow must retain push trigger alongside workflow_dispatch"
 
 
-def test_deploy_workflow_authenticates_private_repo_access():
-    """Deploy workflow must authenticate git and GHCR access for private repos.
+def test_deploy_workflow_runs_production_smoke_against_actions_variable():
+    workflow_text, workflow_config = _load_deploy_workflow()
+    deploy_steps = workflow_config["jobs"]["deploy"].get("steps", [])
+    smoke_steps = [step for step in deploy_steps if step.get("name") == "Run production smoke gate"]
+    assert len(smoke_steps) == 1
+    smoke_step = smoke_steps[0]
+    smoke_run = smoke_step["run"]
 
-    Three requirements:
-    (a) GITHUB_TOKEN in deploy job env for shell-level access
-    (b) Rollout step: authenticated git fetch + docker login ghcr.io before compose pull
-    (c) Bootstrap step: DEPLOY_REPO_URL uses non-tokenized HTTPS repo URL
-    """
-    _, workflow_config = _load_deploy_workflow()
-    deploy_env = workflow_config["jobs"]["deploy"].get("env", {})
-
-    # (a) GITHUB_TOKEN must be in deploy job env
-    assert "GITHUB_TOKEN" in deploy_env, "deploy job must expose GITHUB_TOKEN in env for private repo auth"
-
-    # (c) DEPLOY_REPO_URL must stay non-tokenized; credentials flow through askpass/env.
-    repo_url = deploy_env.get("DEPLOY_REPO_URL", "")
-    assert repo_url == "https://github.com/${{ github.repository }}.git", (
-        "DEPLOY_REPO_URL must remain a non-tokenized repo URL"
+    assert smoke_step["working-directory"] == "web"
+    assert 'if [[ -z "${PROD_SMOKE_BASE_URL}" ]]' in smoke_run
+    assert "SMOKE_MODE=production" in smoke_run
+    assert 'SMOKE_BASE_URL="${PROD_SMOKE_BASE_URL}"' in smoke_run
+    assert "tests/smoke/production_deploy.spec.ts" in smoke_run
+    assert workflow_text.index("flyctl deploy -c infra/fly/caddy.fly.toml --remote-only") < workflow_text.index(
+        "Run production smoke gate"
     )
-
-    # (b) Rollout step must authenticate git fetch and docker login before wrapper rollout.
-    rollout_run = _deploy_ssh_rollout_run(workflow_config)
-    assert "docker login ghcr.io" in rollout_run, "rollout step must docker login to GHCR before pulling private images"
-    assert "GIT_ASKPASS" in rollout_run, "rollout step must use askpass-based git auth for private repo fetch"
-
-    # docker login must come before wrapper-triggered rollout.
-    login_pos = rollout_run.index("docker login ghcr.io")
-    pull_pos = rollout_run.index("bash infra/scripts/prod_compose.sh pull caddy api web")
-    assert login_pos < pull_pos, "rollout step must docker login before rollout wrapper pull"
 
 
 # ---------------------------------------------------------------------------

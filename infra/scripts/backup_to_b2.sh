@@ -2,7 +2,7 @@
 # Stream a pg_dump of the civibus production DB to Backblaze B2.
 #
 # Designed to run from cron on the Hetzner production VM. See
-# docs/operations/db-backup-runbook.md for one-time setup and restore
+# docs/howto/operations/db-backup-runbook.md for one-time setup and restore
 # procedures.
 
 set -euo pipefail
@@ -33,10 +33,14 @@ remote_path="b2:${B2_BUCKET}/db-${timestamp}.dump"
 
 echo "[$(date -Iseconds)] starting backup -> ${remote_path}"
 
-# pg_dump streams to stdout; rclone rcat reads stdin and uploads to B2.
-# Nothing hits local disk. --compress=6 is pg_dump's internal compression
-# (custom format already compresses; explicit for clarity).
-docker exec -e PGPASSWORD="${PGPASSWORD}" "${DB_CONTAINER}" pg_dump \
+pgpass_path="/tmp/.pgpass"
+cleanup_pgpass() { docker exec "${DB_CONTAINER}" rm -f "${pgpass_path}" 2>/dev/null || true; }
+trap cleanup_pgpass EXIT
+
+printf '%s\n' "*:*:${PGDATABASE}:${PGUSER}:${POSTGRES_PASSWORD}" \
+  | docker exec -i "${DB_CONTAINER}" sh -c "cat > ${pgpass_path} && chmod 600 ${pgpass_path}"
+
+docker exec -e PGPASSFILE="${pgpass_path}" "${DB_CONTAINER}" pg_dump \
     -U "${PGUSER}" \
     -d "${PGDATABASE}" \
     --format=custom \

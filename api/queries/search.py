@@ -10,6 +10,7 @@ from psycopg.rows import dict_row
 
 from api.models.search import SearchParams
 from api.queries._common import _build_ilike_contains_pattern
+from api.queries.civics import _current_federal_officeholder_search_rows_sql
 
 _SEARCH_TRIGRAM_MIN_SIMILARITY = 0.3
 
@@ -46,6 +47,7 @@ def _build_ranked_entity_search_sql(
             {context.office_name} AS office_name,
             {context.committee_type} AS committee_type,
             NULL::numeric AS total_raised,
+            FALSE AS is_current_federal_officeholder,
             ({table_alias}.{name_column} ILIKE params.like_pattern ESCAPE '\\') AS contains_match,
             similarity({table_alias}.{name_column}, params.query_text) AS similarity_score
         FROM {table_name} {table_alias}
@@ -82,6 +84,7 @@ def _build_search_sql(entity_rows_sql: str) -> str:
         ORDER BY
             ranked_results.contains_match DESC,
             CASE WHEN ranked_results.contains_match THEN 1.0 ELSE ranked_results.similarity_score END DESC,
+            ranked_results.is_current_federal_officeholder DESC,
             ranked_results.name ASC,
             ranked_results.entity_id ASC
         LIMIT %s
@@ -89,12 +92,31 @@ def _build_search_sql(entity_rows_sql: str) -> str:
     """
 
 
-_SEARCH_PERSON_ROWS_SQL = _build_ranked_entity_search_sql(
-    entity_type="person",
-    table_name="core.person",
-    table_alias="p",
-    name_column="canonical_name",
-)
+_CURRENT_FEDERAL_OFFICEHOLDER_SEARCH_ROWS_SQL = _current_federal_officeholder_search_rows_sql()
+
+_SEARCH_PERSON_ROWS_SQL = f"""
+    SELECT
+        'person'::text AS entity_type,
+        p.id AS entity_id,
+        p.canonical_name AS name,
+        officeholder.search_geography_token AS state,
+        officeholder.party AS party,
+        officeholder.short_office_label AS office_name,
+        NULL::text AS committee_type,
+        NULL::numeric AS total_raised,
+        (officeholder.person_id IS NOT NULL) AS is_current_federal_officeholder,
+        (p.canonical_name ILIKE params.like_pattern ESCAPE '\\') AS contains_match,
+        similarity(p.canonical_name, params.query_text) AS similarity_score
+    FROM core.person p
+    LEFT JOIN (
+        {_CURRENT_FEDERAL_OFFICEHOLDER_SEARCH_ROWS_SQL}
+    ) officeholder ON officeholder.person_id = p.id
+    CROSS JOIN search_params params
+    WHERE (
+        p.canonical_name ILIKE params.like_pattern ESCAPE '\\'
+        OR similarity(p.canonical_name, params.query_text) >= params.min_similarity
+    )
+"""
 _SEARCH_ORG_ROWS_SQL = _build_ranked_entity_search_sql(
     entity_type="org",
     table_name="core.organization",
@@ -128,6 +150,7 @@ _SEARCH_CANDIDATE_ROWS_SQL = """
         off.name AS office_name,
         NULL::text AS committee_type,
         NULL::numeric AS total_raised,
+        FALSE AS is_current_federal_officeholder,
         (p.canonical_name ILIKE params.like_pattern ESCAPE '\\') AS contains_match,
         similarity(p.canonical_name, params.query_text) AS similarity_score
     FROM civic.candidacy cand
@@ -153,6 +176,7 @@ _SEARCH_CONTEST_ROWS_SQL = """
         off.name AS office_name,
         NULL::text AS committee_type,
         NULL::numeric AS total_raised,
+        FALSE AS is_current_federal_officeholder,
         (
             cont.name ILIKE params.like_pattern ESCAPE '\\'
             OR off.name ILIKE params.like_pattern ESCAPE '\\'

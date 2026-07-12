@@ -1,6 +1,5 @@
 
 from __future__ import annotations
-"""Stub summary for keel_judge_prompt.py."""
 
 import json
 import re

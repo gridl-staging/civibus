@@ -7,9 +7,7 @@ from pathlib import Path
 import core.keel_evidence_retention as keel_evidence_retention
 
 
-def _write_evidence(
-    *, evidence_root: Path, layer: str, scope: str, evidence_date: date, status: str
-) -> Path:
+def _write_evidence(*, evidence_root: Path, layer: str, scope: str, evidence_date: date, status: str) -> Path:
     bucket = evidence_root / layer / scope
     bucket.mkdir(parents=True, exist_ok=True)
     target = bucket / f"{evidence_date.isoformat()}.json"

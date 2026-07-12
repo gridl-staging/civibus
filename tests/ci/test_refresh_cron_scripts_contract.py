@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import os
 import re
+import subprocess
 import tomllib
 from pathlib import Path
 
@@ -17,8 +19,8 @@ NC_ORCHESTRATOR_WRAPPER_PATH = SCRIPTS_DIR / "refresh_nc_orchestrator.sh"
 ENV_PROD_EXAMPLE_PATH = REPO_ROOT / ".env.production.example"
 INSTALLER_PATH = SCRIPTS_DIR / "install_refresh_cron.sh"
 LOGROTATE_CONFIG_PATH = SCRIPTS_DIR / "civibus-refresh-logrotate.conf"
-REFRESH_RUNBOOK_PATH = REPO_ROOT / "docs/operations/campaign-finance-refresh.md"
-DB_BACKUP_RUNBOOK_PATH = REPO_ROOT / "docs/operations/db-backup-runbook.md"
+REFRESH_RUNBOOK_PATH = REPO_ROOT / "docs/howto/operations/campaign-finance-refresh.md"
+DB_BACKUP_RUNBOOK_PATH = REPO_ROOT / "docs/howto/operations/db-backup-runbook.md"
 ROADMAP_PATH = REPO_ROOT / "ROADMAP.md"
 SCAI_OVERVIEW_PATH = REPO_ROOT / ".scrai/overview.md"
 CLAUDE_GUIDE_PATH = REPO_ROOT / "CLAUDE.md"
@@ -27,6 +29,7 @@ CERT_EXPIRY_WRAPPER_PATH = SCRIPTS_DIR / "check_cert_expiry.sh"
 IN_FRESHNESS_POLLER_PATH = SCRIPTS_DIR / "poll_in_freshness.sh"
 LAYERS_PATH = REPO_ROOT / "layers.yaml"
 DEBBIE_CONFIG_PATH = REPO_ROOT / ".debbie.toml"
+REFRESH_FLY_CONFIG_PATH = REPO_ROOT / "infra/fly/refresh.fly.toml"
 
 _WRAPPER_FORBIDDEN_FRAGMENTS = (
     "docker compose",
@@ -58,6 +61,35 @@ def _read_required_layers() -> list[dict[str, object]]:
     return layers
 
 
+def test_fly_refresh_app_config_is_build_env_only_internal_worker_contract() -> None:
+    refresh_fly_text = _read_required_text(
+        REFRESH_FLY_CONFIG_PATH,
+        "infra/fly/refresh.fly.toml must exist",
+    )
+    refresh_fly_payload = tomllib.loads(refresh_fly_text)
+
+    assert refresh_fly_payload["app"] == "civibus-refresh"
+    assert refresh_fly_payload["primary_region"] == "sjc"
+    assert refresh_fly_payload["build"]["dockerfile"] == "../api/Dockerfile"
+
+    refresh_env = refresh_fly_payload["env"]
+    assert refresh_env["CIVIBUS_ENV"] == "production"
+    assert refresh_env["POSTGRES_HOST"] == "civibus-db.internal"
+    assert refresh_env["POSTGRES_PORT"] == "5432"
+    assert refresh_env["POSTGRES_USER"] == "civibus"
+    assert refresh_env["POSTGRES_DB"] == "civibus"
+    assert refresh_env["CIVIBUS_REFRESH_DATA_DIR"] == "/data"
+    assert refresh_env["CIVIBUS_STARTUP_CANARY"] == "skip"
+
+    assert "services" not in refresh_fly_payload
+    assert "http_service" not in refresh_fly_payload
+    assert "processes" not in refresh_fly_payload
+    assert "process" not in refresh_fly_payload
+    assert "deploy" not in refresh_fly_payload
+    assert "python -m core.refresh.runner" not in refresh_fly_text
+    assert "core.refresh.runner" not in refresh_fly_text
+
+
 def _is_unattended_global_gate(layer: dict[str, object]) -> bool:
     gate_command = str(layer.get("gate_command", "")).strip()
     gate_command_parts = gate_command.split()
@@ -83,7 +115,7 @@ def test_env_lib_contains_shared_env_loading_contract() -> None:
     # Core parser function
     assert "load_env_assignments() {" in lib_text
     assert 'while IFS= read -r raw_line || [[ -n "${raw_line}" ]]; do' in lib_text
-    assert "Invalid .env assignment: ${raw_line}" in lib_text
+    assert "Invalid .env assignment at ${env_path}:${line_number}" in lib_text
     assert "Load literal KEY=VALUE pairs without executing shell syntax from .env." in lib_text
 
     # Convenience wrapper that sets common exports
@@ -91,13 +123,15 @@ def test_env_lib_contains_shared_env_loading_contract() -> None:
     assert "Missing required env file:" in lib_text
     assert 'export PATH="${HOME}/.local/bin:${PATH}"' in lib_text
     assert "POSTGRES_PASSWORD must be set" in lib_text
-    assert 'export POSTGRES_HOST="127.0.0.1"' in lib_text
-    assert 'export POSTGRES_PORT="5432"' in lib_text
+    assert 'export POSTGRES_HOST="${POSTGRES_HOST:-127.0.0.1}"' in lib_text
+    assert 'export POSTGRES_PORT="${POSTGRES_PORT:-5432}"' in lib_text
     # System CA bundle for government site SSL chains
     assert "SSL_CERT_FILE" in lib_text
 
     # Must NOT execute .env via bash source
     assert 'source "${env_file}"' not in lib_text
+    executable_lines = [line for line in lib_text.splitlines() if not line.lstrip().startswith("#")]
+    assert all("eval" not in line for line in executable_lines)
 
 
 # ---------- common wrapper contract ----------
@@ -205,6 +239,105 @@ def test_nc_orchestrator_wrapper_delegates_to_nc_cli_with_rolling_window() -> No
     assert "--download" not in nc_orchestrator_script_text
 
 
+def test_nc_orchestrator_wrapper_emits_tick_start_and_completion_markers() -> None:
+    nc_orchestrator_script_text = _read_wrapper_text(
+        NC_ORCHESTRATOR_WRAPPER_PATH,
+        "infra/scripts/refresh_nc_orchestrator.sh must exist",
+    )
+
+    assert 'echo "[$(date -Iseconds)] starting nc orchestrator refresh"' in nc_orchestrator_script_text
+    assert 'echo "[$(date -Iseconds)] nc orchestrator refresh completed"' in nc_orchestrator_script_text
+    assert "run_exit_code=$?" in nc_orchestrator_script_text
+    assert 'exit "${run_exit_code}"' in nc_orchestrator_script_text
+
+
+def _build_nc_wrapper_harness(tmp_path: Path, child_exit_code: int) -> tuple[Path, dict[str, str]]:
+    """Stage a fake repo so the real NC wrapper can run against a stubbed `uv` binary.
+
+    The real wrapper sources env_lib.sh and shells out to `uv run ... python -m ...`.
+    We stub env_lib.sh (no-op load_civibus_env so the real .env requirement is bypassed)
+    and place a fake `uv` first on PATH that exits with the requested code. This isolates
+    the wrapper's failure-path control flow from production env and Python deps.
+    """
+    fake_repo = tmp_path / "fake_repo"
+    fake_scripts = fake_repo / "infra" / "scripts"
+    fake_scripts.mkdir(parents=True)
+
+    (fake_scripts / "env_lib.sh").write_text(
+        "#!/usr/bin/env bash\n"
+        "# Stubbed for test isolation — real lib reads .env and exports POSTGRES_*.\n"
+        "load_civibus_env() { :; }\n",
+        encoding="utf-8",
+    )
+
+    wrapper_text = NC_ORCHESTRATOR_WRAPPER_PATH.read_text(encoding="utf-8")
+    fake_wrapper = fake_scripts / "refresh_nc_orchestrator.sh"
+    fake_wrapper.write_text(wrapper_text, encoding="utf-8")
+    fake_wrapper.chmod(0o755)
+
+    fake_bin = tmp_path / "fake_bin"
+    fake_bin.mkdir()
+    fake_uv = fake_bin / "uv"
+    fake_uv.write_text(
+        f"#!/usr/bin/env bash\nexit {child_exit_code}\n",
+        encoding="utf-8",
+    )
+    fake_uv.chmod(0o755)
+
+    env = os.environ.copy()
+    env["PATH"] = f"{fake_bin}{os.pathsep}{env.get('PATH', '')}"
+
+    return fake_wrapper, env
+
+
+def test_nc_orchestrator_wrapper_failure_marker_is_reachable_when_child_fails(tmp_path: Path) -> None:
+    """When the NC scraper CLI exits non-zero, the wrapper must surface the failure
+    marker on stderr and propagate the child exit code. Under `set -euo pipefail`,
+    a bare `cmd; rc=$?` pattern aborts before the assignment, leaving the marker
+    unreachable — this test guards the control-flow contract, not just string presence.
+    """
+    fake_wrapper, env = _build_nc_wrapper_harness(tmp_path, child_exit_code=42)
+
+    result = subprocess.run(
+        ["bash", str(fake_wrapper)],
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=30,
+    )
+
+    combined = result.stdout + result.stderr
+    assert "starting nc orchestrator refresh" in combined, (
+        f"start marker missing\nstdout={result.stdout!r}\nstderr={result.stderr!r}"
+    )
+    assert "nc orchestrator refresh failed exit=42" in combined, (
+        "failure marker must be reachable when child fails under set -euo pipefail; "
+        f"got stdout={result.stdout!r} stderr={result.stderr!r}"
+    )
+    assert result.returncode == 42, f"wrapper must propagate child exit code, got {result.returncode}"
+
+
+def test_nc_orchestrator_wrapper_completion_marker_emitted_on_child_success(tmp_path: Path) -> None:
+    """Mirror of the failure-path test for the success branch — ensures the
+    completion marker is emitted and exit code is 0 when the child succeeds.
+    """
+    fake_wrapper, env = _build_nc_wrapper_harness(tmp_path, child_exit_code=0)
+
+    result = subprocess.run(
+        ["bash", str(fake_wrapper)],
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=30,
+    )
+
+    combined = result.stdout + result.stderr
+    assert "starting nc orchestrator refresh" in combined
+    assert "nc orchestrator refresh completed" in combined
+    assert "nc orchestrator refresh failed" not in combined
+    assert result.returncode == 0
+
+
 def test_env_example_mirrors_fec_bulk_wrapper_runtime_contract() -> None:
     fec_bulk_script_text = _read_required_text(
         FEC_BULK_WRAPPER_PATH,
@@ -288,7 +421,7 @@ def test_installer_and_logrotate_are_repo_controlled_single_source_artifacts() -
 
 
 def test_refresh_runbook_matches_production_cron_wrapper_contract() -> None:
-    assert REFRESH_RUNBOOK_PATH.is_file(), "docs/operations/campaign-finance-refresh.md must exist"
+    assert REFRESH_RUNBOOK_PATH.is_file(), "docs/howto/operations/campaign-finance-refresh.md must exist"
 
     runbook_text = _read_text(REFRESH_RUNBOOK_PATH)
     installer_text = _read_required_text(
@@ -357,15 +490,15 @@ def test_backup_status_docs_keep_shipped_language_and_forbidden_slug_out() -> No
     assert forbidden_slug not in agents_text
 
     assert "DB backup to B2 — CLOSED/PASS." in roadmap_text
-    assert "Production deploy live since March 25, 2026" in overview_text
-    assert "Production deploy live since March 25, 2026" in claude_text
-    assert "Production deploy live since March 25, 2026" in agents_text
+    for text in (overview_text, claude_text, agents_text):
+        assert "Production status as of 2026-04-30" in text
+        assert "wrong-volume bootstrap incident" in text
 
 
 def test_db_backup_runbook_retains_throwaway_restore_contract() -> None:
     runbook_text = _read_required_text(
         DB_BACKUP_RUNBOOK_PATH,
-        "docs/operations/db-backup-runbook.md must exist",
+        "docs/howto/operations/db-backup-runbook.md must exist",
     )
 
     assert "docker build -t civibus-db-verify -f infra/db/Dockerfile ." in runbook_text
@@ -413,11 +546,7 @@ def test_keel_gate_eligibility_is_derived_from_layers_metadata() -> None:
     layers = _read_required_layers()
     layers_by_id = {str(layer["id"]): layer for layer in layers}
 
-    eligible_layer_ids = sorted(
-        str(layer["id"])
-        for layer in layers
-        if _is_unattended_global_gate(layer)
-    )
+    eligible_layer_ids = sorted(str(layer["id"]) for layer in layers if _is_unattended_global_gate(layer))
     assert eligible_layer_ids == ["L5", "L7"]
 
     # L12 remains intentionally excluded from unattended cron execution:
@@ -452,12 +581,26 @@ def test_debbie_sync_keeps_evidence_and_findings_private_by_default() -> None:
     sync_dirs = sync_payload.get("dirs", [])
 
     assert all(
-        not (entry == "evidence" or entry.startswith("evidence/") or entry == "findings" or entry.startswith("findings/"))
+        not (
+            entry == "evidence" or entry.startswith("evidence/") or entry == "findings" or entry.startswith("findings/")
+        )
         for entry in sync_files
     )
-    assert all(
-        str(sync_dir.get("path", "")).rstrip("/") not in {"evidence", "findings"}
-        for sync_dir in sync_dirs
+    assert all(str(sync_dir.get("path", "")).rstrip("/") not in {"evidence", "findings"} for sync_dir in sync_dirs)
+
+
+def test_b2_backup_wrapper_uses_pgpassfile_not_pgpassword_env_injection() -> None:
+    backup_script_text = _read_required_text(
+        SCRIPTS_DIR / "backup_to_b2.sh",
+        "infra/scripts/backup_to_b2.sh must exist",
+    )
+
+    assert "docker exec -e PGPASSWORD" not in backup_script_text, (
+        "backup_to_b2.sh must not pass PGPASSWORD via docker exec -e"
+    )
+    assert "PGPASSWORD=" not in backup_script_text or 'PGPASSWORD="${' not in backup_script_text
+    assert "PGPASSFILE" in backup_script_text or ".pgpass" in backup_script_text, (
+        "backup_to_b2.sh must use PGPASSFILE or .pgpass for pg_dump authentication"
     )
 
 

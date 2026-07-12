@@ -169,11 +169,16 @@ def _parse_indicator(value: str | None) -> bool | None:
 
 
 def _parse_date(value: str | None) -> date | None:
-    """Parse IRS MMDDYYYY date string to date object."""
+    """Parse IRS YYYYMMDD date string to date object.
+
+    Format verified against the live FullDataFile 2026-07-06: every dated
+    field (type A/B/2 dates, established date, header date) is YYYYMMDD.
+    Anything else (empty, datetime strings, out-of-range) returns None.
+    """
     if not value or len(value) != 8:
         return None
     try:
-        return date(int(value[4:8]), int(value[0:2]), int(value[2:4]))
+        return date(int(value[0:4]), int(value[4:6]), int(value[6:8]))
     except (ValueError, IndexError):
         return None
 

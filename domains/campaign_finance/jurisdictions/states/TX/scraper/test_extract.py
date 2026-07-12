@@ -140,7 +140,11 @@ def test_extract_tx_contribution_drops_short_zip_instead_of_failing_validation()
     )
     assert extracted["address"].zip4 is None
     # Other address parts must still be present so the row is not silently dropped.
-    assert extracted["address"].city is not None or extracted["address"].state is not None or extracted["address"].raw_address
+    assert (
+        extracted["address"].city is not None
+        or extracted["address"].state is not None
+        or extracted["address"].raw_address
+    )
 
 
 def test_extract_tx_contribution_drops_8digit_zip_as_malformed() -> None:

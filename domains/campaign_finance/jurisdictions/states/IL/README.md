@@ -44,7 +44,7 @@ Official portal surfaces verified live on 2026-03-27:
 - `--download-row-limit` is the bounded live-proof switch. It truncates the live stream on complete row boundaries and preserves a valid TSV sample from the official portal.
 - Typical proof command:
   - `CIVIBUS_ALLOW_INSECURE_TLS_RETRY=1 uv run python -m domains.campaign_finance.jurisdictions.states.IL.scraper.cli --download --data-type contributions --download-row-limit 25 --dry-run --allow-insecure-tls`
-- Durable live-proof samples from 2026-03-27 are saved in `docs/research/artifacts/`.
+- Durable live-proof samples from 2026-03-27 are saved in `docs/reference/research/artifacts/`.
 
 ## Known Limitations
 

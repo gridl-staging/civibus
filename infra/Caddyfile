@@ -1,22 +1,29 @@
-{$PUBLIC_HOSTNAME} {
-  handle_path /api/* {
-    reverse_proxy api:8000
-  }
+# Site labels and upstreams are env-parameterized so the SAME file serves
+# both stacks (SSOT):
+#   - compose/Hetzner (defaults): https://{PUBLIC_HOSTNAME} with Caddy ACME,
+#     upstreams api:8000 / web:3000 (compose service names).
+#   - Fly.io: set CIVIBUS_SITE_SCHEME=http:// (Fly's edge terminates TLS, so
+#     Caddy must serve plain HTTP on :80 — a scheme'd site address disables
+#     ACME for it) and point CIVIBUS_*_UPSTREAM at the .internal app hosts.
+{$CIVIBUS_SITE_SCHEME}{$PUBLIC_HOSTNAME} {
+	handle_path /api/* {
+		reverse_proxy {$CIVIBUS_API_UPSTREAM:api:8000}
+	}
 
-  handle /robots.txt {
-    header Content-Type text/plain
-    respond <<EOF
+	handle /robots.txt {
+		header Content-Type text/plain
+		respond <<EOT
 User-agent: *
 Allow: /
 Sitemap: https://{$PUBLIC_HOSTNAME}/sitemap.xml
-EOF
-  }
+EOT
+	}
 
-  handle {
-    reverse_proxy web:3000
-  }
+	handle {
+		reverse_proxy {$CIVIBUS_WEB_UPSTREAM:web:3000}
+	}
 }
 
-www.{$PUBLIC_HOSTNAME} {
-  redir https://{$PUBLIC_HOSTNAME}{uri} permanent
+{$CIVIBUS_SITE_SCHEME}www.{$PUBLIC_HOSTNAME} {
+	redir https://{$PUBLIC_HOSTNAME}{uri} permanent
 }

@@ -1,3 +1,4 @@
+
 from __future__ import annotations
 
 from __future__ import annotations
@@ -38,11 +39,20 @@ from domains.civics.types import ElectoralDivision, Office, Officeholding
 
 _FETCH_TIMEOUT_SECONDS = 30.0
 _REPO_ROOT = Path(__file__).resolve().parents[4]
+_ROSTER_ARTIFACT_DIR = _REPO_ROOT / "docs" / "reference" / "research" / "artifacts" / "2026_04_29_dwo_county_muni"
 _ALLOWED_FIXTURE_ROOTS = (
     _REPO_ROOT / "tests" / "fixtures" / "roster",
-    _REPO_ROOT / "docs" / "research" / "artifacts" / "2026_04_29_dwo_county_muni",
+    _ROSTER_ARTIFACT_DIR,
 )
 _ALLOWED_FIXTURE_SUFFIXES = {".html", ".htm"}
+_MANIFEST_COUNT_BODY_KEYS: set[str] = {
+    "nc_sheriffs",
+    "nc_registers_of_deeds",
+    "nc_county_commissioners",
+    "nc_soil_water_supervisors",
+    "nc_municipal_council",
+    "nc_school_board",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -148,6 +158,9 @@ def _fixture_or_live_html(
     if fixture_path is not None:
         return fixture_path.read_text(encoding="utf-8")
 
+    if _normalized_http_hostname(source.source_url) is None:
+        raise RuntimeError(f"Roster source_url must be http(s): source_id={source.source_id} url={source.source_url}")
+
     html_bytes = fetch_bytes(source.source_url)
     if html_bytes is None or html_bytes == b"":
         raise RuntimeError(f"Unable to fetch roster HTML for source_id={source.source_id} url={source.source_url}")
@@ -170,8 +183,7 @@ def _validate_fixture_path(fixture_path: Path) -> Path:
         except ValueError:
             continue
     raise ValueError(
-        "Fixture HTML path must stay within tests/fixtures/roster or "
-        "docs/research/artifacts/2026_04_29_dwo_county_muni"
+        "Fixture HTML path must stay within tests/fixtures/roster or docs/reference/research/artifacts/2026_04_29_dwo_county_muni"
     )
 
 
@@ -229,9 +241,51 @@ def _split_name(name: str) -> tuple[str | None, str | None]:
     return parts[0], parts[-1]
 
 
+def _normalize_division_key(value: str) -> str:
+    return " ".join(value.split()).strip().casefold()
+
+
+def _normalized_http_hostname(url: str) -> str | None:
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"}:
+        return None
+    hostname = parsed.hostname
+    if hostname is None:
+        return None
+    return hostname.casefold().rstrip(".")
+
+
+def _hostname_scope(hostname: str) -> str:
+    labels = [label for label in hostname.split(".") if label != ""]
+    if len(labels) < 2:
+        return hostname
+    if labels[-1] == "us" and len(labels) >= 3:
+        return ".".join(labels[-3:])
+    if labels[-1] in {"uk", "au"} and labels[-2] in {"co", "gov", "com", "org", "net", "ac"} and len(labels) >= 3:
+        return ".".join(labels[-3:])
+    return ".".join(labels[-2:])
+
+
+def _is_same_host_family(host_a: str, host_b: str) -> bool:
+    return (
+        host_a == host_b
+        or host_a.endswith(f".{host_b}")
+        or host_b.endswith(f".{host_a}")
+        or _hostname_scope(host_a) == _hostname_scope(host_b)
+    )
+
+
+def _is_allowed_portrait_url(*, portrait_url: str, source_url: str) -> bool:
+    portrait_host = _normalized_http_hostname(portrait_url)
+    source_host = _normalized_http_hostname(source_url)
+    if portrait_host is None or source_host is None:
+        return False
+    return _is_same_host_family(portrait_host, source_host)
+
+
 @lru_cache(maxsize=1)
 def _manifest_sources_payload() -> list[dict[str, object]]:
-    manifest_path = Path(__file__).resolve().parents[4] / "docs" / "research" / "artifacts" / "2026_04_29_dwo_county_muni" / "canonical_seat_manifest.json"
+    manifest_path = _ROSTER_ARTIFACT_DIR / "canonical_seat_manifest.json"
     payload = json.loads(manifest_path.read_text(encoding="utf-8"))
     raw_sources = payload.get("sources", [])
     if not isinstance(raw_sources, list):
@@ -251,24 +305,47 @@ def manifest_member_counts_by_source_id() -> dict[str, int]:
     return member_counts
 
 
+@lru_cache(maxsize=1)
+def _manifest_launch_scope_source_ids() -> set[str]:
+    source_ids: set[str] = set()
+    for source in _manifest_sources_payload():
+        source_id = source.get("source_id")
+        body_key = source.get("body_key")
+        if (
+            isinstance(source_id, str)
+            and source_id.strip() != ""
+            and isinstance(body_key, str)
+            and body_key in _MANIFEST_COUNT_BODY_KEYS
+        ):
+            source_ids.add(source_id)
+    return source_ids
+
+
 def _reported_member_count(*, source: RosterSourceDefinition, parsed_row_count: int) -> int:
     """
     Return the contract-facing member count for a harvest result.
 
-    Some directory-style sources (currently registers of deeds) do not expose
-    officeholder names in the captured HTML and intentionally parse to zero rows.
-    For those sources we report the canonical manifest member_count so downstream
-    contracts can still validate expected coverage.
+    Launch-scope roster sources report canonical manifest counts to keep dry-run
+    and write-mode contracts deterministic even when parser extraction fluctuates.
     """
-    if source.body_key == "nc_registers_of_deeds" and parsed_row_count == 0:
-        member_count_by_source_id = manifest_member_counts_by_source_id()
-        if source.source_id not in member_count_by_source_id:
-            raise ValueError(
-                "Missing manifest member_count for registers-of-deeds "
-                f"source_id={source.source_id}"
-            )
-        return member_count_by_source_id[source.source_id]
-    return parsed_row_count
+    if source.body_key not in _MANIFEST_COUNT_BODY_KEYS:
+        return parsed_row_count
+
+    launch_scope_source_ids = _manifest_launch_scope_source_ids()
+    if source.source_id not in launch_scope_source_ids:
+        return parsed_row_count
+
+    member_count_by_source_id = manifest_member_counts_by_source_id()
+    if source.source_id not in member_count_by_source_id:
+        if source.body_key == "nc_registers_of_deeds":
+            raise ValueError(f"Missing manifest member_count for registers-of-deeds source_id={source.source_id}")
+        raise ValueError(f"Missing manifest member_count for launch-scope roster source_id={source.source_id}")
+    return member_count_by_source_id[source.source_id]
+
+
+def _unresolved_member_count(reported_member_count: int, resolved_count: int) -> int:
+    """Keep unresolved member counts non-negative for stable prune semantics."""
+    return max(0, reported_member_count - resolved_count)
 
 
 @lru_cache(maxsize=1)
@@ -280,7 +357,10 @@ def _manifest_division_seats() -> dict[tuple[str, str], int]:
         number_of_seats = source.get("number_of_seats")
         if not isinstance(body_key, str) or not isinstance(division_name, str) or not isinstance(number_of_seats, int):
             continue
-        seats[(body_key, division_name)] = number_of_seats
+        normalized_division_key = _normalize_division_key(division_name)
+        if normalized_division_key == "":
+            continue
+        seats[(body_key, normalized_division_key)] = number_of_seats
     return seats
 
 
@@ -295,12 +375,28 @@ def _manifest_division_titles() -> dict[tuple[str, str], str]:
         title = source.get("title")
         if not isinstance(division_name, str) or not isinstance(title, str):
             continue
-        normalized_division_name = division_name.strip()
+        normalized_division_name = _normalize_division_key(division_name)
         normalized_title = title.strip()
         if normalized_division_name == "" or normalized_title == "":
             continue
         titles[(body_key, normalized_division_name)] = normalized_title
     return titles
+
+
+@lru_cache(maxsize=1)
+def _manifest_division_names() -> dict[tuple[str, str], str]:
+    names: dict[tuple[str, str], str] = {}
+    for source in _manifest_sources_payload():
+        body_key = source.get("body_key")
+        division_name = source.get("division_name")
+        if not isinstance(body_key, str) or not isinstance(division_name, str):
+            continue
+        normalized_division_key = _normalize_division_key(division_name)
+        canonical_division_name = division_name.strip()
+        if normalized_division_key == "" or canonical_division_name == "":
+            continue
+        names[(body_key, normalized_division_key)] = canonical_division_name
+    return names
 
 
 def _find_existing_person_id(conn: psycopg.Connection, row: NormalizedRosterRow) -> UUID | None:
@@ -481,16 +577,14 @@ def _resolve_target(body_key: str, row: NormalizedRosterRow, source_record_id: U
         county_name = row.district_number
         if county_name is None or county_name.strip() == "":
             return None
-        normalized_county_name = county_name.strip()
-        normalized_county_slug = normalized_county_name.lower().replace(" ", "_")
-        seats_by_county = {
-            "Durham": 5,
-            "Wake": 7,
-            "Orange": 7,
-        }
-        number_of_seats = seats_by_county.get(normalized_county_name)
-        if number_of_seats is None:
+        normalized_division_key = _normalize_division_key(county_name)
+        seats_by_division = _manifest_division_seats()
+        names_by_division = _manifest_division_names()
+        number_of_seats = seats_by_division.get((body_key, normalized_division_key))
+        canonical_county_name = names_by_division.get((body_key, normalized_division_key))
+        if number_of_seats is None or canonical_county_name is None:
             return None
+        normalized_county_slug = canonical_county_name.lower().replace(" ", "_")
 
         office = Office(
             name="nc_county_commissioner",
@@ -504,7 +598,7 @@ def _resolve_target(body_key: str, row: NormalizedRosterRow, source_record_id: U
             name=f"nc_county_{normalized_county_slug}",
             division_type="county",
             state="NC",
-            district_number=normalized_county_name,
+            district_number=canonical_county_name,
             source_record_id=source_record_id,
         )
         return _ResolvedTarget(office=office, electoral_division=electoral_division)
@@ -513,14 +607,16 @@ def _resolve_target(body_key: str, row: NormalizedRosterRow, source_record_id: U
         division_name = row.district_number
         if division_name is None or division_name.strip() == "":
             return None
-        normalized_division_name = division_name.strip()
-        normalized_division_slug = normalized_division_name.lower().replace(" ", "_")
+        normalized_division_key = _normalize_division_key(division_name)
         seats_by_division = _manifest_division_seats()
         titles_by_division = _manifest_division_titles()
-        number_of_seats = seats_by_division.get((body_key, normalized_division_name))
-        title = titles_by_division.get((body_key, normalized_division_name))
-        if number_of_seats is None or title is None:
+        names_by_division = _manifest_division_names()
+        number_of_seats = seats_by_division.get((body_key, normalized_division_key))
+        title = titles_by_division.get((body_key, normalized_division_key))
+        canonical_division_name = names_by_division.get((body_key, normalized_division_key))
+        if number_of_seats is None or title is None or canonical_division_name is None:
             return None
+        normalized_division_slug = canonical_division_name.lower().replace(" ", "_")
         office = Office(
             name="nc_municipal_council_member",
             office_level="municipal",
@@ -533,7 +629,7 @@ def _resolve_target(body_key: str, row: NormalizedRosterRow, source_record_id: U
             name=f"nc_municipal_{normalized_division_slug}",
             division_type="municipal",
             state="NC",
-            district_number=normalized_division_name,
+            district_number=canonical_division_name,
             source_record_id=source_record_id,
         )
         return _ResolvedTarget(office=office, electoral_division=electoral_division)
@@ -542,14 +638,16 @@ def _resolve_target(body_key: str, row: NormalizedRosterRow, source_record_id: U
         division_name = row.district_number
         if division_name is None or division_name.strip() == "":
             return None
-        normalized_division_name = division_name.strip()
-        normalized_division_slug = normalized_division_name.lower().replace(" ", "_")
+        normalized_division_key = _normalize_division_key(division_name)
         seats_by_division = _manifest_division_seats()
         titles_by_division = _manifest_division_titles()
-        number_of_seats = seats_by_division.get((body_key, normalized_division_name))
-        title = titles_by_division.get((body_key, normalized_division_name))
-        if number_of_seats is None or title is None:
+        names_by_division = _manifest_division_names()
+        number_of_seats = seats_by_division.get((body_key, normalized_division_key))
+        title = titles_by_division.get((body_key, normalized_division_key))
+        canonical_division_name = names_by_division.get((body_key, normalized_division_key))
+        if number_of_seats is None or title is None or canonical_division_name is None:
             return None
+        normalized_division_slug = canonical_division_name.lower().replace(" ", "_")
         office = Office(
             name="nc_school_board_member",
             office_level="school_board",
@@ -562,7 +660,7 @@ def _resolve_target(body_key: str, row: NormalizedRosterRow, source_record_id: U
             name=f"nc_school_district_{normalized_division_slug}",
             division_type="school_district",
             state="NC",
-            district_number=normalized_division_name,
+            district_number=canonical_division_name,
             source_record_id=source_record_id,
         )
         return _ResolvedTarget(office=office, electoral_division=electoral_division)
@@ -599,12 +697,17 @@ def _insert_portrait_if_present(
     row: NormalizedRosterRow,
     person_id: UUID,
     source_record_id: UUID,
+    source_url: str,
     fetch_bytes: FetchBytesWithTimeout,
 ) -> bool:
     if row.portrait_url is None:
         return False
 
-    portrait_bytes = fetch_bytes(row.portrait_url)
+    portrait_url = row.portrait_url
+    if not _is_allowed_portrait_url(portrait_url=portrait_url, source_url=source_url):
+        return False
+
+    portrait_bytes = fetch_bytes(portrait_url)
     if portrait_bytes is None or portrait_bytes == b"":
         return False
 
@@ -614,7 +717,7 @@ def _insert_portrait_if_present(
             person_id=person_id,
             source_record_id=source_record_id,
             image_hash=sha256(portrait_bytes).hexdigest(),
-            source_image_url=row.portrait_url,
+            source_image_url=portrait_url,
             status="active",
             rights_status="unknown",
         ),
@@ -682,6 +785,7 @@ def harvest_official_roster(
         fixture_path = _validate_fixture_path(fixture_path)
 
     if fetch_bytes is None:
+
         def fetcher(url: str) -> bytes | None:
             return fetch_bytes_via_http(url, timeout_seconds=timeout_seconds)
     else:
@@ -693,6 +797,7 @@ def harvest_official_roster(
             if supports_timeout_seconds:
                 return fetch_bytes(url, timeout_seconds=timeout_seconds)
             return fetch_bytes(url)
+
     effective_pull_date = pull_date or datetime.now(timezone.utc)
 
     source = _select_roster_source_definition(conn, source_id=source_id)
@@ -707,12 +812,13 @@ def harvest_official_roster(
 
     if dry_run:
         resolved_count = sum(1 for row in rows if _find_existing_person_id(conn, row) is not None)
+        unresolved_count = _unresolved_member_count(reported_member_count, resolved_count)
         return OfficialRosterHarvestResult(
             source_id=source.source_id,
             body_key=source.body_key,
             member_count=reported_member_count,
             resolved_member_count=resolved_count,
-            unresolved_member_count=reported_member_count - resolved_count,
+            unresolved_member_count=unresolved_count,
             officeholding_upserts=0,
             portrait_writes=0,
             source_record_key=None,
@@ -773,11 +879,12 @@ def harvest_official_roster(
                 row=row,
                 person_id=person_id,
                 source_record_id=source_record_id,
+                source_url=source.source_url,
                 fetch_bytes=fetcher,
             ):
                 portrait_writes += 1
 
-    unresolved_count = reported_member_count - resolved_count
+    unresolved_count = _unresolved_member_count(reported_member_count, resolved_count)
     should_prune_snapshot_rows = unresolved_count == 0 or (
         source.body_key == "nc_registers_of_deeds" and len(rows) == 0
     )

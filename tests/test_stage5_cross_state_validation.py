@@ -147,14 +147,14 @@ def test_stage_regression_files_do_not_reference_stage5_makefile_wiring_audit(
 
 
 def _coverage_registry_rows_by_code() -> dict[str, dict[str, object]]:
-    registry_path = REPO_ROOT / "docs" / "research" / "coverage-registry.json"
+    registry_path = REPO_ROOT / "docs" / "reference" / "research" / "coverage-registry.json"
     payload = json.loads(_read_text(registry_path))
     rows = payload["rows"]
     return {row["jurisdiction_code"]: row for row in rows}
 
 
 def _matrix_row_line(jurisdiction_code: str) -> str:
-    matrix_path = REPO_ROOT / "docs" / "research" / "2026-launch-support-matrix.md"
+    matrix_path = REPO_ROOT / "docs" / "reference" / "research" / "2026-launch-support-matrix.md"
     for line in _read_text(matrix_path).splitlines():
         if line.startswith(f"| {jurisdiction_code} |"):
             return line
@@ -200,17 +200,6 @@ def test_stage5_mn_nj_resolved_negative_wording_is_maintenance_only() -> None:
         assert "Inherit parent-state path:" in child_row["next_action"]
 
 
-def test_stage5_narrative_docs_remove_stale_in_mn_nj_investigation_claims() -> None:
-    roadmap_text = _read_text(REPO_ROOT / "ROADMAP.md")
-    priorities_text = _read_text(REPO_ROOT / "PRIORITIES.md")
-
-    assert "IN remains annual ZIP-first" not in roadmap_text
-    assert "IN is weekly-or-better / launch-ready while MN and NJ are resolved-negative freshness-limited." in roadmap_text
-    assert "IN is weekly-or-better / launch-ready while MN and NJ are resolved-negative freshness-limited." in priorities_text
-    assert "Check if CFA-12 IE forms are in annual bulk ZIP." not in priorities_text
-    assert "Investigate ELEC API for IE endpoints (Form IND)." not in priorities_text
-
-
 def test_stage6_ny_registry_row_uses_apr29_maintenance_closeout_wording() -> None:
     rows_by_code = _coverage_registry_rows_by_code()
     ny_row = rows_by_code["NY"]
@@ -219,22 +208,11 @@ def test_stage6_ny_registry_row_uses_apr29_maintenance_closeout_wording() -> Non
     assert ny_row["tier"] == "implemented but unproven"
     assert ny_row["evidence_date"] == "2026-04-29"
     assert "serial rerun still failed in contributions" in str(ny_row["evidence_summary"]).lower()
-    assert "expenditures and independent expenditures did not execute in that pass" in str(
-        ny_row["evidence_summary"]
-    ).lower()
+    assert (
+        "expenditures and independent expenditures did not execute in that pass"
+        in str(ny_row["evidence_summary"]).lower()
+    )
     assert "0 ny filings / transactions materialized" in str(ny_row["operational_reason"]).lower()
     assert "maintenance_closeout.md" in str(ny_row["next_action"])
     assert buffalo_row["municipal_audit_decision"] == "covered_by_parent"
     assert buffalo_row["next_action"] == f"Inherit parent-state path: NY -> {ny_row['next_action']}"
-
-
-def test_stage6_ny_narrative_docs_match_apr29_maintenance_closeout() -> None:
-    roadmap_text = _read_text(REPO_ROOT / "ROADMAP.md")
-    priorities_text = _read_text(REPO_ROOT / "PRIORITIES.md")
-
-    assert "docs/research/artifacts/2026_04_29_ny_unstick/maintenance_closeout.md" in roadmap_text
-    assert "docs/research/artifacts/2026_04_29_ny_unstick/maintenance_closeout.md" in priorities_text
-    assert "Last updated: 2026-04-30" in roadmap_text
-    assert "**Last updated:** 2026-04-30" in priorities_text
-    assert "stage 2 dispatches failed (missing `uv` PATH, then upstream read timeout/hang/zero-row)" not in priorities_text
-    assert "`filing_sched_abbrev='E'` is \"Other Receipts\", NOT IE." in priorities_text

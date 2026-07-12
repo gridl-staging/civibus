@@ -242,7 +242,7 @@ class TestScheduleBDateParsing:
 
 class TestDocumentationHygiene:
     def test_research_doc_oppexp_fields_match_schedule_b_columns(self):
-        bulk_data_doc = (REPO_ROOT / "docs" / "research" / "fec-bulk-data.md").read_text(encoding="utf-8")
+        bulk_data_doc = (REPO_ROOT / "docs" / "reference" / "research" / "fec-bulk-data.md").read_text(encoding="utf-8")
 
         in_oppexp_section = False
         doc_fields: list[str] = []
@@ -263,6 +263,6 @@ class TestDocumentationHygiene:
 
         parser = _import_schedule_b_parser()
         assert tuple(doc_fields) == parser.SCHEDULE_B_COLUMNS, (
-            "oppexp.txt field names in docs/research/fec-bulk-data.md must exactly "
+            "oppexp.txt field names in docs/reference/research/fec-bulk-data.md must exactly "
             "match SCHEDULE_B_COLUMNS in schedule_b_parser.py"
         )

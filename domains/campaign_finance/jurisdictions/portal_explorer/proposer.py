@@ -32,10 +32,7 @@ def build_proposal_request_payload(
     }
     system_message = PortalExplorerPromptMessage(
         role="system",
-        content=(
-            "Return one portal action as JSON. Allowed action_type values are "
-            "'click', 'fill', and 'done'."
-        ),
+        content=("Return one portal action as JSON. Allowed action_type values are 'click', 'fill', and 'done'."),
     )
     user_message = PortalExplorerPromptMessage(
         role="user",
@@ -58,9 +55,7 @@ def validate_action_against_page_state(
     if action.selector not in selector_universe:
         return PortalExplorerProposalResult(
             status="invalid",
-            reason=(
-                f"Action selector {action.selector!r} is not present in captured selector universe"
-            ),
+            reason=(f"Action selector {action.selector!r} is not present in captured selector universe"),
         )
     return PortalExplorerProposalResult(status="proposed", action=action)
 

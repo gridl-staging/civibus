@@ -44,8 +44,8 @@ Not applicable for this source. CAL-ACCESS stage-2 ingest uses direct ZIP downlo
 - Whether FILER_FILINGS_CD becomes required once filing-to-transaction reconciliation expands beyond current Stage 2 transaction surfaces.
 
 ## Sources
-- [S1] docs/research/stage2-ca-coverage-verification.md
-- [S2] docs/research/stage2-ca-archive-member-investigation.md
+- [S1] docs/reference/research/stage2-ca-coverage-verification.md
+- [S2] docs/reference/research/stage2-ca-archive-member-investigation.md
 - [S3] domains/campaign_finance/jurisdictions/states/CA/config.yaml
-- [S4] docs/research/stage2-ca-contract-translation.md
+- [S4] docs/reference/research/stage2-ca-contract-translation.md
 - [S5] https://www.sos.ca.gov/campaign-lobbying/cal-access-resources/raw-data-campaign-finance-and-lobbying-activity

@@ -8,8 +8,10 @@
 --    - domains/campaign_finance/schema/tables.sql
 --
 -- Schema ownership
--- This file owns exactly seven tables:
+-- This file owns exactly nine tables:
 --   - cf.committee
+--   - cf.committee_summary
+--   - cf.stage4_resume_checkpoint
 --   - cf.candidate
 --   - cf.election
 --   - cf.filing
@@ -63,6 +65,142 @@ CREATE INDEX idx_committee_designation ON cf.committee (committee_designation);
 CREATE INDEX idx_committee_party ON cf.committee (party);
 CREATE INDEX idx_committee_org ON cf.committee (organization_id)
     WHERE organization_id IS NOT NULL;
+CREATE INDEX idx_committee_source_record_id ON cf.committee (source_record_id);
+
+CREATE TABLE cf.committee_summary (
+    id                                      UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    committee_id                            UUID NOT NULL REFERENCES cf.committee(id),
+    cycle                                   INTEGER NOT NULL,
+    link_image                              TEXT,
+    committee_name                          TEXT,
+    committee_type                          TEXT,
+    committee_designation                   TEXT,
+    committee_filing_frequency              TEXT,
+    committee_street_1                      TEXT,
+    committee_street_2                      TEXT,
+    committee_city                          TEXT,
+    committee_state                         TEXT,
+    committee_zip                           TEXT,
+    treasurer_name                          TEXT,
+    individual_contributions                NUMERIC(14,2),
+    party_committee_contributions           NUMERIC(14,2),
+    other_committee_contributions           NUMERIC(14,2),
+    total_contributions                     NUMERIC(14,2),
+    transfers_from_other_authorized_committees NUMERIC(14,2),
+    offsets_to_operating_expenditures       NUMERIC(14,2),
+    other_receipts                          NUMERIC(14,2),
+    total_receipts                          NUMERIC(14,2),
+    transfers_to_other_authorized_committees NUMERIC(14,2),
+    other_loan_repayments                   NUMERIC(14,2),
+    individual_refunds                      NUMERIC(14,2),
+    political_party_committee_refunds       NUMERIC(14,2),
+    total_contribution_refunds              NUMERIC(14,2),
+    other_disbursements                     NUMERIC(14,2),
+    total_disbursements                     NUMERIC(14,2),
+    net_contributions                       NUMERIC(14,2),
+    net_operating_expenditures              NUMERIC(14,2),
+    cash_on_hand_beginning_of_period        NUMERIC(14,2),
+    coverage_start_date                     DATE,
+    cash_on_hand                            NUMERIC(14,2),
+    coverage_end_date                       DATE,
+    debts_owed_by_committee                 NUMERIC(14,2),
+    debts_owed_to_committee                 NUMERIC(14,2),
+    individual_itemized_contributions       NUMERIC(14,2),
+    individual_unitemized_contributions     NUMERIC(14,2),
+    other_loans                             NUMERIC(14,2),
+    transfers_from_nonfederal_account       NUMERIC(14,2),
+    transfers_from_nonfederal_levin         NUMERIC(14,2),
+    total_nonfederal_transfers              NUMERIC(14,2),
+    loan_repayments_received                NUMERIC(14,2),
+    offsets_to_fundraising                  NUMERIC(14,2),
+    offsets_to_legal_accounting             NUMERIC(14,2),
+    federal_candidate_contribution_refunds  NUMERIC(14,2),
+    total_federal_receipts                  NUMERIC(14,2),
+    shared_federal_operating_expenditures   NUMERIC(14,2),
+    shared_nonfederal_operating_expenditures NUMERIC(14,2),
+    other_federal_operating_expenditures    NUMERIC(14,2),
+    total_operating_expenditures            NUMERIC(14,2),
+    federal_candidate_committee_contributions NUMERIC(14,2),
+    independent_expenditures                NUMERIC(14,2),
+    coordinated_expenditures_by_party_committee NUMERIC(14,2),
+    loans_made                              NUMERIC(14,2),
+    shared_federal_activity_federal_share   NUMERIC(14,2),
+    shared_federal_activity_nonfederal      NUMERIC(14,2),
+    nonallocated_federal_election_activity  NUMERIC(14,2),
+    total_federal_election_activity         NUMERIC(14,2),
+    total_federal_disbursements             NUMERIC(14,2),
+    candidate_contributions                 NUMERIC(14,2),
+    candidate_loans                         NUMERIC(14,2),
+    total_loans                             NUMERIC(14,2),
+    operating_expenditures                  NUMERIC(14,2),
+    candidate_loan_repayments               NUMERIC(14,2),
+    total_loan_repayments                   NUMERIC(14,2),
+    other_committee_refunds                 NUMERIC(14,2),
+    total_offsets_to_operating_expenditures NUMERIC(14,2),
+    exempt_legal_accounting_disbursements   NUMERIC(14,2),
+    fundraising_disbursements               NUMERIC(14,2),
+    itemized_refunds_rebates_returns        NUMERIC(14,2),
+    subtotal_refunds_rebates_returns        NUMERIC(14,2),
+    unitemized_refunds_rebates_returns      NUMERIC(14,2),
+    itemized_other_refunds_rebates_returns  NUMERIC(14,2),
+    unitemized_other_refunds_rebates_returns NUMERIC(14,2),
+    subtotal_other_refunds_rebates_returns  NUMERIC(14,2),
+    itemized_other_income                   NUMERIC(14,2),
+    unitemized_other_income                 NUMERIC(14,2),
+    expenditures_prior_years_subject_to_limits NUMERIC(14,2),
+    expenditures_subject_to_limits          NUMERIC(14,2),
+    federal_funds                           NUMERIC(14,2),
+    itemized_convention_expenditures_disbursements NUMERIC(14,2),
+    itemized_other_disbursements            NUMERIC(14,2),
+    subtotal_convention_expenditures_disbursements NUMERIC(14,2),
+    total_expenditures_subject_to_limits    NUMERIC(14,2),
+    unitemized_convention_expenditures_disbursements NUMERIC(14,2),
+    unitemized_other_disbursements          NUMERIC(14,2),
+    total_communication_cost                NUMERIC(14,2),
+    cash_on_hand_beginning_of_year          NUMERIC(14,2),
+    cash_on_hand_close_of_year              NUMERIC(14,2),
+    source_record_id                        UUID REFERENCES core.source_record(id),
+    created_at                              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at                              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+    CONSTRAINT ck_committee_summary_coverage_order
+        CHECK (coverage_start_date IS NULL OR coverage_end_date IS NULL OR coverage_start_date <= coverage_end_date)
+);
+
+CREATE UNIQUE INDEX uq_committee_summary_committee_cycle
+    ON cf.committee_summary (committee_id, cycle);
+CREATE INDEX idx_committee_summary_committee_id
+    ON cf.committee_summary (committee_id);
+CREATE INDEX idx_committee_summary_cycle
+    ON cf.committee_summary (cycle);
+CREATE INDEX idx_committee_summary_source_record_id
+    ON cf.committee_summary (source_record_id);
+
+CREATE TABLE cf.stage4_resume_checkpoint (
+    id                     UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    data_source_id         UUID NOT NULL REFERENCES core.data_source(id),
+    cycle                  INTEGER NOT NULL,
+    file_type              TEXT NOT NULL,
+    archive_fingerprint    TEXT NOT NULL,
+    archive_member_name    TEXT,
+    next_source_row_number BIGINT NOT NULL DEFAULT 0,
+    created_at             TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at             TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+    CONSTRAINT ck_stage4_resume_checkpoint_file_type
+        CHECK (file_type IN ('itcont')),
+    CONSTRAINT ck_stage4_resume_checkpoint_cycle
+        CHECK (cycle >= 1900),
+    CONSTRAINT ck_stage4_resume_checkpoint_next_source_row_number
+        CHECK (next_source_row_number >= 0)
+);
+
+CREATE UNIQUE INDEX uq_stage4_resume_checkpoint_identity
+    ON cf.stage4_resume_checkpoint (data_source_id, cycle, file_type);
+CREATE INDEX idx_stage4_resume_checkpoint_data_source_id
+    ON cf.stage4_resume_checkpoint (data_source_id);
+CREATE INDEX idx_stage4_resume_checkpoint_updated_at
+    ON cf.stage4_resume_checkpoint (updated_at);
 
 CREATE TABLE cf.candidate (
     id                       UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -75,6 +213,10 @@ CREATE TABLE cf.candidate (
     district                 TEXT,
     incumbent_challenge      TEXT,
     principal_committee_id    UUID REFERENCES cf.committee(id),
+    total_receipts           NUMERIC(14,2),
+    total_disbursements      NUMERIC(14,2),
+    cash_on_hand             NUMERIC(14,2),
+    summary_coverage_end_date DATE,
     source_record_id         UUID REFERENCES core.source_record(id),
     created_at               TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at               TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -95,6 +237,7 @@ CREATE TABLE cf.candidate (
 CREATE INDEX idx_candidate_office_filter ON cf.candidate (office, state, district);
 CREATE INDEX idx_candidate_party_filter ON cf.candidate (party);
 CREATE INDEX idx_candidate_principal_committee ON cf.candidate (principal_committee_id);
+CREATE INDEX idx_candidate_source_record_id ON cf.candidate (source_record_id);
 
 CREATE TABLE cf.election (
     id                     UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -135,6 +278,7 @@ CREATE UNIQUE INDEX uq_election_canonical_key
     );
 CREATE INDEX idx_election_lookup
     ON cf.election (office, jurisdiction_code, candidate_election_year);
+CREATE INDEX idx_election_source_record_id ON cf.election (source_record_id);
 
 CREATE TABLE cf.filing (
     id                        UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -192,6 +336,8 @@ CREATE TABLE cf.transaction (
     transaction_date           DATE,
     amount                     NUMERIC(14,2) NOT NULL,
     contributor_name_raw        TEXT,
+    -- Raw FEC ENTITY_TP codes observed in Schedule A include IND, ORG, PAC, COM, CCM, CAN, PTY.
+    contributor_entity_type    TEXT,
     contributor_employer        TEXT,
     contributor_occupation      TEXT,
     contributor_city           TEXT,
@@ -234,7 +380,7 @@ CREATE UNIQUE INDEX uq_filing_transaction_identifier
     ON cf.transaction (filing_id, transaction_identifier)
     WHERE transaction_identifier IS NOT NULL;
 CREATE INDEX idx_transaction_filing_lookup ON cf.transaction (filing_id);
-CREATE INDEX idx_transaction_committee_lookup ON cf.transaction (committee_id);
+CREATE INDEX idx_transaction_committee_date ON cf.transaction (committee_id, transaction_date);
 CREATE INDEX idx_transaction_date_lookup ON cf.transaction (transaction_date);
 CREATE INDEX idx_transaction_contributor_person_lookup
     ON cf.transaction (contributor_person_id)
@@ -248,6 +394,41 @@ CREATE INDEX idx_transaction_support_oppose
 CREATE INDEX idx_transaction_source_record_id
     ON cf.transaction (source_record_id)
     WHERE source_record_id IS NOT NULL;
+-- search_donors(by=name|employer|zip) needs fuzzy text lookup on names/employers
+-- and exact normalized 5-digit ZIP-prefix filtering without replacing donor ER indexes.
+CREATE INDEX idx_transaction_contributor_name_lower_trgm
+    ON cf.transaction USING GIN (LOWER(contributor_name_raw) gin_trgm_ops)
+    WHERE contributor_name_raw IS NOT NULL;
+CREATE INDEX idx_transaction_contributor_employer_lower_trgm
+    ON cf.transaction USING GIN (LOWER(contributor_employer) gin_trgm_ops)
+    WHERE contributor_employer IS NOT NULL;
+CREATE INDEX idx_transaction_contributor_zip5
+    ON cf.transaction (LEFT(contributor_zip, 5))
+    WHERE contributor_zip IS NOT NULL;
+-- High-frequency donor searches must intersect the mode predicate with the
+-- immutable Schedule A receipt filters before row materialization. These partial
+-- indexes are intentionally narrower than the general donor ER indexes above.
+CREATE INDEX idx_transaction_donor_search_name_receipt_trgm
+    ON cf.transaction USING GIN (LOWER(contributor_name_raw) gin_trgm_ops)
+    WHERE contributor_name_raw IS NOT NULL
+      AND transaction_type LIKE '1%'
+      AND contributor_entity_type = 'IND'
+      AND is_memo = FALSE
+      AND amendment_indicator != 'T';
+CREATE INDEX idx_transaction_donor_search_employer_receipt_trgm
+    ON cf.transaction USING GIN (LOWER(contributor_employer) gin_trgm_ops)
+    WHERE contributor_employer IS NOT NULL
+      AND transaction_type LIKE '1%'
+      AND contributor_entity_type = 'IND'
+      AND is_memo = FALSE
+      AND amendment_indicator != 'T';
+CREATE INDEX idx_transaction_donor_search_zip5_receipt
+    ON cf.transaction (LEFT(contributor_zip, 5))
+    WHERE contributor_zip IS NOT NULL
+      AND transaction_type LIKE '1%'
+      AND contributor_entity_type = 'IND'
+      AND is_memo = FALSE
+      AND amendment_indicator != 'T';
 
 CREATE TABLE cf.candidate_committee_link (
     id                   UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -281,6 +462,8 @@ CREATE INDEX idx_candidate_committee_committee_lookup
     ON cf.candidate_committee_link (committee_id);
 CREATE INDEX idx_candidate_committee_election_lookup
     ON cf.candidate_committee_link (election_id);
+CREATE INDEX idx_candidate_committee_link_source_record_id
+    ON cf.candidate_committee_link (source_record_id);
 -- GiST index on (candidate_id, committee_id, designation null-flag/value, valid_period) is
 -- already created by the candidate_committee_link_non_overlapping EXCLUDE constraint.
 
@@ -323,6 +506,16 @@ CREATE INDEX idx_nc_committee_registry_status_desc
 
 CREATE TRIGGER trg_committee_updated_at
     BEFORE UPDATE ON cf.committee
+    FOR EACH ROW
+    EXECUTE FUNCTION core.set_updated_at();
+
+CREATE TRIGGER trg_committee_summary_updated_at
+    BEFORE UPDATE ON cf.committee_summary
+    FOR EACH ROW
+    EXECUTE FUNCTION core.set_updated_at();
+
+CREATE TRIGGER trg_stage4_resume_checkpoint_updated_at
+    BEFORE UPDATE ON cf.stage4_resume_checkpoint
     FOR EACH ROW
     EXECUTE FUNCTION core.set_updated_at();
 

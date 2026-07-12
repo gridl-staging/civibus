@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 
 import psycopg
 import pytest
@@ -8,15 +7,6 @@ from fastapi.testclient import TestClient
 
 from api.deps import get_db
 from api.middleware import require_administrative_request, require_authorized_request
-
-_TEST_ENV_DEFAULTS = {
-    "CIVIBUS_API_KEYS": "test-suite-default-key",
-    "CIVIBUS_RATE_LIMIT_REQUESTS": "100",
-    "CIVIBUS_RATE_LIMIT_WINDOW_SECONDS": "60",
-}
-
-for env_var_name, env_var_value in _TEST_ENV_DEFAULTS.items():
-    os.environ.setdefault(env_var_name, env_var_value)
 
 
 def _build_api_test_client(connection: psycopg.Connection) -> TestClient:

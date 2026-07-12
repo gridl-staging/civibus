@@ -1,7 +1,7 @@
 """Unit tests locking the NC committee registry row contract.
 
 Validates NCCommitteeRegistryRow against the Stage 1 contract in
-docs/research/nc_committee_discovery_contract_2026_04_24.md (lines 100-139).
+docs/reference/research/nc_committee_discovery_contract_2026_04_24.md (lines 100-139).
 """
 
 from __future__ import annotations

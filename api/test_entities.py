@@ -86,6 +86,8 @@ def test_get_person_returns_person_response_with_provenance(
 
     assert response.status_code == 200
     payload = response.json()
+    required_bio_keys = {"bio_text", "bio_source_url", "bio_license", "bio_pulled_at"}
+    assert required_bio_keys.issubset(payload.keys())
     assert payload["id"] == str(person.id)
     assert payload["canonical_name"] == person.canonical_name
     assert payload["name_variants"] == person.name_variants
@@ -131,6 +133,7 @@ def test_get_person_returns_person_response_with_provenance(
     missing_bio_response = api_client.get(f"/v1/person/{person_without_bio.id}")
     assert missing_bio_response.status_code == 200
     missing_bio_payload = missing_bio_response.json()
+    assert required_bio_keys.issubset(missing_bio_payload.keys())
     assert missing_bio_payload["occupation"] == person_without_bio.occupation
     assert missing_bio_payload["education"] == person_without_bio.education
     assert missing_bio_payload["bio_text"] is None
@@ -199,7 +202,56 @@ def test_get_person_returns_active_portrait_payload_when_present(
         "width_px": 640,
         "height_px": 480,
     }
+    assert set(response.json()["portrait"].keys()) == {
+        "status",
+        "rights_status",
+        "source_image_url",
+        "mime_type",
+        "width_px",
+        "height_px",
+    }
     assert "storage_uri" not in response.json()["portrait"]
+
+    restricted_person = Person(
+        canonical_name="Portrait Restricted Person",
+        first_name="Portrait",
+        last_name="Restricted",
+    )
+    insert_person(db_conn, restricted_person)
+    restricted_source_record = SourceRecord(
+        data_source_id=data_source.id,
+        source_record_key=f"portrait-restricted-{uuid4()}",
+        source_url="https://example.org/portrait/restricted-record",
+        raw_fields={"fixture": "portrait-restricted"},
+        pull_date=datetime(2026, 4, 1, 12, 5, tzinfo=timezone.utc),
+    )
+    insert_source_record(db_conn, restricted_source_record)
+    insert_person_portrait(
+        db_conn,
+        PersonPortrait(
+            person_id=restricted_person.id,
+            source_record_id=restricted_source_record.id,
+            status="active",
+            rights_status="restricted",
+            image_hash="c" * 64,
+            mime_type="image/jpeg",
+            width_px=600,
+            height_px=450,
+            source_image_url="https://images.example.org/portrait-restricted.jpg",
+        ),
+    )
+
+    restricted_response = api_client.get(f"/v1/person/{restricted_person.id}")
+
+    assert restricted_response.status_code == 200
+    assert restricted_response.json()["portrait"] == {
+        "status": "active",
+        "rights_status": "restricted",
+        "source_image_url": None,
+        "mime_type": "image/jpeg",
+        "width_px": 600,
+        "height_px": 450,
+    }
 
 
 def test_get_person_returns_roster_sourced_active_portrait_from_existing_person_portrait_join(
@@ -248,6 +300,14 @@ def test_get_person_returns_roster_sourced_active_portrait_from_existing_person_
         "mime_type": "image/jpeg",
         "width_px": 320,
         "height_px": 400,
+    }
+    assert set(response.json()["portrait"].keys()) == {
+        "status",
+        "rights_status",
+        "source_image_url",
+        "mime_type",
+        "width_px",
+        "height_px",
     }
 
 

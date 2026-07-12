@@ -17,7 +17,7 @@
 # secrets, and dev-only files are excluded.
 #
 # Authorization: this is a "non-secret prod config" change per
-# docs/operations/prod_ops_discipline.md "Default to action — authorization
+# docs/howto/operations/prod_ops_discipline.md "Default to action — authorization
 # scope". AI agents may run --dry-run freely. --apply is permitted when
 # changes are intended (it's a deploy, not a recovery).
 
@@ -38,6 +38,7 @@ RSYNC_EXCLUDES=(
     # also produce noisy diffs every time pack-files differ between sides
     # (different gc timing, etc.). The source-repo is the authoritative
     # commit state; the VM's working tree is just deployed code.
+    --exclude='.git'
     --exclude='.git/'
     --exclude='.gitignore'
 
@@ -48,6 +49,8 @@ RSYNC_EXCLUDES=(
     --exclude='.pytest_cache/'
     --exclude='.ruff_cache/'
     --exclude='.mypy_cache/'
+    --exclude='.coverage'
+    --exclude='web/test-results/'
 
     # Per-machine env / secrets — VM has its own, never overwrite.
     --exclude='.env'
@@ -60,13 +63,21 @@ RSYNC_EXCLUDES=(
     --exclude='.matt/'
     --exclude='.claude/'
     --exclude='.cursor/'
+    --exclude='.vscode/'
+    --exclude='.hashbrown/'
+    --exclude='.batman.toml'
 
     # Build artifacts — regenerated at deploy time.
     --exclude='web/.svelte-kit/'
     --exclude='web/build/'
     --exclude='web/dist/'
 
-    # Local data dumps + scratch — don't push terabytes of mock data.
+    # Local data dumps + scratch — VM data/ and generated research artifacts
+    # are host-local and should not be deleted by repo sync.
+    --exclude='data/'
+    --exclude='docs/reference/research/artifacts/'
+    --exclude='docs/reference/research/portal_contracts/'
+    --exclude='docs/reference/research/portal_contracts/runs/'
     --exclude='**/research_artifacts/'
     --exclude='**/*.shp'
     --exclude='**/*.shx'

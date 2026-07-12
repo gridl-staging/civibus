@@ -73,9 +73,7 @@ def _isolate_nc_ie_test_rows_via_savepoint_then_skip_on_lock_contention(
     """
     cursor_check = db_conn.execute("SET LOCAL statement_timeout = '2s'")  # short fail-fast
     try:
-        row = db_conn.execute(
-            "SELECT 1 FROM cf.filing WHERE filing_fec_id LIKE 'NC-IE-%' LIMIT 1"
-        ).fetchone()
+        row = db_conn.execute("SELECT 1 FROM cf.filing WHERE filing_fec_id LIKE 'NC-IE-%' LIMIT 1").fetchone()
     except Exception as exc:  # noqa: BLE001 - any failure (timeout, etc.) means we cannot guarantee isolation
         pytest.skip(
             f"Skipping NC IE integration test: cannot verify clean DB state ({exc!r}); "

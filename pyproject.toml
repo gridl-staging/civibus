@@ -54,6 +54,30 @@ markers = [
 ]
 timeout = 120
 
+# Coverage measures PRODUCT code only; the CI --cov-fail-under gate is meant
+# to catch untested product code, and test files in the denominator distort it
+# both ways (unit test files run at ~100%, integration/e2e test files sit at
+# ~10% when deselected by the unit run). Measured 2026-07-07: product-only
+# coverage 72.6% vs 69% with test files mixed in.
+#
+# The jurisdictions patterns are the parked-jurisdiction quarantine
+# counterpart to the conftest.py collect_ignore gate: per-state/city tests are
+# excluded from default collection, so their (frozen) product code must not
+# sit untested in the denominator. Omit exactly the per-state/city subdir
+# contents (coverage's `*` crosses path separators, so `*/*` reaches
+# arbitrarily deep) while shared helpers directly under jurisdictions/states/
+# (load_utils.py etc.) remain measured — they are live federal-ingest
+# dependencies.
+[tool.coverage.run]
+omit = [
+  "*/test_*.py",
+  "*/tests/*",
+  "*/conftest.py",
+  "conftest.py",
+  "domains/campaign_finance/jurisdictions/states/*/*",
+  "domains/campaign_finance/jurisdictions/cities/*/*",
+]
+
 [tool.ruff]
 line-length = 120
 target-version = "py312"

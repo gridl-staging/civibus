@@ -51,11 +51,7 @@ def build_committee_search_buckets() -> tuple[str, ...]:
 
 def parse_result_rows(html_or_rows: str | Sequence[Mapping[str, Any]]) -> list[NCCommitteeRegistryRow]:
     """Parse CFOrgLkup rows into typed NC registry rows, deduped by OGID."""
-    raw_rows = (
-        _extract_inline_json_rows(html_or_rows)
-        if isinstance(html_or_rows, str)
-        else list(html_or_rows)
-    )
+    raw_rows = _extract_inline_json_rows(html_or_rows) if isinstance(html_or_rows, str) else list(html_or_rows)
 
     deduped_rows: dict[int, NCCommitteeRegistryRow] = {}
     for raw_row in raw_rows:

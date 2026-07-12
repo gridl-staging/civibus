@@ -35,8 +35,8 @@ commands while writing deterministic dispatch metadata.
 
 ```bash
 ./infra/scripts/long_running_dispatch.sh \
-  --log-path docs/research/artifacts/<run>/dispatch.log \
-  --metadata-path docs/research/artifacts/<run>/dispatch_metadata.json \
+  --log-path docs/reference/research/artifacts/<run>/dispatch.log \
+  --metadata-path docs/reference/research/artifacts/<run>/dispatch_metadata.json \
   -- uv run python -m core.entity_resolution.tuning --candidate-id c1
 ```
 

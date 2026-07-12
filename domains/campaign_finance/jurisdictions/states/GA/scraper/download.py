@@ -108,7 +108,9 @@ def download_ga_export(
     if source_block is None:
         raise ValueError(f"Unsupported GA data type: {data_type}")
     if source_block.last_verified_working is None:
-        source_issue_summary = source_block.known_issues[0] if source_block.known_issues else "missing last_verified_working"
+        source_issue_summary = (
+            source_block.known_issues[0] if source_block.known_issues else "missing last_verified_working"
+        )
         raise RuntimeError(
             "GA data type "
             f"{normalized_data_type!r} is configured but not currently verified for live export: {source_issue_summary}"

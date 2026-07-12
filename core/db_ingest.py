@@ -1,7 +1,9 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime
+from enum import StrEnum
 from uuid import UUID
 
 import psycopg
@@ -9,6 +11,47 @@ from psycopg.types.json import Jsonb
 from psycopg.types.range import DateRange
 
 from core.types.python.models import Address, ContactPoint, SourceRecord
+
+
+class SourceRecordBulkInsertAttribution(StrEnum):
+    FAST_PATH_INSERTED = "fast_path_inserted"
+    FAST_PATH_FALLBACK = "fast_path_fallback"
+    FORCED_PER_ROW = "forced_per_row"
+
+
+@dataclass(frozen=True, slots=True)
+class SourceRecordBulkInsertResult:
+    source_record_id: UUID | None
+    inserted: bool
+    attribution: SourceRecordBulkInsertAttribution
+
+
+@dataclass(frozen=True, slots=True)
+class SourceRecordBulkInsertAttributionCounts:
+    fast_path_candidates: int
+    forced_per_row_rows: int
+    fast_path_inserted: int
+    fast_path_fallbacks: int
+
+
+def summarize_source_record_bulk_insert_attribution(
+    results: list[SourceRecordBulkInsertResult],
+) -> SourceRecordBulkInsertAttributionCounts:
+    fast_path_inserted = sum(
+        result.attribution == SourceRecordBulkInsertAttribution.FAST_PATH_INSERTED for result in results
+    )
+    fast_path_fallbacks = sum(
+        result.attribution == SourceRecordBulkInsertAttribution.FAST_PATH_FALLBACK for result in results
+    )
+    forced_per_row_rows = sum(
+        result.attribution == SourceRecordBulkInsertAttribution.FORCED_PER_ROW for result in results
+    )
+    return SourceRecordBulkInsertAttributionCounts(
+        fast_path_candidates=fast_path_inserted + fast_path_fallbacks,
+        forced_per_row_rows=forced_per_row_rows,
+        fast_path_inserted=fast_path_inserted,
+        fast_path_fallbacks=fast_path_fallbacks,
+    )
 
 
 def _strip_null_bytes(value: object) -> object:
@@ -276,6 +319,152 @@ def try_insert_source_record(conn: psycopg.Connection, sr: SourceRecord) -> UUID
         )
 
         return new_id
+
+
+def _is_setwise_bulk_candidate(record: SourceRecord, key_counts: dict[tuple[UUID, str | None], int]) -> bool:
+    if record.source_record_key is None:
+        return False
+    return key_counts[(record.data_source_id, record.source_record_key)] == 1
+
+
+def _bulk_insert_fresh_source_records(
+    conn: psycopg.Connection,
+    records: list[SourceRecord],
+) -> set[int]:
+    """Set-wise insert records with no active row; return the ordinals this statement inserted.
+
+    Ordinals absent from the result already had an active row (or lost the insert race)
+    and must go through the locked ``try_insert_source_record()`` owner.
+    """
+    if not records:
+        return set()
+
+    ordinals = list(range(len(records)))
+    ids = [record.id for record in records]
+    data_source_ids = [record.data_source_id for record in records]
+    source_record_keys = [record.source_record_key for record in records]
+    source_urls = [record.source_url for record in records]
+    raw_fields = [Jsonb(_strip_null_bytes(record.raw_fields)) for record in records]
+    pull_dates = [record.pull_date for record in records]
+    record_hashes = [record.record_hash for record in records]
+    created_at_values = [record.created_at for record in records]
+
+    with conn.cursor() as cursor:
+        cursor.execute(
+            """
+            WITH incoming (
+                ordinal, id, data_source_id, source_record_key, source_url,
+                raw_fields, pull_date, record_hash, created_at
+            ) AS (
+                SELECT *
+                FROM unnest(
+                    %s::integer[],
+                    %s::uuid[],
+                    %s::uuid[],
+                    %s::text[],
+                    %s::text[],
+                    %s::jsonb[],
+                    %s::timestamptz[],
+                    %s::text[],
+                    %s::timestamptz[]
+                )
+            ),
+            active AS (
+                SELECT
+                    incoming.ordinal,
+                    source_record.id AS active_id
+                FROM incoming
+                JOIN core.source_record AS source_record
+                  ON source_record.data_source_id = incoming.data_source_id
+                 AND source_record.source_record_key = incoming.source_record_key
+                 AND source_record.superseded_by IS NULL
+            ),
+            inserted AS (
+                INSERT INTO core.source_record (
+                    id, data_source_id, source_record_key, source_url,
+                    raw_fields, pull_date, record_hash, superseded_by, created_at
+                )
+                SELECT
+                    incoming.id,
+                    incoming.data_source_id,
+                    incoming.source_record_key,
+                    incoming.source_url,
+                    incoming.raw_fields,
+                    incoming.pull_date,
+                    incoming.record_hash,
+                    NULL,
+                    incoming.created_at
+                FROM incoming
+                LEFT JOIN active ON active.ordinal = incoming.ordinal
+                WHERE active.active_id IS NULL
+                ON CONFLICT (data_source_id, source_record_key)
+                WHERE superseded_by IS NULL AND source_record_key IS NOT NULL
+                DO NOTHING
+                RETURNING id
+            )
+            SELECT incoming.ordinal
+            FROM incoming
+            JOIN inserted ON inserted.id = incoming.id
+            LEFT JOIN active ON active.ordinal = incoming.ordinal
+            WHERE active.active_id IS NULL
+            """,
+            (
+                ordinals,
+                ids,
+                data_source_ids,
+                source_record_keys,
+                source_urls,
+                raw_fields,
+                pull_dates,
+                record_hashes,
+                created_at_values,
+            ),
+        )
+        return {ordinal for (ordinal,) in cursor}
+
+
+def try_insert_source_records_bulk(
+    conn: psycopg.Connection,
+    source_records: list[SourceRecord],
+) -> list[SourceRecordBulkInsertResult]:
+    key_counts: dict[tuple[UUID, str | None], int] = {}
+    for record in source_records:
+        key = (record.data_source_id, record.source_record_key)
+        key_counts[key] = key_counts.get(key, 0) + 1
+
+    results: list[SourceRecordBulkInsertResult | None] = [None] * len(source_records)
+    setwise_records: list[SourceRecord] = []
+    setwise_indexes: list[int] = []
+    for index, record in enumerate(source_records):
+        if _is_setwise_bulk_candidate(record, key_counts):
+            setwise_records.append(record)
+            setwise_indexes.append(index)
+        else:
+            inserted_id = try_insert_source_record(conn, record)
+            results[index] = SourceRecordBulkInsertResult(
+                inserted_id,
+                inserted_id is not None,
+                SourceRecordBulkInsertAttribution.FORCED_PER_ROW,
+            )
+
+    inserted_ordinals = _bulk_insert_fresh_source_records(conn, setwise_records)
+    for ordinal, record in enumerate(setwise_records):
+        result_index = setwise_indexes[ordinal]
+        if ordinal in inserted_ordinals:
+            results[result_index] = SourceRecordBulkInsertResult(
+                record.id,
+                True,
+                SourceRecordBulkInsertAttribution.FAST_PATH_INSERTED,
+            )
+        else:
+            inserted_id = try_insert_source_record(conn, record)
+            results[result_index] = SourceRecordBulkInsertResult(
+                inserted_id,
+                inserted_id is not None,
+                SourceRecordBulkInsertAttribution.FAST_PATH_FALLBACK,
+            )
+
+    return [result for result in results if result is not None]
 
 
 def find_organization_by_canonical_name(conn: psycopg.Connection, canonical_name: str) -> UUID | None:

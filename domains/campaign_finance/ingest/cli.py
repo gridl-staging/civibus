@@ -1,5 +1,5 @@
 """
-Stub summary for /Users/stuart/parallel_development/civibus_dev/mar21_01_fec_pipeline_hardening/civibus_dev/domains/campaign_finance/ingest/cli.py.
+Stub summary for mar21_01_fec_pipeline_hardening/civibus_dev/domains/campaign_finance/ingest/cli.py.
 """
 
 from __future__ import annotations

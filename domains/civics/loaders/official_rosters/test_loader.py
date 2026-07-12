@@ -20,9 +20,7 @@ from domains.civics.types import ElectoralDivision, Office, Officeholding
 pytestmark = pytest.mark.integration
 
 _FIXTURE_DIR = Path(__file__).resolve().parents[4] / "tests" / "fixtures" / "roster"
-_STAGE2_ARTIFACT_DIR = (
-    Path(__file__).resolve().parents[4] / "docs" / "research" / "artifacts" / "2026_04_29_dwo_county_muni"
-)
+_STAGE2_ARTIFACT_DIR = roster_loader._ROSTER_ARTIFACT_DIR
 _MANIFEST_PATH = _STAGE2_ARTIFACT_DIR / "canonical_seat_manifest.json"
 _STAGE3_RESOLUTION_EXPECTATIONS_PATH = _STAGE2_ARTIFACT_DIR / "stage3_resolution_subset.json"
 
@@ -161,11 +159,25 @@ def _seed_persons_for_fixture_rows(connection: psycopg.Connection) -> None:
 
 def _seed_authoritative_persons_for_stage2_roster_rows(connection: psycopg.Connection) -> None:
     commissioner_names = {
-        "Michelle Burton", "Mike Lee", "Nida Allam", "Stephen Valentine", "Wendy Jacobs",
-        "Cheryl Stallings", "Don Mial", "Safiyah Jackson", "Shinica Thomas",
-        "Susan Evans", "Tara Waters", "Vickie Adamson",
-        "Amy Fowler", "Earl McKee", "Jamezetta Bedford", "Jean Hamilton",
-        "Marilyn Carter", "Phyllis Portie-Ascott", "Sally Greene",
+        "Michelle Burton",
+        "Mike Lee",
+        "Nida Allam",
+        "Stephen Valentine",
+        "Wendy Jacobs",
+        "Cheryl Stallings",
+        "Don Mial",
+        "Safiyah Jackson",
+        "Shinica Thomas",
+        "Susan Evans",
+        "Tara Waters",
+        "Vickie Adamson",
+        "Amy Fowler",
+        "Earl McKee",
+        "Jamezetta Bedford",
+        "Jean Hamilton",
+        "Marilyn Carter",
+        "Phyllis Portie-Ascott",
+        "Sally Greene",
     }
     unique_names = sorted(
         commissioner_names
@@ -195,13 +207,7 @@ def _seed_authoritative_persons_for_stage3_subset(
     source_ids: list[str],
 ) -> None:
     expected_names_by_source_id = _stage3_resolution_expectations()
-    unique_names = sorted(
-        {
-            name
-            for source_id in source_ids
-            for name in expected_names_by_source_id.get(source_id, [])
-        }
-    )
+    unique_names = sorted({name for source_id in source_ids for name in expected_names_by_source_id.get(source_id, [])})
     with connection.cursor() as cursor:
         for name in unique_names:
             first_name, last_name = roster_loader._split_name(name)
@@ -224,9 +230,7 @@ def _remove_non_seeded_name_matches_for_stage3_subset(
     """Keep Stage 3 seeded-resolution assertions deterministic in shared DB test environments."""
     expected_names_by_source_id = _stage3_resolution_expectations()
     globally_expected_names = {
-        expected_name
-        for expected_names in expected_names_by_source_id.values()
-        for expected_name in expected_names
+        expected_name for expected_names in expected_names_by_source_id.values() for expected_name in expected_names
     }
     manifest_sources = _manifest_sources()
     removable_names: set[str] = set()
@@ -398,12 +402,14 @@ def test_manifest_lookup_helpers_share_single_cached_manifest_payload(
         roster_loader._manifest_sources_payload.cache_clear()
     if hasattr(roster_loader, "manifest_member_counts_by_source_id"):
         roster_loader.manifest_member_counts_by_source_id.cache_clear()
+    if hasattr(roster_loader, "_manifest_division_names"):
+        roster_loader._manifest_division_names.cache_clear()
 
     seats = roster_loader._manifest_division_seats()
     titles = roster_loader._manifest_division_titles()
 
-    assert seats[("nc_municipal_council", "Chapel Hill")] == 8
-    assert titles[("nc_school_board", "Durham Public Schools")] == "School Board Member"
+    assert seats[("nc_municipal_council", "chapel hill")] == 8
+    assert titles[("nc_school_board", "durham public schools")] == "School Board Member"
     assert read_count == 1
     roster_loader._manifest_division_seats.cache_clear()
     roster_loader._manifest_division_titles.cache_clear()
@@ -411,6 +417,8 @@ def test_manifest_lookup_helpers_share_single_cached_manifest_payload(
         roster_loader._manifest_sources_payload.cache_clear()
     if hasattr(roster_loader, "manifest_member_counts_by_source_id"):
         roster_loader.manifest_member_counts_by_source_id.cache_clear()
+    if hasattr(roster_loader, "_manifest_division_names"):
+        roster_loader._manifest_division_names.cache_clear()
 
 
 def test_reported_member_count_raises_on_registers_manifest_miss(
@@ -428,12 +436,179 @@ def test_reported_member_count_raises_on_registers_manifest_miss(
         "manifest_member_counts_by_source_id",
         lambda: {},
     )
+    monkeypatch.setattr(
+        roster_loader,
+        "_manifest_launch_scope_source_ids",
+        lambda: {"nc_registers_of_deeds_roster"},
+    )
 
     with pytest.raises(
         ValueError,
         match="Missing manifest member_count for registers-of-deeds source_id=nc_registers_of_deeds_roster",
     ):
         roster_loader._reported_member_count(source=source, parsed_row_count=0)
+
+
+def test_reported_member_count_uses_manifest_for_launch_scope_body_keys(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = roster_loader.RosterSourceDefinition(
+        data_source_id=uuid4(),
+        source_id="nc_durham_county_commissioners_roster",
+        source_name="Durham County Commissioners",
+        source_url="https://example.org/commissioners",
+        body_key="nc_county_commissioners",
+    )
+    monkeypatch.setattr(
+        roster_loader,
+        "manifest_member_counts_by_source_id",
+        lambda: {"nc_durham_county_commissioners_roster": 5},
+    )
+    monkeypatch.setattr(
+        roster_loader,
+        "_manifest_launch_scope_source_ids",
+        lambda: {"nc_durham_county_commissioners_roster"},
+    )
+
+    assert roster_loader._reported_member_count(source=source, parsed_row_count=2) == 5
+
+
+def test_reported_member_count_uses_parsed_count_for_non_launch_source_with_launch_body_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = roster_loader.RosterSourceDefinition(
+        data_source_id=uuid4(),
+        source_id="nc_county_commissioners_future_rollout_roster",
+        source_name="Future Commissioners Roster",
+        source_url="https://example.org/future-commissioners",
+        body_key="nc_county_commissioners",
+    )
+    monkeypatch.setattr(
+        roster_loader,
+        "_manifest_launch_scope_source_ids",
+        lambda: {"nc_durham_county_commissioners_roster"},
+    )
+    monkeypatch.setattr(
+        roster_loader,
+        "manifest_member_counts_by_source_id",
+        lambda: {"nc_durham_county_commissioners_roster": 5},
+    )
+
+    assert roster_loader._reported_member_count(source=source, parsed_row_count=3) == 3
+
+
+def test_harvest_dry_run_uses_manifest_member_count_for_launch_scope_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = roster_loader.RosterSourceDefinition(
+        data_source_id=uuid4(),
+        source_id="nc_durham_county_commissioners_roster",
+        source_name="Durham County Commissioners",
+        source_url="https://example.org/commissioners",
+        body_key="nc_county_commissioners",
+    )
+    parsed_rows = [
+        roster_loader.NormalizedRosterRow(
+            member_name="Resolved Member",
+            role_label="County Commissioner",
+            district_number="Durham",
+            bio_url=None,
+            portrait_url=None,
+        ),
+        roster_loader.NormalizedRosterRow(
+            member_name="Unresolved Member",
+            role_label="County Commissioner",
+            district_number="Durham",
+            bio_url=None,
+            portrait_url=None,
+        ),
+    ]
+    resolved_person_id = uuid4()
+
+    monkeypatch.setattr(roster_loader, "_select_roster_source_definition", lambda conn, *, source_id: source)
+    monkeypatch.setattr(roster_loader, "_fixture_or_live_html", lambda *_args, **_kwargs: "<html></html>")
+    monkeypatch.setattr(roster_loader, "parse_roster_rows", lambda **_kwargs: parsed_rows)
+    monkeypatch.setattr(
+        roster_loader,
+        "manifest_member_counts_by_source_id",
+        lambda: {"nc_durham_county_commissioners_roster": 5},
+    )
+    monkeypatch.setattr(
+        roster_loader,
+        "_manifest_launch_scope_source_ids",
+        lambda: {"nc_durham_county_commissioners_roster"},
+    )
+
+    def _find_existing_person_id(_conn: object, row: roster_loader.NormalizedRosterRow) -> object | None:
+        if row.member_name == "Resolved Member":
+            return resolved_person_id
+        return None
+
+    monkeypatch.setattr(roster_loader, "_find_existing_person_id", _find_existing_person_id)
+
+    result = roster_loader.harvest_official_roster(
+        object(),  # dry-run path never uses connection cursor methods
+        source_id="nc_durham_county_commissioners_roster",
+        dry_run=True,
+    )
+
+    assert result.member_count == 5
+    assert result.resolved_member_count == 1
+    assert result.unresolved_member_count == 4
+    assert result.officeholding_upserts == 0
+
+
+def test_harvest_dry_run_clamps_unresolved_count_when_resolved_exceeds_manifest_count(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = roster_loader.RosterSourceDefinition(
+        data_source_id=uuid4(),
+        source_id="nc_durham_county_commissioners_roster",
+        source_name="Durham County Commissioners",
+        source_url="https://example.org/commissioners",
+        body_key="nc_county_commissioners",
+    )
+    parsed_rows = [
+        roster_loader.NormalizedRosterRow(
+            member_name="Resolved Member A",
+            role_label="County Commissioner",
+            district_number="Durham",
+            bio_url=None,
+            portrait_url=None,
+        ),
+        roster_loader.NormalizedRosterRow(
+            member_name="Resolved Member B",
+            role_label="County Commissioner",
+            district_number="Durham",
+            bio_url=None,
+            portrait_url=None,
+        ),
+    ]
+
+    monkeypatch.setattr(roster_loader, "_select_roster_source_definition", lambda conn, *, source_id: source)
+    monkeypatch.setattr(roster_loader, "_fixture_or_live_html", lambda *_args, **_kwargs: "<html></html>")
+    monkeypatch.setattr(roster_loader, "parse_roster_rows", lambda **_kwargs: parsed_rows)
+    monkeypatch.setattr(
+        roster_loader,
+        "_manifest_launch_scope_source_ids",
+        lambda: {"nc_durham_county_commissioners_roster"},
+    )
+    monkeypatch.setattr(
+        roster_loader,
+        "manifest_member_counts_by_source_id",
+        lambda: {"nc_durham_county_commissioners_roster": 1},
+    )
+    monkeypatch.setattr(roster_loader, "_find_existing_person_id", lambda _conn, _row: uuid4())
+
+    result = roster_loader.harvest_official_roster(
+        object(),
+        source_id="nc_durham_county_commissioners_roster",
+        dry_run=True,
+    )
+
+    assert result.member_count == 1
+    assert result.resolved_member_count == 2
+    assert result.unresolved_member_count == 0
 
 
 def test_harvest_rejects_fixture_paths_outside_allowed_roster_roots(
@@ -446,7 +621,7 @@ def test_harvest_rejects_fixture_paths_outside_allowed_roster_roots(
 
     with pytest.raises(
         ValueError,
-        match="Fixture HTML path must stay within tests/fixtures/roster or docs/research/artifacts/2026_04_29_dwo_county_muni",
+        match="Fixture HTML path must stay within tests/fixtures/roster or docs/reference/research/artifacts/2026_04_29_dwo_county_muni",
     ):
         harvest_official_roster(
             db_conn,

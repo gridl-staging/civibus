@@ -41,6 +41,7 @@ export default [
       "playwright/no-element-handle": "error",
       "playwright/no-page-pause": "error",
       "playwright/no-force-option": "error",
+      "playwright/no-skipped-test": "off",
       "no-restricted-syntax": [
         "error",
         {

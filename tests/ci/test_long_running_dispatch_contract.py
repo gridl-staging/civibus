@@ -1,7 +1,7 @@
 """Contract tests for the canonical long-running ingest dispatch wrapper.
 
 The wrapper at `infra/scripts/long_running_dispatch.sh` is owned by Stage 2 of the
-`docs/operations/long_running_ingest_discipline.md` spec. These tests freeze:
+`docs/howto/operations/long_running_ingest_discipline.md` spec. These tests freeze:
 
 - Static contract (sources `env_lib.sh`, calls `load_civibus_env`, `set -euo pipefail`).
 - Argument and filesystem validation (red paths).
@@ -45,6 +45,10 @@ def _build_test_repo(tmp_path: Path) -> Path:
     shutil.copy(WRAPPER_PATH, scripts_dir / "long_running_dispatch.sh")
     (scripts_dir / "long_running_dispatch.sh").chmod(0o755)
     (tmp_path / ".env").write_text("POSTGRES_PASSWORD=test\n", encoding="utf-8")
+    # env_lib.load_civibus_env refuses group/other-readable secret env files;
+    # a real production .env holding POSTGRES_PASSWORD is 0600. Match that here so
+    # the fixture exercises the wrapper contract instead of tripping the perms guard.
+    (tmp_path / ".env").chmod(0o600)
     return tmp_path
 
 
@@ -70,7 +74,7 @@ def _run_dispatch(
 
 
 def _evidence_dir(test_repo: Path, artifact_id: str, dispatch_id: str) -> Path:
-    return test_repo / "docs/research/artifacts" / artifact_id / "hetzner" / dispatch_id
+    return test_repo / "docs/reference/research/artifacts" / artifact_id / "hetzner" / dispatch_id
 
 
 def _read_json(path: Path) -> dict:
@@ -235,7 +239,7 @@ def test_wrapper_refuses_when_evidence_directory_cannot_be_created(
     # writing artifacts somewhere unexpected.
     artifact_id = "blocked_artifact"
     dispatch_id = "blocked-disp-001"
-    blocking_path = test_repo / "docs/research/artifacts" / artifact_id
+    blocking_path = test_repo / "docs/reference/research/artifacts" / artifact_id
     blocking_path.parent.mkdir(parents=True)
     blocking_path.write_text("not a directory", encoding="utf-8")
 
@@ -295,7 +299,7 @@ def test_dispatch_json_schema_on_successful_run(test_repo: Path) -> None:
     # absolute path requirements
     assert os.path.isabs(payload["log_path"])
     assert os.path.isabs(payload["evidence_directory"])
-    assert payload["evidence_directory"].endswith(f"/docs/research/artifacts/{artifact_id}/hetzner/{dispatch_id}")
+    assert payload["evidence_directory"].endswith(f"/docs/reference/research/artifacts/{artifact_id}/hetzner/{dispatch_id}")
     assert payload["log_path"].endswith("/dispatch.log")
 
     # RFC3339 UTC timestamp

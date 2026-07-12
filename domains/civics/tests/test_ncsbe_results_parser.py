@@ -74,9 +74,7 @@ def test_parser_contract_returns_exact_certified_values(
         },
     ]
 
-    observed_rows_by_key = {
-        (str(row["contest_external_id"]), str(row["candidate_name"])): row for row in parsed_rows
-    }
+    observed_rows_by_key = {(str(row["contest_external_id"]), str(row["candidate_name"])): row for row in parsed_rows}
     assert len(observed_rows_by_key) == len(parsed_rows), "Parser emitted duplicate contest/candidate rows"
 
     for expected in expected_rows:

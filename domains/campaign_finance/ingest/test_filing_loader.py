@@ -12,13 +12,17 @@ from psycopg.pq import TransactionStatus
 
 from core.db import insert_data_source, insert_entity_source, insert_organization, insert_person, insert_source_record
 from core.types.python.models import DataSource, Organization, Person, SourceRecord, compute_record_hash, utc_now
+from domains.campaign_finance.ingest import filing_loader, filing_loader_bulk
 from domains.campaign_finance.ingest.filing_loader import (
     ensure_state_committee,
     generate_synthetic_committee_id,
     resolve_transaction_counterparty_ids,
     update_transaction_contributor_identity_ids,
     upsert_filing,
+    upsert_filings_bulk,
     upsert_transaction,
+    upsert_transaction_with_status,
+    upsert_transactions_with_status_bulk,
 )
 from domains.campaign_finance.types.models import Filing, Transaction
 
@@ -34,7 +38,12 @@ _TEST_SUB_ID_BASE = 990_000_000_000_000_000
 
 
 @pytest.fixture(autouse=True)
-def _cleanup_test_rows(db_conn: psycopg.Connection) -> None:
+def _cleanup_test_rows(request: pytest.FixtureRequest) -> None:
+    if request.node.get_closest_marker("unit") is not None:
+        yield
+        return
+
+    db_conn = request.getfixturevalue("db_conn")
     yield
     if db_conn.info.transaction_status == TransactionStatus.INERROR:
         db_conn.rollback()
@@ -169,7 +178,7 @@ def _select_transaction_row(db_conn: psycopg.Connection, transaction_id: UUID) -
     with db_conn.cursor(row_factory=dict_row) as cursor:
         cursor.execute(
             """
-            SELECT id, amendment_indicator, back_ref_transaction_id
+            SELECT id, amendment_indicator, back_ref_transaction_id, contributor_entity_type
             FROM cf.transaction
             WHERE id = %s
             """,
@@ -281,6 +290,39 @@ def test_upsert_filing_is_idempotent_on_filing_fec_id(db_conn: psycopg.Connectio
     filing_row = _select_filing_row(db_conn, filing_fec_id)
     assert filing_row["id"] == first_id
     assert filing_row["report_type"] == "Q1"
+
+    with db_conn.cursor() as cursor:
+        cursor.execute("SELECT COUNT(*) FROM cf.filing WHERE filing_fec_id = %s", (filing_fec_id,))
+        filing_count = cursor.fetchone()[0]
+    assert filing_count == 1
+
+
+def test_upsert_filing_is_idempotent_on_filing_fec_id_in_bulk(db_conn: psycopg.Connection) -> None:
+    committee_id = _insert_test_committee(db_conn, "Filing Bulk Upsert", suffix=40)
+    filing_fec_id = f"{_TEST_FILING_PREFIX}bulk-idempotent"
+
+    initial_filing = Filing(
+        filing_fec_id=filing_fec_id,
+        committee_id=committee_id,
+        amendment_indicator="N",
+        report_type="Q1",
+    )
+    first_id = upsert_filing(db_conn, initial_filing)
+
+    returned_ids = upsert_filings_bulk(
+        db_conn,
+        [
+            initial_filing.model_copy(update={"id": uuid4(), "report_type": None}),
+            initial_filing.model_copy(update={"id": uuid4(), "amendment_indicator": "A", "report_type": None}),
+        ],
+    )
+
+    assert returned_ids == {filing_fec_id: first_id}
+
+    filing_row = _select_filing_row(db_conn, filing_fec_id)
+    assert filing_row["id"] == first_id
+    assert filing_row["report_type"] == "Q1"
+    assert filing_row["amendment_indicator"] == "A"
 
     with db_conn.cursor() as cursor:
         cursor.execute("SELECT COUNT(*) FROM cf.filing WHERE filing_fec_id = %s", (filing_fec_id,))
@@ -429,6 +471,308 @@ def test_upsert_transaction_is_idempotent_by_sub_id(db_conn: psycopg.Connection)
         cursor.execute("SELECT COUNT(*) FROM cf.transaction WHERE sub_id = %s", (sub_id,))
         transaction_count = cursor.fetchone()[0]
     assert transaction_count == 1
+
+
+def test_upsert_transaction_with_status_reports_insert_only_for_new_rows(db_conn: psycopg.Connection) -> None:
+    committee_id = _insert_test_committee(db_conn, "Status", suffix=30)
+    filing_id = _insert_test_filing(db_conn, committee_id, "status")
+    sub_id = _TEST_SUB_ID_BASE + 30
+
+    transaction = _build_test_transaction(filing_id, committee_id, "25.00", sub_id=sub_id)
+    first_result = upsert_transaction_with_status(db_conn, transaction)
+    second_result = upsert_transaction_with_status(db_conn, transaction.model_copy(update={"id": uuid4()}))
+
+    assert first_result.transaction_id == transaction.id
+    assert first_result.inserted is True
+    assert second_result.transaction_id == transaction.id
+    assert second_result.inserted is False
+
+    with db_conn.cursor() as cursor:
+        cursor.execute("SELECT COUNT(*) FROM cf.transaction WHERE sub_id = %s", (sub_id,))
+        transaction_count = cursor.fetchone()[0]
+    assert transaction_count == 1
+
+
+def test_upsert_transaction_with_status_reports_insert_only_for_new_rows_in_bulk_duplicate_batch(
+    db_conn: psycopg.Connection,
+) -> None:
+    committee_id = _insert_test_committee(db_conn, "Bulk Status Duplicate", suffix=41)
+    filing_id = _insert_test_filing(db_conn, committee_id, "bulk-status-duplicate")
+    sub_id = _TEST_SUB_ID_BASE + 41
+
+    first_transaction = _build_test_transaction(filing_id, committee_id, "25.00", sub_id=sub_id)
+    second_transaction = first_transaction.model_copy(update={"id": uuid4(), "amount": Decimal("26.00")})
+
+    first_result, second_result = upsert_transactions_with_status_bulk(
+        db_conn,
+        [first_transaction, second_transaction],
+    )
+
+    assert first_result.transaction_id == first_transaction.id
+    assert first_result.inserted is True
+    assert second_result.transaction_id == first_transaction.id
+    assert second_result.inserted is False
+
+    with db_conn.cursor(row_factory=dict_row) as cursor:
+        cursor.execute(
+            """
+            SELECT COUNT(*) AS count, MIN(amount) AS amount
+            FROM cf.transaction
+            WHERE sub_id = %s
+            """,
+            (sub_id,),
+        )
+        transaction_row = cursor.fetchone()
+
+    assert transaction_row is not None
+    assert transaction_row["count"] == 1
+    assert transaction_row["amount"] == Decimal("26.00")
+
+
+def test_upsert_transaction_bulk_duplicate_batch_falls_back_for_mixed_idempotency_keys(
+    db_conn: psycopg.Connection,
+) -> None:
+    committee_id = _insert_test_committee(db_conn, "Bulk Mixed Key Duplicate", suffix=42)
+    filing_id = _insert_test_filing(db_conn, committee_id, "bulk-mixed-key-duplicate")
+    transaction_identifier = f"{_TEST_TRANSACTION_PREFIX}bulk-mixed-key-001"
+
+    first_transaction = _build_test_transaction(
+        filing_id,
+        committee_id,
+        "27.00",
+        sub_id=_TEST_SUB_ID_BASE + 42,
+        transaction_identifier=transaction_identifier,
+    )
+    second_transaction = _build_test_transaction(
+        filing_id,
+        committee_id,
+        "28.00",
+        sub_id=_TEST_SUB_ID_BASE + 43,
+        transaction_identifier=transaction_identifier,
+    )
+
+    first_result, second_result = upsert_transactions_with_status_bulk(
+        db_conn,
+        [first_transaction, second_transaction],
+    )
+
+    assert first_result.transaction_id == first_transaction.id
+    assert first_result.inserted is True
+    assert second_result.transaction_id == first_transaction.id
+    assert second_result.inserted is False
+
+    with db_conn.cursor(row_factory=dict_row) as cursor:
+        cursor.execute(
+            """
+            SELECT COUNT(*) AS count, MIN(amount) AS amount
+            FROM cf.transaction
+            WHERE filing_id = %s
+              AND transaction_identifier = %s
+            """,
+            (filing_id, transaction_identifier),
+        )
+        transaction_row = cursor.fetchone()
+
+    assert transaction_row is not None
+    assert transaction_row["count"] == 1
+    assert transaction_row["amount"] == Decimal("28.00")
+
+
+def test_upsert_transaction_bulk_existing_identifier_falls_back_for_new_sub_id(
+    db_conn: psycopg.Connection,
+) -> None:
+    committee_id = _insert_test_committee(db_conn, "Bulk Existing Identifier", suffix=43)
+    filing_id = _insert_test_filing(db_conn, committee_id, "bulk-existing-identifier")
+    transaction_identifier = f"{_TEST_TRANSACTION_PREFIX}bulk-existing-identifier-001"
+
+    original_transaction = _build_test_transaction(
+        filing_id,
+        committee_id,
+        "29.00",
+        transaction_identifier=transaction_identifier,
+    )
+    original_result = upsert_transaction_with_status(db_conn, original_transaction)
+
+    rerun_transaction = _build_test_transaction(
+        filing_id,
+        committee_id,
+        "30.00",
+        id=uuid4(),
+        sub_id=_TEST_SUB_ID_BASE + 43,
+        transaction_identifier=transaction_identifier,
+    )
+    (rerun_result,) = upsert_transactions_with_status_bulk(db_conn, [rerun_transaction])
+
+    assert original_result.transaction_id == original_transaction.id
+    assert original_result.inserted is True
+    assert rerun_result.transaction_id == original_transaction.id
+    assert rerun_result.inserted is False
+
+    with db_conn.cursor(row_factory=dict_row) as cursor:
+        cursor.execute(
+            """
+            SELECT COUNT(*) AS count, MIN(amount) AS amount, MIN(sub_id) AS sub_id
+            FROM cf.transaction
+            WHERE filing_id = %s
+              AND transaction_identifier = %s
+            """,
+            (filing_id, transaction_identifier),
+        )
+        transaction_row = cursor.fetchone()
+
+    assert transaction_row is not None
+    assert transaction_row["count"] == 1
+    assert transaction_row["amount"] == Decimal("30.00")
+    assert transaction_row["sub_id"] == _TEST_SUB_ID_BASE + 43
+
+
+@pytest.mark.unit
+def test_upsert_transaction_bulk_uses_sub_id_seam_for_unique_dual_key_rows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _NoExistingConflictCursor:
+        def __enter__(self) -> _NoExistingConflictCursor:
+            return self
+
+        def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
+            return None
+
+        def execute(self, statement: object, params: list[object]) -> None:
+            del statement, params
+
+        def fetchone(self) -> None:
+            return None
+
+    class _NoExistingConflictConnection:
+        def cursor(self) -> _NoExistingConflictCursor:
+            return _NoExistingConflictCursor()
+
+    committee_id = uuid4()
+    filing_id = uuid4()
+    first_transaction = _build_test_transaction(
+        filing_id,
+        committee_id,
+        "31.00",
+        sub_id=_TEST_SUB_ID_BASE + 44,
+        transaction_identifier=f"{_TEST_TRANSACTION_PREFIX}bulk-dual-key-001",
+    )
+    second_transaction = _build_test_transaction(
+        filing_id,
+        committee_id,
+        "32.00",
+        sub_id=_TEST_SUB_ID_BASE + 45,
+        transaction_identifier=f"{_TEST_TRANSACTION_PREFIX}bulk-dual-key-002",
+    )
+    first_stubbed_transaction_id = uuid4()
+    second_stubbed_transaction_id = uuid4()
+    stubbed_rows = [
+        (first_stubbed_transaction_id, True),
+        (second_stubbed_transaction_id, False),
+    ]
+    bulk_calls: list[tuple[str, list[tuple[UUID, int | None, UUID, str | None]]]] = []
+
+    def _bulk_upsert_transactions_for_conflict_target(
+        conn: object,
+        *,
+        transactions: list[Transaction],
+        conflict_mode: str,
+    ) -> list[tuple[UUID, bool, int | None, UUID, str | None]]:
+        del conn
+        bulk_calls.append(
+            (
+                conflict_mode,
+                [
+                    (
+                        transaction.id,
+                        transaction.sub_id,
+                        transaction.filing_id,
+                        transaction.transaction_identifier,
+                    )
+                    for transaction in transactions
+                ],
+            )
+        )
+        return [
+            (
+                stubbed_transaction_id,
+                inserted,
+                transaction.sub_id,
+                transaction.filing_id,
+                transaction.transaction_identifier,
+            )
+            for (stubbed_transaction_id, inserted), transaction in zip(stubbed_rows, transactions, strict=True)
+        ]
+
+    monkeypatch.setattr(
+        filing_loader_bulk,
+        "_bulk_upsert_transactions_for_conflict_target",
+        _bulk_upsert_transactions_for_conflict_target,
+    )
+    monkeypatch.setattr(
+        filing_loader_bulk,
+        "upsert_transaction_with_status",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("unique dual-key rows should use bulk upsert")),
+    )
+
+    first_result, second_result = filing_loader.upsert_transactions_with_status_bulk(
+        _NoExistingConflictConnection(),
+        [first_transaction, second_transaction],
+    )
+
+    assert first_result.transaction_id == first_stubbed_transaction_id
+    assert first_result.inserted is True
+    assert second_result.transaction_id == second_stubbed_transaction_id
+    assert second_result.inserted is False
+    assert bulk_calls == [
+        (
+            "sub_id",
+            [
+                (
+                    first_transaction.id,
+                    _TEST_SUB_ID_BASE + 44,
+                    filing_id,
+                    f"{_TEST_TRANSACTION_PREFIX}bulk-dual-key-001",
+                ),
+                (
+                    second_transaction.id,
+                    _TEST_SUB_ID_BASE + 45,
+                    filing_id,
+                    f"{_TEST_TRANSACTION_PREFIX}bulk-dual-key-002",
+                ),
+            ],
+        ),
+    ]
+
+
+@pytest.mark.unit
+def test_bulk_statement_templates_are_reused_for_stable_batch_shapes() -> None:
+    first_values = filing_loader_bulk._values_placeholders(row_count=2, column_count=3)
+    second_values = filing_loader_bulk._values_placeholders(row_count=2, column_count=3)
+    different_values = filing_loader_bulk._values_placeholders(row_count=3, column_count=3)
+
+    assert first_values is second_values
+    assert first_values == "(%s, %s, %s), (%s, %s, %s)"
+    assert different_values != first_values
+
+    first_statement = filing_loader_bulk._transaction_upsert_statement(
+        row_count=2,
+        column_count=31,
+        conflict_mode="sub_id",
+    )
+    second_statement = filing_loader_bulk._transaction_upsert_statement(
+        row_count=2,
+        column_count=31,
+        conflict_mode="sub_id",
+    )
+    other_conflict_statement = filing_loader_bulk._transaction_upsert_statement(
+        row_count=2,
+        column_count=31,
+        conflict_mode="filing_identifier",
+    )
+
+    assert first_statement is second_statement
+    assert "ON CONFLICT (sub_id) WHERE sub_id IS NOT NULL" in first_statement
+    assert "ON CONFLICT (filing_id, transaction_identifier)" in other_conflict_statement
 
 
 def test_upsert_transaction_persists_back_ref_transaction_id(db_conn: psycopg.Connection) -> None:
@@ -700,6 +1044,41 @@ def test_upsert_transaction_preserves_existing_source_record_id(db_conn: psycopg
     assert row is not None
     assert row["amount"] == Decimal("61.00")
     assert row["source_record_id"] == source_record_id
+
+
+def test_upsert_transaction_persists_contributor_entity_type_on_insert_and_update(
+    db_conn: psycopg.Connection,
+) -> None:
+    committee_id = _insert_test_committee(db_conn, "Contributor Entity Type", suffix=23)
+    filing_id = _insert_test_filing(db_conn, committee_id, "contributor-entity-type")
+    sub_id = _TEST_SUB_ID_BASE + 23
+
+    transaction_id = upsert_transaction(
+        db_conn,
+        _build_test_transaction(
+            filing_id,
+            committee_id,
+            "93.00",
+            sub_id=sub_id,
+            contributor_entity_type="IND",
+        ),
+    )
+    assert _select_transaction_row(db_conn, transaction_id)["contributor_entity_type"] == "IND"
+
+    updated_id = upsert_transaction(
+        db_conn,
+        _build_test_transaction(
+            filing_id,
+            committee_id,
+            "94.00",
+            id=uuid4(),
+            sub_id=sub_id,
+            contributor_entity_type="ORG",
+        ),
+    )
+
+    assert updated_id == transaction_id
+    assert _select_transaction_row(db_conn, transaction_id)["contributor_entity_type"] == "ORG"
 
 
 def test_upsert_transaction_persists_schedule_e_columns(db_conn: psycopg.Connection) -> None:

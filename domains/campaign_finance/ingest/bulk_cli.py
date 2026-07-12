@@ -1,73 +1,89 @@
-"""
-Stub summary for /Users/stuart/parallel_development/civibus_dev/MAR18_api_graph_routes_and_property_endpoints/civibus_dev/domains/campaign_finance/ingest/bulk_cli.py.
-"""
+"""Federal campaign finance bulk ingest CLI."""
 
 from __future__ import annotations
 
 import argparse
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from datetime import date
 from pathlib import Path
 import sys
 from time import perf_counter
 from typing import Callable, Literal
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import psycopg
 
 from core.db import get_connection
 from core.graph import age_post_connect, ensure_graph
+from core.refresh.runner import _REPO_ROOT
 from domains.campaign_finance.ingest.bulk_loader import (
     LoadResult,
     Stage4LoadOptions,
     ensure_fec_bulk_data_source,
     load_candidate_committee_links,
     load_candidates,
+    load_candidate_summaries,
     load_committee_transactions,
     load_committees,
     load_contributions,
     sync_data_source_metadata,
 )
+from domains.campaign_finance.ingest.bulk_stage4_loader import resolve_stage4_committee_scope
+from domains.campaign_finance.ingest.committee_summary_loader import load_committee_summaries
+from domains.campaign_finance.ingest.fec_bulk_files import (
+    fec_baseline_url as _fec_baseline_url,
+    fec_baseline_urls as _fec_baseline_urls,
+    fec_schedule_b_url as _fec_schedule_b_url,
+    fec_committee_summary_url as _fec_committee_summary_url,
+    fec_schedule_e_url as _fec_schedule_e_url,
+    fec_weball_url as _fec_weball_url,
+    download_fec_bulk_file_to_cache,
+)
 from domains.campaign_finance.ingest.schedule_b_loader import load_schedule_b
 from domains.campaign_finance.ingest.schedule_e_loader import load_schedule_e
 
-FILE_TYPES: tuple[str, ...] = ("cm", "cn", "ccl", "itcont", "itpas2", "schedule_e", "schedule_b")
+FILE_TYPES: tuple[str, ...] = (
+    "cm",
+    "cn",
+    "ccl",
+    "itcont",
+    "itpas2",
+    "weball",
+    "committee_summary",
+    "schedule_e",
+    "schedule_b",
+)
 FULL_CYCLE_FILE_ORDER: tuple[str, ...] = ("cm", "cn", "ccl", "itcont", "itpas2")
+FEDERAL_INGEST_FILE_ORDER: tuple[str, ...] = ("cm", "cn", "ccl", "weball", "committee_summary", "schedule_e")
 TRANSACTION_FILE_TYPES: frozenset[str] = frozenset({"itcont", "itpas2"})
+FEDERAL_LIMITED_FILE_TYPES: frozenset[str] = frozenset({"itpas2", "committee_summary", "schedule_e"})
 _BULK_FILE_EXTENSIONS = {".txt", ".zip"}
-
-_FEC_BULK_DOWNLOAD_BASE = "https://www.fec.gov/files/bulk-downloads"
-_FEC_BULK_URL_SLUGS: dict[str, str] = {
-    "cm": "cm",
-    "cn": "cn",
-    "ccl": "ccl",
-    "itcont": "indiv",
-    "itpas2": "pas2",
-}
-
-
-def fec_baseline_url(cycle: int, file_type: str) -> str:
-    """Derive the canonical FEC bulk download URL for a cycle and file type."""
-    if file_type not in FULL_CYCLE_FILE_ORDER:
-        raise ValueError(f"Unknown FEC file type: {file_type}")
-    slug = _FEC_BULK_URL_SLUGS[file_type]
-    yy = str(cycle)[-2:]
-    return f"{_FEC_BULK_DOWNLOAD_BASE}/{cycle}/{slug}{yy}.zip"
-
-
-def fec_schedule_b_url(cycle: int) -> str:
-    yy = str(cycle)[-2:]
-    return f"{_FEC_BULK_DOWNLOAD_BASE}/{cycle}/oppexp{yy}.zip"
-
-
-def fec_schedule_e_url(cycle: int) -> str:
-    filename = f"independent_expenditure_{cycle}.csv"
-    return f"{_FEC_BULK_DOWNLOAD_BASE}/{cycle}/{filename}"
+_CSV_FILE_EXTENSIONS = {".csv"}
 
 
 def fec_baseline_urls(cycle: int) -> dict[str, str]:
-    """Return the canonical FEC bulk download URL for every file type in the full cycle."""
-    return {ft: fec_baseline_url(cycle, ft) for ft in FULL_CYCLE_FILE_ORDER}
+    return _fec_baseline_urls(cycle, FULL_CYCLE_FILE_ORDER)
+
+
+def fec_baseline_url(cycle: int, file_type: str) -> str:
+    return _fec_baseline_url(cycle, file_type)
+
+
+def fec_schedule_b_url(cycle: int) -> str:
+    return _fec_schedule_b_url(cycle)
+
+
+def fec_weball_url(cycle: int) -> str:
+    return _fec_weball_url(cycle)
+
+
+def fec_schedule_e_url(cycle: int) -> str:
+    return _fec_schedule_e_url(cycle)
+
+
+def fec_committee_summary_url(cycle: int) -> str:
+    return _fec_committee_summary_url(cycle)
 
 
 def effective_limit_for_dispatch(file_type: str, config: "CliConfig") -> int | None:
@@ -76,6 +92,8 @@ def effective_limit_for_dispatch(file_type: str, config: "CliConfig") -> int | N
         return None
     if config.mode == "single":
         return config.limit
+    if config.mode == "federal":
+        return config.limit if file_type in FEDERAL_LIMITED_FILE_TYPES else None
     if file_type in TRANSACTION_FILE_TYPES:
         return config.limit
     return None
@@ -83,7 +101,8 @@ def effective_limit_for_dispatch(file_type: str, config: "CliConfig") -> int | N
 
 @dataclass(frozen=True, slots=True)
 class CliConfig:
-    mode: Literal["single", "full"]
+
+    mode: Literal["single", "full", "federal"]
     cycle: int
     file_type: str | None
     path: Path | None
@@ -91,7 +110,13 @@ class CliConfig:
     batch_size: int
     limit: int | None
     graph_enabled: bool
+    download: bool = False
     with_transactions: bool = False
+    transactions_only: bool = False
+    spine_only: bool = False
+    min_date: date | None = None
+    count_only: bool = False
+    canonical_stage4_resume_enabled: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -125,10 +150,12 @@ FILE_TYPE_LOADERS: dict[str, LoaderSpec] = {
     "cm": LoaderSpec(loader=load_committees, requires_cycle=True, supports_graph=False),
     "cn": LoaderSpec(loader=load_candidates, requires_cycle=True, supports_graph=False),
     "ccl": LoaderSpec(loader=load_candidate_committee_links, requires_cycle=True, supports_graph=False),
+    "weball": LoaderSpec(loader=load_candidate_summaries, requires_cycle=True, supports_graph=False),
     "itcont": LoaderSpec(loader=load_contributions, requires_cycle=False, supports_graph=True),
     "itpas2": LoaderSpec(loader=load_committee_transactions, requires_cycle=False, supports_graph=True),
     "schedule_e": LoaderSpec(loader=load_schedule_e, requires_cycle=True, supports_graph=True),
     "schedule_b": LoaderSpec(loader=load_schedule_b, requires_cycle=True, supports_graph=True),
+    "committee_summary": LoaderSpec(loader=load_committee_summaries, requires_cycle=True, supports_graph=False),
 }
 
 
@@ -137,7 +164,11 @@ def build_argument_parser() -> argparse.ArgumentParser:
     parser.add_argument("--cycle", required=True, type=int, help="Election cycle year (example: 2024)")
     parser.add_argument("--file-type", choices=FILE_TYPES, help="Single-file mode file type")
     parser.add_argument("--path", type=Path, help="Single-file mode bulk file path")
+    parser.add_argument(
+        "--download", action="store_true", help="Download the requested single file into the repo cache"
+    )
     parser.add_argument("--all", action="store_true", help="Full-cycle mode")
+    parser.add_argument("--federal", action="store_true", help="Ordered federal directory mode")
     parser.add_argument("--directory", type=Path, help="Full-cycle mode directory path")
     parser.add_argument("--batch-size", type=int, default=1000, help="Commit interval (default: 1000)")
     parser.add_argument("--limit", type=int, help="Maximum rows per file")
@@ -147,6 +178,18 @@ def build_argument_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="For itcont/itpas2: also upsert cf.filing and cf.transaction rows from mapped records",
     )
+    parser.add_argument(
+        "--transactions-only",
+        action="store_true",
+        help="For itcont/itpas2: write provenance plus cf.filing/cf.transaction rows without donor entity extraction",
+    )
+    parser.add_argument(
+        "--spine-only", action="store_true", help="For itcont: filter to current federal officeholder committees"
+    )
+    parser.add_argument(
+        "--min-date", type=date.fromisoformat, help="For transaction files: keep rows on or after YYYY-MM-DD"
+    )
+    parser.add_argument("--count-only", action="store_true", help="Parse and filter without writing any database rows")
     return parser
 
 
@@ -161,7 +204,7 @@ def _is_readable_directory(path: Path) -> bool:
 def _build_cli_config(
     args: argparse.Namespace,
     *,
-    mode: Literal["single", "full"],
+    mode: Literal["single", "full", "federal"],
     file_type: str | None,
     path: Path | None,
     directory: Path | None,
@@ -175,7 +218,13 @@ def _build_cli_config(
         batch_size=args.batch_size,
         limit=args.limit,
         graph_enabled=args.graph,
+        download=getattr(args, "download", False),
         with_transactions=args.with_transactions,
+        transactions_only=getattr(args, "transactions_only", False),
+        spine_only=getattr(args, "spine_only", False),
+        min_date=getattr(args, "min_date", None),
+        count_only=getattr(args, "count_only", False),
+        canonical_stage4_resume_enabled=mode == "full",
     )
 
 
@@ -185,37 +234,79 @@ def validate_cli_arguments(args: argparse.Namespace) -> CliConfig:
     if args.limit is not None and args.limit <= 0:
         raise ValueError("limit must be greater than zero")
 
-    single_mode_selected = args.file_type is not None or args.path is not None
-    full_mode_selected = args.all or args.directory is not None
+    single_mode_selected = args.file_type is not None or args.path is not None or args.download
+    directory_mode_selected = args.all or args.federal or args.directory is not None
 
-    if single_mode_selected and full_mode_selected:
-        raise ValueError("single-file mode and full-cycle mode are mutually exclusive")
+    if single_mode_selected and directory_mode_selected:
+        raise ValueError("single-file mode and directory mode are mutually exclusive")
 
     if single_mode_selected:
-        if args.file_type is None or args.path is None:
-            raise ValueError("single-file mode requires both --file-type and --path")
-        if not _is_readable_file(args.path):
+        if args.file_type is None:
+            raise ValueError("single-file mode requires --file-type")
+        if args.download and args.path is not None:
+            raise ValueError("--download and --path are mutually exclusive")
+        if not args.download and args.path is None:
+            raise ValueError("single-file mode requires either --path or --download")
+        if args.path is not None and not _is_readable_file(args.path):
             raise ValueError(f"single-file mode requires a readable file path: {args.path}")
-        if args.with_transactions and args.file_type not in {"itcont", "itpas2"}:
-            raise ValueError("--with-transactions is supported only for itcont and itpas2 single-file loads")
+        if (
+            args.with_transactions or args.transactions_only or args.min_date or args.count_only
+        ) and args.file_type not in {
+            "itcont",
+            "itpas2",
+        }:
+            raise ValueError(
+                "--with-transactions, --transactions-only, --min-date, and --count-only are supported only for itcont and itpas2"
+            )
+        if args.spine_only and args.file_type != "itcont":
+            raise ValueError("--spine-only is supported only for itcont")
         return _build_cli_config(args, mode="single", file_type=args.file_type, path=args.path, directory=None)
 
-    if full_mode_selected:
-        if not args.all or args.directory is None:
+    if directory_mode_selected:
+        if args.count_only:
+            raise ValueError("--count-only is supported only in single-file transaction mode")
+        if args.min_date is not None:
+            raise ValueError("--min-date is supported only in single-file transaction mode")
+        if args.spine_only:
+            raise ValueError("--spine-only is supported only for itcont")
+        if args.transactions_only:
+            raise ValueError("--transactions-only is supported only in single-file transaction mode")
+        if args.all and args.federal:
+            raise ValueError("--all and --federal are mutually exclusive")
+        if args.all and args.directory is None:
+            raise ValueError("full-cycle mode requires both --all and --directory")
+        if args.directory is None:
+            raise ValueError("directory mode requires --directory")
+        if not args.all and not args.federal:
             raise ValueError("full-cycle mode requires both --all and --directory")
         if not _is_readable_directory(args.directory):
-            raise ValueError(f"full-cycle mode requires a readable directory path: {args.directory}")
-        return _build_cli_config(args, mode="full", file_type=None, path=None, directory=args.directory)
+            raise ValueError(f"directory mode requires a readable directory path: {args.directory}")
+        mode: Literal["full", "federal"] = "federal" if args.federal else "full"
+        return _build_cli_config(args, mode=mode, file_type=None, path=None, directory=args.directory)
 
-    raise ValueError("Select either single-file mode (--file-type + --path) or full-cycle mode (--all + --directory)")
+    raise ValueError(
+        "Select either single-file mode (--file-type + --path), full-cycle mode (--all + --directory), "
+        "or federal mode (--federal + --directory)"
+    )
+
+
+def _allowed_extensions_for_file_type(file_type: str) -> set[str]:
+    if file_type in {"committee_summary", "schedule_e"}:
+        return _CSV_FILE_EXTENSIONS
+    return _BULK_FILE_EXTENSIONS
 
 
 def _matches_file_type(path: Path, file_type: str) -> bool:
-    if path.suffix.lower() not in _BULK_FILE_EXTENSIONS:
+    if path.suffix.lower() not in _allowed_extensions_for_file_type(file_type):
         return False
 
     normalized_name = path.name.lower()
-    aliases = {file_type.lower(), _FEC_BULK_URL_SLUGS.get(file_type, file_type).lower()}
+    aliases = {
+        file_type.lower(),
+        {"itcont": "indiv", "itpas2": "pas2", "schedule_e": "independent_expenditure"}.get(
+            file_type, file_type
+        ).lower(),
+    }
     return any(
         normalized_name.startswith(alias) or f"_{alias}" in normalized_name or f"-{alias}" in normalized_name
         for alias in aliases
@@ -236,12 +327,13 @@ def _resolve_full_cycle_file_path(directory: Path, files_in_directory: list[Path
     return matched_path
 
 
-def resolve_full_cycle_directory(directory: Path) -> dict[str, Path]:
+def resolve_ordered_file_directory(directory: Path, file_order: tuple[str, ...]) -> dict[str, Path]:
+    """Resolve one readable local file for each file type in the requested order."""
     resolved_paths: dict[str, Path] = {}
     files_in_directory = [path for path in directory.iterdir() if path.is_file()]
     assigned_file_types: dict[Path, str] = {}
 
-    for file_type in FULL_CYCLE_FILE_ORDER:
+    for file_type in file_order:
         matched_path = _resolve_full_cycle_file_path(directory, files_in_directory, file_type)
         prior_file_type = assigned_file_types.get(matched_path)
         if prior_file_type is not None:
@@ -252,6 +344,16 @@ def resolve_full_cycle_directory(directory: Path) -> dict[str, Path]:
         resolved_paths[file_type] = matched_path
 
     return resolved_paths
+
+
+def resolve_full_cycle_directory(directory: Path) -> dict[str, Path]:
+    """Resolve the baseline --all files without adding optional federal-only files."""
+    return resolve_ordered_file_directory(directory, FULL_CYCLE_FILE_ORDER)
+
+
+def resolve_federal_ingest_directory(directory: Path) -> dict[str, Path]:
+    """Resolve files for the politician-directory federal ingest path."""
+    return resolve_ordered_file_directory(directory, FEDERAL_INGEST_FILE_ORDER)
 
 
 def bootstrap_connection(*, graph_enabled: bool) -> psycopg.Connection:
@@ -282,11 +384,23 @@ def dispatch_load(
         loader_kwargs["limit"] = effective_limit
         loader_kwargs["cycle"] = config.cycle
     else:
+        committee_fec_ids = resolve_stage4_committee_scope(conn, spine_only=config.spine_only)
+        loader_kwargs["cycle"] = config.cycle
+        # canonical_resume_enabled is a Stage 4 load option; the loader rejects
+        # mixing options= with legacy kwargs, so it must be set inside options.
+        canonical_resume_enabled = (
+            request.file_type == "itcont" and config.mode == "full" and config.canonical_stage4_resume_enabled
+        )
         loader_kwargs["options"] = Stage4LoadOptions(
             batch_size=config.batch_size,
             limit=effective_limit,
             graph_enabled=config.graph_enabled and loader_spec.supports_graph,
-            with_transactions=config.with_transactions,
+            with_transactions=config.with_transactions or config.transactions_only,
+            entity_extraction=not config.transactions_only,
+            committee_fec_ids=committee_fec_ids,
+            min_transaction_date=config.min_date,
+            count_only=config.count_only,
+            canonical_resume_enabled=canonical_resume_enabled,
         )
 
     return loader_spec.loader(conn, request.path, **loader_kwargs)
@@ -318,15 +432,15 @@ def _run_load_phase(
     )
 
 
-def load_full_cycle(
+def load_ordered_files(
     *,
     conn: psycopg.Connection,
     config: CliConfig,
     data_source_id: UUID,
     resolved_paths: dict[str, Path],
+    file_order: tuple[str, ...],
 ) -> list[LoadStepSummary]:
-    assert config.mode == "full"
-
+    """Run ordered load phases through the shared dispatch path."""
     return [
         _run_load_phase(
             conn=conn,
@@ -334,8 +448,44 @@ def load_full_cycle(
             request=LoadRequest(file_type=file_type, path=resolved_paths[file_type]),
             data_source_id=data_source_id,
         )
-        for file_type in FULL_CYCLE_FILE_ORDER
+        for file_type in file_order
     ]
+
+
+def load_full_cycle(
+    *,
+    conn: psycopg.Connection,
+    config: CliConfig,
+    data_source_id: UUID,
+    resolved_paths: dict[str, Path],
+) -> list[LoadStepSummary]:
+    """Load the baseline --all FEC files in their longstanding order."""
+    assert config.mode == "full"
+    return load_ordered_files(
+        conn=conn,
+        config=config,
+        data_source_id=data_source_id,
+        resolved_paths=resolved_paths,
+        file_order=FULL_CYCLE_FILE_ORDER,
+    )
+
+
+def load_federal_ingest_path(
+    *,
+    conn: psycopg.Connection,
+    config: CliConfig,
+    data_source_id: UUID,
+    resolved_paths: dict[str, Path],
+) -> list[LoadStepSummary]:
+    """Load the federal politician-directory path without redefining --all."""
+    assert config.mode == "federal"
+    return load_ordered_files(
+        conn=conn,
+        config=config,
+        data_source_id=data_source_id,
+        resolved_paths=resolved_paths,
+        file_order=FEDERAL_INGEST_FILE_ORDER,
+    )
 
 
 def print_summary(summaries: list[LoadStepSummary]) -> None:
@@ -403,6 +553,14 @@ def _run_single_file_mode(
     ]
 
 
+def _resolve_single_file_path(config: CliConfig) -> Path:
+    assert config.file_type is not None
+    if config.download:
+        return download_fec_bulk_file_to_cache(_REPO_ROOT, cycle=config.cycle, file_type=config.file_type)
+    assert config.path is not None
+    return config.path
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_argument_parser().parse_args(argv)
     try:
@@ -412,23 +570,35 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     resolved_paths: dict[str, Path] | None = None
-    if config.mode == "full":
+    if config.mode in {"full", "federal"}:
         assert config.directory is not None
         try:
-            resolved_paths = resolve_full_cycle_directory(config.directory)
+            if config.mode == "federal":
+                resolved_paths = resolve_federal_ingest_directory(config.directory)
+            else:
+                resolved_paths = resolve_full_cycle_directory(config.directory)
         except ValueError as error:
+            print(f"Bulk ingest setup failed: {error}", file=sys.stderr)
+            return 1
+    elif config.mode == "single":
+        try:
+            config = replace(config, path=_resolve_single_file_path(config))
+        except Exception as error:
             print(f"Bulk ingest setup failed: {error}", file=sys.stderr)
             return 1
 
     connection: psycopg.Connection | None = None
     try:
         connection = bootstrap_connection(graph_enabled=config.graph_enabled)
-        with connection.transaction():
-            data_source_id = ensure_fec_bulk_data_source(connection)
+        if config.count_only:
+            data_source_id = uuid4()
+        else:
+            with connection.transaction():
+                data_source_id = ensure_fec_bulk_data_source(connection)
 
         if config.mode == "single":
             summaries = _run_single_file_mode(conn=connection, config=config, data_source_id=data_source_id)
-        else:
+        elif config.mode == "full":
             assert resolved_paths is not None
             summaries = load_full_cycle(
                 conn=connection,
@@ -436,8 +606,16 @@ def main(argv: list[str] | None = None) -> int:
                 data_source_id=data_source_id,
                 resolved_paths=resolved_paths,
             )
+        else:
+            assert resolved_paths is not None
+            summaries = load_federal_ingest_path(
+                conn=connection,
+                config=config,
+                data_source_id=data_source_id,
+                resolved_paths=resolved_paths,
+            )
 
-        if config.mode == "full":
+        if config.mode in {"full", "federal"}:
             finalize_full_cycle_metadata(connection, data_source_id, summaries)
     except Exception as error:
         print(f"Bulk ingest failed: {error}", file=sys.stderr)
@@ -447,6 +625,8 @@ def main(argv: list[str] | None = None) -> int:
             connection.close()
 
     print_summary(summaries)
+    if config.count_only:
+        print("Count-only mode: filtered row counts reported above; no database writes were performed.")
     return 0
 
 

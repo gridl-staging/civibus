@@ -1,17 +1,18 @@
-"""SQL query helpers for civic domain endpoints."""
 
 from __future__ import annotations
 
 import json
 from datetime import date
+from collections.abc import Iterable
 from typing import Any, Literal
 from uuid import UUID
 
 import psycopg
 from psycopg.rows import dict_row
 
+from api.portrait_policy import reusable_portrait_rights_statuses
 from api.queries._common import fetch_one_row
-from domains.civics.constants import LAUNCH_SCOPE_USPS_STATES
+from domains.civics.constants import CANONICAL_FEDERAL_DIRECTORY_OFFICE_NAMES, LAUNCH_SCOPE_USPS_STATES
 
 # ---------------------------------------------------------------------------
 # Office
@@ -137,6 +138,214 @@ def fetch_office_active_contest_count(conn: psycopg.Connection, office_id: UUID)
     if row is None:
         return 0
     return int(row["active_contest_count"])
+
+
+# ---------------------------------------------------------------------------
+# Congress directory
+# ---------------------------------------------------------------------------
+
+
+def _sql_text_array_literal(values: Iterable[str]) -> str:
+    quoted_values = ", ".join("'" + value.replace("'", "''") + "'" for value in values)
+    return f"ARRAY[{quoted_values}]::text[]"
+
+
+def _current_federal_directory_office_names_sql() -> str:
+    return _sql_text_array_literal(CANONICAL_FEDERAL_DIRECTORY_OFFICE_NAMES)
+
+
+def _current_federal_members_ctes_sql(*, office_names_sql: str) -> str:
+    return f"""
+    current_members AS (
+        SELECT
+            oh.id AS officeholding_id,
+            oh.person_id,
+            oh.office_id,
+            oh.electoral_division_id,
+            p.canonical_name AS person_name,
+            o.name AS canonical_office_name,
+            o.title AS office_title,
+            o.state AS office_state,
+            ed.division_type,
+            ed.state AS division_state,
+            ed.district_number,
+            sr.raw_fields ->> 'class' AS senate_class_raw,
+            COALESCE(
+                fec_party.party,
+                civic_party.party,
+                NULLIF(btrim(sr.raw_fields ->> 'party'), '')
+            ) AS party,
+            pp.rights_status AS portrait_rights_status,
+            pp.source_image_url AS raw_portrait_source_image_url
+        FROM civic.officeholding oh
+        JOIN civic.office o ON o.id = oh.office_id
+        JOIN core.person p ON p.id = oh.person_id
+        LEFT JOIN civic.electoral_division ed ON ed.id = oh.electoral_division_id
+        LEFT JOIN core.source_record sr ON sr.id = oh.source_record_id
+        LEFT JOIN LATERAL (
+            SELECT cand.party
+            FROM cf.candidate cand
+            WHERE cand.person_id = oh.person_id
+              AND cand.party IS NOT NULL
+              AND cand.office = CASE
+                  WHEN o.name = 'us_senate' THEN 'S'
+                  WHEN o.name IN ('us_president', 'us_vice_president') THEN 'P'
+                  ELSE 'H'
+              END
+              AND (
+                  COALESCE(ed.state, o.state) IS NULL
+                  OR cand.state IS NULL
+                  OR cand.state = COALESCE(ed.state, o.state)
+              )
+            ORDER BY cand.summary_coverage_end_date DESC NULLS LAST, cand.updated_at DESC, cand.id DESC
+            LIMIT 1
+        ) fec_party ON TRUE
+        LEFT JOIN LATERAL (
+            SELECT c.party
+            FROM civic.candidacy c
+            JOIN civic.contest ct ON ct.id = c.contest_id
+            WHERE c.person_id = oh.person_id
+              AND ct.office_id = o.id
+              AND c.party IS NOT NULL
+            ORDER BY ct.election_date DESC NULLS LAST, c.id DESC
+            LIMIT 1
+        ) civic_party ON TRUE
+        LEFT JOIN LATERAL (
+            SELECT rights_status, source_image_url
+            FROM core.person_portrait
+            WHERE person_id = oh.person_id
+              AND status = 'active'
+            ORDER BY updated_at DESC, id ASC
+            LIMIT 1
+        ) pp ON TRUE
+        WHERE oh.valid_period @> CURRENT_DATE
+          AND o.office_level = 'federal'
+          AND o.name = ANY({office_names_sql})
+    ),
+    derived_members AS (
+        SELECT
+            *,
+            COALESCE(division_state, office_state) AS member_state,
+            CASE upper(btrim(COALESCE(senate_class_raw, '')))
+                WHEN '1' THEN 'Class I'
+                WHEN 'CLASS I' THEN 'Class I'
+                WHEN '2' THEN 'Class II'
+                WHEN 'CLASS II' THEN 'Class II'
+                WHEN '3' THEN 'Class III'
+                WHEN 'CLASS III' THEN 'Class III'
+                ELSE NULL
+            END AS senate_class_label,
+            CASE
+                WHEN canonical_office_name = 'us_house' THEN 'U.S. Representative'
+                WHEN canonical_office_name = 'us_senate' THEN 'U.S. Senator'
+                WHEN canonical_office_name = 'us_house_delegate' THEN 'U.S. Delegate'
+                WHEN canonical_office_name = 'us_president' THEN 'President of the United States'
+                WHEN canonical_office_name = 'us_vice_president' THEN 'Vice President of the United States'
+                ELSE COALESCE(office_title, canonical_office_name)
+            END AS short_office_label,
+            CASE
+                WHEN canonical_office_name IN ('us_house', 'us_house_delegate')
+                  AND COALESCE(division_state, office_state) IS NOT NULL
+                  AND district_number IS NOT NULL
+                    THEN COALESCE(division_state, office_state) || '-' || district_number
+                WHEN canonical_office_name = 'us_senate' THEN COALESCE(division_state, office_state)
+                ELSE NULL
+            END AS search_geography_token
+        FROM current_members
+    )
+    """
+
+
+def _current_federal_members_with_sql(*, office_names_sql: str) -> str:
+    return f"WITH {_current_federal_members_ctes_sql(office_names_sql=office_names_sql)}"
+
+
+def _current_federal_officeholder_search_rows_sql(*, office_names_sql: str | None = None) -> str:
+    offices_sql = office_names_sql or _current_federal_directory_office_names_sql()
+    return f"""
+        {_current_federal_members_with_sql(office_names_sql=offices_sql)}
+        SELECT DISTINCT ON (person_id)
+            person_id,
+            short_office_label,
+            search_geography_token,
+            party
+        FROM derived_members
+        ORDER BY person_id, person_name, officeholding_id
+    """
+
+
+_CURRENT_FEDERAL_MEMBERS_SQL = f"""
+    {_current_federal_members_with_sql(office_names_sql="%s")}
+    SELECT
+        person_id,
+        person_name,
+        officeholding_id,
+        office_id,
+        CASE
+            WHEN canonical_office_name = 'us_house'
+              AND member_state IS NOT NULL
+              AND district_number IS NOT NULL
+                THEN 'U.S. Representative ' || member_state || '-' || district_number
+            WHEN canonical_office_name = 'us_senate'
+              AND member_state IS NOT NULL
+              AND senate_class_label IS NOT NULL
+                THEN 'U.S. Senator ' || member_state || ' ' || senate_class_label
+            WHEN canonical_office_name = 'us_senate'
+              AND member_state IS NOT NULL
+                THEN 'U.S. Senator ' || member_state
+            WHEN canonical_office_name = 'us_president' THEN 'President of the United States'
+            WHEN canonical_office_name = 'us_vice_president' THEN 'Vice President of the United States'
+            WHEN canonical_office_name = 'us_house_delegate'
+              AND member_state IS NOT NULL
+              AND district_number IS NOT NULL
+                THEN short_office_label || ' ' || member_state || '-' || district_number
+            WHEN canonical_office_name = 'us_house_delegate'
+              AND member_state IS NOT NULL
+                THEN short_office_label || ' ' || member_state
+            ELSE COALESCE(office_title, canonical_office_name)
+        END AS office_name,
+        CASE
+            WHEN canonical_office_name IN ('us_president', 'us_vice_president') THEN 'Executive'
+            WHEN canonical_office_name = 'us_senate' THEN 'Senate'
+            WHEN canonical_office_name IN ('us_house', 'us_house_delegate') THEN 'House'
+            WHEN COALESCE(office_title, canonical_office_name) ILIKE '%%president%%' THEN 'Executive'
+            WHEN COALESCE(office_title, canonical_office_name) ILIKE '%%senat%%' THEN 'Senate'
+            WHEN COALESCE(office_title, canonical_office_name) ILIKE '%%delegate%%' THEN 'House'
+            WHEN COALESCE(office_title, canonical_office_name) ILIKE '%%representative%%' THEN 'House'
+            WHEN COALESCE(office_title, canonical_office_name) ILIKE '%%house%%' THEN 'House'
+            ELSE COALESCE(office_title, canonical_office_name)
+        END AS chamber,
+        member_state AS state,
+        CASE
+            WHEN division_type = 'congressional_district' THEN district_number
+            ELSE NULL
+        END AS district,
+        CASE
+            WHEN canonical_office_name = 'us_house_delegate' THEN 'Delegate'
+            WHEN division_type = 'congressional_district' THEN district_number
+            WHEN canonical_office_name = 'us_senate' THEN senate_class_label
+            ELSE NULL
+        END AS district_or_class,
+        party,
+        CASE
+            WHEN portrait_rights_status = ANY(%s) THEN raw_portrait_source_image_url
+            ELSE NULL
+        END AS portrait_source_image_url
+    FROM derived_members
+    ORDER BY person_name, officeholding_id
+"""
+
+
+def fetch_current_federal_members(conn: psycopg.Connection) -> list[dict[str, Any]]:
+    with conn.cursor(row_factory=dict_row) as cursor:
+        cursor.execute(
+            _CURRENT_FEDERAL_MEMBERS_SQL,
+            (
+                list(CANONICAL_FEDERAL_DIRECTORY_OFFICE_NAMES),
+                list(reusable_portrait_rights_statuses()),
+            ),
+        )
+        return list(cursor.fetchall())
 
 
 # ---------------------------------------------------------------------------

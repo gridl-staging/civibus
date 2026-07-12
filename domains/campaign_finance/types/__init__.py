@@ -3,9 +3,10 @@
 from .models import (
     Candidate,
     Committee,
+    CommitteeSummary,
     CommitteeType,
-    Filing,
     Election,
+    Filing,
     Transaction,
     OfficeType,
     CandidateCommitteeLink,
@@ -22,6 +23,7 @@ from .dark_money_models import (
 __all__ = [
     "Candidate",
     "Committee",
+    "CommitteeSummary",
     "CommitteeType",
     "Contribution527",
     "Expenditure527",

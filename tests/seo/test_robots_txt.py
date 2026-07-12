@@ -4,7 +4,7 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-ROBOTS_TXT = REPO_ROOT / "web" / "static" / "robots.txt"
+ROBOTS_TXT = REPO_ROOT / "infra" / "Caddyfile"
 
 
 def test_web_robots_txt_contract():

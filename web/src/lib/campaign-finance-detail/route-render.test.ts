@@ -16,6 +16,7 @@ import {
   CANDIDATE_EMPTY_CANONICAL_DATA,
   CANDIDATE_ID,
   COMMITTEE_CANONICAL_DATA,
+  COMMITTEE_CANONICAL_DATA_WITH_IE,
   COMMITTEE_ID,
   ORG_ID,
   PERSON_ID,
@@ -260,6 +261,9 @@ describe("campaign-finance route renders", () => {
       rendered.body.indexOf("<h3>Key metrics</h3>")
     );
     expect(rendered.body.indexOf("<h3>Key metrics</h3>")).toBeLessThan(
+      rendered.body.indexOf("<h3>Outside Spending</h3>")
+    );
+    expect(rendered.body.indexOf("<h3>Outside Spending</h3>")).toBeLessThan(
       rendered.body.indexOf("<h3>Fundraising summary</h3>")
     );
     expect(rendered.body.indexOf("<h3>Fundraising summary</h3>")).toBeLessThan(
@@ -280,6 +284,71 @@ describe("campaign-finance route renders", () => {
     expect(rendered.body.indexOf("<h3>Filing-period breakdown</h3>")).toBeLessThan(
       rendered.body.indexOf("<h3>Recent transactions</h3>")
     );
+  });
+
+  it("renders committee outside-spending empty state from the committee IE payload", () => {
+    const rendered = render(DetailPage, {
+      props: {
+        presentation: buildCommitteeRoutePresentation(COMMITTEE_CANONICAL_DATA)
+      }
+    });
+
+    const wrapper = extractElementByTestId(rendered.body, "committee-outside-spending");
+    expect(wrapper).not.toBeNull();
+    expect(wrapper).toContain("<h3>Outside Spending</h3>");
+    expect(wrapper).toContain("This committee reported no independent expenditures");
+  });
+
+  it("renders committee outside-spending outlier note when filtering leaves no displayed activity", () => {
+    const rendered = render(DetailPage, {
+      props: {
+        presentation: buildCommitteeRoutePresentation({
+          ...COMMITTEE_CANONICAL_DATA,
+          independentExpendituresMade: asDeferredValue({
+            committee_id: COMMITTEE_ID,
+            support_total: "0.00",
+            oppose_total: "0.00",
+            ie_transaction_count: 0,
+            excluded_outlier_count: 2,
+            targets: []
+          })
+        })
+      }
+    });
+
+    const wrapper = extractElementByTestId(rendered.body, "committee-outside-spending");
+    expect(wrapper).not.toBeNull();
+    expect(wrapper).toContain("This committee reported no independent expenditures");
+    expect(wrapper).toContain(
+      "2 reported independent expenditures were excluded from these totals as outliers."
+    );
+  });
+
+  it("renders committee outside-spending totals, ordered targets, and source links", () => {
+    const rendered = render(DetailPage, {
+      props: {
+        presentation: buildCommitteeRoutePresentation(COMMITTEE_CANONICAL_DATA_WITH_IE)
+      }
+    });
+
+    const wrapper = extractElementByTestId(rendered.body, "committee-outside-spending");
+    const targets = extractElementByTestId(rendered.body, "committee-outside-spending-targets");
+    const sources = extractElementByTestId(rendered.body, "committee-outside-spending-sources");
+    expect(wrapper).not.toBeNull();
+    expect(targets).not.toBeNull();
+    expect(sources).not.toBeNull();
+    expect(wrapper).toContain("$1,700.00");
+    expect(wrapper).toContain("$250.00");
+    expect(wrapper).toContain("4 expenditures");
+    expect(wrapper).toContain(
+      "1 reported independent expenditure was excluded from these totals as an outlier."
+    );
+    expect(targets).toContain('href="/person/11111111-1111-4111-8111-111111111111"');
+    expect(targets).toContain("Pat Candidate");
+    expect(targets).toContain("Lower Target");
+    expect(targets!.indexOf("Pat Candidate")).toBeLessThan(targets!.indexOf("Lower Target"));
+    expect(sources).toContain('href="https://www.fec.gov/data/independent-expenditures/"');
+    expect(sources).toContain("schedule-e-source");
   });
 
   it("renders committee high-signal receipts and expenditure panels", () => {
@@ -527,6 +596,46 @@ describe("campaign-finance route renders", () => {
     expect(rendered.body).toContain("No source records are available for this detail yet.");
     expect(rendered.body).toContain("Data freshness could not be determined");
   });
+
+  it("candidate and committee routes keep unknown-freshness fallback when source dates are malformed", () => {
+    const malformedSource = {
+      domain: "campaign_finance",
+      jurisdiction: "state/NC",
+      data_source_name: "NC State Board",
+      data_source_url: "https://www.ncsbe.gov",
+      source_record_key: "bad-date-source",
+      record_url: null,
+      pull_date: "not-a-date"
+    };
+
+    const candidateRendered = render(CandidateRoutePage, {
+      props: {
+        data: {
+          ...CANDIDATE_CANONICAL_DATA,
+          detail: {
+            ...CANDIDATE_CANONICAL_DATA.detail,
+            sources: [malformedSource]
+          }
+        }
+      }
+    });
+    const committeeRendered = render(CommitteeRoutePage, {
+      props: {
+        data: {
+          ...COMMITTEE_CANONICAL_DATA,
+          detail: {
+            ...COMMITTEE_CANONICAL_DATA.detail,
+            sources: [malformedSource]
+          }
+        }
+      }
+    });
+
+    for (const rendered of [candidateRendered, committeeRendered]) {
+      expect(rendered.body).toContain("Data freshness could not be determined");
+      expect(rendered.body).not.toContain("No source records are available for this detail yet.");
+    }
+  });
 });
 
 describe("DetailPage route presentation", () => {
@@ -709,7 +818,8 @@ describe("DetailPage route presentation", () => {
             oppose_total: "0.00",
             support_count: 0,
             oppose_count: 0,
-            top_spenders: []
+            top_spenders: [],
+            excluded_outlier_count: 0
           }),
           ieTransactions: asDeferredValue([])
         })
@@ -786,7 +896,7 @@ describe("campaign-finance detail key metrics section", () => {
     expect(metricsWrapper).toContain("$125.00");
     expect(metricsWrapper).toContain("Total spent");
     expect(metricsWrapper).toContain("$40.00");
-    expect(metricsWrapper).toContain("Transactions");
+    expect(metricsWrapper).toContain("Itemized transactions loaded");
     expect(metricsWrapper).toContain(">1<");
     // Metrics wrapper must not pull in Fundraising-summary-only fields.
     expect(metricsWrapper).not.toContain("Jurisdiction");
@@ -816,7 +926,7 @@ describe("campaign-finance detail key metrics section", () => {
     expect(metricsWrapper).toContain("$250.00");
     expect(metricsWrapper).toContain("Total spent");
     expect(metricsWrapper).toContain("$80.00");
-    expect(metricsWrapper).toContain("Transactions");
+    expect(metricsWrapper).toContain("Itemized transactions loaded");
     expect(metricsWrapper).toContain(">5<");
     // Metrics wrapper must not pull in Fundraising-summary-only fields.
     expect(metricsWrapper).not.toContain("Fundraising summary");
@@ -840,6 +950,119 @@ describe("campaign-finance detail key metrics section", () => {
     expect(metricRule?.[1]).toMatch(/border-radius:\s*(?:8px|0\.5rem)\s*;/);
     expect(metricLabelRule?.[1]).toBeDefined();
     expect(metricLabelRule?.[1]).toMatch(/letter-spacing:\s*0(?:px|rem|em)?\s*;/);
+  });
+});
+
+describe("committee detail truthfulness (Stage 6)", () => {
+  it("renders positive official FEC totals in key metrics even when itemized transactions are zero", () => {
+    const rendered = render(DetailPage, {
+      props: {
+        presentation: buildCommitteeRoutePresentation({
+          ...COMMITTEE_CANONICAL_DATA,
+          summary: asDeferredValue({
+            ...(COMMITTEE_CANONICAL_DATA.summary as unknown as Awaited<
+              typeof COMMITTEE_CANONICAL_DATA.summary
+            >),
+            total_raised: "1000000.00",
+            total_spent: "500000.00",
+            net: "500000.00",
+            transaction_count: 0,
+            itemized_transaction_count: 0,
+            summary_source: "fec_committee_summary"
+          })
+        })
+      }
+    });
+
+    const metricsWrapper = extractElementByTestId(rendered.body, "key-metrics");
+    expect(metricsWrapper).not.toBeNull();
+    expect(metricsWrapper).toContain("$1,000,000.00");
+    expect(metricsWrapper).toContain("$500,000.00");
+    // Ensure the false-$0 collapse never fires when official totals exist.
+    expect(metricsWrapper).not.toMatch(/Total raised[\s\S]{0,80}\$0\.00/);
+    expect(rendered.body).toContain("Official FEC committee summary");
+    expect(rendered.body).toContain(
+      "Itemized transactions loaded: 0. Official totals above come directly from the FEC committee summary and are not derived from these transactions."
+    );
+  });
+
+  it("renders a per-cycle history table sourced from cycle_summaries", () => {
+    const rendered = render(DetailPage, {
+      props: {
+        presentation: buildCommitteeRoutePresentation({
+          ...COMMITTEE_CANONICAL_DATA,
+          summary: asDeferredValue({
+            ...(COMMITTEE_CANONICAL_DATA.summary as unknown as Awaited<
+              typeof COMMITTEE_CANONICAL_DATA.summary
+            >),
+            cycle_summaries: [
+              {
+                cycle: 2026,
+                total_receipts: "500000.00",
+                total_disbursements: "250000.00",
+                cash_on_hand: "250000.00",
+                coverage_start_date: "2025-01-01",
+                coverage_end_date: "2026-06-30"
+              },
+              {
+                cycle: 2024,
+                total_receipts: "800000.00",
+                total_disbursements: "780000.00",
+                cash_on_hand: "20000.00",
+                coverage_start_date: "2023-01-01",
+                coverage_end_date: "2024-12-31"
+              }
+            ]
+          })
+        })
+      }
+    });
+
+    const wrapper = extractElementByTestId(rendered.body, "committee-cycle-summaries-scroll");
+    expect(wrapper).not.toBeNull();
+    expect(rendered.body).toContain("<h3>Per-cycle history</h3>");
+    expect(wrapper).toContain("<th>Cycle</th>");
+    expect(wrapper).toContain("<th>Coverage</th>");
+    expect(wrapper).toContain("<th>Total receipts</th>");
+    expect(wrapper).toContain("<th>Total disbursements</th>");
+    expect(wrapper).toContain("<th>Cash on hand</th>");
+    expect(wrapper).toContain("<td>2026</td>");
+    expect(wrapper).toContain("<td>2025-01-01 to 2026-06-30</td>");
+    expect(wrapper).toContain("<td>$500,000.00</td>");
+    expect(wrapper).toContain("<td>2024</td>");
+    expect(wrapper).toContain("<td>$800,000.00</td>");
+  });
+
+  it("renders linked candidates from the committee detail shell as slug-aware links", () => {
+    const rendered = render(DetailPage, {
+      props: {
+        presentation: buildCommitteeRoutePresentation({
+          ...COMMITTEE_CANONICAL_DATA,
+          detail: {
+            ...COMMITTEE_CANONICAL_DATA.detail,
+            linked_candidates: [
+              {
+                id: CANDIDATE_ID,
+                fec_candidate_id: "H0LA04001",
+                name: "Mike Johnson",
+                party: "REP",
+                office: "H",
+                state: "LA",
+                district: "04",
+                slug: "mike-johnson",
+                slug_is_unique: true
+              }
+            ]
+          }
+        })
+      }
+    });
+
+    const wrapper = extractElementByTestId(rendered.body, "committee-linked-candidates");
+    expect(wrapper).not.toBeNull();
+    expect(wrapper).toContain('href="/candidate/mike-johnson"');
+    expect(wrapper).toContain("Mike Johnson");
+    expect(wrapper).toContain("H · LA · District 04 · REP");
   });
 });
 

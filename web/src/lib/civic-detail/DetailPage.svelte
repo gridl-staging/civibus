@@ -333,7 +333,7 @@
           </dl>
         </section>
       {:else if sectionKey === "records"}
-        <section class="detail__panel">
+        <section class="detail__panel" data-testid="contest-results-panel">
           <h3>Results</h3>
           {#if contestViewModel.resultWinnerPersonName}
             <dl class="detail__rows">

@@ -9,6 +9,7 @@ import pytest
 from core.db import insert_data_source, insert_entity_source, insert_organization, insert_person, insert_source_record
 from core.types.python.models import DataSource, Organization, Person, SourceRecord, compute_record_hash, utc_now
 
+from domains.campaign_finance.ingest import bulk_transaction_loader
 from domains.campaign_finance.ingest.bulk_transaction_loader import (
     build_filing_from_contribution,
     build_transaction_from_contribution,
@@ -309,6 +310,7 @@ class TestBuildTransactionFromContribution:
         filing_id = uuid4()
         record = _base_contribution_record(
             contributor_name="LEE, MAYA",
+            entity_type="ORG",
             contributor_city="AUSTIN",
             contributor_state="TX",
             contributor_zip="733010123",
@@ -322,11 +324,24 @@ class TestBuildTransactionFromContribution:
             committee_id=committee_id,
         )
         assert txn.contributor_name_raw == "LEE, MAYA"
+        assert txn.contributor_entity_type == "ORG"
         assert txn.contributor_city == "AUSTIN"
         assert txn.contributor_state == "TX"
         assert txn.contributor_zip == "733010123"
         assert txn.contributor_employer == "LONE STAR TECH"
         assert txn.contributor_occupation == "ANALYST"
+
+    def test_blank_entity_type_maps_to_none(self, db_conn: psycopg.Connection) -> None:
+        committee_id = _insert_test_committee(db_conn, "C00100001", f"{_TEST_COMMITTEE_PREFIX}blankentity")
+        filing_id = uuid4()
+        record = _base_contribution_record(entity_type="   ")
+        txn = build_transaction_from_contribution(
+            db_conn,
+            record,
+            filing_id=filing_id,
+            committee_id=committee_id,
+        )
+        assert txn.contributor_entity_type is None
 
     def test_maps_memo_fields(self, db_conn: psycopg.Connection) -> None:
         committee_id = _insert_test_committee(db_conn, "C00100001", f"{_TEST_COMMITTEE_PREFIX}memo")
@@ -416,6 +431,31 @@ class TestBuildTransactionFromContribution:
         )
         assert txn.recipient_committee_id == recipient_committee_id
 
+    def test_uses_prefetched_recipient_committee_map(
+        self,
+        db_conn: psycopg.Connection,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        committee_id = _insert_test_committee(db_conn, "C00100001", f"{_TEST_COMMITTEE_PREFIX}prefetch")
+        recipient_committee_id = uuid4()
+        filing_id = uuid4()
+        record = _base_contribution_record(other_id="C00100004")
+        monkeypatch.setattr(
+            bulk_transaction_loader,
+            "find_committee_id_by_fec_id",
+            lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("recipient committee should be prefetched")),
+        )
+
+        txn = build_transaction_from_contribution(
+            db_conn,
+            record,
+            filing_id=filing_id,
+            committee_id=committee_id,
+            recipient_committee_id_by_fec_id={"C00100004": recipient_committee_id},
+        )
+
+        assert txn.recipient_committee_id == recipient_committee_id
+
     def test_attaches_source_record_id(self, db_conn: psycopg.Connection) -> None:
         committee_id = _insert_test_committee(db_conn, "C00100001", f"{_TEST_COMMITTEE_PREFIX}txnsr")
         filing_id = uuid4()
@@ -450,6 +490,32 @@ class TestBuildTransactionFromContribution:
         )
 
         assert txn.contributor_person_id == person_id
+        assert txn.contributor_organization_id is None
+
+    def test_can_skip_counterparty_resolution_for_transactions_only_batch(
+        self,
+        db_conn: psycopg.Connection,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        committee_id = _insert_test_committee(db_conn, "C00100001", f"{_TEST_COMMITTEE_PREFIX}skipcounterparty")
+        filing_id = uuid4()
+        source_record_id = uuid4()
+        monkeypatch.setattr(
+            bulk_transaction_loader,
+            "resolve_transaction_counterparty_ids",
+            lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("counterparty resolution should be skipped")),
+        )
+
+        txn = build_transaction_from_contribution(
+            db_conn,
+            _base_contribution_record(),
+            filing_id=filing_id,
+            committee_id=committee_id,
+            source_record_id=source_record_id,
+            resolve_counterparty=False,
+        )
+
+        assert txn.contributor_person_id is None
         assert txn.contributor_organization_id is None
 
     def test_resolves_contributor_organization_id_from_existing_provenance(

@@ -3,6 +3,7 @@ import type {
   CandidateFundraisingSummary,
   CommitteeFilingBreakdown,
   CommitteeFundraisingSummary,
+  CommitteeIndependentExpenditureActivity,
   IndependentExpenditureResponse,
   IndependentExpenditureSummary
 } from "./contract";
@@ -58,9 +59,15 @@ export const CANDIDATE_CANONICAL_DATA = {
         contribution_receipts_total: "220.00",
         top_donors: [],
         top_vendors: [],
-        spend_categories: null
+        spend_categories: null,
+        itemized_transaction_count: 5,
+        cycle_summaries: [],
+        summary_source: "derived"
       }
-    ]
+    ],
+    cash_on_hand: null,
+    summary_source: "derived",
+    itemized_transaction_count: 5
   }),
   ieTransactions: asDeferredValue<IndependentExpenditureResponse[]>([]),
   ieSummary: asDeferredValue<IndependentExpenditureSummary | null>(null)
@@ -84,7 +91,10 @@ export const CANDIDATE_EMPTY_CANONICAL_DATA = {
     total_spent: "0.00",
     net: "0.00",
     transaction_count: 0,
-    committees: []
+    committees: [],
+    cash_on_hand: null,
+    summary_source: "derived",
+    itemized_transaction_count: 0
   }),
   ieTransactions: asDeferredValue<IndependentExpenditureResponse[]>([]),
   ieSummary: asDeferredValue<IndependentExpenditureSummary | null>(null)
@@ -130,7 +140,8 @@ export const CANDIDATE_CANONICAL_DATA_WITH_IE = {
         total_amount: "7000.00",
         transaction_count: 2
       }
-    ]
+    ],
+    excluded_outlier_count: 0
   })
 };
 
@@ -175,7 +186,8 @@ export const COMMITTEE_CANONICAL_DATA = {
     city: "Raleigh",
     zip_code: "27601",
     treasurer_name: "Jordan Treasurer",
-    sources: []
+    sources: [],
+    linked_candidates: []
   },
   transactions: asDeferredValue<CampaignFinanceTransactionResponse[]>([]),
   summary: asDeferredValue<CommitteeFundraisingSummary>({
@@ -193,11 +205,77 @@ export const COMMITTEE_CANONICAL_DATA = {
     contribution_receipts_total: "105.00",
     top_donors: [],
     top_vendors: [],
-    spend_categories: null
+    spend_categories: null,
+    itemized_transaction_count: 1,
+    cycle_summaries: [],
+    summary_source: "derived"
   }),
   filingBreakdown: asDeferredValue<CommitteeFilingBreakdown>({
     committee_id: COMMITTEE_ID,
     committee_name: "Citizens for Civibus",
     filings: []
+  }),
+  independentExpendituresMade: asDeferredValue<CommitteeIndependentExpenditureActivity>({
+    committee_id: COMMITTEE_ID,
+    support_total: "0.00",
+    oppose_total: "0.00",
+    ie_transaction_count: 0,
+    excluded_outlier_count: 0,
+    targets: []
+  })
+};
+
+export const COMMITTEE_CANONICAL_DATA_WITH_IE = {
+  ...COMMITTEE_CANONICAL_DATA,
+  independentExpendituresMade: asDeferredValue<CommitteeIndependentExpenditureActivity>({
+    committee_id: COMMITTEE_ID,
+    support_total: "1700.00",
+    oppose_total: "250.00",
+    ie_transaction_count: 4,
+    excluded_outlier_count: 1,
+    targets: [
+      {
+        candidate_id: CANDIDATE_ID,
+        fec_candidate_id: "H0NC01001",
+        candidate_name: "Pat Candidate",
+        person_id: PERSON_ID,
+        party: "DEM",
+        office: "H",
+        state: "NC",
+        district: "01",
+        slug: "pat-candidate",
+        slug_is_unique: true,
+        support_total: "1500.00",
+        oppose_total: "250.00",
+        transaction_count: 3,
+        sources: [
+          {
+            domain: "campaign_finance",
+            jurisdiction: "federal/fec",
+            data_source_name: "FEC Schedule E",
+            data_source_url: "https://www.fec.gov",
+            source_record_key: "schedule-e-source",
+            record_url: "https://www.fec.gov/data/independent-expenditures/",
+            pull_date: "2026-07-08T00:00:00Z"
+          }
+        ]
+      },
+      {
+        candidate_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        fec_candidate_id: "H0NC01002",
+        candidate_name: "Lower Target",
+        person_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        party: "REP",
+        office: "H",
+        state: "NC",
+        district: "02",
+        slug: "lower-target",
+        slug_is_unique: true,
+        support_total: "200.00",
+        oppose_total: "0.00",
+        transaction_count: 1,
+        sources: []
+      }
+    ]
   })
 };

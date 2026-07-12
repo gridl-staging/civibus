@@ -1,3 +1,6 @@
+"""
+Stub summary for jun04_3pm_5_launch_gate_and_golive/civibus_dev/api/main.py.
+"""
 
 import os
 from collections.abc import AsyncIterator
@@ -25,6 +28,7 @@ from api.middleware import (
 )
 from api.routes.campaign_finance import router as campaign_finance_router
 from api.routes.civics import router as civics_router
+from api.routes.donors import router as donors_router
 from api.routes.entity_resolution import router as entity_resolution_router
 from api.routes.entities import router as entities_router
 from api.routes.graph import router as graph_router
@@ -32,6 +36,7 @@ from api.routes.investigate import router as investigate_router
 from api.routes.metadata import router as metadata_router
 from api.routes.portrait_admin import router as portrait_admin_router
 from api.routes.property import router as property_router
+from api.routes.public_federal import router as public_federal_router
 from api.routes.search import router as search_router
 from core.db import build_connection_parameters
 from core.graph import age_post_connect
@@ -47,11 +52,16 @@ def _v1_routers() -> tuple[APIRouter, ...]:
         investigate_router,
         graph_router,
         search_router,
+        donors_router,
     )
 
 
 def _administrative_v1_routers() -> tuple[APIRouter, ...]:
     return (entity_resolution_router, portrait_admin_router)
+
+
+def _public_routers() -> tuple[APIRouter, ...]:
+    return (public_federal_router,)
 
 
 def _include_versioned_routers(
@@ -62,6 +72,14 @@ def _include_versioned_routers(
 ) -> None:
     for router in routers:
         app.include_router(router, prefix="/v1", dependencies=[Depends(dependency)])
+
+
+def _include_public_routers(app: FastAPI, *, routers: tuple[APIRouter, ...]) -> None:
+    # Authless by design — do NOT add a dependency here. These routers own the
+    # public ``/public/v1`` surface and must serve nonpartisan public-record data
+    # with no API key. Auth-gated routes belong on ``_include_versioned_routers``.
+    for router in routers:
+        app.include_router(router)
 
 
 def _parse_positive_int_env_var(env_var_name: str) -> int:
@@ -179,7 +197,7 @@ def create_app() -> FastAPI:
     def health() -> dict[str, str]:
         return {"status": "ok"}
 
-    @app.get("/api/health/content")
+    @app.get("/health/content")
     def content_health(request: Request) -> Response:
         """Content-aware probe for external uptime monitors.
 
@@ -212,10 +230,7 @@ def create_app() -> FastAPI:
                 status_code=503,
                 content={
                     "healthy": False,
-                    "failures": [
-                        {"check": f.check, "actual": f.actual, "floor": f.floor}
-                        for f in failures
-                    ],
+                    "failures": [{"check": f.check, "actual": f.actual, "floor": f.floor} for f in failures],
                 },
             )
         return JSONResponse(status_code=200, content={"healthy": True})
@@ -229,6 +244,7 @@ def create_app() -> FastAPI:
 
     _include_versioned_routers(app, routers=_v1_routers(), dependency=require_authorized_request)
     _include_versioned_routers(app, routers=_administrative_v1_routers(), dependency=require_administrative_request)
+    _include_public_routers(app, routers=_public_routers())
 
     return app
 

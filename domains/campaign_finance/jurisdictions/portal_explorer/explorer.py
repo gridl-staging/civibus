@@ -1,4 +1,5 @@
 """Run bounded portal exploration loops and persist checkpointed run artifacts."""
+
 import json
 from pathlib import Path
 import re
@@ -25,7 +26,7 @@ from domains.campaign_finance.jurisdictions.protected_portal import (
     open_playwright,
 )
 
-_RUN_ARTIFACT_ROOT = Path("docs/research/portal_contracts/runs")
+_RUN_ARTIFACT_ROOT = Path("docs/reference/research/portal_contracts/runs")
 _RUN_FILENAME_SANITIZER = re.compile(r"[^A-Za-z0-9_]+")
 
 

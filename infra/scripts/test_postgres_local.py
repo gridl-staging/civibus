@@ -75,12 +75,8 @@ def test_resolve_local_postgres_runtime_fails_when_db_container_missing(
         postgres_local.resolve_local_postgres_runtime(repo_root=tmp_path)
 
 
-def test_create_backup_passes_postgres_password_via_environment_not_argv(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    observed: dict[str, object] = {}
-    runtime = postgres_local.LocalPostgresRuntime(
+def _make_test_runtime() -> postgres_local.LocalPostgresRuntime:
+    return postgres_local.LocalPostgresRuntime(
         compose_project_name="contract-project",
         compose_service_name=postgres_local.DB_SERVICE_NAME,
         container_name="contract-db-1",
@@ -88,9 +84,29 @@ def test_create_backup_passes_postgres_password_via_environment_not_argv(
         database_name="contract-db",
     )
 
+
+def _assert_no_pgpassword_exposure(calls: list[dict[str, object]]) -> None:
+    for call in calls:
+        cmd = call["command"]
+        cmd_str = " ".join(str(c) for c in cmd)
+        paired = list(zip(cmd, cmd[1:]))
+        assert not any(a == "-e" and b == "PGPASSWORD" for a, b in paired), (
+            f"PGPASSWORD must not appear as a docker exec -e arg: {cmd}"
+        )
+        assert "PGPASSWORD=" not in cmd_str
+        env = call["kwargs"].get("env") or {}
+        assert "PGPASSWORD" not in env, "PGPASSWORD must not be passed via subprocess env dict"
+
+
+def test_create_backup_never_exposes_pgpassword_in_argv_or_env(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    observed_calls: list[dict[str, object]] = []
+    runtime = _make_test_runtime()
+
     def fake_run_command(command: list[str], **kwargs: object) -> None:
-        observed["command"] = command
-        observed["kwargs"] = kwargs
+        observed_calls.append({"command": command, "kwargs": kwargs})
 
     monkeypatch.setattr(postgres_local, "resolve_local_postgres_runtime", lambda *, repo_root=tmp_path: runtime)
     monkeypatch.setattr(postgres_local, "_run_command", fake_run_command)
@@ -98,29 +114,95 @@ def test_create_backup_passes_postgres_password_via_environment_not_argv(
 
     backup_path = postgres_local.create_backup(output_dir=tmp_path, repo_root=tmp_path)
 
-    command = observed["command"]
-    kwargs = observed["kwargs"]
-
     assert backup_path.parent == tmp_path
-    assert "PGPASSWORD=super-secret" not in command
-    assert command[:4] == ["docker", "exec", "-e", "PGPASSWORD"]
-    assert kwargs["env"]["PGPASSWORD"] == "super-secret"
+    _assert_no_pgpassword_exposure(observed_calls)
 
 
-def test_restore_backup_passes_postgres_password_via_environment_not_argv(
+def test_create_backup_writes_pgpass_into_container_via_stdin(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    observed_calls: list[dict[str, object]] = []
+    runtime = _make_test_runtime()
+
+    def fake_run_command(command: list[str], **kwargs: object) -> None:
+        observed_calls.append({"command": command, "kwargs": kwargs})
+
+    monkeypatch.setattr(postgres_local, "resolve_local_postgres_runtime", lambda *, repo_root=tmp_path: runtime)
+    monkeypatch.setattr(postgres_local, "_run_command", fake_run_command)
+    monkeypatch.setenv("POSTGRES_PASSWORD", "super-secret")
+
+    postgres_local.create_backup(output_dir=tmp_path, repo_root=tmp_path)
+
+    assert len(observed_calls) >= 2, "create_backup must issue at least a .pgpass setup call and a pg_dump call"
+    setup_call = observed_calls[0]
+    setup_cmd_str = " ".join(str(c) for c in setup_call["command"])
+    assert "docker" in setup_cmd_str and "exec" in setup_cmd_str
+    assert ".pgpass" in setup_cmd_str
+    assert setup_call["kwargs"].get("input") is not None, ".pgpass content must be piped via input, not passed as argv"
+
+
+def test_create_backup_cleans_up_pgpass_after_dump(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    observed_calls: list[dict[str, object]] = []
+    runtime = _make_test_runtime()
+
+    def fake_run_command(command: list[str], **kwargs: object) -> None:
+        observed_calls.append({"command": command, "kwargs": kwargs})
+
+    monkeypatch.setattr(postgres_local, "resolve_local_postgres_runtime", lambda *, repo_root=tmp_path: runtime)
+    monkeypatch.setattr(postgres_local, "_run_command", fake_run_command)
+    monkeypatch.setenv("POSTGRES_PASSWORD", "super-secret")
+
+    postgres_local.create_backup(output_dir=tmp_path, repo_root=tmp_path)
+
+    cleanup_call = observed_calls[-1]
+    cleanup_cmd_str = " ".join(str(c) for c in cleanup_call["command"])
+    assert "rm" in cleanup_cmd_str and ".pgpass" in cleanup_cmd_str, (
+        "Last call must remove the temporary .pgpass from the container"
+    )
+
+
+def test_create_backup_runs_pg_dump_with_expected_flags(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    observed_calls: list[dict[str, object]] = []
+    runtime = _make_test_runtime()
+
+    def fake_run_command(command: list[str], **kwargs: object) -> None:
+        observed_calls.append({"command": command, "kwargs": kwargs})
+
+    monkeypatch.setattr(postgres_local, "resolve_local_postgres_runtime", lambda *, repo_root=tmp_path: runtime)
+    monkeypatch.setattr(postgres_local, "_run_command", fake_run_command)
+    monkeypatch.setenv("POSTGRES_PASSWORD", "super-secret")
+
+    postgres_local.create_backup(output_dir=tmp_path, repo_root=tmp_path)
+
+    dump_call = next(c for c in observed_calls if "pg_dump" in " ".join(str(x) for x in c["command"]))
+    dump_cmd = dump_call["command"]
+    assert "pg_dump" in dump_cmd
+    assert "-U" in dump_cmd
+    idx_u = dump_cmd.index("-U")
+    assert dump_cmd[idx_u + 1] == "contract-user"
+    assert "-d" in dump_cmd
+    idx_d = dump_cmd.index("-d")
+    assert dump_cmd[idx_d + 1] == "contract-db"
+    assert "--format=custom" in dump_cmd
+    assert "--no-owner" in dump_cmd
+    assert "--no-privileges" in dump_cmd
+
+
+def test_restore_backup_never_exposes_pgpassword_in_argv_or_env(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     observed_calls: list[dict[str, object]] = []
     dump_path = tmp_path / "fixture.dump"
     dump_path.write_bytes(b"dump-bytes")
-    runtime = postgres_local.LocalPostgresRuntime(
-        compose_project_name="contract-project",
-        compose_service_name=postgres_local.DB_SERVICE_NAME,
-        container_name="contract-db-1",
-        connection_parameters={"user": "contract-user", "dbname": "contract-db", "host": "localhost", "port": 5433},
-        database_name="contract-db",
-    )
+    runtime = _make_test_runtime()
 
     def fake_run_command(command: list[str], **kwargs: object) -> None:
         observed_calls.append({"command": command, "kwargs": kwargs})
@@ -131,11 +213,5 @@ def test_restore_backup_passes_postgres_password_via_environment_not_argv(
 
     postgres_local.restore_backup(dump_path=dump_path, repo_root=tmp_path)
 
-    reset_call, restore_call = observed_calls
-    restore_command = restore_call["command"]
-    restore_kwargs = restore_call["kwargs"]
-
-    assert reset_call["command"] == ["make", "db-reset"]
-    assert "PGPASSWORD=super-secret" not in restore_command
-    assert restore_command[:5] == ["docker", "exec", "-i", "-e", "PGPASSWORD"]
-    assert restore_kwargs["env"]["PGPASSWORD"] == "super-secret"
+    assert observed_calls[0]["command"] == ["make", "db-reset"]
+    _assert_no_pgpassword_exposure(observed_calls[1:])

@@ -1,6 +1,6 @@
 import { ApiResponseError } from "$lib/server/api/client";
 import { describe, expect, it, vi } from "vitest";
-import { fetchEntityDetailBundle, fetchPersonCivicHistorySections } from "./entity-detail";
+import { fetchEntityDetailBundle } from "./entity-detail";
 import type { ApiClient } from "./client";
 
 const PERSON_ID = "11111111-1111-4111-8111-111111111111";
@@ -91,27 +91,7 @@ describe("fetchEntityDetailBundle", () => {
       portrait: null,
       sources: []
     };
-
-    const requestJson = vi.fn(async (path: string) => {
-      if (path === `/v1/person/${PERSON_ID}`) {
-        return malformedPersonPayload;
-      }
-
-      if (path === `/v1/er/person/${PERSON_ID}/matches`) {
-        return [];
-      }
-
-      if (path === `/v1/graph/person/${PERSON_ID}/relationships`) {
-        return {
-          entity_type: "person",
-          entity_id: PERSON_ID,
-          neighbors: [],
-          total_count: 0
-        };
-      }
-
-      throw new Error(`unexpected path: ${path}`);
-    });
+    const requestJson = vi.fn(async () => malformedPersonPayload);
 
     await expect(
       fetchEntityDetailBundle(
@@ -121,62 +101,25 @@ describe("fetchEntityDetailBundle", () => {
     ).rejects.toThrow(/missing required bio keys/i);
   });
 
-  it("starts detail, ER, and graph requests concurrently before awaiting detail", async () => {
-    let resolveDetail: (value: typeof PERSON_DETAIL) => void = () => {};
-    const detailPromise = new Promise<typeof PERSON_DETAIL>((resolve) => {
-      resolveDetail = resolve;
-    });
-    const requestJson = vi.fn((path: string) => {
-      if (path === `/v1/person/${PERSON_ID}`) {
-        return detailPromise;
-      }
+  it("rejects person payloads with malformed required bio attribution values", async () => {
+    const requestJson = vi.fn(async () => ({
+      ...PERSON_DETAIL,
+      bio_pulled_at: 1714401000
+    }));
 
-      if (path === `/v1/er/person/${PERSON_ID}/matches`) {
-        return Promise.resolve([]);
-      }
-
-      if (path === `/v1/graph/person/${PERSON_ID}/relationships`) {
-        return Promise.resolve({
-          entity_type: "person",
-          entity_id: PERSON_ID,
-          neighbors: [],
-          total_count: 0
-        });
-      }
-
-      throw new Error(`unexpected path: ${path}`);
-    });
-
-    const bundlePromise = fetchEntityDetailBundle(
-      { requestJson: requestJson as ApiClient["requestJson"] },
-      { entityType: "person", id: PERSON_ID }
-    );
-
-    expect(requestJson).toHaveBeenCalledTimes(3);
-
-    resolveDetail(PERSON_DETAIL);
-    await bundlePromise;
+    await expect(
+      fetchEntityDetailBundle(
+        { requestJson: requestJson as ApiClient["requestJson"] },
+        { entityType: "person", id: PERSON_ID }
+      )
+    ).rejects.toThrow(/bio keys must be string or null/i);
   });
 
-  it("composes person detail + ER + graph from shared Stage 4 paths", async () => {
+  it("returns only canonical person detail from the public detail bundle", async () => {
     const requestJson = vi.fn(async (path: string) => {
       if (path === `/v1/person/${PERSON_ID}`) {
         return PERSON_DETAIL;
       }
-
-      if (path === `/v1/er/person/${PERSON_ID}/matches`) {
-        return [];
-      }
-
-      if (path === `/v1/graph/person/${PERSON_ID}/relationships`) {
-        return {
-          entity_type: "person",
-          entity_id: PERSON_ID,
-          neighbors: [],
-          total_count: 0
-        };
-      }
-
       throw new Error(`unexpected path: ${path}`);
     });
 
@@ -185,46 +128,20 @@ describe("fetchEntityDetailBundle", () => {
       { entityType: "person", id: PERSON_ID }
     );
 
-    expect("portrait" in bundle.detail).toBe(true);
-    if (!("portrait" in bundle.detail)) {
-      throw new Error("expected person detail payload");
-    }
-    expect(bundle.detail.portrait).toEqual(PERSON_DETAIL.portrait);
-    expect("occupation" in bundle.detail ? bundle.detail.occupation : null).toBe("Attorney");
-    expect("education" in bundle.detail ? bundle.detail.education : null).toBe("State University");
-    expect(bundle.detail.sources).toBe(PERSON_DETAIL.sources);
-    expect(bundle.matches).toBeInstanceOf(Promise);
-    expect(bundle.relationships).toBeInstanceOf(Promise);
-    await expect(bundle.matches).resolves.toEqual([]);
-    await expect(bundle.relationships).resolves.toMatchObject({
-      neighbors: []
+    expect(bundle).toEqual({
+      entityType: "person",
+      detail: PERSON_DETAIL
     });
-    expect(requestJson.mock.calls.map(([path]) => path)).toEqual([
-      `/v1/person/${PERSON_ID}`,
-      `/v1/er/person/${PERSON_ID}/matches`,
-      `/v1/graph/person/${PERSON_ID}/relationships`
-    ]);
+    expect("matches" in bundle).toBe(false);
+    expect("relationships" in bundle).toBe(false);
+    expect(requestJson.mock.calls.map(([path]) => path)).toEqual([`/v1/person/${PERSON_ID}`]);
   });
 
-  it("composes org detail + organization ER + org graph path mismatch", async () => {
+  it("returns only canonical organization detail from the public detail bundle", async () => {
     const requestJson = vi.fn(async (path: string) => {
       if (path === `/v1/org/${ORG_ID}`) {
         return ORG_DETAIL;
       }
-
-      if (path === `/v1/er/organization/${ORG_ID}/matches`) {
-        return [];
-      }
-
-      if (path === `/v1/graph/org/${ORG_ID}/relationships`) {
-        return {
-          entity_type: "org",
-          entity_id: ORG_ID,
-          neighbors: [],
-          total_count: 0
-        };
-      }
-
       throw new Error(`unexpected path: ${path}`);
     });
 
@@ -233,15 +150,13 @@ describe("fetchEntityDetailBundle", () => {
       { entityType: "org", id: ORG_ID }
     );
 
-    await expect(bundle.matches).resolves.toEqual([]);
-    await expect(bundle.relationships).resolves.toMatchObject({
-      neighbors: []
+    expect(bundle).toEqual({
+      entityType: "org",
+      detail: ORG_DETAIL
     });
-    expect(requestJson.mock.calls.map(([path]) => path)).toEqual([
-      `/v1/org/${ORG_ID}`,
-      `/v1/er/organization/${ORG_ID}/matches`,
-      `/v1/graph/org/${ORG_ID}/relationships`
-    ]);
+    expect("matches" in bundle).toBe(false);
+    expect("relationships" in bundle).toBe(false);
+    expect(requestJson.mock.calls.map(([path]) => path)).toEqual([`/v1/org/${ORG_ID}`]);
   });
 
   it("preserves backend error semantics (e.g. malformed UUID 422)", async () => {
@@ -257,243 +172,5 @@ describe("fetchEntityDetailBundle", () => {
         { entityType: "person", id: "not-a-uuid" }
       )
     ).rejects.toMatchObject({ status: 422 });
-  });
-
-  it("does not emit unhandled rejections when ER fails before detail resolves", async () => {
-    const earlyMatchFailure = new Error("ER matches request failed");
-    let resolveDetail: (value: typeof PERSON_DETAIL) => void = () => {};
-    const detailPromise = new Promise<typeof PERSON_DETAIL>((resolve) => {
-      resolveDetail = resolve;
-    });
-    const requestJson = vi.fn((path: string) => {
-      if (path === `/v1/person/${PERSON_ID}`) {
-        return detailPromise;
-      }
-
-      if (path === `/v1/er/person/${PERSON_ID}/matches`) {
-        return Promise.reject(earlyMatchFailure);
-      }
-
-      if (path === `/v1/graph/person/${PERSON_ID}/relationships`) {
-        return Promise.resolve({
-          entity_type: "person",
-          entity_id: PERSON_ID,
-          neighbors: [],
-          total_count: 0
-        });
-      }
-
-      throw new Error(`unexpected path: ${path}`);
-    });
-
-    const unhandled: unknown[] = [];
-    const handleUnhandledRejection = (reason: unknown) => {
-      unhandled.push(reason);
-    };
-    process.on("unhandledRejection", handleUnhandledRejection);
-
-    try {
-      const bundlePromise = fetchEntityDetailBundle(
-        { requestJson: requestJson as ApiClient["requestJson"] },
-        { entityType: "person", id: PERSON_ID }
-      );
-
-      await Promise.resolve();
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 0);
-      });
-
-      expect(unhandled).toEqual([]);
-
-      resolveDetail(PERSON_DETAIL);
-      const bundle = await bundlePromise;
-      await expect(bundle.matches).rejects.toThrow("ER matches request failed");
-      await expect(bundle.relationships).resolves.toMatchObject({ total_count: 0 });
-      expect(unhandled).toEqual([]);
-    } finally {
-      process.off("unhandledRejection", handleUnhandledRejection);
-    }
-  });
-
-  it("builds person civic-history sections from officeholding and candidacy endpoints", async () => {
-    const relationships = {
-      entity_type: "person",
-      entity_id: PERSON_ID,
-      neighbors: [
-        {
-          entity_type: "officeholding",
-          entity_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
-          name: "Officeholding Alpha",
-          relationship_type: "HOLDS",
-          direction: "outbound" as const
-        },
-        {
-          entity_type: "candidacy",
-          entity_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
-          name: "Candidacy Alpha",
-          relationship_type: "CANDIDACY_OF",
-          direction: "outbound" as const
-        },
-        {
-          entity_type: "office",
-          entity_id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
-          name: "US House NC-01",
-          relationship_type: "HOLDS",
-          direction: "outbound" as const
-        },
-        {
-          entity_type: "contest",
-          entity_id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
-          name: "NC-01 General Election",
-          relationship_type: "RUNS_IN",
-          direction: "outbound" as const
-        }
-      ],
-      total_count: 4
-    };
-
-    const requestJson = vi.fn(async (path: string) => {
-      if (path === "/v1/officeholdings/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa") {
-        return {
-          id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
-          person_id: PERSON_ID,
-          person_name: "Jane Doe",
-          office_id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
-          electoral_division_id: null,
-          holder_status: "elected",
-          valid_period_lower: "2025-01-01",
-          valid_period_upper: null,
-          date_precision: "day",
-          sources: []
-        };
-      }
-
-      if (path === "/v1/candidacies/bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb") {
-        return {
-          id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
-          person_id: PERSON_ID,
-          person_name: "Jane Doe",
-          contest_id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
-          party: "DEM",
-          filing_date: "2026-01-10",
-          status: "qualified",
-          incumbent_challenge: "I",
-          candidate_number: "17",
-          sources: []
-        };
-      }
-
-      throw new Error(`unexpected path: ${path}`);
-    });
-
-    const sections = await fetchPersonCivicHistorySections(
-      { requestJson: requestJson as ApiClient["requestJson"] },
-      relationships
-    );
-
-    expect(sections.officeholdings).toHaveLength(1);
-    expect(sections.candidacies).toHaveLength(1);
-    expect(sections.officeholdings[0].id).toBe("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
-    expect(sections.candidacies[0].id).toBe("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb");
-    expect(sections.officeholdingLabelsById).toEqual({
-      "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa": "Officeholding Alpha"
-    });
-    expect(sections.officeLabelsById).toEqual({
-      "cccccccc-cccc-4ccc-8ccc-cccccccccccc": "US House NC-01"
-    });
-    expect(sections.candidacyLabelsById).toEqual({
-      "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb": "Candidacy Alpha"
-    });
-    expect(sections.contestLabelsById).toEqual({
-      "dddddddd-dddd-4ddd-8ddd-dddddddddddd": "NC-01 General Election"
-    });
-    expect(requestJson.mock.calls.map(([path]) => path)).toEqual([
-      "/v1/officeholdings/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
-      "/v1/candidacies/bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
-    ]);
-  });
-
-  it("skips stale 404 civic neighbors while keeping the remaining person civic-history rows", async () => {
-    const relationships = {
-      entity_type: "person",
-      entity_id: PERSON_ID,
-      neighbors: [
-        {
-          entity_type: "officeholding",
-          entity_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
-          name: "Officeholding Alpha",
-          relationship_type: "HOLDS",
-          direction: "outbound" as const
-        },
-        {
-          entity_type: "officeholding",
-          entity_id: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
-          name: "Officeholding Missing",
-          relationship_type: "HOLDS",
-          direction: "outbound" as const
-        },
-        {
-          entity_type: "candidacy",
-          entity_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
-          name: "Candidacy Alpha",
-          relationship_type: "CANDIDACY_OF",
-          direction: "outbound" as const
-        }
-      ],
-      total_count: 3
-    };
-
-    const requestJson = vi.fn(async (path: string) => {
-      if (path === "/v1/officeholdings/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa") {
-        return {
-          id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
-          person_id: PERSON_ID,
-          person_name: "Jane Doe",
-          office_id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
-          electoral_division_id: null,
-          holder_status: "elected",
-          valid_period_lower: "2025-01-01",
-          valid_period_upper: null,
-          date_precision: "day",
-          sources: []
-        };
-      }
-
-      if (path === "/v1/officeholdings/eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee") {
-        throw new ApiResponseError(404, { detail: "Officeholding not found" });
-      }
-
-      if (path === "/v1/candidacies/bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb") {
-        return {
-          id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
-          person_id: PERSON_ID,
-          person_name: "Jane Doe",
-          contest_id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
-          party: "DEM",
-          filing_date: "2026-01-10",
-          status: "qualified",
-          incumbent_challenge: "I",
-          candidate_number: "17",
-          sources: []
-        };
-      }
-
-      throw new Error(`unexpected path: ${path}`);
-    });
-
-    const sections = await fetchPersonCivicHistorySections(
-      { requestJson: requestJson as ApiClient["requestJson"] },
-      relationships
-    );
-
-    expect(sections.officeholdings).toHaveLength(1);
-    expect(sections.officeholdings[0]?.id).toBe("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
-    expect(sections.candidacies).toHaveLength(1);
-    expect(sections.candidacies[0]?.id).toBe("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb");
-    expect(requestJson.mock.calls.map(([path]) => path)).toEqual([
-      "/v1/officeholdings/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
-      "/v1/officeholdings/eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
-      "/v1/candidacies/bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
-    ]);
   });
 });

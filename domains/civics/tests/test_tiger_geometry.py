@@ -14,7 +14,13 @@ import shapefile
 
 pytestmark = pytest.mark.integration
 
-_NC_GEOMETRY_EXPECTED_COUNT_BY_LEVEL = {"congressional_district": 14, "state_legislative_upper": 50, "state_legislative_lower": 120, "municipal": 19, "school_district": 4}
+_NC_GEOMETRY_EXPECTED_COUNT_BY_LEVEL = {
+    "congressional_district": 14,
+    "state_legislative_upper": 50,
+    "state_legislative_lower": 120,
+    "municipal": 19,
+    "school_district": 4,
+}
 
 
 def _assert_nc_level_count_and_srid_invariants(
@@ -104,7 +110,7 @@ def _build_tiny_shapefile_zip_bytes() -> bytes:
         "shp": b"fixture-shp",
         "shx": b"fixture-shx",
         "dbf": b"fixture-dbf",
-        "prj": b"GEOGCS[\"NAD83\"]",
+        "prj": b'GEOGCS["NAD83"]',
     }
     output = BytesIO()
     with ZipFile(output, "w") as zip_file:
@@ -515,9 +521,27 @@ def test_load_tiger_geometry_uses_generalized_shapefile_seam_and_preserves_upser
 @pytest.mark.parametrize(
     ("level", "division_type", "expected_count", "ocd_segment", "expected_boundary_year"),
     [
-        ("congressional_district", "congressional_district", _NC_GEOMETRY_EXPECTED_COUNT_BY_LEVEL["congressional_district"], "cd", 2025),
-        ("state_legislative_upper", "state_legislative_upper", _NC_GEOMETRY_EXPECTED_COUNT_BY_LEVEL["state_legislative_upper"], "sldu", 2023),
-        ("state_legislative_lower", "state_legislative_lower", _NC_GEOMETRY_EXPECTED_COUNT_BY_LEVEL["state_legislative_lower"], "sldl", 2023),
+        (
+            "congressional_district",
+            "congressional_district",
+            _NC_GEOMETRY_EXPECTED_COUNT_BY_LEVEL["congressional_district"],
+            "cd",
+            2025,
+        ),
+        (
+            "state_legislative_upper",
+            "state_legislative_upper",
+            _NC_GEOMETRY_EXPECTED_COUNT_BY_LEVEL["state_legislative_upper"],
+            "sldu",
+            2023,
+        ),
+        (
+            "state_legislative_lower",
+            "state_legislative_lower",
+            _NC_GEOMETRY_EXPECTED_COUNT_BY_LEVEL["state_legislative_lower"],
+            "sldl",
+            2023,
+        ),
     ],
 )
 def test_load_tiger_geometry_nc_district_chambers_preserve_counts_and_ocd_contract(
@@ -671,8 +695,24 @@ def test_load_tiger_geometry_nc_districts_persist_contracted_boundary_year(
         "identity_ocd_id",
     ),
     [
-        ("municipal", "municipal", _NC_GEOMETRY_EXPECTED_COUNT_BY_LEVEL["municipal"], 19, 2025, "nc_municipal_durham", "ocd-division/country:us/state:nc/place:durham"),
-        ("school_district", "school_district", _NC_GEOMETRY_EXPECTED_COUNT_BY_LEVEL["school_district"], 4, 2021, "nc_school_district_681", "ocd-division/country:us/state:nc/school_district:681"),
+        (
+            "municipal",
+            "municipal",
+            _NC_GEOMETRY_EXPECTED_COUNT_BY_LEVEL["municipal"],
+            19,
+            2025,
+            "nc_municipal_durham",
+            "ocd-division/country:us/state:nc/place:durham",
+        ),
+        (
+            "school_district",
+            "school_district",
+            _NC_GEOMETRY_EXPECTED_COUNT_BY_LEVEL["school_district"],
+            4,
+            2021,
+            "nc_school_district_681",
+            "ocd-division/country:us/state:nc/school_district:681",
+        ),
     ],
 )
 def test_load_tiger_geometry_nc_onemap_levels_filter_dw_o_and_preserve_contract_identities(

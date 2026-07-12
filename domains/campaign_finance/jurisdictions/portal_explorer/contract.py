@@ -188,9 +188,7 @@ class PortalExplorerRunSummary(PortalExplorerBaseModel):
                 raise ValueError("failed status requires failure_reason")
             return self
         if self.failure_step_index is not None or self.failure_reason is not None:
-            raise ValueError(
-                "failure_step_index and failure_reason are only valid when status='failed'"
-            )
+            raise ValueError("failure_step_index and failure_reason are only valid when status='failed'")
         return self
 
 

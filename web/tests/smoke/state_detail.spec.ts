@@ -1,6 +1,5 @@
 import { expect, test } from "playwright/test";
 import {
-  SMOKE_LANDING_MAP_WARNING_STATE_NAME,
   SMOKE_STATE_DETAIL_IE_CAVEAT,
   SMOKE_STATE_DETAIL_INCOMPLETE_MAP_LABEL,
   SMOKE_STATE_DETAIL_INCOMPLETE_LABEL,
@@ -17,6 +16,7 @@ import {
   SMOKE_STATE_DETAIL_UNSUPPORTED_LABEL,
   SMOKE_STATE_DETAIL_UNSUPPORTED_MESSAGE,
   SMOKE_STATE_DETAIL_WARNING_CODE,
+  SMOKE_STATE_DETAIL_WARNING_STATE_NAME,
   SMOKE_STATE_DETAIL_WARNING_TEXT
 } from "./fixtures";
 
@@ -35,6 +35,10 @@ test.describe("state detail smoke", () => {
     await expect(page.getByTestId("top-committee-row-0")).toContainText(SMOKE_STATE_DETAIL_TOP_COMMITTEE_TOTAL);
     await expect(page.getByTestId("top-ie-spender-row-0")).toContainText(SMOKE_STATE_DETAIL_TOP_IE_SPENDER_NAME);
     await expect(page.getByTestId("top-ie-spender-row-0")).toContainText(SMOKE_STATE_DETAIL_TOP_IE_SPENDER_TOTAL);
+    await expect(page.getByRole("heading", { name: "Source and freshness" })).toBeVisible();
+    await expect(page.getByText(`Coverage status: ${SMOKE_STATE_DETAIL_UNSUPPORTED_LABEL}`)).toHaveCount(0);
+    await expect(page.getByText(`Coverage status: ${SMOKE_STATE_DETAIL_INCOMPLETE_LABEL}`)).toHaveCount(0);
+    await expect(page.getByRole("status").filter({ hasText: SMOKE_STATE_DETAIL_IE_CAVEAT })).toHaveCount(0);
   });
 
   test("returns backend 404 behavior for missing state", async ({ page }: { page: any }) => {
@@ -52,7 +56,7 @@ test.describe("state detail smoke", () => {
     await page.goto(`/state/${SMOKE_STATE_DETAIL_WARNING_CODE}`);
     await expect(page.getByText(`Coverage status: ${SMOKE_STATE_DETAIL_INCOMPLETE_LABEL}`)).toBeVisible();
     await expect(
-      page.getByText(`${SMOKE_LANDING_MAP_WARNING_STATE_NAME} — ${SMOKE_STATE_DETAIL_INCOMPLETE_MAP_LABEL}`)
+      page.getByText(`${SMOKE_STATE_DETAIL_WARNING_STATE_NAME} — ${SMOKE_STATE_DETAIL_INCOMPLETE_MAP_LABEL}`)
     ).toBeVisible();
     await expect(
       page.getByRole("status").filter({ hasText: SMOKE_STATE_DETAIL_WARNING_TEXT })

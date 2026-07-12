@@ -134,7 +134,9 @@ def _extract_object_literal(*, source_text: str, owner_file: str, symbol_name: s
     raise ValueError(f"{symbol_name} object literal is unterminated in {owner_file}")
 
 
-def _find_balanced_block(*, source_text: str, owner_file: str, start_index: int, open_char: str, close_char: str) -> str:
+def _find_balanced_block(
+    *, source_text: str, owner_file: str, start_index: int, open_char: str, close_char: str
+) -> str:
     if start_index >= len(source_text) or source_text[start_index] != open_char:
         raise ValueError(f"expected {open_char!r} at index {start_index} in {owner_file}")
 
@@ -170,7 +172,9 @@ def _find_balanced_block(*, source_text: str, owner_file: str, start_index: int,
     raise ValueError(f"unterminated {open_char}{close_char} block in {owner_file}")
 
 
-def _extract_property_literal(*, source_text: str, owner_file: str, property_name: str, opening_char: str, closing_char: str) -> str:
+def _extract_property_literal(
+    *, source_text: str, owner_file: str, property_name: str, opening_char: str, closing_char: str
+) -> str:
     key_pattern = re.compile(rf"{re.escape(property_name)}\s*:\s*")
     in_string: str | None = None
     escaped = False
@@ -373,7 +377,9 @@ def _extract_action_objects(*, actions_array_text: str, owner_file: str) -> list
     return action_objects
 
 
-def _append_landing_action_rows(*, app_shell_copy_rows: list[tuple[str, str]], action_objects: list[str], app_owner: str) -> None:
+def _append_landing_action_rows(
+    *, app_shell_copy_rows: list[tuple[str, str]], action_objects: list[str], app_owner: str
+) -> None:
     """Append deterministic landing action label/description rows."""
     for action_index, action_object in enumerate(action_objects, start=1):
         app_shell_copy_rows.append(
@@ -407,7 +413,9 @@ def _append_methodology_rows(
             ),
             (
                 "app-shell-methodology-coverage-summary",
-                _extract_string_property(source_text=methodology_object, owner_file=app_owner, property_name="coverageSummary"),
+                _extract_string_property(
+                    source_text=methodology_object, owner_file=app_owner, property_name="coverageSummary"
+                ),
             ),
         ]
     )
@@ -427,14 +435,18 @@ def _append_methodology_rows(
     app_shell_copy_rows.append(
         (
             "app-shell-methodology-confidence-heading",
-            _extract_string_property(source_text=methodology_object, owner_file=app_owner, property_name="confidenceHeading"),
+            _extract_string_property(
+                source_text=methodology_object, owner_file=app_owner, property_name="confidenceHeading"
+            ),
         )
     )
     for label_index, confidence_label_object in enumerate(methodology_confidence_labels, start=1):
         app_shell_copy_rows.append(
             (
                 f"app-shell-methodology-confidence-label-{label_index:03d}-label",
-                _extract_string_property(source_text=confidence_label_object, owner_file=app_owner, property_name="label"),
+                _extract_string_property(
+                    source_text=confidence_label_object, owner_file=app_owner, property_name="label"
+                ),
             )
         )
         app_shell_copy_rows.append(
@@ -506,7 +518,9 @@ def _extract_app_shell_literals(*, app_shell_object: str, app_owner: str) -> _Ap
         cta_object=cta_object,
         action_objects=_extract_action_objects(actions_array_text=actions_array, owner_file=app_owner),
         methodology_object=methodology_object,
-        methodology_sections=_extract_action_objects(actions_array_text=methodology_sections_array, owner_file=app_owner),
+        methodology_sections=_extract_action_objects(
+            actions_array_text=methodology_sections_array, owner_file=app_owner
+        ),
         methodology_confidence_labels=_extract_action_objects(
             actions_array_text=methodology_confidence_labels_array,
             owner_file=app_owner,
@@ -523,15 +537,21 @@ def _build_static_and_landing_rows(*, extracted: _AppShellExtraction, app_owner:
         ),
         (
             "app-shell-static-routes-home-description",
-            _extract_string_property(source_text=extracted.home_object, owner_file=app_owner, property_name="description"),
+            _extract_string_property(
+                source_text=extracted.home_object, owner_file=app_owner, property_name="description"
+            ),
         ),
         (
             "app-shell-landing-eyebrow",
-            _extract_string_property(source_text=extracted.landing_object, owner_file=app_owner, property_name="eyebrow"),
+            _extract_string_property(
+                source_text=extracted.landing_object, owner_file=app_owner, property_name="eyebrow"
+            ),
         ),
         (
             "app-shell-landing-heading",
-            _extract_string_property(source_text=extracted.landing_object, owner_file=app_owner, property_name="heading"),
+            _extract_string_property(
+                source_text=extracted.landing_object, owner_file=app_owner, property_name="heading"
+            ),
         ),
         (
             "app-shell-landing-body",
@@ -539,11 +559,15 @@ def _build_static_and_landing_rows(*, extracted: _AppShellExtraction, app_owner:
         ),
         (
             "app-shell-landing-coverage-heading",
-            _extract_string_property(source_text=extracted.landing_object, owner_file=app_owner, property_name="coverageHeading"),
+            _extract_string_property(
+                source_text=extracted.landing_object, owner_file=app_owner, property_name="coverageHeading"
+            ),
         ),
         (
             "app-shell-landing-coverage-summary",
-            _extract_string_property(source_text=extracted.landing_object, owner_file=app_owner, property_name="coverageSummary"),
+            _extract_string_property(
+                source_text=extracted.landing_object, owner_file=app_owner, property_name="coverageSummary"
+            ),
         ),
         (
             "app-shell-landing-cta-label",
@@ -551,7 +575,9 @@ def _build_static_and_landing_rows(*, extracted: _AppShellExtraction, app_owner:
         ),
         (
             "app-shell-landing-cta-description",
-            _extract_string_property(source_text=extracted.cta_object, owner_file=app_owner, property_name="description"),
+            _extract_string_property(
+                source_text=extracted.cta_object, owner_file=app_owner, property_name="description"
+            ),
         ),
     ]
 
@@ -560,7 +586,9 @@ def _collect_app_shell_rows(*, repo_root: Path) -> list[L11EditorialRow]:
     """Collect app-shell static, landing, and methodology rows in deterministic order."""
     app_owner = L11_OWNER_FILES[0]
     app_shell_text = _read_owner_file(repo_root=repo_root, owner_file=app_owner)
-    app_shell_object = _extract_object_literal(source_text=app_shell_text, owner_file=app_owner, symbol_name="APP_SHELL")
+    app_shell_object = _extract_object_literal(
+        source_text=app_shell_text, owner_file=app_owner, symbol_name="APP_SHELL"
+    )
     extracted = _extract_app_shell_literals(app_shell_object=app_shell_object, app_owner=app_owner)
     app_shell_copy_rows = _build_static_and_landing_rows(extracted=extracted, app_owner=app_owner)
     _append_landing_action_rows(

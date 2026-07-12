@@ -14,11 +14,7 @@ from domains.campaign_finance.jurisdictions.states.NC.scraper.committee_discover
 
 
 def _html_with_data(rows_json: str) -> str:
-    return (
-        "<html><head><script>\\n"
-        f"var data = {rows_json};\\r\\n"
-        "</script></head><body></body></html>"
-    )
+    return f"<html><head><script>\\nvar data = {rows_json};\\r\\n</script></head><body></body></html>"
 
 
 def test_parse_result_rows_extracts_expected_fields_and_dedupes_duplicate_rows() -> None:

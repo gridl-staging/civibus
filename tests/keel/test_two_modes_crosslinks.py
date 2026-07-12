@@ -6,17 +6,16 @@ import re
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-README = REPO_ROOT / "docs" / "keel" / "README.md"
-CASUAL = REPO_ROOT / "docs" / "keel" / "casual.md"
-ENFORCEMENT = REPO_ROOT / "docs" / "keel" / "enforcement.md"
+README = REPO_ROOT / "docs" / "reference" / "keel" / "README.md"
+CASUAL = REPO_ROOT / "docs" / "reference" / "keel" / "casual.md"
+ENFORCEMENT = REPO_ROOT / "docs" / "reference" / "keel" / "enforcement.md"
 
 
 def test_readme_has_two_modes_section_heading() -> None:
     body = README.read_text(encoding="utf-8")
     # Anchor to start-of-line so the substring "Two modes" inside a sentence
     # cannot satisfy the test.
-    assert re.search(r"^#+ Two modes\b", body, re.MULTILINE), \
-        "README.md must contain a `## Two modes` section heading"
+    assert re.search(r"^#+ Two modes\b", body, re.MULTILINE), "README.md must contain a `## Two modes` section heading"
 
 
 def test_readme_names_both_modes() -> None:

@@ -399,16 +399,24 @@ def _seed_contest_surface(conn: psycopg.Connection, data_source_id: UUID) -> Sur
 
     return SurfaceSeedResult(
         samples=[
-            ProvenanceSample(entity_type="contest", entity_id=contest_good_id, table_name="civic.contest", fetch_mode="entity"),
-            ProvenanceSample(entity_type="contest", entity_id=contest_bad_id, table_name="civic.contest", fetch_mode="entity"),
+            ProvenanceSample(
+                entity_type="contest", entity_id=contest_good_id, table_name="civic.contest", fetch_mode="entity"
+            ),
+            ProvenanceSample(
+                entity_type="contest", entity_id=contest_bad_id, table_name="civic.contest", fetch_mode="entity"
+            ),
             ProvenanceSample(
                 entity_type="candidacy", entity_id=candidacy_good_id, table_name="civic.candidacy", fetch_mode="entity"
             ),
             ProvenanceSample(
                 entity_type="candidacy", entity_id=candidacy_bad_id, table_name="civic.candidacy", fetch_mode="entity"
             ),
-            ProvenanceSample(entity_type="office", entity_id=office_good_id, table_name="civic.office", fetch_mode="entity"),
-            ProvenanceSample(entity_type="office", entity_id=office_bad_id, table_name="civic.office", fetch_mode="entity"),
+            ProvenanceSample(
+                entity_type="office", entity_id=office_good_id, table_name="civic.office", fetch_mode="entity"
+            ),
+            ProvenanceSample(
+                entity_type="office", entity_id=office_bad_id, table_name="civic.office", fetch_mode="entity"
+            ),
         ],
         expected_failures=[
             f"contest:{contest_bad_id} [civic.contest] missing source_url for source_record_key=contest-bad",

@@ -20,6 +20,7 @@ def test_fetch_returns_succeeded_attempt_with_portrait_fields_when_active_roster
         person_id=person_id,
         source_record_id=uuid4(),
         status="active",
+        rights_status="public_domain",
         image_hash="a" * 64,
         mime_type="image/jpeg",
         width_px=640,
@@ -38,13 +39,12 @@ def test_fetch_returns_succeeded_attempt_with_portrait_fields_when_active_roster
 
     assert attempt.status == "succeeded"
     assert attempt.source == "official_roster_cache"
-    assert attempt.metadata == {
-        ROSTER_CACHE_PORTRAIT_REUSE_METADATA_KEY: ROSTER_CACHE_PORTRAIT_REUSE_METADATA_VALUE
-    }
+    assert attempt.metadata == {ROSTER_CACHE_PORTRAIT_REUSE_METADATA_KEY: ROSTER_CACHE_PORTRAIT_REUSE_METADATA_VALUE}
     assert record.portrait_image_url == "https://www.example.org/portrait.jpg"
     assert record.portrait_metadata is not None
     assert record.portrait_metadata.image_hash == "a" * 64
     assert record.portrait_metadata.source_image_url == "https://www.example.org/portrait.jpg"
+    assert record.portrait_metadata.rights_status == "public_domain"
 
 
 def test_fetch_returns_no_data_without_mutation_when_no_active_roster_portrait_exists(

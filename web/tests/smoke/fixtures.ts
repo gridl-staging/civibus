@@ -1,5 +1,13 @@
 // @ts-expect-error Smoke fixtures run under Node ESM and import the TS module directly.
 import { resolveSmokeApiPort } from "../../src/lib/server/api/smoke-port.ts";
+// @ts-expect-error Smoke fixtures run under Node ESM and import the TS module directly.
+import { APP_SHELL } from "../../src/lib/config/app.ts";
+// @ts-expect-error Smoke fixtures run under Node ESM and import the TS module directly.
+import { DONOR_LOOKUP_SEED_CONTRIBUTOR_NAME, DONOR_LOOKUP_SEED_EMPLOYER, DONOR_LOOKUP_SEED_PERSON_ID, DONOR_LOOKUP_SEED_TOTAL_AMOUNT, DONOR_LOOKUP_SEED_ZIP5 } from "../../src/lib/donors/fixture.ts";
+// @ts-expect-error Smoke fixtures run under Node ESM and import the TS module directly.
+import { COMMITTEE_SUMMARY_SOURCE_LABELS, buildCommitteeItemizedCoverageNote } from "../../src/lib/campaign-finance-detail/summary-source.ts";
+// @ts-expect-error Smoke fixtures run under Node ESM and import the TS module directly.
+import { runSmokeSeedCommand, type SmokeSeedCleanupCallback } from "./smoke_seed_helpers.ts";
 
 export const SMOKE_API_HOST = "127.0.0.1";
 export const SMOKE_API_PORT = resolveSmokeApiPort(process.env);
@@ -65,23 +73,37 @@ export const SMOKE_SEARCH_EMPTY_DESCRIPTION =
   "Search people, organizations, committees, candidates, offices, and contests across campaign-finance and civic records.";
 export const SMOKE_SEARCH_TITLE = "civ (1 result) | Search | Civibus";
 export const SMOKE_SEARCH_DESCRIPTION = '1 result for "civ" across Civibus records.';
-export const SMOKE_HOME_TITLE = "Civibus | Public-records intelligence for journalists";
-export const SMOKE_HOME_DESCRIPTION =
-  "Investigate campaign-finance, civic office, and property records with source-linked evidence in Civibus search.";
-export const SMOKE_HOME_HEADING = "Trace people, organizations, committees, and offices across jurisdictions.";
-export const SMOKE_HOME_COVERAGE_HEADING = "Coverage at a glance";
-export const SMOKE_HOME_COVERAGE_SUMMARY =
-  "Coverage spans federal and state campaign-finance records, civic offices, and a property pilot. See methodology for current operational scope by jurisdiction.";
-export const SMOKE_LANDING_MAP_HEADING = "Browse coverage by state";
-export const SMOKE_LANDING_MAP_SUPPORTED_STATE_NAME = "North Carolina";
-export const SMOKE_LANDING_MAP_SUPPORTED_STATE_CODE = "NC";
-export const SMOKE_LANDING_MAP_UNSUPPORTED_STATE_NAME = "Arkansas";
-export const SMOKE_LANDING_MAP_UNSUPPORTED_LABEL = "Coverage not yet available";
-export const SMOKE_LANDING_MAP_WARNING_STATE_NAME = "Minnesota";
-export const SMOKE_LANDING_MAP_WARNING_TEXT =
-  "Quarterly bulk only; refresh cadence below weekly target.";
+export const SMOKE_HOME_TITLE = APP_SHELL.staticRoutes.home.title;
+export const SMOKE_HOME_DESCRIPTION = APP_SHELL.staticRoutes.home.description;
+export const SMOKE_HOME_HEADING = APP_SHELL.landing.heading;
+export const SMOKE_HOME_BODY = APP_SHELL.landing.body;
+export const SMOKE_HOME_FEDERAL_SCOPE_PHRASE = "543 elected federal officials";
+export const SMOKE_HOME_PRIMARY_ACTION = APP_SHELL.landing.cta.label;
+export const SMOKE_HOME_PRIMARY_ACTION_HREF = APP_SHELL.landing.cta.href;
+export const SMOKE_HOME_SEARCH_ACTION = APP_SHELL.landing.actions[0].label;
+export const SMOKE_HOME_SEARCH_ACTION_HREF = APP_SHELL.landing.actions[0].href;
+export const SMOKE_HOME_METHODOLOGY_ACTION = APP_SHELL.landing.actions[1].label;
+export const SMOKE_HOME_METHODOLOGY_ACTION_HREF = APP_SHELL.landing.actions[1].href;
+export const SMOKE_HOME_ACTION_LABELS = [
+  SMOKE_HOME_PRIMARY_ACTION,
+  SMOKE_HOME_SEARCH_ACTION,
+  SMOKE_HOME_METHODOLOGY_ACTION
+] as const;
+export const SMOKE_HOME_COVERAGE_HEADING = APP_SHELL.landing.coverageHeading;
+export const SMOKE_HOME_COVERAGE_SUMMARY = APP_SHELL.landing.coverageSummary;
+export const SMOKE_HOME_SCOPE_LINK = "Read methodology.";
+export const SMOKE_HOME_SCOPE_LINK_HREF = APP_SHELL.landing.actions[1].href;
+export const SMOKE_HOME_FORBIDDEN_STATE_ACTION = ["Browse coverage", "by state"].join(" ");
+export const SMOKE_HOME_FORBIDDEN_SUPPORTED_STATE = "North Carolina";
+export const SMOKE_HOME_FORBIDDEN_UNSUPPORTED_STATE = "Arkansas";
+export const SMOKE_HOME_FORBIDDEN_UNSUPPORTED_LABEL = APP_SHELL.landing.mapUnsupportedLabel;
+export const SMOKE_HOME_FORBIDDEN_WARNING_STATE = "Minnesota";
+export const SMOKE_HOME_FORBIDDEN_WARNING_TEXT = "Quarterly bulk only; refresh cadence below weekly target.";
+export const SMOKE_HOME_FORBIDDEN_CANDIDATE_ACTION = "Browse Candidates";
+export const SMOKE_HOME_FORBIDDEN_COMMITTEE_ACTION = "Browse Committees";
 export const SMOKE_STATE_DETAIL_SUPPORTED_CODE = "NC";
 export const SMOKE_STATE_DETAIL_SUPPORTED_NAME = "North Carolina";
+export const SMOKE_STATE_DETAIL_WARNING_STATE_NAME = "Minnesota";
 export const SMOKE_STATE_DETAIL_UNSUPPORTED_CODE = "AR";
 export const SMOKE_STATE_DETAIL_WARNING_CODE = "MN";
 export const SMOKE_STATE_DETAIL_NO_IE_CODE = "LA";
@@ -107,9 +129,26 @@ export const SMOKE_METHODOLOGY_SECTION_BODY =
 export const SMOKE_METHODOLOGY_CONFIDENCE_HEADING = "Entity resolution confidence labels";
 export const SMOKE_SHELL_NAV_HOME = "Home";
 export const SMOKE_SHELL_NAV_SEARCH = "Search";
-export const SMOKE_SHELL_NAV_CANDIDATES = "Candidates";
-export const SMOKE_SHELL_NAV_COMMITTEES = "Committees";
+export const SMOKE_SHELL_NAV_DONORS = "Donor Lookup";
+export const SMOKE_SHELL_NAV_CONGRESS = "Congress";
 export const SMOKE_SHELL_NAV_METHODOLOGY = "Methodology";
+export const SMOKE_SHELL_PRIMARY_NAV_LABELS = APP_SHELL.shellNavigation.map((link) => link.label);
+export const SMOKE_SHELL_FORBIDDEN_CANDIDATES = "Candidates";
+export const SMOKE_SHELL_FORBIDDEN_COMMITTEES = "Committees";
+export const SMOKE_DONOR_LOOKUP_QUERY = "Jane";
+export const SMOKE_DONOR_LOOKUP_HEADING = "Donor Lookup";
+export const SMOKE_DONOR_LOOKUP_SCOPE_NOTE =
+  "Results cover itemized contributions to committees of current federal officeholders only. Unitemized (<$200) contributions are not included.";
+export const SMOKE_DONOR_LOOKUP_RESULT_COUNT = "Showing donors 1-1.";
+export const SMOKE_DONOR_LOOKUP_RECIPIENT_NAME = "Alpha Officeholder";
+export const SMOKE_DONOR_LOOKUP_SEED_CONTRIBUTOR_NAME = DONOR_LOOKUP_SEED_CONTRIBUTOR_NAME;
+export const SMOKE_DONOR_LOOKUP_SEED_EMPLOYER = DONOR_LOOKUP_SEED_EMPLOYER;
+export const SMOKE_DONOR_LOOKUP_SEED_ZIP5 = DONOR_LOOKUP_SEED_ZIP5;
+export const SMOKE_DONOR_LOOKUP_SEED_PERSON_ID = DONOR_LOOKUP_SEED_PERSON_ID;
+export const SMOKE_DONOR_LOOKUP_SEED_TOTAL_AMOUNT = new Intl.NumberFormat("en-US", {
+  style: "currency",
+  currency: "USD"
+}).format(Number(DONOR_LOOKUP_SEED_TOTAL_AMOUNT));
 export const SMOKE_COVERAGE_ROUTE_PATH = "/coverage";
 export const SMOKE_CALENDAR_ROUTE_PATH = "/calendar";
 export const SMOKE_DATA_SOURCES_ROUTE_PATH = "/data-sources";
@@ -134,20 +173,32 @@ export const SMOKE_DATA_SOURCES_DESCRIPTION =
 export const SMOKE_ELECTION_TITLE = `${SMOKE_ELECTION_HEADING} | Civibus`;
 export const SMOKE_ELECTION_DESCRIPTION =
   `Election results and contest overview for ${SMOKE_ELECTION_DATE} across supported jurisdictions.`;
+export const SMOKE_PUBLIC_API_HEADING = "Public API";
+export const SMOKE_PUBLIC_API_ENDPOINTS = [
+  "GET /api/public/v1/federal/officials",
+  "GET /api/public/v1/federal/officials/{person_id}/money",
+  "GET /api/public/v1/federal/export.json",
+  "GET /api/public/v1/federal/export.csv"
+] as const;
+export const SMOKE_PUBLIC_API_MIGRATION_HEADING = "OpenSecrets and ProPublica migration mapping";
+export const SMOKE_PUBLIC_API_SAMPLE_JSON_VALUE = '"office_name": "U.S. House NC-01"';
+export const SMOKE_PUBLIC_API_CSV_HEADER =
+  "person_id,person_name,has_fec_money,candidate_id,total_raised,total_spent,net,cash_on_hand,summary_source,ie_support_total,ie_oppose_total,ie_support_count,ie_oppose_count,source_urls";
+export const SMOKE_PUBLIC_API_REFERENCE_LINKS = ["/api/openapi.json", "/api/docs", "/api/redoc"] as const;
+export const SMOKE_PUBLIC_API_FOOTER_LINK = "Public API";
+export const SMOKE_PUBLIC_API_ROUTE_PATH = "/developers";
 
 export const SMOKE_PERSON_CANONICAL_NAME = "Jane Doe";
 export const SMOKE_PERSON_NO_PORTRAIT_CANONICAL_NAME = "Jordan No Portrait";
 export const SMOKE_PERSON_MISSING_PORTRAIT_CANONICAL_NAME = "Avery Missing Portrait";
-export const SMOKE_PERSON_RELATIONSHIP_NAME = "Q1 Filing";
-export const SMOKE_PERSON_GRAPH_ORG_NAME = "Action PAC";
 export const SMOKE_PERSON_TITLE = "Jane Doe | Person | Civibus";
 export const SMOKE_PERSON_DESCRIPTION =
   "Person profile with 1 identifier and source-linked records.";
+export const SMOKE_ENTITY_PORTRAIT_INITIALS_TEST_ID = "entity-portrait-initials";
 export const SMOKE_ENTITY_PORTRAIT_IMAGE_TEST_ID = "entity-portrait-image";
 export const SMOKE_ENTITY_PORTRAIT_SILHOUETTE_TEST_ID = "entity-portrait-silhouette";
 
 export const SMOKE_ORG_CANONICAL_NAME = "Civibus Action Org";
-export const SMOKE_ORG_RELATIONSHIP_NAME = "Org Filing 2026-Q1";
 export const SMOKE_ORG_TITLE = "Civibus Action Org | Organization | Civibus";
 export const SMOKE_ORG_DESCRIPTION =
   "Organization profile with 1 identifier and source-linked records.";
@@ -205,6 +256,37 @@ export const SMOKE_CANDIDATE_SUPPORT_TOTAL = "$15,000.00";
 export const SMOKE_CANDIDATE_OPPOSE_TOTAL = "$8,500.00";
 export const SMOKE_CANDIDATE_OUTSIDE_SPENDING_EMPTY =
   "Outside-spending data is not yet available for this candidate. Coverage may be incomplete.";
+export const SMOKE_COMMITTEE_IE_SUPPORT_TOTAL = "$1,500.00";
+export const SMOKE_COMMITTEE_IE_OPPOSE_TOTAL = "$250.00";
+export const SMOKE_COMMITTEE_IE_COUNT_LABEL = "3 expenditures";
+export const SMOKE_COMMITTEE_IE_OUTLIER_NOTE =
+  "1 reported independent expenditure was excluded from these totals as an outlier.";
+export const SMOKE_COMMITTEE_IE_TARGET_NAME = SMOKE_CANDIDATE_NAME;
+export const SMOKE_COMMITTEE_IE_SOURCE_NAME = "FEC Schedule E";
+export const SMOKE_COMMITTEE_IE_SOURCE_RECORD_KEY = "committee-ie-source";
+export const SMOKE_COMMITTEE_IE_SOURCE_URL = "https://www.fec.gov/data/independent-expenditures/";
+export const SMOKE_COMMITTEE_OUTSIDE_SPENDING_EMPTY =
+  "This committee reported no independent expenditures";
+export const SMOKE_CONGRESS_SEARCH_TERM = SMOKE_PERSON_CANONICAL_NAME;
+export const SMOKE_CONGRESS_MEMBER_CONTEXT = "House · NC · District 01 · DEM";
+export const SMOKE_CONGRESS_PORTRAIT_URL =
+  "data:image/gif;base64,R0lGODlhAQABAAAAACw=";
+export const SMOKE_CONGRESS_PORTRAIT_ALT = `Portrait of ${SMOKE_PERSON_CANONICAL_NAME}`;
+export const SMOKE_CONGRESS_PERSON_ID = "90000000-0000-4000-8000-000000000411";
+export const SMOKE_CONGRESS_CANDIDATE_ID = "90000000-0000-4000-8000-000000000412";
+export const SMOKE_CONGRESS_PRINCIPAL_COMMITTEE_ID = "90000000-0000-4000-8000-000000000413";
+export const SMOKE_CONGRESS_IE_COMMITTEE_ID = "90000000-0000-4000-8000-000000000414";
+export const SMOKE_CONGRESS_FILING_ID = "90000000-0000-4000-8000-000000000415";
+// Live-mode /search smoke uses a fully independent officeholder fixture
+// (Zorktown Q. Testperson, U.S. House NC-02, DEM) plus a same-name committee.
+// The seed shape mirrors buildCongressSmokeSeedSql() but every id, FEC key,
+// data_source, and source_record is disjoint from the congress seed so the
+// two live specs can run in parallel workers without primary-key collisions.
+// Stage 3 context assertion pins `office_name · state · party` per
+// docs/reference/screen_specs/search.md.
+export const SMOKE_SEARCH_LIVE_PERSON_NAME = "Zorktown Q. Testperson";
+export const SMOKE_SEARCH_LIVE_QUERY = SMOKE_SEARCH_LIVE_PERSON_NAME;
+export const SMOKE_SEARCH_LIVE_CONTEXT_LINE = "U.S. Representative · NC-02 · Democrat";
 export const SMOKE_CANDIDATE_EMPTY_L10_WARNING =
   "No transactions loaded for this candidate yet. Coverage may be incomplete.";
 export const SMOKE_CANDIDATE_DEVIATION_L10_WARNING =
@@ -265,7 +347,7 @@ export const SMOKE_PHL_PROVENANCE_SOURCE_NAME =
 // re-verdict to weekly-or-better — the spec now asserts the literal
 // string is absent from the page rather than importing a fixture named
 // after a banner that no longer exists. See
-// docs/research/in_freshness_recheck_2026_04_26.md.
+// docs/reference/research/in_freshness_recheck_2026_04_26.md.
 export const SMOKE_PROPERTY_PROVENANCE_SOURCE_NAME = "Durham County (property/us/nc/durham)";
 export const SMOKE_PROVENANCE_LAST_PULLED = /^Last pulled: (?:today|\d+ days? ago) \(\d{4}-\d{2}-\d{2}\)$/;
 export const SMOKE_PROVENANCE_SOURCE_KEY = "Source record ID: person-1";
@@ -274,13 +356,357 @@ export const SMOKE_TRUST_ADVISORY = "Review source records before publication.";
 export const SMOKE_TRUST_EMPTY_MESSAGE = "No source records are available for this detail yet.";
 export const SMOKE_TRUST_LAST_PULLED_UNAVAILABLE = "Last pulled: unavailable";
 export const SMOKE_PERSON_CAMPAIGN_FINANCE_HEADING = "Campaign finance";
+export const SMOKE_PERSON_FUNDRAISING_DETAIL_HEADING = "Fundraising detail";
+export const SMOKE_PERSON_DONATIONS_OVER_TIME_HEADING = "Donations over time";
+export const SMOKE_PERSON_DONATION_COUNT_BY_SIZE_HEADING = "Donation count by size bucket";
+export const SMOKE_PERSON_DOLLARS_BY_SIZE_HEADING = "Dollars by size bucket";
+export const SMOKE_PERSON_FUNDRAISING_GEOGRAPHY_HEADING = "Fundraising geography";
+export const SMOKE_PERSON_UNITEMIZED_DOLLARS = "150.00";
+export const SMOKE_PERSON_SMALL_ITEMIZED_DOLLARS = "125.00";
+export const SMOKE_PERSON_LARGE_ITEMIZED_DOLLARS = "225.00";
+export const SMOKE_PERSON_ITEMIZED_DOLLARS = "350.00";
+export const SMOKE_PERSON_TOTAL_CONTRIBUTION_DOLLARS = "500.00";
+export const SMOKE_PERSON_CASH_ON_HAND_DOLLARS = "420.00";
+export const SMOKE_PERSON_SMALL_DOLLAR_DOLLARS = "350.00";
+export const SMOKE_PERSON_SMALL_DOLLAR_SHARE = "0.6087";
+export const SMOKE_PERSON_SMALL_DOLLAR_HEADLINE = `${Math.round(Number(SMOKE_PERSON_SMALL_DOLLAR_SHARE) * 100)}%`;
+export const SMOKE_PERSON_CYCLE_TOTAL_LABEL = "2026 cycle";
+export const SMOKE_PERSON_CYCLE_TOTAL = "$500.00";
+export const SMOKE_PERSON_CAREER_TOTAL_LABEL = "Career";
+export const SMOKE_PERSON_CAREER_TOTAL = "$575.00";
+export const SMOKE_PERSON_PRIOR_UNITEMIZED_DOLLARS = "75.00";
+export const SMOKE_PERSON_TOP_DONORS_HEADING = "Top donors";
+export const SMOKE_PERSON_TOP_DONOR_ONE_NAME = "Smoke Donor Two";
+export const SMOKE_PERSON_TOP_DONOR_TWO_NAME = "Smoke Donor One";
+export const SMOKE_PERSON_TOP_DONOR_ONE_TOTAL = "$225.00";
+export const SMOKE_PERSON_TOP_DONOR_TWO_TOTAL = "$125.00";
+export const SMOKE_PERSON_TOP_EMPLOYERS_HEADING = "Top employers";
+export const SMOKE_PERSON_TOP_EMPLOYER_ONE_NAME = "ACME CORP";
+export const SMOKE_PERSON_TOP_EMPLOYER_TWO_NAME = "STATE UNIVERSITY";
+export const SMOKE_PERSON_TOP_EMPLOYER_ONE_TOTAL = "$225.00";
+export const SMOKE_PERSON_TOP_EMPLOYER_TWO_TOTAL = "$125.00";
+export const SMOKE_PERSON_TOP_EMPLOYER_DISCLAIMER =
+  "Top employers aggregate raw employer names from itemized individual contributions only.";
+export const SMOKE_PERSON_TOP_EMPLOYER_METHODOLOGY =
+  "They are not industry- or sector-coded; see Methodology for source-linking and evidence limitations.";
+export const SMOKE_PERSON_DISTRICT_SHARE_HEADLINE = "36% in district";
+export const SMOKE_PERSON_DISTRICT_SHARE_SUMMARY =
+  "$125.00 in district and $225.00 out of district.";
+export const SMOKE_PERSON_APPROXIMATE_GEOGRAPHY_NOTE =
+  "District geography uses a Census 119th-Congress / 2020-ZCTA approximation.";
+export const SMOKE_PERSON_TOP_SPENDERS_HEADING = "Top spenders";
+export const SMOKE_PERSON_TOP_SPENDER_NAME = SMOKE_IE_COMMITTEE_A_NAME;
+export const SMOKE_PERSON_TOP_SPENDER_TOTAL = "$10,000.00";
+export const SMOKE_PERSON_UNITEMIZED_BUCKET_LABEL = "Unitemized (<$200)";
+export const SMOKE_PERSON_UNITEMIZED_EXCLUSION_NOTE =
+  "Unitemized contributions are excluded from count and geography charts.";
 export const SMOKE_PERSON_LINKED_COMMITTEES_HEADING = "Linked committees";
 export const SMOKE_PERSON_DONORS_AND_VENDORS_HEADING = "Donors and vendors";
 export const SMOKE_PERSON_OUTSIDE_SPENDING_HEADING = "Outside Spending";
 export const SMOKE_COMMITTEE_EMPTY_STATE = "No recent committee transactions found.";
-export const SMOKE_GRAPH_EMPTY_STATE = "No graph relationships are available yet. Linked records will appear after future ingests.";
-export const SMOKE_ER_EMPTY_STATE = "No entity-resolution matches are available yet. Check back after the next ER refresh.";
-export const SMOKE_TECHNICAL_DISCLOSURE_SUMMARY = "Entity-resolution and graph internals";
 export const SMOKE_PROPERTY_EMPTY_OWNERSHIP_STATE = "No ownership history is available yet. Check back after the next county refresh.";
 export const SMOKE_PROPERTY_EMPTY_ASSESSMENT_STATE = "No assessment history is available yet. Check back after the next county refresh.";
 export const SMOKE_OFFICEHOLDER_EMPTY_STATE = "No current officeholders are linked yet. Check back after the next records refresh.";
+
+export async function seedLiveDonorLookupSmoke(): Promise<SmokeSeedCleanupCallback> {
+  await runSmokeSeedCommand("uv", [
+    "run",
+    "--directory",
+    "..",
+    "--extra",
+    "dev",
+    "python",
+    "-m",
+    "test_support.donor_search_fixture"
+  ]);
+  return async () => {};
+}
+
+// SQL builders + live-mode seed wrappers moved to ./smoke-seed-sql so this file
+// stays under the 800-line hard limit and single-owner rule applies:
+// smoke-seed-sql.ts owns every SQL string, and fixtures.ts owns every constant.
+// @ts-expect-error Smoke fixtures run under Node ESM and import the TS module directly.
+export { buildCongressSmokeCleanupSql, buildCongressSmokeSeedSql, seedLiveCongressDirectorySmoke, seedLiveSearchOfficeholderSmoke } from "./smoke-seed-sql.ts";
+// @ts-expect-error Smoke fixtures run under Node ESM and import the TS module directly.
+export { seedLiveStage6CommitteeSmoke } from "./stage6_committee_seed_sql.ts";
+// Stage 6 committee truthfulness fixtures.
+//
+// Local live mode: discovers a real committee named MIKE JOHNSON FOR LOUISIANA
+// through the live campaign-finance API and returns its detail route + a set
+// of stable assertions that would have failed as a false $0 before this stage
+// (positive official total_raised even when itemized_transaction_count is 0).
+//
+// Production mode: production is read-only — the seed helpers below are for
+// local live-mode only. Production smoke discovers the committee to visit by
+// clicking through /congress -> member page -> principal committee link, so
+// the test never hard-codes an ephemeral UUID or slug.
+
+export const SMOKE_STAGE6_COMMITTEE_NAME = "MIKE JOHNSON FOR LOUISIANA";
+// Seeded committee is a synthetic FEC-summary-official record used only for
+// live smoke: its official total_raised is positive while its itemized
+// transaction count is zero, reproducing the false-$0 pattern this stage
+// fixes.
+export const SMOKE_STAGE6_COMMITTEE_ID = "50000000-0000-4000-8000-000000000001";
+export const SMOKE_STAGE6_LINKED_CANDIDATE_ID = "50000000-0000-4000-8000-000000000002";
+export const SMOKE_STAGE6_LINKED_CANDIDATE_NAME = "MIKE JOHNSON";
+export const SMOKE_STAGE6_SUMMARY_SOURCE_LABEL =
+  COMMITTEE_SUMMARY_SOURCE_LABELS.fec_committee_summary;
+export const SMOKE_STAGE6_ITEMIZED_COVERAGE_NOTE = buildCommitteeItemizedCoverageNote({
+  itemized_transaction_count: 0,
+  summary_source: "fec_committee_summary"
+});
+export const SMOKE_STAGE6_COMMITTEE_TOTAL_RAISED_LITERAL = "$1,250,000.00";
+export const SMOKE_STAGE6_COMMITTEE_CYCLE_LABEL = "2024";
+
+export const SMOKE_STAGE6_FEC_COMMITTEE_ID = "C90099901";
+export const SMOKE_STAGE6_FEC_CANDIDATE_ID = "H0LA04901";
+export const SMOKE_STAGE6_DATA_SOURCE_ID = "50000000-0000-4000-8000-000000000010";
+export const SMOKE_STAGE6_SOURCE_RECORD_ID = "50000000-0000-4000-8000-000000000011";
+export const SMOKE_STAGE6_COMMITTEE_SUMMARY_ID = "50000000-0000-4000-8000-000000000012";
+export const SMOKE_STAGE6_LINK_ID = "50000000-0000-4000-8000-000000000013";
+const SMOKE_STAGE6_COMMITTEE_SLUG = "mike-johnson-for-louisiana";
+
+export const SMOKE_LIVE_API_BASE_URL =
+  process.env.SMOKE_LIVE_API_BASE_URL ?? "http://127.0.0.1:8000";
+
+export type LiveCommitteeRouteDiscovery = {
+  committeePath: string;
+  expectedSummarySourceLabel: string;
+  expectedItemizedCoverageNote: string;
+  expectedLinkedCandidateName: string;
+  expectedCycleLabel: string;
+  expectedTotalRaisedText: string;
+  expectedOutsideSpendingEmptyText: string | null;
+  expectedOutsideSpendingTargetName: string | null;
+};
+
+export function getSeededStage6CommitteeRoute(): LiveCommitteeRouteDiscovery {
+  return {
+    committeePath: `/committee/${SMOKE_STAGE6_COMMITTEE_ID}`,
+    expectedSummarySourceLabel: SMOKE_STAGE6_SUMMARY_SOURCE_LABEL,
+    expectedItemizedCoverageNote: SMOKE_STAGE6_ITEMIZED_COVERAGE_NOTE,
+    expectedLinkedCandidateName: SMOKE_STAGE6_LINKED_CANDIDATE_NAME,
+    expectedCycleLabel: SMOKE_STAGE6_COMMITTEE_CYCLE_LABEL,
+    expectedTotalRaisedText: SMOKE_STAGE6_COMMITTEE_TOTAL_RAISED_LITERAL,
+    expectedOutsideSpendingEmptyText: SMOKE_COMMITTEE_OUTSIDE_SPENDING_EMPTY,
+    expectedOutsideSpendingTargetName: null
+  };
+}
+
+type SmokeApiJsonResponse = {
+  ok: () => boolean;
+  status: () => number;
+  json: () => Promise<unknown>;
+};
+
+type SmokePageApiClient = {
+  request: {
+    get: (url: string) => Promise<SmokeApiJsonResponse>;
+  };
+};
+
+type LiveSearchCommitteeResult = {
+  id?: string;
+  name?: string;
+  slug?: string;
+  slug_is_unique?: boolean;
+};
+
+type LiveCommitteeDetailResponse = {
+  linked_candidates?: Array<{ name?: string }>;
+};
+
+type LiveCommitteeSummaryResponse = {
+  total_raised?: string;
+  itemized_transaction_count?: number;
+  cycle_summaries?: Array<{ cycle?: number }>;
+  summary_source?: "fec_committee_summary" | "derived";
+};
+
+type LiveCommitteeIndependentExpenditureResponse = {
+  ie_transaction_count?: number;
+  targets?: Array<{ candidate_name?: string }>;
+};
+
+function resolveDiscoveredCommitteeRouteId(match: LiveSearchCommitteeResult): string {
+  return match.slug_is_unique === true && typeof match.slug === "string" ? match.slug : String(match.id);
+}
+
+function formatSmokeCurrency(value: string): string {
+  const parsed = Number.parseFloat(value);
+  if (!Number.isFinite(parsed)) {
+    throw new Error(`Live committee discovery: invalid money value "${value}"`);
+  }
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD"
+  }).format(parsed);
+}
+
+
+async function fetchLiveCommitteeDiscoveryRecord(
+  page: SmokePageApiClient,
+  committeeId: string
+): Promise<{
+  detail: LiveCommitteeDetailResponse;
+  summary: LiveCommitteeSummaryResponse;
+  independentExpendituresMade: LiveCommitteeIndependentExpenditureResponse;
+}> {
+  const [detailResponse, summaryResponse, independentExpendituresMadeResponse] = await Promise.all([
+    page.request.get(`${SMOKE_LIVE_API_BASE_URL}/v1/committees/${committeeId}`),
+    page.request.get(`${SMOKE_LIVE_API_BASE_URL}/v1/committees/${committeeId}/summary`),
+    page.request.get(
+      `${SMOKE_LIVE_API_BASE_URL}/v1/committees/${committeeId}/independent-expenditures-made`
+    )
+  ]);
+
+  if (!detailResponse.ok()) {
+    throw new Error(
+      `Live committee discovery failed: /v1/committees/${committeeId} returned ${detailResponse.status()}`
+    );
+  }
+  if (!summaryResponse.ok()) {
+    throw new Error(
+      `Live committee discovery failed: /v1/committees/${committeeId}/summary returned ${summaryResponse.status()}`
+    );
+  }
+  if (!independentExpendituresMadeResponse.ok()) {
+    throw new Error(
+      `Live committee discovery failed: /v1/committees/${committeeId}/independent-expenditures-made returned ${independentExpendituresMadeResponse.status()}`
+    );
+  }
+
+  return {
+    detail: (await detailResponse.json()) as LiveCommitteeDetailResponse,
+    summary: (await summaryResponse.json()) as LiveCommitteeSummaryResponse,
+    independentExpendituresMade:
+      (await independentExpendituresMadeResponse.json()) as LiveCommitteeIndependentExpenditureResponse
+  };
+}
+
+function buildDiscoveredLiveCommitteeAssertions(
+  routeId: string,
+  record: {
+    detail: LiveCommitteeDetailResponse;
+    summary: LiveCommitteeSummaryResponse;
+    independentExpendituresMade: LiveCommitteeIndependentExpenditureResponse;
+  }
+): LiveCommitteeRouteDiscovery {
+  const totalRaised = record.summary.total_raised;
+  const itemizedTransactionCount = record.summary.itemized_transaction_count;
+  const summarySource = record.summary.summary_source;
+  const cycle = record.summary.cycle_summaries?.[0]?.cycle;
+  const linkedCandidateName = record.detail.linked_candidates?.[0]?.name;
+  const ieTransactionCount = record.independentExpendituresMade.ie_transaction_count;
+  const firstIeTargetName = record.independentExpendituresMade.targets?.[0]?.candidate_name;
+
+  if (typeof totalRaised !== "string") {
+    throw new Error("Live committee discovery: summary total_raised is missing");
+  }
+  if (typeof itemizedTransactionCount !== "number") {
+    throw new Error("Live committee discovery: summary itemized_transaction_count is missing");
+  }
+  if (summarySource !== "fec_committee_summary" && summarySource !== "derived") {
+    throw new Error("Live committee discovery: summary_source is missing");
+  }
+  if (typeof cycle !== "number") {
+    throw new Error("Live committee discovery: summary cycle_summaries is empty");
+  }
+  if (typeof linkedCandidateName !== "string" || linkedCandidateName.trim() === "") {
+    throw new Error("Live committee discovery: linked candidate name is missing");
+  }
+  if (typeof ieTransactionCount !== "number") {
+    throw new Error("Live committee discovery: independent-expenditures-made count is missing");
+  }
+  if (ieTransactionCount > 0 && (typeof firstIeTargetName !== "string" || firstIeTargetName.trim() === "")) {
+    throw new Error("Live committee discovery: independent-expenditures-made target name is missing");
+  }
+
+  return {
+    committeePath: `/committee/${routeId}`,
+    expectedSummarySourceLabel: COMMITTEE_SUMMARY_SOURCE_LABELS[summarySource],
+    expectedItemizedCoverageNote: buildCommitteeItemizedCoverageNote({
+      itemized_transaction_count: itemizedTransactionCount,
+      summary_source: summarySource
+    }),
+    expectedLinkedCandidateName: linkedCandidateName,
+    expectedCycleLabel: String(cycle),
+    expectedTotalRaisedText: formatSmokeCurrency(totalRaised),
+    expectedOutsideSpendingEmptyText:
+      ieTransactionCount === 0 ? SMOKE_COMMITTEE_OUTSIDE_SPENDING_EMPTY : null,
+    expectedOutsideSpendingTargetName: ieTransactionCount > 0 ? firstIeTargetName ?? null : null
+  };
+}
+
+/**
+ * Discovers the Louisiana committee route in local live mode.
+ *
+ * Live mode covers two paths: (1) a real DB row for MIKE JOHNSON FOR LOUISIANA
+ * whose official FEC totals are already loaded, or (2) the seeded Stage 6
+ * committee inserted by seedLiveStage6CommitteeSmoke() when the real row is
+ * not present. Either way, the returned assertions reflect the false-$0 gap
+ * this stage closes (positive official total with zero itemized transactions).
+ */
+export async function discoverLiveLouisianaCommitteeRoute(page: {
+  request: {
+    get: (
+      url: string
+    ) => Promise<{ ok: () => boolean; status: () => number; json: () => Promise<unknown> }>;
+  };
+}): Promise<LiveCommitteeRouteDiscovery> {
+  const seededRouteResponse = await page.request.get(
+    `${SMOKE_LIVE_API_BASE_URL}/v1/committees/by-slug/${SMOKE_STAGE6_COMMITTEE_SLUG}`
+  );
+  if (seededRouteResponse.ok()) {
+    const slugMatches = (await seededRouteResponse.json()) as LiveSearchCommitteeResult[];
+    const seededMatch = slugMatches.find((match) => match.id === SMOKE_STAGE6_COMMITTEE_ID);
+    if (seededMatch !== undefined) {
+      return getSeededStage6CommitteeRoute();
+    }
+
+    const liveSlugMatch = slugMatches.find(
+      (match) =>
+        typeof match.id === "string" &&
+        typeof match.name === "string" &&
+        match.name.toUpperCase() === SMOKE_STAGE6_COMMITTEE_NAME
+    );
+    if (liveSlugMatch !== undefined) {
+      const liveCommitteeId = liveSlugMatch.id;
+      if (typeof liveCommitteeId !== "string") {
+        throw new Error("Live committee discovery: by-slug match is missing an id");
+      }
+      return buildDiscoveredLiveCommitteeAssertions(
+        resolveDiscoveredCommitteeRouteId(liveSlugMatch),
+        await fetchLiveCommitteeDiscoveryRecord(page, liveCommitteeId)
+      );
+    }
+  }
+
+  const searchResponse = await page.request.get(
+    `${SMOKE_LIVE_API_BASE_URL}/v1/search?q=${encodeURIComponent(SMOKE_STAGE6_COMMITTEE_NAME)}&entity_type=committee`
+  );
+  if (!searchResponse.ok()) {
+    throw new Error(
+      `Live committee discovery failed: /v1/search returned ${searchResponse.status()} for query "${SMOKE_STAGE6_COMMITTEE_NAME}"`
+    );
+  }
+
+  const searchBody = (await searchResponse.json()) as {
+    results?: LiveSearchCommitteeResult[];
+  };
+  const match = (searchBody.results ?? []).find(
+    (candidate) =>
+      typeof candidate.name === "string" &&
+      candidate.name.toUpperCase() === SMOKE_STAGE6_COMMITTEE_NAME
+  );
+  if (match === undefined || typeof match.id !== "string") {
+    throw new Error(
+      `Live committee discovery: search returned no committee named ${SMOKE_STAGE6_COMMITTEE_NAME}`
+    );
+  }
+
+  return buildDiscoveredLiveCommitteeAssertions(
+    resolveDiscoveredCommitteeRouteId(match),
+    await fetchLiveCommitteeDiscoveryRecord(page, match.id)
+  );
+}

@@ -436,7 +436,10 @@ def test_unique_candidacy_selector_matches_matcher_semantics(
     assert _select_unique_nc_candidacy_id_for_bridge_name(db_conn, candidate_name=" SELECTOR SOLO ") == candidacy_id
 
     with db_conn.cursor() as cursor:
-        cursor.execute("SELECT office_id FROM civic.contest WHERE id = (SELECT contest_id FROM civic.candidacy WHERE id = %s)", (candidacy_id,))
+        cursor.execute(
+            "SELECT office_id FROM civic.contest WHERE id = (SELECT contest_id FROM civic.candidacy WHERE id = %s)",
+            (candidacy_id,),
+        )
         office_id: UUID = cursor.fetchone()[0]
     _seed_nc_candidacy_in_existing_office(
         db_conn,
@@ -620,9 +623,7 @@ def test_load_nc_committee_registry_rows_rerun_candidate_name_change_clears_stal
         [original_row],
         seen_at=datetime(2026, 4, 29, 12, 0, tzinfo=UTC),
     )
-    committee_id = _resolve_nc_committee_bridge(
-        db_conn, "STA-CORRECT-C-001", committee_name="TAYLOR COMMITTEE"
-    )
+    committee_id = _resolve_nc_committee_bridge(db_conn, "STA-CORRECT-C-001", committee_name="TAYLOR COMMITTEE")
     assert _select_candidacy_committee_id(db_conn, old_candidacy_id) == committee_id
     assert _select_candidacy_committee_id(db_conn, new_candidacy_id) is None
 
@@ -673,9 +674,7 @@ def test_load_nc_committee_registry_rows_rerun_same_name_ambiguous_preserves_exi
         [row],
         seen_at=datetime(2026, 4, 29, 12, 0, tzinfo=UTC),
     )
-    committee_id = _resolve_nc_committee_bridge(
-        db_conn, "STA-SAME-C-001", committee_name="RILEY SAME COMMITTEE"
-    )
+    committee_id = _resolve_nc_committee_bridge(db_conn, "STA-SAME-C-001", committee_name="RILEY SAME COMMITTEE")
     assert _select_candidacy_committee_id(db_conn, first_candidacy_id) == committee_id
 
     second_candidacy_id = _seed_nc_candidacy_in_existing_office(
@@ -747,9 +746,7 @@ def test_load_nc_committee_registry_rows_rerun_sboe_change_clears_stale_old_comm
         [original_row],
         seen_at=datetime(2026, 4, 29, 12, 0, tzinfo=UTC),
     )
-    old_committee_id = _resolve_nc_committee_bridge(
-        db_conn, "STA-MORGAN-C-OLD", committee_name="MORGAN COMMITTEE"
-    )
+    old_committee_id = _resolve_nc_committee_bridge(db_conn, "STA-MORGAN-C-OLD", committee_name="MORGAN COMMITTEE")
     assert _select_candidacy_committee_id(db_conn, old_candidacy_id) == old_committee_id
     assert _select_candidacy_committee_id(db_conn, new_candidacy_id) is None
 
@@ -758,9 +755,7 @@ def test_load_nc_committee_registry_rows_rerun_sboe_change_clears_stale_old_comm
         [corrected_row],
         seen_at=datetime(2026, 4, 29, 13, 0, tzinfo=UTC),
     )
-    new_committee_id = _resolve_nc_committee_bridge(
-        db_conn, "STA-MORGAN-C-NEW", committee_name="MORGAN COMMITTEE"
-    )
+    new_committee_id = _resolve_nc_committee_bridge(db_conn, "STA-MORGAN-C-NEW", committee_name="MORGAN COMMITTEE")
 
     assert _select_candidacy_committee_id(db_conn, old_candidacy_id) is None
     assert _select_candidacy_committee_id(db_conn, new_candidacy_id) == new_committee_id

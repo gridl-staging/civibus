@@ -1,5 +1,5 @@
 """
-Stub summary for /Users/stuart/parallel_development/civibus_dev/mar25_pm_2_easy_jurisdiction_expansion/civibus_dev/domains/campaign_finance/jurisdictions/states/FL/scraper/extract.py.
+Stub summary for mar25_pm_2_easy_jurisdiction_expansion/civibus_dev/domains/campaign_finance/jurisdictions/states/FL/scraper/extract.py.
 """
 
 from __future__ import annotations

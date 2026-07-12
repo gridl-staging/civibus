@@ -32,6 +32,41 @@ describe('search presentation rich metadata', () => {
     expect(cards[0].contextLine).toBe('Republican · U.S. Senate · TX');
   });
 
+  it('builds officeholder person metadata for senate delegate and executive offices', () => {
+    const cards = buildSearchResultCards([
+      {
+        entity_type: 'person',
+        entity_id: '16161616-1616-4161-8161-161616161616',
+        name: 'Senate Officeholder',
+        party: 'REP',
+        office_name: 'U.S. Senator',
+        state: 'CA'
+      },
+      {
+        entity_type: 'person',
+        entity_id: '17171717-1717-4171-8171-171717171717',
+        name: 'Delegate Officeholder',
+        party: 'IND',
+        office_name: 'U.S. Delegate',
+        state: 'DC-AL'
+      },
+      {
+        entity_type: 'person',
+        entity_id: '18181818-1818-4181-8181-181818181818',
+        name: 'Executive Officeholder',
+        party: 'DEM',
+        office_name: 'President of the United States',
+        state: null
+      }
+    ]);
+
+    expect(cards.map((card) => card.contextLine)).toEqual([
+      'U.S. Senator · CA · Republican',
+      'U.S. Delegate · DC-AL · Independent',
+      'President of the United States · Democrat'
+    ]);
+  });
+
   it('builds empty metadata when a person result has no context fields', () => {
     const cards = buildSearchResultCards([
       {

@@ -3,9 +3,12 @@ import {
   COMMITTEE_TRANSACTIONS_LIMIT,
   buildCommitteeDetailPath,
   buildCommitteeFilingBreakdownPath,
+  buildCommitteeIndependentExpendituresMadePath,
   buildCommitteeSummaryPath,
   buildCommitteeTransactionsPath,
   buildCommitteesBySlugPath,
+  type CommitteeFilingBreakdown,
+  type CommitteeFundraisingSummary,
   type CommitteeListItem
 } from "$lib/campaign-finance-detail/contract";
 import type { CommitteeDetailBundle } from "$lib/server/api/campaign-finance-detail";
@@ -40,7 +43,8 @@ const BASE_COMMITTEE_DETAIL = {
   city: null,
   zip_code: null,
   treasurer_name: null,
-  sources: []
+  sources: [],
+  linked_candidates: []
 };
 
 function buildCommitteeDetail(overrides: Partial<typeof BASE_COMMITTEE_DETAIL> = {}) {
@@ -50,7 +54,10 @@ function buildCommitteeDetail(overrides: Partial<typeof BASE_COMMITTEE_DETAIL> =
   };
 }
 
-function buildCommitteeSummary(committeeId: string, committeeName = "Committee One") {
+function buildCommitteeSummary(
+  committeeId: string,
+  committeeName = "Committee One"
+): CommitteeFundraisingSummary {
   return {
     committee_id: committeeId,
     committee_name: committeeName,
@@ -59,15 +66,39 @@ function buildCommitteeSummary(committeeId: string, committeeName = "Committee O
     net: "0.00",
     transaction_count: 0,
     jurisdiction: "federal/fec",
-    data_through: "2026-03-19T00:00:00Z"
+    data_through: "2026-03-19T00:00:00Z",
+    cash_receipts_total: "0.00",
+    in_kind_receipts_total: "0.00",
+    loan_receipts_total: "0.00",
+    contribution_receipts_total: "0.00",
+    top_donors: [],
+    top_vendors: [],
+    spend_categories: null,
+    itemized_transaction_count: 0,
+    cycle_summaries: [],
+    summary_source: "derived" as const
   };
 }
 
-function buildFilingBreakdown(committeeId: string, committeeName = "Committee One") {
+function buildFilingBreakdown(
+  committeeId: string,
+  committeeName = "Committee One"
+): CommitteeFilingBreakdown {
   return {
     committee_id: committeeId,
     committee_name: committeeName,
     filings: []
+  };
+}
+
+function buildCommitteeIeActivity(committeeId: string) {
+  return {
+    committee_id: committeeId,
+    support_total: "0.00",
+    oppose_total: "0.00",
+    ie_transaction_count: 0,
+    excluded_outlier_count: 0,
+    targets: []
   };
 }
 
@@ -89,6 +120,7 @@ describe("/committee/[id] +page.server load", () => {
     const detail = buildCommitteeDetail({ slug_is_unique: false });
     const summary = buildCommitteeSummary(COMMITTEE_ID);
     const filingBreakdown = buildFilingBreakdown(COMMITTEE_ID);
+    const independentExpendituresMade = buildCommitteeIeActivity(COMMITTEE_ID);
 
     const requestJson = vi.fn(async (path: string) => {
       if (path === buildCommitteeDetailPath(COMMITTEE_ID)) {
@@ -107,6 +139,10 @@ describe("/committee/[id] +page.server load", () => {
         return filingBreakdown;
       }
 
+      if (path === buildCommitteeIndependentExpendituresMadePath(COMMITTEE_ID)) {
+        return independentExpendituresMade;
+      }
+
       throw new Error(`unexpected path: ${path}`);
     });
 
@@ -120,16 +156,19 @@ describe("/committee/[id] +page.server load", () => {
     expect(data.transactions).toBeInstanceOf(Promise);
     expect(data.summary).toBeInstanceOf(Promise);
     expect(data.filingBreakdown).toBeInstanceOf(Promise);
+    expect(data.independentExpendituresMade).toBeInstanceOf(Promise);
 
     expect(await data.transactions).toEqual([]);
     expect(await data.summary).toEqual(summary);
     expect(await data.filingBreakdown).toEqual(filingBreakdown);
+    expect(await data.independentExpendituresMade).toEqual(independentExpendituresMade);
 
     expect(requestJson.mock.calls.map(([path]) => path)).toEqual([
       buildCommitteeDetailPath(COMMITTEE_ID),
       `/v1/transactions?committee_id=${COMMITTEE_ID}&limit=${COMMITTEE_TRANSACTIONS_LIMIT}`,
       buildCommitteeSummaryPath(COMMITTEE_ID),
-      buildCommitteeFilingBreakdownPath(COMMITTEE_ID)
+      buildCommitteeFilingBreakdownPath(COMMITTEE_ID),
+      buildCommitteeIndependentExpendituresMadePath(COMMITTEE_ID)
     ]);
   });
 
@@ -137,6 +176,7 @@ describe("/committee/[id] +page.server load", () => {
     const detail = buildCommitteeDetail({ slug_is_unique: true });
     const summary = buildCommitteeSummary(COMMITTEE_ID);
     const filingBreakdown = buildFilingBreakdown(COMMITTEE_ID);
+    const independentExpendituresMade = buildCommitteeIeActivity(COMMITTEE_ID);
     const matches = [buildSlugMatch({ id: COMMITTEE_ID, name: "Committee One", slug: COMMITTEE_SLUG, slug_is_unique: true })];
 
     const requestJson = vi.fn(async (path: string) => {
@@ -160,6 +200,10 @@ describe("/committee/[id] +page.server load", () => {
         return filingBreakdown;
       }
 
+      if (path === buildCommitteeIndependentExpendituresMadePath(COMMITTEE_ID)) {
+        return independentExpendituresMade;
+      }
+
       throw new Error(`unexpected path: ${path}`);
     });
 
@@ -174,7 +218,8 @@ describe("/committee/[id] +page.server load", () => {
       buildCommitteeDetailPath(COMMITTEE_ID),
       buildCommitteeTransactionsPath(COMMITTEE_ID),
       buildCommitteeSummaryPath(COMMITTEE_ID),
-      buildCommitteeFilingBreakdownPath(COMMITTEE_ID)
+      buildCommitteeFilingBreakdownPath(COMMITTEE_ID),
+      buildCommitteeIndependentExpendituresMadePath(COMMITTEE_ID)
     ]);
   });
 
@@ -182,6 +227,7 @@ describe("/committee/[id] +page.server load", () => {
     const detail = buildCommitteeDetail({ id: COMMITTEE_ID_ALT, slug: UUID_SHAPED_NON_UUID, slug_is_unique: true });
     const summary = buildCommitteeSummary(COMMITTEE_ID_ALT, "Committee Alias");
     const filingBreakdown = buildFilingBreakdown(COMMITTEE_ID_ALT, "Committee Alias");
+    const independentExpendituresMade = buildCommitteeIeActivity(COMMITTEE_ID_ALT);
     const matches = [
       buildSlugMatch({
         id: COMMITTEE_ID_ALT,
@@ -212,6 +258,10 @@ describe("/committee/[id] +page.server load", () => {
         return filingBreakdown;
       }
 
+      if (path === buildCommitteeIndependentExpendituresMadePath(COMMITTEE_ID_ALT)) {
+        return independentExpendituresMade;
+      }
+
       throw new Error(`unexpected path: ${path}`);
     });
 
@@ -224,7 +274,8 @@ describe("/committee/[id] +page.server load", () => {
       buildCommitteeDetailPath(COMMITTEE_ID_ALT),
       buildCommitteeTransactionsPath(COMMITTEE_ID_ALT),
       buildCommitteeSummaryPath(COMMITTEE_ID_ALT),
-      buildCommitteeFilingBreakdownPath(COMMITTEE_ID_ALT)
+      buildCommitteeFilingBreakdownPath(COMMITTEE_ID_ALT),
+      buildCommitteeIndependentExpendituresMadePath(COMMITTEE_ID_ALT)
     ]);
   });
 
@@ -244,6 +295,10 @@ describe("/committee/[id] +page.server load", () => {
 
       if (path === buildCommitteeFilingBreakdownPath(COMMITTEE_ID)) {
         return buildFilingBreakdown(COMMITTEE_ID);
+      }
+
+      if (path === buildCommitteeIndependentExpendituresMadePath(COMMITTEE_ID)) {
+        return buildCommitteeIeActivity(COMMITTEE_ID);
       }
 
       throw new Error(`unexpected path: ${path}`);

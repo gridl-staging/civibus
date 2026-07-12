@@ -104,10 +104,7 @@ _NC_CONTRACT_ARTIFACT_BY_LEVEL = {
     ),
     "school_district": _NcGeometryContractArtifact(
         provider="nconemap",
-        url=(
-            "https://services5.arcgis.com/mSDBiLWaIfH92NqI/arcgis/rest/services/"
-            "LEA_Boundari_NC/FeatureServer"
-        ),
+        url=("https://services5.arcgis.com/mSDBiLWaIfH92NqI/arcgis/rest/services/LEA_Boundari_NC/FeatureServer"),
         boundary_year=2021,
         source_srs="EPSG:6543",
     ),
@@ -631,7 +628,9 @@ def load_tiger_geometry(conn: psycopg.Connection, *, state: str, level: str, yea
         parsed_divisions.append(division)
 
     divisions_to_upsert = (
-        _merge_municipal_divisions(parsed_divisions) if state_code == "NC" and level == "municipal" else parsed_divisions
+        _merge_municipal_divisions(parsed_divisions)
+        if state_code == "NC" and level == "municipal"
+        else parsed_divisions
     )
 
     upserted_count = 0
@@ -690,7 +689,9 @@ def main(argv: list[str] | None = None) -> int:
         if conn is not None:
             conn.close()
 
-    print(f"TIGER geometry load complete: state={args.state.upper()} level={args.level} year={args.year} rows={upserted}")
+    print(
+        f"TIGER geometry load complete: state={args.state.upper()} level={args.level} year={args.year} rows={upserted}"
+    )
     return 0
 
 

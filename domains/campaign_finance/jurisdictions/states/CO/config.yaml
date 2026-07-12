@@ -70,8 +70,8 @@ data_sources:
     last_successful_pull: null
     last_verified_working: "2026-03-26"
     known_issues:
-      - "SOS terms prohibit robotic extraction on public pages; bulk downloads via DataDownload.aspx are the compliant access path (see docs/research/data-licensing.md)"
-      - "No explicit commercial reuse grant found in TRACER bulk download materials (see docs/research/data-licensing.md)"
+      - "SOS terms prohibit robotic extraction on public pages; bulk downloads via DataDownload.aspx are the compliant access path (see docs/reference/research/data-licensing.md)"
+      - "No explicit commercial reuse grant found in TRACER bulk download materials (see docs/reference/research/data-licensing.md)"
       - "ContributionType field embeds LLC total amount in string for LLC contributions (e.g. 'Monetary (Itemized) - LLC Contribution (Total Amount: 500.00)')"
       - "ContributorType field embeds LLC member name in string for LLC member contributions"
       - "Some records in 2025 file have ContributionDate in 2022, indicating late-filed or amended records"

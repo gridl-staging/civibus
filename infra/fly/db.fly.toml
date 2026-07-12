@@ -1,0 +1,33 @@
+# civibus-db — PostgreSQL 18 + PostGIS + AGE (same infra/db image as compose).
+# Internal-only: no [[services]] block, reachable as civibus-db.internal:5432
+# over Fly 6PN (WireGuard-encrypted; no sslmode needed — see
+# docs/howto/operations/fly_deployment_runbook.md).
+#
+# Deploy from repo root: flyctl deploy -c infra/fly/db.fly.toml
+# Secrets (set once, never in this file): POSTGRES_PASSWORD
+app = "civibus-db"
+primary_region = "sjc"
+
+# dockerfile is resolved relative to this file's directory.
+[build]
+  dockerfile = "../db/Dockerfile"
+
+[env]
+  POSTGRES_USER = "civibus"
+  POSTGRES_DB = "civibus"
+  # Subdirectory of the mount: Fly volumes ship a lost+found/, and postgres
+  # initdb refuses a non-empty data directory.
+  PGDATA = "/var/lib/postgresql/data/pgdata"
+
+# Same server tuning as infra/docker-compose.prod.yml (bulk loads need the
+# raised lock table; see that file's comment).
+[processes]
+  app = "postgres -c max_locks_per_transaction=2048 -c shared_buffers=512MB -c work_mem=32MB"
+
+[mounts]
+  source = "civibus_db_data"
+  destination = "/var/lib/postgresql/data"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "2gb"

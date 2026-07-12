@@ -86,7 +86,7 @@ def test_stage5_pa_readme_and_config_match_current_package_contract() -> None:
 
     for data_type, data_source in data_sources_by_type.items():
         # PA ZIPs are actually updated ~weekly despite URL labeling (verified 2026-03-28,
-        # see docs/research/pa-freshness-investigation-2026-03-28.md)
+        # see docs/reference/research/pa-freshness-investigation-2026-03-28.md)
         assert data_source.update_frequency == "weekly"
         assert data_source.api_base_url is None
         assert data_source.bulk_download_url is not None

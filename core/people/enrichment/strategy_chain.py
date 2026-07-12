@@ -1,13 +1,21 @@
 
 from __future__ import annotations
 
-from core.people.enrichment.models import CandidateEnrichmentRecord, CandidateEnrichmentStrategy, CandidateEnrichmentTarget
+from typing import Any
+
+from core.people.enrichment.models import (
+    CandidateEnrichmentRecord,
+    CandidateEnrichmentStrategy,
+    CandidateEnrichmentTarget,
+)
 from core.people.enrichment.strategy_ballotpedia import BallotpediaEnrichmentStrategy
+from core.people.enrichment.strategy_bioguide_portrait import BioguidePortraitStrategy
 from core.people.enrichment.strategy_campaign_site import CampaignSiteEnrichmentStrategy
 from core.people.enrichment.strategy_official_bio import OfficialBioStrategy
 from core.people.enrichment.strategy_official_roster_cache import OfficialRosterCacheStrategy
 from core.people.enrichment.strategy_sboe import SboeEnrichmentStrategy
 from core.people.enrichment.strategy_wikidata import WikidataEnrichmentStrategy
+from core.people.enrichment.strategy_wikipedia_bio import WikipediaBioStrategy
 
 
 class StrategyChain:
@@ -26,6 +34,17 @@ class StrategyChain:
                 BallotpediaEnrichmentStrategy(),
                 WikidataEnrichmentStrategy(),
                 CampaignSiteEnrichmentStrategy(),
+            )
+        )
+
+    @classmethod
+    def federal(cls, *, conn: Any | None = None) -> StrategyChain:
+        return cls(
+            (
+                OfficialRosterCacheStrategy(conn=conn),
+                WikipediaBioStrategy(),
+                OfficialBioStrategy(),
+                BioguidePortraitStrategy(),
             )
         )
 

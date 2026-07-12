@@ -12,19 +12,19 @@ def _fixture(name: str) -> dict[str, object]:
     return json.loads(fixture_path.read_text(encoding="utf-8"))
 
 
-
 def test_campaign_site_strategy_extracts_expected_fields() -> None:
     strategy = CampaignSiteEnrichmentStrategy(http_fetcher=lambda _url: _fixture("campaign_site_success.json"))
 
     record, attempt = strategy.fetch(
-        CandidateEnrichmentTarget(canonical_name="Jamie Chen", verified_campaign_site_url="https://jamiechen.example.com"),
+        CandidateEnrichmentTarget(
+            canonical_name="Jamie Chen", verified_campaign_site_url="https://jamiechen.example.com"
+        ),
         missing_fields=("biography", "campaign_website_url"),
     )
 
     assert attempt.status == "succeeded"
     assert record.biography == "Jamie Chen is focused on transit and school funding."
     assert record.campaign_website_url == "https://jamiechen.example.com"
-
 
 
 def test_campaign_site_strategy_returns_no_data_attempt() -> None:

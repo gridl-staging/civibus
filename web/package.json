@@ -8,7 +8,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
-    "lint": "npm run lint:browser-tests",
+    "lint": "npm run lint:browser-tests --",
     "lint:browser-tests": "eslint tests/smoke/**/*.spec.ts --config tests/smoke/eslint.config.mjs",
     "test": "vitest run",
     "test:watch": "vitest",

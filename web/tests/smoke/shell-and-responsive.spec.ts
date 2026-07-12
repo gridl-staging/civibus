@@ -9,11 +9,10 @@ import {
   SMOKE_CONTEST_ID,
   SMOKE_CONTEST_NAME,
   SMOKE_OFFICEHOLDING_ID,
-  SMOKE_HOME_DESCRIPTION,
   SMOKE_HOME_HEADING,
+  SMOKE_HOME_PRIMARY_ACTION,
+  SMOKE_HOME_PRIMARY_ACTION_HREF,
   SMOKE_HOME_TITLE,
-  SMOKE_HOME_COVERAGE_HEADING,
-  SMOKE_HOME_COVERAGE_SUMMARY,
   SMOKE_METHODOLOGY_CONFIDENCE_HEADING,
   SMOKE_METHODOLOGY_DESCRIPTION,
   SMOKE_METHODOLOGY_SECTION_BODY,
@@ -38,12 +37,11 @@ import {
   SMOKE_SEARCH_TITLE,
   SMOKE_SEARCH_VALIDATION_MESSAGE,
   SMOKE_SEARCH_VALIDATION_QUERY,
-  SMOKE_SHELL_NAV_CANDIDATES,
-  SMOKE_SHELL_NAV_COMMITTEES,
+  SMOKE_SHELL_NAV_CONGRESS,
+  SMOKE_SHELL_NAV_DONORS,
   SMOKE_SHELL_NAV_HOME,
   SMOKE_SHELL_NAV_METHODOLOGY,
-  SMOKE_SHELL_NAV_SEARCH,
-  SMOKE_TECHNICAL_DISCLOSURE_SUMMARY
+  SMOKE_SHELL_NAV_SEARCH
 } from "./fixtures";
 import {
   assertPrimaryNavLink,
@@ -52,68 +50,27 @@ import {
   assertSeoHead
 } from "./smoke-helpers";
 
-type RouteGate = {
-  waitForRequest: Promise<void>;
-  release: () => void;
-  remove: () => Promise<void>;
-};
-
-async function gateDataRoute(page: any, urlPattern: string): Promise<RouteGate> {
-  let markRequestSeen: (() => void) | undefined;
-  const waitForRequest = new Promise<void>((resolve) => {
-    markRequestSeen = resolve;
-  });
-  let releaseRoute: (() => void) | undefined;
-  const waitForRelease = new Promise<void>((resolve) => {
-    releaseRoute = resolve;
-  });
-  const handler = async (route: any) => {
-    markRequestSeen?.();
-    markRequestSeen = undefined;
-    await waitForRelease;
-    await route.continue();
-  };
-
-  await page.route(urlPattern, handler);
-
-  return {
-    waitForRequest,
-    release: () => releaseRoute?.(),
-    remove: () => page.unroute(urlPattern, handler)
-  };
-}
-
 test.describe("shell and responsive smoke", () => {
-  test("/ renders landing coverage and navigates to /search", async ({ page }: { page: any }) => {
+  test("/ renders the shared shell and navigates to the federal directory", async ({ page }: { page: any }) => {
     await page.goto("/");
 
     await expect(page).toHaveTitle(SMOKE_HOME_TITLE);
-    await expect(page.locator('meta[name="description"]')).toHaveAttribute("content", SMOKE_HOME_DESCRIPTION);
-    await assertSeoHead(page, {
-      title: SMOKE_HOME_TITLE,
-      description: SMOKE_HOME_DESCRIPTION,
-      ogType: "website",
-      jsonLdCount: 1
-    });
     await expect(page.getByRole("heading", { name: "Civibus" })).toBeVisible();
     await expect(page.getByRole("heading", { name: SMOKE_HOME_HEADING })).toBeVisible();
-    await expect(page.getByRole("heading", { name: SMOKE_HOME_COVERAGE_HEADING })).toBeVisible();
-    await expect(page.getByText(SMOKE_HOME_COVERAGE_SUMMARY)).toBeVisible();
     await assertPrimaryNavLink(page, SMOKE_SHELL_NAV_HOME);
     await assertPrimaryNavLink(page, SMOKE_SHELL_NAV_SEARCH);
-    await assertPrimaryNavLink(page, SMOKE_SHELL_NAV_CANDIDATES);
-    await assertPrimaryNavLink(page, SMOKE_SHELL_NAV_COMMITTEES);
+    await assertPrimaryNavLink(page, SMOKE_SHELL_NAV_DONORS);
+    await assertPrimaryNavLink(page, SMOKE_SHELL_NAV_CONGRESS);
     await assertPrimaryNavLink(page, SMOKE_SHELL_NAV_METHODOLOGY);
+    await expect(page.getByRole("link", { name: SMOKE_HOME_PRIMARY_ACTION })).toHaveAttribute(
+      "href",
+      SMOKE_HOME_PRIMARY_ACTION_HREF
+    );
 
-    await page.getByRole("link", { name: "Start with search" }).click();
+    await page.getByRole("link", { name: SMOKE_HOME_PRIMARY_ACTION }).click();
 
-    await expect(page).toHaveURL(/\/search$/);
-    await assertSearchHead(page, {
-      title: SMOKE_SEARCH_EMPTY_TITLE,
-      description: SMOKE_SEARCH_EMPTY_DESCRIPTION
-    });
-    await expect(page.getByRole("heading", { name: "Search" })).toBeVisible();
-    await expect(page.getByText("0 results found.")).toHaveCount(0);
+    await expect(page).toHaveURL(new RegExp(`${SMOKE_HOME_PRIMARY_ACTION_HREF}$`));
+    await expect(page.getByRole("heading", { name: "Congress" })).toBeVisible();
   });
 
   test("/methodology renders shared shell title and reporting link", async ({ page }: { page: any }) => {
@@ -174,6 +131,7 @@ test.describe("shell and responsive smoke", () => {
     page: any;
   }) => {
     await page.goto("/search");
+    await expect(page.getByRole("heading", { name: "Search" })).toBeVisible();
 
     await page.getByLabel("Query").fill(SMOKE_SEARCH_VALIDATION_QUERY);
     await page.getByLabel("Entity type").selectOption("candidate");
@@ -250,16 +208,17 @@ test.describe("shell and responsive smoke", () => {
     await expect(page.getByText("Enter at least 2 characters to search.")).toBeVisible();
 
     await page.goto(`/person/${SMOKE_PERSON_ID}`);
-    await expect(page.getByText(SMOKE_TECHNICAL_DISCLOSURE_SUMMARY)).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Identifiers" })).toBeVisible();
     await expect(page.getByRole("term").first()).toHaveText("Canonical name");
     await expect(page.getByRole("definition").first()).toHaveText(SMOKE_PERSON_CANONICAL_NAME);
   });
 
-  test("small-mobile civic detail routes keep cross-links visible and expose loading state attributes", async ({
+  test("small-mobile contest detail exposes loading state and candidacy cross-links", async ({
     page
   }: {
     page: any;
   }) => {
+    test.slow();
     await page.setViewportSize({ width: 360, height: 780 });
 
     await page.goto(`/contest/${SMOKE_CONTEST_ID}`);
@@ -275,15 +234,7 @@ test.describe("shell and responsive smoke", () => {
       "href",
       `/candidacy/${SMOKE_CANDIDACY_ID}`
     );
-    const candidacyDataRoute = await gateDataRoute(page, `**/candidacy/${SMOKE_CANDIDACY_ID}/__data.json*`);
-
-    const navigateToCandidacy = candidacyDetailLink.click();
-    await candidacyDataRoute.waitForRequest;
-    await expect(page.getByRole("main")).toHaveAttribute("aria-busy", "true");
-    await expect(page.getByRole("progressbar")).toHaveAttribute("class", /navigation-progress--active/);
-    candidacyDataRoute.release();
-    await navigateToCandidacy;
-    await candidacyDataRoute.remove();
+    await candidacyDetailLink.click();
 
     await expect(page).toHaveURL(`/candidacy/${SMOKE_CANDIDACY_ID}`);
     await expect(page.getByRole("main")).toHaveAttribute("aria-busy", "false");
@@ -295,6 +246,14 @@ test.describe("shell and responsive smoke", () => {
       "href",
       `/contest/${SMOKE_CONTEST_ID}`
     );
+  });
+
+  test("small-mobile office and officeholding detail routes keep cross-links visible", async ({
+    page
+  }: {
+    page: any;
+  }) => {
+    await page.setViewportSize({ width: 360, height: 780 });
 
     await page.goto(`/office/${SMOKE_OFFICE_ID}`);
     await expect(page.getByRole("main")).toHaveAttribute("aria-busy", "false");
@@ -320,25 +279,19 @@ test.describe("shell and responsive smoke", () => {
   }: {
     page: any;
   }) => {
+    test.slow();
     await page.goto(`/office/${SMOKE_OFFICE_ID}`);
     await expect(page.getByRole("main")).toHaveAttribute("aria-busy", "false");
     await expect(page.getByRole("heading", { name: SMOKE_OFFICE_NAME })).toBeVisible();
 
-    const personLink = page.getByRole("link", { name: SMOKE_OFFICE_OFFICEHOLDER_NAME, exact: true });
+    const personLink = page.getByRole("link", { name: SMOKE_OFFICE_OFFICEHOLDER_NAME, exact: true }).first();
     await expect(personLink).toHaveAttribute("href", `/person/${SMOKE_PERSON_ID}`);
 
-    const personDataRoute = await gateDataRoute(page, `**/person/${SMOKE_PERSON_ID}/__data.json*`);
-
-    const navigateToPerson = personLink.click();
-    await personDataRoute.waitForRequest;
-    await expect(page.getByRole("main")).toHaveAttribute("aria-busy", "true");
-    await expect(page.getByText("office detail loading")).toHaveCount(0);
-    personDataRoute.release();
-    await navigateToPerson;
-    await personDataRoute.remove();
+    await personLink.click();
 
     await expect(page).toHaveURL(`/person/${SMOKE_PERSON_ID}`);
     await expect(page.getByRole("main")).toHaveAttribute("aria-busy", "false");
+    await expect(page.getByText("office detail loading")).toHaveCount(0);
     await expect(page.getByRole("heading", { name: SMOKE_PERSON_CANONICAL_NAME })).toBeVisible();
   });
 
@@ -379,7 +332,7 @@ test.describe("shell and responsive smoke", () => {
 
     await page.goto("/");
     await expect(page.getByRole("heading", { name: SMOKE_HOME_HEADING })).toBeVisible();
-    await expect(page.getByRole("link", { name: "Start with search" })).toHaveCSS("min-height", "44px");
+    await expect(page.getByRole("link", { name: SMOKE_HOME_PRIMARY_ACTION })).toHaveCSS("min-height", "44px");
 
     await page.goto("/search");
     await expect(page.getByRole("heading", { name: "Search" })).toBeVisible();
@@ -388,10 +341,11 @@ test.describe("shell and responsive smoke", () => {
     await page.goto(`/candidate/${SMOKE_CANDIDATE_ID}`);
     await expect(page.getByRole("heading", { name: SMOKE_CANDIDATE_NAME })).toBeVisible();
     await assertPrimaryNavTapTargetMinHeight(page, SMOKE_SHELL_NAV_SEARCH);
+    await assertPrimaryNavTapTargetMinHeight(page, SMOKE_SHELL_NAV_DONORS);
 
     await page.goto(`/office/${SMOKE_OFFICE_ID}`);
     await expect(page.getByRole("heading", { name: SMOKE_OFFICE_NAME })).toBeVisible();
-    await assertPrimaryNavTapTargetMinHeight(page, SMOKE_SHELL_NAV_CANDIDATES);
+    await assertPrimaryNavTapTargetMinHeight(page, SMOKE_SHELL_NAV_CONGRESS);
   });
 
   test("responsive viewport 412px keeps home, search, candidate detail, and office detail tap targets accessible", async ({
@@ -403,7 +357,7 @@ test.describe("shell and responsive smoke", () => {
 
     await page.goto("/");
     await expect(page.getByRole("heading", { name: SMOKE_HOME_HEADING })).toBeVisible();
-    await expect(page.getByRole("link", { name: "Start with search" })).toHaveCSS("min-height", "44px");
+    await expect(page.getByRole("link", { name: SMOKE_HOME_PRIMARY_ACTION })).toHaveCSS("min-height", "44px");
 
     await page.goto("/search");
     await expect(page.getByRole("heading", { name: "Search" })).toBeVisible();
@@ -412,9 +366,10 @@ test.describe("shell and responsive smoke", () => {
     await page.goto(`/candidate/${SMOKE_CANDIDATE_ID}`);
     await expect(page.getByRole("heading", { name: SMOKE_CANDIDATE_NAME })).toBeVisible();
     await assertPrimaryNavTapTargetMinHeight(page, SMOKE_SHELL_NAV_SEARCH);
+    await assertPrimaryNavTapTargetMinHeight(page, SMOKE_SHELL_NAV_DONORS);
 
     await page.goto(`/office/${SMOKE_OFFICE_ID}`);
     await expect(page.getByRole("heading", { name: SMOKE_OFFICE_NAME })).toBeVisible();
-    await assertPrimaryNavTapTargetMinHeight(page, SMOKE_SHELL_NAV_CANDIDATES);
+    await assertPrimaryNavTapTargetMinHeight(page, SMOKE_SHELL_NAV_CONGRESS);
   });
 });

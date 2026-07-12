@@ -182,6 +182,7 @@ CREATE INDEX idx_field_prov_entity ON core.field_provenance (entity_type, entity
 CREATE INDEX idx_field_prov_field ON core.field_provenance (entity_type, entity_id, field_name);
 CREATE UNIQUE INDEX idx_field_prov_current ON core.field_provenance (entity_type, entity_id, field_name)
     WHERE is_current = TRUE;
+CREATE INDEX idx_field_provenance_source_record_id ON core.field_provenance (source_record_id);
 CREATE UNIQUE INDEX idx_field_prov_dedup
     ON core.field_provenance (entity_type, entity_id, field_name, field_value, source_record_id);
 

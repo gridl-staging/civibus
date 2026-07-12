@@ -13,14 +13,19 @@ data/
 
 # Stage 3 browser-capture local profile caches
 .tmp/**/profiles/
-docs/research/artifacts/2026-03-production-proof/*.dump
+docs/reference/research/artifacts/2026-03-production-proof/*.dump
 
 .hashbrown
 
 # Auto-generated scrai caches (large, change frequently)
 .scrai/codemap_graph_cache.json
+.scrai/state.json
+.scrai/summaries.json
+.scrai/dir_summaries.json
 
 # Large shapefile downloads — too big for git
-docs/research/artifacts/*/downloads/**/*.shp
-docs/research/artifacts/*/downloads/**/*.zip
+docs/reference/research/artifacts/*/downloads/**/*.shp
+docs/reference/research/artifacts/*/downloads/**/*.zip
 
+
+.matt/

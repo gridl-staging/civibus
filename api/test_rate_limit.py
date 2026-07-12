@@ -76,6 +76,27 @@ def test_second_key_isolated_and_window_reset_restores_capacity(
     assert reset_window_response.status_code == 200
 
 
+def test_ip_rate_limit_keys_are_isolated(monkeypatch: pytest.MonkeyPatch) -> None:
+    current_time_seconds = {"value": 100}
+    monkeypatch.setenv("CIVIBUS_ENV", "production")
+    monkeypatch.setenv("CIVIBUS_API_KEYS", _VALID_API_KEY)
+    monkeypatch.setenv("CIVIBUS_RATE_LIMIT_REQUESTS", "2")
+    monkeypatch.setenv("CIVIBUS_RATE_LIMIT_WINDOW_SECONDS", "10")
+    monkeypatch.setattr(api_main, "_v1_routers", lambda: ())
+    monkeypatch.setattr(access_middleware, "_current_epoch_seconds", lambda: current_time_seconds["value"])
+    app = create_app()
+    request = Request({"type": "http", "app": app, "method": "GET", "path": "/public/v1/federal/officials"})
+
+    access_middleware._enforce_fixed_window_rate_limit_for_key(request, "1.1.1.1")
+    access_middleware._enforce_fixed_window_rate_limit_for_key(request, "1.1.1.1")
+    with pytest.raises(access_middleware.HTTPException) as exc_info:
+        access_middleware._enforce_fixed_window_rate_limit_for_key(request, "1.1.1.1")
+
+    assert exc_info.value.status_code == 429
+    assert exc_info.value.headers == {"Retry-After": "10"}
+    access_middleware._enforce_fixed_window_rate_limit_for_key(request, "2.2.2.2")
+
+
 def test_fresh_app_instance_starts_with_fresh_rate_limit_state(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

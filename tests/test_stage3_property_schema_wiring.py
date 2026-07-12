@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from pathlib import Path
-import re
+
+from test_support.makefile_contract_helpers import parse_makefile_db_sql_files
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -17,21 +18,18 @@ def test_stage3_property_schema_file_exists() -> None:
 
 def test_stage3_makefile_appends_property_schema_to_db_sql_files_in_order() -> None:
     makefile = read_repo_text("Makefile")
+    db_sql_files = parse_makefile_db_sql_files(makefile)
 
-    assert re.search(
-        r"^DB_SQL_FILES := core/schema/entities\.sql "
-        r"core/schema/jurisdiction\.sql "
-        r"core/schema/provenance\.sql "
-        r"core/schema/entity_resolution\.sql "
-        r"core/schema/er_views\.sql "
-        r"domains/campaign_finance/schema/tables\.sql "
-        r"domains/campaign_finance/schema/nc_orchestrator_tables\.sql "
-        r"domains/campaign_finance/schema/dark_money_tables\.sql "
-        r"domains/property/schema/tables\.sql "
-        r"domains/civics/schema/tables\.sql "
-        r"infra/db/09-age-graph-bootstrap\.sql$",
-        makefile,
-        re.M,
+    assert db_sql_files[:6] == [
+        "core/schema/entities.sql",
+        "core/schema/migrations/2026_04_30_person_bio_fields.sql",
+        "core/schema/jurisdiction.sql",
+        "core/schema/provenance.sql",
+        "core/schema/entity_resolution.sql",
+        "core/schema/er_views.sql",
+    ]
+    assert db_sql_files.index("domains/property/schema/tables.sql") < db_sql_files.index(
+        "domains/civics/schema/tables.sql"
     )
 
 

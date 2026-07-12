@@ -14,6 +14,7 @@ from core.people.enrichment.models import (
     PortraitBinaryMetadata,
     PortraitQaStatus,
 )
+from core.types.python.models import PortraitRightsStatus
 
 MIN_PORTRAIT_DIMENSION_PX = 128
 MIN_FACE_AREA_RATIO = 0.015
@@ -136,6 +137,7 @@ def run_strategy_fetch(
     missing_fields: tuple[str, ...],
     fetch_payload: Callable[[], JsonLikeMapping | None],
     fetch_portrait_bytes: Callable[[str], bytes | None] | None = None,
+    portrait_rights_status: PortraitRightsStatus = "unknown",
 ) -> tuple[CandidateEnrichmentRecord, EnrichmentAttempt]:
     """Normalize one strategy fetch into a record plus structured attempt metadata."""
     try:
@@ -168,7 +170,10 @@ def run_strategy_fetch(
 
     if image_bytes is None or image_bytes == b"":
         return record, attempt.model_copy(
-            update={"portrait_status": "not_found", "metadata": {**attempt.metadata, "portrait_fetch_outcome": "not_found"}}
+            update={
+                "portrait_status": "not_found",
+                "metadata": {**attempt.metadata, "portrait_fetch_outcome": "not_found"},
+            }
         )
 
     portrait_status, portrait_metadata = evaluate_portrait_binary(
@@ -176,9 +181,16 @@ def run_strategy_fetch(
         source_image_url=portrait_url,
         face_box_dimensions_px=_extract_face_box_dimensions(payload),
     )
+    if portrait_metadata is not None:
+        portrait_metadata = portrait_metadata.model_copy(update={"rights_status": portrait_rights_status})
     record.portrait_metadata = portrait_metadata
     if portrait_status == "rejected":
         return record, attempt.model_copy(
-            update={"portrait_status": portrait_status, "metadata": {**attempt.metadata, "portrait_rejection_reason": "invalid_image_bytes"}}
+            update={
+                "portrait_status": portrait_status,
+                "metadata": {**attempt.metadata, "portrait_rejection_reason": "invalid_image_bytes"},
+            }
         )
-    return record, attempt.model_copy(update={"portrait_status": portrait_status, "portrait_metadata": portrait_metadata})
+    return record, attempt.model_copy(
+        update={"portrait_status": portrait_status, "portrait_metadata": portrait_metadata}
+    )

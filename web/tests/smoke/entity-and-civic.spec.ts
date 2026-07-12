@@ -1,19 +1,52 @@
 import { expect, test } from "playwright/test";
 
 import {
+  seedLiveCongressDirectorySmoke,
   SMOKE_CONTEST_FINANCE_LINK_NAME,
   SMOKE_CONTEST_WINNER_NAME,
+  SMOKE_CONGRESS_PERSON_ID,
   SMOKE_OFFICE_RECENT_CONTEST_NAME,
+  SMOKE_PERSON_APPROXIMATE_GEOGRAPHY_NOTE,
   SMOKE_PERSON_CAMPAIGN_FINANCE_HEADING,
+  SMOKE_PERSON_CAREER_TOTAL,
+  SMOKE_PERSON_CAREER_TOTAL_LABEL,
+  SMOKE_PERSON_CYCLE_TOTAL,
+  SMOKE_PERSON_CYCLE_TOTAL_LABEL,
+  SMOKE_PERSON_DONATION_COUNT_BY_SIZE_HEADING,
+  SMOKE_PERSON_DOLLARS_BY_SIZE_HEADING,
+  SMOKE_PERSON_DONATIONS_OVER_TIME_HEADING,
   SMOKE_PERSON_DONORS_AND_VENDORS_HEADING,
+  SMOKE_PERSON_FUNDRAISING_DETAIL_HEADING,
+  SMOKE_PERSON_FUNDRAISING_GEOGRAPHY_HEADING,
   SMOKE_PERSON_LINKED_COMMITTEES_HEADING,
   SMOKE_PERSON_OUTSIDE_SPENDING_HEADING,
-  SMOKE_PERSON_GRAPH_ORG_NAME,
+  SMOKE_PERSON_DISTRICT_SHARE_HEADLINE,
+  SMOKE_PERSON_DISTRICT_SHARE_SUMMARY,
+  SMOKE_PERSON_SMALL_DOLLAR_HEADLINE,
+  SMOKE_PERSON_TOP_EMPLOYER_DISCLAIMER,
+  SMOKE_PERSON_TOP_EMPLOYER_METHODOLOGY,
+  SMOKE_PERSON_TOP_EMPLOYER_ONE_NAME,
+  SMOKE_PERSON_TOP_EMPLOYER_ONE_TOTAL,
+  SMOKE_PERSON_TOP_EMPLOYER_TWO_NAME,
+  SMOKE_PERSON_TOP_EMPLOYER_TWO_TOTAL,
+  SMOKE_PERSON_TOP_EMPLOYERS_HEADING,
+  SMOKE_PERSON_TOP_DONOR_ONE_NAME,
+  SMOKE_PERSON_TOP_DONOR_ONE_TOTAL,
+  SMOKE_PERSON_TOP_DONOR_TWO_NAME,
+  SMOKE_PERSON_TOP_DONOR_TWO_TOTAL,
+  SMOKE_PERSON_TOP_DONORS_HEADING,
+  SMOKE_PERSON_TOP_SPENDER_NAME,
+  SMOKE_PERSON_TOP_SPENDER_TOTAL,
+  SMOKE_PERSON_TOP_SPENDERS_HEADING,
+  SMOKE_PERSON_UNITEMIZED_BUCKET_LABEL,
+  SMOKE_PERSON_UNITEMIZED_EXCLUSION_NOTE,
   SMOKE_CANDIDACY_DESCRIPTION,
-  SMOKE_CANDIDATE_ID,
+  SMOKE_CANDIDATE_NAME,
+  SMOKE_CANDIDATE_SLUG,
   SMOKE_CANDIDACY_ID,
   SMOKE_CANDIDACY_PERSON_NAME,
   SMOKE_CANDIDACY_TITLE,
+  SMOKE_ENTITY_PORTRAIT_INITIALS_TEST_ID,
   SMOKE_ENTITY_PORTRAIT_IMAGE_TEST_ID,
   SMOKE_ENTITY_PORTRAIT_SILHOUETTE_TEST_ID,
   SMOKE_CONTEST_DESCRIPTION,
@@ -57,7 +90,6 @@ import {
   SMOKE_PROVENANCE_LAST_PULLED,
   SMOKE_PROVENANCE_SOURCE_KEY,
   SMOKE_PROVENANCE_SOURCE_NAME,
-  SMOKE_TECHNICAL_DISCLOSURE_SUMMARY,
   SMOKE_TRUST_ADVISORY,
   SMOKE_TRUST_EMPTY_MESSAGE,
   SMOKE_TRUST_LAST_PULLED_UNAVAILABLE,
@@ -71,6 +103,26 @@ import {
   assertSourceRecordLink
 } from "./smoke-helpers";
 
+const MIN_FINANCE_CHART_HEIGHT_PX = 250;
+const LIVE_PERSON_ID = process.env.SMOKE_PERSON_ID === undefined ? SMOKE_CONGRESS_PERSON_ID : SMOKE_PERSON_ID;
+const SHOULD_SEED_LIVE_PERSON_SMOKE = process.env.SMOKE_PERSON_ID === undefined;
+const SHOULD_RUN_LIVE_CONTEST_SMOKE = process.env.SMOKE_CONTEST_ID !== undefined;
+const SHOULD_RUN_LIVE_OFFICE_SMOKE = process.env.SMOKE_OFFICE_ID !== undefined;
+
+async function expectFinanceChartHasStableHeight(page: any, chartName: string | RegExp): Promise<void> {
+  const chartRegion = page.getByLabel(chartName).first();
+  await expect(chartRegion).toBeVisible();
+  const chartBox = await chartRegion.boundingBox();
+  expect(chartBox?.height ?? 0).toBeGreaterThanOrEqual(MIN_FINANCE_CHART_HEIGHT_PX);
+}
+
+async function seedLivePersonSmokeIfNeeded(): Promise<() => Promise<void>> {
+  if (SHOULD_SEED_LIVE_PERSON_SMOKE) {
+    return seedLiveCongressDirectorySmoke();
+  }
+  return async () => undefined;
+}
+
 test.describe("entity and civic detail smoke", () => {
   // Fixture-mode-only: tests below assert synthetic provenance, names, and IDs
   // that only resolve under the fixture-backend. Live-mode coverage of the
@@ -80,11 +132,6 @@ test.describe("entity and civic detail smoke", () => {
   test.skip(SMOKE_USE_LIVE_API, "fixture-only — live coverage in entity/civic live-mode block");
 
   test("/person/[id] renders SSR detail presentation", async ({ page }: { page: any }) => {
-    // Page-load error capture moved to the live-mode block: under fixture mode
-    // the synthetic backend does not implement the candidate-finance-sections
-    // endpoint, so the SSR loader logs a 404 and a console.error fires before
-    // the page is fully assembled. Asserting clean page load belongs to the
-    // live-backed run where the real API serves all section endpoints.
     await page.goto(`/person/${SMOKE_PERSON_ID}`);
 
     await expect(page).toHaveTitle(SMOKE_PERSON_TITLE);
@@ -111,41 +158,86 @@ test.describe("entity and civic detail smoke", () => {
     await assertBreadcrumbNav(page);
     await assertBreadcrumbJsonLd(page);
     await expect(page.getByRole("heading", { name: "Key metrics" })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Officeholding timeline" })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Candidacies" })).toBeVisible();
-    await expect(page.getByRole("heading", { name: SMOKE_PERSON_CAMPAIGN_FINANCE_HEADING })).toBeVisible();
-    // Stage 7 deep finance/IE panel coverage (Linked committees, Donors and
-    // vendors, Outside Spending) is asserted in the live-mode describe block
-    // below — the fixture-backend stub returns "Campaign-finance sections
-    // are temporarily unavailable" for the person finance bundle, so those
-    // panels never render under fixture-mode coverage.
+    await expect(page.getByRole("heading", { name: SMOKE_PERSON_CAMPAIGN_FINANCE_HEADING }).first()).toBeVisible();
+    await expectFinanceChartHasStableHeight(page, `Finance chart for ${SMOKE_PERSON_CANONICAL_NAME}`);
+    await expect(page.getByRole("heading", { name: SMOKE_PERSON_FUNDRAISING_DETAIL_HEADING })).toBeVisible();
+    await expect(page.getByText(SMOKE_PERSON_SMALL_DOLLAR_HEADLINE, { exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Individual contribution totals" })).toBeVisible();
+    const contributionTotalsSummary = page.getByTestId("person-contribution-total-summary");
+    await expect(contributionTotalsSummary.getByText(SMOKE_PERSON_CYCLE_TOTAL, { exact: true })).toBeVisible();
+    await expect(contributionTotalsSummary.getByText(SMOKE_PERSON_CAREER_TOTAL, { exact: true })).toHaveCount(0);
+    await page
+      .getByRole("group", { name: "Contribution totals view" })
+      .getByRole("button", { name: SMOKE_PERSON_CAREER_TOTAL_LABEL })
+      .click();
+    await expect(contributionTotalsSummary.getByText(SMOKE_PERSON_CAREER_TOTAL, { exact: true })).toBeVisible();
+    await expectFinanceChartHasStableHeight(page, `Donations over time for ${SMOKE_PERSON_CANONICAL_NAME}`);
+    await expectFinanceChartHasStableHeight(page, `Donation count by size bucket for ${SMOKE_PERSON_CANONICAL_NAME}`);
+    await expectFinanceChartHasStableHeight(page, `Dollars by size bucket for ${SMOKE_PERSON_CANONICAL_NAME}`);
+    await expectFinanceChartHasStableHeight(page, `Fundraising geography for ${SMOKE_PERSON_CANONICAL_NAME}`);
+    await expect(page.getByRole("heading", { name: SMOKE_PERSON_DONATIONS_OVER_TIME_HEADING })).toBeVisible();
+    await expect(page.getByRole("heading", { name: SMOKE_PERSON_DONATION_COUNT_BY_SIZE_HEADING })).toBeVisible();
+    await expect(page.getByRole("heading", { name: SMOKE_PERSON_DOLLARS_BY_SIZE_HEADING })).toBeVisible();
+    await expect(page.getByRole("heading", { name: SMOKE_PERSON_FUNDRAISING_GEOGRAPHY_HEADING })).toBeVisible();
+    await expect(page.getByText(SMOKE_PERSON_DISTRICT_SHARE_HEADLINE, { exact: true })).toBeVisible();
+    await expect(page.getByText(SMOKE_PERSON_DISTRICT_SHARE_SUMMARY, { exact: true })).toBeVisible();
+    await expect(page.getByText(SMOKE_PERSON_APPROXIMATE_GEOGRAPHY_NOTE, { exact: true })).toBeVisible();
+    await expect(page.getByText(SMOKE_PERSON_UNITEMIZED_BUCKET_LABEL, { exact: true }).first()).toBeVisible();
+    await expect(page.getByText(SMOKE_PERSON_UNITEMIZED_EXCLUSION_NOTE)).toBeVisible();
+    await expect(page.getByRole("heading", { name: SMOKE_PERSON_TOP_DONORS_HEADING })).toBeVisible();
+    const topDonorRows = page.getByTestId("person-top-donors-scroll").getByRole("row");
+    await expect(topDonorRows.nth(1)).toContainText(SMOKE_PERSON_TOP_DONOR_ONE_NAME);
+    await expect(topDonorRows.nth(1)).toContainText(SMOKE_PERSON_TOP_DONOR_ONE_TOTAL);
+    await expect(topDonorRows.nth(2)).toContainText(SMOKE_PERSON_TOP_DONOR_TWO_NAME);
+    await expect(topDonorRows.nth(2)).toContainText(SMOKE_PERSON_TOP_DONOR_TWO_TOTAL);
+    await expect(page.getByRole("heading", { name: SMOKE_PERSON_TOP_EMPLOYERS_HEADING })).toBeVisible();
+    await expect(page.getByText(SMOKE_PERSON_TOP_EMPLOYER_DISCLAIMER, { exact: true })).toBeVisible();
+    await expect(page.getByText(SMOKE_PERSON_TOP_EMPLOYER_METHODOLOGY, { exact: true })).toBeVisible();
+    const topEmployerRows = page.getByTestId("person-top-employers-scroll").getByRole("row");
+    await expect(topEmployerRows.nth(1)).toContainText(SMOKE_PERSON_TOP_EMPLOYER_ONE_NAME);
+    await expect(topEmployerRows.nth(1)).toContainText(SMOKE_PERSON_TOP_EMPLOYER_ONE_TOTAL);
+    await expect(topEmployerRows.nth(2)).toContainText(SMOKE_PERSON_TOP_EMPLOYER_TWO_NAME);
+    await expect(topEmployerRows.nth(2)).toContainText(SMOKE_PERSON_TOP_EMPLOYER_TWO_TOTAL);
+    await expect(page.getByRole("heading", { name: SMOKE_PERSON_LINKED_COMMITTEES_HEADING })).toBeVisible();
+    await expect(page.getByRole("heading", { name: SMOKE_PERSON_DONORS_AND_VENDORS_HEADING })).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: SMOKE_PERSON_OUTSIDE_SPENDING_HEADING, exact: true })
+    ).toBeVisible();
+    await expectFinanceChartHasStableHeight(page, `Outside spending chart for ${SMOKE_CANDIDATE_NAME}`);
+    await expect(page.getByRole("heading", { name: SMOKE_PERSON_TOP_SPENDERS_HEADING })).toBeVisible();
+    const topSpenderRows = page.getByTestId("person-ie-top-spenders-scroll").getByRole("row");
+    await expect(topSpenderRows.nth(1)).toContainText(SMOKE_PERSON_TOP_SPENDER_NAME);
+    await expect(topSpenderRows.nth(1)).toContainText(SMOKE_PERSON_TOP_SPENDER_TOTAL);
     await expect(page.getByRole("heading", { name: "Identifiers" })).toBeVisible();
     await expect(page.getByTestId("entity-metric-identifiers")).toContainText("1");
-    await expect(page.getByTestId("entity-metric-er-matches")).toContainText("0");
-    await expect(page.getByTestId("entity-metric-graph-relationships")).toContainText("2");
+    await expect(page.getByRole("heading", { name: "Officeholding timeline" })).toHaveCount(0);
+    await expect(page.getByRole("heading", { name: "Candidacies" })).toHaveCount(0);
+    await expect(page.getByRole("heading", { name: "Graph relationships" })).toHaveCount(0);
+    await expect(page.getByRole("heading", { name: "Entity-resolution matches" })).toHaveCount(0);
     await expect(page.getByText("Loading...")).toHaveCount(0);
-    // ER matches and graph relationships are inside a closed <details> disclosure
-    const disclosure = page.getByRole("group", { name: "Entity internals" });
-    await expect(disclosure).toHaveCount(1);
-    await expect(page.getByText(SMOKE_TECHNICAL_DISCLOSURE_SUMMARY)).toBeVisible();
+    await expect(page.getByRole("group", { name: "Entity internals" })).toHaveCount(0);
     await expect(page.getByTestId(SMOKE_ENTITY_PORTRAIT_IMAGE_TEST_ID)).toBeVisible();
     await expect(page.getByTestId(SMOKE_ENTITY_PORTRAIT_SILHOUETTE_TEST_ID)).toHaveCount(0);
   });
 
-  test("/person/[id] with portrait null renders shared silhouette fallback", async ({ page }: { page: any }) => {
+  test("/person/[id] with portrait null renders shared fallback avatar", async ({ page }: { page: any }) => {
     await page.goto(`/person/${SMOKE_PERSON_NO_PORTRAIT_ID}`);
 
     await expect(page.getByRole("heading", { name: SMOKE_PERSON_NO_PORTRAIT_CANONICAL_NAME })).toBeVisible();
-    await expect(page.getByTestId(SMOKE_ENTITY_PORTRAIT_SILHOUETTE_TEST_ID)).toBeVisible();
+    await expect(page.getByTestId(SMOKE_ENTITY_PORTRAIT_INITIALS_TEST_ID)).toBeVisible();
+    await expect(page.getByTestId(SMOKE_ENTITY_PORTRAIT_INITIALS_TEST_ID)).toContainText("JP");
     await expect(page.getByTestId(SMOKE_ENTITY_PORTRAIT_IMAGE_TEST_ID)).toHaveCount(0);
+    await expect(page.getByTestId(SMOKE_ENTITY_PORTRAIT_SILHOUETTE_TEST_ID)).toHaveCount(0);
   });
 
-  test("/person/[id] missing portrait field renders shared silhouette fallback", async ({ page }: { page: any }) => {
+  test("/person/[id] missing portrait field renders shared fallback avatar", async ({ page }: { page: any }) => {
     await page.goto(`/person/${SMOKE_PERSON_MISSING_PORTRAIT_FIELD_ID}`);
 
     await expect(page.getByRole("heading", { name: SMOKE_PERSON_MISSING_PORTRAIT_CANONICAL_NAME })).toBeVisible();
-    await expect(page.getByTestId(SMOKE_ENTITY_PORTRAIT_SILHOUETTE_TEST_ID)).toBeVisible();
+    await expect(page.getByTestId(SMOKE_ENTITY_PORTRAIT_INITIALS_TEST_ID)).toBeVisible();
+    await expect(page.getByTestId(SMOKE_ENTITY_PORTRAIT_INITIALS_TEST_ID)).toContainText("AP");
     await expect(page.getByTestId(SMOKE_ENTITY_PORTRAIT_IMAGE_TEST_ID)).toHaveCount(0);
+    await expect(page.getByTestId(SMOKE_ENTITY_PORTRAIT_SILHOUETTE_TEST_ID)).toHaveCount(0);
   });
 
   test("/person/[id] for Durham roster member renders roster-sourced portrait image", async ({
@@ -180,60 +272,7 @@ test.describe("entity and civic detail smoke", () => {
     await expect(page.getByTestId(SMOKE_ENTITY_PORTRAIT_SILHOUETTE_TEST_ID)).toHaveCount(0);
   });
 
-  test("/person/[id] graph keyboard navigation works with arrow, enter, and escape", async ({
-    page
-  }: {
-    page: any;
-  }) => {
-    await page.goto(`/person/${SMOKE_PERSON_ID}`);
-
-    // Open the Entity internals disclosure
-    await page.getByText(SMOKE_TECHNICAL_DISCLOSURE_SUMMARY).click();
-
-    // Tab from the disclosure summary to reach the graph container
-    await page.keyboard.press("Tab");
-    // The graph container should be focused — verify via its role
-    const graphContainer = page.getByRole("img", { name: /Graph of/ });
-    await expect(graphContainer).toBeFocused();
-
-    // ArrowRight selects the first navigable (non-subject) node
-    await page.keyboard.press("ArrowRight");
-    const status = page.getByRole("status");
-    await expect(status).not.toBeEmpty();
-
-    // ArrowRight again advances to the next node (the routable org neighbor)
-    await page.keyboard.press("ArrowRight");
-    await expect(status).toContainText(SMOKE_PERSON_GRAPH_ORG_NAME);
-    await expect(status).toContainText("press Enter to open");
-
-    // ArrowLeft moves back to the previous node
-    await page.keyboard.press("ArrowLeft");
-    await expect(status).not.toBeEmpty();
-
-    // Advance forward again to the routable org node for Enter test
-    await page.keyboard.press("ArrowRight");
-    await expect(status).toContainText(SMOKE_PERSON_GRAPH_ORG_NAME);
-
-    await page.keyboard.press("Enter");
-    await page.waitForURL(`/org/${SMOKE_ORG_ID}`);
-    await expect(page).toHaveURL(`/org/${SMOKE_ORG_ID}`);
-
-    // Navigate back to test Escape
-    await page.goto(`/person/${SMOKE_PERSON_ID}`);
-    await page.getByText(SMOKE_TECHNICAL_DISCLOSURE_SUMMARY).click();
-    await page.keyboard.press("Tab");
-    await expect(graphContainer).toBeFocused();
-
-    await page.keyboard.press("ArrowRight");
-    await expect(status).not.toBeEmpty();
-
-    await page.keyboard.press("Escape");
-    await expect(status).toBeEmpty();
-    // Should still be on the person page (not navigated away)
-    await expect(page).toHaveURL(`/person/${SMOKE_PERSON_ID}`);
-  });
-
-  test("/org/[id] renders detail via /v1/org + /v1/er/organization + /v1/graph/org", async ({
+  test("/org/[id] renders public detail via /v1/org", async ({
     page
   }: {
     page: any;
@@ -259,13 +298,10 @@ test.describe("entity and civic detail smoke", () => {
     await assertBreadcrumbJsonLd(page);
     await expect(page.getByRole("heading", { name: "Key metrics" })).toBeVisible();
     await expect(page.getByTestId("entity-metric-identifiers")).toContainText("1");
-    await expect(page.getByTestId("entity-metric-er-matches")).toContainText("0");
-    await expect(page.getByTestId("entity-metric-graph-relationships")).toContainText("1");
+    await expect(page.getByRole("heading", { name: "Graph relationships" })).toHaveCount(0);
+    await expect(page.getByRole("heading", { name: "Entity-resolution matches" })).toHaveCount(0);
     await expect(page.getByText("Loading...")).toHaveCount(0);
-    // ER/graph are inside closed <details> — only disclosure summary is visible
-    const disclosure = page.getByRole("group", { name: "Entity internals" });
-    await expect(disclosure).toHaveCount(1);
-    await expect(page.getByText(SMOKE_TECHNICAL_DISCLOSURE_SUMMARY)).toBeVisible();
+    await expect(page.getByRole("group", { name: "Entity internals" })).toHaveCount(0);
   });
 
   test("/office/[id] renders office detail with officeholder and breadcrumb", async ({ page }: { page: any }) => {
@@ -294,10 +330,9 @@ test.describe("entity and civic detail smoke", () => {
     await expect(page.getByRole("heading", { name: "Officeholding timeline" })).toBeVisible();
     await expect(page.getByRole("heading", { name: "Recent contests" })).toBeVisible();
     await expect(page.getByRole("heading", { name: "District map context" })).toBeVisible();
-    await expect(page.getByRole("link", { name: SMOKE_OFFICE_OFFICEHOLDER_NAME, exact: true })).toHaveAttribute(
-      "href",
-      `/person/${SMOKE_PERSON_ID}`
-    );
+    await expect(
+      page.getByRole("link", { name: SMOKE_OFFICE_OFFICEHOLDER_NAME, exact: true }).first()
+    ).toHaveAttribute("href", `/person/${SMOKE_PERSON_ID}`);
     await expect(page.getByRole("link", { name: SMOKE_OFFICE_RECENT_CONTEST_NAME })).toHaveAttribute(
       "href",
       `/contest/${SMOKE_CONTEST_ID}`
@@ -371,18 +406,30 @@ test.describe("entity and civic detail smoke", () => {
       "href",
       `/office/${SMOKE_OFFICE_ID}`
     );
-    await expect(page.getByRole("link", { name: SMOKE_CONTEST_WINNER_NAME })).toHaveAttribute(
-      "href",
-      `/person/${SMOKE_PERSON_ID}`
-    );
-    await expect(page.getByRole("link", { name: SMOKE_CONTEST_FINANCE_LINK_NAME })).toHaveAttribute(
-      "href",
-      `/candidate/${SMOKE_CANDIDATE_ID}`
-    );
-    await expect(page.getByRole("link", { name: SMOKE_CANDIDACY_PERSON_NAME, exact: true })).toHaveAttribute(
-      "href",
-      `/person/${SMOKE_PERSON_ID}`
-    );
+    const resultsPanel = page.getByTestId("contest-results-panel");
+    await expect(resultsPanel).toBeVisible();
+    await expect(resultsPanel.getByRole("heading", { name: "Results", exact: true })).toBeVisible();
+    await expect(resultsPanel.getByText("Winner", { exact: true })).toBeVisible();
+    await expect(
+      resultsPanel.getByRole("link", { name: SMOKE_CONTEST_WINNER_NAME, exact: true })
+    ).toHaveAttribute("href", `/person/${SMOKE_PERSON_ID}`);
+
+    const candidaciesRow = page.getByRole("row", {
+      name: new RegExp(
+        `${SMOKE_CANDIDACY_PERSON_NAME} View candidacy detail for ${SMOKE_CANDIDACY_PERSON_NAME}`
+      )
+    });
+    await expect(
+      candidaciesRow.getByRole("link", { name: SMOKE_CANDIDACY_PERSON_NAME, exact: true })
+    ).toHaveAttribute("href", `/person/${SMOKE_PERSON_ID}`);
+    const financeCardHeading = page.getByRole("heading", {
+      name: SMOKE_CANDIDACY_PERSON_NAME,
+      level: 4
+    });
+    await expect(
+      financeCardHeading.getByRole("link", { name: SMOKE_CANDIDACY_PERSON_NAME, exact: true })
+    ).toHaveAttribute("href", `/candidate/${SMOKE_CANDIDATE_SLUG}`);
+    await expect(page.getByRole("link", { name: SMOKE_CONTEST_FINANCE_LINK_NAME })).toHaveCount(0);
     await expect(
       page.getByRole("link", { name: `View candidacy detail for ${SMOKE_CANDIDACY_PERSON_NAME}` })
     ).toHaveAttribute(
@@ -460,30 +507,77 @@ test.describe("entity and civic detail smoke", () => {
 });
 
 // Stage 7 live-mode coverage: assert structural section headings the upstream
-// stages (2/3/5) wired up against the real DB-backed records. Operators
+// stages (2/3/5) wired up against real DB-backed records. Operators can
 // override SMOKE_PERSON_ID, SMOKE_CONTEST_ID, SMOKE_OFFICE_ID via env so the
-// same constants point at known-populated live records. We deliberately
-// avoid asserting fixture-only names/provenance/IDs here so live runs do not
-// false-fail on text that only the fixture-backend serves.
-test.describe("entity and civic detail smoke (live mode)", () => {
+// same constants point at known-populated live records. Without an override,
+// the person-detail smoke seeds the existing Congress fixture into the live DB.
+// We deliberately avoid asserting fixture-only names/provenance/IDs here so
+// live runs do not false-fail on text that only the fixture-backend serves.
+test.describe.serial("entity and civic detail smoke (live mode)", () => {
   test.skip(!SMOKE_USE_LIVE_API, "live-mode only — set SMOKE_USE_LIVE_API=1");
 
-  test("/person/[id] renders Stage 2 completed sections against live data", async ({ page }: { page: any }) => {
+  let cleanupLivePersonSmoke: (() => Promise<void>) | null = null;
+
+  test.beforeAll(async () => {
+    cleanupLivePersonSmoke = await seedLivePersonSmokeIfNeeded();
+  });
+
+  test.afterAll(async () => {
+    await cleanupLivePersonSmoke?.();
+  });
+
+  test("/person/[id] renders public profile sections against live data", async ({ page }: { page: any }) => {
     const pageLoadErrors = capturePageLoadErrors(page);
-    await page.goto(`/person/${SMOKE_PERSON_ID}`);
+
+    await page.goto(`/person/${LIVE_PERSON_ID}`);
 
     await expect(page.getByRole("heading", { name: "Key metrics" })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Officeholding timeline" })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Candidacies" })).toBeVisible();
-    await expect(page.getByRole("heading", { name: SMOKE_PERSON_CAMPAIGN_FINANCE_HEADING })).toBeVisible();
-    await expect(page.getByRole("heading", { name: SMOKE_PERSON_LINKED_COMMITTEES_HEADING })).toBeVisible();
-    await expect(page.getByRole("heading", { name: SMOKE_PERSON_DONORS_AND_VENDORS_HEADING })).toBeVisible();
-    await expect(page.getByRole("heading", { name: SMOKE_PERSON_OUTSIDE_SPENDING_HEADING })).toBeVisible();
+    await expect(page.getByRole("heading", { name: SMOKE_PERSON_CAMPAIGN_FINANCE_HEADING }).first()).toBeVisible();
+    await expect(page.getByRole("heading", { name: SMOKE_PERSON_FUNDRAISING_DETAIL_HEADING })).toBeVisible();
+    await expectFinanceChartHasStableHeight(page, /Donations over time for/);
+    await expectFinanceChartHasStableHeight(page, /Donation count by size bucket for/);
+    await expectFinanceChartHasStableHeight(page, /Dollars by size bucket for/);
+    await expectFinanceChartHasStableHeight(page, /Fundraising geography for/);
+    await expect(page.getByText(SMOKE_PERSON_UNITEMIZED_BUCKET_LABEL, { exact: true }).first()).toBeVisible();
+    await expect(page.getByText(SMOKE_PERSON_UNITEMIZED_EXCLUSION_NOTE)).toBeVisible();
+    await expect(page.getByText(SMOKE_PERSON_SMALL_DOLLAR_HEADLINE, { exact: true })).toBeVisible();
+    await expect(page.getByText(SMOKE_PERSON_DISTRICT_SHARE_HEADLINE, { exact: true })).toBeVisible();
+    await expect(page.getByText(SMOKE_PERSON_APPROXIMATE_GEOGRAPHY_NOTE, { exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Individual contribution totals" })).toBeVisible();
+    const contributionTotalsSummary = page.getByTestId("person-contribution-total-summary");
+    await expect(contributionTotalsSummary.getByText(SMOKE_PERSON_CYCLE_TOTAL, { exact: true })).toBeVisible();
+    await page
+      .getByRole("group", { name: "Contribution totals view" })
+      .getByRole("button", { name: SMOKE_PERSON_CAREER_TOTAL_LABEL })
+      .click();
+    await expect(contributionTotalsSummary.getByText(SMOKE_PERSON_CAREER_TOTAL, { exact: true })).toBeVisible();
+    await page
+      .getByRole("group", { name: "Contribution totals view" })
+      .getByRole("button", { name: SMOKE_PERSON_CYCLE_TOTAL_LABEL })
+      .click();
+    await expect(contributionTotalsSummary.getByText(SMOKE_PERSON_CYCLE_TOTAL, { exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: SMOKE_PERSON_TOP_DONORS_HEADING })).toBeVisible();
+    const topDonorRows = page.getByTestId("person-top-donors-scroll").getByRole("row");
+    await expect(topDonorRows.nth(1)).toContainText(SMOKE_PERSON_TOP_DONOR_ONE_NAME);
+    await expect(topDonorRows.nth(2)).toContainText(SMOKE_PERSON_TOP_DONOR_TWO_NAME);
+    await expect(page.getByRole("heading", { name: SMOKE_PERSON_TOP_EMPLOYERS_HEADING })).toBeVisible();
+    const topEmployerRows = page.getByTestId("person-top-employers-scroll").getByRole("row");
+    await expect(topEmployerRows.nth(1)).toContainText(SMOKE_PERSON_TOP_EMPLOYER_ONE_NAME);
+    await expect(topEmployerRows.nth(2)).toContainText(SMOKE_PERSON_TOP_EMPLOYER_TWO_NAME);
+    await expect(page.getByRole("heading", { name: "Officeholding timeline" })).toHaveCount(0);
+    await expect(page.getByRole("heading", { name: "Candidacies" })).toHaveCount(0);
+    await expect(page.getByRole("heading", { name: "Graph relationships" })).toHaveCount(0);
+    await expect(page.getByRole("heading", { name: "Entity-resolution matches" })).toHaveCount(0);
+    await expect(page.getByRole("group", { name: "Entity internals" })).toHaveCount(0);
     await assertBreadcrumbNav(page);
     await pageLoadErrors.assertNoErrors();
   });
 
   test("/contest/[id] renders Stage 3 completed sections against live data", async ({ page }: { page: any }) => {
+    test.skip(
+      !SHOULD_RUN_LIVE_CONTEST_SMOKE,
+      "live contest smoke requires SMOKE_CONTEST_ID for a known-populated live record"
+    );
     const pageLoadErrors = capturePageLoadErrors(page);
     await page.goto(`/contest/${SMOKE_CONTEST_ID}`);
 
@@ -499,6 +593,10 @@ test.describe("entity and civic detail smoke (live mode)", () => {
   });
 
   test("/office/[id] renders Stage 5 completed sections against live data", async ({ page }: { page: any }) => {
+    test.skip(
+      !SHOULD_RUN_LIVE_OFFICE_SMOKE,
+      "live office smoke requires SMOKE_OFFICE_ID for a known-populated live record"
+    );
     const pageLoadErrors = capturePageLoadErrors(page);
     await page.goto(`/office/${SMOKE_OFFICE_ID}`);
 

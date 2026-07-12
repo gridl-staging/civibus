@@ -24,6 +24,17 @@ import pytest
 
 SCRIPT_PATH = Path(__file__).resolve().parents[2] / "infra" / "scripts" / "sync_to_prod_vm.sh"
 
+# The script FATALs on a missing SSH key before it prints "DRY RUN", so any test
+# that actually *invokes* the script needs the canonical key present. It exists in
+# real dev checkouts but not in stripped worktrees (batman's ephemeral merge
+# worktree, secret-less CI sandboxes), where the script can never announce DRY RUN.
+# Skip — don't fail — those invocation tests when the key is absent.
+CANONICAL_SSH_KEY = Path(__file__).resolve().parents[2] / ".secret" / "hetzner_ssh_key.txt"
+_requires_ssh_key = pytest.mark.skipif(
+    not CANONICAL_SSH_KEY.exists(),
+    reason=f"requires canonical SSH key at {CANONICAL_SSH_KEY} (absent in stripped merge/CI worktrees)",
+)
+
 
 @pytest.fixture(scope="module")
 def script_text() -> str:
@@ -71,6 +82,27 @@ def test_script_excludes_dev_tooling(script_code: str) -> None:
         assert f"--exclude='{excluded}'" in script_code, f"must exclude {excluded!r}"
 
 
+def test_script_excludes_vm_local_runtime_artifacts(script_code: str) -> None:
+    """Avoid deleting VM-local artifacts during repo sync dry-run/apply.
+
+    The sync owner script is for tracked repo content. VM-local caches,
+    local editor state, generated test outputs, and host-side data dumps
+    should be preserved instead of being force-deleted by --delete-after.
+    """
+    for excluded in (
+        ".coverage",
+        ".hashbrown/",
+        ".vscode/",
+        ".batman.toml",
+        "data/",
+        "docs/reference/research/artifacts/",
+        "docs/reference/research/portal_contracts/",
+        "docs/reference/research/portal_contracts/runs/",
+        "web/test-results/",
+    ):
+        assert f"--exclude='{excluded}'" in script_code, f"must exclude {excluded!r}"
+
+
 def test_script_excludes_dot_git(script_code: str) -> None:
     """`.git/` is excluded deliberately — VM doesn't run git commands, and
     including it produces noisy delete-then-recreate diffs every time the
@@ -83,7 +115,7 @@ def test_script_excludes_dot_git(script_code: str) -> None:
 
 def test_script_uses_canonical_ssh_key(script_code: str) -> None:
     """The repo's canonical SSH key path (`.secret/hetzner_ssh_key.txt`)
-    is the only one used elsewhere in infra/scripts and docs/research.
+    is the only one used elsewhere in infra/scripts and docs/reference/research.
     Hard-code it here so the script is reproducible.
     """
     assert "/.secret/hetzner_ssh_key.txt" in script_code or ".secret/hetzner_ssh_key.txt" in script_code
@@ -97,6 +129,7 @@ def test_script_targets_canonical_vm(script_code: str) -> None:
     assert "/root/civibus/civibus_dev" in script_code
 
 
+@_requires_ssh_key
 def test_default_invocation_is_dry_run() -> None:
     """Safe-by-default: running with no flags performs --dry-run only.
     No state changes against the VM. (We can't fully verify "no changes

@@ -17,10 +17,10 @@ from .registry import (
 )
 from .seed_registry import build_fec_registry_row, derive_state_registry_rows
 
-_DEFAULT_SUMMARY_PATH = Path(__file__).resolve().parents[3] / "docs" / "research" / "coverage-registry-summary.md"
-_DEFAULT_QUEUE_PATH = Path(__file__).resolve().parents[3] / "docs" / "research" / "coverage-build-priority-queue.md"
-_DEFAULT_MATRIX_PATH = Path(__file__).resolve().parents[3] / "docs" / "research" / "2026-launch-support-matrix.md"
-_REGISTRY_AUTHORITY_NOTE = "Authoritative source: `docs/research/coverage-registry.json`."
+_DEFAULT_SUMMARY_PATH = Path(__file__).resolve().parents[3] / "docs" / "reference" / "research" / "coverage-registry-summary.md"
+_DEFAULT_QUEUE_PATH = Path(__file__).resolve().parents[3] / "docs" / "reference" / "research" / "coverage-build-priority-queue.md"
+_DEFAULT_MATRIX_PATH = Path(__file__).resolve().parents[3] / "docs" / "reference" / "research" / "2026-launch-support-matrix.md"
+_REGISTRY_AUTHORITY_NOTE = "Authoritative source: `docs/reference/research/coverage-registry.json`."
 _TIER_SORT_ORDER = {
     "launch-support candidate": 0,
     "implemented but unproven": 1,

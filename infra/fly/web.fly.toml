@@ -1,0 +1,38 @@
+# civibus-web — SvelteKit SSR (same web/ image as compose). Internal-only:
+# no [[services]] block; civibus-caddy reaches it at civibus-web.internal:3000.
+#
+# Deploy with the web/ directory as build context (its Dockerfile COPYs from
+# the web root, mirroring compose's `context: ../web`):
+#   flyctl deploy web -c infra/fly/web.fly.toml
+# Secrets (set once, never in this file): CIVIBUS_API_KEY (must be one of the
+# api app's CIVIBUS_API_KEYS).
+# ORIGIN/PUBLIC_ORIGIN switch to https://civibus.shareborough.com at DNS
+# cutover (Phase C).
+app = "civibus-web"
+primary_region = "sjc"
+
+# dockerfile is resolved relative to this file's directory (build context
+# stays web/ via the deploy working-directory argument).
+[build]
+  dockerfile = "../../web/Dockerfile"
+
+[env]
+  CIVIBUS_API_BASE_URL = "http://civibus-api.flycast:8000"
+  # Fly 6PN is IPv6-only: adapter-node defaults to 0.0.0.0 (IPv4), which
+  # refuses caddy's dial to civibus-web.internal. HOST is adapter-node's
+  # documented bind override; "::" listens dual-stack. Fly-only delta.
+  HOST = "::"
+  ORIGIN = "https://civibus-caddy.fly.dev"
+  PUBLIC_ORIGIN = "https://civibus-caddy.fly.dev"
+  NODE_ENV = "production"
+
+[checks.alive]
+  type = "tcp"
+  port = 3000
+  interval = "30s"
+  timeout = "5s"
+  grace_period = "30s"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"

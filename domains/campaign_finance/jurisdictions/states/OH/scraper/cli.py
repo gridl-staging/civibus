@@ -1,5 +1,5 @@
 """
-Stub summary for /Users/stuart/parallel_development/civibus_dev/mar24_pm_3_freshness_truth_pa_mn_in/civibus_dev/domains/campaign_finance/jurisdictions/states/OH/scraper/cli.py.
+Stub summary for mar24_pm_3_freshness_truth_pa_mn_in/civibus_dev/domains/campaign_finance/jurisdictions/states/OH/scraper/cli.py.
 """
 
 from __future__ import annotations

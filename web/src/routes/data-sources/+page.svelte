@@ -50,7 +50,7 @@
           <tr>
             <td>
               {#if sourceUrl}
-                <a href={sourceUrl}>{row.name}</a>
+                <a href={sourceUrl} target="_blank" rel="noopener nofollow">{row.name}</a>
               {:else}
                 {row.name}
               {/if}
@@ -64,7 +64,7 @@
             <td>{row.latest_source_pull_date ?? "unknown"}</td>
             <td>
               {#if latestSourceRecordUrl}
-                <a href={latestSourceRecordUrl}>
+                <a href={latestSourceRecordUrl} target="_blank" rel="noopener nofollow">
                   {row.latest_source_record_key ?? latestSourceRecordUrl}
                 </a>
               {:else}

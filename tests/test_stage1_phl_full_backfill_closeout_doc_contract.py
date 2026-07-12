@@ -4,7 +4,7 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-CLOSEOUT_PATH = REPO_ROOT / "docs" / "research" / "phl_full_backfill_closeout_2026_04_29.md"
+CLOSEOUT_PATH = REPO_ROOT / "docs" / "reference" / "research" / "phl_full_backfill_closeout_2026_04_29.md"
 
 
 def test_stage1_phl_closeout_pins_exact_probe_command_shape_and_prior_facts() -> None:

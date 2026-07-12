@@ -385,6 +385,50 @@ describe('search presentation', () => {
     ]);
   });
 
+  it('builds officeholder person context while keeping generic candidate and committee context', () => {
+    const cards = buildSearchResultCards([
+      {
+        entity_type: 'person',
+        entity_id: '16161616-1616-4161-8161-161616161616',
+        name: 'House Officeholder',
+        office_name: 'U.S. Representative',
+        state: 'LA-04',
+        party: 'REP'
+      },
+      {
+        entity_type: 'person',
+        entity_id: '17171717-1717-4171-8171-171717171717',
+        name: 'Bare Person',
+        office_name: null,
+        state: null,
+        party: null
+      },
+      {
+        entity_type: 'candidate',
+        entity_id: '18181818-1818-4181-8181-181818181818',
+        name: 'Candidate Result',
+        office_name: 'Governor',
+        state: 'OR',
+        party: 'DEM'
+      },
+      {
+        entity_type: 'committee',
+        entity_id: '19191919-1919-4191-8191-191919191919',
+        name: 'Committee Result',
+        committee_type: 'pac',
+        state: 'CA',
+        party: 'DEM'
+      }
+    ]);
+
+    expect(cards.map((card) => card.contextLine)).toEqual([
+      'U.S. Representative · LA-04 · Republican',
+      '',
+      'Democrat · Governor · OR',
+      'Democrat · PAC · CA'
+    ]);
+  });
+
   it('builds browse links with page routes, filter params, and human-readable labels', () => {
     const pagePresentation = buildSearchPagePresentation({
       query: '',

@@ -18,6 +18,7 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 CSV_FIXTURE_PATH = (
     REPO_ROOT
     / "docs"
+    / "reference"
     / "research"
     / "artifacts"
     / "nc_2026_civic_calendar_probe_2026_04_25"
@@ -166,8 +167,7 @@ def test_load_candidate_listing_is_rerun_safe_with_single_active_source_record_p
         WHERE domain = 'civics'
           AND jurisdiction = 'NC'
           AND name = %s
-        """
-        ,
+        """,
         (CANONICAL_NCSBE_CANDIDATE_LISTING_SOURCE_ID,),
     ).fetchone()
     assert data_source_row is not None

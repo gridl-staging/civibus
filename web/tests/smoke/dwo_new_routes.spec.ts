@@ -101,7 +101,11 @@ test.describe("new routes smoke", () => {
     await expect(page.getByRole("heading", { level: 2, name: SMOKE_DATA_SOURCES_HEADING })).toBeVisible();
     await expect(page.getByRole("columnheader", { name: "Name" })).toBeVisible();
     await expect(page.getByRole("columnheader", { name: "Update frequency" })).toBeVisible();
-    await expect(page.getByRole("link", { name: SMOKE_DATA_SOURCE_NAME })).toBeVisible();
+    const sourceLink = page.getByRole("link", { name: SMOKE_DATA_SOURCE_NAME });
+    await expect(sourceLink).toBeVisible();
+    await expect(sourceLink).toHaveAttribute("target", "_blank");
+    await expect(sourceLink).toHaveAttribute("rel", /(?:^|\s)noopener(?:\s|$)/);
+    await expect(sourceLink).toHaveAttribute("rel", /(?:^|\s)nofollow(?:\s|$)/);
     expectNoLoadErrors(SMOKE_DATA_SOURCES_ROUTE_PATH, pageErrors);
   });
 

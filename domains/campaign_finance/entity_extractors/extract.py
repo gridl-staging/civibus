@@ -1,5 +1,5 @@
 """
-Stub summary for /Users/stuart/parallel_development/civibus_dev/MAR18_state_expansion_batch_2/civibus_dev/domains/campaign_finance/entity_extractors/extract.py.
+Stub summary for MAR18_state_expansion_batch_2/civibus_dev/domains/campaign_finance/entity_extractors/extract.py.
 """
 
 from core.types.python.extraction import EntityExtraction, coerce_optional_uuid

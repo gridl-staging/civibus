@@ -87,7 +87,9 @@ def _load_columns_for_transaction_type(transaction_type: str) -> tuple[str, ...]
 def _load_date_selectors_for_transaction_type(transaction_type: str) -> tuple[str, str]:
     data_source_block = _find_ga_data_source_block_by_transaction_type(transaction_type)
     if data_source_block is None:
-        raise RuntimeError(f"Could not load GA date selectors from config.yaml for transaction type {transaction_type!r}")
+        raise RuntimeError(
+            f"Could not load GA date selectors from config.yaml for transaction type {transaction_type!r}"
+        )
     if data_source_block.date_selectors is None:
         raise RuntimeError(
             "Could not load GA date selectors from config.yaml for transaction type "

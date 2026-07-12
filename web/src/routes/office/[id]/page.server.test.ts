@@ -92,6 +92,20 @@ describe("/office/[id] +page.server load", () => {
     expect(requestJson).toHaveBeenCalledTimes(1);
   });
 
+  it("preserves backend plain-text 404 payload semantics", async () => {
+    const requestJson = vi.fn(async (path: string) => {
+      expect(path).toBe(`/v1/offices/${OFFICE_ID}`);
+      throw new ApiResponseError(404, "Office not found");
+    });
+
+    await expect(load(createLoadEvent(requestJson))).rejects.toMatchObject({
+      status: 404,
+      body: { message: "Office not found" }
+    });
+
+    expect(requestJson).toHaveBeenCalledTimes(1);
+  });
+
   it("preserves backend malformed UUID 422 semantics", async () => {
     const malformedId = "not-a-uuid";
     const requestJson = vi.fn(async (path: string) => {
@@ -141,6 +155,91 @@ describe("/office/[id] +page.server load", () => {
     };
 
     expect(data.geometryByLevel.county.features).toEqual([]);
+  });
+
+  it("passes through an empty office payload without synthesizing data and skips geometry when no division context is set", async () => {
+    const requestJson = vi.fn(async (path: string) => {
+      if (path === `/v1/offices/${OFFICE_ID}`) {
+        return {
+          id: OFFICE_ID,
+          name: "Vacant Office",
+          office_level: "state",
+          title: "Governor",
+          jurisdiction_id: null,
+          state: "NC",
+          is_elected: true,
+          number_of_seats: 1,
+          current_officeholders: [],
+          current_holder_card: null,
+          officeholding_timeline: [],
+          recent_contests: [],
+          selected_electoral_division_id: null,
+          selected_electoral_division_type: null,
+          selected_electoral_division_state: null,
+          incomplete_data_states: [],
+          sources: []
+        } satisfies OfficeDetailResponse;
+      }
+      throw new Error(`unexpected path: ${path}`);
+    });
+
+    const data = (await load(createLoadEvent(requestJson))) as {
+      office: OfficeDetailResponse;
+      geometryByLevel: Record<string, { type: string; features: unknown[] }>;
+    };
+
+    expect(data.office.recent_contests).toEqual([]);
+    expect(data.office.current_officeholders).toEqual([]);
+    expect(data.office.officeholding_timeline).toEqual([]);
+    expect(data.office.incomplete_data_states).toEqual([]);
+    expect(data.office.sources).toEqual([]);
+    expect(data.office.selected_electoral_division_id).toBeNull();
+    expect(data.geometryByLevel.state.features).toEqual([]);
+    expect(data.geometryByLevel.county.features).toEqual([]);
+    expect(data.geometryByLevel.congressional_district.features).toEqual([]);
+    const calledPaths = requestJson.mock.calls.map(([path]) => String(path));
+    expect(calledPaths).toEqual([`/v1/offices/${OFFICE_ID}`]);
+  });
+
+  it("passes office payload through without mutation, including unrecognized enum-shaped values", async () => {
+    const officePayload = {
+      id: OFFICE_ID,
+      name: "Office With Unknown Enum",
+      office_level: "state",
+      title: "Governor",
+      jurisdiction_id: null,
+      state: "NC",
+      is_elected: true,
+      number_of_seats: 1,
+      current_officeholders: [],
+      current_holder_card: null,
+      officeholding_timeline: [],
+      recent_contests: [],
+      selected_electoral_division_id: ELECTORAL_DIVISION_ID,
+      selected_electoral_division_type: "tribal_district",
+      selected_electoral_division_state: "NC",
+      incomplete_data_states: ["unrecognized_marker"],
+      sources: []
+    } as unknown as OfficeDetailResponse;
+
+    const requestJson = vi.fn(async (path: string) => {
+      if (path === `/v1/offices/${OFFICE_ID}`) {
+        return officePayload;
+      }
+      throw new Error(`unexpected path: ${path}`);
+    });
+
+    const data = (await load(createLoadEvent(requestJson))) as {
+      office: OfficeDetailResponse;
+      geometryByLevel: Record<string, { type: string; features: unknown[] }>;
+    };
+
+    expect(data.office).toBe(officePayload);
+    expect(data.office.incomplete_data_states).toEqual(["unrecognized_marker"]);
+    expect(data.geometryByLevel.state.features).toEqual([]);
+    expect(data.geometryByLevel.county.features).toEqual([]);
+    const calledPaths = requestJson.mock.calls.map(([path]) => String(path));
+    expect(calledPaths).toEqual([`/v1/offices/${OFFICE_ID}`]);
   });
 
   it("keeps explicit empty-geometry fallback when office map context is unsupported", async () => {

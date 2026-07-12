@@ -1,5 +1,5 @@
 """
-Stub summary for /Users/stuart/parallel_development/civibus_dev/mar22_01_backend_api_completeness/civibus_dev/domains/campaign_finance/quality/fec_closeout.py.
+Stub summary for mar22_01_backend_api_completeness/civibus_dev/domains/campaign_finance/quality/fec_closeout.py.
 """
 
 from __future__ import annotations
@@ -42,7 +42,7 @@ _KNOWN_LIMITATION_ANOMALIES: tuple[dict[str, object], ...] = (
         "message": "Bulk ingest does not populate cf.transaction until filing ingest is implemented.",
         "details": {
             "category": "accepted-limitation",
-            "source": "docs/research/stage2-fec-known-limitations.md#5",
+            "source": "docs/reference/research/stage2-fec-known-limitations.md#5",
         },
     },
 )
@@ -75,7 +75,7 @@ def build_argument_parser() -> argparse.ArgumentParser:
 
 def _default_artifact_path(cycle: int) -> Path:
     repo_root = Path(__file__).resolve().parents[3]
-    return repo_root / "docs" / "research" / "artifacts" / "federal_fec" / str(cycle) / _ARTIFACT_FILENAME
+    return repo_root / "docs" / "reference" / "research" / "artifacts" / "federal_fec" / str(cycle) / _ARTIFACT_FILENAME
 
 
 def _is_readable_directory(path: Path) -> bool:

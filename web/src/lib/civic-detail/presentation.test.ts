@@ -433,6 +433,128 @@ describe("office detail presentation", () => {
     expect(viewModel.timelineRows[0].termEndEmphasis).toBeNull();
   });
 
+  it("defaults malformed missing officeholding_timeline payloads to an empty timeline", () => {
+    const malformedDetail = {
+      id: OFFICE_ID,
+      name: "North Carolina Governor",
+      office_level: "state",
+      title: "Governor",
+      jurisdiction_id: null,
+      state: "NC",
+      is_elected: true,
+      number_of_seats: 1,
+      current_officeholders: [],
+      current_holder_card: null,
+      recent_contests: [],
+      selected_electoral_division_id: null,
+      selected_electoral_division_type: null,
+      selected_electoral_division_state: null,
+      incomplete_data_states: [],
+      sources: []
+    } as unknown as Parameters<typeof buildOfficeDetailPresentation>[0];
+
+    const viewModel = buildOfficeDetailPresentation(malformedDetail);
+
+    expect(viewModel.timelineRows).toEqual([]);
+    expect(viewModel.timelineEmptyMessage).toBe(
+      "No officeholding history is linked yet. Check back after the next records refresh."
+    );
+  });
+
+  it("defaults malformed missing recent_contests payloads to an empty recent-contests section", () => {
+    const malformedDetail = {
+      id: OFFICE_ID,
+      name: "North Carolina Governor",
+      office_level: "state",
+      title: "Governor",
+      jurisdiction_id: null,
+      state: "NC",
+      is_elected: true,
+      number_of_seats: 1,
+      current_officeholders: [],
+      current_holder_card: null,
+      officeholding_timeline: [],
+      selected_electoral_division_id: null,
+      selected_electoral_division_type: null,
+      selected_electoral_division_state: null,
+      incomplete_data_states: [],
+      sources: []
+    } as unknown as Parameters<typeof buildOfficeDetailPresentation>[0];
+
+    const viewModel = buildOfficeDetailPresentation(malformedDetail);
+
+    expect(viewModel.recentContestRows).toEqual([]);
+    expect(viewModel.recentContestEmptyMessage).toBe(
+      "No recent contests are linked yet. Check back after the next records refresh."
+    );
+  });
+
+  it("treats malformed missing current_holder_card payloads as no current holder card", () => {
+    const malformedDetail = {
+      id: OFFICE_ID,
+      name: "North Carolina Governor",
+      office_level: "state",
+      title: "Governor",
+      jurisdiction_id: null,
+      state: "NC",
+      is_elected: true,
+      number_of_seats: 1,
+      current_officeholders: [],
+      officeholding_timeline: [],
+      recent_contests: [],
+      selected_electoral_division_id: null,
+      selected_electoral_division_type: null,
+      selected_electoral_division_state: null,
+      incomplete_data_states: [],
+      sources: []
+    } as unknown as Parameters<typeof buildOfficeDetailPresentation>[0];
+
+    const viewModel = buildOfficeDetailPresentation(malformedDetail);
+
+    expect(viewModel.currentHolderCard).toBeNull();
+  });
+
+  it("derives a fallback current-holder card from a single current_officeholders row", () => {
+    const malformedDetail = {
+      id: OFFICE_ID,
+      name: "North Carolina Governor",
+      office_level: "state",
+      title: "Governor",
+      jurisdiction_id: null,
+      state: "NC",
+      is_elected: true,
+      number_of_seats: 1,
+      current_officeholders: [
+        {
+          officeholding_id: OFFICEHOLDING_ID,
+          person_id: PERSON_ID,
+          person_name: "Jane Officeholder",
+          holder_status: "elected"
+        }
+      ],
+      officeholding_timeline: [],
+      recent_contests: [],
+      selected_electoral_division_id: null,
+      selected_electoral_division_type: null,
+      selected_electoral_division_state: null,
+      incomplete_data_states: [],
+      sources: []
+    } as unknown as Parameters<typeof buildOfficeDetailPresentation>[0];
+
+    const viewModel = buildOfficeDetailPresentation(malformedDetail);
+
+    expect(viewModel.currentHolderCard).toMatchObject({
+      officeholdingId: OFFICEHOLDING_ID,
+      personName: "Jane Officeholder",
+      personHref: `/person/${PERSON_ID}`,
+      officeholdingHref: `/officeholding/${OFFICEHOLDING_ID}`,
+      holderStatus: "elected",
+      validFrom: "—",
+      validThrough: "—",
+      termEndEmphasis: null
+    });
+  });
+
   it("keeps term-ended emphasis tied to backend row state, not frontend wall-clock date", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("1900-01-01T00:00:00.000Z"));
@@ -683,6 +805,9 @@ describe("contest detail presentation", () => {
               total_spent: "2000.00",
               net: "3000.00",
               transaction_count: 42,
+              itemized_transaction_count: 42,
+              cash_on_hand: null,
+              summary_source: "derived" as const,
               committees: []
             },
             ieSummary: {
@@ -691,7 +816,8 @@ describe("contest detail presentation", () => {
               oppose_total: "50.00",
               support_count: 1,
               oppose_count: 1,
-              top_spenders: []
+              top_spenders: [],
+              excluded_outlier_count: 0
             },
             ieTransactions: [
               {

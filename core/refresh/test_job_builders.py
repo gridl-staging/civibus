@@ -6,15 +6,19 @@ import inspect
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import MagicMock
+from uuid import UUID
 
 import pytest
 
 from core.refresh import job_builders
 from core.refresh.job_builders import build_refresh_plan
-from core.refresh.runner import RefreshJob, RunnerParameters
+from core.refresh.runner import RefreshJob, RunnerParameters, build_argument_parser
 from domains.civics.loaders.ncsbe_candidate_listing import _NCSBE_DATA_SOURCE_NAME
 from domains.civics.loaders.ncsbe_results import collect_ncsbe_refresh_raw_csv_paths
-from domains.civics.loaders.official_rosters.source_templates import civic_roster_refresh_templates
+from domains.civics.loaders.official_rosters.source_templates import (
+    civic_roster_refresh_templates,
+    roster_source_templates,
+)
 from domains.civics.loaders.official_rosters.source_registry import (
     list_nc_roster_source_metadata,
 )
@@ -49,6 +53,9 @@ _EXPECTED_CAMPAIGN_FINANCE_KEYS = (
     "city-phl-contributions",
     "city-phl-expenditures",
     "city-sf-transactions",
+    "federal-congress-spine",
+    "federal-fec-committee-summary",
+    "federal-fec-masters",
     "federal-fec-schedule-a",
     "federal-fec-schedule-b",
     "federal-fec-schedule-e",
@@ -160,12 +167,377 @@ class TestIRS527JobContract:
 
 
 @pytest.mark.unit
+class TestFederalEnrichmentJobContract:
+    def _find_federal_enrichment_job(self) -> RefreshJob:
+        jobs = build_refresh_plan(job_key_prefixes=("federal-enrichment",))
+        assert len(jobs) == 1
+        return jobs[0]
+
+    def test_federal_enrichment_runs_after_fec_masters_and_congress_spine(self) -> None:
+        jobs = build_refresh_plan(
+            job_key_prefixes=(
+                "federal-fec-masters",
+                "federal-congress-spine",
+                "federal-enrichment",
+            ),
+        )
+
+        assert tuple(job.key for job in jobs) == (
+            "federal-fec-masters",
+            "federal-congress-spine",
+            "federal-enrichment",
+        )
+        assert [job.key for job in jobs].count("federal-enrichment") == 1
+
+    def test_federal_enrichment_job_metadata_matches_people_enrichment_source(self) -> None:
+        job = self._find_federal_enrichment_job()
+
+        assert job.key == "federal-enrichment"
+        assert job.domain == "people_enrichment"
+        assert job.jurisdiction == "federal/congress"
+        assert job.cadence == "weekly"
+        assert job.data_source_names == ("people-enrichment-federal-congress",)
+
+    def test_priority_scope_includes_federal_spine_before_weekly_enrichment(self) -> None:
+        jobs = build_refresh_plan(
+            scope="priority",
+            job_key_prefixes=("federal-congress-spine", "federal-enrichment"),
+        )
+
+        assert tuple(job.key for job in jobs) == (
+            "federal-congress-spine",
+            "federal-enrichment",
+        )
+        assert tuple(job.cadence for job in jobs) == ("weekly", "weekly")
+
+    def test_federal_enrichment_run_callable_commits_and_closes_on_success(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        connection = MagicMock()
+        enrichment_summary = {"updated": 3}
+        get_connection = MagicMock(return_value=connection)
+        run_federal_enrichment = MagicMock(return_value=enrichment_summary)
+        monkeypatch.setattr(job_builders, "get_connection", get_connection)
+        monkeypatch.setattr(job_builders, "run_federal_enrichment", run_federal_enrichment)
+        job = self._find_federal_enrichment_job()
+
+        result = job.run_callable()
+
+        assert result == enrichment_summary
+        get_connection.assert_called_once_with()
+        run_federal_enrichment.assert_called_once_with(connection)
+        connection.commit.assert_called_once_with()
+        connection.rollback.assert_not_called()
+        connection.close.assert_called_once_with()
+
+    def test_federal_enrichment_run_callable_rolls_back_closes_and_reraises_on_failure(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        connection = MagicMock()
+        error = RuntimeError("enrichment failed")
+        get_connection = MagicMock(return_value=connection)
+        run_federal_enrichment = MagicMock(side_effect=error)
+        monkeypatch.setattr(job_builders, "get_connection", get_connection)
+        monkeypatch.setattr(job_builders, "run_federal_enrichment", run_federal_enrichment)
+        job = self._find_federal_enrichment_job()
+
+        with pytest.raises(RuntimeError, match="enrichment failed"):
+            job.run_callable()
+
+        get_connection.assert_called_once_with()
+        run_federal_enrichment.assert_called_once_with(connection)
+        connection.commit.assert_not_called()
+        connection.rollback.assert_called_once_with()
+        connection.close.assert_called_once_with()
+
+
+_EXPECTED_FEDERAL_JOB_KEYS = (
+    "federal-fec-masters",
+    "federal-fec-committee-summary",
+    "federal-fec-schedule-a",
+    "federal-congress-spine",
+    "federal-fec-schedule-b",
+    "federal-fec-schedule-e",
+    "federal-enrichment",
+    "federal-irs-527",
+)
+
+
+@pytest.mark.unit
 class TestJobKeyPrefixFiltering:
     """Validates _filter_jobs_by_key_prefixes error path."""
 
     def test_nonexistent_prefix_raises_value_error(self) -> None:
         with pytest.raises(ValueError, match="No refresh jobs matched"):
             build_refresh_plan(job_key_prefixes=("nonexistent-prefix",))
+
+    def test_repeated_prefixes_preserve_plan_order_without_duplicate_jobs(self) -> None:
+        jobs = build_refresh_plan(
+            job_key_prefixes=(
+                "federal-fec-masters",
+                "federal-congress-spine",
+                "federal-enrichment",
+                "federal-congress-spine",
+            ),
+        )
+
+        assert tuple(job.key for job in jobs) == (
+            "federal-fec-masters",
+            "federal-congress-spine",
+            "federal-enrichment",
+        )
+        assert [job.key for job in jobs].count("federal-congress-spine") == 1
+
+
+@pytest.mark.unit
+class TestFederalPrefixFilterContract:
+    """Stage 2 contract: filtering by `federal-` selects exactly the federal
+    slice the Stage 2 refresh lane targets, drops every state-, city-, and
+    civic- job, deduplicates repeated prefixes, and preserves the plan order
+    emitted by build_refresh_plan(). The exact federal key inventory lives
+    only here — peer tests must not duplicate it."""
+
+    def _expected_federal_order(self) -> tuple[str, ...]:
+        full_plan_keys = [job.key for job in build_refresh_plan(scope="all")]
+        return tuple(key for key in full_plan_keys if key in set(_EXPECTED_FEDERAL_JOB_KEYS))
+
+    def test_expected_federal_key_inventory_matches_plan_order(self) -> None:
+        assert _EXPECTED_FEDERAL_JOB_KEYS == self._expected_federal_order()
+
+    def test_federal_prefix_selects_exact_federal_set_in_plan_order(self) -> None:
+        jobs = build_refresh_plan(job_key_prefixes=("federal-",))
+
+        actual_keys = tuple(job.key for job in jobs)
+        assert set(actual_keys) == set(_EXPECTED_FEDERAL_JOB_KEYS)
+        assert actual_keys == self._expected_federal_order()
+        for actual_key in actual_keys:
+            assert not actual_key.startswith(("state-", "city-", "civic-", "civics-"))
+
+    def test_repeated_and_overlapping_federal_prefixes_return_each_job_once(self) -> None:
+        jobs = build_refresh_plan(
+            job_key_prefixes=("federal-", "federal-fec-masters", "federal-"),
+        )
+
+        actual_keys = tuple(job.key for job in jobs)
+        assert actual_keys == self._expected_federal_order()
+        for federal_key in _EXPECTED_FEDERAL_JOB_KEYS:
+            assert actual_keys.count(federal_key) == 1
+
+    def test_federal_scope_selects_exact_federal_set_in_plan_order(self) -> None:
+        jobs = build_refresh_plan(scope="federal")
+
+        actual_keys = tuple(job.key for job in jobs)
+        assert actual_keys == _EXPECTED_FEDERAL_JOB_KEYS
+        assert actual_keys == self._expected_federal_order()
+        assert not any(job.key.startswith(("state-", "city-", "civic-", "civics-")) for job in jobs)
+
+
+@pytest.mark.unit
+class TestRunnerFECDefaultOwnership:
+    def test_runner_parameters_default_fec_cycle_is_current_cycle(self) -> None:
+        assert RunnerParameters().fec_cycle == 2026
+
+    def test_argument_parser_default_fec_cycle_is_current_cycle(self) -> None:
+        assert build_argument_parser().parse_args([]).fec_cycle == 2026
+
+
+@pytest.mark.unit
+class TestFECCommitteeSummaryJobContract:
+    def _find_committee_summary_job(self, *, fec_cycle: int = 2024) -> RefreshJob:
+        jobs = build_refresh_plan(
+            parameters=RunnerParameters(fec_cycle=fec_cycle),
+            job_key_prefixes=("federal-fec-committee-summary",),
+        )
+        assert len(jobs) == 1
+        return jobs[0]
+
+    def test_committee_summary_job_metadata_has_dedicated_weekly_history_key(self) -> None:
+        job = self._find_committee_summary_job()
+
+        assert job.key == "federal-fec-committee-summary"
+        assert job.domain == "campaign_finance"
+        assert job.jurisdiction == "federal/fec"
+        assert job.cadence == "weekly"
+        assert job.data_source_names == (job_builders.FEC_BULK_DATA_SOURCE_NAME,)
+        assert job.refresh_history_key == "federal-fec-committee-summary"
+
+    def test_fec_cycle_2026_resolves_active_committee_summary_cycles_oldest_first(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        downloaded_cycles = self._run_committee_summary_job_and_capture_cycles(monkeypatch, fec_cycle=2026)
+
+        assert downloaded_cycles == (2024, 2026)
+
+    def test_fec_cycle_2024_resolves_only_current_active_committee_summary_cycle(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        downloaded_cycles = self._run_committee_summary_job_and_capture_cycles(monkeypatch, fec_cycle=2024)
+
+        assert downloaded_cycles == (2024,)
+
+    def test_committee_summary_job_does_not_schedule_frozen_2022_cycle_by_default(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        downloaded_cycles = self._run_committee_summary_job_and_capture_cycles(monkeypatch, fec_cycle=2026)
+
+        assert 2022 not in downloaded_cycles
+
+    def test_committee_summary_run_callable_downloads_and_dispatches_each_active_cycle(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        connection = MagicMock()
+        data_source_id = UUID("6f93a177-c7ca-4a16-88e6-932245a1ddaf")
+        load_results = [object(), object()]
+        urlretrieve = MagicMock()
+        ensure_fec_bulk_data_source = MagicMock(return_value=data_source_id)
+        dispatch_load = MagicMock(side_effect=load_results)
+        get_connection = MagicMock(return_value=connection)
+
+        monkeypatch.setattr(job_builders, "urlretrieve", urlretrieve)
+        monkeypatch.setattr(job_builders, "get_connection", get_connection)
+        monkeypatch.setattr(job_builders, "ensure_fec_bulk_data_source", ensure_fec_bulk_data_source)
+        monkeypatch.setattr(job_builders, "dispatch_load", dispatch_load)
+
+        job = self._find_committee_summary_job(fec_cycle=2026)
+        result = job.run_callable()
+
+        assert result == load_results
+        assert [call.args[0] for call in urlretrieve.call_args_list] == [
+            job_builders.fec_committee_summary_url(2024),
+            job_builders.fec_committee_summary_url(2026),
+        ]
+        downloaded_paths = [Path(call.args[1]) for call in urlretrieve.call_args_list]
+        assert [path.name for path in downloaded_paths] == [
+            "committee_summary_2024.csv",
+            "committee_summary_2026.csv",
+        ]
+
+        get_connection.assert_called_once_with()
+        connection.transaction.assert_called_once_with()
+        ensure_fec_bulk_data_source.assert_called_once_with(connection)
+        connection.close.assert_called_once_with()
+
+        assert dispatch_load.call_count == 2
+        assert [call.kwargs["conn"] for call in dispatch_load.call_args_list] == [connection, connection]
+        assert [call.kwargs["data_source_id"] for call in dispatch_load.call_args_list] == [
+            data_source_id,
+            data_source_id,
+        ]
+
+        for cycle, path, call in zip((2024, 2026), downloaded_paths, dispatch_load.call_args_list):
+            assert call.kwargs["config"] == job_builders.CliConfig(
+                mode="single",
+                cycle=cycle,
+                file_type="committee_summary",
+                path=path,
+                directory=None,
+                batch_size=1000,
+                limit=None,
+                graph_enabled=False,
+                with_transactions=False,
+            )
+            assert call.kwargs["request"] == job_builders.LoadRequest(
+                file_type="committee_summary",
+                path=path,
+            )
+
+    def _run_committee_summary_job_and_capture_cycles(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        *,
+        fec_cycle: int,
+    ) -> tuple[int, ...]:
+        monkeypatch.setattr(job_builders, "urlretrieve", MagicMock())
+        monkeypatch.setattr(job_builders, "get_connection", MagicMock(return_value=MagicMock()))
+        monkeypatch.setattr(job_builders, "ensure_fec_bulk_data_source", MagicMock(return_value=UUID(int=0)))
+        monkeypatch.setattr(job_builders, "dispatch_load", MagicMock())
+
+        self._find_committee_summary_job(fec_cycle=fec_cycle).run_callable()
+
+        return tuple(call.kwargs["config"].cycle for call in job_builders.dispatch_load.call_args_list)
+
+
+@pytest.mark.unit
+class TestFECScheduleAJobContract:
+    def _find_schedule_a_job(self, *, fec_cycle: int = 2024, fec_limit: int = 100) -> RefreshJob:
+        jobs = build_refresh_plan(
+            parameters=RunnerParameters(fec_cycle=fec_cycle, fec_limit=fec_limit),
+            job_key_prefixes=("federal-fec-schedule-a",),
+        )
+        assert len(jobs) == 1
+        return jobs[0]
+
+    def test_schedule_a_run_callable_dispatches_each_active_fec_cycle_oldest_first(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        connection = MagicMock()
+        data_source_id = UUID("7d9153fd-a974-4984-963d-64d811892e24")
+        load_results = [object(), object()]
+        archive_paths = {
+            2024: Path("/tmp/itcont_2024.zip"),
+            2026: Path("/tmp/itcont_2026.zip"),
+        }
+        download_fec_bulk_file_to_cache = MagicMock(
+            side_effect=lambda _repo_root, *, cycle, **_kwargs: archive_paths[cycle]
+        )
+        ensure_fec_bulk_data_source = MagicMock(return_value=data_source_id)
+        dispatch_load = MagicMock(side_effect=load_results)
+        get_connection = MagicMock(return_value=connection)
+
+        monkeypatch.setattr(job_builders, "download_fec_bulk_file_to_cache", download_fec_bulk_file_to_cache)
+        monkeypatch.setattr(job_builders, "get_connection", get_connection)
+        monkeypatch.setattr(job_builders, "ensure_fec_bulk_data_source", ensure_fec_bulk_data_source)
+        monkeypatch.setattr(job_builders, "dispatch_load", dispatch_load)
+
+        result = self._find_schedule_a_job(fec_cycle=2026, fec_limit=50).run_callable()
+
+        assert result == load_results
+        assert [call.kwargs["cycle"] for call in download_fec_bulk_file_to_cache.call_args_list] == [2024, 2026]
+        assert [call.kwargs["file_type"] for call in download_fec_bulk_file_to_cache.call_args_list] == [
+            "itcont",
+            "itcont",
+        ]
+        assert [call.kwargs["downloader"] for call in download_fec_bulk_file_to_cache.call_args_list] == [
+            job_builders.urlretrieve,
+            job_builders.urlretrieve,
+        ]
+
+        get_connection.assert_called_once_with()
+        connection.transaction.assert_called_once_with()
+        ensure_fec_bulk_data_source.assert_called_once_with(connection)
+        connection.close.assert_called_once_with()
+
+        assert dispatch_load.call_count == 2
+        assert [call.kwargs["conn"] for call in dispatch_load.call_args_list] == [connection, connection]
+        assert [call.kwargs["data_source_id"] for call in dispatch_load.call_args_list] == [
+            data_source_id,
+            data_source_id,
+        ]
+
+        for cycle, call in zip((2024, 2026), dispatch_load.call_args_list):
+            archive_path = archive_paths[cycle]
+            assert call.kwargs["config"] == job_builders.CliConfig(
+                mode="single",
+                cycle=cycle,
+                file_type="itcont",
+                path=archive_path,
+                directory=None,
+                batch_size=1000,
+                limit=50,
+                graph_enabled=False,
+                with_transactions=False,
+                transactions_only=True,
+                spine_only=True,
+                min_date=job_builders.date(2022, 1, 1),
+            )
+            assert call.kwargs["request"] == job_builders.LoadRequest(file_type="itcont", path=archive_path)
 
 
 @pytest.mark.unit
@@ -314,7 +686,8 @@ class TestPHLCityJobContract:
             assert callable(job.run_callable)
             sig = inspect.signature(job.run_callable)
             required = [
-                p for p in sig.parameters.values()
+                p
+                for p in sig.parameters.values()
                 if p.default is inspect.Parameter.empty
                 and p.kind not in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD)
             ]
@@ -568,9 +941,7 @@ class TestCivicRosterJobContract:
 
     def test_campaign_finance_keys_remain_unchanged_after_civic_roster_wiring(self) -> None:
         all_jobs = build_refresh_plan()
-        campaign_finance_keys = tuple(
-            sorted(job.key for job in all_jobs if job.domain == "campaign_finance")
-        )
+        campaign_finance_keys = tuple(sorted(job.key for job in all_jobs if job.domain == "campaign_finance"))
 
         assert campaign_finance_keys == _EXPECTED_CAMPAIGN_FINANCE_KEYS
 
@@ -585,10 +956,7 @@ class TestOfficialRosterJobContract:
     """Contract: build_refresh_plan() must emit one roster refresh job per registered source."""
 
     def _expected_roster_metadata_by_key(self) -> dict[str, object]:
-        return {
-            f"civics-roster-{metadata.source_id}": metadata
-            for metadata in list_nc_roster_source_metadata()
-        }
+        return {f"civics-roster-{metadata.source_id}": metadata for metadata in list_nc_roster_source_metadata()}
 
     def test_plan_contains_one_roster_job_for_each_registered_roster_source(self) -> None:
         expected_by_key = self._expected_roster_metadata_by_key()
@@ -626,3 +994,9 @@ class TestOfficialRosterJobContract:
                 and parameter.kind not in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD)
             ]
             assert required_params == []
+
+    def test_roster_source_templates_include_all_registered_roster_sources(self) -> None:
+        registered_source_ids = {metadata.source_id for metadata in list_nc_roster_source_metadata()}
+        template_source_ids = {template.registry_source_id for template in roster_source_templates()}
+
+        assert registered_source_ids <= template_source_ids

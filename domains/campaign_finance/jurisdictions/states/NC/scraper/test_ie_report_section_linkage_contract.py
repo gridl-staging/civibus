@@ -5,7 +5,10 @@ import json
 from pathlib import Path
 import sys
 
+import pytest
+
 from domains.campaign_finance.jurisdictions.states.NC.scraper.parse import parse_committee_docs
+
 
 def _repo_root() -> Path:
     for candidate in Path(__file__).resolve().parents:
@@ -14,28 +17,14 @@ def _repo_root() -> Path:
     raise RuntimeError("Could not locate repo root from test path")
 
 
-ARTIFACT_ROOT = (
-    _repo_root()
-    / "docs"
-    / "research"
-    / "artifacts"
-    / "2026_04_24_nc_ie_amounts"
-    / "local"
-)
+ARTIFACT_ROOT = _repo_root() / "docs" / "research" / "artifacts" / "2026_04_24_nc_ie_amounts" / "local"
 DOCUMENT_RESULT_HTML = ARTIFACT_ROOT / "local_document_result_page.html"
 REPORT_SECTION_HTML = ARTIFACT_ROOT / "local_report_section_sample.html"
 REPORT_DETAIL_HTML = ARTIFACT_ROOT / "local_report_detail_ie_rows_sample.html"
 CSV_SAMPLE = ARTIFACT_ROOT / "local_document_result_export.csv"
 EXTRACTED_LINKS_JSON = ARTIFACT_ROOT / "extracted_report_section_links.json"
 
-PROBE_PATH = (
-    _repo_root()
-    / "docs"
-    / "research"
-    / "artifacts"
-    / "2026_04_24_nc_ie_amounts"
-    / "probe.py"
-)
+PROBE_PATH = _repo_root() / "docs" / "research" / "artifacts" / "2026_04_24_nc_ie_amounts" / "probe.py"
 
 
 def _load_probe_module():
@@ -48,6 +37,10 @@ def _load_probe_module():
     return module
 
 
+@pytest.mark.skipif(
+    importlib.util.find_spec("playwright") is None,
+    reason="NC state acquisition is parked under federal-first v1; playwright belongs to the download extra.",
+)
 def test_nc_ie_report_section_linkage_contract_from_fixtures() -> None:
     assert DOCUMENT_RESULT_HTML.exists(), f"Missing fixture: {DOCUMENT_RESULT_HTML}"
     assert REPORT_SECTION_HTML.exists(), f"Missing fixture: {REPORT_SECTION_HTML}"
@@ -89,8 +82,7 @@ def test_nc_ie_report_section_linkage_contract_from_fixtures() -> None:
 
     if linkage["outcome"] == "ambiguous":
         assert linkage["fallback_required"] is True, (
-            "Ambiguity detected but fallback is missing: Stage 2 must preserve per-row DATA href "
-            "at index-load time."
+            "Ambiguity detected but fallback is missing: Stage 2 must preserve per-row DATA href at index-load time."
         )
         assert linkage["fallback_requirement"] == "preserve_per_row_data_href_at_index_load_time"
     else:

@@ -11,9 +11,9 @@ The canonical ingest contract is the quarterly direct-download `?download=` CSV 
 MN is currently freshness-limited for launch support. The canonical contributions export probe from 2026-04-09 found `max Receipt date=2025-12-31` (99 days old as of probe date), which does not meet weekly coverage requirements.
 
 Evidence:
-- `docs/research/mn-freshness-investigation-2026-03-29.md`
-- `docs/research/artifacts/2026-04-09-freshness-quality-probes/state-MN.json`
-- `docs/research/in_mn_nj_freshness_stage1_baseline_2026_04_28.md`
+- `docs/reference/research/mn-freshness-investigation-2026-03-29.md`
+- `docs/reference/research/artifacts/2026-04-09-freshness-quality-probes/state-MN.json`
+- `docs/reference/research/in_mn_nj_freshness_stage1_baseline_2026_04_28.md`
 
 ## Data sources summary
 MN publishes three direct CSV download surfaces from the same landing page:

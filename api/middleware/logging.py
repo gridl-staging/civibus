@@ -1,5 +1,5 @@
 """
-Stub summary for /Users/stuart/parallel_development/civibus_dev/mar19_02_backend_hardening/civibus_dev/api/middleware/logging.py.
+Stub summary for mar19_02_backend_hardening/civibus_dev/api/middleware/logging.py.
 """
 
 from __future__ import annotations

@@ -13,7 +13,9 @@ from domains.civics.types import Contest, Election, FilingDeadline, Office, Repo
 
 _NC_CALENDAR_PATH = Path(__file__).resolve().parent.parent / "data" / "nc_2026_civic_calendar.yaml"
 _ZERO_UUID = UUID("00000000-0000-0000-0000-000000000000")
-_DISTRICT_KEY_PATTERN = re.compile(r"^nc_(house_district_\d+|school_district_\d+|municipal_[a-z0-9_]+|county_[a-z0-9_]+)$")
+_DISTRICT_KEY_PATTERN = re.compile(
+    r"^nc_(house_district_\d+|school_district_\d+|municipal_[a-z0-9_]+|county_[a-z0-9_]+)$"
+)
 
 
 def _load_nc_calendar() -> dict[str, list[dict[str, object]]]:
@@ -46,7 +48,9 @@ def test_nc_calendar_rows_validate_against_civic_models() -> None:
     election_ids = {election.id for election in elections}
 
     contests = [Contest.model_validate(_strip_division_lookup_keys(row)) for row in payload["contests"]]
-    filing_deadlines = [FilingDeadline.model_validate(_strip_division_lookup_keys(row)) for row in payload["filing_deadlines"]]
+    filing_deadlines = [
+        FilingDeadline.model_validate(_strip_division_lookup_keys(row)) for row in payload["filing_deadlines"]
+    ]
     reporting_periods = [ReportingPeriod.model_validate(row) for row in payload["reporting_periods"]]
 
     for contest in contests:
@@ -105,7 +109,9 @@ def test_nc_calendar_respects_civic_sql_natural_keys() -> None:
     }
     assert len(contest_models) == len(contest_keys)
 
-    filing_models = [FilingDeadline.model_validate(_strip_division_lookup_keys(row)) for row in payload["filing_deadlines"]]
+    filing_models = [
+        FilingDeadline.model_validate(_strip_division_lookup_keys(row)) for row in payload["filing_deadlines"]
+    ]
     filing_keys = {
         (
             filing.election_id,
@@ -125,8 +131,7 @@ def test_nc_calendar_respects_civic_sql_natural_keys() -> None:
 def test_nc_calendar_contains_stable_division_lookup_keys() -> None:
     payload = _load_nc_calendar()
     seeded_keys = [
-        row.get("electoral_division_key")
-        for row in payload["offices"] + payload["elections"] + payload["contests"]
+        row.get("electoral_division_key") for row in payload["offices"] + payload["elections"] + payload["contests"]
     ]
 
     assert "nc_municipal_durham" in seeded_keys
@@ -252,12 +257,8 @@ def test_disjoint_filing_windows_do_not_collapse_into_one_daily_span(tmp_path: P
     assert sorted_windows[1].start_date == date(2026, 7, 1)
     assert sorted_windows[1].end_date == date(2026, 7, 15)
 
-    assert resolve_candidate_listing_refresh_cadence(
-        calendar_path=calendar_path, on_date=date(2025, 12, 10)
-    ) == "daily"
-    assert resolve_candidate_listing_refresh_cadence(
-        calendar_path=calendar_path, on_date=date(2026, 7, 10)
-    ) == "daily"
-    assert resolve_candidate_listing_refresh_cadence(
-        calendar_path=calendar_path, on_date=date(2026, 4, 1)
-    ) == "quarterly"
+    assert resolve_candidate_listing_refresh_cadence(calendar_path=calendar_path, on_date=date(2025, 12, 10)) == "daily"
+    assert resolve_candidate_listing_refresh_cadence(calendar_path=calendar_path, on_date=date(2026, 7, 10)) == "daily"
+    assert (
+        resolve_candidate_listing_refresh_cadence(calendar_path=calendar_path, on_date=date(2026, 4, 1)) == "quarterly"
+    )

@@ -27,7 +27,7 @@ layers:
     required_evidence:
       schema: evidence_schemas/L1.json
     file_path_triggers:
-      - docs/anchors/**
+      - docs/reference/anchors/**
     gate_command: make gate-L1 JURISDICTION={scope}
   - id: L12
     name: session_output_summary
@@ -166,7 +166,7 @@ def test_render_current_md_recurring_reviews_section_non_empty(tmp_path: Path) -
 def test_render_current_md_parking_lot_is_link_not_copy(tmp_path: Path) -> None:
     repo = _build_synthetic_repo(tmp_path)
     out = keel_current.render_current_md(repo_root=repo, today_utc=date(2026, 4, 26))
-    assert "docs/keel/checklist.md" in out
+    assert "docs/reference/keel/checklist.md" in out
     # The known-unique parking-lot canary string from checklist.md must NOT
     # appear in CURRENT.md (proves we link, not duplicate).
     assert "KNOWN_PARKING_LOT_CANARY_LINE_xyzz" not in out
@@ -175,7 +175,7 @@ def test_render_current_md_parking_lot_is_link_not_copy(tmp_path: Path) -> None:
 def test_render_current_md_open_questions_section_lists_headings(tmp_path: Path) -> None:
     repo = _build_synthetic_repo(tmp_path)
     out = keel_current.render_current_md(repo_root=repo, today_utc=date(2026, 4, 26))
-    assert "docs/keel/open_questions.md" in out
+    assert "docs/reference/keel/open_questions.md" in out
     # Each `### N. Title` heading from open_questions.md must appear.
     assert "1. Evidence retention" in out
     assert "2. Evidence commit path and publication policy" in out
@@ -229,9 +229,7 @@ def test_main_writes_default_path(tmp_path: Path) -> None:
 def test_main_writes_to_explicit_out(tmp_path: Path) -> None:
     repo = _build_synthetic_repo(tmp_path)
     out_path = tmp_path / "out.md"
-    rc = keel_current.main(
-        ["--repo-root", str(repo), "--date", "2026-04-26", "--out", str(out_path)]
-    )
+    rc = keel_current.main(["--repo-root", str(repo), "--date", "2026-04-26", "--out", str(out_path)])
     assert rc == 0
     assert out_path.is_file()
 

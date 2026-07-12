@@ -2,14 +2,84 @@
 # Shared .env loading helpers for civibus cron/refresh scripts.
 # Sourced (not executed) by refresh_priority.sh and refresh_fec_bulk.sh.
 
-# Parse a .env file and export each KEY=VALUE pair into the current shell.
-# Handles comments, blank lines, 'export' prefixes, and single/double quotes.
-# Does NOT eval arbitrary shell syntax — only literal assignments are loaded.
+# Return the file mode as an octal string on both macOS/BSD and GNU/Linux.
+get_file_mode_octal() {
+  local path="$1"
+  local mode
+
+  if mode="$(stat -f '%Lp' "${path}" 2>/dev/null)"; then
+    printf '%s\n' "${mode}"
+    return 0
+  fi
+
+  if mode="$(stat -c '%a' "${path}" 2>/dev/null)"; then
+    printf '%s\n' "${mode}"
+    return 0
+  fi
+
+  echo "Unable to determine permissions for env file: ${path}" >&2
+  return 1
+}
+
+# Secret-bearing env files must not be accessible to group/other users.
+require_private_env_file() {
+  local env_path="$1"
+  local mode
+
+  if [[ -L "${env_path}" ]]; then
+    echo "Refusing to load symlinked env file: ${env_path}" >&2
+    return 1
+  fi
+
+  mode="$(get_file_mode_octal "${env_path}")" || return 1
+
+  if (( (8#${mode} & 8#077) != 0 )); then
+    echo "Refusing to load env file with group/other permissions: ${env_path} (mode ${mode})" >&2
+    return 1
+  fi
+}
+
+is_restricted_env_key() {
+  local key="$1"
+
+  case "${key}" in
+    PATH|IFS|CDPATH|ENV|BASH_ENV|SHELLOPTS|GLOBIGNORE|PYTHONHOME|PYTHONPATH)
+      return 0
+      ;;
+    LD_*|DYLD_*)
+      return 0
+      ;;
+  esac
+
+  return 1
+}
+
+# Parse a .env file and export each literal KEY=VALUE pair into the current
+# shell. Supports blank lines, leading comments, optional `export` prefixes, and
+# single- or double-quoted values without evaluating arbitrary shell syntax.
 load_env_assignments() {
   local env_path="$1"
-  local raw_line line key value
+  local raw_line line key value line_number=0
+
+  if [[ -z "${env_path}" ]]; then
+    echo "load_env_assignments requires an env file path" >&2
+    return 1
+  fi
+
+  if [[ ! -r "${env_path}" ]]; then
+    echo "Cannot read env file: ${env_path}" >&2
+    return 1
+  fi
+
+  if [[ ! -f "${env_path}" ]]; then
+    echo "Env path is not a regular file: ${env_path}" >&2
+    return 1
+  fi
+
+  require_private_env_file "${env_path}" || return 1
 
   while IFS= read -r raw_line || [[ -n "${raw_line}" ]]; do
+    line_number=$((line_number + 1))
     raw_line="${raw_line%$'\r'}"
     line="${raw_line#"${raw_line%%[![:space:]]*}"}"
 
@@ -23,12 +93,27 @@ load_env_assignments() {
     fi
 
     if [[ ! "${line}" =~ ^([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]]; then
-      echo "Invalid .env assignment: ${raw_line}" >&2
+      echo "Invalid .env assignment at ${env_path}:${line_number}" >&2
       return 1
     fi
 
     key="${BASH_REMATCH[1]}"
     value="${BASH_REMATCH[2]}"
+
+    if is_restricted_env_key "${key}"; then
+      echo "Refusing restricted .env key at ${env_path}:${line_number}: ${key}" >&2
+      return 1
+    fi
+
+    if [[ "${value}" == \"* && ! "${value}" =~ ^\"(.*)\"$ ]]; then
+      echo "Unterminated double-quoted .env value at ${env_path}:${line_number}" >&2
+      return 1
+    fi
+
+    if [[ "${value}" == \'* && ! "${value}" =~ ^\'(.*)\'$ ]]; then
+      echo "Unterminated single-quoted .env value at ${env_path}:${line_number}" >&2
+      return 1
+    fi
 
     # Load literal KEY=VALUE pairs without executing shell syntax from .env.
     if [[ "${value}" =~ ^\"(.*)\"$ ]]; then
@@ -46,14 +131,23 @@ load_env_assignments() {
 # Load .env, set common env vars needed by all refresh scripts.
 # Call this after setting script_dir and repo_root.
 load_civibus_env() {
-  local env_file="${1:-${repo_root}/.env}"
+  local env_file="${1:-}"
+
+  if [[ -z "${env_file}" ]]; then
+    if [[ -z "${repo_root:-}" ]]; then
+      echo "load_civibus_env requires an env file path or repo_root to be set" >&2
+      return 1
+    fi
+    env_file="${repo_root}/.env"
+  fi
 
   if [[ ! -f "${env_file}" ]]; then
     echo "Missing required env file: ${env_file}" >&2
     return 1
   fi
 
-  load_env_assignments "${env_file}"
+  require_private_env_file "${env_file}" || return 1
+  load_env_assignments "${env_file}" || return 1
 
   export PATH="${HOME}/.local/bin:${PATH}"
 
@@ -62,8 +156,10 @@ load_civibus_env() {
     return 1
   fi
 
-  export POSTGRES_HOST="127.0.0.1"
-  export POSTGRES_PORT="5432"
+  # Default to the local Postgres socket target, but preserve explicit .env or
+  # shell overrides for alternate local ports / forwarded connections.
+  export POSTGRES_HOST="${POSTGRES_HOST:-127.0.0.1}"
+  export POSTGRES_PORT="${POSTGRES_PORT:-5432}"
 
   # libpq-standard vars so bare psycopg.connect() works without explicit DSN
   export PGHOST="${POSTGRES_HOST}"

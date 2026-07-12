@@ -35,8 +35,7 @@ def _required_dedicated_database_name() -> str:
         )
     if database_name in _PROTECTED_DATABASE_NAMES:
         pytest.skip(
-            f"Skipping MA deadlock integration tests: refusing to run against protected "
-            f"database {database_name!r}."
+            f"Skipping MA deadlock integration tests: refusing to run against protected database {database_name!r}."
         )
     postgres_database_name = os.getenv("POSTGRES_DB", "").strip()
     if postgres_database_name and postgres_database_name != database_name:

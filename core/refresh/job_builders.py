@@ -6,12 +6,15 @@ import shutil
 import tempfile
 import zipfile
 from dataclasses import replace
+from datetime import date
 from functools import partial
+import os
 from pathlib import Path
 from typing import Callable
 from urllib.request import urlretrieve
 
 from core.db import get_connection
+from core.people.enrichment.orchestrator import FEDERAL_ENRICHMENT_DATA_SOURCE_NAME, run_federal_enrichment
 from core.refresh.runner import (
     _CITY_JURISDICTION_TYPE,
     _REPO_ROOT,
@@ -25,14 +28,25 @@ from domains.campaign_finance.ingest.bulk_cli import (
     CliConfig,
     LoadRequest,
     dispatch_load,
+)
+from domains.campaign_finance.ingest.fec_bulk_files import (
+    download_fec_bulk_file_to_cache,
+    fec_baseline_url,
+    fec_committee_summary_url,
     fec_schedule_b_url,
     fec_schedule_e_url,
+    fec_weball_url,
 )
 from domains.campaign_finance.ingest.bulk_loader import (
     FEC_BULK_DATA_SOURCE_NAME,
     ensure_fec_bulk_data_source,
 )
-from domains.campaign_finance.ingest.cli import run_fec_refresh
+from domains.campaign_finance.ingest.congress_legislators_adapter import (
+    adapt_legislators_yaml,
+    fetch_historical_entries,
+    fetch_legislators_entries,
+    select_most_recent_vacancy_predecessors,
+)
 from domains.campaign_finance.ingest.dark_money.download import (
     download_irs_527_full_data,
     extract_irs_527_txt,
@@ -41,6 +55,12 @@ from domains.campaign_finance.ingest.dark_money.loader import (
     _IRS_527_DATA_SOURCE_NAME,
     ensure_irs_527_data_source,
     load_irs_527_records,
+)
+from domains.campaign_finance.ingest.federal_spine_loader import (
+    FEDERAL_SPINE_DATA_SOURCE_NAME,
+    ensure_federal_spine_data_source,
+    load_federal_spine,
+    load_vacancy_predecessors,
 )
 from domains.campaign_finance.jurisdictions.config_schema import (
     JurisdictionConfig,
@@ -103,8 +123,10 @@ from domains.civics.loaders.official_rosters.source_registry import list_nc_rost
 
 from datetime import datetime
 
-_FEC_SOURCE_NAME = "FEC Schedule A API"
 _PRIORITY_CADENCE = "daily"
+_REFRESH_DATA_DIR_ENV = "CIVIBUS_REFRESH_DATA_DIR"
+_SUPPORTED_REFRESH_SCOPES = {"all", "priority", "federal"}
+_FEDERAL_SCOPE_JOB_KEY_PREFIXES = ("federal-",)
 AL_LOADABLE_REFRESH_DATA_TYPES = load_al_data_types()
 KY_LOADABLE_REFRESH_DATA_TYPES = load_ky_data_types()
 LA_LOADABLE_REFRESH_DATA_TYPES = load_la_data_types()
@@ -200,6 +222,19 @@ def _find_data_source_by_name(config: JurisdictionConfig, *, source_name: str) -
 def _default_date_range(now: datetime) -> tuple[str, str]:
     year = now.year
     return f"01/01/{year}", f"12/31/{year}"
+
+
+def _refresh_data_root() -> Path:
+    configured_data_dir = os.environ.get(_REFRESH_DATA_DIR_ENV)
+    if configured_data_dir:
+        return Path(configured_data_dir)
+    return _REPO_ROOT / "data"
+
+
+def _temporary_refresh_directory(*, prefix: str) -> tempfile.TemporaryDirectory[str]:
+    temp_root = _refresh_data_root() / "tmp"
+    temp_root.mkdir(parents=True, exist_ok=True)
+    return tempfile.TemporaryDirectory(prefix=prefix, dir=temp_root)
 
 
 def _resolve_date_range(*, start: str | None, end: str | None, now: datetime) -> tuple[str, str]:
@@ -756,33 +791,25 @@ def _build_city_jobs(config: JurisdictionConfig) -> list[RefreshJob]:
             # campfin_expenditures); each becomes its own runner job so per-job
             # status / cadence stays granular.
             jobs: list[RefreshJob] = []
-            contrib_source = _find_data_source_by_name(
-                config, source_name="PHL Campaign Finance Contributions"
-            )
+            contrib_source = _find_data_source_by_name(config, source_name="PHL Campaign Finance Contributions")
             jobs.extend(
                 _optional_job_list(
                     _build_job_for_source(
                         key=f"city-{city_code.lower()}-contributions",
                         jurisdiction=jurisdiction,
                         source=contrib_source,
-                        run_callable=_download_refresh_callable(
-                            run_phl_refresh, data_type="contributions"
-                        ),
+                        run_callable=_download_refresh_callable(run_phl_refresh, data_type="contributions"),
                     )
                 )
             )
-            exp_source = _find_data_source_by_name(
-                config, source_name="PHL Campaign Finance Expenditures"
-            )
+            exp_source = _find_data_source_by_name(config, source_name="PHL Campaign Finance Expenditures")
             jobs.extend(
                 _optional_job_list(
                     _build_job_for_source(
                         key=f"city-{city_code.lower()}-expenditures",
                         jurisdiction=jurisdiction,
                         source=exp_source,
-                        run_callable=_download_refresh_callable(
-                            run_phl_refresh, data_type="expenditures"
-                        ),
+                        run_callable=_download_refresh_callable(run_phl_refresh, data_type="expenditures"),
                     )
                 )
             )
@@ -828,23 +855,181 @@ def _build_official_roster_jobs() -> list[RefreshJob]:
 
 
 def _build_fec_job(parameters: RunnerParameters) -> RefreshJob:
+    cycles = _active_committee_summary_cycles(parameters.fec_cycle)
+
+    def _run_fec_schedule_a_job() -> list[object]:
+        download_paths: list[tuple[int, Path]] = []
+        for cycle in cycles:
+            archive_path = download_fec_bulk_file_to_cache(
+                _REPO_ROOT,
+                cycle=cycle,
+                file_type="itcont",
+                data_root=_refresh_data_root(),
+                downloader=urlretrieve,
+            )
+            download_paths.append((cycle, archive_path))
+
+        connection = get_connection()
+        try:
+            with connection.transaction():
+                data_source_id = ensure_fec_bulk_data_source(connection)
+            results: list[object] = []
+            for cycle, archive_path in download_paths:
+                results.append(
+                    dispatch_load(
+                        conn=connection,
+                        config=CliConfig(
+                            mode="single",
+                            cycle=cycle,
+                            file_type="itcont",
+                            path=archive_path,
+                            directory=None,
+                            batch_size=1000,
+                            limit=parameters.fec_limit,
+                            graph_enabled=False,
+                            with_transactions=False,
+                            transactions_only=True,
+                            spine_only=True,
+                            min_date=date(2022, 1, 1),
+                        ),
+                        request=LoadRequest(file_type="itcont", path=archive_path),
+                        data_source_id=data_source_id,
+                    )
+                )
+            return results[0] if len(results) == 1 else results
+        finally:
+            connection.close()
+
     return RefreshJob(
         key="federal-fec-schedule-a",
         domain="campaign_finance",
         jurisdiction="federal/fec",
         cadence="continuous",
-        data_source_names=(_FEC_SOURCE_NAME,),
-        run_callable=lambda: run_fec_refresh(
-            state=parameters.fec_state,
-            cycle=parameters.fec_cycle,
-            limit=parameters.fec_limit,
-        ),
+        data_source_names=(FEC_BULK_DATA_SOURCE_NAME,),
+        run_callable=_run_fec_schedule_a_job,
+    )
+
+
+def _build_fec_masters_job(parameters: RunnerParameters) -> RefreshJob:
+    file_types = ("cm", "cn", "ccl", "weball")
+
+    def _fec_masters_url(file_type: str) -> str:
+        if file_type == "weball":
+            return fec_weball_url(parameters.fec_cycle)
+        return fec_baseline_url(parameters.fec_cycle, file_type)
+
+    def _run_fec_masters_job() -> list[object]:
+        with _temporary_refresh_directory(prefix="refresh-fec-masters-") as temp_dir:
+            temp_dir_path = Path(temp_dir)
+            cycle_suffix = str(parameters.fec_cycle)[-2:]
+            download_paths: list[tuple[str, Path]] = []
+            for file_type in file_types:
+                archive_path = temp_dir_path / f"{file_type}{cycle_suffix}.zip"
+                urlretrieve(_fec_masters_url(file_type), archive_path)
+                download_paths.append((file_type, archive_path))
+
+            connection = get_connection()
+            try:
+                with connection.transaction():
+                    data_source_id = ensure_fec_bulk_data_source(connection)
+
+                results: list[object] = []
+                for file_type, archive_path in download_paths:
+                    results.append(
+                        dispatch_load(
+                            conn=connection,
+                            config=CliConfig(
+                                mode="single",
+                                cycle=parameters.fec_cycle,
+                                file_type=file_type,
+                                path=archive_path,
+                                directory=None,
+                                batch_size=1000,
+                                limit=None,
+                                graph_enabled=False,
+                                with_transactions=False,
+                            ),
+                            request=LoadRequest(file_type=file_type, path=archive_path),
+                            data_source_id=data_source_id,
+                        )
+                    )
+                return results
+            finally:
+                connection.close()
+
+    return RefreshJob(
+        key="federal-fec-masters",
+        domain="campaign_finance",
+        jurisdiction="federal/fec",
+        cadence="weekly",
+        data_source_names=(FEC_BULK_DATA_SOURCE_NAME,),
+        run_callable=_run_fec_masters_job,
+        refresh_history_key="federal-fec-masters",
+    )
+
+
+def _active_committee_summary_cycles(fec_cycle: int) -> tuple[int, ...]:
+    previous_cycle = fec_cycle - 2
+    if previous_cycle < 2024:
+        return (fec_cycle,)
+    return (previous_cycle, fec_cycle)
+
+
+def _build_fec_committee_summary_job(parameters: RunnerParameters) -> RefreshJob:
+    cycles = _active_committee_summary_cycles(parameters.fec_cycle)
+
+    def _run_fec_committee_summary_job() -> list[object]:
+        with tempfile.TemporaryDirectory(prefix="refresh-fec-committee-summary-") as temp_dir:
+            temp_dir_path = Path(temp_dir)
+            download_paths: list[tuple[int, Path]] = []
+            for cycle in cycles:
+                destination_path = temp_dir_path / f"committee_summary_{cycle}.csv"
+                urlretrieve(fec_committee_summary_url(cycle), destination_path)
+                download_paths.append((cycle, destination_path))
+
+            connection = get_connection()
+            try:
+                with connection.transaction():
+                    data_source_id = ensure_fec_bulk_data_source(connection)
+
+                results: list[object] = []
+                for cycle, destination_path in download_paths:
+                    results.append(
+                        dispatch_load(
+                            conn=connection,
+                            config=CliConfig(
+                                mode="single",
+                                cycle=cycle,
+                                file_type="committee_summary",
+                                path=destination_path,
+                                directory=None,
+                                batch_size=1000,
+                                limit=None,
+                                graph_enabled=False,
+                                with_transactions=False,
+                            ),
+                            request=LoadRequest(file_type="committee_summary", path=destination_path),
+                            data_source_id=data_source_id,
+                        )
+                    )
+                return results
+            finally:
+                connection.close()
+
+    return RefreshJob(
+        key="federal-fec-committee-summary",
+        domain="campaign_finance",
+        jurisdiction="federal/fec",
+        cadence="weekly",
+        data_source_names=(FEC_BULK_DATA_SOURCE_NAME,),
+        run_callable=_run_fec_committee_summary_job,
+        refresh_history_key="federal-fec-committee-summary",
     )
 
 
 def _build_fec_schedule_e_job(parameters: RunnerParameters) -> RefreshJob:
     def _run_fec_schedule_e_job() -> object:
-        with tempfile.TemporaryDirectory(prefix="refresh-fec-schedule-e-") as temp_dir:
+        with _temporary_refresh_directory(prefix="refresh-fec-schedule-e-") as temp_dir:
             destination_path = Path(temp_dir) / f"independent_expenditure_{parameters.fec_cycle}.csv"
             urlretrieve(fec_schedule_e_url(parameters.fec_cycle), destination_path)
 
@@ -883,7 +1068,7 @@ def _build_fec_schedule_e_job(parameters: RunnerParameters) -> RefreshJob:
 
 def _build_fec_schedule_b_job(parameters: RunnerParameters) -> RefreshJob:
     def _run_fec_schedule_b_job() -> object:
-        with tempfile.TemporaryDirectory(prefix="refresh-fec-schedule-b-") as temp_dir:
+        with _temporary_refresh_directory(prefix="refresh-fec-schedule-b-") as temp_dir:
             temp_dir_path = Path(temp_dir)
             cycle_suffix = str(parameters.fec_cycle)[-2:]
             archive_path = temp_dir_path / f"oppexp{cycle_suffix}.zip"
@@ -933,9 +1118,70 @@ def _build_fec_schedule_b_job(parameters: RunnerParameters) -> RefreshJob:
     )
 
 
+def _build_federal_congress_spine_job() -> RefreshJob:
+    def _run_federal_congress_spine_job() -> object:
+        raw_entries = fetch_legislators_entries()
+        adapted_legislators = adapt_legislators_yaml(raw_entries)
+        historical_entries = fetch_historical_entries()
+        vacancy_predecessors = select_most_recent_vacancy_predecessors(
+            adapted_legislators,
+            historical_entries,
+        )
+
+        connection = get_connection()
+        try:
+            with connection.transaction():
+                data_source_id = ensure_federal_spine_data_source(connection)
+                load_result = load_federal_spine(
+                    connection,
+                    adapted_legislators,
+                    data_source_id=data_source_id,
+                )
+                load_vacancy_predecessors(
+                    connection,
+                    vacancy_predecessors,
+                    data_source_id=data_source_id,
+                )
+                return load_result
+        finally:
+            connection.close()
+
+    return RefreshJob(
+        key="federal-congress-spine",
+        domain="campaign_finance",
+        jurisdiction="federal/congress",
+        cadence="weekly",
+        data_source_names=(FEDERAL_SPINE_DATA_SOURCE_NAME,),
+        run_callable=_run_federal_congress_spine_job,
+    )
+
+
+def _build_federal_enrichment_job() -> RefreshJob:
+    def _run_federal_enrichment_job() -> object:
+        connection = get_connection()
+        try:
+            summary = run_federal_enrichment(connection)
+            connection.commit()
+            return summary
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    return RefreshJob(
+        key="federal-enrichment",
+        domain="people_enrichment",
+        jurisdiction="federal/congress",
+        cadence="weekly",
+        data_source_names=(FEDERAL_ENRICHMENT_DATA_SOURCE_NAME,),
+        run_callable=_run_federal_enrichment_job,
+    )
+
+
 def _build_irs_527_job() -> RefreshJob:
     def _run_irs_527_job() -> object:
-        with tempfile.TemporaryDirectory(prefix="refresh-irs-527-") as temp_dir:
+        with _temporary_refresh_directory(prefix="refresh-irs-527-") as temp_dir:
             temp_dir_path = Path(temp_dir)
             archive_path = download_irs_527_full_data(temp_dir_path)
             txt_path = extract_irs_527_txt(archive_path, temp_dir_path)
@@ -1012,12 +1258,19 @@ def _priority_source_names(
                 priority_sources.add(nc_ie_source[0])
 
     priority_sources.add(_NCSBE_DATA_SOURCE_NAME)
+    priority_sources.add(FEDERAL_SPINE_DATA_SOURCE_NAME)
+    priority_sources.add(FEDERAL_ENRICHMENT_DATA_SOURCE_NAME)
 
     return priority_sources
 
 
 def _priority_cadence_for_job(job: RefreshJob) -> str:
     if job.key == "civic-nc-candidate-listing":
+        return job.cadence
+    # The congress-legislators upstream YAML is republished weekly, so the
+    # priority plan keeps the job's intrinsic weekly cadence instead of
+    # promoting it to the generic daily priority cadence.
+    if job.key in {"federal-congress-spine", "federal-enrichment"}:
         return job.cadence
     return _PRIORITY_CADENCE
 
@@ -1079,16 +1332,22 @@ def build_refresh_plan(
     job_key_prefixes: tuple[str, ...] = (),
     now: datetime | None = None,
 ) -> list[RefreshJob]:
-    if scope not in {"all", "priority"}:
+    if scope not in _SUPPORTED_REFRESH_SCOPES:
         raise ValueError(f"Unsupported scope: {scope!r}")
 
     resolved_now = _resolve_now(now)
     resolved_parameters = parameters or RunnerParameters()
     configs_by_state_code = _discover_configs_by_state_code()
 
-    jobs: list[RefreshJob] = [_build_fec_job(resolved_parameters)]
+    jobs: list[RefreshJob] = [_build_fec_masters_job(resolved_parameters)]
+    jobs.append(_build_fec_committee_summary_job(resolved_parameters))
+    jobs.append(_build_fec_job(resolved_parameters))
+    jobs.append(_build_federal_congress_spine_job())
+    # federal-enrichment joins on people, FEC transaction, and Schedule E rows
+    # produced by the preceding federal jobs.
     jobs.append(_build_fec_schedule_b_job(resolved_parameters))
     jobs.append(_build_fec_schedule_e_job(resolved_parameters))
+    jobs.append(_build_federal_enrichment_job())
     jobs.append(_build_irs_527_job())
     if _include_explicit_nc_past_results_job(job_key_prefixes=job_key_prefixes):
         jobs.append(_build_nc_past_results_job())
@@ -1114,5 +1373,7 @@ def build_refresh_plan(
             for job in jobs
             if any(source_name in allowed_sources for source_name in job.data_source_names)
         ]
+    elif scope == "federal":
+        jobs = _filter_jobs_by_key_prefixes(jobs, job_key_prefixes=_FEDERAL_SCOPE_JOB_KEY_PREFIXES)
 
     return _filter_jobs_by_key_prefixes(jobs, job_key_prefixes=job_key_prefixes)

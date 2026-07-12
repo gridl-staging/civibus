@@ -96,10 +96,7 @@ def _assert_lane_offset_progress_observability(
     assert any(
         lane_lower in record.message.lower()
         and f"offset={offset}" in record.message
-        and any(
-            token in record.message.lower()
-            for token in ("page", "downloaded", "rows so far")
-        )
+        and any(token in record.message.lower() for token in ("page", "downloaded", "rows so far"))
         for record in caplog.records
     )
 
@@ -115,20 +112,14 @@ def _assert_terminal_lane_offset_failure_observability(
     assert any(
         lane_lower in record.message.lower()
         and f"offset={offset}" in record.message
-        and any(
-            token in record.message.lower()
-            for token in ("fail", "error", "timeout", "terminal", "exception")
-        )
+        and any(token in record.message.lower() for token in ("fail", "error", "timeout", "terminal", "exception"))
         for record in caplog.records
     )
     assert any(
         lane_lower in record.message.lower()
         and f"offset={offset}" in record.message
         and "page" in record.message.lower()
-        and any(
-            token in record.message.lower()
-            for token in ("fail", "error", "timeout", "terminal", "exception")
-        )
+        and any(token in record.message.lower() for token in ("fail", "error", "timeout", "terminal", "exception"))
         for record in caplog.records
     )
 
@@ -312,17 +303,9 @@ def test_stage3_regression_emits_structured_page_context_for_attempt_complete_an
     with pytest.raises(httpx.ReadTimeout, match="read operation timed out"):
         download_ny_csv("expenditures", tmp_path)
 
-    attempt_records = [
-        record
-        for record in caplog.records
-        if "NY page request attempt" in record.message
-    ]
-    complete_records = [
-        record for record in caplog.records if "NY page complete" in record.message
-    ]
-    failure_records = [
-        record for record in caplog.records if "NY terminal failure" in record.message
-    ]
+    attempt_records = [record for record in caplog.records if "NY page request attempt" in record.message]
+    complete_records = [record for record in caplog.records if "NY page complete" in record.message]
+    failure_records = [record for record in caplog.records if "NY terminal failure" in record.message]
 
     assert len(attempt_records) == 2
     _assert_record_page_context(

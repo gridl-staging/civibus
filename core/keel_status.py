@@ -1,6 +1,5 @@
 
 from __future__ import annotations
-"""Stub summary for keel_status.py."""
 
 import argparse
 import json
@@ -441,18 +440,14 @@ def collect_layer_summaries(*, repo_root: Path, today_utc: date) -> list[LayerSu
         if scope_strategy_type == "session_summary":
             scope_rows: list[StatusRow] = []
         else:
-            scope_rows = _collect_scope_rows_for_layer(
-                repo_root=repo_root, layer=layer, today_utc=today_utc
-            )
+            scope_rows = _collect_scope_rows_for_layer(repo_root=repo_root, layer=layer, today_utc=today_utc)
         summaries.append(
             LayerSummary(
                 layer_id=layer["id"],
                 name=layer["name"],
                 status=layer["status"],
                 scope_rows=scope_rows,
-                interpretation=_interpret_scope_rows(
-                    scope_rows=scope_rows, scope_strategy_type=scope_strategy_type
-                ),
+                interpretation=_interpret_scope_rows(scope_rows=scope_rows, scope_strategy_type=scope_strategy_type),
             )
         )
     return summaries

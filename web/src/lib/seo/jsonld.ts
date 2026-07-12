@@ -73,7 +73,7 @@ export function buildHomepageJsonLd(input: HomepageJsonLdInput): JsonLdObject {
     "@type": "WebSite",
     name: APP_SHELL.branding.name,
     url: canonicalUrl,
-    description: input.description ?? APP_SHELL.staticRoutes.home.description
+    description: APP_SHELL.staticRoutes.home.description
   });
 }
 

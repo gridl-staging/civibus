@@ -67,6 +67,20 @@ def _insert_test_source_record(
     return source_record
 
 
+def _source_record_for_fields(
+    data_source_id: UUID,
+    source_record_key: str,
+    raw_fields: dict[str, object],
+) -> SourceRecord:
+    return SourceRecord(
+        data_source_id=data_source_id,
+        source_record_key=source_record_key,
+        raw_fields=raw_fields,
+        pull_date=utc_now(),
+        record_hash=compute_record_hash(raw_fields),
+    )
+
+
 def _select_count(conn: psycopg.Connection, query: str, params: tuple[object, ...]) -> int:
     with conn.cursor() as cursor:
         cursor.execute(query, params)
@@ -357,6 +371,324 @@ def test_null_key_always_inserts_without_conflict(db_conn: psycopg.Connection) -
         )
         == 2
     )
+
+
+def test_try_insert_source_records_bulk_preserves_order_and_supersession(
+    db_conn: psycopg.Connection,
+) -> None:
+    data_source = _insert_test_data_source(db_conn)
+    duplicate_fields = {"sub_id": "txn-bulk-duplicate", "amount": "100"}
+    amended_original_fields = {"sub_id": "txn-bulk-amended", "amount": "250"}
+    amended_new_fields = {"sub_id": "txn-bulk-amended", "amount": "300", "amended": True}
+    fresh_fields = {"sub_id": "txn-bulk-fresh", "amount": "500"}
+    duplicate_original = SourceRecord(
+        data_source_id=data_source.id,
+        source_record_key="txn-bulk-duplicate",
+        raw_fields=duplicate_fields,
+        pull_date=utc_now(),
+        record_hash=compute_record_hash(duplicate_fields),
+    )
+    amended_original = SourceRecord(
+        data_source_id=data_source.id,
+        source_record_key="txn-bulk-amended",
+        raw_fields=amended_original_fields,
+        pull_date=utc_now(),
+        record_hash=compute_record_hash(amended_original_fields),
+    )
+    duplicate_reingest = SourceRecord(
+        data_source_id=data_source.id,
+        source_record_key="txn-bulk-duplicate",
+        raw_fields=duplicate_fields,
+        pull_date=utc_now(),
+        record_hash=compute_record_hash(duplicate_fields),
+    )
+    amended_reingest = SourceRecord(
+        data_source_id=data_source.id,
+        source_record_key="txn-bulk-amended",
+        raw_fields=amended_new_fields,
+        pull_date=utc_now(),
+        record_hash=compute_record_hash(amended_new_fields),
+    )
+    fresh_record = SourceRecord(
+        data_source_id=data_source.id,
+        source_record_key="txn-bulk-fresh",
+        raw_fields=fresh_fields,
+        pull_date=utc_now(),
+        record_hash=compute_record_hash(fresh_fields),
+    )
+
+    assert try_insert_source_record(db_conn, duplicate_original) == duplicate_original.id
+    assert try_insert_source_record(db_conn, amended_original) == amended_original.id
+
+    results = db_ingest.try_insert_source_records_bulk(
+        db_conn,
+        [fresh_record, duplicate_reingest, amended_reingest],
+    )
+
+    assert [(result.source_record_id, result.inserted) for result in results] == [
+        (fresh_record.id, True),
+        (None, False),
+        (amended_reingest.id, True),
+    ]
+    with db_conn.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT id, source_record_key, raw_fields, superseded_by
+            FROM core.source_record
+            WHERE data_source_id = %s
+              AND source_record_key IN (%s, %s, %s)
+            ORDER BY source_record_key, created_at, id
+            """,
+            (
+                data_source.id,
+                "txn-bulk-amended",
+                "txn-bulk-duplicate",
+                "txn-bulk-fresh",
+            ),
+        )
+        rows = cursor.fetchall()
+
+    rows_by_key: dict[str, list[tuple[UUID, dict[str, object], UUID | None]]] = {}
+    for row_id, source_record_key, raw_fields, superseded_by in rows:
+        rows_by_key.setdefault(source_record_key, []).append((row_id, raw_fields, superseded_by))
+
+    assert rows_by_key["txn-bulk-duplicate"] == [
+        (duplicate_original.id, duplicate_fields, None),
+    ]
+    assert rows_by_key["txn-bulk-fresh"] == [
+        (fresh_record.id, fresh_fields, None),
+    ]
+    assert rows_by_key["txn-bulk-amended"] == [
+        (amended_original.id, amended_original_fields, amended_reingest.id),
+        (amended_reingest.id, amended_new_fields, None),
+    ]
+
+
+def test_try_insert_source_records_bulk_attributes_mixed_batch_lanes(
+    db_conn: psycopg.Connection,
+) -> None:
+    data_source = _insert_test_data_source(db_conn)
+    duplicate_key = f"txn-bulk-duplicate-{uuid4()}"
+    same_hash_key = f"txn-bulk-same-hash-{uuid4()}"
+    amended_key = f"txn-bulk-amended-{uuid4()}"
+    fresh_fields = {"sub_id": f"txn-bulk-fresh-{uuid4()}", "amount": "500"}
+    duplicate_original_fields = {"sub_id": duplicate_key, "amount": "100"}
+    duplicate_amended_fields = {**duplicate_original_fields, "amount": "125", "amended": True}
+    null_key_fields = {"sub_id": None, "amount": "50"}
+    same_hash_fields = {"sub_id": same_hash_key, "amount": "250"}
+    amended_original_fields = {"sub_id": amended_key, "amount": "300"}
+    amended_new_fields = {**amended_original_fields, "amount": "350", "amended": True}
+
+    duplicate_first = _source_record_for_fields(data_source.id, duplicate_key, duplicate_original_fields)
+    duplicate_second = _source_record_for_fields(data_source.id, duplicate_key, duplicate_amended_fields)
+    null_key_record = SourceRecord(
+        data_source_id=data_source.id,
+        source_record_key=None,
+        raw_fields=null_key_fields,
+        pull_date=utc_now(),
+        record_hash=compute_record_hash(null_key_fields),
+    )
+    fresh_record = _source_record_for_fields(data_source.id, str(fresh_fields["sub_id"]), fresh_fields)
+    same_hash_original = _source_record_for_fields(data_source.id, same_hash_key, same_hash_fields)
+    same_hash_reingest = _source_record_for_fields(data_source.id, same_hash_key, same_hash_fields)
+    amended_original = _source_record_for_fields(data_source.id, amended_key, amended_original_fields)
+    amended_reingest = _source_record_for_fields(data_source.id, amended_key, amended_new_fields)
+
+    assert try_insert_source_record(db_conn, same_hash_original) == same_hash_original.id
+    assert try_insert_source_record(db_conn, amended_original) == amended_original.id
+
+    results = db_ingest.try_insert_source_records_bulk(
+        db_conn,
+        [
+            fresh_record,
+            duplicate_first,
+            null_key_record,
+            same_hash_reingest,
+            duplicate_second,
+            amended_reingest,
+        ],
+    )
+
+    assert [(result.source_record_id, result.inserted) for result in results] == [
+        (fresh_record.id, True),
+        (duplicate_first.id, True),
+        (null_key_record.id, True),
+        (None, False),
+        (duplicate_second.id, True),
+        (amended_reingest.id, True),
+    ]
+    attribution_counts = db_ingest.summarize_source_record_bulk_insert_attribution(results)
+    assert attribution_counts == db_ingest.SourceRecordBulkInsertAttributionCounts(
+        fast_path_candidates=3,
+        forced_per_row_rows=3,
+        fast_path_inserted=1,
+        fast_path_fallbacks=2,
+    )
+
+    with db_conn.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT id, source_record_key, raw_fields, superseded_by
+            FROM core.source_record
+            WHERE data_source_id = %s
+              AND (
+                  source_record_key IS NULL
+                  OR source_record_key IN (%s, %s, %s, %s)
+              )
+            ORDER BY source_record_key NULLS FIRST, created_at, id
+            """,
+            (
+                data_source.id,
+                duplicate_key,
+                same_hash_key,
+                amended_key,
+                fresh_fields["sub_id"],
+            ),
+        )
+        rows = cursor.fetchall()
+
+    rows_by_key: dict[str | None, list[tuple[UUID, dict[str, object], UUID | None]]] = {}
+    for row_id, source_record_key, raw_fields, superseded_by in rows:
+        rows_by_key.setdefault(source_record_key, []).append((row_id, raw_fields, superseded_by))
+
+    assert rows_by_key[None] == [(null_key_record.id, null_key_fields, None)]
+    assert rows_by_key[fresh_fields["sub_id"]] == [(fresh_record.id, fresh_fields, None)]
+    assert rows_by_key[same_hash_key] == [(same_hash_original.id, same_hash_fields, None)]
+    assert rows_by_key[duplicate_key] == [
+        (duplicate_first.id, duplicate_original_fields, duplicate_second.id),
+        (duplicate_second.id, duplicate_amended_fields, None),
+    ]
+    assert rows_by_key[amended_key] == [
+        (amended_original.id, amended_original_fields, amended_reingest.id),
+        (amended_reingest.id, amended_new_fields, None),
+    ]
+
+
+def test_try_insert_source_records_bulk_skips_same_hash_reingest_that_reuses_active_id(
+    db_conn: psycopg.Connection,
+) -> None:
+    """A caller-supplied id matching the active row must not be read as proof of insertion."""
+    data_source = _insert_test_data_source(db_conn)
+    fields = {"sub_id": "txn-bulk-same-id", "amount": "100"}
+    original = SourceRecord(
+        data_source_id=data_source.id,
+        source_record_key="txn-bulk-same-id",
+        raw_fields=fields,
+        pull_date=utc_now(),
+        record_hash=compute_record_hash(fields),
+    )
+    assert try_insert_source_record(db_conn, original) == original.id
+
+    reingest_reusing_active_id = SourceRecord(
+        id=original.id,
+        data_source_id=data_source.id,
+        source_record_key="txn-bulk-same-id",
+        raw_fields=fields,
+        pull_date=utc_now(),
+        record_hash=compute_record_hash(fields),
+    )
+
+    results = db_ingest.try_insert_source_records_bulk(db_conn, [reingest_reusing_active_id])
+
+    assert [(result.source_record_id, result.inserted) for result in results] == [(None, False)]
+    assert (
+        _select_count(
+            db_conn,
+            "SELECT COUNT(*) FROM core.source_record WHERE data_source_id = %s AND source_record_key = %s",
+            (data_source.id, "txn-bulk-same-id"),
+        )
+        == 1
+    )
+
+
+def test_try_insert_source_records_bulk_serializes_existing_key_before_same_hash_skip() -> None:
+    setup_conn = get_connection()
+    amendment_conn = get_connection()
+    cleanup_conn = get_connection()
+    data_source: DataSource | None = None
+    worker_done = Event()
+    worker_started = Event()
+    worker_result: dict[str, object] = {}
+
+    try:
+        data_source = DataSource(
+            domain="campaign_finance",
+            jurisdiction="federal/fec",
+            name=f"Stage 2 Bulk Race {uuid4()}",
+            source_url="https://api.open.fec.gov/v1/schedules/schedule_a/",
+        )
+        insert_data_source(setup_conn, data_source)
+
+        original_fields = {"sub_id": f"txn-bulk-race-{uuid4()}", "amount": "100"}
+        amended_fields = {**original_fields, "amount": "125", "amended": True}
+        original = _source_record_for_fields(data_source.id, original_fields["sub_id"], original_fields)
+        amendment = _source_record_for_fields(data_source.id, original_fields["sub_id"], amended_fields)
+        same_hash_reingest = _source_record_for_fields(data_source.id, original_fields["sub_id"], original_fields)
+
+        assert try_insert_source_record(setup_conn, original) == original.id
+        setup_conn.commit()
+
+        amendment_conn.execute("BEGIN")
+        assert try_insert_source_record(amendment_conn, amendment) == amendment.id
+
+        def _bulk_insert_same_hash_reingest() -> None:
+            worker_conn = get_connection()
+            try:
+                worker_conn.execute("BEGIN")
+                worker_started.set()
+                results = db_ingest.try_insert_source_records_bulk(worker_conn, [same_hash_reingest])
+                worker_conn.commit()
+                worker_result["results"] = results
+            except Exception as exc:  # pragma: no cover - exercised on regression only
+                worker_conn.rollback()
+                worker_result["error"] = exc
+            finally:
+                worker_conn.close()
+                worker_done.set()
+
+        thread = Thread(target=_bulk_insert_same_hash_reingest, daemon=True)
+        thread.start()
+
+        assert worker_started.wait(timeout=1)
+        assert not worker_done.wait(timeout=0.2)
+
+        amendment_conn.commit()
+        thread.join(timeout=2)
+
+        assert worker_done.is_set()
+        assert "error" not in worker_result
+        results = worker_result["results"]
+        assert [(result.source_record_id, result.inserted) for result in results] == [
+            (same_hash_reingest.id, True),
+        ]
+
+        with cleanup_conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT id, raw_fields, superseded_by
+                FROM core.source_record
+                WHERE data_source_id = %s
+                  AND source_record_key = %s
+                """,
+                (data_source.id, original_fields["sub_id"]),
+            )
+            rows = {row_id: (raw_fields, superseded_by) for row_id, raw_fields, superseded_by in cursor}
+
+        assert rows == {
+            original.id: (original_fields, amendment.id),
+            amendment.id: (amended_fields, same_hash_reingest.id),
+            same_hash_reingest.id: (original_fields, None),
+        }
+    finally:
+        setup_conn.rollback()
+        amendment_conn.rollback()
+        if data_source is not None:
+            cleanup_conn.execute("DELETE FROM core.source_record WHERE data_source_id = %s", (data_source.id,))
+            cleanup_conn.execute("DELETE FROM core.data_source WHERE id = %s", (data_source.id,))
+            cleanup_conn.commit()
+        cleanup_conn.close()
+        amendment_conn.close()
+        setup_conn.close()
 
 
 def test_try_insert_data_source_returns_none_when_name_exists(db_conn: psycopg.Connection) -> None:

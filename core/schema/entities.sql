@@ -215,6 +215,7 @@ CREATE INDEX idx_entity_address_entity ON core.entity_address (entity_type, enti
 CREATE INDEX idx_entity_address_address ON core.entity_address (address_id);
 CREATE INDEX idx_entity_address_current ON core.entity_address (entity_type, entity_id)
     WHERE upper_inf(valid_period);
+CREATE INDEX idx_entity_address_source_record_id ON core.entity_address (source_record_id);
 
 -- ============================================================================
 -- Contact Point
@@ -254,6 +255,7 @@ CREATE UNIQUE INDEX uq_contact_point_natural_key_null_role
 
 CREATE INDEX idx_contact_point_owner ON core.contact_point (owner_type, owner_id);
 CREATE INDEX idx_contact_point_type ON core.contact_point (type);
+CREATE INDEX idx_contact_point_source_record_id ON core.contact_point (source_record_id);
 
 -- ============================================================================
 -- Foreign keys (deferred to allow table creation in any order)

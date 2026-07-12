@@ -23,4 +23,9 @@ test.describe("NC county detail smoke", () => {
     await expect(page.getByRole("heading", { name: "Source and freshness" })).toBeVisible();
     await expect(page.getByText(SMOKE_NC_SHOWCASE_TRUST_SOURCE_NAME)).toBeVisible();
   });
+
+  test("/state/NC/county/[slug] returns backend 404 behavior for missing county", async ({ page }: { page: any }) => {
+    const response = await page.goto("/state/NC/county/not-a-real-county");
+    expect(response?.status()).toBe(404);
+  });
 });

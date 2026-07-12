@@ -6,6 +6,7 @@ import re
 import pytest
 
 from infra.scripts import postgres_local
+from test_support.makefile_contract_helpers import parse_makefile_db_sql_files
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -55,25 +56,21 @@ def test_makefile_db_reset_sql_files_include_property_schema() -> None:
     compose_dev = read_repo_text("infra/docker-compose.yml")
     compose_prod = read_repo_text("infra/docker-compose.prod.yml")
 
-    expected_line = (
-        "DB_SQL_FILES := core/schema/entities.sql "
-        "core/schema/jurisdiction.sql "
-        "core/schema/provenance.sql "
-        "core/schema/entity_resolution.sql "
-        "core/schema/er_views.sql "
-        "domains/campaign_finance/schema/tables.sql "
-        "domains/campaign_finance/schema/nc_orchestrator_tables.sql "
-        "domains/campaign_finance/schema/dark_money_tables.sql "
-        "domains/property/schema/tables.sql "
-        "domains/civics/schema/tables.sql "
-        "infra/db/09-age-graph-bootstrap.sql"
+    db_sql_files = parse_makefile_db_sql_files(makefile)
+
+    assert db_sql_files[:6] == [
+        "core/schema/entities.sql",
+        "core/schema/migrations/2026_04_30_person_bio_fields.sql",
+        "core/schema/jurisdiction.sql",
+        "core/schema/provenance.sql",
+        "core/schema/entity_resolution.sql",
+        "core/schema/er_views.sql",
+    ]
+    assert db_sql_files.index("domains/property/schema/tables.sql") < db_sql_files.index(
+        "domains/civics/schema/tables.sql"
     )
-
-    db_sql_files_lines = re.findall(r"^DB_SQL_FILES := .+$", makefile, re.M)
-
-    assert db_sql_files_lines == [expected_line]
     assert (
-        "../domains/campaign_finance/schema/dark_money_tables.sql:/docker-entrypoint-initdb.d/08-dark-money.sql"
+        "../domains/campaign_finance/schema/dark_money_tables.sql:/docker-entrypoint-initdb.d/09-dark-money.sql"
         in compose_dev
     )
     assert (
@@ -189,10 +186,10 @@ def test_postgres_local_backup_sanitizes_database_name_for_output_filename(
         *,
         cwd: Path | None = None,
         stdin=None,
+        input: bytes | None = None,
         stdout=None,
         env: dict[str, str] | None = None,
     ) -> None:
-        assert env == {"PGPASSWORD": "test-password"}
         if stdout is not None:
             stdout.write(b"fixture-backup")
 

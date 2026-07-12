@@ -1,3 +1,6 @@
+"""
+Stub summary for jun04_3pm_5_launch_gate_and_golive/civibus_dev/domains/campaign_finance/ingest/federal_officeholder_loader.py.
+"""
 
 from __future__ import annotations
 
@@ -16,7 +19,12 @@ from domains.campaign_finance.ingest.officeholder_contact import (
     run_officeholder_row,
     upsert_owned_contact_point,
 )
-from domains.civics.ingest import retire_officeholdings_for_vacancy, upsert_electoral_division, upsert_officeholding
+from domains.civics.ingest import (
+    retire_officeholdings_for_vacancy,
+    supersede_officeholdings_for_successor,
+    upsert_electoral_division,
+    upsert_officeholding,
+)
 from domains.civics.types.models import ElectoralDivision, Officeholding
 
 LOGGER = logging.getLogger(__name__)
@@ -24,6 +32,9 @@ LOGGER = logging.getLogger(__name__)
 # Deterministic seed UUIDs from domains/civics/schema/tables.sql
 _OFFICE_US_HOUSE = UUID("00000000-0000-4000-8000-000000000101")
 _OFFICE_US_SENATE = UUID("00000000-0000-4000-8000-000000000102")
+OFFICE_US_PRESIDENT = UUID("00000000-0000-4000-8000-000000000103")
+OFFICE_US_VICE_PRESIDENT = UUID("00000000-0000-4000-8000-000000000104")
+OFFICE_US_HOUSE_DELEGATE = UUID("00000000-0000-4000-8000-000000000105")
 _DIVISION_US_STATEWIDE = UUID("00000000-0000-4000-8000-000000000501")
 _DIVISION_US_CONGRESSIONAL_DISTRICTS = UUID("00000000-0000-4000-8000-000000000504")
 
@@ -41,6 +52,7 @@ def _normalize_display_name(
     last_name: str,
     fallback_member_name: str,
 ) -> str:
+
     def _humanize(token: str) -> str:
         return token.title() if token.isupper() else token
 
@@ -120,9 +132,7 @@ def normalize_house_xml_rows(xml_text: str) -> list[dict[str, str | None]]:
                 else _text(member_info, "elected-date")
             )
             sworn_date = (
-                (sworn_node.get("date") or "").strip()
-                if sworn_node is not None
-                else _text(member_info, "sworn-date")
+                (sworn_node.get("date") or "").strip() if sworn_node is not None else _text(member_info, "sworn-date")
             )
             bioguide_id = _text(member_info, "bioguideID")
 
@@ -195,16 +205,14 @@ def is_federal_officeholder_vacant(row: dict[str, str | None]) -> bool:
 
 
 def _house_term_window(sworn_date_str: str | None) -> ValidDateRange:
-    """Compute House term [sworn_date, sworn_date + 2 years) aligned to Jan 3."""
+    """Compute the open-ended active House term anchored at sworn_date."""
     if not sworn_date_str:
         return ValidDateRange()
     try:
         sworn = date.fromisoformat(sworn_date_str)
     except ValueError:
         return ValidDateRange()
-    # House terms end Jan 3 of the next odd year after swearing in
-    end_year = sworn.year + 2 if sworn.year % 2 == 1 else sworn.year + 1
-    return ValidDateRange(start_date=sworn, end_date=date(end_year, 1, 3))
+    return ValidDateRange(start_date=sworn)
 
 
 def _resolve_house_division(
@@ -261,8 +269,10 @@ def load_federal_house_officeholders(
     result = LoadResult()
 
     for raw_row in rows:
+        row_inserted = False
 
         def _process_row() -> None:
+            nonlocal row_inserted
             if _is_vacant(raw_row):
                 # Retire any active officeholding for this seat before skipping
                 state = (raw_row.get("state") or "").strip()
@@ -286,6 +296,7 @@ def load_federal_house_officeholders(
                 source_record_key=f"house:{bioguide_id}",
                 raw_row=raw_row,
             )
+            row_inserted = source_record_id is not None
             person_id = resolve_or_create_person_by_identifier(
                 conn,
                 identifier_key="bioguide_id",
@@ -296,6 +307,14 @@ def load_federal_house_officeholders(
             )
             division_id = _resolve_house_division(conn, state, district)
             term = _house_term_window(sworn_date)
+            if term.start_date is not None:
+                supersede_officeholdings_for_successor(
+                    conn,
+                    office_id=_OFFICE_US_HOUSE,
+                    electoral_division_id=division_id,
+                    successor_person_id=person_id,
+                    successor_start_date=term.start_date,
+                )
             upsert_officeholding(
                 conn,
                 Officeholding(
@@ -331,7 +350,10 @@ def load_federal_house_officeholders(
             result.skipped += 1
             continue
 
-        result.inserted += 1
+        if row_inserted:
+            result.inserted += 1
+        else:
+            result.skipped += 1
 
     return result
 
@@ -350,8 +372,10 @@ def load_federal_senate_officeholders(
     result = LoadResult()
 
     for raw_row in rows:
+        row_inserted = False
 
         def _process_row() -> None:
+            nonlocal row_inserted
             if _is_vacant(raw_row):
                 state = (raw_row.get("state") or "").strip()
                 senate_class = (raw_row.get("class") or "").strip()
@@ -385,6 +409,7 @@ def load_federal_senate_officeholders(
                 source_record_key=f"senate:{bioguide_id}",
                 raw_row=raw_row,
             )
+            row_inserted = source_record_id is not None
             person_id = resolve_or_create_person_by_identifier(
                 conn,
                 identifier_key="bioguide_id",
@@ -438,6 +463,9 @@ def load_federal_senate_officeholders(
             result.skipped += 1
             continue
 
-        result.inserted += 1
+        if row_inserted:
+            result.inserted += 1
+        else:
+            result.skipped += 1
 
     return result

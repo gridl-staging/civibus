@@ -65,12 +65,27 @@ def test_parse_phl_carto_rows_skips_rows_with_null_required_fields() -> None:
     must be SKIPPED (not raised) so the loader does not crash on a single
     bad row in a batch."""
     rows = [
-        {"transaction_id": None, "transaction_amount": 100, "transaction_date": "2026-01-01",
-         "filer_name": "X", "donor_name": "Y"},
-        {"transaction_id": "T1", "transaction_amount": None, "transaction_date": "2026-01-01",
-         "filer_name": "X", "donor_name": "Y"},
-        {"transaction_id": "T2", "transaction_amount": 250, "transaction_date": "2026-01-02",
-         "filer_name": "X", "donor_name": "Y"},
+        {
+            "transaction_id": None,
+            "transaction_amount": 100,
+            "transaction_date": "2026-01-01",
+            "filer_name": "X",
+            "donor_name": "Y",
+        },
+        {
+            "transaction_id": "T1",
+            "transaction_amount": None,
+            "transaction_date": "2026-01-01",
+            "filer_name": "X",
+            "donor_name": "Y",
+        },
+        {
+            "transaction_id": "T2",
+            "transaction_amount": 250,
+            "transaction_date": "2026-01-02",
+            "filer_name": "X",
+            "donor_name": "Y",
+        },
     ]
     parsed = list(parse_phl_carto_rows(rows, is_expenditure=False))
     assert len(parsed) == 1

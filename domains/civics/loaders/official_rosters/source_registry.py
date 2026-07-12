@@ -9,6 +9,7 @@ import yaml
 
 _REPO_ROOT = Path(__file__).resolve().parents[4]
 _DEFAULT_ROSTER_CADENCE = "weekly"
+_DEFAULT_ROSTER_JURISDICTION = "state/NC"
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,6 +51,11 @@ def _extract_roster_cadence(source_id: str, source: dict[str, object], roster_bo
         or _DEFAULT_ROSTER_CADENCE
     )
     return _coerce_nonempty_string(raw_cadence, field_name="cadence", source_id=source_id)
+
+
+def _extract_roster_jurisdiction(source_id: str, roster_bootstrap: dict[str, object]) -> str:
+    raw_jurisdiction = roster_bootstrap.get("jurisdiction") or _DEFAULT_ROSTER_JURISDICTION
+    return _coerce_nonempty_string(raw_jurisdiction, field_name="jurisdiction", source_id=source_id)
 
 
 @lru_cache(maxsize=1)
@@ -112,7 +118,7 @@ def list_nc_roster_source_metadata() -> tuple[RosterSourceMetadata, ...]:
                         source_id=source_id,
                     ),
                     cadence=_extract_roster_cadence(source_id, source, roster_bootstrap),
-                    jurisdiction="state/NC",
+                    jurisdiction=_extract_roster_jurisdiction(source_id, roster_bootstrap),
                 )
             )
         return tuple(resolved_sources)

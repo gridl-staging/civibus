@@ -313,7 +313,9 @@ def test_l8_gate_fails_when_curated_must_match_pair_is_split(
 def test_l8_regression_curated_exact_must_match_case_scores_as_match() -> None:
     module = _load_gate_module()
     regression_pairs = _load_regression_pairs_fixture()
-    case = next(case for case in regression_pairs.must_match if case.case_id == "person_cross_source_exact_name_address")
+    case = next(
+        case for case in regression_pairs.must_match if case.case_id == "person_cross_source_exact_name_address"
+    )
 
     result = module.score_regression_pair_case(
         case=case,
@@ -350,7 +352,9 @@ def test_l8_regression_curated_normalization_must_match_cases_score_as_match(cas
 def test_l8_regression_distinct_middle_initial_case_remains_non_match() -> None:
     module = _load_gate_module()
     regression_pairs = _load_regression_pairs_fixture()
-    case = next(case for case in regression_pairs.must_not_match if case.case_id == "person_same_name_different_middle_initial")
+    case = next(
+        case for case in regression_pairs.must_not_match if case.case_id == "person_same_name_different_middle_initial"
+    )
 
     result = module.score_regression_pair_case(
         case=case,
@@ -455,7 +459,9 @@ def test_l8_gate_writes_evidence_summary(
     false_positive_corpus = _load_false_positive_corpus_fixture()
     output_path = tmp_path / "regression_run.json"
 
-    def _fake_score_regression_pair_case(*, case: RegressionPairCase, expected_relation: str, **_: Any) -> dict[str, Any]:
+    def _fake_score_regression_pair_case(
+        *, case: RegressionPairCase, expected_relation: str, **_: Any
+    ) -> dict[str, Any]:
         decision = "match" if expected_relation == "must_match" else "no_match"
         return {
             "case_id": case.case_id,
@@ -494,7 +500,9 @@ def test_l8_gate_writes_evidence_summary(
     assert output_path.exists()
     assert payload == json.loads(output_path.read_text(encoding="utf-8"))
     assert payload["status"] == "pass"
-    assert payload["regression_pairs_checked"] == len(regression_pairs.must_match) + len(regression_pairs.must_not_match)
+    assert payload["regression_pairs_checked"] == len(regression_pairs.must_match) + len(
+        regression_pairs.must_not_match
+    )
     assert payload["false_positive_summary"]["cases_evaluated"] == len(false_positive_corpus.cases)
     assert _json_schema_errors(schema=_load_schema(L8_SCHEMA_PATH), payload=payload) == []
 
@@ -507,7 +515,9 @@ def test_l8_gate_records_pair_level_results(
     regression_pairs = _load_regression_pairs_fixture()
     false_positive_corpus = _load_false_positive_corpus_fixture()
 
-    def _fake_score_regression_pair_case(*, case: RegressionPairCase, expected_relation: str, **_: Any) -> dict[str, Any]:
+    def _fake_score_regression_pair_case(
+        *, case: RegressionPairCase, expected_relation: str, **_: Any
+    ) -> dict[str, Any]:
         if case.case_id == regression_pairs.must_match[0].case_id:
             return {
                 "case_id": case.case_id,
@@ -587,7 +597,9 @@ def test_l8_gate_inversion_failure_surfaces_named_nc_case(
         },
     )
 
-    def _fake_score_regression_pair_case(*, case: RegressionPairCase, expected_relation: str, **_: Any) -> dict[str, Any]:
+    def _fake_score_regression_pair_case(
+        *, case: RegressionPairCase, expected_relation: str, **_: Any
+    ) -> dict[str, Any]:
         if case.case_id == target_case_id:
             return {
                 "case_id": case.case_id,
@@ -717,30 +729,34 @@ def test_l8_gate_resolves_threshold_override_once_and_threads_to_every_classific
     monkeypatch.setattr(
         module,
         "score_regression_pair_case",
-        lambda *, auto_merge_threshold, **kwargs: regression_thresholds.append(auto_merge_threshold)
-        or {
-            "case_id": kwargs["case"].case_id,
-            "expected_relation": kwargs["expected_relation"],
-            "entity_type": kwargs["case"].entity_type,
-            "entity_id_a": _stable_entity_id(kwargs["case"].case_id, "left"),
-            "entity_id_b": _stable_entity_id(kwargs["case"].case_id, "right"),
-            "decision": "match" if kwargs["expected_relation"] == "must_match" else "no_match",
-            "confidence": 0.99,
-            "decision_method": "probabilistic",
-            "decided_by": "splink_v1",
-            "passed": True,
-        },
+        lambda *, auto_merge_threshold, **kwargs: (
+            regression_thresholds.append(auto_merge_threshold)
+            or {
+                "case_id": kwargs["case"].case_id,
+                "expected_relation": kwargs["expected_relation"],
+                "entity_type": kwargs["case"].entity_type,
+                "entity_id_a": _stable_entity_id(kwargs["case"].case_id, "left"),
+                "entity_id_b": _stable_entity_id(kwargs["case"].case_id, "right"),
+                "decision": "match" if kwargs["expected_relation"] == "must_match" else "no_match",
+                "confidence": 0.99,
+                "decision_method": "probabilistic",
+                "decided_by": "splink_v1",
+                "passed": True,
+            }
+        ),
     )
     monkeypatch.setattr(
         module,
         "score_false_positive_case",
-        lambda *, case, auto_merge_threshold, **_: corpus_thresholds.append(auto_merge_threshold)
-        or {
-            "case_id": case.corpus_id,
-            "decision": "no_match",
-            "confidence": 0.11,
-            "flagged_false_positive": False,
-        },
+        lambda *, case, auto_merge_threshold, **_: (
+            corpus_thresholds.append(auto_merge_threshold)
+            or {
+                "case_id": case.corpus_id,
+                "decision": "no_match",
+                "confidence": 0.11,
+                "flagged_false_positive": False,
+            }
+        ),
     )
 
     module.run_l8_regression_gate(
@@ -773,34 +789,34 @@ def test_l8_gate_threads_explicit_probabilistic_settings_only_to_person_cases(
     monkeypatch.setattr(
         module,
         "score_regression_pair_case",
-        lambda *, probabilistic_settings=None, case, expected_relation, **_: observed_pair_settings.append(
-            (case.entity_type, probabilistic_settings)
-        )
-        or {
-            "case_id": case.case_id,
-            "expected_relation": expected_relation,
-            "entity_type": case.entity_type,
-            "entity_id_a": _stable_entity_id(case.case_id, "left"),
-            "entity_id_b": _stable_entity_id(case.case_id, "right"),
-            "decision": "match" if expected_relation == "must_match" else "no_match",
-            "confidence": 0.99,
-            "decision_method": "probabilistic",
-            "decided_by": "splink_v1",
-            "passed": True,
-        },
+        lambda *, probabilistic_settings=None, case, expected_relation, **_: (
+            observed_pair_settings.append((case.entity_type, probabilistic_settings))
+            or {
+                "case_id": case.case_id,
+                "expected_relation": expected_relation,
+                "entity_type": case.entity_type,
+                "entity_id_a": _stable_entity_id(case.case_id, "left"),
+                "entity_id_b": _stable_entity_id(case.case_id, "right"),
+                "decision": "match" if expected_relation == "must_match" else "no_match",
+                "confidence": 0.99,
+                "decision_method": "probabilistic",
+                "decided_by": "splink_v1",
+                "passed": True,
+            }
+        ),
     )
     monkeypatch.setattr(
         module,
         "score_false_positive_case",
-        lambda *, case, probabilistic_settings=None, **_: observed_corpus_settings.append(
-            (case.entity_type, probabilistic_settings)
-        )
-        or {
-            "case_id": case.corpus_id,
-            "decision": "no_match",
-            "confidence": 0.11,
-            "flagged_false_positive": False,
-        },
+        lambda *, case, probabilistic_settings=None, **_: (
+            observed_corpus_settings.append((case.entity_type, probabilistic_settings))
+            or {
+                "case_id": case.corpus_id,
+                "decision": "no_match",
+                "confidence": 0.11,
+                "flagged_false_positive": False,
+            }
+        ),
     )
 
     module.run_l8_regression_gate(

@@ -28,9 +28,9 @@ This package covers North Carolina as a single statewide campaign-finance source
   - Scope: statewide filing-document index metadata (`Committee Name`, `SBoE ID`, `Doc Name`, period boundaries, DATA/IMAGE links). Transaction-level IE amounts are recovered downstream from each filing's linked `CFOrgLkup` `ReportDetail` export.
   - Operational proof: 2026-04-19 Hetzner live load inserted 47 NC IE filing-index rows (`NC-IE-%`) with idempotent rerun (`inserted=0` on second pass).
   - Evidence paths:
-    - Canonical repo-owned investigation and Stage 4 proof summary: `docs/research/nc_ie_portal_investigation_2026_04_18.md`
-    - Supporting local probe artifacts: `docs/research/artifacts/2026_04_18_nc_ie/`
-    - Transaction-amount contract re-probe: `docs/research/nc_ie_transaction_amounts_investigation_2026_04_25.md`
+    - Canonical repo-owned investigation and Stage 4 proof summary: `docs/reference/research/nc_ie_portal_investigation_2026_04_18.md`
+    - Supporting local probe artifacts: `docs/reference/research/artifacts/2026_04_18_nc_ie/`
+    - Transaction-amount contract re-probe: `docs/reference/research/nc_ie_transaction_amounts_investigation_2026_04_25.md`
 
 ## Coverage notes
 - Retained Stage 3/4 fixtures prove the NC package contract for:
@@ -54,15 +54,15 @@ This package covers North Carolina as a single statewide campaign-finance source
 ## Evidence references used for current status
 - Stage 3 live browser proof:
   - `domains/campaign_finance/jurisdictions/states/NC/scraper/test_download_playwright.py::test_download_transaction_export_playwright_integration_returns_nonempty_parseable_file`
-  - Repo-owned contract investigation and retained artifacts summarized in `docs/research/nc_ie_portal_investigation_2026_04_18.md`
+  - Repo-owned contract investigation and retained artifacts summarized in `docs/reference/research/nc_ie_portal_investigation_2026_04_18.md`
 - Stage 4 retained real-data ingest proof:
   - `domains/campaign_finance/jurisdictions/states/NC/scraper/test_load_stage4_real_data.py::test_real_data_transactions_with_filings_builds_relational_chain`
   - `domains/campaign_finance/jurisdictions/states/NC/scraper/test_load_stage4_real_data.py::test_real_committee_docs_blank_doc_name_rows_keep_source_record_provenance`
 - Stage 5 bounded runner proof:
-  - `python -m core.refresh.runner --scope all --job-key-prefix state-nc --nc-committee-docs-path docs/research/artifacts/2026-03-live-proof/nc_committee_docs_3517.csv --nc-committee-id STA-C3219N-C-001 --nc-committee-name "NC REALTORS PAC" --nc-date-from 01/01/2024 --nc-date-to 01/31/2024 --force`
+  - `python -m core.refresh.runner --scope all --job-key-prefix state-nc --nc-committee-docs-path docs/reference/research/artifacts/2026-03-live-proof/nc_committee_docs_3517.csv --nc-committee-id STA-C3219N-C-001 --nc-committee-name "NC REALTORS PAC" --nc-date-from 01/01/2024 --nc-date-to 01/31/2024 --force`
   - Result: `state-nc-transactions: status=success metadata_updates=1 message=Refresh job succeeded`
 - Stage 6 broader committee + production proof:
-  - `ADAMS FOR NC HOUSE` / `STA-B6IP24-C-001` retained artifacts at `docs/research/artifacts/2026-03-production-proof/nc_committee_docs_27075_current.csv` and `docs/research/artifacts/2026-03-production-proof/nc_transactions_adams_2024_current.csv`
+  - `ADAMS FOR NC HOUSE` / `STA-B6IP24-C-001` retained artifacts at `docs/reference/research/artifacts/2026-03-production-proof/nc_committee_docs_27075_current.csv` and `docs/reference/research/artifacts/2026-03-production-proof/nc_transactions_adams_2024_current.csv`
   - Production proof on 2026-03-28 loaded `65` NC transactions and `54` NC filings into the deployed stack after a transactions-only priming pass plus the filing-aware rerun.
 
 ## Verification cadence
@@ -76,4 +76,4 @@ This package covers North Carolina as a single statewide campaign-finance source
 - **Unrecognized transaction types.** `classify_transction_type()` returns `"unknown"` for values not in the recognized set (`Individual`, `Non-Party Comm`, `Business/Group/Org`). Entity extraction is skipped for unknown types; raw data is preserved in source records.
 
 ## Remaining closeout gap
-- Office-class boundary proof (Stage 1 universe table in `docs/research/nc_office_universe_2026_04_24.md` + Stage 3 per-class coverage tests) is complete for all five in-scope classes; the Stage 5 closeout matrix (`docs/research/nc_office_coverage_closeout_2026_04_24.md`) and registry narrative update are the remaining deliverables.
+- Office-class boundary proof (Stage 1 universe table in `docs/reference/research/nc_office_universe_2026_04_24.md` + Stage 3 per-class coverage tests) is complete for all five in-scope classes; the Stage 5 closeout matrix (`docs/reference/research/nc_office_coverage_closeout_2026_04_24.md`) and registry narrative update are the remaining deliverables.

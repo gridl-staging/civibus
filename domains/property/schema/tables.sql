@@ -75,6 +75,7 @@ CREATE TABLE prop.assessment (
 
 CREATE UNIQUE INDEX uq_assessment_parcel_tax_year ON prop.assessment (parcel_id, tax_year);
 CREATE INDEX idx_assessment_parcel ON prop.assessment (parcel_id);
+CREATE INDEX idx_assessment_source_record_id ON prop.assessment (source_record_id);
 
 CREATE TABLE prop.ownership (
     id                    UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -114,6 +115,7 @@ CREATE INDEX idx_ownership_owner_address
     ON prop.ownership (owner_address_id)
     WHERE owner_address_id IS NOT NULL;
 CREATE INDEX idx_ownership_valid_period ON prop.ownership USING GIST (valid_period);
+CREATE INDEX idx_ownership_source_record_id ON prop.ownership (source_record_id);
 
 CREATE TRIGGER trg_parcel_updated_at
     BEFORE UPDATE ON prop.parcel

@@ -4,24 +4,33 @@ from __future__ import annotations
 import os
 import sys
 import time
+import types
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import psycopg
 import pytest
 
 if TYPE_CHECKING:
-    import psycopg
+    pass
 
 _REEXEC_SENTINEL_ENV_VAR = "CIVIBUS_PYTEST_REEXEC"
 _POSTGRES_UNAVAILABLE_PREFIX = "Unable to connect to PostgreSQL at "
 _DB_CONNECTION_STARTUP_RETRY_ATTEMPTS = 10
 _DB_CONNECTION_STARTUP_RETRY_DELAY_SECONDS = 1.0
+_postgres_unavailable_error_message: str | None = None
 _STAGE1_BOOTSTRAP_DRIFT_PREFIX = "Stage 1 bootstrap contract drift detected. Missing canaries: "
 _CONTEST_RESULT_CANARY_PREFIX = "civic.contest_result."
 _REPO_ROOT = Path(__file__).resolve().parent
 _CIVICS_SCHEMA_PATH = _REPO_ROOT / "domains" / "civics" / "schema" / "tables.sql"
+_CIVICS_CANDIDACY_MIGRATION_PATH = (
+    _REPO_ROOT / "domains" / "civics" / "schema" / "migrations" / "2026_04_30_candidacy_mvp_columns.sql"
+)
 _ENTITY_RESOLUTION_SCHEMA_PATH = _REPO_ROOT / "core" / "schema" / "entity_resolution.sql"
+_PERSON_BIO_MIGRATION_PATH = _REPO_ROOT / "core" / "schema" / "migrations" / "2026_04_30_person_bio_fields.sql"
 _ER_VIEWS_SCHEMA_PATH = _REPO_ROOT / "core" / "schema" / "er_views.sql"
+_CONTEST_SECTION_START = "-- Contest"
+_CONTEST_SECTION_END = "-- Contest Result"
 _CONTEST_RESULT_SECTION_START = "-- Contest Result"
 _CONTEST_RESULT_SECTION_END = "-- Filing Deadline"
 _CONTEST_RESULT_TRIGGER_START = "CREATE TRIGGER trg_contest_result_updated_at"
@@ -78,7 +87,64 @@ _CONTEST_RESULT_CANARY_REPAIR_SQL = {
         ALTER TABLE civic.contest_result
         ADD COLUMN IF NOT EXISTS is_certified BOOLEAN NOT NULL DEFAULT FALSE
     """,
+    "civic.trg_contest_result_updated_at": """
+        DROP TRIGGER IF EXISTS trg_contest_result_updated_at ON civic.contest_result;
+        CREATE TRIGGER trg_contest_result_updated_at
+            BEFORE UPDATE ON civic.contest_result
+            FOR EACH ROW EXECUTE FUNCTION core.set_updated_at();
+    """,
 }
+_CANDIDACY_CANARY_KEYS = frozenset(
+    {
+        "civic.candidacy.name_on_ballot",
+        "civic.candidacy.is_unexpired_term",
+        "civic.candidacy.raw_fields",
+        "civic.candidacy.committee_id",
+        "civic.idx_candidacy_committee_id",
+        "civic.idx_candidacy_name_on_ballot",
+    }
+)
+_PERSON_BIO_CANARY_KEYS = frozenset(
+    {
+        "core.person.bio_text",
+        "core.person.bio_source_url",
+        "core.person.bio_license",
+        "core.person.bio_pulled_at",
+    }
+)
+_GRAPH_CANARY = "ag_catalog.ag_graph.civibus"
+
+_repo_root_path = str(_REPO_ROOT)
+if _repo_root_path in sys.path:
+    sys.path.remove(_repo_root_path)
+sys.path.insert(0, _repo_root_path)
+
+# Test sessions can inherit another repo's `scripts` package on PYTHONPATH.
+_scripts_module = sys.modules.get("scripts")
+_scripts_module_file = getattr(_scripts_module, "__file__", None)
+if _scripts_module_file is not None and not Path(_scripts_module_file).resolve().is_relative_to(_REPO_ROOT):
+    del sys.modules["scripts"]
+if "scripts" not in sys.modules:
+    _repo_scripts_module = types.ModuleType("scripts")
+    _repo_scripts_module.__path__ = [str(_REPO_ROOT / "scripts")]  # type: ignore[attr-defined]
+    sys.modules["scripts"] = _repo_scripts_module
+
+# --- Parked-jurisdiction quarantine (federal-first v1, see PRIORITIES.md) ---
+# State/city campaign-finance pipelines are FROZEN until post-v1, so their
+# ~2,500 tests are excluded from default collection to keep `make test` and CI
+# focused on active code. Only per-state/city SUBDIRECTORIES are ignored:
+# shared helpers directly under jurisdictions/states/ (load_utils.py etc.) are
+# live federal-ingest dependencies and their colocated tests must keep running.
+# Escape hatch: CIVIBUS_INCLUDE_PARKED=1 (used by `make test-parked`).
+# Contract-tested in tests/test_parked_suite_exclusion.py.
+_PARKED_JURISDICTION_PARENTS = (
+    _REPO_ROOT / "domains" / "campaign_finance" / "jurisdictions" / "states",
+    _REPO_ROOT / "domains" / "campaign_finance" / "jurisdictions" / "cities",
+)
+if not os.environ.get("CIVIBUS_INCLUDE_PARKED"):
+    collect_ignore = [
+        str(child) for parent in _PARKED_JURISDICTION_PARENTS for child in sorted(parent.iterdir()) if child.is_dir()
+    ]
 
 
 def _reexec_pytest_under_project_python_if_needed() -> None:
@@ -110,17 +176,39 @@ from core.graph import age_post_connect, ensure_graph  # noqa: E402
 from test_support.bootstrap_canaries import _collect_missing_stage1_canaries  # noqa: E402
 
 
+# Process-env test defaults for the fail-closed api.main import (module-level
+# `app = create_app()` demands API keys + rate-limit env). These lived in
+# api/conftest.py, which only loads when api/ is collected — a scoped run like
+# `pytest tests` (batman merge validation) crashed at import. The root conftest
+# loads for every run, so it is the single owner; api/conftest.py re-reads the
+# values it needs from the environment.
+_TEST_ENV_DEFAULTS = {
+    "CIVIBUS_API_KEYS": "test-suite-default-key",
+    "CIVIBUS_RATE_LIMIT_REQUESTS": "100",
+    "CIVIBUS_RATE_LIMIT_WINDOW_SECONDS": "60",
+}
+
+for _env_var_name, _env_var_value in _TEST_ENV_DEFAULTS.items():
+    os.environ.setdefault(_env_var_name, _env_var_value)
+
+
 def _require_postgres_password() -> None:
     """Default DB-backed tests to the standard local development password."""
     os.environ.setdefault("POSTGRES_PASSWORD", "civibus_dev")
 
 
 def _connection_or_skip(*, post_connect=None) -> psycopg.Connection:
-    """Try to connect with retries; skip the test if PostgreSQL is unavailable."""
+    """Try to connect with retries; skip or fail if PostgreSQL is unavailable."""
+    global _postgres_unavailable_error_message
+    if _postgres_unavailable_error_message is not None:
+        _skip_or_fail_for_postgres_unavailable(_postgres_unavailable_error_message)
+
     last_connection_error: RuntimeError | None = None
     for attempt_index in range(_DB_CONNECTION_STARTUP_RETRY_ATTEMPTS):
         try:
-            return get_connection(post_connect=post_connect)
+            connection = get_connection(post_connect=post_connect)
+            _postgres_unavailable_error_message = None
+            return connection
         except RuntimeError as error:
             if not str(error).startswith(_POSTGRES_UNAVAILABLE_PREFIX):
                 raise
@@ -130,7 +218,14 @@ def _connection_or_skip(*, post_connect=None) -> psycopg.Connection:
             time.sleep(_DB_CONNECTION_STARTUP_RETRY_DELAY_SECONDS)
 
     assert last_connection_error is not None
-    pytest.skip(str(last_connection_error))
+    _postgres_unavailable_error_message = str(last_connection_error)
+    _skip_or_fail_for_postgres_unavailable(_postgres_unavailable_error_message)
+
+
+def _skip_or_fail_for_postgres_unavailable(message: str) -> None:
+    if os.environ.get("CIVIBUS_REQUIRE_DB") == "1":
+        pytest.fail(message)
+    pytest.skip(message)
 
 
 def _schema_section_sql(*, schema_text: str, start_marker: str, end_marker: str) -> str:
@@ -145,6 +240,11 @@ def _schema_section_sql(*, schema_text: str, start_marker: str, end_marker: str)
 
 def _contest_result_bootstrap_sql() -> str:
     schema_text = _CIVICS_SCHEMA_PATH.read_text(encoding="utf-8")
+    contest_section = _schema_section_sql(
+        schema_text=schema_text,
+        start_marker=_CONTEST_SECTION_START,
+        end_marker=_CONTEST_SECTION_END,
+    )
     contest_result_section = _schema_section_sql(
         schema_text=schema_text,
         start_marker=_CONTEST_RESULT_SECTION_START,
@@ -157,7 +257,35 @@ def _contest_result_bootstrap_sql() -> str:
     )
     return "\n".join(
         [
+            "CREATE SCHEMA IF NOT EXISTS core;",
+            "CREATE TABLE IF NOT EXISTS core.source_record (id UUID PRIMARY KEY);",
+            """
+            CREATE OR REPLACE FUNCTION core.set_updated_at()
+            RETURNS trigger
+            LANGUAGE plpgsql
+            AS $$
+            BEGIN
+                NEW.updated_at := NOW();
+                RETURN NEW;
+            END;
+            $$;
+            """.strip(),
+            """
+            DO $$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1
+                    FROM pg_type t
+                    JOIN pg_namespace n ON n.oid = t.typnamespace
+                    WHERE n.nspname = 'core'
+                      AND t.typname = 'date_precision'
+                ) THEN
+                    CREATE TYPE core.date_precision AS ENUM ('day', 'month', 'quarter', 'year', 'approximate');
+                END IF;
+            END $$;
+            """.strip(),
             "CREATE SCHEMA IF NOT EXISTS civic;",
+            contest_section,
             contest_result_section,
             "DROP TRIGGER IF EXISTS trg_contest_result_updated_at ON civic.contest_result;",
             contest_result_trigger,
@@ -228,28 +356,116 @@ def _relation_exists(connection: psycopg.Connection, relation_name: str) -> bool
     return bool(row and row[0])
 
 
+def _type_exists(connection: psycopg.Connection, schema_name: str, type_name: str) -> bool:
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT EXISTS (
+                SELECT 1
+                FROM pg_type t
+                JOIN pg_namespace n ON n.oid = t.typnamespace
+                WHERE n.nspname = %s
+                  AND t.typname = %s
+            )
+            """,
+            (schema_name, type_name),
+        )
+        row = cursor.fetchone()
+    return bool(row and row[0])
+
+
+def _can_repair_officeholding_date_precision(connection: psycopg.Connection) -> bool:
+    """Repair only when both target table and enum type already exist."""
+    has_officeholding_table = _relation_exists(connection, "civic.officeholding")
+    has_date_precision_type = _type_exists(connection, "core", "date_precision")
+    return has_officeholding_table and has_date_precision_type
+
+
+def _ensure_core_date_precision_type(connection: psycopg.Connection) -> None:
+    with connection.cursor() as cursor:
+        _execute_stage1_canary_repair(
+            connection,
+            cursor,
+            """
+            DO $$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1
+                    FROM pg_type t
+                    JOIN pg_namespace n ON n.oid = t.typnamespace
+                    WHERE n.nspname = 'core'
+                      AND t.typname = 'date_precision'
+                ) THEN
+                    EXECUTE 'CREATE TYPE core.date_precision AS ENUM (''day'', ''month'', ''quarter'', ''year'', ''approximate'')';
+                END IF;
+            END $$;
+            """,
+        )
+
+
+def _execute_stage1_canary_repair(
+    connection: psycopg.Connection,
+    cursor: psycopg.Cursor,
+    repair_sql: str,
+) -> None:
+    """Execute one canary repair and clear transaction state if savepoint cleanup fails."""
+    try:
+        cursor.execute("SAVEPOINT stage1_canary_repair")
+        try:
+            cursor.execute(repair_sql)
+        except psycopg.Error:
+            cursor.execute("ROLLBACK TO SAVEPOINT stage1_canary_repair")
+        finally:
+            cursor.execute("RELEASE SAVEPOINT stage1_canary_repair")
+    except psycopg.Error:
+        connection.rollback()
+
+
 def _bootstrap_missing_stage1_canaries(connection: psycopg.Connection, *, missing_canaries: list[str]) -> None:
+    if _CANDIDACY_CANARY_KEYS & set(missing_canaries):
+        with connection.cursor() as cursor:
+            _execute_stage1_canary_repair(
+                connection, cursor, _CIVICS_CANDIDACY_MIGRATION_PATH.read_text(encoding="utf-8")
+            )
+    if _PERSON_BIO_CANARY_KEYS & set(missing_canaries):
+        with connection.cursor() as cursor:
+            _execute_stage1_canary_repair(connection, cursor, _PERSON_BIO_MIGRATION_PATH.read_text(encoding="utf-8"))
+    if "civic.officeholding.date_precision" in missing_canaries:
+        _ensure_core_date_precision_type(connection)
+    if _GRAPH_CANARY in missing_canaries:
+        try:
+            age_post_connect(connection)
+            ensure_graph(connection)
+        except psycopg.Error:
+            connection.rollback()
     with connection.cursor() as cursor:
         for missing_canary in missing_canaries:
             if not (
                 missing_canary.startswith(_CONTEST_RESULT_CANARY_PREFIX)
+                or missing_canary == "civic.trg_contest_result_updated_at"
                 or missing_canary == "civic.uq_contest_result_canonical"
             ):
                 continue
             repair_sql = _CONTEST_RESULT_CANARY_REPAIR_SQL.get(missing_canary)
             if repair_sql:
-                cursor.execute(repair_sql)
-        if "civic.officeholding.date_precision" in missing_canaries:
-            cursor.execute(
+                _execute_stage1_canary_repair(connection, cursor, repair_sql)
+        if "civic.officeholding.date_precision" in missing_canaries and _can_repair_officeholding_date_precision(
+            connection
+        ):
+            _execute_stage1_canary_repair(
+                connection,
+                cursor,
                 """
                 ALTER TABLE civic.officeholding
                 ADD COLUMN IF NOT EXISTS date_precision core.date_precision NOT NULL DEFAULT 'day'
-                """
+                """,
             )
-        if {"core.person_er_view", "core.organization_er_view"} & set(missing_canaries):
-            cursor.execute(_ER_VIEWS_SCHEMA_PATH.read_text(encoding="utf-8"))
+        if {"core.person_er_view", "core.organization_er_view"} & set(missing_canaries) and _relation_exists(
+            connection, "core.person"
+        ):
+            _execute_stage1_canary_repair(connection, cursor, _ER_VIEWS_SCHEMA_PATH.read_text(encoding="utf-8"))
         if "core.match_decision" in missing_canaries and not _relation_exists(connection, "core.match_decision"):
-            cursor.execute(_match_decision_bootstrap_sql())
+            _execute_stage1_canary_repair(connection, cursor, _match_decision_bootstrap_sql())
 
 
 def _fail_if_stage1_bootstrap_drift_detected(connection: psycopg.Connection) -> None:
@@ -257,6 +473,8 @@ def _fail_if_stage1_bootstrap_drift_detected(connection: psycopg.Connection) -> 
     connection.commit()
     missing_canaries = _collect_missing_stage1_canaries(connection)
     if missing_canaries:
+        # Canary probes can leave the current transaction aborted when optional schema is missing.
+        connection.rollback()
         _bootstrap_missing_stage1_canaries(connection, missing_canaries=missing_canaries)
         connection.commit()
         remaining_missing_canaries = _collect_missing_stage1_canaries(connection)
@@ -296,5 +514,18 @@ def graph_conn() -> psycopg.Connection:
             yield connection
         finally:
             connection.rollback()
+    finally:
+        connection.close()
+
+
+@pytest.fixture
+def committing_db_conn() -> psycopg.Connection:
+    """Provide a DB connection for integration tests that commit real work."""
+    _require_postgres_password()
+    connection = _connection_or_skip()
+    try:
+        _fail_if_stage1_bootstrap_drift_detected(connection)
+        connection.rollback()
+        yield connection
     finally:
         connection.close()

@@ -1,4 +1,4 @@
-"""Structural-contract tests for `docs/keel/casual.md`.
+"""Structural-contract tests for `docs/reference/keel/casual.md`.
 
 The string assertions here are NOT string-duplication-test smell — they
 ARE the contract the doc owes its readers (cross-link integrity, no
@@ -11,7 +11,7 @@ import re
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-CASUAL_MD = REPO_ROOT / "docs" / "keel" / "casual.md"
+CASUAL_MD = REPO_ROOT / "docs" / "reference" / "keel" / "casual.md"
 
 
 # Numbered sections from the plan (Stage 3, "Doc structure").
@@ -50,10 +50,10 @@ def test_casual_md_has_all_seven_numbered_sections() -> None:
 
 
 _REQUIRED_PATHS = [
-    "docs/keel/CURRENT.md",
-    "docs/keel/historical_validation.md",
-    "docs/keel/layers.md",
-    "docs/keel/judge_prompts.md",
+    "docs/reference/keel/CURRENT.md",
+    "docs/reference/keel/historical_validation.md",
+    "docs/reference/keel/layers.md",
+    "docs/reference/keel/judge_prompts.md",
 ]
 
 

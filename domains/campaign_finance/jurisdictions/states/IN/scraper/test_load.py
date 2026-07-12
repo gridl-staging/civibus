@@ -416,6 +416,7 @@ def test_ingest_in_contributions_is_idempotent_and_sets_relational_keys(
     assert second_transaction_count == first_transaction_count
     assert rerun_source_record_snapshot == source_record_snapshot
 
+
 @pytest.mark.integration
 def test_ingest_in_expenditures_maps_amended_rows_to_indicator_a(db_conn: psycopg.Connection) -> None:
     result = load_in_expenditures_with_filings(db_conn, _SAMPLE_EXPENDITURES_PATH)

@@ -1,3 +1,6 @@
+"""
+Stub summary for jun04_3pm_4_congress_directory_ui/civibus_dev/api/routes/civics.py.
+"""
 
 from __future__ import annotations
 
@@ -14,6 +17,7 @@ from api.models.civics import (
     CandidacyResponse,
     CandidacySummary,
     ContactSummary,
+    CongressMemberSummary,
     CivicGeometryFeature,
     CivicGeometryFeatureCollection,
     CivicGeometryFeatureProperties,
@@ -37,6 +41,7 @@ from api.queries.civics import (
     fetch_contest_candidacies,
     fetch_contest_detail,
     fetch_country_state_geometries,
+    fetch_current_federal_members,
     fetch_election_contests_by_date,
     fetch_electoral_division_geometries,
     fetch_office_active_contest_count,
@@ -97,7 +102,9 @@ def get_office(office_id: UUID, conn: psycopg.Connection = Depends(get_db)) -> O
 
     officeholders = fetch_office_officeholders(conn, office_id)
     row["current_officeholders"] = [OfficeholderSummary.model_validate(oh) for oh in officeholders]
-    row["current_holder_card"] = OfficeCurrentHolderCard.model_validate(officeholders[0]) if len(officeholders) == 1 else None
+    row["current_holder_card"] = (
+        OfficeCurrentHolderCard.model_validate(officeholders[0]) if len(officeholders) == 1 else None
+    )
 
     timeline = fetch_officeholding_timeline(conn, office_id)
     row["officeholding_timeline"] = [OfficeholdingTimelineSummary.model_validate(oh) for oh in timeline]
@@ -155,6 +162,14 @@ def get_jurisdiction_offices(jurisdiction_id: UUID, conn: psycopg.Connection = D
         raise HTTPException(status_code=404, detail="Jurisdiction not found")
     rows = fetch_offices_by_jurisdiction(conn, jurisdiction_id)
     return [OfficeListItem.model_validate(r) for r in rows]
+
+
+@router.get("/congress/members", response_model=list[CongressMemberSummary])
+def get_congress_members(conn: psycopg.Connection = Depends(get_db)) -> list[CongressMemberSummary]:
+    rows = fetch_current_federal_members(conn)
+    for row in rows:
+        row["person_detail_path"] = f"/person/{row['person_id']}"
+    return [CongressMemberSummary.model_validate(row) for row in rows]
 
 
 @router.get("/elections/timeline/upcoming", response_model=list[UpcomingElectionTimelineEntry])

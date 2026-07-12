@@ -1,7 +1,7 @@
 # Pennsylvania (PA) campaign-finance jurisdiction package
 
 ## Jurisdiction overview
-Pennsylvania is a state-level jurisdiction (`fips: 42`) using Department of State (DOS) full-export ZIP archives. Despite URL labeling as "yearly," the current-year ZIP is regenerated roughly weekly (~4 day lag from latest filing). See `docs/research/pa-freshness-investigation-2026-03-28.md`.
+Pennsylvania is a state-level jurisdiction (`fips: 42`) using Department of State (DOS) full-export ZIP archives. Despite URL labeling as "yearly," the current-year ZIP is regenerated roughly weekly (~4 day lag from latest filing). See `docs/reference/research/pa-freshness-investigation-2026-03-28.md`.
 
 `config.yaml` is the only machine-readable source of truth for PA archive URLs, source names, coverage, and field mappings.
 

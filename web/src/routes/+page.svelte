@@ -1,15 +1,10 @@
 <script lang="ts">
   import { env } from "$env/dynamic/public";
-  import { page, navigating } from "$app/stores";
+  import { page } from "$app/stores";
   import { APP_SHELL } from "$lib/config/app";
-  import RegionMap from "$lib/region-map/RegionMap.svelte";
   import SeoHead from "$lib/seo/SeoHead.svelte";
   import { buildSeoHeadModel } from "$lib/seo/head";
   import { buildHomepageJsonLd } from "$lib/seo/jsonld";
-  import SkeletonPanel from "$lib/loading/SkeletonPanel.svelte";
-  import type { PageData } from "./$types";
-
-  export let data: PageData;
 
   const routeMetadata = APP_SHELL.staticRoutes.home;
   const landing = APP_SHELL.landing;
@@ -22,33 +17,16 @@
   });
   $: homepageJsonLd = buildHomepageJsonLd({
     pageUrl: $page.url,
-    publicOrigin: env.PUBLIC_ORIGIN,
-    description: routeMetadata.description
+    publicOrigin: env.PUBLIC_ORIGIN
   });
-  $: isReloading = $navigating?.to?.url.pathname === "/";
-  $: hasGeometry = data.geometry.features.length > 0;
 </script>
 
 <SeoHead {headModel} jsonLd={homepageJsonLd} />
 
-<section class="card landing" aria-label="Civibus landing">
+<section class="landing" aria-label="Civibus landing">
   <p class="landing__eyebrow">{landing.eyebrow}</p>
   <h2>{landing.heading}</h2>
   <p>{landing.body}</p>
-
-  <h3>{landing.mapHeading}</h3>
-  {#if isReloading}
-    <SkeletonPanel label={landing.mapLoadingLabel} />
-  {:else if hasGeometry}
-    <RegionMap
-      geometry={data.geometry}
-      stateSummaries={data.stateSummaries}
-      title={landing.mapTitle}
-      unsupportedLabel={landing.mapUnsupportedLabel}
-    />
-  {:else}
-    <p class="landing__map-empty" role="status">{landing.mapEmptyMessage}</p>
-  {/if}
 
   <h3>Take action</h3>
   <div class="landing__actions">
@@ -71,7 +49,10 @@
   </div>
 
   <h3>{landing.coverageHeading}</h3>
-  <p>{landing.coverageSummary}</p>
+  <p>
+    {landing.coverageSummary}
+    <a class="landing__scope-link" href="/methodology">Read methodology.</a>
+  </p>
 </section>
 
 <style>
@@ -89,15 +70,6 @@
 
   .landing h3 {
     margin: 1.25rem 0 0.5rem;
-  }
-
-  .landing__map-empty {
-    margin: 0;
-    padding: 1rem;
-    border: 1px dashed #c6d7e7;
-    border-radius: 0.5rem;
-    background: #f4f8fc;
-    color: #4a5b6c;
   }
 
   .landing__actions {
@@ -132,6 +104,13 @@
   }
 
   .landing__action-link {
+    color: #0f4f79;
+    font-weight: 600;
+  }
+
+  .landing__scope-link {
+    display: inline-block;
+    margin-left: 0.35rem;
     color: #0f4f79;
     font-weight: 600;
   }

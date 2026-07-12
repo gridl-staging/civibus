@@ -5,7 +5,9 @@ import {
   buildCandidateIndependentExpendituresSummaryPath,
   buildCandidateSummaryPath,
   buildCandidatesBySlugPath,
-  type CandidateListItem
+  type CandidateFundraisingSummary,
+  type CandidateListItem,
+  type CommitteeFundraisingSummary
 } from "$lib/campaign-finance-detail/contract";
 import type { CandidateDetailBundle } from "$lib/server/api/campaign-finance-detail";
 import { describe, expect, it, vi } from "vitest";
@@ -49,26 +51,44 @@ function buildCandidateDetail(overrides: Partial<typeof BASE_CANDIDATE_DETAIL> =
   };
 }
 
-function buildCandidateSummary(candidateId: string, candidateName = "Candidate One") {
+function buildCandidateCommitteeSummary(
+  committeeId: string,
+  committeeName = "Committee One"
+): CommitteeFundraisingSummary {
+  return {
+    committee_id: committeeId,
+    committee_name: committeeName,
+    total_raised: "250.00",
+    total_spent: "100.00",
+    net: "150.00",
+    transaction_count: 5,
+    jurisdiction: "federal/fec",
+    data_through: "2026-03-19T00:00:00Z",
+    cash_receipts_total: "250.00",
+    in_kind_receipts_total: "0.00",
+    loan_receipts_total: "0.00",
+    contribution_receipts_total: "250.00",
+    top_donors: [],
+    top_vendors: [],
+    spend_categories: null,
+    itemized_transaction_count: 5,
+    cycle_summaries: [],
+    summary_source: "derived"
+  };
+}
+
+function buildCandidateSummary(candidateId: string, candidateName = "Candidate One"): CandidateFundraisingSummary {
   return {
     candidate_id: candidateId,
     candidate_name: candidateName,
-    total_raised: 250,
-    total_spent: 100,
-    net: 150,
+    total_raised: "250.00",
+    total_spent: "100.00",
+    net: "150.00",
     transaction_count: 5,
-    committees: [
-      {
-        committee_id: COMMITTEE_ID,
-        committee_name: "Committee One",
-        total_raised: 250,
-        total_spent: 100,
-        net: 150,
-        transaction_count: 5,
-        jurisdiction: "federal/fec",
-        data_through: "2026-03-19T00:00:00Z"
-      }
-    ]
+    committees: [buildCandidateCommitteeSummary(COMMITTEE_ID)],
+    cash_on_hand: null,
+    summary_source: "derived" as const,
+    itemized_transaction_count: 5
   };
 }
 

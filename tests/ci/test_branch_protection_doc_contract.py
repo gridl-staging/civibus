@@ -7,7 +7,7 @@ import re
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CI_WORKFLOW_PATH = REPO_ROOT / ".github/workflows/ci.yml"
 INTEGRATION_WORKFLOW_PATH = REPO_ROOT / ".github/workflows/integration.yml"
-RUNBOOK_PATH = REPO_ROOT / "docs/dev/branch-protection.md"
+RUNBOOK_PATH = REPO_ROOT / "docs/reference/dev/branch-protection.md"
 
 
 def _read_text(path: Path) -> str:
@@ -22,7 +22,7 @@ def _extract_job_names(workflow_text: str) -> list[str]:
 
 
 def test_branch_protection_runbook_exists_and_references_workflow_sources() -> None:
-    assert RUNBOOK_PATH.exists(), "docs/dev/branch-protection.md must exist"
+    assert RUNBOOK_PATH.exists(), "docs/reference/dev/branch-protection.md must exist"
     runbook_text = _read_text(RUNBOOK_PATH)
 
     assert ".github/workflows/ci.yml" in runbook_text

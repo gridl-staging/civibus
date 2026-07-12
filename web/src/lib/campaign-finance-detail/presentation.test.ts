@@ -6,17 +6,23 @@ import {
   buildCandidateDetailShellPresentation,
   buildCandidateFactRows,
   buildCandidateRoutePresentation,
+  buildCommitteeCycleSummaryRows,
   buildCommitteeDetailMetadata,
   buildCommitteeDetailMetadataFromBundle,
   buildCommitteeDetailShellPresentation,
   buildCommitteeFactRows,
-  buildCommitteeRoutePresentation
+  buildCommitteeDeferredOutsideSpending,
+  buildCommitteeRoutePresentation,
+  buildFundraisingSummaryPresentation,
+  buildKeyMetrics,
+  buildLinkedCandidateLinks
 } from "./presentation";
 import {
   CANDIDATE_ID,
   COMMITTEE_ID,
   DEFAULT_CANDIDATE_DETAIL,
   DEFAULT_COMMITTEE_DETAIL,
+  DEFAULT_SUMMARY,
   ORG_ID,
   PERSON_ID,
   buildCandidateBundle,
@@ -98,7 +104,7 @@ describe("campaign finance detail presentation", () => {
 
   it("does not surface the retired Indiana freshness warning on campaign-finance detail pages", () => {
     // IN re-verdicted to weekly-or-better 2026-04-26
-    // (see docs/research/in_freshness_recheck_2026_04_26.md). The
+    // (see docs/reference/research/in_freshness_recheck_2026_04_26.md). The
     // Indiana-specific banner is retired; campaign-finance committee
     // and candidate shells must no longer surface it for IN sources.
     const sources = [
@@ -301,6 +307,7 @@ describe("campaign finance detail presentation", () => {
       expect(canonicalPresentation.transactions).toBeInstanceOf(Promise);
       expect(canonicalPresentation.summary).toBeInstanceOf(Promise);
       expect(canonicalPresentation.filingBreakdown).toBeInstanceOf(Promise);
+      expect(canonicalPresentation.independentExpendituresMade).toBeInstanceOf(Promise);
       expect("detail" in canonicalPresentation).toBe(false);
     }
     expect(collisionPresentation).toEqual({
@@ -324,14 +331,154 @@ describe("campaign finance detail presentation", () => {
     });
   });
 
-  it("emits a section order for committee detail with summary before trust before metrics before deep records", () => {
+  it("emits a section order for committee detail with summary before trust before metrics before outside-spending before deep records", () => {
     const shell = buildCommitteeDetailShellPresentation(DEFAULT_COMMITTEE_DETAIL);
 
     expect(shell.sectionOrder).toEqual([
       "summary",
       "trust",
       "metrics",
+      "outside-spending",
       "records"
+    ]);
+  });
+
+  it("builds committee-made outside spending rows with person links and source-filing links", () => {
+    const presentation = buildCommitteeDeferredOutsideSpending({
+      committee_id: COMMITTEE_ID,
+      support_total: "1500.00",
+      oppose_total: "250.00",
+      ie_transaction_count: 3,
+      excluded_outlier_count: 1,
+      targets: [
+        {
+          candidate_id: CANDIDATE_ID,
+          fec_candidate_id: "H0NC01001",
+          candidate_name: "Target Candidate",
+          person_id: PERSON_ID,
+          party: "DEM",
+          office: "H",
+          state: "NC",
+          district: "01",
+          slug: "target-candidate",
+          slug_is_unique: true,
+          support_total: "1500.00",
+          oppose_total: "250.00",
+          transaction_count: 3,
+          sources: [
+            {
+              domain: "campaign_finance",
+              jurisdiction: "federal/fec",
+              data_source_name: "FEC Schedule E",
+              data_source_url: "https://www.fec.gov",
+              source_record_key: "schedule-e-source",
+              record_url: "https://www.fec.gov/data/independent-expenditures/",
+              pull_date: "2026-07-08T00:00:00Z"
+            }
+          ]
+        }
+      ]
+    });
+
+    expect(presentation).toEqual({
+      supportTotal: "$1,500.00",
+      opposeTotal: "$250.00",
+      ieCountLabel: "3 expenditures",
+      outlierNote: "1 reported independent expenditure was excluded from these totals as an outlier.",
+      emptyMessage: null,
+      targetRows: [
+        {
+          rowKey: CANDIDATE_ID,
+          candidateName: "Target Candidate",
+          targetHref: `/person/${PERSON_ID}`,
+          context: "H · NC · District 01 · DEM",
+          supportTotal: "$1,500.00",
+          opposeTotal: "$250.00",
+          transactionCountLabel: "3 expenditures"
+        }
+      ],
+      sourceRows: [
+        {
+          rowKey: `${CANDIDATE_ID}:schedule-e-source:0`,
+          candidateName: "Target Candidate",
+          sourceName: "FEC Schedule E",
+          sourceRecordKey: "schedule-e-source",
+          href: "https://www.fec.gov/data/independent-expenditures/"
+        }
+      ]
+    });
+  });
+
+  it("uses stable committee outside-spending row keys when target names repeat", () => {
+    const presentation = buildCommitteeDeferredOutsideSpending({
+      committee_id: COMMITTEE_ID,
+      support_total: "300.00",
+      oppose_total: "0.00",
+      ie_transaction_count: 2,
+      excluded_outlier_count: 0,
+      targets: [
+        {
+          candidate_id: CANDIDATE_ID,
+          fec_candidate_id: "H0NC01001",
+          candidate_name: "Duplicate Name",
+          person_id: PERSON_ID,
+          party: "DEM",
+          office: "H",
+          state: "NC",
+          district: "01",
+          slug: "duplicate-name",
+          slug_is_unique: false,
+          support_total: "100.00",
+          oppose_total: "0.00",
+          transaction_count: 1,
+          sources: [
+            {
+              domain: "campaign_finance",
+              jurisdiction: "federal/fec",
+              data_source_name: "FEC Schedule E",
+              data_source_url: "https://www.fec.gov",
+              source_record_key: "same-source-key",
+              record_url: "https://www.fec.gov/data/independent-expenditures/one/",
+              pull_date: "2026-07-08T00:00:00Z"
+            }
+          ]
+        },
+        {
+          candidate_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          fec_candidate_id: "H0NC01002",
+          candidate_name: "Duplicate Name",
+          person_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+          party: "REP",
+          office: "H",
+          state: "NC",
+          district: "02",
+          slug: "duplicate-name",
+          slug_is_unique: false,
+          support_total: "200.00",
+          oppose_total: "0.00",
+          transaction_count: 1,
+          sources: [
+            {
+              domain: "campaign_finance",
+              jurisdiction: "federal/fec",
+              data_source_name: "FEC Schedule E",
+              data_source_url: "https://www.fec.gov",
+              source_record_key: "same-source-key",
+              record_url: "https://www.fec.gov/data/independent-expenditures/two/",
+              pull_date: "2026-07-08T00:00:00Z"
+            }
+          ]
+        }
+      ]
+    });
+
+    expect(presentation.targetRows.map((row) => row.rowKey)).toEqual([
+      CANDIDATE_ID,
+      "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+    ]);
+    expect(presentation.sourceRows.map((row) => row.rowKey)).toEqual([
+      `${CANDIDATE_ID}:same-source-key:0`,
+      "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:same-source-key:0"
     ]);
   });
 
@@ -344,6 +491,174 @@ describe("campaign finance detail presentation", () => {
       "metrics",
       "outside-spending",
       "records"
+    ]);
+  });
+
+  it("keeps official positive committee totals in key metrics when itemized transactions are absent", () => {
+    const summary = {
+      ...DEFAULT_SUMMARY,
+      total_raised: "1000000.00",
+      total_spent: "500000.00",
+      net: "500000.00",
+      transaction_count: 0,
+      itemized_transaction_count: 0,
+      cycle_summaries: [],
+      summary_source: "fec_committee_summary" as const
+    };
+
+    const metrics = buildKeyMetrics(summary);
+
+    expect(metrics).toEqual([
+      { label: "Total raised", value: "$1,000,000.00" },
+      { label: "Total spent", value: "$500,000.00" },
+      { label: "Itemized transactions loaded", value: "0" }
+    ]);
+  });
+
+  it("labels the committee summary source and itemized coverage note distinctly from official totals", () => {
+    const officialSummary = {
+      ...DEFAULT_SUMMARY,
+      total_raised: "1000000.00",
+      total_spent: "500000.00",
+      net: "500000.00",
+      transaction_count: 0,
+      itemized_transaction_count: 0,
+      cycle_summaries: [],
+      summary_source: "fec_committee_summary" as const
+    };
+    const derivedSummary = {
+      ...DEFAULT_SUMMARY,
+      transaction_count: 3,
+      itemized_transaction_count: 3,
+      summary_source: "derived" as const
+    };
+
+    const officialPresentation = buildFundraisingSummaryPresentation(officialSummary);
+    const derivedPresentation = buildFundraisingSummaryPresentation(derivedSummary);
+
+    expect(officialPresentation.summarySourceLabel).toBe("Official FEC committee summary");
+    expect(officialPresentation.itemizedCoverageNote).toBe(
+      "Itemized transactions loaded: 0. Official totals above come directly from the FEC committee summary and are not derived from these transactions."
+    );
+    expect(derivedPresentation.summarySourceLabel).toBe("Derived from itemized transactions");
+    expect(derivedPresentation.itemizedCoverageNote).toBe(
+      "Itemized transactions loaded: 3. Totals above are derived from these itemized transactions."
+    );
+  });
+
+  it("formats committee cycle summary rows with coverage ranges and currency-formatted totals", () => {
+    const rows = buildCommitteeCycleSummaryRows({
+      ...DEFAULT_SUMMARY,
+      cycle_summaries: [
+        {
+          cycle: 2026,
+          total_receipts: "500000.00",
+          total_disbursements: "250000.00",
+          cash_on_hand: "250000.00",
+          coverage_start_date: "2025-01-01",
+          coverage_end_date: "2026-06-30"
+        },
+        {
+          cycle: 2024,
+          total_receipts: "800000.00",
+          total_disbursements: "780000.00",
+          cash_on_hand: null,
+          coverage_start_date: null,
+          coverage_end_date: null
+        }
+      ]
+    });
+
+    expect(rows).toEqual([
+      {
+        cycle: 2026,
+        cycleLabel: "2026",
+        coveragePeriod: "2025-01-01 to 2026-06-30",
+        totalReceipts: "$500,000.00",
+        totalDisbursements: "$250,000.00",
+        cashOnHand: "$250,000.00"
+      },
+      {
+        cycle: 2024,
+        cycleLabel: "2024",
+        coveragePeriod: "—",
+        totalReceipts: "$800,000.00",
+        totalDisbursements: "$780,000.00",
+        cashOnHand: "—"
+      }
+    ]);
+  });
+
+  it("builds linked-candidate links using slug-aware canonical candidate routes", () => {
+    const links = buildLinkedCandidateLinks({
+      ...DEFAULT_COMMITTEE_DETAIL,
+      linked_candidates: [
+        {
+          id: CANDIDATE_ID,
+          fec_candidate_id: "H0LA04001",
+          name: "Mike Johnson",
+          party: "REP",
+          office: "H",
+          state: "LA",
+          district: "04",
+          slug: "mike-johnson",
+          slug_is_unique: true
+        },
+        {
+          id: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+          fec_candidate_id: "H0LA04002",
+          name: "Other Candidate",
+          party: null,
+          office: "H",
+          state: "LA",
+          district: null,
+          slug: "other-candidate",
+          slug_is_unique: false
+        }
+      ]
+    });
+
+    expect(links).toEqual([
+      {
+        candidateId: CANDIDATE_ID,
+        name: "Mike Johnson",
+        context: "H · LA · District 04 · REP",
+        href: "/candidate/mike-johnson"
+      },
+      {
+        candidateId: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+        name: "Other Candidate",
+        context: "H · LA",
+        href: "/candidate/eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"
+      }
+    ]);
+  });
+
+  it("includes linked-candidate presentations on the committee shell so the summary section can link out", () => {
+    const shell = buildCommitteeDetailShellPresentation({
+      ...DEFAULT_COMMITTEE_DETAIL,
+      linked_candidates: [
+        {
+          id: CANDIDATE_ID,
+          fec_candidate_id: "H0LA04001",
+          name: "Mike Johnson",
+          party: "REP",
+          office: "H",
+          state: "LA",
+          district: "04",
+          slug: "mike-johnson",
+          slug_is_unique: true
+        }
+      ]
+    });
+
+    expect(shell.linkedCandidates).toEqual([
+      {
+        candidateId: CANDIDATE_ID,
+        name: "Mike Johnson",
+        context: "H · LA · District 04 · REP",
+        href: "/candidate/mike-johnson"
+      }
     ]);
   });
 

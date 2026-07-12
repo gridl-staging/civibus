@@ -16,16 +16,16 @@ def _fixture(name: str) -> dict[str, object]:
     return json.loads(fixture_path.read_text(encoding="utf-8"))
 
 
-
 def test_ballotpedia_strategy_extracts_expected_fields() -> None:
     strategy = BallotpediaEnrichmentStrategy(fetcher=lambda _target: _fixture("ballotpedia_success.json"))
 
-    record, attempt = strategy.fetch(CandidateEnrichmentTarget(canonical_name="Alex Rivera"), missing_fields=("biography", "wikipedia_url"))
+    record, attempt = strategy.fetch(
+        CandidateEnrichmentTarget(canonical_name="Alex Rivera"), missing_fields=("biography", "wikipedia_url")
+    )
 
     assert attempt.status == "succeeded"
     assert record.biography == "Alex Rivera served on the county board before running statewide."
     assert record.wikipedia_url == "https://en.wikipedia.org/wiki/Alex_Rivera"
-
 
 
 def test_ballotpedia_strategy_returns_no_data_attempt() -> None:
@@ -37,14 +37,15 @@ def test_ballotpedia_strategy_returns_no_data_attempt() -> None:
     assert attempt.status == "no_data"
 
 
-
 def test_ballotpedia_policy_guard_skips_when_robots_disallow() -> None:
     strategy = BallotpediaEnrichmentStrategy(
         fetcher=lambda _target: _fixture("ballotpedia_success.json"),
         policy_guard=lambda _target: (False, "robots-disallow:/Candidate:Alex_Rivera"),
     )
 
-    record, attempt = strategy.fetch(CandidateEnrichmentTarget(canonical_name="Alex Rivera"), missing_fields=("biography",))
+    record, attempt = strategy.fetch(
+        CandidateEnrichmentTarget(canonical_name="Alex Rivera"), missing_fields=("biography",)
+    )
 
     assert record == record.__class__()
     assert attempt.status == "skipped"

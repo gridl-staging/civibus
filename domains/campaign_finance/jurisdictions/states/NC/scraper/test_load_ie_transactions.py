@@ -45,13 +45,9 @@ def _skip_when_prod_nc_ie_data_is_present(db_conn: psycopg.Connection) -> None:
     """
     db_conn.execute("SET LOCAL statement_timeout = '2s'")
     try:
-        row = db_conn.execute(
-            "SELECT 1 FROM cf.filing WHERE filing_fec_id LIKE 'NC-IE-%' LIMIT 1"
-        ).fetchone()
+        row = db_conn.execute("SELECT 1 FROM cf.filing WHERE filing_fec_id LIKE 'NC-IE-%' LIMIT 1").fetchone()
     except Exception as exc:  # noqa: BLE001
-        pytest.skip(
-            f"Skipping NC IE integration test: cannot verify clean DB state ({exc!r})"
-        )
+        pytest.skip(f"Skipping NC IE integration test: cannot verify clean DB state ({exc!r})")
     finally:
         db_conn.execute("SET LOCAL statement_timeout = 0")
     if row is not None:
@@ -59,6 +55,8 @@ def _skip_when_prod_nc_ie_data_is_present(db_conn: psycopg.Connection) -> None:
             "Skipping NC IE integration test: production cf.filing already contains "
             "NC-IE-% rows whose record_hashes collide with this test's fixtures."
         )
+
+
 _KNOWN_REPORT_DETAIL_URL = "https://cf.ncsbe.gov/CFOrgLkup/ReportDetail/?RID=229253&TP=EXP"
 _KNOWN_REPORT_EXPORT_URL = (
     "https://cf.ncsbe.gov/CFOrgLkup/ExportDetailResults/?ReportID=229253&Type=EXP"
@@ -400,9 +398,7 @@ def test_load_normalizes_support_oppose_case_at_persistence(
         return [
             row.model_copy(
                 update={
-                    "support_or_oppose_raw": row.support_or_oppose_raw.lower()
-                    if row.support_or_oppose_raw
-                    else None
+                    "support_or_oppose_raw": row.support_or_oppose_raw.lower() if row.support_or_oppose_raw else None
                 }
             )
             for row in rows

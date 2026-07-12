@@ -218,8 +218,7 @@ def test_load_tx_contributions_with_filings_is_idempotent_and_sets_keys(db_conn:
     assert first_result.errors == 0
 
     expected_source_record_keys = sorted(
-        _tx_source_record_key(row, data_type="contributions")
-        for row in _parsed_contributions()
+        _tx_source_record_key(row, data_type="contributions") for row in _parsed_contributions()
     )
     with db_conn.cursor(row_factory=dict_row) as cursor:
         cursor.execute(

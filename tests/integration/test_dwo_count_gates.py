@@ -21,7 +21,7 @@ _FIXTURE_DIR = Path(__file__).resolve().parents[1] / "fixtures" / "roster"
 _DURHAM_SOURCE_ID = "nc_durham_city_council_roster"
 
 # Canonical NC launch counts are fixed in production evidence:
-# docs/research/2026_04_27_nc_drilldown_showcase_closeout.md
+# docs/reference/research/2026_04_27_nc_drilldown_showcase_closeout.md
 _NC_GEOMETRY_EXPECTED_COUNTS = {
     "state": 1,
     "county": 100,
@@ -211,7 +211,9 @@ def test_candidacy_gate_enforces_exact_seed_plan_count(db_conn: psycopg.Connecti
         ("Casey Exact", "UNA"),
     )
     for candidate_name, party in seeded_candidates:
-        person_id = insert_person(db_conn, Person(canonical_name=candidate_name, first_name=candidate_name.split()[0], last_name="Exact"))
+        person_id = insert_person(
+            db_conn, Person(canonical_name=candidate_name, first_name=candidate_name.split()[0], last_name="Exact")
+        )
         upsert_candidacy(
             db_conn,
             Candidacy(

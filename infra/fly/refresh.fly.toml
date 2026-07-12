@@ -1,0 +1,21 @@
+# civibus-refresh: build/env-only app contract for scheduled refresh machines.
+# Stage 3 owns machine creation and runtime command selection.
+app = "civibus-refresh"
+primary_region = "sjc"
+
+# Reuse the existing API image so dependency and entrypoint ownership stays in infra/api.
+[build]
+  dockerfile = "../api/Dockerfile"
+
+[env]
+  CIVIBUS_ENV = "production"
+  POSTGRES_HOST = "civibus-db.internal"
+  POSTGRES_PORT = "5432"
+  POSTGRES_USER = "civibus"
+  POSTGRES_DB = "civibus"
+  CIVIBUS_REFRESH_DATA_DIR = "/data"
+  CIVIBUS_STARTUP_CANARY = "skip"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "1gb"

@@ -45,6 +45,7 @@ _NCSBE_REFRESH_ALLOWED_YEARS = frozenset({"2022", "2024"})
 _NCSBE_RAW_EXTRACTS_DIR = (
     Path(__file__).resolve().parents[3]
     / "docs"
+    / "reference"
     / "research"
     / "artifacts"
     / "2026_04_30_dwo_past_results"
@@ -204,9 +205,7 @@ def _resolve_contest_id(conn: psycopg.Connection, row: dict[str, object]) -> UUI
     if not contest_ids:
         raise ValueError(f"Unresolved contest mapping for key={contest_match_key}")
     if len(contest_ids) > 1:
-        raise ValueError(
-            f"Ambiguous contest mapping for key={contest_match_key}, contest_ids={sorted(contest_ids)}"
-        )
+        raise ValueError(f"Ambiguous contest mapping for key={contest_match_key}, contest_ids={sorted(contest_ids)}")
     return contest_ids[0]
 
 
@@ -241,16 +240,13 @@ def collect_ncsbe_refresh_raw_csv_paths() -> list[Path]:
         resolved_path = (_NCSBE_RAW_EXTRACTS_DIR / source.fixture_file).resolve()
         if resolved_path.parent != canonical_raw_extracts_dir:
             raise ValueError(
-                "NCSBE fixture_file must stay within the canonical raw-extract directory: "
-                f"{source.fixture_file}"
+                f"NCSBE fixture_file must stay within the canonical raw-extract directory: {source.fixture_file}"
             )
         selected_paths.append(resolved_path)
     return selected_paths
 
 
-def _select_matching_data_sources(
-    conn: psycopg.Connection, *, source_id: str
-) -> list[tuple[UUID, str, str]]:
+def _select_matching_data_sources(conn: psycopg.Connection, *, source_id: str) -> list[tuple[UUID, str, str]]:
     """Return civics data_source rows tagged with the given registry source id."""
     with conn.cursor() as cursor:
         cursor.execute(
@@ -372,7 +368,9 @@ def _persist_source_record(
     return active.id
 
 
-def _derive_winner_flags(parsed_rows: list[dict[str, object]], seat_count_by_contest: dict[UUID, int]) -> dict[int, bool]:
+def _derive_winner_flags(
+    parsed_rows: list[dict[str, object]], seat_count_by_contest: dict[UUID, int]
+) -> dict[int, bool]:
     by_contest: dict[UUID, list[tuple[int, int, str]]] = {}
     for idx, row in enumerate(parsed_rows):
         contest_id = row["contest_id"]

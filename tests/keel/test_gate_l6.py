@@ -174,9 +174,7 @@ def test_validate_nc_committee_docs_flags_inverted_coverage_window() -> None:
     ]
 
 
-def test_load_domain_date_window_reads_years_back_from_keel_config_yaml(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_load_domain_date_window_reads_years_back_from_keel_config_yaml(tmp_path: Path, monkeypatch) -> None:
     config_dir = tmp_path / "domains" / "campaign_finance"
     config_dir.mkdir(parents=True)
     config_path = config_dir / "keel_config.yaml"
@@ -190,9 +188,7 @@ def test_load_domain_date_window_reads_years_back_from_keel_config_yaml(
     assert window.years_back == 9
 
 
-def test_date_window_start_uses_config_years_back(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_date_window_start_uses_config_years_back(tmp_path: Path, monkeypatch) -> None:
     config_dir = tmp_path / "domains" / "campaign_finance"
     config_dir.mkdir(parents=True)
     config_path = config_dir / "keel_config.yaml"

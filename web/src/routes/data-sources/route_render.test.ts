@@ -54,6 +54,11 @@ describe("/data-sources route rendering", () => {
     expect(rendered.body).toContain("https://example.org/record-1");
     expect(rendered.body).toContain("2026-04-29T12:00:00Z");
     expect(rendered.body).toContain("2026-04-28T12:00:00Z");
+    expect(rendered.body).toContain('href="https://example.org/source" target="_blank" rel="noopener nofollow"');
+    expect(rendered.body).toContain(
+      'href="https://example.org/record-1" target="_blank" rel="noopener nofollow"'
+    );
+    expect(rendered.body).not.toContain("noopener noreferrer");
   });
 
   it("renders empty-state copy when no rows are present", () => {

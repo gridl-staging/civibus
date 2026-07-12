@@ -1,4 +1,4 @@
-"""Deploy workflow contract tests for Stage 3 GHCR image publication."""
+"""Deploy workflow contract tests for the Fly production deploy lane."""
 
 from pathlib import Path
 
@@ -9,14 +9,22 @@ import core.keel_gate_l13 as keel_gate_l13
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEPLOY_WORKFLOW_PATH = REPO_ROOT / ".github/workflows/deploy.yml"
-CHECKOUT_SHA = "11bd71901bbe5b1630ceea73d27597364c9af683"
-DOCKER_LOGIN_SHA = "b45d80f862d83dbcd57f89517bcf500b2ab88fb2"
-DOCKER_BUILD_PUSH_SHA = "d08e5c354a6adb9ed34480a06d141179aa583294"
+FLY_DEPLOY_COMMANDS = [
+    "flyctl deploy -c infra/fly/api.fly.toml --remote-only",
+    "flyctl deploy web -c infra/fly/web.fly.toml --remote-only",
+    "flyctl deploy -c infra/fly/caddy.fly.toml --remote-only",
+]
+FORBIDDEN_DEPLOY_TARGETS = (
+    "infra/fly/db.fly.toml",
+    "infra/fly/refresh.fly.toml",
+    "civibus-db",
+    "civibus-refresh",
+)
 L13_OWNER_FILES = {
     ".github/workflows/deploy.yml",
-    "infra/docker-compose.prod.yml",
-    ".env.production.example",
-    "infra/scripts/bootstrap_prod_vm.sh",
+    "infra/fly/api.fly.toml",
+    "infra/fly/web.fly.toml",
+    "infra/fly/caddy.fly.toml",
 }
 
 
@@ -25,320 +33,147 @@ def _read_deploy_workflow() -> str:
 
 
 def _parse_deploy_workflow() -> dict:
-    return yaml.safe_load(_read_deploy_workflow())
+    payload = yaml.safe_load(_read_deploy_workflow())
+    assert isinstance(payload, dict), "deploy.yml must parse as a YAML mapping"
+    return payload
 
 
-def _find_build_step_with_file(dockerfile_path: str) -> dict | None:
-    """Return the `with` block for the build step targeting a specific Dockerfile."""
-    parsed = _parse_deploy_workflow()
-    jobs = parsed["jobs"]
-
-    for job_config in jobs.values():
-        for step in job_config.get("steps", []):
-            step_with = step.get("with", {})
-            if step_with.get("file") == dockerfile_path:
-                return step_with
-
-    return None
+def _workflow_triggers(workflow_config: dict) -> dict:
+    return workflow_config.get("on", workflow_config.get(True, {}))
 
 
-# --- Stage 3 basic structure ---
+def _deploy_job() -> dict:
+    return _parse_deploy_workflow()["jobs"]["deploy"]
+
+
+def _deploy_steps() -> list[dict]:
+    return _deploy_job().get("steps", [])
+
+
+def _find_step(step_name: str) -> dict:
+    for step in _deploy_steps():
+        if step.get("name") == step_name:
+            return step
+    raise AssertionError(f"deploy step {step_name!r} is required")
+
+
+def _run_scripts() -> list[str]:
+    return [step.get("run", "") for step in _deploy_steps() if "run" in step]
 
 
 def test_deploy_workflow_exists_and_parses_cleanly() -> None:
-    """YAML parse canary: deploy.yml must exist and load without error."""
-    text = _read_deploy_workflow()
-    parsed = yaml.safe_load(text)
-    assert isinstance(parsed, dict), "deploy.yml must parse as a YAML mapping"
+    parsed = _parse_deploy_workflow()
+    assert isinstance(parsed, dict)
 
 
-def test_stage1_l13_contract_owner_file_set_is_locked() -> None:
-    """Stage 1 L13 may only read the deploy workflow, compose, env example, and bootstrap owners."""
+def test_l13_contract_owner_file_set_is_locked_to_fly_deploy_surface() -> None:
     owner_files = set(keel_gate_l13.CONTRACT_OWNER_FILES.values())
     assert owner_files == L13_OWNER_FILES
     for relative_path in owner_files:
         assert (REPO_ROOT / relative_path).is_file(), f"L13 owner file missing: {relative_path}"
 
 
-def test_deploy_workflow_triggers_on_push_to_main_only() -> None:
-    text = _read_deploy_workflow()
-    assert "push:\n    branches: [main]" in text
-    # Should NOT trigger on pull_request — that belongs to ci.yml
-    assert "pull_request:" not in text
-
-
-def test_deploy_workflow_has_least_privilege_permissions() -> None:
-    text = _read_deploy_workflow()
-    assert "permissions:" in text
-    assert "packages: write" in text
-    assert "contents: read" in text
-
-
-def test_deploy_workflow_uses_sha_pinned_actions() -> None:
-    text = _read_deploy_workflow()
-    assert f"uses: actions/checkout@{CHECKOUT_SHA}" in text
-    assert f"uses: docker/login-action@{DOCKER_LOGIN_SHA}" in text
-    assert f"uses: docker/build-push-action@{DOCKER_BUILD_PUSH_SHA}" in text
-
-
-def test_deploy_workflow_publishes_api_and_web_images() -> None:
-    text = _read_deploy_workflow()
-    assert "ghcr.io/" in text
-    # Must tag with SHA and latest
-    assert "${{ github.sha }}" in text or "github.sha" in text
-    assert "latest" in text
-
-
-def test_deploy_workflow_uses_expected_api_and_web_tag_pairs() -> None:
-    """Published tags must map exactly to api/web service names with SHA and latest tags."""
-    text = _read_deploy_workflow()
-    expected_tags = (
-        "ghcr.io/${{ github.repository }}/api:${{ github.sha }}",
-        "ghcr.io/${{ github.repository }}/api:latest",
-        "ghcr.io/${{ github.repository }}/web:${{ github.sha }}",
-        "ghcr.io/${{ github.repository }}/web:latest",
-    )
-
-    for expected_tag in expected_tags:
-        assert expected_tag in text, f"deploy.yml is missing expected tag '{expected_tag}'"
-
-
-# --- Job set is a closed set (Stage 3 scope guard) ---
-
-ALLOWED_JOBS = {"publish-api", "publish-web", "deploy"}
-
-
-def test_deploy_workflow_declares_only_stage3_jobs() -> None:
-    """Workflow must contain exactly the intended Stage 3 jobs, no extras."""
+def test_deploy_workflow_triggers_on_push_to_main_and_manual_dispatch_only() -> None:
     parsed = _parse_deploy_workflow()
-    actual_jobs = set(parsed["jobs"].keys())
-    assert actual_jobs == ALLOWED_JOBS, f"deploy.yml job set must be exactly {ALLOWED_JOBS}, got {actual_jobs}"
+    triggers = _workflow_triggers(parsed)
+
+    assert triggers["push"]["branches"] == ["main"]
+    assert "workflow_dispatch" in triggers
+    assert "pull_request" not in triggers
 
 
-# --- Dockerfile path and build context consistency ---
-
-
-def test_deploy_workflow_api_uses_correct_dockerfile_and_context() -> None:
-    """API image must use repo-root context with infra/api/Dockerfile."""
-    api_build_steps = _find_build_step_with_file("infra/api/Dockerfile")
-    assert api_build_steps is not None, "No job builds infra/api/Dockerfile"
-    assert api_build_steps["context"] == ".", (
-        f"API build context must be repo root '.', got '{api_build_steps['context']}'"
-    )
-
-
-def test_deploy_workflow_web_uses_correct_dockerfile_and_context() -> None:
-    """Web image must use ./web context with web/Dockerfile."""
-    web_build_steps = _find_build_step_with_file("web/Dockerfile")
-    assert web_build_steps is not None, "No job builds web/Dockerfile"
-    assert web_build_steps["context"] == "./web", (
-        f"Web build context must be './web', got '{web_build_steps['context']}'"
-    )
-
-
-def test_deploy_workflow_never_builds_db_image() -> None:
-    """DB image (infra/db/Dockerfile) must not appear in the deploy workflow."""
-    text = _read_deploy_workflow()
-    assert "infra/db/Dockerfile" not in text
-    assert "/db:" not in text
-
-
-# --- Deploy placeholder job and dependency flow ---
-
-
-def test_deploy_job_depends_on_publish_jobs() -> None:
-    """Deploy job must depend on both publish jobs completing first."""
+def test_deploy_workflow_has_single_guarded_production_job() -> None:
     parsed = _parse_deploy_workflow()
     jobs = parsed["jobs"]
-
-    assert "deploy" in jobs, "deploy.yml must contain a 'deploy' job"
     deploy_job = jobs["deploy"]
-    needs = deploy_job.get("needs", [])
-    if isinstance(needs, str):
-        needs = [needs]
 
-    assert "publish-api" in needs, "deploy must need publish-api"
-    assert "publish-web" in needs, "deploy must need publish-web"
-
-
-def test_deploy_job_uses_environment_protection() -> None:
-    """Deploy job must use environment: for manual approval gating."""
-    parsed = _parse_deploy_workflow()
-    deploy_job = parsed["jobs"]["deploy"]
-    assert "environment" in deploy_job, "deploy job must declare an environment for protection"
-    assert deploy_job["environment"] == "production", "deploy job must target the protected 'production' environment"
+    assert set(jobs) == {"deploy"}
+    assert deploy_job["runs-on"] == "ubuntu-latest"
+    assert deploy_job["environment"] == "production"
+    assert deploy_job["if"] == "github.repository == 'gridl-hq/civibus'"
+    assert parsed["permissions"] == {"contents": "read"}
+    assert deploy_job.get("permissions", {"contents": "read"}) == {"contents": "read"}
 
 
-def test_deploy_job_performs_ssh_based_remote_rollout() -> None:
-    """Deploy job must SSH into the production host and run bootstrap + wrapper rollout."""
-    parsed = _parse_deploy_workflow()
-    deploy_job = parsed["jobs"]["deploy"]
-    steps = deploy_job.get("steps", [])
+def test_deploy_workflow_uses_fly_token_secret_and_smoke_url_variable() -> None:
+    deploy_env = _deploy_job()["env"]
 
-    # The deploy job should have multiple steps for credentials, bootstrap, and rollout
-    assert len(steps) >= 3, "deploy job must have at least three steps (credentials, bootstrap, rollout)"
+    assert deploy_env["FLY_API_TOKEN"] == "${{ secrets.FLY_API_TOKEN }}"
+    assert deploy_env["PROD_SMOKE_BASE_URL"] == "${{ vars.PROD_SMOKE_BASE_URL }}"
 
-    step_runs = [s.get("run", "") for s in steps if "run" in s]
-    assert len(step_runs) >= 3, "deploy job must have at least three run steps"
 
-    # Must configure SSH credentials
-    full_run_text = "\n".join(step_runs)
-    assert "hetzner_deploy_key" in full_run_text.lower(), "deploy must configure SSH key for Hetzner"
-    assert "bootstrap_prod_vm.sh" in full_run_text, "deploy must invoke bootstrap_prod_vm.sh on the remote host"
-    assert "infra/scripts/prod_compose.sh" in full_run_text, (
-        "deploy must invoke infra/scripts/prod_compose.sh for remote compose rollout"
+def test_deploy_workflow_uses_checkout_and_flyctl_setup_only() -> None:
+    workflow_text = _read_deploy_workflow()
+
+    assert "actions/checkout@" in workflow_text
+    assert "superfly/flyctl-actions/setup-flyctl" in workflow_text
+    forbidden_fragments = (
+        "docker/login-action",
+        "docker/build-push-action",
+        "packages: write",
+        "ghcr.io/",
+        "secrets.GITHUB_TOKEN",
+        "HETZNER_",
+        "PRODUCTION_ENV_FILE",
+        "known_hosts",
+        "ssh ",
+        "scp ",
+        "prod_compose.sh",
+        "bootstrap_prod_vm.sh",
     )
+    for fragment in forbidden_fragments:
+        assert fragment not in workflow_text, f"deploy.yml must not keep obsolete {fragment!r} plumbing"
 
 
-def test_deploy_job_uses_single_image_repository_source_of_truth() -> None:
-    """Workflow rollout must export CIVIBUS_IMAGE_REPO for compose image references."""
-    parsed = _parse_deploy_workflow()
-    steps = parsed["jobs"]["deploy"].get("steps", [])
-    rollout_step = _find_step(steps, "Roll out api and web via remote compose")
-    run_script = rollout_step.get("run", "")
+def test_deploy_workflow_runs_exactly_three_serving_fly_deploys() -> None:
+    deploy_scripts = [script for script in _run_scripts() if "flyctl deploy" in script]
+    workflow_text = _read_deploy_workflow()
 
-    assert 'export CIVIBUS_IMAGE_REPO="ghcr.io/${{ github.repository }}"' in run_script
+    assert len(deploy_scripts) == len(FLY_DEPLOY_COMMANDS)
+    for deploy_command in FLY_DEPLOY_COMMANDS:
+        assert workflow_text.count(deploy_command) == 1
 
-    compose_text = (REPO_ROOT / "infra/docker-compose.prod.yml").read_text(encoding="utf-8")
-    assert 'image: "${CIVIBUS_IMAGE_REPO:-ghcr.io/gridl-dev/civibus_dev}/api:${IMAGE_TAG:-latest}"' in compose_text
-    assert 'image: "${CIVIBUS_IMAGE_REPO:-ghcr.io/gridl-dev/civibus_dev}/web:${IMAGE_TAG:-latest}"' in compose_text
+    deploy_positions = [workflow_text.index(deploy_command) for deploy_command in FLY_DEPLOY_COMMANDS]
+    assert deploy_positions == sorted(deploy_positions)
 
 
-def _find_step(steps: list[dict], step_name: str) -> dict:
-    """Return a deploy step by exact name; fail with a clear contract message."""
-    for step in steps:
-        if step.get("name") == step_name:
-            return step
-    raise AssertionError(f"deploy step '{step_name}' is required by Stage 7 contract")
+def test_deploy_workflow_never_deploys_db_or_refresh_apps() -> None:
+    workflow_text = _read_deploy_workflow()
+
+    for forbidden_target in FORBIDDEN_DEPLOY_TARGETS:
+        assert forbidden_target not in workflow_text
 
 
-def _find_step_index(steps: list[dict], step_name: str) -> int:
-    """Return a deploy step index by exact name; fail with a clear contract message."""
-    for index, step in enumerate(steps):
-        if step.get("name") == step_name:
-            return index
-    raise AssertionError(f"deploy step '{step_name}' is required by Stage 7 contract")
+def test_deploy_workflow_keeps_production_smoke_gate_after_all_deploys() -> None:
+    workflow_text = _read_deploy_workflow()
+    smoke_step = _find_step("Run production smoke gate")
+    smoke_script = smoke_step["run"]
 
-
-def test_deploy_job_captures_prior_sha_before_rollout() -> None:
-    """Deploy must snapshot the currently running SHA before checking out the new one."""
-    parsed = _parse_deploy_workflow()
-    steps = parsed["jobs"]["deploy"].get("steps", [])
-    configure_step = _find_step(steps, "Configure SSH credentials")
-    capture_step = _find_step(steps, "Capture currently deployed SHA")
-    configure_script = configure_step.get("run", "")
-    run_script = capture_step.get("run", "")
-    assert "^[A-Za-z0-9][A-Za-z0-9.-]*$" in configure_script
-    assert "HETZNER_HOST to be a bare hostname or IPv4 address" in configure_script
-    assert "CURRENT_DEPLOYED_SHA" in run_script
-    assert "rev-parse HEAD" in run_script
-    assert "GITHUB_OUTPUT" in run_script
-    assert "before deploy rollback anchor" in run_script
-
-
-def test_deploy_job_capture_prior_sha_handles_broken_worktree_checkout() -> None:
-    """Capture step must tolerate stale worktree metadata and use a valid rollback anchor."""
-    parsed = _parse_deploy_workflow()
-    steps = parsed["jobs"]["deploy"].get("steps", [])
-    capture_step = _find_step(steps, "Capture currently deployed SHA")
-    run_script = capture_step.get("run", "")
-
-    expected_fragments = [
-        "repo_dir=\"/root/civibus/civibus_dev\"",
-        "if git -C \"${repo_dir}\" rev-parse HEAD >/dev/null 2>&1; then",
-        "fallback_repo_dir=\"/root/civibus\"",
-        "git -C \"${fallback_repo_dir}\" rev-parse HEAD",
-        "Broken git checkout at ${repo_dir}; using ${fallback_repo_dir} HEAD as rollback anchor",
-    ]
-    for fragment in expected_fragments:
-        assert fragment in run_script, (
-            "Capture currently deployed SHA must degrade gracefully when /root/civibus/civibus_dev "
-            "is an invalid worktree checkout"
-        )
-
-
-def test_deploy_job_capture_prior_sha_uses_quoted_heredoc_for_remote_script() -> None:
-    """Remote SSH script must use a quoted heredoc so local set -u cannot expand remote vars."""
-    parsed = _parse_deploy_workflow()
-    steps = parsed["jobs"]["deploy"].get("steps", [])
-    capture_step = _find_step(steps, "Capture currently deployed SHA")
-    run_script = capture_step.get("run", "")
-
-    assert "bash -se <<'EOF'" in run_script, (
-        "Capture currently deployed SHA must use a quoted heredoc to prevent local shell expansion "
-        "of remote script variables like ${repo_dir}"
+    assert 'if [[ -z "${PROD_SMOKE_BASE_URL}" ]]' in smoke_script
+    assert "SMOKE_MODE=production" in smoke_script
+    assert 'SMOKE_BASE_URL="${PROD_SMOKE_BASE_URL}"' in smoke_script
+    assert (
+        "bash ./tests/smoke/run-playwright.sh -- tests/smoke/production_deploy.spec.ts --reporter=line" in smoke_script
     )
+    assert smoke_step["working-directory"] == "web"
+
+    smoke_position = workflow_text.index("Run production smoke gate")
+    last_deploy_position = max(workflow_text.index(deploy_command) for deploy_command in FLY_DEPLOY_COMMANDS)
+    assert last_deploy_position < smoke_position
 
 
-def test_deploy_job_captures_prior_sha_before_bootstrap_checkout_mutates_head() -> None:
-    """Capture must run before bootstrap, because bootstrap checks out DEPLOY_GIT_SHA."""
-    parsed = _parse_deploy_workflow()
-    steps = parsed["jobs"]["deploy"].get("steps", [])
-
-    capture_index = _find_step_index(steps, "Capture currently deployed SHA")
-    bootstrap_index = _find_step_index(steps, "Bootstrap remote host prerequisites")
-
-    assert capture_index < bootstrap_index, (
-        "Capture currently deployed SHA must run before Bootstrap remote host prerequisites "
-        "or rollback captures the new SHA instead of the prior deployment."
-    )
-
-
-def test_deploy_job_runs_production_smoke_after_rollout() -> None:
-    """Deploy must run production-target smoke using the existing smoke owner path."""
-    parsed = _parse_deploy_workflow()
-    steps = parsed["jobs"]["deploy"].get("steps", [])
-    smoke_step = _find_step(steps, "Run production smoke gate")
-    run_script = smoke_step.get("run", "")
-    assert "./tests/smoke/run-playwright.sh" in run_script
-    assert "tests/smoke/dwo_mvp_release.spec.ts" in run_script
-    assert "SMOKE_MODE=production" in run_script
-    assert "SMOKE_BASE_URL=" in run_script
-
-
-def test_deploy_job_runs_production_smoke_via_bash_wrapper() -> None:
-    """Smoke gate must invoke the runner script via bash, not executable bit state."""
-    parsed = _parse_deploy_workflow()
-    steps = parsed["jobs"]["deploy"].get("steps", [])
-    smoke_step = _find_step(steps, "Run production smoke gate")
-    run_script = smoke_step.get("run", "")
-
-    assert "bash ./tests/smoke/run-playwright.sh -- tests/smoke/dwo_mvp_release.spec.ts --reporter=line" in run_script
-
-
-def test_deploy_job_rolls_back_with_prod_compose_after_smoke_failure() -> None:
-    """Rollback must be conditional on smoke failure and use the same prod compose owner."""
-    parsed = _parse_deploy_workflow()
-    steps = parsed["jobs"]["deploy"].get("steps", [])
-    rollback_step = _find_step(steps, "Rollback to previously deployed SHA on smoke failure")
-
-    assert rollback_step.get("if") == "steps.production_smoke_gate.outcome == 'failure'"
-    run_script = rollback_step.get("run", "")
-    assert "git checkout --detach" in run_script
-    assert "CURRENT_DEPLOYED_SHA" in run_script
-    assert "infra/scripts/prod_compose.sh" in run_script
-    assert "up -d --force-recreate --wait --wait-timeout 180 api web caddy" in run_script
-
-
-def test_deploy_workflow_does_not_duplicate_ci_or_integration_concerns() -> None:
-    """Deploy workflow must not reintroduce commands that belong to ci.yml or integration.yml."""
-    text = _read_deploy_workflow()
-
-    # Lint/test commands that belong to ci.yml
+def test_deploy_workflow_does_not_duplicate_ci_integration_or_refresh_concerns() -> None:
+    workflow_text = _read_deploy_workflow()
     forbidden_fragments = (
         "ruff check",
         "ruff format",
         "pytest",
         "make lint",
         "make test",
-        # Integration workflow commands
         "make db-up",
         "make db-down",
         "make db-reset",
-        "make ingest-fec-bulk-sample",
-        "make graph-load",
-        # Schema commands (compose is allowed for remote rollout; docker-compose
-        # substring appears in the legitimate filename docker-compose.prod.yml)
+        "make refresh",
         "schema-init",
         "entities.sql",
         "jurisdiction.sql",
@@ -347,39 +182,8 @@ def test_deploy_workflow_does_not_duplicate_ci_or_integration_concerns() -> None
         "er_views.sql",
         "LOAD 'age'",
         "create_graph(",
+        "fixture",
+        "integration",
     )
-
     for fragment in forbidden_fragments:
-        assert fragment not in text, f"deploy.yml must not contain '{fragment}' — belongs to ci.yml or integration.yml"
-
-
-def test_deploy_job_capture_prior_sha_uses_unavailable_sentinel_when_anchor_missing() -> None:
-    """Capture step must not hard-stop deploy when prior git anchor cannot be found on the VM."""
-    parsed = _parse_deploy_workflow()
-    steps = parsed["jobs"]["deploy"].get("steps", [])
-    capture_step = _find_step(steps, "Capture currently deployed SHA")
-    run_script = capture_step.get("run", "")
-
-    assert "echo \"UNAVAILABLE\"" in run_script
-    assert "rollback will be disabled" in run_script
-
-
-def test_deploy_job_rollback_fails_fast_when_prior_sha_unavailable() -> None:
-    """Rollback step must explicitly reject the UNAVAILABLE sentinel instead of fetching it."""
-    parsed = _parse_deploy_workflow()
-    steps = parsed["jobs"]["deploy"].get("steps", [])
-    rollback_step = _find_step(steps, "Rollback to previously deployed SHA on smoke failure")
-    run_script = rollback_step.get("run", "")
-
-    assert "UNAVAILABLE" in run_script
-    assert "cannot rollback automatically" in run_script
-
-
-def test_deploy_workflow_rollback_lane_uses_same_image_repository_source_of_truth() -> None:
-    """Rollback must export the same GHCR repo source as the publish and rollout lanes."""
-    parsed = _parse_deploy_workflow()
-    steps = parsed["jobs"]["deploy"].get("steps", [])
-    rollback_step = _find_step(steps, "Rollback to previously deployed SHA on smoke failure")
-    rollback_script = rollback_step.get("run", "")
-
-    assert 'export CIVIBUS_IMAGE_REPO="ghcr.io/${{ github.repository }}"' in rollback_script
+        assert fragment not in workflow_text, f"deploy.yml must not contain {fragment!r}"

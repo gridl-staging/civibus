@@ -41,15 +41,8 @@ if [[ "$smoke_mode" != "production" && "${SMOKE_USE_LIVE_API:-0}" == "1" ]]; the
   fi
 fi
 
-npx --yes @playwright/test@1.56.0 --version >/dev/null
-runner_bin="$(ls -td "$HOME"/.npm/_npx/*/node_modules/.bin/playwright | head -n 1)"
-runner_root="$(cd "$(dirname "$runner_bin")/.." && pwd)"
-
-mkdir -p node_modules
-ln -sfn "$runner_root/playwright" node_modules/playwright
-ln -sfn "$runner_root/playwright-core" node_modules/playwright-core
-
-"$runner_root/.bin/playwright" install chromium >/dev/null
+npx playwright --version >/dev/null
+npx playwright install chromium >/dev/null
 
 if [[ "${1:-}" == "--" ]]; then
   shift
@@ -57,4 +50,4 @@ fi
 
 # Local fixture mode remains default for developer regression coverage.
 # Production smoke mode is enabled by callers via SMOKE_MODE=production and SMOKE_BASE_URL.
-"$runner_root/.bin/playwright" test --config playwright.config.ts "$@"
+npx playwright test --config playwright.config.ts "$@"

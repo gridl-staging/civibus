@@ -23,7 +23,7 @@ def test_bootstrap_l10_gate_script_is_executable_thin_wrapper_contract() -> None
     assert 'script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"' in script_text
     assert 'repo_root="$(cd "${script_dir}/../.." && pwd)"' in script_text
     assert 'web_dir="${repo_root}/web"' in script_text
-    assert 'if ! command -v npm >/dev/null 2>&1; then' in script_text
+    assert "if ! command -v npm >/dev/null 2>&1; then" in script_text
     assert "npm is required to bootstrap L10 gate dependencies" in script_text
     assert 'lockfile_path="${web_dir}/package-lock.json"' in script_text
     assert 'if [[ ! -f "${lockfile_path}" ]]; then' in script_text

@@ -74,7 +74,7 @@ def _publication_output_paths(tmp_path: Path) -> tuple[Path, Path, Path]:
 
 
 def _assert_authority_note(markdown: str) -> None:
-    assert "Authoritative source: `docs/research/coverage-registry.json`." in markdown
+    assert "Authoritative source: `docs/reference/research/coverage-registry.json`." in markdown
 
 
 def _assert_publication_date(markdown: str, expected_date: str) -> None:
@@ -275,9 +275,9 @@ def test_render_publication_markdown_uses_registry_fields_for_queue_ordering() -
     assert "| OH | state | no | state_equivalent | annual | Fix portal access |" in queue_lines[2]
     assert "Date: 2026-03-25" in publication.queue_markdown
     assert "Date: 2026-03-25" in publication.matrix_markdown
-    assert "Authoritative source: `docs/research/coverage-registry.json`." in publication.summary_markdown
-    assert "Authoritative source: `docs/research/coverage-registry.json`." in publication.queue_markdown
-    assert "Authoritative source: `docs/research/coverage-registry.json`." in publication.matrix_markdown
+    assert "Authoritative source: `docs/reference/research/coverage-registry.json`." in publication.summary_markdown
+    assert "Authoritative source: `docs/reference/research/coverage-registry.json`." in publication.queue_markdown
+    assert "Authoritative source: `docs/reference/research/coverage-registry.json`." in publication.matrix_markdown
     assert "| CA | state | launch-support candidate | daily | yes | Run CA proof |" in publication.matrix_markdown
     assert "| OH | state | deferred/blocked | annual | no | Fix portal access |" in publication.matrix_markdown
     assert "MN_MINNEAPOLIS" not in publication.matrix_markdown

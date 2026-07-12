@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from datetime import date
+from decimal import Decimal
 from pathlib import Path
 from uuid import UUID, uuid4
 
@@ -10,14 +11,20 @@ import psycopg
 import pytest
 from psycopg.rows import dict_row
 
-from core.db import get_connection
 from domains.campaign_finance.ingest.bulk_loader import (
     ensure_fec_bulk_data_source,
     load_candidate_committee_links,
     load_candidates,
+    load_candidate_summaries,
     load_committees,
 )
-from domains.campaign_finance.ingest.bulk_parser import CCL_COLUMNS, CM_COLUMNS, CN_COLUMNS, read_bulk_file
+from domains.campaign_finance.ingest.bulk_parser import (
+    CCL_COLUMNS,
+    CM_COLUMNS,
+    CN_COLUMNS,
+    WEBALL_COLUMNS,
+    read_bulk_file,
+)
 
 
 pytestmark = pytest.mark.integration
@@ -26,6 +33,7 @@ _FIXTURE_DIR = Path(__file__).resolve().parents[3] / "tests" / "fixtures" / "bul
 _COMMITTEE_FIXTURE_PATH = _FIXTURE_DIR / "cm_sample.txt"
 _CANDIDATE_FIXTURE_PATH = _FIXTURE_DIR / "cn_sample.txt"
 _CCL_FIXTURE_PATH = _FIXTURE_DIR / "ccl_sample.txt"
+_WEBALL_FIXTURE_PATH = _FIXTURE_DIR / "weball_sample.txt"
 
 _BULK_SOURCE_DOMAIN = "campaign_finance"
 _BULK_SOURCE_JURISDICTION = "federal/fec"
@@ -39,9 +47,11 @@ class BulkLoaderFixtureSet:
     committee_path: Path
     candidate_path: Path
     ccl_path: Path
+    weball_path: Path
     committee_rows: list[dict[str, str | None]]
     candidate_rows: list[dict[str, str | None]]
     ccl_rows: list[dict[str, str | None]]
+    weball_rows: list[dict[str, str | None]]
 
     @property
     def committee_ids(self) -> list[str]:
@@ -61,6 +71,7 @@ class BulkLoaderFixtureSet:
             keys.extend(f"cm:{cycle}:{committee_id}" for committee_id in self.committee_ids)
             keys.extend(f"cn:{cycle}:{candidate_id}" for candidate_id in self.candidate_ids)
             keys.extend(f"ccl:{cycle}:{linkage_id}" for linkage_id in self.linkage_ids)
+            keys.extend(f"weball:{cycle}:{candidate_id}" for candidate_id in self.candidate_ids)
         return keys
 
     def committee_source_record_keys(self, cycles: Sequence[int]) -> list[str]:
@@ -71,12 +82,8 @@ class BulkLoaderFixtureSet:
 
 
 @pytest.fixture
-def bulk_loader_conn() -> Iterator[psycopg.Connection]:
-    connection = get_connection()
-    try:
-        yield connection
-    finally:
-        connection.close()
+def bulk_loader_conn(committing_db_conn: psycopg.Connection) -> Iterator[psycopg.Connection]:
+    yield committing_db_conn
 
 
 @pytest.fixture
@@ -126,6 +133,11 @@ def _write_fixture_file(
     path.write_text("\n".join(lines) + "\n", encoding="latin-1")
 
 
+def _parse_weball_date(raw_value: str) -> date:
+    month, day, year = raw_value.split("/")
+    return date(int(year), int(month), int(day))
+
+
 def _build_fixture_prefix() -> str:
     return str(uuid4().int % 900 + 100)
 
@@ -143,6 +155,7 @@ def _materialize_bulk_loader_fixture_set(tmp_path: Path) -> BulkLoaderFixtureSet
     original_committee_rows = _read_fixture_rows(_COMMITTEE_FIXTURE_PATH, "cm")
     original_candidate_rows = _read_fixture_rows(_CANDIDATE_FIXTURE_PATH, "cn")
     original_ccl_rows = _read_fixture_rows(_CCL_FIXTURE_PATH, "ccl")
+    original_weball_rows = _read_fixture_rows(_WEBALL_FIXTURE_PATH, "weball")
 
     committee_id_map = {
         row["CMTE_ID"]: f"C{fixture_prefix}{index:05d}"
@@ -187,21 +200,32 @@ def _materialize_bulk_loader_fixture_set(tmp_path: Path) -> BulkLoaderFixtureSet
         }
         for row in original_ccl_rows
     ]
+    weball_rows = [
+        {
+            **row,
+            "CAND_ID": candidate_id_map.get(row["CAND_ID"], row["CAND_ID"]),
+        }
+        for row in original_weball_rows
+    ]
 
     committee_path = tmp_path / "cm_sample_unique.txt"
     candidate_path = tmp_path / "cn_sample_unique.txt"
     ccl_path = tmp_path / "ccl_sample_unique.txt"
+    weball_path = tmp_path / "weball_sample_unique.txt"
     _write_fixture_file(committee_path, CM_COLUMNS, committee_rows)
     _write_fixture_file(candidate_path, CN_COLUMNS, candidate_rows)
     _write_fixture_file(ccl_path, CCL_COLUMNS, ccl_rows)
+    _write_fixture_file(weball_path, WEBALL_COLUMNS, weball_rows)
 
     return BulkLoaderFixtureSet(
         committee_path=committee_path,
         candidate_path=candidate_path,
         ccl_path=ccl_path,
+        weball_path=weball_path,
         committee_rows=committee_rows,
         candidate_rows=candidate_rows,
         ccl_rows=ccl_rows,
+        weball_rows=weball_rows,
     )
 
 
@@ -728,6 +752,108 @@ def test_load_candidates_resolves_principal_committee_and_is_idempotent(
     _assert_candidate_rows(bulk_loader_conn, bulk_loader_fixture_set.candidate_rows)
     _assert_person_rows(bulk_loader_conn, bulk_loader_fixture_set.candidate_rows)
     _assert_candidate_addresses(bulk_loader_conn, bulk_loader_fixture_set.candidate_rows)
+
+
+def test_load_candidate_summaries_updates_existing_candidates_and_skips_unresolved(
+    bulk_loader_conn: psycopg.Connection,
+    bulk_loader_fixture_set: BulkLoaderFixtureSet,
+    tmp_path: Path,
+) -> None:
+    data_source_id = ensure_fec_bulk_data_source(bulk_loader_conn)
+    _load_committees_and_candidates(bulk_loader_conn, bulk_loader_fixture_set, data_source_id)
+    weball_rows = [dict(row) for row in bulk_loader_fixture_set.weball_rows]
+    unresolved_candidate_id = f"H{uuid4().hex[:8].upper()}"
+    weball_rows.append({**weball_rows[0], "CAND_ID": unresolved_candidate_id})
+    fixture_path = tmp_path / "weball_with_unresolved_candidate.txt"
+    _write_fixture_file(fixture_path, WEBALL_COLUMNS, weball_rows)
+    updated_rows = [dict(row) for row in weball_rows]
+    updated_rows[0]["TTL_RECEIPTS"] = "99999.01"
+    updated_fixture_path = tmp_path / "weball_with_updated_summary.txt"
+    _write_fixture_file(updated_fixture_path, WEBALL_COLUMNS, updated_rows)
+    expected_rows_by_candidate_id = {
+        row["CAND_ID"]: row for row in updated_rows if row["CAND_ID"] != unresolved_candidate_id
+    }
+
+    first_result = load_candidate_summaries(
+        bulk_loader_conn,
+        fixture_path,
+        cycle=_PRIMARY_CYCLE,
+        data_source_id=data_source_id,
+        batch_size=2,
+    )
+    second_result = load_candidate_summaries(
+        bulk_loader_conn,
+        fixture_path,
+        cycle=_PRIMARY_CYCLE,
+        data_source_id=data_source_id,
+        batch_size=2,
+    )
+    third_result = load_candidate_summaries(
+        bulk_loader_conn,
+        updated_fixture_path,
+        cycle=_PRIMARY_CYCLE,
+        data_source_id=data_source_id,
+        batch_size=2,
+    )
+
+    assert (first_result.inserted, first_result.skipped, first_result.errors) == (5, 1, 0)
+    assert (second_result.inserted, second_result.skipped, second_result.errors) == (0, 6, 0)
+    assert (third_result.inserted, third_result.skipped, third_result.errors) == (1, 5, 0)
+
+    candidate_ids = bulk_loader_fixture_set.candidate_ids
+    with bulk_loader_conn.cursor(row_factory=dict_row) as cursor:
+        cursor.execute(
+            """
+            SELECT fec_candidate_id,
+                   total_receipts,
+                   total_disbursements,
+                   cash_on_hand,
+                   summary_coverage_end_date,
+                   name,
+                   office,
+                   person_id
+            FROM cf.candidate
+            WHERE fec_candidate_id = ANY(%s)
+            ORDER BY fec_candidate_id
+            """,
+            (candidate_ids,),
+        )
+        summary_rows = cursor.fetchall()
+        cursor.execute(
+            "SELECT COUNT(*) AS candidate_count FROM cf.candidate WHERE fec_candidate_id = %s",
+            (unresolved_candidate_id,),
+        )
+        unresolved_candidate_count = cursor.fetchone()["candidate_count"]
+        cursor.execute(
+            "SELECT COUNT(*) AS person_count FROM core.person WHERE identifiers ->> 'fec_candidate_id' = %s",
+            (unresolved_candidate_id,),
+        )
+        unresolved_person_count = cursor.fetchone()["person_count"]
+        cursor.execute(
+            "SELECT COUNT(*) AS source_record_count FROM core.source_record WHERE data_source_id = %s AND source_record_key = %s",
+            (data_source_id, f"weball:{_PRIMARY_CYCLE}:{bulk_loader_fixture_set.candidate_ids[0]}"),
+        )
+        updated_summary_source_record_count = cursor.fetchone()["source_record_count"]
+
+    assert len(summary_rows) == len(bulk_loader_fixture_set.weball_rows)
+    summary_by_candidate_id = {row["fec_candidate_id"]: row for row in summary_rows}
+    for expected_row in bulk_loader_fixture_set.weball_rows:
+        candidate_row = summary_by_candidate_id[expected_row["CAND_ID"]]
+        original_candidate = next(
+            row for row in bulk_loader_fixture_set.candidate_rows if row["CAND_ID"] == expected_row["CAND_ID"]
+        )
+        expected_summary_row = expected_rows_by_candidate_id[expected_row["CAND_ID"]]
+        assert candidate_row["total_receipts"] == Decimal(expected_summary_row["TTL_RECEIPTS"])
+        assert candidate_row["total_disbursements"] == Decimal(expected_summary_row["TTL_DISB"])
+        assert candidate_row["cash_on_hand"] == Decimal(expected_summary_row["COH_COP"])
+        assert candidate_row["summary_coverage_end_date"] == _parse_weball_date(expected_summary_row["CVG_END_DT"])
+        assert candidate_row["name"] == original_candidate["CAND_NAME"]
+        assert candidate_row["office"] == original_candidate["CAND_OFFICE"]
+        assert candidate_row["person_id"] is not None
+
+    assert unresolved_candidate_count == 0
+    assert unresolved_person_count == 0
+    assert updated_summary_source_record_count == 2
 
 
 def test_load_candidate_committee_links_skips_unresolved_foreign_keys_and_is_idempotent(

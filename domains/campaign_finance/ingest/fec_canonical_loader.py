@@ -18,6 +18,7 @@ from core.types.python.models import (
 )
 from domains.campaign_finance.ingest.bulk_parser import read_bulk_file
 from domains.campaign_finance.ingest.bulk_stage4_loader import LoadResult
+from domains.campaign_finance.ingest.federal_officeholder_loader import OFFICE_US_PRESIDENT
 from domains.campaign_finance.ingest.field_mapper import map_candidate_fields
 from domains.campaign_finance.ingest.text_utils import normalize_optional_text
 from domains.civics.ingest import (
@@ -33,14 +34,13 @@ LOGGER = logging.getLogger(__name__)
 # Deterministic seed UUIDs from domains/civics/schema/tables.sql
 _OFFICE_US_HOUSE = UUID("00000000-0000-4000-8000-000000000101")
 _OFFICE_US_SENATE = UUID("00000000-0000-4000-8000-000000000102")
-_OFFICE_US_PRESIDENT = UUID("00000000-0000-4000-8000-000000000103")
 _DIVISION_US_STATEWIDE = UUID("00000000-0000-4000-8000-000000000501")
 _DIVISION_US_CONGRESSIONAL_DISTRICTS = UUID("00000000-0000-4000-8000-000000000504")
 
 _FEC_OFFICE_MAP: dict[str, UUID] = {
     "H": _OFFICE_US_HOUSE,
     "S": _OFFICE_US_SENATE,
-    "P": _OFFICE_US_PRESIDENT,
+    "P": OFFICE_US_PRESIDENT,
 }
 
 
