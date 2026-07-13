@@ -34,7 +34,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          flyctl deploy web -c infra/fly/web.fly.toml --remote-only
+          # The positional web directory changes -c resolution, so anchor the config at the workspace.
+          flyctl deploy web -c "$GITHUB_WORKSPACE/infra/fly/web.fly.toml" --remote-only
 
       - name: Deploy Caddy to Fly
         shell: bash

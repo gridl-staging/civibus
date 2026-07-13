@@ -47,7 +47,7 @@ def test_workflow_runs_on_5_minute_cron(workflow_parsed: dict) -> None:
 
 def test_workflow_uses_probe_base_url_as_single_source_of_truth(workflow_parsed: dict, workflow_text: str) -> None:
     """Normal probes must derive from the top-level base URL, not hard-coded host literals."""
-    assert workflow_parsed["env"]["PROBE_BASE_URL"] == "https://civibus-caddy.fly.dev"
+    assert workflow_parsed["env"]["PROBE_BASE_URL"] == "https://civibus.shareborough.com"
     assert "${{ env.PROBE_BASE_URL }}/api/health/content" in workflow_text
     assert "civibus.org" not in workflow_text.lower()
 

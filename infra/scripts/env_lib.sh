@@ -14,6 +14,7 @@
 # repeating platform probes in every refresh or compose wrapper.
 # This helper intentionally does not normalize ownership; only group/other
 # permission bits are relevant to the secret-file privacy check.
+# Print permission bits for an existing file or directory.
 get_file_mode_octal() {
   local path="$1"
   local mode

@@ -20,7 +20,7 @@ EXPECTED_OWNER_FILES = {
 }
 EXPECTED_FLY_DEPLOY_COMMANDS = [
     "flyctl deploy -c infra/fly/api.fly.toml --remote-only",
-    "flyctl deploy web -c infra/fly/web.fly.toml --remote-only",
+    'flyctl deploy web -c "$GITHUB_WORKSPACE/infra/fly/web.fly.toml" --remote-only',
     "flyctl deploy -c infra/fly/caddy.fly.toml --remote-only",
 ]
 

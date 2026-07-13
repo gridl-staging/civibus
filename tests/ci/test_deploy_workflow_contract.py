@@ -1,6 +1,8 @@
 """Deploy workflow contract tests for the Fly production deploy lane."""
 
 from pathlib import Path
+import shlex
+import tomllib
 
 import yaml
 
@@ -8,10 +10,11 @@ import core.keel_gate_l13 as keel_gate_l13
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+DEBBIE_CONFIG_PATH = REPO_ROOT / ".debbie.toml"
 DEPLOY_WORKFLOW_PATH = REPO_ROOT / ".github/workflows/deploy.yml"
 FLY_DEPLOY_COMMANDS = [
     "flyctl deploy -c infra/fly/api.fly.toml --remote-only",
-    "flyctl deploy web -c infra/fly/web.fly.toml --remote-only",
+    'flyctl deploy web -c "$GITHUB_WORKSPACE/infra/fly/web.fly.toml" --remote-only',
     "flyctl deploy -c infra/fly/caddy.fly.toml --remote-only",
 ]
 FORBIDDEN_DEPLOY_TARGETS = (
@@ -26,6 +29,10 @@ L13_OWNER_FILES = {
     "infra/fly/web.fly.toml",
     "infra/fly/caddy.fly.toml",
 }
+PUBLIC_CI_SUPPORT_FILES = {
+    "scripts/register_roster_pilot_sources.py",
+    "scripts/stage_close_gate.py",
+}
 
 
 def _read_deploy_workflow() -> str:
@@ -35,6 +42,12 @@ def _read_deploy_workflow() -> str:
 def _parse_deploy_workflow() -> dict:
     payload = yaml.safe_load(_read_deploy_workflow())
     assert isinstance(payload, dict), "deploy.yml must parse as a YAML mapping"
+    return payload
+
+
+def _parse_debbie_config() -> dict:
+    payload = tomllib.loads(DEBBIE_CONFIG_PATH.read_text(encoding="utf-8"))
+    assert isinstance(payload, dict), ".debbie.toml must parse as a TOML mapping"
     return payload
 
 
@@ -61,6 +74,32 @@ def _run_scripts() -> list[str]:
     return [step.get("run", "") for step in _deploy_steps() if "run" in step]
 
 
+def _fly_deploy_commands() -> list[str]:
+    return [
+        line.strip()
+        for script in _run_scripts()
+        for line in script.splitlines()
+        if line.strip().startswith("flyctl deploy")
+    ]
+
+
+def _deploy_config_path_is_workspace_anchored(config_path: str) -> bool:
+    return Path(config_path).is_absolute() or config_path.startswith("$GITHUB_WORKSPACE/")
+
+
+def _fly_deploy_command_has_positional_workdir_before_config(command: str) -> bool:
+    tokens = shlex.split(command)
+    assert tokens[:2] == ["flyctl", "deploy"], f"unexpected deploy command: {command}"
+    config_index = tokens.index("-c")
+    return any(not token.startswith("-") for token in tokens[2:config_index])
+
+
+def _fly_deploy_config_path(command: str) -> str:
+    tokens = shlex.split(command)
+    config_index = tokens.index("-c")
+    return tokens[config_index + 1]
+
+
 def test_deploy_workflow_exists_and_parses_cleanly() -> None:
     parsed = _parse_deploy_workflow()
     assert isinstance(parsed, dict)
@@ -71,6 +110,15 @@ def test_l13_contract_owner_file_set_is_locked_to_fly_deploy_surface() -> None:
     assert owner_files == L13_OWNER_FILES
     for relative_path in owner_files:
         assert (REPO_ROOT / relative_path).is_file(), f"L13 owner file missing: {relative_path}"
+
+
+def test_public_ci_support_scripts_sync_to_staging_and_prod() -> None:
+    debbie_payload = _parse_debbie_config()
+    sync_files = set(debbie_payload["sync"]["files"])
+
+    assert PUBLIC_CI_SUPPORT_FILES.issubset(sync_files)
+    for relative_path in PUBLIC_CI_SUPPORT_FILES:
+        assert (REPO_ROOT / relative_path).is_file(), f"public CI support file missing: {relative_path}"
 
 
 def test_deploy_workflow_triggers_on_push_to_main_and_manual_dispatch_only() -> None:
@@ -135,6 +183,18 @@ def test_deploy_workflow_runs_exactly_three_serving_fly_deploys() -> None:
 
     deploy_positions = [workflow_text.index(deploy_command) for deploy_command in FLY_DEPLOY_COMMANDS]
     assert deploy_positions == sorted(deploy_positions)
+
+
+def test_positional_fly_deploy_workdirs_use_workspace_anchored_config_paths() -> None:
+    for command in _fly_deploy_commands():
+        if not _fly_deploy_command_has_positional_workdir_before_config(command):
+            continue
+
+        config_path = _fly_deploy_config_path(command)
+        assert _deploy_config_path_is_workspace_anchored(config_path), (
+            f"{command!r} has a positional deploy workdir before -c, so the config path must be absolute "
+            "or $GITHUB_WORKSPACE-anchored"
+        )
 
 
 def test_deploy_workflow_never_deploys_db_or_refresh_apps() -> None:
