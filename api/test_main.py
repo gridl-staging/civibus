@@ -6,10 +6,12 @@ import sys
 from types import ModuleType, SimpleNamespace
 from unittest.mock import MagicMock
 
+import psycopg
 import pytest
-from fastapi import APIRouter, FastAPI
+from fastapi import APIRouter, Depends, FastAPI
 from fastapi.testclient import TestClient
 
+from api.deps import get_db
 from api.middleware.logging import RequestLoggingMiddleware
 
 _STAGE_1_AUTH_TEST_MODULES = ("api/test_auth.py", "api/test_main.py", "api/test_cors.py")
@@ -92,6 +94,8 @@ def test_create_app_lifespan_manages_connection_pool(monkeypatch: pytest.MonkeyP
     monkeypatch.setattr(api_main, "age_post_connect", _fake_age_post_connect)
 
     class FakeConnectionPool:
+        check_connection = staticmethod(lambda _connection: None)
+
         def __init__(self, **kwargs: object) -> None:
             captured_pool_kwargs.update(kwargs)
 
@@ -110,6 +114,10 @@ def test_create_app_lifespan_manages_connection_pool(monkeypatch: pytest.MonkeyP
         assert isinstance(client.app.state.db_pool, FakeConnectionPool)
         assert captured_pool_kwargs["open"] is False
         assert captured_pool_kwargs["open_wait"] is False
+        assert captured_pool_kwargs["min_size"] == 2
+        assert captured_pool_kwargs["max_size"] == 8
+        assert captured_pool_kwargs["timeout"] == 5.0
+        assert captured_pool_kwargs["check"] is api_main.ConnectionPool.check_connection
 
     configured_connection = SimpleNamespace(autocommit=False)
     configure_callback = captured_pool_kwargs["configure"]
@@ -119,6 +127,42 @@ def test_create_app_lifespan_manages_connection_pool(monkeypatch: pytest.MonkeyP
     assert configured_connection.autocommit is False
 
     pool_closed.assert_called_once_with()
+
+
+def test_create_app_connection_pool_uses_env_pool_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
+    api_main = _load_api_main(monkeypatch)
+    monkeypatch.setenv("CIVIBUS_API_DB_POOL_MIN_SIZE", "3")
+    monkeypatch.setenv("CIVIBUS_API_DB_POOL_MAX_SIZE", "10")
+    monkeypatch.setenv("CIVIBUS_API_DB_POOL_TIMEOUT_SECONDS", "2.5")
+    captured_pool_kwargs: dict[str, object] = {}
+
+    class FakeConnectionPool:
+        check_connection = staticmethod(lambda _connection: None)
+
+        def __init__(self, **kwargs: object) -> None:
+            captured_pool_kwargs.update(kwargs)
+
+        def open(self, *, wait: bool) -> None:
+            captured_pool_kwargs["open_wait"] = wait
+
+    monkeypatch.setattr(api_main, "ConnectionPool", FakeConnectionPool, raising=False)
+
+    pool = api_main._build_app_connection_pool()
+
+    assert isinstance(pool, FakeConnectionPool)
+    assert captured_pool_kwargs["min_size"] == 3
+    assert captured_pool_kwargs["max_size"] == 10
+    assert captured_pool_kwargs["timeout"] == 2.5
+    assert captured_pool_kwargs["open_wait"] is False
+
+
+def test_create_app_connection_pool_rejects_invalid_pool_size(monkeypatch: pytest.MonkeyPatch) -> None:
+    api_main = _load_api_main(monkeypatch)
+    monkeypatch.setenv("CIVIBUS_API_DB_POOL_MIN_SIZE", "9")
+    monkeypatch.setenv("CIVIBUS_API_DB_POOL_MAX_SIZE", "8")
+
+    with pytest.raises(RuntimeError, match="CIVIBUS_API_DB_POOL_MIN_SIZE"):
+        api_main._build_app_connection_pool()
 
 
 def test_create_app_keeps_api_logger_handler_count_stable_across_factory_calls(
@@ -316,6 +360,92 @@ def test_content_health_endpoint_uses_post_strip_health_path(monkeypatch: pytest
 
     assert response.status_code == 200
     assert response.json() == {"healthy": True}
+
+
+def test_query_cancellation_returns_connection_before_health_and_fast_routes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    api_main = _load_api_main(monkeypatch)
+    monkeypatch.setattr(api_main._health_content_module, "evaluate_content_health", lambda _connection: [])
+
+    class FakeConnection:
+        def __init__(self) -> None:
+            self.executed: list[str] = []
+
+        def execute(self, sql: str) -> None:
+            self.executed.append(sql)
+
+    class FakePoolConnectionContext:
+        def __init__(self, pool: "FakeBoundedPool") -> None:
+            self._pool = pool
+
+        def __enter__(self) -> FakeConnection:
+            if self._pool.active_checkouts >= self._pool.max_checkouts:
+                raise AssertionError("pool checkout capacity exhausted")
+            self._pool.active_checkouts += 1
+            self._pool.checkout_connection_ids.append(id(self._pool.pooled_connection))
+            self._pool.max_observed_checkouts = max(
+                self._pool.max_observed_checkouts,
+                self._pool.active_checkouts,
+            )
+            return self._pool.pooled_connection
+
+        def __exit__(self, exc_type: object, exc_value: object, traceback: object) -> bool:
+            self._pool.active_checkouts -= 1
+            return False
+
+    class FakeBoundedPool:
+        def __init__(self) -> None:
+            self.active_checkouts = 0
+            self.max_checkouts = 1
+            self.max_observed_checkouts = 0
+            self.pooled_connection = FakeConnection()
+            self.checkout_connection_ids: list[int] = []
+
+        def connection(self) -> FakePoolConnectionContext:
+            return FakePoolConnectionContext(self)
+
+        def open(self, *, wait: bool) -> None:
+            return None
+
+        def close(self) -> None:
+            assert self.active_checkouts == 0
+
+    fake_pool = FakeBoundedPool()
+    monkeypatch.setattr(api_main, "_build_app_connection_pool", lambda: fake_pool)
+
+    probe_router = APIRouter()
+
+    @probe_router.get("/stage3/slow")
+    def slow_probe(_connection: FakeConnection = Depends(get_db)) -> dict[str, str]:
+        raise psycopg.errors.QueryCanceled("statement timeout")
+
+    @probe_router.get("/stage3/fast")
+    def fast_probe(_connection: FakeConnection = Depends(get_db)) -> dict[str, bool]:
+        return {"ok": True}
+
+    app = api_main.create_app()
+    app.include_router(probe_router)
+
+    with TestClient(app) as client:
+        slow_response = client.get("/stage3/slow")
+        assert fake_pool.active_checkouts == 0
+        health_response = client.get("/health/content")
+        assert fake_pool.active_checkouts == 0
+        fast_response = client.get("/stage3/fast")
+        assert fake_pool.active_checkouts == 0
+
+    assert slow_response.status_code == 504
+    assert slow_response.json() == {"detail": "Database query exceeded the request time limit"}
+    assert health_response.status_code == 200
+    assert health_response.json() == {"healthy": True}
+    assert fast_response.status_code == 200
+    assert fast_response.json() == {"ok": True}
+    assert fake_pool.active_checkouts == 0
+    assert len(fake_pool.checkout_connection_ids) == 3
+    assert len(set(fake_pool.checkout_connection_ids)) == 1
+    assert len(fake_pool.pooled_connection.executed) == 2
+    assert fake_pool.max_observed_checkouts == 1
 
 
 def test_people_enrichment_provenance_endpoint_is_owner_backed_without_api_key(

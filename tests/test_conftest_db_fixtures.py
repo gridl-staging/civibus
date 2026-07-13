@@ -8,6 +8,7 @@ import pytest
 
 import api.conftest as api_conftest
 import conftest as root_conftest
+from test_support import bootstrap_canaries
 
 pytestmark = pytest.mark.unit
 _POSTGRES_UNAVAILABLE = "Unable to connect to PostgreSQL at localhost:5433/civibus"
@@ -409,6 +410,32 @@ def test_stage1_preflight_bootstraps_missing_stage1_canaries_before_failing(
     assert any("CREATE OR REPLACE VIEW core.person_er_view" in sql for sql in executed_sql)
     assert any("CREATE TABLE core.match_decision" in sql for sql in executed_sql)
     assert any("CREATE TRIGGER trg_contest_result_updated_at" in sql for sql in executed_sql)
+
+
+def test_stage1_canaries_include_candidate_committee_link_date_precision() -> None:
+    canary_names = [name for name, _check in bootstrap_canaries._stage1_canary_checks()]
+
+    assert "cf.candidate_committee_link.date_precision" in bootstrap_canaries.BOOTSTRAP_CANARIES
+    assert canary_names == list(bootstrap_canaries.BOOTSTRAP_CANARIES)
+
+
+def test_stage1_canary_bootstrap_repairs_candidate_committee_link_date_precision(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mocked_connection = MagicMock()
+    mocked_cursor = MagicMock()
+    mocked_connection.cursor.return_value.__enter__.return_value = mocked_cursor
+    monkeypatch.setattr(root_conftest, "_relation_exists", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(root_conftest, "_type_exists", lambda *_args, **_kwargs: True)
+
+    root_conftest._bootstrap_missing_stage1_canaries(
+        mocked_connection,
+        missing_canaries=["cf.candidate_committee_link.date_precision"],
+    )
+
+    executed_sql = "\n".join(str(call.args[0]) for call in mocked_cursor.execute.call_args_list)
+    assert "ALTER TABLE cf.candidate_committee_link" in executed_sql
+    assert "ADD COLUMN IF NOT EXISTS date_precision core.date_precision NOT NULL DEFAULT 'year'" in executed_sql
 
 
 def test_stage1_canary_bootstrap_repairs_only_match_decision_owner(

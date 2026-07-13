@@ -156,7 +156,7 @@ def _current_federal_directory_office_names_sql() -> str:
 
 def _current_federal_members_ctes_sql(*, office_names_sql: str) -> str:
     return f"""
-    current_members AS (
+    base_members AS (
         SELECT
             oh.id AS officeholding_id,
             oh.person_id,
@@ -169,43 +169,57 @@ def _current_federal_members_ctes_sql(*, office_names_sql: str) -> str:
             ed.division_type,
             ed.state AS division_state,
             ed.district_number,
+            COALESCE(ed.state, o.state) AS member_state,
             sr.raw_fields ->> 'class' AS senate_class_raw,
-            COALESCE(
-                fec_party.party,
-                civic_party.party,
-                NULLIF(btrim(sr.raw_fields ->> 'party'), '')
-            ) AS party,
-            pp.rights_status AS portrait_rights_status,
-            pp.source_image_url AS raw_portrait_source_image_url
+            sr.raw_fields ->> 'party' AS source_record_party
         FROM civic.officeholding oh
         JOIN civic.office o ON o.id = oh.office_id
         JOIN core.person p ON p.id = oh.person_id
         LEFT JOIN civic.electoral_division ed ON ed.id = oh.electoral_division_id
         LEFT JOIN core.source_record sr ON sr.id = oh.source_record_id
-        LEFT JOIN LATERAL (
-            SELECT cand.party
-            FROM cf.candidate cand
-            WHERE cand.person_id = oh.person_id
-              AND cand.party IS NOT NULL
-              AND cand.office = CASE
-                  WHEN o.name = 'us_senate' THEN 'S'
-                  WHEN o.name IN ('us_president', 'us_vice_president') THEN 'P'
-                  ELSE 'H'
-              END
-              AND (
-                  COALESCE(ed.state, o.state) IS NULL
-                  OR cand.state IS NULL
-                  OR cand.state = COALESCE(ed.state, o.state)
-              )
-            ORDER BY cand.summary_coverage_end_date DESC NULLS LAST, cand.updated_at DESC, cand.id DESC
-            LIMIT 1
-        ) fec_party ON TRUE
+        WHERE oh.valid_period @> CURRENT_DATE
+          AND o.office_level = 'federal'
+          AND o.name = ANY({office_names_sql})
+    ),
+    fec_party_by_officeholding AS (
+        SELECT DISTINCT ON (base.officeholding_id)
+            base.officeholding_id,
+            cand.party
+        FROM base_members base
+        JOIN cf.candidate cand
+          ON cand.person_id = base.person_id
+         AND cand.party IS NOT NULL
+         AND cand.office = CASE
+             WHEN base.canonical_office_name = 'us_senate' THEN 'S'
+             WHEN base.canonical_office_name IN ('us_president', 'us_vice_president') THEN 'P'
+             ELSE 'H'
+         END
+         AND (
+             base.member_state IS NULL
+             OR cand.state IS NULL
+             OR cand.state = base.member_state
+         )
+        ORDER BY base.officeholding_id, cand.summary_coverage_end_date DESC NULLS LAST, cand.updated_at DESC, cand.id DESC
+    ),
+    current_members AS (
+        SELECT
+            base.*,
+            COALESCE(
+                fec_party.party,
+                civic_party.party,
+                NULLIF(btrim(base.source_record_party), '')
+            ) AS party,
+            pp.rights_status AS portrait_rights_status,
+            pp.source_image_url AS raw_portrait_source_image_url
+        FROM base_members base
+        LEFT JOIN fec_party_by_officeholding fec_party
+          ON fec_party.officeholding_id = base.officeholding_id
         LEFT JOIN LATERAL (
             SELECT c.party
             FROM civic.candidacy c
             JOIN civic.contest ct ON ct.id = c.contest_id
-            WHERE c.person_id = oh.person_id
-              AND ct.office_id = o.id
+            WHERE c.person_id = base.person_id
+              AND ct.office_id = base.office_id
               AND c.party IS NOT NULL
             ORDER BY ct.election_date DESC NULLS LAST, c.id DESC
             LIMIT 1
@@ -213,19 +227,15 @@ def _current_federal_members_ctes_sql(*, office_names_sql: str) -> str:
         LEFT JOIN LATERAL (
             SELECT rights_status, source_image_url
             FROM core.person_portrait
-            WHERE person_id = oh.person_id
+            WHERE person_id = base.person_id
               AND status = 'active'
             ORDER BY updated_at DESC, id ASC
             LIMIT 1
         ) pp ON TRUE
-        WHERE oh.valid_period @> CURRENT_DATE
-          AND o.office_level = 'federal'
-          AND o.name = ANY({office_names_sql})
     ),
     derived_members AS (
         SELECT
             *,
-            COALESCE(division_state, office_state) AS member_state,
             CASE upper(btrim(COALESCE(senate_class_raw, '')))
                 WHEN '1' THEN 'Class I'
                 WHEN 'CLASS I' THEN 'Class I'

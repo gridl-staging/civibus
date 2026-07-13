@@ -392,6 +392,33 @@ describe("entity detail page rendering", () => {
     expect(linkedCommitteesIndex).toBeGreaterThan(detailIndex);
   });
 
+  it("keeps the campaign-finance panel heading unique while finance sections stream", () => {
+    const rendered = render(DetailPage, {
+      props: {
+        data: buildPersonPageBundle({
+          personFinanceSections: new Promise(() => {})
+        })
+      }
+    });
+
+    expect(rendered.body.split("<h3>Campaign finance</h3>").length - 1).toBe(1);
+  });
+
+  it("keeps the fundraising detail heading unique while contribution insights stream", () => {
+    const rendered = render(DetailPage, {
+      props: {
+        data: buildPersonPageBundle({
+          personFinanceSections: asSettled([buildPersonFinanceSection()]),
+          personContributionInsights: new Promise(() => {})
+        })
+      }
+    });
+
+    expect(rendered.body.match(/<h[34]>Fundraising detail<\/h[34]>/g)).toHaveLength(1);
+    expect(rendered.body).toContain("<h3>Finance data loading</h3>");
+    expect(rendered.body).not.toContain("<h3>Fundraising detail loading</h3>");
+  });
+
   it("renders ranked Top donors in total-desc order without replacing the donor/vendor feed", () => {
     const rendered = render(DetailPage, {
       props: {

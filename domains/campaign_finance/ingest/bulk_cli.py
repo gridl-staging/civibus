@@ -117,6 +117,7 @@ class CliConfig:
     min_date: date | None = None
     count_only: bool = False
     canonical_stage4_resume_enabled: bool = False
+    progress_file: Path | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -190,6 +191,7 @@ def build_argument_parser() -> argparse.ArgumentParser:
         "--min-date", type=date.fromisoformat, help="For transaction files: keep rows on or after YYYY-MM-DD"
     )
     parser.add_argument("--count-only", action="store_true", help="Parse and filter without writing any database rows")
+    parser.add_argument("--progress-file", type=Path, help="Append Stage 4 JSONL progress at durable commit boundaries")
     return parser
 
 
@@ -225,6 +227,7 @@ def _build_cli_config(
         min_date=getattr(args, "min_date", None),
         count_only=getattr(args, "count_only", False),
         canonical_stage4_resume_enabled=mode == "full",
+        progress_file=getattr(args, "progress_file", None),
     )
 
 
@@ -260,6 +263,8 @@ def validate_cli_arguments(args: argparse.Namespace) -> CliConfig:
             )
         if args.spine_only and args.file_type != "itcont":
             raise ValueError("--spine-only is supported only for itcont")
+        if args.progress_file is not None and args.file_type not in TRANSACTION_FILE_TYPES:
+            raise ValueError("--progress-file is supported only for Stage 4 transaction loads")
         return _build_cli_config(args, mode="single", file_type=args.file_type, path=args.path, directory=None)
 
     if directory_mode_selected:
@@ -271,6 +276,8 @@ def validate_cli_arguments(args: argparse.Namespace) -> CliConfig:
             raise ValueError("--spine-only is supported only for itcont")
         if args.transactions_only:
             raise ValueError("--transactions-only is supported only in single-file transaction mode")
+        if args.progress_file is not None and args.federal:
+            raise ValueError("--progress-file is supported only for Stage 4 transaction loads")
         if args.all and args.federal:
             raise ValueError("--all and --federal are mutually exclusive")
         if args.all and args.directory is None:
@@ -401,6 +408,7 @@ def dispatch_load(
             min_transaction_date=config.min_date,
             count_only=config.count_only,
             canonical_resume_enabled=canonical_resume_enabled,
+            progress_file=config.progress_file,
         )
 
     return loader_spec.loader(conn, request.path, **loader_kwargs)

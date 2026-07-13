@@ -469,18 +469,18 @@ def test_caddyfile_routes_api_prefix_to_api_service():
         CADDYFILE_FILE,
         f"Expected ingress config {CADDYFILE_FILE} to exist",
     )
-    canonical_host_block = re.search(
-        r"^\{\$CIVIBUS_SITE_SCHEME\}\{\$PUBLIC_HOSTNAME\}\s*\{(?P<body>.*?)^\}$",
+    ingress_routes_snippet = re.search(
+        r"^\(civibus_ingress_routes\)\s*\{(?P<body>.*?)^\}$",
         caddyfile_text,
         re.MULTILINE | re.DOTALL,
     )
-    assert canonical_host_block is not None, (
-        "Caddyfile must define a canonical {$CIVIBUS_SITE_SCHEME}{$PUBLIC_HOSTNAME} site block"
+    assert ingress_routes_snippet is not None, (
+        "Caddyfile must define a shared civibus_ingress_routes snippet for every served hostname"
     )
 
     api_route_block = re.search(
         r"handle_path\s+/api/\*\s*\{(?P<body>.*?)\}",
-        canonical_host_block.group("body"),
+        ingress_routes_snippet.group("body"),
         re.DOTALL,
     )
     assert api_route_block is not None, "Caddyfile must route /api/* requests to the backend API service"
@@ -488,6 +488,26 @@ def test_caddyfile_routes_api_prefix_to_api_service():
         "Caddyfile must proxy /api/* traffic to the CIVIBUS_API_UPSTREAM placeholder "
         "with api:8000 as the compose default"
     )
+    assert re.search(
+        r"^\{\$CIVIBUS_SITE_SCHEME\}\{\$PUBLIC_HOSTNAME\}\s*\{\s*import\s+civibus_ingress_routes\s*\}",
+        caddyfile_text,
+        re.MULTILINE,
+    ), "Caddyfile must serve the canonical PUBLIC_HOSTNAME with shared ingress routes"
+
+
+def test_caddyfile_serves_fly_compatibility_hostname_without_acme():
+    caddyfile_text = _read_required_text(
+        CADDYFILE_FILE,
+        f"Expected ingress config {CADDYFILE_FILE} to exist",
+    )
+    assert "http://{$CIVIBUS_FLY_COMPAT_HOSTNAME:127.0.0.1}" in caddyfile_text, (
+        "Fly compatibility hostname must use explicit http:// because Fly terminates TLS at the edge"
+    )
+    assert re.search(
+        r"^http://\{\$CIVIBUS_FLY_COMPAT_HOSTNAME:127\.0\.0\.1\}\s*\{\s*import\s+civibus_ingress_routes\s*\}",
+        caddyfile_text,
+        re.MULTILINE,
+    ), "Caddyfile must serve the Fly compatibility hostname with shared ingress routes"
 
 
 def test_fastapi_routes_match_caddy_stripped_api_prefix(monkeypatch: pytest.MonkeyPatch) -> None:

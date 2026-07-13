@@ -115,7 +115,7 @@
   {#if personContributionInsights !== null && personTopDonors !== null && personTopEmployers !== null}
     <h4>Fundraising detail</h4>
     {#await combineDeferredTriple(personContributionInsights, personTopDonors, personTopEmployers)}
-      <SkeletonPanel label="Fundraising detail" lines={5} />
+      <SkeletonPanel label="Finance data loading" lines={5} />
     {:then [contributionInsights, topDonors, topEmployers]}
       {@const fundraisingDetail = buildPersonContributionInsightsPresentation(
         contributionInsights,
@@ -356,7 +356,7 @@
           <h3>Campaign finance</h3>
           {#await personFinanceSections}
             {@render fundraisingDetail()}
-            <SkeletonPanel label="Campaign finance" lines={8} />
+            <SkeletonPanel label="Finance data loading" lines={8} />
           {:then personFinanceSections}
             {#if personFinanceSections.length === 0}
               {@render fundraisingDetail()}

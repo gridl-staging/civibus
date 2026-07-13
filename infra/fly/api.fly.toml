@@ -19,7 +19,7 @@ primary_region = "sjc"
   POSTGRES_PORT = "5432"
   POSTGRES_USER = "civibus"
   POSTGRES_DB = "civibus"
-  CIVIBUS_CORS_ORIGIN = "https://civibus-caddy.fly.dev"
+  CIVIBUS_CORS_ORIGIN = "https://civibus.shareborough.com"
   CIVIBUS_RATE_LIMIT_REQUESTS = "100"
   CIVIBUS_RATE_LIMIT_WINDOW_SECONDS = "60"
   # Startup-canary / health floors intentionally NOT set here: the canonical

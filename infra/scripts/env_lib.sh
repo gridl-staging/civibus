@@ -2,7 +2,18 @@
 # Shared .env loading helpers for civibus cron/refresh scripts.
 # Sourced (not executed) by refresh_priority.sh and refresh_fec_bulk.sh.
 
-# Return the file mode as an octal string on both macOS/BSD and GNU/Linux.
+# Return the file or directory mode as an octal string on both macOS/BSD and GNU/Linux.
+# The privacy and PATH guards below only need permission bits, so platform-specific
+# stat flags stay isolated here instead of duplicated across callers.
+# BSD stat, used by macOS, exposes permission bits through `-f '%Lp'`.
+# GNU stat, used by most Linux hosts, exposes equivalent bits through `-c '%a'`.
+# Callers rely on stdout containing only the numeric mode on success.
+# Failure text goes to stderr so command substitution does not capture it.
+# Symlink and regular-file policy lives in require_private_env_file.
+# Keeping mode detection separate makes the .env parser testable without
+# repeating platform probes in every refresh or compose wrapper.
+# This helper intentionally does not normalize ownership; only group/other
+# permission bits are relevant to the secret-file privacy check.
 get_file_mode_octal() {
   local path="$1"
   local mode
@@ -17,7 +28,7 @@ get_file_mode_octal() {
     return 0
   fi
 
-  echo "Unable to determine permissions for env file: ${path}" >&2
+  echo "Unable to determine permissions for path: ${path}" >&2
   return 1
 }
 
@@ -43,7 +54,7 @@ is_restricted_env_key() {
   local key="$1"
 
   case "${key}" in
-    PATH|IFS|CDPATH|ENV|BASH_ENV|SHELLOPTS|GLOBIGNORE|PYTHONHOME|PYTHONPATH)
+    PATH|HOME|IFS|CDPATH|ENV|BASH_ENV|SHELLOPTS|GLOBIGNORE|PYTHONHOME|PYTHONPATH)
       return 0
       ;;
     LD_*|DYLD_*)
@@ -52,6 +63,43 @@ is_restricted_env_key() {
   esac
 
   return 1
+}
+
+# Avoid prepending shared or redirected command directories ahead of system
+# binaries. Cron/refresh scripts inherit secrets and later invoke external
+# tools, so only a private real directory is allowed to take PATH precedence.
+prepend_private_local_bin() {
+  local bin_dir="$1"
+  local mode
+
+  if [[ -z "${bin_dir}" || ! -e "${bin_dir}" ]]; then
+    return 0
+  fi
+
+  if [[ ! -d "${bin_dir}" ]]; then
+    echo "Skipping non-directory PATH entry: ${bin_dir}" >&2
+    return 0
+  fi
+
+  if [[ -L "${bin_dir}" ]]; then
+    echo "Skipping symlinked PATH entry: ${bin_dir}" >&2
+    return 0
+  fi
+
+  mode="$(get_file_mode_octal "${bin_dir}")" || return 1
+
+  if (( (8#${mode} & 8#022) != 0 )); then
+    echo "Skipping PATH entry writable by group/other: ${bin_dir} (mode ${mode})" >&2
+    return 0
+  fi
+
+  case ":${PATH}:" in
+    *":${bin_dir}:"*)
+      return 0
+      ;;
+  esac
+
+  export PATH="${bin_dir}:${PATH}"
 }
 
 # Parse a .env file and export each literal KEY=VALUE pair into the current
@@ -132,6 +180,7 @@ load_env_assignments() {
 # Call this after setting script_dir and repo_root.
 load_civibus_env() {
   local env_file="${1:-}"
+  local system_ca_bundle="/etc/ssl/certs/ca-certificates.crt"
 
   if [[ -z "${env_file}" ]]; then
     if [[ -z "${repo_root:-}" ]]; then
@@ -141,15 +190,14 @@ load_civibus_env() {
     env_file="${repo_root}/.env"
   fi
 
-  if [[ ! -f "${env_file}" ]]; then
+  if [[ ! -e "${env_file}" ]]; then
     echo "Missing required env file: ${env_file}" >&2
     return 1
   fi
 
-  require_private_env_file "${env_file}" || return 1
   load_env_assignments "${env_file}" || return 1
 
-  export PATH="${HOME}/.local/bin:${PATH}"
+  prepend_private_local_bin "${HOME}/.local/bin" || return 1
 
   if [[ -z "${POSTGRES_PASSWORD:-}" ]]; then
     echo "POSTGRES_PASSWORD must be set in .env or the shell environment" >&2
@@ -170,5 +218,7 @@ load_civibus_env() {
 
   # Use system CA bundle instead of Python's certifi. Certifi's bundle is
   # missing some government-site cert chains (IL/Cloudflare, CO/Entrust).
-  export SSL_CERT_FILE="/etc/ssl/certs/ca-certificates.crt"
+  if [[ -z "${SSL_CERT_FILE:-}" && -f "${system_ca_bundle}" ]]; then
+    export SSL_CERT_FILE="${system_ca_bundle}"
+  fi
 }

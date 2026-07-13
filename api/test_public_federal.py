@@ -21,13 +21,18 @@ from fastapi.testclient import TestClient
 from fastapi.routing import APIRoute
 
 from api.deps import get_db
+from api.routes import public_federal as public_federal_route_module
 from api.routes.public_federal import PUBLIC_FEDERAL_EXPORT_CSV_COLUMNS, router
 from api.test_campaign_finance_support import (
+    CandidateCommitteeLinkSeed,
     CandidateRowSeed,
     CommitteeRowSeed,
+    CommitteeSummaryRowSeed,
     FilingRowSeed,
     TransactionRowSeed,
+    insert_candidate_committee_link_row,
     insert_candidate_row,
+    insert_committee_summary_row,
     insert_committee_row,
     insert_data_source_for_test,
     insert_filing_row,
@@ -435,6 +440,56 @@ def test_export_json_contains_seeded_member_with_money(api_client: TestClient, d
     assert row["ie_oppose_count"] == 1
 
 
+def test_export_json_uses_official_totals_without_full_candidate_summary(
+    api_client: TestClient,
+    db_conn: psycopg.Connection,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    member, candidate_id = _seed_member_with_money_and_ie(db_conn)
+    candidate_batch_calls: list[list[UUID]] = []
+    public_summary_batch_calls: list[list[tuple[UUID, str]]] = []
+    original_fetch_candidates_for_people = public_federal_route_module.fetch_candidates_for_people
+    original_fetch_candidate_public_money_summaries = public_federal_route_module.fetch_candidate_public_money_summaries
+
+    def track_candidates_for_people(
+        conn: psycopg.Connection,
+        person_ids: list[UUID],
+    ) -> dict[UUID, list[dict[str, object]]]:
+        candidate_batch_calls.append(person_ids)
+        return original_fetch_candidates_for_people(conn, person_ids)
+
+    def track_public_money_summaries(
+        conn: psycopg.Connection,
+        candidates: list[tuple[UUID, str]],
+    ) -> dict[UUID, dict[str, object]]:
+        public_summary_batch_calls.append(list(candidates))
+        return original_fetch_candidate_public_money_summaries(conn, candidates)
+
+    monkeypatch.setattr(public_federal_route_module, "fetch_candidates_for_people", track_candidates_for_people)
+    monkeypatch.setattr(
+        public_federal_route_module,
+        "fetch_candidate_public_money_summaries",
+        track_public_money_summaries,
+    )
+
+    response = api_client.get("/public/v1/federal/export.json")
+
+    assert response.status_code == 200
+    row = _public_money_row_for_person(response.json(), member.person_id)
+    assert row["candidate_id"] == str(candidate_id)
+    assert row["summary_source"] == "fec_weball"
+    assert row["total_raised"] == "9000.00"
+    assert row["total_spent"] == "1000.00"
+    assert row["net"] == "8000.00"
+    assert row["cash_on_hand"] == "8000.00"
+    assert row["ie_support_total"] == "250.00"
+    assert row["ie_oppose_total"] == "100.00"
+    assert len(candidate_batch_calls) == 1
+    assert member.person_id in candidate_batch_calls[0]
+    assert len(public_summary_batch_calls) == 1
+    assert (candidate_id, "Alice Representative") in public_summary_batch_calls[0]
+
+
 def test_export_and_per_member_endpoint_agree(api_client: TestClient, db_conn: psycopg.Connection) -> None:
     member, _candidate_id = _seed_member_with_money_and_ie(db_conn)
 
@@ -516,6 +571,93 @@ def test_export_row_carries_source_url(api_client: TestClient, db_conn: psycopg.
     assert source_url in row["source_urls"]
 
 
+def test_export_batches_provenance_lookup_for_selected_candidates(
+    api_client: TestClient,
+    db_conn: psycopg.Connection,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    member, _candidate_id, source_url = _seed_member_with_candidate_direct_source(db_conn)
+    batch_calls: list[tuple[list[tuple[UUID, UUID | None]], str]] = []
+    original_fetch_batch = public_federal_route_module.fetch_campaign_finance_provenance_batch
+
+    def track_provenance_batch(
+        conn: psycopg.Connection,
+        *,
+        provenance_requests: list[tuple[UUID, UUID | None]],
+        canonical_entity_type: str,
+    ) -> dict[UUID, list[dict[str, object]]]:
+        batch_calls.append((list(provenance_requests), canonical_entity_type))
+        return original_fetch_batch(
+            conn,
+            provenance_requests=provenance_requests,
+            canonical_entity_type=canonical_entity_type,
+        )
+
+    def fail_single_provenance_lookup(*_args: object, **_kwargs: object) -> list[dict[str, object]]:
+        raise AssertionError("public export must not do per-row provenance lookups")
+
+    monkeypatch.setattr(
+        public_federal_route_module,
+        "fetch_campaign_finance_provenance_batch",
+        track_provenance_batch,
+    )
+    monkeypatch.setattr(
+        public_federal_route_module,
+        "fetch_campaign_finance_provenance",
+        fail_single_provenance_lookup,
+    )
+
+    response = api_client.get("/public/v1/federal/export.csv")
+
+    assert response.status_code == 200
+    row = _public_money_csv_row_for_person(response.text, member.person_id)
+    assert source_url in row["source_urls"]
+    assert len(batch_calls) == 1
+    provenance_requests, canonical_entity_type = batch_calls[0]
+    assert canonical_entity_type == "person"
+    assert member.person_id in {person_id for person_id, _source_record_id in provenance_requests}
+
+
+def test_export_batches_public_money_summary_for_selected_candidates(
+    api_client: TestClient,
+    db_conn: psycopg.Connection,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    member, candidate_id = _seed_member_with_money_and_ie(db_conn)
+    batch_calls: list[list[tuple[UUID, str]]] = []
+    original_fetch_batch = public_federal_route_module.fetch_candidate_public_money_summaries
+
+    def track_summary_batch(
+        conn: psycopg.Connection,
+        candidates: list[tuple[UUID, str]],
+    ) -> dict[UUID, dict[str, object]]:
+        batch_calls.append(list(candidates))
+        return original_fetch_batch(conn, candidates)
+
+    def fail_single_summary(*_args: object, **_kwargs: object) -> dict[str, object] | None:
+        raise AssertionError("public export must not do per-candidate money summary lookups")
+
+    monkeypatch.setattr(
+        public_federal_route_module,
+        "fetch_candidate_public_money_summaries",
+        track_summary_batch,
+    )
+    monkeypatch.setattr(
+        public_federal_route_module,
+        "fetch_candidate_public_money_summary",
+        fail_single_summary,
+    )
+
+    response = api_client.get("/public/v1/federal/export.json")
+
+    assert response.status_code == 200
+    row = _public_money_row_for_person(response.json(), member.person_id)
+    assert row["candidate_id"] == str(candidate_id)
+    assert row["total_raised"] == "9000.00"
+    assert len(batch_calls) == 1
+    assert (candidate_id, "Alice Representative") in batch_calls[0]
+
+
 def test_public_member_money_selects_candidate_matching_current_office(
     api_client: TestClient, db_conn: psycopg.Connection
 ) -> None:
@@ -591,6 +733,67 @@ def test_public_member_money_uses_linked_candidate_when_current_office_mismatch(
     assert payload["total_raised"] == "444.00"
     assert payload["total_spent"] == "40.00"
     assert payload["net"] == "404.00"
+
+
+def test_public_member_money_uses_committee_summary_when_candidate_official_totals_missing(
+    api_client: TestClient, db_conn: psycopg.Connection
+) -> None:
+    expectations = _seed_current_federal_members_mix(db_conn)
+    member = _member_by_name(expectations, "Alice Representative")
+    candidate_id = UUID("bb000000-0000-0000-0000-000000000221")
+    committee_id = UUID("bb000000-0000-0000-0000-000000000222")
+
+    insert_candidate_row(
+        db_conn,
+        CandidateRowSeed(
+            id=candidate_id,
+            fec_candidate_id="H0NC01221",
+            name="Alice Committee Summary Candidate",
+            office="H",
+            person_id=member.person_id,
+            party="DEM",
+            state="NC",
+            district="01",
+        ),
+    )
+    insert_committee_row(
+        db_conn,
+        CommitteeRowSeed(
+            id=committee_id,
+            fec_committee_id="C99990221",
+            name="Alice Committee Summary Committee",
+        ),
+    )
+    insert_candidate_committee_link_row(
+        db_conn,
+        CandidateCommitteeLinkSeed(
+            id=UUID("bb000000-0000-0000-0000-000000000223"),
+            candidate_id=candidate_id,
+            committee_id=committee_id,
+            valid_period="[2000-01-01,2100-01-01)",
+        ),
+    )
+    insert_committee_summary_row(
+        db_conn,
+        CommitteeSummaryRowSeed(
+            committee_id=committee_id,
+            cycle=2026,
+            total_receipts=Decimal("1200.00"),
+            total_disbursements=Decimal("450.00"),
+            cash_on_hand=Decimal("750.00"),
+        ),
+    )
+
+    response = api_client.get(f"/public/v1/federal/officials/{member.person_id}/money")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["candidate_id"] == str(candidate_id)
+    assert payload["summary_source"] == "fec_committee_summary"
+    assert payload["total_raised"] == "1200.00"
+    assert payload["total_spent"] == "450.00"
+    assert payload["net"] == "750.00"
+    assert payload["cash_on_hand"] == "750.00"
 
 
 def test_public_member_money_includes_chosen_candidate_direct_source(

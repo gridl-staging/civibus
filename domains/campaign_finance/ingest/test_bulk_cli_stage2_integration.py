@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import csv
+import json
+import os
+import subprocess
 from decimal import Decimal
 from pathlib import Path
 from uuid import UUID
@@ -32,6 +35,8 @@ _SCHEDULE_E_FIXTURE_PATH = Path("tests/fixtures/bulk/schedule_e_sample.csv")
 _COMMITTEE_SUMMARY_FIXTURE_PATH = Path("tests/fixtures/bulk/committee_summary_2024.csv")
 _SCHEDULE_E_ORDERED_FILENAME = "independent_expenditure_2024.csv"
 _COMMITTEE_SUMMARY_ORDERED_FILENAME = "committee_summary_2024.csv"
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+_DETACHED_RUNNER_PATH = _REPO_ROOT / "infra/scripts/detached_runner.sh"
 
 
 def _ordered_schedule_e_file_num(fixture_set: BulkLoaderFixtureSet) -> str:
@@ -339,6 +344,27 @@ def _fetch_data_source_metadata(conn: psycopg.Connection, data_source_id: UUID) 
     return {"record_count": row[0], "last_pull_at": row[1], "last_pull_status": row[2]}
 
 
+def _read_jsonl(path: Path) -> list[dict[str, object]]:
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+
+
+def _run_detached(job_root: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    env = {**os.environ, "DETACHED_RUNNER_ROOT": str(job_root)}
+    return subprocess.run(
+        ["bash", str(_DETACHED_RUNNER_PATH), *args],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=env,
+        timeout=30,
+    )
+
+
+def _detached_payload(result: subprocess.CompletedProcess[str]) -> dict[str, object]:
+    assert result.stdout.strip(), result.stderr
+    return json.loads(result.stdout)
+
+
 def _fetch_ordered_committee_summary(
     conn: psycopg.Connection,
     *,
@@ -572,6 +598,101 @@ def test_full_cycle_with_limit_loads_all_reference_files_but_caps_transactions(
     assert results["ccl"].inserted == len(bulk_loader_fixture_set.ccl_rows)
     assert results["itcont"].inserted == 1
     assert results["itpas2"].inserted == 1
+
+
+@pytest.mark.integration
+def test_full_cycle_progress_file_reports_limited_transaction_counts(
+    bulk_loader_conn: psycopg.Connection,
+    bulk_loader_fixture_set: BulkLoaderFixtureSet,
+    stage4_fixture_set: Stage4FixtureSet,
+    tmp_path: Path,
+) -> None:
+    data_source_id = ensure_fec_bulk_data_source(bulk_loader_conn)
+    cycle_directory = _materialize_cycle_directory(tmp_path, bulk_loader_fixture_set, stage4_fixture_set)
+    progress_path = tmp_path / "progress.jsonl"
+    resolved_paths = bulk_cli.resolve_full_cycle_directory(cycle_directory)
+    config = bulk_cli.CliConfig(
+        mode="full",
+        cycle=2024,
+        file_type=None,
+        path=None,
+        directory=cycle_directory,
+        batch_size=2,
+        limit=1,
+        graph_enabled=False,
+        progress_file=progress_path,
+    )
+
+    summaries = bulk_cli.load_full_cycle(
+        conn=bulk_loader_conn,
+        config=config,
+        data_source_id=data_source_id,
+        resolved_paths=resolved_paths,
+    )
+
+    results = {summary.file_type: summary.result for summary in summaries}
+    payloads = _read_jsonl(progress_path)
+    final_payload = payloads[-1]
+
+    assert results["itcont"].inserted == 1
+    assert results["itpas2"].inserted == 1
+    assert [payload["source"] for payload in payloads] == ["stage4_loader", "stage4_loader"]
+    assert [payload["rows_total"] for payload in payloads] == [1, 1]
+    assert [payload["rows_delta"] for payload in payloads] == [1, 1]
+    assert [payload["detail"] for payload in payloads] == [{"file_type": "itcont"}, {"file_type": "itpas2"}]
+    assert "checkpoint" not in final_payload
+
+
+@pytest.mark.integration
+def test_detached_runner_full_cycle_cli_reports_shared_progress_contract(
+    bulk_loader_fixture_set: BulkLoaderFixtureSet,
+    stage4_fixture_set: Stage4FixtureSet,
+    tmp_path: Path,
+) -> None:
+    cycle_directory = _materialize_cycle_directory(tmp_path, bulk_loader_fixture_set, stage4_fixture_set)
+    job_root = tmp_path / "detached_jobs"
+    job_name = "stage4_progress_integration"
+    progress_path = job_root / job_name / "progress.jsonl"
+
+    start = _run_detached(
+        job_root,
+        "start",
+        job_name,
+        "--",
+        "uv",
+        "run",
+        "python",
+        "-m",
+        "domains.campaign_finance.ingest.bulk_cli",
+        "--cycle",
+        "2024",
+        "--all",
+        "--directory",
+        str(cycle_directory),
+        "--limit",
+        "1",
+        "--progress-file",
+        str(progress_path),
+    )
+    assert start.returncode == 0, start.stderr
+    start_payload = _detached_payload(start)
+    assert start_payload["alive"] is True
+
+    status_payload = _detached_payload(_run_detached(job_root, "status", job_name))
+    assert set(status_payload) == {"job", "pid", "alive", "exit_code", "started_at", "last_log_line", "progress"}
+
+    wait = _run_detached(job_root, "wait", job_name, "--poll-seconds", "1", "--timeout-seconds", "30")
+    assert wait.returncode == 0, wait.stderr
+    terminal_payload = _detached_payload(wait)
+    final_progress = terminal_payload["progress"]
+
+    assert terminal_payload["alive"] is False
+    assert terminal_payload["exit_code"] == 0
+    assert final_progress == _read_jsonl(progress_path)[-1]
+    assert final_progress["source"] == "stage4_loader"
+    assert final_progress["rows_total"] == 1
+    assert final_progress["rows_delta"] == 1
+    assert final_progress["detail"] == {"file_type": "itpas2"}
 
 
 @pytest.mark.integration

@@ -6,8 +6,7 @@
 #   flyctl deploy web -c infra/fly/web.fly.toml
 # Secrets (set once, never in this file): CIVIBUS_API_KEY (must be one of the
 # api app's CIVIBUS_API_KEYS).
-# ORIGIN/PUBLIC_ORIGIN switch to https://civibus.shareborough.com at DNS
-# cutover (Phase C).
+# ORIGIN/PUBLIC_ORIGIN are the issued public launch origin attached to caddy.
 app = "civibus-web"
 primary_region = "sjc"
 
@@ -22,8 +21,8 @@ primary_region = "sjc"
   # refuses caddy's dial to civibus-web.internal. HOST is adapter-node's
   # documented bind override; "::" listens dual-stack. Fly-only delta.
   HOST = "::"
-  ORIGIN = "https://civibus-caddy.fly.dev"
-  PUBLIC_ORIGIN = "https://civibus-caddy.fly.dev"
+  ORIGIN = "https://civibus.shareborough.com"
+  PUBLIC_ORIGIN = "https://civibus.shareborough.com"
   NODE_ENV = "production"
 
 [checks.alive]

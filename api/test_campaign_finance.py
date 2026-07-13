@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from datetime import date, datetime, timezone
 from decimal import Decimal
 from uuid import UUID, uuid4
@@ -12,6 +13,7 @@ import api.queries as campaign_finance_queries
 import api.queries.campaign_finance as campaign_finance_query_module
 from api.queries import fetch_candidate_summary, fetch_committee_fundraising_summary
 from api.queries.campaign_finance import (
+    COMMITTEE_FUNDRAISING_SUMMARY_SQL,
     DISBURSEMENT_TYPE_PREFIX,
     _COUNTY_PROXY_QUALIFYING_TRANSACTIONS_CTE,
 )
@@ -22,6 +24,7 @@ from api.test_campaign_finance_support import (
     CountySummaryFixtureContext,
     CommitteeRowSeed,
     FilingRowSeed,
+    SummaryTestContext,
     TransactionRowSeed,
     insert_candidate_committee_link_row,
     insert_candidate_row,
@@ -1092,6 +1095,32 @@ def _seed_person_top_employers_rows(
         ),
     )
 
+    # A superseded source record: any receipt backed by it must be excluded from
+    # the qualifying-transactions anti-join, exactly like the live source-record
+    # supersession semantics. This pins the anti-join on the top-employers path
+    # (which shares the person-insights qualifying CTE) so a rewrite of the
+    # LEFT JOIN + OR guard cannot silently start counting superseded receipts.
+    employer_data_source = insert_data_source_for_test(
+        db_conn, jurisdiction="federal/fec", name_suffix="insights-employer"
+    )
+    employer_superseding_source = insert_source_record_for_test(
+        db_conn,
+        source_record_id=UUID("d1000000-0000-0000-0000-000000000053"),
+        data_source_id=employer_data_source.id,
+        source_record_key="employer-superseding",
+        source_url="https://example.org/record/employer-superseding",
+        pull_date=datetime(2026, 7, 2, 12, 0, tzinfo=timezone.utc),
+    )
+    employer_superseded_source = insert_source_record_for_test(
+        db_conn,
+        source_record_id=UUID("d1000000-0000-0000-0000-000000000054"),
+        data_source_id=employer_data_source.id,
+        source_record_key="employer-superseded",
+        source_url="https://example.org/record/employer-superseded",
+        pull_date=datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc),
+        superseded_by=employer_superseding_source.id,
+    )
+
     def insert_employer_receipt(
         transaction_id: str,
         amount: str,
@@ -1100,6 +1129,7 @@ def _seed_person_top_employers_rows(
         second_committee: bool = False,
         entity_type: str = "IND",
         is_memo: bool = False,
+        source_record_id: UUID | None = None,
     ) -> None:
         committee_id = second_committee_id if second_committee else first_committee_id
         filing_id = second_filing_id if second_committee else first_filing_id
@@ -1120,6 +1150,7 @@ def _seed_person_top_employers_rows(
                 contributor_zip="27701",
                 is_memo=is_memo,
                 memo_code="X" if is_memo else None,
+                source_record_id=source_record_id,
             ),
         )
 
@@ -1143,6 +1174,15 @@ def _seed_person_top_employers_rows(
             entity_type=entity_type,
             is_memo=is_memo,
         )
+
+    # ACME CORP receipt backed by a superseded source record — must NOT be counted.
+    insert_employer_receipt(
+        "d1000000-0000-0000-0000-000000000055",
+        "500.00",
+        "ACME CORP",
+        second_committee=True,
+        source_record_id=employer_superseded_source.id,
+    )
 
 
 def test_get_person_top_donors_ranks_summed_donors_across_linked_committees(
@@ -4360,6 +4400,313 @@ def test_summary_excludes_transactions_backed_by_superseded_source_records(
     assert result["transaction_count"] == 1
     assert result["jurisdiction"] == "state/nc"
     assert result["data_through"] == pull
+
+
+def test_summary_data_through_is_latest_non_superseded_pull_date(
+    db_conn: psycopg.Connection,
+) -> None:
+    """``data_through`` is the MAX pull_date across the committee's non-superseded
+    qualifying source records — and a superseded record is ignored even when it
+    carries the newest pull_date. Guards the ``latest_provenance`` rewrite so it
+    cannot silently pick the wrong (or a superseded) provenance row.
+    """
+    committee_id = UUID("a0000000-0000-0000-0000-000000000009")
+    older_pull = datetime(2026, 3, 20, 8, 0, tzinfo=timezone.utc)
+    newer_pull = datetime(2026, 3, 22, 8, 0, tzinfo=timezone.utc)
+    ctx = seed_committee_for_summary(
+        db_conn,
+        committee_id=committee_id,
+        fec_committee_id="C99990009",
+        jurisdiction="state/nc",
+        pull_date=older_pull,
+    )
+    newer_source = insert_source_record_for_test(
+        db_conn,
+        source_record_id=UUID("10000000-0000-0000-0000-000000000909"),
+        data_source_id=ctx.data_source_id,
+        source_record_key=f"summary-newer-{committee_id}",
+        source_url="https://example.org/summary-newer",
+        pull_date=newer_pull,
+    )
+    superseding_source = insert_source_record_for_test(
+        db_conn,
+        source_record_id=UUID("10000000-0000-0000-0000-000000000910"),
+        data_source_id=ctx.data_source_id,
+        source_record_key=f"summary-superseding-{committee_id}",
+        source_url="https://example.org/summary-superseding",
+        pull_date=datetime(2026, 3, 30, 8, 0, tzinfo=timezone.utc),
+    )
+    superseded_source = insert_source_record_for_test(
+        db_conn,
+        source_record_id=UUID("10000000-0000-0000-0000-000000000911"),
+        data_source_id=ctx.data_source_id,
+        source_record_key=f"summary-superseded-{committee_id}",
+        source_url="https://example.org/summary-superseded",
+        # Newest pull_date of all, but superseded — must be excluded from data_through.
+        pull_date=datetime(2026, 3, 31, 8, 0, tzinfo=timezone.utc),
+        superseded_by=superseding_source.id,
+    )
+
+    insert_summary_transaction(
+        db_conn,
+        context=ctx,
+        transaction_id=uuid4(),
+        transaction_type="15",
+        amount=Decimal("100.00"),
+        source_record_id=ctx.source_record_id,
+    )
+    insert_summary_transaction(
+        db_conn,
+        context=ctx,
+        transaction_id=uuid4(),
+        transaction_type="15",
+        amount=Decimal("50.00"),
+        source_record_id=newer_source.id,
+    )
+    insert_summary_transaction(
+        db_conn,
+        context=ctx,
+        transaction_id=uuid4(),
+        transaction_type="15",
+        amount=Decimal("999.00"),
+        source_record_id=superseded_source.id,
+    )
+
+    result = fetch_committee_fundraising_summary(db_conn, committee_id)
+
+    assert result is not None
+    # Superseded 999.00 receipt excluded; only the two non-superseded receipts count.
+    assert result["total_raised"] == Decimal("150.00")
+    assert result["transaction_count"] == 2
+    assert result["jurisdiction"] == "state/nc"
+    # MAX pull_date across the two non-superseded source records (not the superseded newest).
+    assert result["data_through"] == newer_pull
+
+
+def _insert_stage_one_summary_transactions(
+    db_conn: psycopg.Connection,
+    *,
+    context: SummaryTestContext,
+    newer_source_id: UUID,
+) -> None:
+    filing_id = UUID(f"20000000-0000-0000-0000-{context.committee_id.hex[:12]}")
+    row_specs = [
+        ("000000000901", "15", "125.00", context.source_record_id, "Donor Alpha", None),
+        ("000000000902", "15", "75.00", newer_source_id, "Donor Alpha", None),
+        ("000000000903", "15", "50.00", newer_source_id, "Donor Beta", None),
+        ("000000000904", "24A", "40.00", newer_source_id, "Vendor Alpha", "Media"),
+        ("000000000905", "24A", "10.00", context.source_record_id, "Vendor Beta", "Field"),
+    ]
+    for suffix, transaction_type, amount, source_record_id, contributor_name, memo_text in row_specs:
+        insert_transaction_row(
+            db_conn,
+            TransactionRowSeed(
+                id=UUID(f"a0000000-0000-0000-0000-{suffix}"),
+                filing_id=filing_id,
+                committee_id=context.committee_id,
+                transaction_type=transaction_type,
+                amount=Decimal(amount),
+                amendment_indicator="N",
+                source_record_id=source_record_id,
+                contributor_name_raw=contributor_name,
+                memo_text=memo_text,
+            ),
+        )
+
+
+def _insert_stage_one_official_cycle_rows(db_conn: psycopg.Connection, committee_id: UUID) -> None:
+    cycle_specs = [
+        (2024, "1000.00", "300.00", "700.00", date(2023, 1, 1), date(2024, 12, 31)),
+        (2026, "2000.00", "700.00", "1300.00", date(2025, 1, 1), date(2026, 6, 30)),
+    ]
+    for cycle, receipts, disbursements, cash_on_hand, coverage_start, coverage_end in cycle_specs:
+        insert_committee_summary_row(
+            db_conn,
+            CommitteeSummaryRowSeed(
+                committee_id=committee_id,
+                cycle=cycle,
+                total_receipts=Decimal(receipts),
+                total_disbursements=Decimal(disbursements),
+                cash_on_hand=Decimal(cash_on_hand),
+                coverage_start_date=coverage_start,
+                coverage_end_date=coverage_end,
+            ),
+        )
+
+
+def test_fetch_committee_summary_preserves_official_totals_rankings_categories_and_latest_provenance(
+    db_conn: psycopg.Connection,
+) -> None:
+    committee_id = UUID("a0000000-0000-0000-0000-000000000901")
+    older_pull = datetime(2026, 7, 10, 12, 0, tzinfo=timezone.utc)
+    newer_pull = datetime(2026, 7, 11, 12, 0, tzinfo=timezone.utc)
+    context = seed_committee_for_summary(
+        db_conn,
+        committee_id=committee_id,
+        committee_name="Stage One Official Totals Committee",
+        fec_committee_id="C99990901",
+        jurisdiction="federal/fec",
+        pull_date=older_pull,
+    )
+    newer_source = insert_source_record_for_test(
+        db_conn,
+        source_record_id=UUID("10000000-0000-0000-0000-000000000901"),
+        data_source_id=context.data_source_id,
+        source_record_key=f"stage-one-newer-{committee_id}",
+        source_url="https://example.org/stage-one/newer",
+        pull_date=newer_pull,
+    )
+    _insert_stage_one_summary_transactions(db_conn, context=context, newer_source_id=newer_source.id)
+    _insert_stage_one_official_cycle_rows(db_conn, committee_id)
+
+    result = fetch_committee_fundraising_summary(db_conn, committee_id)
+
+    assert result is not None
+    assert result["summary_source"] == "fec_committee_summary"
+    assert result["total_raised"] == Decimal("3000.00")
+    assert result["total_spent"] == Decimal("1000.00")
+    assert result["net"] == Decimal("2000.00")
+    assert result["transaction_count"] == 5
+    assert result["itemized_transaction_count"] == 5
+    assert result["data_through"] == newer_pull
+    assert result["top_donors"][:2] == [
+        {"name": "Donor Alpha", "total_amount": Decimal("200.00"), "transaction_count": 2},
+        {"name": "Donor Beta", "total_amount": Decimal("50.00"), "transaction_count": 1},
+    ]
+    assert result["top_vendors"][:2] == [
+        {"name": "Vendor Alpha", "total_amount": Decimal("40.00"), "transaction_count": 1},
+        {"name": "Vendor Beta", "total_amount": Decimal("10.00"), "transaction_count": 1},
+    ]
+    assert result["spend_categories"] == [
+        {"category": "media", "total_amount": Decimal("40.00"), "transaction_count": 1},
+        {"category": "field", "total_amount": Decimal("10.00"), "transaction_count": 1},
+    ]
+    assert result["cycle_summaries"] == [
+        {
+            "cycle": 2024,
+            "total_receipts": Decimal("1000.00"),
+            "total_disbursements": Decimal("300.00"),
+            "cash_on_hand": Decimal("700.00"),
+            "coverage_start_date": date(2023, 1, 1),
+            "coverage_end_date": date(2024, 12, 31),
+        },
+        {
+            "cycle": 2026,
+            "total_receipts": Decimal("2000.00"),
+            "total_disbursements": Decimal("700.00"),
+            "cash_on_hand": Decimal("1300.00"),
+            "coverage_start_date": date(2025, 1, 1),
+            "coverage_end_date": date(2026, 6, 30),
+        },
+    ]
+
+
+def test_fetch_committee_summary_reads_refresh_backed_derived_aggregate(
+    db_conn: psycopg.Connection,
+) -> None:
+    committee_id = UUID("a0000000-0000-0000-0000-000000000921")
+    data_through = datetime(2026, 7, 12, 9, 30, tzinfo=timezone.utc)
+    seed_committee_for_summary(
+        db_conn,
+        committee_id=committee_id,
+        committee_name="Refresh Backed Committee",
+        fec_committee_id="C99990921",
+        jurisdiction="federal/fec",
+        pull_date=data_through,
+    )
+    insert_committee_summary_row(
+        db_conn,
+        CommitteeSummaryRowSeed(
+            committee_id=committee_id,
+            cycle=2026,
+            total_receipts=Decimal("1000.00"),
+            total_disbursements=Decimal("250.00"),
+            cash_on_hand=Decimal("750.00"),
+            coverage_start_date=date(2025, 1, 1),
+            coverage_end_date=date(2026, 6, 30),
+        ),
+    )
+    with db_conn.cursor() as cursor:
+        cursor.execute(
+            """
+            UPDATE cf.committee_summary
+            SET derived_total_raised = 610.00,
+                derived_total_spent = 210.00,
+                derived_net = 400.00,
+                derived_transaction_count = 7,
+                derived_cash_receipts_total = 500.00,
+                derived_in_kind_receipts_total = 40.00,
+                derived_loan_receipts_total = 70.00,
+                derived_contribution_receipts_total = 540.00,
+                derived_jurisdiction = 'federal/fec',
+                derived_data_through = %s
+            WHERE committee_id = %s
+              AND cycle = 2026
+            """,
+            (data_through, committee_id),
+        )
+
+    result = fetch_committee_fundraising_summary(db_conn, committee_id)
+
+    assert result is not None
+    assert result["summary_source"] == "fec_committee_summary"
+    assert result["total_raised"] == Decimal("1000.00")
+    assert result["total_spent"] == Decimal("250.00")
+    assert result["net"] == Decimal("750.00")
+    assert result["transaction_count"] == 7
+    assert result["itemized_transaction_count"] == 7
+    assert result["cash_receipts_total"] == Decimal("500.00")
+    assert result["in_kind_receipts_total"] == Decimal("40.00")
+    assert result["loan_receipts_total"] == Decimal("70.00")
+    assert result["contribution_receipts_total"] == Decimal("540.00")
+    assert result["jurisdiction"] == "federal/fec"
+    assert result["data_through"] == data_through
+    assert result["top_donors"] == []
+    assert result["top_vendors"] == []
+    assert result["spend_categories"] is None
+
+
+def _committee_money_aggregate_calculation_scopes(sql: str) -> list[str]:
+    scopes: list[str] = []
+    for total_raised_alias in re.finditer(r"\bAS\s+total_raised\b", sql, flags=re.IGNORECASE):
+        select_start = sql.rfind("SELECT", 0, total_raised_alias.start())
+        if select_start == -1:
+            continue
+
+        group_by = re.search(r"\bGROUP\s+BY\b", sql[total_raised_alias.end() :], flags=re.IGNORECASE)
+        scope_end = total_raised_alias.end() + group_by.start() if group_by is not None else len(sql)
+        scope = sql[select_start:scope_end]
+        if "SUM(" in scope.upper():
+            scopes.append(scope)
+    return scopes
+
+
+def test_committee_fundraising_summary_sql_keeps_provenance_out_of_money_aggregate() -> None:
+    aggregate_scopes = _committee_money_aggregate_calculation_scopes(COMMITTEE_FUNDRAISING_SUMMARY_SQL)
+
+    assert aggregate_scopes
+    assert not any("latest_provenance" in scope for scope in aggregate_scopes)
+
+
+def test_committee_summary_top_lists_share_one_qualifying_transaction_scan() -> None:
+    top_lists_sql = getattr(campaign_finance_query_module, "COMMITTEE_TOP_LISTS_SQL", "")
+
+    assert top_lists_sql
+    assert top_lists_sql.count("FROM cf.transaction t") == 1
+    assert "qualifying_transactions AS MATERIALIZED" in top_lists_sql
+    assert all(name in top_lists_sql for name in ("top_donors", "top_vendors", "spend_categories"))
+
+
+def test_contribution_insights_itemized_rollups_share_one_qualifying_transaction_scan() -> None:
+    rollups_sql = getattr(campaign_finance_query_module, "_PERSON_CONTRIBUTION_INSIGHTS_ITEMIZED_ROLLUPS_SQL", "")
+
+    assert rollups_sql
+    assert rollups_sql.count("FROM cf.transaction t") == 1
+    assert "qualifying_transactions AS MATERIALIZED" in rollups_sql
+    assert all(
+        name in rollups_sql
+        for name in ("monthly_totals", "state_totals", "totals", "itemized_size_buckets", "itemized_cycle_totals")
+    )
 
 
 def test_get_committee_summary_returns_404_for_missing_committee(api_client: TestClient) -> None:

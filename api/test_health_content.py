@@ -209,9 +209,11 @@ def test_evaluate_content_health_runs_expected_sql_queries() -> None:
                 "contributor_entity_type = 'IND'",
                 "is_memo = FALSE",
                 "amendment_indicator != 'T'",
-                "LEFT JOIN core.source_record sr",
-                "ON sr.id = t.source_record_id AND sr.superseded_by IS NULL",
-                "(t.source_record_id IS NULL OR sr.id IS NOT NULL)",
+                "t.source_record_id IS NULL",
+                "OR t.source_record_id NOT IN",
+                "SELECT superseded.id",
+                "FROM core.source_record superseded",
+                "WHERE superseded.superseded_by IS NOT NULL",
             )
         )
         for q in executed

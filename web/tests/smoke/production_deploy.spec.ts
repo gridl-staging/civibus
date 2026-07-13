@@ -155,23 +155,27 @@ test.describe("production deployment smoke (read-only)", () => {
   }) => {
     const pageLoadErrors = capturePageLoadErrors(page);
 
-    // Federal candidates always have a principal committee, and that committee
-    // always carries a linked_candidates entry for the candidate itself.
-    // Discovering the committee via /congress -> member -> principal committee
-    // guarantees the linked-candidates section renders, so the navigation
-    // assertion can be unconditional (no test-time conditionals).
+    // Federal member person pages expose linked committees inside the Campaign
+    // finance panel. Follow the rendered person-detail table instead of using
+    // the candidate-detail "Committee record" label, which is not part of this
+    // route's accessible link text.
     await page.goto("/congress");
     await page.getByTestId("congress-member-row-0").getByRole("link").click();
     await expect(
       page.getByRole("heading", { name: PERSON_CAMPAIGN_FINANCE_HEADING })
     ).toBeVisible({ timeout: 20_000 });
 
-    const principalCommitteeLink = page
+    await expect(page.getByRole("heading", { name: "Linked committees" })).toBeVisible({
+      timeout: 20_000
+    });
+    const linkedCommitteeHref = await page
       .getByRole("main")
-      .getByRole("link", { name: /Committee record/ })
-      .first();
-    await expect(principalCommitteeLink).toBeVisible({ timeout: 20_000 });
-    await principalCommitteeLink.click();
+      .getByRole("link")
+      .evaluateAll((links: HTMLAnchorElement[]) =>
+        links.map((link) => link.getAttribute("href")).find((href) => href?.startsWith("/committee/"))
+      );
+    expect(linkedCommitteeHref).toBeTruthy();
+    await page.goto(linkedCommitteeHref as string);
 
     const linkedCandidates = page.getByTestId("committee-linked-candidates");
     await expect(linkedCandidates).toBeVisible({ timeout: 20_000 });

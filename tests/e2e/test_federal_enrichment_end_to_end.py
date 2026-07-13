@@ -302,6 +302,13 @@ def _resolve_active_federal_person_for_bioguide_id(connection: Any, bioguide_id:
 
 _FEDERAL_OFFICE_NAMES_SQL_ARRAY = "ARRAY[" + ", ".join(f"'{name}'" for name in FEDERAL_OFFICE_NAMES) + "]"
 
+_EXPECTED_DOCUMENTED_FEDERAL_VACANT_HOUSE_SEATS = (
+    ("CA", "14", "Swalwell, Eric", "2026-04-14"),
+    ("FL", "20", "Cherfilus-McCormick, Sheila", "2026-04-21"),
+    ("GA", "13", "Scott, David", "2026-04-21"),
+    ("TX", "23", "Gonzales, Ernest", "2026-04-14"),
+)
+
 
 def _federal_seat_total(connection: Any) -> int:
     return _fetch_single_int(
@@ -373,6 +380,49 @@ def _undocumented_missing_federal_seat_count(connection: Any) -> int:
     )
 
 
+def _documented_federal_vacant_house_seats(connection: Any) -> list[tuple[str, str, str, str]]:
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            WITH active_seats AS (
+                SELECT oh.office_id, oh.electoral_division_id
+                FROM civic.officeholding oh
+                JOIN civic.office o ON o.id = oh.office_id
+                WHERE o.office_level = 'federal'
+                  AND o.name = 'us_house'
+                  AND upper_inf(oh.valid_period)
+            ),
+            closed_candidates AS (
+                SELECT DISTINCT ON (oh.office_id, oh.electoral_division_id)
+                    ed.state,
+                    LPAD(ed.district_number::text, 2, '0') AS district,
+                    p.canonical_name AS predecessor_name,
+                    upper(oh.valid_period)::date::text AS term_end
+                FROM civic.officeholding oh
+                JOIN civic.office o ON o.id = oh.office_id
+                JOIN civic.electoral_division ed ON ed.id = oh.electoral_division_id
+                JOIN core.person p ON p.id = oh.person_id
+                LEFT JOIN active_seats active
+                    ON active.office_id = oh.office_id
+                   AND active.electoral_division_id = oh.electoral_division_id
+                WHERE o.office_level = 'federal'
+                  AND o.name = 'us_house'
+                  AND NOT upper_inf(oh.valid_period)
+                  AND active.office_id IS NULL
+                ORDER BY
+                    oh.office_id,
+                    oh.electoral_division_id,
+                    upper(oh.valid_period) DESC NULLS LAST,
+                    p.canonical_name
+            )
+            SELECT state, district, predecessor_name, term_end
+            FROM closed_candidates
+            ORDER BY state, district
+            """
+        )
+        return [tuple(row) for row in cursor.fetchall()]
+
+
 def _missing_seat_diagnostics(connection: Any) -> str:
     rows = _fetch_rows(
         connection,
@@ -439,6 +489,12 @@ def test_federal_member_directory_decomposes_to_543(federal_connection: Any) -> 
         f"expected={_EXPECTED_ACTIVE_FEDERAL_OFFICEHOLDERS} "
         f"{_missing_seat_diagnostics(federal_connection)}"
     )
+
+
+def test_federal_member_directory_documents_current_house_vacancy_seats(federal_connection: Any) -> None:
+    vacant_seats = _documented_federal_vacant_house_seats(federal_connection)
+
+    assert vacant_seats == list(_EXPECTED_DOCUMENTED_FEDERAL_VACANT_HOUSE_SEATS)
 
 
 def test_current_federal_officeholding_floor(federal_connection: Any) -> None:

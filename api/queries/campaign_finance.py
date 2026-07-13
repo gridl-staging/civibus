@@ -1,8 +1,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from decimal import Decimal
 from functools import lru_cache
+import json
 import re
 from typing import Any
 from uuid import UUID
@@ -24,8 +26,7 @@ from api.models.campaign_finance import (
 )
 from api.contribution_insights_contract import (
     CONTRIBUTION_INSIGHTS_MIN_DATE,
-    CONTRIBUTION_INSIGHTS_SOURCE_RECORD_JOIN_SQL,
-    CONTRIBUTION_INSIGHTS_SOURCE_RECORD_WHERE_SQL,
+    NOT_SUPERSEDED_SOURCE_RECORD_WHERE_SQL,
     RECEIPT_TYPE_PREFIX,
     contribution_insights_transaction_where_sql,
 )
@@ -255,10 +256,11 @@ _COMMITTEE_LOAN_RECEIPT_PREFIX = "16"
 # authoritative. Kept in sync with ``core.refresh.job_builders._active_committee_summary_cycles``
 # — the loader writes these; this owner reads them. One definition for both the
 # top-level committee aggregate and the per-cycle ``cycle_summaries`` payload.
-SUPPORTED_COMMITTEE_SUMMARY_CYCLES: tuple[int, ...] = (2024, 2026)
+SUPPORTED_COMMITTEE_SUMMARY_CYCLES: tuple[int, ...] = (2022, 2024, 2026)
 CONTRIBUTION_INSIGHTS_CYCLES: tuple[int, ...] = (2022, 2024, 2026)
 DONOR_SEARCH_MIN_QUERY_LEN = 3
 DONOR_SEARCH_MAX_LIMIT = 50
+_DONOR_SEARCH_NESTED_DETAIL_LIMIT = 5
 _DONOR_SEARCH_SUPPORTED_MODES = frozenset({"name", "employer", "zip"})
 _ZIP5_SEARCH_RE = re.compile(r"^\s*(\d{5})(?:-?\d{4})?\s*$")
 
@@ -307,24 +309,15 @@ _PERSON_CONTRIBUTION_INSIGHTS_OFFICE_SQL = """
 
 _INDIVIDUAL_RECEIPT_TRANSACTION_WHERE_SQL = contribution_insights_transaction_where_sql()
 
-_NOT_SUPERSEDED_SOURCE_RECORD_WHERE_SQL = """
-          AND NOT EXISTS (
-              SELECT 1
-              FROM core.source_record superseded
-              WHERE superseded.id = t.source_record_id
-                AND superseded.superseded_by IS NOT NULL
-          )
-"""
-
 _INDIVIDUAL_RECEIPT_QUALIFYING_WHERE_SQL = (
-    _INDIVIDUAL_RECEIPT_TRANSACTION_WHERE_SQL + CONTRIBUTION_INSIGHTS_SOURCE_RECORD_WHERE_SQL
+    _INDIVIDUAL_RECEIPT_TRANSACTION_WHERE_SQL + NOT_SUPERSEDED_SOURCE_RECORD_WHERE_SQL
 )
 
 _PERSON_CONTRIBUTION_INSIGHTS_QUALIFYING_CTE = f"""
     WITH linked_committees AS (
         SELECT unnest(%s::uuid[]) AS committee_id
     ),
-    qualifying_transactions AS (
+    qualifying_transactions AS MATERIALIZED (
         SELECT
             t.id,
             t.amount,
@@ -337,7 +330,6 @@ _PERSON_CONTRIBUTION_INSIGHTS_QUALIFYING_CTE = f"""
         FROM cf.transaction t
         JOIN linked_committees linked
           ON linked.committee_id = t.committee_id
-{CONTRIBUTION_INSIGHTS_SOURCE_RECORD_JOIN_SQL}
         WHERE TRUE
 {_INDIVIDUAL_RECEIPT_QUALIFYING_WHERE_SQL}
     )
@@ -432,6 +424,128 @@ _PERSON_CONTRIBUTION_INSIGHTS_SUMMARY_COVERAGE_SQL = """
     ORDER BY cycle ASC
 """
 
+_PERSON_CONTRIBUTION_INSIGHTS_BUCKET_VALUES_SQL = ",\n        ".join(
+    f"({index}, '{label}', {min_amount}, {'NULL' if max_amount is None else max_amount})"
+    for index, (label, min_amount, max_amount) in enumerate(CONTRIBUTION_INSIGHTS_SIZE_BUCKETS, start=1)
+)
+
+_PERSON_CONTRIBUTION_INSIGHTS_ITEMIZED_ROLLUPS_SQL = f"""
+    {_PERSON_CONTRIBUTION_INSIGHTS_QUALIFYING_CTE},
+    bucket_specs(ordinal, label, min_amount, max_amount) AS (
+        VALUES
+        {_PERSON_CONTRIBUTION_INSIGHTS_BUCKET_VALUES_SQL}
+    ),
+    monthly_totals AS (
+        SELECT
+            to_char(date_trunc('month', transaction_date), 'YYYY-MM') AS month,
+            COALESCE(SUM(amount), 0) AS total_amount,
+            COUNT(*)::integer AS transaction_count
+        FROM qualifying_transactions
+        GROUP BY date_trunc('month', transaction_date)
+    ),
+    state_totals AS (
+        SELECT
+            COALESCE(NULLIF(contributor_state, ''), 'Unknown') AS label,
+            COALESCE(SUM(amount), 0) AS total_amount,
+            COUNT(*)::integer AS transaction_count
+        FROM qualifying_transactions
+        GROUP BY label
+    ),
+    totals AS (
+        SELECT
+            COALESCE(SUM(amount), 0) AS total_amount,
+            COUNT(*)::integer AS transaction_count,
+            MAX(transaction_date) AS max_transaction_date
+        FROM qualifying_transactions
+    ),
+    itemized_size_buckets AS (
+        SELECT
+            bucket.ordinal,
+            bucket.label,
+            bucket.min_amount,
+            bucket.max_amount,
+            COALESCE(SUM(qt.amount), 0) AS total_amount,
+            COUNT(qt.id)::integer AS transaction_count
+        FROM bucket_specs bucket
+        LEFT JOIN qualifying_transactions qt
+          ON qt.amount >= bucket.min_amount
+         AND (bucket.max_amount IS NULL OR qt.amount <= bucket.max_amount)
+        GROUP BY bucket.ordinal, bucket.label, bucket.min_amount, bucket.max_amount
+    ),
+    itemized_cycle_totals AS (
+        SELECT
+            cycle,
+            COALESCE(SUM(amount), 0) AS itemized_individual_contribution_amount,
+            COUNT(*)::integer AS itemized_transaction_count
+        FROM (
+            SELECT
+                CASE
+                    WHEN EXTRACT(YEAR FROM transaction_date)::integer %% 2 = 0
+                        THEN EXTRACT(YEAR FROM transaction_date)::integer
+                    ELSE EXTRACT(YEAR FROM transaction_date)::integer + 1
+                END AS cycle,
+                amount
+            FROM qualifying_transactions
+        ) cycle_transactions
+        GROUP BY cycle
+    )
+    SELECT
+        COALESCE((
+            SELECT jsonb_agg(
+                jsonb_build_object(
+                    'month', month,
+                    'total_amount', total_amount::text,
+                    'transaction_count', transaction_count
+                )
+                ORDER BY month ASC
+            )
+            FROM monthly_totals
+        ), '[]'::jsonb) AS monthly_totals,
+        COALESCE((
+            SELECT jsonb_agg(
+                jsonb_build_object(
+                    'label', label,
+                    'total_amount', total_amount::text,
+                    'transaction_count', transaction_count
+                )
+                ORDER BY total_amount DESC, transaction_count DESC, label ASC
+            )
+            FROM state_totals
+        ), '[]'::jsonb) AS state_totals,
+        (
+            SELECT jsonb_build_object(
+                'total_amount', total_amount::text,
+                'transaction_count', transaction_count,
+                'max_transaction_date', max_transaction_date
+            )
+            FROM totals
+        ) AS totals,
+        COALESCE((
+            SELECT jsonb_agg(
+                jsonb_build_object(
+                    'label', label,
+                    'min_amount', min_amount::text,
+                    'max_amount', CASE WHEN max_amount IS NULL THEN NULL ELSE max_amount::text END,
+                    'total_amount', total_amount::text,
+                    'transaction_count', transaction_count
+                )
+                ORDER BY ordinal ASC
+            )
+            FROM itemized_size_buckets
+        ), '[]'::jsonb) AS itemized_size_buckets,
+        COALESCE((
+            SELECT jsonb_agg(
+                jsonb_build_object(
+                    'cycle', cycle,
+                    'itemized_individual_contribution_amount', itemized_individual_contribution_amount::text,
+                    'itemized_transaction_count', itemized_transaction_count
+                )
+                ORDER BY cycle ASC
+            )
+            FROM itemized_cycle_totals
+        ), '[]'::jsonb) AS itemized_cycle_totals
+"""
+
 _PERSON_CONTRIBUTION_INSIGHTS_SUMMARY_BY_CYCLE_SQL = """
     SELECT
         cycle,
@@ -463,14 +577,41 @@ _PERSON_CONTRIBUTION_INSIGHTS_ITEMIZED_BY_CYCLE_SQL = f"""
     ORDER BY cycle ASC
 """
 
-_DONOR_SEARCH_DONOR_JOIN_SQL = """
-    rollup.contributor_name IS NOT DISTINCT FROM dg.contributor_name
-    AND rollup.contributor_employer IS NOT DISTINCT FROM dg.contributor_employer
-    AND rollup.contributor_occupation IS NOT DISTINCT FROM dg.contributor_occupation
-    AND rollup.contributor_city IS NOT DISTINCT FROM dg.contributor_city
-    AND rollup.contributor_state IS NOT DISTINCT FROM dg.contributor_state
-    AND rollup.normalized_zip5 IS NOT DISTINCT FROM dg.normalized_zip5
-"""
+# The six columns that jointly identify a donor group. NULL is a meaningful,
+# distinct value here (an absent employer is not the same donor as a present one),
+# so the identity comparison must be NULL-safe.
+_DONOR_SEARCH_KEY_COLUMNS = (
+    "contributor_name",
+    "contributor_employer",
+    "contributor_occupation",
+    "contributor_city",
+    "contributor_state",
+    "normalized_zip5",
+)
+
+
+def _donor_key_sql(alias: str) -> str:
+    """Build a hashable donor-identity key over the grouping columns for ``alias``.
+
+    Comparing the six grouping columns with ``IS NOT DISTINCT FROM`` is NULL-safe
+    but not hashable, so PostgreSQL can only join on it with a nested loop. On
+    common terms (q=smith) the recipient and source rollups then cross-product the
+    full matched-transaction set (~57k rows) against the paginated donor page,
+    which timed the endpoint out at ~16s. Encoding the same identity as a single
+    md5 text key lets the planner use a hash join instead.
+
+    Each column is wrapped with an explicit ``N``/``V`` null marker before it is
+    joined by a unit-separator control character (``\\x1f``) that cannot appear in
+    normalized contributor text. The marker guarantees a NULL column can never
+    encode to the same string as any present value, so the key preserves the
+    NULL-safe equality semantics of the original ``IS NOT DISTINCT FROM`` join.
+    """
+    encoded_columns = [
+        f"CASE WHEN {alias}.{column} IS NULL THEN 'N' ELSE 'V' || {alias}.{column} END"
+        for column in _DONOR_SEARCH_KEY_COLUMNS
+    ]
+    return "md5(" + " || E'\\x1f' || ".join(encoded_columns) + ")"
+
 
 _DONOR_SEARCH_SQL_TEMPLATE = f"""
     WITH current_federal_candidate_committees AS (
@@ -502,11 +643,15 @@ _DONOR_SEARCH_SQL_TEMPLATE = f"""
             candidate.id ASC
     ),
     matching_transactions AS MATERIALIZED (
-        -- This is the first materialized transaction boundary: keeping the
-        -- mode predicate, current-federal committee scope, receipt filters,
-        -- date window, and source-record validity together prevents broad
-        -- high-frequency donor matches from being materialized before the
-        -- join-and-aggregate path. Do not cap matched rows here: donor LIMIT
+        -- This is the first materialized transaction boundary: keeping the mode
+        -- predicate, receipt filters, date window, and source-record validity
+        -- together lets the mode index (name/employer trigram or ZIP) be scanned
+        -- exactly once. Committee scope is deliberately NOT applied here: an
+        -- EXISTS against current_federal_candidate_committees made the planner
+        -- re-scan the whole mode bitmap once per federal committee (~508 loops,
+        -- ~12s on q=smith). The committee scope is instead applied by the
+        -- qualifying_transactions INNER JOIN below, which prunes the same rows
+        -- with a single hash join. Do not cap matched rows here: donor LIMIT
         -- belongs after GROUP BY so high-volume donors are counted completely
         -- before pagination. Source validity uses an anti-superseded check
         -- here; provenance details are fetched after donor rollup so the live
@@ -526,18 +671,20 @@ _DONOR_SEARCH_SQL_TEMPLATE = f"""
         FROM cf.transaction t
         WHERE {{match_sql}}
 {_INDIVIDUAL_RECEIPT_TRANSACTION_WHERE_SQL}
-{_NOT_SUPERSEDED_SOURCE_RECORD_WHERE_SQL}
+{NOT_SUPERSEDED_SOURCE_RECORD_WHERE_SQL}
           AND t.contributor_name_raw IS NOT NULL
           AND BTRIM(t.contributor_name_raw) != ''
-          AND EXISTS (
-              SELECT 1
-              FROM current_federal_candidate_committees scope
-              WHERE scope.committee_id = t.committee_id
-          )
     ),
-    qualifying_transactions AS (
+    qualifying_transactions AS MATERIALIZED (
+        -- Materialized so the mode scan + committee-scope join runs exactly once:
+        -- donor_groups and donor_page_transactions both read this set, and an
+        -- inline CTE would otherwise recompute the scan-and-join for each. Keep
+        -- it narrow: candidate/committee labels are joined only after donor
+        -- pagination so the full common-term match does not carry nested-detail
+        -- columns through materialization and grouping.
         SELECT
             t.id,
+            t.committee_id,
             t.amount,
             t.transaction_date,
             t.contributor_name,
@@ -546,13 +693,7 @@ _DONOR_SEARCH_SQL_TEMPLATE = f"""
             t.contributor_city,
             t.contributor_state,
             t.normalized_zip5,
-            scope.person_id,
-            scope.candidate_id,
-            scope.fec_candidate_id,
-            scope.candidate_name,
-            scope.committee_id,
-            scope.fec_committee_id,
-            scope.committee_name,
+            {_donor_key_sql("t")} AS donor_key,
             t.source_record_id
         FROM matching_transactions t
         JOIN current_federal_candidate_committees scope
@@ -560,13 +701,14 @@ _DONOR_SEARCH_SQL_TEMPLATE = f"""
     ),
     donor_groups AS (
         SELECT
-            (ARRAY_AGG(id ORDER BY id ASC))[1] AS id,
+            MIN(id::text)::uuid AS id,
             contributor_name,
             contributor_employer,
             contributor_occupation,
             contributor_city,
             contributor_state,
             normalized_zip5,
+            donor_key,
             COALESCE(SUM(amount), 0) AS total_amount,
             COUNT(*)::integer AS transaction_count,
             MAX(transaction_date) AS latest_transaction_date
@@ -577,43 +719,75 @@ _DONOR_SEARCH_SQL_TEMPLATE = f"""
             contributor_occupation,
             contributor_city,
             contributor_state,
-            normalized_zip5
+            normalized_zip5,
+            donor_key
         ORDER BY total_amount DESC, transaction_count DESC, contributor_name ASC, id ASC
         LIMIT %s
         OFFSET %s
     ),
+    donor_page_transactions AS MATERIALIZED (
+        SELECT qt.*
+        FROM donor_groups dg
+        JOIN qualifying_transactions qt
+          ON qt.donor_key = dg.donor_key
+    ),
     recipient_rollups AS (
+        -- Scope recipient aggregation to the paginated donor page. Joining the
+        -- limited donor_groups set first prunes the transaction universe to the
+        -- top-N donors BEFORE the per-recipient rollup, so the recipient×source
+        -- fan-out never materializes for donors that pagination discards.
         SELECT
-            contributor_name,
-            contributor_employer,
-            contributor_occupation,
-            contributor_city,
-            contributor_state,
-            normalized_zip5,
-            person_id,
-            (ARRAY_AGG(candidate_id ORDER BY candidate_name ASC, candidate_id ASC, committee_name ASC, committee_id ASC))[1]
+            qt.contributor_name,
+            qt.contributor_employer,
+            qt.contributor_occupation,
+            qt.contributor_city,
+            qt.contributor_state,
+            qt.normalized_zip5,
+            qt.donor_key,
+            scope.person_id,
+            (ARRAY_AGG(scope.candidate_id ORDER BY scope.candidate_name ASC, scope.candidate_id ASC, scope.committee_name ASC, scope.committee_id ASC))[1]
                 AS candidate_id,
-            (ARRAY_AGG(fec_candidate_id ORDER BY candidate_name ASC, candidate_id ASC, committee_name ASC, committee_id ASC))[1]
+            (ARRAY_AGG(scope.fec_candidate_id ORDER BY scope.candidate_name ASC, scope.candidate_id ASC, scope.committee_name ASC, scope.committee_id ASC))[1]
                 AS fec_candidate_id,
-            (ARRAY_AGG(candidate_name ORDER BY candidate_name ASC, candidate_id ASC, committee_name ASC, committee_id ASC))[1]
+            (ARRAY_AGG(scope.candidate_name ORDER BY scope.candidate_name ASC, scope.candidate_id ASC, scope.committee_name ASC, scope.committee_id ASC))[1]
                 AS candidate_name,
-            (ARRAY_AGG(committee_id ORDER BY candidate_name ASC, candidate_id ASC, committee_name ASC, committee_id ASC))[1]
+            (ARRAY_AGG(scope.committee_id ORDER BY scope.candidate_name ASC, scope.candidate_id ASC, scope.committee_name ASC, scope.committee_id ASC))[1]
                 AS committee_id,
-            (ARRAY_AGG(fec_committee_id ORDER BY candidate_name ASC, candidate_id ASC, committee_name ASC, committee_id ASC))[1]
+            (ARRAY_AGG(scope.fec_committee_id ORDER BY scope.candidate_name ASC, scope.candidate_id ASC, scope.committee_name ASC, scope.committee_id ASC))[1]
                 AS fec_committee_id,
-            (ARRAY_AGG(committee_name ORDER BY candidate_name ASC, candidate_id ASC, committee_name ASC, committee_id ASC))[1]
+            (ARRAY_AGG(scope.committee_name ORDER BY scope.candidate_name ASC, scope.candidate_id ASC, scope.committee_name ASC, scope.committee_id ASC))[1]
                 AS committee_name,
-            COALESCE(SUM(amount), 0) AS recipient_total_amount,
+            COALESCE(SUM(qt.amount), 0) AS recipient_total_amount,
             COUNT(*)::integer AS recipient_transaction_count
-        FROM qualifying_transactions
+        FROM donor_page_transactions qt
+        JOIN current_federal_candidate_committees scope
+          ON scope.committee_id = qt.committee_id
         GROUP BY
-            contributor_name,
-            contributor_employer,
-            contributor_occupation,
-            contributor_city,
-            contributor_state,
-            normalized_zip5,
-            person_id
+            qt.contributor_name,
+            qt.contributor_employer,
+            qt.contributor_occupation,
+            qt.contributor_city,
+            qt.contributor_state,
+            qt.normalized_zip5,
+            qt.donor_key,
+            scope.person_id
+    ),
+    limited_recipient_rollups AS (
+        SELECT *
+        FROM (
+            SELECT
+                recipient_rollups.*,
+                ROW_NUMBER() OVER (
+                    PARTITION BY donor_key
+                    ORDER BY
+                        recipient_total_amount DESC,
+                        recipient_transaction_count DESC,
+                        candidate_name ASC,
+                        person_id ASC
+                ) AS recipient_rank
+            FROM recipient_rollups
+        ) ranked_recipients
+        WHERE recipient_rank <= {_DONOR_SEARCH_NESTED_DETAIL_LIMIT}
     ),
     source_rollups AS (
         SELECT DISTINCT
@@ -623,6 +797,7 @@ _DONOR_SEARCH_SQL_TEMPLATE = f"""
             source.contributor_city,
             source.contributor_state,
             source.normalized_zip5,
+            source.donor_key,
             sr.id AS source_record_id,
             ds.domain,
             ds.jurisdiction,
@@ -631,14 +806,25 @@ _DONOR_SEARCH_SQL_TEMPLATE = f"""
             sr.source_record_key,
             sr.source_url AS record_url,
             sr.pull_date
-        FROM qualifying_transactions source
-        JOIN donor_groups dg
-          ON {_DONOR_SEARCH_DONOR_JOIN_SQL.replace("rollup.", "source.")}
+        FROM donor_page_transactions source
         JOIN core.source_record sr
           ON sr.id = source.source_record_id AND sr.superseded_by IS NULL
         JOIN core.data_source ds
           ON ds.id = sr.data_source_id
         WHERE source.source_record_id IS NOT NULL
+    ),
+    limited_source_rollups AS (
+        SELECT *
+        FROM (
+            SELECT
+                source_rollups.*,
+                ROW_NUMBER() OVER (
+                    PARTITION BY donor_key
+                    ORDER BY pull_date DESC NULLS LAST, source_record_key ASC NULLS LAST
+                ) AS source_rank
+            FROM source_rollups
+        ) ranked_sources
+        WHERE source_rank <= {_DONOR_SEARCH_NESTED_DETAIL_LIMIT}
     )
     SELECT
         dg.id,
@@ -669,10 +855,10 @@ _DONOR_SEARCH_SQL_TEMPLATE = f"""
         source.record_url,
         source.pull_date
     FROM donor_groups dg
-    LEFT JOIN recipient_rollups recipient
-      ON {_DONOR_SEARCH_DONOR_JOIN_SQL.replace("rollup.", "recipient.")}
-    LEFT JOIN source_rollups source
-      ON {_DONOR_SEARCH_DONOR_JOIN_SQL.replace("rollup.", "source.")}
+    LEFT JOIN limited_recipient_rollups recipient
+      ON recipient.donor_key = dg.donor_key
+    LEFT JOIN limited_source_rollups source
+      ON source.donor_key = dg.donor_key
     ORDER BY
         dg.total_amount DESC,
         dg.transaction_count DESC,
@@ -696,23 +882,22 @@ class UnknownCountySlugError(ValueError):
         super().__init__(f"Unknown county slug for state: {state}/{county_slug}")
 
 
-def _qualifying_transactions_cte(select_columns: str) -> str:
+def _qualifying_transactions_cte(select_columns: str, *, materialized: bool = False) -> str:
     """Build the qualifying-transactions CTE fragment.
 
     Shared between committee-level summary and per-filing breakdown queries.
     Filters: non-memo, non-terminated-amendment, non-superseded source records.
     The caller must bind ``committee_id`` as the first query parameter (``%s``).
     """
-    return f"""qualifying_transactions AS (
+    materialized_sql = " MATERIALIZED" if materialized else ""
+    return f"""qualifying_transactions AS{materialized_sql} (
         SELECT
             {select_columns}
         FROM cf.transaction t
-        LEFT JOIN core.source_record sr
-          ON sr.id = t.source_record_id AND sr.superseded_by IS NULL
         WHERE t.committee_id = %s
           AND t.is_memo = FALSE
           AND t.amendment_indicator != 'T'
-          AND (t.source_record_id IS NULL OR sr.id IS NOT NULL)
+{NOT_SUPERSEDED_SOURCE_RECORD_WHERE_SQL}
     )"""
 
 
@@ -732,105 +917,242 @@ _FUNDRAISING_AGGREGATE_COLUMNS = f"""COALESCE(SUM(qt.amount) FILTER (
         ), 0) AS net,
         COUNT(qt.id) AS transaction_count"""
 
-COMMITTEE_FUNDRAISING_SUMMARY_SQL = f"""
-    WITH {_qualifying_transactions_cte("t.id, t.committee_id, t.transaction_type, t.amount, t.source_record_id")},
-    latest_provenance AS (
+COMMITTEE_STORED_FUNDRAISING_SUMMARY_SQL = """
+    WITH stored_cycle_aggregates AS (
         SELECT
-            ds.jurisdiction,
-            sr.pull_date AS data_through
-        FROM qualifying_transactions qt
-        JOIN core.source_record sr
-          ON sr.id = qt.source_record_id
-        LEFT JOIN core.data_source ds
-          ON ds.id = sr.data_source_id
-        ORDER BY sr.pull_date DESC, sr.id ASC
-        LIMIT 1
+            cs.committee_id,
+            COALESCE(SUM(cs.derived_total_raised), 0) AS total_raised,
+            COALESCE(SUM(cs.derived_total_spent), 0) AS total_spent,
+            COALESCE(SUM(cs.derived_net), 0) AS net,
+            COALESCE(SUM(cs.derived_transaction_count), 0)::integer AS transaction_count,
+            COALESCE(SUM(cs.derived_loan_receipts_total), 0) AS loan_receipts_total,
+            COALESCE(SUM(cs.derived_in_kind_receipts_total), 0) AS in_kind_receipts_total,
+            COALESCE(SUM(cs.derived_contribution_receipts_total), 0) AS contribution_receipts_total,
+            COALESCE(SUM(cs.derived_cash_receipts_total), 0) AS cash_receipts_total,
+            (ARRAY_AGG(
+                cs.derived_jurisdiction
+                ORDER BY cs.derived_data_through DESC NULLS LAST, cs.cycle DESC
+            ) FILTER (WHERE cs.derived_jurisdiction IS NOT NULL))[1] AS jurisdiction,
+            MAX(cs.derived_data_through) AS data_through,
+            BOOL_OR(cs.derived_transaction_count IS NOT NULL) AS has_precomputed_aggregate
+        FROM cf.committee_summary cs
+        WHERE cs.committee_id = %s
+          AND cs.cycle = ANY(%s)
+        GROUP BY cs.committee_id
     )
     SELECT
         c.id AS committee_id,
         c.name AS committee_name,
-        {_FUNDRAISING_AGGREGATE_COLUMNS},
-        COALESCE(SUM(qt.amount) FILTER (
-            WHERE qt.transaction_type LIKE '{RECEIPT_TYPE_PREFIX}%%'
-              AND qt.transaction_type LIKE '{_COMMITTEE_LOAN_RECEIPT_PREFIX}%%'
-        ), 0) AS loan_receipts_total,
-        COALESCE(SUM(qt.amount) FILTER (
-            WHERE qt.transaction_type = '{_COMMITTEE_IN_KIND_RECEIPT_CODE}'
-        ), 0) AS in_kind_receipts_total,
-        COALESCE(SUM(qt.amount) FILTER (
-            WHERE qt.transaction_type LIKE '{RECEIPT_TYPE_PREFIX}%%'
-        ), 0)
-        - COALESCE(SUM(qt.amount) FILTER (
-            WHERE qt.transaction_type LIKE '{RECEIPT_TYPE_PREFIX}%%'
-              AND qt.transaction_type LIKE '{_COMMITTEE_LOAN_RECEIPT_PREFIX}%%'
-        ), 0) AS contribution_receipts_total,
-        GREATEST(
+        sca.total_raised,
+        sca.total_spent,
+        sca.net,
+        sca.transaction_count,
+        sca.loan_receipts_total,
+        sca.in_kind_receipts_total,
+        sca.contribution_receipts_total,
+        sca.cash_receipts_total,
+        sca.jurisdiction,
+        sca.data_through
+    FROM cf.committee c
+    JOIN stored_cycle_aggregates sca
+      ON sca.committee_id = c.id
+    WHERE c.id = %s
+      AND sca.has_precomputed_aggregate
+"""
+
+COMMITTEE_FUNDRAISING_SUMMARY_SQL = f"""
+    WITH stored_cycle_aggregates AS (
+        SELECT
+            cs.committee_id,
+            COALESCE(SUM(cs.derived_total_raised), 0) AS total_raised,
+            COALESCE(SUM(cs.derived_total_spent), 0) AS total_spent,
+            COALESCE(SUM(cs.derived_net), 0) AS net,
+            COALESCE(SUM(cs.derived_transaction_count), 0)::integer AS transaction_count,
+            COALESCE(SUM(cs.derived_loan_receipts_total), 0) AS loan_receipts_total,
+            COALESCE(SUM(cs.derived_in_kind_receipts_total), 0) AS in_kind_receipts_total,
+            COALESCE(SUM(cs.derived_contribution_receipts_total), 0) AS contribution_receipts_total,
+            COALESCE(SUM(cs.derived_cash_receipts_total), 0) AS cash_receipts_total,
+            (ARRAY_AGG(
+                cs.derived_jurisdiction
+                ORDER BY cs.derived_data_through DESC NULLS LAST, cs.cycle DESC
+            ) FILTER (WHERE cs.derived_jurisdiction IS NOT NULL))[1] AS jurisdiction,
+            MAX(cs.derived_data_through) AS data_through,
+            BOOL_OR(cs.derived_transaction_count IS NOT NULL) AS has_precomputed_aggregate
+        FROM cf.committee_summary cs
+        WHERE cs.committee_id = %s
+          AND cs.cycle = ANY(%s)
+        GROUP BY cs.committee_id
+    ),
+    stored_summary AS (
+        SELECT
+            c.id AS committee_id,
+            c.name AS committee_name,
+            sca.total_raised,
+            sca.total_spent,
+            sca.net,
+            sca.transaction_count,
+            sca.loan_receipts_total,
+            sca.in_kind_receipts_total,
+            sca.contribution_receipts_total,
+            sca.cash_receipts_total,
+            sca.jurisdiction,
+            sca.data_through
+        FROM cf.committee c
+        JOIN stored_cycle_aggregates sca
+          ON sca.committee_id = c.id
+        WHERE c.id = %s
+          AND sca.has_precomputed_aggregate
+    ),
+    {_qualifying_transactions_cte("t.id, t.committee_id, t.transaction_type, t.amount, t.source_record_id")},
+    qualifying_source_records AS (
+        SELECT DISTINCT source_record_id
+        FROM qualifying_transactions
+        WHERE source_record_id IS NOT NULL
+    ),
+    committee_provenance AS (
+        -- Bounded provenance aggregate over the committee's own qualifying
+        -- source records. Replaces the former ``ORDER BY pull_date DESC LIMIT 1``
+        -- CTE, whose plan degraded to a backward index scan over all 16M
+        -- ``source_record`` rows for large committees. ``MAX(pull_date)`` and the
+        -- ordered pick both read only the committee's source records, so
+        -- ``data_through`` stays the latest non-superseded pull_date without the
+        -- full-table scan.
+        SELECT
+            (ARRAY_AGG(ds.jurisdiction ORDER BY sr.pull_date DESC, sr.id ASC))[1] AS jurisdiction,
+            MAX(sr.pull_date) AS data_through
+        FROM qualifying_source_records qsr
+        JOIN core.source_record sr
+          ON sr.id = qsr.source_record_id
+        LEFT JOIN core.data_source ds
+          ON ds.id = sr.data_source_id
+    ),
+    live_summary AS (
+        SELECT
+            c.id AS committee_id,
+            c.name AS committee_name,
+            {_FUNDRAISING_AGGREGATE_COLUMNS},
+            COALESCE(SUM(qt.amount) FILTER (
+                WHERE qt.transaction_type LIKE '{RECEIPT_TYPE_PREFIX}%%'
+                  AND qt.transaction_type LIKE '{_COMMITTEE_LOAN_RECEIPT_PREFIX}%%'
+            ), 0) AS loan_receipts_total,
+            COALESCE(SUM(qt.amount) FILTER (
+                WHERE qt.transaction_type = '{_COMMITTEE_IN_KIND_RECEIPT_CODE}'
+            ), 0) AS in_kind_receipts_total,
             COALESCE(SUM(qt.amount) FILTER (
                 WHERE qt.transaction_type LIKE '{RECEIPT_TYPE_PREFIX}%%'
             ), 0)
             - COALESCE(SUM(qt.amount) FILTER (
                 WHERE qt.transaction_type LIKE '{RECEIPT_TYPE_PREFIX}%%'
                   AND qt.transaction_type LIKE '{_COMMITTEE_LOAN_RECEIPT_PREFIX}%%'
-            ), 0)
-            - COALESCE(SUM(qt.amount) FILTER (
-                WHERE qt.transaction_type = '{_COMMITTEE_IN_KIND_RECEIPT_CODE}'
-            ), 0),
-            0
-        ) AS cash_receipts_total,
-        latest_provenance.jurisdiction,
-        latest_provenance.data_through
-    FROM cf.committee c
-    JOIN qualifying_transactions qt
-      ON qt.committee_id = c.id
-    LEFT JOIN latest_provenance
-      ON TRUE
-    WHERE c.id = %s
-    GROUP BY c.id, c.name, latest_provenance.jurisdiction, latest_provenance.data_through
+            ), 0) AS contribution_receipts_total,
+            GREATEST(
+                COALESCE(SUM(qt.amount) FILTER (
+                    WHERE qt.transaction_type LIKE '{RECEIPT_TYPE_PREFIX}%%'
+                ), 0)
+                - COALESCE(SUM(qt.amount) FILTER (
+                    WHERE qt.transaction_type LIKE '{RECEIPT_TYPE_PREFIX}%%'
+                      AND qt.transaction_type LIKE '{_COMMITTEE_LOAN_RECEIPT_PREFIX}%%'
+                ), 0)
+                - COALESCE(SUM(qt.amount) FILTER (
+                    WHERE qt.transaction_type = '{_COMMITTEE_IN_KIND_RECEIPT_CODE}'
+                ), 0),
+                0
+            ) AS cash_receipts_total,
+            committee_provenance.jurisdiction,
+            committee_provenance.data_through
+        FROM cf.committee c
+        JOIN qualifying_transactions qt
+          ON qt.committee_id = c.id
+        LEFT JOIN committee_provenance
+          ON TRUE
+        WHERE c.id = %s
+          AND NOT EXISTS (
+              SELECT 1
+              FROM stored_cycle_aggregates sca
+              WHERE sca.has_precomputed_aggregate
+          )
+        GROUP BY c.id, c.name, committee_provenance.jurisdiction, committee_provenance.data_through
+    )
+    SELECT * FROM stored_summary
+    UNION ALL
+    SELECT * FROM live_summary
 """
 
-COMMITTEE_TOP_DONORS_SQL = f"""
-    WITH {_qualifying_transactions_cte("t.id, t.transaction_type, t.amount, t.contributor_name_raw")}
+COMMITTEE_TOP_LISTS_SQL = f"""
+    WITH {_qualifying_transactions_cte("t.id, t.transaction_type, t.amount, t.contributor_name_raw, t.memo_text", materialized=True)},
+    top_donors AS (
+        SELECT
+            BTRIM(qt.contributor_name_raw) AS name,
+            COALESCE(SUM(qt.amount), 0) AS total_amount,
+            COUNT(qt.id)::integer AS transaction_count
+        FROM qualifying_transactions qt
+        WHERE qt.transaction_type LIKE '{RECEIPT_TYPE_PREFIX}%%'
+          AND qt.contributor_name_raw IS NOT NULL
+          AND BTRIM(qt.contributor_name_raw) != ''
+        GROUP BY BTRIM(qt.contributor_name_raw)
+        ORDER BY total_amount DESC, transaction_count DESC, name ASC
+        LIMIT %s
+    ),
+    top_vendors AS (
+        SELECT
+            BTRIM(qt.contributor_name_raw) AS name,
+            COALESCE(SUM(qt.amount), 0) AS total_amount,
+            COUNT(qt.id)::integer AS transaction_count
+        FROM qualifying_transactions qt
+        WHERE qt.transaction_type LIKE '{DISBURSEMENT_TYPE_PREFIX}%%'
+          AND qt.contributor_name_raw IS NOT NULL
+          AND BTRIM(qt.contributor_name_raw) != ''
+        GROUP BY BTRIM(qt.contributor_name_raw)
+        ORDER BY total_amount DESC, transaction_count DESC, name ASC
+        LIMIT %s
+    ),
+    spend_categories AS (
+        SELECT
+            LOWER(BTRIM(qt.memo_text)) AS category,
+            COALESCE(SUM(qt.amount), 0) AS total_amount,
+            COUNT(qt.id)::integer AS transaction_count
+        FROM qualifying_transactions qt
+        WHERE qt.transaction_type LIKE '{DISBURSEMENT_TYPE_PREFIX}%%'
+          AND qt.memo_text IS NOT NULL
+          AND BTRIM(qt.memo_text) != ''
+        GROUP BY LOWER(BTRIM(qt.memo_text))
+        ORDER BY total_amount DESC, transaction_count DESC, category ASC
+        LIMIT %s
+    )
     SELECT
-        BTRIM(qt.contributor_name_raw) AS name,
-        COALESCE(SUM(qt.amount), 0) AS total_amount,
-        COUNT(qt.id)::integer AS transaction_count
-    FROM qualifying_transactions qt
-    WHERE qt.transaction_type LIKE '{RECEIPT_TYPE_PREFIX}%%'
-      AND qt.contributor_name_raw IS NOT NULL
-      AND BTRIM(qt.contributor_name_raw) != ''
-    GROUP BY BTRIM(qt.contributor_name_raw)
-    ORDER BY total_amount DESC, transaction_count DESC, name ASC
-    LIMIT %s
-"""
-
-COMMITTEE_TOP_VENDORS_SQL = f"""
-    WITH {_qualifying_transactions_cte("t.id, t.transaction_type, t.amount, t.contributor_name_raw")}
-    SELECT
-        BTRIM(qt.contributor_name_raw) AS name,
-        COALESCE(SUM(qt.amount), 0) AS total_amount,
-        COUNT(qt.id)::integer AS transaction_count
-    FROM qualifying_transactions qt
-    WHERE qt.transaction_type LIKE '{DISBURSEMENT_TYPE_PREFIX}%%'
-      AND qt.contributor_name_raw IS NOT NULL
-      AND BTRIM(qt.contributor_name_raw) != ''
-    GROUP BY BTRIM(qt.contributor_name_raw)
-    ORDER BY total_amount DESC, transaction_count DESC, name ASC
-    LIMIT %s
-"""
-
-COMMITTEE_SPEND_CATEGORY_SUMMARY_SQL = f"""
-    WITH {_qualifying_transactions_cte("t.id, t.transaction_type, t.amount, t.memo_text")}
-    SELECT
-        LOWER(BTRIM(qt.memo_text)) AS category,
-        COALESCE(SUM(qt.amount), 0) AS total_amount,
-        COUNT(qt.id)::integer AS transaction_count
-    FROM qualifying_transactions qt
-    WHERE qt.transaction_type LIKE '{DISBURSEMENT_TYPE_PREFIX}%%'
-      AND qt.memo_text IS NOT NULL
-      AND BTRIM(qt.memo_text) != ''
-    GROUP BY LOWER(BTRIM(qt.memo_text))
-    ORDER BY total_amount DESC, transaction_count DESC, category ASC
-    LIMIT %s
+        COALESCE((
+            SELECT jsonb_agg(
+                jsonb_build_object(
+                    'name', name,
+                    'total_amount', total_amount::text,
+                    'transaction_count', transaction_count
+                )
+                ORDER BY total_amount DESC, transaction_count DESC, name ASC
+            )
+            FROM top_donors
+        ), '[]'::jsonb) AS top_donors,
+        COALESCE((
+            SELECT jsonb_agg(
+                jsonb_build_object(
+                    'name', name,
+                    'total_amount', total_amount::text,
+                    'transaction_count', transaction_count
+                )
+                ORDER BY total_amount DESC, transaction_count DESC, name ASC
+            )
+            FROM top_vendors
+        ), '[]'::jsonb) AS top_vendors,
+        COALESCE((
+            SELECT jsonb_agg(
+                jsonb_build_object(
+                    'category', category,
+                    'total_amount', total_amount::text,
+                    'transaction_count', transaction_count
+                )
+                ORDER BY total_amount DESC, transaction_count DESC, category ASC
+            )
+            FROM spend_categories
+        ), '[]'::jsonb) AS spend_categories
 """
 
 COMMITTEE_FILING_BREAKDOWN_SQL = f"""
@@ -1056,6 +1378,24 @@ _CANDIDATE_LIST_SQL_TEMPLATE = f"""
     ORDER BY c.name ASC, c.id ASC
     LIMIT %s + 1
     OFFSET %s
+"""
+
+_CANDIDATES_FOR_PEOPLE_SQL = f"""
+    SELECT
+        c.id,
+        c.fec_candidate_id,
+        c.name,
+        c.person_id,
+        c.source_record_id,
+        c.party,
+        c.office,
+        c.state,
+        c.district,
+        {_SLUG_NAME_EXPR} AS slug,
+        FALSE AS slug_is_unique
+    FROM cf.candidate c
+    WHERE c.person_id = ANY(%s::uuid[])
+    ORDER BY c.person_id ASC, c.name ASC, c.id ASC
 """
 
 _COMMITTEE_LIST_SQL_TEMPLATE = f"""
@@ -1512,6 +1852,54 @@ def _fetch_committee_cycle_summaries(conn: psycopg.Connection, committee_id: UUI
     return cycle_rows
 
 
+def _decode_json_payload(value: Any) -> Any:
+    if isinstance(value, str):
+        return json.loads(value)
+    return value
+
+
+def _json_rows(value: Any) -> list[dict[str, Any]]:
+    decoded = _decode_json_payload(value)
+    if decoded is None:
+        return []
+    return [dict(row) for row in decoded]
+
+
+def _json_object(value: Any) -> dict[str, Any]:
+    decoded = _decode_json_payload(value)
+    if decoded is None:
+        return {}
+    return dict(decoded)
+
+
+def _fetch_committee_top_lists(conn: psycopg.Connection, committee_id: UUID) -> dict[str, list[dict[str, Any]]]:
+    """Fetch and normalize committee donor, vendor, and spend-category rankings."""
+    with conn.cursor(row_factory=dict_row) as cursor:
+        cursor.execute(
+            COMMITTEE_TOP_LISTS_SQL,
+            (
+                committee_id,
+                _COMMITTEE_TOP_PARTIES_LIMIT,
+                _COMMITTEE_TOP_PARTIES_LIMIT,
+                _COMMITTEE_SPEND_CATEGORY_LIMIT,
+            ),
+        )
+        row = cursor.fetchone()
+
+    if row is None:
+        raise RuntimeError(f"Committee top-list query returned no row for committee: {committee_id}")
+
+    top_lists = {
+        "top_donors": _json_rows(row["top_donors"]),
+        "top_vendors": _json_rows(row["top_vendors"]),
+        "spend_categories": _json_rows(row["spend_categories"]),
+    }
+    for list_name in ("top_donors", "top_vendors", "spend_categories"):
+        for list_row in top_lists[list_name]:
+            _quantize_money_fields(list_row, "total_amount")
+    return top_lists
+
+
 def _apply_committee_official_totals(payload: dict[str, Any], cycle_summaries: list[dict[str, Any]]) -> None:
     """Overwrite top-level totals with the sum of supported-cycle official rows.
 
@@ -1549,18 +1937,30 @@ def fetch_committee_fundraising_summary(
       supported-cycle official rows, so the caller can substitute a zero payload.
     """
     with conn.cursor(row_factory=dict_row) as cursor:
-        cursor.execute(COMMITTEE_FUNDRAISING_SUMMARY_SQL, (committee_id, committee_id))
+        cursor.execute(
+            COMMITTEE_STORED_FUNDRAISING_SUMMARY_SQL,
+            (
+                committee_id,
+                list(SUPPORTED_COMMITTEE_SUMMARY_CYCLES),
+                committee_id,
+            ),
+        )
         summary_row = cursor.fetchone()
 
-        cursor.execute(COMMITTEE_TOP_DONORS_SQL, (committee_id, _COMMITTEE_TOP_PARTIES_LIMIT))
-        top_donor_rows = list(cursor.fetchall())
+        if summary_row is None:
+            cursor.execute(
+                COMMITTEE_FUNDRAISING_SUMMARY_SQL,
+                (
+                    committee_id,
+                    list(SUPPORTED_COMMITTEE_SUMMARY_CYCLES),
+                    committee_id,
+                    committee_id,
+                    committee_id,
+                ),
+            )
+            summary_row = cursor.fetchone()
 
-        cursor.execute(COMMITTEE_TOP_VENDORS_SQL, (committee_id, _COMMITTEE_TOP_PARTIES_LIMIT))
-        top_vendor_rows = list(cursor.fetchall())
-
-        cursor.execute(COMMITTEE_SPEND_CATEGORY_SUMMARY_SQL, (committee_id, _COMMITTEE_SPEND_CATEGORY_LIMIT))
-        spend_category_rows = list(cursor.fetchall())
-
+    top_lists = _fetch_committee_top_lists(conn, committee_id)
     cycle_summaries = _fetch_committee_cycle_summaries(conn, committee_id)
 
     if summary_row is None and not cycle_summaries:
@@ -1598,16 +1998,9 @@ def fetch_committee_fundraising_summary(
             "contribution_receipts_total",
         )
 
-    for top_donor_row in top_donor_rows:
-        _quantize_money_fields(top_donor_row, "total_amount")
-    for top_vendor_row in top_vendor_rows:
-        _quantize_money_fields(top_vendor_row, "total_amount")
-    for spend_category_row in spend_category_rows:
-        _quantize_money_fields(spend_category_row, "total_amount")
-
-    summary_row["top_donors"] = top_donor_rows
-    summary_row["top_vendors"] = top_vendor_rows
-    summary_row["spend_categories"] = spend_category_rows or None
+    summary_row["top_donors"] = top_lists["top_donors"]
+    summary_row["top_vendors"] = top_lists["top_vendors"]
+    summary_row["spend_categories"] = top_lists["spend_categories"] or None
     summary_row["cycle_summaries"] = cycle_summaries
     summary_row["itemized_transaction_count"] = summary_row["transaction_count"]
     summary_row["summary_source"] = "derived"
@@ -1677,6 +2070,264 @@ def _has_official_candidate_totals(official_row: dict[str, Any]) -> bool:
     )
 
 
+def _build_candidate_summary_from_official_totals(
+    *,
+    candidate_id: UUID,
+    candidate_name: str,
+    official_row: dict[str, Any],
+    committee_summaries: list[dict[str, Any]],
+) -> dict[str, Any]:
+    total_receipts = official_row["total_receipts"] or _MONEY_SCALE
+    total_disbursements = official_row["total_disbursements"] or _MONEY_SCALE
+    derived_transaction_count = sum(committee["transaction_count"] for committee in committee_summaries)
+    return {
+        "candidate_id": candidate_id,
+        "candidate_name": candidate_name,
+        "total_raised": total_receipts,
+        "total_spent": total_disbursements,
+        "net": total_receipts - total_disbursements,
+        # Official weball totals do not carry itemized counts; callers provide
+        # derived committee summaries when those counts are part of the contract.
+        "transaction_count": derived_transaction_count,
+        "itemized_transaction_count": derived_transaction_count,
+        "committees": committee_summaries,
+        "cash_on_hand": official_row["cash_on_hand"],
+        "summary_source": "fec_weball",
+    }
+
+
+def fetch_candidate_official_summary(
+    conn: psycopg.Connection,
+    candidate_id: UUID,
+    candidate_name: str,
+) -> dict[str, Any] | None:
+    """Return the lightweight FEC weball candidate summary, if populated."""
+    with conn.cursor(row_factory=dict_row) as cursor:
+        cursor.execute(CANDIDATE_OFFICIAL_TOTALS_SQL, (candidate_id,))
+        official_row = cursor.fetchone()
+
+    if official_row is None or not _has_official_candidate_totals(official_row):
+        return None
+
+    return _build_candidate_summary_from_official_totals(
+        candidate_id=candidate_id,
+        candidate_name=candidate_name,
+        official_row=official_row,
+        committee_summaries=[],
+    )
+
+
+_CANDIDATE_COMMITTEE_SUMMARY_TOTALS_SQL = """
+    WITH linked_committees AS (
+        SELECT DISTINCT committee_id
+        FROM cf.candidate_committee_link
+        WHERE candidate_id = %s
+          AND valid_period @> CURRENT_DATE
+    ),
+    supported_cycle_rows AS (
+        SELECT
+            cs.committee_id,
+            cs.cycle,
+            cs.total_receipts,
+            cs.total_disbursements,
+            cs.cash_on_hand
+        FROM cf.committee_summary cs
+        JOIN linked_committees link
+          ON link.committee_id = cs.committee_id
+        WHERE cs.cycle = ANY(%s)
+    ),
+    latest_cash_on_hand AS (
+        SELECT DISTINCT ON (committee_id)
+            committee_id,
+            cash_on_hand
+        FROM supported_cycle_rows
+        ORDER BY committee_id, cycle DESC
+    )
+    SELECT
+        COUNT(*)::integer AS summary_row_count,
+        COALESCE(SUM(total_receipts), 0) AS total_receipts,
+        COALESCE(SUM(total_disbursements), 0) AS total_disbursements,
+        (
+            SELECT SUM(cash_on_hand)
+            FROM latest_cash_on_hand
+            WHERE cash_on_hand IS NOT NULL
+        ) AS cash_on_hand
+    FROM supported_cycle_rows
+"""
+
+_CANDIDATE_PUBLIC_MONEY_SUMMARIES_SQL = """
+    WITH requested_candidates AS (
+        SELECT *
+        FROM unnest(%s::uuid[], %s::text[]) AS requested(candidate_id, candidate_name)
+    ),
+    active_links AS (
+        SELECT DISTINCT
+            link.candidate_id,
+            link.committee_id
+        FROM cf.candidate_committee_link link
+        JOIN requested_candidates requested
+          ON requested.candidate_id = link.candidate_id
+        WHERE link.valid_period @> CURRENT_DATE
+    ),
+    supported_cycle_rows AS (
+        SELECT
+            link.candidate_id,
+            cs.committee_id,
+            cs.cycle,
+            cs.total_receipts,
+            cs.total_disbursements,
+            cs.cash_on_hand
+        FROM cf.committee_summary cs
+        JOIN active_links link
+          ON link.committee_id = cs.committee_id
+        WHERE cs.cycle = ANY(%s)
+    ),
+    latest_cash_on_hand AS (
+        SELECT DISTINCT ON (candidate_id, committee_id)
+            candidate_id,
+            committee_id,
+            cash_on_hand
+        FROM supported_cycle_rows
+        ORDER BY candidate_id, committee_id, cycle DESC
+    ),
+    committee_totals AS (
+        SELECT
+            rows.candidate_id,
+            COUNT(*)::integer AS summary_row_count,
+            COALESCE(SUM(rows.total_receipts), 0) AS committee_total_receipts,
+            COALESCE(SUM(rows.total_disbursements), 0) AS committee_total_disbursements,
+            (
+                SELECT SUM(cash.cash_on_hand)
+                FROM latest_cash_on_hand cash
+                WHERE cash.candidate_id = rows.candidate_id
+                  AND cash.cash_on_hand IS NOT NULL
+            ) AS committee_cash_on_hand
+        FROM supported_cycle_rows rows
+        GROUP BY rows.candidate_id
+    )
+    SELECT
+        requested.candidate_id,
+        requested.candidate_name,
+        candidate.total_receipts AS official_total_receipts,
+        candidate.total_disbursements AS official_total_disbursements,
+        candidate.cash_on_hand AS official_cash_on_hand,
+        COALESCE(committee_totals.summary_row_count, 0)::integer AS summary_row_count,
+        COALESCE(committee_totals.committee_total_receipts, 0) AS committee_total_receipts,
+        COALESCE(committee_totals.committee_total_disbursements, 0) AS committee_total_disbursements,
+        committee_totals.committee_cash_on_hand
+    FROM requested_candidates requested
+    JOIN cf.candidate candidate
+      ON candidate.id = requested.candidate_id
+    LEFT JOIN committee_totals
+      ON committee_totals.candidate_id = requested.candidate_id
+"""
+
+
+def _build_zero_public_candidate_summary(*, candidate_id: UUID, candidate_name: str) -> dict[str, Any]:
+    return {
+        "candidate_id": candidate_id,
+        "candidate_name": candidate_name,
+        "total_raised": _MONEY_SCALE,
+        "total_spent": _MONEY_SCALE,
+        "net": _MONEY_SCALE,
+        "transaction_count": 0,
+        "itemized_transaction_count": 0,
+        "committees": [],
+        "cash_on_hand": None,
+        "summary_source": "derived",
+    }
+
+
+def _build_public_candidate_summary_from_batch_row(row: dict[str, Any]) -> dict[str, Any]:
+    candidate_id = row["candidate_id"]
+    candidate_name = row["candidate_name"]
+    official_row = {
+        "total_receipts": row["official_total_receipts"],
+        "total_disbursements": row["official_total_disbursements"],
+        "cash_on_hand": row["official_cash_on_hand"],
+    }
+    if _has_official_candidate_totals(official_row):
+        return _build_candidate_summary_from_official_totals(
+            candidate_id=candidate_id,
+            candidate_name=candidate_name,
+            official_row=official_row,
+            committee_summaries=[],
+        )
+
+    if row["summary_row_count"] == 0:
+        return _build_zero_public_candidate_summary(candidate_id=candidate_id, candidate_name=candidate_name)
+
+    total_receipts = row["committee_total_receipts"] or _MONEY_SCALE
+    total_disbursements = row["committee_total_disbursements"] or _MONEY_SCALE
+    return {
+        "candidate_id": candidate_id,
+        "candidate_name": candidate_name,
+        "total_raised": total_receipts,
+        "total_spent": total_disbursements,
+        "net": total_receipts - total_disbursements,
+        "transaction_count": 0,
+        "itemized_transaction_count": 0,
+        "committees": [],
+        "cash_on_hand": row["committee_cash_on_hand"],
+        "summary_source": "fec_committee_summary",
+    }
+
+
+def fetch_candidate_public_money_summaries(
+    conn: psycopg.Connection,
+    candidates: Sequence[tuple[UUID, str]],
+) -> dict[UUID, dict[str, Any]]:
+    """Return public-money candidate summaries for many selected candidates."""
+    if not candidates:
+        return {}
+
+    candidate_ids = [candidate_id for candidate_id, _candidate_name in candidates]
+    candidate_names = [candidate_name for _candidate_id, candidate_name in candidates]
+    with conn.cursor(row_factory=dict_row) as cursor:
+        cursor.execute(
+            _CANDIDATE_PUBLIC_MONEY_SUMMARIES_SQL,
+            (candidate_ids, candidate_names, list(SUPPORTED_COMMITTEE_SUMMARY_CYCLES)),
+        )
+        return {row["candidate_id"]: _build_public_candidate_summary_from_batch_row(row) for row in cursor.fetchall()}
+
+
+def fetch_candidate_public_money_summary(
+    conn: psycopg.Connection,
+    candidate_id: UUID,
+    candidate_name: str,
+) -> dict[str, Any] | None:
+    """Return the public-money candidate summary without private detail queries."""
+    official_summary = fetch_candidate_official_summary(conn, candidate_id, candidate_name)
+    if official_summary is not None:
+        return official_summary
+
+    with conn.cursor(row_factory=dict_row) as cursor:
+        cursor.execute(
+            _CANDIDATE_COMMITTEE_SUMMARY_TOTALS_SQL, (candidate_id, list(SUPPORTED_COMMITTEE_SUMMARY_CYCLES))
+        )
+        committee_summary_row = cursor.fetchone()
+
+    if committee_summary_row is None:
+        return None
+    if committee_summary_row["summary_row_count"] == 0:
+        return _build_zero_public_candidate_summary(candidate_id=candidate_id, candidate_name=candidate_name)
+
+    total_receipts = committee_summary_row["total_receipts"] or _MONEY_SCALE
+    total_disbursements = committee_summary_row["total_disbursements"] or _MONEY_SCALE
+    return {
+        "candidate_id": candidate_id,
+        "candidate_name": candidate_name,
+        "total_raised": total_receipts,
+        "total_spent": total_disbursements,
+        "net": total_receipts - total_disbursements,
+        "transaction_count": 0,
+        "itemized_transaction_count": 0,
+        "committees": [],
+        "cash_on_hand": committee_summary_row["cash_on_hand"],
+        "summary_source": "fec_committee_summary",
+    }
+
+
 def fetch_candidate_summary(
     conn: psycopg.Connection,
     candidate_id: UUID,
@@ -1721,27 +2372,15 @@ def fetch_candidate_summary(
             )
         committee_summaries.append(committee_summary)
 
-    derived_transaction_count = sum(committee["transaction_count"] for committee in committee_summaries)
-
     if _has_official_candidate_totals(official_row):
-        total_receipts = official_row["total_receipts"] or _MONEY_SCALE
-        total_disbursements = official_row["total_disbursements"] or _MONEY_SCALE
-        return {
-            "candidate_id": candidate_id,
-            "candidate_name": candidate_name,
-            "total_raised": total_receipts,
-            "total_spent": total_disbursements,
-            "net": total_receipts - total_disbursements,
-            # Transaction count remains the committee-derived count: the official
-            # weball totals do not carry one, and surfacing 0 here would be
-            # misleading when itemized transactions exist for linked committees.
-            "transaction_count": derived_transaction_count,
-            "itemized_transaction_count": derived_transaction_count,
-            "committees": committee_summaries,
-            "cash_on_hand": official_row["cash_on_hand"],
-            "summary_source": "fec_weball",
-        }
+        return _build_candidate_summary_from_official_totals(
+            candidate_id=candidate_id,
+            candidate_name=candidate_name,
+            official_row=official_row,
+            committee_summaries=committee_summaries,
+        )
 
+    derived_transaction_count = sum(committee["transaction_count"] for committee in committee_summaries)
     derived_total_raised = sum((committee["total_raised"] for committee in committee_summaries), start=_MONEY_SCALE)
     derived_total_spent = sum((committee["total_spent"] for committee in committee_summaries), start=_MONEY_SCALE)
     derived_net = sum((committee["net"] for committee in committee_summaries), start=_MONEY_SCALE)
@@ -1831,6 +2470,23 @@ def fetch_candidate_list(
         offset=params.offset,
     )
     return _build_paginated_response(rows, limit=params.limit, offset=params.offset)
+
+
+def fetch_candidates_for_people(
+    conn: psycopg.Connection,
+    person_ids: list[UUID],
+) -> dict[UUID, list[dict[str, Any]]]:
+    """Fetch candidate rows for many people in one query, grouped by person."""
+    if not person_ids:
+        return {}
+    with conn.cursor(row_factory=dict_row) as cursor:
+        cursor.execute(_CANDIDATES_FOR_PEOPLE_SQL, (person_ids,))
+        rows = list(cursor.fetchall())
+
+    candidates_by_person: dict[UUID, list[dict[str, Any]]] = {}
+    for row in rows:
+        candidates_by_person.setdefault(row["person_id"], []).append(row)
+    return candidates_by_person
 
 
 def fetch_committee_list(
@@ -2103,6 +2759,24 @@ _CANDIDATE_IE_SUMMARY_SQL = f"""
       AND {_IE_OUTLIER_WHERE_CLAUSE}
 """
 
+_CANDIDATE_IE_SUMMARIES_SQL = f"""
+    SELECT
+        t.recipient_candidate_id AS candidate_id,
+        COALESCE(SUM(t.amount) FILTER (WHERE t.support_oppose = 'S'), 0) AS support_total,
+        COALESCE(SUM(t.amount) FILTER (WHERE t.support_oppose = 'O'), 0) AS oppose_total,
+        COUNT(*) FILTER (WHERE t.support_oppose = 'S')::integer AS support_count,
+        COUNT(*) FILTER (WHERE t.support_oppose = 'O')::integer AS oppose_count
+    FROM cf.transaction t
+    {_CANDIDATE_IE_SOURCE_RECORD_JOIN_SQL}
+    WHERE t.recipient_candidate_id = ANY(%s::uuid[])
+      AND t.support_oppose IS NOT NULL
+      AND t.is_memo = FALSE
+      AND t.amendment_indicator != 'T'
+      AND (t.source_record_id IS NULL OR sr.id IS NOT NULL)
+      AND {_IE_OUTLIER_WHERE_CLAUSE}
+    GROUP BY t.recipient_candidate_id
+"""
+
 _CANDIDATE_IE_TOP_SPENDERS_SQL = f"""
     SELECT
         t.committee_id,
@@ -2213,6 +2887,48 @@ def _fetch_person_insights_one(
     if "total_amount" in row:
         row["total_amount"] = _quantize_money(row["total_amount"])
     return row
+
+
+def _fetch_person_insights_itemized_rollups(
+    conn: psycopg.Connection,
+    committee_ids: list[UUID],
+) -> dict[str, Any]:
+    """Fetch itemized contribution rollups from one shared qualifying-transaction scan."""
+    with conn.cursor(row_factory=dict_row) as cursor:
+        cursor.execute(
+            _PERSON_CONTRIBUTION_INSIGHTS_ITEMIZED_ROLLUPS_SQL,
+            (committee_ids, CONTRIBUTION_INSIGHTS_MIN_DATE),
+        )
+        row = cursor.fetchone()
+
+    if row is None:
+        raise RuntimeError("Contribution insights itemized rollup query returned no row")
+
+    monthly_rows = _json_rows(row["monthly_totals"])
+    state_rows = _json_rows(row["state_totals"])
+    totals_row = _json_object(row["totals"])
+    itemized_buckets = _json_rows(row["itemized_size_buckets"])
+    itemized_cycle_rows = _json_rows(row["itemized_cycle_totals"])
+
+    for monthly_row in monthly_rows:
+        _quantize_money_fields(monthly_row, "total_amount")
+    for state_row in state_rows:
+        _quantize_money_fields(state_row, "total_amount")
+    _quantize_money_fields(totals_row, "total_amount")
+    for bucket in itemized_buckets:
+        _quantize_money_fields(bucket, "min_amount", "total_amount")
+        if bucket["max_amount"] is not None:
+            bucket["max_amount"] = _quantize_money(bucket["max_amount"])
+    for cycle_row in itemized_cycle_rows:
+        _quantize_money_fields(cycle_row, "itemized_individual_contribution_amount")
+
+    return {
+        "monthly_rows": monthly_rows,
+        "state_rows": state_rows,
+        "totals_row": totals_row,
+        "itemized_buckets": itemized_buckets,
+        "itemized_cycle_rows": itemized_cycle_rows,
+    }
 
 
 def _zero_person_insights_career_totals() -> dict[str, Any]:
@@ -2498,11 +3214,12 @@ def fetch_person_contribution_insights(conn: psycopg.Connection, person_id: UUID
     if not committee_ids:
         return _zero_person_contribution_insights(person_id, excluded_geography="no_linked_candidate")
 
-    monthly_rows = _fetch_person_insights_rows(conn, _PERSON_CONTRIBUTION_INSIGHTS_MONTHLY_SQL, committee_ids)
-    state_rows = _fetch_person_insights_rows(conn, _PERSON_CONTRIBUTION_INSIGHTS_STATE_SQL, committee_ids)
-    totals_row = _fetch_person_insights_one(conn, _PERSON_CONTRIBUTION_INSIGHTS_TOTAL_SQL, committee_ids)
-    itemized_buckets = _build_person_insights_itemized_buckets(conn, committee_ids)
-    itemized_cycle_rows = _fetch_person_insights_itemized_cycle_totals(conn, committee_ids)
+    itemized_rollups = _fetch_person_insights_itemized_rollups(conn, committee_ids)
+    monthly_rows = itemized_rollups["monthly_rows"]
+    state_rows = itemized_rollups["state_rows"]
+    totals_row = itemized_rollups["totals_row"]
+    itemized_buckets = itemized_rollups["itemized_buckets"]
+    itemized_cycle_rows = itemized_rollups["itemized_cycle_rows"]
     summary_row = _fetch_person_insights_summary(conn, committee_ids)
     summary_coverage_rows = _fetch_person_insights_summary_coverage(conn, committee_ids)
     summary_cycle_rows = _fetch_person_insights_summary_cycle_totals(conn, committee_ids)
@@ -2615,6 +3332,45 @@ def fetch_candidate_ie_summary(
         "top_spenders": top_spender_rows,
         "excluded_outlier_count": excluded_outlier_count,
     }
+
+
+def _zero_candidate_ie_summary(candidate_id: UUID) -> dict[str, Any]:
+    return {
+        "candidate_id": candidate_id,
+        "support_total": _MONEY_SCALE,
+        "oppose_total": _MONEY_SCALE,
+        "support_count": 0,
+        "oppose_count": 0,
+        "top_spenders": [],
+        "excluded_outlier_count": 0,
+    }
+
+
+def fetch_candidate_ie_summaries(
+    conn: psycopg.Connection,
+    candidate_ids: list[UUID],
+) -> dict[UUID, dict[str, Any]]:
+    """Fetch public IE support/oppose totals for many candidates."""
+    summaries = {candidate_id: _zero_candidate_ie_summary(candidate_id) for candidate_id in candidate_ids}
+    if not candidate_ids:
+        return summaries
+
+    with conn.cursor(row_factory=dict_row) as cursor:
+        cursor.execute(_CANDIDATE_IE_SUMMARIES_SQL, (candidate_ids, CANDIDATE_IE_OUTLIER_CEILING))
+        rows = list(cursor.fetchall())
+
+    for row in rows:
+        candidate_id = row["candidate_id"]
+        summaries[candidate_id] = {
+            "candidate_id": candidate_id,
+            "support_total": _quantize_money(row["support_total"]),
+            "oppose_total": _quantize_money(row["oppose_total"]),
+            "support_count": row["support_count"],
+            "oppose_count": row["oppose_count"],
+            "top_spenders": [],
+            "excluded_outlier_count": 0,
+        }
+    return summaries
 
 
 _COMMITTEE_IE_CANDIDATE_SLUG_EXPR = _SLUG_NORMALIZE_EXPR.format(value="cand.name")

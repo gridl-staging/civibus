@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import UTC, date, datetime
 import functools
 from hashlib import sha256
+import json
 import logging
 from pathlib import Path
 from typing import Literal
@@ -57,6 +58,7 @@ _LEGACY_STAGE4_OPTION_KEYS = frozenset(
         "min_transaction_date",
         "count_only",
         "canonical_resume_enabled",
+        "progress_file",
     }
 )
 
@@ -82,6 +84,7 @@ class Stage4LoadOptions:
     min_transaction_date: date | None = None
     count_only: bool = False
     canonical_resume_enabled: bool = False
+    progress_file: Path | None = None
 
     @property
     def has_full_source_row_scope(self) -> bool:
@@ -227,6 +230,7 @@ class _Stage4StreamingState:
     processed_since_commit: int = 0
     checkpoint_ready_rows: int = 0
     checkpoint_written_rows: int = 0
+    progress_rows_emitted: int = 0
     checkpoint_blocked: bool = False
     pending_rows: list[_PendingStage4Row] = field(default_factory=list)
 
@@ -298,6 +302,7 @@ def _resolve_stage4_options(
         min_transaction_date=legacy_kwargs.get("min_transaction_date"),
         count_only=bool(legacy_kwargs.get("count_only", False)),
         canonical_resume_enabled=bool(legacy_kwargs.get("canonical_resume_enabled", False)),
+        progress_file=legacy_kwargs.get("progress_file"),
     )
 
 
@@ -502,6 +507,55 @@ def _write_stage4_checkpoint_for_processed_rows(
     )
 
 
+def _stage4_progress_rows_total(state: _Stage4StreamingState) -> int:
+    return state.load_result.inserted + state.load_result.skipped
+
+
+def _stage4_checkpoint_progress_payload(
+    *,
+    request: Stage4LoadRequest,
+    checkpoint_context: _Stage4CheckpointContext | None,
+    checkpoint_rows: int,
+    checkpoint_written: bool,
+) -> dict[str, object] | None:
+    if not checkpoint_written or checkpoint_context is None:
+        return None
+    return {
+        "data_source_id": str(request.data_source_id),
+        "cycle": request.cycle,
+        "file_type": request.file_type,
+        "next_source_row_number": checkpoint_context.start_row + checkpoint_rows,
+    }
+
+
+def _append_stage4_progress(
+    *,
+    request: Stage4LoadRequest,
+    state: _Stage4StreamingState,
+    checkpoint: dict[str, object] | None,
+) -> None:
+    progress_file = request.options.progress_file
+    if progress_file is None:
+        return
+
+    rows_total = _stage4_progress_rows_total(state)
+    payload: dict[str, object] = {
+        "ts": datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+        "source": "stage4_loader",
+        "rows_total": rows_total,
+        "rows_delta": rows_total - state.progress_rows_emitted,
+        "detail": {"file_type": request.file_type},
+    }
+    if checkpoint is not None:
+        payload["checkpoint"] = checkpoint
+
+    progress_file.parent.mkdir(parents=True, exist_ok=True)
+    with progress_file.open("a", encoding="utf-8") as stream:
+        stream.write(json.dumps(payload, separators=(",", ":"), sort_keys=True))
+        stream.write("\n")
+    state.progress_rows_emitted = rows_total
+
+
 def _commit_stage4_batch_progress(
     conn: psycopg.Connection,
     *,
@@ -521,6 +575,13 @@ def _commit_stage4_batch_progress(
             processed_rows=checkpoint_rows,
         )
     conn.commit()
+    checkpoint_payload = _stage4_checkpoint_progress_payload(
+        request=request,
+        checkpoint_context=checkpoint_context,
+        checkpoint_rows=checkpoint_rows,
+        checkpoint_written=should_write_checkpoint,
+    )
+    _append_stage4_progress(request=request, state=state, checkpoint=checkpoint_payload)
     if should_write_checkpoint:
         state.checkpoint_written_rows = checkpoint_rows
     state.processed_since_commit = 0
@@ -545,6 +606,13 @@ def _commit_stage4_final_progress(
             processed_rows=checkpoint_rows,
         )
     conn.commit()
+    checkpoint_payload = _stage4_checkpoint_progress_payload(
+        request=request,
+        checkpoint_context=checkpoint_context,
+        checkpoint_rows=checkpoint_rows,
+        checkpoint_written=should_write_checkpoint,
+    )
+    _append_stage4_progress(request=request, state=state, checkpoint=checkpoint_payload)
     if should_write_checkpoint:
         state.checkpoint_written_rows = checkpoint_rows
     state.processed_since_commit = 0

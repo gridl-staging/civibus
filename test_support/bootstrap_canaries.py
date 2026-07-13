@@ -29,6 +29,30 @@ BOOTSTRAP_CANARIES = (
     "core.organization_er_view",
     "core.match_decision",
     "ag_catalog.ag_graph.civibus",
+    "cf.candidate_committee_link.date_precision",
+    "cf.committee_summary.derived_total_raised",
+    "cf.committee_summary.derived_total_spent",
+    "cf.committee_summary.derived_net",
+    "cf.committee_summary.derived_transaction_count",
+    "cf.committee_summary.derived_cash_receipts_total",
+    "cf.committee_summary.derived_in_kind_receipts_total",
+    "cf.committee_summary.derived_loan_receipts_total",
+    "cf.committee_summary.derived_contribution_receipts_total",
+    "cf.committee_summary.derived_jurisdiction",
+    "cf.committee_summary.derived_data_through",
+)
+
+_COMMITTEE_SUMMARY_DERIVED_COLUMNS = (
+    "derived_total_raised",
+    "derived_total_spent",
+    "derived_net",
+    "derived_transaction_count",
+    "derived_cash_receipts_total",
+    "derived_in_kind_receipts_total",
+    "derived_loan_receipts_total",
+    "derived_contribution_receipts_total",
+    "derived_jurisdiction",
+    "derived_data_through",
 )
 
 
@@ -217,6 +241,17 @@ def _stage1_canary_checks() -> tuple[tuple[str, Callable[[psycopg.Connection], b
         (
             BOOTSTRAP_CANARIES[22],
             lambda conn: _graph_exists(conn, "civibus"),
+        ),
+        (
+            BOOTSTRAP_CANARIES[23],
+            lambda conn: _column_exists(conn, "cf", "candidate_committee_link", "date_precision"),
+        ),
+        *(
+            (
+                f"cf.committee_summary.{column_name}",
+                lambda conn, column_name=column_name: _column_exists(conn, "cf", "committee_summary", column_name),
+            )
+            for column_name in _COMMITTEE_SUMMARY_DERIVED_COLUMNS
         ),
     )
 

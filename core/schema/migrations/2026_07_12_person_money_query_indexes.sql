@@ -1,0 +1,45 @@
+-- Canonical reset-time schema: domains/campaign_finance/schema/tables.sql.
+--
+-- Stage 3 (2026-07-12) supporting migration for the person-money surfaces
+-- (contribution-insights MONTHLY, top-employers, committee fundraising
+-- summary, candidate summary export). Live measurement against Fly
+-- civibus-db on 2026-07-12 (docs/live-state/2026_07_12_live_query_convergence.md,
+-- s25 warm probes) determined that the four person-money surfaces do NOT
+-- require any new indexes on cf.transaction or core.source_record beyond
+-- the Stage 1 canonical set already in
+-- 2026_07_09_donor_search_index.sql.
+--
+-- The dominant blocker was a plan-shape defect in the canonical superseded-
+-- source anti-join owned by
+-- api/contribution_insights_contract.py:NOT_SUPERSEDED_SOURCE_RECORD_WHERE_SQL:
+-- the NOT EXISTS shape compiled to a Nested Loop Anti Join whose 142-row
+-- Materialize was rescanned once per candidate transaction (measured 78 s /
+-- 54 s warm on the jul10_pm_7 committee's ~350k qualifying transactions).
+-- The Stage 3 fix rewrites that single owner to a hashed NOT IN sub-select
+-- so the 142 superseded ids are hashed once and every candidate row does a
+-- single O(1) probe. Warm measurement after the rewrite: 331 ms on the same
+-- committee (s25 EXPLAIN evidence). The hashed subplan is served by the
+-- existing Stage 1 partial index
+-- idx_source_record_superseded_id ON core.source_record (id)
+--     WHERE superseded_by IS NOT NULL
+-- which is already declared in 2026_07_09_donor_search_index.sql. No new
+-- transaction-side receipt-predicate index was required; a speculatively
+-- proposed cf.transaction (committee_id, transaction_date) partial index
+-- was dropped from Stage 3 scope because measurement showed the money
+-- surfaces land under 2000 ms without it.
+--
+-- The committee-summary latest_provenance data_through/jurisdiction fold
+-- is intentionally deferred to a follow-up stage per the escalation policy
+-- in the Stage 3 checklist ("stop and defer to a follow-up stage" if
+-- extending refresh/loader ownership into cf.committee_summary is
+-- required); the money numbers (total_raised, total_spent, net,
+-- transaction_count) land GREEN via the anti-join rewrite alone.
+--
+-- Live cleanup below sweeps up a 624 MB exploratory covering index that a
+-- prior Stage 3 session (s18) created on live while investigating the
+-- latest_provenance path. That index was never committed to canonical
+-- schema, does not benefit the person-money surfaces per s25 measurement,
+-- and is not referenced by any query owner. The IF EXISTS clause keeps
+-- this migration idempotent for schema resets where the index never
+-- existed.
+DROP INDEX IF EXISTS core.idx_source_record_active_id_pull_date;

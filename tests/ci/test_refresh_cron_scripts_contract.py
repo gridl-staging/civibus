@@ -121,7 +121,9 @@ def test_env_lib_contains_shared_env_loading_contract() -> None:
     # Convenience wrapper that sets common exports
     assert "load_civibus_env() {" in lib_text
     assert "Missing required env file:" in lib_text
-    assert 'export PATH="${HOME}/.local/bin:${PATH}"' in lib_text
+    assert "prepend_private_local_bin() {" in lib_text
+    assert 'prepend_private_local_bin "${HOME}/.local/bin"' in lib_text
+    assert "Skipping PATH entry writable by group/other" in lib_text
     assert "POSTGRES_PASSWORD must be set" in lib_text
     assert 'export POSTGRES_HOST="${POSTGRES_HOST:-127.0.0.1}"' in lib_text
     assert 'export POSTGRES_PORT="${POSTGRES_PORT:-5432}"' in lib_text

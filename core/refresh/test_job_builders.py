@@ -255,8 +255,8 @@ class TestFederalEnrichmentJobContract:
 
 _EXPECTED_FEDERAL_JOB_KEYS = (
     "federal-fec-masters",
-    "federal-fec-committee-summary",
     "federal-fec-schedule-a",
+    "federal-fec-committee-summary",
     "federal-congress-spine",
     "federal-fec-schedule-b",
     "federal-fec-schedule-e",
@@ -369,7 +369,7 @@ class TestFECCommitteeSummaryJobContract:
     ) -> None:
         downloaded_cycles = self._run_committee_summary_job_and_capture_cycles(monkeypatch, fec_cycle=2026)
 
-        assert downloaded_cycles == (2024, 2026)
+        assert downloaded_cycles == (2022, 2024, 2026)
 
     def test_fec_cycle_2024_resolves_only_current_active_committee_summary_cycle(
         self,
@@ -379,13 +379,13 @@ class TestFECCommitteeSummaryJobContract:
 
         assert downloaded_cycles == (2024,)
 
-    def test_committee_summary_job_does_not_schedule_frozen_2022_cycle_by_default(
+    def test_committee_summary_job_schedules_recent_history_2022_cycle_by_default(
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         downloaded_cycles = self._run_committee_summary_job_and_capture_cycles(monkeypatch, fec_cycle=2026)
 
-        assert 2022 not in downloaded_cycles
+        assert 2022 in downloaded_cycles
 
     def test_committee_summary_run_callable_downloads_and_dispatches_each_active_cycle(
         self,
@@ -393,27 +393,36 @@ class TestFECCommitteeSummaryJobContract:
     ) -> None:
         connection = MagicMock()
         data_source_id = UUID("6f93a177-c7ca-4a16-88e6-932245a1ddaf")
-        load_results = [object(), object()]
+        load_results = [object(), object(), object()]
+        aggregate_result = 12
         urlretrieve = MagicMock()
         ensure_fec_bulk_data_source = MagicMock(return_value=data_source_id)
         dispatch_load = MagicMock(side_effect=load_results)
         get_connection = MagicMock(return_value=connection)
+        populate_derived_aggregates = MagicMock(return_value=aggregate_result)
 
         monkeypatch.setattr(job_builders, "urlretrieve", urlretrieve)
         monkeypatch.setattr(job_builders, "get_connection", get_connection)
         monkeypatch.setattr(job_builders, "ensure_fec_bulk_data_source", ensure_fec_bulk_data_source)
         monkeypatch.setattr(job_builders, "dispatch_load", dispatch_load)
+        monkeypatch.setattr(
+            job_builders,
+            "populate_committee_summary_derived_aggregates",
+            populate_derived_aggregates,
+        )
 
         job = self._find_committee_summary_job(fec_cycle=2026)
         result = job.run_callable()
 
-        assert result == load_results
+        assert result == [*load_results, aggregate_result]
         assert [call.args[0] for call in urlretrieve.call_args_list] == [
+            job_builders.fec_committee_summary_url(2022),
             job_builders.fec_committee_summary_url(2024),
             job_builders.fec_committee_summary_url(2026),
         ]
         downloaded_paths = [Path(call.args[1]) for call in urlretrieve.call_args_list]
         assert [path.name for path in downloaded_paths] == [
+            "committee_summary_2022.csv",
             "committee_summary_2024.csv",
             "committee_summary_2026.csv",
         ]
@@ -423,14 +432,15 @@ class TestFECCommitteeSummaryJobContract:
         ensure_fec_bulk_data_source.assert_called_once_with(connection)
         connection.close.assert_called_once_with()
 
-        assert dispatch_load.call_count == 2
-        assert [call.kwargs["conn"] for call in dispatch_load.call_args_list] == [connection, connection]
+        assert dispatch_load.call_count == 3
+        assert [call.kwargs["conn"] for call in dispatch_load.call_args_list] == [connection, connection, connection]
         assert [call.kwargs["data_source_id"] for call in dispatch_load.call_args_list] == [
+            data_source_id,
             data_source_id,
             data_source_id,
         ]
 
-        for cycle, path, call in zip((2024, 2026), downloaded_paths, dispatch_load.call_args_list):
+        for cycle, path, call in zip((2022, 2024, 2026), downloaded_paths, dispatch_load.call_args_list):
             assert call.kwargs["config"] == job_builders.CliConfig(
                 mode="single",
                 cycle=cycle,
@@ -446,6 +456,8 @@ class TestFECCommitteeSummaryJobContract:
                 file_type="committee_summary",
                 path=path,
             )
+
+        populate_derived_aggregates.assert_called_once_with(connection, cycles=(2022, 2024, 2026))
 
     def _run_committee_summary_job_and_capture_cycles(
         self,

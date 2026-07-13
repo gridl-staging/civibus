@@ -5,7 +5,7 @@
 #   - Fly.io: set CIVIBUS_SITE_SCHEME=http:// (Fly's edge terminates TLS, so
 #     Caddy must serve plain HTTP on :80 — a scheme'd site address disables
 #     ACME for it) and point CIVIBUS_*_UPSTREAM at the .internal app hosts.
-{$CIVIBUS_SITE_SCHEME}{$PUBLIC_HOSTNAME} {
+(civibus_ingress_routes) {
 	handle_path /api/* {
 		reverse_proxy {$CIVIBUS_API_UPSTREAM:api:8000}
 	}
@@ -22,6 +22,14 @@ EOT
 	handle {
 		reverse_proxy {$CIVIBUS_WEB_UPSTREAM:web:3000}
 	}
+}
+
+{$CIVIBUS_SITE_SCHEME}{$PUBLIC_HOSTNAME} {
+	import civibus_ingress_routes
+}
+
+http://{$CIVIBUS_FLY_COMPAT_HOSTNAME:127.0.0.1} {
+	import civibus_ingress_routes
 }
 
 {$CIVIBUS_SITE_SCHEME}www.{$PUBLIC_HOSTNAME} {

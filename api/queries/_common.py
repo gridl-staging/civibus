@@ -39,6 +39,53 @@ _CAMPAIGN_FINANCE_PROVENANCE_SOURCE_IDS_SQL = """
       AND entity_id = %s
 """
 
+_CAMPAIGN_FINANCE_BATCH_PROVENANCE_SQL = """
+    WITH requests AS (
+        SELECT *
+        FROM unnest(%s::uuid[], %s::uuid[]) AS request(canonical_entity_id, row_source_record_id)
+    ),
+    source_ids AS (
+        SELECT
+            canonical_entity_id,
+            row_source_record_id AS source_record_id
+        FROM requests
+        WHERE row_source_record_id IS NOT NULL
+
+        UNION
+
+        SELECT
+            request.canonical_entity_id,
+            entity_source.source_record_id
+        FROM requests request
+        JOIN core.entity_source entity_source
+          ON entity_source.entity_type = %s
+         AND entity_source.entity_id = request.canonical_entity_id
+        WHERE request.canonical_entity_id IS NOT NULL
+    ),
+    dedup_source_ids AS (
+        SELECT DISTINCT
+            canonical_entity_id,
+            source_record_id
+        FROM source_ids
+        WHERE source_record_id IS NOT NULL
+    )
+    SELECT
+        ids.canonical_entity_id,
+        ds.domain AS domain,
+        ds.jurisdiction AS jurisdiction,
+        ds.name AS data_source_name,
+        ds.source_url AS data_source_url,
+        sr.source_record_key AS source_record_key,
+        sr.source_url AS record_url,
+        sr.pull_date AS pull_date
+    FROM dedup_source_ids ids
+    JOIN core.source_record sr
+      ON sr.id = ids.source_record_id
+    JOIN core.data_source ds
+      ON ds.id = sr.data_source_id
+    ORDER BY ids.canonical_entity_id, sr.pull_date DESC, sr.id ASC
+"""
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -180,3 +227,27 @@ def fetch_campaign_finance_provenance(
             canonical_entity_id,
         ),
     )
+
+
+def fetch_campaign_finance_provenance_batch(
+    conn: psycopg.Connection,
+    *,
+    provenance_requests: Sequence[tuple[UUID, UUID | None]],
+    canonical_entity_type: str,
+) -> dict[UUID, list[dict[str, Any]]]:
+    """Fetch campaign-finance provenance for many canonical entities."""
+    if not provenance_requests:
+        return {}
+
+    canonical_entity_ids = [canonical_entity_id for canonical_entity_id, _row_source_id in provenance_requests]
+    row_source_record_ids = [row_source_id for _canonical_entity_id, row_source_id in provenance_requests]
+    provenance_by_entity = {canonical_entity_id: [] for canonical_entity_id in canonical_entity_ids}
+    with conn.cursor(row_factory=dict_row) as cursor:
+        cursor.execute(
+            _CAMPAIGN_FINANCE_BATCH_PROVENANCE_SQL,
+            (canonical_entity_ids, row_source_record_ids, canonical_entity_type),
+        )
+        for row in cursor.fetchall():
+            canonical_entity_id = row.pop("canonical_entity_id")
+            provenance_by_entity.setdefault(canonical_entity_id, []).append(row)
+    return provenance_by_entity

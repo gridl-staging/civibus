@@ -47,7 +47,7 @@ describe('APP_SHELL shared static-route contract', () => {
 
   it('keeps federal landing action and coverage summary copy in shared config', () => {
     expect(APP_SHELL.landing.coverageSummary).toBe(
-      'Current launch scope is the 543 elected federal officials only, with source-linked photos, bios, offices, FEC money summaries, and Schedule E independent expenditures. State, city, property, candidate-list, and committee-list breadth is not advertised from the homepage.'
+      'Current launch scope is the 543 elected federal seats, with live profiles for current officeholders and documented vacancies excluded from the live official count until filled. State, city, property, candidate-list, and committee-list breadth is not advertised from the homepage.'
     );
     expect(APP_SHELL.landing.actions).toEqual([
       {
@@ -69,7 +69,7 @@ describe('APP_SHELL shared static-route contract', () => {
       'Follow money around Congress and the White House.'
     );
     expect(APP_SHELL.landing.body).toBe(
-      'Civibus v1 covers 543 elected federal officials: 435 House members, 100 senators, 6 non-voting delegates, the President, and the Vice President. Each profile is intended to connect photo, short bio, office, FEC campaign-finance summary, and Schedule E independent expenditures for and against.'
+      'Civibus v1 covers 543 elected federal seats: 435 House seats, 100 Senate seats, 6 non-voting delegate seats, the President, and the Vice President. Public directory profiles appear for current officeholders; documented vacancies reduce the live officeholder count until seats are filled.'
     );
     expect(APP_SHELL.landing.coverageHeading).toBe('Federal scope');
     expect(APP_SHELL.landing.cta).toEqual({

@@ -51,6 +51,49 @@ def test_committee_summary_url_is_separate_from_baseline_bulk_urls() -> None:
     assert "committee_summary" not in bulk_cli.fec_baseline_urls(2024)
 
 
+@pytest.mark.unit
+def test_validate_cli_arguments_rejects_progress_file_for_non_stage4_single_file_modes(tmp_path: Path) -> None:
+    parser = bulk_cli.build_argument_parser()
+    cm_path = tmp_path / "cm_sample.txt"
+    schedule_e_path = tmp_path / "independent_expenditure_2024.csv"
+    progress_path = tmp_path / "progress.jsonl"
+    cm_path.write_text("", encoding="latin-1")
+    schedule_e_path.write_text("", encoding="utf-8")
+
+    for file_type, file_path in (("cm", cm_path), ("schedule_e", schedule_e_path)):
+        with pytest.raises(ValueError, match="--progress-file is supported only for Stage 4 transaction loads"):
+            bulk_cli.validate_cli_arguments(
+                parser.parse_args(
+                    [
+                        "--cycle",
+                        "2024",
+                        "--file-type",
+                        file_type,
+                        "--path",
+                        str(file_path),
+                        "--progress-file",
+                        str(progress_path),
+                    ]
+                )
+            )
+
+
+@pytest.mark.unit
+def test_validate_cli_arguments_rejects_progress_file_for_federal_directory_mode(tmp_path: Path) -> None:
+    for file_type in bulk_cli.FEDERAL_INGEST_FILE_ORDER:
+        suffix = ".csv" if file_type in {"committee_summary", "schedule_e"} else ".txt"
+        (tmp_path / f"{file_type}_sample{suffix}").write_text("", encoding="latin-1")
+    progress_path = tmp_path / "progress.jsonl"
+
+    parser = bulk_cli.build_argument_parser()
+    with pytest.raises(ValueError, match="--progress-file is supported only for Stage 4 transaction loads"):
+        bulk_cli.validate_cli_arguments(
+            parser.parse_args(
+                ["--cycle", "2024", "--federal", "--directory", str(tmp_path), "--progress-file", str(progress_path)]
+            )
+        )
+
+
 class TestEffectiveLimitForDispatch:
     """Tests for selective limit: cm/cn/ccl unlimited, itcont/itpas2 capped in full-cycle mode."""
 
@@ -89,6 +132,49 @@ class TestEffectiveLimitForDispatch:
         config = self._build_config(mode="full", limit=None)
         for file_type in bulk_cli.FULL_CYCLE_FILE_ORDER:
             assert bulk_cli.effective_limit_for_dispatch(file_type, config) is None
+
+
+@pytest.mark.unit
+def test_dispatch_load_threads_progress_file_into_stage4_options(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    file_path = tmp_path / "itpas2_sample.txt"
+    progress_path = tmp_path / "progress.jsonl"
+    file_path.write_text("", encoding="latin-1")
+    captured_options = []
+
+    def stage4_loader(conn, path, *, cycle, data_source_id, options):
+        del conn, path, cycle, data_source_id
+        captured_options.append(options)
+        return LoadResult()
+
+    monkeypatch.setattr(
+        bulk_cli,
+        "FILE_TYPE_LOADERS",
+        {"itpas2": bulk_cli.LoaderSpec(loader=stage4_loader, requires_cycle=False, supports_graph=True)},
+    )
+    monkeypatch.setattr(bulk_cli, "resolve_stage4_committee_scope", MagicMock(return_value=None))
+
+    bulk_cli.dispatch_load(
+        conn=object(),
+        config=bulk_cli.CliConfig(
+            mode="single",
+            cycle=2024,
+            file_type="itpas2",
+            path=file_path,
+            directory=None,
+            batch_size=100,
+            limit=None,
+            graph_enabled=False,
+            progress_file=progress_path,
+        ),
+        request=bulk_cli.LoadRequest(file_type="itpas2", path=file_path),
+        data_source_id=uuid4(),
+    )
+
+    assert len(captured_options) == 1
+    assert captured_options[0].progress_file == progress_path
 
 
 class TestDerivePullStatus:

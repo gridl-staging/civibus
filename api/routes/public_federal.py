@@ -20,15 +20,17 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from api.deps import get_db
 from api.middleware.access import enforce_public_ip_rate_limit
 from api.models import (
-    CandidateListParams,
     PublicFederalOfficial,
     PublicMemberMoneySummary,
 )
 from api.queries import (
     fetch_campaign_finance_provenance,
+    fetch_campaign_finance_provenance_batch,
     fetch_candidate_ie_summary,
-    fetch_candidate_list,
-    fetch_candidate_summary,
+    fetch_candidate_ie_summaries,
+    fetch_candidate_public_money_summaries,
+    fetch_candidate_public_money_summary,
+    fetch_candidates_for_people,
 )
 from api.queries.civics import fetch_current_federal_members
 
@@ -98,9 +100,9 @@ def list_federal_officials(
 ) -> list[PublicFederalOfficial]:
     """Return the current federal-official directory, optionally filtered.
 
-    Filters are applied in Python over the full directory (543 rows) rather than
-    pushed into the query, keeping this a pure wrapper over the single directory
-    owner ``fetch_current_federal_members``.
+    Filters are applied in Python over the full current-officeholder directory
+    rather than pushed into the query, keeping this a pure wrapper over the
+    single directory owner ``fetch_current_federal_members``.
     """
     _apply_public_cache_headers(response)
     officials = fetch_current_federal_members(conn)
@@ -133,39 +135,46 @@ def _no_fec_money_summary(person_id: UUID, person_name: str) -> PublicMemberMone
 def _money_summary_for_candidate(
     conn: psycopg.Connection,
     *,
-    person_id: UUID,
-    person_name: str,
+    member: dict[str, Any],
     candidate: dict[str, Any],
+    summary: dict[str, Any] | None = None,
+    ie_summary: dict[str, Any] | None = None,
+    sources: list[dict[str, Any]] | None = None,
 ) -> PublicMemberMoneySummary:
+    person_id = member["person_id"]
     candidate_id = candidate["id"]
-    summary = fetch_candidate_summary(conn, candidate_id, candidate["name"])
-    if summary is None:
+    resolved_summary = summary or fetch_candidate_public_money_summary(conn, candidate_id, candidate["name"])
+    if resolved_summary is None:
         # Defensive: the candidate row disappeared between the list read and the
         # summary read. Surface as 500 rather than a misleading zero payload.
         raise HTTPException(status_code=500, detail="Candidate summary unavailable")
-    ie_summary = fetch_candidate_ie_summary(conn, candidate_id)
-    sources = fetch_campaign_finance_provenance(
-        conn,
-        row_source_record_id=candidate.get("source_record_id"),
-        canonical_entity_type="person",
-        canonical_entity_id=person_id,
+    resolved_ie_summary = ie_summary or fetch_candidate_ie_summary(conn, candidate_id)
+    resolved_sources = (
+        sources
+        if sources is not None
+        else fetch_campaign_finance_provenance(
+            conn,
+            row_source_record_id=candidate.get("source_record_id"),
+            canonical_entity_type="person",
+            canonical_entity_id=person_id,
+        )
     )
     return PublicMemberMoneySummary.model_validate(
         {
             "person_id": person_id,
-            "person_name": person_name,
+            "person_name": member["person_name"],
             "has_fec_money": True,
             "candidate_id": candidate_id,
-            "total_raised": summary["total_raised"],
-            "total_spent": summary["total_spent"],
-            "net": summary["net"],
-            "cash_on_hand": summary["cash_on_hand"],
-            "summary_source": summary["summary_source"],
-            "ie_support_total": ie_summary["support_total"],
-            "ie_oppose_total": ie_summary["oppose_total"],
-            "ie_support_count": ie_summary["support_count"],
-            "ie_oppose_count": ie_summary["oppose_count"],
-            "sources": sources,
+            "total_raised": resolved_summary["total_raised"],
+            "total_spent": resolved_summary["total_spent"],
+            "net": resolved_summary["net"],
+            "cash_on_hand": resolved_summary["cash_on_hand"],
+            "summary_source": resolved_summary["summary_source"],
+            "ie_support_total": resolved_ie_summary["support_total"],
+            "ie_oppose_total": resolved_ie_summary["oppose_total"],
+            "ie_support_count": resolved_ie_summary["support_count"],
+            "ie_oppose_count": resolved_ie_summary["oppose_count"],
+            "sources": resolved_sources,
         }
     )
 
@@ -209,29 +218,104 @@ def _select_public_money_candidate(candidates: list[dict[str, Any]], member: dic
 
 def _public_money_row_for_member(conn: psycopg.Connection, member: dict[str, Any]) -> PublicMemberMoneySummary:
     person_id = member["person_id"]
-    candidates = fetch_candidate_list(conn, CandidateListParams(person_id=person_id, limit=_CANDIDATE_LOOKUP_LIMIT))
-    candidate_items = candidates["items"]
-    if not candidate_items:
+    candidates = fetch_candidates_for_people(conn, [person_id]).get(person_id, [])
+    return _public_money_row_for_member_candidates(conn, member=member, candidates=candidates)
+
+
+def _public_money_row_for_member_candidates(
+    conn: psycopg.Connection,
+    *,
+    member: dict[str, Any],
+    candidates: list[dict[str, Any]],
+    summaries_by_candidate: dict[UUID, dict[str, Any]] | None = None,
+    ie_summaries_by_candidate: dict[UUID, dict[str, Any]] | None = None,
+    provenance_by_person: dict[UUID, list[dict[str, Any]]] | None = None,
+) -> PublicMemberMoneySummary:
+    person_id = member["person_id"]
+    if not candidates:
         return _no_fec_money_summary(person_id, member["person_name"])
 
-    candidate = _select_public_money_candidate(candidate_items, member)
+    candidate = _select_public_money_candidate(candidates[:_CANDIDATE_LOOKUP_LIMIT], member)
     return _money_summary_for_candidate(
         conn,
-        person_id=person_id,
-        person_name=member["person_name"],
+        member=member,
         candidate=candidate,
+        summary=(summaries_by_candidate or {}).get(candidate["id"]),
+        ie_summary=(ie_summaries_by_candidate or {}).get(candidate["id"]),
+        sources=(provenance_by_person or {}).get(person_id),
     )
+
+
+def _selected_public_money_candidates_by_person(
+    members: list[dict[str, Any]],
+    candidates_by_person: dict[UUID, list[dict[str, Any]]],
+) -> dict[UUID, dict[str, Any]]:
+    selected_candidates: dict[UUID, dict[str, Any]] = {}
+    for member in members:
+        person_id = member["person_id"]
+        candidates = candidates_by_person.get(person_id, [])
+        if candidates:
+            selected_candidates[person_id] = _select_public_money_candidate(
+                candidates[:_CANDIDATE_LOOKUP_LIMIT],
+                member,
+            )
+    return selected_candidates
+
+
+def _provenance_requests_for_selected_candidates(
+    selected_candidates_by_person: dict[UUID, dict[str, Any]],
+) -> list[tuple[UUID, UUID | None]]:
+    return [
+        (person_id, candidate.get("source_record_id")) for person_id, candidate in selected_candidates_by_person.items()
+    ]
 
 
 def build_public_federal_money_rows(conn: psycopg.Connection) -> list[PublicMemberMoneySummary]:
     """Build public money rows for every current federal official."""
-    return [_public_money_row_for_member(conn, member) for member in fetch_current_federal_members(conn)]
+    members = fetch_current_federal_members(conn)
+    candidates_by_person = fetch_candidates_for_people(conn, [member["person_id"] for member in members])
+    selected_candidates_by_person = _selected_public_money_candidates_by_person(members, candidates_by_person)
+    selected_candidate_ids = [candidate["id"] for candidate in selected_candidates_by_person.values()]
+    selected_candidate_refs = [
+        (candidate["id"], candidate["name"]) for candidate in selected_candidates_by_person.values()
+    ]
+    summaries_by_candidate = fetch_candidate_public_money_summaries(conn, selected_candidate_refs)
+    ie_summaries_by_candidate = fetch_candidate_ie_summaries(conn, selected_candidate_ids)
+    provenance_by_person = fetch_campaign_finance_provenance_batch(
+        conn,
+        provenance_requests=_provenance_requests_for_selected_candidates(selected_candidates_by_person),
+        canonical_entity_type="person",
+    )
+    return [
+        _public_money_row_for_member_candidates(
+            conn,
+            member=member,
+            candidates=candidates_by_person.get(member["person_id"], []),
+            summaries_by_candidate=summaries_by_candidate,
+            ie_summaries_by_candidate=ie_summaries_by_candidate,
+            provenance_by_person=provenance_by_person,
+        )
+        for member in members
+    ]
 
 
 def _public_money_row_for_person(conn: psycopg.Connection, person_id: UUID) -> PublicMemberMoneySummary | None:
-    for member in fetch_current_federal_members(conn):
+    members = fetch_current_federal_members(conn)
+    candidates_by_person = fetch_candidates_for_people(conn, [member["person_id"] for member in members])
+    for member in members:
         if member["person_id"] == person_id:
-            return _public_money_row_for_member(conn, member)
+            candidates = candidates_by_person.get(person_id, [])
+            selected_candidate_ids = (
+                [_select_public_money_candidate(candidates[:_CANDIDATE_LOOKUP_LIMIT], member)["id"]]
+                if candidates
+                else []
+            )
+            return _public_money_row_for_member_candidates(
+                conn,
+                member=member,
+                candidates=candidates,
+                ie_summaries_by_candidate=fetch_candidate_ie_summaries(conn, selected_candidate_ids),
+            )
     return None
 
 

@@ -144,6 +144,12 @@ def test_build_refresh_plan_all_scope_emits_canonical_stage6_job_keys() -> None:
     assert "civics-nc-past-results-2022-2024" not in job_keys
 
 
+def test_federal_plan_wires_committee_summary_after_schedule_a() -> None:
+    job_keys = tuple(job.key for job in job_builders.build_refresh_plan(scope="federal"))
+
+    assert job_keys.index("federal-fec-schedule-a") < job_keys.index("federal-fec-committee-summary")
+
+
 def test_build_refresh_plan_adds_nc_jobs_from_independent_input_paths() -> None:
     committee_docs_path = Path("/tmp/stage5_nc_committee_docs_27075.csv")
     ie_document_index_path = Path("/tmp/stage5_nc_ie_document_index_27075.csv")
@@ -754,6 +760,7 @@ def test_build_refresh_plan_orders_federal_jobs_by_stage_critical_prerequisites(
 
     masters_dependents = (
         "federal-fec-schedule-a",
+        "federal-fec-committee-summary",
         "federal-congress-spine",
         "federal-fec-schedule-b",
         "federal-fec-schedule-e",
@@ -766,6 +773,11 @@ def test_build_refresh_plan_orders_federal_jobs_by_stage_critical_prerequisites(
         assert job_index["federal-fec-masters"] < job_index[dependent_key], (
             f"federal-fec-masters must precede {dependent_key} so master tables exist before dependents run"
         )
+
+    assert job_index["federal-fec-schedule-a"] < job_index["federal-fec-committee-summary"], (
+        "federal-fec-schedule-a must precede committee-summary derived aggregate population "
+        "so stored aggregates include the newest itemized transactions"
+    )
 
     enrichment_prerequisites = (
         "federal-congress-spine",
@@ -1315,8 +1327,8 @@ def test_build_refresh_plan_job_key_prefix_filter_preserves_matching_fec_and_nc_
 
     assert [job.key for job in jobs] == [
         "federal-fec-masters",
-        "federal-fec-committee-summary",
         "federal-fec-schedule-a",
+        "federal-fec-committee-summary",
         "federal-fec-schedule-b",
         "federal-fec-schedule-e",
         "state-nc-ie-document-index",

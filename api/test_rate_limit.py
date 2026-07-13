@@ -39,6 +39,15 @@ def _build_rate_limited_client(
     return TestClient(create_app())
 
 
+def test_authenticated_rate_limit_wrapper_documents_public_reuse_contract() -> None:
+    docstring = access_middleware._enforce_fixed_window_rate_limit.__doc__ or ""
+
+    assert "authenticated API-key requests" in docstring
+    assert "_enforce_fixed_window_rate_limit_for_key" in docstring
+    assert "enforce_public_ip_rate_limit" in docstring
+    assert "TODO" not in docstring
+
+
 def test_valid_key_hits_cap_then_returns_429_with_retry_after(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

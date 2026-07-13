@@ -1,7 +1,9 @@
+
 from __future__ import annotations
 
 import argparse
 import json
+import shlex
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -271,12 +273,22 @@ def run_tuning_candidate(
     resolved_summary_path = Path(summary_path)
     recorded_at_utc = datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
-    gate_command = (
-        f"uv run python -m core.entity_resolution.tuning"
-        f" --candidate-id {candidate_id}"
-        f" --artifact-dir {artifact_root}"
-        f" --stage2-baseline-path {resolved_stage2_baseline_path}"
-        f" --summary-path {resolved_summary_path}"
+    gate_command = shlex.join(
+        [
+            "uv",
+            "run",
+            "python",
+            "-m",
+            "core.entity_resolution.tuning",
+            "--candidate-id",
+            candidate_id,
+            "--artifact-dir",
+            str(artifact_root),
+            "--stage2-baseline-path",
+            str(resolved_stage2_baseline_path),
+            "--summary-path",
+            str(resolved_summary_path),
+        ]
     )
     l8_payload = run_l8_regression_gate(
         artifact_path=artifact_root / _STAGE7_L8_FILENAME,

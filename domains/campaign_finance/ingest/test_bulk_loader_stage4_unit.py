@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
@@ -563,6 +564,89 @@ class TestStage4StreamingLoop:
                 )
             ]
         ]
+
+    def test_batch_commit_appends_shared_progress_after_durable_checkpoint(self, tmp_path: Path) -> None:
+        progress_path = tmp_path / "progress.jsonl"
+        data_source_id = uuid4()
+        conn = self._RecordingConnection()
+        request = bulk_stage4_loader.Stage4LoadRequest(
+            file_type="itcont",
+            path=Path("/tmp/itcont.txt"),
+            data_source_id=data_source_id,
+            cycle=2026,
+            options=bulk_stage4_loader.Stage4LoadOptions(batch_size=2, progress_file=progress_path),
+            canonical_resume_enabled=True,
+        )
+        state = bulk_stage4_loader._Stage4StreamingState(
+            load_result=bulk_stage4_loader.LoadResult(inserted=3, skipped=1),
+            processed_since_commit=2,
+            checkpoint_ready_rows=5,
+        )
+        checkpoint_context = bulk_stage4_loader._Stage4CheckpointContext(
+            archive_reference=bulk_stage4_loader.Stage4ArchiveReference(
+                archive_fingerprint="archive-fingerprint",
+                archive_member_name="itcont.txt",
+            ),
+            start_row=100,
+        )
+
+        bulk_stage4_loader._commit_stage4_batch_progress(
+            conn,
+            request=request,
+            state=state,
+            checkpoint_context=checkpoint_context,
+        )
+
+        payload = json.loads(progress_path.read_text(encoding="utf-8"))
+        assert set(payload) == {"ts", "source", "rows_total", "rows_delta", "checkpoint", "detail"}
+        assert payload["source"] == "stage4_loader"
+        assert payload["rows_total"] == 4
+        assert payload["rows_delta"] == 4
+        assert payload["checkpoint"] == {
+            "data_source_id": str(data_source_id),
+            "cycle": 2026,
+            "file_type": "itcont",
+            "next_source_row_number": 105,
+        }
+        assert payload["detail"] == {"file_type": "itcont"}
+        assert state.checkpoint_written_rows == 5
+        assert state.processed_since_commit == 0
+        assert conn.commit_count == 1
+
+    def test_final_commit_appends_shared_progress_without_fake_checkpoint(self, tmp_path: Path) -> None:
+        progress_path = tmp_path / "progress.jsonl"
+        conn = self._RecordingConnection()
+        request = bulk_stage4_loader.Stage4LoadRequest(
+            file_type="itpas2",
+            path=Path("/tmp/itpas2.txt"),
+            data_source_id=uuid4(),
+            options=bulk_stage4_loader.Stage4LoadOptions(batch_size=10, progress_file=progress_path),
+        )
+        state = bulk_stage4_loader._Stage4StreamingState(
+            load_result=bulk_stage4_loader.LoadResult(inserted=7, skipped=2),
+            processed_since_commit=3,
+            progress_rows_emitted=6,
+        )
+
+        assert (
+            bulk_stage4_loader._commit_stage4_final_progress(
+                conn,
+                request=request,
+                state=state,
+                checkpoint_context=None,
+            )
+            is True
+        )
+
+        payload = json.loads(progress_path.read_text(encoding="utf-8"))
+        assert set(payload) == {"ts", "source", "rows_total", "rows_delta", "detail"}
+        assert payload["source"] == "stage4_loader"
+        assert payload["rows_total"] == 9
+        assert payload["rows_delta"] == 3
+        assert payload["detail"] == {"file_type": "itpas2"}
+        assert state.progress_rows_emitted == 9
+        assert state.processed_since_commit == 0
+        assert conn.commit_count == 1
 
     def test_transactions_only_large_batches_use_throughput_flush_floor(self) -> None:
         small_request = bulk_stage4_loader.Stage4LoadRequest(

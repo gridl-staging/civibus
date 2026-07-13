@@ -103,6 +103,11 @@ def _enforce_fixed_window_rate_limit(
     request: Request,
     api_key: str,
 ) -> None:
+    """Apply authenticated API-key requests to the shared per-key owner.
+
+    Public authless routes call ``enforce_public_ip_rate_limit``, which reuses
+    ``_enforce_fixed_window_rate_limit_for_key`` with the client IP as the key.
+    """
     _enforce_fixed_window_rate_limit_for_key(request=request, key=api_key)
 
 

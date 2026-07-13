@@ -26,7 +26,7 @@ on:
         type: string
 
 env:
-  PROBE_BASE_URL: https://civibus-caddy.fly.dev
+  PROBE_BASE_URL: https://civibus.shareborough.com
 
 permissions:
   contents: read

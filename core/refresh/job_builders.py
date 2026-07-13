@@ -854,8 +854,15 @@ def _build_official_roster_jobs() -> list[RefreshJob]:
     return jobs
 
 
+def _active_fec_transaction_cycles(fec_cycle: int) -> tuple[int, ...]:
+    previous_cycle = fec_cycle - 2
+    if previous_cycle < 2024:
+        return (fec_cycle,)
+    return (previous_cycle, fec_cycle)
+
+
 def _build_fec_job(parameters: RunnerParameters) -> RefreshJob:
-    cycles = _active_committee_summary_cycles(parameters.fec_cycle)
+    cycles = _active_fec_transaction_cycles(parameters.fec_cycle)
 
     def _run_fec_schedule_a_job() -> list[object]:
         download_paths: list[tuple[int, Path]] = []
@@ -969,10 +976,122 @@ def _build_fec_masters_job(parameters: RunnerParameters) -> RefreshJob:
 
 
 def _active_committee_summary_cycles(fec_cycle: int) -> tuple[int, ...]:
-    previous_cycle = fec_cycle - 2
-    if previous_cycle < 2024:
+    first_recent_cycle = 2022
+    if fec_cycle <= first_recent_cycle + 2:
         return (fec_cycle,)
-    return (previous_cycle, fec_cycle)
+    cycles = tuple(range(first_recent_cycle, fec_cycle + 1, 2))
+    return cycles or (fec_cycle,)
+
+
+_COMMITTEE_SUMMARY_DERIVED_AGGREGATE_SQL = """
+    WITH target_summaries AS (
+        SELECT
+            cs.committee_id,
+            cs.cycle,
+            MAKE_DATE(cs.cycle - 1, 1, 1) AS cycle_start_date,
+            MAKE_DATE(cs.cycle, 12, 31) AS cycle_end_date
+        FROM cf.committee_summary cs
+        WHERE cs.cycle = ANY(%s)
+    ),
+    eligible_transactions AS (
+        SELECT
+            ts.committee_id,
+            ts.cycle,
+            t.id,
+            t.transaction_type,
+            t.amount,
+            sr.pull_date,
+            ds.jurisdiction
+        FROM target_summaries ts
+        JOIN cf.transaction t
+          ON t.committee_id = ts.committee_id
+         AND t.transaction_date >= ts.cycle_start_date
+         AND t.transaction_date <= ts.cycle_end_date
+         AND t.is_memo = FALSE
+         AND t.amendment_indicator != 'T'
+        LEFT JOIN core.source_record sr
+          ON sr.id = t.source_record_id
+        LEFT JOIN core.data_source ds
+          ON ds.id = sr.data_source_id
+        WHERE t.source_record_id IS NULL
+           OR sr.superseded_by IS NULL
+    ),
+    aggregates AS (
+        SELECT
+            committee_id,
+            cycle,
+            COALESCE(SUM(amount) FILTER (WHERE transaction_type LIKE '1%%'), 0) AS total_raised,
+            COALESCE(SUM(amount) FILTER (WHERE transaction_type LIKE '2%%'), 0) AS total_spent,
+            COALESCE(SUM(amount) FILTER (WHERE transaction_type LIKE '1%%'), 0)
+              - COALESCE(SUM(amount) FILTER (WHERE transaction_type LIKE '2%%'), 0) AS net,
+            COUNT(id)::integer AS transaction_count,
+            COALESCE(SUM(amount) FILTER (
+                WHERE transaction_type LIKE '1%%'
+                  AND transaction_type LIKE '16%%'
+            ), 0) AS loan_receipts_total,
+            COALESCE(SUM(amount) FILTER (WHERE transaction_type = '15Z'), 0) AS in_kind_receipts_total,
+            COALESCE(SUM(amount) FILTER (WHERE transaction_type LIKE '1%%'), 0)
+              - COALESCE(SUM(amount) FILTER (
+                    WHERE transaction_type LIKE '1%%'
+                      AND transaction_type LIKE '16%%'
+                ), 0) AS contribution_receipts_total,
+            GREATEST(
+                COALESCE(SUM(amount) FILTER (WHERE transaction_type LIKE '1%%'), 0)
+                - COALESCE(SUM(amount) FILTER (
+                    WHERE transaction_type LIKE '1%%'
+                      AND transaction_type LIKE '16%%'
+                ), 0)
+                - COALESCE(SUM(amount) FILTER (WHERE transaction_type = '15Z'), 0),
+                0
+            ) AS cash_receipts_total,
+            (ARRAY_AGG(
+                jurisdiction
+                ORDER BY pull_date DESC NULLS LAST, id ASC
+            ) FILTER (WHERE jurisdiction IS NOT NULL))[1] AS jurisdiction,
+            MAX(pull_date) AS data_through
+        FROM eligible_transactions
+        GROUP BY committee_id, cycle
+    ),
+    aggregate_updates AS (
+        SELECT
+            ts.committee_id,
+            ts.cycle,
+            COALESCE(a.total_raised, 0) AS total_raised,
+            COALESCE(a.total_spent, 0) AS total_spent,
+            COALESCE(a.net, 0) AS net,
+            COALESCE(a.transaction_count, 0) AS transaction_count,
+            COALESCE(a.cash_receipts_total, 0) AS cash_receipts_total,
+            COALESCE(a.in_kind_receipts_total, 0) AS in_kind_receipts_total,
+            COALESCE(a.loan_receipts_total, 0) AS loan_receipts_total,
+            COALESCE(a.contribution_receipts_total, 0) AS contribution_receipts_total,
+            a.jurisdiction,
+            a.data_through
+        FROM target_summaries ts
+        LEFT JOIN aggregates a
+          ON a.committee_id = ts.committee_id
+         AND a.cycle = ts.cycle
+    )
+    UPDATE cf.committee_summary cs
+    SET derived_total_raised = au.total_raised,
+        derived_total_spent = au.total_spent,
+        derived_net = au.net,
+        derived_transaction_count = au.transaction_count,
+        derived_cash_receipts_total = au.cash_receipts_total,
+        derived_in_kind_receipts_total = au.in_kind_receipts_total,
+        derived_loan_receipts_total = au.loan_receipts_total,
+        derived_contribution_receipts_total = au.contribution_receipts_total,
+        derived_jurisdiction = au.jurisdiction,
+        derived_data_through = au.data_through
+    FROM aggregate_updates au
+    WHERE cs.committee_id = au.committee_id
+      AND cs.cycle = au.cycle
+"""
+
+
+def populate_committee_summary_derived_aggregates(connection: object, *, cycles: tuple[int, ...]) -> int:
+    with connection.cursor() as cursor:
+        cursor.execute(_COMMITTEE_SUMMARY_DERIVED_AGGREGATE_SQL, (list(cycles),))
+        return cursor.rowcount
 
 
 def _build_fec_committee_summary_job(parameters: RunnerParameters) -> RefreshJob:
@@ -1012,6 +1131,7 @@ def _build_fec_committee_summary_job(parameters: RunnerParameters) -> RefreshJob
                             data_source_id=data_source_id,
                         )
                     )
+                results.append(populate_committee_summary_derived_aggregates(connection, cycles=cycles))
                 return results
             finally:
                 connection.close()
@@ -1340,8 +1460,8 @@ def build_refresh_plan(
     configs_by_state_code = _discover_configs_by_state_code()
 
     jobs: list[RefreshJob] = [_build_fec_masters_job(resolved_parameters)]
-    jobs.append(_build_fec_committee_summary_job(resolved_parameters))
     jobs.append(_build_fec_job(resolved_parameters))
+    jobs.append(_build_fec_committee_summary_job(resolved_parameters))
     jobs.append(_build_federal_congress_spine_job())
     # federal-enrichment joins on people, FEC transaction, and Schedule E rows
     # produced by the preceding federal jobs.

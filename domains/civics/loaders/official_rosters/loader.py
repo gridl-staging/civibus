@@ -155,6 +155,7 @@ def _fixture_or_live_html(
     fixture_path: Path | None,
     fetch_bytes: FetchBytes,
 ) -> str:
+    """Return fixture HTML when supplied, otherwise fetch live roster HTML."""
     if fixture_path is not None:
         return fixture_path.read_text(encoding="utf-8")
 

@@ -36,6 +36,33 @@ def test_validate_cli_arguments_accepts_single_file_mode(tmp_path: Path) -> None
 
 
 @pytest.mark.unit
+def test_validate_cli_arguments_accepts_progress_file_for_stage4_single_file_mode(tmp_path: Path) -> None:
+    file_path = tmp_path / "itcont_sample.txt"
+    progress_path = tmp_path / "progress.jsonl"
+    file_path.write_text("", encoding="latin-1")
+
+    parser = bulk_cli.build_argument_parser()
+    args = parser.parse_args(
+        [
+            "--cycle",
+            "2024",
+            "--file-type",
+            "itcont",
+            "--path",
+            str(file_path),
+            "--progress-file",
+            str(progress_path),
+        ]
+    )
+
+    config = bulk_cli.validate_cli_arguments(args)
+
+    assert config.mode == "single"
+    assert config.file_type == "itcont"
+    assert config.progress_file == progress_path
+
+
+@pytest.mark.unit
 def test_validate_cli_arguments_marks_cli_full_cycle_as_canonical_stage4_resume_owner(tmp_path: Path) -> None:
     for file_type in bulk_cli.FULL_CYCLE_FILE_ORDER:
         (tmp_path / f"{file_type}_sample.txt").write_text("", encoding="latin-1")
@@ -48,6 +75,23 @@ def test_validate_cli_arguments_marks_cli_full_cycle_as_canonical_stage4_resume_
     assert config.mode == "full"
     assert config.directory == tmp_path
     assert config.canonical_stage4_resume_enabled is True
+
+
+@pytest.mark.unit
+def test_validate_cli_arguments_accepts_progress_file_for_full_cycle_mode(tmp_path: Path) -> None:
+    for file_type in bulk_cli.FULL_CYCLE_FILE_ORDER:
+        (tmp_path / f"{file_type}_sample.txt").write_text("", encoding="latin-1")
+    progress_path = tmp_path / "progress.jsonl"
+
+    parser = bulk_cli.build_argument_parser()
+    args = parser.parse_args(
+        ["--cycle", "2024", "--all", "--directory", str(tmp_path), "--progress-file", str(progress_path)]
+    )
+
+    config = bulk_cli.validate_cli_arguments(args)
+
+    assert config.mode == "full"
+    assert config.progress_file == progress_path
 
 
 @pytest.mark.unit

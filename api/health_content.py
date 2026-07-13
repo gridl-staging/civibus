@@ -32,8 +32,7 @@ from psycopg.sql import SQL
 
 from api.contribution_insights_contract import (
     CONTRIBUTION_INSIGHTS_MIN_DATE,
-    CONTRIBUTION_INSIGHTS_SOURCE_RECORD_JOIN_SQL,
-    CONTRIBUTION_INSIGHTS_SOURCE_RECORD_WHERE_SQL,
+    NOT_SUPERSEDED_SOURCE_RECORD_WHERE_SQL,
     contribution_insights_transaction_where_sql,
 )
 
@@ -95,10 +94,9 @@ _CHECK_QUERIES: Mapping[str, str] = {
     "cf_transaction_with_support_oppose": "SELECT COUNT(*) FROM cf.transaction WHERE support_oppose IS NOT NULL",
     "cf_transaction_contribution_insights_sentinel": (
         "SELECT COUNT(*) FROM cf.transaction t "
-        f"{CONTRIBUTION_INSIGHTS_SOURCE_RECORD_JOIN_SQL}"
         f"WHERE lower(t.contributor_name_raw) LIKE '{_CONTRIBUTION_INSIGHTS_SENTINEL_DONOR_PREFIX}'"
         f"{_CONTRIBUTION_INSIGHTS_TRANSACTION_WHERE_SQL}"
-        f"{CONTRIBUTION_INSIGHTS_SOURCE_RECORD_WHERE_SQL}"
+        f"{NOT_SUPERSEDED_SOURCE_RECORD_WHERE_SQL}"
     ),
 }
 

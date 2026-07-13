@@ -9,6 +9,7 @@ __pycache__/
 htmlcov/
 node_modules/
 data/
+build/detached_jobs/
 *.egg-info/
 
 # Stage 3 browser-capture local profile caches

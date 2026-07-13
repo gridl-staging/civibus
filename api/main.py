@@ -3,6 +3,7 @@ Stub summary for jun04_3pm_5_launch_gate_and_golive/civibus_dev/api/main.py.
 """
 
 import os
+import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -40,6 +41,13 @@ from api.routes.public_federal import router as public_federal_router
 from api.routes.search import router as search_router
 from core.db import build_connection_parameters
 from core.graph import age_post_connect
+
+_DB_POOL_MIN_SIZE_ENV_VAR = "CIVIBUS_API_DB_POOL_MIN_SIZE"
+_DB_POOL_MAX_SIZE_ENV_VAR = "CIVIBUS_API_DB_POOL_MAX_SIZE"
+_DB_POOL_TIMEOUT_SECONDS_ENV_VAR = "CIVIBUS_API_DB_POOL_TIMEOUT_SECONDS"
+_DEFAULT_DB_POOL_MIN_SIZE = 2
+_DEFAULT_DB_POOL_MAX_SIZE = 8
+_DEFAULT_DB_POOL_TIMEOUT_SECONDS = 5.0
 
 
 def _v1_routers() -> tuple[APIRouter, ...]:
@@ -96,6 +104,32 @@ def _parse_positive_int_env_var(env_var_name: str) -> int:
     return parsed_value
 
 
+def _parse_optional_positive_int_env_var(env_var_name: str, *, default: int) -> int:
+    raw_env_value = os.getenv(env_var_name)
+    if raw_env_value is None:
+        return default
+    try:
+        parsed_value = int(raw_env_value)
+    except ValueError as exc:
+        raise RuntimeError(f"{env_var_name} must be set to a positive integer") from exc
+    if parsed_value <= 0:
+        raise RuntimeError(f"{env_var_name} must be set to a positive integer")
+    return parsed_value
+
+
+def _parse_optional_positive_float_env_var(env_var_name: str, *, default: float) -> float:
+    raw_env_value = os.getenv(env_var_name)
+    if raw_env_value is None:
+        return default
+    try:
+        parsed_value = float(raw_env_value)
+    except ValueError as exc:
+        raise RuntimeError(f"{env_var_name} must be set to a positive number") from exc
+    if parsed_value <= 0:
+        raise RuntimeError(f"{env_var_name} must be set to a positive number")
+    return parsed_value
+
+
 def _rate_limit_config_from_env() -> tuple[int, int]:
     return (
         _parse_positive_int_env_var(RATE_LIMIT_REQUESTS_ENV_VAR),
@@ -125,6 +159,7 @@ def _strip_cors_headers(response: Response) -> None:
 
 
 def _build_app_connection_pool() -> ConnectionPool:
+    """Build the API request pool with bounded checkout and stale-connection checks."""
 
     def _configure_pool_connection(connection: psycopg.Connection) -> None:
         original_autocommit = connection.autocommit
@@ -134,9 +169,21 @@ def _build_app_connection_pool() -> ConnectionPool:
         finally:
             connection.autocommit = original_autocommit
 
+    min_size = _parse_optional_positive_int_env_var(_DB_POOL_MIN_SIZE_ENV_VAR, default=_DEFAULT_DB_POOL_MIN_SIZE)
+    max_size = _parse_optional_positive_int_env_var(_DB_POOL_MAX_SIZE_ENV_VAR, default=_DEFAULT_DB_POOL_MAX_SIZE)
+    if min_size > max_size:
+        raise RuntimeError(f"{_DB_POOL_MIN_SIZE_ENV_VAR} must be less than or equal to {_DB_POOL_MAX_SIZE_ENV_VAR}")
+
     connection_pool = ConnectionPool(
         kwargs=build_connection_parameters(),
+        min_size=min_size,
+        max_size=max_size,
+        timeout=_parse_optional_positive_float_env_var(
+            _DB_POOL_TIMEOUT_SECONDS_ENV_VAR,
+            default=_DEFAULT_DB_POOL_TIMEOUT_SECONDS,
+        ),
         configure=_configure_pool_connection,
+        check=ConnectionPool.check_connection,
         open=False,
     )
     # Keep DB outages as request-time failures instead of startup-time crashes.
@@ -197,6 +244,9 @@ def create_app() -> FastAPI:
     def health() -> dict[str, str]:
         return {"status": "ok"}
 
+    _content_health_cache: dict[str, object] = {"response": None, "timestamp": 0.0}
+    _CONTENT_HEALTH_TTL_SECONDS = float(os.getenv("CIVIBUS_HEALTH_CONTENT_TTL_SECONDS", "300"))
+
     @app.get("/health/content")
     def content_health(request: Request) -> Response:
         """Content-aware probe for external uptime monitors.
@@ -208,15 +258,17 @@ def create_app() -> FastAPI:
         it without rotating API keys; it exposes only row-count metadata
         which is non-sensitive.
         """
+        now = time.monotonic()
+        cached = _content_health_cache["response"]
+        cached_at = _content_health_cache["timestamp"]
+        if cached is not None and (now - cached_at) < _CONTENT_HEALTH_TTL_SECONDS:  # type: ignore[operator]
+            return cached  # type: ignore[return-value]
+
         pool: ConnectionPool = request.app.state.db_pool
         try:
             with pool.connection() as connection:
-                # Always re-read floors at request time so an env var
-                # rollout takes effect without a restart.
                 failures = _health_content_module.evaluate_content_health(connection)
         except Exception as exc:  # noqa: BLE001 — probe must catch broadly.
-            # DB unreachable IS the failure mode this endpoint exists to
-            # surface (Apr 30 had the API up but DB severed). Map to 503.
             return JSONResponse(
                 status_code=503,
                 content={
@@ -226,14 +278,18 @@ def create_app() -> FastAPI:
                 },
             )
         if failures:
-            return JSONResponse(
+            response = JSONResponse(
                 status_code=503,
                 content={
                     "healthy": False,
                     "failures": [{"check": f.check, "actual": f.actual, "floor": f.floor} for f in failures],
                 },
             )
-        return JSONResponse(status_code=200, content={"healthy": True})
+        else:
+            response = JSONResponse(status_code=200, content={"healthy": True})
+        _content_health_cache["response"] = response
+        _content_health_cache["timestamp"] = now
+        return response
 
     @app.get("/provenance/people-enrichment")
     def people_enrichment_provenance_contract() -> dict[str, str]:

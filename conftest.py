@@ -28,6 +28,9 @@ _CIVICS_CANDIDACY_MIGRATION_PATH = (
 )
 _ENTITY_RESOLUTION_SCHEMA_PATH = _REPO_ROOT / "core" / "schema" / "entity_resolution.sql"
 _PERSON_BIO_MIGRATION_PATH = _REPO_ROOT / "core" / "schema" / "migrations" / "2026_04_30_person_bio_fields.sql"
+_COMMITTEE_SUMMARY_DERIVED_MIGRATION_PATH = (
+    _REPO_ROOT / "core" / "schema" / "migrations" / "2026_07_12_committee_summary_derived_aggregates.sql"
+)
 _ER_VIEWS_SCHEMA_PATH = _REPO_ROOT / "core" / "schema" / "er_views.sql"
 _CONTEST_SECTION_START = "-- Contest"
 _CONTEST_SECTION_END = "-- Contest Result"
@@ -112,6 +115,7 @@ _PERSON_BIO_CANARY_KEYS = frozenset(
         "core.person.bio_pulled_at",
     }
 )
+_COMMITTEE_SUMMARY_DERIVED_CANARY_PREFIX = "cf.committee_summary."
 _GRAPH_CANARY = "ag_catalog.ag_graph.civibus"
 
 _repo_root_path = str(_REPO_ROOT)
@@ -381,6 +385,13 @@ def _can_repair_officeholding_date_precision(connection: psycopg.Connection) -> 
     return has_officeholding_table and has_date_precision_type
 
 
+def _can_repair_candidate_committee_link_date_precision(connection: psycopg.Connection) -> bool:
+    """Repair only when both target table and enum type already exist."""
+    has_link_table = _relation_exists(connection, "cf.candidate_committee_link")
+    has_date_precision_type = _type_exists(connection, "core", "date_precision")
+    return has_link_table and has_date_precision_type
+
+
 def _ensure_core_date_precision_type(connection: psycopg.Connection) -> None:
     with connection.cursor() as cursor:
         _execute_stage1_canary_repair(
@@ -430,6 +441,13 @@ def _bootstrap_missing_stage1_canaries(connection: psycopg.Connection, *, missin
     if _PERSON_BIO_CANARY_KEYS & set(missing_canaries):
         with connection.cursor() as cursor:
             _execute_stage1_canary_repair(connection, cursor, _PERSON_BIO_MIGRATION_PATH.read_text(encoding="utf-8"))
+    if any(canary.startswith(_COMMITTEE_SUMMARY_DERIVED_CANARY_PREFIX) for canary in missing_canaries):
+        with connection.cursor() as cursor:
+            _execute_stage1_canary_repair(
+                connection,
+                cursor,
+                _COMMITTEE_SUMMARY_DERIVED_MIGRATION_PATH.read_text(encoding="utf-8"),
+            )
     if "civic.officeholding.date_precision" in missing_canaries:
         _ensure_core_date_precision_type(connection)
     if _GRAPH_CANARY in missing_canaries:
@@ -458,6 +476,18 @@ def _bootstrap_missing_stage1_canaries(connection: psycopg.Connection, *, missin
                 """
                 ALTER TABLE civic.officeholding
                 ADD COLUMN IF NOT EXISTS date_precision core.date_precision NOT NULL DEFAULT 'day'
+                """,
+            )
+        if (
+            "cf.candidate_committee_link.date_precision" in missing_canaries
+            and _can_repair_candidate_committee_link_date_precision(connection)
+        ):
+            _execute_stage1_canary_repair(
+                connection,
+                cursor,
+                """
+                ALTER TABLE cf.candidate_committee_link
+                ADD COLUMN IF NOT EXISTS date_precision core.date_precision NOT NULL DEFAULT 'year'
                 """,
             )
         if {"core.person_er_view", "core.organization_er_view"} & set(missing_canaries) and _relation_exists(

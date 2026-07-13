@@ -1,0 +1,143 @@
+"""Contract tests for the deployed public-surface parity probe."""
+
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+from pathlib import Path
+
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+PROBE_PATH = REPO_ROOT / "infra/scripts/probe_deployed_surface_parity.sh"
+RUNBOOK_PATH = REPO_ROOT / "docs/howto/operations/fly_deployment_runbook.md"
+DEFAULT_PUBLIC_BASE_URL = "https://civibus-caddy.fly.dev"
+
+
+def _write_fixture(
+    fixture_dir: Path,
+    *,
+    repo_paths: set[str],
+    deployed_paths: set[str],
+    page_statuses: dict[str, int | str] | None = None,
+    openapi_status: int = 200,
+) -> None:
+    fixture_dir.mkdir()
+    (fixture_dir / "repo_openapi_paths.json").write_text(
+        json.dumps(sorted(repo_paths)),
+        encoding="utf-8",
+    )
+    (fixture_dir / "deployed_openapi.json").write_text(
+        json.dumps({"paths": {path: {} for path in sorted(deployed_paths)}}),
+        encoding="utf-8",
+    )
+    (fixture_dir / "deployed_openapi_status.txt").write_text(
+        f"{openapi_status}\n",
+        encoding="utf-8",
+    )
+    statuses = page_statuses or {"/": 200, "/congress": 200, "/developers": 200}
+    (fixture_dir / "page_statuses.tsv").write_text(
+        "".join(f"{path}\t{status}\n" for path, status in statuses.items()),
+        encoding="utf-8",
+    )
+
+
+def _run_probe(fixture_dir: Path) -> subprocess.CompletedProcess[str]:
+    env = os.environ.copy()
+    env.pop("CIVIBUS_PUBLIC_BASE_URL", None)
+    env["CIVIBUS_DEPLOYED_SURFACE_FIXTURE_DIR"] = str(fixture_dir)
+    return subprocess.run(
+        ["bash", str(PROBE_PATH)],
+        cwd=REPO_ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+
+def test_deployed_surface_parity_probe_accepts_matching_fixture_surface(tmp_path: Path) -> None:
+    fixture_dir = tmp_path / "matching"
+    _write_fixture(
+        fixture_dir,
+        repo_paths={"/health", "/public/v1/federal/officials", "/v1/candidates"},
+        deployed_paths={"/health", "/public/v1/federal/officials", "/v1/candidates"},
+    )
+
+    result = _run_probe(fixture_dir)
+
+    assert result.returncode == 0, result.stderr
+    assert f"base_url {DEFAULT_PUBLIC_BASE_URL}" in result.stdout
+    assert "openapi_paths_match repo=3 deployed=3" in result.stdout
+    assert "page_status / 200" in result.stdout
+    assert "page_status /congress 200" in result.stdout
+    assert "page_status /developers 200" in result.stdout
+    assert "surface_parity_ok" in result.stdout
+
+
+def test_deployed_surface_parity_probe_names_paths_missing_from_deployed(tmp_path: Path) -> None:
+    fixture_dir = tmp_path / "missing-deployed"
+    _write_fixture(
+        fixture_dir,
+        repo_paths={"/health", "/v1/candidates"},
+        deployed_paths={"/health"},
+    )
+
+    result = _run_probe(fixture_dir)
+
+    assert result.returncode != 0
+    assert "missing_from_deployed /v1/candidates" in result.stderr
+
+
+def test_deployed_surface_parity_probe_names_paths_missing_from_repo(tmp_path: Path) -> None:
+    fixture_dir = tmp_path / "missing-repo"
+    _write_fixture(
+        fixture_dir,
+        repo_paths={"/health"},
+        deployed_paths={"/health", "/v1/extra"},
+    )
+
+    result = _run_probe(fixture_dir)
+
+    assert result.returncode != 0
+    assert "missing_from_repo /v1/extra" in result.stderr
+
+
+def test_deployed_surface_parity_probe_names_openapi_unexpected_http_status(tmp_path: Path) -> None:
+    fixture_dir = tmp_path / "openapi-status"
+    _write_fixture(
+        fixture_dir,
+        repo_paths={"/health"},
+        deployed_paths={"/health"},
+        openapi_status=503,
+    )
+
+    result = _run_probe(fixture_dir)
+
+    assert result.returncode != 0
+    assert "openapi_unexpected_http_status" in result.stderr
+    assert "503" in result.stderr
+
+
+def test_deployed_surface_parity_probe_names_missing_public_pages(tmp_path: Path) -> None:
+    fixture_dir = tmp_path / "missing-page"
+    _write_fixture(
+        fixture_dir,
+        repo_paths={"/health"},
+        deployed_paths={"/health"},
+        page_statuses={"/": 200, "/congress": 404, "/developers": 200},
+    )
+
+    result = _run_probe(fixture_dir)
+
+    assert result.returncode != 0
+    assert "missing_page /congress 404" in result.stderr
+
+
+def test_fly_runbook_documents_deployed_surface_parity_probe() -> None:
+    runbook_text = RUNBOOK_PATH.read_text(encoding="utf-8")
+
+    assert "## Post-deploy Deployed Surface Parity" in runbook_text
+    assert "`bash infra/scripts/probe_deployed_surface_parity.sh`" in runbook_text
+    assert "`CIVIBUS_PUBLIC_BASE_URL`" in runbook_text
+    assert DEFAULT_PUBLIC_BASE_URL in runbook_text
