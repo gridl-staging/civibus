@@ -218,9 +218,13 @@ def test_deploy_workflow_never_deploys_db_or_refresh_apps() -> None:
 
 def test_deploy_workflow_keeps_production_smoke_gate_after_all_deploys() -> None:
     workflow_text = _read_deploy_workflow()
+    install_step = _find_step("Install web smoke dependencies")
     smoke_step = _find_step("Run production smoke gate")
+    install_script = install_step["run"]
     smoke_script = smoke_step["run"]
 
+    assert "npm ci" in install_script
+    assert install_step["working-directory"] == "web"
     assert 'if [[ -z "${PROD_SMOKE_BASE_URL}" ]]' in smoke_script
     assert "SMOKE_MODE=production" in smoke_script
     assert 'SMOKE_BASE_URL="${PROD_SMOKE_BASE_URL}"' in smoke_script
@@ -229,9 +233,10 @@ def test_deploy_workflow_keeps_production_smoke_gate_after_all_deploys() -> None
     )
     assert smoke_step["working-directory"] == "web"
 
+    install_position = workflow_text.index("Install web smoke dependencies")
     smoke_position = workflow_text.index("Run production smoke gate")
     last_deploy_position = max(workflow_text.index(deploy_command) for deploy_command in FLY_DEPLOY_COMMANDS)
-    assert last_deploy_position < smoke_position
+    assert last_deploy_position < install_position < smoke_position
 
 
 def test_deploy_workflow_does_not_duplicate_ci_integration_or_refresh_concerns() -> None:

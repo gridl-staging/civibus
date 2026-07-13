@@ -43,6 +43,13 @@ jobs:
           set -euo pipefail
           flyctl deploy -c infra/fly/caddy.fly.toml --remote-only
 
+      - name: Install web smoke dependencies
+        shell: bash
+        working-directory: web
+        run: |
+          set -euo pipefail
+          npm ci
+
       - name: Run production smoke gate
         shell: bash
         working-directory: web
