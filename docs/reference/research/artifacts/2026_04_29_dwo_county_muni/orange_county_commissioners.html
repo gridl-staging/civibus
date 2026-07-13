@@ -1,0 +1,1998 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+
+	<meta http-equiv="Content-type" content="text/html; charset=UTF-8" />
+<!-- Google Tag Manager for GA4 -->
+				<script>(function(w,d,s,l,i){w.GAMeasurementID='G-GVG9NL3F88';w[l]=w[l]||[];w[l].push({'gtm.start':
+				new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+				j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+				'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
+				})(window,document,'script','cpDataLayerGA4','GTM-K73C5PS');</script>
+				<!-- End Google Tag Manager for GA4 -->
+				<script type='text/javascript'>
+					var enableTelemetry = 'false'
+					var aiConfig = {
+					instrumentationKey: '1cde048e-3185-4906-aa46-c92a7312b60f'						
+					}
+					var appInsights = window.appInsights || function (a) { function b(a) { c[a] = function () { var b = arguments; c.queue.push(function () { c[a].apply(c, b) }) } } var c = { config: a }, d = document, e = window; setTimeout(function () { var b = d.createElement('script'); b.src = a.url || 'https://js.monitor.azure.com/scripts/a/ai.0.js', d.getElementsByTagName('script')[0].parentNode.appendChild(b) }); try { c.cookie = d.cookie } catch (a) { } c.queue = []; for (var f = ['Event', 'Exception', 'Metric', 'PageView', 'Trace', 'Dependency']; f.length;)b('track' + f.pop()); if (b('setAuthenticatedUserContext'), b('clearAuthenticatedUserContext'), b('startTrackEvent'), b('stopTrackEvent'), b('startTrackPage'), b('stopTrackPage'), b('flush'), !a.disableExceptionTracking) { f = 'onerror', b('_' + f); var g = e[f]; e[f] = function (a, b, d, e, h) { var i = g && g(a, b, d, e, h); return !0 !== i && c['_' + f](a, b, d, e, h), i } } return c }(aiConfig);
+					window.appInsights = appInsights, appInsights.queue && 0 === appInsights.queue.length;
+					// Add telemetry initializer
+					appInsights.queue.push(function() {
+						appInsights.context.addTelemetryInitializer(function(envelope) {
+							var telemetryItem = envelope.data.baseData;
+							// To check the telemetry item’s type:
+							if (!false)
+							{
+								//If the telemetry is not enabled, we still want to capture Google map custom event, so only allow that
+								if (envelope.name.indexOf('.Event') == -1)
+									return false;
+							}
+						});
+					});						
+					appInsights.trackPageView();
+				</script>
+	<script>
+		function populateAntiForgery(token) {
+			var input = document.createElement("input");
+			input.name = "__RequestVerificationToken";
+			input.type = "hidden";
+			input.value = token;
+			var absPat = /^https?:\/\/|^\/\//i;
+			var forms = document.getElementsByTagName("form");
+			for (var i = 0; i < forms.length; i++) {
+				if (forms[i].method == "post" &&
+					!forms[i].querySelector('[name="__RequestVerificationToken"]') &&
+					!absPat.test(forms[i].getAttribute("action"))) {
+					forms[i].appendChild(input.cloneNode());
+				}
+			}
+		}
+
+		function getAntiForgeryToken(callback, error) {
+			var xhr = new XMLHttpRequest();
+			xhr.open("GET", "/antiforgery");
+			xhr.addEventListener("load", function() {
+				try {
+					if (this.status !== 200) {
+						throw Error("Invalid status. Could not retrieve antiforgery token.");
+		}
+					var obj = JSON.parse(this.responseText);
+					callback(obj.token);
+				} catch (e) {
+					typeof error === "function" && error(e);
+				}
+			});
+			xhr.send();
+		}
+
+		getAntiForgeryToken(function(token) {
+			if (document.readyState === "complete"
+				|| document.readyState === "loaded" 
+				|| document.readyState === "interactive") {
+				populateAntiForgery(token);
+				return;
+			}
+			document.addEventListener("DOMContentLoaded", function() {
+				populateAntiForgery(token);
+			}, false);
+		}, console.error);
+			</script>
+			
+
+	<script type="text/javascript">
+		window.departmentHeader = {};
+		window.pageSectionTracker = {};
+		window.isResponsiveEnabled = true;
+		window.isRemoveSetHeights= false;
+		if (window.isRemoveSetHeights) {
+			document.documentElement.className += ' removeSetHeights';
+		}
+		window.mainMenuMediaQuery = 'screen and (max-width: 40em)';
+		window.isMobileBrowserIncludingTablets = false;
+		window.fixedResponsiveMenu = false;
+		window.fullWidthResponsiveMenu = false;
+		window.responsiveMenuHeight = '';
+		window.responsiveMenuFontSize = '';
+		window.isContentAdvisor = false;
+		(function () {
+			window.setSizeCookie = function () {
+				document.cookie = "dpi=" + window.devicePixelRatio + "; path=/";
+				document.cookie = "viewportWidth=" + window.innerWidth + "; path=/";
+				document.cookie = "viewportHeight=" + window.innerHeight + "; path=/";
+				if (screen && screen.width && screen.height) {
+					document.cookie = "screenWidth=" + screen.width + "; path=/";
+					document.cookie = "screenHeight=" + screen.height + "; path=/";
+				}
+				document.cookie = "responsiveGhost=1; path=/";
+			};
+
+			setSizeCookie();
+		}());
+	</script>
+		<meta name="viewport" content="width=device-width, initial-scale=1">
+
+	<script async src="https://docaccess.com/docbox.js"></script>
+	<!-- Global site tag (gtag.js) - Google Analytics Ticket# 448630 -->
+<script async src="https://www.googletagmanager.com/gtag/js?id=UA-59951023-1"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+
+  gtag('config', 'UA-59951023-1');
+</script>
+
+	<meta name="category0" content="Home" />
+<meta name="category1" content="Government" />
+<meta name="category2" content="Board of County Commissioners (BOCC)" />
+
+	
+	<meta name="theme-color" content="#005685">
+	<link rel="icon" href="/images/favicon.ico" type="image/x-icon" />
+	<link rel="shortcut icon" href="/images/favicon.ico" type="image/x-icon" />
+		<title>Board of County Commissioners (BOCC) | Orange County, NC</title>
+
+		<meta name="description" content="The primary duties of the board include adopting an annual budget, establishing the annual property tax rate, appointing various officials and representatives to advisory boards and commissions, planning for county needs and enacting local ordinances. ">
+			<script src="/Assets/Scripts/jQuery/jquery-3.7.1.min.js"></script>
+	<script src="/Assets/Scripts/jQuery/jquery-migrate-3.5.2.min.js" type="text/javascript"></script>
+	
+
+	<!--[if IE 6]><script language="JavaScript" type="text/javascript"> var isie6 = true; </script><![endif]-->
+	<!--[if IE 7]><script language="JavaScript" type="text/javascript"> var isie7 = true; </script><![endif]-->
+	<!--[if IE 8]><script language="JavaScript" type="text/javascript"> var isie8 = true; </script><![endif]-->
+	<!--[if IE 9]><script language="JavaScript" type="text/javascript"> var isie8 = true; </script><![endif]-->
+	<script type="text/javascript"><!--
+	var intCountryCode = 840;
+	var order = '';
+//--></script>
+	
+	<link href="/-1465647691.css" rel="stylesheet" type="text/css" />	<link href="/1984959863.css" rel="stylesheet" type="text/css" />
+
+	<link rel="stylesheet" type="text/css" href="/Assets/Styles/Print.css" media="print">
+	<script type="text/javascript">
+		window.Pages = window.Pages || {};
+		// FrontEnd RWD initialization
+		window.Pages.rwdReady = $.Deferred();
+		window.Pages.toolBarDeferred = $.Deferred();
+		window.Pages.rwdSetupComplete = $.Deferred();
+		window.Pages.megaMenuLoaded = $.Deferred();
+		window.Pages.angularToolbarComplete = $.Deferred();
+		window.Pages.frontEndToolbarComplete = $.Deferred();
+	</script>
+	<!--CPHeadContent-->
+	<script src="/739942322.js" type="text/javascript"></script>
+	
+	
+	
+	
+
+
+
+
+	<!--[if lte IE 8]><link rel="stylesheet" type="text/css" href="/App_Themes/ie8.css"><![endif]-->
+	<!--[if lte IE 7]><link rel="stylesheet" type="text/css" href="/App_Themes/ie7.css"><![endif]-->
+	<!--[if lte IE 6]><link rel="stylesheet" type="text/css" href="/App_Themes/ie6.css"><![endif]-->
+	<!--[if lt IE 9]><script type="text/javascript" src="/Scripts/html5.js"></script><![endif]-->
+
+	<script type="text/javascript">
+		setEditorVariables(false, 840);
+		function getPrintPreviewType() { return 0; } function printPreview() {pPreview(getPrintPreviewType()); }
+	</script>
+	<script src="/Assets/Scripts/AlpineJS/3.14.1/alpine.min.js" type="text/javascript" defer="defer"></script>
+</head>
+<body class="wide " >
+
+    <script>jQuery(document).click(function (event) {
+	var target = jQuery(event.target);
+	if (target.attr('src') && target.parents('.image').length && target.parents('.widget').length) {
+		var text = target.attr('title');
+		
+		if (!text.length) {
+			text = "N/A";
+		}
+		ga('send',
+			{
+				hitType: 'event',
+				eventCategory: 'Image',
+				eventAction: 'Image - ' + text,
+				eventLabel: window.location.href
+			});
+	}
+	if (target.is('button') || target.hasClass('button') || target.parents().hasClass('button')) {
+		var text = "";
+		if (target.parents('.button')[0]) {
+			text = target.parents('.button').first().text();
+		} else if (target.text().length) {
+			text = target.text();
+		} else if (target.attr('title').length) {
+			text = target.attr('title');
+		}
+		if (!text.length) {
+			text = "N/A";
+		}
+		ga('send',
+			{
+				hitType: 'event',
+				eventCategory: 'Button',
+				eventAction: 'Button - ' + text,
+				eventLabel: window.location.href
+			});
+	}
+	if (target.parents('.widgetCustomHtml').length) {
+		ga('send',
+			{
+				hitType: 'event',
+				eventCategory: 'Custom Html',
+				eventAction: 'Custom Html Clicked',
+				eventLabel: window.location.href
+			});
+	}
+	if (target.parents('.editor').length) {
+		ga('send',
+			{
+				hitType: 'event',
+				eventCategory: 'Editor',
+				eventAction: 'Editor Link Clicked',
+				eventLabel: window.location.href
+			});
+	}
+	if (target.parents('.GraphicLinks').length) {
+		var text = "";
+		var targetGraphicLink = target;
+		if (target.hasClass('widgetGraphicLinksLink')) {
+			targetGraphicLink = jQuery(target.children()[0]);
+		}
+		if (targetGraphicLink.hasClass('text')) {
+			text = targetGraphicLink.text();
+		} else if (targetGraphicLink.attr('src').length) {
+			if (targetGraphicLink.attr('alt').length) {
+				text = targetGraphicLink.attr('alt');
+			} else {
+				text = targetGraphicLink.attr('src');
+			}
+		} else {
+			text = "N/A";
+		}
+		ga('send',
+			{
+				hitType: 'event',
+				eventCategory: 'Graphic Links',
+				eventAction: 'Graphic Link - ' + text,
+				eventLabel: window.location.href
+			});
+	}
+	if (target.parents('.InfoAdvanced').length) {
+		ga('send',
+			{
+				hitType: 'event',
+				eventCategory: 'Info Advanced',
+				eventAction: 'Info Advanced Clicked',
+				eventLabel: window.location.href
+			});
+	}
+	if (target.parents('.list').length) {
+		ga('send',
+			{
+				hitType: 'event',
+				eventCategory: 'List',
+				eventAction: 'List Clicked',
+				eventLabel: window.location.href
+			});
+	}
+	if (target.parents('.megaMenuItem').length || target.parents('.topMenuItem').length) {
+		var megaMenuText = jQuery('.topMenuItem.mouseover').find('span').text();
+		var breadCrumbs = [];
+		jQuery('.breadCrumbs > li').each(function () {
+			 breadCrumbs.push(this.textContent);
+		});
+		var pageTitle = breadCrumbs.join('>');
+		var subTitleText = target.parents('.megaMenuItem').children('.widgetTitle').children().text();
+		var text = "";
+		if (pageTitle) {
+			text += pageTitle + " | ";
+		} else {
+			text += document.title + ' - ';
+		}
+		if (target.text() == "" && megaMenuText == "") {
+			text += "N/A";
+		} else if (target.text().length && megaMenuText.length) {
+			if (megaMenuText == target.text()) {
+				text += megaMenuText;
+			} else {
+				text += megaMenuText + " - " + subTitleText + " - " + target.text();
+			}
+		} else if (target.text() == "") {
+			text += megaMenuText;
+		} else {
+			text += target.text();
+		}
+		if (!text.length) {
+			text = "N/A";
+		}
+		ga('send',
+			{
+				hitType: 'event',
+				eventCategory: 'Mega Menu',
+				eventAction: 'Mega Menu : ' + text,
+				eventLabel: window.location.href
+			});
+	}
+	if (target.parents('.widgetNewsFlash').length && target.parents('.widgetItem').length) {
+		var text = jQuery(target.parents('.widgetItem')[0]).find('.widgetTitle').children().text();
+		if (!text.length) {
+			text = "N/A";
+		}
+		ga('send',
+			{
+				hitType: 'event',
+				eventCategory: 'News Flash',
+				eventAction: 'News Flash - ' + text,
+				eventLabel: window.location.href
+			});
+	}
+	if (target.hasClass('widgetQuickLinksLink') || target.find('.widgetQuickLinksLink').length) {
+		var text = target.text();
+		if (!text.length) {
+			text = "N/A";
+		}
+		ga('send',
+			{
+				hitType: 'event',
+				eventCategory: 'Quick Links',
+				eventAction: 'Quick Links - ' + text,
+				eventLabel: window.location.href
+			});
+	}
+	if (target.attr('src') && target.parents('.cpSlideshow').length) {
+		var text = target.attr('title');
+		if (!text.length) {
+			text = "N/A";
+		}
+		ga('send',
+			{
+				hitType: 'event',
+				eventCategory: 'Slideshow',
+				eventAction: 'Slideshow - ' + text,
+				eventLabel: window.location.href
+			});
+	}
+	if (target.parents('.widgetText').length) {
+		ga('send',
+			{
+				hitType: 'event',
+				eventCategory: 'Text',
+				eventAction: 'Text Link Clicked',
+				eventLabel: window.location.href
+			});
+	}
+});</script>
+	<div id="popoverModal" class="cp-PopOver cp-PopOver--modal cp-AdminWrap" style="position: fixed; display: none;">
+	<div class="cp-PopOver-header">
+		<h3 class="cp-PopOver-title"></h3>
+		<button class="cp-Btn cp-PopOver-close" onclick="closePopOverModal(event)">
+			<svg class="cp-Icon--close" alt="close" title="close">
+				<use xmlns:xlink="http://www.w3.org/1999/xlink" xlink:href="#iconClose"></use>
+			</svg>
+		</button>
+	</div>
+	<div id="cpPopOverBody" class="cp-PopOver-body">
+		<form id="cpPopOverForm" name="cpPopOverForm" novalidate></form>
+	</div>
+	<div id="cpPopOverFooter" class="cp-PopOver-footer">
+		<div class="cp-BtnGroup" id="actionButtons">
+			<!-- Action buttons will be dynamically added here -->
+		</div>
+	</div>
+</div>
+    <div id="fb-root"></div>
+<div id=skipToContentLinks>
+<a href="#cc5e1d19e0-43a5-45e2-9eac-6f52e60de420" target="_self" class="skipToContentLink">Skip to Main Content</a>
+</div>
+    <form id="frmReferenceFormForTelerikEditorDialogs"></form>
+
+        <input type="hidden" id="GoogleMapsKey" value="AIzaSyDWUuE-ifkbhxblF920N8MjpBdTg1Wt784" />
+
+
+
+    <input type="hidden" id="cpcDomain" value="https://cp-civicplusuniversity2.civicplus.com">
+    <input type="hidden" id="hdnStructureID" value="9" />
+    <input type="hidden" id="hdnContentCollectionID" value="7d191d99-0cd1-4a02-b3af-44cfe3848804" />
+    <input type="hidden" id="hdnWorkingCopyID" value="00000000-0000-0000-0000-000000000000" />
+    <input type="hidden" id="hdnThemeID" value="31" />
+    <input type="hidden" id="pageIsFrontEnd" value="true" />
+    <input type="hidden" id="pageModuleID" />
+    <input type="hidden" id="pagePageID" value="953" />
+
+    <div id="stickyPlaceholder"></div>
+    <div id="outer-wrap" class="outer-wrap">
+        <div id="inner-wrap" class="inner-wrap">
+                <div id="divToolbars" class="cpToolbars newCP mui-fixed" style="">
+                    
+
+
+
+<!-- Begin Signed Out Bar -->
+<div class="cpToolbar user public">
+    <div class="inner selfClear">
+        <p class="dropdown"><a href="/MyAccount/ProfileCreate" class="myConnections" id="signedOutToolbarCreateProfileButton">Create a Website Account</a> <span class="welcomeMessage">- Manage notification subscriptions, save form progress and more. &nbsp;&nbsp;</span></p>
+        <ul class="nav secondary">
+	        <li><a href="/MyAccount" class="button" id="loggedOutToolbarSignInButton">Website Sign In</a></li>
+        </ul>
+    </div>
+</div>
+<script>
+    $(document).ready(function () {
+        $('#signedOutToolbarCreateProfileButton').click(function (event) {
+            event.preventDefault();
+            window.location.href = '/MyAccount/ProfileCreate?from=url&url=/&dn=' + window.location.origin;
+        });
+
+			
+				$('#loggedOutToolbarSignInButton').click(function (event) {
+					event.preventDefault();
+					window.location.href = '/MyAccount/?from=url&url=' + encodeURIComponent(window.location.href.replace(window.location.origin, '')) + '&dn=' + window.location.host;
+				});
+			
+
+		if ('False' == 'True') {
+            $('#loggedOutToolbarSignInButton').hide();
+		}
+    })
+</script>
+<!-- End Signed Out Bar -->
+
+                </div>
+            <div id="bodyWrapper">
+                <div id="mainNavHolderMobile" class="mainNavHolderMobile"></div>
+                
+<div data-cpRole="structuralContainer" id="bodyContainerTS">
+<!-- Header Container --><header data-cpRole="structuralContainer" id="headerContainerTS" class="fixedTopTS">
+<div class="siteWrap3"><div data-cpRole="banner" id="bannerLogoTS" class="bannerLogoTS empty">
+
+
+
+
+				<a id="bannerLogoTS-89" style="			display: block; text-align: center;
+" class="bannerObject" href="/" target="_self"><img alt="Orange County logo" class="bannerObject" height="85" src="/ImageRepository/Document?documentID=21110" width="288" /></a>
+</div><div data-cpRole="contentContainer" id="searchTS">	<div id="ccb135e178-4d14-4e48-84b8-5c3930ef252f" data-containerid="b135e178-4d14-4e48-84b8-5c3930ef252f" class="pageContent cpGrid cpGrid24 isLockedContainer showInMobile">
+				                
+
+		<div class="row outer wide"><!--
+--><div class="outer col col24 first last" style="" data-widgetcontainerid="3d365662-a8cd-4c67-b297-b4ee5c50cb87">				
+	<div class="row nest first last wide">
+	
+	<div class="inner col col24 first last idead98853-d85d-4522-8b0e-ada5bab1f395" style="" data-widgetcontainerid="ead98853-d85d-4522-8b0e-ada5bab1f395">	
+<div data-widget-id="779299ce-6a78-470e-8373-f1314eff6cc4" data-widget-controller-path="/Layout/WidgetSearch">
+	
+	<script defer type="text/javascript" src="/Common/Controls/jquery-ui-1.14.1/jquery-ui.min.js"></script>
+	<script defer src="/Areas/Layout/Assets/Scripts/Search.js" type="text/javascript"></script>
+	<script defer type="text/javascript">
+
+		$(document).ready(function () {
+			try {
+				$(".widgetSearchButton.widgetSearchButton779299ce-6a78-470e-8373-f1314eff6cc4").click(function (e) {
+				e.preventDefault();
+					if (false||$("#ysnSearchOnlyDept779299ce-6a78-470e-8373-f1314eff6cc4").is(':checked'))
+					{
+						doWidgetSearch($(this).siblings(".widgetSearchBox").val(), Number(0));
+					}
+					else {
+						doWidgetSearch($(this).siblings(".widgetSearchBox").val(), 0);
+					}
+			});
+			$("#searchField779299ce-6a78-470e-8373-f1314eff6cc4").keypress(function (e) {
+				if (window.clipboardData) {
+					if (e.keyCode === 13) {
+						if ($("#ysnSearchOnlyDept779299ce-6a78-470e-8373-f1314eff6cc4").is(':checked') || false) {
+								doWidgetSearch($(this).val(), Number(0));
+							} else {
+								doWidgetSearch($(this).val(), 0);
+							}
+						return false;
+					}
+				} else {
+					if (e.which === 13) {
+						if ($("#ysnSearchOnlyDept779299ce-6a78-470e-8373-f1314eff6cc4").is(':checked') || false) {
+								doWidgetSearch($(this).val(), Number(0));
+							} else {
+								doWidgetSearch($(this).val(), 0);
+							}
+						return false;
+					}
+				}
+				return true;
+			});
+
+				if (true) {
+					var currentRequest = null;
+					var $searchField = $("#searchField779299ce-6a78-470e-8373-f1314eff6cc4").autocomplete({
+						source: function (request, response) {
+							currentRequest = $.ajax({
+								url: '/Search/AutoComplete' + ($("#ysnSearchOnlyDept779299ce-6a78-470e-8373-f1314eff6cc4").is(':checked') || false? '?departmentId=0' : ''),
+								dataType: "json",
+								timeout: 10000,
+								beforeSend: function () {
+									if (currentRequest != null) {
+										currentRequest.abort();
+									}
+								},
+								data:
+								{
+									term: request.term,
+								},
+								success: function (data) {
+									response(data);
+									$('.autoCompleteError').remove();
+								},
+								error: function (xmlhttprequest, textstatus, message) {
+									if (textstatus === "timeout") {
+										if ($("#searchField779299ce-6a78-470e-8373-f1314eff6cc4").siblings('.autoCompleteError').length == 0)
+											$('<span class="autoCompleteError"><p class="alert error">Search autocomplete is currently not responding. Please try again later.</p></span>').insertAfter($("#searchField779299ce-6a78-470e-8373-f1314eff6cc4"));
+									}
+								}
+							});
+						},
+						html: true,
+						delay: 500,
+						select: function (event, ui) {
+							$(this).val(ui.item.value);
+							$(this).next().click();
+						}
+					});
+
+					$searchField.data("ui-autocomplete")._renderItem = function (ul, item) {
+						return $("<li class=\"itemList\"></li>")
+							.data("ui-autocomplete-item", item)
+							.append("<a>" + item.label + "</a>")
+							.appendTo(ul);
+					};
+}
+}
+			catch(e) {} //we're going to eat this error. Autocomplete won't work but we dont wan't to break anything else on the page.
+		});
+	</script>
+
+	<section id="widgetPreviewSearch" class="widget widgetSearch skin71 widgetOptionSet49" style="display: block;" aria-label="Search">
+				<!-- For the button right and inside -->
+		<div class="widgetBody buttonRightInside">
+			<input class="widgetSearchBox widgetSearchBox779299ce-6a78-470e-8373-f1314eff6cc4" cp5ph="true" id="searchField779299ce-6a78-470e-8373-f1314eff6cc4" name="searchField" onchange="searchBtnApplyQuery();" placeholder="Search the website..." type="text" value="" />
+						<a href="/Search/Results" id="btnSearchIcon" class="widgetSearchButton widgetSearchButton779299ce-6a78-470e-8373-f1314eff6cc4" role="button"><img alt="Search" class="imageHover" data-hover="/ImageRepository/Document?documentID=21127" data-image="/ImageRepository/Document?documentID=21128" src="/ImageRepository/Document?documentID=21128" /></a>
+
+			<label class="searchLabel" aria-hidden="true" for="searchField779299ce-6a78-470e-8373-f1314eff6cc4">Search</label>
+		</div>
+
+	</section>
+
+
+<style scoped>
+	  
+		.widgetSearch ::-webkit-input-placeholder {
+		color: #005685;
+	  }
+		.widgetSearch :-moz-placeholder { /* Firefox 18- */
+	   color: #005685;
+	}
+		.widgetSearch ::-moz-placeholder {  /* Firefox 19+ */
+	   color: #005685;
+	}
+	.widgetSearch :-ms-input-placeholder {
+	   color: #005685;
+	}
+	
+
+	.widgetSearch .widgetBody .widgetSearchBox779299ce-6a78-470e-8373-f1314eff6cc4
+	{
+		color: #005685;
+		background-color: #FFFFFF;
+border: solid 2px #B4CD95;
+border-radius: 100px;
+height: 65px;
+font-family: Open Sans;
+font-style: italic;
+font-size: 1.1em;
+padding: 0 64px 0 28px;
+	}
+	.widgetSearch .widgetBody .widgetSearchButton779299ce-6a78-470e-8373-f1314eff6cc4
+	{
+		margin: 8px 8px 0 0;
+	}
+	.widgetSearch .widgetSearch-onlyDept779299ce-6a78-470e-8373-f1314eff6cc4
+	{
+		display: inline-block;
+		color: #333;
+		
+		
+		 padding-top: 10px;
+	}
+	#ysnSearchOnlyDept779299ce-6a78-470e-8373-f1314eff6cc4
+	{
+		position: relative;
+		top: .125em;
+	}
+
+</style>
+
+<link rel="stylesheet" href="/Common/Controls/jquery-ui-1.14.1/jquery-ui.min.css">
+<link rel="stylesheet" href="/Common/Controls/jquery-ui-1.14.1/jquery-ui.theme.min.css">
+
+
+
+<script type="text/javascript">
+	//Updates search icons href to have the correct queryString
+	function searchBtnApplyQuery() {
+		document.getElementById("btnSearchIcon").href = "/Search?searchPhrase=" + document.getElementById("searchField779299ce-6a78-470e-8373-f1314eff6cc4").value;
+	}
+	</script>
+
+</div>
+	</div> <!-- inner column -->
+
+	</div> <!-- inner row -->
+
+			</div><!-- outer column --><!--		--></div> <!-- outer row -->
+
+
+	</div>
+</div><nav data-cpRole="nav" id="mainNav" class="siteNav mainNav" role="navigation">
+<ol id="mainNavMenu" data-parent="1" class="rootNavMenu" role="menu"><!--
+--><li id="MainItem9" class="topMenuItem" role="none" data-pageid="9" data-displaymegamenu="True"><!--
+			--><!--
+			--> <a role = "menuitem"  aria-haspopup=true aria-expanded='false' aria-controls="mainNavMegaMenu9" id = "mainNavHowDoI" class="navMainItem mainNavItem mainNavItem1 " href="/9/How-Do-I" target = "_self" >   How Do I...  </a>			<!--
+			--><!--
+			--></li><!----><li id="MainItem27" class="topMenuItem" role="none" data-pageid="27" data-displaymegamenu="True"><!--
+			--><!--
+			--> <a role = "menuitem"  aria-haspopup=true aria-expanded='false' aria-controls="mainNavMegaMenu27" id = "mainNavGovernment" class="navMainItem mainNavItem mainNavItem2 " href="/27/Government" target = "_self" >   Government  </a>			<!--
+			--><!--
+			--></li><!----><li id="MainItem31" class="topMenuItem" role="none" data-pageid="31" data-displaymegamenu="True"><!--
+			--><!--
+			--> <a role = "menuitem"  aria-haspopup=true aria-expanded='false' aria-controls="mainNavMegaMenu31" id = "mainNavVisiting" class="navMainItem mainNavItem mainNavItem3 " href="/31/Visiting" target = "_self" >   Visiting  </a>			<!--
+			--><!--
+			--></li><!----><li id="MainItem35" class="topMenuItem" role="none" data-pageid="35" data-displaymegamenu="True"><!--
+			--><!--
+			--> <a role = "menuitem"  aria-haspopup=true aria-expanded='false' aria-controls="mainNavMegaMenu35" id = "mainNavBusiness" class="navMainItem mainNavItem mainNavItem4 " href="/35/Business" target = "_self" >   Business  </a>			<!--
+			--><!--
+			--></li><!----><li id="MainItem101" class="topMenuItem" role="none" data-pageid="101" data-displaymegamenu="True"><!--
+			--><!--
+			--> <a role = "menuitem"  aria-haspopup=true aria-expanded='false' aria-controls="mainNavMegaMenu101" id = "mainNavServices" class="navMainItem mainNavItem mainNavItem5 " href="/101/Services" target = "_self" >   Services  </a>			<!--
+			--><!--
+			--></li><!---->
+</ol>
+
+
+	<script type="text/javascript">
+		(function () {
+			function setupMenu() {
+				const menuID = 'mainNavMenu';
+				const menuType = MAIN_MENU;
+
+				//setup menu manager properties for main menu
+				if (!menuManager.mobileMainNav && true)
+					menuManager.adjustMainItemsWidth('#' + menuID);
+				menuManager.isMainMenuEditable = false;
+				menuManager.mainMenuMaxSubMenuLevels = 4;
+				menuManager.setMOMMode(2, menuType);
+
+				//Init main menu
+				const setupDraggable = menuManager.isMainMenuEditable;
+				const urlToGetHiddenMenus = '/Pages/MenuMain/HiddenMainSubMenus?pageID=1&moduleID=&themeID=31&menuContainerID=mainNav';
+
+				menuManager.setupMenu(menuID, 'mainNav', menuType, setupDraggable, urlToGetHiddenMenus);
+				menuManager.mainMenuInit = true;
+				menuManager.mainMenuTextResizer = true;
+				if (1.00 > 0)
+					menuManager.mainMenuTextResizerRatio = 1.00;
+				if (window.isResponsiveEnabled)
+					menuManager.mainMenuReady.resolve();
+
+			}
+
+			if (document.readyState === "complete"
+				|| document.readyState === "loaded"
+				|| document.readyState === "interactive") {
+				setupMenu();
+				return;
+			}
+
+			document.addEventListener("DOMContentLoaded", setupMenu);
+		})();
+	</script>
+
+
+<aside data-cpRole="megaMenu" id="megaMenu" class="megaMenu" style="display: none;"><input type="hidden" id="megaMenuPopupDirection" value="0"><input type="hidden" id="megaMenuWidthReference" value="0"><aside role="menu" data-cpRole="contentContainer" id="mainNavMegaMenu9" class="contentTop mainNavMegaMenu megaMenuContainer pageID_9 hidden" data-orientation="horizontal">	<div id="cc2f92ec66-d47a-4f46-a2c0-8c57bf9a7ba1" data-containerid="2f92ec66-d47a-4f46-a2c0-8c57bf9a7ba1" class="pageContent cpGrid cpGrid24">
+				                
+
+
+
+	</div>
+</aside><aside role="menu" data-cpRole="contentContainer" id="mainNavMegaMenu27" class="contentTop mainNavMegaMenu megaMenuContainer pageID_27 hidden" data-orientation="horizontal">	<div id="cc0a1d45db-58af-4d2c-9965-693ca53d1f48" data-containerid="0a1d45db-58af-4d2c-9965-693ca53d1f48" class="pageContent cpGrid cpGrid24">
+				                
+
+
+
+	</div>
+</aside><aside role="menu" data-cpRole="contentContainer" id="mainNavMegaMenu31" class="contentTop mainNavMegaMenu megaMenuContainer pageID_31 hidden" data-orientation="horizontal">	<div id="ccc72088b7-9ff7-4e72-9e2c-6527540bce26" data-containerid="c72088b7-9ff7-4e72-9e2c-6527540bce26" class="pageContent cpGrid cpGrid24">
+				                
+
+
+
+	</div>
+</aside><aside role="menu" data-cpRole="contentContainer" id="mainNavMegaMenu35" class="contentTop mainNavMegaMenu megaMenuContainer pageID_35 hidden" data-orientation="horizontal">	<div id="ccfdb3c83c-037f-4472-81bf-bcad4e4fa736" data-containerid="fdb3c83c-037f-4472-81bf-bcad4e4fa736" class="pageContent cpGrid cpGrid24">
+				                
+
+
+
+	</div>
+</aside><aside role="menu" data-cpRole="contentContainer" id="mainNavMegaMenu101" class="contentTop mainNavMegaMenu megaMenuContainer pageID_101 hidden" data-orientation="horizontal">	<div id="cc04c38c0d-ea81-41c2-b421-cfe3873b8f09" data-containerid="04c38c0d-ea81-41c2-b421-cfe3873b8f09" class="pageContent cpGrid cpGrid24">
+				                
+
+
+
+	</div>
+</aside></aside></nav></div>
+</header><!-- Banner --><div data-cpRole="structuralContainer" id="bannerContainerTS" class="noOverflowTS">
+<!-- <div data-cpRole="banner" id="banner1">
+      <div data-cpRole="structuralContainer" id="bannerSizingTS">
+        <div data-cpRole="structuralContainer" id="bannerContentTS"> --><div class="siteWrap"><div data-cpRole="contentContainer" id="contentContainer4">	<div id="cca67a1772-922e-4f4f-9f66-be3fecdfbe0a" data-containerid="a67a1772-922e-4f4f-9f66-be3fecdfbe0a" class="pageContent cpGrid cpGrid24 showInMobile">
+				                
+
+
+
+	</div>
+</div></div><!-- </div>
+      </div>
+    </div> -->
+</div><!-- Content container --><div data-cpRole="structuralContainer" id="mainContainerTS">
+<div class="siteWrap"><div data-cpRole="structuralContainer" id="mainWrapTS" class="mainWrap" role="main">
+<div data-cpRole="structuralContainer" id="outerContentWrapTS" class="outerContentWrap">
+<div data-cpRole="structuralContainer" id="contentWrapTS" class="contentWrap">
+<div data-cpRole="breadCrumbs" id="breadCrumbs" class="breadCrumbContainer">		<ol class="semanticList breadCrumbs">
+			<li><a class="breadCrumb" href="/">Home</a></li><li><a class="breadCrumb" href="/27/Government">Government</a></li><li id="currentBCPage" data-pageid="953"><a href class="breadCrumb" aria-current="page">Board of County Commissioners (BOCC)</a></li>
+		</ol>
+
+	   
+    
+</div><div data-cpRole="mainContentContainer" id="moduleContent">
+	
+	<div id="page" class="moduleContentNew">
+		
+
+	<input id="hdnPageID" name="hdnPageID" type="hidden" value="953" />
+	<input id="hdnParentID" name="hdnParentID" type="hidden" value="27" />
+	<input id="hdnVersionID" name="hdnVersionID" type="hidden" value="52959" />
+	<input id="pageMenuTitle" name="pageMenuTitle" type="hidden" value="Board of County Commissioners (BOCC)" />
+	<input id="pageShowFeatureColumn" name="pageShowFeatureColumn" type="hidden" value="False" />
+	<input id="hdnIsLayoutPage" name="hdnIsLayoutPage" type="hidden" value="False" />
+	<input id="hdnPageStatus" name="hdnPageStatus" type="hidden" value="Published" />
+
+				<h1 id="versionHeadLine" class="headline">
+
+Board of County Commissioners (BOCC)		</h1>
+	
+		<div id="cc5e1d19e0-43a5-45e2-9eac-6f52e60de420" data-containerid="5e1d19e0-43a5-45e2-9eac-6f52e60de420" class="pageContent cpGrid cpGrid24"  >
+			
+
+		<div class="row outer wide"><!--
+--><div class="outer col col24 first last" style="" data-widgetcontainerid="683f89f7-79a5-4446-af21-410f2a9baa67">				
+	<div class="row nest first wide">
+	
+	<div class="inner col col24 first last id8944aabc-8d3e-40fb-bfa2-970cedfa3356" style="" data-widgetcontainerid="8944aabc-8d3e-40fb-bfa2-970cedfa3356">	
+<div class="widget editor pageStyles narrow" id="divEditorb39d8bac-2140-4e15-892d-f0ab77aa7625" data-elementqueryclasses='{"wide-narrow":"min-width:25em"}'>
+	    <div class="fr-view">
+
+
+        <p>The Orange County Board of Commissioners (BOCC) is the governing body of Orange County. Each of the seven commissioners is elected by the people of Orange County for a four-year term. Elections are held in November of even-numbered years.&nbsp;<img src="/ImageRepository/Document?documentId=36113" class="fr-dib fr-bordered" alt="Group Photo of the Current Board of County Commissioners" style="width: 1101px;"></p><h2 class="subhead1">BOCC Duties and Authorities</h2><ul><li>Adopting the county&apos;s annual budget by June 30 of each year</li><li>Establishing the annual property tax rate</li><li>Appointing the county manager, county clerk, county attorney and tax administrator</li><li>Appointing various officials and representatives to advisory boards and commissions</li><li>Providing funding for construction of public school facilities for both public school systems in the county</li><li>Determining level of local current expense funding for both public school systems in the county</li><li>Regulating land-use and zoning outside municipal boundaries</li><li>Providing for safety and welfare of all Orange County residents</li><li>Long-range planning for county needs (Capital Investment Plan)</li><li>Enacting local ordinances</li><li>Calling for bond referenda</li><li>Entering into contracts</li><li>Establishing new programs and departments</li><li>Serving as liaisons to local, state and federal boards and commissions</li></ul>
+    </div>
+
+<script type="text/javascript">
+	$(document).ready(function (e) {		
+	    renderSlideshowIfApplicable($('#divEditor' + 'b39d8bac-2140-4e15-892d-f0ab77aa7625'));
+	});
+</script>
+</div>
+	</div> <!-- inner column -->
+
+	</div> <!-- inner row -->
+	<div class="row nest wide">
+	
+	<div class="inner col col24 first last idfc5316cf-7715-4ee5-b759-49edaf62687f" style="" data-widgetcontainerid="fc5316cf-7715-4ee5-b759-49edaf62687f">	
+<div class="widget editor pageStyles narrow" id="divEditora3d86655-a57d-4a5a-a998-ae4c4a799eac" data-elementqueryclasses='{"wide-narrow":"min-width:25em"}'>
+	    <div class="fr-view">
+
+
+        <h2 class="subhead1" data-pasted="true">Contact the BOCC</h2><p>The BOCC welcomes your feedback, comments, and questions.</p><p>Call the Clerk to the Board, Laura Jensen, at 919-245-2130</p><p><a href="mailto:ocbocc@orangecountync.gov">Email all Commissioners through a single email address</a></p><p style="text-align: justify;"><em>Disclaimer - All information and each communication sent to <a href="mailto:ocbocc@orangecountync.gov">ocbocc@orangecountync.gov</a> becomes a public record under North Carolina law. Emails received are subject to immediate public disclosure and may be viewed by the general public.&nbsp;</em><a href="https://groups.google.com/g/ocbocc"><em>Click here to view emails sent to ocbocc@orangecountync.gov.</em></a></p><p>Physical Address:&nbsp;<br style="box-sizing: border-box; letter-spacing: 1px; color: rgb(56, 56, 56); font-family: &quot;Open Sans&quot;; font-size: 16px; font-style: normal; font-variant-ligatures: normal; font-variant-caps: normal; font-weight: 400; orphans: 2; text-align: left; text-indent: 0px; text-transform: none; widows: 2; word-spacing: 0px; -webkit-text-stroke-width: 0px; white-space: normal; background-color: rgb(255, 255, 255); text-decoration-thickness: initial; text-decoration-style: initial; text-decoration-color: initial;">300 W. Tryon St.<br style="box-sizing: border-box; letter-spacing: 1px; color: rgb(56, 56, 56); font-family: &quot;Open Sans&quot;; font-size: 16px; font-style: normal; font-variant-ligatures: normal; font-variant-caps: normal; font-weight: 400; orphans: 2; text-align: left; text-indent: 0px; text-transform: none; widows: 2; word-spacing: 0px; -webkit-text-stroke-width: 0px; white-space: normal; background-color: rgb(255, 255, 255); text-decoration-thickness: initial; text-decoration-style: initial; text-decoration-color: initial;">Hillsborough, NC 27278</p><p>Mailing Address:<br style="box-sizing: border-box; letter-spacing: 1px; color: rgb(56, 56, 56); font-family: &quot;Open Sans&quot;; font-size: 16px; font-style: normal; font-variant-ligatures: normal; font-variant-caps: normal; font-weight: 400; orphans: 2; text-align: left; text-indent: 0px; text-transform: none; widows: 2; word-spacing: 0px; -webkit-text-stroke-width: 0px; white-space: normal; background-color: rgb(255, 255, 255); text-decoration-thickness: initial; text-decoration-style: initial; text-decoration-color: initial;">P.O. Box 8181<br style="box-sizing: border-box; letter-spacing: 1px; color: rgb(56, 56, 56); font-family: &quot;Open Sans&quot;; font-size: 16px; font-style: normal; font-variant-ligatures: normal; font-variant-caps: normal; font-weight: 400; orphans: 2; text-align: left; text-indent: 0px; text-transform: none; widows: 2; word-spacing: 0px; -webkit-text-stroke-width: 0px; white-space: normal; background-color: rgb(255, 255, 255); text-decoration-thickness: initial; text-decoration-style: initial; text-decoration-color: initial;">Hillsborough, NC 27278</p><p><a href="https://orangecountync.gov/directory.aspx?did=94">View the full Department Directory</a></p><h3 class="subhead2" data-pasted="true">Meet the Commissioners</h3><p>Click on a Commissioner&apos;s name below to get their individual contact information, learn which district(s) they represent, and read their biography.</p><ul><li><a href="https://www.orangecountync.gov/2591/Jean-Hamilton">Jean Hamilton, Chair</a></li><li data-pasted="true"><a href="https://www.orangecountync.gov/2589/Amy-Fowler" style="box-sizing: border-box; overflow-wrap: anywhere; word-break: normal; color: rgb(0, 124, 193); text-decoration: underline;">Amy Fowler, Vice-Chair</a></li><li><a aria-label="Jamezetta Bedford, Chair Opens in new window" href="https://www.orangecountync.gov/1003/Jamezetta-Bedford" style="box-sizing: border-box; overflow-wrap: anywhere; word-break: normal; color: rgb(0, 124, 193); text-decoration: underline;">Jamezetta Bedford</a></li><li data-pasted="true"><a href="https://orangecountync.gov/3572/Marilyn-Carter" style="box-sizing: border-box; overflow-wrap: anywhere; word-break: normal; color: rgb(0, 124, 193); text-decoration: underline;">Marilyn Carter</a></li><li><a href="https://www.orangecountync.gov/1004/Sally-Greene" aria-label="Sally Greene, Vice-Chair  Opens in new window" style="box-sizing: border-box; overflow-wrap: anywhere; word-break: normal; color: rgb(0, 124, 193); text-decoration: underline;">Sally Greene</a></li><li><a href="https://www.orangecountync.gov/1005/Earl-McKee" style="box-sizing: border-box; overflow-wrap: anywhere; word-break: normal; color: rgb(0, 124, 193); text-decoration: underline;">Earl McKee</a></li><li><a href="https://www.orangecountync.gov/3116/Phyllis-Portie-Ascott" aria-label="Phyllis Portie-Ascott Opens in new window">Phyllis Portie-Ascott</a></li></ul>
+    </div>
+
+<script type="text/javascript">
+	$(document).ready(function (e) {		
+	    renderSlideshowIfApplicable($('#divEditor' + 'a3d86655-a57d-4a5a-a998-ae4c4a799eac'));
+	});
+</script>
+</div>
+	</div> <!-- inner column -->
+
+	</div> <!-- inner row -->
+	<div class="row nest wide">
+	
+	<div class="inner col col24 first last id5de2904c-398e-4c43-a3c0-5014ef55a147" style="" data-widgetcontainerid="5de2904c-398e-4c43-a3c0-5014ef55a147">	
+<div class="widget editor pageStyles narrow" id="divEditor63a6e351-12a5-4ac4-a763-4c33d654982d" data-elementqueryclasses='{"wide-narrow":"min-width:25em"}'>
+	    <div class="fr-view">
+
+
+        <h2 class="subhead1" data-pasted="true">Meetings</h2><p style="box-sizing: border-box; margin-top: 0px; margin-bottom: 1.4em;">Board of County Commissioners meetings typically begin at 7:00 p.m. unless otherwise indicated. All meetings are open to the public. Meetings are usually held at one of the following locations:</p><ul style='box-sizing: border-box; margin: 0px 0px 1.4em; padding: 0px 0px 0px 3em; font-family: "Open Sans"; font-style: normal; font-weight: 400; color: rgb(56, 56, 56); line-height: 1.5; list-style-type: circle;'><li style="box-sizing: border-box; margin-bottom: 0.35em;">Donna S. Baker Meeting Room, Whitted Building, 300 W. Tryon St., Hillsborough, NC</li><li style="box-sizing: border-box; margin-bottom: 0.35em;">Board room at the Southern Human Services Center, 2501 Homestead Rd., Chapel Hill, NC&nbsp;</li></ul><p><a href="https://www.orangecountync.gov/3801/49696/BOCC-Meeting-Dates?activeLiveTab=widgets#liveEditTab_versionsList">View 2026 meeting dates and locations</a></p><h3 class="subhead2" data-pasted="true">Agendas &amp; Minutes</h3><p>Agendas are available before meetings. Minutes are available following approval.</p><p style="box-sizing: border-box; margin-top: 0px; margin-bottom: 1.4em;"><a href="https://www.orangecountync.gov/AgendaCenter/Search/?term=&CIDs=28,&startDate=&endDate=&dateRange=&dateSelector=" style="box-sizing: border-box; overflow-wrap: anywhere; word-break: normal; color: rgb(0, 124, 193); text-decoration: underline;">View Most Recent Agendas and Minutes</a></p><h3 class="subhead2"><strong style="box-sizing: border-box; font-weight: 700;">Meeting Follow-up Requests&nbsp;</strong></h3><p>Commissioner petitions and other topics brought up at meetings that require staff research can be viewed at the following links:</p><ul><li><a href="https://www4.orangecountync.gov/BOCC/BOCC%20Meeting%20Follow-up%20Actions.pdf" target="_blank" data-docaccess-source-url="https://www4.orangecountync.gov/BOCC/BOCC%20Meeting%20Follow-up%20Actions.pdf" data-url-hash="fade285c3006112dad8ebadad03890e463dbe34e5a7b74bbfc2649453d7a65a7" data-url-status="disabled">BOCC Meeting Follow-up Requests (PDF)</a> - updated every Monday at 5:00 pm</li><li><a href="https://www4.orangecountync.gov/BOCC/BOCC%20Meeting%20Follow-up%20Actions.xlsx">BOCC Meeting Follow-up Requests (Excel)</a> - updated every Monday at 5:00 pm</li></ul><h3 class="subhead2" style='box-sizing: border-box; margin-top: 0px; margin-bottom: 0px; font-family: "Open Sans"; font-style: normal; font-weight: 700; color: rgb(0, 86, 133); font-size: 1.25em; text-decoration: none; display: block;'>Other meeting information and resources</h3><ul style='box-sizing: border-box; margin: 0px 0px 1.4em; padding: 0px 0px 0px 3em; font-family: "Open Sans"; font-style: normal; font-weight: 400; color: rgb(56, 56, 56); line-height: 1.5; list-style-type: circle;'><li><a href="https://www.orangecountync.gov/3344/Public-Comment" style="box-sizing: border-box; overflow-wrap: anywhere; word-break: normal; color: rgb(0, 124, 193); text-decoration: underline;">Learn about the process for making public comment</a></li><li style="box-sizing: border-box; margin-bottom: 0.35em;"><a href="https://www.orangecountync.gov/2157/Public-Participation-Policy" style="box-sizing: border-box; overflow-wrap: anywhere; word-break: normal; color: rgb(0, 124, 193); text-decoration: underline;">View Orange County&apos;s Public Participation Policy</a></li><li style="box-sizing: border-box; margin-bottom: 0.35em;"><a href="https://www.orangecountync.gov/1672/Listening-AssistanceTranslation-Services" style="box-sizing: border-box; overflow-wrap: anywhere; word-break: normal; color: rgb(0, 124, 193); text-decoration: underline;">Review information on requesting listening assistance and/or interpretation/translation services for BOCC meetings</a></li></ul>
+    </div>
+
+<script type="text/javascript">
+	$(document).ready(function (e) {		
+	    renderSlideshowIfApplicable($('#divEditor' + '63a6e351-12a5-4ac4-a763-4c33d654982d'));
+	});
+</script>
+</div>
+	</div> <!-- inner column -->
+
+	</div> <!-- inner row -->
+	<div class="row nest wide">
+	
+	<div class="inner col col24 first last iddd697dbd-5df8-4aad-8b94-23293ba60536" style="" data-widgetcontainerid="dd697dbd-5df8-4aad-8b94-23293ba60536">	
+<div class="widget editor pageStyles narrow" id="divEditor7f67a91e-17af-4bfa-9a58-4f7a5c8ff9e4" data-elementqueryclasses='{"wide-narrow":"min-width:25em"}'>
+	    <div class="fr-view">
+
+
+        <h2 class="subhead1" style='box-sizing: border-box; margin-top: 0.167em; margin-bottom: 0px; font-family: "Open Sans"; font-style: normal; font-weight: 700; color: rgb(181, 96, 22); font-size: 1.5em; text-decoration: none;' data-pasted="true">Meeting Videos</h2><h3 class="subhead2" style='box-sizing: border-box; margin-top: 0px; margin-bottom: 0px; font-family: "Open Sans"; font-style: normal; font-weight: 700; color: rgb(0, 86, 133); font-size: 1.25em; text-decoration: none; display: block;'>Live Meetings</h3><p style="box-sizing: border-box; margin-top: 0px; margin-bottom: 1.4em;">BOCC meetings are available to livestream beginning at 6:45 pm each meeting night. <a href="https://orangecountync.cablecast.tv/watch-now?site=1">Click here to livestream a BOCC meeting.</a></p><p style="box-sizing: border-box; margin-top: 0px; margin-bottom: 1.4em;">Additionally, residents of Orange County may view regular monthly meetings live on Spectrum Channel 1301.&nbsp;</p><h3 class="subhead2" style='box-sizing: border-box; margin-top: 0px; margin-bottom: 0px; font-family: "Open Sans"; font-style: normal; font-weight: 700; color: rgb(0, 86, 133); font-size: 1.25em; text-decoration: none; display: block;'>Recordings of Past Meetings</h3><p style="box-sizing: border-box; margin-top: 0px; margin-bottom: 1.4em;" data-pasted="true">Videos beginning with the June 5, 2025 meeting going forward are available to view online. <a href="https://orangecountync.cablecast.tv/?site=1">Click here to watch BOCC meeting recordings.</a></p><p style="box-sizing: border-box; margin-top: 0px; margin-bottom: 1.4em;">If you would like to view a meeting video before that date (available back to 2010), please contact the Clerk&apos;s Office by calling 919-245-2130 or&nbsp;<a href="mailto:clerk@orangecountync.gov">by emailing the Clerk to the Board. </a></p><p style="box-sizing: border-box; margin-top: 0px; margin-bottom: 1.4em;">The most recent BOCC meeting can be viewed on Spectrum Cable digital channel 1301 at Noon and 7:00 p.m. each day.</p>
+    </div>
+
+<script type="text/javascript">
+	$(document).ready(function (e) {		
+	    renderSlideshowIfApplicable($('#divEditor' + '7f67a91e-17af-4bfa-9a58-4f7a5c8ff9e4'));
+	});
+</script>
+</div>
+	</div> <!-- inner column -->
+
+	</div> <!-- inner row -->
+	<div class="row nest last wide">
+	
+	<div class="inner col col24 first last ided5e3770-2423-4af8-b652-40697e882dc8" style="" data-widgetcontainerid="ed5e3770-2423-4af8-b652-40697e882dc8">	
+<div class="widget editor pageStyles narrow" id="divEditor7f799e82-7d08-4f7d-9b0b-4ac36556622f" data-elementqueryclasses='{"wide-narrow":"min-width:25em"}'>
+	    <div class="fr-view">
+
+
+        <h2 class="subhead1" data-pasted="true">Orange County Volunteer Boards and Commissions</h2><h3 class="subhead2">About Volunteer Boards and Commissions</h3><p>One way residents can have a positive impact on the future of Orange County is to serve on a volunteer board or commission. <a href="https://www.orangecountync.gov/971/About-Volunteer-Boards-Commissions">Review the requirements, application process, appointment procedures, and meeting dates for boards and commissions</a>.</p><h3 class="subhead2">Volunteer Board Descriptions and Rosters</h3><p><a href="https://www4.orangecountync.gov/boards/listing.asp">Review boards and commissions descriptions, current rosters, and current and upcoming vacancies.</a></p><h3 class="subhead2">Volunteer Boards and Commissions Vacancies</h3><p><a href="https://www4.orangecountync.gov/boards/vacancies.asp">View a listing of all vacancies for volunteer boards and commissions.</a></p><h3 class="subhead2">Apply for a Board or Commission</h3><p><a href="https://www4.orangecountync.gov/boards/application.asp">Access the online Volunteer Boards and Commissions Application.</a></p><h3 class="subhead2">Volunteer Board Policies and Procedures</h3><p style="text-align: left;"><a href="https://www.orangecountync.gov/2709/Volunteer-Board-Policies-and-Procedures">Review the Orange County Board of County Commissioners&apos; Advisory Board Policy and Policies and Procedures specific to individual Orange County boards and commissions.</a></p>
+    </div>
+
+<script type="text/javascript">
+	$(document).ready(function (e) {		
+	    renderSlideshowIfApplicable($('#divEditor' + '7f799e82-7d08-4f7d-9b0b-4ac36556622f'));
+	});
+</script>
+</div>
+	</div> <!-- inner column -->
+
+	</div> <!-- inner row -->
+
+			</div><!-- outer column --><!--		--></div> <!-- outer row -->
+		<div class="row outer wide"><!--
+--><div class="outer col col24 first last" style="" data-widgetcontainerid="a2a208bf-b5f3-4dfb-b8fd-5dc53a6514bc">				
+	<div class="row nest first last wide">
+	
+	<div class="inner col col24 first last id71f6e221-1659-48ef-a884-f9e5730b7029" style="" data-widgetcontainerid="71f6e221-1659-48ef-a884-f9e5730b7029">	
+<div class="widget editor pageStyles narrow" id="divEditor41d3ed2c-8cc1-4b63-8103-1d0d837de2a9" data-elementqueryclasses='{"wide-narrow":"min-width:25em"}'>
+	    <div class="fr-view">
+
+
+        <h2 class="subhead1" style='box-sizing: border-box; margin-top: 0.167em; margin-bottom: 0px; font-family: "Open Sans"; font-style: normal; font-weight: 700; color: rgb(181, 96, 22); font-size: 1.5em; text-decoration: none; display: block;' data-pasted="true">Code of Ordinances</h2><h3 class="subhead2">Orange County Code of General Ordinances</h3><p style="box-sizing: border-box; margin-top: 0px; margin-bottom: 1.4em; text-align: justify;">Get access to the <a href="http://library.municode.com/index.aspx?clientId=14983" rel="noopener" target="_blank" aria-label="Code of General Ordinances of Orange County as maintained by Municipal Code Corporation Opens in new window" style="box-sizing: border-box; overflow-wrap: anywhere; word-break: normal; color: rgb(0, 124, 193); text-decoration: underline;">Code of General Ordinances of Orange County as maintained by Municipal Code Corporation</a>, a private online service under contract with Orange County and is not intended to serve as the official County Code for Orange County. The information contained at this site is updated on a quarterly basis and may not include recent amendments to the County Code. Current information is available from records in the County Clerk&apos;s office in the official minutes of the Orange County Board of Commissioners. The official Orange County Code of General Ordinances may be viewed at the office of the Clerk to the Board of County Commissioners.</p><h3 class="subhead2" style='box-sizing: border-box; margin-top: 0px; margin-bottom: 0px; font-family: "Open Sans"; font-style: normal; font-weight: 700; color: rgb(0, 86, 133); font-size: 1.25em; text-decoration: none; text-align: justify;'>Orange County Code of Technical Ordinances-Unified Development Ordinance</h3><p style="box-sizing: border-box; margin-top: 0px; margin-bottom: 1.4em; text-align: justify;">Get access to the Code of Technical Ordinances of Orange County, including the <a href="https://www.orangecountync.gov/3040/Unified-Development-Ordinance-UDO" rel="noopener" target="_blank" aria-label="Unified Development Ordinance (PDF) Opens in new window" style="box-sizing: border-box; overflow-wrap: anywhere; word-break: normal; color: rgb(0, 124, 193); text-decoration: underline;">Unified Development Ordinance</a>, as maintained by the Orange County Planning Department, and is not intended to serve as the official County Code of Technical Ordinances for Orange County. The information contained at this page is updated on a regular basis and may not include recent amendments to the Orange County Code of Technical Ordinances. The official Orange County Code of Technical Ordinances is maintained and may be viewed at the Orange County Planning Department.</p>
+    </div>
+
+<script type="text/javascript">
+	$(document).ready(function (e) {		
+	    renderSlideshowIfApplicable($('#divEditor' + '41d3ed2c-8cc1-4b63-8103-1d0d837de2a9'));
+	});
+</script>
+</div>
+	</div> <!-- inner column -->
+
+	</div> <!-- inner row -->
+
+			</div><!-- outer column --><!--		--></div> <!-- outer row -->
+		<div class="row outer wide"><!--
+--><div class="outer col col24 first last" style="" data-widgetcontainerid="709a1eba-9306-49ff-8f5b-38df5d10970a">				
+	<div class="row nest first last wide">
+	
+	<div class="inner col col24 first last id42c5d96b-c172-4dc2-9105-c70273ec8858" style="" data-widgetcontainerid="42c5d96b-c172-4dc2-9105-c70273ec8858">	
+<div class="widget editor pageStyles narrow" id="divEditor7ce51f1a-50b1-42e4-8830-56818d0006fb" data-elementqueryclasses='{"wide-narrow":"min-width:25em"}'>
+	    <div class="fr-view">
+
+
+        <h2 class="subhead1" style='box-sizing: border-box; margin-top: 0.167em; margin-bottom: 0px; font-family: "Open Sans"; font-style: normal; font-weight: 700; color: rgb(181, 96, 22); font-size: 1.5em; text-decoration: none; display: block;' data-pasted="true">Topics of Interest</h2><h3 class="subhead2" style='box-sizing: border-box; margin-top: 0px; margin-bottom: 0px; font-family: "Open Sans"; font-style: normal; font-weight: 700; color: rgb(0, 86, 133); font-size: 1.25em; text-decoration: none; display: block;'>Strategic Plan</h3><p>The BOCC adopted the <a href="https://orangecountync.gov/DocumentCenter/View/31371/Orange-County-Strategic-Plan">Orange County Strategic Plan</a> (<a href="https://orangecountync.gov/DocumentCenter/View/31669/Orange-County-Strategic-Plan-Spanish" data-docaccess-source-url="https://www.orangecountync.gov/DocumentCenter/View/31669" data-url-hash="d19ef4b107608c29db1b066361f656406cf9293978858cdd04d09c66f207df4f" data-url-status="disabled" style="box-sizing: border-box; letter-spacing: 1px !important; overflow-wrap: anywhere; word-break: normal; color: rgb(0, 124, 193); text-decoration: underline;" data-pasted="true">Plan Estrat&eacute;gico</a>) at its February 20, 2024 meeting.&nbsp;</p><p data-pasted="true"><strong style="box-sizing: border-box; letter-spacing: 1px !important; font-weight: 700;">The Plan</strong> (Plan Estrat&eacute;gico) includes six specific strategic goals:</p><ul><li style="box-sizing: border-box; letter-spacing: 1px !important; margin-bottom: 0.35em;"><a href="https://www.orangecountync.gov/3337/Environmental-Protection-and-Climate-Act" style="box-sizing: border-box; letter-spacing: 1px !important; outline: 0px; overflow-wrap: anywhere; word-break: normal; color: rgb(0, 124, 193); text-decoration: underline;"><strong style="box-sizing: border-box; letter-spacing: 1px !important; font-weight: 700;">Environmental Protection and Climate Action</strong></a>&nbsp; (<a href="https://orangecountync.gov/DocumentCenter/View/31685/OC-STRATEGIC-PLAN-Spanish-Environmental-Protection-and-Climate-Action" data-docaccess-source-url="https://www.orangecountync.gov/DocumentCenter/View/31685" data-url-hash="f622038e1a6fbc3f43bd932bb9bad56df260144375ef83d0d6f779dd02cc7b78" data-url-status="disabled" style="box-sizing: border-box; letter-spacing: 1px !important; overflow-wrap: anywhere; word-break: normal; color: rgb(0, 124, 193); text-decoration: underline;">Protecci&oacute;n ambiental y acci&oacute;n clim&aacute;tica</a>)</li><li style="box-sizing: border-box; letter-spacing: 1px !important; margin-bottom: 0.35em;"><a href="https://www.orangecountync.gov/3338/Healthy-Community" style="box-sizing: border-box; letter-spacing: 1px !important; overflow-wrap: anywhere; word-break: normal; color: rgb(0, 124, 193); text-decoration: underline;"><strong style="box-sizing: border-box; letter-spacing: 1px !important; font-weight: 700;">Healthy Community</strong></a><strong style="box-sizing: border-box; letter-spacing: 1px !important; font-weight: 700;">&nbsp;</strong>(<a href="https://orangecountync.gov/DocumentCenter/View/31686/OC-STRATEGIC-PLAN-Spanish---Healthy-Community" data-docaccess-source-url="https://www.orangecountync.gov/DocumentCenter/View/31686" data-url-hash="6f706dd5cb9ce168cfa3a906eb57f8cb0612cd397f2224ef05d9e0bdac121142" data-url-status="disabled" style="box-sizing: border-box; letter-spacing: 1px !important; overflow-wrap: anywhere; word-break: normal; color: rgb(0, 124, 193); text-decoration: underline;">Comunidad saludable</a>)</li><li style="box-sizing: border-box; letter-spacing: 1px !important; margin-bottom: 0.35em;"><a href="https://www.orangecountync.gov/3339/Housing-for-All" style="box-sizing: border-box; letter-spacing: 1px !important; overflow-wrap: anywhere; word-break: normal; color: rgb(0, 124, 193); text-decoration: underline;"><strong style="box-sizing: border-box; letter-spacing: 1px !important; font-weight: 700;">Housing for All</strong></a> (<a href="https://orangecountync.gov/DocumentCenter/View/31687/OC-STRATEGIC-PLAN-Spanish---Housing-for-All" data-docaccess-source-url="https://www.orangecountync.gov/DocumentCenter/View/31687" data-url-hash="96e4770fe8786fb96619b307f7c9d2d323e571f7538195df5b8ce7689941cc09" data-url-status="disabled" style="box-sizing: border-box; letter-spacing: 1px !important; overflow-wrap: anywhere; word-break: normal; color: rgb(0, 124, 193); text-decoration: underline;">Vivienda para todos</a>)</li><li style="box-sizing: border-box; letter-spacing: 1px !important; margin-bottom: 0.35em;"><a href="https://www.orangecountync.gov/3340/Multi-Modal-Transportation" style="box-sizing: border-box; letter-spacing: 1px !important; overflow-wrap: anywhere; word-break: normal; color: rgb(0, 124, 193); text-decoration: underline;"><strong style="box-sizing: border-box; letter-spacing: 1px !important; font-weight: 700;">Multi-modal Transportation</strong></a> (<a href="https://orangecountync.gov/DocumentCenter/View/31689/OC-STRATEGIC-PLAN-Spanish---Multi-modal-Transportation" data-docaccess-source-url="https://www.orangecountync.gov/DocumentCenter/View/31689" data-url-hash="f3b6dc76835d7f842a7d13a2d2eba44b3e1dab41632e67422af27cc711be531b" data-url-status="disabled" style="box-sizing: border-box; letter-spacing: 1px !important; overflow-wrap: anywhere; word-break: normal; color: rgb(0, 124, 193); text-decoration: underline;">Transporte multimodal</a>)</li><li style="box-sizing: border-box; letter-spacing: 1px !important; margin-bottom: 0.35em;"><a href="https://www.orangecountync.gov/3341/Public-Education-Learning-Community" style="box-sizing: border-box; letter-spacing: 1px !important; overflow-wrap: anywhere; word-break: normal; color: rgb(0, 124, 193); text-decoration: underline;"><strong style="box-sizing: border-box; letter-spacing: 1px !important; font-weight: 700;">Public Education/Learning Community</strong></a> (<a href="https://orangecountync.gov/DocumentCenter/View/31690/OC-STRATEGIC-PLAN-Spanish---Public-Education-Learning-Community" data-docaccess-source-url="https://orangecountync.gov/DocumentCenter/View/31690" data-url-hash="09f29adf310b296e5aa476eb33a6c7a427e451444efbfbe6e305a2bcd998cb3e" data-url-status="disabled" style="box-sizing: border-box; letter-spacing: 1px !important; overflow-wrap: anywhere; word-break: normal; color: rgb(0, 124, 193); text-decoration: underline;">Educaci&oacute;n p&uacute;blica y comunidad de aprendizaje</a>)</li><li style="box-sizing: border-box; letter-spacing: 1px !important; margin-bottom: 0.35em;"><a href="https://www.orangecountync.gov/3342/Diverse-and-Vibrant-Economy"><strong style="box-sizing: border-box; letter-spacing: 1px !important; font-weight: 700;">Diverse and Vibrant Economy</strong></a> (<a href="https://orangecountync.gov/DocumentCenter/View/31691/OC-STRATEGIC-PLAN-Spanish---Diverse-and-Vibrant-Economy" data-docaccess-source-url="https://www.orangecountync.gov/DocumentCenter/View/31691" data-url-hash="91664675778e9ac59f75af4585c031e22ca040de2bb1044005150ef0042c87ba" data-url-status="disabled">Econom&iacute;a diversa y din&aacute;mica</a>)<a href="https://orangecountync.gov/3319/Strategic-Plan"></a></li></ul><p><a href="https://orangecountync.gov/3319/Strategic-Plan">Visit the Strategic Plan webpage.</a></p><h3 class="subhead2" style='box-sizing: border-box; margin-top: 0px; margin-bottom: 0px; font-family: "Open Sans"; font-style: normal; font-weight: 700; color: rgb(0, 86, 133); font-size: 1.25em; text-decoration: none; display: block;'>Opioid Settlement Funds</h3><p style="box-sizing: border-box; margin-top: 0px; margin-bottom: 1.4em; text-align: justify;">In July 2021, a bipartisan coalition of state attorneys general announced the National Opioid Settlement &mdash; a historic $26 billion agreement that will &nbsp;help bring desperately needed help to communities harmed by the opioid epidemic. The State of North Carolina and all 100 counties, including Orange County, joined the agreement. Orange County is expected to receive $6,799,780 over an 18-year period. <a href="https://www.orangecountync.gov/2998/Opioid-Settlement-Funds">Learn more about how Orange County is using Opioid Settlement Funds to address the opioid epidemic.</a></p><ul type="disc" data-pasted="true" style='box-sizing: border-box; margin: 0px 0px 1.4em; padding: 0px 0px 0px 3em; font-family: "Open Sans"; font-style: normal; font-weight: 400; color: rgb(56, 56, 56); line-height: 1.5; list-style-type: circle;'><li style="box-sizing: border-box; margin-bottom: 0.35em;">The 2026 grant cycle for Opioid Settlement Funds is now open. <a href="https://www.orangecountync.gov/3577/Opioid-Settlement-Funds-Awards" style="box-sizing: border-box; overflow-wrap: anywhere; word-break: normal; color: rgb(0, 124, 193); text-decoration: underline;">You can find applications, supporting materials, and a timeline on this webpage</a>.</li></ul><h3 class="subhead2" style='box-sizing: border-box; margin-top: 0px; margin-bottom: 0px; font-family: "Open Sans"; font-style: normal; font-weight: 700; color: rgb(0, 86, 133); font-size: 1.25em; text-decoration: none; display: block;'>2024 School Bond Referendum</h3><p style="text-align: justify;">At its April 2, 2024, meeting, the Orange County Board of Commissioners adopted a preliminary resolution stating its intent to proceed with a $300 million school bond referendum on the November 2024 ballot. The Bond was approved, and the proceeds will benefit Orange County Schools and the Chapel Hill-Carrboro City Schools systems. <a href="https://www.orangecountync.gov/3366/2024-School-Bond-Referendum">Review more i</a><a href="https://www.orangecountync.gov/3366/2024-School-Bond-Referendum">nformation about the 2024 Orange County School Bond Referendum</a>.</p>
+    </div>
+
+<script type="text/javascript">
+	$(document).ready(function (e) {		
+	    renderSlideshowIfApplicable($('#divEditor' + '7ce51f1a-50b1-42e4-8830-56818d0006fb'));
+	});
+</script>
+</div>
+	</div> <!-- inner column -->
+
+	</div> <!-- inner row -->
+
+			</div><!-- outer column --><!--		--></div> <!-- outer row -->
+
+
+		</div>
+
+	</div>
+
+	
+	<div class="newCP">
+
+	</div>
+</div>
+</div>
+</div>
+</div></div>
+</div><!-- GBs --><div data-cpRole="structuralContainer" id="gbsContainerTS">
+<div class="siteWrap"><div data-cpRole="contentContainer" id="gbsTS">	<div id="cc3bc33ebd-b511-48cc-a0c0-1c1afd71bed8" data-containerid="3bc33ebd-b511-48cc-a0c0-1c1afd71bed8" class="pageContent cpGrid cpGrid24 isLockedContainer showInMobile" data-contentcontainerbreakpoint="35">
+				                
+
+		<div class="row outer wide"><!--
+--><div class="outer col col8 first" style="" data-widgetcontainerid="4cba9f6a-2579-4c6c-b52d-d7eacb821ce6">				
+	<div class="row nest first last wide">
+	
+	<div class="inner col col8 first last ida3239f2d-097a-429e-995f-77e9a90ae2ff" style="" data-widgetcontainerid="a3239f2d-097a-429e-995f-77e9a90ae2ff">	
+<div data-widget-id="7b7adc0a-eb74-47dd-bb92-6b6c19fa6e6d" data-widget-controller-path="/GraphicLinks/Widget">
+
+
+
+
+<div id="graphicLinkWidget7b7adc0a-eb74-47dd-bb92-6b6c19fa6e6d" class="widget widgetGraphicLinks skin74 widgetOptionSet4 wide" data-elementqueryclasses='{"wide-narrow":"min-width:23em"}' data-elementquerymatch='matchMultiColumn' data-elementqueryunmatch='unmatchMultiColumn' data-modulewidgettype="graphicLinks">
+	<div class="widgetHeader">
+		<div class="">
+				</div>
+	</div>
+	<div class="widgetBody cpGrid cpGrid2 ">
+		<nav class="widgetGraphicLinksNav" aria-labelledby="GraphicLinkHeaderText">
+				<div class="row   wide">
+					<!--
+--><div class="col col1 first "><ul class="semanticList"><!--
+	    --><li class="widgetItem GraphicLinks">
+
+<div>
+	<a href="/953/Board-of-County-Commissioners-BOCC" target="_self" class="fancyButton fancyButton1325 " >
+		<span>
+			<span><span class="text">Board of Commissioners</span></span>
+		</span>
+	</a>
+</div>
+		<style scoped="scoped">.fancyButton1325.fancyButton:link,.fancyButton1325.fancyButton:visited, .fancyButton1325div.fancyButton{
+	background-image: url('/ImageRepository/Document?documentID=21119');
+	background-repeat: no-repeat;
+	background-position: center 15px ;
+transition: all .3s ease-in-out;}
+.fancyButton1325.fancyButton:hover,.fancyButton1325.fancyButton:focus,.fancyButton1325.fancyButton:active,.fancyButton1325.fancyButton.hover{
+	background-repeat: no-repeat;
+	background-position: center top;
+}
+.fancyButton1325.fancyButton:link > span,.fancyButton1325.fancyButton:visited > span, .fancyButton1325div.fancyButton > span{
+}
+.fancyButton1325.fancyButton:hover > span,.fancyButton1325.fancyButton:focus > span,.fancyButton1325.fancyButton:active > span,.fancyButton1325.fancyButton.hover > span{
+}
+.fancyButton1325.fancyButton .text{
+	color: #171717;
+	font-size: 1.1em;
+	font-family: "Open Sans";
+	padding-top: 190px;
+	font-weight: 600;
+	text-decoration: none;
+	padding-top: 190px;
+	background-image: url('/ImageRepository/Document?documentID=21120');
+	background-repeat: no-repeat;
+	background-position: center 55px ;
+transition: all .3s ease-in-out;
+}
+.fancyButton1325.fancyButton:hover .text,.fancyButton1325.fancyButton:focus .text,.fancyButton1325.fancyButton:active .text,.fancyButton1325.fancyButton.hover .text{
+	text-decoration: underline;
+	background-repeat: no-repeat;
+	background-position: center 40px ;
+
+
+}
+</style>
+
+ </li><!--
+--></ul></div><!----><div class="col col1  last"><ul class="semanticList"><!--
+	    --><li class="widgetItem GraphicLinks">
+
+<div>
+	<a href="https://www.governmentjobs.com/careers/orangecountync" target="_self" class="fancyButton fancyButton1326 " >
+		<span>
+			<span><span class="text">Employment</span></span>
+		</span>
+	</a>
+</div>
+		<style scoped="scoped">.fancyButton1326.fancyButton:link,.fancyButton1326.fancyButton:visited, .fancyButton1326div.fancyButton{
+	background-image: url('/ImageRepository/Document?documentID=21116');
+	background-repeat: no-repeat;
+	background-position: center 15px ;
+transition: all .3s ease-in-out;}
+.fancyButton1326.fancyButton:hover,.fancyButton1326.fancyButton:focus,.fancyButton1326.fancyButton:active,.fancyButton1326.fancyButton.hover{
+	background-repeat: no-repeat;
+	background-position: center top;
+}
+.fancyButton1326.fancyButton:link > span,.fancyButton1326.fancyButton:visited > span, .fancyButton1326div.fancyButton > span{
+}
+.fancyButton1326.fancyButton:hover > span,.fancyButton1326.fancyButton:focus > span,.fancyButton1326.fancyButton:active > span,.fancyButton1326.fancyButton.hover > span{
+}
+.fancyButton1326.fancyButton .text{
+	color: #171717;
+	font-size: 1.1em;
+	font-family: "Open Sans";
+	padding-top: 190px;
+	font-weight: 600;
+	text-decoration: none;
+	padding-top: 190px;
+	background-image: url('/ImageRepository/Document?documentID=21121');
+	background-repeat: no-repeat;
+	background-position: center 55px ;
+transition: all .3s ease-in-out;
+}
+.fancyButton1326.fancyButton:hover .text,.fancyButton1326.fancyButton:focus .text,.fancyButton1326.fancyButton:active .text,.fancyButton1326.fancyButton.hover .text{
+	text-decoration: underline;
+	background-repeat: no-repeat;
+	background-position: center 40px ;
+
+
+}
+</style>
+
+ </li><!--
+--></ul></div><!--				-->
+				</div>
+			</nav>
+		</div>
+	<div class="widgetFooter">
+			</div>
+</div>
+
+</div>
+	</div> <!-- inner column -->
+
+	</div> <!-- inner row -->
+
+			</div><!-- outer column --><!----><div class="outer col col8" style="" data-widgetcontainerid="1f6d02bf-437b-4937-a360-559acfaf9e51">				
+	<div class="row nest first last wide">
+	
+	<div class="inner col col8 first last id7eb0bc16-a394-4d20-b5d5-d9548abda6a9" style="" data-widgetcontainerid="7eb0bc16-a394-4d20-b5d5-d9548abda6a9">	
+<div data-widget-id="eddb73f1-b396-4725-979d-91fed88b2f39" data-widget-controller-path="/GraphicLinks/Widget">
+
+
+
+
+<div id="graphicLinkWidgeteddb73f1-b396-4725-979d-91fed88b2f39" class="widget widgetGraphicLinks skin74 widgetOptionSet4 wide" data-elementqueryclasses='{"wide-narrow":"min-width:23em"}' data-elementquerymatch='matchMultiColumn' data-elementqueryunmatch='unmatchMultiColumn' data-modulewidgettype="graphicLinks">
+	<div class="widgetHeader">
+		<div class="">
+				</div>
+	</div>
+	<div class="widgetBody cpGrid cpGrid2 ">
+		<nav class="widgetGraphicLinksNav" aria-labelledby="GraphicLinkHeaderText">
+				<div class="row   wide">
+					<!--
+--><div class="col col1 first "><ul class="semanticList"><!--
+	    --><li class="widgetItem GraphicLinks">
+
+<div>
+	<a href="/728/Tax-Administration" target="_self" class="fancyButton fancyButton1328 " >
+		<span>
+			<span><span class="text">Pay Your Taxes</span></span>
+		</span>
+	</a>
+</div>
+		<style scoped="scoped">.fancyButton1328.fancyButton:link,.fancyButton1328.fancyButton:visited, .fancyButton1328div.fancyButton{
+	background-image: url('/ImageRepository/Document?documentID=21117');
+	background-repeat: no-repeat;
+	background-position: center 15px ;
+transition: all .3s ease-in-out;}
+.fancyButton1328.fancyButton:hover,.fancyButton1328.fancyButton:focus,.fancyButton1328.fancyButton:active,.fancyButton1328.fancyButton.hover{
+	background-repeat: no-repeat;
+	background-position: center top;
+}
+.fancyButton1328.fancyButton:link > span,.fancyButton1328.fancyButton:visited > span, .fancyButton1328div.fancyButton > span{
+}
+.fancyButton1328.fancyButton:hover > span,.fancyButton1328.fancyButton:focus > span,.fancyButton1328.fancyButton:active > span,.fancyButton1328.fancyButton.hover > span{
+}
+.fancyButton1328.fancyButton .text{
+	color: #171717;
+	font-size: 1.1em;
+	font-family: "Open Sans";
+	padding-top: 190px;
+	font-weight: 600;
+	text-decoration: none;
+	padding-top: 190px;
+	background-image: url('/ImageRepository/Document?documentID=21122');
+	background-repeat: no-repeat;
+	background-position: center 55px ;
+transition: all .3s ease-in-out;
+}
+.fancyButton1328.fancyButton:hover .text,.fancyButton1328.fancyButton:focus .text,.fancyButton1328.fancyButton:active .text,.fancyButton1328.fancyButton.hover .text{
+	text-decoration: underline;
+	background-repeat: no-repeat;
+	background-position: center 40px ;
+
+
+}
+</style>
+
+ </li><!--
+--></ul></div><!----><div class="col col1  last"><ul class="semanticList"><!--
+	    --><li class="widgetItem GraphicLinks">
+
+<div>
+	<a href="https://centralpermits.orangecountync.gov/EnerGov_Prod/SelfService#/home" target="_self" class="fancyButton fancyButton1329 " >
+		<span>
+			<span><span class="text">Permit Portal</span></span>
+		</span>
+	</a>
+</div>
+		<style scoped="scoped">.fancyButton1329.fancyButton:link,.fancyButton1329.fancyButton:visited, .fancyButton1329div.fancyButton{
+	background-image: url('/ImageRepository/Document?documentID=21118');
+	background-repeat: no-repeat;
+	background-position: center 15px ;
+transition: all .3s ease-in-out;}
+.fancyButton1329.fancyButton:hover,.fancyButton1329.fancyButton:focus,.fancyButton1329.fancyButton:active,.fancyButton1329.fancyButton.hover{
+	background-repeat: no-repeat;
+	background-position: center top;
+}
+.fancyButton1329.fancyButton:link > span,.fancyButton1329.fancyButton:visited > span, .fancyButton1329div.fancyButton > span{
+}
+.fancyButton1329.fancyButton:hover > span,.fancyButton1329.fancyButton:focus > span,.fancyButton1329.fancyButton:active > span,.fancyButton1329.fancyButton.hover > span{
+}
+.fancyButton1329.fancyButton .text{
+	color: #171717;
+	font-size: 1.1em;
+	font-family: "Open Sans";
+	padding-top: 190px;
+	font-weight: 600;
+	text-decoration: none;
+	padding-top: 190px;
+	background-image: url('/ImageRepository/Document?documentID=21123');
+	background-repeat: no-repeat;
+	background-position: center 55px ;
+transition: all .3s ease-in-out;
+}
+.fancyButton1329.fancyButton:hover .text,.fancyButton1329.fancyButton:focus .text,.fancyButton1329.fancyButton:active .text,.fancyButton1329.fancyButton.hover .text{
+	text-decoration: underline;
+	background-repeat: no-repeat;
+	background-position: center 40px ;
+
+
+}
+</style>
+
+ </li><!--
+--></ul></div><!--				-->
+				</div>
+			</nav>
+		</div>
+	<div class="widgetFooter">
+			</div>
+</div>
+
+</div>
+	</div> <!-- inner column -->
+
+	</div> <!-- inner row -->
+
+			</div><!-- outer column --><!----><div class="outer col col8 last" style="" data-widgetcontainerid="d8640cd3-1b06-434d-983c-b1e8cf4b069d">				
+	<div class="row nest first last wide">
+	
+	<div class="inner col col8 first last idfb50cc10-2a2f-4a6d-b50b-68f7af9ff671" style="" data-widgetcontainerid="fb50cc10-2a2f-4a6d-b50b-68f7af9ff671">	
+<div data-widget-id="3c51111c-492e-4d1b-9687-3fa4bfc12cc1" data-widget-controller-path="/GraphicLinks/Widget">
+
+
+
+
+<div id="graphicLinkWidget3c51111c-492e-4d1b-9687-3fa4bfc12cc1" class="widget widgetGraphicLinks skin74 widgetOptionSet4 wide" data-elementqueryclasses='{"wide-narrow":"min-width:23em"}' data-elementquerymatch='matchMultiColumn' data-elementqueryunmatch='unmatchMultiColumn' data-modulewidgettype="graphicLinks">
+	<div class="widgetHeader">
+		<div class="">
+				</div>
+	</div>
+	<div class="widgetBody cpGrid cpGrid2 ">
+		<nav class="widgetGraphicLinksNav" aria-labelledby="GraphicLinkHeaderText">
+				<div class="row   wide">
+					<!--
+--><div class="col col1 first "><ul class="semanticList"><!--
+	    --><li class="widgetItem GraphicLinks">
+
+<div>
+	<a href="/287/Available-Pets" target="_self" class="fancyButton fancyButton1330 " >
+		<span>
+			<span><span class="text">Adopt a Pet</span></span>
+		</span>
+	</a>
+</div>
+		<style scoped="scoped">.fancyButton1330.fancyButton:link,.fancyButton1330.fancyButton:visited, .fancyButton1330div.fancyButton{
+	background-image: url('/ImageRepository/Document?documentID=21119');
+	background-repeat: no-repeat;
+	background-position: center 15px ;
+transition: all .3s ease-in-out;}
+.fancyButton1330.fancyButton:hover,.fancyButton1330.fancyButton:focus,.fancyButton1330.fancyButton:active,.fancyButton1330.fancyButton.hover{
+	background-repeat: no-repeat;
+	background-position: center top;
+}
+.fancyButton1330.fancyButton:link > span,.fancyButton1330.fancyButton:visited > span, .fancyButton1330div.fancyButton > span{
+}
+.fancyButton1330.fancyButton:hover > span,.fancyButton1330.fancyButton:focus > span,.fancyButton1330.fancyButton:active > span,.fancyButton1330.fancyButton.hover > span{
+}
+.fancyButton1330.fancyButton .text{
+	color: #171717;
+	font-size: 1.1em;
+	font-family: "Open Sans";
+	padding-top: 190px;
+	font-weight: 600;
+	text-decoration: none;
+	padding-top: 190px;
+	background-image: url('/ImageRepository/Document?documentID=21115');
+	background-repeat: no-repeat;
+	background-position: center 55px ;
+transition: all .3s ease-in-out;
+}
+.fancyButton1330.fancyButton:hover .text,.fancyButton1330.fancyButton:focus .text,.fancyButton1330.fancyButton:active .text,.fancyButton1330.fancyButton.hover .text{
+	text-decoration: underline;
+	background-repeat: no-repeat;
+	background-position: center 40px ;
+
+
+}
+</style>
+
+ </li><!--
+--></ul></div><!----><div class="col col1  last"><ul class="semanticList"><!--
+	    --><li class="widgetItem GraphicLinks">
+
+<div>
+	<a href="/2642/Register-of-Deeds" target="_self" class="fancyButton fancyButton1331 " >
+		<span>
+			<span><span class="text">Register of Deeds</span></span>
+		</span>
+	</a>
+</div>
+		<style scoped="scoped">.fancyButton1331.fancyButton:link,.fancyButton1331.fancyButton:visited, .fancyButton1331div.fancyButton{
+	background-image: url('/ImageRepository/Document?documentID=21116');
+	background-repeat: no-repeat;
+	background-position: center 15px ;
+transition: all .3s ease-in-out;}
+.fancyButton1331.fancyButton:hover,.fancyButton1331.fancyButton:focus,.fancyButton1331.fancyButton:active,.fancyButton1331.fancyButton.hover{
+	background-repeat: no-repeat;
+	background-position: center top;
+}
+.fancyButton1331.fancyButton:link > span,.fancyButton1331.fancyButton:visited > span, .fancyButton1331div.fancyButton > span{
+}
+.fancyButton1331.fancyButton:hover > span,.fancyButton1331.fancyButton:focus > span,.fancyButton1331.fancyButton:active > span,.fancyButton1331.fancyButton.hover > span{
+}
+.fancyButton1331.fancyButton .text{
+	color: #171717;
+	font-size: 1.1em;
+	font-family: "Open Sans";
+	padding-top: 190px;
+	font-weight: 600;
+	text-decoration: none;
+	padding-top: 190px;
+	background-image: url('/ImageRepository/Document?documentID=21124');
+	background-repeat: no-repeat;
+	background-position: center 55px ;
+transition: all .3s ease-in-out;
+}
+.fancyButton1331.fancyButton:hover .text,.fancyButton1331.fancyButton:focus .text,.fancyButton1331.fancyButton:active .text,.fancyButton1331.fancyButton.hover .text{
+	text-decoration: underline;
+	background-repeat: no-repeat;
+	background-position: center 40px ;
+
+
+}
+</style>
+
+ </li><!--
+--></ul></div><!--				-->
+				</div>
+			</nav>
+		</div>
+	<div class="widgetFooter">
+			</div>
+</div>
+
+</div>
+	</div> <!-- inner column -->
+
+	</div> <!-- inner row -->
+
+			</div><!-- outer column --><!--		--></div> <!-- outer row -->
+
+
+	</div>
+</div></div>
+</div><!-- Calendar/Carousel --><!-- <div data-cpRole="structuralContainer" id="homeContainer1">
+    <div class="siteWrap2">
+      <div data-cpRole="contentContainer" id="homeContent1a"></div>
+    </div>
+  </div> --><!-- Footer --><footer data-cpRole="structuralContainer" id="footerContainerTS">
+<div class="siteWrap"><div data-cpRole="contentContainer" id="footerTS">	<div id="cc5af69e54-613a-4aa1-b23c-666cecba2564" data-containerid="5af69e54-613a-4aa1-b23c-666cecba2564" class="pageContent cpGrid cpGrid24 isLockedContainer showInMobile" data-contentcontainerbreakpoint="60">
+				                
+
+		<div class="row outer wide"><!--
+--><div class="outer col col6 first" style="" data-widgetcontainerid="9ea90d1e-63df-4a96-91cc-b7ddcd0640ce">				
+	<div class="row nest first last wide">
+	
+	<div class="inner col col6 first last idac4c1d1e-ac0f-41b7-a38f-299f18ccd50e" style="" data-widgetcontainerid="ac4c1d1e-ac0f-41b7-a38f-299f18ccd50e">	
+    <div data-widget-id="81217f1c-bdc9-4b5b-94b3-1d93aaa344bb" data-widget-controller-path="/InfoAdvanced/Widget">
+
+
+
+
+
+	<section id="divInfoAdv81217f1c-bdc9-4b5b-94b3-1d93aaa344bb" class="widget widgetInfoAdvanced skin73 widgetOptionSet5 wide" data-modulewidgettype="infoAdv" data-elementqueryclasses='{"wide-narrow":"min-width:25em"}' data-elementquerymatch='matchMultiColumn' data-elementqueryunmatch='unmatchMultiColumn' aria-label="Info Advanced">
+			<header class="widgetHeader" id="header81217f1c-bdc9-4b5b-94b3-1d93aaa344bb">
+		<div class="">
+								</div>
+	</header>
+	<div class="widgetBody  cpGrid cpGrid1 ">
+		<div class="row  wide">
+					<div class="col col1 first last">
+						<ol class="pageStyles semanticList">
+
+<li class="InfoAdvanced widgetItem fr-view">
+	<p><a href="/"><img src="/ImageRepository/Document?documentId=21125" class="fr-dib" alt="Orange County NC Home Page"></a></p>
+</li>						</ol>
+					</div>
+		</div>
+	</div>
+	<div class="widgetFooter">
+
+	</div>
+
+	</section>
+
+
+
+<script type="text/javascript">
+	//Render slideshow if info advacned items contain one.
+	$(document).ready(function (e) {
+		$('#divInfoAdv81217f1c-bdc9-4b5b-94b3-1d93aaa344bb .InfoAdvanced.widgetItem').each(function () {
+			renderSlideshowIfApplicable($(this));		
+		});
+	});
+</script></div>	</div> <!-- inner column -->
+
+	</div> <!-- inner row -->
+
+			</div><!-- outer column --><!----><div class="outer col col1" style="" data-widgetcontainerid="181bcf28-157b-4f00-8d64-693029541a07">				
+	<div class="row nest first last wide">
+	
+	<div class="inner col col1 first last id9636aafe-1cce-482f-b00f-d64dbf9bd3ce" style="" data-widgetcontainerid="9636aafe-1cce-482f-b00f-d64dbf9bd3ce">	
+
+<div class="widget widgetSpacer" id="88f706b8-b8a7-447c-9413-5c3faf58db65"></div>	</div> <!-- inner column -->
+
+	</div> <!-- inner row -->
+
+			</div><!-- outer column --><!----><div class="outer col col5" style="" data-widgetcontainerid="75afcde0-a957-49f5-82cc-9c01f05a8c0a">				
+	<div class="row nest first last wide">
+	
+	<div class="inner col col5 first last ided2aef51-e6e1-4a6b-9352-af4e6316b6ed" style="" data-widgetcontainerid="ed2aef51-e6e1-4a6b-9352-af4e6316b6ed">	
+    <div data-widget-id="60eb93a8-6198-4407-a28f-cda0b7b1c74b" data-widget-controller-path="/InfoAdvanced/Widget">
+
+
+
+
+
+	<section id="divInfoAdv60eb93a8-6198-4407-a28f-cda0b7b1c74b" class="widget widgetInfoAdvanced skin73 widgetOptionSet5 wide" data-modulewidgettype="infoAdv" data-elementqueryclasses='{"wide-narrow":"min-width:25em"}' data-elementquerymatch='matchMultiColumn' data-elementqueryunmatch='unmatchMultiColumn' aria-labelledby="header60eb93a8-6198-4407-a28f-cda0b7b1c74b">
+			<header class="widgetHeader" id="header60eb93a8-6198-4407-a28f-cda0b7b1c74b">
+		<div class="">
+					<h3 >Contact Us</h3>
+								</div>
+	</header>
+	<div class="widgetBody  cpGrid cpGrid1 ">
+		<div class="row  wide">
+					<div class="col col1 first last">
+						<ol class="pageStyles semanticList">
+
+<li class="InfoAdvanced widgetItem fr-view">
+	<p>300 West Tryon Street<br>P.O. Box 8181<br>Hillsborough, NC 27278<br>Phone: <a href="tel:9197328181">919-732-8181</a><br><a href="mailto:webadmin@orangecountync.gov">Contact the Webmaster</a></p>
+</li>						</ol>
+					</div>
+		</div>
+	</div>
+	<div class="widgetFooter">
+
+	</div>
+
+	</section>
+
+
+
+<script type="text/javascript">
+	//Render slideshow if info advacned items contain one.
+	$(document).ready(function (e) {
+		$('#divInfoAdv60eb93a8-6198-4407-a28f-cda0b7b1c74b .InfoAdvanced.widgetItem').each(function () {
+			renderSlideshowIfApplicable($(this));		
+		});
+	});
+</script></div>	</div> <!-- inner column -->
+
+	</div> <!-- inner row -->
+
+			</div><!-- outer column --><!----><div class="outer col col1" style="" data-widgetcontainerid="a224e660-f224-401f-b96e-1c365b3e666f">				
+	<div class="row nest first last wide">
+	
+	<div class="inner col col1 first last id5ba1adfa-39dd-4f62-b387-8b6bfb0ab5e7" style="" data-widgetcontainerid="5ba1adfa-39dd-4f62-b387-8b6bfb0ab5e7">	
+
+<div class="widget widgetSpacer" id="1762d634-ff38-4000-9441-dffcf5292fe5"></div>	</div> <!-- inner column -->
+
+	</div> <!-- inner row -->
+
+			</div><!-- outer column --><!----><div class="outer col col5" style="" data-widgetcontainerid="a6bcb0ed-c2cb-48f6-86f6-fc55f2423fd1">				
+	<div class="row nest first last wide">
+	
+	<div class="inner col col5 first last id07f45574-0f9f-46cd-9c8a-057d0be8fff4" style="" data-widgetcontainerid="07f45574-0f9f-46cd-9c8a-057d0be8fff4">	
+	<div data-widget-id="976f5e23-d1e0-49a1-a902-50d33cfa8e7a" data-widget-controller-path="/QuickLinks/Widget">
+
+
+
+
+
+
+
+
+	<section id="widgetQuicklink976f5e23-d1e0-49a1-a902-50d33cfa8e7a" class="widget widgetQuickLinks skin73 widgetOptionSet48 narrow" data-modulewidgettype="quickLinks" data-elementqueryclasses='{"wide-narrow":"min-width:25em"}' data-elementquerymatch='matchMultiColumn' data-elementqueryunmatch='unmatchMultiColumn' aria-labelledby="quickLinksHeader976f5e23-d1e0-49a1-a902-50d33cfa8e7a">
+			<header class="widgetHeader" id="quickLinksHeader976f5e23-d1e0-49a1-a902-50d33cfa8e7a">
+		<div class="">
+					<h3><a  style="" href="/QuickLinks.aspx?CID=28" >Quick Links</a></h3>
+						</div>
+	</header>
+	<div class="widgetBody cpGrid cpGrid1 ">
+        <div class="row  narrow">
+				<div class="col col1 first last">
+					<ol class="semanticList">
+
+    <li style="position:relative" class="widgetItem QuickLinks">
+        <a class="widgetDesc widgetQuickLinksLink" href="/1757/Legal-Notices" target="_self" >Legal Notices</a>
+        <div class="widgetMeta"></div>
+    </li>
+
+    <li style="position:relative" class="widgetItem QuickLinks">
+        <a class="widgetDesc widgetQuickLinksLink" href="/1657/Public-Records-Requests" target="_self" >Request Public Records</a>
+        <div class="widgetMeta"></div>
+    </li>
+
+    <li style="position:relative" class="widgetItem QuickLinks">
+        <a class="widgetDesc widgetQuickLinksLink" href="http://intranet.orangecountync.gov/" target="_blank"  aria-label="Intranet (employees only) opens in new window">Intranet (employees only)</a>
+        <div class="widgetMeta"></div>
+    </li>
+
+    <li style="position:relative" class="widgetItem QuickLinks">
+        <a class="widgetDesc widgetQuickLinksLink" href="https://www.orangecountync.gov/2157/Public-Participation-Policy" target="_blank"  aria-label="Public Participation Policy opens in new window">Public Participation Policy</a>
+        <div class="widgetMeta"></div>
+    </li>
+					</ol>
+				</div>
+		</div>
+        
+	</div>
+	<div class="widgetFooter">
+	</div>
+	<div class="addItemModal hidden">
+		<div class="url hidden">/QuickLinks.aspx</div>
+	</div>
+
+	</section>
+</div>
+	</div> <!-- inner column -->
+
+	</div> <!-- inner row -->
+
+			</div><!-- outer column --><!----><div class="outer col col1" style="" data-widgetcontainerid="12ec1fc9-d7d9-404b-a3b0-556530f276d2">				
+	<div class="row nest first last wide">
+	
+	<div class="inner col col1 first last ida5090c8f-e473-4bc3-bb47-fa0188ecee18" style="" data-widgetcontainerid="a5090c8f-e473-4bc3-bb47-fa0188ecee18">	
+
+<div class="widget widgetSpacer" id="fa492fde-31b4-4c0d-9bb2-229b1b526b35"></div>	</div> <!-- inner column -->
+
+	</div> <!-- inner row -->
+
+			</div><!-- outer column --><!----><div class="outer col col5 last" style="" data-widgetcontainerid="fa1ad883-2c1c-4d30-bafa-638e4b50247a">				
+	<div class="row nest first last wide">
+	
+	<div class="inner col col5 first last idc5fe8223-da40-47f4-b38f-ceee6f4a6d12" style="" data-widgetcontainerid="c5fe8223-da40-47f4-b38f-ceee6f4a6d12">	
+	<div data-widget-id="2c772b11-d106-4459-995e-2ae72ca123f1" data-widget-controller-path="/QuickLinks/Widget">
+
+
+
+
+
+
+
+
+	<section id="widgetQuicklink2c772b11-d106-4459-995e-2ae72ca123f1" class="widget widgetQuickLinks skin73 widgetOptionSet48 narrow" data-modulewidgettype="quickLinks" data-elementqueryclasses='{"wide-narrow":"min-width:25em"}' data-elementquerymatch='matchMultiColumn' data-elementqueryunmatch='unmatchMultiColumn' aria-labelledby="quickLinksHeader2c772b11-d106-4459-995e-2ae72ca123f1">
+			<header class="widgetHeader" id="quickLinksHeader2c772b11-d106-4459-995e-2ae72ca123f1">
+		<div class="">
+					<h3><a  style="" href="/QuickLinks.aspx?CID=29" >Site Links</a></h3>
+						</div>
+	</header>
+	<div class="widgetBody cpGrid cpGrid1 ">
+        <div class="row  narrow">
+				<div class="col col1 first last">
+					<ol class="semanticList">
+
+    <li style="position:relative" class="widgetItem QuickLinks">
+        <a class="widgetDesc widgetQuickLinksLink" href="/" target="_self" >Home</a>
+        <div class="widgetMeta"></div>
+    </li>
+
+    <li style="position:relative" class="widgetItem QuickLinks">
+        <a class="widgetDesc widgetQuickLinksLink" href="/sitemap" target="_self" >Site Map</a>
+        <div class="widgetMeta"></div>
+    </li>
+
+    <li style="position:relative" class="widgetItem QuickLinks">
+        <a class="widgetDesc widgetQuickLinksLink" href="/accessibility" target="_self" >Accessibility</a>
+        <div class="widgetMeta"></div>
+    </li>
+
+    <li style="position:relative" class="widgetItem QuickLinks">
+        <a class="widgetDesc widgetQuickLinksLink" href="/site/copyright" target="_self" >Copyright Notices</a>
+        <div class="widgetMeta"></div>
+    </li>
+
+    <li style="position:relative" class="widgetItem QuickLinks">
+        <a class="widgetDesc widgetQuickLinksLink" href="/privacy" target="_self" >Privacy Policy</a>
+        <div class="widgetMeta"></div>
+    </li>
+					</ol>
+				</div>
+		</div>
+        
+	</div>
+	<div class="widgetFooter">
+	</div>
+	<div class="addItemModal hidden">
+		<div class="url hidden">/QuickLinks.aspx</div>
+	</div>
+
+	</section>
+</div>
+	</div> <!-- inner column -->
+
+	</div> <!-- inner row -->
+
+			</div><!-- outer column --><!--		--></div> <!-- outer row -->
+
+
+	</div>
+</div></div>
+</footer><!-- Powered By --><!-- <div data-cpRole="structuralContainer" id="poweredByContainerTS">
+    <div class="siteWrap2">
+      <div data-cpRole="contentContainer" id="poweredByTS"></div>
+    </div>
+  </div> -->
+</div>
+
+            </div>
+        </div>
+    </div>
+
+<link href="/745732998.css" rel="stylesheet" type="text/css" />
+
+<div id="SplashMessageWrapper" class="cp-Splash-wrapper">
+	<div role="dialog" aria-labelledby="cp-Splash-title" aria-describedby="editorContentDesc" aria-modal="true" tabindex="-1" id="SplashMessage" class="hidden cp-Splash cp-Splash--modal is-open">
+		<div class="cp-Splash-header">
+			<h2 class="cp-Splash-title" id="cp-Splash-title">Loading</h2>
+			<button class="cp-Splash-Btn cp-Splash-close" aria-label="Close this modal" title="Close this window">
+				<svg id="iconClose" viewBox="0 0 25 25">
+					<polygon style="fill:currentcolor"
+							 points="18.806,6.98 18.075,6.248 12.532,11.792 6.989,6.248 6.257,6.98 11.786,12.508 6.212,18.084 6.943,18.815 12.532,13.224 18.12,18.815 18.851,18.084 13.277,12.508"></polygon>
+				</svg>
+			</button>
+		</div>
+		<div class="cp-Splash-body">
+			<div class="cp-Splash-Prose editorContent fr-view" id="editorContentDesc">
+				<!-- Content from the Froala Editor will go here. -->
+				Loading
+			</div>
+		</div>
+		<div class="cp-Splash-footer">
+			<button class="cp-Splash-Btn cp-Splash-Btn--NoShow">Do Not Show Again</button>
+			<button class="cp-Splash-Btn cp-Splash-Btn--Close">Close</button>
+		</div>
+	</div>
+</div>
+
+<script src="/Assets/Scripts/APIClient.js"></script>
+<script src="/Assets/Mystique/Shared/Scripts/Moment/Moment.min.js"></script>
+<script src="/Assets/Scripts/SplashModal/SplashModalRender.js"></script>
+<script>
+
+		$(document).ready(function () {
+			var filter = {
+				targetId: '953',
+				targetType: 1
+			}
+
+			new SplashModalRender().triggerRender(filter);
+		});
+</script>
+
+
+	
+	
+	
+	
+
+
+
+	
+
+
+
+
+
+
+    <script src="/-978663714.js" type="text/javascript"></script>
+    <!----------Google Translate (Mobile Friendly)--------->
+<style>#google-translate-container {float: left;padding: 3px 5px 0px 0px;}.goog-te-combo,.goog-te-banner *,.goog-te-ftab *,.goog-te-menu *,.goog-te-menu2 *,.goog-te-balloon * {font-family: arial;font-size: 10pt;background-image: url("https://theme.zdassets.com/theme_assets/958586/bae8aa24db8d43595871692a9d259186f2db3fb4.png");background-position: 3px 4px;background-size: 22px;background-repeat: no-repeat;text-indent: 20px;background-color: #fff;color: #000 !important;}.goog-logo-link {display: none !important;}.goog-te-gadget {color: transparent !important;}.goog-te-gadget .goog-te-combo {margin: 2px 0 !important;border-radius: 15px !important;}.goog-te-combo{border: 1px solid !important;border-color: #BCC9D7 #96A3B1 #96A3B1 #BCC9D7 !important;border-radius: 0 !important;height:32px; !important;padding: 0 1px 0 .25rem !important;}
+#launcher-wrapper {bottom: 50px !important;}
+</style>
+<div id="google-translate-container">
+<div id="google_translate_element" style="position: fixed; bottom: 0px; right: 20px; z-index: 5;"></div>
+</div>
+<script>
+function googleTranslateElementInit() {
+var el = document.getElementById("google_translate_element");
+if (el && el.innerHTML.trim() !== "") {
+    return;
+}
+
+new google.translate.TranslateElement({ pageLanguage: "en" }, "google_translate_element");
+// begin accessibility compliance
+$('img.goog-te-gadget-icon').attr('alt','Google Translate');
+$('div#goog-gt-tt div.logo img').attr('alt','translate');
+$('div#goog-gt-tt .original-text').css('text-align','right');
+$('.goog-te-gadget-simple .goog-te-menu-value span').css('color','#000000');
+$('.goog-te-combo').attr('aria-label','google translate languages');
+$('svg.goog-te-spinner').attr('title','Google Translate Spinner');
+$('.goog-te-gadget-simple .goog-te-menu-value span').css('color','#000000');
+}
+$(function() {
+$.getScript("//translate.google.com/translate_a/element.js?cb=googleTranslateElementInit");
+});
+</script>
+<!--------------End Google Translate----------------->
+<!-- Global site tag (gtag.js) - Google Analytics -->  <script> window.dataLayer = window.dataLayer || []; function gtag(){dataLayer.push(arguments);} gtag('js', new Date()); gtag('config', 'UA-143381009-1'); </script>
+<!--End script -->
+
+<!-- Global site tag (gtag.js) - Google Analytics -->
+
+
+
+<script>
+
+window.dataLayer = window.dataLayer || [];
+
+function gtag(){dataLayer.push(arguments);}
+
+gtag('js', new Date());
+
+gtag('config', 'UA-143381009-2');
+
+</script>
+
+
+
+<!-- Fixed Nav Adjustment -->
+<script>
+  function getValueTS(elem, attr) {
+    const val = elem.css(attr);
+    if (val === undefined) return undefined;
+    const num = parseInt(val, 10);
+    if (num === NaN) return undefined;
+    return num;
+  }
+
+  function clampTS(number, min, max) {
+    return Math.min(Math.max(number, min), max);
+  }
+
+  function isPageEditingTS() {
+    return (
+      $("#doneEditing").length > 0 || // In live edit
+      typeof DesignCenter !== "undefined" // In theme manager
+    );
+  }
+
+  const bgColorRegexTS = /rgba\((\d+), (\d+), (\d+), (\d*\.?\d*)\)/;
+  function isTransparentTS(elem) {
+    const bg = elem.css('background-color');
+    if (typeof bg !== "string" || !bg.startsWith('rgba(')) return false;
+    const matchState = bg.match(bgColorRegexTS);
+    if (!matchState || matchState.length !== 5) return false;
+    const alpha = parseFloat(matchState[4], 10);
+    if (!(alpha >= 0 && alpha < 1)) return false;
+    return true;
+  }
+
+  function iterateLeftpads(cb) {
+    const containersTS = $("[class^='siteWrap'],[class*=' siteWrap']");
+    for (let i = 0; i < containersTS.length; i++) {
+      const containerTS = containersTS[i];
+      // Skip the body container and anything with data-skip-leftpad
+      if (
+        containerTS.id !== "bodyContainerTS" &&
+        containerTS.getAttribute('data-skip-leftpad') === null
+      ) {
+        cb(containerTS);
+      }
+    }
+  }
+
+  const anchor = $("#divToolbars");
+  const anchor2 = $("#headerContainerTS")
+
+  // Outer banner padding (push banner down)
+  const outerSizingTS = $("#bannerContainerTS");
+  // Inner banner padding (push banner content down) - Transparent header OR on attaching headers
+  const innerSizingTS = $("#bannerSizingTS");
+  const bodyContainerTS = $("#bodyContainerTS");
+
+  const forceUnfixClassTS = "forceUnfixTS";
+
+  const fixedTopTS = $(".fixedTopTS");
+  const fixedBottomTS = $(".fixedBottomTS");
+  const fixedLeftTS = $(".fixedLeftTS");
+
+  var initialTopTS;
+  var topAttachTS;
+  if (fixedTopTS && fixedTopTS.length === 1) {
+    initialTopTS = getValueTS(fixedTopTS, 'top');
+    const attachment = fixedTopTS.attr('data-attach');
+    if (attachment) topAttachTS = $("#" + attachment);
+    if (!topAttachTS || topAttachTS.length !== 1) topAttachTS = undefined;
+  }
+
+  function resizeAdjustmentTS() {
+    const editing = isPageEditingTS();
+
+    // Fixed top script
+    (function () {
+      if (!fixedTopTS || fixedTopTS.length !== 1 || initialTopTS === undefined) return;
+
+      if (editing) {
+        fixedTopTS[0].classList.add(forceUnfixClassTS);
+      } else {
+        fixedTopTS[0].classList.remove(forceUnfixClassTS);
+      }
+
+      const topPosition = fixedTopTS.css('position');
+      if (topPosition === 'fixed') {
+        if (topAttachTS) {
+          scrollAdjustmentTS();
+        } else {
+          const anchorHeight = anchor.outerHeight() - 1;
+          fixedTopTS.css('top', anchorHeight + initialTopTS);
+        }
+      } else {
+        fixedTopTS.css('top', initialTopTS);
+      }
+
+      if (topPosition === 'fixed' || topPosition === 'absolute') {
+        // Bump the banner content down
+        if (isTransparentTS(fixedTopTS)) {
+          innerSizingTS.css('padding-top', initialTopTS + fixedTopTS.outerHeight() - 1);
+          outerSizingTS.css('padding-top', '');
+
+          try {
+            window.Pages.onResizeHandlersExecute();
+          } catch (e) { }
+        } else {
+          outerSizingTS.css('padding-top', fixedTopTS.outerHeight() - 1);
+          innerSizingTS.css('padding-top', '');
+        }
+      } else {
+        innerSizingTS.css('padding-top', '');
+        outerSizingTS.css('padding-top', '');
+      }
+    })();
+
+    // Fixed bottom script
+    (function () {
+      if (!fixedBottomTS || fixedBottomTS.length === 0) return;
+
+      // If the widget has gone narrow, force unfix
+      if (editing || fixedBottomTS.outerHeight() > 200) {
+        fixedBottomTS[0].classList.add(forceUnfixClassTS);
+      } else {
+        fixedBottomTS[0].classList.remove(forceUnfixClassTS);
+      }
+
+      if (fixedBottomTS.css('position') === 'fixed') {
+        bodyContainerTS.css('padding-bottom', fixedBottomTS.outerHeight());
+      } else {
+        bodyContainerTS.css('padding-bottom', '');
+      }
+    })();
+
+    // Fixed left script
+    (function () {
+      if (!fixedLeftTS || fixedLeftTS.length === 0) return;
+
+      if (editing) {
+        fixedLeftTS[0].classList.add(forceUnfixClassTS);
+      } else {
+        fixedLeftTS[0].classList.remove(forceUnfixClassTS);
+      }
+
+      if (fixedLeftTS.css('position') === 'fixed') {
+        const anchorHeight = anchor.outerHeight() - 1;
+        fixedLeftTS.css('top', anchorHeight);
+        const leftBoundingTS = fixedLeftTS[0].getBoundingClientRect();
+        iterateLeftpads(function (containerTS) {
+          const containerBoundingTS = containerTS.getBoundingClientRect();
+          if (containerBoundingTS.left <= leftBoundingTS.right) {
+            $(containerTS).css('padding-left', leftBoundingTS.width + 16);
+          }
+        });
+      } else {
+        fixedLeftTS.css('top', '');
+        iterateLeftpads(function (containerTS) {
+          $(containerTS).css('padding-left', '');
+        });
+      }
+    })();
+  }
+
+  function scrollAdjustmentTS() {
+    if (!fixedTopTS || fixedTopTS.length !== 1 || !topAttachTS || topAttachTS.length !== 1) return;
+    const topPosition = fixedTopTS.css('position');
+    if (topPosition === 'fixed' || topPosition === 'absolute') {
+      const anchorBounding = anchor[0].getBoundingClientRect();
+      const attachBounding = topAttachTS[0].getBoundingClientRect();
+      const scrollTop = $(window).scrollTop();
+
+      fixedTopTS.css('top', Math.max(anchorBounding.bottom - 1, attachBounding.bottom));
+    } else {
+      fixedTopTS.css('top', initialTopTS);
+    }
+  }
+
+  $(window).load(function () {
+    setTimeout(function () {
+      resizeAdjustmentTS();
+    }, 350);
+
+    $(window).scroll(function () {
+      scrollAdjustmentTS();
+    });
+
+    var adjustTimeoutTS;
+    $(window).resize(function () {
+      clearTimeout(adjustTimeoutTS);
+      adjustTimeoutTS = setTimeout(function () {
+        resizeAdjustmentTS();
+      }, 350);
+    });
+
+    $.when(window.Pages.angularToolbarComplete).done(function () {
+      resizeAdjustmentTS();
+    });
+  });
+</script>
+<!-- End Fixed Nav Adjustment -->
+
+<script type="text/javascript">
+window._monsido = window._monsido || {
+token: "bjjArkLNR6_31WLG-7Vwsw",
+statistics: {
+enabled: true,
+cookieLessTracking: true,
+documentTracking: {
+enabled: true,
+documentCls: "monsido_download",
+documentIgnoreCls: "monsido_ignore_download",
+documentExt: [],
+},
+},
+heatmap: {
+enabled: true,
+},
+pageCorrect: {
+enabled: true,
+},
+pageAssistV2: {
+enabled: true,
+theme: "light",
+mainColor: "#783CE2",
+textColor: "#ffffff",
+linkColor: "#783CE2",
+buttonHoverColor: "#783CE2",
+mainDarkColor: "#052942",
+textDarkColor: "#ffffff",
+linkColorDark: "#FFCF4B",
+buttonHoverDarkColor: "#FFCF4B",
+greeting: "Discover your personalization options",
+direction: "leftbottom",
+coordinates: " ",
+iconShape: "circle",
+title: "Personalization Options",
+titleText: "Welcome to PageAssist toolbar! Adjust the options below to cater the website to your accessibility needs.",
+iconPictureUrl: "logo",
+logoPictureUrl: "",
+logoPictureBase64: "",
+languages: ["en-US", "es-MX", "da-DK", "de-DE", "sv-SE", "nb-NO", "nn-NO", "nl-NL", "et-EE", "fr-FR", "pt-PT", "zh-CN", "ru-RU"],
+defaultLanguage: "en-US",
+skipTo: false,
+alwaysOnTop: false,
+},
+};
+</script>
+<script type="text/javascript" async src="https://app-script.monsido.com/v2/monsido-script.js"></script>
+
+
+    <script type="text/javascript">
+        $(function () {
+            document.cookie = "responsiveGhost=0; path=/";
+        });
+        $(window).on("load", function () {
+            $('body').addClass('doneLoading').removeClass('hideContent');
+
+            if ($('#404Content').length > 0)
+                $('div#bodyWrapper').css('padding', '0px');
+        });
+    </script>
+
+    <noscript>
+        <style>
+            body.hideContent {
+                opacity: 1 !important;
+            }
+        </style>
+    </noscript>
+
+        
+<div style="display: none;">
+	<svg xmlns="http://www.w3.org/2000/svg" style="display:none;">
+
+		<symbol id="iconArrow--left" viewbox="0 0 25 25">
+			<title>Arrow Left</title>
+			<polygon style="fill:currentcolor" points="18.044,25 19.498,23.545 8.409,12.454 19.408,1.455 17.954,0 5.502,12.452"></polygon>
+		</symbol>
+
+		<symbol id="iconArrow--right" viewbox="0 0 25 25">
+			<title>Arrow Right</title>
+			<polygon style="fill:currentcolor" points="6.957,0 5.502,1.455 16.591,12.546 5.592,23.545 7.047,25 19.498,12.548"></polygon>
+		</symbol>
+
+	</svg>
+</div>
+    <script type="text/javascript">loadCSS('//fonts.googleapis.com/css?family=Libre+Baskerville:regular|Montserrat:500,600,700|Open+Sans:300,300italic,500,500italic,600,600italic,700,700italic,800,800italic,italic,regular|Raleway:500,600,700,800,regular|Ubuntu:regular|');</script>
+    
+
+    <div class="hidden activeWidgetSkinComponentsOnPageJson">[]</div>
+        <div style="display: none;">
+            <svg xmlns="http://www.w3.org/2000/svg" style="display: none;">
+                <symbol id="iconSlideshowArrowLeft" viewBox="0 0 22.68 40">
+                    <title>Slideshow Left Arrow</title>
+                    <g>
+                        <path style="fill:currentcolor;" d="M20,40a2.67,2.67,0,0,1-1.9-.79L.79,21.9a2.68,2.68,0,0,1,0-3.79L18.1.79a2.68,2.68,0,1,1,3.79,3.79L6.47,20,21.89,35.42A2.68,2.68,0,0,1,20,40Z"></path>
+                    </g>
+                </symbol>
+                <symbol id="iconSlideshowArrowRight" viewBox="0 0 22.68 40">
+                    <title>Slideshow Right Arrow</title>
+                    <g>
+                        <path style="fill:currentcolor;" d="M2.68,0a2.67,2.67,0,0,1,1.9.79L21.89,18.1a2.68,2.68,0,0,1,0,3.79L4.58,39.21A2.68,2.68,0,0,1,.79,35.42L16.21,20,.79,4.58A2.68,2.68,0,0,1,2.68,0Z"></path>
+                    </g>
+                </symbol>
+            </svg>
+        </div>
+    
+	
+
+    <div id="root-picker-outlet"></div>
+</body>
+</html>

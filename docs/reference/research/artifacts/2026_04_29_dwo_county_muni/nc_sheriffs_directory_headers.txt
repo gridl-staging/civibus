@@ -1,0 +1,26 @@
+HTTP/2 301 
+date: Wed, 29 Apr 2026 23:00:28 GMT
+content-type: text/html
+content-length: 162
+location: https://ncsheriffs.org/directory
+age: 0
+x-ratelimit-remaining: 500
+x-nmc-version: v2
+x-cache: MISS
+x-cache-v2: MISS
+x-haproxy: 1
+
+HTTP/2 404 
+date: Wed, 29 Apr 2026 23:00:28 GMT
+content-type: text/html; charset=UTF-8
+vary: Accept-Encoding
+expires: Wed, 11 Jan 1984 05:00:00 GMT
+cache-control: no-cache, must-revalidate, max-age=0, no-store, private
+link: <https://ncsheriffs.org/wp-json/>; rel="https://api.w.org/"
+age: 0
+x-ratelimit-remaining: 500
+x-nmc-version: v2
+x-cache: MISS
+x-cache-v2: MISS
+x-haproxy: 1
+

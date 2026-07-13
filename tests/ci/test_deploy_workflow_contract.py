@@ -33,6 +33,9 @@ PUBLIC_CI_SUPPORT_FILES = {
     "scripts/register_roster_pilot_sources.py",
     "scripts/stage_close_gate.py",
 }
+PUBLIC_CI_SUPPORT_DIRS = {
+    "docs/reference/research/artifacts/2026_04_29_dwo_county_muni",
+}
 
 
 def _read_deploy_workflow() -> str:
@@ -115,10 +118,15 @@ def test_l13_contract_owner_file_set_is_locked_to_fly_deploy_surface() -> None:
 def test_public_ci_support_scripts_sync_to_staging_and_prod() -> None:
     debbie_payload = _parse_debbie_config()
     sync_files = set(debbie_payload["sync"]["files"])
+    sync_dirs = {entry["path"].rstrip("/") for entry in debbie_payload["sync"]["dirs"]}
 
     assert PUBLIC_CI_SUPPORT_FILES.issubset(sync_files)
     for relative_path in PUBLIC_CI_SUPPORT_FILES:
         assert (REPO_ROOT / relative_path).is_file(), f"public CI support file missing: {relative_path}"
+
+    assert PUBLIC_CI_SUPPORT_DIRS.issubset(sync_dirs)
+    for relative_path in PUBLIC_CI_SUPPORT_DIRS:
+        assert (REPO_ROOT / relative_path).is_dir(), f"public CI support directory missing: {relative_path}"
 
 
 def test_deploy_workflow_triggers_on_push_to_main_and_manual_dispatch_only() -> None:
