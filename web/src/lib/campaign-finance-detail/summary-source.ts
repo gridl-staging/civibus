@@ -5,6 +5,8 @@ export const COMMITTEE_SUMMARY_SOURCE_LABELS: Record<CommitteeSummarySource, str
   derived: "Derived from itemized transactions"
 };
 
+/**
+ */
 export function buildCommitteeItemizedCoverageNote(summary: {
   itemized_transaction_count: number;
   summary_source: CommitteeSummarySource;

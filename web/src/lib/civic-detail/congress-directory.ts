@@ -111,6 +111,8 @@ function memberMatchesFilters(member: CongressMemberSummary, filters: CongressDi
   );
 }
 
+/**
+ */
 export function buildCongressMemberRow(member: CongressMemberSummary): CongressMemberRow {
   const stateOrTerritory = member.state ?? "US";
   const party = member.party ?? "Unknown party";
@@ -137,6 +139,8 @@ export function filterCongressMembers(
   return members.filter((member) => memberMatchesFilters(member, normalizedFilters)).map(buildCongressMemberRow);
 }
 
+/**
+ */
 export function buildCongressDirectory(
   members: CongressMemberSummary[],
   filters: Partial<CongressDirectoryFilters>

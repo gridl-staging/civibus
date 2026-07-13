@@ -62,6 +62,8 @@ function readFastApiDetail(errorBody: unknown): string | null {
   return typeof detail === 'string' ? detail : null;
 }
 
+/**
+ */
 function getDonorValidationMessage(errorBody: unknown): string {
   const detail = readFastApiDetail(errorBody);
 

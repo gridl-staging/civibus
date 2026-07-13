@@ -112,6 +112,8 @@ export async function assertPrimaryNavTapTargetMinHeight(page: any, label: strin
   await expect(link).toHaveCSS("min-height", "44px");
 }
 
+/**
+ */
 export function capturePageLoadErrors(page: any) {
   const errors: string[] = [];
 

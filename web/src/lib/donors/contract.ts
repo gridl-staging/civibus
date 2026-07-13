@@ -75,6 +75,8 @@ function hasParamValue(value: string | number | null | undefined): value is stri
   return value !== undefined && value !== null && value !== '';
 }
 
+/**
+ */
 function buildDonorQueryParams(
   params: DonorSearchPagePathParams,
   includeEmptyQuery: boolean

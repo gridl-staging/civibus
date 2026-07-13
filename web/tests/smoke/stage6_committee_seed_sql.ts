@@ -3,6 +3,8 @@ import { SMOKE_STAGE6_COMMITTEE_ID, SMOKE_STAGE6_COMMITTEE_NAME, SMOKE_STAGE6_CO
 // @ts-expect-error Smoke seed helpers run under Node ESM and import the TS module directly.
 import { runSmokeSeedSql, sqlLiteral, sqlUuid, type SmokeSeedCleanupCallback } from "./smoke_seed_helpers.ts";
 
+/**
+ */
 export function buildStage6CommitteeCleanupSql(): string {
   return `
 BEGIN;
@@ -24,6 +26,8 @@ COMMIT;
 `;
 }
 
+/**
+ */
 export function buildStage6CommitteeSeedSql(): string {
   const cleanup = buildStage6CommitteeCleanupSql();
   return `

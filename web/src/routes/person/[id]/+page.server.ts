@@ -14,6 +14,8 @@ function guardUnhandledRejection(promise: Promise<unknown>): void {
   void promise.catch(() => {});
 }
 
+/**
+ */
 export const load: PageServerLoad = ({ params, locals }) =>
   withApiResponseErrorHandling(
     async () => {

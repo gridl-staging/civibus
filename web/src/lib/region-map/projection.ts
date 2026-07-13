@@ -79,6 +79,8 @@ function projectIntoRect(
   return [x, y];
 }
 
+/**
+ */
 function getInsetRect(longitude: number, latitude: number): ProjectionRect | null {
   if (latitude >= ALASKA_INSET.latMin && (longitude <= ALASKA_INSET.lngMax || longitude >= 170)) {
     return ALASKA_INSET;
@@ -96,6 +98,8 @@ function getInsetRect(longitude: number, latitude: number): ProjectionRect | nul
   return null;
 }
 
+/**
+ */
 export function projectPoint(
   longitude: number,
   latitude: number,

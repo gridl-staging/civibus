@@ -76,6 +76,8 @@ function isCivicGeometryRequest(url: URL): boolean {
   return hasOnlyAllowedQueryParams(url, ["level", "state"]);
 }
 
+/**
+ */
 function getNcCivicGeometryFixture(url: URL): unknown | null {
   if (!isCivicGeometryRequest(url)) {
     return null;
@@ -144,6 +146,8 @@ function getCommitteeFixtureById(committeeId: string | null): CommitteeFixture |
   return null;
 }
 
+/**
+ */
 function getCommitteeFixtureResponseByPath(pathname: string): { body: unknown } | null {
   const summaryMatch = pathname.match(/^\/v1\/committees\/([^/]+)\/summary$/);
   if (summaryMatch) {
@@ -174,6 +178,8 @@ function getCommitteeFixtureResponseByPath(pathname: string): { body: unknown } 
   return null;
 }
 
+/**
+ */
 function buildPagedListResponse<TItem>(params: {
   url: URL;
   items: readonly TItem[];

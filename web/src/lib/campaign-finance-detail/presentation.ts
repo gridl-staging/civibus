@@ -42,6 +42,8 @@ export type CampaignFinanceFactRow = {
   href: string | null;
 };
 
+/**
+ */
 export type CommitteeTransactionRow = {
   id: string;
   date: string;
@@ -706,6 +708,8 @@ function buildSpendCategoryRows(
   }));
 }
 
+/**
+ */
 function buildCashOnHandTrendSeries(filingBreakdown: CommitteeFilingBreakdown): ChartSeries[] {
   const points = filingBreakdown.filings
     .filter((filing) => filing.cash_on_hand !== null)
@@ -735,6 +739,8 @@ function buildCashOnHandTrendSeries(filingBreakdown: CommitteeFilingBreakdown): 
   ];
 }
 
+/**
+ */
 export function buildCommitteeHighSignalSummaryPresentation(
   summary: CommitteeFundraisingSummary,
   filingBreakdown: CommitteeFilingBreakdown
@@ -757,6 +763,8 @@ export function buildCommitteeHighSignalSummaryPresentation(
   };
 }
 
+/**
+ */
 export function buildCommitteeDetailShellPresentation(
   detail: CommitteeDetailResponse
 ): CommitteeDetailShellPresentation {
@@ -774,6 +782,8 @@ export function buildCommitteeDetailShellPresentation(
   };
 }
 
+/**
+ */
 export function buildCandidateDetailShellPresentation(
   detail: CandidateDetailResponse,
   options?: {
@@ -867,6 +877,8 @@ function _computeDeviationRatio(currentTotal: number, expectedTotal: number): nu
   return Math.abs(currentTotal - expectedTotal) / expectedTotal;
 }
 
+/**
+ */
 export function buildCandidateCompletenessWarnings(
   summary: CandidateFundraisingSummary,
   l10Reference: CandidateL10Reference | null
@@ -942,6 +954,8 @@ function buildOutsideSpendingTransactionRows(
   }));
 }
 
+/**
+ */
 export function buildOutsideSpendingPresentation(
   ieSummary: IndependentExpenditureSummary | null,
   ieTransactions: IndependentExpenditureResponse[]
@@ -1045,6 +1059,8 @@ function isCommitteeOutsideSpendingEmpty(activity: CommitteeIndependentExpenditu
   );
 }
 
+/**
+ */
 export function buildCommitteeOutsideSpendingPresentation(
   activity: CommitteeIndependentExpenditureActivity
 ): CommitteeOutsideSpendingPresentation {
@@ -1062,6 +1078,8 @@ export function buildCommitteeOutsideSpendingPresentation(
   };
 }
 
+/**
+ */
 export function buildCandidateCommitteeBreakdown(
   summary: CandidateFundraisingSummary
 ): CandidateCommitteeBreakdownRow[] {

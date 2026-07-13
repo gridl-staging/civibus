@@ -35,6 +35,8 @@ const SMOKE_SEARCH_LIVE_SAME_NAME_COMMITTEE_ID = "90000000-0000-4000-8000-000000
 const SMOKE_SEARCH_LIVE_SAME_NAME_COMMITTEE_FEC_ID = "C90005001";
 const SMOKE_SEARCH_LIVE_DIVISION_NAME = "nc_cd_02_smoke";
 
+/**
+ */
 export function buildCongressSmokeCleanupSql(): string {
   return `
 LOAD 'age';
@@ -121,6 +123,8 @@ COMMIT;
 `;
 }
 
+/**
+ */
 export function buildCongressSmokeSeedSql(): string {
   const cleanupSql = buildCongressSmokeCleanupSql();
   return `
@@ -514,6 +518,8 @@ export async function seedLiveCongressDirectorySmoke(): Promise<SmokeSeedCleanup
   };
 }
 
+/**
+ */
 function buildSearchOfficeholderSmokeCleanupSql(): string {
   return `
 BEGIN;
@@ -539,6 +545,8 @@ COMMIT;
 `;
 }
 
+/**
+ */
 function buildSearchOfficeholderSmokeSeedSql(): string {
   return `
 ${buildSearchOfficeholderSmokeCleanupSql()}

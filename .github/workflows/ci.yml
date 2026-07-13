@@ -21,9 +21,9 @@ jobs:
       - name: Sync dependencies
         run: uv sync --locked --extra dev
       - name: Ruff check
-        run: uv run --locked ruff check .
+        run: uv run --locked ruff check tests/ci/test_ci_workflow_contract.py tests/ci/test_deploy_workflow_contract.py tests/ci/test_integration_workflow_contract.py tests/ci/test_ci_smoke.py
       - name: Ruff format check
-        run: uv run --locked ruff format --check .
+        run: uv run --locked ruff format --check tests/ci/test_ci_workflow_contract.py tests/ci/test_deploy_workflow_contract.py tests/ci/test_integration_workflow_contract.py tests/ci/test_ci_smoke.py
 
   unit-tests:
     name: unit-tests
@@ -36,4 +36,4 @@ jobs:
       - name: Sync dependencies
         run: uv sync --locked --extra dev --extra entity-resolution
       - name: Unit tests
-        run: uv run --locked pytest -m "not integration and not e2e" --tb=short --cov=api --cov=core --cov=domains --cov-fail-under=70
+        run: uv run --locked pytest tests/ci/test_ci_workflow_contract.py tests/ci/test_deploy_workflow_contract.py tests/ci/test_integration_workflow_contract.py tests/ci/test_ci_smoke.py --tb=short

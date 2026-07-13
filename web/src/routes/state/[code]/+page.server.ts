@@ -14,6 +14,8 @@ import {
 } from "$lib/server/api/state-pages";
 import type { PageServerLoad } from "./$types";
 
+/**
+ */
 export const load: PageServerLoad = ({ params, locals }) =>
   withApiResponseErrorHandling(async () => {
     const stateDetail = await fetchStateCampaignFinanceDetail(locals.api, params.code);

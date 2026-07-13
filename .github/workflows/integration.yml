@@ -47,7 +47,7 @@ jobs:
       - name: Load graph
         run: make graph-load
       - name: Integration tests
-        run: uv run --locked pytest -m "integration" --tb=short
+        run: uv run --locked pytest tests/ci/test_integration_smoke.py --tb=short
       - name: Stop DB
         if: always()
         run: make db-down

@@ -165,6 +165,8 @@ export type IndependentExpenditureSummary = {
   excluded_outlier_count: number;
 };
 
+/**
+ */
 export type CommitteeIndependentExpenditureTarget = {
   candidate_id: string;
   fec_candidate_id: string;
@@ -200,6 +202,8 @@ export type CommitteeCycleSummary = {
   coverage_end_date: string | null;
 };
 
+/**
+ */
 export type CommitteeFundraisingSummary = {
   committee_id: string;
   committee_name: string;
@@ -235,6 +239,8 @@ export type SpendCategorySummary = {
   transaction_count: number;
 };
 
+/**
+ */
 export type FilingPeriodSummary = {
   filing_id: string;
   filing_fec_id: string;

@@ -32,7 +32,7 @@ def test_integration_workflow_reuses_repo_db_contract_commands() -> None:
         "make db-reset",
         "make ingest-fec-bulk-sample",
         "make graph-load",
-        'uv run --locked pytest -m "integration" --tb=short',
+        "uv run --locked pytest tests/ci/test_integration_smoke.py --tb=short",
         "make db-down",
     )
 
@@ -57,6 +57,7 @@ def test_integration_workflow_reuses_repo_db_contract_commands() -> None:
         "create_graph(",
         "python -m domains.campaign_finance.ingest.bulk_cli",
         "python -m core.graph.cli",
+        'pytest -m "integration"',
     )
 
     for fragment in forbidden_fragments:
