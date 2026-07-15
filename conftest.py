@@ -31,6 +31,9 @@ _PERSON_BIO_MIGRATION_PATH = _REPO_ROOT / "core" / "schema" / "migrations" / "20
 _COMMITTEE_SUMMARY_DERIVED_MIGRATION_PATH = (
     _REPO_ROOT / "core" / "schema" / "migrations" / "2026_07_12_committee_summary_derived_aggregates.sql"
 )
+_ENTITY_SOURCE_CIVIC_TYPES_MIGRATION_PATH = (
+    _REPO_ROOT / "core" / "schema" / "migrations" / "2026_07_13_entity_source_civic_types.sql"
+)
 _ER_VIEWS_SCHEMA_PATH = _REPO_ROOT / "core" / "schema" / "er_views.sql"
 _CONTEST_SECTION_START = "-- Contest"
 _CONTEST_SECTION_END = "-- Contest Result"
@@ -116,6 +119,12 @@ _PERSON_BIO_CANARY_KEYS = frozenset(
     }
 )
 _COMMITTEE_SUMMARY_DERIVED_CANARY_PREFIX = "cf.committee_summary."
+_ENTITY_SOURCE_CIVIC_TYPES_CANARY_KEYS = frozenset(
+    {
+        "core.entity_source.entity_type.election",
+        "core.field_provenance.entity_type.election",
+    }
+)
 _GRAPH_CANARY = "ag_catalog.ag_graph.civibus"
 
 _repo_root_path = str(_REPO_ROOT)
@@ -447,6 +456,13 @@ def _bootstrap_missing_stage1_canaries(connection: psycopg.Connection, *, missin
                 connection,
                 cursor,
                 _COMMITTEE_SUMMARY_DERIVED_MIGRATION_PATH.read_text(encoding="utf-8"),
+            )
+    if _ENTITY_SOURCE_CIVIC_TYPES_CANARY_KEYS & set(missing_canaries):
+        with connection.cursor() as cursor:
+            _execute_stage1_canary_repair(
+                connection,
+                cursor,
+                _ENTITY_SOURCE_CIVIC_TYPES_MIGRATION_PATH.read_text(encoding="utf-8"),
             )
     if "civic.officeholding.date_precision" in missing_canaries:
         _ensure_core_date_precision_type(connection)

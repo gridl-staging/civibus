@@ -214,6 +214,7 @@ body {
 .detail {
   display: grid;
   gap: 1rem;
+  min-width: 0;
 }
 
 .detail__header h2 {
@@ -228,6 +229,16 @@ body {
 
 .detail__panel h3 {
   margin: 0 0 0.5rem;
+}
+
+.detail__panel,
+.detail__committee-card,
+.detail__row,
+.detail__row > *,
+.chart-wrapper,
+.chart-wrapper__body {
+  max-width: 100%;
+  min-width: 0;
 }
 
 .skeleton-panel {
@@ -308,6 +319,84 @@ body {
   font-weight: 700;
   color: #0f3554;
   overflow-wrap: anywhere;
+}
+
+.detail__money-glance {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.detail__section-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.35rem 0.75rem;
+}
+
+.detail__section-heading h4,
+.detail__section-heading p {
+  margin: 0;
+}
+
+.detail__segmented-control {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.detail__segmented-control button {
+  min-height: 44px;
+  min-width: 44px;
+  padding: 0.4rem 0.9rem;
+  border: 1px solid #9eb7cc;
+  border-radius: 0.45rem;
+  background: #ffffff;
+  color: #0f3554;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.detail__segmented-control button[aria-pressed="true"] {
+  border-color: #0f6b8f;
+  background: #e8f4f8;
+}
+
+.detail__cta-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  min-width: 44px;
+}
+
+.detail__section-heading p {
+  color: #5b7488;
+  font-weight: 600;
+}
+
+.detail__cycle-selector {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.detail__cycle-link {
+  min-height: 44px;
+  min-width: 44px;
+  display: inline-grid;
+  place-items: center;
+  padding: 0.45rem 0.8rem;
+  border: 1px solid #9eb7cc;
+  border-radius: 0.45rem;
+  color: #0f3554;
+  background: #ffffff;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.detail__cycle-link[aria-current="page"] {
+  border-color: #0f6b8f;
+  background: #e8f4f8;
 }
 
 .detail__list {
@@ -392,6 +481,8 @@ body {
 
 .detail__table-scroll {
   width: 100%;
+  max-width: 100%;
+  min-width: 0;
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
 }

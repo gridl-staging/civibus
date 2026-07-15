@@ -68,6 +68,7 @@ EXPECTED_GIST_INDEXES = [
 ]
 EXPECTED_ZCTA_DISTRICT_COLUMNS = [
     "zcta5|text|NO|",
+    "boundary_year|smallint|NO|",
     "state_fips|text|NO|",
     "cd_geoid|text|NO|",
     "district_number|text|NO|",
@@ -363,12 +364,36 @@ def test_zcta_district_reference_table_contract() -> None:
         FROM information_schema.columns
         WHERE table_schema = 'civic'
           AND table_name = 'zcta_district'
-          AND column_name IN ('zcta5', 'state_fips', 'cd_geoid', 'district_number', 'land_share', 'source_url')
+          AND column_name IN (
+              'zcta5',
+              'boundary_year',
+              'state_fips',
+              'cd_geoid',
+              'district_number',
+              'land_share',
+              'source_url'
+          )
         ORDER BY ordinal_position;
         """,
     )
     assert rows == EXPECTED_ZCTA_DISTRICT_COLUMNS
     assert _column_format_type(TEST_DATABASE, "zcta_district", "land_share") == "numeric(7,5)"
+    assert _column_format_type(TEST_DATABASE, "zcta_district", "boundary_year") == "smallint"
+
+    primary_key_rows = _run_psql_command(
+        TEST_DATABASE,
+        """
+        SELECT array_to_string(array_agg(a.attname ORDER BY k.ordinality), ',')
+        FROM pg_constraint c
+        JOIN pg_class r ON r.oid = c.conrelid
+        JOIN unnest(c.conkey) WITH ORDINALITY AS k(attnum, ordinality) ON TRUE
+        JOIN pg_attribute a ON a.attrelid = r.oid AND a.attnum = k.attnum
+        WHERE r.relnamespace = 'civic'::regnamespace
+          AND r.relname = 'zcta_district'
+          AND c.contype = 'p';
+        """,
+    )
+    assert primary_key_rows == ["zcta5,boundary_year"]
 
     comment_rows = _run_psql_command(
         TEST_DATABASE,
@@ -379,14 +404,14 @@ def test_zcta_district_reference_table_contract() -> None:
     assert comment_rows == [EXPECTED_ZCTA_DISTRICT_COMMENT]
 
 
-def test_zcta_district_lookup_indexes() -> None:
-    cd_geoid_index = _index_definition(TEST_DATABASE, "idx_zcta_district_cd_geoid")
+def test_zcta_district_lookup_indexes_include_boundary_year() -> None:
+    cd_geoid_index = _index_definition(TEST_DATABASE, "idx_zcta_district_cd_geoid_boundary_year")
     assert cd_geoid_index is not None
-    assert "(cd_geoid)" in cd_geoid_index.lower()
+    assert "(cd_geoid, boundary_year)" in cd_geoid_index.lower()
 
-    state_fips_index = _index_definition(TEST_DATABASE, "idx_zcta_district_state_fips")
+    state_fips_index = _index_definition(TEST_DATABASE, "idx_zcta_district_state_fips_boundary_year")
     assert state_fips_index is not None
-    assert "(state_fips)" in state_fips_index.lower()
+    assert "(state_fips, boundary_year)" in state_fips_index.lower()
 
 
 def test_civic_schema_unique_indexes() -> None:

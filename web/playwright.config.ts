@@ -1,8 +1,8 @@
 import { defineConfig, devices } from 'playwright/test';
-import { resolveSmokeApiPort } from "./src/lib/server/api/smoke-port.ts";
+import { resolveSmokeApiPort, resolveSmokeWebPort } from "./src/lib/server/api/smoke-port";
 
 const API_PORT = resolveSmokeApiPort(process.env);
-const WEB_PORT = 4173;
+const WEB_PORT = resolveSmokeWebPort(process.env);
 const USE_LIVE_API = process.env.SMOKE_USE_LIVE_API === "1";
 const smokeMode = process.env.SMOKE_MODE ?? "local";
 const isProductionSmokeMode = smokeMode === "production";
@@ -34,6 +34,12 @@ export default defineConfig({
       }
     }
   ],
+  expect: {
+    toHaveScreenshot: {
+      pathTemplate:
+        "{snapshotDir}/{testFileDir}/{testFileName}-snapshots/{arg}{-projectName}{ext}"
+    }
+  },
   use: {
     baseURL
   },

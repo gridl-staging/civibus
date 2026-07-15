@@ -1,6 +1,6 @@
 <script lang="ts">
   import { navigating } from "$app/stores";
-  import Chart from "$lib/charts/Chart.svelte";
+  import OutsideSpendingChart from "$lib/charts/OutsideSpendingChart.svelte";
   import type { MapLayerVisibility, MapPageLevel } from "$lib/config/app";
   import TrustSection from "$lib/detail-trust/TrustSection.svelte";
   import SkeletonPanel from "$lib/loading/SkeletonPanel.svelte";
@@ -37,6 +37,7 @@
     | CandidacyDetailResponse
     | OfficeholdingDetailResponse;
   export let contestCandidateFinanceByPersonId: ContestCandidateFinanceByPersonId = {};
+  export let contestSelectedCycle: number | null = null;
   export let contestMap:
     | {
         pageLevel: MapPageLevel;
@@ -61,7 +62,8 @@
       officeViewModel = buildOfficeDetailPresentation(data as OfficeDetailResponse);
     } else if (entityType === "contest") {
       contestViewModel = buildContestDetailPresentation(data as ContestDetailResponse, {
-        candidateFinanceByPersonId: contestCandidateFinanceByPersonId
+        candidateFinanceByPersonId: contestCandidateFinanceByPersonId,
+        selectedCycle: contestSelectedCycle
       });
     } else if (entityType === "candidacy") {
       candidacyViewModel = buildCandidacyDetailPresentation(data as CandidacyDetailResponse);
@@ -427,56 +429,86 @@
                   {/if}
                 </h4>
 
-                {#if financeRow.fundraisingSummary}
-                  <h5>Fundraising summary</h5>
+                {#if financeRow.financeFacts.length > 0}
                   <dl class="detail__rows">
-                    <div class="detail__row">
-                      <dt>Total raised</dt>
-                      <dd>{financeRow.fundraisingSummary.totalRaised}</dd>
-                    </div>
-                    <div class="detail__row">
-                      <dt>Total spent</dt>
-                      <dd>{financeRow.fundraisingSummary.totalSpent}</dd>
-                    </div>
-                    <div class="detail__row">
-                      <dt>Net</dt>
-                      <dd>{financeRow.fundraisingSummary.net}</dd>
-                    </div>
-                    <div class="detail__row">
-                      <dt>Transactions</dt>
-                      <dd>{financeRow.fundraisingSummary.transactionCount}</dd>
-                    </div>
+                    {#each financeRow.financeFacts as fact (fact.label)}
+                      <div class="detail__row">
+                        <dt>{fact.label}</dt>
+                        <dd>{fact.value}</dd>
+                      </div>
+                    {/each}
                   </dl>
-                  <Chart
-                    kind="bar"
-                    title={`Finance chart: ${financeRow.personName}`}
-                    ariaLabel={`Finance chart for ${financeRow.personName}`}
-                    series={financeRow.financeChartSeries}
-                  />
                 {:else}
                   <p>Candidate fundraising data is not yet available.</p>
                 {/if}
 
                 <h5>Outside Spending</h5>
-                {#if financeRow.outsideSpending.emptyMessage}
+                {#if financeRow.outsideSpendingFigure === null}
                   <p>{financeRow.outsideSpending.emptyMessage}</p>
                 {:else}
-                  <dl class="detail__rows">
-                    <div class="detail__row">
-                      <dt>Support total</dt>
-                      <dd>{financeRow.outsideSpending.supportTotal}</dd>
-                    </div>
-                    <div class="detail__row">
-                      <dt>Oppose total</dt>
-                      <dd>{financeRow.outsideSpending.opposeTotal}</dd>
-                    </div>
-                  </dl>
-                  <Chart
-                    kind="bar"
-                    title={`Outside spending chart: ${financeRow.personName}`}
-                    ariaLabel={`Outside spending chart for ${financeRow.personName}`}
-                    series={financeRow.outsideSpendingChartSeries}
+                  {#if financeRow.outsideSpending.explanatoryBlock}
+                    <p>{financeRow.outsideSpending.explanatoryBlock}</p>
+                  {/if}
+                  <OutsideSpendingChart
+                    testId={`contest-outside-spending-${financeRow.personId}`}
+                    cycle={financeRow.outsideSpendingFigure.cycle}
+                    coverageThrough={financeRow.outsideSpendingFigure.coverageThrough}
+                    sources={financeRow.outsideSpendingFigure.sources}
+                    rows={financeRow.outsideSpendingFigure.rows}
+                    topSpenders={financeRow.outsideSpendingFigure.topSpenders}
                   />
+                  {#if financeRow.outsideSpending.topSpenders.length > 0}
+                    <h6>Top spenders</h6>
+                    <div class="detail__table-scroll" data-testid="contest-top-spenders-scroll">
+                      <table>
+                        <thead>
+                          <tr>
+                            <th>Committee</th>
+                            <th>Stance</th>
+                            <th>Total</th>
+                            <th>Transactions</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {#each financeRow.outsideSpending.topSpenders as spender (spender.committeeHref + spender.stance)}
+                            <tr>
+                              <td><a href={spender.committeeHref}>{spender.committeeName}</a></td>
+                              <td>{spender.stance}</td>
+                              <td>{spender.totalAmount}</td>
+                              <td>{spender.transactionCountLabel}</td>
+                            </tr>
+                          {/each}
+                        </tbody>
+                      </table>
+                    </div>
+                  {/if}
+                  {#if financeRow.outsideSpending.transactionRows.length > 0}
+                    <h6>Transactions</h6>
+                    <div class="detail__table-scroll" data-testid="contest-outside-spending-transactions">
+                      <table>
+                        <thead>
+                          <tr>
+                            <th>Date</th>
+                            <th>Dissemination Date</th>
+                            <th>Spender</th>
+                            <th>Stance</th>
+                            <th>Amount</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {#each financeRow.outsideSpending.transactionRows as tx (tx.date + tx.spenderHref + tx.amount)}
+                            <tr>
+                              <td>{tx.date}</td>
+                              <td>{tx.disseminationDate}</td>
+                              <td><a href={tx.spenderHref}>{tx.spender}</a></td>
+                              <td>{tx.stance}</td>
+                              <td>{tx.amount}</td>
+                            </tr>
+                          {/each}
+                        </tbody>
+                      </table>
+                    </div>
+                  {/if}
                 {/if}
               </article>
             {/each}

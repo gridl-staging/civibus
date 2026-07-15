@@ -183,8 +183,10 @@ const EMPTY_PERSON_CONTRIBUTION_INSIGHTS: PersonContributionInsights = {
   person_id: PERSON_ID,
   has_data: false,
   metadata: {
+    selected_cycle: 2026,
+    available_cycles: [2022, 2024, 2026],
     coverage_start_date: "2022-01-01",
-    coverage_end_date: null,
+    coverage_end_date: "2026-12-31",
     cycles_included: [2022, 2024, 2026],
     committee_count: 0,
     approximate_geography: false,
@@ -203,6 +205,11 @@ const EMPTY_PERSON_CONTRIBUTION_INSIGHTS: PersonContributionInsights = {
     source: "none"
   },
   geography: {
+    geography_mode: "excluded",
+    classified_amount: "0.00",
+    classified_transaction_count: 0,
+    unknown_amount: "0.00",
+    unknown_transaction_count: 0,
     by_state: [],
     by_district: [],
     district_share: {
@@ -851,7 +858,8 @@ describe("route head rendering", () => {
             county: createEmptyFeatureCollection(),
             congressional_district: createEmptyFeatureCollection()
           },
-          contestCandidateFinanceByPersonId: {}
+          contestCandidateFinanceByPersonId: {},
+          contestSelectedCycle: 2026
         }
       }
     });

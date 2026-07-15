@@ -1,15 +1,18 @@
 
 from __future__ import annotations
 
+import re
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from api.models._validation import validate_inclusive_bounds
 from api.models.provenance import SourceInfo
+
+_MONEY_QUANTUM = Decimal("0.01")
 
 
 class CommitteeResponse(BaseModel):
@@ -158,6 +161,10 @@ class TopSpenderEntry(BaseModel):
 
 class IndependentExpenditureSummary(BaseModel):
     candidate_id: UUID
+    selected_cycle: int
+    coverage_start_date: date
+    coverage_end_date: date
+    available_cycles: list[int] = Field(default_factory=list)
     support_total: Decimal
     oppose_total: Decimal
     support_count: int
@@ -200,6 +207,13 @@ class ContributionInsightsMonthlyTotal(BaseModel):
     total_amount: Decimal
     transaction_count: int
 
+    @field_validator("month")
+    @classmethod
+    def validate_backend_month(cls, value: str) -> str:
+        if not re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", value):
+            raise ValueError("month must use backend-owned YYYY-MM format")
+        return value
+
 
 class ContributionInsightsItemizedBucket(BaseModel):
     label: str
@@ -230,14 +244,27 @@ class ContributionInsightsDistrictShare(BaseModel):
 
 
 class ContributionInsightsGeography(BaseModel):
+    """Bounded geography rollups for the selected-cycle person money view.
+
+    ``by_state`` is the single owner for state bars: callers should expect at
+    most five ranked states plus ordinary ``Other states`` and ``Unknown`` rows.
+    """
+
     by_state: list[ContributionInsightsGeographyRow] = Field(default_factory=list)
     by_district: list[ContributionInsightsGeographyRow] = Field(default_factory=list)
     district_share: ContributionInsightsDistrictShare
+    geography_mode: Literal["district", "statewide", "state_bars_only", "excluded"] = "excluded"
+    classified_amount: Decimal = Decimal("0.00")
+    classified_transaction_count: int = 0
+    unknown_amount: Decimal = Decimal("0.00")
+    unknown_transaction_count: int = 0
 
 
 class ContributionInsightsMetadata(BaseModel):
+    selected_cycle: int
     coverage_start_date: date
-    coverage_end_date: date | None = None
+    coverage_end_date: date
+    available_cycles: list[int] = Field(default_factory=list)
     cycles_included: list[int] = Field(default_factory=list)
     committee_count: int
     approximate_geography: bool
@@ -397,10 +424,27 @@ class CommitteeCycleSummary(BaseModel):
     coverage_end_date: date | None = None
 
 
+class ReceiptSourceComponent(BaseModel):
+    label: str
+    total_amount: Decimal
+    source: Literal["fec_committee_summary", "none"]
+
+    @field_validator("total_amount")
+    @classmethod
+    def validate_money_scale(cls, value: Decimal) -> Decimal:
+        if value != value.quantize(_MONEY_QUANTUM):
+            raise ValueError("total_amount must be quantized to cents")
+        return value
+
+
 class CommitteeFundraisingSummary(BaseModel):
 
     committee_id: UUID
     committee_name: str
+    selected_cycle: int
+    coverage_start_date: date
+    coverage_end_date: date
+    available_cycles: list[int] = Field(default_factory=list)
     total_raised: Decimal
     total_spent: Decimal
     net: Decimal
@@ -424,12 +468,21 @@ class CommitteeFundraisingSummary(BaseModel):
     # "fec_committee_summary" = summed official supported-cycle rows;
     # "derived" = qualifying-transaction sums.
     summary_source: Literal["fec_committee_summary", "derived"] = "derived"
+    receipt_source_composition: list[ReceiptSourceComponent] = Field(default_factory=list)
+    selected_cycle_coverage_complete: bool = False
+    can_render_share: bool = False
+    receipt_source_caveats: list[str] = Field(default_factory=list)
+    debts_owed_by_committee: Decimal | None = None
 
 
 class CandidateFundraisingSummary(BaseModel):
 
     candidate_id: UUID
     candidate_name: str
+    selected_cycle: int
+    coverage_start_date: date
+    coverage_end_date: date
+    available_cycles: list[int] = Field(default_factory=list)
     total_raised: Decimal
     total_spent: Decimal
     net: Decimal
@@ -437,6 +490,10 @@ class CandidateFundraisingSummary(BaseModel):
     committees: list[CommitteeFundraisingSummary]
     # Stage 3: official FEC weball cash-on-hand. None when no official totals are loaded.
     cash_on_hand: Decimal | None = None
+    candidate_contrib: Decimal | None = None
+    candidate_loans: Decimal | None = None
+    candidate_loan_repay: Decimal | None = None
+    net_self_funding: Decimal | None = None
     # Stage 3: which source produced total_raised/total_spent/net.
     # "fec_weball" = candidate row's official totals; "derived" = sum of linked committee transactions.
     summary_source: Literal["fec_weball", "derived"]
@@ -445,6 +502,11 @@ class CandidateFundraisingSummary(BaseModel):
     # committee-summary feed carries a transaction count, so this stays identical
     # to ``transaction_count`` under a name that stays truthful next to official totals.
     itemized_transaction_count: int = 0
+    receipt_source_composition: list[ReceiptSourceComponent] = Field(default_factory=list)
+    selected_cycle_coverage_complete: bool = False
+    can_render_share: bool = False
+    receipt_source_caveats: list[str] = Field(default_factory=list)
+    debts_owed_by_committee: Decimal | None = None
 
 
 StateCoverageTier = Literal[

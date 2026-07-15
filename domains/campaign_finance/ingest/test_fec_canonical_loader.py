@@ -189,10 +189,18 @@ class TestElectoralDivisionResolution:
 
         row = db_conn.execute(
             """
-            SELECT division_type, state, district_number, parent_id
-            FROM civic.electoral_division
-            WHERE name = 'nc_cd_01' AND division_type = 'congressional_district'
+            SELECT d.division_type, d.state, d.district_number, d.parent_id
+            FROM civic.electoral_division d
+            JOIN civic.contest c
+              ON c.electoral_division_id = d.id
+            JOIN core.source_record sr
+              ON sr.id = c.source_record_id
+            WHERE d.name = 'nc_cd_01'
+              AND d.division_type = 'congressional_district'
+              AND d.boundary_year = 2022
+              AND sr.data_source_id = %s
             """,
+            (ds.id,),
         ).fetchone()
         assert row is not None
         assert row[0] == "congressional_district"

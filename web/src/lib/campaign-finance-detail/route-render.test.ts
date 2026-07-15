@@ -18,6 +18,7 @@ import {
   COMMITTEE_CANONICAL_DATA,
   COMMITTEE_CANONICAL_DATA_WITH_IE,
   COMMITTEE_ID,
+  DEFAULT_SELECTED_CYCLE_FIELDS,
   ORG_ID,
   PERSON_ID,
   SAMPLE_TRANSACTION,
@@ -276,6 +277,9 @@ describe("campaign-finance route renders", () => {
       rendered.body.indexOf("<h3>Top vendors</h3>")
     );
     expect(rendered.body.indexOf("<h3>Top vendors</h3>")).toBeLessThan(
+      rendered.body.indexOf("<h3>Per-cycle history</h3>")
+    );
+    expect(rendered.body.indexOf("<h3>Per-cycle history</h3>")).toBeLessThan(
       rendered.body.indexOf("<h3>Cash-on-hand trend</h3>")
     );
     expect(rendered.body.indexOf("<h3>Cash-on-hand trend</h3>")).toBeLessThan(
@@ -380,6 +384,22 @@ describe("campaign-finance route renders", () => {
                 transaction_count: 1,
                 cash_on_hand: "85.00",
                 row_id: "f1:N"
+              },
+              {
+                filing_id: "f2",
+                filing_fec_id: "FEC-2",
+                filing_name: "Q2",
+                report_type: "Q2",
+                amendment_indicator: "N",
+                coverage_start_date: "2026-05-01",
+                coverage_end_date: "2026-06-30",
+                receipt_date: "2026-07-15",
+                total_raised: "250.00",
+                total_spent: "84.50",
+                net: "165.50",
+                transaction_count: 2,
+                cash_on_hand: "250.50",
+                row_id: "f2:N"
               }
             ]
           })
@@ -399,7 +419,25 @@ describe("campaign-finance route renders", () => {
     expect(rendered.body).toContain("<h3>Spend categories</h3>");
     expect(rendered.body).toContain("media");
     expect(rendered.body).toContain("<h3>Cash-on-hand trend</h3>");
-    expect(rendered.body).toContain('aria-label="Committee cash-on-hand trend"');
+    expect(rendered.body).toContain(
+      "Cash on hand is $250.50 at the latest filing period in the 2026 cycle."
+    );
+    expect(rendered.body).toContain("March 31, 2026");
+    expect(rendered.body).toContain("June 30, 2026");
+    expect(rendered.body).toContain("Missing source coverage before this filing period.");
+    expect(rendered.body).toContain("View chart data");
+    expect(rendered.body).toContain('aria-label="Cash on hand trend by filing period"');
+    expect(rendered.body).not.toContain('aria-label="Committee cash-on-hand trend"');
+
+    const filingTable = extractElementByTestId(rendered.body, "filing-breakdown-scroll");
+    expect(filingTable).not.toBeNull();
+    expect(filingTable).toContain("<th>Total receipts</th>");
+    expect(filingTable).toContain("<th>Total disbursements</th>");
+    expect(filingTable).toContain("<th>Cash on hand</th>");
+    expect(filingTable).toContain("<th>Transactions</th>");
+    expect(filingTable).not.toContain("<th>Raised</th>");
+    expect(filingTable).not.toContain("<th>Spent</th>");
+    expect(filingTable).not.toContain("<th>Net</th>");
   });
 
   it("renders explicit no-category and no-trend messages when committee summary omits those aggregates", () => {
@@ -420,7 +458,8 @@ describe("campaign-finance route renders", () => {
     });
 
     expect(rendered.body).toContain("Spend categories are not available for this committee.");
-    expect(rendered.body).toContain("Cash-on-hand trend is not available from reported filing periods.");
+    expect(rendered.body).toContain("Cash on hand needs two or more dated filing-period values before plotting.");
+    expect(rendered.body).not.toContain('aria-label="Committee cash-on-hand trend"');
   });
 
   it("renders IE-aware committee transaction columns via presenter-normalized fields", () => {
@@ -813,6 +852,7 @@ describe("DetailPage route presentation", () => {
         presentation: buildCandidateRoutePresentation({
           ...CANDIDATE_CANONICAL_DATA,
           ieSummary: asDeferredValue({
+            ...DEFAULT_SELECTED_CYCLE_FIELDS,
             candidate_id: CANDIDATE_ID,
             support_total: "0.00",
             oppose_total: "0.00",

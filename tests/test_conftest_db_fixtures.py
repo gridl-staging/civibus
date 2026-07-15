@@ -438,6 +438,37 @@ def test_stage1_canary_bootstrap_repairs_candidate_committee_link_date_precision
     assert "ADD COLUMN IF NOT EXISTS date_precision core.date_precision NOT NULL DEFAULT 'year'" in executed_sql
 
 
+def test_stage1_canaries_include_entity_source_civic_types() -> None:
+    canary_names = [name for name, _check in bootstrap_canaries._stage1_canary_checks()]
+
+    assert "core.entity_source.entity_type.election" in bootstrap_canaries.BOOTSTRAP_CANARIES
+    assert "core.field_provenance.entity_type.election" in bootstrap_canaries.BOOTSTRAP_CANARIES
+    assert canary_names == list(bootstrap_canaries.BOOTSTRAP_CANARIES)
+
+
+def test_stage1_canary_bootstrap_repairs_entity_source_civic_types() -> None:
+    mocked_connection = MagicMock()
+    mocked_cursor = MagicMock()
+    mocked_connection.cursor.return_value.__enter__.return_value = mocked_cursor
+
+    root_conftest._bootstrap_missing_stage1_canaries(
+        mocked_connection,
+        missing_canaries=[
+            "core.entity_source.entity_type.election",
+            "core.field_provenance.entity_type.election",
+        ],
+    )
+
+    executed_sql = "\n".join(str(call.args[0]) for call in mocked_cursor.execute.call_args_list)
+    assert "ALTER TABLE core.entity_source" in executed_sql
+    assert "ALTER TABLE core.field_provenance" in executed_sql
+    assert "entity_source_entity_type_check" in executed_sql
+    assert "field_provenance_entity_type_check" in executed_sql
+    assert "'election'" in executed_sql
+    assert "'filing_deadline'" in executed_sql
+    assert "'reporting_period'" in executed_sql
+
+
 def test_stage1_canary_bootstrap_repairs_only_match_decision_owner(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

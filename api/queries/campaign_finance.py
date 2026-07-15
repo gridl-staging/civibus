@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import dataclass
+from datetime import date
 from decimal import Decimal
 from functools import lru_cache
 import json
@@ -151,7 +153,7 @@ CANDIDATE_LINKED_COMMITTEE_IDS_SQL = """
     SELECT DISTINCT committee_id
     FROM cf.candidate_committee_link
     WHERE candidate_id = %s
-      AND valid_period @> CURRENT_DATE
+      AND valid_period && daterange(%s, %s, '[]')
     ORDER BY committee_id ASC
 """
 
@@ -168,8 +170,26 @@ COMMITTEE_CYCLE_SUMMARIES_SQL = """
         coverage_end_date
     FROM cf.committee_summary
     WHERE committee_id = %s
-      AND cycle = ANY(%s)
+      AND cycle = %s
     ORDER BY cycle ASC
+"""
+
+COMMITTEE_RECEIPT_SOURCE_ROWS_SQL = """
+    SELECT
+        committee_id,
+        total_receipts,
+        individual_contributions,
+        other_committee_contributions,
+        party_committee_contributions,
+        candidate_contributions,
+        candidate_loans,
+        transfers_from_other_authorized_committees,
+        debts_owed_by_committee,
+        coverage_start_date,
+        coverage_end_date
+    FROM cf.committee_summary
+    WHERE committee_id = ANY(%s)
+      AND cycle = %s
 """
 
 COMMITTEE_NAME_SQL = """
@@ -196,7 +216,7 @@ COMMITTEE_LINKED_CANDIDATES_SQL = f"""
     FROM cf.candidate_committee_link link
     JOIN cf.candidate c ON c.id = link.candidate_id
     WHERE link.committee_id = %s
-      AND link.valid_period @> CURRENT_DATE
+      AND link.valid_period && daterange(%s, %s, '[]')
     ORDER BY c.name ASC, c.id ASC
 """
 
@@ -207,7 +227,11 @@ CANDIDATE_OFFICIAL_TOTALS_SQL = """
     SELECT
         total_receipts,
         total_disbursements,
-        cash_on_hand
+        cash_on_hand,
+        candidate_contrib,
+        candidate_loans,
+        candidate_loan_repay,
+        summary_coverage_end_date
     FROM cf.candidate
     WHERE id = %s
 """
@@ -251,6 +275,15 @@ _COMMITTEE_TOP_PARTIES_LIMIT = 5
 _COMMITTEE_SPEND_CATEGORY_LIMIT = 5
 _COMMITTEE_IN_KIND_RECEIPT_CODE = "15Z"
 _COMMITTEE_LOAN_RECEIPT_PREFIX = "16"
+_RECEIPT_RECONCILIATION_TOLERANCE = Decimal("0.01")
+_RECEIPT_COMPONENT_LABELS = {
+    "individual_contributions": "Individual contributions",
+    "other_committee_contributions": "PAC/other committee contributions",
+    "party_committee_contributions": "Party committee contributions",
+    "candidate_funding": "Candidate funding",
+    "transfers_from_other_authorized_committees": "Transfers from other authorized committees",
+    "other_receipts": "Other receipts",
+}
 
 # Stage 5: cycles for which ``cf.committee_summary`` official totals are considered
 # authoritative. Kept in sync with ``core.refresh.job_builders._active_committee_summary_cycles``
@@ -258,18 +291,59 @@ _COMMITTEE_LOAN_RECEIPT_PREFIX = "16"
 # top-level committee aggregate and the per-cycle ``cycle_summaries`` payload.
 SUPPORTED_COMMITTEE_SUMMARY_CYCLES: tuple[int, ...] = (2022, 2024, 2026)
 CONTRIBUTION_INSIGHTS_CYCLES: tuple[int, ...] = (2022, 2024, 2026)
+
+
+@dataclass(frozen=True)
+class SelectedCycle:
+    selected_cycle: int
+    coverage_start_date: date
+    coverage_end_date: date
+    available_cycles: tuple[int, ...]
+
+    def as_payload(self) -> dict[str, Any]:
+        return {
+            "selected_cycle": self.selected_cycle,
+            "coverage_start_date": self.coverage_start_date,
+            "coverage_end_date": self.coverage_end_date,
+            "available_cycles": list(self.available_cycles),
+        }
+
+
+def resolve_selected_cycle(cycle: int | None = None) -> SelectedCycle:
+    """Resolve and validate the selected federal campaign-finance cycle."""
+    available_cycles = SUPPORTED_COMMITTEE_SUMMARY_CYCLES
+    selected_cycle = max(available_cycles) if cycle is None else cycle
+    if selected_cycle not in available_cycles:
+        supported = ", ".join(str(value) for value in available_cycles)
+        raise ValueError(f"Unsupported cycle {selected_cycle}; supported cycles: {supported}")
+    return SelectedCycle(
+        selected_cycle=selected_cycle,
+        coverage_start_date=date(selected_cycle - 1, 1, 1),
+        coverage_end_date=date(selected_cycle, 12, 31),
+        available_cycles=available_cycles,
+    )
+
+
+def _coerce_selected_cycle(cycle: SelectedCycle | int | None = None) -> SelectedCycle:
+    if isinstance(cycle, SelectedCycle):
+        return cycle
+    return resolve_selected_cycle(cycle)
+
+
 DONOR_SEARCH_MIN_QUERY_LEN = 3
 DONOR_SEARCH_MAX_LIMIT = 50
 _DONOR_SEARCH_NESTED_DETAIL_LIMIT = 5
 _DONOR_SEARCH_SUPPORTED_MODES = frozenset({"name", "employer", "zip"})
 _ZIP5_SEARCH_RE = re.compile(r"^\s*(\d{5})(?:-?\d{4})?\s*$")
 
-# The <= $200 bucket mirrors FEC itemization; $3,300 tracks the federal per-election limit.
+# FEC comparison buckets use absolute amount for membership while signed amounts
+# remain authoritative for totals, so correction-like rows reduce dollars.
 CONTRIBUTION_INSIGHTS_SIZE_BUCKETS: tuple[tuple[str, Decimal, Decimal | None], ...] = (
-    ("$1-$200", Decimal("0.01"), Decimal("200.00")),
-    ("$201-$500", Decimal("200.01"), Decimal("500.00")),
-    ("$501-$3,300", Decimal("500.01"), Decimal("3300.00")),
-    ("$3,301+", Decimal("3300.01"), None),
+    ("$200 and under", Decimal("0.01"), Decimal("200.00")),
+    ("$200.01-$499.99", Decimal("200.01"), Decimal("499.99")),
+    ("$500-$999.99", Decimal("500.00"), Decimal("999.99")),
+    ("$1,000-$1,999.99", Decimal("1000.00"), Decimal("1999.99")),
+    ("$2,000 and over", Decimal("2000.00"), None),
 )
 
 # Documented Stage 1 fallback: this maps counties to committee-registration cities.
@@ -288,7 +362,7 @@ _PERSON_CONTRIBUTION_INSIGHTS_LINKED_COMMITTEES_SQL = """
     JOIN cf.candidate_committee_link link
       ON link.candidate_id = candidate.id
     WHERE candidate.person_id = %s
-      AND link.valid_period @> CURRENT_DATE
+      AND link.valid_period && daterange(%s, %s, '[]')
     ORDER BY link.committee_id
 """
 
@@ -307,7 +381,7 @@ _PERSON_CONTRIBUTION_INSIGHTS_OFFICE_SQL = """
     LIMIT 1
 """
 
-_INDIVIDUAL_RECEIPT_TRANSACTION_WHERE_SQL = contribution_insights_transaction_where_sql()
+_INDIVIDUAL_RECEIPT_TRANSACTION_WHERE_SQL = contribution_insights_transaction_where_sql(max_date_sql="%s")
 
 _INDIVIDUAL_RECEIPT_QUALIFYING_WHERE_SQL = (
     _INDIVIDUAL_RECEIPT_TRANSACTION_WHERE_SQL + NOT_SUPERSEDED_SOURCE_RECORD_WHERE_SQL
@@ -326,7 +400,8 @@ _PERSON_CONTRIBUTION_INSIGHTS_QUALIFYING_CTE = f"""
             t.contributor_employer,
             t.contributor_city,
             t.contributor_state,
-            LEFT(regexp_replace(COALESCE(t.contributor_zip, ''), '[^0-9]', '', 'g'), 5) AS zcta5
+            LEFT(regexp_replace(COALESCE(t.contributor_zip, ''), '[^0-9]', '', 'g'), 5) AS zcta5,
+            LENGTH(regexp_replace(COALESCE(t.contributor_zip, ''), '[^0-9]', '', 'g')) >= 5 AS has_valid_zip
         FROM cf.transaction t
         JOIN linked_committees linked
           ON linked.committee_id = t.committee_id
@@ -349,7 +424,10 @@ _PERSON_CONTRIBUTION_INSIGHTS_MONTHLY_SQL = f"""
 _PERSON_CONTRIBUTION_INSIGHTS_STATE_SQL = f"""
     {_PERSON_CONTRIBUTION_INSIGHTS_QUALIFYING_CTE}
     SELECT
-        COALESCE(NULLIF(contributor_state, ''), 'Unknown') AS label,
+        CASE
+            WHEN NULLIF(contributor_state, '') IS NULL OR NOT has_valid_zip THEN 'Unknown'
+            ELSE contributor_state
+        END AS label,
         COALESCE(SUM(amount), 0) AS total_amount,
         COUNT(*)::integer AS transaction_count
     FROM qualifying_transactions
@@ -372,8 +450,8 @@ _PERSON_CONTRIBUTION_INSIGHTS_BUCKET_TOTALS_SQL = f"""
         COALESCE(SUM(amount), 0) AS total_amount,
         COUNT(*)::integer AS transaction_count
     FROM qualifying_transactions
-    WHERE amount >= %s
-      AND (%s::numeric IS NULL OR amount <= %s)
+    WHERE ABS(amount) >= %s
+      AND (%s::numeric IS NULL OR ABS(amount) <= %s)
 """
 
 _PERSON_CONTRIBUTION_INSIGHTS_DISTRICT_SQL = f"""
@@ -382,28 +460,41 @@ _PERSON_CONTRIBUTION_INSIGHTS_DISTRICT_SQL = f"""
     FROM (
         SELECT
             CASE
-                WHEN z.zcta5 IS NULL THEN 'Unknown district'
+                WHEN %s = 'us_senate' AND (NULLIF(qt.contributor_state, '') IS NULL OR NOT qt.has_valid_zip) THEN 'Unknown'
+                WHEN %s = 'us_senate' AND qt.contributor_state = %s THEN 'In state'
+                WHEN %s = 'us_senate' THEN 'Out of state'
+                WHEN NULLIF(qt.contributor_state, '') IS NULL OR NOT qt.has_valid_zip OR z.zcta5 IS NULL THEN 'Unknown'
                 WHEN qt.contributor_state = %s AND z.district_number = %s THEN 'In district'
-                ELSE 'Out of district'
+                WHEN qt.contributor_state = %s THEN 'Elsewhere in state'
+                ELSE 'Out of state'
             END AS label,
             COALESCE(SUM(qt.amount), 0) AS total_amount,
             COUNT(*)::integer AS transaction_count
         FROM qualifying_transactions qt
-        LEFT JOIN civic.zcta_district z ON z.zcta5 = qt.zcta5
+        LEFT JOIN civic.zcta_district z
+          ON z.zcta5 = qt.zcta5
+         AND z.boundary_year = (
+             SELECT MAX(boundary_year)
+             FROM civic.zcta_district
+         )
         GROUP BY label
         HAVING COUNT(*) > 0
     ) district_totals
     ORDER BY
         CASE label
             WHEN 'In district' THEN 1
-            WHEN 'Out of district' THEN 2
-            ELSE 3
+            WHEN 'Elsewhere in state' THEN 2
+            WHEN 'Out of state' THEN 3
+            WHEN 'In state' THEN 1
+            WHEN 'Unknown' THEN 4
+            ELSE 5
         END
 """
 
 _PERSON_CONTRIBUTION_INSIGHTS_SUMMARY_SQL = """
     SELECT
         COALESCE(SUM(individual_unitemized_contributions), 0) AS unitemized_total,
+        SUM(individual_itemized_contributions) AS itemized_total,
         COUNT(*)::integer AS summary_row_count,
         COUNT(DISTINCT committee_id)::integer AS summary_committee_count,
         ARRAY_REMOVE(ARRAY_AGG(DISTINCT cycle ORDER BY cycle), NULL) AS cycles_included,
@@ -416,12 +507,80 @@ _PERSON_CONTRIBUTION_INSIGHTS_SUMMARY_SQL = """
 _PERSON_CONTRIBUTION_INSIGHTS_SUMMARY_COVERAGE_SQL = """
     SELECT
         cycle,
-        COUNT(DISTINCT committee_id)::integer AS committee_count
+        COUNT(DISTINCT committee_id)::integer AS committee_count,
+        COUNT(DISTINCT committee_id) FILTER (
+            WHERE coverage_start_date <= %s
+              AND coverage_end_date >= %s
+        )::integer AS complete_committee_count,
+        MIN(coverage_start_date) AS coverage_start_date,
+        MAX(coverage_end_date) AS coverage_end_date
     FROM cf.committee_summary
     WHERE committee_id = ANY(%s)
       AND cycle = ANY(%s)
     GROUP BY cycle
     ORDER BY cycle ASC
+"""
+
+_PERSON_CONTRIBUTION_INSIGHTS_SUMMARY_ROLLUPS_SQL = """
+    WITH summary_rows AS MATERIALIZED (
+        SELECT *
+        FROM cf.committee_summary
+        WHERE committee_id = ANY(%s)
+          AND cycle = ANY(%s)
+    ),
+    coverage_rows AS (
+        SELECT
+            cycle,
+            COUNT(DISTINCT committee_id)::integer AS committee_count,
+            COUNT(DISTINCT committee_id) FILTER (
+                WHERE coverage_start_date <= %s
+                  AND coverage_end_date >= %s
+            )::integer AS complete_committee_count,
+            MIN(coverage_start_date) AS coverage_start_date,
+            MAX(coverage_end_date) AS coverage_end_date
+        FROM summary_rows
+        GROUP BY cycle
+    ),
+    summary_cycle_rows AS (
+        SELECT
+            cycle,
+            COALESCE(SUM(individual_unitemized_contributions), 0)
+                AS unitemized_individual_contribution_amount
+        FROM summary_rows
+        GROUP BY cycle
+    )
+    SELECT
+        COALESCE(SUM(individual_unitemized_contributions), 0) AS unitemized_total,
+        SUM(individual_itemized_contributions) AS itemized_total,
+        COUNT(*)::integer AS summary_row_count,
+        COUNT(DISTINCT committee_id)::integer AS summary_committee_count,
+        ARRAY_REMOVE(ARRAY_AGG(DISTINCT cycle ORDER BY cycle), NULL) AS cycles_included,
+        MAX(coverage_end_date) AS coverage_end_date,
+        COALESCE((
+            SELECT jsonb_agg(
+                jsonb_build_object(
+                    'cycle', cycle,
+                    'committee_count', committee_count,
+                    'complete_committee_count', complete_committee_count,
+                    'coverage_start_date', coverage_start_date,
+                    'coverage_end_date', coverage_end_date
+                )
+                ORDER BY cycle ASC
+            )
+            FROM coverage_rows
+        ), '[]'::jsonb) AS coverage_rows,
+        COALESCE((
+            SELECT jsonb_agg(
+                jsonb_build_object(
+                    'cycle', cycle,
+                    'unitemized_individual_contribution_amount',
+                    unitemized_individual_contribution_amount::text
+                )
+                ORDER BY cycle ASC
+            )
+            FROM summary_cycle_rows
+        ), '[]'::jsonb) AS summary_cycle_rows
+    FROM summary_rows
 """
 
 _PERSON_CONTRIBUTION_INSIGHTS_BUCKET_VALUES_SQL = ",\n        ".join(
@@ -435,7 +594,26 @@ _PERSON_CONTRIBUTION_INSIGHTS_ITEMIZED_ROLLUPS_SQL = f"""
         VALUES
         {_PERSON_CONTRIBUTION_INSIGHTS_BUCKET_VALUES_SQL}
     ),
-    monthly_totals AS (
+    coverage_bounds AS (
+        SELECT
+            CASE
+                WHEN %s::boolean THEN %s::date
+                ELSE date_trunc('month', MIN(transaction_date))::date
+            END AS start_month,
+            CASE
+                WHEN %s::boolean THEN date_trunc('month', LEAST(%s::date, CURRENT_DATE))::date
+                ELSE date_trunc('month', MAX(transaction_date))::date
+            END AS end_month
+        FROM qualifying_transactions
+    ),
+    coverage_months AS (
+        SELECT to_char(month_value, 'YYYY-MM') AS month
+        FROM coverage_bounds bounds
+        CROSS JOIN LATERAL generate_series(bounds.start_month, bounds.end_month, interval '1 month') AS month_value
+        WHERE bounds.start_month IS NOT NULL
+          AND bounds.end_month IS NOT NULL
+    ),
+    transaction_month_totals AS (
         SELECT
             to_char(date_trunc('month', transaction_date), 'YYYY-MM') AS month,
             COALESCE(SUM(amount), 0) AS total_amount,
@@ -443,13 +621,62 @@ _PERSON_CONTRIBUTION_INSIGHTS_ITEMIZED_ROLLUPS_SQL = f"""
         FROM qualifying_transactions
         GROUP BY date_trunc('month', transaction_date)
     ),
+    monthly_totals AS (
+        SELECT
+            coverage_months.month,
+            COALESCE(transaction_month_totals.total_amount, 0) AS total_amount,
+            COALESCE(transaction_month_totals.transaction_count, 0)::integer AS transaction_count
+        FROM coverage_months
+        LEFT JOIN transaction_month_totals
+          ON transaction_month_totals.month = coverage_months.month
+    ),
     state_totals AS (
         SELECT
-            COALESCE(NULLIF(contributor_state, ''), 'Unknown') AS label,
+            CASE
+                WHEN NULLIF(contributor_state, '') IS NULL OR NOT has_valid_zip THEN 'Unknown'
+                ELSE contributor_state
+            END AS label,
             COALESCE(SUM(amount), 0) AS total_amount,
             COUNT(*)::integer AS transaction_count
         FROM qualifying_transactions
         GROUP BY label
+    ),
+    ranked_known_state_totals AS (
+        SELECT
+            label,
+            total_amount,
+            transaction_count,
+            ROW_NUMBER() OVER (
+                ORDER BY total_amount DESC, transaction_count DESC, label ASC
+            ) AS state_rank
+        FROM state_totals
+        WHERE label != 'Unknown'
+    ),
+    bounded_state_totals AS (
+        SELECT
+            state_rank AS ordinal,
+            label,
+            total_amount,
+            transaction_count
+        FROM ranked_known_state_totals
+        WHERE state_rank <= 5
+        UNION ALL
+        SELECT
+            6 AS ordinal,
+            'Other states' AS label,
+            COALESCE(SUM(total_amount), 0) AS total_amount,
+            COALESCE(SUM(transaction_count), 0)::integer AS transaction_count
+        FROM ranked_known_state_totals
+        WHERE state_rank > 5
+        HAVING COUNT(*) > 0
+        UNION ALL
+        SELECT
+            7 AS ordinal,
+            'Unknown' AS label,
+            total_amount,
+            transaction_count
+        FROM state_totals
+        WHERE label = 'Unknown'
     ),
     totals AS (
         SELECT
@@ -468,8 +695,8 @@ _PERSON_CONTRIBUTION_INSIGHTS_ITEMIZED_ROLLUPS_SQL = f"""
             COUNT(qt.id)::integer AS transaction_count
         FROM bucket_specs bucket
         LEFT JOIN qualifying_transactions qt
-          ON qt.amount >= bucket.min_amount
-         AND (bucket.max_amount IS NULL OR qt.amount <= bucket.max_amount)
+          ON ABS(qt.amount) >= bucket.min_amount
+         AND (bucket.max_amount IS NULL OR ABS(qt.amount) <= bucket.max_amount)
         GROUP BY bucket.ordinal, bucket.label, bucket.min_amount, bucket.max_amount
     ),
     itemized_cycle_totals AS (
@@ -488,6 +715,39 @@ _PERSON_CONTRIBUTION_INSIGHTS_ITEMIZED_ROLLUPS_SQL = f"""
             FROM qualifying_transactions
         ) cycle_transactions
         GROUP BY cycle
+    ),
+    district_totals AS (
+        SELECT label, total_amount, transaction_count
+        FROM (
+            SELECT
+                CASE
+                    WHEN NOT %s::boolean THEN NULL
+                    WHEN %s = 'us_senate' AND (NULLIF(qt.contributor_state, '') IS NULL OR NOT qt.has_valid_zip) THEN 'Unknown'
+                    WHEN %s = 'us_senate' AND qt.contributor_state = %s THEN 'In state'
+                    WHEN %s = 'us_senate' THEN 'Out of state'
+                    WHEN NULLIF(qt.contributor_state, '') IS NULL OR NOT qt.has_valid_zip OR z.zcta5 IS NULL THEN 'Unknown'
+                    WHEN qt.contributor_state = %s AND z.district_number = %s THEN 'In district'
+                    WHEN qt.contributor_state = %s THEN 'Elsewhere in state'
+                    ELSE 'Out of state'
+                END AS label,
+                COALESCE(SUM(qt.amount), 0) AS total_amount,
+                COUNT(*)::integer AS transaction_count
+            FROM qualifying_transactions qt
+            LEFT JOIN civic.zcta_district z
+              ON %s::boolean AND z.zcta5 = qt.zcta5
+            WHERE %s::boolean
+            GROUP BY label
+            HAVING COUNT(*) > 0
+        ) district_totals
+        ORDER BY
+            CASE label
+                WHEN 'In district' THEN 1
+                WHEN 'Elsewhere in state' THEN 2
+                WHEN 'Out of state' THEN 3
+                WHEN 'In state' THEN 1
+                WHEN 'Unknown' THEN 4
+                ELSE 5
+            END
     )
     SELECT
         COALESCE((
@@ -508,9 +768,9 @@ _PERSON_CONTRIBUTION_INSIGHTS_ITEMIZED_ROLLUPS_SQL = f"""
                     'total_amount', total_amount::text,
                     'transaction_count', transaction_count
                 )
-                ORDER BY total_amount DESC, transaction_count DESC, label ASC
+                ORDER BY ordinal ASC
             )
-            FROM state_totals
+            FROM bounded_state_totals
         ), '[]'::jsonb) AS state_totals,
         (
             SELECT jsonb_build_object(
@@ -543,7 +803,26 @@ _PERSON_CONTRIBUTION_INSIGHTS_ITEMIZED_ROLLUPS_SQL = f"""
                 ORDER BY cycle ASC
             )
             FROM itemized_cycle_totals
-        ), '[]'::jsonb) AS itemized_cycle_totals
+        ), '[]'::jsonb) AS itemized_cycle_totals,
+        COALESCE((
+            SELECT jsonb_agg(
+                jsonb_build_object(
+                    'label', label,
+                    'total_amount', total_amount::text,
+                    'transaction_count', transaction_count
+                )
+                ORDER BY
+                    CASE label
+                        WHEN 'In district' THEN 1
+                        WHEN 'Elsewhere in state' THEN 2
+                        WHEN 'Out of state' THEN 3
+                        WHEN 'In state' THEN 1
+                        WHEN 'Unknown' THEN 4
+                        ELSE 5
+                    END
+            )
+            FROM district_totals
+        ), '[]'::jsonb) AS district_totals
 """
 
 _PERSON_CONTRIBUTION_INSIGHTS_SUMMARY_BY_CYCLE_SQL = """
@@ -882,7 +1161,12 @@ class UnknownCountySlugError(ValueError):
         super().__init__(f"Unknown county slug for state: {state}/{county_slug}")
 
 
-def _qualifying_transactions_cte(select_columns: str, *, materialized: bool = False) -> str:
+def _qualifying_transactions_cte(
+    select_columns: str,
+    *,
+    materialized: bool = False,
+    cycle_filtered: bool = False,
+) -> str:
     """Build the qualifying-transactions CTE fragment.
 
     Shared between committee-level summary and per-filing breakdown queries.
@@ -890,11 +1174,17 @@ def _qualifying_transactions_cte(select_columns: str, *, materialized: bool = Fa
     The caller must bind ``committee_id`` as the first query parameter (``%s``).
     """
     materialized_sql = " MATERIALIZED" if materialized else ""
+    cycle_filter_sql = ""
+    if cycle_filtered:
+        cycle_filter_sql = """
+          AND t.transaction_date >= %s
+          AND t.transaction_date <= %s"""
     return f"""qualifying_transactions AS{materialized_sql} (
         SELECT
             {select_columns}
         FROM cf.transaction t
         WHERE t.committee_id = %s
+{cycle_filter_sql}
           AND t.is_memo = FALSE
           AND t.amendment_indicator != 'T'
 {NOT_SUPERSEDED_SOURCE_RECORD_WHERE_SQL}
@@ -937,7 +1227,7 @@ COMMITTEE_STORED_FUNDRAISING_SUMMARY_SQL = """
             BOOL_OR(cs.derived_transaction_count IS NOT NULL) AS has_precomputed_aggregate
         FROM cf.committee_summary cs
         WHERE cs.committee_id = %s
-          AND cs.cycle = ANY(%s)
+          AND cs.cycle = %s
         GROUP BY cs.committee_id
     )
     SELECT
@@ -980,7 +1270,7 @@ COMMITTEE_FUNDRAISING_SUMMARY_SQL = f"""
             BOOL_OR(cs.derived_transaction_count IS NOT NULL) AS has_precomputed_aggregate
         FROM cf.committee_summary cs
         WHERE cs.committee_id = %s
-          AND cs.cycle = ANY(%s)
+          AND cs.cycle = %s
         GROUP BY cs.committee_id
     ),
     stored_summary AS (
@@ -1003,7 +1293,7 @@ COMMITTEE_FUNDRAISING_SUMMARY_SQL = f"""
         WHERE c.id = %s
           AND sca.has_precomputed_aggregate
     ),
-    {_qualifying_transactions_cte("t.id, t.committee_id, t.transaction_type, t.amount, t.source_record_id")},
+    {_qualifying_transactions_cte("t.id, t.committee_id, t.transaction_type, t.amount, t.source_record_id", cycle_filtered=True)},
     qualifying_source_records AS (
         SELECT DISTINCT source_record_id
         FROM qualifying_transactions
@@ -1079,7 +1369,7 @@ COMMITTEE_FUNDRAISING_SUMMARY_SQL = f"""
 """
 
 COMMITTEE_TOP_LISTS_SQL = f"""
-    WITH {_qualifying_transactions_cte("t.id, t.transaction_type, t.amount, t.contributor_name_raw, t.memo_text", materialized=True)},
+    WITH {_qualifying_transactions_cte("t.id, t.transaction_type, t.amount, t.contributor_name_raw, t.memo_text", materialized=True, cycle_filtered=True)},
     top_donors AS (
         SELECT
             BTRIM(qt.contributor_name_raw) AS name,
@@ -1810,14 +2100,22 @@ def fetch_committees_by_slug(conn: psycopg.Connection, slug: str) -> list[dict[s
         return list(cursor.fetchall())
 
 
-def fetch_committee_linked_candidates(conn: psycopg.Connection, committee_id: UUID) -> list[dict[str, Any]]:
+def fetch_committee_linked_candidates(
+    conn: psycopg.Connection,
+    committee_id: UUID,
+    selected_cycle: SelectedCycle | int | None = None,
+) -> list[dict[str, Any]]:
     """Return active candidates linked to a committee, ordered by candidate name.
 
     Rows are shaped like ``CandidateListItem`` so Stage 6 can route by ``person_id``
     / slug through the same detail contract already used for the candidate list.
     """
+    cycle = _coerce_selected_cycle(selected_cycle)
     with conn.cursor(row_factory=dict_row) as cursor:
-        cursor.execute(COMMITTEE_LINKED_CANDIDATES_SQL, (committee_id,))
+        cursor.execute(
+            COMMITTEE_LINKED_CANDIDATES_SQL,
+            (committee_id, cycle.coverage_start_date, cycle.coverage_end_date),
+        )
         return list(cursor.fetchall())
 
 
@@ -1830,7 +2128,11 @@ def _fetch_committee_name(conn: psycopg.Connection, committee_id: UUID) -> str |
     return row["name"]
 
 
-def _fetch_committee_cycle_summaries(conn: psycopg.Connection, committee_id: UUID) -> list[dict[str, Any]]:
+def _fetch_committee_cycle_summaries(
+    conn: psycopg.Connection,
+    committee_id: UUID,
+    selected_cycle: SelectedCycle,
+) -> list[dict[str, Any]]:
     """Load supported-cycle official rows from ``cf.committee_summary``.
 
     Returned in ascending cycle order with money fields quantized to the standard
@@ -1840,7 +2142,7 @@ def _fetch_committee_cycle_summaries(conn: psycopg.Connection, committee_id: UUI
     with conn.cursor(row_factory=dict_row) as cursor:
         cursor.execute(
             COMMITTEE_CYCLE_SUMMARIES_SQL,
-            (committee_id, list(SUPPORTED_COMMITTEE_SUMMARY_CYCLES)),
+            (committee_id, selected_cycle.selected_cycle),
         )
         cycle_rows = list(cursor.fetchall())
 
@@ -1872,13 +2174,27 @@ def _json_object(value: Any) -> dict[str, Any]:
     return dict(decoded)
 
 
-def _fetch_committee_top_lists(conn: psycopg.Connection, committee_id: UUID) -> dict[str, list[dict[str, Any]]]:
+def _empty_committee_top_lists() -> dict[str, list[dict[str, Any]]]:
+    return {
+        "top_donors": [],
+        "top_vendors": [],
+        "spend_categories": [],
+    }
+
+
+def _fetch_committee_top_lists(
+    conn: psycopg.Connection,
+    committee_id: UUID,
+    selected_cycle: SelectedCycle,
+) -> dict[str, list[dict[str, Any]]]:
     """Fetch and normalize committee donor, vendor, and spend-category rankings."""
     with conn.cursor(row_factory=dict_row) as cursor:
         cursor.execute(
             COMMITTEE_TOP_LISTS_SQL,
             (
                 committee_id,
+                selected_cycle.coverage_start_date,
+                selected_cycle.coverage_end_date,
                 _COMMITTEE_TOP_PARTIES_LIMIT,
                 _COMMITTEE_TOP_PARTIES_LIMIT,
                 _COMMITTEE_SPEND_CATEGORY_LIMIT,
@@ -1887,7 +2203,7 @@ def _fetch_committee_top_lists(conn: psycopg.Connection, committee_id: UUID) -> 
         row = cursor.fetchone()
 
     if row is None:
-        raise RuntimeError(f"Committee top-list query returned no row for committee: {committee_id}")
+        return _empty_committee_top_lists()
 
     top_lists = {
         "top_donors": _json_rows(row["top_donors"]),
@@ -1917,9 +2233,138 @@ def _apply_committee_official_totals(payload: dict[str, Any], cycle_summaries: l
     payload["summary_source"] = "fec_committee_summary"
 
 
+def _receipt_component(label_key: str, total_amount: Decimal) -> dict[str, Any]:
+    return {
+        "label": _RECEIPT_COMPONENT_LABELS[label_key],
+        "total_amount": _quantize_money(total_amount),
+        "source": "fec_committee_summary",
+    }
+
+
+def _empty_receipt_source_payload(caveat: str) -> dict[str, Any]:
+    return {
+        "receipt_source_composition": [],
+        "selected_cycle_coverage_complete": False,
+        "can_render_share": False,
+        "receipt_source_caveats": [caveat],
+        "debts_owed_by_committee": None,
+    }
+
+
+def _fetch_receipt_source_payload(
+    conn: psycopg.Connection,
+    committee_ids: list[UUID],
+    selected_cycle: SelectedCycle,
+) -> dict[str, Any]:
+    """Build receipt-source composition from complete selected-cycle committee summaries."""
+    if not committee_ids:
+        return _empty_receipt_source_payload("missing_committee_summary")
+
+    with conn.cursor(row_factory=dict_row) as cursor:
+        cursor.execute(COMMITTEE_RECEIPT_SOURCE_ROWS_SQL, (committee_ids, selected_cycle.selected_cycle))
+        rows = list(cursor.fetchall())
+
+    if len({row["committee_id"] for row in rows}) != len(set(committee_ids)):
+        return _empty_receipt_source_payload("missing_committee_summary")
+    if any(
+        row["coverage_start_date"] is None
+        or row["coverage_end_date"] is None
+        or row["coverage_start_date"] > selected_cycle.coverage_start_date
+        or row["coverage_end_date"] < selected_cycle.coverage_end_date
+        or row["total_receipts"] is None
+        for row in rows
+    ):
+        return _empty_receipt_source_payload("incomplete_committee_summary_coverage")
+
+    individual = sum((row["individual_contributions"] or _MONEY_SCALE for row in rows), start=_MONEY_SCALE)
+    other_committee = sum((row["other_committee_contributions"] or _MONEY_SCALE for row in rows), start=_MONEY_SCALE)
+    party = sum((row["party_committee_contributions"] or _MONEY_SCALE for row in rows), start=_MONEY_SCALE)
+    candidate_funding = sum(
+        ((row["candidate_contributions"] or _MONEY_SCALE) + (row["candidate_loans"] or _MONEY_SCALE) for row in rows),
+        start=_MONEY_SCALE,
+    )
+    transfers = sum(
+        (row["transfers_from_other_authorized_committees"] or _MONEY_SCALE for row in rows),
+        start=_MONEY_SCALE,
+    )
+    total_receipts = sum((row["total_receipts"] for row in rows), start=_MONEY_SCALE)
+    named_components = individual + other_committee + party + candidate_funding + transfers
+    residual = total_receipts - named_components
+    components = [
+        _receipt_component("individual_contributions", individual),
+        _receipt_component("other_committee_contributions", other_committee),
+        _receipt_component("party_committee_contributions", party),
+        _receipt_component("candidate_funding", candidate_funding),
+        _receipt_component("transfers_from_other_authorized_committees", transfers),
+        _receipt_component("other_receipts", residual),
+    ]
+    has_negative_component = any(component["total_amount"] < 0 for component in components)
+    component_total = sum((component["total_amount"] for component in components), start=_MONEY_SCALE)
+    reconciles = (
+        abs(_quantize_money(component_total) - _quantize_money(total_receipts)) <= _RECEIPT_RECONCILIATION_TOLERANCE
+    )
+    caveats: list[str] = []
+    if has_negative_component:
+        caveats.append("negative_receipt_source_component")
+    if not reconciles:
+        caveats.append("receipt_source_components_do_not_reconcile")
+    return {
+        "receipt_source_composition": [] if caveats else components,
+        "selected_cycle_coverage_complete": True,
+        "can_render_share": not caveats,
+        "receipt_source_caveats": caveats,
+        "debts_owed_by_committee": _quantize_money(
+            sum((row["debts_owed_by_committee"] or _MONEY_SCALE for row in rows), start=_MONEY_SCALE)
+        ),
+    }
+
+
+def _combine_candidate_receipt_source_payload(committee_summaries: list[dict[str, Any]]) -> dict[str, Any]:
+    """Aggregate committee receipt-source payloads into one candidate-level payload."""
+    if not committee_summaries:
+        return _empty_receipt_source_payload("missing_committee_summary")
+
+    caveats: list[str] = []
+    coverage_complete = all(committee.get("selected_cycle_coverage_complete") for committee in committee_summaries)
+    debts_owed = sum(
+        (committee.get("debts_owed_by_committee") or _MONEY_SCALE for committee in committee_summaries),
+        start=_MONEY_SCALE,
+    )
+    if not coverage_complete:
+        caveats.append("missing_committee_summary")
+    for committee in committee_summaries:
+        for caveat in committee.get("receipt_source_caveats", []):
+            if caveat not in caveats:
+                caveats.append(caveat)
+    if caveats or not all(committee.get("can_render_share") for committee in committee_summaries):
+        return {
+            "receipt_source_composition": [],
+            "selected_cycle_coverage_complete": coverage_complete,
+            "can_render_share": False,
+            "receipt_source_caveats": caveats or ["receipt_source_components_do_not_reconcile"],
+            "debts_owed_by_committee": _quantize_money(debts_owed) if coverage_complete else None,
+        }
+
+    totals_by_label = {label: _MONEY_SCALE for label in _RECEIPT_COMPONENT_LABELS.values()}
+    for committee in committee_summaries:
+        for component in committee["receipt_source_composition"]:
+            totals_by_label[component["label"]] += component["total_amount"]
+    return {
+        "receipt_source_composition": [
+            {"label": label, "total_amount": _quantize_money(amount), "source": "fec_committee_summary"}
+            for label, amount in totals_by_label.items()
+        ],
+        "selected_cycle_coverage_complete": True,
+        "can_render_share": True,
+        "receipt_source_caveats": [],
+        "debts_owed_by_committee": _quantize_money(debts_owed),
+    }
+
+
 def fetch_committee_fundraising_summary(
     conn: psycopg.Connection,
     committee_id: UUID,
+    selected_cycle: SelectedCycle | int | None = None,
 ) -> dict[str, Any] | None:
     """Aggregate fundraising totals for a single committee.
 
@@ -1936,12 +2381,13 @@ def fetch_committee_fundraising_summary(
     - Returns ``None`` only when there are no qualifying transactions AND no
       supported-cycle official rows, so the caller can substitute a zero payload.
     """
+    cycle = _coerce_selected_cycle(selected_cycle)
     with conn.cursor(row_factory=dict_row) as cursor:
         cursor.execute(
             COMMITTEE_STORED_FUNDRAISING_SUMMARY_SQL,
             (
                 committee_id,
-                list(SUPPORTED_COMMITTEE_SUMMARY_CYCLES),
+                cycle.selected_cycle,
                 committee_id,
             ),
         )
@@ -1952,16 +2398,19 @@ def fetch_committee_fundraising_summary(
                 COMMITTEE_FUNDRAISING_SUMMARY_SQL,
                 (
                     committee_id,
-                    list(SUPPORTED_COMMITTEE_SUMMARY_CYCLES),
+                    cycle.selected_cycle,
                     committee_id,
                     committee_id,
+                    cycle.coverage_start_date,
+                    cycle.coverage_end_date,
                     committee_id,
                 ),
             )
             summary_row = cursor.fetchone()
 
-    top_lists = _fetch_committee_top_lists(conn, committee_id)
-    cycle_summaries = _fetch_committee_cycle_summaries(conn, committee_id)
+    top_lists = _fetch_committee_top_lists(conn, committee_id, cycle)
+    cycle_summaries = _fetch_committee_cycle_summaries(conn, committee_id, cycle)
+    receipt_source_payload = _fetch_receipt_source_payload(conn, [committee_id], cycle)
 
     if summary_row is None and not cycle_summaries:
         return None
@@ -2001,9 +2450,11 @@ def fetch_committee_fundraising_summary(
     summary_row["top_donors"] = top_lists["top_donors"]
     summary_row["top_vendors"] = top_lists["top_vendors"]
     summary_row["spend_categories"] = top_lists["spend_categories"] or None
+    summary_row.update(cycle.as_payload())
     summary_row["cycle_summaries"] = cycle_summaries
     summary_row["itemized_transaction_count"] = summary_row["transaction_count"]
     summary_row["summary_source"] = "derived"
+    summary_row.update(receipt_source_payload)
 
     if cycle_summaries:
         _apply_committee_official_totals(summary_row, cycle_summaries)
@@ -2011,11 +2462,18 @@ def fetch_committee_fundraising_summary(
     return summary_row
 
 
-def build_zero_committee_fundraising_summary(*, committee_id: UUID, committee_name: str) -> dict[str, Any]:
+def build_zero_committee_fundraising_summary(
+    *,
+    committee_id: UUID,
+    committee_name: str,
+    selected_cycle: SelectedCycle | int | None = None,
+) -> dict[str, Any]:
     """Return the stable zero-total payload for committees without qualifying transactions."""
+    cycle = _coerce_selected_cycle(selected_cycle)
     return {
         "committee_id": committee_id,
         "committee_name": committee_name,
+        **cycle.as_payload(),
         "total_raised": _MONEY_SCALE,
         "total_spent": _MONEY_SCALE,
         "net": _MONEY_SCALE,
@@ -2033,19 +2491,40 @@ def build_zero_committee_fundraising_summary(*, committee_id: UUID, committee_na
         "itemized_transaction_count": 0,
         "cycle_summaries": [],
         "summary_source": "derived",
+        "receipt_source_composition": [],
+        "selected_cycle_coverage_complete": False,
+        "can_render_share": False,
+        "receipt_source_caveats": ["missing_committee_summary"],
+        "debts_owed_by_committee": None,
     }
 
 
-def build_zero_candidate_fundraising_summary(*, candidate_id: UUID, candidate_name: str) -> dict[str, Any]:
+def _null_candidate_self_funding_payload() -> dict[str, Decimal | None]:
+    return {
+        "candidate_contrib": None,
+        "candidate_loans": None,
+        "candidate_loan_repay": None,
+        "net_self_funding": None,
+    }
+
+
+def build_zero_candidate_fundraising_summary(
+    *,
+    candidate_id: UUID,
+    candidate_name: str,
+    selected_cycle: SelectedCycle | int | None = None,
+) -> dict[str, Any]:
     """Return the stable zero-total payload for candidates without linked committees.
 
     The default ``summary_source`` is ``"derived"`` because no FEC weball totals
     are known in this branch. Callers that have official totals build their own
     payload via ``fetch_candidate_summary``.
     """
+    cycle = _coerce_selected_cycle(selected_cycle)
     return {
         "candidate_id": candidate_id,
         "candidate_name": candidate_name,
+        **cycle.as_payload(),
         "total_raised": _MONEY_SCALE,
         "total_spent": _MONEY_SCALE,
         "net": _MONEY_SCALE,
@@ -2053,7 +2532,13 @@ def build_zero_candidate_fundraising_summary(*, candidate_id: UUID, candidate_na
         "itemized_transaction_count": 0,
         "committees": [],
         "cash_on_hand": None,
+        **_null_candidate_self_funding_payload(),
         "summary_source": "derived",
+        "receipt_source_composition": [],
+        "selected_cycle_coverage_complete": False,
+        "can_render_share": False,
+        "receipt_source_caveats": ["missing_committee_summary"],
+        "debts_owed_by_committee": None,
     }
 
 
@@ -2070,19 +2555,44 @@ def _has_official_candidate_totals(official_row: dict[str, Any]) -> bool:
     )
 
 
+def _official_candidate_totals_cover_selected_cycle(
+    official_row: dict[str, Any],
+    selected_cycle: SelectedCycle,
+) -> bool:
+    return (
+        _has_official_candidate_totals(official_row)
+        and official_row["summary_coverage_end_date"] == selected_cycle.coverage_end_date
+    )
+
+
 def _build_candidate_summary_from_official_totals(
     *,
     candidate_id: UUID,
     candidate_name: str,
     official_row: dict[str, Any],
     committee_summaries: list[dict[str, Any]],
+    selected_cycle: SelectedCycle | int | None = None,
 ) -> dict[str, Any]:
+    cycle = _coerce_selected_cycle(selected_cycle)
     total_receipts = official_row["total_receipts"] or _MONEY_SCALE
     total_disbursements = official_row["total_disbursements"] or _MONEY_SCALE
+    candidate_contrib = official_row["candidate_contrib"]
+    candidate_loans = official_row["candidate_loans"]
+    candidate_loan_repay = official_row["candidate_loan_repay"]
+    self_funding_components = (candidate_contrib, candidate_loans, candidate_loan_repay)
+    net_self_funding = None
+    if any(component is not None for component in self_funding_components):
+        # Repayments can exceed contributions plus loans, so a negative result is meaningful.
+        net_self_funding = (
+            (candidate_contrib if candidate_contrib is not None else _MONEY_SCALE)
+            + (candidate_loans if candidate_loans is not None else _MONEY_SCALE)
+            - (candidate_loan_repay if candidate_loan_repay is not None else _MONEY_SCALE)
+        )
     derived_transaction_count = sum(committee["transaction_count"] for committee in committee_summaries)
     return {
         "candidate_id": candidate_id,
         "candidate_name": candidate_name,
+        **cycle.as_payload(),
         "total_raised": total_receipts,
         "total_spent": total_disbursements,
         "net": total_receipts - total_disbursements,
@@ -2092,7 +2602,12 @@ def _build_candidate_summary_from_official_totals(
         "itemized_transaction_count": derived_transaction_count,
         "committees": committee_summaries,
         "cash_on_hand": official_row["cash_on_hand"],
+        "candidate_contrib": candidate_contrib,
+        "candidate_loans": candidate_loans,
+        "candidate_loan_repay": candidate_loan_repay,
+        "net_self_funding": net_self_funding,
         "summary_source": "fec_weball",
+        **_combine_candidate_receipt_source_payload(committee_summaries),
     }
 
 
@@ -2100,13 +2615,15 @@ def fetch_candidate_official_summary(
     conn: psycopg.Connection,
     candidate_id: UUID,
     candidate_name: str,
+    selected_cycle: SelectedCycle | int | None = None,
 ) -> dict[str, Any] | None:
     """Return the lightweight FEC weball candidate summary, if populated."""
+    cycle = _coerce_selected_cycle(selected_cycle)
     with conn.cursor(row_factory=dict_row) as cursor:
         cursor.execute(CANDIDATE_OFFICIAL_TOTALS_SQL, (candidate_id,))
         official_row = cursor.fetchone()
 
-    if official_row is None or not _has_official_candidate_totals(official_row):
+    if official_row is None or not _official_candidate_totals_cover_selected_cycle(official_row, cycle):
         return None
 
     return _build_candidate_summary_from_official_totals(
@@ -2114,6 +2631,7 @@ def fetch_candidate_official_summary(
         candidate_name=candidate_name,
         official_row=official_row,
         committee_summaries=[],
+        selected_cycle=cycle,
     )
 
 
@@ -2122,7 +2640,7 @@ _CANDIDATE_COMMITTEE_SUMMARY_TOTALS_SQL = """
         SELECT DISTINCT committee_id
         FROM cf.candidate_committee_link
         WHERE candidate_id = %s
-          AND valid_period @> CURRENT_DATE
+          AND valid_period && daterange(%s, %s, '[]')
     ),
     supported_cycle_rows AS (
         SELECT
@@ -2134,7 +2652,7 @@ _CANDIDATE_COMMITTEE_SUMMARY_TOTALS_SQL = """
         FROM cf.committee_summary cs
         JOIN linked_committees link
           ON link.committee_id = cs.committee_id
-        WHERE cs.cycle = ANY(%s)
+        WHERE cs.cycle = %s
     ),
     latest_cash_on_hand AS (
         SELECT DISTINCT ON (committee_id)
@@ -2145,6 +2663,7 @@ _CANDIDATE_COMMITTEE_SUMMARY_TOTALS_SQL = """
     )
     SELECT
         COUNT(*)::integer AS summary_row_count,
+        ARRAY_REMOVE(ARRAY_AGG(DISTINCT committee_id ORDER BY committee_id), NULL) AS committee_ids,
         COALESCE(SUM(total_receipts), 0) AS total_receipts,
         COALESCE(SUM(total_disbursements), 0) AS total_disbursements,
         (
@@ -2167,7 +2686,7 @@ _CANDIDATE_PUBLIC_MONEY_SUMMARIES_SQL = """
         FROM cf.candidate_committee_link link
         JOIN requested_candidates requested
           ON requested.candidate_id = link.candidate_id
-        WHERE link.valid_period @> CURRENT_DATE
+        WHERE link.valid_period && daterange(%s, %s, '[]')
     ),
     supported_cycle_rows AS (
         SELECT
@@ -2180,7 +2699,7 @@ _CANDIDATE_PUBLIC_MONEY_SUMMARIES_SQL = """
         FROM cf.committee_summary cs
         JOIN active_links link
           ON link.committee_id = cs.committee_id
-        WHERE cs.cycle = ANY(%s)
+        WHERE cs.cycle = %s
     ),
     latest_cash_on_hand AS (
         SELECT DISTINCT ON (candidate_id, committee_id)
@@ -2211,6 +2730,10 @@ _CANDIDATE_PUBLIC_MONEY_SUMMARIES_SQL = """
         candidate.total_receipts AS official_total_receipts,
         candidate.total_disbursements AS official_total_disbursements,
         candidate.cash_on_hand AS official_cash_on_hand,
+        candidate.candidate_contrib AS official_candidate_contrib,
+        candidate.candidate_loans AS official_candidate_loans,
+        candidate.candidate_loan_repay AS official_candidate_loan_repay,
+        candidate.summary_coverage_end_date AS official_summary_coverage_end_date,
         COALESCE(committee_totals.summary_row_count, 0)::integer AS summary_row_count,
         COALESCE(committee_totals.committee_total_receipts, 0) AS committee_total_receipts,
         COALESCE(committee_totals.committee_total_disbursements, 0) AS committee_total_disbursements,
@@ -2223,10 +2746,17 @@ _CANDIDATE_PUBLIC_MONEY_SUMMARIES_SQL = """
 """
 
 
-def _build_zero_public_candidate_summary(*, candidate_id: UUID, candidate_name: str) -> dict[str, Any]:
+def _build_zero_public_candidate_summary(
+    *,
+    candidate_id: UUID,
+    candidate_name: str,
+    selected_cycle: SelectedCycle | int | None = None,
+) -> dict[str, Any]:
+    cycle = _coerce_selected_cycle(selected_cycle)
     return {
         "candidate_id": candidate_id,
         "candidate_name": candidate_name,
+        **cycle.as_payload(),
         "total_raised": _MONEY_SCALE,
         "total_spent": _MONEY_SCALE,
         "net": _MONEY_SCALE,
@@ -2234,34 +2764,54 @@ def _build_zero_public_candidate_summary(*, candidate_id: UUID, candidate_name: 
         "itemized_transaction_count": 0,
         "committees": [],
         "cash_on_hand": None,
+        **_null_candidate_self_funding_payload(),
         "summary_source": "derived",
+        "receipt_source_composition": [],
+        "selected_cycle_coverage_complete": False,
+        "can_render_share": False,
+        "receipt_source_caveats": ["missing_committee_summary"],
+        "debts_owed_by_committee": None,
     }
 
 
-def _build_public_candidate_summary_from_batch_row(row: dict[str, Any]) -> dict[str, Any]:
+def _build_public_candidate_summary_from_batch_row(
+    row: dict[str, Any],
+    selected_cycle: SelectedCycle | int | None = None,
+) -> dict[str, Any]:
+    cycle = _coerce_selected_cycle(selected_cycle)
     candidate_id = row["candidate_id"]
     candidate_name = row["candidate_name"]
     official_row = {
         "total_receipts": row["official_total_receipts"],
         "total_disbursements": row["official_total_disbursements"],
         "cash_on_hand": row["official_cash_on_hand"],
+        "candidate_contrib": row["official_candidate_contrib"],
+        "candidate_loans": row["official_candidate_loans"],
+        "candidate_loan_repay": row["official_candidate_loan_repay"],
+        "summary_coverage_end_date": row["official_summary_coverage_end_date"],
     }
-    if _has_official_candidate_totals(official_row):
+    if _official_candidate_totals_cover_selected_cycle(official_row, cycle):
         return _build_candidate_summary_from_official_totals(
             candidate_id=candidate_id,
             candidate_name=candidate_name,
             official_row=official_row,
             committee_summaries=[],
+            selected_cycle=cycle,
         )
 
     if row["summary_row_count"] == 0:
-        return _build_zero_public_candidate_summary(candidate_id=candidate_id, candidate_name=candidate_name)
+        return _build_zero_public_candidate_summary(
+            candidate_id=candidate_id,
+            candidate_name=candidate_name,
+            selected_cycle=cycle,
+        )
 
     total_receipts = row["committee_total_receipts"] or _MONEY_SCALE
     total_disbursements = row["committee_total_disbursements"] or _MONEY_SCALE
     return {
         "candidate_id": candidate_id,
         "candidate_name": candidate_name,
+        **cycle.as_payload(),
         "total_raised": total_receipts,
         "total_spent": total_disbursements,
         "net": total_receipts - total_disbursements,
@@ -2269,13 +2819,20 @@ def _build_public_candidate_summary_from_batch_row(row: dict[str, Any]) -> dict[
         "itemized_transaction_count": 0,
         "committees": [],
         "cash_on_hand": row["committee_cash_on_hand"],
+        **_null_candidate_self_funding_payload(),
         "summary_source": "fec_committee_summary",
+        "receipt_source_composition": [],
+        "selected_cycle_coverage_complete": False,
+        "can_render_share": False,
+        "receipt_source_caveats": ["missing_committee_summary"],
+        "debts_owed_by_committee": None,
     }
 
 
 def fetch_candidate_public_money_summaries(
     conn: psycopg.Connection,
     candidates: Sequence[tuple[UUID, str]],
+    selected_cycle: SelectedCycle | int | None = None,
 ) -> dict[UUID, dict[str, Any]]:
     """Return public-money candidate summaries for many selected candidates."""
     if not candidates:
@@ -2283,40 +2840,58 @@ def fetch_candidate_public_money_summaries(
 
     candidate_ids = [candidate_id for candidate_id, _candidate_name in candidates]
     candidate_names = [candidate_name for _candidate_id, candidate_name in candidates]
+    cycle = _coerce_selected_cycle(selected_cycle)
     with conn.cursor(row_factory=dict_row) as cursor:
         cursor.execute(
             _CANDIDATE_PUBLIC_MONEY_SUMMARIES_SQL,
-            (candidate_ids, candidate_names, list(SUPPORTED_COMMITTEE_SUMMARY_CYCLES)),
+            (
+                candidate_ids,
+                candidate_names,
+                cycle.coverage_start_date,
+                cycle.coverage_end_date,
+                cycle.selected_cycle,
+            ),
         )
-        return {row["candidate_id"]: _build_public_candidate_summary_from_batch_row(row) for row in cursor.fetchall()}
+        return {
+            row["candidate_id"]: _build_public_candidate_summary_from_batch_row(row, cycle) for row in cursor.fetchall()
+        }
 
 
 def fetch_candidate_public_money_summary(
     conn: psycopg.Connection,
     candidate_id: UUID,
     candidate_name: str,
+    selected_cycle: SelectedCycle | int | None = None,
 ) -> dict[str, Any] | None:
     """Return the public-money candidate summary without private detail queries."""
-    official_summary = fetch_candidate_official_summary(conn, candidate_id, candidate_name)
+    cycle = _coerce_selected_cycle(selected_cycle)
+    official_summary = fetch_candidate_official_summary(conn, candidate_id, candidate_name, cycle)
     if official_summary is not None:
         return official_summary
 
     with conn.cursor(row_factory=dict_row) as cursor:
         cursor.execute(
-            _CANDIDATE_COMMITTEE_SUMMARY_TOTALS_SQL, (candidate_id, list(SUPPORTED_COMMITTEE_SUMMARY_CYCLES))
+            _CANDIDATE_COMMITTEE_SUMMARY_TOTALS_SQL,
+            (candidate_id, cycle.coverage_start_date, cycle.coverage_end_date, cycle.selected_cycle),
         )
         committee_summary_row = cursor.fetchone()
 
     if committee_summary_row is None:
         return None
     if committee_summary_row["summary_row_count"] == 0:
-        return _build_zero_public_candidate_summary(candidate_id=candidate_id, candidate_name=candidate_name)
+        return _build_zero_public_candidate_summary(
+            candidate_id=candidate_id,
+            candidate_name=candidate_name,
+            selected_cycle=cycle,
+        )
 
     total_receipts = committee_summary_row["total_receipts"] or _MONEY_SCALE
     total_disbursements = committee_summary_row["total_disbursements"] or _MONEY_SCALE
+    linked_committee_ids = committee_summary_row["committee_ids"] or []
     return {
         "candidate_id": candidate_id,
         "candidate_name": candidate_name,
+        **cycle.as_payload(),
         "total_raised": total_receipts,
         "total_spent": total_disbursements,
         "net": total_receipts - total_disbursements,
@@ -2324,7 +2899,9 @@ def fetch_candidate_public_money_summary(
         "itemized_transaction_count": 0,
         "committees": [],
         "cash_on_hand": committee_summary_row["cash_on_hand"],
+        **_null_candidate_self_funding_payload(),
         "summary_source": "fec_committee_summary",
+        **_fetch_receipt_source_payload(conn, linked_committee_ids, cycle),
     }
 
 
@@ -2332,6 +2909,7 @@ def fetch_candidate_summary(
     conn: psycopg.Connection,
     candidate_id: UUID,
     candidate_name: str,
+    selected_cycle: SelectedCycle | int | None = None,
 ) -> dict[str, Any] | None:
     """Aggregate fundraising totals for a candidate.
 
@@ -2347,6 +2925,7 @@ def fetch_candidate_summary(
       is missing; the route validates this separately, so it is unreachable in
       practice.
     """
+    cycle = _coerce_selected_cycle(selected_cycle)
     with conn.cursor(row_factory=dict_row) as cursor:
         cursor.execute(CANDIDATE_OFFICIAL_TOTALS_SQL, (candidate_id,))
         official_row = cursor.fetchone()
@@ -2355,13 +2934,15 @@ def fetch_candidate_summary(
         return None
 
     with conn.cursor(row_factory=dict_row) as cursor:
-        cursor.execute(CANDIDATE_LINKED_COMMITTEE_IDS_SQL, (candidate_id,))
+        cursor.execute(
+            CANDIDATE_LINKED_COMMITTEE_IDS_SQL, (candidate_id, cycle.coverage_start_date, cycle.coverage_end_date)
+        )
         linked_committee_rows = list(cursor.fetchall())
 
     committee_summaries: list[dict[str, Any]] = []
     for linked_committee_row in linked_committee_rows:
         committee_id = linked_committee_row["committee_id"]
-        committee_summary = fetch_committee_fundraising_summary(conn, committee_id)
+        committee_summary = fetch_committee_fundraising_summary(conn, committee_id, cycle)
         if committee_summary is None:
             committee_row = fetch_one_row(conn, query=CAMPAIGN_FINANCE_COMMITTEE_DETAIL_SQL, row_id=committee_id)
             if committee_row is None:
@@ -2369,24 +2950,28 @@ def fetch_candidate_summary(
             committee_summary = build_zero_committee_fundraising_summary(
                 committee_id=committee_id,
                 committee_name=committee_row["name"],
+                selected_cycle=cycle,
             )
         committee_summaries.append(committee_summary)
 
-    if _has_official_candidate_totals(official_row):
+    if _official_candidate_totals_cover_selected_cycle(official_row, cycle):
         return _build_candidate_summary_from_official_totals(
             candidate_id=candidate_id,
             candidate_name=candidate_name,
             official_row=official_row,
             committee_summaries=committee_summaries,
+            selected_cycle=cycle,
         )
 
     derived_transaction_count = sum(committee["transaction_count"] for committee in committee_summaries)
     derived_total_raised = sum((committee["total_raised"] for committee in committee_summaries), start=_MONEY_SCALE)
     derived_total_spent = sum((committee["total_spent"] for committee in committee_summaries), start=_MONEY_SCALE)
     derived_net = sum((committee["net"] for committee in committee_summaries), start=_MONEY_SCALE)
+    receipt_source_payload = _combine_candidate_receipt_source_payload(committee_summaries)
     return {
         "candidate_id": candidate_id,
         "candidate_name": candidate_name,
+        **cycle.as_payload(),
         "total_raised": derived_total_raised,
         "total_spent": derived_total_spent,
         "net": derived_net,
@@ -2394,7 +2979,9 @@ def fetch_candidate_summary(
         "itemized_transaction_count": derived_transaction_count,
         "committees": committee_summaries,
         "cash_on_hand": None,
+        **_null_candidate_self_funding_payload(),
         "summary_source": "derived",
+        **receipt_source_payload,
     }
 
 
@@ -2509,14 +3096,18 @@ def fetch_committee_list(
 def fetch_transaction_list(
     conn: psycopg.Connection,
     params: TransactionListParams,
+    selected_cycle: SelectedCycle | int | None = None,
 ) -> list[dict[str, Any]]:
     """Fetch filtered transaction list for a committee."""
+    cycle = _coerce_selected_cycle(selected_cycle)
     return _fetch_filtered_rows(
         conn,
         sql_template=_TRANSACTION_LIST_SQL_TEMPLATE,
         filter_values=(
             (params.committee_id, "t.committee_id = %s"),
             (params.jurisdiction, "ds.jurisdiction = %s"),
+            (cycle.coverage_start_date, "t.transaction_date >= %s"),
+            (cycle.coverage_end_date, "t.transaction_date <= %s"),
             (params.min_date, "t.transaction_date >= %s"),
             (params.max_date, "t.transaction_date <= %s"),
             (params.min_amount, "t.amount >= %s"),
@@ -2717,12 +3308,16 @@ _CANDIDATE_IE_SOURCE_RECORD_JOIN_SQL = """
       ON sr.id = t.source_record_id AND sr.superseded_by IS NULL
 """
 
-_CANDIDATE_IE_QUALIFYING_WHERE_SQL = """
+_CANDIDATE_IE_QUALIFYING_PREDICATE_SQL = """
+    t.support_oppose IS NOT NULL
+    AND t.is_memo = FALSE
+    AND t.amendment_indicator != 'T'
+    AND (t.source_record_id IS NULL OR sr.id IS NOT NULL)
+"""
+
+_CANDIDATE_IE_QUALIFYING_WHERE_SQL = f"""
     WHERE t.recipient_candidate_id = %s
-      AND t.support_oppose IS NOT NULL
-      AND t.is_memo = FALSE
-      AND t.amendment_indicator != 'T'
-      AND (t.source_record_id IS NULL OR sr.id IS NOT NULL)
+      AND {_CANDIDATE_IE_QUALIFYING_PREDICATE_SQL}
 """
 
 _CANDIDATE_IE_LIST_SQL = f"""
@@ -2742,6 +3337,8 @@ _CANDIDATE_IE_LIST_SQL = f"""
       ON c.id = t.committee_id
     {_CANDIDATE_IE_SOURCE_RECORD_JOIN_SQL}
     {_CANDIDATE_IE_QUALIFYING_WHERE_SQL}
+      AND t.transaction_date >= %s
+      AND t.transaction_date <= %s
     ORDER BY t.amount DESC NULLS LAST, t.id ASC
     LIMIT %s
     OFFSET %s
@@ -2756,25 +3353,37 @@ _CANDIDATE_IE_SUMMARY_SQL = f"""
     FROM cf.transaction t
     {_CANDIDATE_IE_SOURCE_RECORD_JOIN_SQL}
     {_CANDIDATE_IE_QUALIFYING_WHERE_SQL}
+      AND t.transaction_date >= %s
+      AND t.transaction_date <= %s
       AND {_IE_OUTLIER_WHERE_CLAUSE}
 """
 
 _CANDIDATE_IE_SUMMARIES_SQL = f"""
+    WITH qualified AS (
+        SELECT
+            t.recipient_candidate_id AS candidate_id,
+            t.support_oppose,
+            t.amount
+        FROM cf.transaction t
+        {_CANDIDATE_IE_SOURCE_RECORD_JOIN_SQL}
+        WHERE t.recipient_candidate_id = ANY(%s::uuid[])
+          AND t.transaction_date >= %s
+          AND t.transaction_date <= %s
+          AND {_CANDIDATE_IE_QUALIFYING_PREDICATE_SQL}
+    ),
+    classified AS (
+        SELECT *, amount > %s AS is_outlier
+        FROM qualified
+    )
     SELECT
-        t.recipient_candidate_id AS candidate_id,
-        COALESCE(SUM(t.amount) FILTER (WHERE t.support_oppose = 'S'), 0) AS support_total,
-        COALESCE(SUM(t.amount) FILTER (WHERE t.support_oppose = 'O'), 0) AS oppose_total,
-        COUNT(*) FILTER (WHERE t.support_oppose = 'S')::integer AS support_count,
-        COUNT(*) FILTER (WHERE t.support_oppose = 'O')::integer AS oppose_count
-    FROM cf.transaction t
-    {_CANDIDATE_IE_SOURCE_RECORD_JOIN_SQL}
-    WHERE t.recipient_candidate_id = ANY(%s::uuid[])
-      AND t.support_oppose IS NOT NULL
-      AND t.is_memo = FALSE
-      AND t.amendment_indicator != 'T'
-      AND (t.source_record_id IS NULL OR sr.id IS NOT NULL)
-      AND {_IE_OUTLIER_WHERE_CLAUSE}
-    GROUP BY t.recipient_candidate_id
+        candidate_id,
+        COALESCE(SUM(amount) FILTER (WHERE support_oppose = 'S' AND NOT is_outlier), 0) AS support_total,
+        COALESCE(SUM(amount) FILTER (WHERE support_oppose = 'O' AND NOT is_outlier), 0) AS oppose_total,
+        COUNT(*) FILTER (WHERE support_oppose = 'S' AND NOT is_outlier)::integer AS support_count,
+        COUNT(*) FILTER (WHERE support_oppose = 'O' AND NOT is_outlier)::integer AS oppose_count,
+        COUNT(*) FILTER (WHERE is_outlier)::integer AS excluded_outlier_count
+    FROM classified
+    GROUP BY candidate_id
 """
 
 _CANDIDATE_IE_TOP_SPENDERS_SQL = f"""
@@ -2789,6 +3398,8 @@ _CANDIDATE_IE_TOP_SPENDERS_SQL = f"""
       ON c.id = t.committee_id
     {_CANDIDATE_IE_SOURCE_RECORD_JOIN_SQL}
     {_CANDIDATE_IE_QUALIFYING_WHERE_SQL}
+      AND t.transaction_date >= %s
+      AND t.transaction_date <= %s
       AND {_IE_OUTLIER_WHERE_CLAUSE}
     GROUP BY t.committee_id, c.name, t.support_oppose
     ORDER BY SUM(t.amount) DESC, t.committee_id ASC, t.support_oppose ASC
@@ -2800,6 +3411,8 @@ _CANDIDATE_IE_OUTLIER_COUNT_SQL = f"""
     FROM cf.transaction t
     {_CANDIDATE_IE_SOURCE_RECORD_JOIN_SQL}
     {_CANDIDATE_IE_QUALIFYING_WHERE_SQL}
+      AND t.transaction_date >= %s
+      AND t.transaction_date <= %s
       AND t.amount > %s
 """
 
@@ -2813,14 +3426,19 @@ def _quantize_money_fields(row: dict[str, Any], *field_names: str) -> None:
         row[field_name] = _quantize_money(row[field_name])
 
 
-def _zero_person_contribution_insights(person_id: UUID, *, excluded_geography: str) -> dict[str, Any]:
+def _zero_person_contribution_insights(
+    person_id: UUID,
+    *,
+    excluded_geography: str,
+    selected_cycle: SelectedCycle | int | None = None,
+) -> dict[str, Any]:
     """Return the stable empty contribution-insights payload for a known person."""
+    cycle = _coerce_selected_cycle(selected_cycle)
     return {
         "person_id": person_id,
         "has_data": False,
         "metadata": {
-            "coverage_start_date": CONTRIBUTION_INSIGHTS_MIN_DATE,
-            "coverage_end_date": None,
+            **cycle.as_payload(),
             "cycles_included": [],
             "committee_count": 0,
             "approximate_geography": False,
@@ -2836,6 +3454,11 @@ def _zero_person_contribution_insights(person_id: UUID, *, excluded_geography: s
             "by_state": [],
             "by_district": [],
             "district_share": _district_dollar_share([]),
+            "geography_mode": "excluded",
+            "classified_amount": _MONEY_SCALE,
+            "classified_transaction_count": 0,
+            "unknown_amount": _MONEY_SCALE,
+            "unknown_transaction_count": 0,
         },
         "small_dollar_share": {
             "small_dollar_amount": None,
@@ -2846,9 +3469,16 @@ def _zero_person_contribution_insights(person_id: UUID, *, excluded_geography: s
     }
 
 
-def _fetch_person_insights_linked_committee_ids(conn: psycopg.Connection, person_id: UUID) -> list[UUID]:
+def _fetch_person_insights_linked_committee_ids(
+    conn: psycopg.Connection,
+    person_id: UUID,
+    selected_cycle: SelectedCycle,
+) -> list[UUID]:
     with conn.cursor(row_factory=dict_row) as cursor:
-        cursor.execute(_PERSON_CONTRIBUTION_INSIGHTS_LINKED_COMMITTEES_SQL, (person_id,))
+        cursor.execute(
+            _PERSON_CONTRIBUTION_INSIGHTS_LINKED_COMMITTEES_SQL,
+            (person_id, selected_cycle.coverage_start_date, selected_cycle.coverage_end_date),
+        )
         return [row["committee_id"] for row in cursor.fetchall()]
 
 
@@ -2862,10 +3492,14 @@ def _fetch_person_insights_rows(
     conn: psycopg.Connection,
     query: str,
     committee_ids: list[UUID],
+    selected_cycle: SelectedCycle,
     *extra_params: object,
 ) -> list[dict[str, Any]]:
     with conn.cursor(row_factory=dict_row) as cursor:
-        cursor.execute(query, (committee_ids, CONTRIBUTION_INSIGHTS_MIN_DATE, *extra_params))
+        cursor.execute(
+            query,
+            (committee_ids, selected_cycle.coverage_start_date, selected_cycle.coverage_end_date, *extra_params),
+        )
         rows = list(cursor.fetchall())
     for row in rows:
         if "total_amount" in row:
@@ -2877,10 +3511,14 @@ def _fetch_person_insights_one(
     conn: psycopg.Connection,
     query: str,
     committee_ids: list[UUID],
+    selected_cycle: SelectedCycle,
     *extra_params: object,
 ) -> dict[str, Any]:
     with conn.cursor(row_factory=dict_row) as cursor:
-        cursor.execute(query, (committee_ids, CONTRIBUTION_INSIGHTS_MIN_DATE, *extra_params))
+        cursor.execute(
+            query,
+            (committee_ids, selected_cycle.coverage_start_date, selected_cycle.coverage_end_date, *extra_params),
+        )
         row = cursor.fetchone()
     if row is None:
         raise RuntimeError("Contribution insights aggregate query returned no row")
@@ -2892,12 +3530,35 @@ def _fetch_person_insights_one(
 def _fetch_person_insights_itemized_rollups(
     conn: psycopg.Connection,
     committee_ids: list[UUID],
+    selected_cycle: SelectedCycle,
+    *,
+    complete_summary_coverage: bool,
+    district_params: tuple[bool, str | None, str | None, str | None] = (False, None, None, None),
 ) -> dict[str, Any]:
     """Fetch itemized contribution rollups from one shared qualifying-transaction scan."""
+    district_enabled, office_name, office_state, office_district = district_params
     with conn.cursor(row_factory=dict_row) as cursor:
         cursor.execute(
             _PERSON_CONTRIBUTION_INSIGHTS_ITEMIZED_ROLLUPS_SQL,
-            (committee_ids, CONTRIBUTION_INSIGHTS_MIN_DATE),
+            (
+                committee_ids,
+                selected_cycle.coverage_start_date,
+                selected_cycle.coverage_end_date,
+                complete_summary_coverage,
+                selected_cycle.coverage_start_date,
+                complete_summary_coverage,
+                selected_cycle.coverage_end_date,
+                district_enabled,
+                office_name,
+                office_name,
+                office_state,
+                office_name,
+                office_state,
+                office_district or "",
+                office_state,
+                district_enabled,
+                district_enabled,
+            ),
         )
         row = cursor.fetchone()
 
@@ -2909,6 +3570,7 @@ def _fetch_person_insights_itemized_rollups(
     totals_row = _json_object(row["totals"])
     itemized_buckets = _json_rows(row["itemized_size_buckets"])
     itemized_cycle_rows = _json_rows(row["itemized_cycle_totals"])
+    district_rows = _json_rows(row["district_totals"])
 
     for monthly_row in monthly_rows:
         _quantize_money_fields(monthly_row, "total_amount")
@@ -2921,6 +3583,8 @@ def _fetch_person_insights_itemized_rollups(
             bucket["max_amount"] = _quantize_money(bucket["max_amount"])
     for cycle_row in itemized_cycle_rows:
         _quantize_money_fields(cycle_row, "itemized_individual_contribution_amount")
+    for district_row in district_rows:
+        _quantize_money_fields(district_row, "total_amount")
 
     return {
         "monthly_rows": monthly_rows,
@@ -2928,6 +3592,7 @@ def _fetch_person_insights_itemized_rollups(
         "totals_row": totals_row,
         "itemized_buckets": itemized_buckets,
         "itemized_cycle_rows": itemized_cycle_rows,
+        "district_rows": district_rows,
     }
 
 
@@ -2941,25 +3606,68 @@ def _zero_person_insights_career_totals() -> dict[str, Any]:
     }
 
 
-def _fetch_person_insights_summary(conn: psycopg.Connection, committee_ids: list[UUID]) -> dict[str, Any]:
+def _fetch_person_insights_summary(
+    conn: psycopg.Connection,
+    committee_ids: list[UUID],
+    selected_cycle: SelectedCycle,
+) -> dict[str, Any]:
     with conn.cursor(row_factory=dict_row) as cursor:
-        cursor.execute(_PERSON_CONTRIBUTION_INSIGHTS_SUMMARY_SQL, (committee_ids, list(CONTRIBUTION_INSIGHTS_CYCLES)))
+        cursor.execute(_PERSON_CONTRIBUTION_INSIGHTS_SUMMARY_SQL, (committee_ids, [selected_cycle.selected_cycle]))
         row = cursor.fetchone()
     if row is None:
         raise RuntimeError("Contribution insights summary query returned no row")
     row["unitemized_total"] = _quantize_money(row["unitemized_total"])
+    row["itemized_total"] = _quantize_money(row["itemized_total"]) if row["itemized_total"] is not None else None
     row["cycles_included"] = list(row["cycles_included"] or [])
     return row
+
+
+def _fetch_person_insights_summary_rollups(
+    conn: psycopg.Connection,
+    committee_ids: list[UUID],
+    selected_cycle: SelectedCycle,
+) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
+    with conn.cursor(row_factory=dict_row) as cursor:
+        cursor.execute(
+            _PERSON_CONTRIBUTION_INSIGHTS_SUMMARY_ROLLUPS_SQL,
+            (
+                committee_ids,
+                [selected_cycle.selected_cycle],
+                selected_cycle.coverage_start_date,
+                selected_cycle.coverage_end_date,
+            ),
+        )
+        summary_row = cursor.fetchone()
+    if summary_row is None:
+        raise RuntimeError("Contribution insights summary rollup query returned no row")
+
+    summary_row["unitemized_total"] = _quantize_money(summary_row["unitemized_total"])
+    summary_row["itemized_total"] = (
+        _quantize_money(summary_row["itemized_total"]) if summary_row["itemized_total"] is not None else None
+    )
+    summary_row["cycles_included"] = list(summary_row["cycles_included"] or [])
+
+    coverage_rows = _json_rows(summary_row.pop("coverage_rows"))
+    summary_cycle_rows = _json_rows(summary_row.pop("summary_cycle_rows"))
+    for cycle_row in summary_cycle_rows:
+        _quantize_money_fields(cycle_row, "unitemized_individual_contribution_amount")
+    return summary_row, coverage_rows, summary_cycle_rows
 
 
 def _fetch_person_insights_summary_coverage(
     conn: psycopg.Connection,
     committee_ids: list[UUID],
+    selected_cycle: SelectedCycle,
 ) -> list[dict[str, Any]]:
     with conn.cursor(row_factory=dict_row) as cursor:
         cursor.execute(
             _PERSON_CONTRIBUTION_INSIGHTS_SUMMARY_COVERAGE_SQL,
-            (committee_ids, list(CONTRIBUTION_INSIGHTS_CYCLES)),
+            (
+                selected_cycle.coverage_start_date,
+                selected_cycle.coverage_end_date,
+                committee_ids,
+                [selected_cycle.selected_cycle],
+            ),
         )
         return list(cursor.fetchall())
 
@@ -2967,11 +3675,12 @@ def _fetch_person_insights_summary_coverage(
 def _fetch_person_insights_summary_cycle_totals(
     conn: psycopg.Connection,
     committee_ids: list[UUID],
+    selected_cycle: SelectedCycle,
 ) -> list[dict[str, Any]]:
     with conn.cursor(row_factory=dict_row) as cursor:
         cursor.execute(
             _PERSON_CONTRIBUTION_INSIGHTS_SUMMARY_BY_CYCLE_SQL,
-            (committee_ids, list(CONTRIBUTION_INSIGHTS_CYCLES)),
+            (committee_ids, [selected_cycle.selected_cycle]),
         )
         rows = list(cursor.fetchall())
     for row in rows:
@@ -2984,11 +3693,12 @@ def _fetch_person_insights_summary_cycle_totals(
 def _fetch_person_insights_itemized_cycle_totals(
     conn: psycopg.Connection,
     committee_ids: list[UUID],
+    selected_cycle: SelectedCycle,
 ) -> list[dict[str, Any]]:
     with conn.cursor(row_factory=dict_row) as cursor:
         cursor.execute(
             _PERSON_CONTRIBUTION_INSIGHTS_ITEMIZED_BY_CYCLE_SQL,
-            (committee_ids, CONTRIBUTION_INSIGHTS_MIN_DATE),
+            (committee_ids, selected_cycle.coverage_start_date, selected_cycle.coverage_end_date),
         )
         rows = list(cursor.fetchall())
     for row in rows:
@@ -3000,15 +3710,36 @@ def _has_complete_person_insights_summary(
     summary_row: dict[str, Any],
     summary_coverage_rows: list[dict[str, Any]],
     committee_count: int,
+    selected_cycle: SelectedCycle,
 ) -> bool:
     if summary_row["summary_committee_count"] != committee_count:
         return False
-    return all(row["committee_count"] == committee_count for row in summary_coverage_rows)
+    if not summary_coverage_rows:
+        return False
+    return all(
+        row["committee_count"] == committee_count and row["complete_committee_count"] == committee_count
+        for row in summary_coverage_rows
+    )
+
+
+def _person_insights_itemized_summary_reconciles(
+    summary_row: dict[str, Any],
+    itemized_total: Decimal,
+) -> bool:
+    summary_itemized_total = summary_row["itemized_total"]
+    if summary_itemized_total is None:
+        return False
+    return abs(_quantize_money(summary_itemized_total) - _quantize_money(itemized_total)) <= Decimal("0.01")
+
+
+def _person_insights_has_itemized_summary_basis(summary_row: dict[str, Any]) -> bool:
+    return summary_row["itemized_total"] is not None
 
 
 def _build_person_insights_itemized_buckets(
     conn: psycopg.Connection,
     committee_ids: list[UUID],
+    selected_cycle: SelectedCycle,
 ) -> list[dict[str, Any]]:
     """Build backend-owned itemized size buckets from qualifying Schedule A rows."""
     buckets: list[dict[str, Any]] = []
@@ -3017,6 +3748,7 @@ def _build_person_insights_itemized_buckets(
             conn,
             _PERSON_CONTRIBUTION_INSIGHTS_BUCKET_TOTALS_SQL,
             committee_ids,
+            selected_cycle,
             min_amount,
             max_amount,
             max_amount,
@@ -3111,31 +3843,114 @@ def _district_rows(
     committee_ids: list[UUID],
     office_row: dict[str, Any] | None,
     caveats: list[str],
-) -> tuple[list[dict[str, Any]], bool, str | None]:
+    selected_cycle: SelectedCycle,
+) -> tuple[list[dict[str, Any]], bool, str | None, str]:
     """Return district geography rows or the backend-owned omission reason."""
     if office_row is None:
-        return [], False, "no_current_federal_officeholding"
+        return [], False, "no_current_federal_officeholding", "excluded"
     if office_row["office_name"] in {"us_president", "us_vice_president"}:
-        return [], False, "federal_executive"
-    if office_row["office_name"] == "us_senate":
-        return [], False, "statewide_office"
+        return [], False, "federal_executive", "state_bars_only"
     if not office_row["state"] or not office_row["district"]:
-        return [], False, "missing_member_district"
+        if office_row["office_name"] == "us_senate" and office_row["state"]:
+            rows = _fetch_person_insights_rows(
+                conn,
+                _PERSON_CONTRIBUTION_INSIGHTS_DISTRICT_SQL,
+                committee_ids,
+                selected_cycle,
+                office_row["office_name"],
+                office_row["office_name"],
+                office_row["state"],
+                office_row["office_name"],
+                office_row["state"],
+                "",
+                office_row["state"],
+            )
+            return rows, True, None, "statewide"
+        return [], False, "missing_member_district", "excluded"
 
     rows = _fetch_person_insights_rows(
         conn,
         _PERSON_CONTRIBUTION_INSIGHTS_DISTRICT_SQL,
         committee_ids,
+        selected_cycle,
+        office_row["office_name"],
+        office_row["office_name"],
+        office_row["state"],
+        office_row["office_name"],
         office_row["state"],
         office_row["district"],
+        office_row["state"],
     )
-    matched_rows = [row for row in rows if row["label"] != "Unknown district"]
-    unknown_rows = [row for row in rows if row["label"] == "Unknown district"]
+    matched_rows = [row for row in rows if row["label"] != "Unknown"]
+    unknown_rows = [row for row in rows if row["label"] == "Unknown"]
     if unknown_rows:
         caveats.append("missing_zcta_district")
+    if selected_cycle.selected_cycle != max(SUPPORTED_COMMITTEE_SUMMARY_CYCLES):
+        caveats.append("current_district_approximation")
     if not matched_rows:
-        return [], True, None
-    return rows, True, None
+        return [], True, None, "district"
+    return rows, True, None, "district"
+
+
+def _person_insights_district_rollup_params(
+    office_row: dict[str, Any] | None,
+) -> tuple[tuple[bool, str | None, str | None, str | None], bool, str | None, str]:
+    if office_row is None:
+        return (False, None, None, None), False, "no_current_federal_officeholding", "excluded"
+    if office_row["office_name"] in {"us_president", "us_vice_president"}:
+        return (False, None, None, None), False, "federal_executive", "state_bars_only"
+    if not office_row["state"] or not office_row["district"]:
+        if office_row["office_name"] == "us_senate" and office_row["state"]:
+            return (True, office_row["office_name"], office_row["state"], ""), True, None, "statewide"
+        return (False, None, None, None), False, "missing_member_district", "excluded"
+    return (
+        (True, office_row["office_name"], office_row["state"], office_row["district"]),
+        True,
+        None,
+        "district",
+    )
+
+
+def _finalize_person_insights_district_rows(
+    rows: list[dict[str, Any]],
+    *,
+    geography_mode: str,
+    selected_cycle: SelectedCycle,
+    caveats: list[str],
+) -> list[dict[str, Any]]:
+    if geography_mode != "district":
+        return rows
+
+    matched_rows = [row for row in rows if row["label"] != "Unknown"]
+    unknown_rows = [row for row in rows if row["label"] == "Unknown"]
+    if unknown_rows:
+        caveats.append("missing_zcta_district")
+    if selected_cycle.selected_cycle != max(SUPPORTED_COMMITTEE_SUMMARY_CYCLES):
+        caveats.append("current_district_approximation")
+    if not matched_rows:
+        return []
+    return rows
+
+
+def _geography_denominators(rows: list[dict[str, Any]], unknown_label: str = "Unknown") -> dict[str, Any]:
+    """Split geography rows into classified and unknown contribution denominators."""
+    classified_amount = _MONEY_SCALE
+    classified_transaction_count = 0
+    unknown_amount = _MONEY_SCALE
+    unknown_transaction_count = 0
+    for row in rows:
+        if row["label"] == unknown_label:
+            unknown_amount += row["total_amount"]
+            unknown_transaction_count += row["transaction_count"]
+        else:
+            classified_amount += row["total_amount"]
+            classified_transaction_count += row["transaction_count"]
+    return {
+        "classified_amount": _quantize_money(classified_amount),
+        "classified_transaction_count": classified_transaction_count,
+        "unknown_amount": _quantize_money(unknown_amount),
+        "unknown_transaction_count": unknown_transaction_count,
+    }
 
 
 def _small_dollar_share(
@@ -3169,8 +3984,10 @@ def _small_dollar_share(
 def _district_dollar_share(district_rows: list[dict[str, Any]]) -> dict[str, Any]:
     amounts = {
         "In district": Decimal("0.00"),
-        "Out of district": Decimal("0.00"),
-        "Unknown district": Decimal("0.00"),
+        "Elsewhere in state": Decimal("0.00"),
+        "In state": Decimal("0.00"),
+        "Out of state": Decimal("0.00"),
+        "Unknown": Decimal("0.00"),
     }
     for row in district_rows:
         label = str(row["label"])
@@ -3178,9 +3995,9 @@ def _district_dollar_share(district_rows: list[dict[str, Any]]) -> dict[str, Any
             raise ValueError(f"Unexpected district contribution label: {label}")
         amounts[label] = _quantize_money(amounts[label] + row["total_amount"])
 
-    in_district_amount = amounts["In district"]
-    out_of_district_amount = amounts["Out of district"]
-    unknown_district_amount = amounts["Unknown district"]
+    in_district_amount = amounts["In district"] + amounts["In state"]
+    out_of_district_amount = amounts["Elsewhere in state"] + amounts["Out of state"]
+    unknown_district_amount = amounts["Unknown"]
     classified_amount = in_district_amount + out_of_district_amount
     if classified_amount == 0:
         return {
@@ -3203,41 +4020,80 @@ def _district_dollar_share(district_rows: list[dict[str, Any]]) -> dict[str, Any
     }
 
 
-def fetch_person_contribution_insights(conn: psycopg.Connection, person_id: UUID) -> dict[str, Any] | None:
+def fetch_person_contribution_insights(
+    conn: psycopg.Connection,
+    person_id: UUID,
+    selected_cycle: SelectedCycle | int | None = None,
+) -> dict[str, Any] | None:
     """Return person-level contribution insights for active linked candidate committees."""
+    cycle = _coerce_selected_cycle(selected_cycle)
     with conn.cursor(row_factory=dict_row) as cursor:
         cursor.execute(_PERSON_EXISTS_SQL, (person_id,))
         if cursor.fetchone() is None:
             return None
 
-    committee_ids = _fetch_person_insights_linked_committee_ids(conn, person_id)
+    committee_ids = _fetch_person_insights_linked_committee_ids(conn, person_id, cycle)
     if not committee_ids:
-        return _zero_person_contribution_insights(person_id, excluded_geography="no_linked_candidate")
+        return _zero_person_contribution_insights(
+            person_id,
+            excluded_geography="no_linked_candidate",
+            selected_cycle=cycle,
+        )
 
-    itemized_rollups = _fetch_person_insights_itemized_rollups(conn, committee_ids)
+    summary_row, summary_coverage_rows, summary_cycle_rows = _fetch_person_insights_summary_rollups(
+        conn,
+        committee_ids,
+        cycle,
+    )
+    complete_summary_coverage = _has_complete_person_insights_summary(
+        summary_row,
+        summary_coverage_rows,
+        len(committee_ids),
+        cycle,
+    )
+    office_row = _fetch_person_insights_office(conn, person_id)
+    caveats: list[str] = []
+    district_params, approximate_geography, excluded_geography, geography_mode = (
+        _person_insights_district_rollup_params(
+            office_row,
+        )
+    )
+    itemized_rollups = _fetch_person_insights_itemized_rollups(
+        conn,
+        committee_ids,
+        cycle,
+        complete_summary_coverage=complete_summary_coverage,
+        district_params=district_params,
+    )
     monthly_rows = itemized_rollups["monthly_rows"]
     state_rows = itemized_rollups["state_rows"]
     totals_row = itemized_rollups["totals_row"]
     itemized_buckets = itemized_rollups["itemized_buckets"]
     itemized_cycle_rows = itemized_rollups["itemized_cycle_rows"]
-    summary_row = _fetch_person_insights_summary(conn, committee_ids)
-    summary_coverage_rows = _fetch_person_insights_summary_coverage(conn, committee_ids)
-    summary_cycle_rows = _fetch_person_insights_summary_cycle_totals(conn, committee_ids)
 
-    caveats: list[str] = []
-    summary_available = _has_complete_person_insights_summary(
+    itemized_total = totals_row["total_amount"]
+    has_reconciliation_basis = complete_summary_coverage and _person_insights_has_itemized_summary_basis(
         summary_row,
-        summary_coverage_rows,
-        len(committee_ids),
+    )
+    summary_available = has_reconciliation_basis and _person_insights_itemized_summary_reconciles(
+        summary_row,
+        itemized_total,
     )
     if not summary_available:
-        caveats.append("missing_committee_summary")
+        if not complete_summary_coverage:
+            caveats.append("missing_committee_summary")
+            caveats.append("itemized_summary_reconciliation_unavailable")
+        elif not has_reconciliation_basis:
+            caveats.append("itemized_summary_reconciliation_unavailable")
+        else:
+            caveats.append("itemized_summary_reconciliation_mismatch")
         caveats.append("itemized_only_cycle_totals")
-
-    office_row = _fetch_person_insights_office(conn, person_id)
-    district_rows, approximate_geography, excluded_geography = _district_rows(conn, committee_ids, office_row, caveats)
-    itemized_total = totals_row["total_amount"]
-    coverage_end_date = summary_row["coverage_end_date"] if summary_available else totals_row["max_transaction_date"]
+    district_rows = _finalize_person_insights_district_rows(
+        itemized_rollups["district_rows"],
+        geography_mode=geography_mode,
+        selected_cycle=cycle,
+        caveats=caveats,
+    )
     cycles_included = summary_row["cycles_included"] if summary_available else []
     cycle_totals = _build_person_insights_cycle_totals(
         itemized_cycle_rows,
@@ -3249,8 +4105,7 @@ def fetch_person_contribution_insights(conn: psycopg.Connection, person_id: UUID
         "person_id": person_id,
         "has_data": bool(monthly_rows or summary_available),
         "metadata": {
-            "coverage_start_date": CONTRIBUTION_INSIGHTS_MIN_DATE,
-            "coverage_end_date": coverage_end_date,
+            **cycle.as_payload(),
             "cycles_included": cycles_included,
             "committee_count": len(committee_ids),
             "approximate_geography": approximate_geography,
@@ -3270,6 +4125,8 @@ def fetch_person_contribution_insights(conn: psycopg.Connection, person_id: UUID
             "by_state": state_rows,
             "by_district": district_rows,
             "district_share": _district_dollar_share(district_rows),
+            "geography_mode": geography_mode,
+            **_geography_denominators(state_rows),
         },
         "small_dollar_share": _small_dollar_share(
             itemized_buckets,
@@ -3286,9 +4143,14 @@ def fetch_candidate_ie_transactions(
     *,
     limit: int,
     offset: int,
+    selected_cycle: SelectedCycle | int | None = None,
 ) -> list[dict[str, Any]]:
+    cycle = _coerce_selected_cycle(selected_cycle)
     with conn.cursor(row_factory=dict_row) as cursor:
-        cursor.execute(_CANDIDATE_IE_LIST_SQL, (candidate_id, limit, offset))
+        cursor.execute(
+            _CANDIDATE_IE_LIST_SQL,
+            (candidate_id, cycle.coverage_start_date, cycle.coverage_end_date, limit, offset),
+        )
         return list(cursor.fetchall())
 
 
@@ -3296,6 +4158,7 @@ def fetch_candidate_ie_summary(
     conn: psycopg.Connection,
     candidate_id: UUID,
     *,
+    selected_cycle: SelectedCycle | int | None = None,
     top_spenders_limit: int = _IE_TOP_SPENDERS_DEFAULT_LIMIT,
 ) -> dict[str, Any]:
     """Fetch aggregated IE support/oppose totals and top spenders for a candidate.
@@ -3304,19 +4167,32 @@ def fetch_candidate_ie_summary(
     counts, and top-spender rankings; the count of excluded rows is surfaced under
     ``excluded_outlier_count``. The raw list endpoint keeps returning every row.
     """
+    cycle = _coerce_selected_cycle(selected_cycle)
     with conn.cursor(row_factory=dict_row) as cursor:
-        cursor.execute(_CANDIDATE_IE_SUMMARY_SQL, (candidate_id, CANDIDATE_IE_OUTLIER_CEILING))
+        cursor.execute(
+            _CANDIDATE_IE_SUMMARY_SQL,
+            (candidate_id, cycle.coverage_start_date, cycle.coverage_end_date, CANDIDATE_IE_OUTLIER_CEILING),
+        )
         summary_row = cursor.fetchone()
         if summary_row is None:
             raise RuntimeError(f"IE summary query returned no rows for candidate: {candidate_id}")
 
         cursor.execute(
             _CANDIDATE_IE_TOP_SPENDERS_SQL,
-            (candidate_id, CANDIDATE_IE_OUTLIER_CEILING, top_spenders_limit),
+            (
+                candidate_id,
+                cycle.coverage_start_date,
+                cycle.coverage_end_date,
+                CANDIDATE_IE_OUTLIER_CEILING,
+                top_spenders_limit,
+            ),
         )
         top_spender_rows = list(cursor.fetchall())
 
-        cursor.execute(_CANDIDATE_IE_OUTLIER_COUNT_SQL, (candidate_id, CANDIDATE_IE_OUTLIER_CEILING))
+        cursor.execute(
+            _CANDIDATE_IE_OUTLIER_COUNT_SQL,
+            (candidate_id, cycle.coverage_start_date, cycle.coverage_end_date, CANDIDATE_IE_OUTLIER_CEILING),
+        )
         outlier_count_row = cursor.fetchone()
 
     for top_spender_row in top_spender_rows:
@@ -3325,6 +4201,7 @@ def fetch_candidate_ie_summary(
     excluded_outlier_count = 0 if outlier_count_row is None else outlier_count_row["excluded_outlier_count"]
     return {
         "candidate_id": candidate_id,
+        **cycle.as_payload(),
         "support_total": _quantize_money(summary_row["support_total"]),
         "oppose_total": _quantize_money(summary_row["oppose_total"]),
         "support_count": summary_row["support_count"],
@@ -3334,9 +4211,14 @@ def fetch_candidate_ie_summary(
     }
 
 
-def _zero_candidate_ie_summary(candidate_id: UUID) -> dict[str, Any]:
+def _zero_candidate_ie_summary(
+    candidate_id: UUID,
+    selected_cycle: SelectedCycle | int | None = None,
+) -> dict[str, Any]:
+    cycle = _coerce_selected_cycle(selected_cycle)
     return {
         "candidate_id": candidate_id,
+        **cycle.as_payload(),
         "support_total": _MONEY_SCALE,
         "oppose_total": _MONEY_SCALE,
         "support_count": 0,
@@ -3349,26 +4231,37 @@ def _zero_candidate_ie_summary(candidate_id: UUID) -> dict[str, Any]:
 def fetch_candidate_ie_summaries(
     conn: psycopg.Connection,
     candidate_ids: list[UUID],
+    selected_cycle: SelectedCycle | int | None = None,
 ) -> dict[UUID, dict[str, Any]]:
     """Fetch public IE support/oppose totals for many candidates."""
-    summaries = {candidate_id: _zero_candidate_ie_summary(candidate_id) for candidate_id in candidate_ids}
+    cycle = _coerce_selected_cycle(selected_cycle)
+    summaries = {candidate_id: _zero_candidate_ie_summary(candidate_id, cycle) for candidate_id in candidate_ids}
     if not candidate_ids:
         return summaries
 
     with conn.cursor(row_factory=dict_row) as cursor:
-        cursor.execute(_CANDIDATE_IE_SUMMARIES_SQL, (candidate_ids, CANDIDATE_IE_OUTLIER_CEILING))
+        cursor.execute(
+            _CANDIDATE_IE_SUMMARIES_SQL,
+            (
+                candidate_ids,
+                cycle.coverage_start_date,
+                cycle.coverage_end_date,
+                CANDIDATE_IE_OUTLIER_CEILING,
+            ),
+        )
         rows = list(cursor.fetchall())
 
     for row in rows:
         candidate_id = row["candidate_id"]
         summaries[candidate_id] = {
             "candidate_id": candidate_id,
+            **cycle.as_payload(),
             "support_total": _quantize_money(row["support_total"]),
             "oppose_total": _quantize_money(row["oppose_total"]),
             "support_count": row["support_count"],
             "oppose_count": row["oppose_count"],
             "top_spenders": [],
-            "excluded_outlier_count": 0,
+            "excluded_outlier_count": row["excluded_outlier_count"],
         }
     return summaries
 
@@ -3621,6 +4514,7 @@ def fetch_person_top_donors(
     conn: psycopg.Connection,
     person_id: UUID,
     limit: int = _PERSON_TOP_DONORS_DEFAULT_LIMIT,
+    selected_cycle: SelectedCycle | int | None = None,
 ) -> list[dict[str, Any]] | None:
     """Return ranked top donors summed across a person's active linked committees.
 
@@ -3633,17 +4527,19 @@ def fetch_person_top_donors(
         if cursor.fetchone() is None:
             return None
 
-    committee_ids = _fetch_person_insights_linked_committee_ids(conn, person_id)
+    cycle = _coerce_selected_cycle(selected_cycle)
+    committee_ids = _fetch_person_insights_linked_committee_ids(conn, person_id, cycle)
     if not committee_ids:
         return []
 
-    return _fetch_person_insights_rows(conn, _PERSON_TOP_DONORS_SQL, committee_ids, limit)
+    return _fetch_person_insights_rows(conn, _PERSON_TOP_DONORS_SQL, committee_ids, cycle, limit)
 
 
 def fetch_person_top_employers(
     conn: psycopg.Connection,
     person_id: UUID,
     limit: int = _PERSON_TOP_DONORS_DEFAULT_LIMIT,
+    selected_cycle: SelectedCycle | int | None = None,
 ) -> list[dict[str, Any]] | None:
     """Return ranked employer-name totals across a person's active linked committees."""
     with conn.cursor(row_factory=dict_row) as cursor:
@@ -3651,8 +4547,15 @@ def fetch_person_top_employers(
         if cursor.fetchone() is None:
             return None
 
-    committee_ids = _fetch_person_insights_linked_committee_ids(conn, person_id)
+    cycle = _coerce_selected_cycle(selected_cycle)
+    committee_ids = _fetch_person_insights_linked_committee_ids(conn, person_id, cycle)
     if not committee_ids:
         return []
 
-    return _fetch_person_insights_rows(conn, _PERSON_TOP_EMPLOYERS_SQL, committee_ids, limit)
+    return _fetch_person_insights_rows(
+        conn,
+        _PERSON_TOP_EMPLOYERS_SQL,
+        committee_ids,
+        cycle,
+        limit,
+    )

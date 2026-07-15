@@ -453,7 +453,9 @@ def test_live_adapter_count_sanity() -> None:
     entries = adapter_module.fetch_legislators_entries()
     result = adapt_legislators_yaml(entries)
     assert 425 <= len(result.house_rows) <= 440, f"House row count {len(result.house_rows)} outside expected band"
-    assert len(result.senate_rows) == 100, f"Senate row count {len(result.senate_rows)} != 100"
+    assert 98 <= len(result.senate_rows) <= 100, (
+        f"Senate row count {len(result.senate_rows)} outside vacancy-aware band"
+    )
     assert len(result.delegate_rows) == 6, f"Delegate row count {len(result.delegate_rows)} != 6"
     assert len(result.president_rows) >= 1
     assert len(result.vp_rows) >= 1

@@ -18,7 +18,9 @@ FEC_CANDIDATE_ID_REGEX = r"^[HSP]\d[A-Z0-9]{2}\d{5}$"
 JurisdictionTypeLiteral = Literal["federal", "state", "other"]
 IncumbentChallengeLiteral = Literal["I", "C", "O"]
 AmendmentIndicatorLiteral = Literal["N", "A", "T"]
-CommitteeSummaryMoney = Annotated[Decimal, Field(max_digits=14, decimal_places=2)]
+FecMoney = Annotated[Decimal, Field(max_digits=14, decimal_places=2)]
+CommitteeSummaryMoney = FecMoney
+CandidateMoney = FecMoney
 
 
 def _utc_now() -> datetime:
@@ -204,6 +206,9 @@ class Candidate(CampaignFinanceBaseModel):
     total_receipts: Optional[Decimal] = None
     total_disbursements: Optional[Decimal] = None
     cash_on_hand: Optional[Decimal] = None
+    candidate_contrib: Optional[CandidateMoney] = None
+    candidate_loans: Optional[CandidateMoney] = None
+    candidate_loan_repay: Optional[CandidateMoney] = None
     summary_coverage_end_date: Optional[date] = None
     source_record_id: Optional[UUID] = None
 

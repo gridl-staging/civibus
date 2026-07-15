@@ -23,14 +23,18 @@ import {
 import {
   fetchCandidateDetail,
   fetchCandidateDetailBundle,
+  fetchContestCandidateFinanceByPersonId,
   fetchCandidateList,
   fetchPersonCandidateFinanceSections,
   fetchPersonContributionInsights,
   fetchPersonTopDonors,
   fetchPersonTopEmployers,
   fetchCandidatesBySlug,
+  fetchCandidateIndependentExpenditures,
+  fetchCandidateIndependentExpendituresSummary,
   fetchCandidateSummary,
   fetchCountyCampaignFinanceSummary,
+  fetchCommitteeTransactions,
   fetchCommitteeList,
   fetchCommitteesBySlug,
   fetchCommitteeDetailBundle,
@@ -45,6 +49,12 @@ const SECOND_COMMITTEE_ID = "99999999-9999-4999-8999-999999999999";
 const CANDIDATE_ID = "44444444-4444-4444-8444-444444444444";
 const PERSON_ID = "11111111-1111-4111-8111-111111111111";
 const FILING_ID = "77777777-7777-4777-8777-777777777777";
+const SELECTED_CYCLE_FIELDS = {
+  selected_cycle: 2026,
+  coverage_start_date: "2025-01-01",
+  coverage_end_date: "2026-12-31",
+  available_cycles: [2022, 2024, 2026]
+};
 
 const CANDIDATE_DETAIL = {
   id: CANDIDATE_ID,
@@ -80,7 +90,8 @@ const COMMITTEE_SUMMARY = {
   spend_categories: [{ category: "media", total_amount: "25.00", transaction_count: 1 }],
   itemized_transaction_count: 1,
   cycle_summaries: [],
-  summary_source: "derived" as const
+  summary_source: "derived" as const,
+  ...SELECTED_CYCLE_FIELDS
 };
 
 const COMMITTEE_FILING_BREAKDOWN = {
@@ -200,8 +211,7 @@ const PERSON_CONTRIBUTION_INSIGHTS = {
   person_id: PERSON_ID,
   has_data: true,
   metadata: {
-    coverage_start_date: "2022-01-01",
-    coverage_end_date: null,
+    ...SELECTED_CYCLE_FIELDS,
     cycles_included: [2022, 2024, 2026],
     committee_count: 1,
     approximate_geography: false,
@@ -211,9 +221,9 @@ const PERSON_CONTRIBUTION_INSIGHTS = {
   monthly_totals: [{ month: "2026-01", total_amount: "1234.56", transaction_count: 4 }],
   itemized_size_buckets: [
     {
-      label: "$1-$199",
-      min_amount: "1.00",
-      max_amount: "199.99",
+      label: "$200 and under",
+      min_amount: "0.01",
+      max_amount: "200.00",
       total_amount: "250.00",
       transaction_count: 3
     }
@@ -661,6 +671,206 @@ describe("campaign-finance detail api", () => {
     expect(employers).toEqual(PERSON_TOP_EMPLOYERS);
     expect(requestJson).toHaveBeenCalledTimes(1);
     expect(requestJson).toHaveBeenCalledWith(buildPersonTopEmployersPath(PERSON_ID));
+  });
+
+  it("fetches selected-cycle finance endpoints through exact cycle-scoped API paths", async () => {
+    const candidateSummary = {
+      candidate_id: CANDIDATE_ID,
+      candidate_name: "Candidate One",
+      total_raised: "250.00",
+      total_spent: "100.00",
+      net: "150.00",
+      transaction_count: 5,
+      committees: [COMMITTEE_SUMMARY],
+      cash_on_hand: null,
+      summary_source: "derived" as const,
+      itemized_transaction_count: 5,
+      selected_cycle: 2024,
+      coverage_start_date: "2023-01-01",
+      coverage_end_date: "2024-12-31",
+      available_cycles: [2022, 2024, 2026]
+    };
+    const ieSummary = {
+      candidate_id: CANDIDATE_ID,
+      support_total: "0.00",
+      oppose_total: "0.00",
+      support_count: 0,
+      oppose_count: 0,
+      top_spenders: [],
+      excluded_outlier_count: 0,
+      selected_cycle: 2024,
+      coverage_start_date: "2023-01-01",
+      coverage_end_date: "2024-12-31",
+      available_cycles: [2022, 2024, 2026]
+    };
+    const requestJson = vi.fn(async (path: string) => {
+      if (path === buildPersonContributionInsightsPath(PERSON_ID, { cycle: 2024 })) {
+        return {
+          ...PERSON_CONTRIBUTION_INSIGHTS,
+          metadata: {
+            ...PERSON_CONTRIBUTION_INSIGHTS.metadata,
+            selected_cycle: 2024,
+            coverage_start_date: "2023-01-01",
+            coverage_end_date: "2024-12-31"
+          }
+        };
+      }
+      if (path === buildPersonTopDonorsPath(PERSON_ID, { cycle: 2024 })) {
+        return PERSON_TOP_DONORS;
+      }
+      if (path === buildPersonTopEmployersPath(PERSON_ID, { cycle: 2024 })) {
+        return PERSON_TOP_EMPLOYERS;
+      }
+      if (path === buildCandidateSummaryPath(CANDIDATE_ID, { cycle: 2024 })) {
+        return candidateSummary;
+      }
+      if (path === buildCommitteeSummaryPath(COMMITTEE_ID, { cycle: 2024 })) {
+        return { ...COMMITTEE_SUMMARY, selected_cycle: 2024 };
+      }
+      if (path === buildCandidateIndependentExpendituresPath(CANDIDATE_ID, { cycle: 2024 })) {
+        return [];
+      }
+      if (path === buildCandidateIndependentExpendituresSummaryPath(CANDIDATE_ID, { cycle: 2024 })) {
+        return ieSummary;
+      }
+      if (path === buildCommitteeTransactionsPath(COMMITTEE_ID, { cycle: 2024 })) {
+        return [];
+      }
+
+      throw new Error(`unexpected path: ${path}`);
+    });
+    const apiClient = { requestJson: requestJson as ApiClient["requestJson"] };
+
+    await expect(fetchPersonContributionInsights(apiClient, { id: PERSON_ID, cycle: 2024 })).resolves.toMatchObject({
+      metadata: { selected_cycle: 2024, coverage_start_date: "2023-01-01", coverage_end_date: "2024-12-31" }
+    });
+    await expect(fetchPersonTopDonors(apiClient, { id: PERSON_ID, cycle: 2024 })).resolves.toEqual(PERSON_TOP_DONORS);
+    await expect(fetchPersonTopEmployers(apiClient, { id: PERSON_ID, cycle: 2024 })).resolves.toEqual(
+      PERSON_TOP_EMPLOYERS
+    );
+    await expect(fetchCandidateSummary(apiClient, { id: CANDIDATE_ID, cycle: 2024 })).resolves.toEqual(
+      candidateSummary
+    );
+    await expect(fetchCommitteeSummary(apiClient, { id: COMMITTEE_ID, cycle: 2024 })).resolves.toMatchObject({
+      selected_cycle: 2024
+    });
+    await expect(fetchCandidateIndependentExpenditures(apiClient, { id: CANDIDATE_ID, cycle: 2024 })).resolves.toEqual(
+      []
+    );
+    await expect(
+      fetchCandidateIndependentExpendituresSummary(apiClient, { id: CANDIDATE_ID, cycle: 2024 })
+    ).resolves.toEqual(ieSummary);
+    await expect(fetchCommitteeTransactions(apiClient, { id: COMMITTEE_ID, cycle: 2024 })).resolves.toEqual([]);
+    expect(requestJson.mock.calls.map(([path]) => path)).toEqual([
+      buildPersonContributionInsightsPath(PERSON_ID, { cycle: 2024 }),
+      buildPersonTopDonorsPath(PERSON_ID, { cycle: 2024 }),
+      buildPersonTopEmployersPath(PERSON_ID, { cycle: 2024 }),
+      buildCandidateSummaryPath(CANDIDATE_ID, { cycle: 2024 }),
+      buildCommitteeSummaryPath(COMMITTEE_ID, { cycle: 2024 }),
+      buildCandidateIndependentExpendituresPath(CANDIDATE_ID, { cycle: 2024 }),
+      buildCandidateIndependentExpendituresSummaryPath(CANDIDATE_ID, { cycle: 2024 }),
+      buildCommitteeTransactionsPath(COMMITTEE_ID, { cycle: 2024 })
+    ]);
+  });
+
+  it("fetches contest candidate finance with backend-owned selected-cycle facts and exact cycle paths", async () => {
+    const candidateSummary = {
+      candidate_id: CANDIDATE_ID,
+      candidate_name: "Candidate One",
+      total_raised: "250.00",
+      total_spent: "100.00",
+      net: "150.00",
+      transaction_count: 5,
+      committees: [],
+      cash_on_hand: "75.00",
+      summary_source: "fec_weball" as const,
+      itemized_transaction_count: 5,
+      selected_cycle: 2024,
+      coverage_start_date: "2023-01-01",
+      coverage_end_date: "2024-12-31",
+      available_cycles: [2022, 2024, 2026]
+    };
+    const ieSummary = {
+      candidate_id: CANDIDATE_ID,
+      support_total: "10.00",
+      oppose_total: "5.00",
+      support_count: 1,
+      oppose_count: 1,
+      top_spenders: [],
+      excluded_outlier_count: 0,
+      selected_cycle: 2024,
+      coverage_start_date: "2023-01-01",
+      coverage_end_date: "2024-12-31",
+      available_cycles: [2022, 2024, 2026]
+    };
+    const requestJson = vi.fn(async (path: string) => {
+      if (path === `/v1/candidates?person_id=${PERSON_ID}&limit=10&offset=0`) {
+        return CANDIDATE_LIST_RESPONSE;
+      }
+      if (path === buildCandidateDetailPath(CANDIDATE_ID)) {
+        return { ...CANDIDATE_DETAIL, person_id: PERSON_ID, principal_committee_id: null };
+      }
+      if (path === buildCandidateSummaryPath(CANDIDATE_ID, { cycle: 2024 })) {
+        return candidateSummary;
+      }
+      if (path === buildCandidateIndependentExpendituresPath(CANDIDATE_ID, { cycle: 2024 })) {
+        return [];
+      }
+      if (path === buildCandidateIndependentExpendituresSummaryPath(CANDIDATE_ID, { cycle: 2024 })) {
+        return ieSummary;
+      }
+
+      throw new Error(`unexpected path: ${path}`);
+    });
+
+    const sections = await fetchContestCandidateFinanceByPersonId(
+      { requestJson: requestJson as ApiClient["requestJson"] },
+      { candidacies: [{ personId: PERSON_ID }], cycle: 2024 }
+    );
+
+    expect(sections[PERSON_ID]).toMatchObject({
+      personId: PERSON_ID,
+      candidateHref: "/candidate/candidate-one",
+      summary: {
+        selected_cycle: 2024,
+        coverage_start_date: "2023-01-01",
+        coverage_end_date: "2024-12-31",
+        total_raised: "250.00",
+        total_spent: "100.00",
+        cash_on_hand: "75.00"
+      },
+      ieSummary: {
+        selected_cycle: 2024,
+        coverage_end_date: "2024-12-31"
+      },
+      ieTransactions: []
+    });
+    expect(requestJson.mock.calls.map(([path]) => path)).toEqual([
+      `/v1/candidates?person_id=${PERSON_ID}&limit=10&offset=0`,
+      buildCandidateDetailPath(CANDIDATE_ID),
+      buildCandidateSummaryPath(CANDIDATE_ID, { cycle: 2024 }),
+      buildCandidateIndependentExpendituresPath(CANDIDATE_ID, { cycle: 2024 }),
+      buildCandidateIndependentExpendituresSummaryPath(CANDIDATE_ID, { cycle: 2024 })
+    ]);
+  });
+
+  it("passes backend 422 responses through for cycle-scoped requests", async () => {
+    const requestJson = vi
+      .fn()
+      .mockRejectedValue(new ApiResponseError(422, { detail: [{ loc: ["query", "cycle"], msg: "Unsupported cycle" }] }));
+
+    await expect(
+      fetchCandidateIndependentExpendituresSummary(
+        { requestJson: requestJson as ApiClient["requestJson"] },
+        { id: CANDIDATE_ID, cycle: 2025 }
+      )
+    ).rejects.toMatchObject({
+      status: 422,
+      body: { detail: [{ loc: ["query", "cycle"], msg: "Unsupported cycle" }] }
+    });
+    expect(requestJson).toHaveBeenCalledWith(
+      buildCandidateIndependentExpendituresSummaryPath(CANDIDATE_ID, { cycle: 2025 })
+    );
   });
 
   it("fetches candidate detail bundle with detail, summary, and IE data in parallel", async () => {

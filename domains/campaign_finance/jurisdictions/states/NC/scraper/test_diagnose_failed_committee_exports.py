@@ -25,6 +25,7 @@ _EXPECTED_SAMPLE_IDS = [
 _COHORT_ARTIFACT = (
     Path(__file__).resolve().parents[6]
     / "docs"
+    / "reference"
     / "research"
     / "artifacts"
     / "2026_04_27_nc_orch_failed_cohort"

@@ -49,5 +49,6 @@
   entityType="contest"
   data={data.contest}
   contestCandidateFinanceByPersonId={data.contestCandidateFinanceByPersonId ?? {}}
+  contestSelectedCycle={data.contestSelectedCycle ?? null}
   {contestMap}
 />

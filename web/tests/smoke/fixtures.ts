@@ -222,7 +222,18 @@ export const SMOKE_COMMITTEE_TOTAL_RAISED = "$125.00";
 export const SMOKE_COMMITTEE_TOTAL_SPENT = "$40.00";
 export const SMOKE_COMMITTEE_NET_TOTAL = "$85.00";
 export const SMOKE_COMMITTEE_FILING_ROW_LABEL = "Q1 Filing (F3N)";
+export const SMOKE_COMMITTEE_SECOND_FILING_ROW_LABEL = "Q2 Filing (F3N)";
 export const SMOKE_COMMITTEE_FILING_SUMMARY_EMPTY_STATE = "No filing-period fundraising data available.";
+export const SMOKE_COMMITTEE_CASH_TREND_COVERAGE_META =
+  "2026 cycle, coverage through June 30, 2026. Unit: dollars";
+export const SMOKE_COMMITTEE_CASH_TREND_FIRST_PERIOD = "March 31, 2026";
+export const SMOKE_COMMITTEE_CASH_TREND_SECOND_PERIOD = "June 30, 2026";
+export const SMOKE_COMMITTEE_CASH_TREND_FIRST_BALANCE = "$125.00";
+export const SMOKE_COMMITTEE_CASH_TREND_LATEST_BALANCE = "$250.50";
+export const SMOKE_COMMITTEE_CASH_TREND_LATEST_COPY =
+  "Cash on hand is $250.50 at the latest filing period in the 2026 cycle.";
+export const SMOKE_COMMITTEE_CASH_TREND_MISSING_INTERVAL =
+  "Missing source coverage before this filing period.";
 export const SMOKE_COMMITTEE_ORG_LINK_TEXT = `Organization record (${SMOKE_ORG_ID})`;
 export const SMOKE_COMMITTEE_CONTRIBUTOR_PERSON_LINK_TEXT = "View contributor person record";
 export const SMOKE_COMMITTEE_CONTRIBUTOR_ORG_LINK_TEXT = "View contributor organization record";
@@ -236,6 +247,9 @@ export const SMOKE_CANDIDATE_TOTAL_RAISED = "$250.00";
 export const SMOKE_CANDIDATE_TOTAL_SPENT = "$80.00";
 export const SMOKE_CANDIDATE_NET_TOTAL = "$170.00";
 export const SMOKE_CANDIDATE_DATA_THROUGH = "2026-03-19";
+export const SMOKE_CANDIDATE_CASH_ON_HAND = "$125.00";
+export const SMOKE_CANDIDATE_SELECTED_CYCLE = "2026";
+export const SMOKE_CANDIDATE_COVERAGE_THROUGH = "2026-12-31";
 export const SMOKE_CANDIDATE_PERSON_LINK_TEXT = `Person record (${SMOKE_PERSON_ID})`;
 export const SMOKE_CANDIDATE_COMMITTEE_LINK_TEXT = `Committee record (${SMOKE_COMMITTEE_ID})`;
 export const SMOKE_EMPTY_COMMITTEE_TITLE = "Committee Empty | Committee | Civibus";
@@ -254,6 +268,12 @@ export const SMOKE_IE_COMMITTEE_A_NAME = "Super PAC Alpha";
 export const SMOKE_IE_TRANSACTION_DISSEMINATION_DATE = "2026-03-20";
 export const SMOKE_CANDIDATE_SUPPORT_TOTAL = "$15,000.00";
 export const SMOKE_CANDIDATE_OPPOSE_TOTAL = "$8,500.00";
+export const SMOKE_CANDIDATE_OUTSIDE_SPENDING_EXPLANATION =
+  "Outside spending is independent and not controlled by the candidate committee.";
+export const SMOKE_CANDIDATE_OUTSIDE_SPENDING_COVERAGE_META =
+  "2026 cycle, coverage through December 31, 2026. Unit: dollars";
+export const SMOKE_CANDIDATE_OUTSIDE_SPENDING_CHART_SUMMARY =
+  "Outside spending reports $15,000.00 in support spending and $8,500.00 in oppose spending for the 2026 cycle.";
 export const SMOKE_CANDIDATE_OUTSIDE_SPENDING_EMPTY =
   "Outside-spending data is not yet available for this candidate. Coverage may be incomplete.";
 export const SMOKE_COMMITTEE_IE_SUPPORT_TOTAL = "$1,500.00";
@@ -361,6 +381,30 @@ export const SMOKE_PERSON_DONATIONS_OVER_TIME_HEADING = "Donations over time";
 export const SMOKE_PERSON_DONATION_COUNT_BY_SIZE_HEADING = "Donation count by size bucket";
 export const SMOKE_PERSON_DOLLARS_BY_SIZE_HEADING = "Dollars by size bucket";
 export const SMOKE_PERSON_FUNDRAISING_GEOGRAPHY_HEADING = "Fundraising geography";
+export const SMOKE_PERSON_MONEY_AT_GLANCE_HEADING = "Money at a glance";
+export const SMOKE_PERSON_SELECTED_CYCLE = "2026";
+export const SMOKE_PERSON_MONEY_COVERAGE = `2026-01-01 to ${SMOKE_CANDIDATE_COVERAGE_THROUGH}`;
+export const SMOKE_PERSON_MONEY_SOURCE_LABEL = "Official FEC candidate summary";
+export const SMOKE_PERSON_MONEY_RECEIPTS = SMOKE_CANDIDATE_TOTAL_RAISED;
+export const SMOKE_PERSON_MONEY_DISBURSEMENTS = SMOKE_CANDIDATE_TOTAL_SPENT;
+export const SMOKE_PERSON_MONEY_CASH_ON_HAND = SMOKE_CANDIDATE_CASH_ON_HAND;
+export const SMOKE_PERSON_MONEY_DEBTS_OWED = "$0.00";
+export const SMOKE_PERSON_RECEIPT_COMPOSITION_SUMMARY =
+  "Receipt components disclose $250.00 in total receipts for the 2026 cycle.";
+export const SMOKE_PERSON_SUMMARY_CHART_COVERAGE_META =
+  "2026 cycle, coverage through December 31, 2026. Unit: dollars";
+export const SMOKE_PERSON_CONTRIBUTION_CHART_COVERAGE_META =
+  "2026 cycle, coverage through June 30, 2026. Unit: dollars";
+export const SMOKE_PERSON_MONTHLY_CONTRIBUTIONS_SUMMARY =
+  "Itemized individual contributions total $350.00 in the 2026 cycle.";
+export const SMOKE_PERSON_DOLLARS_BY_SIZE_SUMMARY =
+  "Itemized contribution-size buckets discloses $350.00 across 2 reported transactions in the 2026 cycle.";
+export const SMOKE_PERSON_REPORTED_TRANSACTIONS_BY_SIZE_SUMMARY =
+  "Itemized contribution-size buckets discloses $350.00 across 2 reported transactions in the 2026 cycle.";
+export const SMOKE_PERSON_GEOGRAPHY_SUMMARY =
+  "Unknown is included in the visible geography denominator. Unknown is $0.00 with 0 reported transactions; visible denominator is $350.00.";
+export const SMOKE_PERSON_OUTSIDE_SPENDING_SUMMARY =
+  "Outside spending reports $15,000.00 in support spending and $8,500.00 in oppose spending for the 2026 cycle.";
 export const SMOKE_PERSON_UNITEMIZED_DOLLARS = "150.00";
 export const SMOKE_PERSON_SMALL_ITEMIZED_DOLLARS = "125.00";
 export const SMOKE_PERSON_LARGE_ITEMIZED_DOLLARS = "225.00";
@@ -372,15 +416,15 @@ export const SMOKE_PERSON_SMALL_DOLLAR_SHARE = "0.6087";
 export const SMOKE_PERSON_SMALL_DOLLAR_HEADLINE = `${Math.round(Number(SMOKE_PERSON_SMALL_DOLLAR_SHARE) * 100)}%`;
 export const SMOKE_PERSON_CYCLE_TOTAL_LABEL = "2026 cycle";
 export const SMOKE_PERSON_CYCLE_TOTAL = "$500.00";
-export const SMOKE_PERSON_CAREER_TOTAL_LABEL = "Career";
+export const SMOKE_PERSON_CAREER_TOTAL_LABEL = "Recent history total (2022-2026)";
 export const SMOKE_PERSON_CAREER_TOTAL = "$575.00";
 export const SMOKE_PERSON_PRIOR_UNITEMIZED_DOLLARS = "75.00";
-export const SMOKE_PERSON_TOP_DONORS_HEADING = "Top donors";
+export const SMOKE_PERSON_TOP_DONORS_HEADING = "Top reported contributor names";
 export const SMOKE_PERSON_TOP_DONOR_ONE_NAME = "Smoke Donor Two";
 export const SMOKE_PERSON_TOP_DONOR_TWO_NAME = "Smoke Donor One";
 export const SMOKE_PERSON_TOP_DONOR_ONE_TOTAL = "$225.00";
 export const SMOKE_PERSON_TOP_DONOR_TWO_TOTAL = "$125.00";
-export const SMOKE_PERSON_TOP_EMPLOYERS_HEADING = "Top employers";
+export const SMOKE_PERSON_TOP_EMPLOYERS_HEADING = "Top reported employer names";
 export const SMOKE_PERSON_TOP_EMPLOYER_ONE_NAME = "ACME CORP";
 export const SMOKE_PERSON_TOP_EMPLOYER_TWO_NAME = "STATE UNIVERSITY";
 export const SMOKE_PERSON_TOP_EMPLOYER_ONE_TOTAL = "$225.00";
@@ -402,7 +446,7 @@ export const SMOKE_PERSON_UNITEMIZED_EXCLUSION_NOTE =
   "Unitemized contributions are excluded from count and geography charts.";
 export const SMOKE_PERSON_LINKED_COMMITTEES_HEADING = "Linked committees";
 export const SMOKE_PERSON_DONORS_AND_VENDORS_HEADING = "Donors and vendors";
-export const SMOKE_PERSON_OUTSIDE_SPENDING_HEADING = "Outside Spending";
+export const SMOKE_PERSON_OUTSIDE_SPENDING_HEADING = "Outside spending";
 export const SMOKE_COMMITTEE_EMPTY_STATE = "No recent committee transactions found.";
 export const SMOKE_PROPERTY_EMPTY_OWNERSHIP_STATE = "No ownership history is available yet. Check back after the next county refresh.";
 export const SMOKE_PROPERTY_EMPTY_ASSESSMENT_STATE = "No assessment history is available yet. Check back after the next county refresh.";

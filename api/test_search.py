@@ -10,6 +10,7 @@ from api.test_campaign_finance_support import CommitteeRowSeed, insert_committee
 from api.test_civics import (
     _insert_candidacy,
     _insert_contest,
+    _insert_namesake_challenger_candidacy,
     _insert_office,
     _insert_officeholding,
     _seed_current_federal_members_mix,
@@ -907,6 +908,61 @@ def test_search_officeholder_person_ranks_before_same_name_committee_and_bare_pe
     result_keys = {(row["entity_type"], row["entity_id"]) for row in payload}
     assert ("committee", str(committee_id)) in result_keys
     assert ("person", str(bare_person_id)) in result_keys
+
+
+def test_search_officeholder_person_ranks_before_namesake_challenger(
+    api_client: TestClient,
+    db_conn: psycopg.Connection,
+) -> None:
+    expectations = _seed_current_federal_members_mix(db_conn)
+    officeholder = next(row for row in expectations if row.person_name == "Alice Representative")
+    challenger_id = _insert_namesake_challenger_candidacy(
+        db_conn,
+        officeholder,
+        person_id=UUID("00000000-0000-0000-0000-000000000044"),
+    )
+
+    response = api_client.get("/v1/search", params={"q": officeholder.person_name, "limit": 10})
+
+    assert response.status_code == 200
+    payload = response.json()
+    officeholder_key = ("person", str(officeholder.person_id))
+    challenger_person_key = ("person", str(challenger_id))
+    challenger_candidate_key = ("candidate", str(challenger_id))
+    indexed_keys = {(row["entity_type"], row["entity_id"]): index for index, row in enumerate(payload)}
+
+    assert payload[indexed_keys[officeholder_key]] == {
+        "entity_type": "person",
+        "entity_id": str(officeholder.person_id),
+        "name": "Alice Representative",
+        "state": "NC-01",
+        "party": "DEM",
+        "office_name": "U.S. Representative",
+        "committee_type": None,
+        "total_raised": None,
+    }
+    assert payload[indexed_keys[challenger_person_key]] == {
+        "entity_type": "person",
+        "entity_id": str(challenger_id),
+        "name": "Alice Representative",
+        "state": None,
+        "party": None,
+        "office_name": None,
+        "committee_type": None,
+        "total_raised": None,
+    }
+    assert payload[indexed_keys[challenger_candidate_key]] == {
+        "entity_type": "candidate",
+        "entity_id": str(challenger_id),
+        "name": "Alice Representative",
+        "state": None,
+        "party": "IND",
+        "office_name": "us_house",
+        "committee_type": None,
+        "total_raised": None,
+    }
+    assert indexed_keys[officeholder_key] < indexed_keys[challenger_person_key]
+    assert indexed_keys[officeholder_key] < indexed_keys[challenger_candidate_key]
 
 
 def test_search_officeholder_person_context_values_do_not_enrich_bare_person(

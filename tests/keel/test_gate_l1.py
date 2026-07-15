@@ -558,6 +558,148 @@ def test_main_returns_error_when_anchor_file_is_missing(tmp_path: Path) -> None:
     assert not (tmp_path / "evidence").exists()
 
 
+def _federal_anchor(race_range: list[int]) -> "keel_gate_l1.AnchorFile":
+    named_entity = keel_gate_l1.NamedEntityExpectation(
+        name="Sitting Official",
+        entity_type="officeholder",
+        role_or_office="US House Representative",
+        cycle=2026,
+        source="https://example.test/official",
+        tier=1,
+        accessed=date(2026, 7, 13),
+    )
+    return keel_gate_l1.AnchorFile(
+        frontmatter=keel_gate_l1.AnchorFrontmatter(
+            scope="FEDERAL",
+            domain="campaign_finance",
+            review_cadence_days=180,
+            created=date(2026, 7, 13),
+            updated=date(2026, 7, 13),
+            schema_version=1,
+        ),
+        coverage_boundary="Federal race spine for 2026",
+        aggregate_expectations=[
+            keel_gate_l1.AggregateExpectation(
+                metric="us_house_seats_2026",
+                value_expected=435,
+                unit="count",
+                cycle=2026,
+                source="https://example.test/house",
+                tier=1,
+                accessed=date(2026, 7, 13),
+            ),
+            keel_gate_l1.AggregateExpectation(
+                metric="countable_federal_races",
+                value_expected=race_range,
+                unit="count",
+                cycle=2026,
+                source="https://example.test/races",
+                tier=1,
+                accessed=date(2026, 7, 13),
+            ),
+        ],
+        named_entity_expectations=[named_entity] * 5,
+        negative_expectations=[
+            keel_gate_l1.NegativeExpectation(
+                pattern="TEST CANDIDATE",
+                reason="fixture leakage",
+                source="internal_convention",
+                tier="internal",
+                accessed=date(2026, 7, 13),
+            ),
+            keel_gate_l1.NegativeExpectation(
+                pattern="UNKNOWN OFFICE",
+                reason="unresolved office placeholder",
+                source="internal_convention",
+                tier="internal",
+                accessed=date(2026, 7, 13),
+            ),
+        ],
+        source_bibliography=[
+            keel_gate_l1.SourceBibliographyEntry(
+                url="https://example.test/races",
+                description="Federal race source",
+            )
+        ],
+    )
+
+
+def _seed_federal_contest(
+    connection: psycopg.Connection,
+    *,
+    office_name: str,
+    election_date: date,
+    office_level: str = "federal",
+) -> None:
+    office_row = connection.execute(
+        """
+        INSERT INTO civic.office (name, office_level)
+        VALUES (%s, %s)
+        RETURNING id
+        """,
+        (office_name, office_level),
+    ).fetchone()
+    assert office_row is not None
+    connection.execute(
+        """
+        INSERT INTO civic.contest (name, election_date, election_type, office_id)
+        VALUES (%s, %s, 'general', %s)
+        """,
+        (f"{office_name} contest", election_date, office_row[0]),
+    )
+
+
+def test_select_primary_metric_returns_countable_races_for_federal_anchor() -> None:
+    anchor = _federal_anchor([1, 500])
+
+    metric = keel_gate_l1.select_primary_metric(anchor)
+
+    assert metric.metric == "countable_federal_races"
+    assert metric.unit == "count"
+    assert metric.expected_minimum == Decimal("1")
+    assert metric.expected_maximum == Decimal("500")
+
+
+@pytest.mark.integration
+def test_query_scope_total_counts_federal_contests_in_cycle_window(
+    db_conn: psycopg.Connection,
+) -> None:
+    # Use a far-future cycle with no pre-existing rows so the count is fully controlled.
+    _seed_federal_contest(db_conn, office_name="US House FED-1", election_date=date(2099, 11, 3))
+    _seed_federal_contest(db_conn, office_name="US Senate FED-2", election_date=date(2099, 11, 3))
+    # Out-of-window federal contest (different cycle) must be excluded.
+    _seed_federal_contest(db_conn, office_name="US House FED-3", election_date=date(2098, 11, 5))
+    # Non-federal contest in-window must be excluded.
+    _seed_federal_contest(
+        db_conn, office_name="State House FED-4", election_date=date(2099, 11, 3), office_level="state"
+    )
+
+    total = keel_gate_l1.query_scope_total(db_conn, jurisdiction="FEDERAL", cycle=2099)
+
+    assert total == Decimal("2")
+
+
+def test_default_anchors_root_points_at_reference_anchors_directory() -> None:
+    repo_root = Path(__file__).resolve().parents[2]
+    assert keel_gate_l1._DEFAULT_ANCHORS_ROOT == repo_root / "docs" / "reference" / "anchors"
+
+
+def test_load_anchor_file_parses_committed_federal_anchor() -> None:
+    federal_anchor_path = keel_gate_l1._DEFAULT_ANCHORS_ROOT / "FEDERAL.md"
+
+    anchor = keel_gate_l1.load_anchor_file(federal_anchor_path)
+
+    assert anchor.frontmatter.scope == "FEDERAL"
+    assert anchor.coverage_boundary
+    assert len(anchor.aggregate_expectations) >= 3
+    assert len(anchor.named_entity_expectations) >= 5
+    assert len(anchor.negative_expectations) >= 2
+    race_metrics = [metric for metric in anchor.aggregate_expectations if metric.metric == "countable_federal_races"]
+    assert len(race_metrics) == 1
+    assert race_metrics[0].unit == "count"
+    assert race_metrics[0].expected_maximum >= Decimal("511")
+
+
 def test_repo_audited_anchor_files_are_schema_valid() -> None:
     anchors_root = Path(__file__).resolve().parents[2] / "docs" / "reference" / "anchors"
     jurisdictions = ("NC", "IN", "NE", "LA", "AL", "GA", "PA", "TX", "CA")

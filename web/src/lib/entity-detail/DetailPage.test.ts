@@ -12,11 +12,19 @@ vi.mock("$app/navigation", () => ({
 const PERSON_ID = "11111111-1111-4111-8111-111111111111";
 const CANDIDATE_ID = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
 const COMMITTEE_ID = "ffffffff-ffff-4fff-8fff-ffffffffffff";
+const FILING_ID = "66666666-6666-4666-8666-666666666666";
+const SELECTED_CYCLE_FIELDS = {
+  selected_cycle: 2026,
+  coverage_start_date: "2025-01-01",
+  coverage_end_date: "2026-12-31",
+  available_cycles: [2022, 2024, 2026]
+};
 
 const CONTRIBUTION_INSIGHTS = {
   person_id: PERSON_ID,
   has_data: true,
   metadata: {
+    ...SELECTED_CYCLE_FIELDS,
     coverage_start_date: "2022-01-01",
     coverage_end_date: "2026-06-30",
     cycles_included: [2022, 2024, 2026],
@@ -28,16 +36,15 @@ const CONTRIBUTION_INSIGHTS = {
   monthly_totals: [{ month: "2026-01", total_amount: "100.00", transaction_count: 1 }],
   itemized_size_buckets: [
     {
-      label: "$1-$199",
-      min_amount: "1.00",
-      max_amount: "199.99",
+      label: "$200 and under",
+      min_amount: "0.01",
+      max_amount: "200.00",
       total_amount: "100.00",
       transaction_count: 1
     }
   ],
   dollars_by_size: [
-    { label: "Unitemized (<$200)", total_amount: "125.00", source: "committee_summary" as const },
-    { label: "$1-$199", total_amount: "100.00", source: "transactions" as const }
+    { label: "$200 and under", total_amount: "100.00", source: "transactions" as const }
   ],
   cycle_totals: [
     {
@@ -65,7 +72,12 @@ const CONTRIBUTION_INSIGHTS = {
       unknown_district_amount: "0.00",
       share: "1.0000",
       available: true
-    }
+    },
+    geography_mode: "district" as const,
+    classified_amount: "100.00",
+    classified_transaction_count: 1,
+    unknown_amount: "0.00",
+    unknown_transaction_count: 0
   },
   small_dollar_share: {
     small_dollar_amount: "225.00",
@@ -109,6 +121,7 @@ function buildPersonFinanceSection(
       sources: []
     },
     summary: asSettled({
+      ...SELECTED_CYCLE_FIELDS,
       candidate_id: CANDIDATE_ID,
       candidate_name: "Candidate One",
       total_raised: "1000.00",
@@ -117,9 +130,26 @@ function buildPersonFinanceSection(
       transaction_count: 3,
       itemized_transaction_count: 3,
       cash_on_hand: null,
+      debts_owed_by_committee: "45.00",
       summary_source: "derived" as const,
+      receipt_source_composition: [
+        {
+          label: "Gross individual contributions",
+          total_amount: "900.00",
+          source: "fec_committee_summary" as const
+        },
+        {
+          label: "PAC/other committee contributions",
+          total_amount: "100.00",
+          source: "fec_committee_summary" as const
+        }
+      ],
+      selected_cycle_coverage_complete: true,
+      can_render_share: true,
+      receipt_source_caveats: [],
       committees: [
         {
+          ...SELECTED_CYCLE_FIELDS,
           committee_id: COMMITTEE_ID,
           committee_name: "Friends of Candidate One",
           slug: "friends-of-candidate-one",
@@ -139,14 +169,30 @@ function buildPersonFinanceSection(
           spend_categories: null,
           itemized_transaction_count: 2,
           cycle_summaries: [],
-          summary_source: "derived" as const
+          summary_source: "derived" as const,
+          receipt_source_composition: [
+            {
+              label: "Gross individual contributions",
+              total_amount: "650.00",
+              source: "fec_committee_summary" as const
+            },
+            {
+              label: "PAC/other committee contributions",
+              total_amount: "100.00",
+              source: "fec_committee_summary" as const
+            }
+          ],
+          selected_cycle_coverage_complete: true,
+          can_render_share: true,
+          receipt_source_caveats: [],
+          debts_owed_by_committee: "45.00"
         }
       ]
     }),
     ieTransactions: asSettled([
       {
         id: "ie-1",
-        filing_id: null,
+        filing_id: FILING_ID,
         committee_id: COMMITTEE_ID,
         committee_name: "Outside Group A",
         amount: 1250,
@@ -158,6 +204,7 @@ function buildPersonFinanceSection(
       }
     ]),
     ieSummary: {
+      ...SELECTED_CYCLE_FIELDS,
       candidate_id: CANDIDATE_ID,
       support_total: "1250.00",
       oppose_total: "200.00",
@@ -344,8 +391,26 @@ describe("entity detail page rendering", () => {
 
     expect(rendered.body).toContain("<h3>Campaign finance</h3>");
     expect(rendered.body).toContain("Candidate One");
-    expect(rendered.body).toContain("Total raised");
+    expect(rendered.body).toContain("Money at a glance");
+    expect(rendered.body).toContain('aria-label="Election cycle"');
+    expect(rendered.body.match(/aria-label="Election cycle"/g)).toHaveLength(1);
+    expect(rendered.body).toContain('aria-current="page"');
+    expect(rendered.body).toContain('href="?cycle=2022"');
+    expect(rendered.body).toContain('href="?cycle=2024"');
+    expect(rendered.body).toContain('href="?cycle=2026"');
+    expect(rendered.body).toContain("2026 cycle");
+    expect(rendered.body).toContain("Coverage");
+    expect(rendered.body).toContain("2025-01-01 to 2026-12-31");
+    expect(rendered.body).toContain("Source");
+    expect(rendered.body).toContain("Derived from itemized transactions");
+    expect(rendered.body).toContain("Total receipts");
     expect(rendered.body).toContain("$1,000.00");
+    expect(rendered.body).toContain("Total disbursements");
+    expect(rendered.body).toContain("$600.00");
+    expect(rendered.body).toContain("Cash on hand");
+    expect(rendered.body).toContain("Not available");
+    expect(rendered.body).toContain("Debts owed by the committee");
+    expect(rendered.body).toContain("$45.00");
     expect(rendered.body).toContain("Friends of Candidate One");
     expect(rendered.body).toContain("Acme Donor LLC");
     expect(rendered.body).toContain("2026-01-15");
@@ -356,40 +421,146 @@ describe("entity detail page rendering", () => {
     expect(rendered.body).toContain("<h5>Individual contribution totals</h5>");
     expect(rendered.body).toContain("2026 cycle");
     expect(rendered.body).toContain("$225.00");
-    expect(rendered.body).toContain("Career");
+    expect(rendered.body).toContain("Recent history total (2022-2026)");
     expect(rendered.body).toContain(
       "Totals combine itemized transactions with available committee-summary data; unitemized coverage may be incomplete."
     );
-    expect(rendered.body).toContain("Donations over time");
-    expect(rendered.body).toContain("Donation count by size bucket");
-    expect(rendered.body).toContain("Dollars by size bucket");
-    expect(rendered.body).toContain("Fundraising geography");
+    expect(rendered.body).toContain("Sources of receipts");
+    expect(rendered.body).toContain("Receipt components disclose $1,000.00 in total receipts for the 2026 cycle.");
+    expect(rendered.body).toContain("Itemized individual contributions by month");
+    expect(rendered.body).toContain("Itemized individual contributions total $100.00 in the 2026 cycle.");
+    expect(rendered.body).toContain("Itemized contribution-size buckets");
+    expect(rendered.body).toContain("Dollars | Reported transactions");
+    expect(rendered.body).toContain("Geography");
+    expect(rendered.body).toContain("View chart data");
+    expect(rendered.body).toContain("Unknown is included in the visible geography denominator.");
+    expect(rendered.body).not.toContain("outside the classified geography denominator");
+    expect(rendered.body).not.toContain("Donation count by size bucket");
+    expect(rendered.body).not.toContain("Dollars by size bucket");
+    expect(rendered.body).not.toContain("Fundraising geography");
     expect(rendered.body).toContain("District share");
     expect(rendered.body).toContain("100% in district");
     expect(rendered.body).toContain("$100.00 in district and $0.00 out of district.");
-    expect(rendered.body).toContain("<h5>Top donors</h5>");
+    expect(rendered.body).toContain("<h5>Top reported contributor names</h5>");
+    expect(rendered.body).toContain("detail__rank-bar");
     expect(rendered.body).toContain("Largest Person Donor");
     expect(rendered.body).toContain("$500.00");
     expect(rendered.body).toContain("Second Person Donor");
-    expect(rendered.body).toContain("<h5>Top employers</h5>");
+    expect(rendered.body).toContain("<h5>Top reported employer names</h5>");
     expect(rendered.body).toContain("Top employers aggregate raw employer names from itemized individual contributions only.");
     expect(rendered.body).toContain("They are not industry- or sector-coded; see Methodology for source-linking and evidence limitations.");
     expect(rendered.body).toContain('data-testid="person-top-employers-scroll"');
     expect(rendered.body).toContain("ACME CORP");
     expect(rendered.body).toContain("$600.00");
     expect(rendered.body).toContain("State University");
-    expect(rendered.body).toContain("Unitemized (&lt;$200)");
+    expect(rendered.body).toContain("$200 and under");
     expect(rendered.body).toContain("Unitemized contributions are excluded from count and geography charts.");
-    expect(rendered.body).toContain("<h4>Outside Spending</h4>");
-    expect(rendered.body).toContain('aria-label="Outside spending chart for Candidate One"');
-    expect(rendered.body).toContain("Finance chart: Candidate One");
+    expect(rendered.body).toContain('<h4 id="person-outside-spending">Outside spending</h4>');
+    expect(rendered.body).toContain('data-testid="person-outside-spending"');
+    expect(rendered.body).toContain('aria-label="Zero-centered support and oppose spending comparison"');
+    expect(rendered.body).not.toContain(["Finance", "chart:"].join(" "));
+    expect(rendered.body).not.toContain(["Career", "total"].join(" "));
 
-    const summaryChartIndex = rendered.body.indexOf("Finance chart: Candidate One");
+    const coreAttributesIndex = rendered.body.indexOf("<h3>Core attributes</h3>");
+    const campaignFinanceIndex = rendered.body.indexOf("<h3>Campaign finance</h3>");
+    const keyMetricsIndex = rendered.body.indexOf("<h3>Key metrics</h3>");
+    const identifiersIndex = rendered.body.indexOf("<h3>Identifiers</h3>");
+    const moneyAtGlanceIndex = rendered.body.indexOf("Money at a glance");
     const detailIndex = rendered.body.indexOf("<h4>Fundraising detail</h4>");
     const linkedCommitteesIndex = rendered.body.indexOf("<h4>Linked committees</h4>");
+    const receiptsIndex = rendered.body.indexOf("Total receipts", moneyAtGlanceIndex);
+    const disbursementsIndex = rendered.body.indexOf("Total disbursements", receiptsIndex);
+    const cashOnHandIndex = rendered.body.indexOf("Cash on hand", disbursementsIndex);
+    const debtsOwedIndex = rendered.body.indexOf("Debts owed by the committee", cashOnHandIndex);
+    expect(coreAttributesIndex).toBeGreaterThan(-1);
+    expect(campaignFinanceIndex).toBeGreaterThan(coreAttributesIndex);
+    expect(keyMetricsIndex).toBeGreaterThan(campaignFinanceIndex);
+    expect(identifiersIndex).toBeGreaterThan(keyMetricsIndex);
+    expect(moneyAtGlanceIndex).toBeGreaterThan(campaignFinanceIndex);
+    expect(receiptsIndex).toBeGreaterThan(moneyAtGlanceIndex);
+    expect(disbursementsIndex).toBeGreaterThan(receiptsIndex);
+    expect(cashOnHandIndex).toBeGreaterThan(disbursementsIndex);
+    expect(debtsOwedIndex).toBeGreaterThan(cashOnHandIndex);
     expect(detailIndex).toBeGreaterThan(-1);
-    expect(detailIndex).toBeGreaterThan(summaryChartIndex);
+    expect(detailIndex).toBeGreaterThan(moneyAtGlanceIndex);
     expect(linkedCommitteesIndex).toBeGreaterThan(detailIndex);
+  });
+
+  it("renders selected-cycle money as page-wide content before candidate cards", () => {
+    const source = readFileSync(new URL("./DetailPage.svelte", import.meta.url), "utf8");
+    const financePanelIndex = source.indexOf('{:else if sectionKey === "person-campaign-finance"}');
+    const financeSectionsThenIndex = source.indexOf("{:then personFinanceSections}", financePanelIndex);
+    const moneyPresentationIndex = source.indexOf("{@render moneyAtGlance(", financeSectionsThenIndex);
+    const candidateLoopIndex = source.indexOf("{#each personFinanceSections as section", financeSectionsThenIndex);
+
+    expect(financePanelIndex).toBeGreaterThan(-1);
+    expect(financeSectionsThenIndex).toBeGreaterThan(financePanelIndex);
+    expect(moneyPresentationIndex).toBeGreaterThan(financeSectionsThenIndex);
+    expect(moneyPresentationIndex).toBeLessThan(candidateLoopIndex);
+    expect(source).not.toContain(["sectionIndex", "=== 0"].join(" "));
+    expect(source).not.toContain("personFinanceSections[0].summary");
+
+    const rendered = render(DetailPage, {
+      props: {
+        data: buildPersonPageBundle({
+          personFinanceSections: asSettled([
+            buildPersonFinanceSection(),
+            buildPersonFinanceSection({
+              candidate: {
+                ...buildPersonFinanceSection().candidate,
+                id: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeee02",
+                name: "Candidate Two",
+                slug: "candidate-two"
+              },
+              summary: asSettled({
+                ...SELECTED_CYCLE_FIELDS,
+                candidate_id: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeee02",
+                candidate_name: "Candidate Two",
+                total_raised: "2500.00",
+                total_spent: "1200.00",
+                net: "1300.00",
+                transaction_count: 4,
+                itemized_transaction_count: 4,
+                cash_on_hand: "700.00",
+                debts_owed_by_committee: "55.00",
+                summary_source: "fec_weball" as const,
+                receipt_source_composition: [
+                  {
+                    label: "Gross individual contributions",
+                    total_amount: "2400.00",
+                    source: "fec_committee_summary" as const
+                  },
+                  {
+                    label: "PAC/other committee contributions",
+                    total_amount: "100.00",
+                    source: "fec_committee_summary" as const
+                  }
+                ],
+                selected_cycle_coverage_complete: true,
+                can_render_share: true,
+                receipt_source_caveats: [],
+                committees: []
+              })
+            })
+          ])
+        })
+      }
+    });
+    const campaignFinanceIndex = rendered.body.indexOf("<h3>Campaign finance</h3>");
+    const moneyAtGlanceIndex = rendered.body.indexOf("Money at a glance", campaignFinanceIndex);
+    const firstCandidateCardIndex = rendered.body.indexOf("Candidate One", campaignFinanceIndex);
+
+    expect(rendered.body.match(/<h4>Money at a glance<\/h4>/g)).toHaveLength(1);
+    expect(rendered.body.match(/aria-label="Election cycle"/g)).toHaveLength(1);
+    expect(moneyAtGlanceIndex).toBeGreaterThan(campaignFinanceIndex);
+    expect(moneyAtGlanceIndex).toBeLessThan(firstCandidateCardIndex);
+    const moneyAtGlanceBlock = rendered.body.slice(moneyAtGlanceIndex, firstCandidateCardIndex);
+    expect(moneyAtGlanceBlock).toContain("$3,500.00");
+    expect(moneyAtGlanceBlock).toContain("$1,800.00");
+    expect(moneyAtGlanceBlock).toContain("Not available");
+    expect(moneyAtGlanceBlock).toContain("$100.00");
+    expect(moneyAtGlanceBlock).toContain("Mixed official FEC and derived summary data");
+    expect(moneyAtGlanceBlock).not.toContain("$1,000.00");
   });
 
   it("keeps the campaign-finance panel heading unique while finance sections stream", () => {
@@ -419,7 +590,7 @@ describe("entity detail page rendering", () => {
     expect(rendered.body).not.toContain("<h3>Fundraising detail loading</h3>");
   });
 
-  it("renders ranked Top donors in total-desc order without replacing the donor/vendor feed", () => {
+  it("renders ranked reported contributor names in total-desc order without replacing the donor/vendor feed", () => {
     const rendered = render(DetailPage, {
       props: {
         data: buildPersonPageBundle({
@@ -428,7 +599,7 @@ describe("entity detail page rendering", () => {
       }
     });
 
-    const topDonorsIndex = rendered.body.indexOf("<h5>Top donors</h5>");
+    const topDonorsIndex = rendered.body.indexOf("<h5>Top reported contributor names</h5>");
     const largestDonorIndex = rendered.body.indexOf("Largest Person Donor", topDonorsIndex);
     const secondDonorIndex = rendered.body.indexOf("Second Person Donor", topDonorsIndex);
     const donorVendorIndex = rendered.body.indexOf("<h4>Donors and vendors</h4>");
@@ -437,15 +608,15 @@ describe("entity detail page rendering", () => {
     expect(topDonorsIndex).toBeGreaterThan(-1);
     expect(largestDonorIndex).toBeGreaterThan(topDonorsIndex);
     expect(secondDonorIndex).toBeGreaterThan(largestDonorIndex);
-    expect(rendered.body).toContain("<th>Donor</th><th>Total</th><th>Transactions</th>");
+    expect(rendered.body).toContain("<th>Reported contributor name</th><th>Total</th><th>Transactions</th>");
     expect(rendered.body).not.toContain(
-      "<th>Donor</th><th>Total</th><th>Transactions</th><th>Transactions</th>"
+      "<th>Reported contributor name</th><th>Total</th><th>Transactions</th><th>Transactions</th>"
     );
     expect(donorVendorIndex).toBeGreaterThan(topDonorsIndex);
     expect(chronologicalDonorIndex).toBeGreaterThan(donorVendorIndex);
   });
 
-  it("renders ranked Top employers near Top donors without replacing the donor/vendor feed", () => {
+  it("renders ranked Top employers near reported contributor names without replacing the donor/vendor feed", () => {
     const rendered = render(DetailPage, {
       props: {
         data: buildPersonPageBundle({
@@ -454,8 +625,8 @@ describe("entity detail page rendering", () => {
       }
     });
 
-    const topDonorsIndex = rendered.body.indexOf("<h5>Top donors</h5>");
-    const topEmployersIndex = rendered.body.indexOf("<h5>Top employers</h5>", topDonorsIndex);
+    const topDonorsIndex = rendered.body.indexOf("<h5>Top reported contributor names</h5>");
+    const topEmployersIndex = rendered.body.indexOf("<h5>Top reported employer names</h5>", topDonorsIndex);
     const acmeIndex = rendered.body.indexOf("ACME CORP", topEmployersIndex);
     const universityIndex = rendered.body.indexOf("State University", topEmployersIndex);
     const donorVendorIndex = rendered.body.indexOf("<h4>Donors and vendors</h4>");
@@ -465,6 +636,11 @@ describe("entity detail page rendering", () => {
     expect(acmeIndex).toBeGreaterThan(topEmployersIndex);
     expect(universityIndex).toBeGreaterThan(acmeIndex);
     expect(rendered.body).toContain("<th>Employer</th><th>Total</th><th>Transactions</th>");
+    const topEmployersTable = rendered.body.match(
+      /data-testid="person-top-employers-scroll"[\s\S]*?<table>([\s\S]*?)<\/table>/
+    )?.[1];
+    expect(topEmployersTable).toBeDefined();
+    expect(topEmployersTable?.match(/<thead>/g)).toHaveLength(1);
     expect(donorVendorIndex).toBeGreaterThan(topEmployersIndex);
     expect(chronologicalDonorIndex).toBeGreaterThan(donorVendorIndex);
   });
@@ -496,7 +672,7 @@ describe("entity detail page rendering", () => {
     expect(rendered.body).toContain("No employer rankings available.");
   });
 
-  it("renders IE Top spenders inside the existing Outside Spending block", () => {
+  it("renders person outside spending through the shared chart contract", () => {
     const rendered = render(DetailPage, {
       props: {
         data: buildPersonPageBundle({
@@ -505,14 +681,210 @@ describe("entity detail page rendering", () => {
       }
     });
 
-    const outsideSpendingIndex = rendered.body.indexOf("<h4>Outside Spending</h4>");
-    const topSpendersIndex = rendered.body.indexOf("<h5>Top spenders</h5>", outsideSpendingIndex);
+    const outsideSpendingIndex = rendered.body.indexOf('<h4 id="person-outside-spending">Outside spending</h4>');
+    const chartIndex = rendered.body.indexOf('data-testid="person-outside-spending"', outsideSpendingIndex);
+    const plotIndex = rendered.body.indexOf('data-testid="person-outside-spending-plot"', chartIndex);
+    const supportIndex = rendered.body.indexOf("Support spending", plotIndex);
+    const opposeIndex = rendered.body.indexOf("Oppose spending", plotIndex);
+    const topSpendersIndex = rendered.body.indexOf("<h5>Top spenders</h5>", chartIndex);
     const spenderIndex = rendered.body.indexOf("Outside Group A", topSpendersIndex);
 
     expect(outsideSpendingIndex).toBeGreaterThan(-1);
-    expect(topSpendersIndex).toBeGreaterThan(outsideSpendingIndex);
+    expect(chartIndex).toBeGreaterThan(outsideSpendingIndex);
+    expect(plotIndex).toBeGreaterThan(chartIndex);
+    expect(supportIndex).toBeGreaterThan(plotIndex);
+    expect(opposeIndex).toBeGreaterThan(plotIndex);
+    expect(rendered.body).toContain('data-zero-centered="true"');
+    expect(rendered.body).toContain('data-domain-min="-1250"');
+    expect(rendered.body).toContain('data-domain-max="1250"');
+    expect(rendered.body).toContain("Outside spending reports $1,250.00 in support spending and $200.00 in oppose spending for the 2026 cycle.");
+    expect(rendered.body).not.toContain("Outside spending chart: Candidate One");
+    expect(topSpendersIndex).toBeGreaterThan(chartIndex);
     expect(spenderIndex).toBeGreaterThan(topSpendersIndex);
     expect(rendered.body).toContain("$1,250.00");
+  });
+
+  it("renders selected-cycle IE drilldown tables with committee and source filing links", () => {
+    const rendered = render(DetailPage, {
+      props: {
+        data: buildPersonPageBundle({
+          personFinanceSections: asSettled([buildPersonFinanceSection()])
+        })
+      }
+    });
+
+    const moneyAtGlanceIndex = rendered.body.indexOf("<h4>Money at a glance</h4>");
+    const outsideSpendingIndex = rendered.body.indexOf('<h4 id="person-outside-spending">Outside spending</h4>');
+    const topSpendersIndex = rendered.body.indexOf('data-testid="person-ie-top-spenders-scroll"', outsideSpendingIndex);
+    const transactionsIndex = rendered.body.indexOf('data-testid="person-ie-transactions-scroll"', topSpendersIndex);
+
+    expect(moneyAtGlanceIndex).toBeGreaterThan(-1);
+    expect(rendered.body).toContain('href="#person-outside-spending"');
+    expect(rendered.body).toContain("Outside spending details");
+    expect(outsideSpendingIndex).toBeGreaterThan(moneyAtGlanceIndex);
+    expect(topSpendersIndex).toBeGreaterThan(outsideSpendingIndex);
+    expect(transactionsIndex).toBeGreaterThan(topSpendersIndex);
+    expect(rendered.body).toContain("<th>Spender</th><th>Stance</th><th>Total</th><th>Expenditures</th>");
+    expect(rendered.body).toContain(
+      `<td><a href="/committee/${COMMITTEE_ID}">Outside Group A</a></td><td>Support</td><td>$1,250.00</td><td>1 expenditure</td>`
+    );
+    expect(rendered.body).toContain(
+      "<th>Date</th><th>Spender</th><th>Stance</th><th>Amount</th><th>Dissemination date</th><th>Source</th>"
+    );
+    expect(rendered.body).toContain(`<a href="/v1/filings/${FILING_ID}">Source filing</a>`);
+    expect(rendered.body).toContain(
+      "Outside spending is independent and not controlled by the candidate committee."
+    );
+    expect(rendered.body).not.toContain("Red spending");
+    expect(rendered.body).not.toContain("Blue spending");
+    expect(rendered.body).not.toContain("coordination");
+  });
+
+  it("keeps one-sided outside spending centered on the shared symmetric scale", () => {
+    const rendered = render(DetailPage, {
+      props: {
+        data: buildPersonPageBundle({
+          personFinanceSections: asSettled([
+            buildPersonFinanceSection({
+              ieSummary: {
+                ...SELECTED_CYCLE_FIELDS,
+                candidate_id: CANDIDATE_ID,
+                support_total: "1250.00",
+                oppose_total: "0.00",
+                support_count: 1,
+                oppose_count: 0,
+                excluded_outlier_count: 0,
+                top_spenders: [
+                  {
+                    committee_id: COMMITTEE_ID,
+                    committee_name: "Outside Group A",
+                    support_oppose: "S",
+                    total_amount: "1250.00",
+                    transaction_count: 1
+                  }
+                ]
+              },
+              ieTransactions: asSettled([])
+            })
+          ])
+        })
+      }
+    });
+
+    expect(rendered.body).toContain('data-testid="person-outside-spending-plot"');
+    expect(rendered.body).toContain('data-domain-min="-1250"');
+    expect(rendered.body).toContain('data-domain-max="1250"');
+    expect(rendered.body).toContain("Support spending");
+    expect(rendered.body).toContain("Oppose spending");
+  });
+
+  it("keeps oppose-only outside spending centered on the shared symmetric scale", () => {
+    const rendered = render(DetailPage, {
+      props: {
+        data: buildPersonPageBundle({
+          personFinanceSections: asSettled([
+            buildPersonFinanceSection({
+              ieSummary: {
+                ...SELECTED_CYCLE_FIELDS,
+                candidate_id: CANDIDATE_ID,
+                support_total: "0.00",
+                oppose_total: "980.00",
+                support_count: 0,
+                oppose_count: 2,
+                excluded_outlier_count: 0,
+                top_spenders: [
+                  {
+                    committee_id: COMMITTEE_ID,
+                    committee_name: "Outside Group A",
+                    support_oppose: "O",
+                    total_amount: "980.00",
+                    transaction_count: 2
+                  }
+                ]
+              },
+              ieTransactions: asSettled([])
+            })
+          ])
+        })
+      }
+    });
+
+    expect(rendered.body).toContain('data-testid="person-outside-spending-plot"');
+    expect(rendered.body).toContain('data-domain-min="-980"');
+    expect(rendered.body).toContain('data-domain-max="980"');
+    expect(rendered.body).toContain("Support spending");
+    expect(rendered.body).toContain("Oppose spending");
+  });
+
+  it("suppresses the shared outside-spending plot for unavailable and all-zero states", () => {
+    const emptyStates = [
+      {
+        label: "unavailable",
+        ieSummary: null,
+        expectedCopy:
+          "Outside-spending data is not yet available for this candidate. Coverage may be incomplete."
+      },
+      {
+        label: "all-zero",
+        ieSummary: {
+          ...SELECTED_CYCLE_FIELDS,
+          candidate_id: CANDIDATE_ID,
+          support_total: "0.00",
+          oppose_total: "0.00",
+          support_count: 0,
+          oppose_count: 0,
+          excluded_outlier_count: 0,
+          top_spenders: []
+        },
+        expectedCopy:
+          "No outside spending is reported in available filings. Coverage may be incomplete."
+      }
+    ];
+
+    for (const state of emptyStates) {
+      const rendered = render(DetailPage, {
+        props: {
+          data: buildPersonPageBundle({
+            personFinanceSections: asSettled([
+              buildPersonFinanceSection({
+                candidate: {
+                  ...buildPersonFinanceSection().candidate,
+                  id: `${state.label}-${CANDIDATE_ID}`
+                },
+                ieSummary: state.ieSummary,
+                ieTransactions: asSettled([])
+              })
+            ])
+          })
+        }
+      });
+
+      expect(rendered.body).toContain('<h4 id="person-outside-spending">Outside spending</h4>');
+      expect(rendered.body).toContain(state.expectedCopy);
+      expect(rendered.body).not.toContain('data-testid="person-outside-spending-plot"');
+      expect(rendered.body).not.toContain("Outside spending chart: Candidate One");
+      expect(rendered.body).toContain("Donors and vendors");
+    }
+  });
+
+  it("keeps adjacent finance sections visible when outside-spending transactions reject", () => {
+    const rendered = render(DetailPage, {
+      props: {
+        data: buildPersonPageBundle({
+          personFinanceSections: asSettled([
+            buildPersonFinanceSection({
+              ieTransactions: Promise.reject(new Error("IE transactions unavailable"))
+            })
+          ])
+        })
+      }
+    });
+
+    expect(rendered.body).toContain("Friends of Candidate One");
+    expect(rendered.body).toContain("Acme Donor LLC");
+    expect(rendered.body).toContain('<h4 id="person-outside-spending">Outside spending</h4>');
+    expect(rendered.body).toContain('<section class="skeleton-panel" aria-label="Outside spending" aria-busy="true">');
+    expect(rendered.body).not.toContain('data-testid="person-outside-spending-plot"');
   });
 
   it("renders contribution-insights caveat states without hiding adjacent finance sections", () => {
@@ -523,6 +895,22 @@ describe("entity detail page rendering", () => {
           "Committee summary totals are unavailable, so summary-backed unitemized dollars are not included.",
         hasData: true,
         caveats: ["missing_committee_summary"],
+        excludedGeography: null
+      },
+      {
+        key: "itemized_summary_reconciliation_unavailable",
+        message:
+          "Itemized totals cannot be reconciled to committee summary totals, so this view uses itemized-only contribution facts.",
+        hasData: true,
+        caveats: ["itemized_summary_reconciliation_unavailable"],
+        excludedGeography: null
+      },
+      {
+        key: "itemized_summary_reconciliation_mismatch",
+        message:
+          "Itemized totals do not match committee summary totals, so this view uses itemized-only contribution facts.",
+        hasData: true,
+        caveats: ["itemized_summary_reconciliation_mismatch"],
         excludedGeography: null
       },
       {
@@ -578,7 +966,7 @@ describe("entity detail page rendering", () => {
       expect(rendered.body).not.toContain("federal_executive");
       expect(rendered.body).not.toContain("no_linked_candidate");
       if (state.key === "missing_committee_summary") {
-        expect(rendered.body).toContain("Dollars by size bucket");
+        expect(rendered.body).toContain("Itemized contribution-size buckets");
         expect(rendered.body).not.toContain(
           "Committee summary totals are required before dollars by size can be shown."
         );
@@ -586,7 +974,7 @@ describe("entity detail page rendering", () => {
       expect(rendered.body).toContain("Jane Doe");
       expect(rendered.body).toContain("Friends of Candidate One");
       expect(rendered.body).toContain("Acme Donor LLC");
-      expect(rendered.body).toContain("<h4>Outside Spending</h4>");
+      expect(rendered.body).toContain('<h4 id="person-outside-spending">Outside spending</h4>');
     }
   });
 
@@ -623,7 +1011,12 @@ describe("entity detail page rendering", () => {
                 unknown_district_amount: null,
                 share: null,
                 available: false
-              }
+              },
+              geography_mode: "excluded" as const,
+              classified_amount: "0.00",
+              classified_transaction_count: 0,
+              unknown_amount: "0.00",
+              unknown_transaction_count: 0
             },
             small_dollar_share: {
               small_dollar_amount: null,
@@ -666,10 +1059,9 @@ describe("entity detail page rendering", () => {
     expect(rendered.body).toContain("Candidate One");
     expect(rendered.body).toContain("Candidate Two");
     expect(rendered.body.match(/<h4>Fundraising detail<\/h4>/g)).toHaveLength(1);
-    expect(rendered.body).toContain('aria-label="Donations over time for Jane Doe"');
-    expect(rendered.body).toContain('aria-label="Donation count by size bucket for Jane Doe"');
-    expect(rendered.body).toContain('aria-label="Dollars by size bucket for Jane Doe"');
-    expect(rendered.body).toContain('aria-label="Fundraising geography for Jane Doe"');
+    expect(rendered.body).toContain("Itemized individual contributions by month");
+    expect(rendered.body).toContain("Itemized contribution-size buckets");
+    expect(rendered.body).toContain("Geography");
     expect(rendered.body).not.toContain("Donations over time for Candidate One");
     expect(rendered.body).not.toContain("Donations over time for Candidate Two");
   });
@@ -693,24 +1085,27 @@ describe("entity detail page rendering", () => {
     expect(pendingFundraisingDetailIndex).toBeLessThan(financeSectionsThenIndex);
   });
 
-  it("keeps person-scoped contribution insights between candidate summary and linked committees when the summary rejects", () => {
+  it("keeps person-scoped contribution insights visible when candidate summary rejects", () => {
     const source = readFileSync(new URL("./DetailPage.svelte", import.meta.url), "utf8");
     const financePanelIndex = source.indexOf('{:else if sectionKey === "person-campaign-finance"}');
-    const summaryAwaitIndex = source.indexOf("{#await section.summary}");
+    const financeSectionsThenIndex = source.indexOf("{:then personFinanceSections}", financePanelIndex);
+    const fundraisingDetailIndex = source.indexOf("{@render fundraisingDetail()}", financeSectionsThenIndex);
+    const candidateLoopIndex = source.indexOf("{#each personFinanceSections as section", financeSectionsThenIndex);
+    const summaryAwaitIndex = source.indexOf("{#await buildMoneyAtGlanceSummary(sections)}");
     const summaryCatchIndex = source.indexOf("{:catch}", summaryAwaitIndex);
-    const summaryAwaitCloseIndex = source.indexOf("{/await}", summaryCatchIndex);
-    const fundraisingDetailIndex = source.indexOf(
-      "{@render fundraisingDetail()}",
-      summaryAwaitCloseIndex
+    const selectedCycleSummaryUnavailableIndex = source.indexOf(
+      "Selected-cycle money summary is temporarily unavailable.",
+      summaryCatchIndex
     );
-    const linkedCommitteesIndex = source.indexOf("<h4>Linked committees</h4>", fundraisingDetailIndex);
+    const linkedCommitteesIndex = source.indexOf("<h4>Linked committees</h4>", summaryCatchIndex);
 
     expect(financePanelIndex).toBeGreaterThan(-1);
+    expect(fundraisingDetailIndex).toBeGreaterThan(financeSectionsThenIndex);
+    expect(fundraisingDetailIndex).toBeLessThan(candidateLoopIndex);
     expect(summaryAwaitIndex).toBeGreaterThan(-1);
     expect(summaryCatchIndex).toBeGreaterThan(summaryAwaitIndex);
-    expect(summaryAwaitCloseIndex).toBeGreaterThan(summaryCatchIndex);
-    expect(fundraisingDetailIndex).toBeGreaterThan(summaryAwaitCloseIndex);
-    expect(linkedCommitteesIndex).toBeGreaterThan(fundraisingDetailIndex);
+    expect(selectedCycleSummaryUnavailableIndex).toBeGreaterThan(summaryCatchIndex);
+    expect(linkedCommitteesIndex).toBeGreaterThan(summaryCatchIndex);
 
     const data = buildPersonPageBundle({
       personFinanceSections: asSettled([
@@ -721,9 +1116,6 @@ describe("entity detail page rendering", () => {
     });
 
     const rendered = render(DetailPage, { props: { data } });
-    const summaryUnavailableIndex = rendered.body.indexOf(
-      "Candidate fundraising summary is temporarily unavailable."
-    );
     const fundraisingDetailIndexInBody = rendered.body.indexOf("<h4>Fundraising detail</h4>");
     const linkedCommitteesIndexInBody = rendered.body.indexOf("<h4>Linked committees</h4>");
 
@@ -731,8 +1123,7 @@ describe("entity detail page rendering", () => {
     expect(rendered.body).toContain("100%");
     expect(rendered.body).toContain("Candidate One");
     expect(rendered.body).toContain("Acme Donor LLC");
-    expect(rendered.body).toContain("<h4>Outside Spending</h4>");
-    expect(fundraisingDetailIndexInBody).toBeGreaterThan(summaryUnavailableIndex);
+    expect(rendered.body).toContain('<h4 id="person-outside-spending">Outside spending</h4>');
     expect(linkedCommitteesIndexInBody).toBeGreaterThan(fundraisingDetailIndexInBody);
   });
 
@@ -788,7 +1179,7 @@ describe("entity detail page rendering", () => {
     expect(rendered.body).toContain("Candidate One");
     expect(rendered.body).toContain("Friends of Candidate One");
     expect(rendered.body).toContain("Acme Donor LLC");
-    expect(rendered.body).toContain("<h4>Outside Spending</h4>");
+    expect(rendered.body).toContain('<h4 id="person-outside-spending">Outside spending</h4>');
   });
 
   it("encodes person finance candidate hrefs with the shared route builder", () => {
@@ -847,6 +1238,7 @@ describe("entity detail page rendering", () => {
       },
       personFinanceSections: asSettled([buildPersonFinanceSection({
         summary: asSettled({
+          ...SELECTED_CYCLE_FIELDS,
           candidate_id: CANDIDATE_ID,
           candidate_name: "Candidate One",
           total_raised: "0.00",
@@ -856,6 +1248,10 @@ describe("entity detail page rendering", () => {
           itemized_transaction_count: 0,
           cash_on_hand: null,
           summary_source: "derived" as const,
+          receipt_source_composition: [],
+          selected_cycle_coverage_complete: false,
+          can_render_share: false,
+          receipt_source_caveats: [],
           committees: []
         }),
         donorVendorTransactions: asSettled([]),
@@ -870,13 +1266,14 @@ describe("entity detail page rendering", () => {
     expect(rendered.body).toContain("Initials avatar for Jane Doe");
     expect(rendered.body).toContain("No linked committee summaries are available yet.");
     expect(rendered.body).toContain("No donor/vendor transactions are available yet.");
-    expect(rendered.body).toContain("<h4>Outside Spending</h4>");
+    expect(rendered.body).toContain('<h4 id="person-outside-spending">Outside spending</h4>');
   });
 
   it("renders both empty-state banners when linked committees and donor/vendor transactions are absent", () => {
     const data = buildPersonPageBundle({
       personFinanceSections: asSettled([buildPersonFinanceSection({
         summary: asSettled({
+          ...SELECTED_CYCLE_FIELDS,
           candidate_id: CANDIDATE_ID,
           candidate_name: "Candidate One",
           total_raised: "0.00",
@@ -886,6 +1283,10 @@ describe("entity detail page rendering", () => {
           itemized_transaction_count: 0,
           cash_on_hand: null,
           summary_source: "derived" as const,
+          receipt_source_composition: [],
+          selected_cycle_coverage_complete: false,
+          can_render_share: false,
+          receipt_source_caveats: [],
           committees: []
         }),
         donorVendorTransactions: asSettled([])
@@ -931,8 +1332,12 @@ describe("entity detail page rendering", () => {
     expect(personFinanceStart).toBeGreaterThan(-1);
 
     const personFinanceSlice = source.slice(personFinanceStart);
-    const summaryAwaitIndex = personFinanceSlice.indexOf("{#await section.summary}");
-    const summaryCatchIndex = personFinanceSlice.indexOf("Candidate fundraising summary is temporarily unavailable.");
+    const linkedCommitteesIndex = personFinanceSlice.indexOf("<h4>Linked committees</h4>");
+    const summaryAwaitIndex = personFinanceSlice.indexOf("{#await section.summary}", linkedCommitteesIndex);
+    const summaryCatchIndex = personFinanceSlice.indexOf(
+      "Linked committees are temporarily unavailable.",
+      summaryAwaitIndex
+    );
     const summaryAwaitEndIndex = personFinanceSlice.indexOf("{/await}", summaryCatchIndex);
     const donorVendorAwaitIndex = personFinanceSlice.indexOf("{#await section.donorVendorTransactions}");
 
@@ -940,5 +1345,29 @@ describe("entity detail page rendering", () => {
     expect(summaryCatchIndex).toBeGreaterThan(summaryAwaitIndex);
     expect(summaryAwaitEndIndex).toBeGreaterThan(summaryCatchIndex);
     expect(donorVendorAwaitIndex).toBeGreaterThan(summaryAwaitEndIndex);
+  });
+
+  it("resolves outside-spending summary and transactions in the same awaited slice", () => {
+    const source = readFileSync(new URL("./DetailPage.svelte", import.meta.url), "utf8");
+    const personFinanceStart = source.indexOf('{:else if sectionKey === "person-campaign-finance"}');
+    expect(personFinanceStart).toBeGreaterThan(-1);
+
+    const personFinanceSlice = source.slice(personFinanceStart);
+    const outsideSpendingIndex = personFinanceSlice.indexOf('<h4 id="person-outside-spending">Outside spending</h4>');
+    const combinedAwaitIndex = personFinanceSlice.indexOf(
+      "{#await combineDeferredPair(section.ieSummary, section.ieTransactions)}",
+      outsideSpendingIndex
+    );
+    const combinedThenIndex = personFinanceSlice.indexOf("{:then [ieSummary, ieTransactions]}", combinedAwaitIndex);
+    const outsideSpendingBuildIndex = personFinanceSlice.indexOf(
+      "buildPersonOutsideSpendingSection(ieSummary, ieTransactions)",
+      combinedThenIndex
+    );
+
+    expect(outsideSpendingIndex).toBeGreaterThan(-1);
+    expect(combinedAwaitIndex).toBeGreaterThan(outsideSpendingIndex);
+    expect(combinedThenIndex).toBeGreaterThan(combinedAwaitIndex);
+    expect(outsideSpendingBuildIndex).toBeGreaterThan(combinedThenIndex);
+    expect(personFinanceSlice).not.toContain("{#await section.ieSummary}");
   });
 });

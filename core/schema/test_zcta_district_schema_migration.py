@@ -8,7 +8,8 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MIGRATION_FILE = REPO_ROOT / "core" / "schema" / "migrations" / "2026_07_07_zcta_district.sql"
 EXPECTED_COLUMN_FRAGMENTS = [
-    "zcta5 text primary key check (zcta5 ~ '^[0-9]{5}$')",
+    "zcta5 text not null check (zcta5 ~ '^[0-9]{5}$')",
+    "boundary_year smallint not null check (boundary_year >= 0)",
     "state_fips text not null check (state_fips ~ '^[0-9]{2}$')",
     "cd_geoid text not null check (cd_geoid ~ '^[0-9a-z]{4}$')",
     "district_number text not null check (char_length(district_number) = 2)",
@@ -30,6 +31,7 @@ def test_zcta_district_migration_contract() -> None:
     assert "create table if not exists civic.zcta_district" in compact_sql
     for column_fragment in EXPECTED_COLUMN_FRAGMENTS:
         assert column_fragment in compact_sql
-    assert "create index if not exists idx_zcta_district_cd_geoid" in compact_sql
-    assert "create index if not exists idx_zcta_district_state_fips" in compact_sql
+    assert "primary key (zcta5, boundary_year)" in compact_sql
+    assert "create index if not exists idx_zcta_district_cd_geoid_boundary_year" in compact_sql
+    assert "create index if not exists idx_zcta_district_state_fips_boundary_year" in compact_sql
     assert EXPECTED_COMMENT_FRAGMENT in compact_sql

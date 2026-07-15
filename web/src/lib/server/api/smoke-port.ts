@@ -1,6 +1,7 @@
 const DEFAULT_SMOKE_API_PORT = 3999;
+const DEFAULT_SMOKE_WEB_PORT = 4173;
 
-function parseSmokeApiPort(rawPort: string | undefined): number | null {
+function parseSmokePort(rawPort: string | undefined): number | null {
   if (rawPort === undefined) {
     return null;
   }
@@ -14,5 +15,9 @@ function parseSmokeApiPort(rawPort: string | undefined): number | null {
 }
 
 export function resolveSmokeApiPort(env: Record<string, string | undefined>): number {
-  return parseSmokeApiPort(env.SMOKE_API_PORT) ?? DEFAULT_SMOKE_API_PORT;
+  return parseSmokePort(env.SMOKE_API_PORT) ?? DEFAULT_SMOKE_API_PORT;
+}
+
+export function resolveSmokeWebPort(env: Record<string, string | undefined>): number {
+  return parseSmokePort(env.SMOKE_WEB_PORT) ?? DEFAULT_SMOKE_WEB_PORT;
 }

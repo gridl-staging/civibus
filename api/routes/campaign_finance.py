@@ -38,6 +38,7 @@ from api.queries import (
     CAMPAIGN_FINANCE_CANDIDATE_DETAIL_SQL,
     CAMPAIGN_FINANCE_COMMITTEE_DETAIL_SQL,
     CAMPAIGN_FINANCE_FILING_DETAIL_SQL,
+    SelectedCycle,
     UnknownCountySlugError,
     build_zero_committee_fundraising_summary,
     fetch_campaign_finance_provenance,
@@ -60,6 +61,7 @@ from api.queries import (
     fetch_state_campaign_finance_detail,
     fetch_state_campaign_finance_summaries,
     fetch_transaction_list,
+    resolve_selected_cycle,
 )
 from api.routes.validation import build_query_params_dependency
 from core.types.python.models import validate_optional_state_code
@@ -68,6 +70,13 @@ router = APIRouter()
 _build_transaction_list_params = build_query_params_dependency(TransactionListParams)
 _build_candidate_list_params = build_query_params_dependency(CandidateListParams)
 _build_committee_list_params = build_query_params_dependency(CommitteeListParams)
+
+
+def _selected_cycle_dependency(cycle: int | None = Query(default=None)) -> SelectedCycle:
+    try:
+        return resolve_selected_cycle(cycle)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
 
 
 @dataclass(frozen=True)
@@ -220,18 +229,20 @@ def get_filing(filing_id: UUID, conn: psycopg.Connection = Depends(get_db)) -> F
 @router.get("/transactions", response_model=list[TransactionResponse])
 def list_transactions(
     params: TransactionListParams = Depends(_build_transaction_list_params),
+    selected_cycle: SelectedCycle = Depends(_selected_cycle_dependency),
     conn: psycopg.Connection = Depends(get_db),
 ) -> list[TransactionResponse]:
-    transaction_rows = fetch_transaction_list(conn, params)
+    transaction_rows = fetch_transaction_list(conn, params, selected_cycle)
     return [TransactionResponse.model_validate(transaction_row) for transaction_row in transaction_rows]
 
 
 @router.get("/person/{person_id}/contribution-insights", response_model=PersonContributionInsights)
 def get_person_contribution_insights(
     person_id: UUID,
+    selected_cycle: SelectedCycle = Depends(_selected_cycle_dependency),
     conn: psycopg.Connection = Depends(get_db),
 ) -> PersonContributionInsights:
-    insights = fetch_person_contribution_insights(conn, person_id)
+    insights = fetch_person_contribution_insights(conn, person_id, selected_cycle)
     if insights is None:
         raise HTTPException(status_code=404, detail="Person not found")
     return PersonContributionInsights.model_validate(insights)
@@ -241,9 +252,10 @@ def get_person_contribution_insights(
 def get_person_top_donors(
     person_id: UUID,
     limit: int = Query(default=10, ge=1, le=100),
+    selected_cycle: SelectedCycle = Depends(_selected_cycle_dependency),
     conn: psycopg.Connection = Depends(get_db),
 ) -> list[RankedTransactionParty]:
-    donor_rows = fetch_person_top_donors(conn, person_id, limit)
+    donor_rows = fetch_person_top_donors(conn, person_id, limit, selected_cycle)
     if donor_rows is None:
         raise HTTPException(status_code=404, detail="Person not found")
     return [RankedTransactionParty.model_validate(donor_row) for donor_row in donor_rows]
@@ -253,9 +265,10 @@ def get_person_top_donors(
 def get_person_top_employers(
     person_id: UUID,
     limit: int = Query(default=10, ge=1, le=100),
+    selected_cycle: SelectedCycle = Depends(_selected_cycle_dependency),
     conn: psycopg.Connection = Depends(get_db),
 ) -> list[PersonTopEmployerRow]:
-    employer_rows = fetch_person_top_employers(conn, person_id, limit)
+    employer_rows = fetch_person_top_employers(conn, person_id, limit, selected_cycle)
     if employer_rows is None:
         raise HTTPException(status_code=404, detail="Person not found")
     return [PersonTopEmployerRow.model_validate(employer_row) for employer_row in employer_rows]
@@ -263,13 +276,19 @@ def get_person_top_employers(
 
 @router.get("/committees/{committee_id}/summary", response_model=CommitteeFundraisingSummary)
 def get_committee_summary(
-    committee_id: UUID, conn: psycopg.Connection = Depends(get_db)
+    committee_id: UUID,
+    selected_cycle: SelectedCycle = Depends(_selected_cycle_dependency),
+    conn: psycopg.Connection = Depends(get_db),
 ) -> CommitteeFundraisingSummary:
     detail_row = _fetch_row_or_404(conn, CAMPAIGN_FINANCE_COMMITTEE_DETAIL_SQL, committee_id, "Committee not found")
 
-    summary = fetch_committee_fundraising_summary(conn, committee_id)
+    summary = fetch_committee_fundraising_summary(conn, committee_id, selected_cycle)
     if summary is None:
-        summary = build_zero_committee_fundraising_summary(committee_id=committee_id, committee_name=detail_row["name"])
+        summary = build_zero_committee_fundraising_summary(
+            committee_id=committee_id,
+            committee_name=detail_row["name"],
+            selected_cycle=selected_cycle,
+        )
     return CommitteeFundraisingSummary.model_validate(summary)
 
 
@@ -303,7 +322,9 @@ def get_committee_filings_summary(
 
 @router.get("/candidates/{candidate_id}/summary", response_model=CandidateFundraisingSummary)
 def get_candidate_summary(
-    candidate_id: UUID, conn: psycopg.Connection = Depends(get_db)
+    candidate_id: UUID,
+    selected_cycle: SelectedCycle = Depends(_selected_cycle_dependency),
+    conn: psycopg.Connection = Depends(get_db),
 ) -> CandidateFundraisingSummary:
     """Return the FEC weball / derived fundraising summary for a candidate."""
     detail_row = _fetch_row_or_404(conn, CAMPAIGN_FINANCE_CANDIDATE_DETAIL_SQL, candidate_id, "Candidate not found")
@@ -312,7 +333,7 @@ def get_candidate_summary(
     # itself, so the route does not need a fallback. ``None`` would mean the
     # candidate row has been deleted between the 404 check above and the summary
     # read; that race surfaces as 500 deliberately.
-    summary = fetch_candidate_summary(conn, candidate_id, detail_row["name"])
+    summary = fetch_candidate_summary(conn, candidate_id, detail_row["name"], selected_cycle)
     if summary is None:
         raise HTTPException(status_code=500, detail="Candidate summary unavailable")
     return CandidateFundraisingSummary.model_validate(summary)
@@ -326,11 +347,14 @@ def get_candidate_independent_expenditures(
     candidate_id: UUID,
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
+    selected_cycle: SelectedCycle = Depends(_selected_cycle_dependency),
     conn: psycopg.Connection = Depends(get_db),
 ) -> list[IndependentExpenditureResponse]:
     _fetch_row_or_404(conn, CAMPAIGN_FINANCE_CANDIDATE_DETAIL_SQL, candidate_id, "Candidate not found")
 
-    ie_rows = fetch_candidate_ie_transactions(conn, candidate_id, limit=limit, offset=offset)
+    ie_rows = fetch_candidate_ie_transactions(
+        conn, candidate_id, limit=limit, offset=offset, selected_cycle=selected_cycle
+    )
     return [IndependentExpenditureResponse.model_validate(ie_row) for ie_row in ie_rows]
 
 
@@ -340,11 +364,14 @@ def get_candidate_independent_expenditures(
 )
 def get_candidate_independent_expenditures_summary(
     candidate_id: UUID,
+    selected_cycle: SelectedCycle = Depends(_selected_cycle_dependency),
     conn: psycopg.Connection = Depends(get_db),
 ) -> IndependentExpenditureSummary:
     _fetch_row_or_404(conn, CAMPAIGN_FINANCE_CANDIDATE_DETAIL_SQL, candidate_id, "Candidate not found")
 
-    return IndependentExpenditureSummary.model_validate(fetch_candidate_ie_summary(conn, candidate_id))
+    return IndependentExpenditureSummary.model_validate(
+        fetch_candidate_ie_summary(conn, candidate_id, selected_cycle=selected_cycle)
+    )
 
 
 @router.get("/campaign-finance/states/summary", response_model=list[StateSummaryItem])

@@ -77,6 +77,21 @@ def test_api_dockerfile_contract_inputs_and_entrypoint() -> None:
     assert "python -m" not in dockerfile_code
 
 
+def test_api_dockerfile_stamps_build_provenance_env() -> None:
+    dockerfile_text = DOCKERFILE_PATH.read_text(encoding="utf-8")
+
+    for arg_line in ("ARG CIVIBUS_GIT_SHA", "ARG CIVIBUS_BUILT_AT"):
+        assert arg_line in dockerfile_text, f"{arg_line} must be declared"
+    assert "ENV CIVIBUS_GIT_SHA=$CIVIBUS_GIT_SHA" in dockerfile_text
+    assert "ENV CIVIBUS_BUILT_AT=$CIVIBUS_BUILT_AT" in dockerfile_text
+
+    # Placed AFTER the cached ``uv sync`` layer so a per-deploy SHA change never
+    # busts that expensive layer, and BEFORE dropping to the non-root user.
+    assert dockerfile_text.index("uv sync --locked --extra api") < dockerfile_text.index("ARG CIVIBUS_GIT_SHA")
+    assert dockerfile_text.index("ARG CIVIBUS_GIT_SHA") < dockerfile_text.index("USER civibus")
+    assert dockerfile_text.index("ARG CIVIBUS_BUILT_AT") < dockerfile_text.index("USER civibus")
+
+
 def test_debbie_sync_includes_api_dockerfile_root_inputs() -> None:
     assert DEBBIE_CONFIG_PATH.is_file(), ".debbie.toml must exist"
     debbie_payload = tomllib.loads(DEBBIE_CONFIG_PATH.read_text(encoding="utf-8"))

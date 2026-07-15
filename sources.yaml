@@ -1119,3 +1119,61 @@ jurisdictions:
       - layer: L1
         scope: CA
         path: evidence/L1/CA/2026-04-29.json
+- scope: FEDERAL
+  phase: Phase 3
+  ownership: project-local pilot registry until matt-side absorption exists
+  sources:
+  - source_id: census_tiger_congressional_district_listing
+    current_state: prototyped
+    coverage_boundary: Census TIGER congressional-district directory listing hash
+      used as a weekly boundary-change probe for the federal ZCTA/district and
+      geometry seam; the refresh job records listing-state only and does not
+      download shapefiles or reload crosswalk rows.
+    transitions:
+    - to_state: prototyped
+      recorded_on: 2026-07-14
+      rationale: Stage 2 wired a source-record-backed federal geometry probe so
+        directory-listing changes surface before a later live geometry/crosswalk
+        refresh run.
+      evidence_refs:
+      - layer: docs
+        scope: NC_geometry_source_contract_2026_04_29
+        path: docs/reference/research/2026_04_29_nc_geometry_source_contract.md
+  - source_id: openfec_election_dates_api
+    current_state: prototyped
+    coverage_boundary: OpenFEC /election-dates/ calendar feed used to resolve the regular
+      November general-election date (and detect special-election rows) for the federal
+      race spine. Recent-cycle coverage only; not an authoritative state election calendar.
+    transitions:
+    - to_state: prototyped
+      recorded_on: 2026-07-13
+      rationale: Stage 2 wired FecClient.fetch_election_dates against the OpenFEC
+        /election-dates/ endpoint and the federal-fec-races loader resolves each general
+        election date from its payload; endpoint contract and currency captured in the
+        committed Stage 2 race-data findings.
+      evidence_refs:
+      - layer: docs
+        scope: FEDERAL_fec_race_data_findings_2026_07_08
+        path: docs/reference/research/2026_07_08_fec_race_data_findings.md
+      - layer: docs
+        scope: FEDERAL_2026_primary_election_dates
+        path: docs/reference/research/2026-primary-election-dates.md
+  - source_id: fec_bulk_cn_ccl_races
+    current_state: prototyped
+    coverage_boundary: FEC bulk candidate-master (cn) and candidate-committee-linkage (ccl)
+      files filtered to CAND_ELECTION_YR + CAND_STATUS for race membership; drives the
+      civic.contest / civic.candidacy federal race spine keyed by general-election date.
+    transitions:
+    - to_state: prototyped
+      recorded_on: 2026-07-13
+      rationale: Stage 1 mapper surfaced candidate_election_year / candidate_status and
+        Stage 2 built the federal-fec-races loader over existing cn source records; the
+        race-membership recipe and bulk-file field contract are captured in the committed
+        Stage 2 research docs.
+      evidence_refs:
+      - layer: docs
+        scope: FEDERAL_fec_race_data_findings_2026_07_08
+        path: docs/reference/research/2026_07_08_fec_race_data_findings.md
+      - layer: docs
+        scope: FEDERAL_fec_bulk_data
+        path: docs/reference/research/fec-bulk-data.md

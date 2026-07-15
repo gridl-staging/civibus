@@ -13,8 +13,12 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 DEBBIE_CONFIG_PATH = REPO_ROOT / ".debbie.toml"
 DEPLOY_WORKFLOW_PATH = REPO_ROOT / ".github/workflows/deploy.yml"
 FLY_DEPLOY_COMMANDS = [
-    "flyctl deploy -c infra/fly/api.fly.toml --remote-only",
-    'flyctl deploy web -c "$GITHUB_WORKSPACE/infra/fly/web.fly.toml" --remote-only',
+    "flyctl deploy -c infra/fly/api.fly.toml --remote-only "
+    "--build-arg CIVIBUS_GIT_SHA=${{ steps.provenance.outputs.dev_sha }} "
+    "--build-arg CIVIBUS_BUILT_AT=${{ steps.provenance.outputs.built_at }}",
+    'flyctl deploy web -c "$GITHUB_WORKSPACE/infra/fly/web.fly.toml" --remote-only '
+    "--build-arg CIVIBUS_GIT_SHA=${{ steps.provenance.outputs.dev_sha }} "
+    "--build-arg CIVIBUS_BUILT_AT=${{ steps.provenance.outputs.built_at }}",
     "flyctl deploy -c infra/fly/caddy.fly.toml --remote-only",
 ]
 FORBIDDEN_DEPLOY_TARGETS = (
@@ -209,6 +213,35 @@ def test_positional_fly_deploy_workdirs_use_workspace_anchored_config_paths() ->
         )
 
 
+def test_deploy_workflow_resolves_dev_sha_from_sync_manifest() -> None:
+    provenance_step = _find_step("Resolve dev build provenance")
+    script = provenance_step["run"]
+
+    assert provenance_step.get("id") == "provenance", "provenance step must expose an id for step outputs"
+    # Reads the dev SHA from the prod-mirror sync manifest, NOT ${{ github.sha }}.
+    assert ".debbie/sync_manifest.json" in script
+    assert "github.sha" not in script
+    assert ".dev_sha" in script
+    # Fails loud on a missing manifest or a non-40-char-hex SHA — never degrades
+    # to stamping "unknown".
+    assert "^[0-9a-f]{40}$" in script
+    assert "exit 1" in script
+    # Both provenance values are exported for the deploy steps to consume.
+    assert "dev_sha=" in script
+    assert "built_at=" in script
+    assert "$GITHUB_OUTPUT" in script
+
+
+def test_deploy_workflow_passes_dev_provenance_build_args_to_api_and_web() -> None:
+    for step_name in ("Deploy API to Fly", "Deploy web to Fly"):
+        run_script = _find_step(step_name)["run"]
+        assert "--build-arg CIVIBUS_GIT_SHA=${{ steps.provenance.outputs.dev_sha }}" in run_script
+        assert "--build-arg CIVIBUS_BUILT_AT=${{ steps.provenance.outputs.built_at }}" in run_script
+
+    caddy_script = _find_step("Deploy Caddy to Fly")["run"]
+    assert "--build-arg" not in caddy_script, "caddy is a bare reverse proxy — no provenance stamp"
+
+
 def test_deploy_workflow_never_deploys_db_or_refresh_apps() -> None:
     workflow_text = _read_deploy_workflow()
 
@@ -218,10 +251,20 @@ def test_deploy_workflow_never_deploys_db_or_refresh_apps() -> None:
 
 def test_deploy_workflow_keeps_production_smoke_gate_after_all_deploys() -> None:
     workflow_text = _read_deploy_workflow()
+    drift_step = _find_step("Verify public deploy serves built dev SHA")
     install_step = _find_step("Install web smoke dependencies")
     smoke_step = _find_step("Run production smoke gate")
+    drift_script = drift_step["run"]
     install_script = install_step["run"]
     smoke_script = smoke_step["run"]
+
+    assert "/api/health/version" in drift_script
+    assert "/version.json" in drift_script
+    assert "${{ steps.provenance.outputs.dev_sha }}" in drift_script
+    assert "seq 1 18" in drift_script
+    assert "sleep 5" in drift_script
+    assert "exit 1" in drift_script
+    assert 'if [[ -z "${PROD_SMOKE_BASE_URL}" ]]' in drift_script
 
     assert "npm ci" in install_script
     assert install_step["working-directory"] == "web"
@@ -229,14 +272,17 @@ def test_deploy_workflow_keeps_production_smoke_gate_after_all_deploys() -> None
     assert "SMOKE_MODE=production" in smoke_script
     assert 'SMOKE_BASE_URL="${PROD_SMOKE_BASE_URL}"' in smoke_script
     assert (
-        "bash ./tests/smoke/run-playwright.sh -- tests/smoke/production_deploy.spec.ts --reporter=line" in smoke_script
+        "bash ./tests/smoke/run-playwright.sh -- "
+        "tests/smoke/production_deploy.spec.ts "
+        "tests/smoke/production_finance_visuals.spec.ts --reporter=line" in smoke_script
     )
     assert smoke_step["working-directory"] == "web"
 
+    drift_position = workflow_text.index("Verify public deploy serves built dev SHA")
     install_position = workflow_text.index("Install web smoke dependencies")
     smoke_position = workflow_text.index("Run production smoke gate")
     last_deploy_position = max(workflow_text.index(deploy_command) for deploy_command in FLY_DEPLOY_COMMANDS)
-    assert last_deploy_position < install_position < smoke_position
+    assert last_deploy_position < drift_position < install_position < smoke_position
 
 
 def test_deploy_workflow_does_not_duplicate_ci_integration_or_refresh_concerns() -> None:

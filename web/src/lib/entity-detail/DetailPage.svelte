@@ -1,6 +1,10 @@
 <script lang="ts">
   import { buildCandidateHref } from "$lib/campaign-finance-detail/contract";
-  import Chart from "$lib/charts/Chart.svelte";
+  import GeographyShareChart from "$lib/charts/GeographyShareChart.svelte";
+  import HorizontalBarChart from "$lib/charts/HorizontalBarChart.svelte";
+  import MonthlyContributionsChart from "$lib/charts/MonthlyContributionsChart.svelte";
+  import OutsideSpendingChart from "$lib/charts/OutsideSpendingChart.svelte";
+  import ReceiptCompositionChart from "$lib/charts/ReceiptCompositionChart.svelte";
   import TrustSection from "$lib/detail-trust/TrustSection.svelte";
   import SkeletonPanel from "$lib/loading/SkeletonPanel.svelte";
   import Portrait from "$lib/portrait/Portrait.svelte";
@@ -9,18 +13,22 @@
     buildPersonDonorVendorEmptyStateBanner,
     buildPersonLinkedCommitteeEmptyStateBanner,
     buildPersonDonorVendorRows,
-    buildPersonFinanceSummaryPresentation,
     buildPersonLinkedCommitteeRows,
     buildPersonContributionInsightsPresentation,
-    buildPersonOutsideSpendingChartSeries,
+    buildPersonMoneyAtGlancePresentation,
+    buildPersonMoneyAtGlanceSummary,
     buildPersonOutsideSpendingSection,
-    buildPersonSummaryChartSeries,
     buildEntityDetailShellPresentation,
-    type EntityDetailShellPresentation
+    type EntityDetailShellPresentation,
+    type PersonMoneyAtGlanceSummary
   } from "$lib/entity-detail/presentation";
   import type { EntityDetailPageBundle } from "$lib/server/api/entity-detail";
   import type { PersonCandidateFinanceSection } from "$lib/server/api/campaign-finance-detail";
-  import type { PersonTopEmployerRow, RankedTransactionParty } from "$lib/campaign-finance-detail/contract";
+  import type {
+    CandidateFundraisingSummary,
+    PersonTopEmployerRow,
+    RankedTransactionParty
+  } from "$lib/campaign-finance-detail/contract";
 
   export let data: EntityDetailPageBundle;
 
@@ -40,6 +48,7 @@
   const EMPTY_PERSON_TOP_DONORS: RankedTransactionParty[] = [];
   const EMPTY_PERSON_TOP_EMPLOYERS: PersonTopEmployerRow[] = [];
   let selectedContributionTotalView: "cycle" | "career" = "cycle";
+  let selectedSizeBucketUnit: "dollars" | "reported_transactions" = "dollars";
 
   $: personDetail =
     data.entityType === "person" ? (data.detail as PersonDetailResponse) : null;
@@ -108,6 +117,30 @@
     }
 
     return [first, second, third];
+  }
+
+  function combineDeferredPair<TFirst, TSecond>(
+    first: TFirst | Promise<TFirst>,
+    second: TSecond | Promise<TSecond>
+  ): [TFirst, TSecond] | Promise<[TFirst, TSecond]> {
+    if (isThenable(first) || isThenable(second)) {
+      return Promise.all([first, second]);
+    }
+
+    return [first, second];
+  }
+
+  function buildMoneyAtGlanceSummary(
+    sections: PersonCandidateFinanceSection[]
+  ): PersonMoneyAtGlanceSummary | Promise<PersonMoneyAtGlanceSummary> {
+    const summaries = sections.map((section) => section.summary) as Array<
+      CandidateFundraisingSummary | Promise<CandidateFundraisingSummary>
+    >;
+    if (summaries.some(isThenable)) {
+      return Promise.all(summaries).then(buildPersonMoneyAtGlanceSummary);
+    }
+
+    return buildPersonMoneyAtGlanceSummary(summaries as Array<CandidateFundraisingSummary>);
   }
 </script>
 
@@ -183,30 +216,41 @@
             <p>{selectedTotalSummary.caveatMessage}</p>
           {/if}
         {/if}
-        <Chart
-          kind="line"
-          title="Donations over time"
-          ariaLabel={`Donations over time for ${shellViewModel.canonicalName}`}
-          series={fundraisingDetail.monthlyTotalsSeries}
+        <MonthlyContributionsChart
+          testId={fundraisingDetail.monthlyContributions.testId}
+          cycle={fundraisingDetail.monthlyContributions.cycle}
+          coverageThrough={fundraisingDetail.monthlyContributions.coverageThrough}
+          sources={fundraisingDetail.monthlyContributions.sources}
+          rows={fundraisingDetail.monthlyContributions.rows}
+          coveredMonths={fundraisingDetail.monthlyContributions.coveredMonths}
         />
         <p>{fundraisingDetail.unitemizedExclusionNote}</p>
-        <Chart
-          kind="bar"
-          title="Donation count by size bucket"
-          ariaLabel={`Donation count by size bucket for ${shellViewModel.canonicalName}`}
-          series={fundraisingDetail.itemizedCountSeries}
+        <div class="detail__segmented-control" role="group" aria-label="Contribution-size bucket scale">
+          <span class="detail__segmented-label">Dollars | Reported transactions</span>
+          <button
+            type="button"
+            aria-pressed={selectedSizeBucketUnit === "dollars"}
+            onclick={() => (selectedSizeBucketUnit = "dollars")}
+          >
+            Dollars
+          </button>
+          <button
+            type="button"
+            aria-pressed={selectedSizeBucketUnit === "reported_transactions"}
+            onclick={() => (selectedSizeBucketUnit = "reported_transactions")}
+          >
+            Reported transactions
+          </button>
+        </div>
+        <HorizontalBarChart
+          testId={fundraisingDetail.sizeBuckets.testId}
+          title={fundraisingDetail.sizeBuckets.title}
+          cycle={fundraisingDetail.sizeBuckets.cycle}
+          coverageThrough={fundraisingDetail.sizeBuckets.coverageThrough}
+          sources={fundraisingDetail.sizeBuckets.sources}
+          rows={fundraisingDetail.sizeBuckets.rowsByUnit[selectedSizeBucketUnit]}
         />
-        <Chart
-          kind="bar"
-          title="Dollars by size bucket"
-          ariaLabel={`Dollars by size bucket for ${shellViewModel.canonicalName}`}
-          series={fundraisingDetail.dollarsBySizeSeries}
-        />
-        <ul class="detail__inline-list" aria-label="Dollars by size bucket labels">
-          {#each fundraisingDetail.dollarsBySizeSeries[0]?.points ?? [] as point (String(point.x))}
-            <li>{point.x}</li>
-          {/each}
-        </ul>
+        <p>Reported rows exclude unitemized counts and do not equal unique donors.</p>
         <p>{fundraisingDetail.geographyNote}</p>
         <dl class="detail__rows">
           <div class="detail__row">
@@ -218,13 +262,16 @@
             <dd>{fundraisingDetail.districtShareSummary}</dd>
           </div>
         </dl>
-        <Chart
-          kind="bar"
-          title="Fundraising geography"
-          ariaLabel={`Fundraising geography for ${shellViewModel.canonicalName}`}
-          series={fundraisingDetail.preferredGeographySeries}
+        <GeographyShareChart
+          testId={fundraisingDetail.geographyShare.testId}
+          cycle={fundraisingDetail.geographyShare.cycle}
+          coverageThrough={fundraisingDetail.geographyShare.coverageThrough}
+          sources={fundraisingDetail.geographyShare.sources}
+          rows={fundraisingDetail.geographyShare.rows}
+          approximationNote={fundraisingDetail.geographyShare.approximationNote}
+          unknownIncludedInDenominator={fundraisingDetail.geographyShare.mode === "district"}
         />
-        <h5>Top donors</h5>
+        <h5>{fundraisingDetail.rankingLabels.topDonors}</h5>
         {#if fundraisingDetail.topDonorsEmptyMessage !== null}
           <p>{fundraisingDetail.topDonorsEmptyMessage}</p>
         {:else}
@@ -232,7 +279,7 @@
             <table>
               <thead>
                 <tr>
-                  <th>Donor</th>
+                  <th>Reported contributor name</th>
                   <th>Total</th>
                   <th>Transactions</th>
                 </tr>
@@ -241,7 +288,16 @@
                 {#each fundraisingDetail.topDonors as donor, donorIndex (`${donor.name}-${donorIndex}`)}
                   <tr>
                     <td>{donor.name}</td>
-                    <td>{donor.totalAmount}</td>
+                    <td>
+                      <span class="detail__rank-cell">
+                        <span>{donor.totalAmount}</span>
+                        <span
+                          class="detail__rank-bar"
+                          aria-hidden="true"
+                          style:--rank-width={`${donor.barPercent}%`}
+                        ></span>
+                      </span>
+                    </td>
                     <td>{donor.transactionCountLabel}</td>
                   </tr>
                 {/each}
@@ -249,7 +305,7 @@
             </table>
           </div>
         {/if}
-        <h5>Top employers</h5>
+        <h5>{fundraisingDetail.rankingLabels.topEmployers}</h5>
         <p>{fundraisingDetail.topEmployerDisclaimer}</p>
         <p>{fundraisingDetail.topEmployerMethodologyReference}</p>
         {#if fundraisingDetail.topEmployersEmptyMessage !== null}
@@ -268,7 +324,16 @@
                 {#each fundraisingDetail.topEmployers as employer, employerIndex (`${employer.name}-${employerIndex}`)}
                   <tr>
                     <td>{employer.name}</td>
-                    <td>{employer.totalAmount}</td>
+                    <td>
+                      <span class="detail__rank-cell">
+                        <span>{employer.totalAmount}</span>
+                        <span
+                          class="detail__rank-bar"
+                          aria-hidden="true"
+                          style:--rank-width={`${employer.barPercent}%`}
+                        ></span>
+                      </span>
+                    </td>
                     <td>{employer.transactionCountLabel}</td>
                   </tr>
                 {/each}
@@ -281,6 +346,65 @@
       <p>Contribution insights are temporarily unavailable.</p>
     {/await}
   {/if}
+{/snippet}
+
+{#snippet moneyAtGlance(sections: PersonCandidateFinanceSection[])}
+  {#await buildMoneyAtGlanceSummary(sections)}
+    <SkeletonPanel label="Selected-cycle money" lines={4} />
+  {:then summary}
+    {@const moneyAtGlance = buildPersonMoneyAtGlancePresentation(summary)}
+    <section class="detail__money-glance" aria-label={moneyAtGlance.heading}>
+      <div class="detail__section-heading">
+        <h4>{moneyAtGlance.heading}</h4>
+        <p>{moneyAtGlance.cycleLabel}</p>
+      </div>
+      <nav class="detail__cycle-selector" aria-label="Election cycle">
+        {#each moneyAtGlance.cycleOptions as option (option.cycle)}
+          <a
+            class="detail__cycle-link"
+            href={option.href}
+            aria-current={option.selected ? "page" : undefined}
+          >
+            {option.label}
+          </a>
+        {/each}
+      </nav>
+      <dl class="detail__rows">
+        <div class="detail__row">
+          <dt>Coverage</dt>
+          <dd>{moneyAtGlance.coverageLabel}</dd>
+        </div>
+        <div class="detail__row">
+          <dt>Source</dt>
+          <dd>{moneyAtGlance.sourceLabel}</dd>
+        </div>
+        <div class="detail__row">
+          <dt>Outside spending</dt>
+          <dd><a class="detail__cta-link" href="#person-outside-spending">Outside spending details</a></dd>
+        </div>
+      </dl>
+      <dl class="detail__metrics-grid">
+        {#each moneyAtGlance.metricRows as row (row.label)}
+          <div class="detail__metric">
+            <dt class="detail__metric-label">{row.label}</dt>
+            <dd class="detail__metric-value">{row.value}</dd>
+          </div>
+        {/each}
+      </dl>
+      <ReceiptCompositionChart
+        testId={moneyAtGlance.receiptComposition.testId}
+        cycle={moneyAtGlance.receiptComposition.cycle}
+        coverageThrough={moneyAtGlance.receiptComposition.coverageThrough}
+        sources={moneyAtGlance.receiptComposition.sources}
+        rows={moneyAtGlance.receiptComposition.rows}
+        totalReceipts={moneyAtGlance.receiptComposition.totalReceipts}
+        canPlot={moneyAtGlance.receiptComposition.canPlot}
+        caveat={moneyAtGlance.receiptComposition.caveat}
+      />
+    </section>
+  {:catch}
+    <p>Selected-cycle money summary is temporarily unavailable.</p>
+  {/await}
 {/snippet}
 
 <section class="card detail" aria-label="Entity detail">
@@ -362,50 +486,16 @@
               {@render fundraisingDetail()}
               <p>No campaign-finance candidacies are linked yet.</p>
             {:else}
-              {#each personFinanceSections as section, sectionIndex (section.candidate.id)}
+              {@render moneyAtGlance(personFinanceSections)}
+              {@render fundraisingDetail()}
+
+              {#each personFinanceSections as section (section.candidate.id)}
                 <article class="detail__committee-card">
                   <h4>
                     <a href={buildCandidateHref(section.candidate)}>
                       {section.candidate.name}
                     </a>
                   </h4>
-
-                  {#await section.summary}
-                    <SkeletonPanel label="Candidate finance summary" lines={4} />
-                  {:then summary}
-                    {@const fundraisingSummary = buildPersonFinanceSummaryPresentation(summary)}
-                    {@const summaryChartSeries = buildPersonSummaryChartSeries(summary)}
-                    <dl class="detail__rows">
-                      <div class="detail__row">
-                        <dt>Total raised</dt>
-                        <dd>{fundraisingSummary.totalRaised}</dd>
-                      </div>
-                      <div class="detail__row">
-                        <dt>Total spent</dt>
-                        <dd>{fundraisingSummary.totalSpent}</dd>
-                      </div>
-                      <div class="detail__row">
-                        <dt>Net</dt>
-                        <dd>{fundraisingSummary.net}</dd>
-                      </div>
-                      <div class="detail__row">
-                        <dt>Transaction count</dt>
-                        <dd>{fundraisingSummary.transactionCount}</dd>
-                      </div>
-                    </dl>
-                    <Chart
-                      kind="bar"
-                      title={`Finance chart: ${section.candidate.name}`}
-                      ariaLabel={`Finance chart for ${shellViewModel.canonicalName}`}
-                      series={summaryChartSeries}
-                    />
-                  {:catch}
-                    <p>Candidate fundraising summary is temporarily unavailable.</p>
-                  {/await}
-
-                  {#if sectionIndex === 0}
-                    {@render fundraisingDetail()}
-                  {/if}
 
                   <h4>Linked committees</h4>
                   {#await section.summary}
@@ -483,15 +573,17 @@
                     <p>Donor/vendor transactions are temporarily unavailable.</p>
                   {/await}
 
-                  <h4>Outside Spending</h4>
-                  {#await section.ieSummary}
+                  <h4 id="person-outside-spending">Outside spending</h4>
+                  {#await combineDeferredPair(section.ieSummary, section.ieTransactions)}
                     <SkeletonPanel label="Outside spending" lines={4} />
-                  {:then ieSummary}
-                    {@const outsideSpending = buildPersonOutsideSpendingSection(ieSummary, [])}
-                    {@const outsideSpendingSeries = buildPersonOutsideSpendingChartSeries(ieSummary)}
-                    {#if outsideSpending.emptyMessage}
+                  {:then [ieSummary, ieTransactions]}
+                    {@const outsideSpending = buildPersonOutsideSpendingSection(ieSummary, ieTransactions)}
+                    {#if outsideSpending.emptyMessage || ieSummary === null}
                       <p>{outsideSpending.emptyMessage}</p>
                     {:else}
+                      {#if outsideSpending.explanatoryBlock}
+                        <p>{outsideSpending.explanatoryBlock}</p>
+                      {/if}
                       <dl class="detail__rows">
                         <div class="detail__row">
                           <dt>Support total</dt>
@@ -502,11 +594,18 @@
                           <dd>{outsideSpending.opposeTotal}</dd>
                         </div>
                       </dl>
-                      <Chart
-                        kind="bar"
-                        title={`Outside spending chart: ${section.candidate.name}`}
-                        ariaLabel={`Outside spending chart for ${section.candidate.name}`}
-                        series={outsideSpendingSeries}
+                      <OutsideSpendingChart
+                        testId="person-outside-spending"
+                        cycle={ieSummary.selected_cycle}
+                        coverageThrough={ieSummary.coverage_end_date}
+                        sources={[
+                          {
+                            label: "FEC Schedule E independent expenditures",
+                            href: "https://www.fec.gov/data/independent-expenditures/"
+                          }
+                        ]}
+                        rows={outsideSpending.chartRows}
+                        topSpenders={outsideSpending.chartTopSpenders}
                       />
                       <h5>Top spenders</h5>
                       {#if outsideSpending.topSpenders.length === 0}
@@ -535,6 +634,43 @@
                           </table>
                         </div>
                       {/if}
+                      <h5>Transactions</h5>
+                      {#if outsideSpending.transactionRows.length === 0}
+                        <p>No outside-spending transactions available.</p>
+                      {:else}
+                        <div class="detail__table-scroll" data-testid="person-ie-transactions-scroll">
+                          <table>
+                            <thead>
+                              <tr>
+                                <th>Date</th>
+                                <th>Spender</th>
+                                <th>Stance</th>
+                                <th>Amount</th>
+                                <th>Dissemination date</th>
+                                <th>Source</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {#each outsideSpending.transactionRows as row (row.rowKey)}
+                                <tr>
+                                  <td>{row.date}</td>
+                                  <td><a href={row.spenderHref}>{row.spender}</a></td>
+                                  <td>{row.stance}</td>
+                                  <td>{row.amount}</td>
+                                  <td>{row.disseminationDate}</td>
+                                  <td>
+                                    {#if row.sourceHref}
+                                      <a href={row.sourceHref}>Source filing</a>
+                                    {:else}
+                                      Source filing unavailable
+                                    {/if}
+                                  </td>
+                                </tr>
+                              {/each}
+                            </tbody>
+                          </table>
+                        </div>
+                      {/if}
                     {/if}
                   {:catch}
                     <p>Outside-spending data is temporarily unavailable.</p>
@@ -551,3 +687,18 @@
     {/if}
   {/each}
 </section>
+
+<style>
+  .detail__rank-cell {
+    display: grid;
+    gap: 0.25rem;
+    min-width: 8rem;
+  }
+
+  .detail__rank-bar {
+    background: linear-gradient(90deg, #0f766e var(--rank-width), #e2e8f0 0);
+    border: 1px solid #cbd5e1;
+    display: block;
+    height: 0.5rem;
+  }
+</style>

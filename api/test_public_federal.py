@@ -10,7 +10,7 @@ from __future__ import annotations
 import csv
 import io
 import re
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 from uuid import UUID, uuid4
@@ -42,6 +42,7 @@ from api.test_campaign_finance_support import (
 from api.test_civics import (
     _CongressMemberExpectation,
     _expected_congress_http_rows,
+    _insert_namesake_challenger_candidacy,
     _seed_current_federal_members_mix,
 )
 from core.db import insert_entity_source
@@ -148,6 +149,7 @@ def _seed_member_with_money_and_ie(
             total_receipts=Decimal("9000.00"),
             total_disbursements=Decimal("1000.00"),
             cash_on_hand=Decimal("8000.00"),
+            summary_coverage_end_date=date(2026, 12, 31),
         ),
     )
     insert_committee_row(
@@ -209,6 +211,7 @@ def _insert_candidate_with_official_totals(
     total_receipts: Decimal,
     total_disbursements: Decimal,
     cash_on_hand: Decimal,
+    summary_coverage_end_date: date = date(2026, 12, 31),
     source_record_id: UUID | None = None,
 ) -> None:
     insert_candidate_row(
@@ -225,6 +228,7 @@ def _insert_candidate_with_official_totals(
             total_receipts=total_receipts,
             total_disbursements=total_disbursements,
             cash_on_hand=cash_on_hand,
+            summary_coverage_end_date=summary_coverage_end_date,
             source_record_id=source_record_id,
         ),
     )
@@ -358,6 +362,24 @@ def test_public_endpoints_ip_rate_limited_without_api_key(
 
 def test_public_officials_returns_directory_projection(api_client: TestClient, db_conn: psycopg.Connection) -> None:
     expectations = _seed_current_federal_members_mix(db_conn)
+
+    response = api_client.get("/public/v1/federal/officials")
+
+    assert response.status_code == 200
+    assert response.json() == _expected_congress_http_rows(expectations)
+
+
+def test_public_officials_excludes_namesake_challenger(
+    api_client: TestClient,
+    db_conn: psycopg.Connection,
+) -> None:
+    expectations = _seed_current_federal_members_mix(db_conn)
+    officeholder = _member_by_name(expectations, "Alice Representative")
+    _insert_namesake_challenger_candidacy(
+        db_conn,
+        officeholder,
+        person_id=UUID("00000000-0000-0000-0000-000000000045"),
+    )
 
     response = api_client.get("/public/v1/federal/officials")
 

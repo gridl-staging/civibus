@@ -18,11 +18,15 @@ from core.db import get_connection
 from core.graph.loader import CONTRIBUTION_LIKE_TYPES
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
-_DEFAULT_ANCHORS_ROOT = _REPO_ROOT / "docs" / "anchors"
+_DEFAULT_ANCHORS_ROOT = _REPO_ROOT / "docs" / "reference" / "anchors"
 _DEFAULT_EVIDENCE_ROOT = _REPO_ROOT / "evidence" / "L1"
 _FRONTMATTER_RE = re.compile(r"\A---\n(?P<frontmatter>.*?)\n---\n?", re.DOTALL)
 _SECTION_HEADING_RE = re.compile(r"^## (?P<title>.+)$", re.MULTILINE)
 _PRIMARY_CONTRIBUTION_METRICS = frozenset({"total_contributions_raised", "total_contributions"})
+# FEDERAL is judged on countable federal races (a `count`-unit metric over civic.contest),
+# not the contribution-dollar totals used for committee-state-scoped jurisdictions.
+FEDERAL_SCOPE = "FEDERAL"
+_COUNTABLE_FEDERAL_RACES_METRIC = "countable_federal_races"
 _L1_ADDITIONAL_RECEIPT_TYPES = frozenset(
     {
         # NC loads preserve the source's receipt-side contributor class in
@@ -213,6 +217,8 @@ def load_anchor_file(anchor_path: Path) -> AnchorFile:
 
 
 def select_primary_metric(anchor: AnchorFile) -> AggregateExpectation:
+    if anchor.frontmatter.scope == FEDERAL_SCOPE:
+        return _select_federal_race_metric(anchor)
     preferred = [
         metric
         for metric in anchor.aggregate_expectations
@@ -224,12 +230,58 @@ def select_primary_metric(anchor: AnchorFile) -> AggregateExpectation:
     return sorted(preferred, key=lambda metric: metric.cycle, reverse=True)[0]
 
 
+def _select_federal_race_metric(anchor: AnchorFile) -> AggregateExpectation:
+    """Pick the countable-federal-races count metric for the FEDERAL anchor's L1 gate."""
+    preferred = [
+        metric
+        for metric in anchor.aggregate_expectations
+        if metric.metric == _COUNTABLE_FEDERAL_RACES_METRIC and metric.unit == "count"
+    ]
+    if not preferred:
+        raise ValueError(
+            "FEDERAL anchor is missing a countable_federal_races count aggregate expectation for L1 race gating"
+        )
+    return sorted(preferred, key=lambda metric: metric.cycle, reverse=True)[0]
+
+
+def count_federal_contests(connection: psycopg.Connection, *, cycle: int) -> int:
+    """Count countable federal races: civic.contest rows for federal offices in the cycle window.
+
+    Single owner of the federal race-count query so L14 projects the same contest universe as
+    the L1 FEDERAL gate rather than reimplementing the join.
+    """
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT COUNT(*)
+            FROM civic.contest ct
+            JOIN civic.office o
+              ON o.id = ct.office_id
+            WHERE o.office_level = 'federal'
+              AND ct.election_date >= %s
+              AND ct.election_date < %s
+            """,
+            (
+                date(cycle, 1, 1),
+                date(cycle + 1, 1, 1),
+            ),
+        )
+        return int(cursor.fetchone()[0])
+
+
 def query_scope_total(
     connection: psycopg.Connection,
     *,
     jurisdiction: str,
     cycle: int,
 ) -> Decimal:
+    """Return the L1 primary-metric total for a jurisdiction and cycle.
+
+    FEDERAL is judged on countable federal races (a count over civic.contest); every other
+    jurisdiction keeps the committee-state-scoped receipt-dollar sum over cf.transaction.
+    """
+    if jurisdiction == FEDERAL_SCOPE:
+        return Decimal(count_federal_contests(connection, cycle=cycle))
     with connection.cursor() as cursor:
         cursor.execute(
             """

@@ -33,6 +33,11 @@ def workflow_parsed() -> dict:
     return yaml.safe_load(WORKFLOW_PATH.read_text(encoding="utf-8"))
 
 
+@pytest.fixture(scope="module")
+def workflow_steps(workflow_parsed: dict) -> list[dict]:
+    return workflow_parsed["jobs"]["probe"]["steps"]
+
+
 def test_workflow_file_exists() -> None:
     assert WORKFLOW_PATH.exists(), f"missing workflow at {WORKFLOW_PATH}"
 
@@ -146,3 +151,28 @@ def test_label_create_command_includes_explicit_repository_context(workflow_text
     assert force_arg_index >= 0, "label-create command must keep idempotent --force behavior"
     label_command = workflow_text[label_command_index:force_arg_index]
     assert '--repo="${{ github.repository }}"' in label_command, "gh label create must include explicit --repo context"
+
+
+def test_workflow_warns_on_public_deploy_drift_without_failing_job(
+    workflow_text: str, workflow_steps: list[dict]
+) -> None:
+    drift_step = next(step for step in workflow_steps if step.get("name") == "Warn on public deploy drift")
+    script = drift_step["run"]
+
+    assert drift_step["continue-on-error"] is True
+    assert "gh api repos/${{ github.repository }}/contents/.debbie/sync_manifest.json" in script
+    assert "base64 -d" in script
+    assert ".dev_sha" in script
+    assert "/api/health/version" in script
+    assert "/version.json" in script
+    assert "::warning::" in script
+    assert "deploy lag" in workflow_text
+    assert "cannot detect sync lag" in workflow_text
+    assert "Promote this check to fail-closed only after one batch with zero false would-be kills" in workflow_text
+
+
+def test_workflow_keeps_warn_probe_lightweight_and_issue_flow_unchanged(workflow_text: str) -> None:
+    assert "actions/checkout@" not in workflow_text
+    assert "uv sync" not in workflow_text
+    assert "gh issue create" in workflow_text
+    assert "gh issue close" in workflow_text

@@ -81,6 +81,18 @@ class BulkLoaderFixtureSet:
         return keys
 
 
+@dataclass(frozen=True, slots=True)
+class CandidateSummaryScenario:
+    fixture_path: Path
+    updated_fixture_path: Path
+    weball_rows: list[dict[str, str | None]]
+    updated_rows: list[dict[str, str | None]]
+    expected_rows_by_candidate_id: dict[str, dict[str, str | None]]
+    unresolved_candidate_id: str
+    blank_self_funding_candidate_id: str
+    changed_candidate_id: str
+
+
 @pytest.fixture
 def bulk_loader_conn(committing_db_conn: psycopg.Connection) -> Iterator[psycopg.Connection]:
     yield committing_db_conn
@@ -136,6 +148,12 @@ def _write_fixture_file(
 def _parse_weball_date(raw_value: str) -> date:
     month, day, year = raw_value.split("/")
     return date(int(year), int(month), int(day))
+
+
+def _decimal_or_none(raw_value: str | None) -> Decimal | None:
+    if raw_value is None or raw_value.strip() == "":
+        return None
+    return Decimal(raw_value)
 
 
 def _build_fixture_prefix() -> str:
@@ -532,6 +550,160 @@ def _fetch_link_rows(
         return cursor.fetchall()
 
 
+def _build_candidate_summary_scenario(
+    fixture_set: BulkLoaderFixtureSet,
+    tmp_path: Path,
+) -> CandidateSummaryScenario:
+    weball_rows = [dict(row) for row in fixture_set.weball_rows]
+    blank_self_funding_candidate_id = weball_rows[1]["CAND_ID"]
+    for column_name in ("CAND_CONTRIB", "CAND_LOANS", "CAND_LOAN_REPAY"):
+        weball_rows[1][column_name] = ""
+
+    unresolved_candidate_id = f"H{uuid4().hex[:8].upper()}"
+    weball_rows.append({**weball_rows[0], "CAND_ID": unresolved_candidate_id})
+    fixture_path = tmp_path / "weball_with_unresolved_candidate.txt"
+    _write_fixture_file(fixture_path, WEBALL_COLUMNS, weball_rows)
+
+    updated_rows = [dict(row) for row in weball_rows]
+    updated_rows[0]["TTL_RECEIPTS"] = "99999.01"
+    updated_rows[0]["CAND_CONTRIB"] = "7654.32"
+    updated_rows[0]["CAND_LOANS"] = "8765.43"
+    updated_rows[0]["CAND_LOAN_REPAY"] = "987.65"
+    updated_fixture_path = tmp_path / "weball_with_updated_summary.txt"
+    _write_fixture_file(updated_fixture_path, WEBALL_COLUMNS, updated_rows)
+
+    return CandidateSummaryScenario(
+        fixture_path=fixture_path,
+        updated_fixture_path=updated_fixture_path,
+        weball_rows=weball_rows,
+        updated_rows=updated_rows,
+        expected_rows_by_candidate_id={
+            row["CAND_ID"]: row for row in updated_rows if row["CAND_ID"] != unresolved_candidate_id
+        },
+        unresolved_candidate_id=unresolved_candidate_id,
+        blank_self_funding_candidate_id=blank_self_funding_candidate_id,
+        changed_candidate_id=updated_rows[0]["CAND_ID"],
+    )
+
+
+def _fetch_candidate_summary_rows(
+    conn: psycopg.Connection,
+    *,
+    data_source_id: UUID,
+    candidate_ids: Sequence[str],
+    unresolved_candidate_id: str,
+) -> tuple[list[dict[str, object]], int, int, int]:
+    with conn.cursor(row_factory=dict_row) as cursor:
+        cursor.execute(
+            """
+            SELECT fec_candidate_id,
+                   total_receipts,
+                   total_disbursements,
+                   cash_on_hand,
+                   candidate_contrib,
+                   candidate_loans,
+                   candidate_loan_repay,
+                   summary_coverage_end_date,
+                   name,
+                   office,
+                   person_id,
+                   candidate_source.source_record_key AS candidate_source_record_key
+            FROM cf.candidate
+            JOIN core.source_record candidate_source
+              ON candidate_source.id = candidate.source_record_id
+            WHERE fec_candidate_id = ANY(%s)
+            ORDER BY fec_candidate_id
+            """,
+            (candidate_ids,),
+        )
+        summary_rows = cursor.fetchall()
+        cursor.execute(
+            "SELECT COUNT(*) AS candidate_count FROM cf.candidate WHERE fec_candidate_id = %s",
+            (unresolved_candidate_id,),
+        )
+        unresolved_candidate_count = cursor.fetchone()["candidate_count"]
+        cursor.execute(
+            "SELECT COUNT(*) AS person_count FROM core.person WHERE identifiers ->> 'fec_candidate_id' = %s",
+            (unresolved_candidate_id,),
+        )
+        unresolved_person_count = cursor.fetchone()["person_count"]
+        cursor.execute(
+            "SELECT COUNT(*) AS source_record_count FROM core.source_record WHERE data_source_id = %s AND source_record_key = %s",
+            (data_source_id, f"weball:{_PRIMARY_CYCLE}:{candidate_ids[0]}"),
+        )
+        updated_source_record_count = cursor.fetchone()["source_record_count"]
+    return summary_rows, unresolved_candidate_count, unresolved_person_count, updated_source_record_count
+
+
+def _fetch_weball_source_record_rows(
+    conn: psycopg.Connection,
+    *,
+    data_source_id: UUID,
+    candidate_id: str,
+) -> list[dict[str, object]]:
+    with conn.cursor(row_factory=dict_row) as cursor:
+        cursor.execute(
+            """
+            SELECT id,
+                   superseded_by,
+                   raw_fields ->> 'CAND_CONTRIB' AS candidate_contrib,
+                   raw_fields ->> 'CAND_LOANS' AS candidate_loans,
+                   raw_fields ->> 'CAND_LOAN_REPAY' AS candidate_loan_repay
+            FROM core.source_record
+            WHERE data_source_id = %s
+              AND source_record_key = %s
+            ORDER BY created_at, id
+            """,
+            (data_source_id, f"weball:{_PRIMARY_CYCLE}:{candidate_id}"),
+        )
+        return cursor.fetchall()
+
+
+def _assert_candidate_summary_rows(
+    *,
+    summary_rows: Sequence[dict[str, object]],
+    fixture_set: BulkLoaderFixtureSet,
+    scenario: CandidateSummaryScenario,
+) -> dict[str, dict[str, object]]:
+    assert len(summary_rows) == len(fixture_set.weball_rows)
+    summary_by_candidate_id = {row["fec_candidate_id"]: row for row in summary_rows}
+    for expected_row in scenario.weball_rows[:-1]:
+        candidate_row = summary_by_candidate_id[expected_row["CAND_ID"]]
+        original_candidate = next(
+            row for row in fixture_set.candidate_rows if row["CAND_ID"] == expected_row["CAND_ID"]
+        )
+        expected_summary_row = scenario.expected_rows_by_candidate_id[expected_row["CAND_ID"]]
+        assert candidate_row["total_receipts"] == Decimal(expected_summary_row["TTL_RECEIPTS"])
+        assert candidate_row["total_disbursements"] == Decimal(expected_summary_row["TTL_DISB"])
+        assert candidate_row["cash_on_hand"] == Decimal(expected_summary_row["COH_COP"])
+        assert candidate_row["candidate_contrib"] == _decimal_or_none(expected_summary_row["CAND_CONTRIB"])
+        assert candidate_row["candidate_loans"] == _decimal_or_none(expected_summary_row["CAND_LOANS"])
+        assert candidate_row["candidate_loan_repay"] == _decimal_or_none(expected_summary_row["CAND_LOAN_REPAY"])
+        assert candidate_row["summary_coverage_end_date"] == _parse_weball_date(expected_summary_row["CVG_END_DT"])
+        assert candidate_row["name"] == original_candidate["CAND_NAME"]
+        assert candidate_row["office"] == original_candidate["CAND_OFFICE"]
+        assert candidate_row["person_id"] is not None
+        assert candidate_row["candidate_source_record_key"] == f"cn:{_PRIMARY_CYCLE}:{expected_row['CAND_ID']}"
+    return summary_by_candidate_id
+
+
+def _assert_changed_weball_source_records(
+    *,
+    source_rows: Sequence[dict[str, object]],
+    scenario: CandidateSummaryScenario,
+) -> None:
+    assert len(source_rows) == 2
+    old_source_row = next(row for row in source_rows if row["superseded_by"] is not None)
+    active_source_row = next(row for row in source_rows if row["superseded_by"] is None)
+    assert old_source_row["superseded_by"] == active_source_row["id"]
+    assert old_source_row["candidate_contrib"] == scenario.weball_rows[0]["CAND_CONTRIB"]
+    assert old_source_row["candidate_loans"] == scenario.weball_rows[0]["CAND_LOANS"]
+    assert old_source_row["candidate_loan_repay"] == scenario.weball_rows[0]["CAND_LOAN_REPAY"]
+    assert active_source_row["candidate_contrib"] == scenario.updated_rows[0]["CAND_CONTRIB"]
+    assert active_source_row["candidate_loans"] == scenario.updated_rows[0]["CAND_LOANS"]
+    assert active_source_row["candidate_loan_repay"] == scenario.updated_rows[0]["CAND_LOAN_REPAY"]
+
+
 def _load_committees_and_candidates(
     conn: psycopg.Connection,
     fixture_set: BulkLoaderFixtureSet,
@@ -761,36 +933,25 @@ def test_load_candidate_summaries_updates_existing_candidates_and_skips_unresolv
 ) -> None:
     data_source_id = ensure_fec_bulk_data_source(bulk_loader_conn)
     _load_committees_and_candidates(bulk_loader_conn, bulk_loader_fixture_set, data_source_id)
-    weball_rows = [dict(row) for row in bulk_loader_fixture_set.weball_rows]
-    unresolved_candidate_id = f"H{uuid4().hex[:8].upper()}"
-    weball_rows.append({**weball_rows[0], "CAND_ID": unresolved_candidate_id})
-    fixture_path = tmp_path / "weball_with_unresolved_candidate.txt"
-    _write_fixture_file(fixture_path, WEBALL_COLUMNS, weball_rows)
-    updated_rows = [dict(row) for row in weball_rows]
-    updated_rows[0]["TTL_RECEIPTS"] = "99999.01"
-    updated_fixture_path = tmp_path / "weball_with_updated_summary.txt"
-    _write_fixture_file(updated_fixture_path, WEBALL_COLUMNS, updated_rows)
-    expected_rows_by_candidate_id = {
-        row["CAND_ID"]: row for row in updated_rows if row["CAND_ID"] != unresolved_candidate_id
-    }
+    scenario = _build_candidate_summary_scenario(bulk_loader_fixture_set, tmp_path)
 
     first_result = load_candidate_summaries(
         bulk_loader_conn,
-        fixture_path,
+        scenario.fixture_path,
         cycle=_PRIMARY_CYCLE,
         data_source_id=data_source_id,
         batch_size=2,
     )
     second_result = load_candidate_summaries(
         bulk_loader_conn,
-        fixture_path,
+        scenario.fixture_path,
         cycle=_PRIMARY_CYCLE,
         data_source_id=data_source_id,
         batch_size=2,
     )
     third_result = load_candidate_summaries(
         bulk_loader_conn,
-        updated_fixture_path,
+        scenario.updated_fixture_path,
         cycle=_PRIMARY_CYCLE,
         data_source_id=data_source_id,
         batch_size=2,
@@ -800,60 +961,31 @@ def test_load_candidate_summaries_updates_existing_candidates_and_skips_unresolv
     assert (second_result.inserted, second_result.skipped, second_result.errors) == (0, 6, 0)
     assert (third_result.inserted, third_result.skipped, third_result.errors) == (1, 5, 0)
 
-    candidate_ids = bulk_loader_fixture_set.candidate_ids
-    with bulk_loader_conn.cursor(row_factory=dict_row) as cursor:
-        cursor.execute(
-            """
-            SELECT fec_candidate_id,
-                   total_receipts,
-                   total_disbursements,
-                   cash_on_hand,
-                   summary_coverage_end_date,
-                   name,
-                   office,
-                   person_id
-            FROM cf.candidate
-            WHERE fec_candidate_id = ANY(%s)
-            ORDER BY fec_candidate_id
-            """,
-            (candidate_ids,),
-        )
-        summary_rows = cursor.fetchall()
-        cursor.execute(
-            "SELECT COUNT(*) AS candidate_count FROM cf.candidate WHERE fec_candidate_id = %s",
-            (unresolved_candidate_id,),
-        )
-        unresolved_candidate_count = cursor.fetchone()["candidate_count"]
-        cursor.execute(
-            "SELECT COUNT(*) AS person_count FROM core.person WHERE identifiers ->> 'fec_candidate_id' = %s",
-            (unresolved_candidate_id,),
-        )
-        unresolved_person_count = cursor.fetchone()["person_count"]
-        cursor.execute(
-            "SELECT COUNT(*) AS source_record_count FROM core.source_record WHERE data_source_id = %s AND source_record_key = %s",
-            (data_source_id, f"weball:{_PRIMARY_CYCLE}:{bulk_loader_fixture_set.candidate_ids[0]}"),
-        )
-        updated_summary_source_record_count = cursor.fetchone()["source_record_count"]
-
-    assert len(summary_rows) == len(bulk_loader_fixture_set.weball_rows)
-    summary_by_candidate_id = {row["fec_candidate_id"]: row for row in summary_rows}
-    for expected_row in bulk_loader_fixture_set.weball_rows:
-        candidate_row = summary_by_candidate_id[expected_row["CAND_ID"]]
-        original_candidate = next(
-            row for row in bulk_loader_fixture_set.candidate_rows if row["CAND_ID"] == expected_row["CAND_ID"]
-        )
-        expected_summary_row = expected_rows_by_candidate_id[expected_row["CAND_ID"]]
-        assert candidate_row["total_receipts"] == Decimal(expected_summary_row["TTL_RECEIPTS"])
-        assert candidate_row["total_disbursements"] == Decimal(expected_summary_row["TTL_DISB"])
-        assert candidate_row["cash_on_hand"] == Decimal(expected_summary_row["COH_COP"])
-        assert candidate_row["summary_coverage_end_date"] == _parse_weball_date(expected_summary_row["CVG_END_DT"])
-        assert candidate_row["name"] == original_candidate["CAND_NAME"]
-        assert candidate_row["office"] == original_candidate["CAND_OFFICE"]
-        assert candidate_row["person_id"] is not None
+    summary_result = _fetch_candidate_summary_rows(
+        bulk_loader_conn,
+        data_source_id=data_source_id,
+        candidate_ids=bulk_loader_fixture_set.candidate_ids,
+        unresolved_candidate_id=scenario.unresolved_candidate_id,
+    )
+    summary_rows, unresolved_candidate_count, unresolved_person_count, updated_source_record_count = summary_result
+    changed_source_rows = _fetch_weball_source_record_rows(
+        bulk_loader_conn,
+        data_source_id=data_source_id,
+        candidate_id=scenario.changed_candidate_id,
+    )
+    summary_by_candidate_id = _assert_candidate_summary_rows(
+        summary_rows=summary_rows,
+        fixture_set=bulk_loader_fixture_set,
+        scenario=scenario,
+    )
 
     assert unresolved_candidate_count == 0
     assert unresolved_person_count == 0
-    assert updated_summary_source_record_count == 2
+    assert updated_source_record_count == 2
+    assert summary_by_candidate_id[scenario.blank_self_funding_candidate_id]["candidate_contrib"] is None
+    assert summary_by_candidate_id[scenario.blank_self_funding_candidate_id]["candidate_loans"] is None
+    assert summary_by_candidate_id[scenario.blank_self_funding_candidate_id]["candidate_loan_repay"] is None
+    _assert_changed_weball_source_records(source_rows=changed_source_rows, scenario=scenario)
 
 
 def test_load_candidate_committee_links_skips_unresolved_foreign_keys_and_is_idempotent(

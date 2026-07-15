@@ -44,9 +44,12 @@ _CANDIDATE_INSERT_SQL = """
         total_receipts,
         total_disbursements,
         cash_on_hand,
+        candidate_contrib,
+        candidate_loans,
+        candidate_loan_repay,
         summary_coverage_end_date
     )
-    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
 """
 
 _FILING_INSERT_SQL = """
@@ -124,11 +127,19 @@ _COMMITTEE_SUMMARY_INSERT_SQL = """
         total_receipts,
         total_disbursements,
         cash_on_hand,
+        individual_contributions,
+        party_committee_contributions,
+        other_committee_contributions,
+        transfers_from_other_authorized_committees,
+        debts_owed_by_committee,
+        individual_itemized_contributions,
         individual_unitemized_contributions,
+        candidate_contributions,
+        candidate_loans,
         coverage_start_date,
         coverage_end_date
     )
-    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
 """
 
 _ELECTORAL_DIVISION_INSERT_SQL = """
@@ -168,13 +179,14 @@ _OFFICEHOLDING_INSERT_SQL = """
 _ZCTA_DISTRICT_INSERT_SQL = """
     INSERT INTO civic.zcta_district (
         zcta5,
+        boundary_year,
         state_fips,
         cd_geoid,
         district_number,
         land_share,
         source_url
     )
-    VALUES (%s, %s, %s, %s, %s, %s)
+    VALUES (%s, %s, %s, %s, %s, %s, %s)
 """
 
 
@@ -210,6 +222,9 @@ class CandidateRowSeed:
     total_receipts: Decimal | None = None
     total_disbursements: Decimal | None = None
     cash_on_hand: Decimal | None = None
+    candidate_contrib: Decimal | None = None
+    candidate_loans: Decimal | None = None
+    candidate_loan_repay: Decimal | None = None
     summary_coverage_end_date: date | None = None
 
 
@@ -220,7 +235,15 @@ class CommitteeSummaryRowSeed:
     total_receipts: Decimal | None = None
     total_disbursements: Decimal | None = None
     cash_on_hand: Decimal | None = None
+    individual_contributions: Decimal | None = None
+    party_committee_contributions: Decimal | None = None
+    other_committee_contributions: Decimal | None = None
+    transfers_from_other_authorized_committees: Decimal | None = None
+    debts_owed_by_committee: Decimal | None = None
+    individual_itemized_contributions: Decimal | None = None
     individual_unitemized_contributions: Decimal | None = None
+    candidate_contributions: Decimal | None = None
+    candidate_loans: Decimal | None = None
     coverage_start_date: date | None = None
     coverage_end_date: date | None = None
 
@@ -321,6 +344,7 @@ def _build_transaction_seed(
     amendment_indicator: str,
     source_record_id: UUID | None = None,
     is_memo: bool = False,
+    transaction_date: date | None = None,
     transaction_identifier: str | None = None,
     memo_code: str | None = None,
     recipient_candidate_id: UUID | None = None,
@@ -337,6 +361,7 @@ def _build_transaction_seed(
         amendment_indicator=amendment_indicator,
         source_record_id=source_record_id,
         is_memo=is_memo,
+        transaction_date=transaction_date,
         transaction_identifier=transaction_identifier,
         memo_code=_resolve_memo_code(is_memo=is_memo, memo_code=memo_code),
         recipient_candidate_id=recipient_candidate_id,
@@ -427,6 +452,9 @@ def insert_candidate_row(conn: psycopg.Connection, candidate: CandidateRowSeed) 
             candidate.total_receipts,
             candidate.total_disbursements,
             candidate.cash_on_hand,
+            candidate.candidate_contrib,
+            candidate.candidate_loans,
+            candidate.candidate_loan_repay,
             candidate.summary_coverage_end_date,
         ),
     )
@@ -442,7 +470,15 @@ def insert_committee_summary_row(conn: psycopg.Connection, summary: CommitteeSum
             summary.total_receipts,
             summary.total_disbursements,
             summary.cash_on_hand,
+            summary.individual_contributions,
+            summary.party_committee_contributions,
+            summary.other_committee_contributions,
+            summary.transfers_from_other_authorized_committees,
+            summary.debts_owed_by_committee,
+            summary.individual_itemized_contributions,
             summary.individual_unitemized_contributions,
+            summary.candidate_contributions,
+            summary.candidate_loans,
             summary.coverage_start_date,
             summary.coverage_end_date,
         ),
@@ -584,12 +620,13 @@ def insert_zcta_district_row(
     state_fips: str,
     cd_geoid: str,
     district_number: str,
+    boundary_year: int = 2022,
     land_share: Decimal = Decimal("1.00000"),
 ) -> None:
     _execute_insert(
         conn,
         query=_ZCTA_DISTRICT_INSERT_SQL,
-        params=(zcta5, state_fips, cd_geoid, district_number, land_share, "https://example.org/zcta"),
+        params=(zcta5, boundary_year, state_fips, cd_geoid, district_number, land_share, "https://example.org/zcta"),
     )
 
 
@@ -731,7 +768,7 @@ def _insert_filter_transactions(
             amendment_indicator="N",
             source_record_id=None,
             transaction_identifier="txn-d",
-            transaction_date=None,
+            transaction_date=date(2026, 3, 14),
         ),
     )
 
@@ -986,6 +1023,7 @@ def insert_summary_transaction(
     amount: Decimal,
     source_record_id: UUID | None = None,
     is_memo: bool = False,
+    transaction_date: date | None = date(2026, 3, 15),
     memo_code: str | None = None,
     amendment_indicator: str = "N",
     recipient_candidate_id: UUID | None = None,
@@ -1005,6 +1043,7 @@ def insert_summary_transaction(
             amendment_indicator=amendment_indicator,
             source_record_id=source_record_id,
             is_memo=is_memo,
+            transaction_date=transaction_date,
             memo_code=memo_code,
             recipient_candidate_id=recipient_candidate_id,
             support_oppose=support_oppose,

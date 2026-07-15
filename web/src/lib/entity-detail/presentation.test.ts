@@ -9,13 +9,17 @@ import {
   buildIdentifierKeyMetrics,
   buildIdentifierRows,
   buildPersonContributionInsightsPresentation,
-  buildPersonOutsideSpendingChartSeries,
-  buildPersonSummaryChartSeries,
+  buildPersonMoneyAtGlancePresentation,
+  buildPersonMoneyAtGlanceSummary,
   getIdentifierEmptyMessage
 } from "./presentation";
 
 const PERSON_ID = "11111111-1111-4111-8111-111111111111";
 const ORG_ID = "22222222-2222-4222-8222-222222222222";
+const SELECTED_CYCLE_METADATA = {
+  selected_cycle: 2026,
+  available_cycles: [2022, 2024, 2026]
+};
 
 const SOURCES = [
   {
@@ -71,6 +75,7 @@ const CONTRIBUTION_INSIGHTS = {
   person_id: PERSON_ID,
   has_data: true,
   metadata: {
+    ...SELECTED_CYCLE_METADATA,
     coverage_start_date: "2022-01-01",
     coverage_end_date: "2026-06-30",
     cycles_included: [2022, 2024, 2026],
@@ -85,24 +90,23 @@ const CONTRIBUTION_INSIGHTS = {
   ],
   itemized_size_buckets: [
     {
-      label: "$1-$199",
-      min_amount: "1.00",
-      max_amount: "199.99",
+      label: "$200 and under",
+      min_amount: "0.01",
+      max_amount: "200.00",
       total_amount: "175.00",
       transaction_count: 3
     },
     {
-      label: "$200+",
-      min_amount: "200.00",
-      max_amount: null,
+      label: "$200.01-$499.99",
+      min_amount: "200.01",
+      max_amount: "499.99",
       total_amount: "175.50",
       transaction_count: 2
     }
   ],
   dollars_by_size: [
-    { label: "Unitemized (<$200)", total_amount: "125.00", source: "committee_summary" as const },
-    { label: "$1-$199", total_amount: "175.00", source: "transactions" as const },
-    { label: "$200+", total_amount: "175.50", source: "transactions" as const }
+    { label: "$200 and under", total_amount: "175.00", source: "transactions" as const },
+    { label: "$200.01-$499.99", total_amount: "175.50", source: "transactions" as const }
   ],
   cycle_totals: [
     {
@@ -132,7 +136,8 @@ const CONTRIBUTION_INSIGHTS = {
   geography: {
     by_state: [
       { label: "NC", total_amount: "300.00", transaction_count: 4 },
-      { label: "VA", total_amount: "50.50", transaction_count: 1 }
+      { label: "VA", total_amount: "50.50", transaction_count: 1 },
+      { label: "Unknown", total_amount: "25.00", transaction_count: 1 }
     ],
     by_district: [
       { label: "NC-01", total_amount: "275.00", transaction_count: 3 },
@@ -144,7 +149,12 @@ const CONTRIBUTION_INSIGHTS = {
       unknown_district_amount: "25.00",
       share: "0.7846",
       available: true
-    }
+    },
+    geography_mode: "district" as const,
+    classified_amount: "350.50",
+    classified_transaction_count: 5,
+    unknown_amount: "25.00",
+    unknown_transaction_count: 1
   },
   small_dollar_share: {
     small_dollar_amount: "300.00",
@@ -208,10 +218,10 @@ describe("entity detail presentation", () => {
 
     expect(viewModel.sectionOrder).toEqual([
       "summary",
+      "person-campaign-finance",
       "trust",
       "metrics",
-      "records",
-      "person-campaign-finance"
+      "records"
     ]);
     expect(viewModel.keyMetricRows).toEqual([{ label: "Identifiers", value: "1" }]);
     expect(viewModel.trustSection).toEqual(buildTrustSection(SOURCES));
@@ -243,40 +253,301 @@ describe("entity detail presentation", () => {
     expect(viewModel.identifierEmptyMessage).toBe(getIdentifierEmptyMessage());
   });
 
-  it("builds finance chart series from person finance values", () => {
+  it("builds selected-cycle money-at-a-glance rows from person finance summary values", () => {
+    const firstSummary = {
+      ...SELECTED_CYCLE_METADATA,
+      coverage_start_date: "2025-01-01",
+      coverage_end_date: "2026-12-31",
+      candidate_id: "candidate-1",
+      candidate_name: "Candidate One",
+      total_raised: "125.00",
+      total_spent: "75.00",
+      net: "50.00",
+      transaction_count: 2,
+      itemized_transaction_count: 2,
+      cash_on_hand: "25.00",
+      debts_owed_by_committee: "10.00",
+      summary_source: "fec_weball" as const,
+      receipt_source_composition: [
+        {
+          label: "Gross individual contributions",
+          total_amount: "90.00",
+          source: "fec_committee_summary" as const
+        },
+        {
+          label: "PAC/other committee contributions",
+          total_amount: "35.00",
+          source: "fec_committee_summary" as const
+        }
+      ],
+      selected_cycle_coverage_complete: true,
+      can_render_share: true,
+      receipt_source_caveats: [],
+      committees: []
+    };
+
     expect(
-      buildPersonSummaryChartSeries({
-        total_raised: "125.00",
+      buildPersonMoneyAtGlancePresentation(firstSummary)
+    ).toEqual({
+      heading: "Money at a glance",
+      cycleLabel: "2026 cycle",
+      coverageLabel: "2025-01-01 to 2026-12-31",
+      sourceLabel: "Official FEC candidate summary",
+      cycleOptions: [
+        { cycle: 2022, label: "2022", href: "?cycle=2022", selected: false },
+        { cycle: 2024, label: "2024", href: "?cycle=2024", selected: false },
+        { cycle: 2026, label: "2026", href: "?cycle=2026", selected: true }
+      ],
+      metricRows: [
+        { label: "Total receipts", value: "$125.00" },
+        { label: "Total disbursements", value: "$75.00" },
+        { label: "Cash on hand", value: "$25.00" },
+        { label: "Debts owed by the committee", value: "$10.00" }
+      ],
+      receiptComposition: {
+        testId: "person-receipt-composition",
+        cycle: 2026,
+        coverageThrough: "2026-12-31",
+        sources: [
+          {
+            label: "FEC candidate and committee summaries",
+            href: "https://www.fec.gov/data/candidates/"
+          }
+        ],
+        totalReceipts: 125,
+        canPlot: true,
+        caveat: "",
+        rows: [
+          {
+            id: "gross_individual_contributions",
+            label: "Gross individual contributions",
+            amount: 90,
+            denominator: 125,
+            canPlot: true
+          },
+          {
+            id: "pac_other_committee_contributions",
+            label: "PAC/other committee contributions",
+            amount: 35,
+            denominator: 125,
+            canPlot: true
+          }
+        ]
+      }
+    });
+
+    expect(
+      buildPersonMoneyAtGlancePresentation(
+        buildPersonMoneyAtGlanceSummary([
+          firstSummary,
+          {
+            ...firstSummary,
+            candidate_id: "candidate-2",
+            candidate_name: "Candidate Two",
+            total_raised: "875.00",
+            total_spent: "225.00",
+            net: "650.00",
+            transaction_count: 5,
+            itemized_transaction_count: 4,
+            cash_on_hand: "100.00",
+            debts_owed_by_committee: "40.00",
+            summary_source: "derived" as const
+          }
+        ])
+      )
+    ).toMatchObject({
+      sourceLabel: "Mixed official FEC and derived summary data",
+      metricRows: [
+        { label: "Total receipts", value: "$1,000.00" },
+        { label: "Total disbursements", value: "$300.00" },
+        { label: "Cash on hand", value: "$125.00" },
+        { label: "Debts owed by the committee", value: "$50.00" }
+      ]
+    });
+
+    expect(
+      buildPersonMoneyAtGlancePresentation(
+        buildPersonMoneyAtGlanceSummary([
+          firstSummary,
+          {
+            ...firstSummary,
+            candidate_id: "candidate-3",
+            candidate_name: "Candidate Three",
+            total_raised: "875.00",
+            total_spent: "225.00",
+            net: "650.00",
+            transaction_count: 5,
+            itemized_transaction_count: 4,
+            cash_on_hand: null,
+            debts_owed_by_committee: undefined
+          }
+        ])
+      )
+    ).toMatchObject({
+      metricRows: [
+        { label: "Total receipts", value: "$1,000.00" },
+        { label: "Total disbursements", value: "$300.00" },
+        { label: "Cash on hand", value: "Not available" },
+        { label: "Debts owed by the committee", value: "Not available" }
+      ]
+    });
+
+    expect(() =>
+      buildPersonMoneyAtGlanceSummary([
+        firstSummary,
+        {
+          ...firstSummary,
+          candidate_id: "candidate-4",
+          candidate_name: "Candidate Four",
+          selected_cycle: 2024
+        }
+      ])
+    ).toThrow("Person money at a glance summaries must share one selected cycle.");
+
+  });
+
+  it("maps candidate receipt-source summaries into shared receipt composition props", () => {
+    const firstSummary = {
+      ...SELECTED_CYCLE_METADATA,
+      coverage_start_date: "2025-01-01",
+      coverage_end_date: "2026-12-31",
+      candidate_id: "candidate-1",
+      candidate_name: "Candidate One",
+      total_raised: "125.00",
+      total_spent: "75.00",
+      net: "50.00",
+      transaction_count: 2,
+      itemized_transaction_count: 2,
+      cash_on_hand: "25.00",
+      debts_owed_by_committee: "10.00",
+      summary_source: "fec_weball" as const,
+      receipt_source_composition: [
+        {
+          label: "Gross individual contributions",
+          total_amount: "90.00",
+          source: "fec_committee_summary" as const
+        },
+        {
+          label: "PAC/other committee contributions",
+          total_amount: "35.00",
+          source: "fec_committee_summary" as const
+        }
+      ],
+      selected_cycle_coverage_complete: true,
+      can_render_share: true,
+      receipt_source_caveats: [],
+      committees: []
+    };
+    const secondSummary = {
+      ...firstSummary,
+      candidate_id: "candidate-2",
+      candidate_name: "Candidate Two",
+      total_raised: "275.00",
+      receipt_source_composition: [
+        {
+          label: "Gross individual contributions",
+          total_amount: "180.00",
+          source: "fec_committee_summary" as const
+        },
+        {
+          label: "PAC/other committee contributions",
+          total_amount: "95.00",
+          source: "fec_committee_summary" as const
+        }
+      ],
+      receipt_source_caveats: ["components_reconciled_from_committee_summaries"]
+    };
+
+    expect(
+      buildPersonMoneyAtGlancePresentation(
+        buildPersonMoneyAtGlanceSummary([firstSummary, secondSummary])
+      ).receiptComposition
+    ).toEqual({
+      testId: "person-receipt-composition",
+      cycle: 2026,
+      coverageThrough: "2026-12-31",
+      sources: [
+        {
+          label: "FEC candidate and committee summaries",
+          href: "https://www.fec.gov/data/candidates/"
+        }
+      ],
+      totalReceipts: 400,
+      canPlot: true,
+      caveat: "components_reconciled_from_committee_summaries",
+      rows: [
+        {
+          id: "gross_individual_contributions",
+          label: "Gross individual contributions",
+          amount: 270,
+          denominator: 400,
+          canPlot: true
+        },
+        {
+          id: "pac_other_committee_contributions",
+          label: "PAC/other committee contributions",
+          amount: 130,
+          denominator: 400,
+          canPlot: true
+        }
+      ]
+    });
+  });
+
+  it("keeps negative receipt-source reconciliation components table-only", () => {
+    const summary = buildPersonMoneyAtGlanceSummary([
+      {
+        ...SELECTED_CYCLE_METADATA,
+        coverage_start_date: "2025-01-01",
+        coverage_end_date: "2026-12-31",
+        candidate_id: "candidate-1",
+        candidate_name: "Candidate One",
+        total_raised: "100.00",
         total_spent: "75.00",
-        net: "50.00"
-      })
-    ).toEqual([
-      {
-        id: "finance",
-        label: "Finance",
-        points: [
-          { x: "Raised", y: 125 },
-          { x: "Spent", y: 75 },
-          { x: "Net", y: 50 }
-        ]
+        net: "25.00",
+        transaction_count: 2,
+        itemized_transaction_count: 2,
+        cash_on_hand: "25.00",
+        debts_owed_by_committee: "0.00",
+        summary_source: "fec_weball" as const,
+        receipt_source_composition: [
+          {
+            label: "Gross individual contributions",
+            total_amount: "125.00",
+            source: "fec_committee_summary" as const
+          },
+          {
+            label: "Contribution refunds and offsets",
+            total_amount: "-25.00",
+            source: "fec_committee_summary" as const
+          }
+        ],
+        selected_cycle_coverage_complete: true,
+        can_render_share: false,
+        receipt_source_caveats: ["negative_component_table_only"],
+        committees: []
       }
     ]);
-    expect(
-      buildPersonOutsideSpendingChartSeries({
-        support_total: "200.00",
-        oppose_total: "80.00"
-      })
-    ).toEqual([
-      {
-        id: "outside-spending",
-        label: "Outside spending",
-        points: [
-          { x: "Support", y: 200 },
-          { x: "Oppose", y: 80 }
-        ]
-      }
-    ]);
-    expect(buildPersonOutsideSpendingChartSeries(null)).toEqual([]);
+
+    expect(buildPersonMoneyAtGlancePresentation(summary).receiptComposition).toMatchObject({
+      totalReceipts: 100,
+      canPlot: false,
+      caveat: "negative_component_table_only",
+      rows: [
+        expect.objectContaining({
+          label: "Gross individual contributions",
+          amount: 125,
+          denominator: 100,
+          canPlot: false
+        }),
+        expect.objectContaining({
+          label: "Contribution refunds and offsets",
+          amount: -25,
+          denominator: 100,
+          canPlot: false
+        })
+      ]
+    });
   });
 
   it("maps contribution insights into headline copy and chart series", () => {
@@ -288,13 +559,33 @@ describe("entity detail presentation", () => {
 
     expect(viewModel.emptyMessage).toBeNull();
     expect(viewModel.topDonors).toEqual([
-      { name: "High Dollar Donor", totalAmount: "$500.00", transactionCountLabel: "4 transactions" },
-      { name: "Second Dollar Donor", totalAmount: "$250.00", transactionCountLabel: "2 transactions" }
+      {
+        name: "High Dollar Donor",
+        totalAmount: "$500.00",
+        transactionCountLabel: "4 transactions",
+        barPercent: 100
+      },
+      {
+        name: "Second Dollar Donor",
+        totalAmount: "$250.00",
+        transactionCountLabel: "2 transactions",
+        barPercent: 50
+      }
     ]);
     expect(viewModel.topDonorsEmptyMessage).toBeNull();
     expect(viewModel.topEmployers).toEqual([
-      { name: "ACME CORP", totalAmount: "$600.00", transactionCountLabel: "3 transactions" },
-      { name: "State University", totalAmount: "$150.00", transactionCountLabel: "1 transaction" }
+      {
+        name: "ACME CORP",
+        totalAmount: "$600.00",
+        transactionCountLabel: "3 transactions",
+        barPercent: 100
+      },
+      {
+        name: "State University",
+        totalAmount: "$150.00",
+        transactionCountLabel: "1 transaction",
+        barPercent: 25
+      }
     ]);
     expect(viewModel.topEmployersEmptyMessage).toBeNull();
     expect(viewModel.topEmployerDisclaimer).toBe(
@@ -318,7 +609,7 @@ describe("entity detail presentation", () => {
       },
       {
         key: "career",
-        label: "Career",
+        label: "Recent history total (2022-2026)",
         amountLabel: "$726.00",
         itemizedAmountLabel: "$601.00",
         unitemizedAmountLabel: "$125.00",
@@ -334,50 +625,189 @@ describe("entity detail presentation", () => {
       "$275.00 in district and $75.50 out of district; $25.00 unknown district excluded from the share."
     );
     expect(viewModel.coverageLabel).toBe("2022-01-01 to 2026-06-30");
-    expect(viewModel.monthlyTotalsSeries).toEqual([
-      {
-        id: "monthly-totals",
-        label: "Donations over time",
-        points: [
-          { x: "2026-01", y: 100 },
-          { x: "2026-02", y: 250.5 }
-        ]
-      }
-    ]);
-    expect(viewModel.itemizedCountSeries).toEqual([
-      {
-        id: "itemized-counts",
-        label: "Donation count by size bucket",
-        points: [
-          { x: "$1-$199", y: 3 },
-          { x: "$200+", y: 2 }
-        ]
-      }
-    ]);
-    expect(viewModel.dollarsBySizeSeries).toEqual([
-      {
-        id: "dollars-by-size",
-        label: "Dollars by size bucket",
-        points: [
-          { x: "Unitemized (<$200)", y: 125 },
-          { x: "$1-$199", y: 175 },
-          { x: "$200+", y: 175.5 }
-        ]
-      }
-    ]);
-    expect(viewModel.stateGeographySeries[0].points).toEqual([
-      { x: "NC", y: 300 },
-      { x: "VA", y: 50.5 }
-    ]);
-    expect(viewModel.districtGeographySeries[0].points).toEqual([
-      { x: "NC-01", y: 275 },
-      { x: "Out of district", y: 75.5 }
-    ]);
-    expect(viewModel.preferredGeographySeries).toBe(viewModel.districtGeographySeries);
     expect(viewModel.geographyNote).toContain("Census 119th-Congress / 2020-ZCTA approximation");
     expect(viewModel.unitemizedExclusionNote).toBe(
       "Unitemized contributions are excluded from count and geography charts."
     );
+    expect(viewModel.monthlyContributions).toEqual({
+      testId: "person-monthly-contributions",
+      cycle: 2026,
+      coverageThrough: "2026-06-30",
+      sources: [
+        {
+          label: "FEC Schedule A itemized individual contributions",
+          href: "https://www.fec.gov/data/receipts/individual-contributions/"
+        }
+      ],
+      coveredMonths: [
+        "2022-01",
+        "2022-02",
+        "2022-03",
+        "2022-04",
+        "2022-05",
+        "2022-06",
+        "2022-07",
+        "2022-08",
+        "2022-09",
+        "2022-10",
+        "2022-11",
+        "2022-12",
+        "2023-01",
+        "2023-02",
+        "2023-03",
+        "2023-04",
+        "2023-05",
+        "2023-06",
+        "2023-07",
+        "2023-08",
+        "2023-09",
+        "2023-10",
+        "2023-11",
+        "2023-12",
+        "2024-01",
+        "2024-02",
+        "2024-03",
+        "2024-04",
+        "2024-05",
+        "2024-06",
+        "2024-07",
+        "2024-08",
+        "2024-09",
+        "2024-10",
+        "2024-11",
+        "2024-12",
+        "2025-01",
+        "2025-02",
+        "2025-03",
+        "2025-04",
+        "2025-05",
+        "2025-06",
+        "2025-07",
+        "2025-08",
+        "2025-09",
+        "2025-10",
+        "2025-11",
+        "2025-12",
+        "2026-01",
+        "2026-02",
+        "2026-03",
+        "2026-04",
+        "2026-05",
+        "2026-06"
+      ],
+      rows: [
+        { month: "2026-01", amount: 100, transactionCount: 2, covered: true },
+        { month: "2026-02", amount: 250.5, transactionCount: 3, covered: true }
+      ]
+    });
+    expect(viewModel.sizeBuckets).toEqual({
+      title: "Itemized contribution-size buckets",
+      testId: "person-size-buckets",
+      cycle: 2026,
+      coverageThrough: "2026-06-30",
+      sources: [
+        {
+          label: "FEC Schedule A itemized individual contributions",
+          href: "https://www.fec.gov/data/receipts/individual-contributions/"
+        }
+      ],
+      rowsByUnit: {
+        dollars: [
+          {
+            id: "200_and_under",
+            label: "$200 and under",
+            amount: 175,
+            transactionCount: 3,
+            unit: "dollars",
+            canPlot: true
+          },
+          {
+            id: "200_01_499_99",
+            label: "$200.01-$499.99",
+            amount: 175.5,
+            transactionCount: 2,
+            unit: "dollars",
+            canPlot: true
+          },
+          {
+            id: "500_999_99",
+            label: "$500-$999.99",
+            amount: 0,
+            transactionCount: 0,
+            unit: "dollars",
+            canPlot: true
+          },
+          {
+            id: "1_000_1_999_99",
+            label: "$1,000-$1,999.99",
+            amount: 0,
+            transactionCount: 0,
+            unit: "dollars",
+            canPlot: true
+          },
+          {
+            id: "2_000_and_over",
+            label: "$2,000 and over",
+            amount: 0,
+            transactionCount: 0,
+            unit: "dollars",
+            canPlot: true
+          }
+        ],
+        reported_transactions: expect.arrayContaining([
+          expect.objectContaining({
+            id: "200_and_under",
+            label: "$200 and under",
+            unit: "reported_transactions"
+          })
+        ])
+      }
+    });
+    expect(viewModel.geographyShare).toEqual({
+      testId: "person-geography-share",
+      cycle: 2026,
+      coverageThrough: "2026-06-30",
+      sources: [
+        {
+          label: "FEC Schedule A itemized individual contributions",
+          href: "https://www.fec.gov/data/receipts/individual-contributions/"
+        }
+      ],
+      mode: "district",
+      approximationNote: "District geography uses a Census 119th-Congress / 2020-ZCTA approximation.",
+      rows: [
+        {
+          id: "nc_01",
+          label: "NC-01",
+          amount: 275,
+          transactionCount: 3,
+          denominator: 375.5,
+          approximate: true
+        },
+        {
+          id: "out_of_district",
+          label: "Out of district",
+          amount: 75.5,
+          transactionCount: 2,
+          denominator: 375.5,
+          approximate: true
+        },
+        {
+          id: "unknown",
+          label: "Unknown",
+          amount: 25,
+          transactionCount: 1,
+          denominator: 375.5,
+          approximate: true
+        }
+      ]
+    });
+    expect(viewModel.rankingLabels).toEqual({
+      topDonors: "Top reported contributor names",
+      topEmployers: "Top reported employer names"
+    });
+    expect(viewModel.topDonors[0]).toMatchObject({ barPercent: 100 });
+    expect(viewModel.topDonors[1]).toMatchObject({ barPercent: 50 });
   });
 
   it("builds no-itemized-data empty state when cycle and career totals have no source", () => {
@@ -414,7 +844,10 @@ describe("entity detail presentation", () => {
       metadata: { ...CONTRIBUTION_INSIGHTS.metadata, approximate_geography: false }
     });
 
-    expect(viewModel.preferredGeographySeries).toBe(viewModel.stateGeographySeries);
+    expect(viewModel.geographyShare.mode).toBe("district");
+    expect(viewModel.geographyShare.rows).toContainEqual(
+      expect.objectContaining({ label: "Unknown" })
+    );
     expect(viewModel.geographyNote).toBe("Contributor geography by state.");
   });
 
@@ -486,10 +919,9 @@ describe("entity detail presentation", () => {
     expect(viewModel.caveatMessages).toEqual([
       "Committee summary totals are unavailable, so summary-backed unitemized dollars are not included."
     ]);
-    expect(viewModel.dollarsBySizeSeries[0].points).toContainEqual({
-      x: "$1-$199",
-      y: 175
-    });
+    expect(viewModel.sizeBuckets.rowsByUnit.dollars).toContainEqual(
+      expect.objectContaining({ label: "$200 and under", amount: 175 })
+    );
   });
 
   it("does not render loaded missing ZCTA caveats as top-panel unavailable copy when district rows exist", () => {
@@ -513,12 +945,12 @@ describe("entity detail presentation", () => {
 
     expect(viewModel.emptyMessage).toBeNull();
     expect(viewModel.caveatMessages).toEqual([]);
-    expect(viewModel.districtGeographySeries[0].points).toEqual([
-      { x: "In district", y: 350 },
-      { x: "Out of district", y: 201 },
-      { x: "Unknown district", y: 75 }
+    expect(viewModel.geographyShare.rows).toEqual([
+      expect.objectContaining({ label: "In district", amount: 350 }),
+      expect.objectContaining({ label: "Out of district", amount: 201 }),
+      expect.objectContaining({ label: "Unknown district", amount: 75 }),
+      expect.objectContaining({ label: "Unknown", amount: 25 })
     ]);
-    expect(viewModel.preferredGeographySeries).toBe(viewModel.districtGeographySeries);
     expect(viewModel.geographyNote).toContain("Census 119th-Congress / 2020-ZCTA approximation");
   });
 
@@ -532,6 +964,11 @@ describe("entity detail presentation", () => {
         caveats: ["missing_zcta_district"]
       },
       geography: {
+        geography_mode: "state_bars_only",
+        classified_amount: "551.00",
+        classified_transaction_count: 4,
+        unknown_amount: "0.00",
+        unknown_transaction_count: 0,
         by_state: [
           { label: "NC", total_amount: "350.00", transaction_count: 3 },
           { label: "VA", total_amount: "201.00", transaction_count: 1 }
@@ -549,10 +986,47 @@ describe("entity detail presentation", () => {
 
     expect(viewModel.emptyMessage).toBeNull();
     expect(viewModel.caveatMessages).toEqual([]);
-    expect(viewModel.preferredGeographySeries).toBe(viewModel.stateGeographySeries);
+    expect(viewModel.geographyShare.mode).toBe("state_bars_only");
     expect(viewModel.geographyNote).toBe(
       "District geography is unavailable until ZCTA district reference data is loaded."
     );
+  });
+
+  it("maps statewide geography mode without district approximation copy", () => {
+    const viewModel = buildPersonContributionInsightsPresentation({
+      ...CONTRIBUTION_INSIGHTS,
+      metadata: {
+        ...CONTRIBUTION_INSIGHTS.metadata,
+        approximate_geography: false,
+        caveats: []
+      },
+      geography: {
+        geography_mode: "statewide",
+        classified_amount: "400.00",
+        classified_transaction_count: 4,
+        unknown_amount: "50.00",
+        unknown_transaction_count: 1,
+        by_state: [{ label: "NC", total_amount: "400.00", transaction_count: 4 }],
+        by_district: [],
+        district_share: {
+          in_district_amount: null,
+          out_of_district_amount: null,
+          unknown_district_amount: null,
+          share: null,
+          available: false
+        }
+      }
+    });
+
+    expect(viewModel.geographyShare).toMatchObject({
+      mode: "statewide",
+      approximationNote: "",
+      rows: [
+        expect.objectContaining({ label: "NC", amount: 400, denominator: 400 }),
+        expect.objectContaining({ label: "Unknown", amount: 50, denominator: 400 })
+      ]
+    });
+    expect(viewModel.geographyNote).toBe("Contributor geography by state.");
   });
 
   it("maps excluded-geography backend codes without exposing enum values", () => {
@@ -569,6 +1043,11 @@ describe("entity detail presentation", () => {
         itemized_size_buckets: [],
         dollars_by_size: [],
         geography: {
+          geography_mode: "excluded",
+          classified_amount: "0.00",
+          classified_transaction_count: 0,
+          unknown_amount: "0.00",
+          unknown_transaction_count: 0,
           by_state: [],
           by_district: [],
           district_share: {

@@ -1,7 +1,6 @@
 /** View-model builders for civic detail pages and their record tables. */
 import { formatCountLabel } from "$lib/count-label";
 import { formatBoolean, formatDisplayValue } from "$lib/detail-format";
-import type { ChartSeries } from "$lib/charts/types";
 import {
   buildTrustSection,
   type TrustSectionViewModel
@@ -13,13 +12,10 @@ import type {
   IndependentExpenditureSummary
 } from "$lib/campaign-finance-detail/contract";
 import {
-  buildCandidateDeferredCommitteeBreakdown,
-  buildCandidateDeferredFundraisingSummary,
-  buildCandidateDeferredKeyMetrics,
   buildCandidateDeferredOutsideSpending,
-  type CandidateAggregateSummaryPresentation,
-  type CandidateCommitteeBreakdownRow,
-  type KeyMetric,
+  buildCandidateDeferredOutsideSpendingFigure,
+  formatCurrency,
+  type CandidateOutsideSpendingFigure,
   type OutsideSpendingPresentation
 } from "$lib/campaign-finance-detail/presentation";
 import {
@@ -114,12 +110,9 @@ export type ContestCandidateFinanceRow = {
   personName: string;
   personHref: string | null;
   candidateHref: string | null;
-  fundraisingSummary: CandidateAggregateSummaryPresentation | null;
-  keyMetrics: KeyMetric[];
-  committeeBreakdown: CandidateCommitteeBreakdownRow[];
+  financeFacts: CivicFactRow[];
   outsideSpending: OutsideSpendingPresentation;
-  financeChartSeries: ChartSeries[];
-  outsideSpendingChartSeries: ChartSeries[];
+  outsideSpendingFigure: CandidateOutsideSpendingFigure | null;
 };
 
 /**
@@ -255,11 +248,6 @@ function countOccurrences(values: string[]): Map<string, number> {
     counts.set(v, (counts.get(v) ?? 0) + 1);
   }
   return counts;
-}
-
-function parseSerializedMoney(value: string): number {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : 0;
 }
 
 function parseDateSortValue(value: string | null): number {
@@ -518,13 +506,17 @@ function buildOfficeRecentContestRows(detail: OfficeDetailResponse): OfficeRecen
  */
 function buildContestCandidacyRows(
   candidacies: CandidacySummary[],
-  winnerCandidacyId: string | null | undefined
+  winnerCandidacyId: string | null | undefined,
+  selectedCycleByPersonId: Record<string, number | null>
 ): ContestCandidacyRow[] {
   const baseRows = candidacies.map((candidacy) => ({
     id: candidacy.candidacy_id,
     personId: candidacy.person_id,
     personName: candidacy.person_name,
-    personHref: buildEntityRouteHref("person", candidacy.person_id),
+    personHref: appendSelectedCycleToHref(
+      buildEntityRouteHref("person", candidacy.person_id),
+      selectedCycleByPersonId[candidacy.person_id] ?? null
+    ),
     candidacyHref: buildCandidacyRoutePath(candidacy.candidacy_id),
     party: formatDisplayValue(candidacy.party),
     status: formatDisplayValue(candidacy.status),
@@ -562,43 +554,85 @@ function buildContestKeyMetricRows(candidacyRows: ContestCandidacyRow[]): CivicF
   return [{ label: "Candidacies", value: String(candidacyRows.length) }];
 }
 
-/**
- */
-function buildContestFinanceChartSeries(
-  candidateName: string,
-  summary: CandidateFundraisingSummary
-): ChartSeries[] {
-  return [
-    {
-      id: "candidate-finance",
-      label: `${candidateName} fundraising`,
-      points: [
-        { x: "Raised", y: parseSerializedMoney(summary.total_raised) },
-        { x: "Spent", y: parseSerializedMoney(summary.total_spent) },
-        { x: "Net", y: parseSerializedMoney(summary.net) }
-      ]
-    }
-  ];
+function appendSelectedCycleToHref(href: string | null, selectedCycle: number | null): string | null {
+  if (href === null || selectedCycle === null) {
+    return href;
+  }
+
+  if (/[?&]cycle=/.test(href)) {
+    return href;
+  }
+
+  const separator = href.includes("?") ? "&" : "?";
+  return `${href}${separator}cycle=${selectedCycle}`;
+}
+
+function getContestFinanceSelectedCycle(
+  financeSection: ContestCandidateFinanceSection
+): number | null {
+  return financeSection.summary?.selected_cycle ?? financeSection.ieSummary?.selected_cycle ?? null;
+}
+
+function getContestLinkSelectedCycle(
+  financeSection: ContestCandidateFinanceSection | undefined,
+  fallbackSelectedCycle: number | null
+): number | null {
+  if (financeSection === undefined) {
+    return fallbackSelectedCycle;
+  }
+
+  return getContestFinanceSelectedCycle(financeSection) ?? fallbackSelectedCycle;
 }
 
 /**
  */
-function buildContestOutsideSpendingChartSeries(
-  candidateName: string,
-  ieSummary: IndependentExpenditureSummary | null
-): ChartSeries[] {
-  if (ieSummary === null) {
+function buildContestLinkSelectedCycleByPersonId(
+  candidacies: CandidacySummary[],
+  candidateFinanceByPersonId: ContestCandidateFinanceByPersonId,
+  fallbackSelectedCycle: number | null
+): Record<string, number | null> {
+  const selectedCycleByPersonId: Record<string, number | null> = {};
+
+  for (const candidacy of candidacies) {
+    selectedCycleByPersonId[candidacy.person_id] = getContestLinkSelectedCycle(
+      candidateFinanceByPersonId[candidacy.person_id],
+      fallbackSelectedCycle
+    );
+  }
+
+  return selectedCycleByPersonId;
+}
+
+function getContestSelectedCycle(
+  candidateFinanceByPersonId: ContestCandidateFinanceByPersonId
+): number | null {
+  for (const financeSection of Object.values(candidateFinanceByPersonId)) {
+    const selectedCycle = getContestFinanceSelectedCycle(financeSection);
+    if (selectedCycle !== null) {
+      return selectedCycle;
+    }
+  }
+
+  return null;
+}
+
+/**
+ */
+function buildContestCandidateFinanceFacts(
+  summary: CandidateFundraisingSummary | null
+): CivicFactRow[] {
+  if (summary === null) {
     return [];
   }
 
   return [
+    { label: "Selected cycle", value: String(summary.selected_cycle) },
+    { label: "Coverage through", value: formatDateValue(summary.coverage_end_date) },
+    { label: "Receipts", value: formatCurrency(summary.total_raised) },
+    { label: "Disbursements", value: formatCurrency(summary.total_spent) },
     {
-      id: "outside-spending",
-      label: `${candidateName} outside spending`,
-      points: [
-        { x: "Support", y: parseSerializedMoney(ieSummary.support_total) },
-        { x: "Oppose", y: parseSerializedMoney(ieSummary.oppose_total) }
-      ]
+      label: "Cash on hand",
+      value: summary.cash_on_hand === null ? "—" : formatCurrency(summary.cash_on_hand)
     }
   ];
 }
@@ -607,7 +641,8 @@ function buildContestOutsideSpendingChartSeries(
  */
 function buildContestCandidateFinanceRows(
   candidacyRows: ContestCandidacyRow[],
-  candidateFinanceByPersonId: ContestCandidateFinanceByPersonId
+  candidateFinanceByPersonId: ContestCandidateFinanceByPersonId,
+  selectedCycleByPersonId: Record<string, number | null>
 ): ContestCandidateFinanceRow[] {
   const rows: ContestCandidateFinanceRow[] = [];
 
@@ -617,33 +652,23 @@ function buildContestCandidateFinanceRows(
       continue;
     }
 
-    const fundraisingSummary =
-      financeSection.summary === null
-        ? null
-        : buildCandidateDeferredFundraisingSummary(financeSection.summary);
+    const linkSelectedCycle =
+      selectedCycleByPersonId[candidacyRow.personId] ??
+      getContestFinanceSelectedCycle(financeSection);
     rows.push({
       personId: candidacyRow.personId,
       personName: candidacyRow.personName,
-      personHref: candidacyRow.personHref,
-      candidateHref: financeSection.candidateHref,
-      fundraisingSummary,
-      keyMetrics:
-        financeSection.summary === null ? [] : buildCandidateDeferredKeyMetrics(financeSection.summary),
-      committeeBreakdown:
-        financeSection.summary === null
-          ? []
-          : buildCandidateDeferredCommitteeBreakdown(financeSection.summary),
+      personHref: appendSelectedCycleToHref(candidacyRow.personHref, linkSelectedCycle),
+      candidateHref: appendSelectedCycleToHref(financeSection.candidateHref, linkSelectedCycle),
+      financeFacts: buildContestCandidateFinanceFacts(financeSection.summary),
       outsideSpending: buildCandidateDeferredOutsideSpending(
         financeSection.ieSummary,
-        financeSection.ieTransactions
+        financeSection.ieTransactions,
+        linkSelectedCycle
       ),
-      financeChartSeries:
-        financeSection.summary === null
-          ? []
-          : buildContestFinanceChartSeries(candidacyRow.personName, financeSection.summary),
-      outsideSpendingChartSeries: buildContestOutsideSpendingChartSeries(
-        candidacyRow.personName,
-        financeSection.ieSummary
+      outsideSpendingFigure: buildCandidateDeferredOutsideSpendingFigure(
+        financeSection.ieSummary,
+        linkSelectedCycle
       )
     });
   }
@@ -774,6 +799,7 @@ export function buildOfficeDetailPresentation(detail: OfficeDetailResponse): Off
 
 type BuildContestDetailPresentationOptions = {
   candidateFinanceByPersonId?: ContestCandidateFinanceByPersonId;
+  selectedCycle?: number | null;
 };
 
 /**
@@ -782,9 +808,23 @@ export function buildContestDetailPresentation(
   detail: ContestDetailResponse,
   options?: BuildContestDetailPresentationOptions
 ): ContestDetailPresentation {
-  const candidacyRows = buildContestCandidacyRows(detail.candidacies, detail.result_winner_candidacy_id);
   const candidateFinanceByPersonId = options?.candidateFinanceByPersonId ?? {};
-  const financeRows = buildContestCandidateFinanceRows(candidacyRows, candidateFinanceByPersonId);
+  const selectedCycle = options?.selectedCycle ?? getContestSelectedCycle(candidateFinanceByPersonId);
+  const selectedCycleByPersonId = buildContestLinkSelectedCycleByPersonId(
+    detail.candidacies,
+    candidateFinanceByPersonId,
+    selectedCycle
+  );
+  const candidacyRows = buildContestCandidacyRows(
+    detail.candidacies,
+    detail.result_winner_candidacy_id,
+    selectedCycleByPersonId
+  );
+  const financeRows = buildContestCandidateFinanceRows(
+    candidacyRows,
+    candidateFinanceByPersonId,
+    selectedCycleByPersonId
+  );
 
   const matchedWinnerRow =
     detail.result_winner_candidacy_id === undefined || detail.result_winner_candidacy_id === null
@@ -795,7 +835,13 @@ export function buildContestDetailPresentation(
   const resultWinnerPersonHref =
     detail.result_winner_person_id === undefined || detail.result_winner_person_id === null
       ? matchedWinnerRow?.personHref ?? null
-      : buildEntityRouteHref("person", detail.result_winner_person_id);
+      : appendSelectedCycleToHref(
+          buildEntityRouteHref("person", detail.result_winner_person_id),
+          getContestLinkSelectedCycle(
+            candidateFinanceByPersonId[detail.result_winner_person_id],
+            selectedCycle
+          )
+        );
   const resultWinnerCandidacyHref = matchedWinnerRow?.candidacyHref ?? null;
 
   return {

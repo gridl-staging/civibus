@@ -5,7 +5,6 @@ import { describe, expect, it } from "vitest";
 
 const chartsDir = resolve(fileURLToPath(new URL(".", import.meta.url)));
 const srcRoot = resolve(chartsDir, "..", "..");
-const allowedImporter = resolve(chartsDir, "Chart.svelte");
 
 const LAYERCHART_USAGE_PATTERN =
   /(?:\bimport\s+[^;]*?\bfrom\s+["']layerchart(?:\/[^"']+)?["']|\bimport\s+["']layerchart(?:\/[^"']+)?["']|\bexport\s+(?:\*|\*\s+as\s+\w+|\{[^}]*\})\s+from\s+["']layerchart(?:\/[^"']+)?["']|\bimport\s*\(["']layerchart(?:\/[^"']+)?["']\)|\brequire\s*\(["']layerchart(?:\/[^"']+)?["']\))/;
@@ -52,9 +51,9 @@ describe("charts import boundary", () => {
     expect(usesLayerchartModule('import { Chart } from "other-package";')).toBe(false);
   });
 
-  it("forbids layerchart imports outside src/lib/charts/Chart.svelte", () => {
+  it("forbids layerchart imports outside src/lib/charts", () => {
     const offenders = collectCodeFiles(srcRoot).filter((filePath) => {
-      if (filePath === allowedImporter) {
+      if (filePath.startsWith(`${chartsDir}/`)) {
         return false;
       }
 
@@ -63,5 +62,13 @@ describe("charts import boundary", () => {
     });
 
     expect(offenders).toEqual([]);
+  });
+
+  it("routes every layerchart import through the single Chart.svelte adapter", () => {
+    const layerchartOwners = collectCodeFiles(chartsDir)
+      .filter((filePath) => usesLayerchartModule(readFileSync(filePath, "utf8")))
+      .map((filePath) => filePath.slice(chartsDir.length + 1));
+
+    expect(layerchartOwners).toEqual(["Chart.svelte"]);
   });
 });

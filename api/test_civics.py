@@ -734,6 +734,29 @@ def _seed_current_federal_members_mix(conn: psycopg.Connection) -> list[_Congres
     return sorted(expectations, key=lambda item: item.person_name)
 
 
+def _insert_namesake_challenger_candidacy(
+    conn: psycopg.Connection,
+    officeholder: _CongressMemberExpectation,
+    *,
+    person_id: UUID | None = None,
+) -> UUID:
+    challenger_id = person_id or uuid4()
+    insert_person(conn, Person(id=challenger_id, canonical_name=officeholder.person_name))
+    contest_id = _insert_contest(
+        conn,
+        name=f"{officeholder.person_name} future challenger contest",
+        office_id=officeholder.office_id,
+    )
+    _insert_candidacy(
+        conn,
+        person_id=challenger_id,
+        contest_id=contest_id,
+        party="IND",
+        status="qualified",
+    )
+    return challenger_id
+
+
 def _expected_congress_query_rows(expectations: list[_CongressMemberExpectation]) -> list[dict[str, object]]:
     return [
         {

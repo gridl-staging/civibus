@@ -9,7 +9,7 @@ from test_office_universe_inventory import REQUIRED_COLUMNS, UNIVERSE_DOC_PATH
 
 
 REPO_ROOT = Path(__file__).resolve().parents[6]
-CLOSEOUT_DOC_PATH = REPO_ROOT / "docs" / "research" / "nc_office_coverage_closeout_2026_04_24.md"
+CLOSEOUT_DOC_PATH = REPO_ROOT / "docs" / "reference" / "research" / "nc_office_coverage_closeout_2026_04_24.md"
 EXPECTED_CLOSEOUT_COLUMNS = [
     "office_class",
     "fixture_slug",

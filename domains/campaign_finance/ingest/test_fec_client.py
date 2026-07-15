@@ -241,3 +241,223 @@ class TestHttpErrorHandling:
             client = FecClient(api_key="test-key")
             with pytest.raises(FecApiError, match="invalid JSON"):
                 client.fetch_contributions()
+
+
+# ---------------------------------------------------------------------------
+# Election dates endpoint (/election-dates/) — page-based pagination
+# ---------------------------------------------------------------------------
+
+
+def _election_dates_page(results: list[dict], *, page: int = 1, pages: int = 1) -> dict:
+    """Build an /election-dates/ envelope with standard page-based pagination.
+
+    The election-dates endpoint uses page/per_page pagination and reports the
+    total page count under pagination.pages — it does NOT return the Schedule A
+    seek-cursor fields (last_indexes / last_contribution_receipt_date).
+    """
+    return {
+        "api_version": "1.0",
+        "pagination": {"page": page, "per_page": 20, "count": len(results), "pages": pages},
+        "results": results,
+    }
+
+
+class TestFetchElectionDates:
+    def test_calls_election_dates_endpoint_with_expected_params(self):
+        results = [{"election_date": "2024-11-05", "office_sought": "S", "election_state": "NC"}]
+        responses = [_make_ok_response(_election_dates_page(results))]
+
+        with patch("httpx.Client") as MockClient:
+            mock_client_instance = MockClient.return_value.__enter__.return_value
+            mock_client_instance.get.side_effect = responses
+
+            client = FecClient(api_key="test-key")
+            client.fetch_election_dates(office="S", state="NC", election_year=2024, per_page=20)
+
+        call_args = mock_client_instance.get.call_args_list[0]
+        url = call_args[0][0] if call_args[0] else call_args[1].get("url")
+        params = call_args[1].get("params", call_args[0][1] if len(call_args[0]) > 1 else {})
+
+        assert "api.open.fec.gov" in url
+        assert "/v1/election-dates/" in url
+        # Must NOT reuse the Schedule A schedule_a endpoint.
+        assert "/schedules/schedule_a/" not in url
+        assert params["api_key"] == "test-key"
+        assert params["per_page"] == 20
+        assert params["page"] == 1
+        assert params["office_sought"] == "S"
+        assert params["election_state"] == "NC"
+        assert params["election_year"] == 2024
+
+    def test_house_district_filter_is_forwarded(self):
+        results = [{"election_date": "2024-11-05", "office_sought": "H", "election_district": "01"}]
+        with patch("httpx.Client") as MockClient:
+            mock_client_instance = MockClient.return_value.__enter__.return_value
+            mock_client_instance.get.side_effect = [_make_ok_response(_election_dates_page(results))]
+
+            client = FecClient(api_key="test-key")
+            client.fetch_election_dates(office="H", state="NC", district="01", election_year=2024)
+
+        params = mock_client_instance.get.call_args_list[0][1]["params"]
+        assert params["office_sought"] == "H"
+        assert params["election_state"] == "NC"
+        assert params["election_district"] == "01"
+        assert params["election_year"] == 2024
+
+    def test_returns_results_list(self):
+        results = [
+            {"election_date": "2024-11-05", "office_sought": "S"},
+            {"election_date": "2024-03-05", "office_sought": "S"},
+        ]
+        with patch("httpx.Client") as MockClient:
+            mock_client_instance = MockClient.return_value.__enter__.return_value
+            mock_client_instance.get.side_effect = [_make_ok_response(_election_dates_page(results))]
+
+            client = FecClient(api_key="test-key")
+            returned = client.fetch_election_dates(state="NC", election_year=2024)
+
+        assert returned == results
+
+    def test_follows_page_based_pagination(self):
+        page1 = _election_dates_page([{"election_date": "2024-11-05"}], page=1, pages=2)
+        page2 = _election_dates_page([{"election_date": "2024-03-05"}], page=2, pages=2)
+
+        with patch("httpx.Client") as MockClient:
+            mock_client_instance = MockClient.return_value.__enter__.return_value
+            mock_client_instance.get.side_effect = [_make_ok_response(page1), _make_ok_response(page2)]
+
+            client = FecClient(api_key="test-key")
+            returned = client.fetch_election_dates(state="NC", election_year=2024, per_page=1)
+
+        assert returned == [{"election_date": "2024-11-05"}, {"election_date": "2024-03-05"}]
+        assert mock_client_instance.get.call_count == 2
+        # Page-based pagination increments the `page` param and never sends seek-cursor fields.
+        first_params = mock_client_instance.get.call_args_list[0][1]["params"]
+        second_params = mock_client_instance.get.call_args_list[1][1]["params"]
+        assert first_params["page"] == 1
+        assert second_params["page"] == 2
+        for sent_params in (first_params, second_params):
+            assert "last_index" not in sent_params
+            assert "last_indexes" not in sent_params
+            assert "last_contribution_receipt_date" not in sent_params
+
+    def test_stops_after_final_page(self):
+        page1 = _election_dates_page([{"election_date": "2024-11-05"}], page=1, pages=1)
+
+        with patch("httpx.Client") as MockClient:
+            mock_client_instance = MockClient.return_value.__enter__.return_value
+            mock_client_instance.get.side_effect = [_make_ok_response(page1)]
+
+            client = FecClient(api_key="test-key")
+            returned = client.fetch_election_dates(state="NC", election_year=2024)
+
+        assert returned == [{"election_date": "2024-11-05"}]
+        assert mock_client_instance.get.call_count == 1
+
+    def test_limit_truncates_results(self):
+        page1 = _election_dates_page([{"election_date": f"2024-0{i}-05"} for i in range(1, 5)], page=1, pages=3)
+
+        with patch("httpx.Client") as MockClient:
+            mock_client_instance = MockClient.return_value.__enter__.return_value
+            mock_client_instance.get.return_value = _make_ok_response(page1)
+
+            client = FecClient(api_key="test-key")
+            returned = client.fetch_election_dates(state="NC", election_year=2024, limit=2)
+
+        assert len(returned) == 2
+
+    def test_missing_results_raises(self):
+        response = _make_ok_response({"api_version": "1.0", "pagination": {"page": 1, "pages": 1}})
+
+        with patch("httpx.Client") as MockClient:
+            mock_client_instance = MockClient.return_value.__enter__.return_value
+            mock_client_instance.get.return_value = response
+
+            client = FecClient(api_key="test-key")
+            with pytest.raises(FecApiError, match="results"):
+                client.fetch_election_dates(state="NC", election_year=2024)
+
+    def test_http_error_raises(self):
+        resp = MagicMock(spec=httpx.Response)
+        resp.status_code = 500
+        resp.text = "Error 500"
+        resp.raise_for_status.side_effect = httpx.HTTPStatusError("500", request=MagicMock(), response=resp)
+
+        with patch("httpx.Client") as MockClient:
+            mock_client_instance = MockClient.return_value.__enter__.return_value
+            mock_client_instance.get.return_value = resp
+
+            client = FecClient(api_key="test-key")
+            with pytest.raises(FecApiError, match="500"):
+                client.fetch_election_dates(state="NC", election_year=2024)
+
+    def test_transport_error_raises(self):
+        with patch("httpx.Client") as MockClient:
+            mock_client_instance = MockClient.return_value.__enter__.return_value
+            mock_client_instance.get.side_effect = httpx.ReadTimeout("timed out", request=MagicMock())
+
+            client = FecClient(api_key="test-key")
+            with pytest.raises(FecApiError, match="(?i)request failed"):
+                client.fetch_election_dates(state="NC", election_year=2024)
+
+    def test_invalid_json_raises(self):
+        response = MagicMock(spec=httpx.Response)
+        response.status_code = 200
+        response.raise_for_status = MagicMock()
+        response.json.side_effect = json.JSONDecodeError("Expecting value", "not-json", 0)
+
+        with patch("httpx.Client") as MockClient:
+            mock_client_instance = MockClient.return_value.__enter__.return_value
+            mock_client_instance.get.return_value = response
+
+            client = FecClient(api_key="test-key")
+            with pytest.raises(FecApiError, match="invalid JSON"):
+                client.fetch_election_dates(state="NC", election_year=2024)
+
+    def test_missing_pagination_pages_raises(self):
+        """A non-empty results page without a valid ``pagination.pages`` field must raise.
+
+        Silently treating a missing page-count as "last page" truncates multi-page
+        responses and can pick the wrong fallback general date in the races loader.
+        """
+        envelope = {
+            "api_version": "1.0",
+            "pagination": {"page": 1, "per_page": 20},
+            "results": [{"election_date": "2024-11-05"}],
+        }
+        with patch("httpx.Client") as MockClient:
+            mock_client_instance = MockClient.return_value.__enter__.return_value
+            mock_client_instance.get.return_value = _make_ok_response(envelope)
+
+            client = FecClient(api_key="test-key")
+            with pytest.raises(FecApiError, match="(?i)pagination"):
+                client.fetch_election_dates(state="NC", election_year=2024)
+
+    def test_missing_pagination_envelope_raises(self):
+        """A non-empty results page missing the ``pagination`` envelope entirely must raise."""
+        envelope = {
+            "api_version": "1.0",
+            "results": [{"election_date": "2024-11-05"}],
+        }
+        with patch("httpx.Client") as MockClient:
+            mock_client_instance = MockClient.return_value.__enter__.return_value
+            mock_client_instance.get.return_value = _make_ok_response(envelope)
+
+            client = FecClient(api_key="test-key")
+            with pytest.raises(FecApiError, match="(?i)pagination"):
+                client.fetch_election_dates(state="NC", election_year=2024)
+
+    def test_non_integer_pagination_pages_raises(self):
+        """A non-integer ``pagination.pages`` field must raise instead of truncating."""
+        envelope = {
+            "api_version": "1.0",
+            "pagination": {"page": 1, "per_page": 20, "pages": "many"},
+            "results": [{"election_date": "2024-11-05"}],
+        }
+        with patch("httpx.Client") as MockClient:
+            mock_client_instance = MockClient.return_value.__enter__.return_value
+            mock_client_instance.get.return_value = _make_ok_response(envelope)
+
+            client = FecClient(api_key="test-key")
+            with pytest.raises(FecApiError, match="(?i)pagination"):
+                client.fetch_election_dates(state="NC", election_year=2024)

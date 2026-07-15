@@ -482,6 +482,9 @@ def _update_candidate_summary(
             SET total_receipts = %s,
                 total_disbursements = %s,
                 cash_on_hand = %s,
+                candidate_contrib = %s,
+                candidate_loans = %s,
+                candidate_loan_repay = %s,
                 summary_coverage_end_date = %s,
                 updated_at = NOW()
             WHERE fec_candidate_id = %s
@@ -490,6 +493,9 @@ def _update_candidate_summary(
                 mapped_fields["total_receipts"],
                 mapped_fields["total_disbursements"],
                 mapped_fields["cash_on_hand"],
+                mapped_fields["candidate_contrib"],
+                mapped_fields["candidate_loans"],
+                mapped_fields["candidate_loan_repay"],
                 mapped_fields["summary_coverage_end_date"],
                 mapped_fields["fec_candidate_id"],
             ),

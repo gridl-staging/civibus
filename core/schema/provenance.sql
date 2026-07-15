@@ -136,6 +136,7 @@ CREATE TABLE core.entity_source (
     entity_type     TEXT NOT NULL CHECK (entity_type IN (
                         'person', 'organization', 'address',
                         'office', 'electoral_division', 'contest',
+                        'election', 'filing_deadline', 'reporting_period',
                         'candidacy', 'officeholding', 'contact_point'
                     )),
     entity_id       UUID NOT NULL,
@@ -166,6 +167,7 @@ CREATE TABLE core.field_provenance (
     entity_type     TEXT NOT NULL CHECK (entity_type IN (
                         'person', 'organization', 'address',
                         'office', 'electoral_division', 'contest',
+                        'election', 'filing_deadline', 'reporting_period',
                         'candidacy', 'officeholding', 'contact_point'
                     )),
     entity_id       UUID NOT NULL,

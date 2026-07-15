@@ -14,6 +14,7 @@ from api.queries.campaign_finance import (
     CAMPAIGN_FINANCE_FILING_DETAIL_SQL,
     DONOR_SEARCH_MAX_LIMIT,
     DONOR_SEARCH_MIN_QUERY_LEN,
+    SelectedCycle,
     UnknownCountySlugError,
     build_zero_committee_fundraising_summary,
     build_zero_candidate_fundraising_summary,
@@ -41,6 +42,7 @@ from api.queries.campaign_finance import (
     fetch_state_campaign_finance_summaries,
     fetch_persons_by_slug,
     fetch_transaction_list,
+    resolve_selected_cycle,
     search_donors,
 )
 from api.queries.entity_resolution import (
@@ -74,6 +76,7 @@ __all__ = [
     "CAMPAIGN_FINANCE_FILING_DETAIL_SQL",
     "DONOR_SEARCH_MAX_LIMIT",
     "DONOR_SEARCH_MIN_QUERY_LEN",
+    "SelectedCycle",
     "UnknownCountySlugError",
     "_MONEY_SCALE",
     "_build_paginated_response",
@@ -126,5 +129,6 @@ __all__ = [
     "fetch_runtime_coverage_registry",
     "fetch_search_results",
     "fetch_transaction_list",
+    "resolve_selected_cycle",
     "search_donors",
 ]

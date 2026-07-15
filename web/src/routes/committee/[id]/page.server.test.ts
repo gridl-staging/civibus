@@ -19,6 +19,18 @@ const COMMITTEE_ID = "33333333-3333-4333-8333-333333333333";
 const COMMITTEE_ID_ALT = "66666666-6666-4666-8666-666666666666";
 const COMMITTEE_SLUG = "committee-one";
 const UUID_SHAPED_NON_UUID = "33333333-3333-4333-8333-33333333333z";
+const SELECTED_CYCLE_FIELDS = {
+  selected_cycle: 2026,
+  coverage_start_date: "2025-01-01",
+  coverage_end_date: "2026-12-31",
+  available_cycles: [2022, 2024, 2026]
+};
+const RECEIPT_SOURCE_FIELDS = {
+  receipt_source_composition: [],
+  selected_cycle_coverage_complete: false,
+  can_render_share: false,
+  receipt_source_caveats: []
+};
 
 function createLoadEvent(requestJson: ReturnType<typeof vi.fn>, id = COMMITTEE_ID) {
   return {
@@ -59,6 +71,8 @@ function buildCommitteeSummary(
   committeeName = "Committee One"
 ): CommitteeFundraisingSummary {
   return {
+    ...SELECTED_CYCLE_FIELDS,
+    ...RECEIPT_SOURCE_FIELDS,
     committee_id: committeeId,
     committee_name: committeeName,
     total_raised: "0.00",

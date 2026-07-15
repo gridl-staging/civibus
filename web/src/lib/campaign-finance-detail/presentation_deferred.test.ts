@@ -26,6 +26,7 @@ import {
   COMMITTEE_ID,
   DEFAULT_CANDIDATE_SUMMARY,
   DEFAULT_FILING_BREAKDOWN,
+  DEFAULT_SELECTED_CYCLE_FIELDS,
   DEFAULT_SUMMARY,
   DEFAULT_TRANSACTION,
   FILING_ID,
@@ -65,9 +66,9 @@ describe("campaign finance deferred detail presentation", () => {
           amendmentIndicator: "N",
           coveragePeriod: "2026-01-01 to 2026-03-31",
           receiptDate: "2026-04-10",
-          totalRaised: "$125.00",
-          totalSpent: "$50.00",
-          net: "$75.00",
+          totalReceipts: "$125.00",
+          totalDisbursements: "$50.00",
+          cashOnHand: "$75.00",
           transactionCount: 1
         }
       ],
@@ -128,8 +129,7 @@ describe("campaign finance deferred detail presentation", () => {
 
   it("builds candidate aggregate fundraising totals and committee breakdown from summary", () => {
     const summary = {
-      candidate_id: CANDIDATE_ID,
-      candidate_name: "Candidate One",
+      ...DEFAULT_CANDIDATE_SUMMARY,
       total_raised: "5000.00",
       total_spent: "2000.00",
       net: "3000.00",
@@ -291,16 +291,17 @@ describe("campaign finance deferred detail presentation", () => {
     ]);
     expect(
       buildCandidateDeferredOutsideSpending(
-      {
-        candidate_id: CANDIDATE_ID,
-        support_total: "100.00",
-        oppose_total: "0.00",
-        support_count: 1,
-        oppose_count: 0,
-        top_spenders: [],
-        excluded_outlier_count: 0
-      },
-      []
+        {
+          ...DEFAULT_SELECTED_CYCLE_FIELDS,
+          candidate_id: CANDIDATE_ID,
+          support_total: "100.00",
+          oppose_total: "0.00",
+          support_count: 1,
+          oppose_count: 0,
+          top_spenders: [],
+          excluded_outlier_count: 0
+        },
+        []
       ).explanatoryBlock
     ).toBe("Outside spending is independent and not controlled by the candidate committee.");
   });
@@ -351,14 +352,64 @@ describe("campaign finance deferred detail presentation", () => {
         { category: "media", totalAmount: "$25.00", transactionCountLabel: "1 transaction" }
       ],
       spendCategoriesEmptyMessage: null,
-      cashOnHandTrendSeries: [
+      cashOnHandTrend: {
+        cycle: 2026,
+        coverageThrough: "2026-12-31",
+        sources: [],
+        points: [{ periodEnd: "2026-03-31", amount: 75, missingIntervalBefore: false }]
+      }
+    });
+  });
+
+  it("normalizes committee filing cash-on-hand points from real coverage periods only", () => {
+    const highSignal = buildCommitteeDeferredHighSignalSummary(DEFAULT_SUMMARY, {
+      ...DEFAULT_FILING_BREAKDOWN,
+      filings: [
         {
-          id: "cash-on-hand",
-          label: "Cash on hand",
-          points: [{ x: "2026-03-31", y: 75 }]
+          ...DEFAULT_FILING_BREAKDOWN.filings[0],
+          filing_id: "later",
+          filing_fec_id: "FEC-200",
+          coverage_start_date: "2026-05-01",
+          coverage_end_date: "2026-06-30",
+          receipt_date: "2026-07-15",
+          cash_on_hand: "250.50",
+          row_id: "later:N"
+        },
+        {
+          ...DEFAULT_FILING_BREAKDOWN.filings[0],
+          filing_id: "receipt-fallback-forbidden",
+          filing_fec_id: "FEC-150",
+          coverage_start_date: null,
+          coverage_end_date: null,
+          receipt_date: "2026-05-01",
+          cash_on_hand: "175.00",
+          row_id: "receipt-fallback-forbidden:N"
+        },
+        {
+          ...DEFAULT_FILING_BREAKDOWN.filings[0],
+          filing_id: "earlier",
+          filing_fec_id: "FEC-100",
+          coverage_start_date: "2026-01-01",
+          coverage_end_date: "2026-03-31",
+          cash_on_hand: "75.00",
+          row_id: "earlier:N"
+        },
+        {
+          ...DEFAULT_FILING_BREAKDOWN.filings[0],
+          filing_id: "invalid-money",
+          filing_fec_id: "FEC-999",
+          coverage_start_date: "2026-07-01",
+          coverage_end_date: "2026-09-30",
+          cash_on_hand: "not-a-number",
+          row_id: "invalid-money:N"
         }
       ]
     });
+
+    expect(highSignal.cashOnHandTrend.points).toEqual([
+      { periodEnd: "2026-03-31", amount: 75, missingIntervalBefore: false },
+      { periodEnd: "2026-06-30", amount: 250.5, missingIntervalBefore: true }
+    ]);
   });
 
   it("builds committee deferred outside-spending empty and populated states", () => {
@@ -433,7 +484,12 @@ describe("campaign finance deferred detail presentation", () => {
 
     expect(highSignal.spendCategories).toEqual([]);
     expect(highSignal.spendCategoriesEmptyMessage).toBe("Spend categories are not available for this committee.");
-    expect(highSignal.cashOnHandTrendSeries).toEqual([]);
+    expect(highSignal.cashOnHandTrend).toEqual({
+      cycle: 2026,
+      coverageThrough: "2026-12-31",
+      sources: [],
+      points: []
+    });
   });
 
   it("maps IE-specific committee transaction fields through presenter-owned rows", () => {
@@ -454,6 +510,7 @@ describe("campaign finance deferred detail presentation", () => {
   it("adds an explanatory outside-spending block when IE data exists", () => {
     const outsideSpending = buildOutsideSpendingPresentation(
       {
+        ...DEFAULT_SELECTED_CYCLE_FIELDS,
         candidate_id: CANDIDATE_ID,
         support_total: "100.00",
         oppose_total: "50.00",
@@ -471,8 +528,10 @@ describe("campaign finance deferred detail presentation", () => {
   });
 
   it("includes transaction-level outside-spending rows when IE data exists", () => {
+    const filingId = "66666666-6666-4666-8666-666666666666";
     const outsideSpending = buildOutsideSpendingPresentation(
       {
+        ...DEFAULT_SELECTED_CYCLE_FIELDS,
         candidate_id: CANDIDATE_ID,
         support_total: "100.00",
         oppose_total: "50.00",
@@ -484,7 +543,7 @@ describe("campaign finance deferred detail presentation", () => {
       [
         {
           id: "77777777-7777-4777-8777-777777777777",
-          filing_id: null,
+          filing_id: filingId,
           committee_id: COMMITTEE_ID,
           committee_name: "Independent Expenditure Committee",
           amount: 100,
@@ -499,12 +558,14 @@ describe("campaign finance deferred detail presentation", () => {
 
     expect(outsideSpending.transactionRows).toEqual([
       {
+        rowKey: "77777777-7777-4777-8777-777777777777",
         date: "2026-03-19",
         disseminationDate: "2026-03-20",
         spender: "Independent Expenditure Committee",
         spenderHref: `/committee/${COMMITTEE_ID}`,
         stance: "Support",
-        amount: "$100.00"
+        amount: "$100.00",
+        sourceHref: `/v1/filings/${filingId}`
       }
     ]);
   });
@@ -520,6 +581,7 @@ describe("campaign finance deferred detail presentation", () => {
   it("uses a no-activity outside-spending message when summary totals are zero", () => {
     const outsideSpending = buildOutsideSpendingPresentation(
       {
+        ...DEFAULT_SELECTED_CYCLE_FIELDS,
         candidate_id: CANDIDATE_ID,
         support_total: "0.00",
         oppose_total: "0.00",
@@ -531,6 +593,9 @@ describe("campaign finance deferred detail presentation", () => {
       []
     );
 
+    expect(outsideSpending.explanatoryBlock).toBe(
+      "Outside spending is independent and not controlled by the candidate committee."
+    );
     expect(outsideSpending.emptyMessage).toBe(
       "No outside spending is reported in available filings. Coverage may be incomplete."
     );

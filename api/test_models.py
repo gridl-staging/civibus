@@ -38,6 +38,7 @@ from api.models import (
     PersonSlugResult,
     PropertyAssessmentResponse,
     PropertyOwnershipResponse,
+    ReceiptSourceComponent,
     SearchParams,
     SearchResult,
     StateCandidateTopEntry,
@@ -266,15 +267,17 @@ def test_candidate_response_serializes_optional_fields_as_null_and_round_trips()
     assert CandidateResponse.model_validate(dumped).model_dump(mode="json") == dumped
 
 
-def test_person_contribution_insights_round_trips_money_and_metadata() -> None:
+def test_person_contribution_insights_geography_round_trips_money_and_metadata() -> None:
     person_id = uuid4()
     response = PersonContributionInsights.model_validate(
         {
             "person_id": person_id,
             "has_data": True,
             "metadata": {
-                "coverage_start_date": date(2022, 1, 1),
-                "coverage_end_date": date(2026, 6, 30),
+                "selected_cycle": 2026,
+                "coverage_start_date": date(2025, 1, 1),
+                "coverage_end_date": date(2026, 12, 31),
+                "available_cycles": [2022, 2024, 2026],
                 "cycles_included": [2024, 2026],
                 "committee_count": 2,
                 "approximate_geography": True,
@@ -284,7 +287,7 @@ def test_person_contribution_insights_round_trips_money_and_metadata() -> None:
             "monthly_totals": [{"month": "2024-02", "total_amount": Decimal("250.00"), "transaction_count": 2}],
             "itemized_size_buckets": [
                 {
-                    "label": "$1-$200",
+                    "label": "$200 and under",
                     "min_amount": Decimal("0.01"),
                     "max_amount": Decimal("200.00"),
                     "total_amount": Decimal("250.00"),
@@ -297,6 +300,11 @@ def test_person_contribution_insights_round_trips_money_and_metadata() -> None:
             "geography": {
                 "by_state": [{"label": "NC", "total_amount": Decimal("250.00"), "transaction_count": 2}],
                 "by_district": [{"label": "In district", "total_amount": Decimal("250.00"), "transaction_count": 2}],
+                "geography_mode": "district",
+                "classified_amount": Decimal("250.00"),
+                "classified_transaction_count": 2,
+                "unknown_amount": Decimal("0.00"),
+                "unknown_transaction_count": 0,
                 "district_share": {
                     "in_district_amount": Decimal("250.00"),
                     "out_of_district_amount": Decimal("0.00"),
@@ -317,11 +325,50 @@ def test_person_contribution_insights_round_trips_money_and_metadata() -> None:
     dumped = response.model_dump(mode="json")
 
     assert dumped["person_id"] == str(person_id)
-    assert dumped["metadata"]["coverage_start_date"] == "2022-01-01"
+    assert dumped["metadata"]["selected_cycle"] == 2026
+    assert dumped["metadata"]["coverage_start_date"] == "2025-01-01"
+    assert dumped["metadata"]["coverage_end_date"] == "2026-12-31"
+    assert dumped["metadata"]["available_cycles"] == [2022, 2024, 2026]
     assert dumped["monthly_totals"][0]["total_amount"] == "250.00"
+    assert dumped["geography"]["geography_mode"] == "district"
+    assert dumped["geography"]["classified_amount"] == "250.00"
     assert dumped["geography"]["district_share"]["share"] == "1.0000"
     assert dumped["small_dollar_share"]["share"] == "0.7500"
     assert PersonContributionInsights.model_validate(dumped).model_dump(mode="json") == dumped
+
+
+@pytest.mark.parametrize("month", ["2024-2", "2024-02-01", "02-2024", "2024-13"])
+def test_contribution_insights_monthly_total_rejects_non_backend_month_strings(month: str) -> None:
+    with pytest.raises(ValidationError):
+        PersonContributionInsights.model_validate(
+            {
+                "person_id": str(uuid4()),
+                "has_data": True,
+                "metadata": {
+                    "selected_cycle": 2026,
+                    "coverage_start_date": date(2025, 1, 1),
+                    "coverage_end_date": date(2026, 12, 31),
+                    "committee_count": 1,
+                    "approximate_geography": False,
+                },
+                "monthly_totals": [{"month": month, "total_amount": Decimal("0.00"), "transaction_count": 0}],
+                "geography": {
+                    "district_share": {
+                        "in_district_amount": None,
+                        "out_of_district_amount": None,
+                        "unknown_district_amount": None,
+                        "share": None,
+                        "available": False,
+                    }
+                },
+                "small_dollar_share": {
+                    "small_dollar_amount": None,
+                    "total_contribution_amount": None,
+                    "share": None,
+                    "available": False,
+                },
+            }
+        )
 
 
 def test_filing_response_requires_required_fields() -> None:
@@ -506,6 +553,10 @@ def test_ie_independent_expenditure_summary_round_trips_with_ranked_top_spenders
     summary = IndependentExpenditureSummary.model_validate(
         {
             "candidate_id": str(uuid4()),
+            "selected_cycle": 2026,
+            "coverage_start_date": date(2025, 1, 1),
+            "coverage_end_date": date(2026, 12, 31),
+            "available_cycles": [2022, 2024, 2026],
             "support_total": Decimal("1200.50"),
             "oppose_total": Decimal("900.25"),
             "support_count": 3,
@@ -532,6 +583,10 @@ def test_ie_independent_expenditure_summary_round_trips_with_ranked_top_spenders
     dumped = summary.model_dump(mode="json")
 
     assert dumped["support_total"] == "1200.50"
+    assert dumped["selected_cycle"] == 2026
+    assert dumped["coverage_start_date"] == "2025-01-01"
+    assert dumped["coverage_end_date"] == "2026-12-31"
+    assert dumped["available_cycles"] == [2022, 2024, 2026]
     assert dumped["oppose_total"] == "900.25"
     assert dumped["support_count"] == 3
     assert dumped["oppose_count"] == 2
@@ -1158,6 +1213,10 @@ def test_committee_fundraising_summary_serializes_decimal_fields_and_round_trips
         {
             "committee_id": committee_id,
             "committee_name": "Civibus Victory Fund",
+            "selected_cycle": 2026,
+            "coverage_start_date": date(2025, 1, 1),
+            "coverage_end_date": date(2026, 12, 31),
+            "available_cycles": [2022, 2024, 2026],
             "total_raised": Decimal("150000.50"),
             "total_spent": Decimal("75000.25"),
             "net": Decimal("75000.25"),
@@ -1171,6 +1230,17 @@ def test_committee_fundraising_summary_serializes_decimal_fields_and_round_trips
             "top_donors": [{"name": "Donor One", "total_amount": Decimal("10000.00"), "transaction_count": 4}],
             "top_vendors": [{"name": "Vendor One", "total_amount": Decimal("5000.00"), "transaction_count": 2}],
             "spend_categories": [{"category": "media", "total_amount": Decimal("7000.00"), "transaction_count": 2}],
+            "receipt_source_composition": [
+                {
+                    "label": "Individual contributions",
+                    "total_amount": Decimal("100000.00"),
+                    "source": "fec_committee_summary",
+                }
+            ],
+            "selected_cycle_coverage_complete": True,
+            "can_render_share": True,
+            "receipt_source_caveats": [],
+            "debts_owed_by_committee": Decimal("2500.00"),
         }
     )
 
@@ -1179,6 +1249,10 @@ def test_committee_fundraising_summary_serializes_decimal_fields_and_round_trips
     # Decimal fields serialize as strings (not floats) to preserve precision
     assert dumped["committee_id"] == str(committee_id)
     assert dumped["committee_name"] == "Civibus Victory Fund"
+    assert dumped["selected_cycle"] == 2026
+    assert dumped["coverage_start_date"] == "2025-01-01"
+    assert dumped["coverage_end_date"] == "2026-12-31"
+    assert dumped["available_cycles"] == [2022, 2024, 2026]
     assert dumped["total_raised"] == "150000.50"
     assert dumped["total_spent"] == "75000.25"
     assert dumped["net"] == "75000.25"
@@ -1192,7 +1266,34 @@ def test_committee_fundraising_summary_serializes_decimal_fields_and_round_trips
     assert dumped["top_donors"][0]["name"] == "Donor One"
     assert dumped["top_vendors"][0]["name"] == "Vendor One"
     assert dumped["spend_categories"][0]["category"] == "media"
+    assert dumped["receipt_source_composition"][0]["source"] == "fec_committee_summary"
+    assert dumped["selected_cycle_coverage_complete"] is True
+    assert dumped["can_render_share"] is True
+    assert dumped["debts_owed_by_committee"] == "2500.00"
     assert CommitteeFundraisingSummary.model_validate(dumped).model_dump(mode="json") == dumped
+
+
+def test_receipt_source_component_round_trips_and_rejects_invalid_receipt_source_values() -> None:
+    component = ReceiptSourceComponent.model_validate(
+        {
+            "label": "Individual contributions",
+            "total_amount": Decimal("125.50"),
+            "source": "fec_committee_summary",
+        }
+    )
+
+    assert component.model_dump(mode="json") == {
+        "label": "Individual contributions",
+        "total_amount": "125.50",
+        "source": "fec_committee_summary",
+    }
+
+    with pytest.raises(ValidationError):
+        ReceiptSourceComponent.model_validate(
+            {"label": "Bad", "total_amount": Decimal("1.001"), "source": "fec_committee_summary"}
+        )
+    with pytest.raises(ValidationError):
+        ReceiptSourceComponent.model_validate({"label": "Bad", "total_amount": Decimal("1.00"), "source": "derived"})
 
 
 def test_committee_fundraising_summary_allows_null_jurisdiction_and_data_through() -> None:
@@ -1200,6 +1301,10 @@ def test_committee_fundraising_summary_allows_null_jurisdiction_and_data_through
         {
             "committee_id": uuid4(),
             "committee_name": "Zero Committee",
+            "selected_cycle": 2026,
+            "coverage_start_date": date(2025, 1, 1),
+            "coverage_end_date": date(2026, 12, 31),
+            "available_cycles": [2022, 2024, 2026],
             "total_raised": Decimal("0.00"),
             "total_spent": Decimal("0.00"),
             "net": Decimal("0.00"),
@@ -1235,6 +1340,10 @@ def test_candidate_fundraising_summary_serializes_decimals_and_nested_committees
         {
             "candidate_id": candidate_id,
             "candidate_name": "Candidate Summary Name",
+            "selected_cycle": 2026,
+            "coverage_start_date": date(2025, 1, 1),
+            "coverage_end_date": date(2026, 12, 31),
+            "available_cycles": [2022, 2024, 2026],
             "total_raised": Decimal("1500.50"),
             "total_spent": Decimal("300.25"),
             "net": Decimal("1200.25"),
@@ -1243,6 +1352,10 @@ def test_candidate_fundraising_summary_serializes_decimals_and_nested_committees
                 {
                     "committee_id": committee_id,
                     "committee_name": "Committee Summary Name",
+                    "selected_cycle": 2026,
+                    "coverage_start_date": date(2025, 1, 1),
+                    "coverage_end_date": date(2026, 12, 31),
+                    "available_cycles": [2022, 2024, 2026],
                     "total_raised": Decimal("1500.50"),
                     "total_spent": Decimal("300.25"),
                     "net": Decimal("1200.25"),
@@ -1252,6 +1365,17 @@ def test_candidate_fundraising_summary_serializes_decimals_and_nested_committees
                 }
             ],
             "summary_source": "derived",
+            "receipt_source_composition": [
+                {
+                    "label": "Other receipts",
+                    "total_amount": Decimal("25.00"),
+                    "source": "fec_committee_summary",
+                }
+            ],
+            "selected_cycle_coverage_complete": True,
+            "can_render_share": True,
+            "receipt_source_caveats": [],
+            "debts_owed_by_committee": Decimal("100.00"),
         }
     )
 
@@ -1259,6 +1383,10 @@ def test_candidate_fundraising_summary_serializes_decimals_and_nested_committees
 
     assert dumped["candidate_id"] == str(candidate_id)
     assert dumped["candidate_name"] == "Candidate Summary Name"
+    assert dumped["selected_cycle"] == 2026
+    assert dumped["coverage_start_date"] == "2025-01-01"
+    assert dumped["coverage_end_date"] == "2026-12-31"
+    assert dumped["available_cycles"] == [2022, 2024, 2026]
     assert dumped["total_raised"] == "1500.50"
     assert dumped["total_spent"] == "300.25"
     assert dumped["net"] == "1200.25"
@@ -1273,6 +1401,10 @@ def test_candidate_fundraising_summary_serializes_decimals_and_nested_committees
     assert dumped["committees"][0]["data_through"] == "2026-03-20T12:00:00Z"
     assert dumped["cash_on_hand"] is None
     assert dumped["summary_source"] == "derived"
+    assert dumped["receipt_source_composition"][0]["label"] == "Other receipts"
+    assert dumped["selected_cycle_coverage_complete"] is True
+    assert dumped["can_render_share"] is True
+    assert dumped["debts_owed_by_committee"] == "100.00"
     assert CandidateFundraisingSummary.model_validate(dumped).model_dump(mode="json") == dumped
 
 
@@ -1283,6 +1415,10 @@ def test_candidate_fundraising_summary_serializes_cash_on_hand_and_summary_sourc
         {
             "candidate_id": candidate_id,
             "candidate_name": "Weball Candidate",
+            "selected_cycle": 2026,
+            "coverage_start_date": date(2025, 1, 1),
+            "coverage_end_date": date(2026, 12, 31),
+            "available_cycles": [2022, 2024, 2026],
             "total_raised": Decimal("9000.00"),
             "total_spent": Decimal("3500.00"),
             "net": Decimal("5500.00"),
@@ -1304,6 +1440,10 @@ def test_candidate_fundraising_summary_serializes_cash_on_hand_and_summary_sourc
         {
             "candidate_id": candidate_id,
             "candidate_name": "Derived Candidate",
+            "selected_cycle": 2026,
+            "coverage_start_date": date(2025, 1, 1),
+            "coverage_end_date": date(2026, 12, 31),
+            "available_cycles": [2022, 2024, 2026],
             "total_raised": Decimal("0.00"),
             "total_spent": Decimal("0.00"),
             "net": Decimal("0.00"),
@@ -1578,6 +1718,10 @@ def test_committee_fundraising_summary_round_trips_stage5_official_fields() -> N
         {
             "committee_id": committee_id,
             "committee_name": "Official Totals Committee",
+            "selected_cycle": 2026,
+            "coverage_start_date": date(2025, 1, 1),
+            "coverage_end_date": date(2026, 12, 31),
+            "available_cycles": [2022, 2024, 2026],
             "total_raised": Decimal("10000.00"),
             "total_spent": Decimal("4000.00"),
             "net": Decimal("6000.00"),
@@ -1688,6 +1832,10 @@ def test_candidate_fundraising_summary_round_trips_itemized_transaction_count() 
         {
             "candidate_id": uuid4(),
             "candidate_name": "Weball Candidate",
+            "selected_cycle": 2026,
+            "coverage_start_date": date(2025, 1, 1),
+            "coverage_end_date": date(2026, 12, 31),
+            "available_cycles": [2022, 2024, 2026],
             "total_raised": Decimal("9000.00"),
             "total_spent": Decimal("3500.00"),
             "net": Decimal("5500.00"),
@@ -1708,6 +1856,10 @@ def test_independent_expenditure_summary_round_trips_excluded_outlier_count() ->
     summary = IndependentExpenditureSummary.model_validate(
         {
             "candidate_id": str(uuid4()),
+            "selected_cycle": 2026,
+            "coverage_start_date": date(2025, 1, 1),
+            "coverage_end_date": date(2026, 12, 31),
+            "available_cycles": [2022, 2024, 2026],
             "support_total": Decimal("250.00"),
             "oppose_total": Decimal("0.00"),
             "support_count": 1,
@@ -1724,6 +1876,10 @@ def test_independent_expenditure_summary_round_trips_excluded_outlier_count() ->
     without_count = IndependentExpenditureSummary.model_validate(
         {
             "candidate_id": str(uuid4()),
+            "selected_cycle": 2026,
+            "coverage_start_date": date(2025, 1, 1),
+            "coverage_end_date": date(2026, 12, 31),
+            "available_cycles": [2022, 2024, 2026],
             "support_total": Decimal("0.00"),
             "oppose_total": Decimal("0.00"),
             "support_count": 0,

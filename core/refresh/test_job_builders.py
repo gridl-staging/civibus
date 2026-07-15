@@ -258,10 +258,12 @@ _EXPECTED_FEDERAL_JOB_KEYS = (
     "federal-fec-schedule-a",
     "federal-fec-committee-summary",
     "federal-congress-spine",
+    "federal-fec-races",
     "federal-fec-schedule-b",
     "federal-fec-schedule-e",
     "federal-enrichment",
     "federal-irs-527",
+    "federal-geometry-probe",
 )
 
 
@@ -332,6 +334,92 @@ class TestFederalPrefixFilterContract:
         assert actual_keys == _EXPECTED_FEDERAL_JOB_KEYS
         assert actual_keys == self._expected_federal_order()
         assert not any(job.key.startswith(("state-", "city-", "civic-", "civics-")) for job in jobs)
+
+
+@pytest.mark.unit
+class TestFederalGeometryProbeJobContract:
+    def _find_geometry_probe_job(self) -> RefreshJob:
+        jobs = build_refresh_plan(job_key_prefixes=("federal-geometry-probe",))
+        assert len(jobs) == 1
+        return jobs[0]
+
+    def test_job_metadata(self) -> None:
+        job = self._find_geometry_probe_job()
+
+        assert job.key == "federal-geometry-probe"
+        assert job.domain == "civics"
+        assert job.jurisdiction == "federal/geometry"
+        assert job.cadence == "weekly"
+        assert job.data_source_names == ("Census TIGER congressional district listing",)
+
+    def test_run_callable_invokes_probe_only(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        connection = MagicMock()
+        probe_result = object()
+        get_connection = MagicMock(return_value=connection)
+        probe = MagicMock(return_value=probe_result)
+        monkeypatch.setattr(job_builders, "get_connection", get_connection)
+        monkeypatch.setattr(job_builders, "probe_tiger_congressional_district_listing", probe)
+
+        result = self._find_geometry_probe_job().run_callable()
+
+        assert result is probe_result
+        get_connection.assert_called_once_with()
+        probe.assert_called_once_with(connection, year=2024)
+        connection.commit.assert_called_once_with()
+        connection.close.assert_called_once_with()
+
+    def test_probe_does_not_precede_independent_federal_prerequisites(self) -> None:
+        keys = tuple(job.key for job in build_refresh_plan(scope="federal"))
+
+        assert keys.index("federal-geometry-probe") > keys.index("federal-fec-masters")
+        assert keys.index("federal-geometry-probe") > keys.index("federal-congress-spine")
+
+
+@pytest.mark.unit
+class TestFederalFecRacesJobContract:
+    """Stage 2 contract: the federal races loader is wired as a single federal job."""
+
+    def _find_races_job(self) -> RefreshJob:
+        jobs = build_refresh_plan(job_key_prefixes=("federal-fec-races",))
+        assert len(jobs) == 1, f"Expected exactly 1 federal-fec-races job, found {[j.key for j in jobs]}"
+        return jobs[0]
+
+    def test_job_metadata(self) -> None:
+        from domains.civics.loaders.federal_fec_races import FEDERAL_FEC_RACES_DATA_SOURCE_NAME
+
+        job = self._find_races_job()
+        assert job.key == "federal-fec-races"
+        assert job.domain == "civics"
+        assert job.jurisdiction == "federal/fec"
+        assert job.cadence == "weekly"
+        assert job.data_source_names == (FEDERAL_FEC_RACES_DATA_SOURCE_NAME,)
+        assert job.refresh_history_key == "federal-fec-races"
+
+    def test_run_callable_is_zero_arg(self) -> None:
+        job = self._find_races_job()
+        assert callable(job.run_callable)
+        required_params = [
+            parameter
+            for parameter in inspect.signature(job.run_callable).parameters.values()
+            if parameter.default is inspect.Parameter.empty
+            and parameter.kind not in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD)
+        ]
+        assert required_params == []
+
+    def test_federal_scope_places_races_after_congress_spine(self) -> None:
+        keys = [job.key for job in build_refresh_plan(scope="federal")]
+        assert "federal-fec-races" in keys
+        # Races consume cn candidate data produced by earlier federal jobs, so the
+        # job is ordered immediately after the congress spine.
+        assert keys.index("federal-fec-races") == keys.index("federal-congress-spine") + 1
+
+    def test_federal_scope_excludes_other_civics_jobs(self) -> None:
+        jobs = build_refresh_plan(scope="federal")
+        keys = [job.key for job in jobs]
+        assert "federal-fec-races" in keys
+        # The civics-domain races job rides the federal scope by key prefix, while
+        # every other civics job (rosters, NC candidate listing) stays excluded.
+        assert not any(key.startswith(("civic-", "civics-", "state-", "city-")) for key in keys)
 
 
 @pytest.mark.unit

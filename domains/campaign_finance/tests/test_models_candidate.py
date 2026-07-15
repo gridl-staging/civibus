@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from decimal import Decimal
 from uuid import UUID
 
 import pytest
@@ -77,3 +78,30 @@ def test_candidate_round_trip_dump_and_validate():
     dumped = candidate.model_dump(mode="json")
     restored = Candidate.model_validate(dumped)
     assert restored == candidate
+
+
+def test_candidate_self_funding_fields_preserve_cent_valued_decimals():
+    candidate = Candidate.model_validate(
+        build_candidate_payload(
+            candidate_contrib=Decimal("1234.56"),
+            candidate_loans=Decimal("2345.67"),
+            candidate_loan_repay=Decimal("3456.78"),
+        )
+    )
+
+    assert candidate.candidate_contrib == Decimal("1234.56")
+    assert candidate.candidate_loans == Decimal("2345.67")
+    assert candidate.candidate_loan_repay == Decimal("3456.78")
+
+
+def test_candidate_self_funding_fields_default_to_none():
+    candidate = Candidate.model_validate(build_candidate_payload())
+
+    assert candidate.candidate_contrib is None
+    assert candidate.candidate_loans is None
+    assert candidate.candidate_loan_repay is None
+
+
+def test_candidate_rejects_unknown_fields():
+    with pytest.raises(ValidationError):
+        Candidate.model_validate(build_candidate_payload(net_self_funding=Decimal("1.00")))

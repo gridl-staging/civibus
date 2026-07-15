@@ -392,25 +392,51 @@ def test_transaction_committee_date_index_contract():
 
 
 def test_candidate_official_summary_columns_are_nullable_money_and_date():
-    expected_columns = {
-        "total_receipts": "numeric|YES",
-        "total_disbursements": "numeric|YES",
-        "cash_on_hand": "numeric|YES",
-        "summary_coverage_end_date": "date|YES",
-    }
+    expected_money_columns = (
+        "total_receipts",
+        "total_disbursements",
+        "cash_on_hand",
+        "candidate_contrib",
+        "candidate_loans",
+        "candidate_loan_repay",
+    )
 
-    for column_name, expected in expected_columns.items():
+    for column_name in expected_money_columns:
         rows = _run_psql_command(
             TEST_DATABASE,
             f"""
-            SELECT data_type || '|' || is_nullable
+            SELECT data_type || '|' || is_nullable || '|' || numeric_precision || '|' || numeric_scale
             FROM information_schema.columns
             WHERE table_schema = 'cf'
               AND table_name = 'candidate'
               AND column_name = '{column_name}';
             """,
         )
-        assert rows == [expected]
+        assert rows == ["numeric|YES|14|2"]
+
+    rows = _run_psql_command(
+        TEST_DATABASE,
+        """
+        SELECT data_type || '|' || is_nullable
+        FROM information_schema.columns
+        WHERE table_schema = 'cf'
+          AND table_name = 'candidate'
+          AND column_name = 'summary_coverage_end_date';
+        """,
+    )
+    assert rows == ["date|YES"]
+
+    rows = _run_psql_command(
+        TEST_DATABASE,
+        """
+        SELECT count(*)::text
+        FROM information_schema.columns
+        WHERE table_schema = 'cf'
+          AND table_name = 'candidate'
+          AND column_name = 'net_self_funding';
+        """,
+    )
+    assert rows == ["0"]
 
 
 def test_committee_summary_storage_contract():

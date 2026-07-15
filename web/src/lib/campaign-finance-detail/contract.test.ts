@@ -5,6 +5,8 @@ import {
   COMMITTEE_TRANSACTIONS_LIMIT,
   buildCandidateDetailPath,
   buildCandidateHref,
+  buildCandidateIndependentExpendituresPath,
+  buildCandidateIndependentExpendituresSummaryPath,
   buildCandidateListPath,
   buildCandidatesPagePath,
   buildCandidateSummaryPath,
@@ -19,6 +21,7 @@ import {
   buildCommitteesPagePath,
   buildCommitteeTransactionsPath,
   buildCommitteesBySlugPath,
+  buildFilingDetailPath,
   buildPersonContributionInsightsPath,
   buildPersonTopDonorsPath,
   buildPersonTopEmployersPath,
@@ -31,12 +34,19 @@ import {
   type CommitteeCycleSummary,
   type CommitteeFundraisingSummary,
   type CommitteeIndependentExpenditureActivity,
+  type CandidateFundraisingSummary,
   type IndependentExpenditureSummary,
   type PersonContributionInsights
 } from "./contract";
 
 const COMMITTEE_ID = "33333333-3333-4333-8333-333333333333";
 const CANDIDATE_ID = "44444444-4444-4444-8444-444444444444";
+const SELECTED_CYCLE_FIELDS = {
+  selected_cycle: 2026,
+  coverage_start_date: "2025-01-01",
+  coverage_end_date: "2026-12-31",
+  available_cycles: [2022, 2024, 2026]
+};
 
 function expectType<T extends true>(): void {}
 
@@ -58,6 +68,35 @@ describe("campaign-finance detail contract", () => {
 
   it("builds backend-owned candidate summary path", () => {
     expect(buildCandidateSummaryPath(CANDIDATE_ID)).toBe(`/v1/candidates/${CANDIDATE_ID}/summary`);
+  });
+
+  it("serializes selected cycle on backend-owned finance paths", () => {
+    const personId = "11111111-1111-4111-8111-111111111111";
+
+    expect(buildPersonContributionInsightsPath(personId, { cycle: 2024 })).toBe(
+      `/v1/person/${personId}/contribution-insights?cycle=2024`
+    );
+    expect(buildPersonTopDonorsPath(personId, { cycle: 2024 })).toBe(
+      `/v1/person/${personId}/top-donors?cycle=2024`
+    );
+    expect(buildPersonTopEmployersPath(personId, { cycle: 2024 })).toBe(
+      `/v1/person/${personId}/top-employers?cycle=2024`
+    );
+    expect(buildCandidateSummaryPath(CANDIDATE_ID, { cycle: 2024 })).toBe(
+      `/v1/candidates/${CANDIDATE_ID}/summary?cycle=2024`
+    );
+    expect(buildCommitteeSummaryPath(COMMITTEE_ID, { cycle: 2024 })).toBe(
+      `/v1/committees/${COMMITTEE_ID}/summary?cycle=2024`
+    );
+    expect(buildCandidateIndependentExpendituresPath(CANDIDATE_ID, { cycle: 2024 })).toBe(
+      `/v1/candidates/${CANDIDATE_ID}/independent-expenditures?cycle=2024`
+    );
+    expect(buildCandidateIndependentExpendituresSummaryPath(CANDIDATE_ID, { cycle: 2024 })).toBe(
+      `/v1/candidates/${CANDIDATE_ID}/independent-expenditures/summary?cycle=2024`
+    );
+    expect(buildCommitteeTransactionsPath(COMMITTEE_ID, { cycle: 2024 })).toBe(
+      `/v1/transactions?committee_id=${COMMITTEE_ID}&limit=${COMMITTEE_TRANSACTIONS_LIMIT}&cycle=2024`
+    );
   });
 
   it("builds backend-owned person contribution insights path", () => {
@@ -86,7 +125,9 @@ describe("campaign-finance detail contract", () => {
       has_data: true,
       metadata: {
         coverage_start_date: "2022-01-01",
-        coverage_end_date: null,
+        coverage_end_date: "2026-12-31",
+        selected_cycle: 2026,
+        available_cycles: [2022, 2024, 2026],
         cycles_included: [2022, 2024, 2026],
         committee_count: 2,
         approximate_geography: true,
@@ -96,9 +137,9 @@ describe("campaign-finance detail contract", () => {
       monthly_totals: [{ month: "2026-01", total_amount: "1234.56", transaction_count: 7 }],
       itemized_size_buckets: [
         {
-          label: "$1-$199",
-          min_amount: "1.00",
-          max_amount: "199.99",
+          label: "$200 and under",
+          min_amount: "0.01",
+          max_amount: "200.00",
           total_amount: "500.00",
           transaction_count: 4
         }
@@ -141,7 +182,12 @@ describe("campaign-finance detail contract", () => {
           unknown_district_amount: "0.00",
           share: "0.3333",
           available: true
-        }
+        },
+        geography_mode: "district",
+        classified_amount: "750.00",
+        classified_transaction_count: 7,
+        unknown_amount: "0.00",
+        unknown_transaction_count: 0
       },
       small_dollar_share: {
         small_dollar_amount: "600.00",
@@ -152,8 +198,8 @@ describe("campaign-finance detail contract", () => {
     };
 
     expect(insights.monthly_totals[0].total_amount).toBe("1234.56");
-    expect(insights.itemized_size_buckets[0].min_amount).toBe("1.00");
-    expect(insights.itemized_size_buckets[0].max_amount).toBe("199.99");
+    expect(insights.itemized_size_buckets[0].min_amount).toBe("0.01");
+    expect(insights.itemized_size_buckets[0].max_amount).toBe("200.00");
     expect(insights.dollars_by_size[0].total_amount).toBe("100.00");
     expect(insights.cycle_totals[0].source).toBe("mixed_sources");
     expect(insights.career_totals.total_individual_contribution_amount).toBe("2000.00");
@@ -174,7 +220,15 @@ describe("campaign-finance detail contract", () => {
       itemized_transaction_count: 0,
       committees: [],
       cash_on_hand: "5500.00",
-      summary_source: "fec_weball"
+      summary_source: "fec_weball",
+      selected_cycle: 2026,
+      coverage_start_date: "2025-01-01",
+      coverage_end_date: "2026-12-31",
+      available_cycles: [2022, 2024, 2026],
+      receipt_source_composition: [],
+      selected_cycle_coverage_complete: false,
+      can_render_share: false,
+      receipt_source_caveats: []
     } satisfies import("./contract").CandidateFundraisingSummary;
 
     const derivedSummary = {
@@ -187,13 +241,89 @@ describe("campaign-finance detail contract", () => {
       itemized_transaction_count: 0,
       committees: [],
       cash_on_hand: null,
-      summary_source: "derived"
+      summary_source: "derived",
+      selected_cycle: 2026,
+      coverage_start_date: "2025-01-01",
+      coverage_end_date: "2026-12-31",
+      available_cycles: [2022, 2024, 2026],
+      receipt_source_composition: [],
+      selected_cycle_coverage_complete: false,
+      can_render_share: false,
+      receipt_source_caveats: []
     } satisfies import("./contract").CandidateFundraisingSummary;
 
     expect(weballSummary.cash_on_hand).toBe("5500.00");
     expect(weballSummary.summary_source).toBe("fec_weball");
     expect(derivedSummary.cash_on_hand).toBeNull();
     expect(derivedSummary.summary_source).toBe("derived");
+  });
+
+  it("summary contracts preserve selected-cycle metadata from the backend", () => {
+    const candidateSummary: CandidateFundraisingSummary = {
+      candidate_id: CANDIDATE_ID,
+      candidate_name: "Cycle Candidate",
+      total_raised: "100.00",
+      total_spent: "20.00",
+      net: "80.00",
+      transaction_count: 1,
+      committees: [],
+      cash_on_hand: "80.00",
+      summary_source: "fec_weball",
+      itemized_transaction_count: 1,
+      selected_cycle: 2026,
+      coverage_start_date: "2025-01-01",
+      coverage_end_date: "2026-12-31",
+      available_cycles: [2022, 2024, 2026],
+      receipt_source_composition: [],
+      selected_cycle_coverage_complete: false,
+      can_render_share: false,
+      receipt_source_caveats: []
+    };
+    const committeeSummary: CommitteeFundraisingSummary = {
+      committee_id: COMMITTEE_ID,
+      committee_name: "Cycle Committee",
+      total_raised: "100.00",
+      total_spent: "20.00",
+      net: "80.00",
+      transaction_count: 1,
+      jurisdiction: "federal/fec",
+      data_through: null,
+      cash_receipts_total: "100.00",
+      in_kind_receipts_total: "0.00",
+      loan_receipts_total: "0.00",
+      contribution_receipts_total: "100.00",
+      top_donors: [],
+      top_vendors: [],
+      spend_categories: [],
+      itemized_transaction_count: 1,
+      cycle_summaries: [],
+      summary_source: "derived",
+      selected_cycle: 2026,
+      coverage_start_date: "2025-01-01",
+      coverage_end_date: "2026-12-31",
+      available_cycles: [2022, 2024, 2026],
+      receipt_source_composition: [],
+      selected_cycle_coverage_complete: false,
+      can_render_share: false,
+      receipt_source_caveats: []
+    };
+    const ieSummary: IndependentExpenditureSummary = {
+      candidate_id: CANDIDATE_ID,
+      support_total: "10.00",
+      oppose_total: "0.00",
+      support_count: 1,
+      oppose_count: 0,
+      top_spenders: [],
+      excluded_outlier_count: 0,
+      selected_cycle: 2026,
+      coverage_start_date: "2025-01-01",
+      coverage_end_date: "2026-12-31",
+      available_cycles: [2022, 2024, 2026]
+    };
+
+    expect(candidateSummary.selected_cycle).toBe(2026);
+    expect(committeeSummary.coverage_start_date).toBe("2025-01-01");
+    expect(ieSummary.available_cycles).toEqual([2022, 2024, 2026]);
   });
 
   it("builds backend-owned county campaign-finance summary path", () => {
@@ -239,6 +369,9 @@ describe("campaign-finance detail contract", () => {
     );
     expect(buildCommitteeFilingBreakdownPath(maliciousId)).toBe(
       "/v1/committees/..%2Fsearch%3Fentity_type%3Dcommittee/filings/summary"
+    );
+    expect(buildFilingDetailPath(maliciousId)).toBe(
+      "/v1/filings/..%2Fsearch%3Fentity_type%3Dcommittee"
     );
     expect(buildCandidateSummaryPath(maliciousId)).toBe(
       "/v1/candidates/..%2Fsearch%3Fentity_type%3Dcommittee/summary"
@@ -534,6 +667,22 @@ describe("buildCandidateHref and buildCommitteeHref", () => {
 
 describe("Stage 5 contract fields", () => {
   it("Stage 5 API-owned fields stay required in the TypeScript contract", () => {
+    expectType<{} extends Pick<PersonContributionInsights["metadata"], "selected_cycle"> ? false : true>();
+    expectType<
+      {} extends Pick<PersonContributionInsights["metadata"], "coverage_start_date"> ? false : true
+    >();
+    expectType<
+      {} extends Pick<PersonContributionInsights["metadata"], "coverage_end_date"> ? false : true
+    >();
+    expectType<
+      {} extends Pick<PersonContributionInsights["metadata"], "available_cycles"> ? false : true
+    >();
+    expectType<{} extends Pick<CommitteeFundraisingSummary, "selected_cycle"> ? false : true>();
+    expectType<{} extends Pick<CommitteeFundraisingSummary, "available_cycles"> ? false : true>();
+    expectType<{} extends Pick<CandidateFundraisingSummary, "selected_cycle"> ? false : true>();
+    expectType<{} extends Pick<CandidateFundraisingSummary, "available_cycles"> ? false : true>();
+    expectType<{} extends Pick<IndependentExpenditureSummary, "selected_cycle"> ? false : true>();
+    expectType<{} extends Pick<IndependentExpenditureSummary, "available_cycles"> ? false : true>();
     expectType<{} extends Pick<CommitteeDetailResponse, "linked_candidates"> ? false : true>();
     expectType<
       {} extends Pick<CommitteeFundraisingSummary, "itemized_transaction_count"> ? false : true
@@ -595,6 +744,7 @@ describe("Stage 5 contract fields", () => {
 
   it("CommitteeFundraisingSummary includes itemized_transaction_count, cycle_summaries, summary_source", () => {
     const officialSummary: CommitteeFundraisingSummary = {
+      ...SELECTED_CYCLE_FIELDS,
       committee_id: COMMITTEE_ID,
       committee_name: "Official PAC",
       total_raised: "500000.00",
@@ -629,13 +779,18 @@ describe("Stage 5 contract fields", () => {
           coverage_end_date: null
         }
       ],
-      summary_source: "fec_committee_summary"
+      summary_source: "fec_committee_summary",
+      receipt_source_composition: [],
+      selected_cycle_coverage_complete: false,
+      can_render_share: false,
+      receipt_source_caveats: []
     };
     expect(officialSummary.itemized_transaction_count).toBe(120);
     expect(officialSummary.cycle_summaries).toHaveLength(2);
     expect(officialSummary.summary_source).toBe("fec_committee_summary");
 
     const derivedSummary: CommitteeFundraisingSummary = {
+      ...SELECTED_CYCLE_FIELDS,
       committee_id: COMMITTEE_ID,
       committee_name: "Derived PAC",
       total_raised: "1000.00",
@@ -653,7 +808,11 @@ describe("Stage 5 contract fields", () => {
       spend_categories: null,
       itemized_transaction_count: 5,
       cycle_summaries: [],
-      summary_source: "derived"
+      summary_source: "derived",
+      receipt_source_composition: [],
+      selected_cycle_coverage_complete: false,
+      can_render_share: false,
+      receipt_source_caveats: []
     };
     expect(derivedSummary.summary_source).toBe("derived");
     expect(derivedSummary.cycle_summaries).toHaveLength(0);
@@ -675,6 +834,7 @@ describe("Stage 5 contract fields", () => {
 
   it("CandidateFundraisingSummary includes itemized_transaction_count", () => {
     const summary = {
+      ...SELECTED_CYCLE_FIELDS,
       candidate_id: CANDIDATE_ID,
       candidate_name: "Stage 5 Candidate",
       total_raised: "50000.00",
@@ -684,7 +844,11 @@ describe("Stage 5 contract fields", () => {
       committees: [],
       cash_on_hand: "25000.00",
       summary_source: "fec_weball",
-      itemized_transaction_count: 42
+      itemized_transaction_count: 42,
+      receipt_source_composition: [],
+      selected_cycle_coverage_complete: false,
+      can_render_share: false,
+      receipt_source_caveats: []
     } satisfies import("./contract").CandidateFundraisingSummary;
     expect(summary.itemized_transaction_count).toBe(42);
     expect(summary.transaction_count).toBe(summary.itemized_transaction_count);
@@ -692,6 +856,7 @@ describe("Stage 5 contract fields", () => {
 
   it("IndependentExpenditureSummary includes excluded_outlier_count", () => {
     const summary: IndependentExpenditureSummary = {
+      ...SELECTED_CYCLE_FIELDS,
       candidate_id: CANDIDATE_ID,
       support_total: "500000.00",
       oppose_total: "200000.00",

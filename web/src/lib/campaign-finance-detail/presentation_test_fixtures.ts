@@ -5,6 +5,18 @@ export const CANDIDATE_ID = "44444444-4444-4444-8444-444444444444";
 export const PERSON_ID = "11111111-1111-4111-8111-111111111111";
 export const ORG_ID = "22222222-2222-4222-8222-222222222222";
 export const FILING_ID = "66666666-6666-4666-8666-666666666666";
+export const DEFAULT_SELECTED_CYCLE_FIELDS = {
+  selected_cycle: 2026,
+  coverage_start_date: "2025-01-01",
+  coverage_end_date: "2026-12-31",
+  available_cycles: [2022, 2024, 2026]
+};
+export const DEFAULT_RECEIPT_SOURCE_FIELDS = {
+  receipt_source_composition: [],
+  selected_cycle_coverage_complete: false,
+  can_render_share: false,
+  receipt_source_caveats: []
+};
 
 type DetailSource = {
   domain: string;
@@ -35,6 +47,8 @@ export const DEFAULT_COMMITTEE_DETAIL = {
 };
 
 export const DEFAULT_SUMMARY = {
+  ...DEFAULT_SELECTED_CYCLE_FIELDS,
+  ...DEFAULT_RECEIPT_SOURCE_FIELDS,
   committee_id: COMMITTEE_ID,
   committee_name: "Committee One",
   total_raised: "125.00",
@@ -129,6 +143,8 @@ export const DEFAULT_CANDIDATE_DETAIL = {
 };
 
 export const DEFAULT_CANDIDATE_SUMMARY = {
+  ...DEFAULT_SELECTED_CYCLE_FIELDS,
+  ...DEFAULT_RECEIPT_SOURCE_FIELDS,
   candidate_id: CANDIDATE_ID,
   candidate_name: "Candidate One",
   total_raised: "0.00",

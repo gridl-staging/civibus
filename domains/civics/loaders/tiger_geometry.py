@@ -9,6 +9,7 @@ import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import urlopen
 from uuid import UUID
@@ -18,7 +19,11 @@ import psycopg
 import shapefile
 
 from core.db import get_connection
-from domains.civics.constants import LAUNCH_SCOPE_STATE_FIPS
+from domains.civics.constants import (
+    CENSUS_STATE_FIPS_TO_USPS_MAP,
+    LAUNCH_SCOPE_STATE_FIPS,
+    congressional_boundary_year_for_congress,
+)
 from domains.civics.ingest import upsert_electoral_division
 from domains.civics.types import ElectoralDivision
 
@@ -52,6 +57,9 @@ _CD_FILENAME_PATTERN = re.compile(
     re.IGNORECASE,
 )
 _CD_FIELD_PATTERN = re.compile(r"CD\d{3}FP", re.IGNORECASE)
+_TRANSIENT_HTTP_STATUS_CODES = frozenset({429, 500, 502, 503, 504, 520, 524})
+_DOWNLOAD_ATTEMPTS = 3
+_DOWNLOAD_TIMEOUT_SECONDS = 60
 
 
 @dataclass(frozen=True)
@@ -260,26 +268,84 @@ def _discover_congressional_district_zip_name(listing_html: str, year: int, stat
         raise ValueError(f"No congressional district zip found in listing for TIGER {year}")
 
     state_matches = [candidate for candidate in matches if candidate[0] == state_fips]
-    if state_matches:
-        state_matches.sort(key=lambda item: item[1])
-        return state_matches[-1][2]
-
     us_matches = [candidate for candidate in matches if candidate[0] == "us"]
-    if us_matches:
-        us_matches.sort(key=lambda item: item[1])
-        return us_matches[-1][2]
+    latest_state_match = max(state_matches, key=lambda item: item[1]) if state_matches else None
+    latest_us_match = max(us_matches, key=lambda item: item[1]) if us_matches else None
+
+    if latest_state_match is not None and latest_us_match is not None:
+        if latest_state_match[1] >= latest_us_match[1]:
+            return latest_state_match[2]
+        return latest_us_match[2]
+    if latest_state_match is not None:
+        return latest_state_match[2]
+    if latest_us_match is not None:
+        return latest_us_match[2]
 
     raise ValueError(f"No congressional district zip found for state FIPS {state_fips} in TIGER {year} listing")
 
 
+def _discover_national_congressional_district_zip_names(listing_html: str, year: int) -> list[str]:
+    latest_by_scope: dict[str, tuple[int, str]] = {}
+    for match in _CD_FILENAME_PATTERN.finditer(listing_html):
+        candidate_year = int(match.group("year"))
+        if candidate_year != year:
+            continue
+        scope = match.group("scope").lower()
+        congress_text = match.group("congress")
+        congress = int(congress_text)
+        filename = f"tl_{candidate_year}_{scope}_cd{congress_text}.zip"
+        current = latest_by_scope.get(scope)
+        if current is None or congress > current[0]:
+            latest_by_scope[scope] = (congress, filename)
+
+    us_match = latest_by_scope.get("us")
+    if us_match is not None:
+        return [us_match[1]]
+
+    state_scoped_inventory = {scope: item for scope, item in latest_by_scope.items() if scope.isdigit()}
+    if state_scoped_inventory:
+        congress_numbers = {item[0] for item in state_scoped_inventory.values()}
+        if len(congress_numbers) != 1:
+            raise ValueError(f"State-scoped congressional district inventory mixes Congress numbers in TIGER {year}")
+        return [item[1] for scope, item in sorted(state_scoped_inventory.items())]
+    raise ValueError(f"No congressional district zip found in listing for TIGER {year}")
+
+
+def _congress_number_from_cd_zip_url(zip_url: str) -> int:
+    filename = Path(zip_url).name
+    match = _CD_FILENAME_PATTERN.fullmatch(filename)
+    if match is None:
+        raise ValueError(f"Could not determine Congress number from congressional district zip URL: {zip_url}")
+    return int(match.group("congress"))
+
+
+def _boundary_year_for_congressional_zip_url(zip_url: str) -> int:
+    congress_number = _congress_number_from_cd_zip_url(zip_url)
+    return congressional_boundary_year_for_congress(congress_number)
+
+
+def _download_url(url: str) -> bytes:
+    last_error: BaseException | None = None
+    for _attempt in range(_DOWNLOAD_ATTEMPTS):
+        try:
+            with urlopen(url, timeout=_DOWNLOAD_TIMEOUT_SECONDS) as response:  # noqa: S310
+                return response.read()
+        except HTTPError as error:
+            if error.code not in _TRANSIENT_HTTP_STATUS_CODES:
+                raise
+            last_error = error
+        except (ConnectionResetError, TimeoutError, URLError) as error:
+            last_error = error
+    assert last_error is not None
+    raise last_error
+
+
 def _download_text(url: str) -> str:
-    with urlopen(url) as response:  # noqa: S310
-        return response.read().decode("utf-8")
+    return _download_url(url).decode("utf-8")
 
 
 def _download_bytes(url: str) -> bytes:
-    with urlopen(url) as response:  # noqa: S310
-        return response.read()
+    return _download_url(url)
 
 
 def _nc_contract_artifact_for_level(level: str) -> _NcGeometryContractArtifact:
@@ -318,6 +384,14 @@ def _zip_url_for_level(*, year: int, level: str, state_fips: str) -> str:
     listing_html = _download_text(listing_url)
     zip_name = _discover_congressional_district_zip_name(listing_html, year=year, state_fips=state_fips)
     return f"{listing_url}{zip_name}"
+
+
+def _zip_urls_for_national_congressional_districts(*, year: int) -> list[str]:
+    base_url = _TIGER_BASE_URL.format(year=year)
+    listing_url = f"{base_url}/CD/"
+    listing_html = _download_text(listing_url)
+    zip_names = _discover_national_congressional_district_zip_names(listing_html, year=year)
+    return [f"{listing_url}{zip_name}" for zip_name in zip_names]
 
 
 def _run_ogr2ogr_geojson_export(
@@ -376,6 +450,22 @@ def _iter_geojson_features_from_shapefile_zip(zip_path: Path) -> list[dict[str, 
         source_srs=None,
         target_srs="EPSG:4326",
     )
+
+
+def _download_shapefile_zip_features(
+    zip_url: str,
+    *,
+    source_srs: str | None,
+) -> list[dict[str, object]]:
+    zip_payload = _download_bytes(zip_url)
+    with tempfile.NamedTemporaryFile(prefix="civics_tiger_", suffix=".zip", delete=True) as temp_zip:
+        temp_zip.write(zip_payload)
+        temp_zip.flush()
+        return _iter_geojson_features_from_shapefile_zip_with_srs(
+            Path(temp_zip.name),
+            source_srs=source_srs,
+            target_srs="EPSG:4326",
+        )
 
 
 def _iter_geojson_features_from_arcgis_featureserver(
@@ -445,6 +535,19 @@ def _district_number_from_properties(properties: dict[str, object]) -> str:
         if _CD_FIELD_PATTERN.fullmatch(key) and isinstance(value, str) and value.strip():
             return value.strip().zfill(2)
     raise ValueError("Missing district number field (expected DISTRICT or CD###FP)")
+
+
+def _state_code_from_properties(properties: dict[str, object]) -> str:
+    stusps = properties.get("STUSPS")
+    if isinstance(stusps, str) and stusps.strip():
+        return stusps.strip().upper()
+
+    statefp = properties.get("STATEFP")
+    if isinstance(statefp, str) and statefp.strip():
+        state_code = CENSUS_STATE_FIPS_TO_USPS_MAP.get(statefp.strip().zfill(2))
+        if state_code is not None:
+            return state_code
+    raise ValueError("TIGER congressional district feature missing recognized STUSPS or STATEFP")
 
 
 def _school_district_number_from_properties(properties: dict[str, object]) -> str:
@@ -585,6 +688,18 @@ def _feature_matches_state(*, level: str, state: str, state_fips: str, propertie
     return properties.get("STATEFP") == state_fips
 
 
+def _upsert_divisions(conn: psycopg.Connection, divisions: list[ElectoralDivision]) -> int:
+    upserted_count = 0
+    for division in divisions:
+        upsert_electoral_division(conn, division)
+        upserted_count += 1
+    return upserted_count
+
+
+def _without_timeless_ocd_id(division: ElectoralDivision) -> ElectoralDivision:
+    return division.model_copy(update={"ocd_id": None})
+
+
 def load_tiger_geometry(conn: psycopg.Connection, *, state: str, level: str, year: int) -> int:
     """Load TIGER polygons for one (state, level, year) target."""
     if level not in _LEVEL_CHOICES:
@@ -593,24 +708,19 @@ def load_tiger_geometry(conn: psycopg.Connection, *, state: str, level: str, yea
     state_code = state.upper()
     state_fips = _state_fips_for_code(conn, state_code)
     zip_url = _zip_url_for_level(year=year, level=level, state_fips=state_fips)
-    boundary_year = _boundary_year_for_level(year=year, level=level, state_fips=state_fips)
     nc_contract_artifact: _NcGeometryContractArtifact | None = None
     if state_fips == "37" and level in _NC_CONTRACT_ARTIFACT_BY_LEVEL:
         nc_contract_artifact = _nc_contract_artifact_for_level(level)
 
+    boundary_year = _boundary_year_for_level(year=year, level=level, state_fips=state_fips)
+    if level == "congressional_district" and nc_contract_artifact is None:
+        boundary_year = _boundary_year_for_congressional_zip_url(zip_url)
+
     if nc_contract_artifact is not None and nc_contract_artifact.provider == "nconemap":
         features = _iter_geojson_features_from_arcgis_featureserver(zip_url)
     else:
-        zip_payload = _download_bytes(zip_url)
-        with tempfile.NamedTemporaryFile(prefix="civics_tiger_", suffix=".zip", delete=True) as temp_zip:
-            temp_zip.write(zip_payload)
-            temp_zip.flush()
-            source_srs = nc_contract_artifact.source_srs if nc_contract_artifact is not None else None
-            features = _iter_geojson_features_from_shapefile_zip_with_srs(
-                Path(temp_zip.name),
-                source_srs=source_srs,
-                target_srs="EPSG:4326",
-            )
+        source_srs = nc_contract_artifact.source_srs if nc_contract_artifact is not None else None
+        features = _download_shapefile_zip_features(zip_url, source_srs=source_srs)
 
     parsed_divisions: list[ElectoralDivision] = []
     for feature in features:
@@ -633,24 +743,55 @@ def load_tiger_geometry(conn: psycopg.Connection, *, state: str, level: str, yea
         else parsed_divisions
     )
 
-    upserted_count = 0
-    for division in divisions_to_upsert:
-        upsert_electoral_division(conn, division)
-        upserted_count += 1
-    return upserted_count
+    return _upsert_divisions(conn, divisions_to_upsert)
+
+
+def load_national_congressional_district_geometry(conn: psycopg.Connection, *, year: int) -> int:
+    """Load national TIGER congressional district polygons for one TIGER artifact year."""
+    level = "congressional_district"
+    divisions: list[ElectoralDivision] = []
+    for zip_url in _zip_urls_for_national_congressional_districts(year=year):
+        boundary_year = _boundary_year_for_congressional_zip_url(zip_url)
+        features = _download_shapefile_zip_features(zip_url, source_srs=None)
+        for feature in features:
+            properties = feature.get("properties")
+            if not isinstance(properties, dict):
+                continue
+            state_code = _state_code_from_properties(properties)
+            division = _normalize_tiger_feature(
+                level=level,
+                state=state_code,
+                feature=feature,
+                boundary_year=boundary_year,
+            )
+            divisions.append(_without_timeless_ocd_id(division))
+    return _upsert_divisions(conn, divisions)
 
 
 def _build_argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Load TIGER geometry rows into civic.electoral_division")
-    parser.add_argument("--state", required=True, help="Two-letter state code, e.g. NC")
+    parser.add_argument(
+        "--national-congressional-districts",
+        action="store_true",
+        help="Load the national TIGER congressional-district artifact for --year",
+    )
+    parser.add_argument("--state", help="Two-letter state code, e.g. NC")
     parser.add_argument(
         "--level",
-        required=True,
         choices=_LEVEL_CHOICES,
         help="Geometry level to load: state, county, or congressional_district",
     )
     parser.add_argument("--year", required=True, type=int, help="TIGER boundary year (e.g. 2024)")
     return parser
+
+
+def _validate_load_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None:
+    if args.national_congressional_districts:
+        if args.state is not None or args.level is not None:
+            parser.error("--national-congressional-districts cannot be combined with --state or --level")
+        return
+    if args.state is None or args.level is None:
+        parser.error("--state and --level are required unless --national-congressional-districts is set")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -676,12 +817,17 @@ def main(argv: list[str] | None = None) -> int:
             conn.close()
         return 0
 
-    args = _build_argument_parser().parse_args(argv)
+    parser = _build_argument_parser()
+    args = parser.parse_args(argv)
+    _validate_load_args(args, parser)
     conn: psycopg.Connection | None = None
     try:
         conn = get_connection()
         with conn.transaction():
-            upserted = load_tiger_geometry(conn, state=args.state, level=args.level, year=args.year)
+            if args.national_congressional_districts:
+                upserted = load_national_congressional_district_geometry(conn, year=args.year)
+            else:
+                upserted = load_tiger_geometry(conn, state=args.state, level=args.level, year=args.year)
     except Exception as exc:  # noqa: BLE001
         print(f"TIGER geometry load failed: {exc}", file=sys.stderr)
         return 1
@@ -689,9 +835,14 @@ def main(argv: list[str] | None = None) -> int:
         if conn is not None:
             conn.close()
 
-    print(
-        f"TIGER geometry load complete: state={args.state.upper()} level={args.level} year={args.year} rows={upserted}"
-    )
+    if args.national_congressional_districts:
+        print(
+            f"TIGER geometry load complete: scope=national level=congressional_district year={args.year} rows={upserted}"
+        )
+    else:
+        print(
+            f"TIGER geometry load complete: state={args.state.upper()} level={args.level} year={args.year} rows={upserted}"
+        )
     return 0
 
 

@@ -36,15 +36,17 @@ import {
   type IndependentExpenditureSummary,
   type PersonContributionInsights,
   type PersonTopEmployerRow,
-  type RankedTransactionParty
+  type RankedTransactionParty,
+  type SelectedCycleRequest
 } from "$lib/campaign-finance-detail/contract";
 import { ApiResponseError, type ApiClient } from "./client";
 
 type IdRequest = { id: string };
+type CycleScopedIdRequest = IdRequest & SelectedCycleRequest;
 type SlugRequest = { slug: string };
 
-export type CommitteeDetailRequest = IdRequest;
-export type CandidateDetailRequest = IdRequest;
+export type CommitteeDetailRequest = CycleScopedIdRequest;
+export type CandidateDetailRequest = CycleScopedIdRequest;
 export type CandidateListRequest = CandidateListPathRequest;
 export type CommitteeListRequest = CommitteeListPathRequest;
 export type CandidateBySlugRequest = SlugRequest;
@@ -78,6 +80,14 @@ function fetchById<TResponse>(
   return fetchByRequest(apiClient, request, ({ id }) => buildPath(id));
 }
 
+function fetchByCycleScopedId<TResponse>(
+  apiClient: ApiClient,
+  request: CycleScopedIdRequest,
+  buildPath: (id: string, request: SelectedCycleRequest) => string
+): Promise<TResponse> {
+  return fetchByRequest(apiClient, request, ({ id, cycle }) => buildPath(id, { cycle }));
+}
+
 export async function fetchCommitteeDetail(
   apiClient: ApiClient,
   request: CommitteeDetailRequest
@@ -96,14 +106,14 @@ export async function fetchCommitteeTransactions(
   apiClient: ApiClient,
   request: CommitteeDetailRequest
 ): Promise<CampaignFinanceTransactionResponse[]> {
-  return fetchById(apiClient, request, buildCommitteeTransactionsPath);
+  return fetchByCycleScopedId(apiClient, request, buildCommitteeTransactionsPath);
 }
 
 export async function fetchCommitteeSummary(
   apiClient: ApiClient,
   request: CommitteeDetailRequest
 ): Promise<CommitteeFundraisingSummary> {
-  return fetchById(apiClient, request, buildCommitteeSummaryPath);
+  return fetchByCycleScopedId(apiClient, request, buildCommitteeSummaryPath);
 }
 
 export async function fetchCommitteeFilingBreakdown(
@@ -138,6 +148,7 @@ export type PersonCandidateFinanceSection = {
 export type PersonCandidateFinanceRequest = {
   personId: string;
   limit?: number;
+  cycle?: number;
 };
 
 export type ContestCandidacyFinanceRequestItem = {
@@ -157,48 +168,49 @@ export type ContestCandidateFinanceByPersonId = Record<string, ContestCandidateF
 export type ContestCandidateFinanceRequest = {
   candidacies: ContestCandidacyFinanceRequestItem[];
   limitPerPerson?: number;
+  cycle?: number;
 };
 
 export async function fetchCandidateSummary(
   apiClient: ApiClient,
   request: CandidateDetailRequest
 ): Promise<CandidateFundraisingSummary> {
-  return fetchById(apiClient, request, buildCandidateSummaryPath);
+  return fetchByCycleScopedId(apiClient, request, buildCandidateSummaryPath);
 }
 
 export async function fetchCandidateIndependentExpenditures(
   apiClient: ApiClient,
   request: CandidateDetailRequest
 ): Promise<IndependentExpenditureResponse[]> {
-  return fetchById(apiClient, request, buildCandidateIndependentExpendituresPath);
+  return fetchByCycleScopedId(apiClient, request, buildCandidateIndependentExpendituresPath);
 }
 
 export async function fetchCandidateIndependentExpendituresSummary(
   apiClient: ApiClient,
   request: CandidateDetailRequest
 ): Promise<IndependentExpenditureSummary | null> {
-  return fetchById(apiClient, request, buildCandidateIndependentExpendituresSummaryPath);
+  return fetchByCycleScopedId(apiClient, request, buildCandidateIndependentExpendituresSummaryPath);
 }
 
 export async function fetchPersonContributionInsights(
   apiClient: ApiClient,
-  request: IdRequest
+  request: CycleScopedIdRequest
 ): Promise<PersonContributionInsights> {
-  return fetchById(apiClient, request, buildPersonContributionInsightsPath);
+  return fetchByCycleScopedId(apiClient, request, buildPersonContributionInsightsPath);
 }
 
 export async function fetchPersonTopDonors(
   apiClient: ApiClient,
-  request: IdRequest
+  request: CycleScopedIdRequest
 ): Promise<RankedTransactionParty[]> {
-  return fetchById(apiClient, request, buildPersonTopDonorsPath);
+  return fetchByCycleScopedId(apiClient, request, buildPersonTopDonorsPath);
 }
 
 export async function fetchPersonTopEmployers(
   apiClient: ApiClient,
-  request: IdRequest
+  request: CycleScopedIdRequest
 ): Promise<PersonTopEmployerRow[]> {
-  return fetchById(apiClient, request, buildPersonTopEmployersPath);
+  return fetchByCycleScopedId(apiClient, request, buildPersonTopEmployersPath);
 }
 
 function guardUnhandledRejection(promise: Promise<unknown>): void {
@@ -302,7 +314,8 @@ export async function fetchPersonCandidateFinanceSections(
   return Promise.all(
     linkedCandidates.items.map(async (candidateListItem) => {
       const candidateBundle = await fetchCandidateDetailBundle(apiClient, {
-        id: candidateListItem.id
+        id: candidateListItem.id,
+        cycle: request.cycle
       });
 
       const donorVendorTransactions = candidateBundle.summary.then(async (summary) => {
@@ -317,7 +330,8 @@ export async function fetchPersonCandidateFinanceSections(
         const transactionsByCommittee = await Promise.all(
           committeeIds.map((committeeId) =>
             fetchCommitteeTransactions(apiClient, {
-              id: committeeId
+              id: committeeId,
+              cycle: request.cycle
             })
           )
         );
@@ -378,7 +392,8 @@ export async function fetchContestCandidateFinanceByPersonId(
       try {
         const personSections = await fetchPersonCandidateFinanceSections(apiClient, {
           personId,
-          limit: request.limitPerPerson ?? 10
+          limit: request.limitPerPerson ?? 10,
+          cycle: request.cycle
         });
         const matchedSection = selectPersonCandidateFinanceSection(personSections, personId);
         if (matchedSection === null) {

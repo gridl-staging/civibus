@@ -1,5 +1,236 @@
 /** Shared browser-smoke assertions for SEO, navigation, and provenance UI. */
 import { expect } from "playwright/test";
+import type { Locator, Page } from "playwright";
+
+const NEAR_BLACK_RGB_CHANNEL_MAX = 24;
+const OPAQUE_ALPHA_MIN = 0.95;
+
+export const LINE_SERIES_MARK_SELECTOR = "svg path.lc-path";
+export const BAR_SERIES_MARK_SELECTOR = "svg rect";
+
+type SvgPaintSample = {
+  tagName: string;
+  fill: string;
+  fillOpacity: string;
+  stroke: string;
+  strokeOpacity: string;
+  opacity: string;
+  boundingBox: { width: number; height: number } | null;
+};
+
+export function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function parseRgbChannels(color: string): [number, number, number] | null {
+  const match = color.match(/^rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([0-9.]+))?\)$/);
+  if (!match) {
+    return null;
+  }
+
+  return [Number(match[1]), Number(match[2]), Number(match[3])];
+}
+
+function parseCssAlpha(value: string): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 1;
+}
+
+function parseAlpha(color: string): number {
+  const colorAlpha = color.match(/^rgba?\(\d+,\s*\d+,\s*\d+,\s*([0-9.]+)\)$/);
+  return Number(colorAlpha?.[1] ?? 1);
+}
+
+/**
+ */
+function samplePaint(sample: SvgPaintSample): {
+  color: string;
+  alpha: number;
+} {
+  if (sample.fill !== "none" && sample.fill !== "rgba(0, 0, 0, 0)") {
+    return {
+      color: sample.fill,
+      alpha: parseAlpha(sample.fill) * parseCssAlpha(sample.fillOpacity) * parseCssAlpha(sample.opacity)
+    };
+  }
+
+  return {
+    color: sample.stroke,
+    alpha: parseAlpha(sample.stroke) * parseCssAlpha(sample.strokeOpacity) * parseCssAlpha(sample.opacity)
+  };
+}
+
+function isOpaqueNearBlack(sample: SvgPaintSample): boolean {
+  const paint = samplePaint(sample);
+  const channels = parseRgbChannels(paint.color);
+  if (!channels) {
+    return false;
+  }
+
+  const [red, green, blue] = channels;
+  return (
+    red <= NEAR_BLACK_RGB_CHANNEL_MAX &&
+    green <= NEAR_BLACK_RGB_CHANNEL_MAX &&
+    blue <= NEAR_BLACK_RGB_CHANNEL_MAX &&
+    paint.alpha >= OPAQUE_ALPHA_MIN
+  );
+}
+
+export async function chartRegion(page: Page, label: string | RegExp): Promise<Locator> {
+  if (label instanceof RegExp) {
+    return page.getByLabel(label).first();
+  }
+
+  return page.getByLabel(new RegExp(`^${escapeRegExp(label)}(?: for .*)?$`, "i")).first();
+}
+
+/**
+ */
+async function sampleVisibleSvgPaints(region: Locator, selector: string): Promise<SvgPaintSample[]> {
+  // eslint-disable-next-line playwright/no-raw-locators -- the oracle must inspect package-rendered SVG paint internals.
+  return (await region.locator(selector).evaluateAll((elements: Element[]) =>
+    elements
+      .map((element) => {
+        const styles = window.getComputedStyle(element);
+        const clientBox = element.getBoundingClientRect();
+        const svgBox =
+          "getBBox" in element
+            ? (element as SVGGraphicsElement).getBBox()
+            : { width: 0, height: 0 };
+        const box =
+          clientBox.width * clientBox.height > 0
+            ? clientBox
+            : svgBox.width * svgBox.height > 0
+              ? svgBox
+              : null;
+        return {
+          tagName: element.tagName.toLowerCase(),
+          fill: styles.fill,
+          fillOpacity: styles.fillOpacity,
+          stroke: styles.stroke,
+          strokeOpacity: styles.strokeOpacity,
+          opacity: styles.opacity,
+          boundingBox: box === null ? null : { width: box.width, height: box.height }
+        };
+      })
+      .filter(
+        (sample) =>
+          sample.tagName === "path" ||
+          (sample.boundingBox?.width ?? 0) * (sample.boundingBox?.height ?? 0) > 0
+      )
+  )) as SvgPaintSample[];
+}
+
+/** Returns visible SVG series paint samples so smoke tests can reject fallback-black chart fills. */
+export async function sampleVisibleRectPaints(region: Locator): Promise<SvgPaintSample[]> {
+  return [
+    ...(await sampleVisibleSvgPaints(region, "svg rect")),
+    ...(await sampleVisibleSvgPaints(region, "svg path.lc-path"))
+  ];
+}
+
+export async function expectRealChartRender(region: Locator, markSelector: string): Promise<void> {
+  // eslint-disable-next-line playwright/no-raw-locators -- the oracle must prove the chart package rendered an SVG.
+  expect(await region.locator("svg").count()).toBeGreaterThan(0);
+  expect(await region.locator(markSelector).count()).toBeGreaterThan(0);
+}
+
+export async function expectNoOpaqueNearBlackPaints(regions: Locator | Locator[]): Promise<void> {
+  const regionList = Array.isArray(regions) ? regions : [regions];
+  const samples = (
+    await Promise.all(regionList.map((region) => sampleVisibleRectPaints(region)))
+  ).flat();
+  expect(samples.length).toBeGreaterThan(0);
+  expect(samples.filter(isOpaqueNearBlack)).toEqual([]);
+}
+
+export async function expectNonZeroChartBox(region: Locator, markSelector: string): Promise<void> {
+  const box = await region.locator(markSelector).first().boundingBox();
+  expect(box?.width ?? 0).toBeGreaterThan(0);
+  expect(box?.height ?? 0).toBeGreaterThan(0);
+}
+
+export async function expectNoHorizontalOverflow(page: Page): Promise<void> {
+  const overflow = await page.evaluate(() => {
+    const root = document.documentElement;
+    return Math.ceil(root.scrollWidth - root.clientWidth);
+  });
+  expect(overflow).toBeLessThanOrEqual(1);
+}
+
+/** Asserts no chart frame or chart body scrolls beyond its own box in either axis. */
+export async function expectNoChartFrameOverflow(regions: Locator[]): Promise<void> {
+  for (const region of regions) {
+    const overflowing = await region.evaluate((element: HTMLElement) =>
+      Array.from(element.querySelectorAll(".finance-chart, .chart-wrapper__body"))
+        .map((child) => ({
+          scrollWidth: child.scrollWidth,
+          clientWidth: child.clientWidth,
+          scrollHeight: child.scrollHeight,
+          clientHeight: child.clientHeight
+        }))
+        .filter(
+          (box) =>
+            Math.ceil(box.scrollWidth - box.clientWidth) > 0 ||
+            Math.ceil(box.scrollHeight - box.clientHeight) > 0
+        )
+    );
+    expect(overflowing).toEqual([]);
+  }
+}
+
+/**
+ * Asserts every rendered numeric axis tick stays short enough to read (never a
+ * truncated/overflowing money label). Requires at least one numeric tick.
+ */
+export async function expectBoundedNumericTickLabels(regions: Locator[]): Promise<void> {
+  for (const region of regions) {
+    const numericTickLabels = await region.evaluate((element: HTMLElement) =>
+      Array.from(element.querySelectorAll("svg text"))
+        .map((text) => text.textContent?.trim() ?? "")
+        .filter((label) => /^[−-]?\$?\d[\d,.]*(?:\.\d+)?$/.test(label))
+    );
+    expect(numericTickLabels.length).toBeGreaterThan(0);
+    expect(numericTickLabels.every((label) => label.length <= 12)).toBe(true);
+  }
+}
+
+/**
+ * Fails when a fixed/sticky/absolute near-black element covers a material share
+ * (>=25%) of the viewport — the signature of a broken overlay that hides content.
+ */
+export async function expectNoMaterialNearBlackOverlay(page: Page): Promise<void> {
+  const overlays = await page.evaluate(() => {
+    const nearBlack = (color: string): boolean => {
+      const match = /^rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([0-9.]+))?\)$/.exec(color);
+      if (match === null) {
+        return false;
+      }
+      const alpha = Number(match[4] ?? 1);
+      return Number(match[1]) <= 24 && Number(match[2]) <= 24 && Number(match[3]) <= 24 && alpha >= 0.8;
+    };
+    const viewportArea = window.innerWidth * window.innerHeight;
+    return Array.from(document.querySelectorAll<HTMLElement>("body *"))
+      .map((element) => {
+        const style = window.getComputedStyle(element);
+        const box = element.getBoundingClientRect();
+        return {
+          position: style.position,
+          backgroundColor: style.backgroundColor,
+          area: box.width * box.height,
+          visible: box.width > 0 && box.height > 0 && style.visibility !== "hidden" && style.display !== "none"
+        };
+      })
+      .filter(
+        (sample) =>
+          sample.visible &&
+          ["fixed", "sticky", "absolute"].includes(sample.position) &&
+          sample.area >= viewportArea * 0.25 &&
+          nearBlack(sample.backgroundColor)
+      );
+  });
+  expect(overlays).toEqual([]);
+}
 
 /**
  * Shared SEO head-tag assertions. Verifies Open Graph + Twitter + canonical

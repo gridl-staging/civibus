@@ -13,6 +13,115 @@ from domains.campaign_finance.coverage import registry as coverage_registry
 from domains.campaign_finance.coverage import render_summary as coverage_render_summary
 
 
+class _FakeConn:
+    def __enter__(self):  # type: ignore[no-untyped-def]
+        return self
+
+    def __exit__(self, exc_type, exc, tb):  # type: ignore[no-untyped-def]
+        return False
+
+
+def _empty_federal_collection(
+    monkeypatch,
+    *,
+    federal_gate: "keel_gate_l14.FederalCoverageGate | None",
+    federal_race_count: int | None,
+) -> "keel_gate_l14.L14CoverageCollection":
+    registry = coverage_registry.CoverageRegistry(rows=[])
+    lifecycle = coverage_lifecycle.ImplementedRegionLifecycleRegistry(updated_at=date(2026, 7, 13), rows=[])
+    monkeypatch.setattr(keel_gate_l14.coverage_registry, "load_registry", lambda path: registry)
+    monkeypatch.setattr(keel_gate_l14.coverage_lifecycle, "load_lifecycle", lambda path: lifecycle)
+    monkeypatch.setattr(keel_gate_l14, "_load_civics_roster_sources", lambda sources_path: [])
+    monkeypatch.setattr(keel_gate_l14, "_manifest_member_counts_by_source_id", lambda: {})
+    monkeypatch.setattr(keel_gate_l14, "_load_roster_loaded_counts", lambda conn, source_ids: {})
+    monkeypatch.setattr(keel_gate_l14, "_collect_nc_geometry_summary", lambda: None)
+    monkeypatch.setattr(keel_gate_l14, "_collect_federal_gate", lambda conn: federal_gate)
+    monkeypatch.setattr(keel_gate_l14, "_collect_federal_race_count", lambda conn: federal_race_count)
+    monkeypatch.setattr(keel_gate_l14, "get_connection", lambda: _FakeConn())
+    return keel_gate_l14.collect_coverage_matrix(
+        registry_path=Path("docs/reference/research/coverage-registry.json"),
+        lifecycle_path=Path("docs/reference/research/implemented-region-lifecycle.json"),
+    )
+
+
+def _passing_officeholder_gate() -> "keel_gate_l14.FederalCoverageGate":
+    return keel_gate_l14.FederalCoverageGate(
+        active_officeholders=538,
+        total_seats=543,
+        portrait_coverage_pct=97.7,
+        bio_coverage_pct=92.9,
+        candidate_link_coverage_pct=97.5,
+        ie_coverage_pct=61.1,
+    )
+
+
+def test_federal_row_denominator_comes_from_race_count_not_officeholder_seats(monkeypatch) -> None:
+    collection = _empty_federal_collection(
+        monkeypatch,
+        federal_gate=_passing_officeholder_gate(),
+        federal_race_count=474,
+    )
+
+    federal_rows = [row for row in collection.rows if row.jurisdiction_code == "FEDERAL"]
+    assert len(federal_rows) == 1
+    federal_row = federal_rows[0]
+    # Denominator fields now reflect countable federal races, not officeholder seats.
+    assert federal_row.loaded_count == 474
+    assert federal_row.expected_count == keel_gate_l14._EXPECTED_FEDERAL_RACES
+    # Officeholder-quality gate remains intact and surfaced.
+    assert collection.federal_gate is not None
+    assert collection.federal_gate.active_officeholders == 538
+    assert keel_gate_l14._evidence_status(collection) == "pass"
+
+
+def test_federal_status_fails_when_officeholder_quality_regresses_with_spine_loaded(monkeypatch) -> None:
+    regressed_gate = keel_gate_l14.FederalCoverageGate(
+        active_officeholders=400,
+        total_seats=543,
+        portrait_coverage_pct=50.0,
+        bio_coverage_pct=40.0,
+        candidate_link_coverage_pct=60.0,
+        ie_coverage_pct=0.0,
+    )
+    collection = _empty_federal_collection(monkeypatch, federal_gate=regressed_gate, federal_race_count=474)
+
+    assert keel_gate_l14._evidence_status(collection) == "fail"
+
+
+def test_federal_status_passes_on_race_count_when_officeholder_spine_absent(monkeypatch) -> None:
+    empty_office_gate = keel_gate_l14.FederalCoverageGate(
+        active_officeholders=0,
+        total_seats=543,
+        portrait_coverage_pct=0.0,
+        bio_coverage_pct=0.0,
+        candidate_link_coverage_pct=0.0,
+        ie_coverage_pct=0.0,
+    )
+    collection = _empty_federal_collection(monkeypatch, federal_gate=empty_office_gate, federal_race_count=3)
+
+    assert keel_gate_l14._evidence_status(collection) == "pass"
+
+
+def test_federal_status_accepts_observed_loaded_contest_universe(monkeypatch) -> None:
+    collection = _empty_federal_collection(
+        monkeypatch,
+        federal_gate=_passing_officeholder_gate(),
+        federal_race_count=511,
+    )
+
+    assert keel_gate_l14._evidence_status(collection) == "pass"
+
+
+def test_federal_status_fails_when_race_count_out_of_range(monkeypatch) -> None:
+    collection = _empty_federal_collection(
+        monkeypatch,
+        federal_gate=_passing_officeholder_gate(),
+        federal_race_count=keel_gate_l14._EXPECTED_FEDERAL_RACES + 1,
+    )
+
+    assert keel_gate_l14._evidence_status(collection) == "fail"
+
+
 def test_l14_coverage_row_allows_optional_counts_and_forbids_extra() -> None:
     row = keel_gate_l14.L14CoverageRow(
         jurisdiction_code="NC",
@@ -493,6 +602,10 @@ def test_main_returns_non_zero_when_nc_geometry_summary_mismatches(tmp_path: Pat
         "_collect_nc_geometry_summary",
         lambda: keel_gate_l14.NcGeometrySummary(total_count=209, srid_4326_count=209),
     )
+    # Isolate the NC-geometry gate: skip the federal collection so its status branch does not
+    # short-circuit ahead of the NC-geometry check (the fake conn has no cursor, so the federal
+    # collection is swallowed and federal_gate stays None).
+    monkeypatch.setattr(keel_gate_l14, "get_connection", lambda: _FakeConn())
     monkeypatch.setattr(keel_gate_l14, "_repo_sha", lambda repo_root: "6a78078d")
     monkeypatch.setattr(keel_gate_l14, "_utc_now", lambda: datetime(2026, 4, 24, 13, 30, tzinfo=UTC))
 

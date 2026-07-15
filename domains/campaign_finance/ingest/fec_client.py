@@ -7,6 +7,7 @@ import os
 import httpx
 
 FEC_BASE_URL = "https://api.open.fec.gov/v1/schedules/schedule_a/"
+FEC_ELECTION_DATES_URL = "https://api.open.fec.gov/v1/election-dates/"
 FEC_REQUEST_TIMEOUT_SECONDS = 10.0
 
 
@@ -54,12 +55,7 @@ class FecClient:
                     params["two_year_transaction_period"] = cycle
                 params.update(cursor_params)
 
-                try:
-                    response = http.get(FEC_BASE_URL, params=params)
-                except httpx.RequestError as error:
-                    raise FecApiError(f"FEC API request failed: {error}") from None
-                self._check_response(response)
-                data = self._load_page_data(response)
+                data = self._fetch_page(http, FEC_BASE_URL, params)
                 results = data["results"]
 
                 if not results:
@@ -77,6 +73,80 @@ class FecClient:
                 cursor_params = next_cursor_params
 
         return all_results
+
+    def fetch_election_dates(
+        self,
+        *,
+        office: str | None = None,
+        state: str | None = None,
+        district: str | None = None,
+        election_year: int | None = None,
+        per_page: int = 20,
+        limit: int | None = None,
+    ) -> list[dict]:
+        """Fetch OpenFEC ``/election-dates/`` rows, following page-based pagination.
+
+        Unlike Schedule A's seek cursor, the election-dates endpoint uses standard
+        ``page``/``per_page`` pagination and reports the total page count under
+        ``pagination.pages``. Returns the concatenated results list; raises
+        FecApiError on transport, HTTP, or envelope errors.
+        """
+        all_results: list[dict] = []
+
+        with httpx.Client(timeout=FEC_REQUEST_TIMEOUT_SECONDS) as http:
+            page = 1
+            while True:
+                params: dict[str, str | int] = {
+                    "api_key": self._api_key,
+                    "per_page": per_page,
+                    "page": page,
+                    "sort": "election_date",
+                }
+                if office is not None:
+                    params["office_sought"] = office
+                if state is not None:
+                    params["election_state"] = state
+                if district is not None:
+                    params["election_district"] = district
+                if election_year is not None:
+                    params["election_year"] = election_year
+
+                data = self._fetch_page(http, FEC_ELECTION_DATES_URL, params)
+                results = data["results"]
+
+                if not results:
+                    break
+
+                all_results.extend(results)
+
+                if limit is not None and len(all_results) >= limit:
+                    return all_results[:limit]
+
+                total_pages = self._total_pages(data)
+                if page >= total_pages:
+                    break
+                page += 1
+
+        return all_results
+
+    def _fetch_page(
+        self,
+        http: httpx.Client,
+        url: str,
+        params: dict[str, str | int],
+    ) -> dict[str, object]:
+        """Issue one GET and return the validated envelope, mapping errors to FecApiError.
+
+        Shared by every endpoint so transport wrapping, non-2xx handling, and
+        envelope validation stay identical; per-endpoint pagination advancement
+        stays with the caller.
+        """
+        try:
+            response = http.get(url, params=params)
+        except httpx.RequestError as error:
+            raise FecApiError(f"FEC API request failed: {error}") from None
+        self._check_response(response)
+        return self._load_page_data(response)
 
     def _load_page_data(self, response: httpx.Response) -> dict[str, object]:
         try:
@@ -114,6 +184,20 @@ class FecClient:
             "last_index": last_index,
             "last_contribution_receipt_date": last_contribution_receipt_date,
         }
+
+    def _total_pages(self, response_data: dict[str, object]) -> int:
+        """Return the total page count from a page-based ``pagination`` envelope.
+
+        Raises ``FecApiError`` when the envelope is missing or malformed rather
+        than silently truncating multi-page responses.
+        """
+        pagination = response_data.get("pagination")
+        if not isinstance(pagination, dict):
+            raise FecApiError("FEC API response missing pagination envelope")
+        pages = pagination.get("pages")
+        if not isinstance(pages, int) or isinstance(pages, bool):
+            raise FecApiError("FEC API pagination.pages must be an integer")
+        return pages
 
     def _check_response(self, response: httpx.Response) -> None:
         """Raise FecApiError with a descriptive message on non-2xx responses."""

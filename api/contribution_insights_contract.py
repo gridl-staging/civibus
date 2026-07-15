@@ -43,9 +43,11 @@ NOT_SUPERSEDED_SOURCE_RECORD_WHERE_SQL = """
 """
 
 
-def contribution_insights_transaction_where_sql(*, min_date_sql: str = "%s") -> str:
+def contribution_insights_transaction_where_sql(*, min_date_sql: str = "%s", max_date_sql: str | None = None) -> str:
+    max_date_clause = "" if max_date_sql is None else f"\n          AND t.transaction_date <= {max_date_sql}"
     return f"""
           AND t.transaction_date >= {min_date_sql}
+{max_date_clause}
           AND t.transaction_date IS NOT NULL
           AND t.transaction_type LIKE '{RECEIPT_TYPE_PREFIX}%%'
           AND t.contributor_entity_type = 'IND'

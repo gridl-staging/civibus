@@ -11,11 +11,17 @@ from fastapi.testclient import TestClient
 
 import api.queries as campaign_finance_queries
 import api.queries.campaign_finance as campaign_finance_query_module
-from api.queries import fetch_candidate_summary, fetch_committee_fundraising_summary
+from api.queries import (
+    fetch_candidate_public_money_summaries,
+    fetch_candidate_summary,
+    fetch_committee_fundraising_summary,
+)
 from api.queries.campaign_finance import (
+    CANDIDATE_IE_OUTLIER_CEILING,
     COMMITTEE_FUNDRAISING_SUMMARY_SQL,
     DISBURSEMENT_TYPE_PREFIX,
     _COUNTY_PROXY_QUALIFYING_TRANSACTIONS_CTE,
+    fetch_candidate_ie_summaries,
 )
 from api.test_campaign_finance_support import (
     CandidateCommitteeLinkSeed,
@@ -55,6 +61,66 @@ from domains.campaign_finance.types.models import Filing
 pytestmark = pytest.mark.integration
 
 
+def _stage3_uuid(index: int) -> UUID:
+    return UUID(f"e3000000-0000-0000-0000-{index:012d}")
+
+
+def _assert_selected_cycle_payload(
+    payload: dict[str, object],
+    *,
+    selected_cycle: int,
+    coverage_start_date: str,
+    coverage_end_date: str,
+) -> None:
+    assert payload["selected_cycle"] == selected_cycle
+    assert payload["coverage_start_date"] == coverage_start_date
+    assert payload["coverage_end_date"] == coverage_end_date
+    assert payload["available_cycles"] == [2022, 2024, 2026]
+
+
+def _database_current_date(db_conn: psycopg.Connection) -> date:
+    with db_conn.cursor() as cursor:
+        cursor.execute("SELECT CURRENT_DATE")
+        current_date = cursor.fetchone()[0]
+    assert isinstance(current_date, date)
+    return current_date
+
+
+def _expected_complete_2026_monthly_totals(today: date) -> list[dict[str, object]]:
+    expected_months = [
+        ("2025-01", "0.00", 0),
+        ("2025-02", "0.00", 0),
+        ("2025-03", "0.00", 0),
+        ("2025-04", "0.00", 0),
+        ("2025-05", "0.00", 0),
+        ("2025-06", "0.00", 0),
+        ("2025-07", "0.00", 0),
+        ("2025-08", "0.00", 0),
+        ("2025-09", "0.00", 0),
+        ("2025-10", "0.00", 0),
+        ("2025-11", "0.00", 0),
+        ("2025-12", "0.00", 0),
+        ("2026-01", "200.00", 1),
+        ("2026-02", "700.00", 2),
+        ("2026-03", "1499.99", 2),
+        ("2026-04", "0.00", 0),
+        ("2026-05", "2999.99", 2),
+        ("2026-06", "0.00", 0),
+        ("2026-07", "1800.00", 2),
+        ("2026-08", "0.00", 0),
+        ("2026-09", "0.00", 0),
+        ("2026-10", "0.00", 0),
+        ("2026-11", "0.00", 0),
+        ("2026-12", "0.00", 0),
+    ]
+    last_month = min(today, date(2026, 12, 31)).strftime("%Y-%m")
+    return [
+        {"month": month, "total_amount": total_amount, "transaction_count": transaction_count}
+        for month, total_amount, transaction_count in expected_months
+        if month <= last_month
+    ]
+
+
 def _seed_person_contribution_insights_fixture(
     db_conn: psycopg.Connection,
     *,
@@ -79,8 +145,8 @@ def _seed_person_contribution_insights_fixture(
         state="NC",
         district_number="01",
     )
-    office_division_id = division_id if office_name == "us_house" else None
-    holding_division_id = division_id if office_name == "us_house" else None
+    office_division_id = division_id if office_name in {"us_house", "us_delegate"} else None
+    holding_division_id = division_id if office_name in {"us_house", "us_delegate"} else None
     insert_office_row(
         db_conn,
         office_id=office_id,
@@ -146,6 +212,7 @@ def _seed_person_contribution_insights_fixture(
             CommitteeSummaryRowSeed(
                 committee_id=committee_id,
                 cycle=2024,
+                individual_itemized_contributions=Decimal("551.00"),
                 individual_unitemized_contributions=Decimal("300.00"),
                 coverage_start_date=date(2023, 1, 1),
                 coverage_end_date=date(2024, 12, 31),
@@ -156,9 +223,10 @@ def _seed_person_contribution_insights_fixture(
             CommitteeSummaryRowSeed(
                 committee_id=committee_id,
                 cycle=2026,
+                individual_itemized_contributions=Decimal("7199.98"),
                 individual_unitemized_contributions=Decimal("200.00"),
                 coverage_start_date=date(2025, 1, 1),
-                coverage_end_date=date(2026, 6, 30),
+                coverage_end_date=date(2026, 12, 31),
             ),
         )
 
@@ -226,8 +294,15 @@ def _seed_person_contribution_insights_fixture(
         insert_receipt("d1000000-0000-0000-0000-000000000011", "50.00", date(2024, 2, 3), "NC", "27701")
         insert_receipt("d1000000-0000-0000-0000-000000000012", "200.00", date(2024, 2, 20), "NC", "27709")
         insert_receipt("d1000000-0000-0000-0000-000000000013", "201.00", date(2024, 3, 1), "VA", "22201")
-        insert_receipt("d1000000-0000-0000-0000-000000000039", "30.00", date(2026, 1, 11), "NC", "27701")
-        insert_receipt("d1000000-0000-0000-0000-000000000040", "19.00", date(2026, 5, 5), "NC", "27709")
+        insert_receipt("d1000000-0000-0000-0000-000000000039", "200.00", date(2026, 1, 11), "NC", "27701")
+        insert_receipt("d1000000-0000-0000-0000-000000000040", "200.01", date(2026, 2, 5), "NC", "27709")
+        insert_receipt("d1000000-0000-0000-0000-000000000041", "499.99", date(2026, 2, 6), "NC", "27709")
+        insert_receipt("d1000000-0000-0000-0000-000000000042", "500.00", date(2026, 3, 7), "NC", "27701")
+        insert_receipt("d1000000-0000-0000-0000-000000000043", "999.99", date(2026, 3, 8), "NC", "27701")
+        insert_receipt("d1000000-0000-0000-0000-000000000044", "1000.00", date(2026, 5, 9), "NC", "27709")
+        insert_receipt("d1000000-0000-0000-0000-000000000045", "1999.99", date(2026, 5, 10), "NC", "27709")
+        insert_receipt("d1000000-0000-0000-0000-000000000046", "2000.00", date(2026, 7, 11), "NC", "27701")
+        insert_receipt("d1000000-0000-0000-0000-000000000047", "-200.00", date(2026, 7, 12), "NC", "27701")
         insert_receipt(
             "d1000000-0000-0000-0000-000000000014",
             "100.00",
@@ -270,6 +345,305 @@ def _seed_person_contribution_insights_fixture(
             source_record_id=superseded_source.id,
         )
     return person.id, candidate_id
+
+
+def _insert_stage3_geography_receipts(
+    db_conn: psycopg.Connection,
+    *,
+    filing_id: UUID,
+    committee_id: UUID,
+) -> None:
+    rows = [
+        (31, "600.00", "NC", "27701", "In-district donor"),
+        (32, "500.00", "NC", "27601", "Elsewhere NC donor"),
+        (33, "400.00", "VA", "22201", "Virginia donor"),
+        (34, "300.00", "CA", "94105", "California donor"),
+        (35, "200.00", "TX", "73301", "Texas donor"),
+        (36, "100.00", "FL", "33101", "Florida donor"),
+        (37, "50.00", "WA", "98101", "Washington donor"),
+        (38, "25.00", None, "27701", "Blank-state donor"),
+        (39, "900.00", "NY", "12AB", "Invalid-zip donor"),
+        (40, "70.00", "NC", "99999", "Unmapped-zip donor"),
+    ]
+    for row_index, amount, contributor_state, contributor_zip, contributor_name in rows:
+        insert_transaction_row(
+            db_conn,
+            TransactionRowSeed(
+                id=_stage3_uuid(row_index),
+                filing_id=filing_id,
+                committee_id=committee_id,
+                transaction_type="15",
+                amendment_indicator="N",
+                transaction_date=date(2026, 3, row_index - 30),
+                amount=Decimal(amount),
+                contributor_name_raw=contributor_name,
+                contributor_entity_type="IND",
+                contributor_state=contributor_state,
+                contributor_zip=contributor_zip,
+            ),
+        )
+
+
+def _seed_stage3_geography_fixture(
+    db_conn: psycopg.Connection,
+    *,
+    office_name: str,
+    office_title: str,
+    candidate_office: str,
+    candidate_fec_id: str,
+    office_state: str = "NC",
+    office_district: str | None = "01",
+) -> tuple[UUID, UUID, UUID]:
+    person = Person(canonical_name=f"Stage 3 {office_title}")
+    insert_person(db_conn, person)
+    division_id = _stage3_uuid(1)
+    office_id = _stage3_uuid(2)
+    committee_id = _stage3_uuid(4)
+    candidate_id = _stage3_uuid(5)
+    filing_id = _stage3_uuid(6)
+    if office_district is not None:
+        insert_electoral_division_row(
+            db_conn,
+            division_id=division_id,
+            name=f"{office_state} District {office_district}",
+            division_type="congressional_district",
+            state=office_state,
+            district_number=office_district,
+        )
+    insert_office_row(
+        db_conn,
+        office_id=office_id,
+        name=office_name,
+        title=office_title,
+        state=office_state,
+        electoral_division_id=division_id if office_district is not None else None,
+    )
+    insert_officeholding_row(
+        db_conn,
+        officeholding_id=_stage3_uuid(3),
+        person_id=person.id,
+        office_id=office_id,
+        electoral_division_id=division_id if office_district is not None else None,
+    )
+    insert_committee_row(
+        db_conn,
+        CommitteeRowSeed(id=committee_id, fec_committee_id="C99300001", name=f"{office_title} Committee"),
+    )
+    insert_candidate_row(
+        db_conn,
+        CandidateRowSeed(
+            id=candidate_id,
+            fec_candidate_id=candidate_fec_id,
+            name=f"Stage 3 {office_title} Candidate",
+            office=candidate_office,
+            person_id=person.id,
+            state=office_state,
+            district=office_district,
+        ),
+    )
+    insert_candidate_committee_link_row(
+        db_conn,
+        CandidateCommitteeLinkSeed(
+            id=_stage3_uuid(7),
+            candidate_id=candidate_id,
+            committee_id=committee_id,
+            valid_period="[2025-01-01,2027-01-01)",
+            candidate_election_year=2026,
+            fec_election_year=2026,
+        ),
+    )
+    insert_filing_row(db_conn, FilingRowSeed(id=filing_id, filing_fec_id="stage3-geography", committee_id=committee_id))
+    insert_committee_summary_row(
+        db_conn,
+        CommitteeSummaryRowSeed(
+            committee_id=committee_id,
+            cycle=2026,
+            individual_itemized_contributions=Decimal("3145.00"),
+            individual_unitemized_contributions=Decimal("0.00"),
+            coverage_start_date=date(2025, 1, 1),
+            coverage_end_date=date(2026, 12, 31),
+        ),
+    )
+    insert_zcta_district_row(
+        db_conn,
+        zcta5="27701",
+        state_fips="37",
+        cd_geoid=f"37{office_district or '01'}",
+        district_number=office_district or "01",
+    )
+    insert_zcta_district_row(db_conn, zcta5="27601", state_fips="37", cd_geoid="3702", district_number="02")
+    insert_zcta_district_row(db_conn, zcta5="22201", state_fips="51", cd_geoid="5108", district_number="08")
+    insert_zcta_district_row(db_conn, zcta5="94105", state_fips="06", cd_geoid="0611", district_number="11")
+    insert_zcta_district_row(db_conn, zcta5="73301", state_fips="48", cd_geoid="4837", district_number="37")
+    insert_zcta_district_row(db_conn, zcta5="33101", state_fips="12", cd_geoid="1227", district_number="27")
+    insert_zcta_district_row(db_conn, zcta5="98101", state_fips="53", cd_geoid="5307", district_number="07")
+    _insert_stage3_geography_receipts(db_conn, filing_id=filing_id, committee_id=committee_id)
+    return person.id, candidate_id, committee_id
+
+
+def _stage3_expected_state_rows() -> list[dict[str, object]]:
+    return [
+        {"label": "NC", "total_amount": "1170.00", "transaction_count": 3},
+        {"label": "VA", "total_amount": "400.00", "transaction_count": 1},
+        {"label": "CA", "total_amount": "300.00", "transaction_count": 1},
+        {"label": "TX", "total_amount": "200.00", "transaction_count": 1},
+        {"label": "FL", "total_amount": "100.00", "transaction_count": 1},
+        {"label": "Other states", "total_amount": "50.00", "transaction_count": 1},
+        {"label": "Unknown", "total_amount": "925.00", "transaction_count": 2},
+    ]
+
+
+def _assert_stage3_geography_denominators(geography: dict[str, object]) -> None:
+    assert geography["classified_amount"] == "2220.00"
+    assert geography["classified_transaction_count"] == 8
+    assert geography["unknown_amount"] == "925.00"
+    assert geography["unknown_transaction_count"] == 2
+
+
+def _assert_stage3_direct_sql_rows(
+    db_conn: psycopg.Connection,
+    *,
+    committee_id: UUID,
+    office_name: str,
+    office_state: str,
+    office_district: str,
+    expected_district_rows: list[dict[str, object]],
+) -> None:
+    cycle = campaign_finance_query_module.resolve_selected_cycle(2026)
+    unbounded_state_rows = campaign_finance_query_module._fetch_person_insights_rows(
+        db_conn,
+        campaign_finance_query_module._PERSON_CONTRIBUTION_INSIGHTS_STATE_SQL,
+        [committee_id],
+        cycle,
+    )
+    state_rows = campaign_finance_query_module._fetch_person_insights_itemized_rollups(
+        db_conn,
+        [committee_id],
+        cycle,
+        complete_summary_coverage=True,
+    )["state_rows"]
+    district_rows = campaign_finance_query_module._fetch_person_insights_rows(
+        db_conn,
+        campaign_finance_query_module._PERSON_CONTRIBUTION_INSIGHTS_DISTRICT_SQL,
+        [committee_id],
+        cycle,
+        office_name,
+        office_name,
+        office_state,
+        office_name,
+        office_state,
+        office_district,
+        office_state,
+    )
+    assert unbounded_state_rows == [
+        {"label": "NC", "total_amount": Decimal("1170.00"), "transaction_count": 3},
+        {"label": "Unknown", "total_amount": Decimal("925.00"), "transaction_count": 2},
+        {"label": "VA", "total_amount": Decimal("400.00"), "transaction_count": 1},
+        {"label": "CA", "total_amount": Decimal("300.00"), "transaction_count": 1},
+        {"label": "TX", "total_amount": Decimal("200.00"), "transaction_count": 1},
+        {"label": "FL", "total_amount": Decimal("100.00"), "transaction_count": 1},
+        {"label": "WA", "total_amount": Decimal("50.00"), "transaction_count": 1},
+    ]
+    assert [
+        {**row, "total_amount": f"{row['total_amount']:.2f}"} for row in state_rows
+    ] == _stage3_expected_state_rows()
+    assert district_rows == expected_district_rows
+
+
+def _seed_stage3_receipt_source_candidate(db_conn: psycopg.Connection) -> tuple[UUID, UUID, UUID]:
+    candidate_id = _stage3_uuid(101)
+    committee_a_id = _stage3_uuid(102)
+    committee_b_id = _stage3_uuid(103)
+    insert_candidate_row(
+        db_conn,
+        CandidateRowSeed(
+            id=candidate_id,
+            fec_candidate_id="H0NC03101",
+            name="Stage 3 Receipt Candidate",
+            office="H",
+        ),
+    )
+    for committee_id, fec_committee_id, name, link_index in (
+        (committee_a_id, "C99300102", "Stage 3 Receipt Committee A", 104),
+        (committee_b_id, "C99300103", "Stage 3 Receipt Committee B", 105),
+    ):
+        insert_committee_row(db_conn, CommitteeRowSeed(id=committee_id, fec_committee_id=fec_committee_id, name=name))
+        insert_candidate_committee_link_row(
+            db_conn,
+            CandidateCommitteeLinkSeed(
+                id=_stage3_uuid(link_index),
+                candidate_id=candidate_id,
+                committee_id=committee_id,
+                valid_period="[2023-01-01,2027-01-01)",
+                candidate_election_year=2026,
+                fec_election_year=2026,
+            ),
+        )
+    insert_committee_summary_row(
+        db_conn,
+        CommitteeSummaryRowSeed(
+            committee_id=committee_a_id,
+            cycle=2024,
+            total_receipts=Decimal("9999.00"),
+            total_disbursements=Decimal("1111.00"),
+            coverage_start_date=date(2023, 1, 1),
+            coverage_end_date=date(2024, 12, 31),
+        ),
+    )
+    insert_committee_summary_row(
+        db_conn,
+        CommitteeSummaryRowSeed(
+            committee_id=committee_a_id,
+            cycle=2026,
+            total_receipts=Decimal("1000.00"),
+            total_disbursements=Decimal("300.00"),
+            cash_on_hand=Decimal("700.00"),
+            individual_contributions=Decimal("500.00"),
+            other_committee_contributions=Decimal("100.00"),
+            party_committee_contributions=Decimal("50.00"),
+            candidate_contributions=Decimal("75.00"),
+            candidate_loans=Decimal("25.00"),
+            transfers_from_other_authorized_committees=Decimal("100.00"),
+            debts_owed_by_committee=Decimal("80.00"),
+            coverage_start_date=date(2025, 1, 1),
+            coverage_end_date=date(2026, 12, 31),
+        ),
+    )
+    insert_committee_summary_row(
+        db_conn,
+        CommitteeSummaryRowSeed(
+            committee_id=committee_b_id,
+            cycle=2026,
+            total_receipts=Decimal("500.00"),
+            total_disbursements=Decimal("200.00"),
+            cash_on_hand=Decimal("300.00"),
+            individual_contributions=Decimal("200.00"),
+            other_committee_contributions=Decimal("25.00"),
+            party_committee_contributions=Decimal("25.00"),
+            candidate_contributions=Decimal("10.00"),
+            candidate_loans=Decimal("15.00"),
+            transfers_from_other_authorized_committees=Decimal("50.00"),
+            debts_owed_by_committee=Decimal("20.00"),
+            coverage_start_date=date(2025, 1, 1),
+            coverage_end_date=date(2026, 12, 31),
+        ),
+    )
+    return candidate_id, committee_a_id, committee_b_id
+
+
+def _expected_receipt_source_composition() -> list[dict[str, str]]:
+    return [
+        {"label": "Individual contributions", "total_amount": "700.00", "source": "fec_committee_summary"},
+        {"label": "PAC/other committee contributions", "total_amount": "125.00", "source": "fec_committee_summary"},
+        {"label": "Party committee contributions", "total_amount": "75.00", "source": "fec_committee_summary"},
+        {"label": "Candidate funding", "total_amount": "125.00", "source": "fec_committee_summary"},
+        {
+            "label": "Transfers from other authorized committees",
+            "total_amount": "150.00",
+            "source": "fec_committee_summary",
+        },
+        {"label": "Other receipts", "total_amount": "325.00", "source": "fec_committee_summary"},
+    ]
 
 
 def _seed_expired_person_contribution_insights_committee(
@@ -376,105 +750,225 @@ def test_get_person_contribution_insights_returns_house_itemized_unitemized_geog
     assert payload["person_id"] == str(person_id)
     assert payload["has_data"] is True
     assert payload["metadata"] == {
-        "coverage_start_date": "2022-01-01",
-        "coverage_end_date": "2026-06-30",
-        "cycles_included": [2024, 2026],
+        "selected_cycle": 2026,
+        "coverage_start_date": "2025-01-01",
+        "coverage_end_date": "2026-12-31",
+        "available_cycles": [2022, 2024, 2026],
+        "cycles_included": [2026],
         "committee_count": 1,
         "approximate_geography": True,
         "excluded_geography": None,
         "caveats": [],
     }
-    assert payload["monthly_totals"] == [
-        {"month": "2024-02", "total_amount": "250.00", "transaction_count": 2},
-        {"month": "2024-03", "total_amount": "301.00", "transaction_count": 2},
-        {"month": "2026-01", "total_amount": "30.00", "transaction_count": 1},
-        {"month": "2026-05", "total_amount": "19.00", "transaction_count": 1},
-    ]
+    assert payload["monthly_totals"] == _expected_complete_2026_monthly_totals(_database_current_date(db_conn))
     assert payload["itemized_size_buckets"] == [
         {
-            "label": "$1-$200",
+            "label": "$200 and under",
             "min_amount": "0.01",
             "max_amount": "200.00",
-            "total_amount": "399.00",
-            "transaction_count": 5,
+            "total_amount": "0.00",
+            "transaction_count": 2,
         },
         {
-            "label": "$201-$500",
+            "label": "$200.01-$499.99",
             "min_amount": "200.01",
-            "max_amount": "500.00",
-            "total_amount": "201.00",
-            "transaction_count": 1,
+            "max_amount": "499.99",
+            "total_amount": "700.00",
+            "transaction_count": 2,
         },
         {
-            "label": "$501-$3,300",
-            "min_amount": "500.01",
-            "max_amount": "3300.00",
-            "total_amount": "0.00",
-            "transaction_count": 0,
+            "label": "$500-$999.99",
+            "min_amount": "500.00",
+            "max_amount": "999.99",
+            "total_amount": "1499.99",
+            "transaction_count": 2,
         },
         {
-            "label": "$3,301+",
-            "min_amount": "3300.01",
+            "label": "$1,000-$1,999.99",
+            "min_amount": "1000.00",
+            "max_amount": "1999.99",
+            "total_amount": "2999.99",
+            "transaction_count": 2,
+        },
+        {
+            "label": "$2,000 and over",
+            "min_amount": "2000.00",
             "max_amount": None,
-            "total_amount": "0.00",
-            "transaction_count": 0,
+            "total_amount": "2000.00",
+            "transaction_count": 1,
         },
     ]
     assert payload["dollars_by_size"] == [
-        {"label": "Unitemized (<$200)", "total_amount": "500.00", "source": "committee_summary"},
-        {"label": "$1-$200 itemized", "total_amount": "399.00", "source": "transactions"},
-        {"label": "$201-$500 itemized", "total_amount": "201.00", "source": "transactions"},
-        {"label": "$501-$3,300 itemized", "total_amount": "0.00", "source": "transactions"},
-        {"label": "$3,301+ itemized", "total_amount": "0.00", "source": "transactions"},
+        {"label": "Unitemized (<$200)", "total_amount": "200.00", "source": "committee_summary"},
+        {"label": "$200 and under itemized", "total_amount": "0.00", "source": "transactions"},
+        {"label": "$200.01-$499.99 itemized", "total_amount": "700.00", "source": "transactions"},
+        {"label": "$500-$999.99 itemized", "total_amount": "1499.99", "source": "transactions"},
+        {"label": "$1,000-$1,999.99 itemized", "total_amount": "2999.99", "source": "transactions"},
+        {"label": "$2,000 and over itemized", "total_amount": "2000.00", "source": "transactions"},
     ]
     assert payload["cycle_totals"] == [
         {
-            "cycle": 2024,
-            "itemized_individual_contribution_amount": "551.00",
-            "itemized_transaction_count": 4,
-            "unitemized_individual_contribution_amount": "300.00",
-            "total_individual_contribution_amount": "851.00",
-            "source": "committee_summary",
-        },
-        {
             "cycle": 2026,
-            "itemized_individual_contribution_amount": "49.00",
-            "itemized_transaction_count": 2,
+            "itemized_individual_contribution_amount": "7199.98",
+            "itemized_transaction_count": 9,
             "unitemized_individual_contribution_amount": "200.00",
-            "total_individual_contribution_amount": "249.00",
+            "total_individual_contribution_amount": "7399.98",
             "source": "committee_summary",
         },
     ]
     assert payload["career_totals"] == {
-        "itemized_individual_contribution_amount": "600.00",
-        "itemized_transaction_count": 6,
-        "unitemized_individual_contribution_amount": "500.00",
-        "total_individual_contribution_amount": "1100.00",
+        "itemized_individual_contribution_amount": "7199.98",
+        "itemized_transaction_count": 9,
+        "unitemized_individual_contribution_amount": "200.00",
+        "total_individual_contribution_amount": "7399.98",
         "source": "committee_summary",
     }
     assert payload["geography"] == {
         "by_state": [
-            {"label": "NC", "total_amount": "399.00", "transaction_count": 5},
-            {"label": "VA", "total_amount": "201.00", "transaction_count": 1},
+            {"label": "NC", "total_amount": "7199.98", "transaction_count": 9},
         ],
         "by_district": [
-            {"label": "In district", "total_amount": "399.00", "transaction_count": 5},
-            {"label": "Out of district", "total_amount": "201.00", "transaction_count": 1},
+            {"label": "In district", "total_amount": "7199.98", "transaction_count": 9},
         ],
         "district_share": {
-            "in_district_amount": "399.00",
-            "out_of_district_amount": "201.00",
+            "in_district_amount": "7199.98",
+            "out_of_district_amount": "0.00",
             "unknown_district_amount": "0.00",
-            "share": "0.6650",
+            "share": "1.0000",
             "available": True,
         },
+        "geography_mode": "district",
+        "classified_amount": "7199.98",
+        "classified_transaction_count": 9,
+        "unknown_amount": "0.00",
+        "unknown_transaction_count": 0,
     }
     assert payload["small_dollar_share"] == {
-        "small_dollar_amount": "899.00",
-        "total_contribution_amount": "1100.00",
-        "share": "0.8173",
+        "small_dollar_amount": "200.00",
+        "total_contribution_amount": "7399.98",
+        "share": "0.0270",
         "available": True,
     }
+
+
+def test_selected_cycle_routes_default_and_accept_supported_cycle(
+    api_client: TestClient,
+    db_conn: psycopg.Connection,
+) -> None:
+    person_id, candidate_id = _seed_person_contribution_insights_fixture(db_conn)
+    committee_id = UUID("d1000000-0000-0000-0000-000000000004")
+
+    default_insights = api_client.get(f"/v1/person/{person_id}/contribution-insights")
+    assert default_insights.status_code == 200
+    _assert_selected_cycle_payload(
+        default_insights.json()["metadata"],
+        selected_cycle=2026,
+        coverage_start_date="2025-01-01",
+        coverage_end_date="2026-12-31",
+    )
+
+    cycle_2024_expectations = [
+        (
+            f"/v1/person/{person_id}/contribution-insights?cycle=2024",
+            ("metadata",),
+        ),
+        (f"/v1/candidates/{candidate_id}/summary?cycle=2024", ()),
+        (f"/v1/committees/{committee_id}/summary?cycle=2024", ()),
+        (f"/v1/candidates/{candidate_id}/independent-expenditures/summary?cycle=2024", ()),
+    ]
+    for path, metadata_path in cycle_2024_expectations:
+        response = api_client.get(path)
+        assert response.status_code == 200
+        payload = response.json()
+        selected_payload = payload["metadata"] if metadata_path else payload
+        _assert_selected_cycle_payload(
+            selected_payload,
+            selected_cycle=2024,
+            coverage_start_date="2023-01-01",
+            coverage_end_date="2024-12-31",
+        )
+
+    accepted_list_paths = [
+        f"/v1/person/{person_id}/top-donors?cycle=2024",
+        f"/v1/person/{person_id}/top-employers?cycle=2024",
+        f"/v1/candidates/{candidate_id}/independent-expenditures?cycle=2024",
+        f"/v1/transactions?committee_id={committee_id}&cycle=2024",
+    ]
+    for path in accepted_list_paths:
+        assert api_client.get(path).status_code == 200
+
+
+@pytest.mark.parametrize("cycle", [2020, 2025])
+@pytest.mark.parametrize(
+    "path",
+    [
+        f"/v1/person/{uuid4()}/contribution-insights",
+        f"/v1/person/{uuid4()}/top-donors",
+        f"/v1/person/{uuid4()}/top-employers",
+        f"/v1/candidates/{uuid4()}/summary",
+        f"/v1/candidates/{uuid4()}/independent-expenditures",
+        f"/v1/candidates/{uuid4()}/independent-expenditures/summary",
+        f"/v1/committees/{uuid4()}/summary",
+        f"/v1/transactions?committee_id={uuid4()}",
+    ],
+)
+def test_selected_cycle_routes_reject_unsupported_cycle_before_query_execution(
+    api_client: TestClient,
+    path: str,
+    cycle: int,
+) -> None:
+    separator = "&" if "?" in path else "?"
+    response = api_client.get(f"{path}{separator}cycle={cycle}")
+
+    assert response.status_code == 422
+    assert str(cycle) in response.text
+
+
+def test_get_person_contribution_insights_uses_latest_loaded_zcta_boundary_year(
+    api_client: TestClient,
+    db_conn: psycopg.Connection,
+) -> None:
+    person_id, _candidate_id = _seed_person_contribution_insights_fixture(db_conn)
+    insert_zcta_district_row(
+        db_conn,
+        zcta5="27701",
+        state_fips="37",
+        cd_geoid="3702",
+        district_number="02",
+        boundary_year=2024,
+    )
+    insert_zcta_district_row(
+        db_conn,
+        zcta5="27709",
+        state_fips="37",
+        cd_geoid="3702",
+        district_number="02",
+        boundary_year=2024,
+    )
+    insert_zcta_district_row(
+        db_conn,
+        zcta5="22201",
+        state_fips="51",
+        cd_geoid="5108",
+        district_number="08",
+        boundary_year=2024,
+    )
+
+    response = api_client.get(f"/v1/person/{person_id}/contribution-insights")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["geography"]["by_district"] == [
+        {"label": "Out of district", "total_amount": "600.00", "transaction_count": 6},
+    ]
+    assert payload["geography"]["district_share"] == {
+        "in_district_amount": "0.00",
+        "out_of_district_amount": "600.00",
+        "unknown_district_amount": "0.00",
+        "share": "0.0000",
+        "available": True,
+    }
+    assert payload["metadata"]["caveats"] == []
 
 
 def test_get_person_contribution_insights_keeps_unsupported_2022_cycle_itemized(
@@ -485,7 +979,7 @@ def test_get_person_contribution_insights_keeps_unsupported_2022_cycle_itemized(
     insert_transaction_row(
         db_conn,
         TransactionRowSeed(
-            id=UUID("d1000000-0000-0000-0000-000000000041"),
+            id=UUID("d1000000-0000-0000-0000-000000000048"),
             filing_id=UUID("d1000000-0000-0000-0000-000000000006"),
             committee_id=UUID("d1000000-0000-0000-0000-000000000004"),
             transaction_type="15",
@@ -503,40 +997,59 @@ def test_get_person_contribution_insights_keeps_unsupported_2022_cycle_itemized(
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["metadata"]["cycles_included"] == [2024, 2026]
+    assert payload["metadata"]["cycles_included"] == [2026]
     assert payload["metadata"]["caveats"] == []
     assert payload["cycle_totals"] == [
         {
-            "cycle": 2022,
-            "itemized_individual_contribution_amount": "125.00",
-            "itemized_transaction_count": 1,
-            "unitemized_individual_contribution_amount": "0.00",
-            "total_individual_contribution_amount": "125.00",
-            "source": "itemized_transactions",
-        },
-        {
-            "cycle": 2024,
-            "itemized_individual_contribution_amount": "551.00",
-            "itemized_transaction_count": 4,
-            "unitemized_individual_contribution_amount": "300.00",
-            "total_individual_contribution_amount": "851.00",
-            "source": "committee_summary",
-        },
-        {
             "cycle": 2026,
-            "itemized_individual_contribution_amount": "49.00",
-            "itemized_transaction_count": 2,
+            "itemized_individual_contribution_amount": "7199.98",
+            "itemized_transaction_count": 9,
             "unitemized_individual_contribution_amount": "200.00",
-            "total_individual_contribution_amount": "249.00",
+            "total_individual_contribution_amount": "7399.98",
             "source": "committee_summary",
         },
     ]
     assert payload["career_totals"] == {
-        "itemized_individual_contribution_amount": "725.00",
-        "itemized_transaction_count": 7,
-        "unitemized_individual_contribution_amount": "500.00",
-        "total_individual_contribution_amount": "1225.00",
-        "source": "mixed_sources",
+        "itemized_individual_contribution_amount": "7199.98",
+        "itemized_transaction_count": 9,
+        "unitemized_individual_contribution_amount": "200.00",
+        "total_individual_contribution_amount": "7399.98",
+        "source": "committee_summary",
+    }
+
+    cycle_2022_response = api_client.get(f"/v1/person/{person_id}/contribution-insights?cycle=2022")
+
+    assert cycle_2022_response.status_code == 200
+    cycle_2022_payload = cycle_2022_response.json()
+    _assert_selected_cycle_payload(
+        cycle_2022_payload["metadata"],
+        selected_cycle=2022,
+        coverage_start_date="2021-01-01",
+        coverage_end_date="2022-12-31",
+    )
+    assert cycle_2022_payload["metadata"]["cycles_included"] == []
+    assert cycle_2022_payload["metadata"]["caveats"] == [
+        "missing_committee_summary",
+        "itemized_summary_reconciliation_unavailable",
+        "itemized_only_cycle_totals",
+        "current_district_approximation",
+    ]
+    assert cycle_2022_payload["cycle_totals"] == [
+        {
+            "cycle": 2022,
+            "itemized_individual_contribution_amount": "1124.00",
+            "itemized_transaction_count": 2,
+            "unitemized_individual_contribution_amount": "0.00",
+            "total_individual_contribution_amount": "1124.00",
+            "source": "itemized_transactions",
+        }
+    ]
+    assert cycle_2022_payload["career_totals"] == {
+        "itemized_individual_contribution_amount": "1124.00",
+        "itemized_transaction_count": 2,
+        "unitemized_individual_contribution_amount": "0.00",
+        "total_individual_contribution_amount": "1124.00",
+        "source": "itemized_transactions",
     }
 
 
@@ -552,38 +1065,136 @@ def test_get_person_contribution_insights_cycle_totals_fall_back_when_summary_mi
     payload = response.json()
     assert payload["has_data"] is True
     assert payload["metadata"]["cycles_included"] == []
-    assert payload["metadata"]["caveats"] == ["missing_committee_summary", "itemized_only_cycle_totals"]
+    assert payload["metadata"]["caveats"] == [
+        "missing_committee_summary",
+        "itemized_summary_reconciliation_unavailable",
+        "itemized_only_cycle_totals",
+    ]
     assert payload["cycle_totals"] == [
         {
-            "cycle": 2024,
-            "itemized_individual_contribution_amount": "551.00",
-            "itemized_transaction_count": 4,
-            "unitemized_individual_contribution_amount": "0.00",
-            "total_individual_contribution_amount": "551.00",
-            "source": "itemized_transactions",
-        },
-        {
             "cycle": 2026,
-            "itemized_individual_contribution_amount": "49.00",
-            "itemized_transaction_count": 2,
+            "itemized_individual_contribution_amount": "7199.98",
+            "itemized_transaction_count": 9,
             "unitemized_individual_contribution_amount": "0.00",
-            "total_individual_contribution_amount": "49.00",
+            "total_individual_contribution_amount": "7199.98",
             "source": "itemized_transactions",
         },
     ]
     assert payload["career_totals"] == {
-        "itemized_individual_contribution_amount": "600.00",
-        "itemized_transaction_count": 6,
+        "itemized_individual_contribution_amount": "7199.98",
+        "itemized_transaction_count": 9,
         "unitemized_individual_contribution_amount": "0.00",
-        "total_individual_contribution_amount": "600.00",
+        "total_individual_contribution_amount": "7199.98",
         "source": "itemized_transactions",
     }
     assert [bucket["label"] for bucket in payload["dollars_by_size"]] == [
-        "$1-$200 itemized",
-        "$201-$500 itemized",
-        "$501-$3,300 itemized",
-        "$3,301+ itemized",
+        "$200 and under itemized",
+        "$200.01-$499.99 itemized",
+        "$500-$999.99 itemized",
+        "$1,000-$1,999.99 itemized",
+        "$2,000 and over itemized",
     ]
+    assert payload["small_dollar_share"] == {
+        "small_dollar_amount": None,
+        "total_contribution_amount": None,
+        "share": None,
+        "available": False,
+    }
+
+
+@pytest.mark.parametrize(
+    ("summary_itemized_amount", "expected_caveats", "expected_available"),
+    [
+        (
+            Decimal("7199.99"),
+            [],
+            True,
+        ),
+        (
+            Decimal("7200.00"),
+            [
+                "itemized_summary_reconciliation_mismatch",
+                "itemized_only_cycle_totals",
+            ],
+            False,
+        ),
+    ],
+)
+def test_get_person_contribution_insights_gates_unitemized_facts_on_itemized_summary_reconciliation(
+    api_client: TestClient,
+    db_conn: psycopg.Connection,
+    summary_itemized_amount: Decimal,
+    expected_caveats: list[str],
+    expected_available: bool,
+) -> None:
+    person_id, _candidate_id = _seed_person_contribution_insights_fixture(db_conn)
+    db_conn.execute(
+        """
+        UPDATE cf.committee_summary
+        SET individual_itemized_contributions = %s
+        WHERE committee_id = %s AND cycle = 2026
+        """,
+        (summary_itemized_amount, UUID("d1000000-0000-0000-0000-000000000004")),
+    )
+
+    response = api_client.get(f"/v1/person/{person_id}/contribution-insights")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["metadata"]["caveats"] == expected_caveats
+    assert payload["small_dollar_share"]["available"] is expected_available
+    if expected_available:
+        assert payload["dollars_by_size"][0] == {
+            "label": "Unitemized (<$200)",
+            "total_amount": "200.00",
+            "source": "committee_summary",
+        }
+        assert payload["cycle_totals"][0]["total_individual_contribution_amount"] == "7399.98"
+    else:
+        assert payload["dollars_by_size"][0] == {
+            "label": "$200 and under itemized",
+            "total_amount": "0.00",
+            "source": "transactions",
+        }
+        assert payload["cycle_totals"][0]["total_individual_contribution_amount"] == "7199.98"
+
+
+def test_get_person_contribution_insights_marks_null_itemized_summary_unavailable(
+    api_client: TestClient,
+    db_conn: psycopg.Connection,
+) -> None:
+    person_id, _candidate_id = _seed_person_contribution_insights_fixture(db_conn)
+    db_conn.execute(
+        """
+        UPDATE cf.committee_summary
+        SET individual_itemized_contributions = NULL
+        WHERE committee_id = %s AND cycle = 2026
+        """,
+        (UUID("d1000000-0000-0000-0000-000000000004"),),
+    )
+
+    response = api_client.get(f"/v1/person/{person_id}/contribution-insights")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["metadata"]["cycles_included"] == []
+    assert payload["metadata"]["caveats"] == [
+        "itemized_summary_reconciliation_unavailable",
+        "itemized_only_cycle_totals",
+    ]
+    assert payload["dollars_by_size"][0] == {
+        "label": "$200 and under itemized",
+        "total_amount": "0.00",
+        "source": "transactions",
+    }
+    assert payload["cycle_totals"][0] == {
+        "cycle": 2026,
+        "itemized_individual_contribution_amount": "7199.98",
+        "itemized_transaction_count": 9,
+        "unitemized_individual_contribution_amount": "0.00",
+        "total_individual_contribution_amount": "7199.98",
+        "source": "itemized_transactions",
+    }
     assert payload["small_dollar_share"] == {
         "small_dollar_amount": None,
         "total_contribution_amount": None,
@@ -650,14 +1261,19 @@ def test_get_person_contribution_insights_marks_partial_committee_summary_unavai
     assert response.status_code == 200
     payload = response.json()
     assert payload["metadata"]["committee_count"] == 2
-    assert payload["metadata"]["coverage_end_date"] == "2026-05-05"
+    assert payload["metadata"]["coverage_end_date"] == "2026-12-31"
     assert payload["metadata"]["cycles_included"] == []
-    assert payload["metadata"]["caveats"] == ["missing_committee_summary", "itemized_only_cycle_totals"]
+    assert payload["metadata"]["caveats"] == [
+        "missing_committee_summary",
+        "itemized_summary_reconciliation_unavailable",
+        "itemized_only_cycle_totals",
+    ]
     assert [bucket["label"] for bucket in payload["dollars_by_size"]] == [
-        "$1-$200 itemized",
-        "$201-$500 itemized",
-        "$501-$3,300 itemized",
-        "$3,301+ itemized",
+        "$200 and under itemized",
+        "$200.01-$499.99 itemized",
+        "$500-$999.99 itemized",
+        "$1,000-$1,999.99 itemized",
+        "$2,000 and over itemized",
     ]
     assert payload["small_dollar_share"] == {
         "small_dollar_amount": None,
@@ -735,39 +1351,36 @@ def test_get_person_contribution_insights_cycle_totals_fall_back_when_summary_cy
     assert response.status_code == 200
     payload = response.json()
     assert payload["metadata"]["committee_count"] == 2
-    assert payload["metadata"]["coverage_end_date"] == "2026-05-05"
+    assert payload["metadata"]["coverage_end_date"] == "2026-12-31"
     assert payload["metadata"]["cycles_included"] == []
-    assert payload["metadata"]["caveats"] == ["missing_committee_summary", "itemized_only_cycle_totals"]
+    assert payload["metadata"]["caveats"] == [
+        "missing_committee_summary",
+        "itemized_summary_reconciliation_unavailable",
+        "itemized_only_cycle_totals",
+    ]
     assert payload["cycle_totals"] == [
         {
-            "cycle": 2024,
-            "itemized_individual_contribution_amount": "600.00",
-            "itemized_transaction_count": 5,
-            "unitemized_individual_contribution_amount": "0.00",
-            "total_individual_contribution_amount": "600.00",
-            "source": "itemized_transactions",
-        },
-        {
             "cycle": 2026,
-            "itemized_individual_contribution_amount": "49.00",
-            "itemized_transaction_count": 2,
+            "itemized_individual_contribution_amount": "7199.98",
+            "itemized_transaction_count": 9,
             "unitemized_individual_contribution_amount": "0.00",
-            "total_individual_contribution_amount": "49.00",
+            "total_individual_contribution_amount": "7199.98",
             "source": "itemized_transactions",
         },
     ]
     assert payload["career_totals"] == {
-        "itemized_individual_contribution_amount": "649.00",
-        "itemized_transaction_count": 7,
+        "itemized_individual_contribution_amount": "7199.98",
+        "itemized_transaction_count": 9,
         "unitemized_individual_contribution_amount": "0.00",
-        "total_individual_contribution_amount": "649.00",
+        "total_individual_contribution_amount": "7199.98",
         "source": "itemized_transactions",
     }
     assert [bucket["label"] for bucket in payload["dollars_by_size"]] == [
-        "$1-$200 itemized",
-        "$201-$500 itemized",
-        "$501-$3,300 itemized",
-        "$3,301+ itemized",
+        "$200 and under itemized",
+        "$200.01-$499.99 itemized",
+        "$500-$999.99 itemized",
+        "$1,000-$1,999.99 itemized",
+        "$2,000 and over itemized",
     ]
     assert payload["small_dollar_share"] == {
         "small_dollar_amount": None,
@@ -804,18 +1417,16 @@ def test_get_person_contribution_insights_surfaces_mixed_unknown_district_geogra
     assert response.status_code == 200
     payload = response.json()
     assert payload["geography"]["by_district"] == [
-        {"label": "In district", "total_amount": "399.00", "transaction_count": 5},
-        {"label": "Out of district", "total_amount": "201.00", "transaction_count": 1},
-        {"label": "Unknown district", "total_amount": "75.00", "transaction_count": 1},
+        {"label": "In district", "total_amount": "7199.98", "transaction_count": 9},
     ]
     assert payload["geography"]["district_share"] == {
-        "in_district_amount": "399.00",
-        "out_of_district_amount": "201.00",
-        "unknown_district_amount": "75.00",
-        "share": "0.6650",
+        "in_district_amount": "7199.98",
+        "out_of_district_amount": "0.00",
+        "unknown_district_amount": "0.00",
+        "share": "1.0000",
         "available": True,
     }
-    assert payload["metadata"]["caveats"] == ["missing_zcta_district"]
+    assert payload["metadata"]["caveats"] == []
 
 
 def test_get_person_contribution_insights_preserves_state_when_zcta_district_missing(
@@ -829,8 +1440,7 @@ def test_get_person_contribution_insights_preserves_state_when_zcta_district_mis
     assert response.status_code == 200
     payload = response.json()
     assert payload["geography"]["by_state"] == [
-        {"label": "NC", "total_amount": "399.00", "transaction_count": 5},
-        {"label": "VA", "total_amount": "201.00", "transaction_count": 1},
+        {"label": "NC", "total_amount": "7199.98", "transaction_count": 9},
     ]
     assert payload["geography"]["by_district"] == []
     assert payload["geography"]["district_share"] == {
@@ -860,16 +1470,19 @@ def test_get_person_contribution_insights_omits_statewide_and_executive_district
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["geography"]["by_district"] == []
+    assert payload["geography"]["by_district"] == [
+        {"label": "In state", "total_amount": "7199.98", "transaction_count": 9},
+    ]
     assert payload["geography"]["district_share"] == {
-        "in_district_amount": None,
-        "out_of_district_amount": None,
-        "unknown_district_amount": None,
-        "share": None,
-        "available": False,
+        "in_district_amount": "7199.98",
+        "out_of_district_amount": "0.00",
+        "unknown_district_amount": "0.00",
+        "share": "1.0000",
+        "available": True,
     }
-    assert payload["metadata"]["excluded_geography"] == "statewide_office"
-    assert payload["metadata"]["approximate_geography"] is False
+    assert payload["geography"]["geography_mode"] == "statewide"
+    assert payload["metadata"]["excluded_geography"] is None
+    assert payload["metadata"]["approximate_geography"] is True
 
     db_conn.rollback()
     person_id, _candidate_id = _seed_person_contribution_insights_fixture(
@@ -894,6 +1507,221 @@ def test_get_person_contribution_insights_omits_statewide_and_executive_district
     }
     assert payload["metadata"]["excluded_geography"] == "federal_executive"
     assert payload["metadata"]["approximate_geography"] is False
+    assert payload["geography"]["geography_mode"] == "state_bars_only"
+
+
+def test_get_person_contribution_insights_geography_house_uses_in_district_elsewhere_state_out_of_state_and_unknown(
+    api_client: TestClient,
+    db_conn: psycopg.Connection,
+) -> None:
+    person_id, _candidate_id, committee_id = _seed_stage3_geography_fixture(
+        db_conn,
+        office_name="us_house",
+        office_title="Representative",
+        candidate_office="H",
+        candidate_fec_id="H0NC03001",
+    )
+    expected_district_rows = [
+        {"label": "In district", "total_amount": Decimal("600.00"), "transaction_count": 1},
+        {"label": "Elsewhere in state", "total_amount": Decimal("500.00"), "transaction_count": 1},
+        {"label": "Out of state", "total_amount": Decimal("1050.00"), "transaction_count": 5},
+        {"label": "Unknown", "total_amount": Decimal("995.00"), "transaction_count": 3},
+    ]
+
+    _assert_stage3_direct_sql_rows(
+        db_conn,
+        committee_id=committee_id,
+        office_name="us_house",
+        office_state="NC",
+        office_district="01",
+        expected_district_rows=expected_district_rows,
+    )
+    response = api_client.get(f"/v1/person/{person_id}/contribution-insights")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["geography"]["by_state"] == _stage3_expected_state_rows()
+    assert payload["geography"]["by_district"] == [
+        {**row, "total_amount": f"{row['total_amount']:.2f}"} for row in expected_district_rows
+    ]
+    assert payload["geography"]["geography_mode"] == "district"
+    _assert_stage3_geography_denominators(payload["geography"])
+    assert payload["geography"]["district_share"] == {
+        "in_district_amount": "600.00",
+        "out_of_district_amount": "1550.00",
+        "unknown_district_amount": "995.00",
+        "share": "0.2791",
+        "available": True,
+    }
+    assert payload["metadata"]["approximate_geography"] is True
+    assert payload["metadata"]["excluded_geography"] is None
+    assert payload["metadata"]["caveats"] == ["missing_zcta_district"]
+
+
+def test_get_person_contribution_insights_geography_delegate_uses_at_large_district(
+    api_client: TestClient,
+    db_conn: psycopg.Connection,
+) -> None:
+    person_id, _candidate_id, committee_id = _seed_stage3_geography_fixture(
+        db_conn,
+        office_name="us_delegate",
+        office_title="Delegate",
+        candidate_office="H",
+        candidate_fec_id="H0NC03002",
+        office_district="00",
+    )
+    expected_district_rows = [
+        {"label": "In district", "total_amount": Decimal("600.00"), "transaction_count": 1},
+        {"label": "Elsewhere in state", "total_amount": Decimal("500.00"), "transaction_count": 1},
+        {"label": "Out of state", "total_amount": Decimal("1050.00"), "transaction_count": 5},
+        {"label": "Unknown", "total_amount": Decimal("995.00"), "transaction_count": 3},
+    ]
+
+    _assert_stage3_direct_sql_rows(
+        db_conn,
+        committee_id=committee_id,
+        office_name="us_delegate",
+        office_state="NC",
+        office_district="00",
+        expected_district_rows=expected_district_rows,
+    )
+    response = api_client.get(f"/v1/person/{person_id}/contribution-insights")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["geography"]["by_state"] == _stage3_expected_state_rows()
+    assert payload["geography"]["by_district"] == [
+        {**row, "total_amount": f"{row['total_amount']:.2f}"} for row in expected_district_rows
+    ]
+    assert payload["geography"]["geography_mode"] == "district"
+    _assert_stage3_geography_denominators(payload["geography"])
+    assert payload["metadata"]["approximate_geography"] is True
+    assert payload["metadata"]["excluded_geography"] is None
+    assert payload["metadata"]["caveats"] == ["missing_zcta_district"]
+
+
+def test_get_person_contribution_insights_geography_senate_uses_statewide_labels(
+    api_client: TestClient,
+    db_conn: psycopg.Connection,
+) -> None:
+    person_id, _candidate_id, committee_id = _seed_stage3_geography_fixture(
+        db_conn,
+        office_name="us_senate",
+        office_title="Senator",
+        candidate_office="S",
+        candidate_fec_id="S0NC03003",
+        office_district=None,
+    )
+    expected_district_rows = [
+        {"label": "In state", "total_amount": Decimal("1170.00"), "transaction_count": 3},
+        {"label": "Out of state", "total_amount": Decimal("1050.00"), "transaction_count": 5},
+        {"label": "Unknown", "total_amount": Decimal("925.00"), "transaction_count": 2},
+    ]
+
+    _assert_stage3_direct_sql_rows(
+        db_conn,
+        committee_id=committee_id,
+        office_name="us_senate",
+        office_state="NC",
+        office_district="",
+        expected_district_rows=expected_district_rows,
+    )
+    response = api_client.get(f"/v1/person/{person_id}/contribution-insights")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["geography"]["by_state"] == _stage3_expected_state_rows()
+    assert payload["geography"]["by_district"] == [
+        {**row, "total_amount": f"{row['total_amount']:.2f}"} for row in expected_district_rows
+    ]
+    assert payload["geography"]["geography_mode"] == "statewide"
+    _assert_stage3_geography_denominators(payload["geography"])
+    assert payload["metadata"]["approximate_geography"] is True
+    assert payload["metadata"]["excluded_geography"] is None
+    assert payload["metadata"]["caveats"] == []
+
+
+def test_get_person_contribution_insights_geography_president_returns_top_five_other_and_unknown_state_bars(
+    api_client: TestClient,
+    db_conn: psycopg.Connection,
+) -> None:
+    person_id, _candidate_id, _committee_id = _seed_stage3_geography_fixture(
+        db_conn,
+        office_name="us_president",
+        office_title="President",
+        candidate_office="P",
+        candidate_fec_id="P0US03004",
+        office_state="US",
+        office_district=None,
+    )
+
+    response = api_client.get(f"/v1/person/{person_id}/contribution-insights")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["geography"]["by_state"] == _stage3_expected_state_rows()
+    assert payload["geography"]["by_district"] == []
+    assert payload["geography"]["district_share"] == {
+        "in_district_amount": None,
+        "out_of_district_amount": None,
+        "unknown_district_amount": None,
+        "share": None,
+        "available": False,
+    }
+    assert payload["geography"]["geography_mode"] == "state_bars_only"
+    _assert_stage3_geography_denominators(payload["geography"])
+    assert payload["metadata"]["approximate_geography"] is False
+    assert payload["metadata"]["excluded_geography"] == "federal_executive"
+    assert payload["metadata"]["caveats"] == []
+
+
+def test_get_person_contribution_insights_geography_invalid_zip_falls_to_unknown_without_polluting_state_rankings(
+    api_client: TestClient,
+    db_conn: psycopg.Connection,
+) -> None:
+    person_id, _candidate_id, _committee_id = _seed_stage3_geography_fixture(
+        db_conn,
+        office_name="us_house",
+        office_title="Representative",
+        candidate_office="H",
+        candidate_fec_id="H0NC03005",
+    )
+
+    response = api_client.get(f"/v1/person/{person_id}/contribution-insights")
+
+    assert response.status_code == 200
+    state_rows = response.json()["geography"]["by_state"]
+    assert state_rows == _stage3_expected_state_rows()
+    assert "NY" not in {row["label"] for row in state_rows}
+    assert state_rows[-1] == {"label": "Unknown", "total_amount": "925.00", "transaction_count": 2}
+
+
+def test_get_person_contribution_insights_geography_prior_cycle_house_surfaces_current_district_approximation_caveat(
+    api_client: TestClient,
+    db_conn: psycopg.Connection,
+) -> None:
+    person_id, _candidate_id = _seed_person_contribution_insights_fixture(db_conn)
+
+    response = api_client.get(f"/v1/person/{person_id}/contribution-insights?cycle=2024")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["geography"]["by_state"] == [
+        {"label": "NC", "total_amount": "350.00", "transaction_count": 3},
+        {"label": "VA", "total_amount": "201.00", "transaction_count": 1},
+    ]
+    assert payload["geography"]["by_district"] == [
+        {"label": "In district", "total_amount": "350.00", "transaction_count": 3},
+        {"label": "Out of state", "total_amount": "201.00", "transaction_count": 1},
+    ]
+    assert payload["geography"]["geography_mode"] == "district"
+    assert payload["geography"]["classified_amount"] == "551.00"
+    assert payload["geography"]["classified_transaction_count"] == 4
+    assert payload["geography"]["unknown_amount"] == "0.00"
+    assert payload["geography"]["unknown_transaction_count"] == 0
+    assert payload["metadata"]["approximate_geography"] is True
+    assert payload["metadata"]["excluded_geography"] is None
+    assert payload["metadata"]["caveats"] == ["current_district_approximation"]
 
 
 def test_get_person_contribution_insights_cycle_totals_edge_case_payloads(
@@ -910,8 +1738,10 @@ def test_get_person_contribution_insights_cycle_totals_edge_case_payloads(
         "person_id": str(no_candidate.id),
         "has_data": False,
         "metadata": {
-            "coverage_start_date": "2022-01-01",
-            "coverage_end_date": None,
+            "selected_cycle": 2026,
+            "coverage_start_date": "2025-01-01",
+            "coverage_end_date": "2026-12-31",
+            "available_cycles": [2022, 2024, 2026],
             "cycles_included": [],
             "committee_count": 0,
             "approximate_geography": False,
@@ -939,6 +1769,11 @@ def test_get_person_contribution_insights_cycle_totals_edge_case_payloads(
                 "share": None,
                 "available": False,
             },
+            "geography_mode": "excluded",
+            "classified_amount": "0.00",
+            "classified_transaction_count": 0,
+            "unknown_amount": "0.00",
+            "unknown_transaction_count": 0,
         },
         "small_dollar_share": {
             "small_dollar_amount": None,
@@ -1196,11 +2031,6 @@ def test_get_person_top_donors_ranks_summed_donors_across_linked_committees(
 
     assert response.status_code == 200
     assert response.json() == [
-        {"name": "Donor 0012", "total_amount": "500.00", "transaction_count": 2, "city": None, "state": "NC"},
-        {"name": "Donor 0013", "total_amount": "201.00", "transaction_count": 1, "city": None, "state": "VA"},
-        {"name": "Zeta Donor", "total_amount": "150.00", "transaction_count": 1, "city": "Asheville", "state": "NC"},
-        {"name": "Donor 0014", "total_amount": "100.00", "transaction_count": 1, "city": None, "state": "NC"},
-        {"name": "Donor 0011", "total_amount": "50.00", "transaction_count": 1, "city": None, "state": "NC"},
         {"name": "Donor 0039", "total_amount": "30.00", "transaction_count": 1, "city": None, "state": "NC"},
         {"name": "Donor 0040", "total_amount": "19.00", "transaction_count": 1, "city": None, "state": "NC"},
     ]
@@ -1217,8 +2047,8 @@ def test_get_person_top_donors_honors_limit(
 
     assert response.status_code == 200
     assert response.json() == [
-        {"name": "Donor 0012", "total_amount": "500.00", "transaction_count": 2, "city": None, "state": "NC"},
-        {"name": "Donor 0013", "total_amount": "201.00", "transaction_count": 1, "city": None, "state": "VA"},
+        {"name": "Donor 0039", "total_amount": "30.00", "transaction_count": 1, "city": None, "state": "NC"},
+        {"name": "Donor 0040", "total_amount": "19.00", "transaction_count": 1, "city": None, "state": "NC"},
     ]
 
 
@@ -1249,7 +2079,7 @@ def test_get_person_top_employers_ranks_summed_employers_across_linked_committee
     person_id, candidate_id = _seed_person_contribution_insights_fixture(db_conn, include_itemized_receipts=False)
     _seed_person_top_employers_rows(db_conn, candidate_id=candidate_id)
 
-    response = api_client.get(f"/v1/person/{person_id}/top-employers")
+    response = api_client.get(f"/v1/person/{person_id}/top-employers?cycle=2024")
 
     assert response.status_code == 200
     assert response.json() == [
@@ -1265,7 +2095,7 @@ def test_get_person_top_employers_honors_limit(
     person_id, candidate_id = _seed_person_contribution_insights_fixture(db_conn, include_itemized_receipts=False)
     _seed_person_top_employers_rows(db_conn, candidate_id=candidate_id)
 
-    response = api_client.get(f"/v1/person/{person_id}/top-employers?limit=1")
+    response = api_client.get(f"/v1/person/{person_id}/top-employers?limit=1&cycle=2024")
 
     assert response.status_code == 200
     assert response.json() == [{"employer": "ACME CORP", "total_amount": "300.00", "transaction_count": 3}]
@@ -1880,6 +2710,243 @@ def test_get_candidate_summary_aggregates_multi_committee_totals(
     assert payload["cash_on_hand"] is None
 
 
+def test_fetch_candidate_summary_reports_gross_receipt_source_composition(
+    api_client: TestClient,
+    db_conn: psycopg.Connection,
+) -> None:
+    candidate_id = UUID("b0000000-0000-0000-0000-000000000701")
+    committee_a_id = UUID("b7111111-1111-1111-1111-111111111111")
+    committee_b_id = UUID("b7222222-2222-2222-2222-222222222222")
+    insert_candidate_row(
+        db_conn,
+        CandidateRowSeed(
+            id=candidate_id,
+            fec_candidate_id="H0NC02701",
+            name="Receipt Source Candidate",
+            office="H",
+        ),
+    )
+    for committee_id, fec_committee_id, committee_name, link_id in (
+        (committee_a_id, "C99000711", "Receipt Committee A", UUID("b0000000-0000-0000-0000-000000000711")),
+        (committee_b_id, "C99000722", "Receipt Committee B", UUID("b0000000-0000-0000-0000-000000000722")),
+    ):
+        insert_committee_row(
+            db_conn,
+            CommitteeRowSeed(id=committee_id, fec_committee_id=fec_committee_id, name=committee_name),
+        )
+        insert_candidate_committee_link_row(
+            db_conn,
+            CandidateCommitteeLinkSeed(
+                id=link_id,
+                candidate_id=candidate_id,
+                committee_id=committee_id,
+                valid_period="[2025-01-01,2027-01-01)",
+                candidate_election_year=2026,
+                fec_election_year=2026,
+            ),
+        )
+
+    insert_committee_summary_row(
+        db_conn,
+        CommitteeSummaryRowSeed(
+            committee_id=committee_a_id,
+            cycle=2026,
+            total_receipts=Decimal("1000.00"),
+            total_disbursements=Decimal("300.00"),
+            cash_on_hand=Decimal("700.00"),
+            individual_contributions=Decimal("500.00"),
+            other_committee_contributions=Decimal("100.00"),
+            party_committee_contributions=Decimal("50.00"),
+            candidate_contributions=Decimal("75.00"),
+            candidate_loans=Decimal("25.00"),
+            transfers_from_other_authorized_committees=Decimal("100.00"),
+            debts_owed_by_committee=Decimal("80.00"),
+            coverage_start_date=date(2025, 1, 1),
+            coverage_end_date=date(2026, 12, 31),
+        ),
+    )
+    insert_committee_summary_row(
+        db_conn,
+        CommitteeSummaryRowSeed(
+            committee_id=committee_b_id,
+            cycle=2026,
+            total_receipts=Decimal("500.00"),
+            total_disbursements=Decimal("200.00"),
+            cash_on_hand=Decimal("300.00"),
+            individual_contributions=Decimal("200.00"),
+            other_committee_contributions=Decimal("25.00"),
+            party_committee_contributions=Decimal("25.00"),
+            candidate_contributions=Decimal("10.00"),
+            candidate_loans=Decimal("15.00"),
+            transfers_from_other_authorized_committees=Decimal("50.00"),
+            debts_owed_by_committee=Decimal("20.00"),
+            coverage_start_date=date(2025, 1, 1),
+            coverage_end_date=date(2026, 12, 31),
+        ),
+    )
+
+    response = api_client.get(f"/v1/candidates/{candidate_id}/summary")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["summary_source"] == "derived"
+    assert payload["total_raised"] == "1500.00"
+    assert payload["total_spent"] == "500.00"
+    assert payload["selected_cycle_coverage_complete"] is True
+    assert payload["can_render_share"] is True
+    assert payload["receipt_source_caveats"] == []
+    assert payload["debts_owed_by_committee"] == "100.00"
+    assert payload["receipt_source_composition"] == [
+        {"label": "Individual contributions", "total_amount": "700.00", "source": "fec_committee_summary"},
+        {"label": "PAC/other committee contributions", "total_amount": "125.00", "source": "fec_committee_summary"},
+        {"label": "Party committee contributions", "total_amount": "75.00", "source": "fec_committee_summary"},
+        {"label": "Candidate funding", "total_amount": "125.00", "source": "fec_committee_summary"},
+        {
+            "label": "Transfers from other authorized committees",
+            "total_amount": "150.00",
+            "source": "fec_committee_summary",
+        },
+        {"label": "Other receipts", "total_amount": "325.00", "source": "fec_committee_summary"},
+    ]
+
+
+def test_fetch_candidate_summary_selected_cycle_metrics_report_completeness_debts_and_provenance(
+    db_conn: psycopg.Connection,
+) -> None:
+    candidate_id, _committee_a_id, _committee_b_id = _seed_stage3_receipt_source_candidate(db_conn)
+
+    payload = fetch_candidate_summary(db_conn, candidate_id, "Stage 3 Receipt Candidate")
+
+    assert payload is not None
+    assert payload["selected_cycle"] == 2026
+    assert payload["coverage_start_date"] == date(2025, 1, 1)
+    assert payload["coverage_end_date"] == date(2026, 12, 31)
+    assert payload["available_cycles"] == [2022, 2024, 2026]
+    assert payload["summary_source"] == "derived"
+    assert payload["total_raised"] == Decimal("1500.00")
+    assert payload["total_spent"] == Decimal("500.00")
+    assert payload["net"] == Decimal("1000.00")
+    assert payload["selected_cycle_coverage_complete"] is True
+    assert payload["can_render_share"] is True
+    assert payload["receipt_source_caveats"] == []
+    assert payload["debts_owed_by_committee"] == Decimal("100.00")
+    assert [
+        {**component, "total_amount": f"{component['total_amount']:.2f}"}
+        for component in payload["receipt_source_composition"]
+    ] == _expected_receipt_source_composition()
+    labels = {component["label"] for component in payload["receipt_source_composition"]}
+    assert "Refunds" not in labels
+    assert "Loan repayments" not in labels
+
+
+def test_get_candidate_summary_exposes_selected_cycle_and_available_cycles(
+    api_client: TestClient,
+    db_conn: psycopg.Connection,
+) -> None:
+    candidate_id, _committee_a_id, _committee_b_id = _seed_stage3_receipt_source_candidate(db_conn)
+
+    response = api_client.get(f"/v1/candidates/{candidate_id}/summary?cycle=2026")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["selected_cycle"] == 2026
+    assert payload["coverage_start_date"] == "2025-01-01"
+    assert payload["coverage_end_date"] == "2026-12-31"
+    assert payload["available_cycles"] == [2022, 2024, 2026]
+    assert payload["receipt_source_composition"] == _expected_receipt_source_composition()
+    assert {component["source"] for component in payload["receipt_source_composition"]} == {"fec_committee_summary"}
+    assert payload["debts_owed_by_committee"] == "100.00"
+
+
+def test_get_candidate_summary_receipt_source_caveats_follow_coverage_and_reconciliation(
+    api_client: TestClient,
+    db_conn: psycopg.Connection,
+) -> None:
+    candidate_id, _committee_a_id, committee_b_id = _seed_stage3_receipt_source_candidate(db_conn)
+    with db_conn.cursor() as cursor:
+        cursor.execute(
+            """
+            UPDATE cf.committee_summary
+            SET coverage_end_date = %s
+            WHERE committee_id = %s
+              AND cycle = 2026
+            """,
+            (date(2026, 6, 30), committee_b_id),
+        )
+
+    response = api_client.get(f"/v1/candidates/{candidate_id}/summary")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["selected_cycle_coverage_complete"] is False
+    assert payload["can_render_share"] is False
+    assert payload["receipt_source_composition"] == []
+    assert payload["receipt_source_caveats"] == [
+        "missing_committee_summary",
+        "incomplete_committee_summary_coverage",
+    ]
+    assert payload["debts_owed_by_committee"] is None
+
+
+def test_fetch_candidate_summary_disables_receipt_source_share_for_incomplete_or_nonreconciling_summaries(
+    api_client: TestClient,
+    db_conn: psycopg.Connection,
+) -> None:
+    candidate_id = UUID("b0000000-0000-0000-0000-000000000801")
+    committee_id = UUID("b8111111-1111-1111-1111-111111111111")
+    insert_candidate_row(
+        db_conn,
+        CandidateRowSeed(
+            id=candidate_id,
+            fec_candidate_id="H0NC02801",
+            name="Negative Receipt Source Candidate",
+            office="H",
+        ),
+    )
+    insert_committee_row(
+        db_conn,
+        CommitteeRowSeed(id=committee_id, fec_committee_id="C99000811", name="Negative Receipt Committee"),
+    )
+    insert_candidate_committee_link_row(
+        db_conn,
+        CandidateCommitteeLinkSeed(
+            id=UUID("b0000000-0000-0000-0000-000000000811"),
+            candidate_id=candidate_id,
+            committee_id=committee_id,
+            valid_period="[2025-01-01,2027-01-01)",
+            candidate_election_year=2026,
+            fec_election_year=2026,
+        ),
+    )
+    insert_committee_summary_row(
+        db_conn,
+        CommitteeSummaryRowSeed(
+            committee_id=committee_id,
+            cycle=2026,
+            total_receipts=Decimal("100.00"),
+            total_disbursements=Decimal("0.00"),
+            individual_contributions=Decimal("125.00"),
+            other_committee_contributions=Decimal("0.00"),
+            party_committee_contributions=Decimal("0.00"),
+            candidate_contributions=Decimal("0.00"),
+            candidate_loans=Decimal("0.00"),
+            transfers_from_other_authorized_committees=Decimal("0.00"),
+            coverage_start_date=date(2025, 1, 1),
+            coverage_end_date=date(2026, 12, 31),
+        ),
+    )
+
+    response = api_client.get(f"/v1/candidates/{candidate_id}/summary")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["selected_cycle_coverage_complete"] is True
+    assert payload["can_render_share"] is False
+    assert payload["receipt_source_composition"] == []
+    assert payload["receipt_source_caveats"] == ["negative_receipt_source_component"]
+    assert payload["debts_owed_by_committee"] == "0.00"
+
+
 def test_get_candidate_summary_uses_official_weball_totals_when_populated(
     api_client: TestClient,
     db_conn: psycopg.Connection,
@@ -1896,6 +2963,7 @@ def test_get_candidate_summary_uses_official_weball_totals_when_populated(
             total_receipts=Decimal("9000.00"),
             total_disbursements=Decimal("3500.00"),
             cash_on_hand=Decimal("5500.00"),
+            summary_coverage_end_date=date(2026, 12, 31),
         ),
     )
 
@@ -1952,6 +3020,221 @@ def test_get_candidate_summary_uses_official_weball_totals_when_populated(
     ]
     assert payload["committees"][0]["total_raised"] == "100.00"
     assert payload["committees"][0]["total_spent"] == "40.00"
+
+
+def test_get_candidate_summary_exposes_candidate_self_funding(
+    api_client: TestClient,
+    db_conn: psycopg.Connection,
+) -> None:
+    candidate_id = UUID("e3000000-0000-0000-0000-000000000701")
+    insert_candidate_row(
+        db_conn,
+        CandidateRowSeed(
+            id=candidate_id,
+            fec_candidate_id="H0NC03701",
+            name="Self Funding Contract Candidate",
+            office="H",
+            total_receipts=Decimal("5000.00"),
+            total_disbursements=Decimal("1250.00"),
+            cash_on_hand=Decimal("3750.00"),
+            candidate_contrib=Decimal("1234.56"),
+            candidate_loans=Decimal("345.67"),
+            candidate_loan_repay=Decimal("89.01"),
+            summary_coverage_end_date=date(2026, 12, 31),
+        ),
+    )
+
+    response = api_client.get(f"/v1/candidates/{candidate_id}/summary")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["candidate_contrib"] == "1234.56"
+    assert payload["candidate_loans"] == "345.67"
+    assert payload["candidate_loan_repay"] == "89.01"
+    assert payload["net_self_funding"] == "1491.22"
+
+
+@pytest.mark.parametrize(
+    "self_funding_case",
+    [
+        (
+            UUID("e3000000-0000-0000-0000-000000000711"),
+            "H0NC03711",
+            Decimal("110.11"),
+            Decimal("220.22"),
+            Decimal("30.03"),
+            Decimal("300.30"),
+        ),
+        (UUID("e3000000-0000-0000-0000-000000000712"), "H0NC03712", None, None, None, None),
+        (
+            UUID("e3000000-0000-0000-0000-000000000713"),
+            "H0NC03713",
+            None,
+            Decimal("77.77"),
+            None,
+            Decimal("77.77"),
+        ),
+        (
+            UUID("e3000000-0000-0000-0000-000000000714"),
+            "H0NC03714",
+            Decimal("11.11"),
+            Decimal("22.22"),
+            Decimal("44.44"),
+            Decimal("-11.11"),
+        ),
+    ],
+    ids=["complete", "all_null", "one_component", "negative_net"],
+)
+def test_candidate_self_funding_detail_and_batch_parity(
+    db_conn: psycopg.Connection,
+    self_funding_case: tuple[UUID, str, Decimal | None, Decimal | None, Decimal | None, Decimal | None],
+) -> None:
+    (
+        candidate_id,
+        fec_candidate_id,
+        candidate_contrib,
+        candidate_loans,
+        candidate_loan_repay,
+        expected_net_self_funding,
+    ) = self_funding_case
+    candidate_name = f"Self Funding Parity {fec_candidate_id}"
+    insert_candidate_row(
+        db_conn,
+        CandidateRowSeed(
+            id=candidate_id,
+            fec_candidate_id=fec_candidate_id,
+            name=candidate_name,
+            office="H",
+            total_receipts=Decimal("1000.00"),
+            total_disbursements=Decimal("400.00"),
+            cash_on_hand=Decimal("600.00"),
+            candidate_contrib=candidate_contrib,
+            candidate_loans=candidate_loans,
+            candidate_loan_repay=candidate_loan_repay,
+            summary_coverage_end_date=date(2026, 12, 31),
+        ),
+    )
+    expected_self_funding = {
+        "candidate_contrib": candidate_contrib,
+        "candidate_loans": candidate_loans,
+        "candidate_loan_repay": candidate_loan_repay,
+        "net_self_funding": expected_net_self_funding,
+    }
+
+    detail_summary = fetch_candidate_summary(db_conn, candidate_id, candidate_name)
+    batch_summary = fetch_candidate_public_money_summaries(db_conn, [(candidate_id, candidate_name)])[candidate_id]
+
+    assert detail_summary is not None
+    assert {key: detail_summary[key] for key in expected_self_funding} == expected_self_funding
+    assert {key: batch_summary[key] for key in expected_self_funding} == expected_self_funding
+
+
+def test_candidate_self_funding_is_null_for_non_selected_cycle(db_conn: psycopg.Connection) -> None:
+    candidate_id = UUID("e3000000-0000-0000-0000-000000000721")
+    candidate_name = "Prior Cycle Self Funding Candidate"
+    insert_candidate_row(
+        db_conn,
+        CandidateRowSeed(
+            id=candidate_id,
+            fec_candidate_id="H0NC03721",
+            name=candidate_name,
+            office="H",
+            total_receipts=Decimal("9000.00"),
+            total_disbursements=Decimal("3500.00"),
+            cash_on_hand=Decimal("5500.00"),
+            candidate_contrib=Decimal("901.23"),
+            candidate_loans=Decimal("456.78"),
+            candidate_loan_repay=Decimal("123.45"),
+            summary_coverage_end_date=date(2026, 12, 31),
+        ),
+    )
+    expected_null_self_funding = {
+        "candidate_contrib": None,
+        "candidate_loans": None,
+        "candidate_loan_repay": None,
+        "net_self_funding": None,
+    }
+
+    detail_summary = fetch_candidate_summary(db_conn, candidate_id, candidate_name, selected_cycle=2024)
+    batch_summary = fetch_candidate_public_money_summaries(
+        db_conn, [(candidate_id, candidate_name)], selected_cycle=2024
+    )[candidate_id]
+
+    assert detail_summary is not None
+    assert {key: detail_summary[key] for key in expected_null_self_funding} == expected_null_self_funding
+    assert {key: batch_summary[key] for key in expected_null_self_funding} == expected_null_self_funding
+
+
+def test_get_candidate_summary_ignores_official_weball_totals_for_non_selected_cycle(
+    api_client: TestClient,
+    db_conn: psycopg.Connection,
+) -> None:
+    """A selected cycle must not label another weball cycle's totals as its own."""
+    candidate_id = UUID("b0000000-0000-0000-0000-000000000551")
+    insert_candidate_row(
+        db_conn,
+        CandidateRowSeed(
+            id=candidate_id,
+            fec_candidate_id="H0NC02551",
+            name="Prior Cycle Official Totals Candidate",
+            office="H",
+            total_receipts=Decimal("9000.00"),
+            total_disbursements=Decimal("3500.00"),
+            cash_on_hand=Decimal("5500.00"),
+            summary_coverage_end_date=date(2026, 12, 31),
+        ),
+    )
+    committee_context = seed_committee_for_summary(
+        db_conn,
+        committee_id=UUID("b5666666-6666-6666-6666-666666666666"),
+        committee_name="Prior Cycle Official Totals Committee",
+        fec_committee_id="C99000551",
+    )
+    insert_summary_transaction(
+        db_conn,
+        context=committee_context,
+        transaction_id=UUID("b0000000-0000-0000-0000-000000000561"),
+        transaction_type="15",
+        amount=Decimal("125.00"),
+        transaction_date=date(2024, 7, 15),
+        source_record_id=committee_context.source_record_id,
+    )
+    insert_summary_transaction(
+        db_conn,
+        context=committee_context,
+        transaction_id=UUID("b0000000-0000-0000-0000-000000000562"),
+        transaction_type="24A",
+        amount=Decimal("25.00"),
+        transaction_date=date(2024, 8, 15),
+        source_record_id=committee_context.source_record_id,
+    )
+    insert_candidate_committee_link_row(
+        db_conn,
+        CandidateCommitteeLinkSeed(
+            id=UUID("b0000000-0000-0000-0000-000000000563"),
+            candidate_id=candidate_id,
+            committee_id=committee_context.committee_id,
+            valid_period="[2023-01-01,2025-01-01)",
+            designation="P",
+            source_record_id=None,
+            candidate_election_year=2024,
+            fec_election_year=2024,
+        ),
+    )
+
+    response = api_client.get(f"/v1/candidates/{candidate_id}/summary?cycle=2024")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["selected_cycle"] == 2024
+    assert payload["coverage_start_date"] == "2023-01-01"
+    assert payload["coverage_end_date"] == "2024-12-31"
+    assert payload["summary_source"] == "derived"
+    assert payload["total_raised"] == "125.00"
+    assert payload["total_spent"] == "25.00"
+    assert payload["net"] == "100.00"
+    assert payload["cash_on_hand"] is None
+    assert payload["transaction_count"] == 2
 
 
 def test_get_candidate_summary_returns_zero_official_payload_when_no_linked_committees_direct_owner(
@@ -2076,6 +3359,10 @@ def test_get_candidate_summary_returns_zero_totals_when_no_linked_committees(
     assert payload == {
         "candidate_id": str(candidate_id),
         "candidate_name": "No Committee Candidate",
+        "selected_cycle": 2026,
+        "coverage_start_date": "2025-01-01",
+        "coverage_end_date": "2026-12-31",
+        "available_cycles": [2022, 2024, 2026],
         "total_raised": "0.00",
         "total_spent": "0.00",
         "net": "0.00",
@@ -2083,7 +3370,16 @@ def test_get_candidate_summary_returns_zero_totals_when_no_linked_committees(
         "itemized_transaction_count": 0,
         "committees": [],
         "cash_on_hand": None,
+        "candidate_contrib": None,
+        "candidate_loans": None,
+        "candidate_loan_repay": None,
+        "net_self_funding": None,
         "summary_source": "derived",
+        "receipt_source_composition": [],
+        "selected_cycle_coverage_complete": False,
+        "can_render_share": False,
+        "receipt_source_caveats": ["missing_committee_summary"],
+        "debts_owed_by_committee": None,
     }
 
 
@@ -2146,6 +3442,10 @@ def test_get_candidate_summary_keeps_linked_committee_with_zero_qualifying_trans
     assert response.json() == {
         "candidate_id": str(candidate_id),
         "candidate_name": "Zero Qualifying Candidate",
+        "selected_cycle": 2026,
+        "coverage_start_date": "2025-01-01",
+        "coverage_end_date": "2026-12-31",
+        "available_cycles": [2022, 2024, 2026],
         "total_raised": "0.00",
         "total_spent": "0.00",
         "net": "0.00",
@@ -2155,6 +3455,10 @@ def test_get_candidate_summary_keeps_linked_committee_with_zero_qualifying_trans
             {
                 "committee_id": str(committee_context.committee_id),
                 "committee_name": "Zero Qualifying Committee",
+                "selected_cycle": 2026,
+                "coverage_start_date": "2025-01-01",
+                "coverage_end_date": "2026-12-31",
+                "available_cycles": [2022, 2024, 2026],
                 "total_raised": "0.00",
                 "total_spent": "0.00",
                 "net": "0.00",
@@ -2171,10 +3475,24 @@ def test_get_candidate_summary_keeps_linked_committee_with_zero_qualifying_trans
                 "itemized_transaction_count": 0,
                 "cycle_summaries": [],
                 "summary_source": "derived",
+                "receipt_source_composition": [],
+                "selected_cycle_coverage_complete": False,
+                "can_render_share": False,
+                "receipt_source_caveats": ["missing_committee_summary"],
+                "debts_owed_by_committee": None,
             }
         ],
         "cash_on_hand": None,
+        "candidate_contrib": None,
+        "candidate_loans": None,
+        "candidate_loan_repay": None,
+        "net_self_funding": None,
         "summary_source": "derived",
+        "receipt_source_composition": [],
+        "selected_cycle_coverage_complete": False,
+        "can_render_share": False,
+        "receipt_source_caveats": ["missing_committee_summary"],
+        "debts_owed_by_committee": None,
     }
 
 
@@ -2807,6 +4125,7 @@ def test_get_candidate_independent_expenditures_summary_aggregates_and_ranks_spe
             transaction_type="24E",
             amount=Decimal("300.00"),
             amendment_indicator="N",
+            transaction_date=date(2026, 1, 10),
             recipient_candidate_id=candidate_id,
             support_oppose="S",
         ),
@@ -2817,6 +4136,7 @@ def test_get_candidate_independent_expenditures_summary_aggregates_and_ranks_spe
             transaction_type="24E",
             amount=Decimal("50.00"),
             amendment_indicator="N",
+            transaction_date=date(2026, 1, 11),
             recipient_candidate_id=candidate_id,
             support_oppose="S",
         ),
@@ -2827,6 +4147,7 @@ def test_get_candidate_independent_expenditures_summary_aggregates_and_ranks_spe
             transaction_type="24E",
             amount=Decimal("40.00"),
             amendment_indicator="N",
+            transaction_date=date(2026, 1, 12),
             recipient_candidate_id=candidate_id,
             support_oppose="O",
         ),
@@ -2837,6 +4158,7 @@ def test_get_candidate_independent_expenditures_summary_aggregates_and_ranks_spe
             transaction_type="24E",
             amount=Decimal("200.00"),
             amendment_indicator="N",
+            transaction_date=date(2026, 1, 13),
             recipient_candidate_id=candidate_id,
             support_oppose="O",
         ),
@@ -2847,6 +4169,7 @@ def test_get_candidate_independent_expenditures_summary_aggregates_and_ranks_spe
             transaction_type="24E",
             amount=Decimal("75.00"),
             amendment_indicator="N",
+            transaction_date=date(2026, 1, 14),
             recipient_candidate_id=candidate_id,
             support_oppose="O",
         ),
@@ -2857,6 +4180,7 @@ def test_get_candidate_independent_expenditures_summary_aggregates_and_ranks_spe
             transaction_type="24E",
             amount=Decimal("125.00"),
             amendment_indicator="N",
+            transaction_date=date(2026, 1, 15),
             recipient_candidate_id=candidate_id,
             support_oppose="S",
         ),
@@ -2867,6 +4191,7 @@ def test_get_candidate_independent_expenditures_summary_aggregates_and_ranks_spe
             transaction_type="24E",
             amount=Decimal("125.00"),
             amendment_indicator="N",
+            transaction_date=date(2026, 1, 16),
             recipient_candidate_id=candidate_id,
             support_oppose="O",
         ),
@@ -2956,6 +4281,7 @@ def test_get_candidate_independent_expenditure_endpoints_exclude_memo_rows(
             transaction_type="24E",
             amount=Decimal("125.00"),
             amendment_indicator="N",
+            transaction_date=date(2026, 3, 15),
             recipient_candidate_id=candidate_id,
             support_oppose="S",
             memo_text="Broadcast ad buy",
@@ -2971,6 +4297,7 @@ def test_get_candidate_independent_expenditure_endpoints_exclude_memo_rows(
             transaction_type="24E",
             amount=Decimal("900.00"),
             amendment_indicator="N",
+            transaction_date=date(2026, 3, 15),
             recipient_candidate_id=candidate_id,
             support_oppose="O",
             memo_code="X",
@@ -2990,7 +4317,7 @@ def test_get_candidate_independent_expenditure_endpoints_exclude_memo_rows(
             "committee_id": "c6666666-6666-6666-6666-666666666666",
             "committee_name": "Memo Filter Committee",
             "amount": 125.0,
-            "transaction_date": None,
+            "transaction_date": "2026-03-15",
             "purpose": "Broadcast ad buy",
             "dissemination_date": None,
             "aggregate_amount": None,
@@ -3004,6 +4331,10 @@ def test_get_candidate_independent_expenditure_endpoints_exclude_memo_rows(
         "oppose_total": "0.00",
         "support_count": 1,
         "oppose_count": 0,
+        "selected_cycle": 2026,
+        "coverage_start_date": "2025-01-01",
+        "coverage_end_date": "2026-12-31",
+        "available_cycles": [2022, 2024, 2026],
         "top_spenders": [
             {
                 "committee_id": str(committee_id),
@@ -3061,6 +4392,10 @@ def test_get_candidate_independent_expenditure_endpoints_return_empty_state(
         "oppose_total": "0.00",
         "support_count": 0,
         "oppose_count": 0,
+        "selected_cycle": 2026,
+        "coverage_start_date": "2025-01-01",
+        "coverage_end_date": "2026-12-31",
+        "available_cycles": [2022, 2024, 2026],
         "top_spenders": [],
         "excluded_outlier_count": 0,
     }
@@ -4041,6 +5376,7 @@ def test_summary_computes_stage4_receipt_splits_rankings_and_spend_categories(
             transaction_type="15",
             amount=Decimal("100.00"),
             amendment_indicator="N",
+            transaction_date=date(2026, 3, 15),
             source_record_id=ctx.source_record_id,
             contributor_name_raw="Donor One",
         ),
@@ -4051,6 +5387,7 @@ def test_summary_computes_stage4_receipt_splits_rankings_and_spend_categories(
             transaction_type="15",
             amount=Decimal("25.00"),
             amendment_indicator="N",
+            transaction_date=date(2026, 3, 15),
             source_record_id=ctx.source_record_id,
             contributor_name_raw="Donor One",
         ),
@@ -4061,6 +5398,7 @@ def test_summary_computes_stage4_receipt_splits_rankings_and_spend_categories(
             transaction_type="15Z",
             amount=Decimal("30.00"),
             amendment_indicator="N",
+            transaction_date=date(2026, 3, 15),
             source_record_id=ctx.source_record_id,
             contributor_name_raw="Donor Two",
         ),
@@ -4071,6 +5409,7 @@ def test_summary_computes_stage4_receipt_splits_rankings_and_spend_categories(
             transaction_type="16G",
             amount=Decimal("20.00"),
             amendment_indicator="N",
+            transaction_date=date(2026, 3, 15),
             source_record_id=ctx.source_record_id,
             contributor_name_raw="Lender LLC",
         ),
@@ -4081,6 +5420,7 @@ def test_summary_computes_stage4_receipt_splits_rankings_and_spend_categories(
             transaction_type="24A",
             amount=Decimal("40.00"),
             amendment_indicator="N",
+            transaction_date=date(2026, 3, 15),
             source_record_id=ctx.source_record_id,
             contributor_name_raw="Vendor Alpha",
             memo_text="Media",
@@ -4092,6 +5432,7 @@ def test_summary_computes_stage4_receipt_splits_rankings_and_spend_categories(
             transaction_type="24E",
             amount=Decimal("15.00"),
             amendment_indicator="N",
+            transaction_date=date(2026, 3, 15),
             source_record_id=ctx.source_record_id,
             contributor_name_raw="Vendor Beta",
             memo_text="Field",
@@ -4103,6 +5444,7 @@ def test_summary_computes_stage4_receipt_splits_rankings_and_spend_categories(
             transaction_type="24A",
             amount=Decimal("10.00"),
             amendment_indicator="N",
+            transaction_date=date(2026, 3, 15),
             source_record_id=ctx.source_record_id,
             contributor_name_raw="Vendor Alpha",
             memo_text="Media",
@@ -4114,6 +5456,7 @@ def test_summary_computes_stage4_receipt_splits_rankings_and_spend_categories(
             transaction_type="24A",
             amount=Decimal("5.00"),
             amendment_indicator="N",
+            transaction_date=date(2026, 3, 15),
             source_record_id=ctx.source_record_id,
             contributor_name_raw="Vendor Alpha",
             memo_text=None,
@@ -4507,6 +5850,7 @@ def _insert_stage_one_summary_transactions(
                 transaction_type=transaction_type,
                 amount=Decimal(amount),
                 amendment_indicator="N",
+                transaction_date=date(2026, 3, 15),
                 source_record_id=source_record_id,
                 contributor_name_raw=contributor_name,
                 memo_text=memo_text,
@@ -4563,9 +5907,9 @@ def test_fetch_committee_summary_preserves_official_totals_rankings_categories_a
 
     assert result is not None
     assert result["summary_source"] == "fec_committee_summary"
-    assert result["total_raised"] == Decimal("3000.00")
-    assert result["total_spent"] == Decimal("1000.00")
-    assert result["net"] == Decimal("2000.00")
+    assert result["total_raised"] == Decimal("2000.00")
+    assert result["total_spent"] == Decimal("700.00")
+    assert result["net"] == Decimal("1300.00")
     assert result["transaction_count"] == 5
     assert result["itemized_transaction_count"] == 5
     assert result["data_through"] == newer_pull
@@ -4582,14 +5926,6 @@ def test_fetch_committee_summary_preserves_official_totals_rankings_categories_a
         {"category": "field", "total_amount": Decimal("10.00"), "transaction_count": 1},
     ]
     assert result["cycle_summaries"] == [
-        {
-            "cycle": 2024,
-            "total_receipts": Decimal("1000.00"),
-            "total_disbursements": Decimal("300.00"),
-            "cash_on_hand": Decimal("700.00"),
-            "coverage_start_date": date(2023, 1, 1),
-            "coverage_end_date": date(2024, 12, 31),
-        },
         {
             "cycle": 2026,
             "total_receipts": Decimal("2000.00"),
@@ -4699,14 +6035,26 @@ def test_committee_summary_top_lists_share_one_qualifying_transaction_scan() -> 
 
 def test_contribution_insights_itemized_rollups_share_one_qualifying_transaction_scan() -> None:
     rollups_sql = getattr(campaign_finance_query_module, "_PERSON_CONTRIBUTION_INSIGHTS_ITEMIZED_ROLLUPS_SQL", "")
+    district_sql = getattr(campaign_finance_query_module, "_PERSON_CONTRIBUTION_INSIGHTS_DISTRICT_SQL", "")
 
     assert rollups_sql
     assert rollups_sql.count("FROM cf.transaction t") == 1
     assert "qualifying_transactions AS MATERIALIZED" in rollups_sql
     assert all(
         name in rollups_sql
-        for name in ("monthly_totals", "state_totals", "totals", "itemized_size_buckets", "itemized_cycle_totals")
+        for name in (
+            "monthly_totals",
+            "state_totals",
+            "totals",
+            "itemized_size_buckets",
+            "itemized_cycle_totals",
+            "district_totals",
+        )
     )
+    assert rollups_sql.count("LEFT JOIN civic.zcta_district") == 1
+    assert district_sql.count("FROM cf.transaction t") == 1
+    assert district_sql.count("CASE\n                WHEN") == 1
+    assert district_sql.count("LEFT JOIN civic.zcta_district") == 1
 
 
 def test_get_committee_summary_returns_404_for_missing_committee(api_client: TestClient) -> None:
@@ -4737,6 +6085,10 @@ def test_get_committee_summary_returns_zero_totals_when_no_qualifying_transactio
     assert response.json() == {
         "committee_id": str(committee_id),
         "committee_name": committee_name,
+        "selected_cycle": 2026,
+        "coverage_start_date": "2025-01-01",
+        "coverage_end_date": "2026-12-31",
+        "available_cycles": [2022, 2024, 2026],
         "total_raised": "0.00",
         "total_spent": "0.00",
         "net": "0.00",
@@ -5546,7 +6898,7 @@ def test_fetch_committee_summary_official_only_rows_include_committee_name(
     monkeypatch.setattr(
         campaign_finance_query_module,
         "_fetch_committee_cycle_summaries",
-        lambda _conn, _committee_id: [
+        lambda _conn, _committee_id, _selected_cycle: [
             {
                 "cycle": 2026,
                 "total_receipts": Decimal("1234.00"),
@@ -5562,6 +6914,11 @@ def test_fetch_committee_summary_official_only_rows_include_committee_name(
         "_fetch_committee_name",
         lambda _conn, _committee_id: "Official Only Committee",
         raising=False,
+    )
+    monkeypatch.setattr(
+        campaign_finance_query_module,
+        "_fetch_committee_top_lists",
+        lambda _conn, _committee_id, _selected_cycle: {"top_donors": [], "top_vendors": [], "spend_categories": []},
     )
 
     summary = fetch_committee_fundraising_summary(_CommitteeSummaryOfficialOnlyConnection(), committee_id)
@@ -5616,23 +6973,15 @@ def test_get_committee_summary_uses_official_committee_summary_totals_when_prese
     assert response.status_code == 200
     payload = response.json()
     assert payload["summary_source"] == "fec_committee_summary"
-    # Official totals win; sum across supported cycles.
-    assert payload["total_raised"] == "10000.00"
-    assert payload["total_spent"] == "4000.00"
-    assert payload["net"] == "6000.00"
+    # Official totals win for the selected cycle.
+    assert payload["total_raised"] == "1000.00"
+    assert payload["total_spent"] == "500.00"
+    assert payload["net"] == "500.00"
     # Derived counts stay truthful next to official totals.
     assert payload["transaction_count"] == 2
     assert payload["itemized_transaction_count"] == 2
-    # Per-cycle rows preserved in ascending cycle order.
+    # Per-cycle rows preserve the selected cycle.
     assert payload["cycle_summaries"] == [
-        {
-            "cycle": 2024,
-            "total_receipts": "9000.00",
-            "total_disbursements": "3500.00",
-            "cash_on_hand": "5500.00",
-            "coverage_start_date": None,
-            "coverage_end_date": None,
-        },
         {
             "cycle": 2026,
             "total_receipts": "1000.00",
@@ -5971,6 +7320,160 @@ def _seed_candidate_and_committee_for_ie(
     )
 
 
+def _insert_superseded_candidate_ie_source(db_conn: psycopg.Connection) -> UUID:
+    data_source = insert_data_source_for_test(
+        db_conn,
+        jurisdiction="federal/fec",
+        name_suffix="candidate-ie-summaries",
+    )
+    superseding_source = insert_source_record_for_test(
+        db_conn,
+        source_record_id=UUID("a7100000-0000-0000-0000-000000000030"),
+        data_source_id=data_source.id,
+        source_record_key="candidate-ie-summaries-current",
+        source_url="https://example.org/record/candidate-ie-summaries-current",
+        pull_date=datetime(2026, 7, 2, 12, 0, tzinfo=timezone.utc),
+    )
+    superseded_source = insert_source_record_for_test(
+        db_conn,
+        source_record_id=UUID("a7100000-0000-0000-0000-000000000031"),
+        data_source_id=data_source.id,
+        source_record_key="candidate-ie-summaries-superseded",
+        source_url="https://example.org/record/candidate-ie-summaries-superseded",
+        pull_date=datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc),
+        superseded_by=superseding_source.id,
+    )
+    return superseded_source.id
+
+
+def _seed_candidate_ie_summaries_fixture(
+    db_conn: psycopg.Connection,
+) -> tuple[UUID, UUID, UUID]:
+    populated_candidate_id = UUID("a7100000-0000-0000-0000-000000000001")
+    empty_candidate_id = UUID("a7100000-0000-0000-0000-000000000002")
+    unrequested_candidate_id = UUID("a7100000-0000-0000-0000-000000000003")
+    committee_id = UUID("a7100000-0000-0000-0000-000000000010")
+    filing_id = UUID("a7100000-0000-0000-0000-000000000020")
+    _seed_candidate_and_committee_for_ie(
+        db_conn,
+        candidate_id=populated_candidate_id,
+        committee_id=committee_id,
+        filing_id=filing_id,
+        candidate_fec_id="H0NC71001",
+        committee_fec_id="C71000001",
+        committee_name="Batch IE Committee",
+    )
+    for candidate_id, fec_candidate_id in (
+        (empty_candidate_id, "H0NC71002"),
+        (unrequested_candidate_id, "H0NC71003"),
+    ):
+        insert_candidate_row(
+            db_conn,
+            CandidateRowSeed(
+                id=candidate_id,
+                fec_candidate_id=fec_candidate_id,
+                name=f"Batch IE Candidate {fec_candidate_id}",
+                office="H",
+            ),
+        )
+
+    superseded_source_id = _insert_superseded_candidate_ie_source(db_conn)
+
+    transaction_rows = (
+        (populated_candidate_id, Decimal("40000000.00"), date(2023, 1, 1), "N", False, "S", None),
+        (populated_candidate_id, CANDIDATE_IE_OUTLIER_CEILING, date(2024, 12, 31), "N", False, "S", None),
+        (populated_candidate_id, Decimal("250.25"), date(2024, 6, 1), "N", False, "O", None),
+        (populated_candidate_id, Decimal("9980000000.00"), date(2024, 6, 2), "N", False, "S", None),
+        (
+            populated_candidate_id,
+            CANDIDATE_IE_OUTLIER_CEILING + Decimal("0.01"),
+            date(2024, 6, 3),
+            "N",
+            False,
+            "O",
+            None,
+        ),
+        (populated_candidate_id, Decimal("1000.00"), date(2022, 12, 31), "N", False, "S", None),
+        (populated_candidate_id, Decimal("2000.00"), date(2025, 1, 1), "N", False, "O", None),
+        (populated_candidate_id, Decimal("3000.00"), date(2024, 6, 4), "N", True, "S", None),
+        (populated_candidate_id, Decimal("4000.00"), date(2024, 6, 5), "T", False, "O", None),
+        (populated_candidate_id, Decimal("5000.00"), date(2024, 6, 6), "N", False, None, None),
+        (
+            populated_candidate_id,
+            Decimal("6000.00"),
+            date(2024, 6, 7),
+            "N",
+            False,
+            "O",
+            superseded_source_id,
+        ),
+        (unrequested_candidate_id, Decimal("7000.00"), date(2024, 6, 8), "N", False, "S", None),
+    )
+    for index, (candidate_id, amount, transaction_date, amendment, is_memo, stance, source_id) in enumerate(
+        transaction_rows,
+        start=101,
+    ):
+        insert_transaction_row(
+            db_conn,
+            TransactionRowSeed(
+                id=UUID(f"a7100000-0000-0000-0000-{index:012d}"),
+                filing_id=filing_id,
+                committee_id=committee_id,
+                transaction_type="24E",
+                amount=amount,
+                amendment_indicator=amendment,
+                source_record_id=source_id,
+                transaction_date=transaction_date,
+                recipient_candidate_id=candidate_id,
+                is_memo=is_memo,
+                support_oppose=stance,
+            ),
+        )
+    return populated_candidate_id, empty_candidate_id, unrequested_candidate_id
+
+
+def test_fetch_candidate_ie_summaries_applies_cycle_qualification_and_outlier_rules(
+    db_conn: psycopg.Connection,
+) -> None:
+    populated_candidate_id, empty_candidate_id, unrequested_candidate_id = _seed_candidate_ie_summaries_fixture(db_conn)
+
+    summaries = fetch_candidate_ie_summaries(
+        db_conn,
+        [populated_candidate_id, empty_candidate_id],
+        selected_cycle=2024,
+    )
+
+    assert summaries == {
+        populated_candidate_id: {
+            "candidate_id": populated_candidate_id,
+            "selected_cycle": 2024,
+            "coverage_start_date": date(2023, 1, 1),
+            "coverage_end_date": date(2024, 12, 31),
+            "available_cycles": [2022, 2024, 2026],
+            "support_total": Decimal("140000000.00"),
+            "oppose_total": Decimal("250.25"),
+            "support_count": 2,
+            "oppose_count": 1,
+            "top_spenders": [],
+            "excluded_outlier_count": 2,
+        },
+        empty_candidate_id: {
+            "candidate_id": empty_candidate_id,
+            "selected_cycle": 2024,
+            "coverage_start_date": date(2023, 1, 1),
+            "coverage_end_date": date(2024, 12, 31),
+            "available_cycles": [2022, 2024, 2026],
+            "support_total": Decimal("0.00"),
+            "oppose_total": Decimal("0.00"),
+            "support_count": 0,
+            "oppose_count": 0,
+            "top_spenders": [],
+            "excluded_outlier_count": 0,
+        },
+    }
+    assert unrequested_candidate_id not in summaries
+
+
 def test_candidate_ie_summary_excludes_outliers_while_list_endpoint_stays_source_faithful(
     api_client: TestClient,
     db_conn: psycopg.Connection,
@@ -6001,11 +7504,12 @@ def test_candidate_ie_summary_excludes_outliers_while_list_endpoint_stays_source
             transaction_type="24E",
             amount=Decimal("250.00"),
             amendment_indicator="N",
+            transaction_date=date(2026, 3, 15),
             recipient_candidate_id=candidate_id,
             support_oppose="S",
         ),
     )
-    # Bogus over-ceiling row: $500M / row. Above the $100M outlier ceiling.
+    # Known malformed Schedule E shape: $9.98B / row. Above the $100M ceiling.
     insert_transaction_row(
         db_conn,
         TransactionRowSeed(
@@ -6013,8 +7517,9 @@ def test_candidate_ie_summary_excludes_outliers_while_list_endpoint_stays_source
             filing_id=filing_id,
             committee_id=committee_id,
             transaction_type="24E",
-            amount=Decimal("500000000.00"),
+            amount=Decimal("9980000000.00"),
             amendment_indicator="N",
+            transaction_date=date(2026, 3, 15),
             recipient_candidate_id=candidate_id,
             support_oppose="S",
         ),
@@ -6029,6 +7534,8 @@ def test_candidate_ie_summary_excludes_outliers_while_list_endpoint_stays_source
         str(normal_row_id),
         str(outlier_row_id),
     }
+    outlier_list_row = next(row for row in list_response.json() if row["id"] == str(outlier_row_id))
+    assert Decimal(str(outlier_list_row["amount"])) == Decimal("9980000000.00")
 
     assert summary_response.status_code == 200
     summary_payload = summary_response.json()

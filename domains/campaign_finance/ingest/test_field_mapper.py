@@ -312,6 +312,8 @@ def test_map_candidate_fields_creates_candidate_compatible_rows_with_principal_c
     for row in selected_candidate_rows:
         mapped = map_candidate_fields(row)
         assert mapped["principal_committee_fec_id"] == row["CAND_PCC"]
+        assert mapped["candidate_election_year"] == int(row["CAND_ELECTION_YR"])
+        assert mapped["candidate_status"] == row["CAND_STATUS"]
 
         candidate_payload = {key: mapped[key] for key in Candidate.model_fields if key in mapped}
         candidate_payload["principal_committee_id"] = uuid4()
@@ -320,9 +322,58 @@ def test_map_candidate_fields_creates_candidate_compatible_rows_with_principal_c
         assert candidate.office.value == mapped["office"]
 
 
+@pytest.mark.parametrize("candidate_election_year", ["", "   ", "not-a-year"])
+@pytest.mark.unit
+def test_map_candidate_fields_returns_none_for_missing_or_invalid_candidate_election_year(
+    candidate_election_year: str,
+) -> None:
+    row = {
+        "CAND_ID": "H0NC01001",
+        "CAND_NAME": "RIVERS, ALEX",
+        "CAND_PTY_AFFILIATION": "DEM",
+        "CAND_ELECTION_YR": candidate_election_year,
+        "CAND_OFFICE_ST": "NC",
+        "CAND_OFFICE": "H",
+        "CAND_OFFICE_DISTRICT": "01",
+        "CAND_ICI": "C",
+        "CAND_STATUS": "C",
+        "CAND_PCC": "C00100001",
+    }
+
+    mapped = map_candidate_fields(row)
+
+    assert mapped["candidate_election_year"] is None
+
+
+@pytest.mark.parametrize("candidate_status", ["", "   "])
+@pytest.mark.unit
+def test_map_candidate_fields_returns_none_for_blank_candidate_status(candidate_status: str) -> None:
+    row = {
+        "CAND_ID": "H0NC01001",
+        "CAND_NAME": "RIVERS, ALEX",
+        "CAND_PTY_AFFILIATION": "DEM",
+        "CAND_ELECTION_YR": "2024",
+        "CAND_OFFICE_ST": "NC",
+        "CAND_OFFICE": "H",
+        "CAND_OFFICE_DISTRICT": "01",
+        "CAND_ICI": "C",
+        "CAND_STATUS": candidate_status,
+        "CAND_PCC": "C00100001",
+    }
+
+    mapped = map_candidate_fields(row)
+
+    assert mapped["candidate_status"] is None
+
+
 @pytest.mark.unit
 def test_map_candidate_summary_fields_uses_exact_decimal_totals_and_coverage_date() -> None:
-    row = next(read_bulk_file(_FIXTURE_DIR / "weball_sample.txt", "weball"))
+    row = {
+        **next(read_bulk_file(_FIXTURE_DIR / "weball_sample.txt", "weball")),
+        "CAND_CONTRIB": "250.01",
+        "CAND_LOANS": "125.02",
+        "CAND_LOAN_REPAY": "75.03",
+    }
 
     mapped = map_candidate_summary_fields(row)
 
@@ -331,6 +382,9 @@ def test_map_candidate_summary_fields_uses_exact_decimal_totals_and_coverage_dat
         "total_receipts": Decimal("12345.67"),
         "total_disbursements": Decimal("8910.11"),
         "cash_on_hand": Decimal("3535.56"),
+        "candidate_contrib": Decimal("250.01"),
+        "candidate_loans": Decimal("125.02"),
+        "candidate_loan_repay": Decimal("75.03"),
         "summary_coverage_end_date": "2024-12-31",
     }
 
@@ -342,13 +396,39 @@ def test_map_candidate_summary_fields_uses_exact_decimal_totals_and_coverage_dat
             "total_receipts": mapped["total_receipts"],
             "total_disbursements": mapped["total_disbursements"],
             "cash_on_hand": mapped["cash_on_hand"],
+            "candidate_contrib": mapped["candidate_contrib"],
+            "candidate_loans": mapped["candidate_loans"],
+            "candidate_loan_repay": mapped["candidate_loan_repay"],
             "summary_coverage_end_date": mapped["summary_coverage_end_date"],
         }
     )
     assert candidate.total_receipts == Decimal("12345.67")
     assert candidate.total_disbursements == Decimal("8910.11")
     assert candidate.cash_on_hand == Decimal("3535.56")
+    assert candidate.candidate_contrib == Decimal("250.01")
+    assert candidate.candidate_loans == Decimal("125.02")
+    assert candidate.candidate_loan_repay == Decimal("75.03")
     assert candidate.summary_coverage_end_date == date(2024, 12, 31)
+
+
+@pytest.mark.unit
+def test_map_candidate_summary_fields_maps_blank_self_funding_values_to_none() -> None:
+    mapped = map_candidate_summary_fields(
+        {
+            "CAND_ID": "H0NC01001",
+            "TTL_RECEIPTS": "100.00",
+            "TTL_DISB": "25.00",
+            "COH_COP": "75.00",
+            "CAND_CONTRIB": "",
+            "CAND_LOANS": "   ",
+            "CAND_LOAN_REPAY": None,
+            "CVG_END_DT": "12/31/2024",
+        }
+    )
+
+    assert mapped["candidate_contrib"] is None
+    assert mapped["candidate_loans"] is None
+    assert mapped["candidate_loan_repay"] is None
 
 
 @pytest.mark.unit

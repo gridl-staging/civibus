@@ -536,6 +536,73 @@ class TestUpsertContest:
         assert row[0] == division_id
         assert row[1] == 1
 
+    def test_late_arriving_division_reuses_existing_division_contest_when_legacy_row_remains(
+        self,
+        db_conn: psycopg.Connection,
+    ) -> None:
+        from domains.civics.ingest import upsert_contest, upsert_electoral_division
+
+        office_id = self._make_office(db_conn)
+        division_id = upsert_electoral_division(
+            db_conn,
+            ElectoralDivision(
+                name=f"nc_congressional_district_{uuid4().hex[:12]}",
+                division_type="congressional_district",
+                state="NC",
+                district_number="03",
+            ),
+        )
+        election_date = date(2024, 11, 5)
+        target_id = upsert_contest(
+            db_conn,
+            Contest(
+                name="NC Congressional District 3 General 2024",
+                election_date=election_date,
+                election_type="general",
+                office_id=office_id,
+                electoral_division_id=division_id,
+            ),
+        )
+        legacy_id = upsert_contest(
+            db_conn,
+            Contest(
+                name="Legacy NC Congressional District 3 General 2024",
+                election_date=election_date,
+                election_type="general",
+                office_id=office_id,
+            ),
+        )
+
+        updated_id = upsert_contest(
+            db_conn,
+            Contest(
+                id=uuid4(),
+                name="Updated NC Congressional District 3 General 2024",
+                election_date=election_date,
+                election_type="general",
+                office_id=office_id,
+                electoral_division_id=division_id,
+            ),
+        )
+
+        assert updated_id == target_id
+        assert legacy_id != target_id
+        rows = db_conn.execute(
+            """
+            SELECT id, electoral_division_id, name
+            FROM civic.contest
+            WHERE office_id = %s
+              AND election_date = %s
+              AND election_type = 'general'
+            ORDER BY electoral_division_id NULLS FIRST
+            """,
+            (office_id, election_date),
+        ).fetchall()
+        assert [(row[0], row[1], row[2]) for row in rows] == [
+            (legacy_id, None, "Legacy NC Congressional District 3 General 2024"),
+            (target_id, division_id, "Updated NC Congressional District 3 General 2024"),
+        ]
+
 
 # ---------------------------------------------------------------------------
 # Election upsert tests

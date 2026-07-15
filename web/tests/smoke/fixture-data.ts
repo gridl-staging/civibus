@@ -6,7 +6,10 @@ const {
   SMOKE_CANDIDACY_PERSON_NAME,
   SMOKE_CANDIDATE_ID,
   SMOKE_AL_CANDIDATE_ID,
+  SMOKE_CANDIDATE_CASH_ON_HAND,
+  SMOKE_CANDIDATE_COVERAGE_THROUGH,
   SMOKE_CANDIDATE_NAME,
+  SMOKE_CANDIDATE_SELECTED_CYCLE,
   SMOKE_CANDIDATE_SLUG,
   SMOKE_COVERAGE_DOMAIN,
   SMOKE_COVERAGE_JURISDICTION,
@@ -52,6 +55,7 @@ const {
   SMOKE_PHL_COMMITTEE_ID,
   SMOKE_PHL_COMMITTEE_NAME,
   SMOKE_PERSON_CANONICAL_NAME,
+  SMOKE_PERSON_CASH_ON_HAND_DOLLARS,
   SMOKE_PERSON_ID,
   SMOKE_PERSON_ITEMIZED_DOLLARS,
   SMOKE_PERSON_LARGE_ITEMIZED_DOLLARS,
@@ -60,6 +64,7 @@ const {
   SMOKE_PERSON_NO_PORTRAIT_CANONICAL_NAME,
   SMOKE_PERSON_NO_PORTRAIT_ID,
   SMOKE_PERSON_PRIOR_UNITEMIZED_DOLLARS,
+  SMOKE_PERSON_SELECTED_CYCLE,
   SMOKE_PERSON_SMALL_DOLLAR_DOLLARS,
   SMOKE_PERSON_SMALL_DOLLAR_SHARE,
   SMOKE_PERSON_SMALL_ITEMIZED_DOLLARS,
@@ -275,8 +280,10 @@ export const smokeFixtures = {
       person_id: SMOKE_PERSON_ID,
       has_data: true,
       metadata: {
+        selected_cycle: Number(SMOKE_PERSON_SELECTED_CYCLE),
         coverage_start_date: "2022-01-01",
         coverage_end_date: "2026-06-30",
+        available_cycles: [2022, 2024, 2026],
         cycles_included: [2022, 2024, 2026],
         committee_count: 1,
         approximate_geography: true,
@@ -289,14 +296,14 @@ export const smokeFixtures = {
       ],
       itemized_size_buckets: [
         {
-          label: "$1-$200",
+          label: "$200 and under",
           min_amount: "0.01",
           max_amount: "200.00",
           total_amount: SMOKE_PERSON_SMALL_ITEMIZED_DOLLARS,
           transaction_count: 1
         },
         {
-          label: "$201-$500",
+          label: "$200.01-$499.99",
           min_amount: "200.01",
           max_amount: "500.00",
           total_amount: SMOKE_PERSON_LARGE_ITEMIZED_DOLLARS,
@@ -344,7 +351,12 @@ export const smokeFixtures = {
               (Number(SMOKE_PERSON_SMALL_ITEMIZED_DOLLARS) + Number(SMOKE_PERSON_LARGE_ITEMIZED_DOLLARS))
           ),
           available: true
-        }
+        },
+        geography_mode: "district" as const,
+        classified_amount: SMOKE_PERSON_ITEMIZED_DOLLARS,
+        classified_transaction_count: 2,
+        unknown_amount: "0.00",
+        unknown_transaction_count: 0
       },
       small_dollar_share: {
         small_dollar_amount: SMOKE_PERSON_SMALL_DOLLAR_DOLLARS,
@@ -609,6 +621,10 @@ export const smokeFixtures = {
     summary: {
       committee_id: SMOKE_COMMITTEE_ID,
       committee_name: SMOKE_COMMITTEE_NAME,
+      selected_cycle: 2026,
+      coverage_start_date: "2026-01-01",
+      coverage_end_date: "2026-06-30",
+      available_cycles: [2026],
       total_raised: "125.00",
       total_spent: "40.00",
       net: "85.00",
@@ -643,7 +659,24 @@ export const smokeFixtures = {
           total_spent: "40.00",
           net: "85.00",
           transaction_count: 3,
-          cash_on_hand: null
+          cash_on_hand: "125.00",
+          row_id: `${SMOKE_FILING_ID}:N`
+        },
+        {
+          filing_id: "33333333-3333-4333-8333-333333333334",
+          filing_fec_id: "F3N",
+          filing_name: "Q2 Filing",
+          report_type: "Q2",
+          amendment_indicator: "N",
+          coverage_start_date: "2026-06-01",
+          coverage_end_date: "2026-06-30",
+          receipt_date: "2026-07-15",
+          total_raised: "250.50",
+          total_spent: "100.00",
+          net: "150.50",
+          transaction_count: 2,
+          cash_on_hand: "250.50",
+          row_id: "33333333-3333-4333-8333-333333333334:N"
         }
       ]
     },
@@ -872,10 +905,30 @@ export const smokeFixtures = {
     summary: {
       candidate_id: SMOKE_CANDIDATE_ID,
       candidate_name: SMOKE_CANDIDATE_NAME,
+      selected_cycle: Number(SMOKE_CANDIDATE_SELECTED_CYCLE),
+      coverage_start_date: "2026-01-01",
+      coverage_end_date: SMOKE_CANDIDATE_COVERAGE_THROUGH,
+      available_cycles: [Number(SMOKE_CANDIDATE_SELECTED_CYCLE)],
       total_raised: "250.00",
       total_spent: "80.00",
       net: "170.00",
       transaction_count: 5,
+      debts_owed_by_committee: "0.00",
+      receipt_source_composition: [
+        {
+          label: "Gross individual contributions",
+          total_amount: "125.00",
+          source: "fec_committee_summary" as const
+        },
+        {
+          label: "PAC/other committee contributions",
+          total_amount: "125.00",
+          source: "fec_committee_summary" as const
+        }
+      ],
+      selected_cycle_coverage_complete: true,
+      can_render_share: true,
+      receipt_source_caveats: [],
       committees: [
         {
           committee_id: SMOKE_COMMITTEE_ID,
@@ -887,14 +940,31 @@ export const smokeFixtures = {
           net: "170.00",
           transaction_count: 5,
           jurisdiction: "federal/fec",
-          data_through: "2026-03-19T00:00:00Z"
+          data_through: "2026-03-19T00:00:00Z",
+          selected_cycle: Number(SMOKE_CANDIDATE_SELECTED_CYCLE),
+          coverage_start_date: "2026-01-01",
+          coverage_end_date: SMOKE_CANDIDATE_COVERAGE_THROUGH,
+          available_cycles: [Number(SMOKE_CANDIDATE_SELECTED_CYCLE)],
+          cash_receipts_total: "250.00",
+          in_kind_receipts_total: "0.00",
+          loan_receipts_total: "0.00",
+          contribution_receipts_total: "250.00",
+          top_donors: [],
+          top_vendors: [],
+          spend_categories: null,
+          itemized_transaction_count: 5,
+          cycle_summaries: [],
+          summary_source: "derived" as const
         }
-      ]
+      ],
+      cash_on_hand: SMOKE_CANDIDATE_CASH_ON_HAND.replace("$", "").replace(",", ""),
+      summary_source: "fec_weball" as const,
+      itemized_transaction_count: 5
     },
     ieTransactions: [
       {
         id: "dd222222-2222-4222-8222-222222222222",
-        filing_id: null,
+        filing_id: SMOKE_FILING_ID,
         committee_id: SMOKE_IE_COMMITTEE_A_ID,
         committee_name: SMOKE_IE_COMMITTEE_A_NAME,
         amount: 5000,
@@ -907,6 +977,10 @@ export const smokeFixtures = {
     ],
     ieSummary: {
       candidate_id: SMOKE_CANDIDATE_ID,
+      selected_cycle: Number(SMOKE_CANDIDATE_SELECTED_CYCLE),
+      coverage_start_date: "2026-01-01",
+      coverage_end_date: SMOKE_CANDIDATE_COVERAGE_THROUGH,
+      available_cycles: [Number(SMOKE_CANDIDATE_SELECTED_CYCLE)],
       support_total: "15000.00",
       oppose_total: "8500.00",
       support_count: 12,
@@ -919,7 +993,8 @@ export const smokeFixtures = {
           total_amount: "10000.00",
           transaction_count: 8
         }
-      ]
+      ],
+      excluded_outlier_count: 0
     }
   },
   candidateEmpty: {

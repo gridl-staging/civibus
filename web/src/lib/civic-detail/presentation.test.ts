@@ -765,7 +765,7 @@ describe("contest detail presentation", () => {
     );
   });
 
-  it("builds winner results and candidate finance/outside-spending presentation from shared finance formatters", () => {
+  it("builds winner results and compact selected-cycle candidate finance facts from shared finance formatters", () => {
     const viewModel = buildContestDetailPresentation(
       {
         id: CONTEST_ID,
@@ -794,11 +794,16 @@ describe("contest detail presentation", () => {
         sources: []
       },
       {
+        selectedCycle: 9999,
         candidateFinanceByPersonId: {
           [PERSON_ID]: {
             personId: PERSON_ID,
             candidateHref: "/candidate/jane-officeholder",
             summary: {
+              selected_cycle: 2026,
+              coverage_start_date: "2025-01-01",
+              coverage_end_date: "2026-12-31",
+              available_cycles: [2022, 2024, 2026],
               candidate_id: "candidate-1",
               candidate_name: "Jane Officeholder",
               total_raised: "5000.00",
@@ -806,11 +811,19 @@ describe("contest detail presentation", () => {
               net: "3000.00",
               transaction_count: 42,
               itemized_transaction_count: 42,
-              cash_on_hand: null,
+              cash_on_hand: "1000.00",
               summary_source: "derived" as const,
+              receipt_source_composition: [],
+              selected_cycle_coverage_complete: false,
+              can_render_share: false,
+              receipt_source_caveats: [],
               committees: []
             },
             ieSummary: {
+              selected_cycle: 2024,
+              coverage_start_date: "2023-01-01",
+              coverage_end_date: "2024-12-31",
+              available_cycles: [2022, 2024],
               candidate_id: "candidate-1",
               support_total: "100.00",
               oppose_total: "50.00",
@@ -839,51 +852,158 @@ describe("contest detail presentation", () => {
     );
 
     expect(viewModel.resultWinnerPersonName).toBe("Jane Officeholder");
-    expect(viewModel.resultWinnerPersonHref).toBe(`/person/${PERSON_ID}`);
+    expect(viewModel.resultWinnerPersonHref).toBe(`/person/${PERSON_ID}?cycle=2026`);
     expect(viewModel.resultWinnerCandidacyHref).toBe(`/candidacy/${CANDIDACY_ID}`);
     expect(viewModel.resultEmptyMessage).toBeNull();
     expect(viewModel.financeEmptyMessage).toBeNull();
     expect(viewModel.candidacyRows[0].isWinner).toBe(true);
+    expect(viewModel.candidacyRows[0].personHref).toBe(`/person/${PERSON_ID}?cycle=2026`);
     expect(viewModel.financeRows).toHaveLength(1);
     expect(viewModel.financeRows[0]).toMatchObject({
       personId: PERSON_ID,
       personName: "Jane Officeholder",
-      candidateHref: "/candidate/jane-officeholder",
-      fundraisingSummary: {
-        totalRaised: "$5,000.00",
-        totalSpent: "$2,000.00",
-        net: "$3,000.00",
-        transactionCount: 42
-      },
+      personHref: `/person/${PERSON_ID}?cycle=2026`,
+      candidateHref: "/candidate/jane-officeholder?cycle=2026",
+      financeFacts: [
+        { label: "Selected cycle", value: "2026" },
+        { label: "Coverage through", value: "2026-12-31" },
+        { label: "Receipts", value: "$5,000.00" },
+        { label: "Disbursements", value: "$2,000.00" },
+        { label: "Cash on hand", value: "$1,000.00" }
+      ],
       outsideSpending: {
-        supportTotal: "$100.00",
-        opposeTotal: "$50.00",
-        supportCountLabel: "1 expenditure",
-        opposeCountLabel: "1 expenditure",
-        emptyMessage: null
+        supportTotal: "—",
+        opposeTotal: "—",
+        supportCountLabel: "—",
+        opposeCountLabel: "—",
+        emptyMessage:
+          "Outside-spending data is not yet available for this candidate. Coverage may be incomplete."
       }
     });
-    expect(viewModel.financeRows[0].financeChartSeries).toEqual([
+    expect("financeChartSeries" in viewModel.financeRows[0]).toBe(false);
+    expect("outsideSpendingChartSeries" in viewModel.financeRows[0]).toBe(false);
+    expect(viewModel.financeRows[0].outsideSpendingFigure).toBeNull();
+  });
+
+  it("uses IE selected-cycle metadata for contest outside-spending figures when fundraising is missing", () => {
+    const viewModel = buildContestDetailPresentation(
       {
-        id: "candidate-finance",
-        label: "Jane Officeholder fundraising",
-        points: [
-          { x: "Raised", y: 5000 },
-          { x: "Spent", y: 2000 },
-          { x: "Net", y: 3000 }
-        ]
-      }
-    ]);
-    expect(viewModel.financeRows[0].outsideSpendingChartSeries).toEqual([
+        id: CONTEST_ID,
+        name: "Governor 2026 General Election",
+        election_date: "2026-11-03",
+        election_type: "general",
+        office_id: OFFICE_ID,
+        electoral_division_id: ELECTORAL_DIVISION_ID,
+        number_of_seats: 1,
+        filing_deadline: "2026-09-01",
+        is_partisan: true,
+        candidate_list_incomplete: false,
+        result_winner_candidacy_id: CANDIDACY_ID,
+        result_winner_person_id: PERSON_ID,
+        result_winner_person_name: "Jane Officeholder",
+        candidacies: [
+          {
+            candidacy_id: CANDIDACY_ID,
+            person_id: PERSON_ID,
+            person_name: "Jane Officeholder",
+            party: "DEM",
+            status: "won",
+            incumbent_challenge: "I"
+          }
+        ],
+        sources: []
+      },
       {
-        id: "outside-spending",
-        label: "Jane Officeholder outside spending",
-        points: [
-          { x: "Support", y: 100 },
-          { x: "Oppose", y: 50 }
-        ]
+        selectedCycle: 9999,
+        candidateFinanceByPersonId: {
+          [PERSON_ID]: {
+            personId: PERSON_ID,
+            candidateHref: "/candidate/jane-officeholder",
+            summary: null,
+            ieSummary: {
+              selected_cycle: 2024,
+              coverage_start_date: "2023-01-01",
+              coverage_end_date: "2024-10-15",
+              available_cycles: [2024],
+              candidate_id: "candidate-1",
+              support_total: "0.00",
+              oppose_total: "0.00",
+              support_count: 0,
+              oppose_count: 0,
+              top_spenders: [],
+              excluded_outlier_count: 0
+            },
+            ieTransactions: []
+          }
+        }
       }
-    ]);
+    );
+
+    expect(viewModel.resultWinnerPersonHref).toBe(`/person/${PERSON_ID}?cycle=2024`);
+    expect(viewModel.financeRows[0].candidateHref).toBe(
+      "/candidate/jane-officeholder?cycle=2024"
+    );
+    expect(viewModel.financeRows[0].outsideSpendingFigure).toMatchObject({
+      cycle: 2024,
+      coverageThrough: "2024-10-15",
+      rows: [
+        { id: "support", amount: 0, transactionCount: 0 },
+        { id: "oppose", amount: 0, transactionCount: 0 }
+      ]
+    });
+  });
+
+  it("preserves route-selected cycle links when contest finance sections are empty", () => {
+    const viewModel = buildContestDetailPresentation(
+      {
+        id: CONTEST_ID,
+        name: "Governor 2024 General Election",
+        election_date: "2024-11-05",
+        election_type: "general",
+        office_id: OFFICE_ID,
+        electoral_division_id: ELECTORAL_DIVISION_ID,
+        number_of_seats: 1,
+        filing_deadline: "2024-09-01",
+        is_partisan: true,
+        candidate_list_incomplete: false,
+        result_winner_candidacy_id: CANDIDACY_ID,
+        result_winner_person_id: PERSON_ID,
+        result_winner_person_name: "Jane Officeholder",
+        candidacies: [
+          {
+            candidacy_id: CANDIDACY_ID,
+            person_id: PERSON_ID,
+            person_name: "Jane Officeholder",
+            party: "DEM",
+            status: "won",
+            incumbent_challenge: "I"
+          }
+        ],
+        sources: []
+      },
+      {
+        selectedCycle: 2024,
+        candidateFinanceByPersonId: {
+          [PERSON_ID]: {
+            personId: PERSON_ID,
+            candidateHref: "/candidate/jane-officeholder",
+            summary: null,
+            ieSummary: null,
+            ieTransactions: []
+          }
+        }
+      }
+    );
+
+    expect(viewModel.resultWinnerPersonHref).toBe(`/person/${PERSON_ID}?cycle=2024`);
+    expect(viewModel.candidacyRows[0].personHref).toBe(`/person/${PERSON_ID}?cycle=2024`);
+    expect(viewModel.financeRows).toHaveLength(1);
+    expect(viewModel.financeRows[0].personHref).toBe(`/person/${PERSON_ID}?cycle=2024`);
+    expect(viewModel.financeRows[0].candidateHref).toBe(
+      "/candidate/jane-officeholder?cycle=2024"
+    );
+    expect(viewModel.financeRows[0].financeFacts).toEqual([]);
+    expect(viewModel.financeRows[0].outsideSpendingFigure).toBeNull();
   });
 
   it("builds contest route metadata from loaded contest detail", () => {

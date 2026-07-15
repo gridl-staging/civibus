@@ -399,21 +399,29 @@ def upsert_contest(conn: psycopg.Connection, contest: Contest) -> UUID:
             # Promote legacy contest rows created before division ids were populated.
             cur.execute(
                 """
-                UPDATE civic.contest
+                UPDATE civic.contest AS legacy
                 SET
                     name = %s,
-                    election_id = COALESCE(%s, civic.contest.election_id),
+                    election_id = COALESCE(%s, legacy.election_id),
                     electoral_division_id = %s,
                     number_of_seats = %s,
-                    filing_deadline = COALESCE(%s, civic.contest.filing_deadline),
+                    filing_deadline = COALESCE(%s, legacy.filing_deadline),
                     is_partisan = %s,
                     candidate_list_incomplete = %s,
-                    source_record_id = COALESCE(%s, civic.contest.source_record_id),
+                    source_record_id = COALESCE(%s, legacy.source_record_id),
                     updated_at = NOW()
-                WHERE office_id = %s
-                  AND election_date IS NOT DISTINCT FROM %s
-                  AND election_type = %s
-                  AND electoral_division_id IS NULL
+                WHERE legacy.office_id = %s
+                  AND legacy.election_date IS NOT DISTINCT FROM %s
+                  AND legacy.election_type = %s
+                  AND legacy.electoral_division_id IS NULL
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM civic.contest AS existing
+                      WHERE existing.office_id = legacy.office_id
+                        AND existing.election_date IS NOT DISTINCT FROM legacy.election_date
+                        AND existing.election_type = legacy.election_type
+                        AND existing.electoral_division_id = %s
+                  )
                 RETURNING id
                 """,
                 (
@@ -428,6 +436,7 @@ def upsert_contest(conn: psycopg.Connection, contest: Contest) -> UUID:
                     contest.office_id,
                     contest.election_date,
                     contest.election_type,
+                    contest.electoral_division_id,
                 ),
             )
             promoted_row = cur.fetchone()

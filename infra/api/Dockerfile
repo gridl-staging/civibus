@@ -23,6 +23,16 @@ RUN uv sync --locked --extra api \
 
 ENV PATH="/app/.venv/bin:$PATH"
 
+# Build-provenance stamp: the dev-repo commit SHA and build timestamp are passed
+# at deploy time (--build-arg) so /health/version can expose them for deploy-drift
+# detection. Placed AFTER the cached `uv sync` layer so a per-deploy SHA change
+# never busts that expensive layer. Default "unknown" keeps un-stamped builds
+# honest rather than shipping an empty value.
+ARG CIVIBUS_GIT_SHA=unknown
+ARG CIVIBUS_BUILT_AT=unknown
+ENV CIVIBUS_GIT_SHA=$CIVIBUS_GIT_SHA
+ENV CIVIBUS_BUILT_AT=$CIVIBUS_BUILT_AT
+
 USER civibus
 
 EXPOSE 8000

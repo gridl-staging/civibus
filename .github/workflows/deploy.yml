@@ -24,24 +24,73 @@ jobs:
 
       - uses: superfly/flyctl-actions/setup-flyctl@master
 
+      - name: Resolve dev build provenance
+        id: provenance
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Stamp the DEV-repo commit SHA from the sync manifest (the workflow
+          # trigger SHA is the prod-mirror namespace and is not comparable to
+          # civibus_dev/main) so downstream drift detection works. Fail loud
+          # rather than degrade to "unknown".
+          manifest=".debbie/sync_manifest.json"
+          if [[ ! -f "$manifest" ]]; then
+            echo "Missing $manifest — cannot stamp dev build provenance" >&2
+            exit 1
+          fi
+          dev_sha="$(jq -r '.dev_sha // ""' "$manifest")"
+          if [[ ! "$dev_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Invalid dev_sha in $manifest: '$dev_sha' (expected 40-char hex)" >&2
+            exit 1
+          fi
+          built_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          echo "dev_sha=$dev_sha" >> "$GITHUB_OUTPUT"
+          echo "built_at=$built_at" >> "$GITHUB_OUTPUT"
+
       - name: Deploy API to Fly
         shell: bash
         run: |
           set -euo pipefail
-          flyctl deploy -c infra/fly/api.fly.toml --remote-only
+          flyctl deploy -c infra/fly/api.fly.toml --remote-only --build-arg CIVIBUS_GIT_SHA=${{ steps.provenance.outputs.dev_sha }} --build-arg CIVIBUS_BUILT_AT=${{ steps.provenance.outputs.built_at }}
 
       - name: Deploy web to Fly
         shell: bash
         run: |
           set -euo pipefail
           # The positional web directory changes -c resolution, so anchor the config at the workspace.
-          flyctl deploy web -c "$GITHUB_WORKSPACE/infra/fly/web.fly.toml" --remote-only
+          flyctl deploy web -c "$GITHUB_WORKSPACE/infra/fly/web.fly.toml" --remote-only --build-arg CIVIBUS_GIT_SHA=${{ steps.provenance.outputs.dev_sha }} --build-arg CIVIBUS_BUILT_AT=${{ steps.provenance.outputs.built_at }}
 
       - name: Deploy Caddy to Fly
         shell: bash
         run: |
           set -euo pipefail
           flyctl deploy -c infra/fly/caddy.fly.toml --remote-only
+
+      - name: Verify public deploy serves built dev SHA
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${PROD_SMOKE_BASE_URL}" ]]; then
+            echo "Deploy workflow requires PROD_SMOKE_BASE_URL Actions variable for production drift verification" >&2
+            exit 1
+          fi
+          expected_sha="${{ steps.provenance.outputs.dev_sha }}"
+          api_url="${PROD_SMOKE_BASE_URL%/}/api/health/version"
+          web_url="${PROD_SMOKE_BASE_URL%/}/version.json"
+          api_sha="unknown"
+          web_sha="unknown"
+          for attempt in $(seq 1 18); do
+            api_sha="$(curl -fsS "$api_url" | jq -r '.git_sha // "unknown"' || true)"
+            web_sha="$(curl -fsS "$web_url" | jq -r '.git_sha // "unknown"' || true)"
+            if [[ "$api_sha" == "$expected_sha" && "$web_sha" == "$expected_sha" ]]; then
+              echo "public_sha_match expected=$expected_sha api=$api_sha web=$web_sha"
+              exit 0
+            fi
+            echo "waiting_for_public_sha attempt=$attempt expected=$expected_sha api=$api_sha web=$web_sha"
+            sleep 5
+          done
+          echo "public_sha_drift expected=$expected_sha api=$api_sha web=$web_sha" >&2
+          exit 1
 
       - name: Install web smoke dependencies
         shell: bash
@@ -60,4 +109,4 @@ jobs:
             exit 1
           fi
           SMOKE_MODE=production SMOKE_BASE_URL="${PROD_SMOKE_BASE_URL}" \
-            bash ./tests/smoke/run-playwright.sh -- tests/smoke/production_deploy.spec.ts --reporter=line
+            bash ./tests/smoke/run-playwright.sh -- tests/smoke/production_deploy.spec.ts tests/smoke/production_finance_visuals.spec.ts --reporter=line

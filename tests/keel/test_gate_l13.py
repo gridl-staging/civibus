@@ -19,8 +19,12 @@ EXPECTED_OWNER_FILES = {
     "infra/fly/caddy.fly.toml",
 }
 EXPECTED_FLY_DEPLOY_COMMANDS = [
-    "flyctl deploy -c infra/fly/api.fly.toml --remote-only",
-    'flyctl deploy web -c "$GITHUB_WORKSPACE/infra/fly/web.fly.toml" --remote-only',
+    "flyctl deploy -c infra/fly/api.fly.toml --remote-only "
+    "--build-arg CIVIBUS_GIT_SHA=${{ steps.provenance.outputs.dev_sha }} "
+    "--build-arg CIVIBUS_BUILT_AT=${{ steps.provenance.outputs.built_at }}",
+    'flyctl deploy web -c "$GITHUB_WORKSPACE/infra/fly/web.fly.toml" --remote-only '
+    "--build-arg CIVIBUS_GIT_SHA=${{ steps.provenance.outputs.dev_sha }} "
+    "--build-arg CIVIBUS_BUILT_AT=${{ steps.provenance.outputs.built_at }}",
     "flyctl deploy -c infra/fly/caddy.fly.toml --remote-only",
 ]
 

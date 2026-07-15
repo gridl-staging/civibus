@@ -40,6 +40,8 @@ BOOTSTRAP_CANARIES = (
     "cf.committee_summary.derived_contribution_receipts_total",
     "cf.committee_summary.derived_jurisdiction",
     "cf.committee_summary.derived_data_through",
+    "core.entity_source.entity_type.election",
+    "core.field_provenance.entity_type.election",
 )
 
 _COMMITTEE_SUMMARY_DERIVED_COLUMNS = (
@@ -137,6 +139,34 @@ def _trigger_exists(conn: psycopg.Connection, schema_name: str, table_name: str,
         )
         row = cur.fetchone()
     return bool(row and row[0])
+
+
+def _check_constraint_allows_type_value(
+    conn: psycopg.Connection,
+    *,
+    schema_name: str,
+    table_name: str,
+    constraint_name: str,
+    type_value: str,
+) -> bool:
+    """Return True when the named CHECK constraint's definition names ``type_value``."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT pg_get_constraintdef(con.oid)
+            FROM pg_constraint con
+            JOIN pg_class rel ON rel.oid = con.conrelid
+            JOIN pg_namespace nsp ON nsp.oid = rel.relnamespace
+            WHERE nsp.nspname = %s
+              AND rel.relname = %s
+              AND con.conname = %s
+            """,
+            (schema_name, table_name, constraint_name),
+        )
+        row = cur.fetchone()
+    if not row or row[0] is None:
+        return False
+    return f"'{type_value}'" in row[0]
 
 
 def _graph_exists(conn: psycopg.Connection, graph_name: str) -> bool:
@@ -252,6 +282,26 @@ def _stage1_canary_checks() -> tuple[tuple[str, Callable[[psycopg.Connection], b
                 lambda conn, column_name=column_name: _column_exists(conn, "cf", "committee_summary", column_name),
             )
             for column_name in _COMMITTEE_SUMMARY_DERIVED_COLUMNS
+        ),
+        (
+            "core.entity_source.entity_type.election",
+            lambda conn: _check_constraint_allows_type_value(
+                conn,
+                schema_name="core",
+                table_name="entity_source",
+                constraint_name="entity_source_entity_type_check",
+                type_value="election",
+            ),
+        ),
+        (
+            "core.field_provenance.entity_type.election",
+            lambda conn: _check_constraint_allows_type_value(
+                conn,
+                schema_name="core",
+                table_name="field_provenance",
+                constraint_name="field_provenance_entity_type_check",
+                type_value="election",
+            ),
         ),
     )
 

@@ -21,6 +21,7 @@ from domains.campaign_finance.ingest.bulk_stage4_loader import LoadResult
 from domains.campaign_finance.ingest.federal_officeholder_loader import OFFICE_US_PRESIDENT
 from domains.campaign_finance.ingest.field_mapper import map_candidate_fields
 from domains.campaign_finance.ingest.text_utils import normalize_optional_text
+from domains.civics.constants import congressional_boundary_year
 from domains.civics.ingest import (
     derive_incumbent_challenge,
     upsert_candidacy,
@@ -55,11 +56,6 @@ def federal_general_election_date(year: int) -> date:
     first_monday = 1 + (7 - dow) % 7
     # First Tuesday after first Monday
     return date(year, 11, first_monday + 1)
-
-
-def congressional_boundary_year(election_year: int) -> int:
-    """Return the congressional district boundary cycle in effect for a federal election year."""
-    return election_year - ((election_year - 2) % 10)
 
 
 def _resolve_electoral_division(
@@ -122,7 +118,7 @@ def _try_insert_source_record(
     return try_insert_source_record(conn, sr)
 
 
-class _ValidatedRow:
+class ValidatedRow:
     """Intermediate representation after field extraction and validation."""
 
     __slots__ = (
@@ -155,10 +151,12 @@ class _ValidatedRow:
         self.mapped = mapped
 
 
-def _validate_candidate_row(raw_row: dict[str, str | None]) -> _ValidatedRow | None:
+def validate_candidate_row(raw_row: dict[str, str | None]) -> ValidatedRow | None:
     """Extract and validate required fields from a raw FEC candidate row.
 
-    Returns a _ValidatedRow on success, or None if the row should be skipped.
+    Returns a ValidatedRow on success, or None if the row should be skipped.
+    Shared by the canonical loader and the federal races loader so both apply
+    identical office resolution and election-year validation.
     """
     mapped = map_candidate_fields(raw_row)
 
@@ -186,7 +184,7 @@ def _validate_candidate_row(raw_row: dict[str, str | None]) -> _ValidatedRow | N
         LOGGER.warning("Invalid CAND_ELECTION_YR %r for %s", election_year_raw, fec_candidate_id)
         return None
 
-    return _ValidatedRow(
+    return ValidatedRow(
         fec_candidate_id=fec_candidate_id,
         candidate_name=candidate_name,
         office_id=office_id,
@@ -197,11 +195,8 @@ def _validate_candidate_row(raw_row: dict[str, str | None]) -> _ValidatedRow | N
     )
 
 
-def _ingest_validated_row(
-    conn: psycopg.Connection,
-    row: _ValidatedRow,
-    source_record_id: UUID,
-) -> None:
+def resolve_candidate_person(conn: psycopg.Connection, row: ValidatedRow) -> UUID:
+    """Reuse the canonical person for a FEC candidate id, creating one when absent."""
     person_id = find_person_by_identifier(conn, "fec_candidate_id", row.fec_candidate_id)
     if person_id is None:
         person_id = insert_person(
@@ -211,27 +206,31 @@ def _ingest_validated_row(
                 identifiers={"fec_candidate_id": row.fec_candidate_id},
             ),
         )
-    insert_entity_source(conn, "person", person_id, source_record_id, "candidate")
+    return person_id
 
+
+def resolve_candidate_division(conn: psycopg.Connection, row: ValidatedRow) -> UUID | None:
+    """Resolve the electoral division for a validated FEC candidate row."""
     state = normalize_optional_text(row.mapped.get("state"))
     district = normalize_optional_text(row.mapped.get("district"))
-    division_id = _resolve_electoral_division(conn, row.office_code, state, district, election_year=row.election_year)
+    return _resolve_electoral_division(conn, row.office_code, state, district, election_year=row.election_year)
 
-    election_date = federal_general_election_date(row.election_year)
-    contest_name = f"{row.office_code} {state or 'US'} General {row.election_year}"
-    contest_id = upsert_contest(
-        conn,
-        Contest(
-            name=contest_name,
-            election_date=election_date,
-            election_type="general",
-            office_id=row.office_id,
-            electoral_division_id=division_id,
-            source_record_id=source_record_id,
-        ),
-    )
 
-    party = normalize_optional_text(row.mapped.get("party"))
+def federal_contest_name(row: ValidatedRow) -> str:
+    """Deterministic contest name shared by every FEC candidate-to-civic loader."""
+    state = normalize_optional_text(row.mapped.get("state"))
+    return f"{row.office_code} {state or 'US'} General {row.election_year}"
+
+
+def resolve_candidate_incumbent_challenge(
+    conn: psycopg.Connection,
+    row: ValidatedRow,
+    *,
+    person_id: UUID,
+    division_id: UUID | None,
+    as_of: date,
+) -> str | None:
+    """Resolve FEC incumbent/challenger code, deriving only when House data is precise."""
     incumbent_challenge = normalize_optional_text(row.mapped.get("incumbent_challenge"))
     if incumbent_challenge is None and row.office_code == "H":
         # FEC candidate master does not expose a Senate seat/class discriminator,
@@ -241,20 +240,70 @@ def _ingest_validated_row(
             person_id,
             row.office_id,
             division_id,
-            as_of=election_date,
+            as_of=as_of,
         )
+    return incumbent_challenge
+
+
+def ingest_candidate_civic_rows(
+    conn: psycopg.Connection,
+    row: ValidatedRow,
+    source_record_id: UUID,
+    *,
+    election_id: UUID | None = None,
+    election_date: date | None = None,
+    candidacy_status: str | None = None,
+) -> UUID:
+    """Ingest one validated FEC candidate row into person/division/contest/candidacy.
+
+    Single owner for the FEC candidate-to-civic mapping. The canonical loader
+    calls it with defaults; the federal races loader supplies ``election_id``
+    (to link the contest to the newly-populated ``civic.election`` row) and
+    ``candidacy_status`` (from the Stage 1 ``candidate_status`` mapper output).
+    Returns the upserted contest id.
+    """
+    person_id = resolve_candidate_person(conn, row)
+    insert_entity_source(conn, "person", person_id, source_record_id, "candidate")
+
+    division_id = resolve_candidate_division(conn, row)
+    resolved_election_date = (
+        election_date if election_date is not None else federal_general_election_date(row.election_year)
+    )
+    contest_id = upsert_contest(
+        conn,
+        Contest(
+            name=federal_contest_name(row),
+            election_date=resolved_election_date,
+            election_type="general",
+            office_id=row.office_id,
+            election_id=election_id,
+            electoral_division_id=division_id,
+            source_record_id=source_record_id,
+        ),
+    )
+
+    party = normalize_optional_text(row.mapped.get("party"))
+    incumbent_challenge = resolve_candidate_incumbent_challenge(
+        conn,
+        row,
+        person_id=person_id,
+        division_id=division_id,
+        as_of=resolved_election_date,
+    )
     upsert_candidacy(
         conn,
         Candidacy(
             person_id=person_id,
             contest_id=contest_id,
             party=party,
+            status=candidacy_status,
             incumbent_challenge=incumbent_challenge,
             # fec_candidate_id as candidate_number is a copied source fact for display only
             candidate_number=row.fec_candidate_id,
             source_record_id=source_record_id,
         ),
     )
+    return contest_id
 
 
 def load_fec_candidates_canonical(
@@ -278,7 +327,7 @@ def load_fec_candidates_canonical(
     processed_since_commit = 0
 
     for raw_row in read_bulk_file(path, "cn", limit=limit):
-        validated = _validate_candidate_row(raw_row)
+        validated = validate_candidate_row(raw_row)
         if validated is None:
             result.errors += 1
             continue
@@ -294,7 +343,7 @@ def load_fec_candidates_canonical(
             result.skipped += 1
             continue
 
-        _ingest_validated_row(conn, validated, source_record_id)
+        ingest_candidate_civic_rows(conn, validated, source_record_id)
 
         result.inserted += 1
         processed_since_commit += 1

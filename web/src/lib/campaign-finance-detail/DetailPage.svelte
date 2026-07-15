@@ -1,7 +1,7 @@
 <script lang="ts">
   import TrustSection from "$lib/detail-trust/TrustSection.svelte";
   import SkeletonPanel from "$lib/loading/SkeletonPanel.svelte";
-  import Chart from "$lib/charts/Chart.svelte";
+  import CashOnHandTrendChart from "$lib/charts/CashOnHandTrendChart.svelte";
   import {
     buildCandidateCompletenessWarnings,
     buildCandidateDeferredCommitteeBreakdown,
@@ -347,27 +347,6 @@
             {/if}
           </section>
 
-          <section class="detail__panel">
-            <h3>Cash-on-hand trend</h3>
-            {#await presentation.filingBreakdown}
-              <SkeletonPanel label="Cash-on-hand trend" lines={3} />
-            {:then filingBreakdown}
-              {@const trendSummary = buildCommitteeDeferredHighSignalSummary(summary, filingBreakdown)}
-              {#if trendSummary.cashOnHandTrendSeries.length === 0}
-                <p>Cash-on-hand trend is not available from reported filing periods.</p>
-              {:else}
-                <Chart
-                  kind="line"
-                  title="Cash-on-hand trend"
-                  ariaLabel="Committee cash-on-hand trend"
-                  series={trendSummary.cashOnHandTrendSeries}
-                />
-              {/if}
-            {:catch}
-              <p>Cash-on-hand trend is not available from reported filing periods.</p>
-            {/await}
-          </section>
-
           {@const cycleSummaryRows = buildCommitteeCycleSummaryRows(summary)}
           <section class="detail__panel">
             <h3>Per-cycle history</h3>
@@ -401,6 +380,24 @@
             {/if}
           </section>
 
+          <section class="detail__panel">
+            <h3>Cash-on-hand trend</h3>
+            {#await presentation.filingBreakdown}
+              <SkeletonPanel label="Cash-on-hand trend" lines={3} />
+            {:then filingBreakdown}
+              {@const trendFigure = buildCommitteeDeferredHighSignalSummary(summary, filingBreakdown).cashOnHandTrend}
+              <CashOnHandTrendChart
+                testId="committee-cash-on-hand-trend"
+                cycle={trendFigure.cycle}
+                coverageThrough={trendFigure.coverageThrough}
+                sources={trendFigure.sources}
+                points={trendFigure.points}
+              />
+            {:catch}
+              <p>Cash-on-hand trend is not available from reported filing periods.</p>
+            {/await}
+          </section>
+
           {#await presentation.filingBreakdown}
             <SkeletonPanel label="Filing-period breakdown" lines={5} />
           {:then filingBreakdown}
@@ -417,9 +414,9 @@
                         <th>Filing</th>
                         <th>Coverage</th>
                         <th>Received</th>
-                        <th>Raised</th>
-                        <th>Spent</th>
-                        <th>Net</th>
+                        <th>Total receipts</th>
+                        <th>Total disbursements</th>
+                        <th>Cash on hand</th>
                         <th>Transactions</th>
                       </tr>
                     </thead>
@@ -429,9 +426,9 @@
                           <td>{row.filingName} ({row.filingFecId})</td>
                           <td>{row.coveragePeriod}</td>
                           <td>{row.receiptDate}</td>
-                          <td>{row.totalRaised}</td>
-                          <td>{row.totalSpent}</td>
-                          <td>{row.net}</td>
+                          <td>{row.totalReceipts}</td>
+                          <td>{row.totalDisbursements}</td>
+                          <td>{row.cashOnHand}</td>
                           <td>{row.transactionCount}</td>
                         </tr>
                       {/each}

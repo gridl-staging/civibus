@@ -82,6 +82,36 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           echo "Probe result: healthy=${HEALTHY} status=${STATUS}"
 
+      - name: Warn on public deploy drift
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # WARN-only shadow mode. This mirror-side check detects deploy lag
+          # (public host not serving the latest synced mirror commit) but cannot
+          # detect sync lag (gridl-dev/civibus_dev main ahead of the mirror).
+          # Promote this check to fail-closed only after one batch with zero false would-be kills cited in closing evidence.
+          manifest_json="$(
+            gh api repos/${{ github.repository }}/contents/.debbie/sync_manifest.json --jq '.content' | base64 -d
+          )"
+          expected_sha="$(printf '%s' "$manifest_json" | jq -r '.dev_sha // empty')"
+          api_sha="$(curl -fsS "${PROBE_BASE_URL%/}/api/health/version" | jq -r '.git_sha // "unknown"' || true)"
+          web_sha="$(curl -fsS "${PROBE_BASE_URL%/}/version.json" | jq -r '.git_sha // "unknown"' || true)"
+
+          if [[ ! "$expected_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::warning::deploy lag check could not read a valid dev_sha from the mirror sync manifest"
+            exit 1
+          fi
+
+          if [[ "$api_sha" == "$expected_sha" && "$web_sha" == "$expected_sha" ]]; then
+            echo "deploy_drift_ok expected=$expected_sha api=$api_sha web=$web_sha"
+            exit 0
+          fi
+
+          echo "::warning::deploy lag detected for ${PROBE_BASE_URL}: expected=$expected_sha api=$api_sha web=$web_sha. This mirror-side warning cannot detect sync lag; the dev-repo parity probe owns that."
+          exit 1
+
       - name: Find existing open uptime-incident issue
         id: find
         env:

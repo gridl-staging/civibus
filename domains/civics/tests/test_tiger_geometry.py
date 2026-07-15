@@ -142,6 +142,71 @@ def _district_geojson_feature_collection(*, district_count: int) -> str:
     return json.dumps({"type": "FeatureCollection", "features": features})
 
 
+def _congressional_district_feature(
+    *,
+    statefp: str,
+    district: str,
+    min_x: float,
+    min_y: float,
+    size: float = 0.1,
+    state: str | None = None,
+) -> dict[str, object]:
+    properties: dict[str, object] = {"STATEFP": statefp, "CD119FP": district}
+    if state is not None:
+        properties["STUSPS"] = state
+    return {
+        "type": "Feature",
+        "geometry": {"type": "Polygon", "coordinates": _square_polygon(min_x, min_y, size)},
+        "properties": properties,
+    }
+
+
+def _national_congressional_district_geojson_feature_collection() -> str:
+    return json.dumps(
+        {
+            "type": "FeatureCollection",
+            "features": [
+                _congressional_district_feature(statefp="01", state="AL", district="01", min_x=-86.9, min_y=32.3),
+                _congressional_district_feature(statefp="01", state="AL", district="02", min_x=-86.7, min_y=32.5),
+                _congressional_district_feature(statefp="06", state="CA", district="12", min_x=-122.5, min_y=37.7),
+                _congressional_district_feature(statefp="11", state="DC", district="98", min_x=-77.1, min_y=38.8),
+                _congressional_district_feature(statefp="72", state="PR", district="98", min_x=-66.2, min_y=18.2),
+            ],
+        }
+    )
+
+
+def _trimmed_dc_congressional_district_fixture() -> str:
+    return json.dumps(
+        {
+            "type": "FeatureCollection",
+            "features": [
+                {
+                    "type": "Feature",
+                    "geometry": {
+                        "type": "Polygon",
+                        "coordinates": [
+                            [
+                                [-77.119759, 38.791645],
+                                [-76.909393, 38.791645],
+                                [-76.909393, 38.995548],
+                                [-77.119759, 38.995548],
+                                [-77.119759, 38.791645],
+                            ]
+                        ],
+                    },
+                    "properties": {
+                        "STATEFP": "11",
+                        "CD119FP": "98",
+                        "GEOID": "1198",
+                        "NAMELSAD": "Delegate District (at Large)",
+                    },
+                }
+            ],
+        }
+    )
+
+
 def _municipal_geojson_feature_collection_with_mixed_statewide_rows() -> str:
     """Build NC OneMap-like municipal features with D/W/O + out-of-scope counties."""
     features: list[dict[str, object]] = []
@@ -354,7 +419,11 @@ def test_load_tiger_states_and_counties_is_idempotent_with_canonical_rows(
         """
         SELECT COUNT(1)::int
         FROM civic.electoral_division
-        WHERE state IN ('PR') OR name IN ('Adjuntas', 'Imaginary County')
+        WHERE COALESCE(boundary_year, 0) = 2024
+          AND (
+              (state = 'PR' AND name = 'Puerto Rico') OR
+              name IN ('Adjuntas', 'Imaginary County')
+          )
         """
     ).fetchone()
     assert skipped_rows == (0,)
@@ -518,6 +587,206 @@ def test_load_tiger_geometry_uses_generalized_shapefile_seam_and_preserves_upser
     assert rerun_all == (3, 3)
 
 
+def test_load_national_congressional_district_geometry_enriches_wave_a_identity_rows(
+    db_conn: psycopg.Connection,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from domains.civics.ingest import upsert_electoral_division
+    from domains.civics.loaders import tiger_geometry
+    from domains.civics.types import ElectoralDivision
+
+    zip_payload = _build_tiny_shapefile_zip_bytes()
+    seam_calls: list[tuple[str | None, str]] = []
+    downloaded_urls: list[str] = []
+
+    def _fake_ogr2ogr_export(
+        _zip_path: Path,
+        *,
+        source_srs: str | None,
+        target_srs: str,
+    ) -> str:
+        seam_calls.append((source_srs, target_srs))
+        return _national_congressional_district_geojson_feature_collection()
+
+    monkeypatch.setattr(
+        tiger_geometry,
+        "_zip_urls_for_national_congressional_districts",
+        lambda **_kwargs: ["https://www2.census.gov/geo/tiger/TIGER2024/CD/tl_2024_us_cd119.zip"],
+    )
+    monkeypatch.setattr(tiger_geometry, "_download_bytes", lambda url: downloaded_urls.append(url) or zip_payload)
+    monkeypatch.setattr(tiger_geometry, "_run_ogr2ogr_geojson_export", _fake_ogr2ogr_export)
+
+    existing_id = upsert_electoral_division(
+        db_conn,
+        ElectoralDivision(
+            name="ca_cd_12",
+            division_type="congressional_district",
+            state="CA",
+            district_number="12",
+            boundary_year=2022,
+        ),
+    )
+
+    upserted_count = tiger_geometry.load_national_congressional_district_geometry(db_conn, year=2024)
+
+    assert upserted_count == 5
+    assert downloaded_urls == ["https://www2.census.gov/geo/tiger/TIGER2024/CD/tl_2024_us_cd119.zip"]
+    assert seam_calls == [(None, "EPSG:4326")]
+
+    rows = db_conn.execute(
+        """
+        SELECT
+            id,
+            name,
+            state,
+            district_number,
+            boundary_year,
+            ocd_id,
+            ST_GeometryType(geometry) AS geometry_type,
+            ST_SRID(geometry) AS srid
+        FROM civic.electoral_division
+        WHERE division_type = 'congressional_district'
+          AND COALESCE(boundary_year, 0) = 2022
+          AND state IN ('AL', 'CA', 'DC', 'PR')
+          AND name IN ('al_cd_01', 'al_cd_02', 'ca_cd_12', 'dc_cd_98', 'pr_cd_98')
+        ORDER BY state, district_number
+        """
+    ).fetchall()
+
+    assert [(row[1], row[2], row[3], row[4], row[5], row[6], row[7]) for row in rows] == [
+        ("al_cd_01", "AL", "01", 2022, None, "ST_MultiPolygon", 4326),
+        ("al_cd_02", "AL", "02", 2022, None, "ST_MultiPolygon", 4326),
+        ("ca_cd_12", "CA", "12", 2022, None, "ST_MultiPolygon", 4326),
+        ("dc_cd_98", "DC", "98", 2022, None, "ST_MultiPolygon", 4326),
+        ("pr_cd_98", "PR", "98", 2022, None, "ST_MultiPolygon", 4326),
+    ]
+
+    ca_rows = [row for row in rows if row[1] == "ca_cd_12"]
+    assert len(ca_rows) == 1
+    assert ca_rows[0][0] == existing_id
+
+
+def test_load_national_congressional_district_geometry_preserves_current_rows_when_loading_cd116(
+    db_conn: psycopg.Connection,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from domains.civics.loaders import tiger_geometry
+
+    zip_payload = _build_tiny_shapefile_zip_bytes()
+    payload_by_url = {
+        "https://www2.census.gov/geo/tiger/TIGER2024/CD/tl_2024_us_cd119.zip": json.dumps(
+            {
+                "type": "FeatureCollection",
+                "features": [
+                    _congressional_district_feature(statefp="01", state="AL", district="01", min_x=-86.9, min_y=32.3)
+                ],
+            }
+        ),
+        "https://www2.census.gov/geo/tiger/TIGER2022/CD/tl_2022_us_cd116.zip": json.dumps(
+            {
+                "type": "FeatureCollection",
+                "features": [
+                    _congressional_district_feature(statefp="01", state="AL", district="01", min_x=-86.8, min_y=32.4)
+                ],
+            }
+        ),
+    }
+    active_url: dict[str, str] = {"value": ""}
+
+    def _fake_zip_urls_for_national_congressional_districts(*, year: int) -> list[str]:
+        return [
+            f"https://www2.census.gov/geo/tiger/TIGER{year}/CD/tl_{year}_us_cd{'116' if year == 2022 else '119'}.zip"
+        ]
+
+    def _fake_download_bytes(url: str) -> bytes:
+        active_url["value"] = url
+        return zip_payload
+
+    def _fake_ogr2ogr_export(_zip_path: Path, **_kwargs: object) -> str:
+        return payload_by_url[active_url["value"]]
+
+    monkeypatch.setattr(
+        tiger_geometry,
+        "_zip_urls_for_national_congressional_districts",
+        _fake_zip_urls_for_national_congressional_districts,
+    )
+    monkeypatch.setattr(tiger_geometry, "_download_bytes", _fake_download_bytes)
+    monkeypatch.setattr(tiger_geometry, "_run_ogr2ogr_geojson_export", _fake_ogr2ogr_export)
+
+    current_count = tiger_geometry.load_national_congressional_district_geometry(db_conn, year=2024)
+    historical_count = tiger_geometry.load_national_congressional_district_geometry(db_conn, year=2022)
+
+    assert current_count == 1
+    assert historical_count == 1
+
+    rows = db_conn.execute(
+        """
+        SELECT boundary_year, COUNT(*)::int, COUNT(DISTINCT id)::int
+        FROM civic.electoral_division
+        WHERE division_type = 'congressional_district'
+          AND state = 'AL'
+          AND district_number = '01'
+          AND boundary_year IN (2012, 2022)
+        GROUP BY boundary_year
+        ORDER BY boundary_year
+        """
+    ).fetchall()
+    assert rows == [(2012, 1, 1), (2022, 1, 1)]
+
+
+def test_load_national_congressional_district_geometry_known_answer_contract(
+    db_conn: psycopg.Connection,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from domains.civics.loaders import tiger_geometry
+
+    zip_url = "https://www2.census.gov/geo/tiger/TIGER2024/CD/tl_2024_us_cd119.zip"
+    monkeypatch.setattr(tiger_geometry, "_zip_urls_for_national_congressional_districts", lambda **_kwargs: [zip_url])
+    monkeypatch.setattr(tiger_geometry, "_download_bytes", lambda _url: _build_tiny_shapefile_zip_bytes())
+    monkeypatch.setattr(
+        tiger_geometry,
+        "_run_ogr2ogr_geojson_export",
+        lambda *_args, **_kwargs: _trimmed_dc_congressional_district_fixture(),
+    )
+
+    upserted_count = tiger_geometry.load_national_congressional_district_geometry(db_conn, year=2024)
+
+    assert upserted_count == 1
+    row = db_conn.execute(
+        """
+        SELECT
+            name,
+            state,
+            district_number,
+            boundary_year,
+            ROUND(ST_X(ST_Centroid(geometry))::numeric, 6)::float8 AS centroid_x,
+            ROUND(ST_Y(ST_Centroid(geometry))::numeric, 6)::float8 AS centroid_y,
+            ROUND(ST_XMin(Box2D(geometry))::numeric, 6)::float8 AS min_x,
+            ROUND(ST_YMin(Box2D(geometry))::numeric, 6)::float8 AS min_y,
+            ROUND(ST_XMax(Box2D(geometry))::numeric, 6)::float8 AS max_x,
+            ROUND(ST_YMax(Box2D(geometry))::numeric, 6)::float8 AS max_y
+        FROM civic.electoral_division
+        WHERE division_type = 'congressional_district'
+          AND state = 'DC'
+          AND district_number = '98'
+          AND boundary_year = 2022
+        """
+    ).fetchone()
+
+    assert row == (
+        "dc_cd_98",
+        "DC",
+        "98",
+        2022,
+        pytest.approx(-77.014576, abs=0.000001),
+        pytest.approx(38.893596, abs=0.000001),
+        pytest.approx(-77.119759, abs=0.000001),
+        pytest.approx(38.791645, abs=0.000001),
+        pytest.approx(-76.909393, abs=0.000001),
+        pytest.approx(38.995548, abs=0.000001),
+    )
+
+
 @pytest.mark.parametrize(
     ("level", "division_type", "expected_count", "ocd_segment", "expected_boundary_year"),
     [
@@ -678,8 +947,9 @@ def test_load_tiger_geometry_nc_districts_persist_contracted_boundary_year(
         WHERE division_type = %s
           AND state = 'NC'
           AND district_number = '01'
+          AND boundary_year = %s
         """,
-        (division_type,),
+        (division_type, expected_boundary_year),
     ).fetchone()
     assert boundary_year_row == (expected_boundary_year,)
 

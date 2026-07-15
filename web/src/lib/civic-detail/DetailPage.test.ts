@@ -560,11 +560,16 @@ describe("civic detail page rendering", () => {
           result_winner_person_id: PERSON_ID,
           result_winner_person_name: "Jane Candidate"
         },
+        contestSelectedCycle: 9999,
         contestCandidateFinanceByPersonId: {
           [PERSON_ID]: {
             personId: PERSON_ID,
             candidateHref: "/candidate/jane-candidate",
             summary: {
+              selected_cycle: 2026,
+              coverage_start_date: "2025-01-01",
+              coverage_end_date: "2026-12-31",
+              available_cycles: [2022, 2024, 2026],
               candidate_id: "candidate-1",
               candidate_name: "Jane Candidate",
               total_raised: "5000.00",
@@ -572,16 +577,149 @@ describe("civic detail page rendering", () => {
               net: "3000.00",
               transaction_count: 42,
               itemized_transaction_count: 42,
-              cash_on_hand: null,
+              cash_on_hand: "1000.00",
               summary_source: "derived" as const,
+              receipt_source_composition: [],
+              selected_cycle_coverage_complete: false,
+              can_render_share: false,
+              receipt_source_caveats: [],
               committees: []
             },
             ieSummary: {
+              selected_cycle: 2026,
+              coverage_start_date: "2025-01-01",
+              coverage_end_date: "2026-12-31",
+              available_cycles: [2022, 2024, 2026],
               candidate_id: "candidate-1",
               support_total: "100.00",
               oppose_total: "50.00",
               support_count: 1,
               oppose_count: 1,
+              top_spenders: [
+                {
+                  committee_id: "committee-1",
+                  committee_name: "Independent Expenditure Committee",
+                  support_oppose: "S",
+                  total_amount: "100.00",
+                  transaction_count: 1
+                }
+              ],
+              excluded_outlier_count: 0
+            },
+            ieTransactions: [
+              {
+                id: "ie-1",
+                filing_id: null,
+                committee_id: "committee-1",
+                committee_name: "Independent Expenditure Committee",
+                amount: 100,
+                transaction_date: "2026-03-19",
+                purpose: "Independent expenditure",
+                dissemination_date: "2026-03-20",
+                aggregate_amount: 100,
+                support_oppose: "S"
+              }
+            ]
+          }
+        }
+      }
+    });
+
+    expect(rendered.body).toContain("<h3>Results</h3>");
+    expect(rendered.body).toContain('data-testid="contest-results-panel"');
+    expect(rendered.body).toContain("Jane Candidate");
+    expect(
+      rendered.body.match(/href="\/person\/11111111-1111-4111-8111-111111111111\?cycle=2026"/g)
+    ).toHaveLength(2);
+    expect(rendered.body).not.toContain("?cycle=9999");
+    expect(rendered.body).toContain("<h3>Candidate finance and outside spending</h3>");
+    expect(rendered.body).toContain('href="/candidate/jane-candidate?cycle=2026"');
+    expect(rendered.body).toContain("Selected cycle");
+    expect(rendered.body).toContain("Coverage through");
+    expect(rendered.body).toContain("Receipts");
+    expect(rendered.body).toContain("$5,000.00");
+    expect(rendered.body).toContain("Disbursements");
+    expect(rendered.body).toContain("$2,000.00");
+    expect(rendered.body).toContain("Cash on hand");
+    expect(rendered.body).toContain("$1,000.00");
+    expect(rendered.body).not.toContain("Debt");
+    expect(rendered.body).not.toContain("Fundraising summary");
+    expect(rendered.body).toContain("Outside Spending");
+    expect(rendered.body).not.toContain("Finance chart for Jane Candidate");
+    expect(rendered.body).not.toContain("Outside spending chart for Jane Candidate");
+    expect(rendered.body).toContain("Outside spending is independent and not controlled by the candidate committee.");
+    expect(rendered.body).toContain("2026 cycle, coverage through December 31, 2026. Unit: dollars");
+    expect(rendered.body).toContain(
+      "Outside spending reports $100.00 in support spending and $50.00 in oppose spending for the 2026 cycle."
+    );
+    expect(rendered.body).toContain("View chart data");
+    expect(rendered.body).toContain("Support spending");
+    expect(rendered.body).toMatch(/Dollars:[\s\S]*\$100\.00[\s\S]*Transactions:[\s\S]*1/);
+    expect(rendered.body).toContain('data-zero-centered="true"');
+    expect(rendered.body).toContain('href="/committee/committee-1"');
+    expect(rendered.body).toContain("Independent Expenditure Committee");
+    expect(rendered.body).toContain("Dissemination Date");
+    expect(rendered.body).toContain("2026-03-20");
+  });
+
+  it("renders route-selected cycle person links when contest finance sections are empty", () => {
+    const rendered = render(DetailPage, {
+      props: {
+        entityType: "contest",
+        data: {
+          ...CONTEST_DETAIL,
+          result_winner_candidacy_id: CANDIDACY_ID,
+          result_winner_person_id: PERSON_ID,
+          result_winner_person_name: "Jane Candidate"
+        },
+        contestSelectedCycle: 2024,
+        contestCandidateFinanceByPersonId: {
+          [PERSON_ID]: {
+            personId: PERSON_ID,
+            candidateHref: null,
+            summary: null,
+            ieSummary: null,
+            ieTransactions: []
+          }
+        }
+      }
+    });
+
+    expect(
+      rendered.body.match(/href="\/person\/11111111-1111-4111-8111-111111111111\?cycle=2024"/g)
+    ).toHaveLength(3);
+    expect(rendered.body).toContain("Candidate fundraising data is not yet available.");
+    expect(rendered.body).toContain(
+      "Outside-spending data is not yet available for this candidate. Coverage may be incomplete."
+    );
+  });
+
+  it("lets the shared outside-spending figure suppress zero-activity plots", () => {
+    const rendered = render(DetailPage, {
+      props: {
+        entityType: "contest",
+        data: {
+          ...CONTEST_DETAIL,
+          result_winner_candidacy_id: CANDIDACY_ID,
+          result_winner_person_id: PERSON_ID,
+          result_winner_person_name: "Jane Candidate"
+        },
+        contestSelectedCycle: 2024,
+        contestCandidateFinanceByPersonId: {
+          [PERSON_ID]: {
+            personId: PERSON_ID,
+            candidateHref: "/candidate/jane-candidate",
+            summary: null,
+            ieSummary: {
+              selected_cycle: 2024,
+              coverage_start_date: "2023-01-01",
+              coverage_end_date: "2024-10-15",
+              available_cycles: [2024],
+              candidate_id: "candidate-1",
+              support_total: "0.00",
+              oppose_total: "0.00",
+              support_count: 0,
+              oppose_count: 0,
               top_spenders: [],
               excluded_outlier_count: 0
             },
@@ -591,14 +729,15 @@ describe("civic detail page rendering", () => {
       }
     });
 
-    expect(rendered.body).toContain("<h3>Results</h3>");
-    expect(rendered.body).toContain('data-testid="contest-results-panel"');
-    expect(rendered.body).toContain("Jane Candidate");
-    expect(rendered.body).toContain("<h3>Candidate finance and outside spending</h3>");
-    expect(rendered.body).toContain("Fundraising summary");
-    expect(rendered.body).toContain("Outside Spending");
-    expect(rendered.body).toContain("Finance chart for Jane Candidate");
-    expect(rendered.body).toContain("Outside spending chart for Jane Candidate");
+    expect(rendered.body).toContain(
+      "No independent expenditure support or oppose activity is reported for this cycle."
+    );
+    expect(rendered.body).toContain(
+      "Outside spending is independent and not controlled by the candidate committee."
+    );
+    expect(rendered.body).not.toContain(
+      'data-testid="contest-outside-spending-11111111-1111-4111-8111-111111111111-plot"'
+    );
   });
 
   it("renders contest empty-state and degraded-coverage caveat when candidacies are unavailable", () => {

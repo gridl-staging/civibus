@@ -400,7 +400,7 @@ _EXPECTED_PHASE2_JURISDICTIONS = {
     },
 }
 
-_EXPECTED_SCOPE_ORDER = ["NC", "PHL", "NY", "MA", "IN", "MN", "NJ", "CA"]
+_EXPECTED_SCOPE_ORDER = ["NC", "PHL", "NY", "MA", "IN", "MN", "NJ", "CA", "FEDERAL"]
 
 _EXPECTED_IN_MN_NJ_MINIMAL_SOURCES = {
     "IN": {

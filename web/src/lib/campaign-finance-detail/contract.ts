@@ -8,6 +8,15 @@ export type SerializedMoney = string;
 type ListQueryParamValue = string | number | undefined;
 type CampaignFinanceListPathParams = Record<string, ListQueryParamValue>;
 type ListRequestParam = string | number;
+export type SelectedCycleRequest = {
+  cycle?: ListRequestParam;
+};
+export type SelectedCycleMetadata = {
+  selected_cycle: number;
+  coverage_start_date: string;
+  coverage_end_date: string;
+  available_cycles: number[];
+};
 type SlugRoutableItem = {
   id: string;
   slug: string;
@@ -155,7 +164,7 @@ export type TopSpenderEntry = {
   transaction_count: number;
 };
 
-export type IndependentExpenditureSummary = {
+export type IndependentExpenditureSummary = SelectedCycleMetadata & {
   candidate_id: string;
   support_total: SerializedMoney;
   oppose_total: SerializedMoney;
@@ -202,9 +211,15 @@ export type CommitteeCycleSummary = {
   coverage_end_date: string | null;
 };
 
+export type ReceiptSourceComponent = {
+  label: string;
+  total_amount: SerializedMoney;
+  source: "fec_committee_summary" | "none";
+};
+
 /**
  */
-export type CommitteeFundraisingSummary = {
+export type CommitteeFundraisingSummary = SelectedCycleMetadata & {
   committee_id: string;
   committee_name: string;
   slug?: string;
@@ -225,6 +240,11 @@ export type CommitteeFundraisingSummary = {
   itemized_transaction_count: number;
   cycle_summaries: CommitteeCycleSummary[];
   summary_source: "fec_committee_summary" | "derived";
+  receipt_source_composition: ReceiptSourceComponent[];
+  selected_cycle_coverage_complete: boolean;
+  can_render_share: boolean;
+  receipt_source_caveats: string[];
+  debts_owed_by_committee?: SerializedMoney | null;
 };
 
 export type RankedTransactionParty = {
@@ -302,11 +322,14 @@ export type ContributionInsightsGeography = {
   by_state: ContributionInsightsGeographyRow[];
   by_district: ContributionInsightsGeographyRow[];
   district_share: ContributionInsightsDistrictShare;
+  geography_mode: "district" | "statewide" | "state_bars_only" | "excluded";
+  classified_amount: SerializedMoney;
+  classified_transaction_count: number;
+  unknown_amount: SerializedMoney;
+  unknown_transaction_count: number;
 };
 
-export type ContributionInsightsMetadata = {
-  coverage_start_date: string;
-  coverage_end_date: string | null;
+export type ContributionInsightsMetadata = SelectedCycleMetadata & {
   cycles_included: number[];
   committee_count: number;
   approximate_geography: boolean;
@@ -412,19 +435,32 @@ export function buildCommitteeHref(item: SlugRoutableItem): string {
   return buildSlugAwareHref("committee", item);
 }
 
-export function buildCommitteeSummaryPath(committeeId: string): string {
-  return buildCampaignFinancePath("committees", committeeId, "/summary");
+function buildSelectedCyclePath(basePath: string, request: SelectedCycleRequest = {}): string {
+  return buildPathWithQuery(basePath, { cycle: request.cycle });
+}
+
+export function buildCommitteeSummaryPath(
+  committeeId: string,
+  request: SelectedCycleRequest = {}
+): string {
+  return buildSelectedCyclePath(buildCampaignFinancePath("committees", committeeId, "/summary"), request);
 }
 
 export function buildCommitteeFilingBreakdownPath(committeeId: string): string {
   return buildCampaignFinancePath("committees", committeeId, "/filings/summary");
 }
 
+export function buildFilingDetailPath(filingId: string): string {
+  return buildCampaignFinancePath("filings", filingId);
+}
+
 export function buildCommitteeIndependentExpendituresMadePath(committeeId: string): string {
   return buildCampaignFinancePath("committees", committeeId, "/independent-expenditures-made");
 }
 
-export type CandidateFundraisingSummary = {
+/**
+ */
+export type CandidateFundraisingSummary = SelectedCycleMetadata & {
   candidate_id: string;
   candidate_name: string;
   total_raised: SerializedMoney;
@@ -434,9 +470,14 @@ export type CandidateFundraisingSummary = {
   committees: CommitteeFundraisingSummary[];
   // Stage 3: official FEC weball cash-on-hand; null when no weball totals are loaded.
   cash_on_hand: SerializedMoney | null;
+  debts_owed_by_committee?: SerializedMoney | null;
   // Stage 3: which backend source produced total_raised/total_spent/net.
   summary_source: "fec_weball" | "derived";
   itemized_transaction_count: number;
+  receipt_source_composition: ReceiptSourceComponent[];
+  selected_cycle_coverage_complete: boolean;
+  can_render_share: boolean;
+  receipt_source_caveats: string[];
 };
 
 export type CountySummaryRecipientCommittee = {
@@ -487,20 +528,29 @@ export function buildCandidateHref(item: SlugRoutableItem): string {
   return buildSlugAwareHref("candidate", item);
 }
 
-export function buildCandidateSummaryPath(candidateId: string): string {
-  return buildCampaignFinancePath("candidates", candidateId, "/summary");
+export function buildCandidateSummaryPath(
+  candidateId: string,
+  request: SelectedCycleRequest = {}
+): string {
+  return buildSelectedCyclePath(buildCampaignFinancePath("candidates", candidateId, "/summary"), request);
 }
 
-export function buildPersonContributionInsightsPath(personId: string): string {
-  return buildCampaignFinancePath("person", personId, "/contribution-insights");
+export function buildPersonContributionInsightsPath(
+  personId: string,
+  request: SelectedCycleRequest = {}
+): string {
+  return buildSelectedCyclePath(buildCampaignFinancePath("person", personId, "/contribution-insights"), request);
 }
 
-export function buildPersonTopDonorsPath(personId: string): string {
-  return buildCampaignFinancePath("person", personId, "/top-donors");
+export function buildPersonTopDonorsPath(personId: string, request: SelectedCycleRequest = {}): string {
+  return buildSelectedCyclePath(buildCampaignFinancePath("person", personId, "/top-donors"), request);
 }
 
-export function buildPersonTopEmployersPath(personId: string): string {
-  return buildCampaignFinancePath("person", personId, "/top-employers");
+export function buildPersonTopEmployersPath(
+  personId: string,
+  request: SelectedCycleRequest = {}
+): string {
+  return buildSelectedCyclePath(buildCampaignFinancePath("person", personId, "/top-employers"), request);
 }
 
 export function buildCountyCampaignFinanceSummaryPath(state: string, countySlug: string): string {
@@ -509,17 +559,33 @@ export function buildCountyCampaignFinanceSummaryPath(state: string, countySlug:
   )}/campaign-finance-summary`;
 }
 
-export function buildCandidateIndependentExpendituresPath(candidateId: string): string {
-  return buildCampaignFinancePath("candidates", candidateId, "/independent-expenditures");
+export function buildCandidateIndependentExpendituresPath(
+  candidateId: string,
+  request: SelectedCycleRequest = {}
+): string {
+  return buildSelectedCyclePath(
+    buildCampaignFinancePath("candidates", candidateId, "/independent-expenditures"),
+    request
+  );
 }
 
-export function buildCandidateIndependentExpendituresSummaryPath(candidateId: string): string {
-  return buildCampaignFinancePath("candidates", candidateId, "/independent-expenditures/summary");
+export function buildCandidateIndependentExpendituresSummaryPath(
+  candidateId: string,
+  request: SelectedCycleRequest = {}
+): string {
+  return buildSelectedCyclePath(
+    buildCampaignFinancePath("candidates", candidateId, "/independent-expenditures/summary"),
+    request
+  );
 }
 
-export function buildCommitteeTransactionsPath(committeeId: string): string {
-  const searchParams = new URLSearchParams();
-  searchParams.set("committee_id", committeeId);
-  searchParams.set("limit", String(COMMITTEE_TRANSACTIONS_LIMIT));
-  return `/v1/transactions?${searchParams.toString()}`;
+export function buildCommitteeTransactionsPath(
+  committeeId: string,
+  request: SelectedCycleRequest = {}
+): string {
+  return buildPathWithQuery("/v1/transactions", {
+    committee_id: committeeId,
+    limit: COMMITTEE_TRANSACTIONS_LIMIT,
+    cycle: request.cycle
+  });
 }

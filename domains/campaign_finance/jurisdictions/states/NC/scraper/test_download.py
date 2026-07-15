@@ -41,6 +41,7 @@ _STAGE1_LINKAGE_FIXTURE = FIXTURE_DIR / "cfdoclkup_ie_document_index_stage1_link
 _STAGE1_DOCUMENT_RESULT_HTML_FIXTURE = (
     Path(__file__).resolve().parents[6]
     / "docs"
+    / "reference"
     / "research"
     / "artifacts"
     / "2026_04_24_nc_ie_amounts"
@@ -50,6 +51,7 @@ _STAGE1_DOCUMENT_RESULT_HTML_FIXTURE = (
 _STAGE1_REPORT_DETAIL_HTML_FIXTURE = (
     Path(__file__).resolve().parents[6]
     / "docs"
+    / "reference"
     / "research"
     / "artifacts"
     / "2026_04_24_nc_ie_amounts"

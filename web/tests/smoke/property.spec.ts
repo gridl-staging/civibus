@@ -24,13 +24,10 @@ import {
 import {
   assertBreadcrumbJsonLd,
   assertBreadcrumbNav,
+  escapeRegExp,
   assertSeoHead,
   assertSourceRecordLink
 } from "./smoke-helpers";
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
 
 test.describe("property smoke", () => {
   test("/property/[id] renders parcel details and geometry placeholder", async ({ page }: { page: any }) => {

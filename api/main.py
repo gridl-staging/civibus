@@ -14,6 +14,7 @@ import psycopg
 from psycopg_pool import ConnectionPool
 
 from api import health_content as _health_content_module
+from api import health_version as _health_version_module
 
 from api.middleware import (
     API_KEY_HEADER_NAME,
@@ -243,6 +244,14 @@ def create_app() -> FastAPI:
     @app.get("/health")
     def health() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.get("/health/version", include_in_schema=False)
+    def health_version() -> dict[str, str]:
+        """Build-provenance probe: the dev commit SHA + build timestamp stamped
+        into the image (see ``infra/api/Dockerfile``). Excluded from the public
+        OpenAPI contract. No ``git rev-parse`` — the runtime image has no
+        ``.git`` directory, so values come only from build-time env vars."""
+        return _health_version_module.build_version_payload()
 
     _content_health_cache: dict[str, object] = {"response": None, "timestamp": 0.0}
     _CONTENT_HEALTH_TTL_SECONDS = float(os.getenv("CIVIBUS_HEALTH_CONTENT_TTL_SECONDS", "300"))

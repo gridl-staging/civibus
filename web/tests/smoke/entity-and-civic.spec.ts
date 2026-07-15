@@ -12,12 +12,8 @@ import {
   SMOKE_PERSON_CAREER_TOTAL_LABEL,
   SMOKE_PERSON_CYCLE_TOTAL,
   SMOKE_PERSON_CYCLE_TOTAL_LABEL,
-  SMOKE_PERSON_DONATION_COUNT_BY_SIZE_HEADING,
-  SMOKE_PERSON_DOLLARS_BY_SIZE_HEADING,
-  SMOKE_PERSON_DONATIONS_OVER_TIME_HEADING,
   SMOKE_PERSON_DONORS_AND_VENDORS_HEADING,
   SMOKE_PERSON_FUNDRAISING_DETAIL_HEADING,
-  SMOKE_PERSON_FUNDRAISING_GEOGRAPHY_HEADING,
   SMOKE_PERSON_LINKED_COMMITTEES_HEADING,
   SMOKE_PERSON_OUTSIDE_SPENDING_HEADING,
   SMOKE_PERSON_DISTRICT_SHARE_HEADLINE,
@@ -42,6 +38,7 @@ import {
   SMOKE_PERSON_UNITEMIZED_EXCLUSION_NOTE,
   SMOKE_CANDIDACY_DESCRIPTION,
   SMOKE_CANDIDATE_NAME,
+  SMOKE_CANDIDATE_SELECTED_CYCLE,
   SMOKE_CANDIDATE_SLUG,
   SMOKE_CANDIDACY_ID,
   SMOKE_CANDIDACY_PERSON_NAME,
@@ -159,7 +156,7 @@ test.describe("entity and civic detail smoke", () => {
     await assertBreadcrumbJsonLd(page);
     await expect(page.getByRole("heading", { name: "Key metrics" })).toBeVisible();
     await expect(page.getByRole("heading", { name: SMOKE_PERSON_CAMPAIGN_FINANCE_HEADING }).first()).toBeVisible();
-    await expectFinanceChartHasStableHeight(page, `Finance chart for ${SMOKE_PERSON_CANONICAL_NAME}`);
+    await expectFinanceChartHasStableHeight(page, "Receipt source composition by dollars");
     await expect(page.getByRole("heading", { name: SMOKE_PERSON_FUNDRAISING_DETAIL_HEADING })).toBeVisible();
     await expect(page.getByText(SMOKE_PERSON_SMALL_DOLLAR_HEADLINE, { exact: true })).toBeVisible();
     await expect(page.getByRole("heading", { name: "Individual contribution totals" })).toBeVisible();
@@ -171,18 +168,16 @@ test.describe("entity and civic detail smoke", () => {
       .getByRole("button", { name: SMOKE_PERSON_CAREER_TOTAL_LABEL })
       .click();
     await expect(contributionTotalsSummary.getByText(SMOKE_PERSON_CAREER_TOTAL, { exact: true })).toBeVisible();
-    await expectFinanceChartHasStableHeight(page, `Donations over time for ${SMOKE_PERSON_CANONICAL_NAME}`);
-    await expectFinanceChartHasStableHeight(page, `Donation count by size bucket for ${SMOKE_PERSON_CANONICAL_NAME}`);
-    await expectFinanceChartHasStableHeight(page, `Dollars by size bucket for ${SMOKE_PERSON_CANONICAL_NAME}`);
-    await expectFinanceChartHasStableHeight(page, `Fundraising geography for ${SMOKE_PERSON_CANONICAL_NAME}`);
-    await expect(page.getByRole("heading", { name: SMOKE_PERSON_DONATIONS_OVER_TIME_HEADING })).toBeVisible();
-    await expect(page.getByRole("heading", { name: SMOKE_PERSON_DONATION_COUNT_BY_SIZE_HEADING })).toBeVisible();
-    await expect(page.getByRole("heading", { name: SMOKE_PERSON_DOLLARS_BY_SIZE_HEADING })).toBeVisible();
-    await expect(page.getByRole("heading", { name: SMOKE_PERSON_FUNDRAISING_GEOGRAPHY_HEADING })).toBeVisible();
+    await expectFinanceChartHasStableHeight(page, "Monthly contribution columns");
+    await expectFinanceChartHasStableHeight(page, "Itemized contribution-size buckets bar chart");
+    await expectFinanceChartHasStableHeight(page, "Geography dollar share by contributor location");
+    await expect(page.getByRole("heading", { name: "Monthly contribution columns" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Itemized contribution-size buckets" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Geography dollar share" })).toBeVisible();
     await expect(page.getByText(SMOKE_PERSON_DISTRICT_SHARE_HEADLINE, { exact: true })).toBeVisible();
     await expect(page.getByText(SMOKE_PERSON_DISTRICT_SHARE_SUMMARY, { exact: true })).toBeVisible();
-    await expect(page.getByText(SMOKE_PERSON_APPROXIMATE_GEOGRAPHY_NOTE, { exact: true })).toBeVisible();
-    await expect(page.getByText(SMOKE_PERSON_UNITEMIZED_BUCKET_LABEL, { exact: true }).first()).toBeVisible();
+    await expect(page.getByText(SMOKE_PERSON_APPROXIMATE_GEOGRAPHY_NOTE, { exact: true }).first()).toBeVisible();
+    await expect(page.getByText(SMOKE_PERSON_UNITEMIZED_BUCKET_LABEL, { exact: true })).toHaveCount(0);
     await expect(page.getByText(SMOKE_PERSON_UNITEMIZED_EXCLUSION_NOTE)).toBeVisible();
     await expect(page.getByRole("heading", { name: SMOKE_PERSON_TOP_DONORS_HEADING })).toBeVisible();
     const topDonorRows = page.getByTestId("person-top-donors-scroll").getByRole("row");
@@ -203,8 +198,8 @@ test.describe("entity and civic detail smoke", () => {
     await expect(
       page.getByRole("heading", { name: SMOKE_PERSON_OUTSIDE_SPENDING_HEADING, exact: true })
     ).toBeVisible();
-    await expectFinanceChartHasStableHeight(page, `Outside spending chart for ${SMOKE_CANDIDATE_NAME}`);
-    await expect(page.getByRole("heading", { name: SMOKE_PERSON_TOP_SPENDERS_HEADING })).toBeVisible();
+    await expectFinanceChartHasStableHeight(page, "Zero-centered support and oppose spending comparison");
+    await expect(page.getByRole("heading", { name: SMOKE_PERSON_TOP_SPENDERS_HEADING, level: 5 })).toBeVisible();
     const topSpenderRows = page.getByTestId("person-ie-top-spenders-scroll").getByRole("row");
     await expect(topSpenderRows.nth(1)).toContainText(SMOKE_PERSON_TOP_SPENDER_NAME);
     await expect(topSpenderRows.nth(1)).toContainText(SMOKE_PERSON_TOP_SPENDER_TOTAL);
@@ -412,7 +407,7 @@ test.describe("entity and civic detail smoke", () => {
     await expect(resultsPanel.getByText("Winner", { exact: true })).toBeVisible();
     await expect(
       resultsPanel.getByRole("link", { name: SMOKE_CONTEST_WINNER_NAME, exact: true })
-    ).toHaveAttribute("href", `/person/${SMOKE_PERSON_ID}`);
+    ).toHaveAttribute("href", `/person/${SMOKE_PERSON_ID}?cycle=${SMOKE_CANDIDATE_SELECTED_CYCLE}`);
 
     const candidaciesRow = page.getByRole("row", {
       name: new RegExp(
@@ -421,14 +416,14 @@ test.describe("entity and civic detail smoke", () => {
     });
     await expect(
       candidaciesRow.getByRole("link", { name: SMOKE_CANDIDACY_PERSON_NAME, exact: true })
-    ).toHaveAttribute("href", `/person/${SMOKE_PERSON_ID}`);
+    ).toHaveAttribute("href", `/person/${SMOKE_PERSON_ID}?cycle=${SMOKE_CANDIDATE_SELECTED_CYCLE}`);
     const financeCardHeading = page.getByRole("heading", {
       name: SMOKE_CANDIDACY_PERSON_NAME,
       level: 4
     });
     await expect(
       financeCardHeading.getByRole("link", { name: SMOKE_CANDIDACY_PERSON_NAME, exact: true })
-    ).toHaveAttribute("href", `/candidate/${SMOKE_CANDIDATE_SLUG}`);
+    ).toHaveAttribute("href", `/candidate/${SMOKE_CANDIDATE_SLUG}?cycle=${SMOKE_CANDIDATE_SELECTED_CYCLE}`);
     await expect(page.getByRole("link", { name: SMOKE_CONTEST_FINANCE_LINK_NAME })).toHaveCount(0);
     await expect(
       page.getByRole("link", { name: `View candidacy detail for ${SMOKE_CANDIDACY_PERSON_NAME}` })

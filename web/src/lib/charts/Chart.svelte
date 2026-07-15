@@ -1,12 +1,13 @@
 <script lang="ts">
-  import { scaleBand } from "d3-scale";
-  import { BarChart, LineChart } from "layerchart";
+  import "layerchart/core.css";
+  import { BarChart, LineChart } from "layerchart/svg";
   import type { ChartKind, ChartSeries } from "./types";
 
   export let kind: ChartKind;
   export let title: string;
   export let ariaLabel: string;
   export let series: ChartSeries[] = [];
+  export let yDomain: [number, number] | undefined = undefined;
 
   type LayerChartRow = {
     x: string | number | Date;
@@ -16,6 +17,7 @@
   type LayerChartSeries = {
     key: string;
     label: string;
+    value: string;
     color: string;
   };
 
@@ -47,23 +49,29 @@
   }
 
   function toLayerChartSeries(inputSeries: ChartSeries[]): LayerChartSeries[] {
-    return inputSeries.map((item, index) => ({
-      key: item.id,
-      label: item.label,
-      color: SERIES_COLORS[index % SERIES_COLORS.length]
-    }));
-  }
+    const colorIndexByLabel = new Map<string, number>();
+    let nextColorIndex = 0;
 
-  function hasCategoricalXValues(rows: LayerChartRow[]): boolean {
-    return rows.some((row) => typeof row.x === "string");
+    return inputSeries.map((item) => {
+      const existingColorIndex = colorIndexByLabel.get(item.label);
+      const colorIndex = existingColorIndex ?? nextColorIndex++;
+
+      if (existingColorIndex === undefined) {
+        colorIndexByLabel.set(item.label, colorIndex);
+      }
+
+      return {
+        key: item.id,
+        label: item.label,
+        value: item.id,
+        color: SERIES_COLORS[colorIndex % SERIES_COLORS.length]
+      };
+    });
   }
 
   $: hasPoints = series.some((item) => item.points.length > 0);
   $: chartRows = toLayerChartRows(series);
   $: layerSeries = toLayerChartSeries(series);
-  $: categoricalLineXScale = kind === "line" && hasCategoricalXValues(chartRows)
-    ? scaleBand().padding(0.2)
-    : undefined;
 </script>
 
 <section class="chart-wrapper" aria-label={ariaLabel}>
@@ -72,9 +80,9 @@
   <div class="chart-wrapper__body">
     {#if hasPoints}
       {#if kind === "line"}
-        <LineChart data={chartRows} x="x" series={layerSeries} axis={true} xScale={categoricalLineXScale} />
+        <LineChart data={chartRows} x="x" series={layerSeries} axis={true} height={288} {yDomain} />
       {:else}
-        <BarChart data={chartRows} x="x" series={layerSeries} axis={true} />
+        <BarChart data={chartRows} x="x" series={layerSeries} axis={true} height={288} {yDomain} />
       {/if}
     {:else}
       <p>No chart data available.</p>

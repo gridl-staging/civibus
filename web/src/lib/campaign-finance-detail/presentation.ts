@@ -7,10 +7,11 @@ import {
 import { formatCountLabel } from "$lib/count-label";
 import {
   buildCandidateHref,
-  buildCommitteeHref
+  buildCommitteeHref,
+  buildFilingDetailPath
 } from "$lib/campaign-finance-detail/contract";
 import { sanitizeExternalUrl } from "$lib/url/sanitize-external-url";
-import type { ChartSeries } from "$lib/charts/types";
+import type { CashOnHandPoint, ChartSource, OutsideSpendingRow } from "$lib/charts/types";
 import type {
   CandidateDetailResponse,
   CandidateListItem,
@@ -86,7 +87,14 @@ export type CommitteeHighSignalSummaryPresentation = {
   topVendors: RankedPartyRow[];
   spendCategories: SpendCategoryRow[];
   spendCategoriesEmptyMessage: string | null;
-  cashOnHandTrendSeries: ChartSeries[];
+  cashOnHandTrend: CommitteeCashOnHandTrendFigure;
+};
+
+export type CommitteeCashOnHandTrendFigure = {
+  cycle: number;
+  coverageThrough: string | null;
+  sources: ChartSource[];
+  points: CashOnHandPoint[];
 };
 
 export type FundraisingSummaryPresentation = {
@@ -124,9 +132,9 @@ export type FilingBreakdownRowPresentation = {
   amendmentIndicator: string;
   coveragePeriod: string;
   receiptDate: string;
-  totalRaised: string;
-  totalSpent: string;
-  net: string;
+  totalReceipts: string;
+  totalDisbursements: string;
+  cashOnHand: string;
   transactionCount: number;
 };
 
@@ -177,12 +185,14 @@ export type OutsideSpendingTopSpenderRow = {
 };
 
 export type OutsideSpendingTransactionRow = {
+  rowKey: string;
   date: string;
   disseminationDate: string;
   spender: string;
   spenderHref: string;
   stance: string;
   amount: string;
+  sourceHref: string | null;
 };
 
 export type OutsideSpendingPresentation = {
@@ -191,9 +201,19 @@ export type OutsideSpendingPresentation = {
   supportCountLabel: string;
   opposeCountLabel: string;
   topSpenders: OutsideSpendingTopSpenderRow[];
+  chartRows: OutsideSpendingRow[];
+  chartTopSpenders: OutsideSpendingRow[];
   explanatoryBlock: string | null;
   transactionRows: OutsideSpendingTransactionRow[];
   emptyMessage: string | null;
+};
+
+export type CandidateOutsideSpendingFigure = {
+  cycle: number;
+  coverageThrough: string | null;
+  rows: OutsideSpendingRow[];
+  topSpenders: OutsideSpendingRow[];
+  sources: ChartSource[];
 };
 
 export type CommitteeOutsideSpendingTargetRow = {
@@ -373,6 +393,15 @@ function parseSerializedMoney(value: SerializedMoney | number): number {
   return typeof value === "number" ? value : Number(value);
 }
 
+function parseFiniteSerializedMoney(value: SerializedMoney | number | null): number | null {
+  if (value === null) {
+    return null;
+  }
+
+  const parsedValue = parseSerializedMoney(value);
+  return Number.isFinite(parsedValue) ? parsedValue : null;
+}
+
 function formatDateValue(value: string | null): string {
   if (!value) {
     return "—";
@@ -405,8 +434,91 @@ function buildCoveragePeriodLabel(startDate: string | null, endDate: string | nu
   return `${formattedStartDate} to ${formattedEndDate}`;
 }
 
+function parseIsoDateOnly(value: string | null): Date | null {
+  if (value === null || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return null;
+  }
+
+  const parsedDate = new Date(`${value}T00:00:00.000Z`);
+  return Number.isNaN(parsedDate.getTime()) ? null : parsedDate;
+}
+
+function hasCoverageGap(previousEndDate: string | null, nextStartDate: string | null): boolean {
+  const previousEnd = parseIsoDateOnly(previousEndDate);
+  const nextStart = parseIsoDateOnly(nextStartDate);
+
+  if (previousEnd === null || nextStart === null) {
+    return false;
+  }
+
+  const nextExpectedStart = new Date(previousEnd);
+  nextExpectedStart.setUTCDate(nextExpectedStart.getUTCDate() + 1);
+  return nextStart.getTime() > nextExpectedStart.getTime();
+}
+
 export function formatCurrency(value: SerializedMoney | number): string {
   return CURRENCY_FORMATTER.format(parseSerializedMoney(value));
+}
+
+type NormalizedCommitteeFilingFact = {
+  filing: CommitteeFilingBreakdown["filings"][number];
+  originalIndex: number;
+  coverageEndDate: string | null;
+  cashOnHandAmount: number | null;
+};
+
+/**
+ */
+function buildNormalizedCommitteeFilingFacts(
+  filingBreakdown: CommitteeFilingBreakdown
+): NormalizedCommitteeFilingFact[] {
+  return filingBreakdown.filings
+    .map((filing, originalIndex) => ({
+      filing,
+      originalIndex,
+      coverageEndDate: parseIsoDateOnly(filing.coverage_end_date) === null ? null : filing.coverage_end_date,
+      cashOnHandAmount: parseFiniteSerializedMoney(filing.cash_on_hand)
+    }))
+    .sort((left, right) => {
+      if (left.coverageEndDate !== null && right.coverageEndDate !== null) {
+        return left.coverageEndDate.localeCompare(right.coverageEndDate);
+      }
+
+      if (left.coverageEndDate !== null) {
+        return -1;
+      }
+
+      if (right.coverageEndDate !== null) {
+        return 1;
+      }
+
+      return left.originalIndex - right.originalIndex;
+    });
+}
+
+/**
+ */
+function buildCashOnHandTrendPoints(filingFacts: NormalizedCommitteeFilingFact[]): CashOnHandPoint[] {
+  const points: CashOnHandPoint[] = [];
+  let previousPointFact: NormalizedCommitteeFilingFact | null = null;
+
+  for (const fact of filingFacts) {
+    if (fact.coverageEndDate === null || fact.cashOnHandAmount === null) {
+      continue;
+    }
+
+    points.push({
+      periodEnd: fact.coverageEndDate,
+      amount: fact.cashOnHandAmount,
+      missingIntervalBefore:
+        previousPointFact === null
+          ? false
+          : hasCoverageGap(previousPointFact.filing.coverage_end_date, fact.filing.coverage_start_date)
+    });
+    previousPointFact = fact;
+  }
+
+  return points;
 }
 
 type AggregateSummarySource = {
@@ -491,7 +603,7 @@ export function buildLinkedCandidateLinks(detail: CommitteeDetailResponse): Link
 export function buildFilingBreakdownPresentation(
   filingBreakdown: CommitteeFilingBreakdown
 ): FilingBreakdownPresentation {
-  const rows = filingBreakdown.filings.map((filing) => ({
+  const rows = buildNormalizedCommitteeFilingFacts(filingBreakdown).map(({ filing, cashOnHandAmount }) => ({
     filingId: filing.filing_id,
     filingFecId: filing.filing_fec_id,
     filingName: formatRowValue(filing.filing_name),
@@ -499,9 +611,9 @@ export function buildFilingBreakdownPresentation(
     amendmentIndicator: filing.amendment_indicator,
     coveragePeriod: buildCoveragePeriodLabel(filing.coverage_start_date, filing.coverage_end_date),
     receiptDate: formatDateValue(filing.receipt_date),
-    totalRaised: formatCurrency(filing.total_raised),
-    totalSpent: formatCurrency(filing.total_spent),
-    net: formatCurrency(filing.net),
+    totalReceipts: formatCurrency(filing.total_raised),
+    totalDisbursements: formatCurrency(filing.total_spent),
+    cashOnHand: cashOnHandAmount === null ? "—" : formatCurrency(cashOnHandAmount),
     transactionCount: filing.transaction_count
   }));
 
@@ -708,35 +820,18 @@ function buildSpendCategoryRows(
   }));
 }
 
-/**
- */
-function buildCashOnHandTrendSeries(filingBreakdown: CommitteeFilingBreakdown): ChartSeries[] {
-  const points = filingBreakdown.filings
-    .filter((filing) => filing.cash_on_hand !== null)
-    .map((filing) => {
-      const y = parseSerializedMoney(filing.cash_on_hand as SerializedMoney);
-      if (Number.isNaN(y)) {
-        return null;
-      }
+function buildCommitteeCashOnHandTrendFigure(
+  summary: CommitteeFundraisingSummary,
+  filingBreakdown: CommitteeFilingBreakdown
+): CommitteeCashOnHandTrendFigure {
+  const filingFacts = buildNormalizedCommitteeFilingFacts(filingBreakdown);
 
-      return {
-        x: filing.coverage_end_date ?? filing.receipt_date ?? filing.row_id,
-        y
-      };
-    })
-    .filter((point): point is { x: string; y: number } => point !== null);
-
-  if (points.length === 0) {
-    return [];
-  }
-
-  return [
-    {
-      id: "cash-on-hand",
-      label: "Cash on hand",
-      points
-    }
-  ];
+  return {
+    cycle: summary.selected_cycle,
+    coverageThrough: summary.coverage_end_date,
+    sources: [],
+    points: buildCashOnHandTrendPoints(filingFacts)
+  };
 }
 
 /**
@@ -759,7 +854,7 @@ export function buildCommitteeHighSignalSummaryPresentation(
     spendCategories,
     spendCategoriesEmptyMessage:
       summary.spend_categories === null ? COMMITTEE_SPEND_CATEGORIES_UNAVAILABLE_MESSAGE : null,
-    cashOnHandTrendSeries: buildCashOnHandTrendSeries(filingBreakdown)
+    cashOnHandTrend: buildCommitteeCashOnHandTrendFigure(summary, filingBreakdown)
   };
 }
 
@@ -851,9 +946,20 @@ export function buildCandidateDeferredCommitteeBreakdown(
 
 export function buildCandidateDeferredOutsideSpending(
   ieSummary: IndependentExpenditureSummary | null,
-  ieTransactions: IndependentExpenditureResponse[]
+  ieTransactions: IndependentExpenditureResponse[],
+  selectedCycleOverride: number | null = null
 ): OutsideSpendingPresentation {
-  return buildOutsideSpendingPresentation(ieSummary, ieTransactions);
+  return buildOutsideSpendingPresentation(
+    selectOutsideSpendingSummaryForCycle(ieSummary, selectedCycleOverride),
+    selectOutsideSpendingTransactionsForCycle(ieSummary, ieTransactions, selectedCycleOverride)
+  );
+}
+
+export function buildCandidateDeferredOutsideSpendingFigure(
+  ieSummary: IndependentExpenditureSummary | null,
+  selectedCycleOverride: number | null = null
+): CandidateOutsideSpendingFigure | null {
+  return buildOutsideSpendingFigure(ieSummary, selectedCycleOverride);
 }
 
 export function buildCandidateDeferredKeyMetrics(summary: CandidateFundraisingSummary): KeyMetric[] {
@@ -941,6 +1047,7 @@ function buildOutsideSpendingTransactionRows(
   ieTransactions: IndependentExpenditureResponse[]
 ): OutsideSpendingTransactionRow[] {
   return ieTransactions.map((tx) => ({
+    rowKey: tx.id,
     date: formatDateValue(tx.transaction_date),
     disseminationDate: formatDateValue(tx.dissemination_date),
     spender: tx.committee_name,
@@ -950,8 +1057,110 @@ function buildOutsideSpendingTransactionRows(
       slug_is_unique: false
     }),
     stance: formatStanceLabel(tx.support_oppose),
-    amount: formatCurrency(tx.amount)
+    amount: formatCurrency(tx.amount),
+    sourceHref: tx.filing_id === null ? null : buildFilingDetailPath(tx.filing_id)
   }));
+}
+
+/**
+ */
+function buildOutsideSpendingChartRows(
+  ieSummary: IndependentExpenditureSummary
+): OutsideSpendingRow[] {
+  return [
+    {
+      id: "support-spending",
+      label: "Support spending",
+      stance: "support",
+      amount: parseSerializedMoney(ieSummary.support_total),
+      transactionCount: ieSummary.support_count
+    },
+    {
+      id: "oppose-spending",
+      label: "Oppose spending",
+      stance: "oppose",
+      amount: parseSerializedMoney(ieSummary.oppose_total),
+      transactionCount: ieSummary.oppose_count
+    }
+  ];
+}
+
+function buildOutsideSpendingTopSpenderChartRows(
+  ieSummary: IndependentExpenditureSummary
+): OutsideSpendingRow[] {
+  return ieSummary.top_spenders.map((spender) => ({
+    id: spender.committee_id,
+    label: spender.committee_name,
+    stance: spender.support_oppose === "O" ? "oppose" : "support",
+    amount: parseSerializedMoney(spender.total_amount),
+    transactionCount: spender.transaction_count
+  }));
+}
+
+/**
+ */
+function buildOutsideSpendingFigure(
+  ieSummary: IndependentExpenditureSummary | null,
+  selectedCycleOverride: number | null = null
+): CandidateOutsideSpendingFigure | null {
+  const selectedSummary = selectOutsideSpendingSummaryForCycle(ieSummary, selectedCycleOverride);
+  if (selectedSummary === null) {
+    return null;
+  }
+
+  return {
+    cycle: selectedSummary.selected_cycle,
+    coverageThrough: selectedSummary.coverage_end_date,
+    rows: [
+      {
+        id: "support",
+        label: "Support spending",
+        stance: "support",
+        amount: parseSerializedMoney(selectedSummary.support_total),
+        transactionCount: selectedSummary.support_count
+      },
+      {
+        id: "oppose",
+        label: "Oppose spending",
+        stance: "oppose",
+        amount: parseSerializedMoney(selectedSummary.oppose_total),
+        transactionCount: selectedSummary.oppose_count
+      }
+    ],
+    topSpenders: selectedSummary.top_spenders.map((spender) => ({
+      id: `${spender.committee_id}-${spender.support_oppose}`,
+      label: spender.committee_name,
+      stance: spender.support_oppose === "S" ? "support" : "oppose",
+      amount: parseSerializedMoney(spender.total_amount),
+      transactionCount: spender.transaction_count
+    })),
+    sources: []
+  };
+}
+
+function selectOutsideSpendingSummaryForCycle(
+  ieSummary: IndependentExpenditureSummary | null,
+  selectedCycleOverride: number | null
+): IndependentExpenditureSummary | null {
+  if (ieSummary === null) {
+    return null;
+  }
+
+  if (selectedCycleOverride !== null && selectedCycleOverride !== ieSummary.selected_cycle) {
+    return null;
+  }
+
+  return ieSummary;
+}
+
+function selectOutsideSpendingTransactionsForCycle(
+  ieSummary: IndependentExpenditureSummary | null,
+  ieTransactions: IndependentExpenditureResponse[],
+  selectedCycleOverride: number | null
+): IndependentExpenditureResponse[] {
+  return selectOutsideSpendingSummaryForCycle(ieSummary, selectedCycleOverride) === null
+    ? []
+    : ieTransactions;
 }
 
 /**
@@ -969,6 +1178,8 @@ export function buildOutsideSpendingPresentation(
       supportCountLabel: "—",
       opposeCountLabel: "—",
       topSpenders: [],
+      chartRows: [],
+      chartTopSpenders: [],
       explanatoryBlock: null,
       transactionRows: [],
       emptyMessage: OUTSIDE_SPENDING_UNAVAILABLE_MESSAGE
@@ -982,7 +1193,9 @@ export function buildOutsideSpendingPresentation(
       supportCountLabel: "—",
       opposeCountLabel: "—",
       topSpenders: [],
-      explanatoryBlock: null,
+      chartRows: [],
+      chartTopSpenders: [],
+      explanatoryBlock: OUTSIDE_SPENDING_EXPLANATORY_BLOCK,
       transactionRows: [],
       emptyMessage: OUTSIDE_SPENDING_NO_ACTIVITY_MESSAGE
     };
@@ -1004,6 +1217,8 @@ export function buildOutsideSpendingPresentation(
       totalAmount: formatCurrency(spender.total_amount),
       transactionCountLabel: formatCountLabel(spender.transaction_count, "expenditure")
     })),
+    chartRows: buildOutsideSpendingChartRows(ieSummary),
+    chartTopSpenders: buildOutsideSpendingTopSpenderChartRows(ieSummary),
     explanatoryBlock: OUTSIDE_SPENDING_EXPLANATORY_BLOCK,
     transactionRows: buildOutsideSpendingTransactionRows(ieTransactions),
     emptyMessage: null

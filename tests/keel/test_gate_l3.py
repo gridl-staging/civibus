@@ -139,6 +139,34 @@ def _read_json(path: Path) -> dict[str, object]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def test_repo_sources_registry_registers_federal_chartered_sources(tmp_path: Path) -> None:
+    repo_root = Path(__file__).resolve().parents[2]
+    registry = keel_gate_l3._load_registry(repo_root / "sources.yaml")
+
+    federal_entry = next(entry for entry in registry.jurisdictions if entry.scope == "FEDERAL")
+    assert [source.source_id for source in federal_entry.sources] == [
+        "census_tiger_congressional_district_listing",
+        "openfec_election_dates_api",
+        "fec_bulk_cn_ccl_races",
+    ]
+    assert {source.current_state for source in federal_entry.sources} == {"prototyped"}
+
+    result = keel_gate_l3.evaluate_registry(
+        repo_root=repo_root,
+        sources_path=repo_root / "sources.yaml",
+        jurisdiction="FEDERAL",
+        evidence_root=tmp_path / "evidence" / "L3",
+    )
+
+    assert result.exit_code == 0
+    assert [source_result.source_id for source_result in result.source_results] == [
+        "census_tiger_congressional_district_listing",
+        "openfec_election_dates_api",
+        "fec_bulk_cn_ccl_races",
+    ]
+    assert {source_result.status for source_result in result.source_results} == {"pass"}
+
+
 def test_repo_sources_registry_passes_current_nc_roster_state_mix_contract(tmp_path: Path) -> None:
     repo_root = Path(__file__).resolve().parents[2]
     registry = yaml.safe_load((repo_root / "sources.yaml").read_text(encoding="utf-8"))

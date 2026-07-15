@@ -18,6 +18,18 @@ const CANDIDATE_ID_ALT = "55555555-5555-4555-8555-555555555555";
 const COMMITTEE_ID = "33333333-3333-4333-8333-333333333333";
 const CANDIDATE_SLUG = "candidate-one";
 const UUID_SHAPED_NON_UUID = "44444444-4444-4444-8444-44444444444z";
+const SELECTED_CYCLE_FIELDS = {
+  selected_cycle: 2026,
+  coverage_start_date: "2025-01-01",
+  coverage_end_date: "2026-12-31",
+  available_cycles: [2022, 2024, 2026]
+};
+const RECEIPT_SOURCE_FIELDS = {
+  receipt_source_composition: [],
+  selected_cycle_coverage_complete: false,
+  can_render_share: false,
+  receipt_source_caveats: []
+};
 
 function createLoadEvent(requestJson: ReturnType<typeof vi.fn>, id = CANDIDATE_ID) {
   return {
@@ -56,6 +68,8 @@ function buildCandidateCommitteeSummary(
   committeeName = "Committee One"
 ): CommitteeFundraisingSummary {
   return {
+    ...SELECTED_CYCLE_FIELDS,
+    ...RECEIPT_SOURCE_FIELDS,
     committee_id: committeeId,
     committee_name: committeeName,
     total_raised: "250.00",
@@ -79,6 +93,8 @@ function buildCandidateCommitteeSummary(
 
 function buildCandidateSummary(candidateId: string, candidateName = "Candidate One"): CandidateFundraisingSummary {
   return {
+    ...SELECTED_CYCLE_FIELDS,
+    ...RECEIPT_SOURCE_FIELDS,
     candidate_id: candidateId,
     candidate_name: candidateName,
     total_raised: "250.00",

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+from io import BytesIO
+from urllib.error import HTTPError
 from pathlib import Path
 from zipfile import ZipFile
 
@@ -259,6 +261,114 @@ def test_discovers_state_scoped_congressional_filename_from_listing() -> None:
     """
     assert _discover_congressional_district_zip_name(html, year=2024, state_fips="37") == "tl_2024_37_cd119.zip"
 
+    mixed_html = """
+    <html><body>
+    <a href="tl_2024_37_cd118.zip">stale-north-carolina</a>
+    <a href="tl_2024_us_cd119.zip">current-national</a>
+    </body></html>
+    """
+    assert _discover_congressional_district_zip_name(mixed_html, year=2024, state_fips="37") == "tl_2024_us_cd119.zip"
+
+
+def test_discovers_national_congressional_inventory_from_state_scoped_listing() -> None:
+    from domains.civics.loaders.tiger_geometry import _discover_national_congressional_district_zip_names
+
+    html = """
+    <html><body>
+    <a href="tl_2024_02_cd118.zip">old-alaska</a>
+    <a href="tl_2024_01_cd119.zip">alabama</a>
+    <a href="tl_2024_02_cd119.zip">alaska</a>
+    <a href="tl_2024_72_cd119.zip">puerto-rico</a>
+    </body></html>
+    """
+
+    assert _discover_national_congressional_district_zip_names(html, year=2024) == [
+        "tl_2024_01_cd119.zip",
+        "tl_2024_02_cd119.zip",
+        "tl_2024_72_cd119.zip",
+    ]
+
+
+def test_national_congressional_zip_urls_fall_back_to_state_scoped_inventory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from domains.civics.loaders import tiger_geometry
+
+    html_by_case = {
+        "success": """
+    <html><body>
+    <a href="tl_2024_01_cd119.zip">alabama</a>
+    <a href="tl_2024_72_cd119.zip">puerto-rico</a>
+    </body></html>
+    """,
+        "mixed": """
+    <html><body>
+    <a href="tl_2024_01_cd119.zip">alabama</a>
+    <a href="tl_2024_72_cd118.zip">stale-puerto-rico</a>
+    </body></html>
+    """,
+    }
+    listing_calls: list[str] = []
+    active_case = {"value": "success"}
+
+    def _fake_download_text(url: str) -> str:
+        listing_calls.append(url)
+        return html_by_case[active_case["value"]]
+
+    monkeypatch.setattr(tiger_geometry, "_download_text", _fake_download_text)
+
+    urls = tiger_geometry._zip_urls_for_national_congressional_districts(year=2024)
+
+    assert urls == [
+        "https://www2.census.gov/geo/tiger/TIGER2024/CD/tl_2024_01_cd119.zip",
+        "https://www2.census.gov/geo/tiger/TIGER2024/CD/tl_2024_72_cd119.zip",
+    ]
+    assert listing_calls == ["https://www2.census.gov/geo/tiger/TIGER2024/CD/"]
+
+    active_case["value"] = "mixed"
+    with pytest.raises(ValueError, match="mixes Congress numbers"):
+        tiger_geometry._zip_urls_for_national_congressional_districts(year=2024)
+
+
+@pytest.mark.parametrize("status_code", [520, 524])
+def test_download_bytes_retries_transient_census_http_errors(
+    monkeypatch: pytest.MonkeyPatch,
+    status_code: int,
+) -> None:
+    from domains.civics.loaders import tiger_geometry
+
+    calls: list[str] = []
+
+    def _fake_urlopen(url: str, *, timeout: int) -> BytesIO:
+        calls.append(url)
+        assert timeout == tiger_geometry._DOWNLOAD_TIMEOUT_SECONDS
+        if len(calls) == 1:
+            raise HTTPError(url, status_code, "timeout", hdrs=None, fp=None)
+        return BytesIO(b"zip-payload")
+
+    monkeypatch.setattr(tiger_geometry, "urlopen", _fake_urlopen)
+
+    assert tiger_geometry._download_bytes("https://example.test/artifact.zip") == b"zip-payload"
+    assert calls == ["https://example.test/artifact.zip", "https://example.test/artifact.zip"]
+
+
+def test_download_text_retries_transient_connection_resets(monkeypatch: pytest.MonkeyPatch) -> None:
+    from domains.civics.loaders import tiger_geometry
+
+    calls: list[str] = []
+
+    def _fake_urlopen(url: str, *, timeout: int) -> BytesIO:
+        calls.append(url)
+        assert timeout == tiger_geometry._DOWNLOAD_TIMEOUT_SECONDS
+        if len(calls) == 1:
+            raise ConnectionResetError("connection reset by peer")
+        return BytesIO(b"<html>listing</html>")
+
+    monkeypatch.setattr(tiger_geometry, "urlopen", _fake_urlopen)
+
+    assert tiger_geometry._download_text("https://example.test/CD/") == "<html>listing</html>"
+    assert calls == ["https://example.test/CD/", "https://example.test/CD/"]
+
 
 def test_loader_argument_parser_accepts_state_level_year() -> None:
     from domains.civics.loaders.tiger_geometry import _build_argument_parser
@@ -266,9 +376,55 @@ def test_loader_argument_parser_accepts_state_level_year() -> None:
     args = _build_argument_parser().parse_args(
         ["--state", "NC", "--level", "state_legislative_upper", "--year", "2024"]
     )
+    assert args.national_congressional_districts is False
     assert args.state == "NC"
     assert args.level == "state_legislative_upper"
     assert args.year == 2024
+
+
+def test_loader_argument_parser_accepts_national_congressional_district_mode() -> None:
+    from domains.civics.loaders.tiger_geometry import _build_argument_parser
+
+    args = _build_argument_parser().parse_args(["--national-congressional-districts", "--year", "2024"])
+
+    assert args.national_congressional_districts is True
+    assert args.state is None
+    assert args.level is None
+    assert args.year == 2024
+
+
+def test_main_invokes_national_congressional_district_loader(monkeypatch: pytest.MonkeyPatch) -> None:
+    from domains.civics.loaders import tiger_geometry
+
+    calls: list[tuple[object, int]] = []
+
+    class _FakeTransaction:
+        def __enter__(self) -> None:
+            return None
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+    class _FakeConnection:
+        def transaction(self) -> _FakeTransaction:
+            return _FakeTransaction()
+
+        def close(self) -> None:
+            return None
+
+    fake_conn = _FakeConnection()
+
+    def _fake_load(conn: object, *, year: int) -> int:
+        calls.append((conn, year))
+        return 7
+
+    monkeypatch.setattr(tiger_geometry, "get_connection", lambda: fake_conn)
+    monkeypatch.setattr(tiger_geometry, "load_national_congressional_district_geometry", _fake_load)
+
+    exit_code = tiger_geometry.main(["--national-congressional-districts", "--year", "2024"])
+
+    assert exit_code == 0
+    assert calls == [(fake_conn, 2024)]
 
 
 @pytest.mark.parametrize("level", ["municipal", "school_district"])
@@ -320,6 +476,25 @@ def test_zip_url_for_level_pins_nc_districts_to_stage1_contract_artifacts(
 
     url = tiger_geometry._zip_url_for_level(year=1999, level=level, state_fips="37")
     assert url == expected_url
+
+
+@pytest.mark.parametrize(
+    ("level", "expected_boundary_year"),
+    [
+        ("congressional_district", 2025),
+        ("state_legislative_upper", 2023),
+        ("state_legislative_lower", 2023),
+    ],
+)
+def test_boundary_year_for_level_pins_nc_districts_to_stage1_contract_artifacts(
+    level: str,
+    expected_boundary_year: int,
+) -> None:
+    from domains.civics.loaders import tiger_geometry
+
+    boundary_year = tiger_geometry._boundary_year_for_level(year=1999, level=level, state_fips="37")
+
+    assert boundary_year == expected_boundary_year
 
 
 @pytest.mark.parametrize(

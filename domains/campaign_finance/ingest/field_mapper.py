@@ -133,6 +133,8 @@ def map_candidate_fields(row: Mapping[str, str | None]) -> dict[str, object]:
         "state": _normalize_optional_text(row.get("CAND_OFFICE_ST")),
         "district": _normalize_optional_text(row.get("CAND_OFFICE_DISTRICT")),
         "incumbent_challenge": _normalize_optional_text(row.get("CAND_ICI")),
+        "candidate_election_year": _parse_optional_year(row.get("CAND_ELECTION_YR")),
+        "candidate_status": _normalize_optional_text(row.get("CAND_STATUS")),
         "principal_committee_fec_id": _normalize_optional_text(row.get("CAND_PCC")),
     }
 
@@ -143,6 +145,9 @@ def map_candidate_summary_fields(row: Mapping[str, str | None]) -> dict[str, obj
         "total_receipts": parse_fec_decimal_amount(row.get("TTL_RECEIPTS")),
         "total_disbursements": parse_fec_decimal_amount(row.get("TTL_DISB")),
         "cash_on_hand": parse_fec_decimal_amount(row.get("COH_COP")),
+        "candidate_contrib": parse_fec_decimal_amount(row.get("CAND_CONTRIB")),
+        "candidate_loans": parse_fec_decimal_amount(row.get("CAND_LOANS")),
+        "candidate_loan_repay": parse_fec_decimal_amount(row.get("CAND_LOAN_REPAY")),
         "summary_coverage_end_date": parse_fec_date(row.get("CVG_END_DT")),
     }
 

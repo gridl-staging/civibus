@@ -51,10 +51,12 @@ def test_build_refresh_plan_all_scope_emits_canonical_stage6_job_keys() -> None:
         "federal-fec-masters",
         "federal-fec-schedule-b",
         "federal-fec-committee-summary",
+        "federal-fec-races",
         "federal-congress-spine",
         "federal-enrichment",
         "federal-fec-schedule-e",
         "federal-irs-527",
+        "federal-geometry-probe",
         "state-al-contributions",
         "state-al-expenditures",
         "state-ca-refresh",
@@ -137,7 +139,7 @@ def test_build_refresh_plan_all_scope_emits_canonical_stage6_job_keys() -> None:
 
     assert job_keys == expected_job_keys
 
-    assert len(job_keys) == 112
+    assert len(job_keys) == 114
     assert "state-nc-ie-transactions" not in job_keys
     assert "state-nc-transactions" not in job_keys
     assert "state-nc-ie-document-index" not in job_keys
@@ -184,10 +186,10 @@ def test_build_refresh_plan_adds_nc_jobs_from_independent_input_paths() -> None:
     job_keys_with_ie_nc = {job.key for job in jobs_with_ie_nc}
     job_keys_with_both_nc = {job.key for job in jobs_with_both_nc}
 
-    assert len(job_keys_without_nc) == 112
-    assert len(job_keys_with_transaction_nc) == 113
-    assert len(job_keys_with_ie_nc) == 114
-    assert len(job_keys_with_both_nc) == 115
+    assert len(job_keys_without_nc) == 114
+    assert len(job_keys_with_transaction_nc) == 115
+    assert len(job_keys_with_ie_nc) == 116
+    assert len(job_keys_with_both_nc) == 117
     assert "state-nc-ie-transactions" not in job_keys_without_nc
     assert "state-nc-ie-transactions" not in job_keys_with_transaction_nc
     assert "state-nc-ie-transactions" in job_keys_with_ie_nc
@@ -1329,6 +1331,7 @@ def test_build_refresh_plan_job_key_prefix_filter_preserves_matching_fec_and_nc_
         "federal-fec-masters",
         "federal-fec-schedule-a",
         "federal-fec-committee-summary",
+        "federal-fec-races",
         "federal-fec-schedule-b",
         "federal-fec-schedule-e",
         "state-nc-ie-document-index",

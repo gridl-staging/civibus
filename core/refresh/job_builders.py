@@ -47,6 +47,7 @@ from domains.campaign_finance.ingest.congress_legislators_adapter import (
     fetch_legislators_entries,
     select_most_recent_vacancy_predecessors,
 )
+from domains.campaign_finance.ingest.fec_client import FecClient
 from domains.campaign_finance.ingest.dark_money.download import (
     download_irs_527_full_data,
     extract_irs_527_txt,
@@ -116,6 +117,15 @@ from domains.civics.loaders.nc_calendar import (
 from domains.civics.loaders.ncsbe_results import (
     collect_ncsbe_refresh_data_source_names,
     run_ncsbe_results_refresh_2022_2024,
+)
+from domains.civics.loaders.federal_fec_races import (
+    FEDERAL_FEC_RACES_DATA_SOURCE_NAME,
+    ensure_federal_fec_races_data_source,
+    load_federal_fec_races,
+)
+from domains.civics.loaders.zcta_district_loader import (
+    TIGER_CD_LISTING_DATA_SOURCE_NAME,
+    probe_tiger_congressional_district_listing,
 )
 from domains.civics.loaders.official_rosters.source_templates import civic_roster_refresh_templates
 from domains.civics.loaders.official_rosters.cli import main as run_official_roster_cli
@@ -1276,6 +1286,39 @@ def _build_federal_congress_spine_job() -> RefreshJob:
     )
 
 
+def _federal_fec_races_min_election_year(parameters: RunnerParameters) -> int:
+    """Recent five-cycle window (inclusive) anchored on the configured FEC cycle."""
+    return parameters.fec_cycle - 4
+
+
+def _build_federal_fec_races_job(parameters: RunnerParameters) -> RefreshJob:
+    def _run_federal_fec_races_job() -> object:
+        connection = get_connection()
+        try:
+            with connection.transaction():
+                races_data_source_id = ensure_federal_fec_races_data_source(connection)
+                cn_data_source_id = ensure_fec_bulk_data_source(connection)
+            return load_federal_fec_races(
+                connection,
+                races_data_source_id=races_data_source_id,
+                cn_data_source_id=cn_data_source_id,
+                election_client=FecClient(),
+                min_election_year=_federal_fec_races_min_election_year(parameters),
+            )
+        finally:
+            connection.close()
+
+    return RefreshJob(
+        key="federal-fec-races",
+        domain="civics",
+        jurisdiction="federal/fec",
+        cadence="weekly",
+        data_source_names=(FEDERAL_FEC_RACES_DATA_SOURCE_NAME,),
+        run_callable=_run_federal_fec_races_job,
+        refresh_history_key="federal-fec-races",
+    )
+
+
 def _build_federal_enrichment_job() -> RefreshJob:
     def _run_federal_enrichment_job() -> object:
         connection = get_connection()
@@ -1325,6 +1368,26 @@ def _build_irs_527_job() -> RefreshJob:
         cadence="continuous",
         data_source_names=(_IRS_527_DATA_SOURCE_NAME,),
         run_callable=_run_irs_527_job,
+    )
+
+
+def _build_federal_geometry_probe_job() -> RefreshJob:
+    def _run_federal_geometry_probe_job() -> object:
+        connection = get_connection()
+        try:
+            result = probe_tiger_congressional_district_listing(connection, year=2024)
+            connection.commit()
+            return result
+        finally:
+            connection.close()
+
+    return RefreshJob(
+        key="federal-geometry-probe",
+        domain="civics",
+        jurisdiction="federal/geometry",
+        cadence="weekly",
+        data_source_names=(TIGER_CD_LISTING_DATA_SOURCE_NAME,),
+        run_callable=_run_federal_geometry_probe_job,
     )
 
 
@@ -1463,12 +1526,16 @@ def build_refresh_plan(
     jobs.append(_build_fec_job(resolved_parameters))
     jobs.append(_build_fec_committee_summary_job(resolved_parameters))
     jobs.append(_build_federal_congress_spine_job())
+    # federal-fec-races reads the cn candidate master rows loaded by
+    # federal-fec-masters and populates the civic.election/contest/candidacy spine.
+    jobs.append(_build_federal_fec_races_job(resolved_parameters))
     # federal-enrichment joins on people, FEC transaction, and Schedule E rows
     # produced by the preceding federal jobs.
     jobs.append(_build_fec_schedule_b_job(resolved_parameters))
     jobs.append(_build_fec_schedule_e_job(resolved_parameters))
     jobs.append(_build_federal_enrichment_job())
     jobs.append(_build_irs_527_job())
+    jobs.append(_build_federal_geometry_probe_job())
     if _include_explicit_nc_past_results_job(job_key_prefixes=job_key_prefixes):
         jobs.append(_build_nc_past_results_job())
     for state_code in _SUPPORTED_STATE_CODES:

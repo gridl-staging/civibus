@@ -14,23 +14,64 @@
 # repeating platform probes in every refresh or compose wrapper.
 # This helper intentionally does not normalize ownership; only group/other
 # permission bits are relevant to the secret-file privacy check.
-# Print permission bits for an existing file or directory.
+# Returns only the octal permission bits so callers can enforce their own
+# privacy policy without duplicating OS-specific stat probes.
 get_file_mode_octal() {
   local path="$1"
   local mode
 
-  if mode="$(stat -f '%Lp' "${path}" 2>/dev/null)"; then
+  if mode="$(stat -f '%Lp' -- "${path}" 2>/dev/null)"; then
     printf '%s\n' "${mode}"
     return 0
   fi
 
-  if mode="$(stat -c '%a' "${path}" 2>/dev/null)"; then
+  if mode="$(stat -c '%a' -- "${path}" 2>/dev/null)"; then
     printf '%s\n' "${mode}"
     return 0
   fi
 
   echo "Unable to determine permissions for path: ${path}" >&2
   return 1
+}
+
+# Trusted env files and PATH entries also depend on their parent directories:
+# writable or symlinked ancestors let another user replace the checked leaf
+# after validation. Walk upward to reject those replacement seams.
+require_private_parent_directories() {
+  local target_path="$1"
+  local path_label="${2:-path}"
+  local action_verb="${3:-Refusing}"
+  local current_path mode next_path
+
+  if [[ "${target_path}" != /* ]]; then
+    current_path="${PWD%/}/${target_path}"
+  else
+    current_path="${target_path}"
+  fi
+  current_path="$(dirname "${current_path}")"
+
+  while :; do
+    if [[ -L "${current_path}" ]]; then
+      echo "${action_verb} ${path_label} with symlinked parent directory: ${target_path} (parent ${current_path})" >&2
+      return 1
+    fi
+
+    mode="$(get_file_mode_octal "${current_path}")" || return 1
+    if (( (8#${mode} & 8#022) != 0 )); then
+      echo "${action_verb} ${path_label} with parent directory writable by group/other: ${target_path} (parent ${current_path}, mode ${mode})" >&2
+      return 1
+    fi
+
+    if [[ "${current_path}" == "/" ]]; then
+      break
+    fi
+
+    next_path="$(dirname "${current_path}")"
+    if [[ "${next_path}" == "${current_path}" ]]; then
+      break
+    fi
+    current_path="${next_path}"
+  done
 }
 
 # Secret-bearing env files must not be accessible to group/other users.
@@ -49,6 +90,8 @@ require_private_env_file() {
     echo "Refusing to load env file with group/other permissions: ${env_path} (mode ${mode})" >&2
     return 1
   fi
+
+  require_private_parent_directories "${env_path}" "env file" "Refusing" || return 1
 }
 
 is_restricted_env_key() {
@@ -84,6 +127,10 @@ prepend_private_local_bin() {
 
   if [[ -L "${bin_dir}" ]]; then
     echo "Skipping symlinked PATH entry: ${bin_dir}" >&2
+    return 0
+  fi
+
+  if ! require_private_parent_directories "${bin_dir}" "PATH entry" "Skipping"; then
     return 0
   fi
 
@@ -198,7 +245,9 @@ load_civibus_env() {
 
   load_env_assignments "${env_file}" || return 1
 
-  prepend_private_local_bin "${HOME}/.local/bin" || return 1
+  if [[ -n "${HOME:-}" ]]; then
+    prepend_private_local_bin "${HOME}/.local/bin" || return 1
+  fi
 
   if [[ -z "${POSTGRES_PASSWORD:-}" ]]; then
     echo "POSTGRES_PASSWORD must be set in .env or the shell environment" >&2

@@ -17,14 +17,14 @@ def _repo_root() -> Path:
     raise RuntimeError("Could not locate repo root from test path")
 
 
-ARTIFACT_ROOT = _repo_root() / "docs" / "research" / "artifacts" / "2026_04_24_nc_ie_amounts" / "local"
+ARTIFACT_ROOT = _repo_root() / "docs" / "reference" / "research" / "artifacts" / "2026_04_24_nc_ie_amounts" / "local"
 DOCUMENT_RESULT_HTML = ARTIFACT_ROOT / "local_document_result_page.html"
 REPORT_SECTION_HTML = ARTIFACT_ROOT / "local_report_section_sample.html"
 REPORT_DETAIL_HTML = ARTIFACT_ROOT / "local_report_detail_ie_rows_sample.html"
 CSV_SAMPLE = ARTIFACT_ROOT / "local_document_result_export.csv"
 EXTRACTED_LINKS_JSON = ARTIFACT_ROOT / "extracted_report_section_links.json"
 
-PROBE_PATH = _repo_root() / "docs" / "research" / "artifacts" / "2026_04_24_nc_ie_amounts" / "probe.py"
+PROBE_PATH = _repo_root() / "docs" / "reference" / "research" / "artifacts" / "2026_04_24_nc_ie_amounts" / "probe.py"
 
 
 def _load_probe_module():

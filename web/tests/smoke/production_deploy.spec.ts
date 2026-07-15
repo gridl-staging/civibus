@@ -1,27 +1,27 @@
 import { expect, test } from "playwright/test";
 
-import { capturePageLoadErrors } from "./smoke-helpers";
+import { capturePageLoadErrors, chartRegion } from "./smoke-helpers";
 
 const MIN_FINANCE_CHART_HEIGHT_PX = 250;
+const PERSON_FINANCE_CHART_LABEL = "Receipt source composition by dollars";
 const CONTRIBUTION_INSIGHTS_CHART_LABELS = [
-  /Donations over time for/,
-  /Donation count by size bucket for/,
-  /Dollars by size bucket for/,
-  /Fundraising geography for/
+  "Monthly contribution columns",
+  "Itemized contribution-size buckets bar chart",
+  "Geography dollar share by contributor location"
 ] as const;
 
 async function expectFinanceChartHasStableHeight(page: any): Promise<void> {
-  const chartRegion = page.getByLabel(/Finance chart for/).first();
-  await expect(chartRegion).toBeVisible({ timeout: 20_000 });
-  const chartBox = await chartRegion.boundingBox();
+  const region = await chartRegion(page, PERSON_FINANCE_CHART_LABEL);
+  await expect(region).toBeVisible({ timeout: 20_000 });
+  const chartBox = await region.boundingBox();
   expect(chartBox?.height ?? 0).toBeGreaterThanOrEqual(MIN_FINANCE_CHART_HEIGHT_PX);
 }
 
 async function expectContributionInsightsChartsHaveStableHeight(page: any): Promise<void> {
   for (const chartLabel of CONTRIBUTION_INSIGHTS_CHART_LABELS) {
-    const chartRegion = page.getByLabel(chartLabel).first();
-    await expect(chartRegion).toBeVisible({ timeout: 20_000 });
-    const chartBox = await chartRegion.boundingBox();
+    const region = await chartRegion(page, chartLabel);
+    await expect(region).toBeVisible({ timeout: 20_000 });
+    const chartBox = await region.boundingBox();
     expect(chartBox?.height ?? 0).toBeGreaterThanOrEqual(MIN_FINANCE_CHART_HEIGHT_PX);
   }
 }
