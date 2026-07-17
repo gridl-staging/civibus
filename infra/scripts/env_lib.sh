@@ -2,20 +2,10 @@
 # Shared .env loading helpers for civibus cron/refresh scripts.
 # Sourced (not executed) by refresh_priority.sh and refresh_fec_bulk.sh.
 
-# Return the file or directory mode as an octal string on both macOS/BSD and GNU/Linux.
-# The privacy and PATH guards below only need permission bits, so platform-specific
-# stat flags stay isolated here instead of duplicated across callers.
-# BSD stat, used by macOS, exposes permission bits through `-f '%Lp'`.
-# GNU stat, used by most Linux hosts, exposes equivalent bits through `-c '%a'`.
-# Callers rely on stdout containing only the numeric mode on success.
-# Failure text goes to stderr so command substitution does not capture it.
-# Symlink and regular-file policy lives in require_private_env_file.
-# Keeping mode detection separate makes the .env parser testable without
-# repeating platform probes in every refresh or compose wrapper.
-# This helper intentionally does not normalize ownership; only group/other
-# permission bits are relevant to the secret-file privacy check.
-# Returns only the octal permission bits so callers can enforce their own
-# privacy policy without duplicating OS-specific stat probes.
+# Return file or directory permission bits as an octal string on macOS/BSD and
+# GNU/Linux. Keeping the platform-specific stat probes here lets env-file and
+# PATH guards share one policy-neutral helper. Successful output contains only
+# the mode; failures are reported on stderr.
 get_file_mode_octal() {
   local path="$1"
   local mode

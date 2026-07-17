@@ -65,10 +65,16 @@ describe("charts import boundary", () => {
   });
 
   it("routes every layerchart import through the single Chart.svelte adapter", () => {
-    const layerchartOwners = collectCodeFiles(chartsDir)
+    const chartFiles = collectCodeFiles(chartsDir);
+    const chartFilenames = chartFiles.map((filePath) =>
+      filePath.slice(chartsDir.length + 1)
+    );
+    const layerchartOwners = chartFiles
       .filter((filePath) => usesLayerchartModule(readFileSync(filePath, "utf8")))
       .map((filePath) => filePath.slice(chartsDir.length + 1));
 
+    expect(chartFilenames).toContain("ComparisonBar.svelte");
+    expect(layerchartOwners).not.toContain("ComparisonBar.svelte");
     expect(layerchartOwners).toEqual(["Chart.svelte"]);
   });
 });

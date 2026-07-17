@@ -31,6 +31,7 @@
   } from "$lib/campaign-finance-detail/contract";
 
   export let data: EntityDetailPageBundle;
+  export let compareHref: string | null = null;
 
   let shellViewModel: EntityDetailShellPresentation;
   $: shellViewModel = buildEntityDetailShellPresentation({
@@ -414,6 +415,9 @@
     {/if}
     <h2>{shellViewModel.canonicalName}</h2>
     <p class="detail__type">{shellViewModel.entityType}</p>
+    {#if personDetail !== null && compareHref !== null}
+      <a class="detail__cta-link" href={compareHref}>Compare</a>
+    {/if}
   </header>
 
   {#if personDetail !== null && personDetail.bio_text !== null}

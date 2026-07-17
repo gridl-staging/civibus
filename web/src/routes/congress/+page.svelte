@@ -3,13 +3,19 @@
   import { goto } from "$app/navigation";
   import { page } from "$app/stores";
   import ListNavigationLoading from "$lib/campaign-finance-detail/ListNavigationLoading.svelte";
+  import ComparisonBar from "$lib/charts/ComparisonBar.svelte";
+  import { formatCurrency, formatCurrencyShort } from "$lib/charts/finance";
   import {
+    buildCongressCompareHref,
     buildCongressDirectory,
-    type CongressDirectoryFilters
+    getCongressMoneyMetric,
+    getCongressMoneySourceHref,
+    type CongressDirectoryFilters,
+    type CongressMemberRow,
+    type CongressMoneySort
   } from "$lib/civic-detail/congress-directory";
   import { CONGRESS_PAGE_PATH } from "$lib/civic-detail/contract";
   import SkeletonPanel from "$lib/loading/SkeletonPanel.svelte";
-  import Portrait from "$lib/portrait/Portrait.svelte";
   import SeoHead from "$lib/seo/SeoHead.svelte";
   import { buildSeoHeadModel } from "$lib/seo/head";
   import type { PageData } from "./$types";
@@ -18,6 +24,23 @@
 
   const CONGRESS_TITLE = "Congress | Civibus";
   const CONGRESS_DESCRIPTION = "Browse current federal officeholders by name, chamber, state or territory, and party.";
+  const MONEY_SORT_OPTIONS: Array<{ value: CongressMoneySort; label: string }> = [
+    { value: "total_raised", label: "Total raised" },
+    { value: "outside_against", label: "Most spent to defeat them (outside against)" },
+    { value: "outside_support", label: "Outside support" },
+    { value: "cash_on_hand", label: "Cash on hand" }
+  ];
+  const MONEY_COLUMNS: Array<{
+    label: string;
+    value: (row: CongressMemberRow) => string | null;
+  }> = [
+    { label: "Total raised", value: (row) => row.totalRaised },
+    { label: "Outside support", value: (row) => row.outsideSupport },
+    { label: "Outside against", value: (row) => row.outsideAgainst },
+    { label: "Cash on hand", value: (row) => row.cashOnHand }
+  ];
+
+  let selectedPersonIds: string[] = [];
 
   $: headModel = buildSeoHeadModel({
     metadata: {
@@ -34,9 +57,21 @@
     state: $page.url.searchParams.get("state") ?? "",
     party: $page.url.searchParams.get("party") ?? ""
   };
-  $: directory = buildCongressDirectory(data.members, rawFilters);
+  $: directory = buildCongressDirectory(
+    data.members,
+    rawFilters,
+    data.moneySummaries,
+    $page.url.searchParams.get("sort") ?? ""
+  );
   $: resultCountLabel =
     directory.rows.length === 1 ? "1 member" : `${directory.rows.length} members`;
+  $: activeMetricMaximum = Math.max(
+    0,
+    ...directory.rows
+      .map((row) => getCongressMoneyMetric(row, directory.activeSort))
+      .filter((value): value is number => value !== null)
+  );
+  $: compareHref = buildCongressCompareHref(selectedPersonIds);
 
   function valueFromEvent(event: Event): string {
     return (event.currentTarget as HTMLInputElement | HTMLSelectElement).value;
@@ -51,6 +86,36 @@
       nextUrl.searchParams.set(name, normalizedValue);
     }
     void goto(`${CONGRESS_PAGE_PATH}${nextUrl.search}`, { keepFocus: true, noScroll: true });
+  }
+
+  function updateSort(value: string): void {
+    const nextUrl = new URL($page.url);
+    if (value === "total_raised") {
+      nextUrl.searchParams.delete("sort");
+    } else {
+      nextUrl.searchParams.set("sort", value);
+    }
+    void goto(`${CONGRESS_PAGE_PATH}${nextUrl.search}`, { keepFocus: true, noScroll: true });
+  }
+
+  function updateSelectedPerson(personId: string, selected: boolean): void {
+    const nextSelectedIds = new Set(selectedPersonIds);
+    if (selected) {
+      nextSelectedIds.add(personId);
+    } else {
+      nextSelectedIds.delete(personId);
+    }
+    selectedPersonIds = [...nextSelectedIds];
+  }
+
+  function selectPersonFromEvent(personId: string, event: Event): void {
+    updateSelectedPerson(personId, (event.currentTarget as HTMLInputElement).checked);
+  }
+
+  function navigateToComparison(): void {
+    if (compareHref !== null) {
+      void goto(compareHref);
+    }
   }
 </script>
 
@@ -109,10 +174,22 @@
       {/each}
     </select>
 
+    <label for="congress-money-sort">Sort money by</label>
+    <select
+      id="congress-money-sort"
+      name="sort"
+      data-testid="congress-money-sort"
+      on:change={(event) => updateSort(valueFromEvent(event))}
+    >
+      {#each MONEY_SORT_OPTIONS as option}
+        <option value={option.value} selected={directory.activeSort === option.value}>{option.label}</option>
+      {/each}
+    </select>
+
     <a href={CONGRESS_PAGE_PATH}>Reset</a>
   </form>
 
-  <ListNavigationLoading routePath={CONGRESS_PAGE_PATH} filterParams={["search", "chamber", "state", "party"]} label="Updating results…" let:isFilterNavigation>
+  <ListNavigationLoading routePath={CONGRESS_PAGE_PATH} filterParams={["search", "chamber", "state", "party", "sort"]} label="Updating results…" let:isFilterNavigation>
     {#if isFilterNavigation}
       <SkeletonPanel label="Congress results loading" lines={4} />
     {:else if data.members.length === 0}
@@ -120,15 +197,59 @@
     {:else if directory.rows.length === 0}
       <p>No members match the active filters.</p>
     {:else}
+      <div class="congress-directory__compare-control">
+        <button type="button" disabled={compareHref === null} on:click={navigateToComparison}>
+          Compare selected (2–4)
+        </button>
+      </div>
       <ul class="congress-directory__items">
         {#each directory.rows as row, index (row.id)}
+          {@const activeMetric = getCongressMoneyMetric(row, directory.activeSort)}
+          {@const moneySourceHref = getCongressMoneySourceHref(row)}
           <li class="congress-directory__item" data-testid={`congress-member-row-${index}`}>
-            <Portrait canonicalName={row.personName} personId={row.id} portrait={row.portrait} />
-            <div class="congress-directory__item-body">
-              <h3 class="congress-directory__name">
-                <a href={row.personHref}>{row.personName}</a>
-              </h3>
+            <div class="congress-directory__selection">
+              <input
+                id={`congress-compare-${row.id}`}
+                type="checkbox"
+                checked={selectedPersonIds.includes(row.id)}
+                aria-label={`Select ${row.personName} for comparison`}
+                on:change={(event) => selectPersonFromEvent(row.id, event)}
+              />
+            </div>
+            <div class="congress-directory__item-content">
+              <ComparisonBar
+                entities={[{
+                  id: row.id,
+                  label: row.personName,
+                  portrait: row.portrait,
+                  href: row.personHref,
+                  value: activeMetric,
+                  valueLabel: activeMetric === null ? "" : formatCurrencyShort(activeMetric)
+                }]}
+                scaleMax={activeMetricMaximum}
+              />
               <p class="congress-directory__context">{row.contextLine}</p>
+
+              {#if row.hasFecMoney}
+                <dl class="congress-directory__money" aria-label={`Money summary for ${row.personName}`}>
+                  {#each MONEY_COLUMNS as column}
+                    {@const value = column.value(row)}
+                    <div class="congress-directory__money-cell">
+                      <dt>{column.label}</dt>
+                      <dd>
+                        {#if value === null}
+                          <span class="congress-directory__money-missing">Not reported/loaded</span>
+                        {:else if moneySourceHref !== null}
+                          <a href={moneySourceHref} target="_blank" rel="noreferrer">{formatCurrency(Number(value))}</a>
+                        {:else}
+                          <span>{formatCurrency(Number(value))}</span>
+                          <span class="congress-directory__source-unavailable">Source link unavailable</span>
+                        {/if}
+                      </dd>
+                    </div>
+                  {/each}
+                </dl>
+              {/if}
             </div>
           </li>
         {/each}
@@ -171,28 +292,83 @@
   }
 
   .congress-directory__item {
+    align-items: start;
+    border-top: 1px solid #d8dee5;
+    display: grid;
+    gap: 0.5rem;
+    grid-template-columns: max-content minmax(0, 1fr);
+    min-width: 0;
+    padding: 1rem 0;
+  }
+
+  .congress-directory__compare-control {
     display: flex;
-    align-items: center;
-    gap: 0.75rem;
+    justify-content: flex-end;
+    margin-bottom: 0.5rem;
+  }
+
+  .congress-directory__selection {
+    padding-top: 0.7rem;
+  }
+
+  .congress-directory__selection input {
+    height: 1.1rem;
+    width: 1.1rem;
+  }
+
+  .congress-directory__item-content {
     min-width: 0;
-  }
-
-  .congress-directory__item + .congress-directory__item {
-    margin-top: 0.75rem;
-  }
-
-  .congress-directory__item-body {
-    min-width: 0;
-  }
-
-  .congress-directory__name {
-    margin: 0;
-    font-size: 1.05rem;
   }
 
   .congress-directory__context {
-    margin: 0.2rem 0 0;
+    margin: 0.35rem 0 0;
     color: var(--text-secondary, #44515e);
     font-size: 0.95rem;
+  }
+
+  .congress-directory__money {
+    display: grid;
+    gap: 0.75rem;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    margin: 0.9rem 0 0;
+  }
+
+  .congress-directory__money-cell {
+    min-width: 0;
+  }
+
+  .congress-directory__money-cell dt {
+    color: var(--text-secondary, #44515e);
+    font-size: 0.8rem;
+  }
+
+  .congress-directory__money-cell dd {
+    margin: 0.15rem 0 0;
+  }
+
+  .congress-directory__money-cell a,
+  .congress-directory__money-cell dd > span:first-child {
+    font-variant-numeric: tabular-nums;
+    font-weight: 650;
+  }
+
+  .congress-directory__source-unavailable,
+  .congress-directory__money-missing {
+    color: var(--text-secondary, #44515e);
+    display: block;
+    font-size: 0.8rem;
+    font-weight: 400;
+  }
+
+  @media (max-width: 48rem) {
+    .congress-directory__money {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+  }
+
+  @media (max-width: 30rem) {
+    .congress-directory__money {
+      grid-template-columns: minmax(0, 1fr);
+    }
   }
 </style>

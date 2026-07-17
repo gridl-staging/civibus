@@ -1,6 +1,7 @@
 <script lang="ts">
   import ChartFrame from "./ChartFrame.svelte";
   import Chart from "./Chart.svelte";
+  import { sharedScaleWidthPct } from "./comparison-transforms";
   import { formatCount, formatCurrency, toExactRows } from "./finance";
   import type { ChartFrameProps, ChartSeries, HorizontalBarRow } from "./types";
 
@@ -10,9 +11,13 @@
   export let coverageThrough: string | null;
   export let sources: ChartFrameProps["sources"] = [];
   export let rows: HorizontalBarRow[] = [];
+  // Supplied by comparison surfaces so sibling columns plot against one domain;
+  // omitted elsewhere, where the chart self-normalizes to its own largest row.
+  export let scaleMax: number | undefined = undefined;
 
   $: plottedRows = rows.filter((row) => row.canPlot);
-  $: maxRowValue = Math.max(0, ...plottedRows.map((row) => getRowValue(row)));
+  $: ownMaxRowValue = Math.max(0, ...plottedRows.map((row) => getRowValue(row)));
+  $: effectiveScaleMax = scaleMax ?? ownMaxRowValue;
   $: chartSeries = buildChartSeries(plottedRows);
   $: state =
     plottedRows.length === 0
@@ -28,10 +33,7 @@
   };
 
   function getRowWidth(row: HorizontalBarRow): string {
-    if (maxRowValue === 0) {
-      return "0%";
-    }
-    return `${(getRowValue(row) / maxRowValue) * 100}%`;
+    return `${sharedScaleWidthPct(getRowValue(row), effectiveScaleMax) * 100}%`;
   }
 
   function getRowValue(row: HorizontalBarRow): number {
@@ -67,7 +69,7 @@
   {exactRows}
   {state}
 >
-  <div class="horizontal-bars" data-testid="{testId}-plot">
+  <div class="horizontal-bars" data-testid="{testId}-plot" data-domain-max={effectiveScaleMax}>
     <Chart
       kind="bar"
       title={title}

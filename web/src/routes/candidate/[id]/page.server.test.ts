@@ -103,6 +103,7 @@ function buildCandidateSummary(candidateId: string, candidateName = "Candidate O
     transaction_count: 5,
     committees: [buildCandidateCommitteeSummary(COMMITTEE_ID)],
     cash_on_hand: null,
+    net_self_funding: null,
     summary_source: "derived" as const,
     itemized_transaction_count: 5
   };

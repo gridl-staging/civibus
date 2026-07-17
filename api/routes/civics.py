@@ -13,6 +13,7 @@ import psycopg
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from api.deps import get_db
+from api.models.campaign_finance import PublicMemberMoneySummary
 from api.models.civics import (
     CandidacyResponse,
     CandidacySummary,
@@ -55,6 +56,7 @@ from api.queries.civics import (
     fetch_state_geometry,
     fetch_upcoming_election_contests,
 )
+from api.routes.public_federal import build_public_federal_money_rows
 
 router = APIRouter()
 _WINNER_CANDIDACY_STATUSES = {"elected", "won", "winner"}
@@ -170,6 +172,13 @@ def get_congress_members(conn: psycopg.Connection = Depends(get_db)) -> list[Con
     for row in rows:
         row["person_detail_path"] = f"/person/{row['person_id']}"
     return [CongressMemberSummary.model_validate(row) for row in rows]
+
+
+@router.get("/congress/money-summaries", response_model=list[PublicMemberMoneySummary])
+def get_congress_member_money_summaries(
+    conn: psycopg.Connection = Depends(get_db),
+) -> list[PublicMemberMoneySummary]:
+    return build_public_federal_money_rows(conn)
 
 
 @router.get("/elections/timeline/upcoming", response_model=list[UpcomingElectionTimelineEntry])

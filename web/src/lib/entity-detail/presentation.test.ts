@@ -266,6 +266,7 @@ describe("entity detail presentation", () => {
       transaction_count: 2,
       itemized_transaction_count: 2,
       cash_on_hand: "25.00",
+      net_self_funding: "5.00",
       debts_owed_by_committee: "10.00",
       summary_source: "fec_weball" as const,
       receipt_source_composition: [
@@ -302,6 +303,7 @@ describe("entity detail presentation", () => {
         { label: "Total receipts", value: "$125.00" },
         { label: "Total disbursements", value: "$75.00" },
         { label: "Cash on hand", value: "$25.00" },
+        { label: "Net self-funded", value: "$5.00" },
         { label: "Debts owed by the committee", value: "$10.00" }
       ],
       receiptComposition: {
@@ -350,6 +352,7 @@ describe("entity detail presentation", () => {
             transaction_count: 5,
             itemized_transaction_count: 4,
             cash_on_hand: "100.00",
+            net_self_funding: "45.00",
             debts_owed_by_committee: "40.00",
             summary_source: "derived" as const
           }
@@ -361,6 +364,7 @@ describe("entity detail presentation", () => {
         { label: "Total receipts", value: "$1,000.00" },
         { label: "Total disbursements", value: "$300.00" },
         { label: "Cash on hand", value: "$125.00" },
+        { label: "Net self-funded", value: "$50.00" },
         { label: "Debts owed by the committee", value: "$50.00" }
       ]
     });
@@ -379,6 +383,7 @@ describe("entity detail presentation", () => {
             transaction_count: 5,
             itemized_transaction_count: 4,
             cash_on_hand: null,
+            net_self_funding: null,
             debts_owed_by_committee: undefined
           }
         ])
@@ -388,6 +393,7 @@ describe("entity detail presentation", () => {
         { label: "Total receipts", value: "$1,000.00" },
         { label: "Total disbursements", value: "$300.00" },
         { label: "Cash on hand", value: "Not available" },
+        { label: "Net self-funded", value: "Not available" },
         { label: "Debts owed by the committee", value: "Not available" }
       ]
     });
@@ -419,6 +425,7 @@ describe("entity detail presentation", () => {
       transaction_count: 2,
       itemized_transaction_count: 2,
       cash_on_hand: "25.00",
+      net_self_funding: "5.00",
       debts_owed_by_committee: "10.00",
       summary_source: "fec_weball" as const,
       receipt_source_composition: [
@@ -508,6 +515,7 @@ describe("entity detail presentation", () => {
         transaction_count: 2,
         itemized_transaction_count: 2,
         cash_on_hand: "25.00",
+        net_self_funding: "5.00",
         debts_owed_by_committee: "0.00",
         summary_source: "fec_weball" as const,
         receipt_source_composition: [

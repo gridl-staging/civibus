@@ -47,6 +47,16 @@ export function formatCurrency(value: number): string {
   return CURRENCY_FORMATTER.format(value);
 }
 
+export function formatCurrencyShort(value: number): string {
+  if (value >= 1_000_000) {
+    return `$${(value / 1_000_000).toFixed(1)}M`;
+  }
+  if (value >= 1_000) {
+    return `$${(value / 1_000).toFixed(0)}K`;
+  }
+  return `$${value}`;
+}
+
 export function formatCount(value: number): string {
   return COUNT_FORMATTER.format(value);
 }
@@ -115,7 +125,10 @@ export function summarizeShare(row: GeographyShareRow): string {
 
 /**
  */
-export function calculateOutsideSpendingDomain(rows: OutsideSpendingRow[]): {
+export function calculateOutsideSpendingDomain(
+  rows: OutsideSpendingRow[],
+  sharedScaleMax?: number
+): {
   min: number;
   max: number;
   signedRows: Array<{ id: string; label: string; signedAmount: number }>;
@@ -126,7 +139,9 @@ export function calculateOutsideSpendingDomain(rows: OutsideSpendingRow[]): {
     signedAmount: row.stance === "oppose" ? -Math.abs(row.amount) : Math.abs(row.amount)
   }));
   const values = signedRows.map((row) => row.signedAmount);
-  const absoluteMaximum = Math.max(0, ...values.map((value) => Math.abs(value)));
+  // A shared maximum keeps sibling comparison columns on one zero-centered domain;
+  // without one the chart still self-normalizes to its own largest reported value.
+  const absoluteMaximum = sharedScaleMax ?? Math.max(0, ...values.map((value) => Math.abs(value)));
   return {
     min: -absoluteMaximum,
     max: absoluteMaximum,

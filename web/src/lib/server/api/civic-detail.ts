@@ -1,5 +1,6 @@
 import {
   buildCongressMembersPath,
+  buildCongressMoneySummariesPath,
   buildElectionDateAggregatePath,
   buildUpcomingElectionTimelinePath,
   buildCandidacyDetailPath,
@@ -7,6 +8,7 @@ import {
   buildOfficeDetailPath,
   buildOfficeholdingDetailPath,
   type CongressMemberSummary,
+  type CongressMemberMoneySummary,
   type CandidacyDetailResponse,
   type ContestDetailResponse,
   type ElectionDateAggregateResponse,
@@ -38,6 +40,10 @@ export type ElectionDateAggregateRequest = {
 
 export async function fetchCongressMembers(apiClient: ApiClient): Promise<CongressMemberSummary[]> {
   return apiClient.requestJson<CongressMemberSummary[]>(buildCongressMembersPath());
+}
+
+export async function fetchCongressMoneySummaries(apiClient: ApiClient): Promise<CongressMemberMoneySummary[]> {
+  return apiClient.requestJson<CongressMemberMoneySummary[]>(buildCongressMoneySummariesPath());
 }
 
 export async function fetchOfficeDetail(

@@ -82,6 +82,7 @@ export const CANDIDATE_CANONICAL_DATA = {
       }
     ],
     cash_on_hand: null,
+    net_self_funding: null,
     summary_source: "derived",
     itemized_transaction_count: 5
   }),
@@ -111,6 +112,7 @@ export const CANDIDATE_EMPTY_CANONICAL_DATA = {
     transaction_count: 0,
     committees: [],
     cash_on_hand: null,
+    net_self_funding: null,
     summary_source: "derived",
     itemized_transaction_count: 0
   }),

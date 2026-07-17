@@ -25,6 +25,15 @@ const {
   SMOKE_COMMITTEE_IE_SOURCE_URL,
   SMOKE_COMMITTEE_NAME,
   SMOKE_COMMITTEE_SLUG,
+  SMOKE_CONGRESS_LEADER_NAME,
+  SMOKE_CONGRESS_LEADER_PERSON_ID,
+  SMOKE_CONGRESS_LEADER_SOURCE_HREF,
+  SMOKE_CONGRESS_NO_MONEY_NAME,
+  SMOKE_CONGRESS_NO_MONEY_PERSON_ID,
+  SMOKE_CONGRESS_PORTRAIT_URL,
+  SMOKE_CONGRESS_SECOND_NAME,
+  SMOKE_CONGRESS_SECOND_PERSON_ID,
+  SMOKE_CONGRESS_SECOND_SOURCE_HREF,
   SMOKE_CONTEST_ID,
   SMOKE_CONTEST_NAME,
   SMOKE_DEVIANT_CANDIDATE_ID,
@@ -162,8 +171,106 @@ export const smokeFixtures = {
       district: "01",
       district_or_class: "District 01",
       party: "Democratic",
-      portrait_source_image_url: "https://images.example.org/jane-doe.jpg",
+      portrait_source_image_url: SMOKE_CONGRESS_PORTRAIT_URL,
       person_detail_path: `/person/${SMOKE_PERSON_ID}`
+    },
+    {
+      person_id: SMOKE_CONGRESS_SECOND_PERSON_ID,
+      person_name: SMOKE_CONGRESS_SECOND_NAME,
+      officeholding_id: "21111111-1111-4111-8111-111111111112",
+      office_id: "21111111-1111-4111-8111-111111111113",
+      office_name: "U.S. Senator from Georgia",
+      chamber: "Senate",
+      state: "GA",
+      district: null,
+      district_or_class: "Class II",
+      party: "Republican",
+      portrait_source_image_url: null,
+      person_detail_path: `/person/${SMOKE_CONGRESS_SECOND_PERSON_ID}`
+    },
+    {
+      person_id: SMOKE_CONGRESS_NO_MONEY_PERSON_ID,
+      person_name: SMOKE_CONGRESS_NO_MONEY_NAME,
+      officeholding_id: "31111111-1111-4111-8111-111111111112",
+      office_id: "31111111-1111-4111-8111-111111111113",
+      office_name: "Delegate to the U.S. House from Puerto Rico",
+      chamber: "House",
+      state: "PR",
+      district: null,
+      district_or_class: "Delegate",
+      party: "Democratic",
+      portrait_source_image_url: null,
+      person_detail_path: `/person/${SMOKE_CONGRESS_NO_MONEY_PERSON_ID}`
+    }
+  ],
+  congressMoneySummaries: [
+    {
+      person_id: SMOKE_CONGRESS_LEADER_PERSON_ID,
+      person_name: SMOKE_CONGRESS_LEADER_NAME,
+      has_fec_money: true,
+      candidate_id: "H6NC01001",
+      total_raised: "300.00",
+      total_spent: "200.00",
+      net: "100.00",
+      cash_on_hand: "60.00",
+      summary_source: "fec_candidate_totals",
+      ie_support_total: "90.00",
+      ie_oppose_total: "30.00",
+      ie_support_count: 2,
+      ie_oppose_count: 1,
+      sources: [
+        {
+          domain: "fec",
+          jurisdiction: "US",
+          data_source_name: "FEC candidate summary",
+          data_source_url: "https://api.open.fec.gov/developers/",
+          source_record_key: "H6NC01001",
+          record_url: SMOKE_CONGRESS_LEADER_SOURCE_HREF,
+          pull_date: "2026-07-16"
+        }
+      ]
+    },
+    {
+      person_id: SMOKE_CONGRESS_SECOND_PERSON_ID,
+      person_name: SMOKE_CONGRESS_SECOND_NAME,
+      has_fec_money: true,
+      candidate_id: "S6GA00001",
+      total_raised: "100.00",
+      total_spent: "75.00",
+      net: "25.00",
+      cash_on_hand: "0.00",
+      summary_source: "fec_candidate_totals",
+      ie_support_total: "20.00",
+      ie_oppose_total: "80.00",
+      ie_support_count: 1,
+      ie_oppose_count: 3,
+      sources: [
+        {
+          domain: "fec",
+          jurisdiction: "US",
+          data_source_name: "FEC candidate summary",
+          data_source_url: "https://api.open.fec.gov/developers/",
+          source_record_key: "S6GA00001",
+          record_url: SMOKE_CONGRESS_SECOND_SOURCE_HREF,
+          pull_date: "2026-07-16"
+        }
+      ]
+    },
+    {
+      person_id: SMOKE_CONGRESS_NO_MONEY_PERSON_ID,
+      person_name: SMOKE_CONGRESS_NO_MONEY_NAME,
+      has_fec_money: false,
+      candidate_id: null,
+      total_raised: "0.00",
+      total_spent: "0.00",
+      net: "0.00",
+      cash_on_hand: null,
+      summary_source: null,
+      ie_support_total: "0.00",
+      ie_oppose_total: "0.00",
+      ie_support_count: 0,
+      ie_oppose_count: 0,
+      sources: []
     }
   ],
   coverageRegistry: [
@@ -415,6 +522,90 @@ export const smokeFixtures = {
       portrait: null,
       sources: []
     },
+  },
+  congressSecondPerson: {
+    id: SMOKE_CONGRESS_SECOND_PERSON_ID,
+    detail: {
+      id: SMOKE_CONGRESS_SECOND_PERSON_ID,
+      canonical_name: SMOKE_CONGRESS_SECOND_NAME,
+      name_variants: [],
+      first_name: "Alex",
+      middle_name: null,
+      last_name: "Money",
+      suffix: null,
+      date_of_birth: null,
+      year_of_birth: null,
+      bio_text: null,
+      bio_source_url: null,
+      bio_license: null,
+      bio_pulled_at: null,
+      identifiers: { fec_candidate_id: "S6GA00001" },
+      primary_address_id: null,
+      er_cluster_id: null,
+      er_confidence: null,
+      portrait: null,
+      sources: [
+        {
+          domain: "campaign_finance",
+          jurisdiction: "federal/fec",
+          data_source_name: "FEC",
+          data_source_url: "https://www.fec.gov",
+          source_record_key: "S6GA00001",
+          record_url: SMOKE_CONGRESS_SECOND_SOURCE_HREF,
+          pull_date: "2026-07-16"
+        }
+      ]
+    },
+    contributionInsights: {
+      person_id: SMOKE_CONGRESS_SECOND_PERSON_ID,
+      has_data: false,
+      metadata: {
+        selected_cycle: 2026,
+        coverage_start_date: null,
+        coverage_end_date: null,
+        available_cycles: [2026],
+        cycles_included: [2026],
+        committee_count: 0,
+        approximate_geography: false,
+        excluded_geography: null,
+        caveats: []
+      },
+      monthly_totals: [],
+      itemized_size_buckets: [],
+      dollars_by_size: [],
+      cycle_totals: [],
+      career_totals: {
+        itemized_individual_contribution_amount: "0.00",
+        itemized_transaction_count: 0,
+        unitemized_individual_contribution_amount: "0.00",
+        total_individual_contribution_amount: "0.00",
+        source: "transactions" as const
+      },
+      geography: {
+        by_state: [],
+        by_district: [],
+        district_share: {
+          in_district_amount: "0.00",
+          out_of_district_amount: "0.00",
+          unknown_district_amount: "0.00",
+          share: "0",
+          available: false
+        },
+        geography_mode: "state" as const,
+        classified_amount: "0.00",
+        classified_transaction_count: 0,
+        unknown_amount: "0.00",
+        unknown_transaction_count: 0
+      },
+      small_dollar_share: {
+        small_dollar_amount: "0.00",
+        total_contribution_amount: "0.00",
+        share: "0",
+        available: false
+      }
+    },
+    topDonors: [],
+    topEmployers: []
   },
   rosterDurhamPerson: {
     id: SMOKE_ROSTER_DURHAM_PERSON_ID,

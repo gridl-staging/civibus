@@ -1,13 +1,8 @@
 import {
   fetchEntityDetailBundle
 } from "$lib/server/api/entity-detail";
-import {
-  fetchPersonCandidateFinanceSections,
-  fetchPersonContributionInsights,
-  fetchPersonTopDonors,
-  fetchPersonTopEmployers
-} from "$lib/server/api/campaign-finance-detail";
 import { withApiResponseErrorHandling } from "$lib/server/api/error";
+import { loadPersonMoneyBundle } from "$lib/server/api/person-money-bundle";
 import { error } from "@sveltejs/kit";
 import type { PageServerLoad } from "./$types";
 
@@ -15,10 +10,6 @@ const INVALID_CYCLE_ERROR = {
   message: "Invalid cycle query parameter.",
   detail: "The cycle query parameter must be a single four-digit election cycle."
 };
-
-function guardUnhandledRejection(promise: Promise<unknown>): void {
-  void promise.catch(() => {});
-}
 
 /**
  */
@@ -50,73 +41,13 @@ export const load: PageServerLoad = ({ params, locals, url }) =>
         entityType: "person",
         id: params.id
       });
-
-      if (requestedCycle !== undefined) {
-        const personFinanceSections = fetchPersonCandidateFinanceSections(locals.api, {
-          personId: params.id,
-          cycle: requestedCycle
-        });
-        const personContributionInsights = fetchPersonContributionInsights(locals.api, {
-          id: params.id,
-          cycle: requestedCycle
-        });
-        const personTopDonors = fetchPersonTopDonors(locals.api, {
-          id: params.id,
-          cycle: requestedCycle
-        });
-        const personTopEmployers = fetchPersonTopEmployers(locals.api, {
-          id: params.id,
-          cycle: requestedCycle
-        });
-        guardUnhandledRejection(personFinanceSections);
-        guardUnhandledRejection(personContributionInsights);
-        guardUnhandledRejection(personTopDonors);
-        guardUnhandledRejection(personTopEmployers);
-
-        return {
-          ...bundle,
-          personFinanceSections,
-          personContributionInsights: Promise.resolve(await personContributionInsights),
-          personTopDonors,
-          personTopEmployers
-        };
-      }
-
-      const personContributionInsights = fetchPersonContributionInsights(locals.api, {
-        id: params.id
-      });
-      const selectedCycle = personContributionInsights.then(
-        (contributionInsights) => contributionInsights.metadata.selected_cycle
-      );
-      const personFinanceSections = selectedCycle.then((cycle) =>
-        fetchPersonCandidateFinanceSections(locals.api, {
-          personId: params.id,
-          cycle
-        })
-      );
-      const personTopDonors = selectedCycle.then((cycle) =>
-        fetchPersonTopDonors(locals.api, {
-          id: params.id,
-          cycle
-        })
-      );
-      const personTopEmployers = selectedCycle.then((cycle) =>
-        fetchPersonTopEmployers(locals.api, {
-          id: params.id,
-          cycle
-        })
-      );
-      guardUnhandledRejection(personContributionInsights);
-      guardUnhandledRejection(personFinanceSections);
-      guardUnhandledRejection(personTopDonors);
-      guardUnhandledRejection(personTopEmployers);
+      const moneyBundle = requestedCycle === undefined
+        ? loadPersonMoneyBundle(locals.api, params.id)
+        : await loadPersonMoneyBundle(locals.api, params.id, requestedCycle);
 
       return {
         ...bundle,
-        personFinanceSections,
-        personContributionInsights,
-        personTopDonors,
-        personTopEmployers
+        ...moneyBundle
       };
     },
     "Backend person detail request failed."

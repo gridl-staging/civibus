@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from datetime import date, datetime, timezone
 from decimal import Decimal
+from typing import Literal
 from uuid import UUID, uuid4
 
 import psycopg
@@ -59,6 +60,8 @@ from domains.campaign_finance.ingest.filing_loader import upsert_filing
 from domains.campaign_finance.types.models import Filing
 
 pytestmark = pytest.mark.integration
+
+PrincipalCommitteeFallbackShape = Literal["selected_cycle_fallback", "production_missing_self_funding_columns"]
 
 
 def _stage3_uuid(index: int) -> UUID:
@@ -345,6 +348,188 @@ def _seed_person_contribution_insights_fixture(
             source_record_id=superseded_source.id,
         )
     return person.id, candidate_id
+
+
+def _seed_principal_committee_fallback_fixture(
+    db_conn: psycopg.Connection,
+    *,
+    row_shape: PrincipalCommitteeFallbackShape = "selected_cycle_fallback",
+) -> tuple[UUID, UUID, UUID]:
+    person = Person(canonical_name="Principal Committee Fallback Member")
+    insert_person(db_conn, person)
+
+    office_id = UUID("d2000000-0000-0000-0000-000000000002")
+    insert_office_row(
+        db_conn,
+        office_id=office_id,
+        name="us_senate",
+        title="Senator",
+        state="NC",
+        electoral_division_id=None,
+    )
+    insert_officeholding_row(
+        db_conn,
+        officeholding_id=UUID("d2000000-0000-0000-0000-000000000003"),
+        person_id=person.id,
+        office_id=office_id,
+        electoral_division_id=None,
+    )
+
+    committee_id = UUID("d2000000-0000-0000-0000-000000000004")
+    candidate_id = UUID("d2000000-0000-0000-0000-000000000005")
+    filing_id = UUID("d2000000-0000-0000-0000-000000000006")
+    candidate_summary_coverage_end_date = (
+        date(2026, 3, 31) if row_shape == "production_missing_self_funding_columns" else date(2024, 12, 31)
+    )
+    insert_committee_row(
+        db_conn,
+        CommitteeRowSeed(
+            id=committee_id,
+            fec_committee_id="C88880001",
+            name="Principal Fallback Committee",
+            state="NC",
+        ),
+    )
+    insert_candidate_row(
+        db_conn,
+        CandidateRowSeed(
+            id=candidate_id,
+            fec_candidate_id="S4NC02024",
+            name="Principal Fallback Candidate",
+            office="S",
+            person_id=person.id,
+            principal_committee_id=committee_id,
+            state="NC",
+            total_receipts=Decimal("1234.00"),
+            total_disbursements=Decimal("400.00"),
+            cash_on_hand=Decimal("834.00"),
+            candidate_contrib=Decimal("75.00"),
+            candidate_loans=Decimal("25.00"),
+            candidate_loan_repay=Decimal("10.00"),
+            summary_coverage_end_date=candidate_summary_coverage_end_date,
+        ),
+    )
+    insert_filing_row(
+        db_conn,
+        FilingRowSeed(
+            id=filing_id,
+            filing_fec_id="principal-fallback-filing",
+            committee_id=committee_id,
+        ),
+    )
+    insert_committee_summary_row(
+        db_conn,
+        CommitteeSummaryRowSeed(
+            committee_id=committee_id,
+            cycle=2024,
+            total_receipts=Decimal("1234.00"),
+            total_disbursements=Decimal("400.00"),
+            cash_on_hand=Decimal("834.00"),
+            individual_contributions=Decimal("800.00"),
+            party_committee_contributions=Decimal("50.00"),
+            other_committee_contributions=Decimal("200.00"),
+            transfers_from_other_authorized_committees=Decimal("34.00"),
+            debts_owed_by_committee=Decimal("33.00"),
+            individual_itemized_contributions=Decimal("700.00"),
+            individual_unitemized_contributions=Decimal("100.00"),
+            candidate_contributions=Decimal("75.00"),
+            candidate_loans=Decimal("25.00"),
+            coverage_start_date=date(2023, 1, 1),
+            coverage_end_date=date(2024, 12, 31),
+        ),
+    )
+    for transaction_id, amount, transaction_date, contributor_zip in (
+        (UUID("d2000000-0000-0000-0000-000000000007"), Decimal("200.00"), date(2024, 2, 3), "27701"),
+        (UUID("d2000000-0000-0000-0000-000000000008"), Decimal("500.00"), date(2024, 3, 4), "27709"),
+    ):
+        insert_transaction_row(
+            db_conn,
+            TransactionRowSeed(
+                id=transaction_id,
+                filing_id=filing_id,
+                committee_id=committee_id,
+                transaction_type="15",
+                amount=amount,
+                amendment_indicator="N",
+                transaction_date=transaction_date,
+                contributor_name_raw=f"Fallback Donor {contributor_zip}",
+                contributor_entity_type="IND",
+                contributor_state="NC",
+                contributor_zip=contributor_zip,
+            ),
+        )
+    insert_transaction_row(
+        db_conn,
+        TransactionRowSeed(
+            id=UUID("d2000000-0000-0000-0000-000000000009"),
+            filing_id=filing_id,
+            committee_id=committee_id,
+            transaction_type="24A",
+            amount=Decimal("400.00"),
+            amendment_indicator="N",
+            transaction_date=date(2024, 4, 5),
+        ),
+    )
+    if row_shape == "production_missing_self_funding_columns":
+        insert_candidate_committee_link_row(
+            db_conn,
+            CandidateCommitteeLinkSeed(
+                id=UUID("d2000000-0000-0000-0000-000000000013"),
+                candidate_id=candidate_id,
+                committee_id=committee_id,
+                valid_period="[2025-01-01,2027-01-01)",
+                designation="P",
+                candidate_election_year=2026,
+                fec_election_year=2026,
+            ),
+        )
+        insert_committee_summary_row(
+            db_conn,
+            CommitteeSummaryRowSeed(
+                committee_id=committee_id,
+                cycle=2026,
+                total_receipts=Decimal("2222.00"),
+                total_disbursements=Decimal("777.00"),
+                cash_on_hand=Decimal("1445.00"),
+                individual_contributions=Decimal("1200.00"),
+                party_committee_contributions=Decimal("100.00"),
+                other_committee_contributions=Decimal("300.00"),
+                transfers_from_other_authorized_committees=Decimal("122.00"),
+                debts_owed_by_committee=Decimal("44.00"),
+                individual_itemized_contributions=Decimal("1000.00"),
+                individual_unitemized_contributions=Decimal("200.00"),
+                candidate_contributions=Decimal("400.00"),
+                candidate_loans=Decimal("50.00"),
+                coverage_start_date=date(2025, 1, 1),
+                coverage_end_date=date(2026, 3, 31),
+            ),
+        )
+        for transaction_id, amount, transaction_type, transaction_date in (
+            (UUID("d2000000-0000-0000-0000-000000000014"), Decimal("1200.00"), "15", date(2026, 2, 3)),
+            (UUID("d2000000-0000-0000-0000-000000000015"), Decimal("777.00"), "24A", date(2026, 3, 4)),
+        ):
+            insert_transaction_row(
+                db_conn,
+                TransactionRowSeed(
+                    id=transaction_id,
+                    filing_id=filing_id,
+                    committee_id=committee_id,
+                    transaction_type=transaction_type,
+                    amount=amount,
+                    amendment_indicator="N",
+                    transaction_date=transaction_date,
+                ),
+            )
+        with db_conn.cursor() as cursor:
+            cursor.execute(
+                """
+                ALTER TABLE cf.candidate
+                    DROP COLUMN candidate_contrib,
+                    DROP COLUMN candidate_loans,
+                    DROP COLUMN candidate_loan_repay
+                """
+            )
+    return person.id, candidate_id, committee_id
 
 
 def _insert_stage3_geography_receipts(
@@ -851,6 +1036,101 @@ def test_get_person_contribution_insights_returns_house_itemized_unitemized_geog
     }
 
 
+def test_get_person_contribution_insights_uses_cycle_matching_principal_committee_fallback(
+    api_client: TestClient,
+    db_conn: psycopg.Connection,
+) -> None:
+    person_id, _candidate_id, committee_id = _seed_principal_committee_fallback_fixture(db_conn)
+
+    response = api_client.get(f"/v1/person/{person_id}/contribution-insights?cycle=2024")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["person_id"] == str(person_id)
+    assert payload["has_data"] is True
+    assert payload["metadata"] == {
+        "selected_cycle": 2024,
+        "coverage_start_date": "2023-01-01",
+        "coverage_end_date": "2024-12-31",
+        "available_cycles": [2022, 2024, 2026],
+        "cycles_included": [2024],
+        "committee_count": 1,
+        "approximate_geography": True,
+        "excluded_geography": None,
+        "caveats": [],
+    }
+    assert payload["metadata"]["excluded_geography"] != "no_linked_candidate"
+    assert str(committee_id) == "d2000000-0000-0000-0000-000000000004"
+    assert payload["itemized_size_buckets"] == [
+        {
+            "label": "$200 and under",
+            "min_amount": "0.01",
+            "max_amount": "200.00",
+            "total_amount": "200.00",
+            "transaction_count": 1,
+        },
+        {
+            "label": "$200.01-$499.99",
+            "min_amount": "200.01",
+            "max_amount": "499.99",
+            "total_amount": "0.00",
+            "transaction_count": 0,
+        },
+        {
+            "label": "$500-$999.99",
+            "min_amount": "500.00",
+            "max_amount": "999.99",
+            "total_amount": "500.00",
+            "transaction_count": 1,
+        },
+        {
+            "label": "$1,000-$1,999.99",
+            "min_amount": "1000.00",
+            "max_amount": "1999.99",
+            "total_amount": "0.00",
+            "transaction_count": 0,
+        },
+        {
+            "label": "$2,000 and over",
+            "min_amount": "2000.00",
+            "max_amount": None,
+            "total_amount": "0.00",
+            "transaction_count": 0,
+        },
+    ]
+    assert payload["dollars_by_size"] == [
+        {"label": "Unitemized (<$200)", "total_amount": "100.00", "source": "committee_summary"},
+        {"label": "$200 and under itemized", "total_amount": "200.00", "source": "transactions"},
+        {"label": "$200.01-$499.99 itemized", "total_amount": "0.00", "source": "transactions"},
+        {"label": "$500-$999.99 itemized", "total_amount": "500.00", "source": "transactions"},
+        {"label": "$1,000-$1,999.99 itemized", "total_amount": "0.00", "source": "transactions"},
+        {"label": "$2,000 and over itemized", "total_amount": "0.00", "source": "transactions"},
+    ]
+    assert payload["cycle_totals"] == [
+        {
+            "cycle": 2024,
+            "itemized_individual_contribution_amount": "700.00",
+            "itemized_transaction_count": 2,
+            "unitemized_individual_contribution_amount": "100.00",
+            "total_individual_contribution_amount": "800.00",
+            "source": "committee_summary",
+        },
+    ]
+    assert payload["career_totals"] == {
+        "itemized_individual_contribution_amount": "700.00",
+        "itemized_transaction_count": 2,
+        "unitemized_individual_contribution_amount": "100.00",
+        "total_individual_contribution_amount": "800.00",
+        "source": "committee_summary",
+    }
+    assert payload["small_dollar_share"] == {
+        "small_dollar_amount": "300.00",
+        "total_contribution_amount": "800.00",
+        "share": "0.3750",
+        "available": True,
+    }
+
+
 def test_selected_cycle_routes_default_and_accept_supported_cycle(
     api_client: TestClient,
     db_conn: psycopg.Connection,
@@ -959,11 +1239,11 @@ def test_get_person_contribution_insights_uses_latest_loaded_zcta_boundary_year(
     assert response.status_code == 200
     payload = response.json()
     assert payload["geography"]["by_district"] == [
-        {"label": "Out of district", "total_amount": "600.00", "transaction_count": 6},
+        {"label": "Elsewhere in state", "total_amount": "7199.98", "transaction_count": 9},
     ]
     assert payload["geography"]["district_share"] == {
         "in_district_amount": "0.00",
-        "out_of_district_amount": "600.00",
+        "out_of_district_amount": "7199.98",
         "unknown_district_amount": "0.00",
         "share": "0.0000",
         "available": True,
@@ -3020,6 +3300,289 @@ def test_get_candidate_summary_uses_official_weball_totals_when_populated(
     ]
     assert payload["committees"][0]["total_raised"] == "100.00"
     assert payload["committees"][0]["total_spent"] == "40.00"
+
+
+def test_get_candidate_summary_uses_cycle_matching_principal_committee_fallback(
+    api_client: TestClient,
+    db_conn: psycopg.Connection,
+) -> None:
+    _person_id, candidate_id, committee_id = _seed_principal_committee_fallback_fixture(db_conn)
+
+    response = api_client.get(f"/v1/candidates/{candidate_id}/summary?cycle=2024")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["candidate_id"] == str(candidate_id)
+    assert payload["candidate_name"] == "Principal Fallback Candidate"
+    assert payload["selected_cycle"] == 2024
+    assert payload["coverage_start_date"] == "2023-01-01"
+    assert payload["coverage_end_date"] == "2024-12-31"
+    assert payload["available_cycles"] == [2022, 2024, 2026]
+    assert payload["summary_source"] == "fec_weball"
+    assert payload["total_raised"] == "1234.00"
+    assert payload["total_spent"] == "400.00"
+    assert payload["net"] == "834.00"
+    assert payload["cash_on_hand"] == "834.00"
+    assert payload["candidate_contrib"] == "75.00"
+    assert payload["candidate_loans"] == "25.00"
+    assert payload["candidate_loan_repay"] == "10.00"
+    assert payload["net_self_funding"] == "90.00"
+    assert payload["transaction_count"] == 3
+    assert payload["itemized_transaction_count"] == 3
+    assert len(payload["committees"]) == 1
+    assert payload["committees"][0]["committee_id"] == str(committee_id)
+    assert payload["committees"][0]["committee_name"] == "Principal Fallback Committee"
+    assert payload["committees"][0]["total_raised"] == "1234.00"
+    assert payload["committees"][0]["total_spent"] == "400.00"
+    assert payload["committees"][0]["transaction_count"] == 3
+    assert payload["committees"][0]["summary_source"] == "fec_committee_summary"
+    assert payload["receipt_source_composition"] == [
+        {"label": "Individual contributions", "total_amount": "800.00", "source": "fec_committee_summary"},
+        {"label": "PAC/other committee contributions", "total_amount": "200.00", "source": "fec_committee_summary"},
+        {"label": "Party committee contributions", "total_amount": "50.00", "source": "fec_committee_summary"},
+        {"label": "Candidate funding", "total_amount": "100.00", "source": "fec_committee_summary"},
+        {
+            "label": "Transfers from other authorized committees",
+            "total_amount": "34.00",
+            "source": "fec_committee_summary",
+        },
+        {"label": "Other receipts", "total_amount": "50.00", "source": "fec_committee_summary"},
+    ]
+    receipt_denominator = sum(Decimal(row["total_amount"]) for row in payload["receipt_source_composition"])
+    assert receipt_denominator == Decimal(payload["total_raised"])
+    assert payload["selected_cycle_coverage_complete"] is True
+    assert payload["can_render_share"] is True
+    assert payload["receipt_source_caveats"] == []
+    assert payload["debts_owed_by_committee"] == "33.00"
+
+
+def test_get_candidate_summary_handles_production_shape_missing_candidate_self_funding_columns(
+    api_client: TestClient,
+    db_conn: psycopg.Connection,
+) -> None:
+    _person_id, candidate_id, committee_id = _seed_principal_committee_fallback_fixture(
+        db_conn,
+        row_shape="production_missing_self_funding_columns",
+    )
+
+    selected_cycle_response = api_client.get(f"/v1/candidates/{candidate_id}/summary?cycle=2024")
+    default_cycle_response = api_client.get(f"/v1/candidates/{candidate_id}/summary")
+
+    assert selected_cycle_response.status_code == 200
+    selected_cycle_payload = selected_cycle_response.json()
+    assert selected_cycle_payload["candidate_id"] == str(candidate_id)
+    assert selected_cycle_payload["candidate_name"] == "Principal Fallback Candidate"
+    assert selected_cycle_payload["selected_cycle"] == 2024
+    assert selected_cycle_payload["coverage_start_date"] == "2023-01-01"
+    assert selected_cycle_payload["coverage_end_date"] == "2024-12-31"
+    assert selected_cycle_payload["available_cycles"] == [2022, 2024, 2026]
+    assert selected_cycle_payload["summary_source"] == "derived"
+    assert selected_cycle_payload["total_raised"] == "0.00"
+    assert selected_cycle_payload["total_spent"] == "0.00"
+    assert selected_cycle_payload["net"] == "0.00"
+    assert selected_cycle_payload["cash_on_hand"] is None
+    assert selected_cycle_payload["candidate_contrib"] is None
+    assert selected_cycle_payload["candidate_loans"] is None
+    assert selected_cycle_payload["candidate_loan_repay"] is None
+    assert selected_cycle_payload["net_self_funding"] is None
+    assert selected_cycle_payload["transaction_count"] == 0
+    assert selected_cycle_payload["itemized_transaction_count"] == 0
+    assert selected_cycle_payload["committees"] == []
+    assert selected_cycle_payload["receipt_source_composition"] == []
+    assert selected_cycle_payload["selected_cycle_coverage_complete"] is False
+    assert selected_cycle_payload["can_render_share"] is False
+    assert selected_cycle_payload["receipt_source_caveats"] == ["missing_committee_summary"]
+    assert selected_cycle_payload["debts_owed_by_committee"] is None
+
+    assert default_cycle_response.status_code == 200
+    default_cycle_payload = default_cycle_response.json()
+    assert default_cycle_payload["candidate_id"] == str(candidate_id)
+    assert default_cycle_payload["candidate_name"] == "Principal Fallback Candidate"
+    assert default_cycle_payload["selected_cycle"] == 2026
+    assert default_cycle_payload["coverage_start_date"] == "2025-01-01"
+    assert default_cycle_payload["coverage_end_date"] == "2026-12-31"
+    assert default_cycle_payload["available_cycles"] == [2022, 2024, 2026]
+    assert default_cycle_payload["summary_source"] == "derived"
+    assert default_cycle_payload["total_raised"] == "2222.00"
+    assert default_cycle_payload["total_spent"] == "777.00"
+    assert default_cycle_payload["net"] == "1445.00"
+    assert default_cycle_payload["cash_on_hand"] is None
+    assert default_cycle_payload["candidate_contrib"] is None
+    assert default_cycle_payload["candidate_loans"] is None
+    assert default_cycle_payload["candidate_loan_repay"] is None
+    assert default_cycle_payload["net_self_funding"] is None
+    assert default_cycle_payload["transaction_count"] == 2
+    assert default_cycle_payload["itemized_transaction_count"] == 2
+    assert [row["committee_id"] for row in default_cycle_payload["committees"]] == [str(committee_id)]
+    assert default_cycle_payload["committees"][0]["committee_name"] == "Principal Fallback Committee"
+    assert default_cycle_payload["committees"][0]["total_raised"] == "2222.00"
+    assert default_cycle_payload["committees"][0]["total_spent"] == "777.00"
+    assert default_cycle_payload["committees"][0]["net"] == "1445.00"
+    assert default_cycle_payload["committees"][0]["transaction_count"] == 2
+    assert default_cycle_payload["committees"][0]["summary_source"] == "fec_committee_summary"
+    assert default_cycle_payload["receipt_source_composition"] == []
+    assert default_cycle_payload["selected_cycle_coverage_complete"] is False
+    assert default_cycle_payload["can_render_share"] is False
+    assert default_cycle_payload["receipt_source_caveats"] == [
+        "missing_committee_summary",
+        "incomplete_committee_summary_coverage",
+    ]
+    assert default_cycle_payload["debts_owed_by_committee"] is None
+
+
+def test_get_candidate_summary_explicit_link_is_authoritative_over_principal_committee(
+    api_client: TestClient,
+    db_conn: psycopg.Connection,
+) -> None:
+    _person_id, candidate_id, principal_committee_id = _seed_principal_committee_fallback_fixture(db_conn)
+    explicit_committee_context = seed_committee_for_summary(
+        db_conn,
+        committee_id=UUID("d2000000-0000-0000-0000-000000000010"),
+        committee_name="Explicit Link Committee",
+        fec_committee_id="C88880002",
+    )
+    insert_committee_summary_row(
+        db_conn,
+        CommitteeSummaryRowSeed(
+            committee_id=explicit_committee_context.committee_id,
+            cycle=2024,
+            total_receipts=Decimal("300.00"),
+            total_disbursements=Decimal("25.00"),
+            individual_contributions=Decimal("300.00"),
+            individual_itemized_contributions=Decimal("300.00"),
+            coverage_start_date=date(2023, 1, 1),
+            coverage_end_date=date(2024, 12, 31),
+        ),
+    )
+    insert_summary_transaction(
+        db_conn,
+        context=explicit_committee_context,
+        transaction_id=UUID("d2000000-0000-0000-0000-000000000011"),
+        transaction_type="15",
+        amount=Decimal("300.00"),
+        transaction_date=date(2024, 5, 6),
+        source_record_id=explicit_committee_context.source_record_id,
+    )
+    insert_candidate_committee_link_row(
+        db_conn,
+        CandidateCommitteeLinkSeed(
+            id=UUID("d2000000-0000-0000-0000-000000000012"),
+            candidate_id=candidate_id,
+            committee_id=explicit_committee_context.committee_id,
+            valid_period="[2023-01-01,2025-01-01)",
+            designation="P",
+            candidate_election_year=2024,
+            fec_election_year=2024,
+        ),
+    )
+
+    response = api_client.get(f"/v1/candidates/{candidate_id}/summary?cycle=2024")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["summary_source"] == "fec_weball"
+    assert payload["total_raised"] == "1234.00"
+    assert payload["transaction_count"] == 1
+    assert [row["committee_id"] for row in payload["committees"]] == [str(explicit_committee_context.committee_id)]
+    assert str(principal_committee_id) not in {row["committee_id"] for row in payload["committees"]}
+
+
+def test_get_candidate_summary_principal_committee_requires_selected_cycle_official_coverage(
+    api_client: TestClient,
+    db_conn: psycopg.Connection,
+) -> None:
+    committee_id = UUID("d3000000-0000-0000-0000-000000000001")
+    candidate_id = UUID("d3000000-0000-0000-0000-000000000002")
+    filing_id = UUID("d3000000-0000-0000-0000-000000000003")
+    insert_committee_row(
+        db_conn,
+        CommitteeRowSeed(id=committee_id, fec_committee_id="C88880003", name="Stale Coverage Principal"),
+    )
+    insert_candidate_row(
+        db_conn,
+        CandidateRowSeed(
+            id=candidate_id,
+            fec_candidate_id="H6NC03026",
+            name="Stale Coverage Principal Candidate",
+            office="H",
+            principal_committee_id=committee_id,
+            total_receipts=Decimal("9000.00"),
+            total_disbursements=Decimal("1000.00"),
+            cash_on_hand=Decimal("8000.00"),
+            summary_coverage_end_date=date(2026, 12, 31),
+        ),
+    )
+    insert_filing_row(
+        db_conn,
+        FilingRowSeed(id=filing_id, filing_fec_id="stale-principal-filing", committee_id=committee_id),
+    )
+    insert_committee_summary_row(
+        db_conn,
+        CommitteeSummaryRowSeed(
+            committee_id=committee_id,
+            cycle=2024,
+            total_receipts=Decimal("444.00"),
+            total_disbursements=Decimal("111.00"),
+            coverage_start_date=date(2023, 1, 1),
+            coverage_end_date=date(2024, 12, 31),
+        ),
+    )
+    insert_transaction_row(
+        db_conn,
+        TransactionRowSeed(
+            id=UUID("d3000000-0000-0000-0000-000000000004"),
+            filing_id=filing_id,
+            committee_id=committee_id,
+            transaction_type="15",
+            amount=Decimal("444.00"),
+            amendment_indicator="N",
+            transaction_date=date(2024, 6, 7),
+        ),
+    )
+
+    response = api_client.get(f"/v1/candidates/{candidate_id}/summary?cycle=2024")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["summary_source"] == "derived"
+    assert payload["total_raised"] == "0.00"
+    assert payload["total_spent"] == "0.00"
+    assert payload["transaction_count"] == 0
+    assert payload["committees"] == []
+    assert payload["receipt_source_caveats"] == ["missing_committee_summary"]
+
+
+def test_get_person_contribution_insights_missing_principal_committee_keeps_no_data_payload(
+    api_client: TestClient,
+    db_conn: psycopg.Connection,
+) -> None:
+    person = Person(canonical_name="Missing Principal Committee Member")
+    insert_person(db_conn, person)
+    insert_candidate_row(
+        db_conn,
+        CandidateRowSeed(
+            id=UUID("d4000000-0000-0000-0000-000000000001"),
+            fec_candidate_id="H4NC04024",
+            name="Missing Principal Committee Candidate",
+            office="H",
+            person_id=person.id,
+            total_receipts=Decimal("100.00"),
+            total_disbursements=Decimal("25.00"),
+            cash_on_hand=Decimal("75.00"),
+            summary_coverage_end_date=date(2024, 12, 31),
+        ),
+    )
+
+    response = api_client.get(f"/v1/person/{person.id}/contribution-insights?cycle=2024")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["has_data"] is False
+    assert payload["metadata"]["selected_cycle"] == 2024
+    assert payload["metadata"]["committee_count"] == 0
+    assert payload["metadata"]["excluded_geography"] == "no_linked_candidate"
+    assert payload["cycle_totals"] == []
+    assert payload["career_totals"]["source"] == "none"
 
 
 def test_get_candidate_summary_exposes_candidate_self_funding(
@@ -6052,9 +6615,11 @@ def test_contribution_insights_itemized_rollups_share_one_qualifying_transaction
         )
     )
     assert rollups_sql.count("LEFT JOIN civic.zcta_district") == 1
+    assert rollups_sql.count("SELECT MAX(boundary_year)") == 1
     assert district_sql.count("FROM cf.transaction t") == 1
     assert district_sql.count("CASE\n                WHEN") == 1
     assert district_sql.count("LEFT JOIN civic.zcta_district") == 1
+    assert district_sql.count("SELECT MAX(boundary_year)") == 1
 
 
 def test_get_committee_summary_returns_404_for_missing_committee(api_client: TestClient) -> None:

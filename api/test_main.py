@@ -306,6 +306,7 @@ def test_create_app_registers_unique_expected_v1_get_routes(monkeypatch: pytest.
         "/v1/geometry",
         "/v1/civics/geometry",
         "/v1/congress/members",
+        "/v1/congress/money-summaries",
         "/v1/transactions",
         "/v1/parcels/{parcel_id}",
         "/v1/parcels",

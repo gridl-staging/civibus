@@ -605,4 +605,121 @@ describe("finance chart SSR components", () => {
     );
     expect(rendered.body).not.toContain('data-testid="outside-spending-zero-plot"');
   });
+
+  it("plots horizontal bars against a shared scale maximum when one is supplied", () => {
+    const rows: HorizontalBarRow[] = [
+      {
+        id: "200-under",
+        label: "$200 and under",
+        amount: 500,
+        transactionCount: 10,
+        unit: "dollars",
+        canPlot: true
+      },
+      {
+        id: "500-999",
+        label: "$500-$999.99",
+        amount: 250,
+        transactionCount: 1,
+        unit: "dollars",
+        canPlot: true
+      }
+    ];
+    const rendered = render(HorizontalBarChart, {
+      props: {
+        ...baseFrame,
+        testId: "size-buckets",
+        title: "Itemized contribution-size buckets",
+        rows,
+        scaleMax: 1000
+      }
+    });
+
+    // Against a shared $1,000 domain the rows are 50% and 25% wide, not the
+    // 100%/50% they would each self-normalize to.
+    expect(rendered.body).toMatch(
+      /\$200 and under[\s\S]*--finance-width: 50%[\s\S]*\$500-\$999\.99[\s\S]*--finance-width: 25%/
+    );
+    expect(rendered.body).toContain('data-domain-max="1000"');
+  });
+
+  it("self-normalizes horizontal bars to their own maximum when no shared scale is supplied", () => {
+    const rows: HorizontalBarRow[] = [
+      {
+        id: "200-under",
+        label: "$200 and under",
+        amount: 500,
+        transactionCount: 10,
+        unit: "dollars",
+        canPlot: true
+      },
+      {
+        id: "500-999",
+        label: "$500-$999.99",
+        amount: 250,
+        transactionCount: 1,
+        unit: "dollars",
+        canPlot: true
+      }
+    ];
+    const rendered = render(HorizontalBarChart, {
+      props: {
+        ...baseFrame,
+        testId: "size-buckets",
+        title: "Itemized contribution-size buckets",
+        rows
+      }
+    });
+
+    expect(rendered.body).toMatch(
+      /\$200 and under[\s\S]*--finance-width: 100%[\s\S]*\$500-\$999\.99[\s\S]*--finance-width: 50%/
+    );
+    expect(rendered.body).toContain('data-domain-max="500"');
+  });
+
+  it("raises the monthly contribution ceiling to a shared scale maximum when one is supplied", () => {
+    const rows: MonthlyContributionRow[] = [
+      { month: "2026-01", amount: 100, transactionCount: 2, covered: true },
+      { month: "2026-02", amount: 250, transactionCount: 3, covered: true }
+    ];
+
+    const ownScale = render(MonthlyContributionsChart, {
+      props: { ...baseFrame, testId: "monthly", rows, coveredMonths: ["2026-01", "2026-02"] }
+    });
+    const sharedScale = render(MonthlyContributionsChart, {
+      props: {
+        ...baseFrame,
+        testId: "monthly",
+        rows,
+        coveredMonths: ["2026-01", "2026-02"],
+        scaleMax: 900
+      }
+    });
+
+    // Readable tick ceilings: own max 250 -> 250; shared max 900 -> 1000.
+    expect(ownScale.body).toContain('data-domain-max="250"');
+    expect(sharedScale.body).toContain('data-domain-max="1000"');
+  });
+
+  it("centers outside spending on a shared scale maximum when one is supplied", () => {
+    const rows: OutsideSpendingRow[] = [
+      { id: "support", label: "Support spending", stance: "support", amount: 100, transactionCount: 1 },
+      { id: "oppose", label: "Oppose spending", stance: "oppose", amount: 300, transactionCount: 2 }
+    ];
+
+    const ownScale = render(OutsideSpendingChart, {
+      props: { ...baseFrame, testId: "outside", rows, topSpenders: [] }
+    });
+    const sharedScale = render(OutsideSpendingChart, {
+      props: { ...baseFrame, testId: "outside", rows, topSpenders: [], scaleMax: 400 }
+    });
+
+    expect(ownScale.body).toContain('data-domain-min="-300"');
+    expect(ownScale.body).toContain('data-domain-max="300"');
+    expect(sharedScale.body).toContain('data-domain-min="-400"');
+    expect(sharedScale.body).toContain('data-domain-max="400"');
+    expect(sharedScale.body).toContain(
+      'data-testid="outside-plot" data-zero-centered="true" data-domain-min="-400" data-domain-max="400"'
+    );
+  });
 });

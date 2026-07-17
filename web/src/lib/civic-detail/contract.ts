@@ -206,10 +206,33 @@ export type CongressMemberSummary = {
   person_detail_path: string;
 };
 
+/**
+ */
+export type CongressMemberMoneySummary = {
+  person_id: string;
+  person_name: string;
+  has_fec_money: boolean;
+  candidate_id: string | null;
+  total_raised: string;
+  total_spent: string;
+  net: string;
+  cash_on_hand: string | null;
+  summary_source: string | null;
+  ie_support_total: string;
+  ie_oppose_total: string;
+  ie_support_count: number;
+  ie_oppose_count: number;
+  sources: SourceInfo[];
+};
+
 export const CONGRESS_PAGE_PATH = "/congress";
 
 export function buildCongressMembersPath(): string {
   return "/v1/congress/members";
+}
+
+export function buildCongressMoneySummariesPath(): string {
+  return "/v1/congress/money-summaries";
 }
 
 export function buildOfficeDetailPath(officeId: string): string {

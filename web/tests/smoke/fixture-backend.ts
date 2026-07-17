@@ -5,10 +5,135 @@ const { SMOKE_API_HOST, SMOKE_API_PORT } =
   (await import(new URL("./fixtures.ts", import.meta.url).href)) as typeof import("./fixtures");
 const { smokeFixtures } =
   (await import(new URL("./fixture-data.ts", import.meta.url).href)) as typeof import("./fixture-data");
+const { compareFixtureByCandidateId, compareFixtureById, compareFixtureBySearchQuery } =
+  (await import(new URL("./compare-fixtures.ts", import.meta.url).href)) as typeof import("./compare-fixtures");
 
 function writeJson(response: import("node:http").ServerResponse, status: number, body: unknown): void {
   response.writeHead(status, { "content-type": "application/json; charset=utf-8" });
   response.end(JSON.stringify(body));
+}
+
+type CompareFixtureResponse = {
+  status: number;
+  body: unknown;
+  delayMs?: number;
+};
+
+function getCompareSearchResponse(url: URL): CompareFixtureResponse | null {
+  if (url.pathname !== "/v1/search" || url.searchParams.get("entity_type") !== "person") {
+    return null;
+  }
+
+  const fixture = compareFixtureBySearchQuery.get(url.searchParams.get("q") ?? "");
+  if (fixture === undefined) {
+    return null;
+  }
+
+  return {
+    status: 200,
+    body: [{ entity_type: "person", entity_id: fixture.id, name: fixture.name }]
+  };
+}
+
+/**
+ */
+function getComparePersonResponse(url: URL): CompareFixtureResponse | null {
+  const match = url.pathname.match(
+    /^\/v1\/person\/([^/]+)(?:\/(contribution-insights|top-donors|top-employers))?$/
+  );
+  if (match === null) {
+    return null;
+  }
+
+  const fixture = compareFixtureById.get(match[1]);
+  if (fixture === undefined) {
+    return null;
+  }
+
+  const resource = match[2];
+  if (resource === undefined) {
+    return { status: 200, body: fixture.person };
+  }
+  if (resource === "contribution-insights") {
+    const errorStatus = fixture.behavior.contributionInsightsErrorStatus;
+    return errorStatus === null
+      ? {
+          status: 200,
+          body: fixture.contributionInsights,
+          delayMs: fixture.behavior.contributionInsightsDelayMs
+        }
+      : { status: errorStatus, body: { detail: "Synthetic compare money failure." } };
+  }
+  if (resource === "top-donors") {
+    return { status: 200, body: fixture.topDonors };
+  }
+  return { status: 200, body: fixture.topEmployers };
+}
+
+function getCompareCandidateListResponse(url: URL): CompareFixtureResponse | null {
+  if (url.pathname !== "/v1/candidates") {
+    return null;
+  }
+
+  const fixture = compareFixtureById.get(url.searchParams.get("person_id") ?? "");
+  return fixture === undefined ? null : { status: 200, body: fixture.candidateList };
+}
+
+/**
+ */
+function getCompareCandidateResponse(url: URL): CompareFixtureResponse | null {
+  const match = url.pathname.match(
+    /^\/v1\/candidates\/([^/]+)(?:\/(summary|independent-expenditures(?:\/summary)?))?$/
+  );
+  if (match === null) {
+    return null;
+  }
+
+  const fixture = compareFixtureByCandidateId.get(match[1]);
+  if (fixture === undefined) {
+    return null;
+  }
+
+  const resource = match[2];
+  if (resource === undefined) {
+    return { status: 200, body: fixture.candidate };
+  }
+  if (resource === "summary") {
+    return fixture.candidateSummary === null
+      ? { status: fixture.behavior.candidateSummaryStatus, body: { detail: "No candidate summary fixture." } }
+      : { status: 200, body: fixture.candidateSummary };
+  }
+  if (resource === "independent-expenditures/summary") {
+    return fixture.independentExpenditureSummary === null
+      ? { status: 404, body: { detail: "No independent-expenditure summary fixture." } }
+      : { status: 200, body: fixture.independentExpenditureSummary };
+  }
+  return { status: 200, body: fixture.independentExpenditures };
+}
+
+function getCompareFixtureResponse(url: URL): CompareFixtureResponse | null {
+  return (
+    getCompareSearchResponse(url) ??
+    getComparePersonResponse(url) ??
+    getCompareCandidateListResponse(url) ??
+    getCompareCandidateResponse(url)
+  );
+}
+
+async function serveCompareFixture(
+  url: URL,
+  response: import("node:http").ServerResponse
+): Promise<boolean> {
+  const fixtureResponse = getCompareFixtureResponse(url);
+  if (fixtureResponse === null) {
+    return false;
+  }
+
+  if ((fixtureResponse.delayMs ?? 0) > 0) {
+    await new Promise((resolve) => setTimeout(resolve, fixtureResponse.delayMs));
+  }
+  writeJson(response, fixtureResponse.status, fixtureResponse.body);
+  return true;
 }
 
 /** Matches the committee transaction requests emitted by the detail page. */
@@ -26,7 +151,7 @@ function isCommitteeTransactionsRequest(url: URL): boolean {
     return false;
   }
 
-  return url.searchParams.size === 2;
+  return hasOnlyAllowedQueryParams(url, ["committee_id", "limit", "cycle"]);
 }
 
 function hasOnlyAllowedQueryParams(url: URL, allowedKeys: readonly string[]): boolean {
@@ -126,6 +251,7 @@ type CommitteeFixture =
 type PersonFixture =
   | (typeof smokeFixtures)["person"]
   | (typeof smokeFixtures)["personNoPortrait"]
+  | (typeof smokeFixtures)["congressSecondPerson"]
   | (typeof smokeFixtures)["rosterDurhamPerson"]
   | (typeof smokeFixtures)["rosterNcHousePerson"]
   | (typeof smokeFixtures)["personMissingPortraitField"];
@@ -275,6 +401,7 @@ const personFixturesById = new Map<string, PersonFixture>(
   [
     smokeFixtures.person,
     smokeFixtures.personNoPortrait,
+    smokeFixtures.congressSecondPerson,
     smokeFixtures.rosterDurhamPerson,
     smokeFixtures.rosterNcHousePerson,
     smokeFixtures.personMissingPortraitField
@@ -296,6 +423,10 @@ const server = createServer(async (request, response) => {
 
   if (url.pathname === "/healthz") {
     writeJson(response, 200, { status: "ok" });
+    return;
+  }
+
+  if (await serveCompareFixture(url, response)) {
     return;
   }
 
@@ -338,6 +469,11 @@ const server = createServer(async (request, response) => {
 
   if (url.pathname === "/v1/congress/members" && url.searchParams.size === 0) {
     writeJson(response, 200, smokeFixtures.congressMembers);
+    return;
+  }
+
+  if (url.pathname === "/v1/congress/money-summaries" && url.searchParams.size === 0) {
+    writeJson(response, 200, smokeFixtures.congressMoneySummaries);
     return;
   }
 

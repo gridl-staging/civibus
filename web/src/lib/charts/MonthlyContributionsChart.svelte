@@ -16,11 +16,14 @@
   export let sources: ChartFrameProps["sources"] = [];
   export let rows: MonthlyContributionRow[] = [];
   export let coveredMonths: string[] = [];
+  // Supplied by comparison surfaces so sibling columns plot against one domain;
+  // omitted elsewhere, where the chart self-normalizes to its own largest month.
+  export let scaleMax: number | undefined = undefined;
 
   $: filledRows = zeroFillCoveredMonths(rows, coveredMonths);
   $: totalAmount = filledRows.reduce((sum, row) => sum + row.amount, 0);
   $: maxAmount = Math.max(0, ...filledRows.map((row) => row.amount));
-  $: tickCeiling = getReadableTickCeiling(maxAmount);
+  $: tickCeiling = getReadableTickCeiling(scaleMax ?? maxAmount);
   $: chartSeries = buildChartSeries(filledRows, tickCeiling);
   $: state =
     filledRows.length === 0
@@ -68,12 +71,13 @@
   {exactRows}
   {state}
 >
-  <div class="monthly-contributions" data-testid="{testId}-plot">
+  <div class="monthly-contributions" data-testid="{testId}-plot" data-domain-max={tickCeiling}>
     <Chart
       kind="bar"
       title="Monthly contribution columns"
       ariaLabel="Monthly contribution columns"
       series={chartSeries}
+      yDomain={tickCeiling > 0 ? [0, tickCeiling] : undefined}
     />
     {#each filledRows as row (row.month)}
       <div class="monthly-contributions__row">

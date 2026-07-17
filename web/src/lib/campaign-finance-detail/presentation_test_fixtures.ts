@@ -153,6 +153,7 @@ export const DEFAULT_CANDIDATE_SUMMARY = {
   transaction_count: 0,
   committees: [],
   cash_on_hand: null,
+  net_self_funding: null,
   summary_source: "derived" as const,
   itemized_transaction_count: 0
 };

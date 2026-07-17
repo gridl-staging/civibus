@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
+from decimal import Decimal
 from uuid import UUID, uuid4
 
 import psycopg
@@ -12,9 +13,15 @@ from fastapi.testclient import TestClient
 
 from api.test_campaign_finance_support import (
     CandidateRowSeed,
+    CommitteeRowSeed,
+    FilingRowSeed,
+    TransactionRowSeed,
     insert_candidate_row,
+    insert_committee_row,
     insert_data_source_for_test,
+    insert_filing_row,
     insert_source_record_for_test,
+    insert_transaction_row,
 )
 from core.db import insert_entity_source, insert_person, insert_person_portrait, insert_source_record
 from core.types.python.models import Person, PersonPortrait, SourceRecord, compute_record_hash
@@ -785,6 +792,86 @@ def _expected_congress_http_rows(expectations: list[_CongressMemberExpectation])
     return rows
 
 
+def _congress_member_by_name(
+    expectations: list[_CongressMemberExpectation], person_name: str
+) -> _CongressMemberExpectation:
+    for expectation in expectations:
+        if expectation.person_name == person_name:
+            return expectation
+    raise AssertionError(f"seed mix did not produce a member named {person_name!r}")
+
+
+def _congress_money_row_for_person(payload: list[dict[str, object]], person_id: UUID) -> dict[str, object]:
+    expected_person_id = str(person_id)
+    for row in payload:
+        if row["person_id"] == expected_person_id:
+            return row
+    raise AssertionError(f"congress money summaries did not include person_id {expected_person_id}")
+
+
+def _seed_congress_member_with_money_and_ie(
+    db_conn: psycopg.Connection,
+) -> tuple[_CongressMemberExpectation, UUID]:
+    expectations = _seed_current_federal_members_mix(db_conn)
+    member = _congress_member_by_name(expectations, "Alice Representative")
+    candidate_id = UUID("bc000000-0000-0000-0000-000000000001")
+    committee_id = UUID("bc000000-0000-0000-0000-000000000010")
+    filing_id = UUID("bc000000-0000-0000-0000-000000000020")
+
+    insert_candidate_row(
+        db_conn,
+        CandidateRowSeed(
+            id=candidate_id,
+            fec_candidate_id="H0NC01001",
+            name=member.person_name,
+            office="H",
+            person_id=member.person_id,
+            party="DEM",
+            state="NC",
+            district="01",
+            total_receipts=Decimal("9000.00"),
+            total_disbursements=Decimal("1000.00"),
+            cash_on_hand=Decimal("8000.00"),
+            summary_coverage_end_date=date(2026, 12, 31),
+        ),
+    )
+    insert_committee_row(
+        db_conn,
+        CommitteeRowSeed(
+            id=committee_id,
+            fec_committee_id="C99991001",
+            name="Congress Endpoint IE Committee",
+        ),
+    )
+    insert_filing_row(
+        db_conn,
+        FilingRowSeed(
+            id=filing_id,
+            filing_fec_id="filing-C99991001",
+            committee_id=committee_id,
+        ),
+    )
+    for transaction_id, transaction_type, amount, support_oppose in (
+        (UUID("bc000000-0000-0000-0000-000000000101"), "24E", Decimal("250.00"), "S"),
+        (UUID("bc000000-0000-0000-0000-000000000102"), "24A", Decimal("100.00"), "O"),
+    ):
+        insert_transaction_row(
+            db_conn,
+            TransactionRowSeed(
+                id=transaction_id,
+                filing_id=filing_id,
+                committee_id=committee_id,
+                transaction_type=transaction_type,
+                amount=amount,
+                amendment_indicator="N",
+                transaction_date=date(2026, 6, 1),
+                recipient_candidate_id=candidate_id,
+                support_oppose=support_oppose,
+            ),
+        )
+    return member, candidate_id
+
+
 # ---------------------------------------------------------------------------
 # Sprint 1: Detail endpoints
 # ---------------------------------------------------------------------------
@@ -809,6 +896,47 @@ class TestCongressMembers:
 
         assert response.status_code == 200
         assert response.json() == _expected_congress_http_rows(expectations)
+
+
+class TestCongressMemberMoneySummaries:
+    def test_congress_member_money_summaries_returns_fec_totals_and_ie(
+        self, api_client: TestClient, db_conn: psycopg.Connection
+    ) -> None:
+        member, candidate_id = _seed_congress_member_with_money_and_ie(db_conn)
+
+        response = api_client.get("/v1/congress/money-summaries")
+
+        assert response.status_code == 200
+        row = _congress_money_row_for_person(response.json(), member.person_id)
+        assert row["has_fec_money"] is True
+        assert row["candidate_id"] == str(candidate_id)
+        assert row["total_raised"] == "9000.00"
+        assert row["cash_on_hand"] == "8000.00"
+        assert row["ie_support_total"] == "250.00"
+        assert row["ie_oppose_total"] == "100.00"
+
+    def test_congress_member_money_summaries_marks_unlinked_member_as_no_money(
+        self, api_client: TestClient, db_conn: psycopg.Connection
+    ) -> None:
+        expectations = _seed_current_federal_members_mix(db_conn)
+        member = _congress_member_by_name(expectations, "Alice Representative")
+
+        response = api_client.get("/v1/congress/money-summaries")
+
+        assert response.status_code == 200
+        row = _congress_money_row_for_person(response.json(), member.person_id)
+        assert row["has_fec_money"] is False
+        assert row["candidate_id"] is None
+        assert row["summary_source"] is None
+        assert row["cash_on_hand"] is None
+        assert row["sources"] == []
+        assert row["total_raised"] == "0"
+        assert row["total_spent"] == "0"
+        assert row["net"] == "0"
+        assert row["ie_support_total"] == "0"
+        assert row["ie_oppose_total"] == "0"
+        assert row["ie_support_count"] == 0
+        assert row["ie_oppose_count"] == 0
 
 
 class TestMapContextHelpers:

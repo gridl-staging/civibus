@@ -444,7 +444,7 @@ function sumMoney(summaries: CandidateFundraisingSummary[], field: PersonMoneyFi
  */
 function sumOptionalMoney(
   summaries: CandidateFundraisingSummary[],
-  field: "cash_on_hand" | "debts_owed_by_committee"
+  field: "cash_on_hand" | "debts_owed_by_committee" | "net_self_funding"
 ): SerializedMoney | null {
   const values: SerializedMoney[] = [];
 
@@ -549,6 +549,7 @@ export function buildPersonMoneyAtGlanceSummary(
     transaction_count: sumCount(summaries, "transaction_count"),
     itemized_transaction_count: sumCount(summaries, "itemized_transaction_count"),
     cash_on_hand: sumOptionalMoney(summaries, "cash_on_hand"),
+    net_self_funding: sumOptionalMoney(summaries, "net_self_funding"),
     debts_owed_by_committee: sumOptionalMoney(summaries, "debts_owed_by_committee"),
     summary_source: buildAggregateSummarySource(summaries),
     receipt_source_composition: buildAggregateReceiptSourceComposition(summaries),
@@ -581,6 +582,7 @@ export function buildPersonMoneyAtGlancePresentation(
       { label: "Total receipts", value: formatCurrency(summary.total_raised) },
       { label: "Total disbursements", value: formatCurrency(summary.total_spent) },
       { label: "Cash on hand", value: formatOptionalCurrency(summary.cash_on_hand) },
+      { label: "Net self-funded", value: formatOptionalCurrency(summary.net_self_funding) },
       { label: "Debts owed by the committee", value: formatOptionalCurrency(summary.debts_owed_by_committee) }
     ],
     receiptComposition: buildPersonReceiptCompositionPresentation(summary)

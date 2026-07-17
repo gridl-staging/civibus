@@ -12,6 +12,9 @@
 <svelte:head>
   <title>{headModel.title}</title>
   <meta name="description" content={headModel.description} />
+  {#if headModel.robots}
+    <meta name="robots" content={headModel.robots} />
+  {/if}
   <meta property="og:title" content={headModel.openGraph.title} />
   <meta property="og:description" content={headModel.openGraph.description} />
   <meta property="og:type" content={headModel.openGraph.type} />

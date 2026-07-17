@@ -130,6 +130,7 @@ function buildPersonFinanceSection(
       transaction_count: 3,
       itemized_transaction_count: 3,
       cash_on_hand: null,
+      net_self_funding: null,
       debts_owed_by_committee: "45.00",
       summary_source: "derived" as const,
       receipt_source_composition: [
@@ -310,6 +311,20 @@ describe("entity detail page rendering", () => {
     expect(rendered.body).not.toContain("Civic Record");
     expect(rendered.body).not.toContain("Officeholding timeline");
     expect(rendered.body).not.toContain("Entity internals");
+  });
+
+  it("renders a route-owned compare entry point when a person compare href is provided", () => {
+    const rendered = render(DetailPage, {
+      props: {
+        data: buildPersonPageBundle(),
+        compareHref: "/compare?people=11111111-1111-4111-8111-111111111111"
+      }
+    });
+
+    expect(rendered.body).toContain("Compare");
+    expect(rendered.body).toContain(
+      'href="/compare?people=11111111-1111-4111-8111-111111111111"'
+    );
   });
 
   it("renders public organization detail without person finance or graph sections", () => {
@@ -522,6 +537,7 @@ describe("entity detail page rendering", () => {
                 transaction_count: 4,
                 itemized_transaction_count: 4,
                 cash_on_hand: "700.00",
+                net_self_funding: "125.00",
                 debts_owed_by_committee: "55.00",
                 summary_source: "fec_weball" as const,
                 receipt_source_composition: [
@@ -1247,6 +1263,7 @@ describe("entity detail page rendering", () => {
           transaction_count: 0,
           itemized_transaction_count: 0,
           cash_on_hand: null,
+          net_self_funding: null,
           summary_source: "derived" as const,
           receipt_source_composition: [],
           selected_cycle_coverage_complete: false,
@@ -1282,6 +1299,7 @@ describe("entity detail page rendering", () => {
           transaction_count: 0,
           itemized_transaction_count: 0,
           cash_on_hand: null,
+          net_self_funding: null,
           summary_source: "derived" as const,
           receipt_source_composition: [],
           selected_cycle_coverage_complete: false,

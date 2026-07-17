@@ -25,7 +25,7 @@ def test_decisions_are_root_owned_with_frontmatter_and_line_budget() -> None:
     assert not (REPO_ROOT / "docs" / "decisions").exists()
 
     decision_files = sorted(decisions_dir.glob("*.md"))
-    assert len(decision_files) == 13
+    assert len(decision_files) == 14
     for decision_file in decision_files:
         lines = decision_file.read_text(encoding="utf-8").splitlines()
         assert len(lines) <= 200, decision_file.name

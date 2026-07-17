@@ -57,6 +57,19 @@ describe("SeoHead", () => {
     expect(rendered.head).toContain('"name":"Jane \\u003cDoe>"');
   });
 
+  it("renders an optional robots directive from the shared head model", () => {
+    const rendered = render(SeoHead, {
+      props: {
+        headModel: {
+          ...HEAD_MODEL,
+          robots: "noindex"
+        }
+      }
+    });
+
+    expect(rendered.head).toContain('<meta name="robots" content="noindex"');
+  });
+
   it("omits canonical and absolute media tags when the head model does not provide trusted URLs", () => {
     const rendered = render(SeoHead, {
       props: {

@@ -470,6 +470,7 @@ export type CandidateFundraisingSummary = SelectedCycleMetadata & {
   committees: CommitteeFundraisingSummary[];
   // Stage 3: official FEC weball cash-on-hand; null when no weball totals are loaded.
   cash_on_hand: SerializedMoney | null;
+  net_self_funding: SerializedMoney | null;
   debts_owed_by_committee?: SerializedMoney | null;
   // Stage 3: which backend source produced total_raised/total_spent/net.
   summary_source: "fec_weball" | "derived";

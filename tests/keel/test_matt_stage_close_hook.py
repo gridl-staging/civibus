@@ -34,6 +34,7 @@ def test_matt_stage_close_hook_runs_gate_from_repo_root(tmp_path: Path) -> None:
     )
 
     env = os.environ.copy()
+    env.pop("MATT_DIR_PROJECT_DIR", None)
     env["PATH"] = f"{fake_bin}:{env.get('PATH', '')}"
     env["UV_LOG_PATH"] = str(log_path)
 

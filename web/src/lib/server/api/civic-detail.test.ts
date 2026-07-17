@@ -2,6 +2,7 @@ import { ApiResponseError } from "$lib/server/api/client";
 import type {
   CandidacyDetailResponse,
   CongressMemberSummary,
+  CongressMemberMoneySummary,
   ContestDetailResponse,
   ElectionDateAggregateResponse,
   OfficeDetailResponse,
@@ -13,6 +14,7 @@ import type { ApiClient } from "./client";
 import {
   fetchCandidacyDetail,
   fetchCongressMembers,
+  fetchCongressMoneySummaries,
   fetchContestDetail,
   fetchElectionDateAggregate,
   fetchOfficeDetail,
@@ -41,6 +43,33 @@ const CONGRESS_MEMBER_SUMMARY: CongressMemberSummary = {
   party: "Democratic",
   portrait_source_image_url: "https://example.test/jane.jpg",
   person_detail_path: `/person/${PERSON_ID}`
+};
+
+const CONGRESS_MONEY_SUMMARY: CongressMemberMoneySummary = {
+  person_id: PERSON_ID,
+  person_name: "Jane Representative",
+  has_fec_money: false,
+  candidate_id: null,
+  total_raised: "0.00",
+  total_spent: "0.00",
+  net: "0.00",
+  cash_on_hand: null,
+  summary_source: null,
+  ie_support_total: "0.00",
+  ie_oppose_total: "0.00",
+  ie_support_count: 0,
+  ie_oppose_count: 0,
+  sources: [
+    {
+      domain: "fec",
+      jurisdiction: "US",
+      data_source_name: "FEC candidate summary",
+      data_source_url: "https://api.open.fec.gov/developers/",
+      source_record_key: "P00000001",
+      record_url: "https://www.fec.gov/data/candidate/P00000001/",
+      pull_date: "2026-07-16"
+    }
+  ]
 };
 
 describe("fetchCongressMembers", () => {
@@ -81,6 +110,60 @@ describe("fetchCongressMembers", () => {
     ).rejects.toMatchObject({
       status: 503,
       body: { detail: "service unavailable" }
+    });
+  });
+});
+
+describe("fetchCongressMoneySummaries", () => {
+  it("makes one request to /v1/congress/money-summaries and preserves the backend DTO", async () => {
+    const requestJson = vi.fn(async (path: string) => {
+      expect(path).toBe("/v1/congress/money-summaries");
+      return [CONGRESS_MONEY_SUMMARY] satisfies CongressMemberMoneySummary[];
+    });
+
+    const response = await fetchCongressMoneySummaries({
+      requestJson: requestJson as ApiClient["requestJson"]
+    });
+
+    expect(requestJson).toHaveBeenCalledTimes(1);
+    expect(requestJson).toHaveBeenCalledWith("/v1/congress/money-summaries");
+    expect(response).toEqual([CONGRESS_MONEY_SUMMARY]);
+    expect(response[0]).toEqual({
+      person_id: PERSON_ID,
+      person_name: "Jane Representative",
+      has_fec_money: false,
+      candidate_id: null,
+      total_raised: "0.00",
+      total_spent: "0.00",
+      net: "0.00",
+      cash_on_hand: null,
+      summary_source: null,
+      ie_support_total: "0.00",
+      ie_oppose_total: "0.00",
+      ie_support_count: 0,
+      ie_oppose_count: 0,
+      sources: [
+        {
+          domain: "fec",
+          jurisdiction: "US",
+          data_source_name: "FEC candidate summary",
+          data_source_url: "https://api.open.fec.gov/developers/",
+          source_record_key: "P00000001",
+          record_url: "https://www.fec.gov/data/candidate/P00000001/",
+          pull_date: "2026-07-16"
+        }
+      ]
+    });
+  });
+
+  it("preserves backend ApiResponseError semantics", async () => {
+    const requestJson = vi.fn().mockRejectedValue(new ApiResponseError(500, { detail: "money unavailable" }));
+
+    await expect(
+      fetchCongressMoneySummaries({ requestJson: requestJson as ApiClient["requestJson"] })
+    ).rejects.toMatchObject({
+      status: 500,
+      body: { detail: "money unavailable" }
     });
   });
 });

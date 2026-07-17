@@ -10,6 +10,9 @@
   export let sources: ChartFrameProps["sources"] = [];
   export let rows: OutsideSpendingRow[] = [];
   export let topSpenders: OutsideSpendingRow[] = [];
+  // Supplied by comparison surfaces so sibling columns share one zero-centered
+  // domain; omitted elsewhere, where the chart self-normalizes to its own rows.
+  export let scaleMax: number | undefined = undefined;
 
   $: supportTotal = rows
     .filter((row) => row.stance === "support")
@@ -18,7 +21,7 @@
     .filter((row) => row.stance === "oppose")
     .reduce((sum, row) => sum + row.amount, 0);
   $: hasActivity = supportTotal > 0 || opposeTotal > 0;
-  $: domain = calculateOutsideSpendingDomain(rows);
+  $: domain = calculateOutsideSpendingDomain(rows, scaleMax);
   $: chartSeries = buildChartSeries(domain.signedRows);
   $: state = hasActivity
     ? { kind: "ready" as const }
@@ -94,7 +97,13 @@
   {exactRows}
   {state}
 >
-  <div class="outside-spending" data-testid="{testId}-plot" data-zero-centered="true">
+  <div
+    class="outside-spending"
+    data-testid="{testId}-plot"
+    data-zero-centered="true"
+    data-domain-min={domain.min}
+    data-domain-max={domain.max}
+  >
     <div
       class="outside-spending__axis"
       data-domain-min={domain.min}

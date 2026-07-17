@@ -10,6 +10,7 @@
   import SeoHead from "$lib/seo/SeoHead.svelte";
   import { buildDetailRouteSeo } from "$lib/seo/head";
   import { buildBreadcrumbJsonLd, removeJsonLdContext, type JsonLdObject } from "$lib/seo/jsonld";
+  import { buildCompareUrl } from "../../compare/people-query";
   import type { PageData } from "./$types";
 
   export let data: PageData;
@@ -35,6 +36,7 @@
     crumbs: breadcrumbCrumbs,
     publicOrigin: env.PUBLIC_ORIGIN
   });
+  $: compareHref = buildCompareUrl([data.detail.id]);
   $: detailJsonLdWithoutContext = removeJsonLdContext(detailRouteSeo.jsonLd);
   $: detailPageJsonLd = {
     "@context": "https://schema.org",
@@ -45,4 +47,4 @@
 <SeoHead headModel={detailRouteSeo.headModel} jsonLd={detailPageJsonLd} />
 
 <Breadcrumb crumbs={breadcrumbCrumbs} />
-<DetailPage {data} />
+<DetailPage {data} {compareHref} />

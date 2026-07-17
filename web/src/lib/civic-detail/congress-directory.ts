@@ -1,5 +1,6 @@
-import type { CongressMemberSummary } from "./contract";
+import type { CongressMemberMoneySummary, CongressMemberSummary } from "./contract";
 import type { PersonPortraitResponse } from "$lib/entity-detail/contract";
+import { sanitizeExternalUrl } from "$lib/url/sanitize-external-url";
 
 export type CongressDirectoryFilters = {
   search: string;
@@ -13,6 +14,8 @@ export type CongressFilterOption = {
   label: string;
 };
 
+/**
+ */
 export type CongressMemberRow = {
   id: string;
   personName: string;
@@ -23,16 +26,34 @@ export type CongressMemberRow = {
   party: string;
   contextLine: string;
   portrait: PersonPortraitResponse | null;
+  hasFecMoney: boolean;
+  totalRaised: string | null;
+  outsideSupport: string | null;
+  outsideAgainst: string | null;
+  cashOnHand: string | null;
+  moneySources: CongressMemberMoneySummary["sources"];
 };
+
+export const CONGRESS_MONEY_SORTS = [
+  "total_raised",
+  "outside_against",
+  "outside_support",
+  "cash_on_hand"
+] as const;
+
+export type CongressMoneySort = (typeof CONGRESS_MONEY_SORTS)[number];
 
 export type CongressDirectoryViewModel = {
   rows: CongressMemberRow[];
   allRowsCount: number;
   activeFilters: CongressDirectoryFilters;
+  activeSort: CongressMoneySort;
   chamberOptions: CongressFilterOption[];
   stateOrTerritoryOptions: CongressFilterOption[];
   partyOptions: CongressFilterOption[];
 };
+
+const DEFAULT_CONGRESS_MONEY_SORT: CongressMoneySort = "total_raised";
 
 const EMPTY_FILTERS: CongressDirectoryFilters = {
   search: "",
@@ -64,6 +85,14 @@ function sanitizeFilterValue(value: string, validValues: Set<string>): string {
     return "";
   }
   return validValues.has(value) ? value : "";
+}
+
+function isCongressMoneySort(value: string): value is CongressMoneySort {
+  return CONGRESS_MONEY_SORTS.includes(value as CongressMoneySort);
+}
+
+function sanitizeSortValue(value: string): CongressMoneySort {
+  return isCongressMoneySort(value) ? value : DEFAULT_CONGRESS_MONEY_SORT;
 }
 
 function buildPortrait(sourceImageUrl: string | null): PersonPortraitResponse | null {
@@ -111,12 +140,120 @@ function memberMatchesFilters(member: CongressMemberSummary, filters: CongressDi
   );
 }
 
+function buildMoneySummaryByPersonId(
+  moneySummaries: CongressMemberMoneySummary[]
+): Map<string, CongressMemberMoneySummary> {
+  return new Map(moneySummaries.map((summary) => [summary.person_id, summary]));
+}
+
 /**
  */
-export function buildCongressMemberRow(member: CongressMemberSummary): CongressMemberRow {
+function buildRowMoney(summary: CongressMemberMoneySummary | undefined): Pick<
+  CongressMemberRow,
+  "hasFecMoney" | "totalRaised" | "outsideSupport" | "outsideAgainst" | "cashOnHand" | "moneySources"
+> {
+  if (summary === undefined || !summary.has_fec_money) {
+    return {
+      hasFecMoney: false,
+      totalRaised: null,
+      outsideSupport: null,
+      outsideAgainst: null,
+      cashOnHand: null,
+      moneySources: []
+    };
+  }
+
+  return {
+    hasFecMoney: true,
+    totalRaised: summary.total_raised,
+    outsideSupport: summary.ie_support_total,
+    outsideAgainst: summary.ie_oppose_total,
+    cashOnHand: summary.cash_on_hand,
+    moneySources: summary.sources
+  };
+}
+
+function parseMoneyMetric(value: string | null): number | null {
+  if (value === null) {
+    return null;
+  }
+  const parsedValue = Number(value);
+  return Number.isFinite(parsedValue) ? parsedValue : null;
+}
+
+export function getCongressMoneyMetric(row: CongressMemberRow, sort: CongressMoneySort): number | null {
+  if (sort === "outside_against") {
+    return parseMoneyMetric(row.outsideAgainst);
+  }
+  if (sort === "outside_support") {
+    return parseMoneyMetric(row.outsideSupport);
+  }
+  if (sort === "cash_on_hand") {
+    return parseMoneyMetric(row.cashOnHand);
+  }
+  return parseMoneyMetric(row.totalRaised);
+}
+
+function compareRowsByNameThenId(left: CongressMemberRow, right: CongressMemberRow): number {
+  const nameComparison = left.personName.localeCompare(right.personName);
+  return nameComparison === 0 ? left.id.localeCompare(right.id) : nameComparison;
+}
+
+/**
+ */
+function sortCongressMemberRows(rows: CongressMemberRow[], sort: CongressMoneySort): CongressMemberRow[] {
+  return [...rows].sort((left, right) => {
+    const leftMetric = getCongressMoneyMetric(left, sort);
+    const rightMetric = getCongressMoneyMetric(right, sort);
+
+    if (leftMetric === null && rightMetric === null) {
+      return compareRowsByNameThenId(left, right);
+    }
+    if (leftMetric === null) {
+      return 1;
+    }
+    if (rightMetric === null) {
+      return -1;
+    }
+    if (leftMetric !== rightMetric) {
+      return rightMetric - leftMetric;
+    }
+    return compareRowsByNameThenId(left, right);
+  });
+}
+
+export function getCongressMoneySourceHref(row: CongressMemberRow): string | null {
+  const safeRecordUrl = row.moneySources
+    .map((source) => sanitizeExternalUrl(source.record_url))
+    .find((url): url is string => url !== null);
+  if (safeRecordUrl !== undefined) {
+    return safeRecordUrl;
+  }
+
+  return row.moneySources
+    .map((source) => sanitizeExternalUrl(source.data_source_url))
+    .find((url): url is string => url !== null) ?? null;
+}
+
+export function buildCongressCompareHref(selectedPersonIds: string[]): string | null {
+  const canonicalPersonIds = [...new Set(selectedPersonIds)].sort((left, right) => left.localeCompare(right));
+  if (canonicalPersonIds.length < 2 || canonicalPersonIds.length > 4) {
+    return null;
+  }
+
+  return `/compare?people=${canonicalPersonIds.map((personId) => encodeURIComponent(personId)).join(",")}`;
+}
+
+/**
+ */
+export function buildCongressMemberRow(
+  member: CongressMemberSummary,
+  moneySummary?: CongressMemberMoneySummary
+): CongressMemberRow {
   const stateOrTerritory = member.state ?? "US";
   const party = member.party ?? "Unknown party";
   const contextLabel = formatDistrictOrClass(member);
+  const rowMoney = buildRowMoney(moneySummary);
 
   return {
     id: member.person_id,
@@ -127,27 +264,35 @@ export function buildCongressMemberRow(member: CongressMemberSummary): CongressM
     contextLabel,
     party,
     contextLine: [member.chamber, stateOrTerritory, contextLabel, party].join(" · "),
-    portrait: buildPortrait(member.portrait_source_image_url)
+    portrait: buildPortrait(member.portrait_source_image_url),
+    ...rowMoney
   };
 }
 
 export function filterCongressMembers(
   members: CongressMemberSummary[],
-  filters: CongressDirectoryFilters
+  filters: CongressDirectoryFilters,
+  moneySummaries: CongressMemberMoneySummary[] = []
 ): CongressMemberRow[] {
   const normalizedFilters = { ...filters, search: normalizeSearchText(filters.search) };
-  return members.filter((member) => memberMatchesFilters(member, normalizedFilters)).map(buildCongressMemberRow);
+  const moneySummaryByPersonId = buildMoneySummaryByPersonId(moneySummaries);
+  return members
+    .filter((member) => memberMatchesFilters(member, normalizedFilters))
+    .map((member) => buildCongressMemberRow(member, moneySummaryByPersonId.get(member.person_id)));
 }
 
 /**
  */
 export function buildCongressDirectory(
   members: CongressMemberSummary[],
-  filters: Partial<CongressDirectoryFilters>
+  filters: Partial<CongressDirectoryFilters>,
+  moneySummaries: CongressMemberMoneySummary[] = [],
+  sort = ""
 ): CongressDirectoryViewModel {
   const chamberOptions = uniqueSortedOptions(members.map((member) => member.chamber));
   const stateOrTerritoryOptions = uniqueSortedOptions(members.map((member) => member.state));
   const partyOptions = uniqueSortedOptions(members.map((member) => member.party));
+  const activeSort = sanitizeSortValue(sort);
   const activeFilters = {
     ...EMPTY_FILTERS,
     ...filters,
@@ -158,9 +303,10 @@ export function buildCongressDirectory(
   };
 
   return {
-    rows: filterCongressMembers(members, activeFilters),
+    rows: sortCongressMemberRows(filterCongressMembers(members, activeFilters, moneySummaries), activeSort),
     allRowsCount: members.length,
     activeFilters,
+    activeSort,
     chamberOptions,
     stateOrTerritoryOptions,
     partyOptions

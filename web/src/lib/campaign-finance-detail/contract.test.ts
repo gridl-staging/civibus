@@ -206,7 +206,7 @@ describe("campaign-finance detail contract", () => {
     expect(insights.small_dollar_share.share).toBe("0.6000");
   });
 
-  it("CandidateFundraisingSummary contract exposes cash_on_hand and summary_source", () => {
+  it("CandidateFundraisingSummary contract exposes cash_on_hand, summary_source, and net self-funding", () => {
     // Type-level proof: the CandidateFundraisingSummary contract MUST include the
     // Stage 3 fields. If either field is missing from the type, this object literal
     // (with `satisfies` and explicit fields) fails to compile.
@@ -220,6 +220,7 @@ describe("campaign-finance detail contract", () => {
       itemized_transaction_count: 0,
       committees: [],
       cash_on_hand: "5500.00",
+      net_self_funding: "1200.00",
       summary_source: "fec_weball",
       selected_cycle: 2026,
       coverage_start_date: "2025-01-01",
@@ -241,6 +242,7 @@ describe("campaign-finance detail contract", () => {
       itemized_transaction_count: 0,
       committees: [],
       cash_on_hand: null,
+      net_self_funding: null,
       summary_source: "derived",
       selected_cycle: 2026,
       coverage_start_date: "2025-01-01",
@@ -253,8 +255,10 @@ describe("campaign-finance detail contract", () => {
     } satisfies import("./contract").CandidateFundraisingSummary;
 
     expect(weballSummary.cash_on_hand).toBe("5500.00");
+    expect(weballSummary.net_self_funding).toBe("1200.00");
     expect(weballSummary.summary_source).toBe("fec_weball");
     expect(derivedSummary.cash_on_hand).toBeNull();
+    expect(derivedSummary.net_self_funding).toBeNull();
     expect(derivedSummary.summary_source).toBe("derived");
   });
 
@@ -268,6 +272,7 @@ describe("campaign-finance detail contract", () => {
       transaction_count: 1,
       committees: [],
       cash_on_hand: "80.00",
+      net_self_funding: "15.00",
       summary_source: "fec_weball",
       itemized_transaction_count: 1,
       selected_cycle: 2026,
@@ -700,6 +705,11 @@ describe("Stage 5 contract fields", () => {
         : true
     >();
     expectType<
+      {} extends Pick<import("./contract").CandidateFundraisingSummary, "net_self_funding">
+        ? false
+        : true
+    >();
+    expectType<
       {} extends Pick<IndependentExpenditureSummary, "excluded_outlier_count"> ? false : true
     >();
     expect(true).toBe(true);
@@ -843,6 +853,7 @@ describe("Stage 5 contract fields", () => {
       transaction_count: 42,
       committees: [],
       cash_on_hand: "25000.00",
+      net_self_funding: "5000.00",
       summary_source: "fec_weball",
       itemized_transaction_count: 42,
       receipt_source_composition: [],
@@ -852,6 +863,7 @@ describe("Stage 5 contract fields", () => {
     } satisfies import("./contract").CandidateFundraisingSummary;
     expect(summary.itemized_transaction_count).toBe(42);
     expect(summary.transaction_count).toBe(summary.itemized_transaction_count);
+    expect(summary.net_self_funding).toBe("5000.00");
   });
 
   it("IndependentExpenditureSummary includes excluded_outlier_count", () => {

@@ -27,6 +27,7 @@ export type DetailRouteSeoInput = SeoHeadModelInput & {
 export type SeoHeadModel = {
   title: string;
   description: string;
+  robots?: string | null;
   canonicalUrl: string | null;
   openGraph: {
     title: string;

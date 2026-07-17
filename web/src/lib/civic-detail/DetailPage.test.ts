@@ -578,6 +578,7 @@ describe("civic detail page rendering", () => {
               transaction_count: 42,
               itemized_transaction_count: 42,
               cash_on_hand: "1000.00",
+              net_self_funding: null,
               summary_source: "derived" as const,
               receipt_source_composition: [],
               selected_cycle_coverage_complete: false,

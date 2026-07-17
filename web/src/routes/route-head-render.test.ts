@@ -11,6 +11,7 @@ import DevelopersPage from "./developers/+page.svelte";
 import CandidatesPage from "./candidates/+page.svelte";
 import CommitteesPage from "./committees/+page.svelte";
 import CongressPage from "./congress/+page.svelte";
+import ComparePage from "./compare/+page.svelte";
 import PersonPage from "./person/[id]/+page.svelte";
 import OrgPage from "./org/[id]/+page.svelte";
 import PropertyPage from "./property/[id]/+page.svelte";
@@ -665,7 +666,8 @@ describe("route head rendering", () => {
     const rendered = render(CongressPage, {
       props: {
         data: {
-          members: [CONGRESS_MEMBER]
+          members: [CONGRESS_MEMBER],
+          moneySummaries: []
         }
       }
     });
@@ -679,6 +681,30 @@ describe("route head rendering", () => {
     expect(rendered.head).toContain("Browse current federal officeholders");
     expect(rendered.body).toContain("Jane Representative");
     expect(rendered.body).toContain('href="/person/11111111-1111-4111-8111-111111111111"');
+  });
+
+  it("renders compare with a noindex head and clean canonical comparison URL", () => {
+    currentPageUrl = new URL("https://preview.internal:5173/compare?people=ada,ben&notice=max-4");
+    const rendered = render(ComparePage, {
+      props: {
+        data: {
+          columns: [],
+          notices: ["max-4"],
+          canonicalComparison: {
+            people: "ada,ben",
+            href: "/compare?people=ada,ben"
+          },
+          prompt: null
+        }
+      }
+    });
+
+    expect(rendered.head).toContain("<title>Compare Officeholders | Civibus</title>");
+    expect(rendered.head).toContain('<meta name="robots" content="noindex"');
+    expect(rendered.head).toContain(
+      '<link rel="canonical" href="https://civibus.test/compare?people=ada,ben"'
+    );
+    expect(rendered.head).not.toContain("notice=max-4");
   });
 
   it("renders person detail with shared canonical/OG/Twitter tags and one detail JSON-LD block", () => {
@@ -773,6 +799,9 @@ describe("route head rendering", () => {
     });
 
     expect(rendered.body).toContain("<h3>Key metrics</h3>");
+    expect(rendered.body).toContain(
+      'href="/compare?people=11111111-1111-4111-8111-111111111111"'
+    );
     expect(rendered.body).toContain("<dt>Identifiers</dt>");
     expect(rendered.body).not.toContain("Civic Record");
     expect(rendered.body).not.toContain("Officeholding timeline");

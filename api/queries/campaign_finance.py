@@ -225,15 +225,16 @@ COMMITTEE_LINKED_CANDIDATES_SQL = f"""
 # which case the summary owner falls back to transaction-derived committee aggregates.
 CANDIDATE_OFFICIAL_TOTALS_SQL = """
     SELECT
-        total_receipts,
-        total_disbursements,
-        cash_on_hand,
-        candidate_contrib,
-        candidate_loans,
-        candidate_loan_repay,
-        summary_coverage_end_date
-    FROM cf.candidate
-    WHERE id = %s
+        candidate.total_receipts,
+        candidate.total_disbursements,
+        candidate.cash_on_hand,
+        (to_jsonb(candidate)->>'candidate_contrib')::numeric AS candidate_contrib,
+        (to_jsonb(candidate)->>'candidate_loans')::numeric AS candidate_loans,
+        (to_jsonb(candidate)->>'candidate_loan_repay')::numeric AS candidate_loan_repay,
+        candidate.summary_coverage_end_date,
+        candidate.principal_committee_id
+    FROM cf.candidate AS candidate
+    WHERE candidate.id = %s
 """
 
 CAMPAIGN_FINANCE_FILING_DETAIL_SQL = """
@@ -356,14 +357,20 @@ _COUNTY_PROXY_CITIES_BY_STATE: dict[str, dict[str, tuple[str, ...]]] = {
 
 _PERSON_EXISTS_SQL = "SELECT 1 FROM core.person WHERE id = %s"
 
-_PERSON_CONTRIBUTION_INSIGHTS_LINKED_COMMITTEES_SQL = """
-    SELECT DISTINCT link.committee_id
-    FROM cf.candidate candidate
-    JOIN cf.candidate_committee_link link
-      ON link.candidate_id = candidate.id
+_PERSON_CONTRIBUTION_INSIGHTS_CANDIDATES_SQL = """
+    SELECT
+        candidate.id AS candidate_id,
+        candidate.total_receipts,
+        candidate.total_disbursements,
+        candidate.cash_on_hand,
+        (to_jsonb(candidate)->>'candidate_contrib')::numeric AS candidate_contrib,
+        (to_jsonb(candidate)->>'candidate_loans')::numeric AS candidate_loans,
+        (to_jsonb(candidate)->>'candidate_loan_repay')::numeric AS candidate_loan_repay,
+        candidate.summary_coverage_end_date,
+        candidate.principal_committee_id
+    FROM cf.candidate AS candidate
     WHERE candidate.person_id = %s
-      AND link.valid_period && daterange(%s, %s, '[]')
-    ORDER BY link.committee_id
+    ORDER BY candidate.summary_coverage_end_date DESC NULLS LAST, candidate.id ASC
 """
 
 _PERSON_CONTRIBUTION_INSIGHTS_OFFICE_SQL = """
@@ -734,7 +741,12 @@ _PERSON_CONTRIBUTION_INSIGHTS_ITEMIZED_ROLLUPS_SQL = f"""
                 COUNT(*)::integer AS transaction_count
             FROM qualifying_transactions qt
             LEFT JOIN civic.zcta_district z
-              ON %s::boolean AND z.zcta5 = qt.zcta5
+              ON %s::boolean
+             AND z.zcta5 = qt.zcta5
+             AND z.boundary_year = (
+                 SELECT MAX(boundary_year)
+                 FROM civic.zcta_district
+             )
             WHERE %s::boolean
             GROUP BY label
             HAVING COUNT(*) > 0
@@ -2565,6 +2577,58 @@ def _official_candidate_totals_cover_selected_cycle(
     )
 
 
+def _fetch_cycle_linked_candidate_committee_ids(
+    conn: psycopg.Connection,
+    candidate_id: UUID,
+    selected_cycle: SelectedCycle,
+) -> list[UUID]:
+    with conn.cursor(row_factory=dict_row) as cursor:
+        cursor.execute(
+            CANDIDATE_LINKED_COMMITTEE_IDS_SQL,
+            (candidate_id, selected_cycle.coverage_start_date, selected_cycle.coverage_end_date),
+        )
+        return [row["committee_id"] for row in cursor.fetchall()]
+
+
+def _fetch_candidate_finance_resolution_row(
+    conn: psycopg.Connection,
+    candidate_id: UUID,
+) -> dict[str, Any] | None:
+    with conn.cursor(row_factory=dict_row) as cursor:
+        cursor.execute(CANDIDATE_OFFICIAL_TOTALS_SQL, (candidate_id,))
+        return cursor.fetchone()
+
+
+def _resolve_candidate_finance_committee_ids(
+    conn: psycopg.Connection,
+    candidate_id: UUID,
+    selected_cycle: SelectedCycle,
+    *,
+    candidate_row: dict[str, Any] | None = None,
+) -> list[UUID]:
+    linked_committee_ids = _fetch_cycle_linked_candidate_committee_ids(conn, candidate_id, selected_cycle)
+    if linked_committee_ids:
+        return linked_committee_ids
+
+    resolution_row = (
+        candidate_row
+        if candidate_row is not None
+        else _fetch_candidate_finance_resolution_row(
+            conn,
+            candidate_id,
+        )
+    )
+    if resolution_row is None:
+        return []
+
+    principal_committee_id = resolution_row["principal_committee_id"]
+    if principal_committee_id is None:
+        return []
+    if not _official_candidate_totals_cover_selected_cycle(resolution_row, selected_cycle):
+        return []
+    return [principal_committee_id]
+
+
 def _build_candidate_summary_from_official_totals(
     *,
     candidate_id: UUID,
@@ -2730,9 +2794,9 @@ _CANDIDATE_PUBLIC_MONEY_SUMMARIES_SQL = """
         candidate.total_receipts AS official_total_receipts,
         candidate.total_disbursements AS official_total_disbursements,
         candidate.cash_on_hand AS official_cash_on_hand,
-        candidate.candidate_contrib AS official_candidate_contrib,
-        candidate.candidate_loans AS official_candidate_loans,
-        candidate.candidate_loan_repay AS official_candidate_loan_repay,
+        (to_jsonb(candidate)->>'candidate_contrib')::numeric AS official_candidate_contrib,
+        (to_jsonb(candidate)->>'candidate_loans')::numeric AS official_candidate_loans,
+        (to_jsonb(candidate)->>'candidate_loan_repay')::numeric AS official_candidate_loan_repay,
         candidate.summary_coverage_end_date AS official_summary_coverage_end_date,
         COALESCE(committee_totals.summary_row_count, 0)::integer AS summary_row_count,
         COALESCE(committee_totals.committee_total_receipts, 0) AS committee_total_receipts,
@@ -2933,15 +2997,15 @@ def fetch_candidate_summary(
     if official_row is None:
         return None
 
-    with conn.cursor(row_factory=dict_row) as cursor:
-        cursor.execute(
-            CANDIDATE_LINKED_COMMITTEE_IDS_SQL, (candidate_id, cycle.coverage_start_date, cycle.coverage_end_date)
-        )
-        linked_committee_rows = list(cursor.fetchall())
+    linked_committee_ids = _resolve_candidate_finance_committee_ids(
+        conn,
+        candidate_id,
+        cycle,
+        candidate_row=official_row,
+    )
 
     committee_summaries: list[dict[str, Any]] = []
-    for linked_committee_row in linked_committee_rows:
-        committee_id = linked_committee_row["committee_id"]
+    for committee_id in linked_committee_ids:
         committee_summary = fetch_committee_fundraising_summary(conn, committee_id, cycle)
         if committee_summary is None:
             committee_row = fetch_one_row(conn, query=CAMPAIGN_FINANCE_COMMITTEE_DETAIL_SQL, row_id=committee_id)
@@ -3475,11 +3539,32 @@ def _fetch_person_insights_linked_committee_ids(
     selected_cycle: SelectedCycle,
 ) -> list[UUID]:
     with conn.cursor(row_factory=dict_row) as cursor:
-        cursor.execute(
-            _PERSON_CONTRIBUTION_INSIGHTS_LINKED_COMMITTEES_SQL,
-            (person_id, selected_cycle.coverage_start_date, selected_cycle.coverage_end_date),
+        cursor.execute(_PERSON_CONTRIBUTION_INSIGHTS_CANDIDATES_SQL, (person_id,))
+        candidate_rows = list(cursor.fetchall())
+
+    active_committee_ids: set[UUID] = set()
+    for candidate_row in candidate_rows:
+        active_committee_ids.update(
+            _fetch_cycle_linked_candidate_committee_ids(
+                conn,
+                candidate_row["candidate_id"],
+                selected_cycle,
+            )
         )
-        return [row["committee_id"] for row in cursor.fetchall()]
+    if active_committee_ids:
+        return sorted(active_committee_ids)
+
+    fallback_committee_ids: set[UUID] = set()
+    for candidate_row in candidate_rows:
+        fallback_committee_ids.update(
+            _resolve_candidate_finance_committee_ids(
+                conn,
+                candidate_row["candidate_id"],
+                selected_cycle,
+                candidate_row=candidate_row,
+            )
+        )
+    return sorted(fallback_committee_ids)
 
 
 def _fetch_person_insights_office(conn: psycopg.Connection, person_id: UUID) -> dict[str, Any] | None:

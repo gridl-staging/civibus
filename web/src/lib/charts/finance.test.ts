@@ -5,6 +5,7 @@ import {
   buildCashOnHandSeries,
   calculateOutsideSpendingDomain,
   formatCurrency,
+  formatCurrencyShort,
   formatCount,
   formatPercent,
   getContrastRatio,
@@ -24,6 +25,9 @@ describe("charts/finance helpers", () => {
   it("formats hand-calculated currency, counts, and percentages", () => {
     expect(formatCurrency(1250.5)).toBe("$1,250.50");
     expect(formatCurrency(-25.25)).toBe("-$25.25");
+    expect(formatCurrencyShort(300_000)).toBe("$300K");
+    expect(formatCurrencyShort(1_500_000)).toBe("$1.5M");
+    expect(formatCurrencyShort(950)).toBe("$950");
     expect(formatCount(1234)).toBe("1,234");
     expect(formatPercent(0.125)).toBe("12.5%");
     expect(formatPercent(0)).toBe("0%");
