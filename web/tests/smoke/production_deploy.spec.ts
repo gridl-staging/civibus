@@ -212,14 +212,21 @@ test.describe("production deployment smoke (read-only)", () => {
         links.map((link) => link.getAttribute("href")).find((href) => href?.startsWith("/committee/"))
       );
     expect(linkedCommitteeHref).toBeTruthy();
-    await page.goto(linkedCommitteeHref as string);
+    // Committee pages stream money panels, so the "load" event (page.goto's
+    // default wait) can lag well past first paint on the heaviest members;
+    // wait for the DOM instead. Row 0 is now the top fundraiser (money-sorted),
+    // whose committee + candidate pages carry the most finance data.
+    await page.goto(linkedCommitteeHref as string, { waitUntil: "domcontentloaded" });
 
     const linkedCandidates = page.getByTestId("committee-linked-candidates");
     await expect(linkedCandidates).toBeVisible({ timeout: 20_000 });
     const firstLinkedCandidate = linkedCandidates.getByRole("link").first();
     await expect(firstLinkedCandidate).toBeVisible();
     await firstLinkedCandidate.click();
-    await expect(page).toHaveURL(/\/candidate\//);
+    // SvelteKit holds the URL until the destination's load() resolves; the
+    // heaviest candidate page can exceed the default 5s, so match the spec's
+    // 20s convention for live-DB navigations.
+    await expect(page).toHaveURL(/\/candidate\//, { timeout: 20_000 });
 
     await pageLoadErrors.assertNoErrors();
   });
