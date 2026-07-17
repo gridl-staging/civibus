@@ -177,6 +177,14 @@ test.describe("production deployment smoke (read-only)", () => {
   }: {
     page: any;
   }) => {
+    // This test chains through the heaviest member's pages: row 0 is the
+    // money-sorted top fundraiser, whose committee-detail page carries the most
+    // transactions and currently renders in ~13s server-side on the small prod
+    // instance (a real perf follow-up tracked in ROADMAP -- individual
+    // high-volume committee pages, not just /committees). Give the whole
+    // navigation chain room so the gate reflects navigation correctness rather
+    // than committee-page latency.
+    test.setTimeout(90_000);
     const pageLoadErrors = capturePageLoadErrors(page);
 
     // Federal member person pages expose linked committees inside the Campaign
@@ -224,9 +232,9 @@ test.describe("production deployment smoke (read-only)", () => {
     await expect(firstLinkedCandidate).toBeVisible();
     await firstLinkedCandidate.click();
     // SvelteKit holds the URL until the destination's load() resolves; the
-    // heaviest candidate page can exceed the default 5s, so match the spec's
-    // 20s convention for live-DB navigations.
-    await expect(page).toHaveURL(/\/candidate\//, { timeout: 20_000 });
+    // heaviest candidate page can exceed the default 5s, so allow generous time
+    // for the live-DB navigation (the per-test budget above covers the total).
+    await expect(page).toHaveURL(/\/candidate\//, { timeout: 30_000 });
 
     await pageLoadErrors.assertNoErrors();
   });
