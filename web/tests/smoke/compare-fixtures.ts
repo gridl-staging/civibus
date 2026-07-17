@@ -1,5 +1,16 @@
 /** Deterministic officeholder and campaign-finance fixtures for the compare smoke suite. */
 
+const fixtureConstants =
+  (await import(new URL("./fixtures.ts", import.meta.url).href)) as typeof import("./fixtures");
+
+const {
+  SMOKE_CANDIDATE_ID,
+  SMOKE_CONGRESS_LEADER_NAME,
+  SMOKE_CONGRESS_LEADER_PERSON_ID,
+  SMOKE_CONGRESS_SECOND_NAME,
+  SMOKE_CONGRESS_SECOND_PERSON_ID
+} = fixtureConstants;
+
 const SELECTED_CYCLE = 2026;
 const COVERAGE_START_DATE = "2025-01-01";
 const COVERAGE_END_DATE = "2026-06-30";
@@ -451,12 +462,63 @@ export const compareOfficeholders = [
   })
 ] as const;
 
-export const compareFixtureById = new Map(compareOfficeholders.map((fixture) => [fixture.id, fixture]));
+const congressCompareHandoffOfficeholders = [
+  buildOfficeholderFixture({
+    id: SMOKE_CONGRESS_LEADER_PERSON_ID,
+    name: SMOKE_CONGRESS_LEADER_NAME,
+    candidateId: SMOKE_CANDIDATE_ID,
+    fecCandidateId: "H6NC01001",
+    searchQuery: "jane congress compare",
+    office: "H",
+    state: "NC",
+    district: "01",
+    totals: {
+      raised: "300.00",
+      spent: "200.00",
+      cashOnHand: "60.00",
+      netSelfFunding: "0.00",
+      smallDollarShare: "0.2500"
+    },
+    charts: {
+      monthlyMax: "300.00",
+      sizeBucketMax: "75.00",
+      support: "90.00",
+      oppose: "30.00"
+    }
+  }),
+  buildOfficeholderFixture({
+    id: SMOKE_CONGRESS_SECOND_PERSON_ID,
+    name: SMOKE_CONGRESS_SECOND_NAME,
+    candidateId: "21111111-1111-4111-8111-111111111114",
+    fecCandidateId: "S6GA00001",
+    searchQuery: "alex congress compare",
+    office: "S",
+    state: "GA",
+    district: null,
+    totals: {
+      raised: "100.00",
+      spent: "20.00",
+      cashOnHand: "0.00",
+      netSelfFunding: "0.00",
+      smallDollarShare: "0.1000"
+    },
+    charts: {
+      monthlyMax: "100.00",
+      sizeBucketMax: "25.00",
+      support: "20.00",
+      oppose: "80.00"
+    }
+  })
+] as const;
+
+const compareLookupFixtures = [...compareOfficeholders, ...congressCompareHandoffOfficeholders] as const;
+
+export const compareFixtureById = new Map(compareLookupFixtures.map((fixture) => [fixture.id, fixture]));
 export const compareFixtureByCandidateId = new Map(
-  compareOfficeholders.map((fixture) => [fixture.candidateId, fixture])
+  compareLookupFixtures.map((fixture) => [fixture.candidateId, fixture])
 );
 export const compareFixtureBySearchQuery = new Map(
-  compareOfficeholders.map((fixture) => [fixture.searchQuery, fixture])
+  compareLookupFixtures.map((fixture) => [fixture.searchQuery, fixture])
 );
 
 export const compareExpectedChartScales = {

@@ -42,7 +42,9 @@ export const load: PageServerLoad = ({ params, locals, url }) =>
         id: params.id
       });
       const moneyBundle = requestedCycle === undefined
-        ? loadPersonMoneyBundle(locals.api, params.id)
+        ? loadPersonMoneyBundle(locals.api, params.id, {
+            fallbackWhenBackendSelectedInsightsUnavailable: true
+          })
         : await loadPersonMoneyBundle(locals.api, params.id, requestedCycle);
 
       return {

@@ -6,6 +6,7 @@ import {
   chartRegion,
   escapeRegExp,
   expectBoundedNumericTickLabels,
+  expectNoBackendFailureStates,
   expectNoChartFrameOverflow,
   expectNoHorizontalOverflow,
   expectNoMaterialNearBlackOverlay,
@@ -79,6 +80,13 @@ test.describe("production person finance visuals (read-only)", () => {
     await expect(page.getByRole("heading", { name: CAMPAIGN_FINANCE_HEADING })).toBeVisible({
       timeout: 20_000
     });
+
+    // No cycle in the URL means the backend-selected path, which is the one that opts into
+    // person-money-bundle's fallback. Every other assertion in this file is deliberately
+    // drift-tolerant — TRUTHFUL_NO_DATA even matches the word "unavailable" — so a total
+    // money outage would otherwise be scored as an honest no-data page and pass the gate.
+    // This is the only assertion here that separates "no data" from "backend broken".
+    await expectNoBackendFailureStates(page);
 
     // Act like a reader following the explicit 2024 cycle URL.
     await page.goto(`${RELEASE_PERSON_PATH}?cycle=${SELECTED_CYCLE}`);

@@ -531,7 +531,7 @@ export const smokeFixtures = {
       name_variants: [],
       first_name: "Alex",
       middle_name: null,
-      last_name: "Money",
+      last_name: "Money Senator",
       suffix: null,
       date_of_birth: null,
       year_of_birth: null,

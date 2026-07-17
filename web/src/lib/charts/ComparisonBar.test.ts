@@ -14,6 +14,7 @@ describe("ComparisonBar SSR presentation component", () => {
             id: "person_b",
             label: "Beta Senator",
             href: "/person/person_b",
+            linkTestId: "beta-profile-link",
             value: 125_000,
             valueLabel: "$125,000.00"
           },
@@ -31,6 +32,7 @@ describe("ComparisonBar SSR presentation component", () => {
       rendered.body.indexOf('data-testid="comparison-row-person_a"')
     );
     expect(rendered.body).toMatch(/<a[^>]*href="\/person\/person_b"[^>]*>Beta Senator<\/a>/);
+    expect(rendered.body).toContain('data-testid="beta-profile-link"');
     expect(rendered.body).toMatch(/<span[^>]*>Alpha Representative<\/span>/);
     expect(rendered.body).toContain('data-testid="comparison-bar-person_b"');
     expect(rendered.body).toContain('data-testid="comparison-end-label-person_a"');

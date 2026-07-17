@@ -21,6 +21,7 @@ import {
 import { capturePageLoadErrors } from "./smoke-helpers";
 
 const NO_REPORTED_MONEY = "No reported/loaded money.";
+const CONGRESS_MEMBER_PROFILE_LINK_TEST_ID = "congress-member-profile-link";
 
 function memberRows(page: Page): Locator {
   return page.getByTestId(/^congress-member-row-/);
@@ -63,6 +64,11 @@ test("/congress renders a URL-owned money leaderboard and canonical compare hand
   ]);
 
   const leaderRow = rowForMember(page, SMOKE_CONGRESS_LEADER_NAME);
+  await expect(leaderRow.getByRole("link")).toHaveCount(5);
+  await expect(leaderRow.getByTestId(CONGRESS_MEMBER_PROFILE_LINK_TEST_ID)).toHaveAttribute(
+    "href",
+    `/person/${SMOKE_CONGRESS_LEADER_PERSON_ID}`
+  );
   await expectLinkedMoney(leaderRow, SMOKE_CONGRESS_LEADER_TOTAL_RAISED, SMOKE_CONGRESS_LEADER_SOURCE_HREF);
   await expectLinkedMoney(leaderRow, SMOKE_CONGRESS_LEADER_OUTSIDE_SUPPORT, SMOKE_CONGRESS_LEADER_SOURCE_HREF);
   await expectLinkedMoney(leaderRow, SMOKE_CONGRESS_LEADER_OUTSIDE_AGAINST, SMOKE_CONGRESS_LEADER_SOURCE_HREF);

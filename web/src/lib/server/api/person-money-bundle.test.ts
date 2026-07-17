@@ -190,4 +190,53 @@ describe("loadPersonMoneyBundle", () => {
       metadata: { selected_cycle: 2024 }
     });
   });
+
+  it("rejects backend-selected money streams by default when contribution insights fail", async () => {
+    const requestJson = vi.fn((path: string): Promise<unknown> => {
+      if (path === `/v1/person/${PERSON_ID}/contribution-insights`) {
+        return Promise.reject(new Error("insights unavailable"));
+      }
+
+      return Promise.reject(new Error(`Unexpected path: ${path}`));
+    });
+
+    const bundle = loadPersonMoneyBundle(createApi(requestJson), PERSON_ID);
+
+    await expect(bundle.personContributionInsights).rejects.toThrow("insights unavailable");
+    await expect(bundle.personFinanceSections).rejects.toThrow("insights unavailable");
+    await expect(bundle.personTopDonors).rejects.toThrow("insights unavailable");
+    await expect(bundle.personTopEmployers).rejects.toThrow("insights unavailable");
+    expect(requestJson.mock.calls.map(([path]) => path)).toEqual([
+      `/v1/person/${PERSON_ID}/contribution-insights`
+    ]);
+  });
+
+  it("resolves empty optional money data when opted into backend-selected fallback", async () => {
+    const requestJson = vi.fn((path: string): Promise<unknown> => {
+      if (path === `/v1/person/${PERSON_ID}/contribution-insights`) {
+        return Promise.reject(new Error("insights unavailable"));
+      }
+
+      return Promise.reject(new Error(`Unexpected path: ${path}`));
+    });
+
+    const bundle = loadPersonMoneyBundle(createApi(requestJson), PERSON_ID, {
+      fallbackWhenBackendSelectedInsightsUnavailable: true
+    });
+
+    await expect(bundle.personContributionInsights).resolves.toMatchObject({
+      person_id: PERSON_ID,
+      has_data: false,
+      metadata: {
+        selected_cycle: 2026,
+        caveats: ["temporarily_unavailable"]
+      }
+    });
+    await expect(bundle.personFinanceSections).resolves.toEqual([]);
+    await expect(bundle.personTopDonors).resolves.toEqual([]);
+    await expect(bundle.personTopEmployers).resolves.toEqual([]);
+    expect(requestJson.mock.calls.map(([path]) => path)).toEqual([
+      `/v1/person/${PERSON_ID}/contribution-insights`
+    ]);
+  });
 });

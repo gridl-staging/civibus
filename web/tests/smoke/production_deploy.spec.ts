@@ -34,6 +34,11 @@ async function expectContributionInsightsChartsHaveStableHeight(page: any): Prom
 const isProductionSmokeMode = (process.env.SMOKE_MODE ?? "local") === "production";
 const PERSON_CAMPAIGN_FINANCE_HEADING = "Campaign finance";
 const PERSON_OUTSIDE_SPENDING_HEADING = "Outside Spending";
+const CONGRESS_MEMBER_PROFILE_LINK_TEST_ID = "congress-member-profile-link";
+
+function memberProfileLink(row: any): any {
+  return row.getByTestId(CONGRESS_MEMBER_PROFILE_LINK_TEST_ID);
+}
 
 test.describe("production deployment smoke (read-only)", () => {
   test.skip(!isProductionSmokeMode, "production-mode only — set SMOKE_MODE=production and SMOKE_BASE_URL");
@@ -65,7 +70,7 @@ test.describe("production deployment smoke (read-only)", () => {
 
     // Act as a human: click the first member's name link and verify the
     // person page shows that member with money + outside-spending panels.
-    const memberLink = firstMemberRow.getByRole("link");
+    const memberLink = memberProfileLink(firstMemberRow);
     const memberName = (await memberLink.textContent())?.trim() ?? "";
     expect(memberName.length).toBeGreaterThan(0);
     await memberLink.click();
@@ -98,7 +103,7 @@ test.describe("production deployment smoke (read-only)", () => {
   test("person page loads without client-side errors", async ({ page }: { page: any }) => {
     const pageLoadErrors = capturePageLoadErrors(page);
     await page.goto("/congress");
-    await page.getByTestId("congress-member-row-0").getByRole("link").click();
+    await memberProfileLink(page.getByTestId("congress-member-row-0")).click();
     await expect(
       page.getByRole("heading", { name: PERSON_CAMPAIGN_FINANCE_HEADING })
     ).toBeVisible({ timeout: 20_000 });
@@ -160,7 +165,7 @@ test.describe("production deployment smoke (read-only)", () => {
     // the candidate-detail "Committee record" label, which is not part of this
     // route's accessible link text.
     await page.goto("/congress");
-    await page.getByTestId("congress-member-row-0").getByRole("link").click();
+    await memberProfileLink(page.getByTestId("congress-member-row-0")).click();
     await expect(
       page.getByRole("heading", { name: PERSON_CAMPAIGN_FINANCE_HEADING })
     ).toBeVisible({ timeout: 20_000 });
@@ -193,7 +198,7 @@ test.describe("production deployment smoke (read-only)", () => {
     // Arrange: read a real member name off the live directory first, so the
     // search assertion is self-consistent with whatever data is deployed.
     await page.goto("/congress");
-    const memberLink = page.getByTestId("congress-member-row-0").getByRole("link");
+    const memberLink = memberProfileLink(page.getByTestId("congress-member-row-0"));
     const memberName = (await memberLink.textContent())?.trim() ?? "";
     expect(memberName.length).toBeGreaterThan(0);
     const lastName = memberName.split(",")[0]?.trim() ?? memberName;

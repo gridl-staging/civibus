@@ -8,6 +8,45 @@ const OPAQUE_ALPHA_MIN = 0.95;
 export const LINE_SERIES_MARK_SELECTOR = "svg path.lc-path";
 export const BAR_SERIES_MARK_SELECTOR = "svg rect";
 
+// Repo-wide copy convention for a panel whose backend call FAILED, as opposed to a panel
+// whose data is legitimately absent. Rendered inline by the {:catch} arms of
+// src/lib/entity-detail/DetailPage.svelte and src/lib/campaign-finance-detail/DetailPage.svelte
+// ("Contribution insights are temporarily unavailable.", "Candidate metrics are temporarily
+// unavailable.", …), and by the temporarily_unavailable empty-state message that
+// person-money-bundle.ts's fallback produces when a money call rejects.
+//
+// Matched as a family pattern rather than an imported constant because the copy is authored
+// inline per panel; this mirrors how production_finance_visuals.spec.ts already pins its
+// TRUTHFUL_NO_DATA / CHART_FRAME_STATE_COPY families.
+//
+// Why this exists: these states are deliberately calm so real users see graceful
+// degradation instead of a stack trace. The cost is that a total backend outage looks
+// almost exactly like an honest "no data yet" page — and TRUTHFUL_NO_DATA in
+// production_finance_visuals.spec.ts matches the word "unavailable", so the production gate
+// scores an outage as a PASS. A live deployment must never show this family: it always means
+// the API failed, never that the data is merely absent.
+export const BACKEND_FAILURE_STATE_COPY = /temporarily unavailable/i;
+
+/**
+ * Assert no panel on the current page is showing a backend-failure state.
+ *
+ * Only meaningful when the caller has already proven the page rendered (e.g. asserted a
+ * heading is visible). On its own, absence of the copy would also be satisfied by a page
+ * that failed to render at all.
+ */
+export async function expectNoBackendFailureStates(page: Page): Promise<void> {
+  // Settle first. The money panels stream in via {#await}, and a negative assertion never
+  // waits for content to arrive — so asserting the copy's absence straight away passes
+  // while the panels are still pending. Verified the hard way: without this line, a person
+  // page whose contribution-insights call returns 503 scored a PASS.
+  //
+  // SkeletonPanel marks each pending panel aria-busy, so zero busy panels means every
+  // {#await} has resolved to either data or its {:catch}. toHaveCount auto-retries, which
+  // is what makes this a wait rather than a sample.
+  await expect(page.locator('[aria-busy="true"]')).toHaveCount(0, { timeout: 20_000 });
+  await expect(page.getByText(BACKEND_FAILURE_STATE_COPY)).toHaveCount(0);
+}
+
 type SvgPaintSample = {
   tagName: string;
   fill: string;
@@ -345,20 +384,65 @@ export async function assertPrimaryNavTapTargetMinHeight(page: any, label: strin
 
 /**
  */
+export function formatCapturedBrowserValue(value: unknown): string {
+  if (value instanceof Error) {
+    return value.message;
+  }
+
+  if (typeof value === "string") {
+    return value;
+  }
+
+  try {
+    const serialized = JSON.stringify(value);
+    return serialized === undefined ? String(value) : serialized;
+  } catch {
+    return String(value);
+  }
+}
+
+/**
+ */
+async function formatConsoleMessage(message: any): Promise<string> {
+  const args = message.args();
+  if (args.length === 0) {
+    return message.text();
+  }
+
+  const values = await Promise.all(
+    args.map(async (arg: any) => {
+      try {
+        return formatCapturedBrowserValue(await arg.jsonValue());
+      } catch {
+        return message.text();
+      }
+    })
+  );
+  return values.join(" ");
+}
+
+/**
+ */
 export function capturePageLoadErrors(page: any) {
   const errors: string[] = [];
+  const pendingConsoleErrors: Promise<void>[] = [];
 
-  page.on("pageerror", (error: Error) => {
-    errors.push(`pageerror: ${error.message}`);
+  page.on("pageerror", (error: unknown) => {
+    errors.push(`pageerror: ${formatCapturedBrowserValue(error)}`);
   });
   page.on("console", (message: any) => {
     if (message.type() === "error") {
-      errors.push(`console.error: ${message.text()}`);
+      pendingConsoleErrors.push(
+        formatConsoleMessage(message).then((formattedMessage) => {
+          errors.push(`console.error: ${formattedMessage}`);
+        })
+      );
     }
   });
 
   return {
     async assertNoErrors() {
+      await Promise.all(pendingConsoleErrors);
       await expect(errors).toEqual([]);
     }
   };

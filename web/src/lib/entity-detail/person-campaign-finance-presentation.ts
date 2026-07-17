@@ -142,6 +142,7 @@ const APPROXIMATE_DISTRICT_GEOGRAPHY_NOTE =
   "District geography uses a Census 119th-Congress / 2020-ZCTA approximation.";
 const STATE_GEOGRAPHY_NOTE = "Contributor geography by state.";
 const CONTRIBUTION_INSIGHTS_EMPTY_MESSAGES: Record<string, string> = {
+  temporarily_unavailable: "Contribution insights are temporarily unavailable.",
   missing_committee_summary:
     "Committee summary totals are required before dollars by size can be shown.",
   missing_zcta_district:

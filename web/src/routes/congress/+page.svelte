@@ -223,6 +223,7 @@
                   label: row.personName,
                   portrait: row.portrait,
                   href: row.personHref,
+                  linkTestId: "congress-member-profile-link",
                   value: activeMetric,
                   valueLabel: activeMetric === null ? "" : formatCurrencyShort(activeMetric)
                 }]}

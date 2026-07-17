@@ -538,7 +538,7 @@ describe("/person/[id] +page.server load", () => {
     }
   });
 
-  it("keeps bare person contribution-insights failures deferred to component error boundaries", async () => {
+  it("keeps bare person pages renderable when contribution insights are temporarily unavailable", async () => {
     const contributionInsightsFailure = new ApiResponseError(503, {
       detail: "Contribution insights unavailable."
     });
@@ -555,10 +555,13 @@ describe("/person/[id] +page.server load", () => {
 
     const data = (await load(createLoadEvent(requestJson))) as EntityDetailPageBundle;
 
-    await expect(data.personContributionInsights).rejects.toBe(contributionInsightsFailure);
-    await expect(data.personFinanceSections).rejects.toBe(contributionInsightsFailure);
-    await expect(data.personTopDonors).rejects.toBe(contributionInsightsFailure);
-    await expect(data.personTopEmployers).rejects.toBe(contributionInsightsFailure);
+    await expect(data.personContributionInsights).resolves.toMatchObject({
+      has_data: false,
+      metadata: { caveats: ["temporarily_unavailable"] }
+    });
+    await expect(data.personFinanceSections).resolves.toEqual([]);
+    await expect(data.personTopDonors).resolves.toEqual([]);
+    await expect(data.personTopEmployers).resolves.toEqual([]);
     expect(requestJson.mock.calls.map(([path]) => path)).toEqual([
       `/v1/person/${PERSON_ID}`,
       `/v1/person/${PERSON_ID}/contribution-insights`

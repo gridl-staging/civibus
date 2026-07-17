@@ -1,7 +1,9 @@
 import { expect, test } from "playwright/test";
 import type { Locator, Page } from "playwright";
 import {
+  BACKEND_FAILURE_STATE_COPY,
   BAR_SERIES_MARK_SELECTOR,
+  expectNoBackendFailureStates,
   expectNoChartFrameOverflow,
   expectNoHorizontalOverflow,
   expectNonZeroChartBox,
@@ -174,6 +176,33 @@ test.describe("officeholder compare fixture smoke", () => {
     ).toBeVisible();
     await expect(nationalColumn.getByTestId(`compare-${nationalOfficeholder.id}-monthly`)).toBeVisible();
     await expectVisibleFootnotes(page);
+  });
+
+  // Control pair for expectNoBackendFailureStates, which the production gate relies on to
+  // notice a backend outage. The person page degrades gracefully when a money call fails
+  // (see fallbackWhenBackendSelectedInsightsUnavailable in person-money-bundle.ts), so an
+  // outage renders as calm "temporarily unavailable" copy rather than an error — and the
+  // production visuals spec counts that copy as a passing "truthful no-data" state. This
+  // test pins both directions so the detector cannot silently stop discriminating:
+  // it must stay quiet for a healthy person and it must see the failure copy for a
+  // person whose contribution-insights call returns 503 (errorOfficeholder's fixture).
+  test("backend-failure detector sees a failing money backend but stays quiet when healthy", async ({
+    page
+  }: {
+    page: Page;
+  }) => {
+    // Healthy person: no failure copy anywhere, so the production assertion is meaningful
+    // rather than vacuously true.
+    await page.goto(`/person/${nationalOfficeholder.id}`);
+    await expect(page.getByRole("heading", { name: "Campaign finance" })).toBeVisible();
+    await expectNoBackendFailureStates(page);
+
+    // Failing person: same detector must fire. This is what would have caught the
+    // 2026-07-17 zcta_district.boundary_year schema drift, which broke contribution
+    // insights in production while every existing gate stayed green.
+    await page.goto(`/person/${errorOfficeholder.id}`);
+    await expect(page.getByRole("heading", { name: "Campaign finance" })).toBeVisible();
+    await expect(page.getByText(BACKEND_FAILURE_STATE_COPY).first()).toBeVisible();
   });
 
   for (const width of [1440, 768, 390]) {

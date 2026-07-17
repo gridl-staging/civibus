@@ -16,6 +16,7 @@
     label: string;
     portrait?: PortraitProps["portrait"];
     href?: string;
+    linkTestId?: string;
     // A finite number (including an honest 0) is a reported value; null signals
     // money that was never reported or loaded, so the two never collapse together.
     value: number | null;
@@ -93,7 +94,7 @@
         <Portrait canonicalName={entity.label} personId={entity.id} portrait={entity.portrait} />
         <div class="comparison-bars__label-block">
           {#if safeHref}
-            <a class="comparison-bars__label" href={safeHref}>{entity.label}</a>
+            <a class="comparison-bars__label" href={safeHref} data-testid={entity.linkTestId}>{entity.label}</a>
           {:else}
             <span class="comparison-bars__label">{entity.label}</span>
           {/if}
