@@ -1,6 +1,6 @@
 {
-  "host": "5.78.207.136",
-  "vm_repo_path": "/root/civibus/civibus_dev",
+  "host": "<redacted; VM host in .secret/.env.secret HETZNER_HOST>",
+  "vm_repo_path": "<redacted VM repo path>",
   "command": "uv run python -m core.refresh.runner --scope all --job-key-prefix civics-roster- --force",
   "dispatch_utc": "2026-04-30T09:43:15Z",
   "log_path": "/var/log/civibus/roster_dispatch_20260430_094315.log",
@@ -39,8 +39,8 @@
   ],
   "dispatch_notes": [
     "Stage 5 replay lane: source preload ran immediately before dispatch via uv run python -m scripts.register_roster_pilot_sources and ensured all 27 roster source rows existed in core.data_source.",
-    "VM origin uses HTTPS without persistent credentials; existing PAT at /tmp/civibus-deploy/github_token (placed by deploy.yml workflow) was used via the GIT_ASKPASS pattern from infra/scripts/bootstrap_prod_vm.sh::run_git_authenticated to fetch the branch.",
-    "uv lives at /root/.local/bin/uv on the VM; PATH must be prepended for ad-hoc invocations.",
+    "VM origin uses HTTPS without persistent credentials; an existing deploy PAT on the VM (placed by the deploy.yml workflow, path redacted) was used via the GIT_ASKPASS pattern from infra/scripts/bootstrap_prod_vm.sh::run_git_authenticated to fetch the branch.",
+    "uv lives at the VM operator's local bin on PATH; PATH must be prepended for ad-hoc invocations.",
     "Runner connected to PostgreSQL on 127.0.0.1:5433 (host port mapped from infra-db-1 container's 5432). POSTGRES_PORT=5433 explicitly exported because env_lib.sh defaults to 5432 which is not bound on this VM.",
     "PID recorded is the bash wrapper that launched the runner under nohup setsid; the runner subprocess detached and has already finished. Stage 6 evidence must rely on the replay log path rather than the wrapper PID."
   ],

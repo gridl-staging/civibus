@@ -7,8 +7,8 @@ scope: NC_roster_maintenance_closeout_2026_04_30
 # NC roster maintenance closeout (replayed dispatch `2026-04-30T09:43:15Z`)
 
 ## Dispatch baseline
-- Host: `5.78.207.136`
-- Repo path: `/root/civibus/civibus_dev`
+- Host: `<redacted; VM host in .secret/.env.secret HETZNER_HOST>`
+- Repo path: `<redacted VM repo path>`
 - Dispatch UTC: `2026-04-30T09:43:15Z`
 - Canonical log: `/var/log/civibus/roster_dispatch_20260430_094315.log`
 - Pre-dispatch preload command: `uv run python -m scripts.register_roster_pilot_sources`

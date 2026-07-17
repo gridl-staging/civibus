@@ -47,6 +47,42 @@ export async function expectNoBackendFailureStates(page: Page): Promise<void> {
   await expect(page.getByText(BACKEND_FAILURE_STATE_COPY)).toHaveCount(0);
 }
 
+// National party committees (the four Hill committees + RNC/DNC). Their receipts
+// are party money, not a candidate's own, and must never appear in a member's
+// "Linked committees" table. Summing a party committee's receipts into a
+// member's total inflated the /congress money-sorted #1 entry ~23x (a senator
+// shown at ~$150M against a real ~$6.5M, because the NRSC's ~$142M was counted
+// as his). Matched by name family (like BACKEND_FAILURE_STATE_COPY) rather than
+// an imported constant, since committee names are authored upstream at FEC.
+export const PARTY_COMMITTEE_NAME_PATTERN =
+  /\bNRSC\b|\bDSCC\b|\bNRCC\b|\bDCCC\b|\bRNC\b|\bDNC\b|NATIONAL REPUBLICAN SENATORIAL|DEMOCRATIC SENATORIAL CAMPAIGN|NATIONAL REPUBLICAN CONGRESSIONAL|DEMOCRATIC CONGRESSIONAL CAMPAIGN|REPUBLICAN NATIONAL COMMITTEE|DEMOCRATIC NATIONAL COMMITTEE/i;
+
+/**
+ * Money-correctness guard: the linked-committees table on a member's person page
+ * must list only the member's own committees, never a national party committee.
+ *
+ * Deterministic value correctness across all three candidate-money query owners
+ * is owned by the api known-answer test
+ * `test_candidate_money_excludes_party_and_jfc_committees`; this is a live-prod
+ * spot check on the flagship #1 surface, robust to fundraising magnitude (a real
+ * presidential principal committee can rival a party committee's size, so a
+ * value ceiling cannot tell them apart — the committee identity can). The table
+ * only renders when the member has authorized committees (empty/unavailable
+ * states show a banner instead), so this is a no-op when absent; pair it with a
+ * prior `expectNoBackendFailureStates` so an outage cannot make it pass vacuously.
+ */
+export async function expectNoPartyCommitteeInLinkedCommittees(page: Page): Promise<void> {
+  // Scope to the linked-committees table and assert no cell names a party
+  // committee. getByText auto-waits (so a streamed row can't slip past), and
+  // toHaveCount(0) is a no-op when the table is absent -- a member with no
+  // authorized committees shows a banner instead of the table -- so pair this
+  // with a prior expectNoBackendFailureStates to rule out an outage hiding it.
+  const partyCommitteeCells = page
+    .getByTestId("person-linked-committees")
+    .getByText(PARTY_COMMITTEE_NAME_PATTERN);
+  await expect(partyCommitteeCells).toHaveCount(0);
+}
+
 type SvgPaintSample = {
   tagName: string;
   fill: string;

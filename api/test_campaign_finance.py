@@ -14,6 +14,7 @@ import api.queries as campaign_finance_queries
 import api.queries.campaign_finance as campaign_finance_query_module
 from api.queries import (
     fetch_candidate_public_money_summaries,
+    fetch_candidate_public_money_summary,
     fetch_candidate_summary,
     fetch_committee_fundraising_summary,
 )
@@ -3402,11 +3403,16 @@ def test_get_candidate_summary_handles_production_shape_missing_candidate_self_f
     assert default_cycle_payload["coverage_start_date"] == "2025-01-01"
     assert default_cycle_payload["coverage_end_date"] == "2026-12-31"
     assert default_cycle_payload["available_cycles"] == [2022, 2024, 2026]
-    assert default_cycle_payload["summary_source"] == "derived"
-    assert default_cycle_payload["total_raised"] == "2222.00"
-    assert default_cycle_payload["total_spent"] == "777.00"
-    assert default_cycle_payload["net"] == "1445.00"
-    assert default_cycle_payload["cash_on_hand"] is None
+    # The candidate's official weball total (coverage-end 2026-03-31) now covers
+    # the open 2026 cycle (within-window), so the authoritative FEC figures win
+    # over the committee-sum: total_raised is the official 1234.00, not the
+    # committee's 2222.00 (still shown at the committee level below). Missing
+    # self-funding columns remain None -- the shape this test guards.
+    assert default_cycle_payload["summary_source"] == "fec_weball"
+    assert default_cycle_payload["total_raised"] == "1234.00"
+    assert default_cycle_payload["total_spent"] == "400.00"
+    assert default_cycle_payload["net"] == "834.00"
+    assert default_cycle_payload["cash_on_hand"] == "834.00"
     assert default_cycle_payload["candidate_contrib"] is None
     assert default_cycle_payload["candidate_loans"] is None
     assert default_cycle_payload["candidate_loan_repay"] is None
@@ -3726,6 +3732,212 @@ def test_candidate_self_funding_is_null_for_non_selected_cycle(db_conn: psycopg.
     assert detail_summary is not None
     assert {key: detail_summary[key] for key in expected_null_self_funding} == expected_null_self_funding
     assert {key: batch_summary[key] for key in expected_null_self_funding} == expected_null_self_funding
+
+
+def test_candidate_money_excludes_party_and_jfc_committees(
+    db_conn: psycopg.Connection,
+) -> None:
+    """Candidate money totals must sum only the candidate's own authorized committees.
+
+    Party committees (FEC ``committee_type`` X/Y/Z, e.g. the NRSC) and joint
+    fundraising committees (``committee_designation`` 'J') are linked to a
+    candidate in FEC ``ccl`` data, but their receipts are not the candidate's
+    own campaign money. Summing them inflated the flagship ``/congress`` money
+    leaderboard's #1 entry ~23x (Sullivan showed $150,777,761.90 for a real
+    ~$6.5M). This pins the fix across all three candidate-money owners:
+    ``fetch_candidate_public_money_summaries`` (leaderboard/compare/export),
+    ``fetch_candidate_public_money_summary`` (public person page), and
+    ``fetch_candidate_summary`` (candidate detail). Regression guard for the
+    ROADMAP P1 logged 2026-07-17.
+    """
+    candidate_id = UUID("9a000000-0000-0000-0000-000000000001")
+    candidate_name = "PARTY JFC EXCLUSION, TEST"
+    principal_id = UUID("9a000000-0000-0000-0000-0000000000c1")
+    authorized_id = UUID("9a000000-0000-0000-0000-0000000000c2")
+    jfc_id = UUID("9a000000-0000-0000-0000-0000000000c3")
+    party_id = UUID("9a000000-0000-0000-0000-0000000000c4")
+
+    # (committee_id, fec_id, name, committee_type, committee_designation, receipts)
+    committees = (
+        (principal_id, "C90000001", "PRINCIPAL CAMPAIGN CTE", "S", "P", Decimal("6500847.42")),
+        (authorized_id, "C90000002", "AUTHORIZED JOINT CTE", "S", "A", Decimal("1000000.00")),
+        (jfc_id, "C90000003", "CANDIDATE VICTORY JFC", "N", "J", Decimal("2174403.69")),
+        (party_id, "C90000004", "NATIONAL PARTY CTE", "Y", "U", Decimal("142102510.79")),
+    )
+    for committee_id, fec_id, name, committee_type, designation, _receipts in committees:
+        insert_committee_row(
+            db_conn,
+            CommitteeRowSeed(
+                id=committee_id,
+                fec_committee_id=fec_id,
+                name=name,
+                committee_type=committee_type,
+                committee_designation=designation,
+            ),
+        )
+
+    # No covering official weball totals -> forces the committee-sum fallback,
+    # which is exactly the path where party/JFC receipts were being summed in.
+    insert_candidate_row(
+        db_conn,
+        CandidateRowSeed(
+            id=candidate_id,
+            fec_candidate_id="S6AK00999",
+            name=candidate_name,
+            office="S",
+            state="AK",
+            principal_committee_id=principal_id,
+        ),
+    )
+
+    for index, (committee_id, _fec_id, _name, _committee_type, designation, receipts) in enumerate(committees):
+        insert_committee_summary_row(
+            db_conn,
+            CommitteeSummaryRowSeed(
+                committee_id=committee_id,
+                cycle=2026,
+                total_receipts=receipts,
+                total_disbursements=Decimal("0.00"),
+                coverage_start_date=date(2025, 1, 1),
+                coverage_end_date=date(2026, 12, 31),
+            ),
+        )
+        insert_candidate_committee_link_row(
+            db_conn,
+            CandidateCommitteeLinkSeed(
+                id=UUID(f"9a000000-0000-0000-0000-0000000000{index:02d}"),
+                candidate_id=candidate_id,
+                committee_id=committee_id,
+                valid_period="[2025-01-01,2027-01-01)",
+                designation=designation,
+                candidate_election_year=2026,
+                fec_election_year=2026,
+            ),
+        )
+
+    # Only the principal ('P', $6,500,847.42) and authorized ('A', $1,000,000.00)
+    # committees count; the JFC and party committee are excluded. The buggy sum
+    # was 6500847.42 + 1000000.00 + 2174403.69 + 142102510.79 = 151777761.90.
+    expected_total = Decimal("7500847.42")
+
+    batch_summary = fetch_candidate_public_money_summaries(db_conn, [(candidate_id, candidate_name)])[candidate_id]
+    assert batch_summary["total_raised"] == expected_total
+
+    person_summary = fetch_candidate_public_money_summary(db_conn, candidate_id, candidate_name)
+    assert person_summary is not None
+    assert person_summary["total_raised"] == expected_total
+
+    # Candidate-detail owner: the displayed committee breakdown must stay
+    # coherent with the total by excluding the same party/JFC committees.
+    detail_summary = fetch_candidate_summary(db_conn, candidate_id, candidate_name)
+    assert detail_summary is not None
+    detail_committee_names = {committee["committee_name"] for committee in detail_summary["committees"]}
+    assert detail_committee_names == {"PRINCIPAL CAMPAIGN CTE", "AUTHORIZED JOINT CTE"}
+
+
+def test_candidate_money_uses_official_total_over_inflated_committee_sum(
+    db_conn: psycopg.Connection,
+) -> None:
+    """The FEC official weball total is authoritative and must win over the
+    committee-sum fallback whenever it covers the selected cycle.
+
+    Real prod shape (verified 2026-07-17): 553 of 557 current officeholders carry
+    an official total whose coverage-end is mid-cycle (e.g. 2026-03-31). A prior
+    exact ``coverage_end == cycle_end`` check rejected those for the open 2026
+    cycle and forced the committee-sum, which summed party/JFC committees and put
+    a senator at $150M for a real $6.5M. Here the candidate's official total is
+    $6,500,847.42; the principal committee's *summary* is a deliberately
+    different $6,000,000.00 and a linked party committee ($142.1M) + JFC ($2.17M)
+    would further inflate the fallback -- so a total of $6,500,847.42 with
+    ``summary_source == "fec_weball"`` proves the official path is used, not the
+    fallback. Complements test_candidate_money_excludes_party_and_jfc_committees,
+    which pins the no-official-total fallback path.
+    """
+    candidate_id = UUID("9a000000-0000-0000-0000-000000000101")
+    candidate_name = "OFFICIAL TOTAL WINS, TEST"
+    principal_id = UUID("9a000000-0000-0000-0000-0000000001c1")
+    jfc_id = UUID("9a000000-0000-0000-0000-0000000001c3")
+    party_id = UUID("9a000000-0000-0000-0000-0000000001c4")
+
+    official_total = Decimal("6500847.42")
+
+    # (committee_id, fec_id, name, committee_type, committee_designation, summary_receipts)
+    committees = (
+        (principal_id, "C90001001", "PRINCIPAL CAMPAIGN CTE", "S", "P", Decimal("6000000.00")),
+        (jfc_id, "C90001003", "CANDIDATE VICTORY JFC", "N", "J", Decimal("2174403.69")),
+        (party_id, "C90001004", "NATIONAL PARTY CTE", "Y", "U", Decimal("142102510.79")),
+    )
+    for committee_id, fec_id, name, committee_type, designation, _receipts in committees:
+        insert_committee_row(
+            db_conn,
+            CommitteeRowSeed(
+                id=committee_id,
+                fec_committee_id=fec_id,
+                name=name,
+                committee_type=committee_type,
+                committee_designation=designation,
+            ),
+        )
+
+    # Official weball total present with coverage-end mid-2026-cycle (2026-03-31):
+    # inside the [2025-01-01, 2026-12-31] window but not at the 2026-12-31 end,
+    # which the prior exact-match coverage check wrongly rejected.
+    insert_candidate_row(
+        db_conn,
+        CandidateRowSeed(
+            id=candidate_id,
+            fec_candidate_id="S6AK01999",
+            name=candidate_name,
+            office="S",
+            state="AK",
+            principal_committee_id=principal_id,
+            total_receipts=official_total,
+            total_disbursements=Decimal("1505699.66"),
+            cash_on_hand=Decimal("5000000.00"),
+            summary_coverage_end_date=date(2026, 3, 31),
+        ),
+    )
+
+    for index, (committee_id, _fec_id, _name, _committee_type, designation, receipts) in enumerate(committees):
+        insert_committee_summary_row(
+            db_conn,
+            CommitteeSummaryRowSeed(
+                committee_id=committee_id,
+                cycle=2026,
+                total_receipts=receipts,
+                total_disbursements=Decimal("0.00"),
+                coverage_start_date=date(2025, 1, 1),
+                coverage_end_date=date(2026, 12, 31),
+            ),
+        )
+        insert_candidate_committee_link_row(
+            db_conn,
+            CandidateCommitteeLinkSeed(
+                id=UUID(f"9a000000-0000-0000-0000-0000000001{index:02d}"),
+                candidate_id=candidate_id,
+                committee_id=committee_id,
+                valid_period="[2025-01-01,2027-01-01)",
+                designation=designation,
+                candidate_election_year=2026,
+                fec_election_year=2026,
+            ),
+        )
+
+    # All three owners must report the authoritative official total ($6,500,847.42),
+    # not the committee-sum ($6.0M principal alone, or the inflated party/JFC sum).
+    batch_summary = fetch_candidate_public_money_summaries(db_conn, [(candidate_id, candidate_name)])[candidate_id]
+    assert batch_summary["total_raised"] == official_total
+    assert batch_summary["summary_source"] == "fec_weball"
+
+    person_summary = fetch_candidate_public_money_summary(db_conn, candidate_id, candidate_name)
+    assert person_summary is not None
+    assert person_summary["total_raised"] == official_total
+    assert person_summary["summary_source"] == "fec_weball"
+
+    detail_summary = fetch_candidate_summary(db_conn, candidate_id, candidate_name)
+    assert detail_summary is not None
+    assert detail_summary["total_raised"] == official_total
+    assert detail_summary["summary_source"] == "fec_weball"
 
 
 def test_get_candidate_summary_ignores_official_weball_totals_for_non_selected_cycle(

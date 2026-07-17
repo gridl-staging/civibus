@@ -512,7 +512,7 @@
                     {#if linkedCommitteeBanner}
                       <p>{linkedCommitteeBanner}</p>
                     {:else}
-                      <div class="detail__table-scroll">
+                      <div class="detail__table-scroll" data-testid="person-linked-committees">
                         <table>
                           <thead>
                             <tr>

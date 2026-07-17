@@ -3,7 +3,8 @@ import { expect, test } from "playwright/test";
 import {
   capturePageLoadErrors,
   chartRegion,
-  expectNoBackendFailureStates
+  expectNoBackendFailureStates,
+  expectNoPartyCommitteeInLinkedCommittees
 } from "./smoke-helpers";
 
 const MIN_FINANCE_CHART_HEIGHT_PX = 250;
@@ -197,6 +198,13 @@ test.describe("production deployment smoke (read-only)", () => {
     await expect(page.getByRole("heading", { name: "Linked committees" })).toBeVisible({
       timeout: 20_000
     });
+
+    // Money-correctness guard on the flagship money-sorted #1 member: their own
+    // linked committees must not include a national party committee. Party
+    // receipts are not the member's money; counting them inflated this exact
+    // leaderboard ~23x. (Helper is a no-op when the table is absent.)
+    await expectNoPartyCommitteeInLinkedCommittees(page);
+
     const linkedCommitteeHref = await page
       .getByRole("main")
       .getByRole("link")

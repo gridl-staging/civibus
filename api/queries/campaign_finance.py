@@ -149,12 +149,50 @@ CAMPAIGN_FINANCE_CANDIDATE_DETAIL_SQL = f"""
     WHERE c.id = %s
 """
 
-CANDIDATE_LINKED_COMMITTEE_IDS_SQL = """
-    SELECT DISTINCT committee_id
-    FROM cf.candidate_committee_link
-    WHERE candidate_id = %s
-      AND valid_period && daterange(%s, %s, '[]')
-    ORDER BY committee_id ASC
+# A candidate's own campaign money is only what their principal ('P') and
+# authorized ('A') committees raise. This filter excludes the two committee
+# classes that were being wrongly summed into candidate totals: party
+# committees (FEC committee_type X/Y/Z -- NRSC/DSCC/NRCC/DCCC) and joint
+# fundraising committees (committee_designation 'J', whose receipts are split
+# and transferred out to participant committees). Summing a party committee
+# inflated the /congress money leaderboard's #1 entry ~23x (a senator shown at
+# ~$150M against a real ~$6.5M). ``IS DISTINCT FROM`` keeps rows whose
+# type/designation is NULL/unknown, so a legitimate principal/authorized
+# committee (committee_type H/S/P, designation P/A) is never dropped. Applied by
+# all three candidate-money owners below via a ``cm`` alias on ``cf.committee``.
+#
+# This filter guards the committee-sum FALLBACK, which now fires only when a
+# candidate has no official FEC weball total covering the selected cycle. The
+# primary path uses the authoritative candidate total (see
+# _official_candidate_totals_cover_selected_cycle), which never includes
+# party/JFC/leadership money -- so for the ~553/557 officeholders with an
+# official total this filter does not even run.
+#
+# SSOT note -- read before "simplifying" this to match fec_lookup.py: the
+# acquisition side (domains/campaign_finance/ingest/fec_lookup.py,
+# current_federal_officeholder_committee_fec_ids) uses a stricter allowlist,
+# link designation IN ('P','A'). We deliberately do NOT mirror that allowlist in
+# the fallback. Verified against live prod (2026-07-17): some candidates' only
+# committee link is non-P/A, so a strict allowlist would zero them in the
+# fallback; a denylist scoped to the two confirmed-wrong classes fixes the bug
+# without that regression. Leadership-PAC (designation 'D') / unauthorized
+# committees summed here therefore affect only candidates lacking an official
+# total -- a residual tracked in ROADMAP.md, not the common case.
+_AUTHORIZED_CANDIDATE_COMMITTEE_FILTER = (
+    "cm.committee_type IS DISTINCT FROM 'X'\n"
+    "      AND cm.committee_type IS DISTINCT FROM 'Y'\n"
+    "      AND cm.committee_type IS DISTINCT FROM 'Z'\n"
+    "      AND cm.committee_designation IS DISTINCT FROM 'J'"
+)
+
+CANDIDATE_LINKED_COMMITTEE_IDS_SQL = f"""
+    SELECT DISTINCT link.committee_id
+    FROM cf.candidate_committee_link link
+    JOIN cf.committee cm ON cm.id = link.committee_id
+    WHERE link.candidate_id = %s
+      AND link.valid_period && daterange(%s, %s, '[]')
+      AND {_AUTHORIZED_CANDIDATE_COMMITTEE_FILTER}
+    ORDER BY link.committee_id ASC
 """
 
 # Stage 5: FEC per-cycle official totals for a single committee. Cycles outside the
@@ -2571,9 +2609,26 @@ def _official_candidate_totals_cover_selected_cycle(
     official_row: dict[str, Any],
     selected_cycle: SelectedCycle,
 ) -> bool:
+    # A candidate's official FEC weball total (cf.candidate.total_receipts) is the
+    # authoritative "raised this cycle" figure and, unlike the committee-sum
+    # fallback, never includes party/JFC/leadership money. Use it whenever it is
+    # populated AND its coverage-end falls inside the selected cycle's window.
+    #
+    # This deliberately REPLACES a prior exact-match check
+    # (summary_coverage_end_date == selected_cycle.coverage_end_date). That match
+    # is only ever true for a COMPLETED cycle, so for an open cycle (e.g. 2026, end
+    # 2026-12-31) it discarded every candidate's real FEC total and forced the
+    # committee-sum fallback -- which over-counted party/JFC committees and put a
+    # senator at $150M for a real $6.5M. A within-window check accepts the
+    # cycle-to-date weball total (coverage-end 2026-03-31 is a valid 2026 figure)
+    # while still rejecting a *different* cycle's total: a 2026-dated total is
+    # outside the 2024 window, so it is not labeled as 2024's -- the invariant
+    # pinned by test_get_candidate_summary_ignores_official_weball_totals_for_non_selected_cycle.
+    coverage_end = official_row["summary_coverage_end_date"]
     return (
         _has_official_candidate_totals(official_row)
-        and official_row["summary_coverage_end_date"] == selected_cycle.coverage_end_date
+        and coverage_end is not None
+        and selected_cycle.coverage_start_date <= coverage_end <= selected_cycle.coverage_end_date
     )
 
 
@@ -2699,12 +2754,14 @@ def fetch_candidate_official_summary(
     )
 
 
-_CANDIDATE_COMMITTEE_SUMMARY_TOTALS_SQL = """
+_CANDIDATE_COMMITTEE_SUMMARY_TOTALS_SQL = f"""
     WITH linked_committees AS (
-        SELECT DISTINCT committee_id
-        FROM cf.candidate_committee_link
-        WHERE candidate_id = %s
-          AND valid_period && daterange(%s, %s, '[]')
+        SELECT DISTINCT ccl.committee_id
+        FROM cf.candidate_committee_link ccl
+        JOIN cf.committee cm ON cm.id = ccl.committee_id
+        WHERE ccl.candidate_id = %s
+          AND ccl.valid_period && daterange(%s, %s, '[]')
+          AND {_AUTHORIZED_CANDIDATE_COMMITTEE_FILTER}
     ),
     supported_cycle_rows AS (
         SELECT
@@ -2738,7 +2795,7 @@ _CANDIDATE_COMMITTEE_SUMMARY_TOTALS_SQL = """
     FROM supported_cycle_rows
 """
 
-_CANDIDATE_PUBLIC_MONEY_SUMMARIES_SQL = """
+_CANDIDATE_PUBLIC_MONEY_SUMMARIES_SQL = f"""
     WITH requested_candidates AS (
         SELECT *
         FROM unnest(%s::uuid[], %s::text[]) AS requested(candidate_id, candidate_name)
@@ -2750,7 +2807,10 @@ _CANDIDATE_PUBLIC_MONEY_SUMMARIES_SQL = """
         FROM cf.candidate_committee_link link
         JOIN requested_candidates requested
           ON requested.candidate_id = link.candidate_id
+        JOIN cf.committee cm
+          ON cm.id = link.committee_id
         WHERE link.valid_period && daterange(%s, %s, '[]')
+          AND {_AUTHORIZED_CANDIDATE_COMMITTEE_FILTER}
     ),
     supported_cycle_rows AS (
         SELECT
