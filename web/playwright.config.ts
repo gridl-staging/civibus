@@ -26,6 +26,18 @@ export default defineConfig({
   testDir: './tests/smoke',
   timeout: 30_000,
   fullyParallel: true,
+  // Production smoke runs read-only against ONE small live Fly instance. Running
+  // it fully parallel makes the gate a load test against itself: a burst of
+  // concurrent page loads (the committee page alone takes ~6.5s) drives heavy
+  // surfaces past their 20s budget, so tests fail for contention the deploy did
+  // not cause — and retries fail too, because the concurrent partner sustains the
+  // load across every attempt. Serialize production mode so it exercises prod like
+  // a human. retries here absorb only the rare single-request transient of a live
+  // service; the deterministic test/data mismatches this gate used to hide were
+  // fixed in the specs, not papered over here. Local fixture mode is unaffected
+  // (undefined workers = full parallelism against the throwaway fixture backend).
+  workers: isProductionSmokeMode ? 1 : undefined,
+  retries: isProductionSmokeMode ? 2 : 0,
   projects: [
     {
       name: "chromium",

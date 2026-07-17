@@ -1,26 +1,38 @@
 import { expect, test } from "playwright/test";
 
-import { capturePageLoadErrors, chartRegion } from "./smoke-helpers";
+import {
+  capturePageLoadErrors,
+  chartRegion,
+  expectNoBackendFailureStates
+} from "./smoke-helpers";
 
 const MIN_FINANCE_CHART_HEIGHT_PX = 250;
-const PERSON_FINANCE_CHART_LABEL = "Receipt source composition by dollars";
-const CONTRIBUTION_INSIGHTS_CHART_LABELS = [
+// Every finance chart on the person page. These are data-dependent: the
+// receipt-source-composition chart shows a truthful "components not loaded yet"
+// state for members whose committee-summary breakdown is not loaded (true for
+// every member on prod today), and the itemized insight charts are empty for a
+// member with no itemized rows. /congress is now money-sorted (LB4), so row 0 is
+// an arbitrary top fundraiser whose data shape we cannot assume.
+const FINANCE_CHART_LABELS = [
+  "Receipt source composition by dollars",
   "Monthly contribution columns",
   "Itemized contribution-size buckets bar chart",
   "Geography dollar share by contributor location"
 ] as const;
 
-async function expectFinanceChartHasStableHeight(page: any): Promise<void> {
-  const region = await chartRegion(page, PERSON_FINANCE_CHART_LABEL);
-  await expect(region).toBeVisible({ timeout: 20_000 });
-  const chartBox = await region.boundingBox();
-  expect(chartBox?.height ?? 0).toBeGreaterThanOrEqual(MIN_FINANCE_CHART_HEIGHT_PX);
-}
-
-async function expectContributionInsightsChartsHaveStableHeight(page: any): Promise<void> {
-  for (const chartLabel of CONTRIBUTION_INSIGHTS_CHART_LABELS) {
+// Guard that IF a finance chart renders it is not collapsed -- without demanding
+// that any specific chart render, because chart presence depends on live data
+// (see FINANCE_CHART_LABELS). Deep chart honesty (paints, bounded ticks, no
+// overflow) is owned by production_finance_visuals.spec.ts on a pinned person
+// known to have itemized data; this deploy smoke only proves the click-through
+// reaches a working finance panel. Pair every call with
+// expectNoBackendFailureStates so an outage can never masquerade as "no data".
+async function expectRenderedFinanceChartsNotCollapsed(page: any): Promise<void> {
+  for (const chartLabel of FINANCE_CHART_LABELS) {
     const region = await chartRegion(page, chartLabel);
-    await expect(region).toBeVisible({ timeout: 20_000 });
+    if ((await region.count()) === 0 || !(await region.isVisible())) {
+      continue;
+    }
     const chartBox = await region.boundingBox();
     expect(chartBox?.height ?? 0).toBeGreaterThanOrEqual(MIN_FINANCE_CHART_HEIGHT_PX);
   }
@@ -33,7 +45,12 @@ async function expectContributionInsightsChartsHaveStableHeight(page: any): Prom
 // rather than pinned to a named politician who may leave office.
 const isProductionSmokeMode = (process.env.SMOKE_MODE ?? "local") === "production";
 const PERSON_CAMPAIGN_FINANCE_HEADING = "Campaign finance";
-const PERSON_OUTSIDE_SPENDING_HEADING = "Outside Spending";
+// Must match the component's exact rendered text. DetailPage.svelte renders
+// <h4 id="person-outside-spending">Outside spending</h4> (sentence case) and has
+// since the module was built; the prior title-case "Outside Spending" here never
+// matched with exact:true and only ever "passed" because earlier steps failed
+// first.
+const PERSON_OUTSIDE_SPENDING_HEADING = "Outside spending";
 const CONGRESS_MEMBER_PROFILE_LINK_TEST_ID = "congress-member-profile-link";
 
 function memberProfileLink(row: any): any {
@@ -79,16 +96,17 @@ test.describe("production deployment smoke (read-only)", () => {
     await expect(
       page.getByRole("heading", { name: PERSON_CAMPAIGN_FINANCE_HEADING })
     ).toBeVisible();
-    await expectFinanceChartHasStableHeight(page);
     await expect(page.getByRole("heading", { name: "Fundraising detail" })).toBeVisible({
       timeout: 20_000
     });
-    await expectContributionInsightsChartsHaveStableHeight(page);
-    // exact: true matters — while the streamed finance section loads, its
-    // SkeletonPanel renders a transient <h3>Outside spending</h3> that a
-    // case-insensitive locator also matches (strict-mode violation). The
-    // stable post-load heading is the panel's <h4>Outside Spending</h4>.
-    // The generous timeout covers cold-cache streamed SSR on the live DB.
+    // Settle the streamed money panels, then prove the finance panel is not
+    // silently in a backend-failure state before checking chart honesty.
+    await expectNoBackendFailureStates(page);
+    await expectRenderedFinanceChartsNotCollapsed(page);
+    // The panel settled above (expectNoBackendFailureStates waits out the
+    // SkeletonPanel), so only the stable <h4>Outside spending</h4> remains;
+    // exact:true pins it to that heading and not the "Outside spending details"
+    // CTA link. The generous timeout covers cold-cache streamed SSR on the live DB.
     await expect(
       page.getByRole("heading", { name: PERSON_OUTSIDE_SPENDING_HEADING, exact: true })
     ).toBeVisible({ timeout: 20_000 });
@@ -107,11 +125,11 @@ test.describe("production deployment smoke (read-only)", () => {
     await expect(
       page.getByRole("heading", { name: PERSON_CAMPAIGN_FINANCE_HEADING })
     ).toBeVisible({ timeout: 20_000 });
-    await expectFinanceChartHasStableHeight(page);
     await expect(page.getByRole("heading", { name: "Fundraising detail" })).toBeVisible({
       timeout: 20_000
     });
-    await expectContributionInsightsChartsHaveStableHeight(page);
+    await expectNoBackendFailureStates(page);
+    await expectRenderedFinanceChartsNotCollapsed(page);
     await expect(page.getByRole("heading", { name: "Graph relationships" })).toHaveCount(0);
     await expect(page.getByRole("heading", { name: "Entity-resolution matches" })).toHaveCount(0);
     await expect(page.getByRole("heading", { name: "Officeholding timeline" })).toHaveCount(0);
@@ -170,6 +188,12 @@ test.describe("production deployment smoke (read-only)", () => {
       page.getByRole("heading", { name: PERSON_CAMPAIGN_FINANCE_HEADING })
     ).toBeVisible({ timeout: 20_000 });
 
+    // Settle the streamed finance panel first. Mid-hydration the section can
+    // briefly hold a transient duplicate "Linked committees" heading (SSR +
+    // streamed re-render), which makes the strict-mode locator below resolve to
+    // two elements under parallel load. Waiting for the panel to settle collapses
+    // it to the single stable heading.
+    await expectNoBackendFailureStates(page);
     await expect(page.getByRole("heading", { name: "Linked committees" })).toBeVisible({
       timeout: 20_000
     });
