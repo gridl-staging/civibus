@@ -1,0 +1,10 @@
+# FROZEN baseline — never append; new migrations are APPLIED by the runner, not baselined.
+2026_04_30_person_bio_fields.sql
+2026_07_07_committee_summary.sql
+2026_07_07_transaction_entity_type.sql
+2026_07_07_zcta_district.sql
+2026_07_09_donor_search_index.sql
+2026_07_09_stage4_resume_checkpoint.sql
+2026_07_12_committee_summary_derived_aggregates.sql
+2026_07_12_person_money_query_indexes.sql
+2026_07_14_zcta_district_boundary_year.sql

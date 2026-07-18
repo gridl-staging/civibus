@@ -1,6 +1,7 @@
 """RED tests for FecClient — FEC Schedule A API client."""
 
 import json
+from decimal import Decimal
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -56,6 +57,14 @@ def _make_ok_response(data: dict) -> MagicMock:
 _EMPTY_PAGE = {"api_version": "1.0", "pagination": {"last_indexes": None, "per_page": 10}, "results": []}
 
 
+def _candidate_totals_envelope(results: list[dict]) -> dict:
+    return {
+        "api_version": "1.0",
+        "pagination": {"count": len(results), "page": 1, "pages": 1, "per_page": 20},
+        "results": results,
+    }
+
+
 class TestFetchContributionsSinglePage:
     def test_returns_results_list(self):
         fixture = _load_fixture()
@@ -95,6 +104,83 @@ class TestFetchContributionsSinglePage:
         assert params["sort"] == "-contribution_receipt_date"
         assert params["contributor_state"] == "NC"
         assert params["two_year_transaction_period"] == 2024
+
+
+# ---------------------------------------------------------------------------
+# Candidate totals endpoint (/candidate/{candidate_id}/totals/)
+# ---------------------------------------------------------------------------
+
+
+class TestFetchCandidateTotals:
+    def test_calls_candidate_totals_endpoint_with_expected_params_and_returns_receipts(self):
+        envelope = _candidate_totals_envelope(
+            [
+                {
+                    "candidate_id": "S6AK00045",
+                    "cycle": 2026,
+                    "receipts": "6500847.42",
+                }
+            ]
+        )
+
+        with patch("httpx.Client") as MockClient:
+            mock_client_instance = MockClient.return_value.__enter__.return_value
+            mock_client_instance.get.return_value = _make_ok_response(envelope)
+
+            client = FecClient(api_key="test-key")
+            receipts = client.fetch_candidate_totals("S6AK00045", 2026)
+
+        call_args = mock_client_instance.get.call_args_list[0]
+        url = call_args[0][0] if call_args[0] else call_args[1].get("url")
+        params = call_args[1].get("params", call_args[0][1] if len(call_args[0]) > 1 else {})
+
+        assert url == "https://api.open.fec.gov/v1/candidate/S6AK00045/totals/"
+        assert params == {"api_key": "test-key", "cycle": 2026}
+        assert receipts == Decimal("6500847.42")
+
+    def test_empty_candidate_totals_results_raise_fec_api_error(self):
+        with patch("httpx.Client") as MockClient:
+            mock_client_instance = MockClient.return_value.__enter__.return_value
+            mock_client_instance.get.return_value = _make_ok_response(_candidate_totals_envelope([]))
+
+            client = FecClient(api_key="test-key")
+            with pytest.raises(FecApiError, match="(?i)receipts"):
+                client.fetch_candidate_totals("S6AK00045", 2026)
+
+    @pytest.mark.parametrize(
+        "candidate_id",
+        [
+            "../election-dates",
+            "S6AK00045?api_key=attacker",
+            "https://example.com",
+        ],
+    )
+    def test_candidate_totals_rejects_path_or_query_payloads_before_http(self, candidate_id):
+        with patch("httpx.Client") as MockClient:
+            client = FecClient(api_key="test-key")
+            with pytest.raises(FecApiError, match="(?i)candidate.id"):
+                client.fetch_candidate_totals(candidate_id, 2026)
+
+        MockClient.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "row",
+        [
+            {"candidate_id": "S6AK00045", "cycle": 2026},
+            {"candidate_id": "S6AK00045", "cycle": 2026, "receipts": None},
+            {"candidate_id": "S6AK00045", "cycle": 2026, "receipts": "not-a-number"},
+            {"candidate_id": "S6AK00045", "cycle": 2026, "receipts": "NaN"},
+            {"candidate_id": "S6AK00045", "cycle": 2026, "receipts": "Infinity"},
+        ],
+    )
+    def test_missing_or_non_numeric_candidate_total_receipts_raise_fec_api_error(self, row):
+        with patch("httpx.Client") as MockClient:
+            mock_client_instance = MockClient.return_value.__enter__.return_value
+            mock_client_instance.get.return_value = _make_ok_response(_candidate_totals_envelope([row]))
+
+            client = FecClient(api_key="test-key")
+            with pytest.raises(FecApiError, match="(?i)receipts"):
+                client.fetch_candidate_totals("S6AK00045", 2026)
 
 
 # ---------------------------------------------------------------------------

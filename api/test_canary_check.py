@@ -15,6 +15,7 @@ so the canary's flow can be exercised without a live Postgres.
 from __future__ import annotations
 
 import importlib
+import logging
 import sys
 from types import ModuleType
 from unittest.mock import MagicMock
@@ -27,6 +28,58 @@ from api._federal_first_test_support import (
     FakeConnection,
     set_federal_floor_env,
 )
+
+
+REQUIRED_SCHEMA_COLUMNS = (
+    ("civic", "zcta_district", "boundary_year"),
+    ("cf", "candidate", "candidate_contrib"),
+    ("cf", "candidate", "candidate_loans"),
+    ("cf", "candidate", "candidate_loan_repay"),
+)
+
+
+class FakeCanaryCursor:
+    def __init__(self, present_columns: set[tuple[str, str, str]]) -> None:
+        self.present_columns = present_columns
+        self.executed: list[tuple[object, object]] = []
+        self._rows: list[tuple[str, str, str]] = []
+
+    def __enter__(self) -> "FakeCanaryCursor":
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        return None
+
+    def execute(self, query: object, params: object = None) -> None:
+        self.executed.append((query, params))
+        required_columns = {(params[index], params[index + 1], params[index + 2]) for index in range(0, len(params), 3)}
+        self._rows = sorted(required_columns - self.present_columns)
+
+    def fetchall(self) -> list[tuple[str, str, str]]:
+        return self._rows
+
+
+class FakeCanaryConnection:
+    def __init__(self, present_columns: set[tuple[str, str, str]]) -> None:
+        self.cursor_instance = FakeCanaryCursor(present_columns)
+        self.closed = False
+        self.close_count = 0
+
+    def cursor(self) -> FakeCanaryCursor:
+        return self.cursor_instance
+
+    def close(self) -> None:
+        self.close_count += 1
+        self.closed = True
+
+
+class RecordingLogHandler(logging.Handler):
+    def __init__(self) -> None:
+        super().__init__(level=logging.ERROR)
+        self.messages: list[str] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.messages.append(record.getMessage())
 
 
 def _fresh_canary_module() -> ModuleType:
@@ -51,13 +104,15 @@ def test_canary_exits_zero_when_health_passes(monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.delenv("CIVIBUS_STARTUP_CANARY", raising=False)
     canary = _fresh_canary_module()
 
-    fake_connection = MagicMock()
-    fake_connection.close = MagicMock()
+    fake_connection = FakeCanaryConnection(set(REQUIRED_SCHEMA_COLUMNS))
+    evaluate_content_health = MagicMock(return_value=[])
     monkeypatch.setattr(canary, "get_connection", lambda: fake_connection)
-    monkeypatch.setattr(canary, "evaluate_content_health", lambda *a, **k: [])
+    monkeypatch.setattr(canary, "evaluate_content_health", evaluate_content_health)
 
     assert canary.main() == 0
-    fake_connection.close.assert_called_once()
+    evaluate_content_health.assert_called_once()
+    assert evaluate_content_health.call_args.args[0] is fake_connection
+    assert fake_connection.close_count == 1
 
 
 def test_canary_exits_one_when_health_fails(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -65,8 +120,7 @@ def test_canary_exits_one_when_health_fails(monkeypatch: pytest.MonkeyPatch) -> 
     canary = _fresh_canary_module()
     from api.health_content import ContentHealthFailure
 
-    fake_connection = MagicMock()
-    fake_connection.close = MagicMock()
+    fake_connection = FakeCanaryConnection(set(REQUIRED_SCHEMA_COLUMNS))
     monkeypatch.setattr(canary, "get_connection", lambda: fake_connection)
     monkeypatch.setattr(
         canary,
@@ -77,7 +131,40 @@ def test_canary_exits_one_when_health_fails(monkeypatch: pytest.MonkeyPatch) -> 
     assert canary.main() == 1
     # Even on failure the connection must close, otherwise repeated boot
     # attempts leak DB connections.
-    fake_connection.close.assert_called_once()
+    assert fake_connection.closed is True
+
+
+@pytest.mark.parametrize("missing_column", REQUIRED_SCHEMA_COLUMNS)
+def test_canary_exits_one_when_required_schema_column_is_missing(
+    monkeypatch: pytest.MonkeyPatch,
+    missing_column: tuple[str, str, str],
+) -> None:
+    monkeypatch.delenv("CIVIBUS_STARTUP_CANARY", raising=False)
+    canary = _fresh_canary_module()
+    present_columns = set(REQUIRED_SCHEMA_COLUMNS) - {missing_column}
+    fake_connection = FakeCanaryConnection(present_columns)
+    evaluate_content_health = MagicMock(return_value=[])
+    monkeypatch.setattr(canary, "get_connection", lambda: fake_connection)
+    monkeypatch.setattr(canary, "evaluate_content_health", evaluate_content_health)
+    log_handler = RecordingLogHandler()
+    logger = logging.getLogger("civibus.api.canary")
+    logger.addHandler(log_handler)
+    try:
+        assert canary.main() == 1
+    finally:
+        logger.removeHandler(log_handler)
+
+    executed = fake_connection.cursor_instance.executed
+    assert len(executed) == 1
+    query, params = executed[0]
+    assert "information_schema.columns" in str(query)
+    assert {(params[index], params[index + 1], params[index + 2]) for index in range(0, len(params), 3)} == set(
+        REQUIRED_SCHEMA_COLUMNS
+    )
+    schema, table, column = missing_column
+    assert f"schema_column:{schema}.{table}.{column}" in "\n".join(log_handler.messages)
+    evaluate_content_health.assert_not_called()
+    assert fake_connection.close_count == 1
 
 
 def test_canary_exits_zero_with_federal_first_floors(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -120,7 +207,11 @@ def test_canary_exits_one_when_db_unreachable_past_deadline(monkeypatch: pytest.
         raise RuntimeError("simulated db outage")
 
     monkeypatch.setattr(canary, "get_connection", _boom)
-    # evaluate_content_health must not be reached because get_connection raises.
-    monkeypatch.setattr(canary, "evaluate_content_health", lambda *a, **k: [])
+    missing_required_schema_checks = MagicMock(return_value=[])
+    evaluate_content_health = MagicMock(return_value=[])
+    monkeypatch.setattr(canary, "_missing_required_schema_checks", missing_required_schema_checks)
+    monkeypatch.setattr(canary, "evaluate_content_health", evaluate_content_health)
 
     assert canary.main() == 1
+    missing_required_schema_checks.assert_not_called()
+    evaluate_content_health.assert_not_called()

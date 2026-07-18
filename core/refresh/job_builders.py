@@ -1002,14 +1002,21 @@ _COMMITTEE_SUMMARY_DERIVED_AGGREGATE_SQL = """
             MAKE_DATE(cs.cycle, 12, 31) AS cycle_end_date
         FROM cf.committee_summary cs
         WHERE cs.cycle = ANY(%s)
+          AND (%s::uuid[] IS NULL OR cs.committee_id = ANY(%s::uuid[]))
     ),
-    eligible_transactions AS (
+    target_committees AS (
+        SELECT DISTINCT committee_id
+        FROM target_summaries
+    ),
+    eligible_transactions AS MATERIALIZED (
         SELECT
             ts.committee_id,
             ts.cycle,
             t.id,
             t.transaction_type,
             t.amount,
+            t.contributor_name_raw,
+            t.memo_text,
             sr.pull_date,
             ds.jurisdiction
         FROM target_summaries ts
@@ -1025,6 +1032,219 @@ _COMMITTEE_SUMMARY_DERIVED_AGGREGATE_SQL = """
           ON ds.id = sr.data_source_id
         WHERE t.source_record_id IS NULL
            OR sr.superseded_by IS NULL
+    ),
+    filing_eligible_transactions AS MATERIALIZED (
+        SELECT
+            tc.committee_id,
+            t.id,
+            t.filing_id,
+            t.transaction_type,
+            t.amount
+        FROM target_committees tc
+        JOIN cf.transaction t
+          ON t.committee_id = tc.committee_id
+         AND t.is_memo = FALSE
+         AND t.amendment_indicator != 'T'
+        LEFT JOIN core.source_record sr
+          ON sr.id = t.source_record_id
+        WHERE t.source_record_id IS NULL
+           OR sr.superseded_by IS NULL
+    ),
+    filing_totals AS (
+        SELECT
+            f.committee_id,
+            f.id AS filing_id,
+            f.filing_fec_id,
+            f.filing_name,
+            f.report_type,
+            f.amendment_indicator,
+            f.coverage_start_date,
+            f.coverage_end_date,
+            f.receipt_date,
+            COALESCE(SUM(ft.amount) FILTER (WHERE ft.transaction_type LIKE '1%%'), 0) AS total_raised,
+            COALESCE(SUM(ft.amount) FILTER (WHERE ft.transaction_type LIKE '2%%'), 0) AS total_spent,
+            COALESCE(SUM(ft.amount) FILTER (WHERE ft.transaction_type LIKE '1%%'), 0)
+              - COALESCE(SUM(ft.amount) FILTER (WHERE ft.transaction_type LIKE '2%%'), 0) AS net,
+            COUNT(ft.id)::integer AS transaction_count
+        FROM target_committees tc
+        JOIN cf.filing f
+          ON f.committee_id = tc.committee_id
+        LEFT JOIN filing_eligible_transactions ft
+          ON ft.filing_id = f.id
+        GROUP BY
+            f.committee_id,
+            f.id,
+            f.filing_fec_id,
+            f.filing_name,
+            f.report_type,
+            f.amendment_indicator,
+            f.coverage_start_date,
+            f.coverage_end_date,
+            f.receipt_date
+    ),
+    filing_cash_on_hand AS (
+        SELECT
+            ft.*,
+            SUM(ft.net) OVER (
+                PARTITION BY ft.committee_id
+                ORDER BY
+                    ft.coverage_end_date ASC NULLS LAST,
+                    ft.receipt_date ASC NULLS LAST,
+                    ft.filing_id ASC
+                ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+            ) AS cash_on_hand
+        FROM filing_totals ft
+    ),
+    filing_breakdowns AS (
+        SELECT
+            committee_id,
+            JSONB_AGG(
+                JSONB_BUILD_OBJECT(
+                    'filing_id', filing_id::text,
+                    'filing_fec_id', filing_fec_id,
+                    'filing_name', filing_name,
+                    'report_type', report_type,
+                    'amendment_indicator', amendment_indicator,
+                    'coverage_start_date', coverage_start_date,
+                    'coverage_end_date', coverage_end_date,
+                    'receipt_date', receipt_date,
+                    'total_raised', TO_CHAR(total_raised, 'FM999999999999990.00'),
+                    'total_spent', TO_CHAR(total_spent, 'FM999999999999990.00'),
+                    'net', TO_CHAR(net, 'FM999999999999990.00'),
+                    'transaction_count', transaction_count,
+                    'cash_on_hand', TO_CHAR(cash_on_hand, 'FM999999999999990.00'),
+                    'row_id', filing_id::text || ':' || amendment_indicator
+                )
+                ORDER BY coverage_end_date DESC NULLS LAST, receipt_date DESC NULLS LAST, filing_id ASC
+            ) AS filing_breakdown
+        FROM filing_cash_on_hand
+        GROUP BY committee_id
+    ),
+    donor_groups AS (
+        SELECT
+            committee_id,
+            cycle,
+            BTRIM(contributor_name_raw) AS name,
+            SUM(amount) AS total_amount,
+            COUNT(id)::integer AS transaction_count
+        FROM eligible_transactions
+        WHERE transaction_type LIKE '1%%'
+          AND contributor_name_raw IS NOT NULL
+          AND BTRIM(contributor_name_raw) != ''
+        GROUP BY committee_id, cycle, BTRIM(contributor_name_raw)
+    ),
+    ranked_donors AS (
+        SELECT
+            committee_id,
+            cycle,
+            name,
+            total_amount,
+            transaction_count,
+            ROW_NUMBER() OVER (
+                PARTITION BY committee_id, cycle
+                ORDER BY total_amount DESC, transaction_count DESC, name ASC
+            ) AS top_rank
+        FROM donor_groups
+    ),
+    top_donors AS (
+        SELECT
+            committee_id,
+            cycle,
+            JSONB_AGG(
+                JSONB_BUILD_OBJECT(
+                    'name', name,
+                    'total_amount', total_amount::text,
+                    'transaction_count', transaction_count
+                )
+                ORDER BY total_amount DESC, transaction_count DESC, name ASC
+            ) AS top_donors
+        FROM ranked_donors
+        WHERE top_rank <= 5
+        GROUP BY committee_id, cycle
+    ),
+    vendor_groups AS (
+        SELECT
+            committee_id,
+            cycle,
+            BTRIM(contributor_name_raw) AS name,
+            SUM(amount) AS total_amount,
+            COUNT(id)::integer AS transaction_count
+        FROM eligible_transactions
+        WHERE transaction_type LIKE '2%%'
+          AND contributor_name_raw IS NOT NULL
+          AND BTRIM(contributor_name_raw) != ''
+        GROUP BY committee_id, cycle, BTRIM(contributor_name_raw)
+    ),
+    ranked_vendors AS (
+        SELECT
+            committee_id,
+            cycle,
+            name,
+            total_amount,
+            transaction_count,
+            ROW_NUMBER() OVER (
+                PARTITION BY committee_id, cycle
+                ORDER BY total_amount DESC, transaction_count DESC, name ASC
+            ) AS top_rank
+        FROM vendor_groups
+    ),
+    top_vendors AS (
+        SELECT
+            committee_id,
+            cycle,
+            JSONB_AGG(
+                JSONB_BUILD_OBJECT(
+                    'name', name,
+                    'total_amount', total_amount::text,
+                    'transaction_count', transaction_count
+                )
+                ORDER BY total_amount DESC, transaction_count DESC, name ASC
+            ) AS top_vendors
+        FROM ranked_vendors
+        WHERE top_rank <= 5
+        GROUP BY committee_id, cycle
+    ),
+    spend_category_groups AS (
+        SELECT
+            committee_id,
+            cycle,
+            LOWER(BTRIM(memo_text)) AS category,
+            SUM(amount) AS total_amount,
+            COUNT(id)::integer AS transaction_count
+        FROM eligible_transactions
+        WHERE transaction_type LIKE '2%%'
+          AND memo_text IS NOT NULL
+          AND BTRIM(memo_text) != ''
+        GROUP BY committee_id, cycle, LOWER(BTRIM(memo_text))
+    ),
+    ranked_spend_categories AS (
+        SELECT
+            committee_id,
+            cycle,
+            category,
+            total_amount,
+            transaction_count,
+            ROW_NUMBER() OVER (
+                PARTITION BY committee_id, cycle
+                ORDER BY total_amount DESC, transaction_count DESC, category ASC
+            ) AS top_rank
+        FROM spend_category_groups
+    ),
+    top_spend_categories AS (
+        SELECT
+            committee_id,
+            cycle,
+            JSONB_AGG(
+                JSONB_BUILD_OBJECT(
+                    'category', category,
+                    'total_amount', total_amount::text,
+                    'transaction_count', transaction_count
+                )
+                ORDER BY total_amount DESC, transaction_count DESC, category ASC
+            ) AS spend_categories
+        FROM ranked_spend_categories
+        WHERE top_rank <= 5
+        GROUP BY committee_id, cycle
     ),
     aggregates AS (
         SELECT
@@ -1075,11 +1295,26 @@ _COMMITTEE_SUMMARY_DERIVED_AGGREGATE_SQL = """
             COALESCE(a.loan_receipts_total, 0) AS loan_receipts_total,
             COALESCE(a.contribution_receipts_total, 0) AS contribution_receipts_total,
             a.jurisdiction,
-            a.data_through
+            a.data_through,
+            COALESCE(td.top_donors, '[]'::jsonb) AS top_donors,
+            COALESCE(tv.top_vendors, '[]'::jsonb) AS top_vendors,
+            COALESCE(tsc.spend_categories, '[]'::jsonb) AS spend_categories,
+            COALESCE(fb.filing_breakdown, '[]'::jsonb) AS filing_breakdown
         FROM target_summaries ts
         LEFT JOIN aggregates a
           ON a.committee_id = ts.committee_id
          AND a.cycle = ts.cycle
+        LEFT JOIN top_donors td
+          ON td.committee_id = ts.committee_id
+         AND td.cycle = ts.cycle
+        LEFT JOIN top_vendors tv
+          ON tv.committee_id = ts.committee_id
+         AND tv.cycle = ts.cycle
+        LEFT JOIN top_spend_categories tsc
+          ON tsc.committee_id = ts.committee_id
+         AND tsc.cycle = ts.cycle
+        LEFT JOIN filing_breakdowns fb
+          ON fb.committee_id = ts.committee_id
     )
     UPDATE cf.committee_summary cs
     SET derived_total_raised = au.total_raised,
@@ -1091,16 +1326,29 @@ _COMMITTEE_SUMMARY_DERIVED_AGGREGATE_SQL = """
         derived_loan_receipts_total = au.loan_receipts_total,
         derived_contribution_receipts_total = au.contribution_receipts_total,
         derived_jurisdiction = au.jurisdiction,
-        derived_data_through = au.data_through
+        derived_data_through = au.data_through,
+        derived_top_donors = au.top_donors,
+        derived_top_vendors = au.top_vendors,
+        derived_spend_categories = au.spend_categories,
+        derived_filing_breakdown = au.filing_breakdown
     FROM aggregate_updates au
     WHERE cs.committee_id = au.committee_id
       AND cs.cycle = au.cycle
 """
 
 
-def populate_committee_summary_derived_aggregates(connection: object, *, cycles: tuple[int, ...]) -> int:
+def populate_committee_summary_derived_aggregates(
+    connection: object,
+    *,
+    cycles: tuple[int, ...],
+    committee_ids: tuple[str, ...] | None = None,
+) -> int:
+    committee_id_list = None if committee_ids is None else list(committee_ids)
     with connection.cursor() as cursor:
-        cursor.execute(_COMMITTEE_SUMMARY_DERIVED_AGGREGATE_SQL, (list(cycles),))
+        cursor.execute(
+            _COMMITTEE_SUMMARY_DERIVED_AGGREGATE_SQL,
+            (list(cycles), committee_id_list, committee_id_list),
+        )
         return cursor.rowcount
 
 

@@ -3,11 +3,15 @@ Stub summary for MAR18_state_expansion_batch_2/civibus_dev/domains/campaign_fina
 """
 
 import os
+import re
+from decimal import Decimal, InvalidOperation
 
 import httpx
 
 FEC_BASE_URL = "https://api.open.fec.gov/v1/schedules/schedule_a/"
 FEC_ELECTION_DATES_URL = "https://api.open.fec.gov/v1/election-dates/"
+FEC_CANDIDATE_TOTALS_URL = "https://api.open.fec.gov/v1/candidate/{candidate_id}/totals/"
+FEC_CANDIDATE_ID_PATTERN = re.compile(r"^[HSP][0-9][A-Z0-9]{7}$")
 FEC_REQUEST_TIMEOUT_SECONDS = 10.0
 
 
@@ -129,6 +133,22 @@ class FecClient:
 
         return all_results
 
+    def fetch_candidate_totals(self, fec_candidate_id: str, cycle: int) -> Decimal:
+        """Return OpenFEC's authoritative candidate receipts scalar for one cycle."""
+        if not FEC_CANDIDATE_ID_PATTERN.fullmatch(fec_candidate_id):
+            raise FecApiError("FEC candidate ID must use the canonical 9-character format")
+        url = FEC_CANDIDATE_TOTALS_URL.format(candidate_id=fec_candidate_id)
+        params: dict[str, str | int] = {"api_key": self._api_key, "cycle": cycle}
+
+        with httpx.Client(timeout=FEC_REQUEST_TIMEOUT_SECONDS) as http:
+            data = self._fetch_page(http, url, params)
+
+        results = data["results"]
+        first_result = results[0] if results else None
+        if not isinstance(first_result, dict):
+            raise FecApiError("FEC API candidate totals response missing receipts")
+        return self._parse_candidate_total_receipts(first_result)
+
     def _fetch_page(
         self,
         http: httpx.Client,
@@ -198,6 +218,18 @@ class FecClient:
         if not isinstance(pages, int) or isinstance(pages, bool):
             raise FecApiError("FEC API pagination.pages must be an integer")
         return pages
+
+    def _parse_candidate_total_receipts(self, result: dict[str, object]) -> Decimal:
+        receipts = result.get("receipts")
+        if receipts is None:
+            raise FecApiError("FEC API candidate totals response missing receipts")
+        try:
+            parsed_receipts = Decimal(str(receipts))
+        except (InvalidOperation, ValueError):
+            raise FecApiError("FEC API candidate totals receipts must be numeric") from None
+        if not parsed_receipts.is_finite():
+            raise FecApiError("FEC API candidate totals receipts must be finite")
+        return parsed_receipts
 
     def _check_response(self, response: httpx.Response) -> None:
         """Raise FecApiError with a descriptive message on non-2xx responses."""

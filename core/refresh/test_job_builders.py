@@ -3,13 +3,28 @@
 from __future__ import annotations
 
 import inspect
-from datetime import datetime, timezone
+import json
+from datetime import date, datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 from unittest.mock import MagicMock
 from uuid import UUID
 
+import psycopg
 import pytest
 
+from api.test_campaign_finance_support import (
+    CommitteeRowSeed,
+    CommitteeSummaryRowSeed,
+    FilingRowSeed,
+    TransactionRowSeed,
+    insert_committee_row,
+    insert_committee_summary_row,
+    insert_data_source_for_test,
+    insert_filing_row,
+    insert_source_record_for_test,
+    insert_transaction_row,
+)
 from core.refresh import job_builders
 from core.refresh.job_builders import build_refresh_plan
 from core.refresh.runner import RefreshJob, RunnerParameters, build_argument_parser
@@ -429,6 +444,1192 @@ class TestRunnerFECDefaultOwnership:
 
     def test_argument_parser_default_fec_cycle_is_current_cycle(self) -> None:
         assert build_argument_parser().parse_args([]).fec_cycle == 2026
+
+
+def _refresh_test_uuid(sequence: int) -> UUID:
+    return UUID(f"91000000-0000-0000-0000-{sequence:012x}")
+
+
+def _summary_top_list_transaction(
+    sequence: int,
+    *,
+    filing_id: UUID,
+    committee_id: UUID,
+    transaction_type: str,
+    amount: str,
+    contributor_name_raw: str | None,
+    memo_text: str | None,
+    transaction_date: date = date(2026, 6, 1),
+    amendment_indicator: str = "N",
+    source_record_id: UUID | None = None,
+    is_memo: bool = False,
+) -> TransactionRowSeed:
+    return TransactionRowSeed(
+        id=_refresh_test_uuid(sequence),
+        filing_id=filing_id,
+        committee_id=committee_id,
+        transaction_type=transaction_type,
+        amount=Decimal(amount),
+        amendment_indicator=amendment_indicator,
+        source_record_id=source_record_id,
+        transaction_identifier=f"top-list-{sequence}",
+        transaction_date=transaction_date,
+        contributor_name_raw=contributor_name_raw,
+        memo_text=memo_text,
+        is_memo=is_memo,
+    )
+
+
+def _insert_summary_top_list_transactions(
+    db_conn: psycopg.Connection,
+    transactions: tuple[TransactionRowSeed, ...],
+) -> None:
+    for transaction in transactions:
+        insert_transaction_row(db_conn, transaction)
+
+
+def _seed_ranked_receipt_transactions(
+    db_conn: psycopg.Connection,
+    *,
+    filing_id: UUID,
+    committee_id: UUID,
+    active_source_id: UUID,
+) -> None:
+    rows = (
+        (10, "11", "200.00", "  Alpha Donor  "),
+        (11, "11", "200.00", "Alpha Donor"),
+        (12, "11", "400.00", "Beta Donor"),
+        (13, "11", "300.00", "Abel Donor"),
+        (14, "11", "300.00", "Zed Donor"),
+        (15, "11", "250.00", "Gamma Donor"),
+        (16, "11", "200.00", "Delta Donor"),
+        (17, "11", "100.00", "Epsilon Donor"),
+        (18, "11", "50.00", "   "),
+        (19, "11", "60.00", None),
+        (20, "16", "70.00", "Loan Donor"),
+        (21, "15Z", "80.00", "In Kind Donor"),
+    )
+    _insert_summary_top_list_transactions(
+        db_conn,
+        tuple(
+            _summary_top_list_transaction(
+                sequence,
+                filing_id=filing_id,
+                committee_id=committee_id,
+                transaction_type=transaction_type,
+                amount=amount,
+                contributor_name_raw=contributor_name_raw,
+                memo_text=None,
+                source_record_id=active_source_id if sequence == 10 else None,
+            )
+            for sequence, transaction_type, amount, contributor_name_raw in rows
+        ),
+    )
+
+
+def _seed_ranked_disbursement_transactions(
+    db_conn: psycopg.Connection,
+    *,
+    filing_id: UUID,
+    committee_id: UUID,
+) -> None:
+    rows = (
+        (30, "150.00", "  Acme LLC  ", " Digital Ads "),
+        (31, "150.00", "Acme LLC", "digital ads"),
+        (32, "300.00", "Beta Vendor", "MAIL"),
+        (33, "200.00", "Alpha Vendor", " events "),
+        (34, "200.00", "Zeta Vendor", "Travel"),
+        (35, "150.00", "Gamma Vendor", "printing"),
+        (36, "100.00", "Delta Vendor", "office"),
+        (37, "50.00", "Epsilon Vendor", "signage"),
+        (38, "25.00", "Blank Memo Vendor", "   "),
+        (39, "35.00", "Null Memo Vendor", None),
+    )
+    _insert_summary_top_list_transactions(
+        db_conn,
+        tuple(
+            _summary_top_list_transaction(
+                sequence,
+                filing_id=filing_id,
+                committee_id=committee_id,
+                transaction_type="21",
+                amount=amount,
+                contributor_name_raw=contributor_name_raw,
+                memo_text=memo_text,
+            )
+            for sequence, amount, contributor_name_raw, memo_text in rows
+        ),
+    )
+
+
+def _seed_excluded_summary_transactions(
+    db_conn: psycopg.Connection,
+    *,
+    filing_id: UUID,
+    committee_id: UUID,
+    superseded_source_id: UUID,
+) -> None:
+    _insert_summary_top_list_transactions(
+        db_conn,
+        (
+            _summary_top_list_transaction(
+                50,
+                filing_id=filing_id,
+                committee_id=committee_id,
+                transaction_type="11",
+                amount="1000.00",
+                contributor_name_raw="Memo Excluded",
+                memo_text=None,
+                is_memo=True,
+            ),
+            _summary_top_list_transaction(
+                51,
+                filing_id=filing_id,
+                committee_id=committee_id,
+                transaction_type="21",
+                amount="1000.00",
+                contributor_name_raw="Amendment Excluded",
+                memo_text="excluded",
+                amendment_indicator="T",
+            ),
+            _summary_top_list_transaction(
+                52,
+                filing_id=filing_id,
+                committee_id=committee_id,
+                transaction_type="11",
+                amount="1000.00",
+                contributor_name_raw="Superseded Excluded",
+                memo_text=None,
+                source_record_id=superseded_source_id,
+            ),
+            _summary_top_list_transaction(
+                53,
+                filing_id=filing_id,
+                committee_id=committee_id,
+                transaction_type="11",
+                amount="1000.00",
+                contributor_name_raw="Cycle Excluded",
+                memo_text=None,
+                transaction_date=date(2027, 1, 1),
+            ),
+        ),
+    )
+
+
+def _seed_committee_summary_top_list_committee(
+    db_conn: psycopg.Connection,
+    *,
+    committee_id: UUID,
+    fec_committee_id: str,
+    filing_id: UUID,
+    cycle: int = 2026,
+) -> None:
+    insert_committee_row(
+        db_conn,
+        CommitteeRowSeed(
+            id=committee_id,
+            fec_committee_id=fec_committee_id,
+            name=f"Top List Committee {fec_committee_id}",
+        ),
+    )
+    insert_committee_summary_row(
+        db_conn,
+        CommitteeSummaryRowSeed(
+            committee_id=committee_id,
+            cycle=cycle,
+            coverage_start_date=date(cycle - 1, 1, 1),
+            coverage_end_date=date(cycle, 12, 31),
+        ),
+    )
+    insert_filing_row(
+        db_conn,
+        FilingRowSeed(
+            id=filing_id,
+            filing_fec_id=f"F{fec_committee_id}",
+            committee_id=committee_id,
+            coverage_start_date=date(cycle, 1, 1),
+            coverage_end_date=date(cycle, 6, 30),
+        ),
+    )
+
+
+def _committee_summary_values(
+    db_conn: psycopg.Connection,
+    committee_id: UUID,
+    *,
+    cycle: int = 2026,
+) -> dict[str, object]:
+    with db_conn.cursor(row_factory=psycopg.rows.dict_row) as cursor:
+        cursor.execute(
+            """
+            SELECT
+                derived_total_raised,
+                derived_total_spent,
+                derived_net,
+                derived_transaction_count,
+                derived_cash_receipts_total,
+                derived_in_kind_receipts_total,
+                derived_loan_receipts_total,
+                derived_contribution_receipts_total,
+                derived_top_donors,
+                derived_top_vendors,
+                derived_spend_categories,
+                derived_filing_breakdown
+            FROM cf.committee_summary
+            WHERE committee_id = %s
+              AND cycle = %s
+            """,
+            (committee_id, cycle),
+        )
+        row = cursor.fetchone()
+    assert row is not None
+    return dict(row)
+
+
+def _set_committee_summary_sentinels(db_conn: psycopg.Connection, committee_id: UUID) -> None:
+    with db_conn.cursor() as cursor:
+        cursor.execute(
+            """
+            UPDATE cf.committee_summary
+            SET derived_total_raised = 999.00,
+                derived_total_spent = 888.00,
+                derived_net = 111.00,
+                derived_transaction_count = 77,
+                derived_top_donors = '[{"name": "sentinel donor"}]'::jsonb,
+                derived_top_vendors = '[{"name": "sentinel vendor"}]'::jsonb,
+                derived_spend_categories = '[{"category": "sentinel category"}]'::jsonb,
+                derived_filing_breakdown = '[{"filing_id": "sentinel"}]'::jsonb
+            WHERE committee_id = %s
+              AND cycle = 2026
+            """,
+            (committee_id,),
+        )
+
+
+def _set_committee_summary_top_lists(
+    db_conn: psycopg.Connection,
+    committee_id: UUID,
+    *,
+    donors_sql: str | None,
+    vendors_sql: str | None,
+    spend_categories_sql: str | None,
+    cycle: int = 2026,
+) -> None:
+    with db_conn.cursor() as cursor:
+        cursor.execute(
+            """
+            UPDATE cf.committee_summary
+            SET derived_top_donors = CASE WHEN %s THEN NULL ELSE %s::jsonb END,
+                derived_top_vendors = CASE WHEN %s THEN NULL ELSE %s::jsonb END,
+                derived_spend_categories = CASE WHEN %s THEN NULL ELSE %s::jsonb END
+            WHERE committee_id = %s
+              AND cycle = %s
+            """,
+            (
+                donors_sql is None,
+                donors_sql,
+                vendors_sql is None,
+                vendors_sql,
+                spend_categories_sql is None,
+                spend_categories_sql,
+                committee_id,
+                cycle,
+            ),
+        )
+
+
+def _seed_committee_summary_filing_breakdown_fixture(db_conn: psycopg.Connection) -> dict[str, UUID]:
+    ids = {
+        "requested_committee": _refresh_test_uuid(401),
+        "sentinel_committee": _refresh_test_uuid(402),
+        "filing_older": _refresh_test_uuid(403),
+        "filing_recent_low": _refresh_test_uuid(404),
+        "filing_recent_high": _refresh_test_uuid(405),
+        "filing_zero": _refresh_test_uuid(406),
+        "superseding_source": _refresh_test_uuid(407),
+        "superseded_source": _refresh_test_uuid(408),
+    }
+    data_source = insert_data_source_for_test(db_conn, jurisdiction="federal/fec", name_suffix="filing-breakdown")
+    insert_source_record_for_test(
+        db_conn,
+        source_record_id=ids["superseding_source"],
+        data_source_id=data_source.id,
+        source_record_key="filing-breakdown-current",
+        source_url="https://example.org/source/filing-breakdown-current",
+        pull_date=datetime(2026, 7, 18, tzinfo=timezone.utc),
+    )
+    insert_source_record_for_test(
+        db_conn,
+        source_record_id=ids["superseded_source"],
+        data_source_id=data_source.id,
+        source_record_key="filing-breakdown-superseded",
+        source_url="https://example.org/source/filing-breakdown-superseded",
+        pull_date=datetime(2026, 7, 17, tzinfo=timezone.utc),
+        superseded_by=ids["superseding_source"],
+    )
+    _seed_committee_summary_top_list_committee(
+        db_conn,
+        committee_id=ids["requested_committee"],
+        fec_committee_id="C90000401",
+        filing_id=ids["filing_older"],
+    )
+    _seed_committee_summary_top_list_committee(
+        db_conn,
+        committee_id=ids["sentinel_committee"],
+        fec_committee_id="C90000402",
+        filing_id=_refresh_test_uuid(409),
+    )
+    _update_committee_summary_older_filing(db_conn, ids["filing_older"])
+    _insert_committee_summary_filing_breakdown_rows(db_conn, ids)
+    _set_committee_summary_sentinels(db_conn, ids["sentinel_committee"])
+    return ids
+
+
+def _update_committee_summary_older_filing(db_conn: psycopg.Connection, filing_id: UUID) -> None:
+    db_conn.execute(
+        """
+        UPDATE cf.filing
+        SET report_type = 'Q1',
+            amendment_indicator = 'A',
+            filing_name = 'Older Filing',
+            coverage_start_date = DATE '2026-01-01',
+            coverage_end_date = DATE '2026-03-31',
+            receipt_date = DATE '2026-04-15'
+        WHERE id = %s
+        """,
+        (filing_id,),
+    )
+
+
+def _insert_committee_summary_filing_breakdown_rows(db_conn: psycopg.Connection, ids: dict[str, UUID]) -> None:
+    for filing_id, fec_id, coverage_end, receipt_date in (
+        (ids["filing_recent_low"], "FILING-RECENT-LOW", date(2026, 6, 30), date(2026, 7, 20)),
+        (ids["filing_recent_high"], "FILING-RECENT-HIGH", date(2026, 6, 30), date(2026, 7, 20)),
+        (ids["filing_zero"], "FILING-ZERO", None, None),
+    ):
+        insert_filing_row(
+            db_conn,
+            FilingRowSeed(
+                id=filing_id,
+                filing_fec_id=fec_id,
+                committee_id=ids["requested_committee"],
+                report_type="Q2",
+                amendment_indicator="N",
+                filing_name=fec_id,
+                coverage_start_date=None if coverage_end is None else date(2026, 4, 1),
+                coverage_end_date=coverage_end,
+                receipt_date=receipt_date,
+            ),
+        )
+    _insert_committee_summary_filing_breakdown_transactions(db_conn, ids)
+
+
+def _insert_committee_summary_filing_breakdown_transactions(db_conn: psycopg.Connection, ids: dict[str, UUID]) -> None:
+    for sequence, filing_key, transaction_type, amount, source_key, is_memo, amendment_indicator in (
+        (410, "filing_older", "15", "40.00", None, False, "A"),
+        (411, "filing_older", "24A", "10.00", None, False, "A"),
+        (412, "filing_recent_low", "15", "100.00", None, False, "N"),
+        (413, "filing_recent_low", "24A", "30.00", None, False, "N"),
+        (414, "filing_recent_high", "15", "50.00", None, False, "N"),
+        (415, "filing_recent_high", "15", "999.00", None, True, "N"),
+        (416, "filing_recent_high", "15", "888.00", None, False, "T"),
+        (417, "filing_recent_high", "15", "777.00", "superseded_source", False, "N"),
+    ):
+        insert_transaction_row(
+            db_conn,
+            _summary_top_list_transaction(
+                sequence,
+                filing_id=ids[filing_key],
+                committee_id=ids["requested_committee"],
+                transaction_type=transaction_type,
+                amount=amount,
+                contributor_name_raw="Filing Donor",
+                memo_text=None,
+                source_record_id=None if source_key is None else ids[source_key],
+                is_memo=is_memo,
+                amendment_indicator=amendment_indicator,
+            ),
+        )
+
+
+def _expected_committee_summary_filing_breakdown(ids: dict[str, UUID]) -> list[dict[str, object]]:
+    return [
+        {
+            "filing_id": str(ids["filing_recent_low"]),
+            "filing_fec_id": "FILING-RECENT-LOW",
+            "filing_name": "FILING-RECENT-LOW",
+            "report_type": "Q2",
+            "amendment_indicator": "N",
+            "coverage_start_date": "2026-04-01",
+            "coverage_end_date": "2026-06-30",
+            "receipt_date": "2026-07-20",
+            "total_raised": "100.00",
+            "total_spent": "30.00",
+            "net": "70.00",
+            "transaction_count": 2,
+            "cash_on_hand": "100.00",
+            "row_id": f"{ids['filing_recent_low']}:N",
+        },
+        {
+            "filing_id": str(ids["filing_recent_high"]),
+            "filing_fec_id": "FILING-RECENT-HIGH",
+            "filing_name": "FILING-RECENT-HIGH",
+            "report_type": "Q2",
+            "amendment_indicator": "N",
+            "coverage_start_date": "2026-04-01",
+            "coverage_end_date": "2026-06-30",
+            "receipt_date": "2026-07-20",
+            "total_raised": "50.00",
+            "total_spent": "0.00",
+            "net": "50.00",
+            "transaction_count": 1,
+            "cash_on_hand": "150.00",
+            "row_id": f"{ids['filing_recent_high']}:N",
+        },
+        {
+            "filing_id": str(ids["filing_older"]),
+            "filing_fec_id": "FC90000401",
+            "filing_name": "Older Filing",
+            "report_type": "Q1",
+            "amendment_indicator": "A",
+            "coverage_start_date": "2026-01-01",
+            "coverage_end_date": "2026-03-31",
+            "receipt_date": "2026-04-15",
+            "total_raised": "40.00",
+            "total_spent": "10.00",
+            "net": "30.00",
+            "transaction_count": 2,
+            "cash_on_hand": "30.00",
+            "row_id": f"{ids['filing_older']}:A",
+        },
+        {
+            "filing_id": str(ids["filing_zero"]),
+            "filing_fec_id": "FILING-ZERO",
+            "filing_name": "FILING-ZERO",
+            "report_type": "Q2",
+            "amendment_indicator": "N",
+            "coverage_start_date": None,
+            "coverage_end_date": None,
+            "receipt_date": None,
+            "total_raised": "0.00",
+            "total_spent": "0.00",
+            "net": "0.00",
+            "transaction_count": 0,
+            "cash_on_hand": "150.00",
+            "row_id": f"{ids['filing_zero']}:N",
+        },
+    ]
+
+
+@pytest.mark.integration
+class TestCommitteeSummaryDerivedTopLists:
+    def test_committee_summary_derived_top_lists_store_exact_ranked_payloads(
+        self,
+        db_conn: psycopg.Connection,
+    ) -> None:
+        committee_id = _refresh_test_uuid(1)
+        filing_id = _refresh_test_uuid(2)
+        data_source = insert_data_source_for_test(
+            db_conn,
+            jurisdiction="federal/fec",
+            name_suffix="committee-summary-top-lists",
+        )
+        active_source_id = _refresh_test_uuid(3)
+        replacement_source_id = _refresh_test_uuid(4)
+        superseded_source_id = _refresh_test_uuid(5)
+        pull_date = datetime(2026, 7, 1, tzinfo=timezone.utc)
+        insert_source_record_for_test(
+            db_conn,
+            source_record_id=active_source_id,
+            data_source_id=data_source.id,
+            source_record_key="active-top-list",
+            source_url="https://example.org/source/active-top-list",
+            pull_date=pull_date,
+        )
+        insert_source_record_for_test(
+            db_conn,
+            source_record_id=replacement_source_id,
+            data_source_id=data_source.id,
+            source_record_key="replacement-top-list",
+            source_url="https://example.org/source/replacement-top-list",
+            pull_date=pull_date,
+        )
+        insert_source_record_for_test(
+            db_conn,
+            source_record_id=superseded_source_id,
+            data_source_id=data_source.id,
+            source_record_key="superseded-top-list",
+            source_url="https://example.org/source/superseded-top-list",
+            pull_date=pull_date,
+            superseded_by=replacement_source_id,
+        )
+        _seed_committee_summary_top_list_committee(
+            db_conn,
+            committee_id=committee_id,
+            fec_committee_id="C90000001",
+            filing_id=filing_id,
+        )
+        _seed_ranked_receipt_transactions(
+            db_conn,
+            filing_id=filing_id,
+            committee_id=committee_id,
+            active_source_id=active_source_id,
+        )
+        _seed_ranked_disbursement_transactions(
+            db_conn,
+            filing_id=filing_id,
+            committee_id=committee_id,
+        )
+        _seed_excluded_summary_transactions(
+            db_conn,
+            filing_id=filing_id,
+            committee_id=committee_id,
+            superseded_source_id=superseded_source_id,
+        )
+
+        rowcount = job_builders.populate_committee_summary_derived_aggregates(db_conn, cycles=(2026,))
+
+        summary = _committee_summary_values(db_conn, committee_id)
+        assert rowcount == 1
+        assert summary["derived_total_raised"] == Decimal("2210.00")
+        assert summary["derived_total_spent"] == Decimal("1360.00")
+        assert summary["derived_net"] == Decimal("850.00")
+        assert summary["derived_transaction_count"] == 22
+        assert summary["derived_loan_receipts_total"] == Decimal("70.00")
+        assert summary["derived_in_kind_receipts_total"] == Decimal("80.00")
+        assert summary["derived_contribution_receipts_total"] == Decimal("2140.00")
+        assert summary["derived_cash_receipts_total"] == Decimal("2060.00")
+        assert summary["derived_top_donors"] == [
+            {"name": "Alpha Donor", "total_amount": "400.00", "transaction_count": 2},
+            {"name": "Beta Donor", "total_amount": "400.00", "transaction_count": 1},
+            {"name": "Abel Donor", "total_amount": "300.00", "transaction_count": 1},
+            {"name": "Zed Donor", "total_amount": "300.00", "transaction_count": 1},
+            {"name": "Gamma Donor", "total_amount": "250.00", "transaction_count": 1},
+        ]
+        assert summary["derived_top_vendors"] == [
+            {"name": "Acme LLC", "total_amount": "300.00", "transaction_count": 2},
+            {"name": "Beta Vendor", "total_amount": "300.00", "transaction_count": 1},
+            {"name": "Alpha Vendor", "total_amount": "200.00", "transaction_count": 1},
+            {"name": "Zeta Vendor", "total_amount": "200.00", "transaction_count": 1},
+            {"name": "Gamma Vendor", "total_amount": "150.00", "transaction_count": 1},
+        ]
+        assert summary["derived_spend_categories"] == [
+            {"category": "digital ads", "total_amount": "300.00", "transaction_count": 2},
+            {"category": "mail", "total_amount": "300.00", "transaction_count": 1},
+            {"category": "events", "total_amount": "200.00", "transaction_count": 1},
+            {"category": "travel", "total_amount": "200.00", "transaction_count": 1},
+            {"category": "printing", "total_amount": "150.00", "transaction_count": 1},
+        ]
+
+    def test_committee_summary_derived_top_lists_store_empty_arrays_for_blank_groups(
+        self,
+        db_conn: psycopg.Connection,
+    ) -> None:
+        committee_id = _refresh_test_uuid(101)
+        filing_id = _refresh_test_uuid(102)
+        _seed_committee_summary_top_list_committee(
+            db_conn,
+            committee_id=committee_id,
+            fec_committee_id="C90000101",
+            filing_id=filing_id,
+        )
+        insert_transaction_row(
+            db_conn,
+            _summary_top_list_transaction(
+                103,
+                filing_id=filing_id,
+                committee_id=committee_id,
+                transaction_type="11",
+                amount="10.00",
+                contributor_name_raw=" ",
+                memo_text=None,
+            ),
+        )
+        insert_transaction_row(
+            db_conn,
+            _summary_top_list_transaction(
+                104,
+                filing_id=filing_id,
+                committee_id=committee_id,
+                transaction_type="21",
+                amount="5.00",
+                contributor_name_raw=None,
+                memo_text=" ",
+            ),
+        )
+
+        rowcount = job_builders.populate_committee_summary_derived_aggregates(db_conn, cycles=(2026,))
+
+        summary = _committee_summary_values(db_conn, committee_id)
+        assert rowcount == 1
+        assert summary["derived_total_raised"] == Decimal("10.00")
+        assert summary["derived_total_spent"] == Decimal("5.00")
+        assert summary["derived_transaction_count"] == 2
+        assert summary["derived_top_donors"] == []
+        assert summary["derived_top_vendors"] == []
+        assert summary["derived_spend_categories"] == []
+
+    def test_committee_summary_derived_scoping_updates_only_requested_committees(
+        self,
+        db_conn: psycopg.Connection,
+    ) -> None:
+        requested_committee_id = _refresh_test_uuid(201)
+        sentinel_committee_id = _refresh_test_uuid(202)
+        requested_filing_id = _refresh_test_uuid(203)
+        sentinel_filing_id = _refresh_test_uuid(204)
+        _seed_committee_summary_top_list_committee(
+            db_conn,
+            committee_id=requested_committee_id,
+            fec_committee_id="C90000201",
+            filing_id=requested_filing_id,
+        )
+        _seed_committee_summary_top_list_committee(
+            db_conn,
+            committee_id=sentinel_committee_id,
+            fec_committee_id="C90000202",
+            filing_id=sentinel_filing_id,
+        )
+        insert_transaction_row(
+            db_conn,
+            _summary_top_list_transaction(
+                205,
+                filing_id=requested_filing_id,
+                committee_id=requested_committee_id,
+                transaction_type="11",
+                amount="25.00",
+                contributor_name_raw="Requested Donor",
+                memo_text=None,
+            ),
+        )
+        _set_committee_summary_sentinels(db_conn, sentinel_committee_id)
+
+        rowcount = job_builders.populate_committee_summary_derived_aggregates(
+            db_conn,
+            cycles=(2026,),
+            committee_ids=(str(requested_committee_id),),
+        )
+
+        requested_summary = _committee_summary_values(db_conn, requested_committee_id)
+        sentinel_summary = _committee_summary_values(db_conn, sentinel_committee_id)
+        assert rowcount == 1
+        assert requested_summary["derived_top_donors"] == [
+            {"name": "Requested Donor", "total_amount": "25.00", "transaction_count": 1}
+        ]
+        assert sentinel_summary["derived_total_raised"] == Decimal("999.00")
+        assert sentinel_summary["derived_top_donors"] == [{"name": "sentinel donor"}]
+
+        rowcount = job_builders.populate_committee_summary_derived_aggregates(
+            db_conn,
+            cycles=(2026,),
+            committee_ids=(),
+        )
+
+        assert rowcount == 0
+        assert _committee_summary_values(db_conn, sentinel_committee_id)["derived_top_donors"] == [
+            {"name": "sentinel donor"}
+        ]
+
+        rowcount = job_builders.populate_committee_summary_derived_aggregates(db_conn, cycles=(2026,))
+
+        sentinel_summary = _committee_summary_values(db_conn, sentinel_committee_id)
+        assert rowcount == 2
+        assert sentinel_summary["derived_total_raised"] == Decimal("0.00")
+        assert sentinel_summary["derived_transaction_count"] == 0
+        assert sentinel_summary["derived_top_donors"] == []
+        assert sentinel_summary["derived_top_vendors"] == []
+        assert sentinel_summary["derived_spend_categories"] == []
+
+    def test_committee_summary_derived_filing_breakdown_parity_and_scoping(
+        self,
+        db_conn: psycopg.Connection,
+    ) -> None:
+        ids = _seed_committee_summary_filing_breakdown_fixture(db_conn)
+
+        rowcount = job_builders.populate_committee_summary_derived_aggregates(
+            db_conn,
+            cycles=(2026,),
+            committee_ids=(str(ids["requested_committee"]),),
+        )
+
+        requested_summary = _committee_summary_values(db_conn, ids["requested_committee"])
+        sentinel_summary = _committee_summary_values(db_conn, ids["sentinel_committee"])
+        assert rowcount == 1
+        assert requested_summary["derived_filing_breakdown"] == _expected_committee_summary_filing_breakdown(ids)
+        assert sentinel_summary["derived_filing_breakdown"] == [{"filing_id": "sentinel"}]
+
+
+@pytest.mark.integration
+class TestBackfillCommitteeTopListsEntrypoint:
+    def test_backfill_committee_top_lists_scopes_to_requested_committee(
+        self,
+        db_conn: psycopg.Connection,
+    ) -> None:
+        from core.refresh import backfill_committee_top_lists
+
+        requested_committee_id = _refresh_test_uuid(301)
+        sentinel_committee_id = _refresh_test_uuid(302)
+        requested_filing_id = _refresh_test_uuid(303)
+        sentinel_filing_id = _refresh_test_uuid(304)
+        _seed_committee_summary_top_list_committee(
+            db_conn,
+            committee_id=requested_committee_id,
+            fec_committee_id="C90000301",
+            filing_id=requested_filing_id,
+        )
+        _seed_committee_summary_top_list_committee(
+            db_conn,
+            committee_id=sentinel_committee_id,
+            fec_committee_id="C90000302",
+            filing_id=sentinel_filing_id,
+        )
+        insert_transaction_row(
+            db_conn,
+            _summary_top_list_transaction(
+                305,
+                filing_id=requested_filing_id,
+                committee_id=requested_committee_id,
+                transaction_type="11",
+                amount="31.00",
+                contributor_name_raw="Backfill Donor",
+                memo_text=None,
+            ),
+        )
+        insert_transaction_row(
+            db_conn,
+            _summary_top_list_transaction(
+                306,
+                filing_id=sentinel_filing_id,
+                committee_id=sentinel_committee_id,
+                transaction_type="11",
+                amount="72.00",
+                contributor_name_raw="Unrequested Donor",
+                memo_text=None,
+            ),
+        )
+        _set_committee_summary_sentinels(db_conn, sentinel_committee_id)
+
+        result = backfill_committee_top_lists.backfill_committee_top_lists(
+            db_conn,
+            cycles=(2026,),
+            committee_ids=(str(requested_committee_id),),
+        )
+
+        requested_summary = _committee_summary_values(db_conn, requested_committee_id)
+        sentinel_summary = _committee_summary_values(db_conn, sentinel_committee_id)
+        assert result.rows_updated == 1
+        assert requested_summary["derived_top_donors"] == [
+            {"name": "Backfill Donor", "total_amount": "31.00", "transaction_count": 1}
+        ]
+        assert sentinel_summary["derived_top_donors"] == [{"name": "sentinel donor"}]
+        assert sentinel_summary["derived_total_raised"] == Decimal("999.00")
+
+    def test_backfill_committee_top_lists_limit_selects_bounded_summary_subset(
+        self,
+        db_conn: psycopg.Connection,
+    ) -> None:
+        from core.refresh import backfill_committee_top_lists
+
+        selected_committee_id = _refresh_test_uuid(401)
+        unselected_committee_id = _refresh_test_uuid(402)
+        selected_filing_id = _refresh_test_uuid(403)
+        unselected_filing_id = _refresh_test_uuid(404)
+        _seed_committee_summary_top_list_committee(
+            db_conn,
+            committee_id=selected_committee_id,
+            fec_committee_id="C90000401",
+            filing_id=selected_filing_id,
+        )
+        _seed_committee_summary_top_list_committee(
+            db_conn,
+            committee_id=unselected_committee_id,
+            fec_committee_id="C90000402",
+            filing_id=unselected_filing_id,
+        )
+        insert_transaction_row(
+            db_conn,
+            _summary_top_list_transaction(
+                405,
+                filing_id=selected_filing_id,
+                committee_id=selected_committee_id,
+                transaction_type="11",
+                amount="15.00",
+                contributor_name_raw="Limit Donor",
+                memo_text=None,
+            ),
+        )
+        _set_committee_summary_sentinels(db_conn, unselected_committee_id)
+
+        result = backfill_committee_top_lists.backfill_committee_top_lists(
+            db_conn,
+            cycles=(2026,),
+            limit=1,
+        )
+
+        assert result.rows_updated == 1
+        assert result.committee_ids == (str(selected_committee_id),)
+        assert _committee_summary_values(db_conn, selected_committee_id)["derived_top_donors"] == [
+            {"name": "Limit Donor", "total_amount": "15.00", "transaction_count": 1}
+        ]
+        assert _committee_summary_values(db_conn, unselected_committee_id)["derived_top_donors"] == [
+            {"name": "sentinel donor"}
+        ]
+
+    def test_backfill_committee_top_lists_limit_zero_selects_empty_scope(
+        self,
+        db_conn: psycopg.Connection,
+    ) -> None:
+        from core.refresh import backfill_committee_top_lists
+
+        committee_id = _refresh_test_uuid(411)
+        filing_id = _refresh_test_uuid(412)
+        _seed_committee_summary_top_list_committee(
+            db_conn,
+            committee_id=committee_id,
+            fec_committee_id="C90000411",
+            filing_id=filing_id,
+        )
+
+        result = backfill_committee_top_lists.backfill_committee_top_lists(
+            db_conn,
+            cycles=(2026,),
+            limit=0,
+        )
+
+        assert result.rows_updated == 0
+        assert result.committee_ids == ()
+        assert _committee_summary_values(db_conn, committee_id)["derived_top_donors"] is None
+
+    def test_backfill_committee_top_lists_explicit_ids_deduplicate_before_limit(
+        self,
+        db_conn: psycopg.Connection,
+    ) -> None:
+        from core.refresh import backfill_committee_top_lists
+
+        first_committee_id = _refresh_test_uuid(421)
+        second_committee_id = _refresh_test_uuid(422)
+        third_committee_id = _refresh_test_uuid(423)
+        first_filing_id = _refresh_test_uuid(424)
+        second_filing_id = _refresh_test_uuid(425)
+        third_filing_id = _refresh_test_uuid(426)
+        for committee_id, fec_committee_id, filing_id, donor_name, sequence in (
+            (first_committee_id, "C90000421", first_filing_id, "First Explicit", 427),
+            (second_committee_id, "C90000422", second_filing_id, "Second Explicit", 428),
+            (third_committee_id, "C90000423", third_filing_id, "Third Explicit", 429),
+        ):
+            _seed_committee_summary_top_list_committee(
+                db_conn,
+                committee_id=committee_id,
+                fec_committee_id=fec_committee_id,
+                filing_id=filing_id,
+            )
+            insert_transaction_row(
+                db_conn,
+                _summary_top_list_transaction(
+                    sequence,
+                    filing_id=filing_id,
+                    committee_id=committee_id,
+                    transaction_type="11",
+                    amount="10.00",
+                    contributor_name_raw=donor_name,
+                    memo_text=None,
+                ),
+            )
+
+        result = backfill_committee_top_lists.backfill_committee_top_lists(
+            db_conn,
+            cycles=(2026,),
+            committee_ids=(
+                str(first_committee_id),
+                str(second_committee_id),
+                str(first_committee_id),
+                str(third_committee_id),
+            ),
+            limit=2,
+        )
+
+        assert result.rows_updated == 2
+        assert result.committee_ids == (str(first_committee_id), str(second_committee_id))
+        assert _committee_summary_values(db_conn, first_committee_id)["derived_top_donors"] == [
+            {"name": "First Explicit", "total_amount": "10.00", "transaction_count": 1}
+        ]
+        assert _committee_summary_values(db_conn, second_committee_id)["derived_top_donors"] == [
+            {"name": "Second Explicit", "total_amount": "10.00", "transaction_count": 1}
+        ]
+        assert _committee_summary_values(db_conn, third_committee_id)["derived_top_donors"] is None
+
+    def test_backfill_committee_top_lists_limit_only_advances_through_incomplete_committees(
+        self,
+        db_conn: psycopg.Connection,
+    ) -> None:
+        from core.refresh import backfill_committee_top_lists
+
+        complete_committee_id = _refresh_test_uuid(431)
+        vendor_null_committee_id = _refresh_test_uuid(432)
+        donors_null_committee_id = _refresh_test_uuid(433)
+        spend_null_committee_id = _refresh_test_uuid(434)
+        cycle_duplicate_committee_id = _refresh_test_uuid(435)
+        for offset, committee_id in enumerate(
+            (
+                complete_committee_id,
+                vendor_null_committee_id,
+                donors_null_committee_id,
+                spend_null_committee_id,
+                cycle_duplicate_committee_id,
+            ),
+            start=436,
+        ):
+            _seed_committee_summary_top_list_committee(
+                db_conn,
+                committee_id=committee_id,
+                fec_committee_id=f"C90000{offset}",
+                filing_id=_refresh_test_uuid(offset),
+            )
+            insert_transaction_row(
+                db_conn,
+                _summary_top_list_transaction(
+                    offset + 10,
+                    filing_id=_refresh_test_uuid(offset),
+                    committee_id=committee_id,
+                    transaction_type="11",
+                    amount=f"{offset}.00",
+                    contributor_name_raw=f"Donor {offset}",
+                    memo_text=None,
+                ),
+            )
+
+        insert_committee_summary_row(
+            db_conn,
+            CommitteeSummaryRowSeed(
+                committee_id=cycle_duplicate_committee_id,
+                cycle=2024,
+                coverage_start_date=date(2023, 1, 1),
+                coverage_end_date=date(2024, 12, 31),
+            ),
+        )
+        _set_committee_summary_top_lists(
+            db_conn,
+            complete_committee_id,
+            donors_sql='[{"name": "complete"}]',
+            vendors_sql='[{"name": "complete"}]',
+            spend_categories_sql='[{"category": "complete"}]',
+        )
+        _set_committee_summary_top_lists(
+            db_conn,
+            vendor_null_committee_id,
+            donors_sql='[{"name": "donor populated"}]',
+            vendors_sql=None,
+            spend_categories_sql='[{"category": "spend populated"}]',
+        )
+        _set_committee_summary_top_lists(
+            db_conn,
+            donors_null_committee_id,
+            donors_sql=None,
+            vendors_sql='[{"name": "vendor populated"}]',
+            spend_categories_sql='[{"category": "spend populated"}]',
+        )
+        _set_committee_summary_top_lists(
+            db_conn,
+            spend_null_committee_id,
+            donors_sql='[{"name": "donor populated"}]',
+            vendors_sql='[{"name": "vendor populated"}]',
+            spend_categories_sql=None,
+        )
+
+        first_batch = backfill_committee_top_lists.backfill_committee_top_lists(
+            db_conn,
+            cycles=(2024, 2026),
+            limit=2,
+        )
+        second_batch = backfill_committee_top_lists.backfill_committee_top_lists(
+            db_conn,
+            cycles=(2024, 2026),
+            limit=2,
+        )
+        exhausted = backfill_committee_top_lists.backfill_committee_top_lists(
+            db_conn,
+            cycles=(2024, 2026),
+            limit=2,
+        )
+
+        assert first_batch.committee_ids == (str(vendor_null_committee_id), str(donors_null_committee_id))
+        assert first_batch.rows_updated == 2
+        assert second_batch.committee_ids == (str(spend_null_committee_id), str(cycle_duplicate_committee_id))
+        assert second_batch.rows_updated == 3
+        assert exhausted.committee_ids == ()
+        assert exhausted.rows_updated == 0
+        assert _committee_summary_values(db_conn, complete_committee_id)["derived_top_donors"] == [{"name": "complete"}]
+        assert _committee_summary_values(db_conn, vendor_null_committee_id)["derived_top_donors"] == [
+            {"name": "Donor 437", "total_amount": "437.00", "transaction_count": 1}
+        ]
+        assert _committee_summary_values(db_conn, cycle_duplicate_committee_id, cycle=2024)["derived_top_donors"] == []
+
+
+@pytest.mark.unit
+class TestBackfillCommitteeTopListsCLI:
+    def test_main_calls_populate_only_and_prints_probe_metrics(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        from core.refresh import backfill_committee_top_lists
+
+        connection = MagicMock()
+        get_connection = MagicMock(return_value=connection)
+        populate = MagicMock(return_value=3)
+        monotonic_values = iter((10.0, 12.5))
+        monkeypatch.setattr(backfill_committee_top_lists, "get_connection", get_connection)
+        monkeypatch.setattr(backfill_committee_top_lists, "populate_committee_summary_derived_aggregates", populate)
+        monkeypatch.setattr(backfill_committee_top_lists.time, "perf_counter", lambda: next(monotonic_values))
+
+        result = backfill_committee_top_lists.main(
+            [
+                "--cycles",
+                "2024",
+                "2026",
+                "--committee-id",
+                "00000000-0000-0000-0000-000000000301",
+            ]
+        )
+
+        assert result == 0
+        get_connection.assert_called_once_with()
+        connection.transaction.assert_called_once_with()
+        connection.close.assert_called_once_with()
+        populate.assert_called_once_with(
+            connection,
+            cycles=(2024, 2026),
+            committee_ids=("00000000-0000-0000-0000-000000000301",),
+        )
+        output = capsys.readouterr().out
+        assert output.endswith("\n")
+        assert json.loads(output) == {
+            "cycles": [2024, 2026],
+            "committee_ids": ["00000000-0000-0000-0000-000000000301"],
+            "rows_updated": 3,
+            "elapsed_seconds": 2.5,
+        }
+
+    def test_main_normalizes_deduplicates_and_limits_explicit_committee_ids(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        from core.refresh import backfill_committee_top_lists
+
+        connection = MagicMock()
+        monkeypatch.setattr(backfill_committee_top_lists, "get_connection", MagicMock(return_value=connection))
+        monkeypatch.setattr(
+            backfill_committee_top_lists,
+            "populate_committee_summary_derived_aggregates",
+            MagicMock(return_value=2),
+        )
+        monotonic_values = iter((4.0, 5.0))
+        monkeypatch.setattr(backfill_committee_top_lists.time, "perf_counter", lambda: next(monotonic_values))
+
+        result = backfill_committee_top_lists.main(
+            [
+                "--cycles",
+                "2026",
+                "--committee-id",
+                "91000000000000000000000000000001",
+                "--committee-id",
+                "91000000-0000-0000-0000-000000000002",
+                "--committee-id",
+                "91000000-0000-0000-0000-000000000001",
+                "--limit",
+                "1",
+            ]
+        )
+
+        assert result == 0
+        backfill_committee_top_lists.populate_committee_summary_derived_aggregates.assert_called_once_with(
+            connection,
+            cycles=(2026,),
+            committee_ids=("91000000-0000-0000-0000-000000000001",),
+        )
+        assert json.loads(capsys.readouterr().out) == {
+            "cycles": [2026],
+            "committee_ids": ["91000000-0000-0000-0000-000000000001"],
+            "rows_updated": 2,
+            "elapsed_seconds": 1.0,
+        }
+
+    @pytest.mark.parametrize(
+        "argv",
+        (
+            [],
+            ["--cycles", "2026", "--limit", "-1"],
+            ["--cycles", "2026", "--committee-id", "not-a-uuid"],
+        ),
+    )
+    def test_main_rejects_invalid_arguments_before_opening_connection(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        argv: list[str],
+    ) -> None:
+        from core.refresh import backfill_committee_top_lists
+
+        get_connection = MagicMock()
+        monkeypatch.setattr(backfill_committee_top_lists, "get_connection", get_connection)
+
+        with pytest.raises(SystemExit):
+            backfill_committee_top_lists.main(argv)
+
+        get_connection.assert_not_called()
+
+    def test_main_closes_connection_when_populate_fails(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from core.refresh import backfill_committee_top_lists
+
+        connection = MagicMock()
+        populate_error = RuntimeError("populate failed")
+        monkeypatch.setattr(backfill_committee_top_lists, "get_connection", MagicMock(return_value=connection))
+        monkeypatch.setattr(
+            backfill_committee_top_lists,
+            "populate_committee_summary_derived_aggregates",
+            MagicMock(side_effect=populate_error),
+        )
+        monotonic_values = iter((1.0,))
+        monkeypatch.setattr(backfill_committee_top_lists.time, "perf_counter", lambda: next(monotonic_values))
+
+        with pytest.raises(RuntimeError, match="populate failed"):
+            backfill_committee_top_lists.main(["--cycles", "2026"])
+
+        connection.transaction.assert_called_once_with()
+        connection.close.assert_called_once_with()
+
+    def test_main_reports_null_committee_ids_for_all_scope(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        from core.refresh import backfill_committee_top_lists
+
+        connection = MagicMock()
+        monkeypatch.setattr(backfill_committee_top_lists, "get_connection", MagicMock(return_value=connection))
+        monkeypatch.setattr(
+            backfill_committee_top_lists,
+            "populate_committee_summary_derived_aggregates",
+            MagicMock(return_value=7),
+        )
+        monotonic_values = iter((20.0, 23.25))
+        monkeypatch.setattr(backfill_committee_top_lists.time, "perf_counter", lambda: next(monotonic_values))
+
+        assert backfill_committee_top_lists.main(["--cycles", "2026"]) == 0
+
+        backfill_committee_top_lists.populate_committee_summary_derived_aggregates.assert_called_once_with(
+            connection,
+            cycles=(2026,),
+            committee_ids=None,
+        )
+        assert json.loads(capsys.readouterr().out) == {
+            "cycles": [2026],
+            "committee_ids": None,
+            "rows_updated": 7,
+            "elapsed_seconds": 3.25,
+        }
 
 
 @pytest.mark.unit

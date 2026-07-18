@@ -20,12 +20,40 @@ import logging
 import os
 import sys
 import time
+from dataclasses import dataclass
+from typing import Sequence
 
 from api.health_content import evaluate_content_health, floors_from_env
 from core.db import get_connection
 
 
 _LOGGER = logging.getLogger("civibus.api.canary")
+
+
+@dataclass(frozen=True)
+class RequiredSchemaColumn:
+    schema: str
+    table: str
+    column: str
+
+    @property
+    def check_name(self) -> str:
+        return f"schema_column:{self.schema}.{self.table}.{self.column}"
+
+
+@dataclass(frozen=True)
+class CanaryFailure:
+    check: str
+    actual: int
+    floor: int
+
+
+_REQUIRED_SCHEMA_COLUMNS: tuple[RequiredSchemaColumn, ...] = (
+    RequiredSchemaColumn("civic", "zcta_district", "boundary_year"),
+    RequiredSchemaColumn("cf", "candidate", "candidate_contrib"),
+    RequiredSchemaColumn("cf", "candidate", "candidate_loans"),
+    RequiredSchemaColumn("cf", "candidate", "candidate_loan_repay"),
+)
 
 
 def _should_skip(env: dict[str, str] | None = None) -> bool:
@@ -43,6 +71,46 @@ def _deadline_seconds() -> float:
         return float(raw)
     except ValueError:
         return 30.0
+
+
+def _required_schema_parameters() -> tuple[str, ...]:
+    return tuple(
+        value
+        for required_column in _REQUIRED_SCHEMA_COLUMNS
+        for value in (required_column.schema, required_column.table, required_column.column)
+    )
+
+
+def _required_schema_values_sql() -> str:
+    return ", ".join(["(%s, %s, %s)"] * len(_REQUIRED_SCHEMA_COLUMNS))
+
+
+def _missing_required_schema_checks(connection: object) -> list[str]:
+    check_names = {
+        (required_column.schema, required_column.table, required_column.column): required_column.check_name
+        for required_column in _REQUIRED_SCHEMA_COLUMNS
+    }
+    query = f"""
+        WITH required(table_schema, table_name, column_name) AS (
+            VALUES {_required_schema_values_sql()}
+        )
+        SELECT required.table_schema, required.table_name, required.column_name
+        FROM required
+        LEFT JOIN information_schema.columns AS columns
+          ON columns.table_schema = required.table_schema
+         AND columns.table_name = required.table_name
+         AND columns.column_name = required.column_name
+        WHERE columns.column_name IS NULL
+        ORDER BY required.table_schema, required.table_name, required.column_name
+    """
+    with connection.cursor() as cursor:
+        cursor.execute(query, _required_schema_parameters())
+        missing_columns = cursor.fetchall()
+    return [check_names[(schema, table, column)] for schema, table, column in missing_columns]
+
+
+def _schema_failures(missing_checks: Sequence[str]) -> list[CanaryFailure]:
+    return [CanaryFailure(check=check, actual=0, floor=1) for check in missing_checks]
 
 
 def main() -> int:
@@ -69,7 +137,12 @@ def main() -> int:
             continue
 
         try:
-            failures = evaluate_content_health(connection, floors=floors)
+            missing_schema_checks = _missing_required_schema_checks(connection)
+            failures = (
+                _schema_failures(missing_schema_checks)
+                if missing_schema_checks
+                else evaluate_content_health(connection, floors=floors)
+            )
         finally:
             try:
                 connection.close()

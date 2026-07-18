@@ -154,12 +154,14 @@ CAMPAIGN_FINANCE_CANDIDATE_DETAIL_SQL = f"""
 # classes that were being wrongly summed into candidate totals: party
 # committees (FEC committee_type X/Y/Z -- NRSC/DSCC/NRCC/DCCC) and joint
 # fundraising committees (committee_designation 'J', whose receipts are split
-# and transferred out to participant committees). Summing a party committee
-# inflated the /congress money leaderboard's #1 entry ~23x (a senator shown at
-# ~$150M against a real ~$6.5M). ``IS DISTINCT FROM`` keeps rows whose
-# type/designation is NULL/unknown, so a legitimate principal/authorized
-# committee (committee_type H/S/P, designation P/A) is never dropped. Applied by
-# all three candidate-money owners below via a ``cm`` alias on ``cf.committee``.
+# and transferred out to participant committees), plus leadership PACs
+# (committee_designation 'D'), which are not authorized candidate committees.
+# Summing a party committee inflated the /congress money leaderboard's #1 entry
+# ~23x (a senator shown at ~$150M against a real ~$6.5M). ``IS DISTINCT FROM``
+# keeps rows whose type/designation is NULL/unknown, so a legitimate
+# principal/authorized committee (committee_type H/S/P, designation P/A) is
+# never dropped. Applied by all three candidate-money owners below via a ``cm``
+# alias on ``cf.committee``.
 #
 # This filter guards the committee-sum FALLBACK, which now fires only when a
 # candidate has no official FEC weball total covering the selected cycle. The
@@ -174,15 +176,16 @@ CAMPAIGN_FINANCE_CANDIDATE_DETAIL_SQL = f"""
 # link designation IN ('P','A'). We deliberately do NOT mirror that allowlist in
 # the fallback. Verified against live prod (2026-07-17): some candidates' only
 # committee link is non-P/A, so a strict allowlist would zero them in the
-# fallback; a denylist scoped to the two confirmed-wrong classes fixes the bug
-# without that regression. Leadership-PAC (designation 'D') / unauthorized
-# committees summed here therefore affect only candidates lacking an official
-# total -- a residual tracked in ROADMAP.md, not the common case.
+# fallback; a denylist scoped to the confirmed-wrong classes fixes the bug
+# without that regression. Other unauthorized committees summed here therefore
+# affect only candidates lacking an official total -- a residual tracked in
+# ROADMAP.md, not the common case.
 _AUTHORIZED_CANDIDATE_COMMITTEE_FILTER = (
     "cm.committee_type IS DISTINCT FROM 'X'\n"
     "      AND cm.committee_type IS DISTINCT FROM 'Y'\n"
     "      AND cm.committee_type IS DISTINCT FROM 'Z'\n"
-    "      AND cm.committee_designation IS DISTINCT FROM 'J'"
+    "      AND cm.committee_designation IS DISTINCT FROM 'J'\n"
+    "      AND cm.committee_designation IS DISTINCT FROM 'D'"
 )
 
 CANDIDATE_LINKED_COMMITTEE_IDS_SQL = f"""
@@ -1769,6 +1772,16 @@ _STATE_SUMMARY_WARNING_TIERS: frozenset[str] = frozenset({"freshness-limited", "
 # totals/counts/top spenders. Raw IE transaction lists stay source-faithful.
 CANDIDATE_IE_OUTLIER_CEILING: Decimal = Decimal("100000000.00")
 _IE_OUTLIER_WHERE_CLAUSE = "t.amount <= %s"
+CANDIDATE_RECEIPTS_CEILING_BY_OFFICE: dict[str, int] = {
+    "H": 60_000_000,
+    "S": 150_000_000,
+    "P": 2_000_000_000,
+}
+
+
+def exceeds_receipts_ceiling(office: str, total: Decimal) -> bool:
+    return total > CANDIDATE_RECEIPTS_CEILING_BY_OFFICE[office]
+
 
 _STATE_TRANSACTION_AGGREGATES_SQL = f"""
     SELECT
@@ -2224,6 +2237,22 @@ def _json_object(value: Any) -> dict[str, Any]:
     return dict(decoded)
 
 
+def _parse_json_date(value: Any) -> date | None:
+    if value is None or isinstance(value, date):
+        return value
+    return date.fromisoformat(str(value))
+
+
+def _normalize_filing_breakdown_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    for row in rows:
+        row["filing_id"] = row["filing_id"] if isinstance(row["filing_id"], UUID) else UUID(str(row["filing_id"]))
+        for field_name in ("coverage_start_date", "coverage_end_date", "receipt_date"):
+            row[field_name] = _parse_json_date(row[field_name])
+        _quantize_money_fields(row, "total_raised", "total_spent", "net", "cash_on_hand")
+        row["row_id"] = f"{row['filing_id']}:{row['amendment_indicator']}"
+    return rows
+
+
 def _empty_committee_top_lists() -> dict[str, list[dict[str, Any]]]:
     return {
         "top_donors": [],
@@ -2240,17 +2269,35 @@ def _fetch_committee_top_lists(
     """Fetch and normalize committee donor, vendor, and spend-category rankings."""
     with conn.cursor(row_factory=dict_row) as cursor:
         cursor.execute(
-            COMMITTEE_TOP_LISTS_SQL,
-            (
-                committee_id,
-                selected_cycle.coverage_start_date,
-                selected_cycle.coverage_end_date,
-                _COMMITTEE_TOP_PARTIES_LIMIT,
-                _COMMITTEE_TOP_PARTIES_LIMIT,
-                _COMMITTEE_SPEND_CATEGORY_LIMIT,
-            ),
+            """
+            SELECT
+                cs.derived_top_donors AS top_donors,
+                cs.derived_top_vendors AS top_vendors,
+                cs.derived_spend_categories AS spend_categories
+            FROM cf.committee_summary cs
+            WHERE cs.committee_id = %s
+              AND cs.cycle = %s
+              AND cs.derived_top_donors IS NOT NULL
+              AND cs.derived_top_vendors IS NOT NULL
+              AND cs.derived_spend_categories IS NOT NULL
+            """,
+            (committee_id, selected_cycle.selected_cycle),
         )
         row = cursor.fetchone()
+
+        if row is None:
+            cursor.execute(
+                COMMITTEE_TOP_LISTS_SQL,
+                (
+                    committee_id,
+                    selected_cycle.coverage_start_date,
+                    selected_cycle.coverage_end_date,
+                    _COMMITTEE_TOP_PARTIES_LIMIT,
+                    _COMMITTEE_TOP_PARTIES_LIMIT,
+                    _COMMITTEE_SPEND_CATEGORY_LIMIT,
+                ),
+            )
+            row = cursor.fetchone()
 
     if row is None:
         return _empty_committee_top_lists()
@@ -3115,13 +3162,24 @@ def fetch_committee_filing_breakdown(
 ) -> list[dict[str, Any]]:
     """Return per-filing fundraising totals for a committee."""
     with conn.cursor(row_factory=dict_row) as cursor:
+        cursor.execute(
+            """
+            SELECT derived_filing_breakdown
+            FROM cf.committee_summary
+            WHERE committee_id = %s
+            ORDER BY derived_data_through DESC NULLS LAST, cycle DESC, id ASC
+            LIMIT 1
+            """,
+            (committee_id,),
+        )
+        stored_row = cursor.fetchone()
+        if stored_row is not None and stored_row["derived_filing_breakdown"] is not None:
+            return _normalize_filing_breakdown_rows(_json_rows(stored_row["derived_filing_breakdown"]))
+
         cursor.execute(COMMITTEE_FILING_BREAKDOWN_SQL, (committee_id, committee_id))
         filing_rows = list(cursor.fetchall())
 
-    for filing_row in filing_rows:
-        _quantize_money_fields(filing_row, "total_raised", "total_spent", "net", "cash_on_hand")
-        filing_row["row_id"] = f"{filing_row['filing_id']}:{filing_row['amendment_indicator']}"
-    return filing_rows
+    return _normalize_filing_breakdown_rows(filing_rows)
 
 
 def fetch_cf_summary_by_county(

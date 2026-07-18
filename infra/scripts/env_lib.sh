@@ -10,18 +10,40 @@ get_file_mode_octal() {
   local path="$1"
   local mode
 
-  if mode="$(stat -f '%Lp' -- "${path}" 2>/dev/null)"; then
+  if mode="$(command -p stat -f '%Lp' -- "${path}" 2>/dev/null)"; then
     printf '%s\n' "${mode}"
     return 0
   fi
 
-  if mode="$(stat -c '%a' -- "${path}" 2>/dev/null)"; then
+  if mode="$(command -p stat -c '%a' -- "${path}" 2>/dev/null)"; then
     printf '%s\n' "${mode}"
     return 0
   fi
 
   echo "Unable to determine permissions for path: ${path}" >&2
   return 1
+}
+
+parent_dir_path() {
+  local path="${1%/}"
+
+  if [[ -z "${path}" || "${path}" == "/" ]]; then
+    printf '/\n'
+    return 0
+  fi
+
+  if [[ "${path}" != */* ]]; then
+    printf '.\n'
+    return 0
+  fi
+
+  path="${path%/*}"
+  if [[ -z "${path}" ]]; then
+    printf '/\n'
+    return 0
+  fi
+
+  printf '%s\n' "${path}"
 }
 
 # Trusted env files and PATH entries also depend on their parent directories:
@@ -38,7 +60,7 @@ require_private_parent_directories() {
   else
     current_path="${target_path}"
   fi
-  current_path="$(dirname "${current_path}")"
+  current_path="$(parent_dir_path "${current_path}")"
 
   while :; do
     if [[ -L "${current_path}" ]]; then
@@ -56,13 +78,77 @@ require_private_parent_directories() {
       break
     fi
 
-    next_path="$(dirname "${current_path}")"
+    next_path="$(parent_dir_path "${current_path}")"
     if [[ "${next_path}" == "${current_path}" ]]; then
       break
     fi
     current_path="${next_path}"
   done
 }
+
+path_entry_is_private_directory() {
+  local path_entry="$1"
+  local mode
+
+  PATH_ENTRY_PRIVATE_REJECTION=""
+  PATH_ENTRY_PRIVATE_MODE=""
+
+  if [[ "${path_entry}" != /* ]]; then
+    PATH_ENTRY_PRIVATE_REJECTION="not_absolute"
+    return 1
+  fi
+
+  if [[ ! -d "${path_entry}" ]]; then
+    PATH_ENTRY_PRIVATE_REJECTION="not_directory"
+    return 1
+  fi
+
+  if [[ -L "${path_entry}" ]]; then
+    PATH_ENTRY_PRIVATE_REJECTION="symlink"
+    return 1
+  fi
+
+  mode="$(get_file_mode_octal "${path_entry}")" || return 1
+  if (( (8#${mode} & 8#022) != 0 )); then
+    PATH_ENTRY_PRIVATE_REJECTION="writable"
+    PATH_ENTRY_PRIVATE_MODE="${mode}"
+    return 1
+  fi
+
+  return 0
+}
+
+# Cron and operator shells can inherit attacker-controlled PATH entries before
+# this file is sourced. Secret-bearing callers source env_lib.sh before loading
+# .env values, so sanitize the inherited command search path here once the
+# trusted permission helpers are available. The sanitizer is intentionally a
+# leaf-only policy: it removes entries that are not absolute, real, private
+# directories without reordering accepted entries. Callers that put a directory
+# ahead of system tools later still use require_private_parent_directories()
+# where ancestor replacement would change the validated leaf.
+sanitize_inherited_path() {
+  local entry path_to_scan="${PATH:-}:" sanitized_path=""
+
+  while [[ -n "${path_to_scan}" ]]; do
+    entry="${path_to_scan%%:*}"
+    path_to_scan="${path_to_scan#*:}"
+    if path_entry_is_private_directory "${entry}"; then
+      if [[ -z "${sanitized_path}" ]]; then
+        sanitized_path="${entry}"
+      else
+        sanitized_path="${sanitized_path}:${entry}"
+      fi
+    fi
+  done
+
+  if [[ -z "${sanitized_path}" ]]; then
+    sanitized_path="/usr/bin:/bin"
+  fi
+
+  export PATH="${sanitized_path}"
+}
+
+sanitize_inherited_path
 
 # Secret-bearing env files must not be accessible to group/other users.
 require_private_env_file() {
@@ -110,24 +196,23 @@ prepend_private_local_bin() {
     return 0
   fi
 
-  if [[ ! -d "${bin_dir}" ]]; then
-    echo "Skipping non-directory PATH entry: ${bin_dir}" >&2
-    return 0
-  fi
-
-  if [[ -L "${bin_dir}" ]]; then
-    echo "Skipping symlinked PATH entry: ${bin_dir}" >&2
-    return 0
-  fi
-
   if ! require_private_parent_directories "${bin_dir}" "PATH entry" "Skipping"; then
     return 0
   fi
 
-  mode="$(get_file_mode_octal "${bin_dir}")" || return 1
-
-  if (( (8#${mode} & 8#022) != 0 )); then
-    echo "Skipping PATH entry writable by group/other: ${bin_dir} (mode ${mode})" >&2
+  if ! path_entry_is_private_directory "${bin_dir}"; then
+    case "${PATH_ENTRY_PRIVATE_REJECTION}" in
+      not_directory|not_absolute)
+        echo "Skipping non-directory PATH entry: ${bin_dir}" >&2
+        ;;
+      symlink)
+        echo "Skipping symlinked PATH entry: ${bin_dir}" >&2
+        ;;
+      writable)
+        mode="${PATH_ENTRY_PRIVATE_MODE}"
+        echo "Skipping PATH entry writable by group/other: ${bin_dir} (mode ${mode})" >&2
+        ;;
+    esac
     return 0
   fi
 

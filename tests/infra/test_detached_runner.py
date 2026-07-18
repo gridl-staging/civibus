@@ -168,7 +168,7 @@ def test_start_status_and_wait_report_terminal_metadata(tmp_path: Path) -> None:
 def test_wait_timeout_is_distinct_and_does_not_kill_job(tmp_path: Path) -> None:
     job_root = tmp_path / "jobs"
     job_name = "timeout_job"
-    start = _run_runner(job_root, "start", job_name, "--", *_fixture_command(exit_code=0, sleep_seconds="2.0"))
+    start = _run_runner(job_root, "start", job_name, "--", *_fixture_command(exit_code=0, sleep_seconds="5.0"))
     assert start.returncode == 0, start.stderr
     start_payload = _json_stdout(start)
 

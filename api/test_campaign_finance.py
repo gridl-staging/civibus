@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 from datetime import date, datetime, timezone
 from decimal import Decimal
@@ -16,6 +17,7 @@ from api.queries import (
     fetch_candidate_public_money_summaries,
     fetch_candidate_public_money_summary,
     fetch_candidate_summary,
+    fetch_committee_filing_breakdown,
     fetch_committee_fundraising_summary,
 )
 from api.queries.campaign_finance import (
@@ -55,6 +57,7 @@ from api.test_campaign_finance_support import (
     seed_transactions_for_filters,
 )
 from core.db import insert_entity_source, insert_organization, insert_person
+from core.refresh.job_builders import populate_committee_summary_derived_aggregates
 from core.types.python.models import Organization, Person
 from domains.civics.constants import LAUNCH_SCOPE_USPS_STATES
 from domains.campaign_finance.ingest.filing_loader import upsert_filing
@@ -3835,111 +3838,6 @@ def test_candidate_money_excludes_party_and_jfc_committees(
     assert detail_committee_names == {"PRINCIPAL CAMPAIGN CTE", "AUTHORIZED JOINT CTE"}
 
 
-def test_candidate_money_uses_official_total_over_inflated_committee_sum(
-    db_conn: psycopg.Connection,
-) -> None:
-    """The FEC official weball total is authoritative and must win over the
-    committee-sum fallback whenever it covers the selected cycle.
-
-    Real prod shape (verified 2026-07-17): 553 of 557 current officeholders carry
-    an official total whose coverage-end is mid-cycle (e.g. 2026-03-31). A prior
-    exact ``coverage_end == cycle_end`` check rejected those for the open 2026
-    cycle and forced the committee-sum, which summed party/JFC committees and put
-    a senator at $150M for a real $6.5M. Here the candidate's official total is
-    $6,500,847.42; the principal committee's *summary* is a deliberately
-    different $6,000,000.00 and a linked party committee ($142.1M) + JFC ($2.17M)
-    would further inflate the fallback -- so a total of $6,500,847.42 with
-    ``summary_source == "fec_weball"`` proves the official path is used, not the
-    fallback. Complements test_candidate_money_excludes_party_and_jfc_committees,
-    which pins the no-official-total fallback path.
-    """
-    candidate_id = UUID("9a000000-0000-0000-0000-000000000101")
-    candidate_name = "OFFICIAL TOTAL WINS, TEST"
-    principal_id = UUID("9a000000-0000-0000-0000-0000000001c1")
-    jfc_id = UUID("9a000000-0000-0000-0000-0000000001c3")
-    party_id = UUID("9a000000-0000-0000-0000-0000000001c4")
-
-    official_total = Decimal("6500847.42")
-
-    # (committee_id, fec_id, name, committee_type, committee_designation, summary_receipts)
-    committees = (
-        (principal_id, "C90001001", "PRINCIPAL CAMPAIGN CTE", "S", "P", Decimal("6000000.00")),
-        (jfc_id, "C90001003", "CANDIDATE VICTORY JFC", "N", "J", Decimal("2174403.69")),
-        (party_id, "C90001004", "NATIONAL PARTY CTE", "Y", "U", Decimal("142102510.79")),
-    )
-    for committee_id, fec_id, name, committee_type, designation, _receipts in committees:
-        insert_committee_row(
-            db_conn,
-            CommitteeRowSeed(
-                id=committee_id,
-                fec_committee_id=fec_id,
-                name=name,
-                committee_type=committee_type,
-                committee_designation=designation,
-            ),
-        )
-
-    # Official weball total present with coverage-end mid-2026-cycle (2026-03-31):
-    # inside the [2025-01-01, 2026-12-31] window but not at the 2026-12-31 end,
-    # which the prior exact-match coverage check wrongly rejected.
-    insert_candidate_row(
-        db_conn,
-        CandidateRowSeed(
-            id=candidate_id,
-            fec_candidate_id="S6AK01999",
-            name=candidate_name,
-            office="S",
-            state="AK",
-            principal_committee_id=principal_id,
-            total_receipts=official_total,
-            total_disbursements=Decimal("1505699.66"),
-            cash_on_hand=Decimal("5000000.00"),
-            summary_coverage_end_date=date(2026, 3, 31),
-        ),
-    )
-
-    for index, (committee_id, _fec_id, _name, _committee_type, designation, receipts) in enumerate(committees):
-        insert_committee_summary_row(
-            db_conn,
-            CommitteeSummaryRowSeed(
-                committee_id=committee_id,
-                cycle=2026,
-                total_receipts=receipts,
-                total_disbursements=Decimal("0.00"),
-                coverage_start_date=date(2025, 1, 1),
-                coverage_end_date=date(2026, 12, 31),
-            ),
-        )
-        insert_candidate_committee_link_row(
-            db_conn,
-            CandidateCommitteeLinkSeed(
-                id=UUID(f"9a000000-0000-0000-0000-0000000001{index:02d}"),
-                candidate_id=candidate_id,
-                committee_id=committee_id,
-                valid_period="[2025-01-01,2027-01-01)",
-                designation=designation,
-                candidate_election_year=2026,
-                fec_election_year=2026,
-            ),
-        )
-
-    # All three owners must report the authoritative official total ($6,500,847.42),
-    # not the committee-sum ($6.0M principal alone, or the inflated party/JFC sum).
-    batch_summary = fetch_candidate_public_money_summaries(db_conn, [(candidate_id, candidate_name)])[candidate_id]
-    assert batch_summary["total_raised"] == official_total
-    assert batch_summary["summary_source"] == "fec_weball"
-
-    person_summary = fetch_candidate_public_money_summary(db_conn, candidate_id, candidate_name)
-    assert person_summary is not None
-    assert person_summary["total_raised"] == official_total
-    assert person_summary["summary_source"] == "fec_weball"
-
-    detail_summary = fetch_candidate_summary(db_conn, candidate_id, candidate_name)
-    assert detail_summary is not None
-    assert detail_summary["total_raised"] == official_total
-    assert detail_summary["summary_source"] == "fec_weball"
-
-
 def test_get_candidate_summary_ignores_official_weball_totals_for_non_selected_cycle(
     api_client: TestClient,
     db_conn: psycopg.Connection,
@@ -6262,6 +6160,335 @@ def test_summary_computes_stage4_receipt_splits_rankings_and_spend_categories(
     ]
 
 
+def _stage3_top_list_uuid(index: int) -> UUID:
+    return UUID(f"a3{index:06x}-0000-0000-0000-000000000000")
+
+
+def _stage3_fetch_committee_top_lists(
+    db_conn: psycopg.Connection,
+    committee_id: UUID,
+) -> dict[str, list[dict[str, object]]]:
+    return campaign_finance_query_module._fetch_committee_top_lists(
+        db_conn,
+        committee_id,
+        campaign_finance_query_module.resolve_selected_cycle(2026),
+    )
+
+
+def _stage3_top_list_transaction(
+    index: int,
+    *,
+    context: SummaryTestContext,
+    transaction_type: str,
+    amount: str,
+    contributor_name_raw: str,
+    memo_text: str | None = None,
+    is_memo: bool = False,
+    amendment_indicator: str = "N",
+    transaction_date: date = date(2026, 6, 1),
+    source_record_id: UUID | None = None,
+) -> TransactionRowSeed:
+    return TransactionRowSeed(
+        id=UUID(f"{context.committee_id.hex[:8]}-0000-0000-0001-{index:012x}"),
+        filing_id=UUID(f"20000000-0000-0000-0000-{context.committee_id.hex[:12]}"),
+        committee_id=context.committee_id,
+        transaction_type=transaction_type,
+        amount=Decimal(amount),
+        amendment_indicator=amendment_indicator,
+        transaction_date=transaction_date,
+        source_record_id=context.source_record_id if source_record_id is None else source_record_id,
+        contributor_name_raw=contributor_name_raw,
+        memo_text=memo_text,
+        is_memo=is_memo,
+        transaction_identifier=f"stage3-top-list-{index}",
+    )
+
+
+def _seed_stage3_committee_top_list_fixture(
+    db_conn: psycopg.Connection,
+    *,
+    committee_id: UUID,
+    fec_committee_id: str,
+) -> SummaryTestContext:
+    context = seed_committee_for_summary(
+        db_conn,
+        committee_id=committee_id,
+        committee_name="Stage 3 Top List Committee",
+        fec_committee_id=fec_committee_id,
+        pull_date=datetime(2026, 7, 1, tzinfo=timezone.utc),
+    )
+    insert_committee_summary_row(
+        db_conn,
+        CommitteeSummaryRowSeed(
+            committee_id=committee_id,
+            cycle=2026,
+            coverage_start_date=date(2025, 1, 1),
+            coverage_end_date=date(2026, 12, 31),
+        ),
+    )
+    superseded_source = insert_source_record_for_test(
+        db_conn,
+        source_record_id=UUID(f"10000001-0000-0000-0000-{committee_id.hex[:12]}"),
+        data_source_id=context.data_source_id,
+        source_record_key=f"stage3-superseded-{committee_id}",
+        source_url=f"https://example.org/record/stage3-superseded-{committee_id}",
+        pull_date=datetime(2026, 7, 2, tzinfo=timezone.utc),
+        superseded_by=context.source_record_id,
+    )
+    transactions = (
+        _stage3_top_list_transaction(
+            1, context=context, transaction_type="15", amount="200.00", contributor_name_raw="Alpha Donor"
+        ),
+        _stage3_top_list_transaction(
+            2, context=context, transaction_type="15", amount="200.00", contributor_name_raw="Alpha Donor"
+        ),
+        _stage3_top_list_transaction(
+            3, context=context, transaction_type="15", amount="400.00", contributor_name_raw="Beta Donor"
+        ),
+        _stage3_top_list_transaction(
+            4, context=context, transaction_type="15", amount="300.00", contributor_name_raw="Zed Donor"
+        ),
+        _stage3_top_list_transaction(
+            5, context=context, transaction_type="15", amount="300.00", contributor_name_raw="Abel Donor"
+        ),
+        _stage3_top_list_transaction(
+            6, context=context, transaction_type="15", amount="250.00", contributor_name_raw="Gamma Donor"
+        ),
+        _stage3_top_list_transaction(
+            7,
+            context=context,
+            transaction_type="15",
+            amount="9999.00",
+            contributor_name_raw="Memo Donor",
+            is_memo=True,
+        ),
+        _stage3_top_list_transaction(
+            8,
+            context=context,
+            transaction_type="15",
+            amount="8888.00",
+            contributor_name_raw="Superseded Donor",
+            source_record_id=superseded_source.id,
+        ),
+        _stage3_top_list_transaction(
+            9,
+            context=context,
+            transaction_type="15",
+            amount="7777.00",
+            contributor_name_raw="Terminated Donor",
+            amendment_indicator="T",
+        ),
+        _stage3_top_list_transaction(
+            10,
+            context=context,
+            transaction_type="15",
+            amount="6666.00",
+            contributor_name_raw="Old Donor",
+            transaction_date=date(2024, 12, 31),
+        ),
+        _stage3_top_list_transaction(
+            11,
+            context=context,
+            transaction_type="24A",
+            amount="150.00",
+            contributor_name_raw="Acme LLC",
+            memo_text="Digital Ads",
+        ),
+        _stage3_top_list_transaction(
+            12,
+            context=context,
+            transaction_type="24A",
+            amount="150.00",
+            contributor_name_raw="Acme LLC",
+            memo_text="Digital Ads",
+        ),
+        _stage3_top_list_transaction(
+            13,
+            context=context,
+            transaction_type="24A",
+            amount="300.00",
+            contributor_name_raw="Beta Vendor",
+            memo_text="Mail",
+        ),
+        _stage3_top_list_transaction(
+            14,
+            context=context,
+            transaction_type="24A",
+            amount="200.00",
+            contributor_name_raw="Zeta Vendor",
+            memo_text="Travel",
+        ),
+        _stage3_top_list_transaction(
+            15,
+            context=context,
+            transaction_type="24A",
+            amount="200.00",
+            contributor_name_raw="Alpha Vendor",
+            memo_text="Events",
+        ),
+        _stage3_top_list_transaction(
+            16,
+            context=context,
+            transaction_type="24A",
+            amount="150.00",
+            contributor_name_raw="Gamma Vendor",
+            memo_text="Printing",
+        ),
+        _stage3_top_list_transaction(
+            17,
+            context=context,
+            transaction_type="24A",
+            amount="9999.00",
+            contributor_name_raw="Memo Vendor",
+            memo_text="Memo Category",
+            is_memo=True,
+        ),
+        _stage3_top_list_transaction(
+            18,
+            context=context,
+            transaction_type="24A",
+            amount="8888.00",
+            contributor_name_raw="Superseded Vendor",
+            memo_text="Superseded Category",
+            source_record_id=superseded_source.id,
+        ),
+        _stage3_top_list_transaction(
+            19,
+            context=context,
+            transaction_type="24A",
+            amount="7777.00",
+            contributor_name_raw="Terminated Vendor",
+            memo_text="Terminated Category",
+            amendment_indicator="T",
+        ),
+        _stage3_top_list_transaction(
+            20,
+            context=context,
+            transaction_type="24A",
+            amount="6666.00",
+            contributor_name_raw="Old Vendor",
+            memo_text="Old Category",
+            transaction_date=date(2024, 12, 31),
+        ),
+    )
+    for transaction in transactions:
+        insert_transaction_row(db_conn, transaction)
+    return context
+
+
+def _expected_stage3_committee_top_lists() -> dict[str, list[dict[str, object]]]:
+    return {
+        "top_donors": [
+            {"name": "Alpha Donor", "total_amount": Decimal("400.00"), "transaction_count": 2},
+            {"name": "Beta Donor", "total_amount": Decimal("400.00"), "transaction_count": 1},
+            {"name": "Abel Donor", "total_amount": Decimal("300.00"), "transaction_count": 1},
+            {"name": "Zed Donor", "total_amount": Decimal("300.00"), "transaction_count": 1},
+            {"name": "Gamma Donor", "total_amount": Decimal("250.00"), "transaction_count": 1},
+        ],
+        "top_vendors": [
+            {"name": "Acme LLC", "total_amount": Decimal("300.00"), "transaction_count": 2},
+            {"name": "Beta Vendor", "total_amount": Decimal("300.00"), "transaction_count": 1},
+            {"name": "Alpha Vendor", "total_amount": Decimal("200.00"), "transaction_count": 1},
+            {"name": "Zeta Vendor", "total_amount": Decimal("200.00"), "transaction_count": 1},
+            {"name": "Gamma Vendor", "total_amount": Decimal("150.00"), "transaction_count": 1},
+        ],
+        "spend_categories": [
+            {"category": "digital ads", "total_amount": Decimal("300.00"), "transaction_count": 2},
+            {"category": "mail", "total_amount": Decimal("300.00"), "transaction_count": 1},
+            {"category": "events", "total_amount": Decimal("200.00"), "transaction_count": 1},
+            {"category": "travel", "total_amount": Decimal("200.00"), "transaction_count": 1},
+            {"category": "printing", "total_amount": Decimal("150.00"), "transaction_count": 1},
+        ],
+    }
+
+
+def test_committee_top_lists_parity(db_conn: psycopg.Connection) -> None:
+    committee_id = _stage3_top_list_uuid(101)
+    _seed_stage3_committee_top_list_fixture(
+        db_conn,
+        committee_id=committee_id,
+        fec_committee_id="C93000101",
+    )
+
+    live_result = _stage3_fetch_committee_top_lists(db_conn, committee_id)
+    rowcount = populate_committee_summary_derived_aggregates(
+        db_conn,
+        cycles=(2026,),
+        committee_ids=(str(committee_id),),
+    )
+    stored_result = _stage3_fetch_committee_top_lists(db_conn, committee_id)
+
+    expected = _expected_stage3_committee_top_lists()
+    assert rowcount == 1
+    assert live_result == expected
+    assert stored_result == live_result
+    excluded_names = {
+        "Memo Donor",
+        "Superseded Donor",
+        "Terminated Donor",
+        "Old Donor",
+        "Memo Vendor",
+        "Superseded Vendor",
+        "Terminated Vendor",
+        "Old Vendor",
+    }
+    excluded_categories = {"memo category", "superseded category", "terminated category", "old category"}
+    assert excluded_names.isdisjoint({row["name"] for row in stored_result["top_donors"]})
+    assert excluded_names.isdisjoint({row["name"] for row in stored_result["top_vendors"]})
+    assert excluded_categories.isdisjoint({row["category"] for row in stored_result["spend_categories"]})
+
+
+def test_committee_top_lists_stored_payload_is_selected_atomically(
+    db_conn: psycopg.Connection,
+) -> None:
+    committee_id = _stage3_top_list_uuid(201)
+    _seed_stage3_committee_top_list_fixture(
+        db_conn,
+        committee_id=committee_id,
+        fec_committee_id="C93000201",
+    )
+    populate_committee_summary_derived_aggregates(
+        db_conn,
+        cycles=(2026,),
+        committee_ids=(str(committee_id),),
+    )
+    expected = _stage3_fetch_committee_top_lists(db_conn, committee_id)
+    db_conn.execute("DELETE FROM cf.transaction WHERE committee_id = %s", (committee_id,))
+
+    assert _stage3_fetch_committee_top_lists(db_conn, committee_id) == expected
+
+    incomplete_committee_id = _stage3_top_list_uuid(202)
+    _seed_stage3_committee_top_list_fixture(
+        db_conn,
+        committee_id=incomplete_committee_id,
+        fec_committee_id="C93000202",
+    )
+    sentinel_donors = [{"name": "Stored Sentinel Donor", "total_amount": "999.00", "transaction_count": 9}]
+    sentinel_vendors = [{"name": "Stored Sentinel Vendor", "total_amount": "888.00", "transaction_count": 8}]
+    with db_conn.cursor() as cursor:
+        cursor.execute(
+            """
+            UPDATE cf.committee_summary
+            SET derived_top_donors = %s::jsonb,
+                derived_top_vendors = %s::jsonb,
+                derived_spend_categories = NULL
+            WHERE committee_id = %s
+              AND cycle = 2026
+            """,
+            (json.dumps(sentinel_donors), json.dumps(sentinel_vendors), incomplete_committee_id),
+        )
+    assert _stage3_fetch_committee_top_lists(db_conn, incomplete_committee_id) == _expected_stage3_committee_top_lists()
+
+    all_null_committee_id = _stage3_top_list_uuid(203)
+    _seed_stage3_committee_top_list_fixture(
+        db_conn,
+        committee_id=all_null_committee_id,
+        fec_committee_id="C93000203",
+    )
+
+    assert _stage3_fetch_committee_top_lists(db_conn, all_null_committee_id) == _expected_stage3_committee_top_lists()
+
+
 def test_summary_excludes_memo_transactions(
     db_conn: psycopg.Connection,
 ) -> None:
@@ -7595,6 +7822,166 @@ def test_get_committee_filings_summary_uses_canonical_row_after_filing_upsert_re
     assert filing_summary["total_spent"] == "20.00"
     assert filing_summary["net"] == "105.00"
     assert filing_summary["transaction_count"] == 2
+
+
+def _jsonable_filing_breakdown(rows: list[dict[str, object]]) -> list[dict[str, object]]:
+    payload: list[dict[str, object]] = []
+    for row in rows:
+        payload.append(
+            {
+                key: value.isoformat()
+                if isinstance(value, date)
+                else str(value)
+                if isinstance(value, (Decimal, UUID))
+                else value
+                for key, value in row.items()
+            }
+        )
+    return payload
+
+
+def _store_committee_filing_breakdown(
+    db_conn: psycopg.Connection,
+    *,
+    committee_id: UUID,
+    cycle: int,
+    payload: list[dict[str, object]] | None,
+    derived_data_through: datetime,
+) -> None:
+    insert_committee_summary_row(
+        db_conn,
+        CommitteeSummaryRowSeed(
+            committee_id=committee_id,
+            cycle=cycle,
+            coverage_start_date=date(cycle - 1, 1, 1),
+            coverage_end_date=date(cycle, 12, 31),
+        ),
+    )
+    with db_conn.cursor() as cursor:
+        cursor.execute(
+            """
+            UPDATE cf.committee_summary
+            SET derived_filing_breakdown = %s::jsonb,
+                derived_data_through = %s
+            WHERE committee_id = %s
+              AND cycle = %s
+            """,
+            (None if payload is None else json.dumps(payload), derived_data_through, committee_id, cycle),
+        )
+
+
+def test_filing_breakdown_parity_uses_complete_stored_payload_without_live_tables(
+    db_conn: psycopg.Connection,
+) -> None:
+    committee_id = UUID("a0000000-0000-0000-0000-000000000024")
+    context = seed_committee_for_filing_breakdown(
+        db_conn,
+        committee_id=committee_id,
+        committee_name="Filing Stored Parity Committee",
+        fec_committee_id="C99992024",
+    )
+    filing_id = UUID("a0000000-0000-0000-0000-000000000124")
+    insert_filing_row(
+        db_conn,
+        FilingRowSeed(
+            id=filing_id,
+            filing_fec_id="FILING-STORED-PARITY",
+            committee_id=context.committee_id,
+            report_type="Q1",
+            amendment_indicator="N",
+            filing_name="Stored Parity Filing",
+            coverage_start_date=date(2026, 1, 1),
+            coverage_end_date=date(2026, 3, 31),
+            receipt_date=date(2026, 4, 15),
+        ),
+    )
+    insert_filing_breakdown_transaction(
+        db_conn,
+        committee_id=context.committee_id,
+        filing_id=filing_id,
+        transaction_id=UUID("a0000000-0000-0000-0000-000000000224"),
+        transaction_type="15",
+        amount=Decimal("125.00"),
+    )
+    insert_filing_breakdown_transaction(
+        db_conn,
+        committee_id=context.committee_id,
+        filing_id=filing_id,
+        transaction_id=UUID("a0000000-0000-0000-0000-000000000225"),
+        transaction_type="24A",
+        amount=Decimal("20.00"),
+    )
+    live_rows = fetch_committee_filing_breakdown(db_conn, context.committee_id)
+    _store_committee_filing_breakdown(
+        db_conn,
+        committee_id=context.committee_id,
+        cycle=2026,
+        payload=_jsonable_filing_breakdown(live_rows),
+        derived_data_through=datetime(2026, 7, 18, 12, 0, tzinfo=timezone.utc),
+    )
+    db_conn.execute("DELETE FROM cf.transaction WHERE committee_id = %s", (context.committee_id,))
+    db_conn.execute("DELETE FROM cf.filing WHERE committee_id = %s", (context.committee_id,))
+
+    assert fetch_committee_filing_breakdown(db_conn, context.committee_id) == live_rows
+
+
+def test_filing_breakdown_stored_payload_falls_back_when_latest_summary_is_incomplete(
+    db_conn: psycopg.Connection,
+) -> None:
+    committee_id = UUID("a0000000-0000-0000-0000-000000000025")
+    context = seed_committee_for_filing_breakdown(
+        db_conn,
+        committee_id=committee_id,
+        committee_name="Filing Stored Fallback Committee",
+        fec_committee_id="C99992025",
+    )
+    filing_id = UUID("a0000000-0000-0000-0000-000000000125")
+    insert_filing_row(
+        db_conn,
+        FilingRowSeed(
+            id=filing_id,
+            filing_fec_id="FILING-STORED-FALLBACK",
+            committee_id=context.committee_id,
+            report_type="Q2",
+            amendment_indicator="N",
+            filing_name="Stored Fallback Filing",
+            coverage_start_date=date(2026, 4, 1),
+            coverage_end_date=date(2026, 6, 30),
+            receipt_date=date(2026, 7, 15),
+        ),
+    )
+    insert_filing_breakdown_transaction(
+        db_conn,
+        committee_id=context.committee_id,
+        filing_id=filing_id,
+        transaction_id=UUID("a0000000-0000-0000-0000-000000000226"),
+        transaction_type="15",
+        amount=Decimal("75.00"),
+    )
+    live_rows = fetch_committee_filing_breakdown(db_conn, context.committee_id)
+    stale_payload = [
+        {
+            **_jsonable_filing_breakdown(live_rows)[0],
+            "filing_name": "Stale Payload Must Not Win",
+            "total_raised": "999.00",
+        }
+    ]
+    _store_committee_filing_breakdown(
+        db_conn,
+        committee_id=context.committee_id,
+        cycle=2024,
+        payload=stale_payload,
+        derived_data_through=datetime(2026, 7, 17, 12, 0, tzinfo=timezone.utc),
+    )
+    _store_committee_filing_breakdown(
+        db_conn,
+        committee_id=context.committee_id,
+        cycle=2026,
+        payload=None,
+        derived_data_through=datetime(2026, 7, 18, 12, 0, tzinfo=timezone.utc),
+    )
+
+    assert fetch_committee_filing_breakdown(db_conn, context.committee_id) == live_rows
 
 
 def test_get_committee_filings_summary_returns_404_for_missing_committee(

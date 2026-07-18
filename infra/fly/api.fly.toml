@@ -13,6 +13,9 @@ primary_region = "sjc"
 [build]
   dockerfile = "../api/Dockerfile"
 
+[deploy]
+  release_command = "python -m core.schema.apply_migrations"
+
 [env]
   CIVIBUS_ENV = "production"
   POSTGRES_HOST = "civibus-db.internal"
