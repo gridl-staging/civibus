@@ -105,6 +105,12 @@ def test_api_entrypoint_runtime_contract() -> None:
     entrypoint_text = ENTRYPOINT_PATH.read_text(encoding="utf-8")
     entrypoint_code = _shell_code(entrypoint_text)
 
+    assert 'if [ "${1:-}" = "python" ]' in entrypoint_code
+    assert '[ "${2:-}" = "-m" ]' in entrypoint_code
+    assert '[ "${3:-}" = "core.schema.apply_migrations" ]' in entrypoint_code
+    assert entrypoint_code.index('[ "${3:-}" = "core.schema.apply_migrations" ]') < entrypoint_code.index(
+        "python -m api.canary_check"
+    )
     assert "python -m api.canary_check" in entrypoint_code
     assert 'exec "$@"' in entrypoint_code
     assert "uv run" not in entrypoint_code
