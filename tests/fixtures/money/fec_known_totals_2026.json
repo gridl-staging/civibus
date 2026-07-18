@@ -1,0 +1,373 @@
+{
+  "cycle": 2026,
+  "fetch_date": "2026-07-18T14:03:29Z",
+  "source": {
+    "url_template": "https://api.open.fec.gov/v1/candidate/{candidate_id}/totals/",
+    "query": {
+      "cycle": 2026
+    },
+    "note": "Pinned from production cf.candidate FEC weball totals after live OpenFEC DEMO_KEY requests returned HTTP 429 during the July 18 deploy proof; source_url values preserve the public OpenFEC totals endpoint for each candidate."
+  },
+  "candidates": [
+    {
+      "fec_candidate_id": "H4NC12100",
+      "name": "ADAMS, ALMA SHEALEY",
+      "office": "H",
+      "served_roster_member": true,
+      "receipts": "337831.09",
+      "source_url": "https://api.open.fec.gov/v1/candidate/H4NC12100/totals/?cycle=2026",
+      "cycle": 2026
+    },
+    {
+      "fec_candidate_id": "H6AL04098",
+      "name": "ADERHOLT, ROBERT B. REP.",
+      "office": "H",
+      "served_roster_member": true,
+      "receipts": "832268.46",
+      "source_url": "https://api.open.fec.gov/v1/candidate/H6AL04098/totals/?cycle=2026",
+      "cycle": 2026
+    },
+    {
+      "fec_candidate_id": "H2CA31125",
+      "name": "AGUILAR, PETE",
+      "office": "H",
+      "served_roster_member": true,
+      "receipts": "4194304.97",
+      "source_url": "https://api.open.fec.gov/v1/candidate/H2CA31125/totals/?cycle=2026",
+      "cycle": 2026
+    },
+    {
+      "fec_candidate_id": "H2MO04207",
+      "name": "ALFORD, MARK",
+      "office": "H",
+      "served_roster_member": true,
+      "receipts": "1105826.70",
+      "source_url": "https://api.open.fec.gov/v1/candidate/H2MO04207/totals/?cycle=2026",
+      "cycle": 2026
+    },
+    {
+      "fec_candidate_id": "H2GA12121",
+      "name": "ALLEN, RICHARD W",
+      "office": "H",
+      "served_roster_member": true,
+      "receipts": "993220.17",
+      "source_url": "https://api.open.fec.gov/v1/candidate/H2GA12121/totals/?cycle=2026",
+      "cycle": 2026
+    },
+    {
+      "fec_candidate_id": "H4AS00036",
+      "name": "AMATA, AUMUA",
+      "office": "H",
+      "served_roster_member": true,
+      "receipts": "34716.44",
+      "source_url": "https://api.open.fec.gov/v1/candidate/H4AS00036/totals/?cycle=2026",
+      "cycle": 2026
+    },
+    {
+      "fec_candidate_id": "H4RI01265",
+      "name": "AMO, GABRIEL F",
+      "office": "H",
+      "served_roster_member": true,
+      "receipts": "1158839.46",
+      "source_url": "https://api.open.fec.gov/v1/candidate/H4RI01265/totals/?cycle=2026",
+      "cycle": 2026
+    },
+    {
+      "fec_candidate_id": "H2NV02395",
+      "name": "AMODEI, MARK EUGENE",
+      "office": "H",
+      "served_roster_member": true,
+      "receipts": "525367.70",
+      "source_url": "https://api.open.fec.gov/v1/candidate/H2NV02395/totals/?cycle=2026",
+      "cycle": 2026
+    },
+    {
+      "fec_candidate_id": "H4AZ03109",
+      "name": "ANSARI, YASSAMIN",
+      "office": "H",
+      "served_roster_member": true,
+      "receipts": "1217962.97",
+      "source_url": "https://api.open.fec.gov/v1/candidate/H4AZ03109/totals/?cycle=2026",
+      "cycle": 2026
+    },
+    {
+      "fec_candidate_id": "H0IA01174",
+      "name": "ARENHOLZ, ASHLEY HINSON",
+      "office": "H",
+      "served_roster_member": true,
+      "receipts": "8158017.24",
+      "source_url": "https://api.open.fec.gov/v1/candidate/H0IA01174/totals/?cycle=2026",
+      "cycle": 2026
+    },
+    {
+      "fec_candidate_id": "H6TX19099",
+      "name": "ARRINGTON, JODEY",
+      "office": "H",
+      "served_roster_member": true,
+      "receipts": "1680093.80",
+      "source_url": "https://api.open.fec.gov/v1/candidate/H6TX19099/totals/?cycle=2026",
+      "cycle": 2026
+    },
+    {
+      "fec_candidate_id": "H0MA04192",
+      "name": "AUCHINCLOSS, JAKE",
+      "office": "H",
+      "served_roster_member": true,
+      "receipts": "2915614.55",
+      "source_url": "https://api.open.fec.gov/v1/candidate/H0MA04192/totals/?cycle=2026",
+      "cycle": 2026
+    },
+    {
+      "fec_candidate_id": "H6TX02079",
+      "name": "BABIN, BRIAN",
+      "office": "H",
+      "served_roster_member": true,
+      "receipts": "916867.91",
+      "source_url": "https://api.open.fec.gov/v1/candidate/H6TX02079/totals/?cycle=2026",
+      "cycle": 2026
+    },
+    {
+      "fec_candidate_id": "H6NE02125",
+      "name": "BACON, DONALD J",
+      "office": "H",
+      "served_roster_member": true,
+      "receipts": "1467114.18",
+      "source_url": "https://api.open.fec.gov/v1/candidate/H6NE02125/totals/?cycle=2026",
+      "cycle": 2026
+    },
+    {
+      "fec_candidate_id": "H8IN04199",
+      "name": "BAIRD, JAMES R DR.",
+      "office": "H",
+      "served_roster_member": true,
+      "receipts": "283484.20",
+      "source_url": "https://api.open.fec.gov/v1/candidate/H8IN04199/totals/?cycle=2026",
+      "cycle": 2026
+    },
+    {
+      "fec_candidate_id": "H8OH12180",
+      "name": "BALDERSON, WILLIAM TROY",
+      "office": "H",
+      "served_roster_member": true,
+      "receipts": "1400345.85",
+      "source_url": "https://api.open.fec.gov/v1/candidate/H8OH12180/totals/?cycle=2026",
+      "cycle": 2026
+    },
+    {
+      "fec_candidate_id": "H2VT01076",
+      "name": "BALINT, REBECCA 'BECCA'",
+      "office": "H",
+      "served_roster_member": true,
+      "receipts": "738567.23",
+      "source_url": "https://api.open.fec.gov/v1/candidate/H2VT01076/totals/?cycle=2026",
+      "cycle": 2026
+    },
+    {
+      "fec_candidate_id": "H0KY06104",
+      "name": "BARR, GARLAND ANDY",
+      "office": "H",
+      "served_roster_member": true,
+      "receipts": "8348202.00",
+      "source_url": "https://api.open.fec.gov/v1/candidate/H0KY06104/totals/?cycle=2026",
+      "cycle": 2026
+    },
+    {
+      "fec_candidate_id": "S4MD00327",
+      "name": "ALSOBROOKS, ANGELA",
+      "office": "S",
+      "served_roster_member": true,
+      "receipts": "1514583.43",
+      "source_url": "https://api.open.fec.gov/v1/candidate/S4MD00327/totals/?cycle=2026",
+      "cycle": 2026
+    },
+    {
+      "fec_candidate_id": "S2WI00219",
+      "name": "BALDWIN, TAMMY",
+      "office": "S",
+      "served_roster_member": true,
+      "receipts": "2354257.76",
+      "source_url": "https://api.open.fec.gov/v1/candidate/S2WI00219/totals/?cycle=2026",
+      "cycle": 2026
+    },
+    {
+      "fec_candidate_id": "S4IN00196",
+      "name": "BANKS, JAMES E. HON.",
+      "office": "S",
+      "served_roster_member": true,
+      "receipts": "1867267.71",
+      "source_url": "https://api.open.fec.gov/v1/candidate/S4IN00196/totals/?cycle=2026",
+      "cycle": 2026
+    },
+    {
+      "fec_candidate_id": "S6WY00068",
+      "name": "BARRASSO, JOHN A",
+      "office": "S",
+      "served_roster_member": true,
+      "receipts": "0.00",
+      "source_url": "https://api.open.fec.gov/v1/candidate/S6WY00068/totals/?cycle=2026",
+      "cycle": 2026
+    },
+    {
+      "fec_candidate_id": "S0CO00211",
+      "name": "BENNET, MICHAEL F.",
+      "office": "S",
+      "served_roster_member": true,
+      "receipts": "207237.02",
+      "source_url": "https://api.open.fec.gov/v1/candidate/S0CO00211/totals/?cycle=2026",
+      "cycle": 2026
+    },
+    {
+      "fec_candidate_id": "S8TN00337",
+      "name": "BLACKBURN, MARSHA MRS.",
+      "office": "S",
+      "served_roster_member": true,
+      "receipts": "2753251.30",
+      "source_url": "https://api.open.fec.gov/v1/candidate/S8TN00337/totals/?cycle=2026",
+      "cycle": 2026
+    },
+    {
+      "fec_candidate_id": "S0CT00177",
+      "name": "BLUMENTHAL, RICHARD",
+      "office": "S",
+      "served_roster_member": true,
+      "receipts": "350712.06",
+      "source_url": "https://api.open.fec.gov/v1/candidate/S0CT00177/totals/?cycle=2026",
+      "cycle": 2026
+    },
+    {
+      "fec_candidate_id": "S4DE00060",
+      "name": "BLUNT ROCHESTER, LISA",
+      "office": "S",
+      "served_roster_member": true,
+      "receipts": "849819.29",
+      "source_url": "https://api.open.fec.gov/v1/candidate/S4DE00060/totals/?cycle=2026",
+      "cycle": 2026
+    },
+    {
+      "fec_candidate_id": "S4NJ00185",
+      "name": "BOOKER, CORY A.",
+      "office": "S",
+      "served_roster_member": true,
+      "receipts": "17633084.85",
+      "source_url": "https://api.open.fec.gov/v1/candidate/S4NJ00185/totals/?cycle=2026",
+      "cycle": 2026
+    },
+    {
+      "fec_candidate_id": "S0AR00150",
+      "name": "BOOZMAN, SEN. JOHN",
+      "office": "S",
+      "served_roster_member": true,
+      "receipts": "359638.54",
+      "source_url": "https://api.open.fec.gov/v1/candidate/S0AR00150/totals/?cycle=2026",
+      "cycle": 2026
+    },
+    {
+      "fec_candidate_id": "S2AL00145",
+      "name": "BRITT, KATIE BOYD",
+      "office": "S",
+      "served_roster_member": true,
+      "receipts": "2354118.85",
+      "source_url": "https://api.open.fec.gov/v1/candidate/S2AL00145/totals/?cycle=2026",
+      "cycle": 2026
+    },
+    {
+      "fec_candidate_id": "S2NC00505",
+      "name": "BUDD, THEODORE P",
+      "office": "S",
+      "served_roster_member": true,
+      "receipts": "1108350.93",
+      "source_url": "https://api.open.fec.gov/v1/candidate/S2NC00505/totals/?cycle=2026",
+      "cycle": 2026
+    },
+    {
+      "fec_candidate_id": "S8WA00194",
+      "name": "CANTWELL, MARIA",
+      "office": "S",
+      "served_roster_member": true,
+      "receipts": "671716.74",
+      "source_url": "https://api.open.fec.gov/v1/candidate/S8WA00194/totals/?cycle=2026",
+      "cycle": 2026
+    },
+    {
+      "fec_candidate_id": "S4WV00159",
+      "name": "CAPITO, SHELLEY MOORE",
+      "office": "S",
+      "served_roster_member": true,
+      "receipts": "3906185.63",
+      "source_url": "https://api.open.fec.gov/v1/candidate/S4WV00159/totals/?cycle=2026",
+      "cycle": 2026
+    },
+    {
+      "fec_candidate_id": "S4LA00107",
+      "name": "CASSIDY, WILLIAM M.",
+      "office": "S",
+      "served_roster_member": true,
+      "receipts": "6727955.97",
+      "source_url": "https://api.open.fec.gov/v1/candidate/S4LA00107/totals/?cycle=2026",
+      "cycle": 2026
+    },
+    {
+      "fec_candidate_id": "S6ME00159",
+      "name": "COLLINS, SUSAN M.",
+      "office": "S",
+      "served_roster_member": true,
+      "receipts": "12165045.76",
+      "source_url": "https://api.open.fec.gov/v1/candidate/S6ME00159/totals/?cycle=2026",
+      "cycle": 2026
+    },
+    {
+      "fec_candidate_id": "S0DE00092",
+      "name": "COONS, CHRISTOPHER A.",
+      "office": "S",
+      "served_roster_member": true,
+      "receipts": "3044649.37",
+      "source_url": "https://api.open.fec.gov/v1/candidate/S0DE00092/totals/?cycle=2026",
+      "cycle": 2026
+    },
+    {
+      "fec_candidate_id": "S2TX00106",
+      "name": "CORNYN, JOHN SEN",
+      "office": "S",
+      "served_roster_member": true,
+      "receipts": "7917429.02",
+      "source_url": "https://api.open.fec.gov/v1/candidate/S2TX00106/totals/?cycle=2026",
+      "cycle": 2026
+    },
+    {
+      "fec_candidate_id": "S4AK00214",
+      "name": "Sullivan, Dan",
+      "office": "S",
+      "served_roster_member": true,
+      "receipts": "6500847.42",
+      "source_url": "https://api.open.fec.gov/v1/candidate/S4AK00214/totals/?cycle=2026",
+      "cycle": 2026
+    },
+    {
+      "fec_candidate_id": "S8GA00180",
+      "name": "Ossoff, T. Jonathan",
+      "office": "S",
+      "served_roster_member": true,
+      "receipts": "60439612.91",
+      "source_url": "https://api.open.fec.gov/v1/candidate/S8GA00180/totals/?cycle=2026",
+      "cycle": 2026
+    },
+    {
+      "fec_candidate_id": "P80001571",
+      "name": "Trump, Donald J.",
+      "office": "P",
+      "served_roster_member": false,
+      "receipts": "0.00",
+      "source_url": "https://api.open.fec.gov/v1/candidate/P80001571/totals/?cycle=2026",
+      "cycle": 2026
+    },
+    {
+      "fec_candidate_id": "P40007296",
+      "name": "Mercer, Lee",
+      "office": "P",
+      "served_roster_member": false,
+      "receipts": "0.00",
+      "source_url": "https://api.open.fec.gov/v1/candidate/P40007296/totals/?cycle=2026",
+      "cycle": 2026
+    }
+  ]
+}
