@@ -10,6 +10,7 @@ from uuid import UUID, uuid4
 import psycopg
 import pytest
 from fastapi.testclient import TestClient
+from psycopg.rows import dict_row
 
 import api.queries as campaign_finance_queries
 import api.queries.campaign_finance as campaign_finance_query_module
@@ -28,6 +29,7 @@ from api.queries.campaign_finance import (
     fetch_candidate_ie_summaries,
 )
 from api.test_campaign_finance_support import (
+    BulkFilingBreakdownCommitteeSeed,
     CandidateCommitteeLinkSeed,
     CandidateRowSeed,
     CommitteeSummaryRowSeed,
@@ -52,6 +54,7 @@ from api.test_campaign_finance_support import (
     insert_zcta_district_row,
     seed_county_summary_recipient,
     seed_county_summary_fixture,
+    seed_bulk_filing_breakdown_fixture,
     seed_committee_for_filing_breakdown,
     seed_committee_for_summary,
     seed_transactions_for_filters,
@@ -60,6 +63,7 @@ from core.db import insert_entity_source, insert_organization, insert_person
 from core.refresh.job_builders import populate_committee_summary_derived_aggregates
 from core.types.python.models import Organization, Person
 from domains.civics.constants import LAUNCH_SCOPE_USPS_STATES
+from domains.campaign_finance.constants import FILING_BREAKDOWN_STORE_LIMIT
 from domains.campaign_finance.ingest.filing_loader import upsert_filing
 from domains.campaign_finance.types.models import Filing
 
@@ -2311,12 +2315,15 @@ def test_get_person_top_donors_ranks_summed_donors_across_linked_committees(
     person_id, candidate_id = _seed_person_contribution_insights_fixture(db_conn)
     _seed_person_top_donors_second_committee(db_conn, candidate_id=candidate_id)
 
-    response = api_client.get(f"/v1/person/{person_id}/top-donors")
+    response = api_client.get(f"/v1/person/{person_id}/top-donors?cycle=2024")
 
     assert response.status_code == 200
     assert response.json() == [
-        {"name": "Donor 0039", "total_amount": "30.00", "transaction_count": 1, "city": None, "state": "NC"},
-        {"name": "Donor 0040", "total_amount": "19.00", "transaction_count": 1, "city": None, "state": "NC"},
+        {"name": "Donor 0012", "total_amount": "500.00", "transaction_count": 2, "city": None, "state": "NC"},
+        {"name": "Donor 0013", "total_amount": "201.00", "transaction_count": 1, "city": None, "state": "VA"},
+        {"name": "Zeta Donor", "total_amount": "150.00", "transaction_count": 1, "city": "Asheville", "state": "NC"},
+        {"name": "Donor 0014", "total_amount": "100.00", "transaction_count": 1, "city": None, "state": "NC"},
+        {"name": "Donor 0011", "total_amount": "50.00", "transaction_count": 1, "city": None, "state": "NC"},
     ]
 
 
@@ -2327,12 +2334,12 @@ def test_get_person_top_donors_honors_limit(
     person_id, candidate_id = _seed_person_contribution_insights_fixture(db_conn)
     _seed_person_top_donors_second_committee(db_conn, candidate_id=candidate_id)
 
-    response = api_client.get(f"/v1/person/{person_id}/top-donors?limit=2")
+    response = api_client.get(f"/v1/person/{person_id}/top-donors?cycle=2024&limit=2")
 
     assert response.status_code == 200
     assert response.json() == [
-        {"name": "Donor 0039", "total_amount": "30.00", "transaction_count": 1, "city": None, "state": "NC"},
-        {"name": "Donor 0040", "total_amount": "19.00", "transaction_count": 1, "city": None, "state": "NC"},
+        {"name": "Donor 0012", "total_amount": "500.00", "transaction_count": 2, "city": None, "state": "NC"},
+        {"name": "Donor 0013", "total_amount": "201.00", "transaction_count": 1, "city": None, "state": "VA"},
     ]
 
 
@@ -7109,6 +7116,11 @@ def test_get_committee_summary_returns_zero_totals_when_no_qualifying_transactio
         "itemized_transaction_count": 0,
         "cycle_summaries": [],
         "summary_source": "derived",
+        "receipt_source_composition": [],
+        "selected_cycle_coverage_complete": False,
+        "can_render_share": False,
+        "receipt_source_caveats": ["missing_committee_summary"],
+        "debts_owed_by_committee": None,
     }
 
 
@@ -7601,6 +7613,12 @@ def test_get_committee_filings_summary_returns_sorted_totals_and_keeps_zero_tran
     payload = response.json()
     assert payload["committee_id"] == str(context.committee_id)
     assert payload["committee_name"] == committee_name
+    assert payload["total_filings"] == 4
+    assert payload["store_limit"] == FILING_BREAKDOWN_STORE_LIMIT
+    assert payload["has_next"] is False
+    assert payload["offset"] == 0
+    assert payload["limit"] == 50
+    assert len(payload["filings"]) <= 50
     assert [row["filing_id"] for row in payload["filings"]] == [
         str(filing_recent_low_id),
         str(filing_recent_high_id),
@@ -7824,6 +7842,48 @@ def test_get_committee_filings_summary_uses_canonical_row_after_filing_upsert_re
     assert filing_summary["transaction_count"] == 2
 
 
+def test_get_committee_filings_summary_returns_requested_page_with_truthful_metadata(
+    api_client: TestClient,
+    db_conn: psycopg.Connection,
+) -> None:
+    committee_id = UUID("a0000000-0000-0000-0000-000000000127")
+    context = seed_committee_for_filing_breakdown(
+        db_conn,
+        committee_id=committee_id,
+        committee_name="Filing Pagination Committee",
+        fec_committee_id="C99992127",
+    )
+    expected_ids: list[UUID] = []
+    for index, day in enumerate((20, 19, 18, 17), start=1):
+        filing_id = UUID(f"a0000000-0000-0000-0000-00000000013{index}")
+        expected_ids.append(filing_id)
+        insert_filing_row(
+            db_conn,
+            FilingRowSeed(
+                id=filing_id,
+                filing_fec_id=f"FILING-PAGE-{index}",
+                committee_id=context.committee_id,
+                report_type="Q2",
+                amendment_indicator="N",
+                filing_name=f"Paged Filing {index}",
+                coverage_start_date=date(2026, 4, 1),
+                coverage_end_date=date(2026, 6, day),
+                receipt_date=date(2026, 7, day),
+            ),
+        )
+
+    response = api_client.get(f"/v1/committees/{context.committee_id}/filings/summary?limit=2&offset=1")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert [row["filing_id"] for row in payload["filings"]] == [str(expected_ids[1]), str(expected_ids[2])]
+    assert payload["total_filings"] == 4
+    assert payload["store_limit"] == FILING_BREAKDOWN_STORE_LIMIT
+    assert payload["has_next"] is True
+    assert payload["offset"] == 1
+    assert payload["limit"] == 2
+
+
 def _jsonable_filing_breakdown(rows: list[dict[str, object]]) -> list[dict[str, object]]:
     payload: list[dict[str, object]] = []
     for row in rows:
@@ -7868,6 +7928,32 @@ def _store_committee_filing_breakdown(
             """,
             (None if payload is None else json.dumps(payload), derived_data_through, committee_id, cycle),
         )
+
+
+def _stored_filing_breakdown_payload(
+    *,
+    label: str,
+    uuid_batch: int,
+    row_count: int,
+) -> list[dict[str, object]]:
+    return [
+        {
+            "filing_id": str(UUID(f"a0000000-0000-0000-0000-{uuid_batch:08d}{i:04d}")),
+            "filing_fec_id": f"FILING-STORED-{label}-{i:03d}",
+            "filing_name": f"Stored {label.title()} Filing {i:03d}",
+            "report_type": "Q2",
+            "amendment_indicator": "N",
+            "coverage_start_date": "2026-04-01",
+            "coverage_end_date": "2026-06-30",
+            "receipt_date": "2026-07-15",
+            "total_raised": f"{i}.00",
+            "total_spent": "0.00",
+            "net": f"{i}.00",
+            "transaction_count": i,
+            "cash_on_hand": f"{i}.00",
+        }
+        for i in range(row_count)
+    ]
 
 
 def test_filing_breakdown_parity_uses_complete_stored_payload_without_live_tables(
@@ -7923,6 +8009,132 @@ def test_filing_breakdown_parity_uses_complete_stored_payload_without_live_table
     db_conn.execute("DELETE FROM cf.filing WHERE committee_id = %s", (context.committee_id,))
 
     assert fetch_committee_filing_breakdown(db_conn, context.committee_id) == live_rows
+
+
+def test_fetch_committee_filing_breakdown_slices_stored_jsonb_before_materializing_rows(
+    db_conn: psycopg.Connection,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    committee_id = UUID("a0000000-0000-0000-0000-000000000128")
+    context = seed_committee_for_filing_breakdown(
+        db_conn,
+        committee_id=committee_id,
+        committee_name="Filing Stored Slice Committee",
+        fec_committee_id="C99992128",
+    )
+    stored_payload = _stored_filing_breakdown_payload(
+        label="SLICE",
+        uuid_batch=1,
+        row_count=FILING_BREAKDOWN_STORE_LIMIT + 25,
+    )
+    _store_committee_filing_breakdown(
+        db_conn,
+        committee_id=context.committee_id,
+        cycle=2026,
+        payload=stored_payload,
+        derived_data_through=datetime(2026, 7, 18, 12, 0, tzinfo=timezone.utc),
+    )
+    captured_json_rows_inputs: list[list[dict[str, object]]] = []
+    original_json_rows = campaign_finance_query_module._json_rows
+
+    def spy_json_rows(value: object) -> list[dict[str, object]]:
+        decoded_value = json.loads(value) if isinstance(value, str) else value
+        captured_json_rows_inputs.append(list(decoded_value))
+        return original_json_rows(value)
+
+    monkeypatch.setattr(campaign_finance_query_module, "_json_rows", spy_json_rows)
+
+    page = fetch_committee_filing_breakdown(db_conn, context.committee_id, limit=50, offset=10)
+
+    expected_page = stored_payload[10:60]
+    expected_filing_ids = [str(row["filing_id"]) for row in expected_page]
+    expected_fec_ids = [row["filing_fec_id"] for row in expected_page]
+    assert [str(row["filing_id"]) for row in page] == expected_filing_ids
+    assert [row["filing_fec_id"] for row in page] == expected_fec_ids
+    assert len(page) == 50
+    assert len(captured_json_rows_inputs) == 1
+    assert [row["filing_id"] for row in captured_json_rows_inputs[0]] == expected_filing_ids
+    assert [row["filing_fec_id"] for row in captured_json_rows_inputs[0]] == expected_fec_ids
+
+
+def test_fetch_committee_filing_breakdown_clamps_stored_pages_to_recent_window(
+    db_conn: psycopg.Connection,
+) -> None:
+    committee_id = UUID("a0000000-0000-0000-0000-000000000129")
+    context = seed_committee_for_filing_breakdown(
+        db_conn,
+        committee_id=committee_id,
+        committee_name="Filing Stored Window Committee",
+        fec_committee_id="C99992129",
+    )
+    stored_payload = _stored_filing_breakdown_payload(
+        label="WINDOW",
+        uuid_batch=2,
+        row_count=FILING_BREAKDOWN_STORE_LIMIT + 25,
+    )
+    _store_committee_filing_breakdown(
+        db_conn,
+        committee_id=context.committee_id,
+        cycle=2026,
+        payload=stored_payload,
+        derived_data_through=datetime(2026, 7, 18, 12, 0, tzinfo=timezone.utc),
+    )
+
+    page = fetch_committee_filing_breakdown(
+        db_conn,
+        context.committee_id,
+        limit=50,
+        offset=FILING_BREAKDOWN_STORE_LIMIT - 10,
+    )
+
+    assert [row["filing_fec_id"] for row in page] == [
+        f"FILING-STORED-WINDOW-{i:03d}" for i in range(FILING_BREAKDOWN_STORE_LIMIT - 10, FILING_BREAKDOWN_STORE_LIMIT)
+    ]
+    assert len(page) == 10
+
+
+def test_filing_breakdown_precompute_matches_live_sql_recent_cap(
+    db_conn: psycopg.Connection,
+) -> None:
+    committee_id = UUID("a0000000-0000-0000-0000-000000000026")
+    seed_bulk_filing_breakdown_fixture(
+        db_conn,
+        committees=(
+            BulkFilingBreakdownCommitteeSeed(
+                committee_id=committee_id,
+                fec_committee_id="C99992026",
+                name="Filing Bulk Parity Committee",
+                uuid_sequence_start=30_000,
+            ),
+        ),
+    )
+    populate_committee_summary_derived_aggregates(
+        db_conn,
+        cycles=(2026,),
+        committee_ids=(str(committee_id),),
+    )
+    with db_conn.cursor(row_factory=dict_row) as cursor:
+        cursor.execute(
+            """
+            SELECT derived_filing_breakdown
+            FROM cf.committee_summary
+            WHERE committee_id = %s
+              AND cycle = 2026
+            """,
+            (committee_id,),
+        )
+        stored_payload = cursor.fetchone()["derived_filing_breakdown"]
+        cursor.execute(
+            campaign_finance_query_module.COMMITTEE_FILING_BREAKDOWN_SQL,
+            (committee_id, committee_id),
+        )
+        live_sql_rows = list(cursor.fetchall())
+
+    normalized_live_payload = _jsonable_filing_breakdown(
+        campaign_finance_query_module._normalize_filing_breakdown_rows(live_sql_rows)
+    )
+    assert len(stored_payload) == 200
+    assert stored_payload == normalized_live_payload
 
 
 def test_filing_breakdown_stored_payload_falls_back_when_latest_summary_is_incomplete(
@@ -7991,6 +8203,25 @@ def test_get_committee_filings_summary_returns_404_for_missing_committee(
 
     assert response.status_code == 404
     assert response.json() == {"detail": "Committee not found"}
+
+
+@pytest.mark.parametrize(
+    ("query_string", "field_name"),
+    [
+        ("limit=0", "limit"),
+        (f"limit={FILING_BREAKDOWN_STORE_LIMIT + 1}", "limit"),
+        ("offset=-1", "offset"),
+    ],
+)
+def test_get_committee_filings_summary_rejects_invalid_pagination_params(
+    api_client: TestClient,
+    query_string: str,
+    field_name: str,
+) -> None:
+    response = api_client.get(f"/v1/committees/{uuid4()}/filings/summary?{query_string}")
+
+    assert response.status_code == 422
+    assert response.json()["detail"][0]["loc"] == ["query", field_name]
 
 
 # ---------------------------------------------------------------------------

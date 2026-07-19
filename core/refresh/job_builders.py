@@ -41,6 +41,7 @@ from domains.campaign_finance.ingest.bulk_loader import (
     FEC_BULK_DATA_SOURCE_NAME,
     ensure_fec_bulk_data_source,
 )
+from domains.campaign_finance.constants import FILING_BREAKDOWN_STORE_LIMIT as _FILING_BREAKDOWN_STORE_LIMIT
 from domains.campaign_finance.ingest.congress_legislators_adapter import (
     adapt_legislators_yaml,
     fetch_historical_entries,
@@ -993,7 +994,7 @@ def _active_committee_summary_cycles(fec_cycle: int) -> tuple[int, ...]:
     return cycles or (fec_cycle,)
 
 
-_COMMITTEE_SUMMARY_DERIVED_AGGREGATE_SQL = """
+_COMMITTEE_SUMMARY_DERIVED_AGGREGATE_SQL = f"""
     WITH target_summaries AS (
         SELECT
             cs.committee_id,
@@ -1095,6 +1096,18 @@ _COMMITTEE_SUMMARY_DERIVED_AGGREGATE_SQL = """
             ) AS cash_on_hand
         FROM filing_totals ft
     ),
+    ranked_filing_cash_on_hand AS (
+        SELECT
+            fcoh.*,
+            ROW_NUMBER() OVER (
+                PARTITION BY fcoh.committee_id
+                ORDER BY
+                    fcoh.coverage_end_date DESC NULLS LAST,
+                    fcoh.receipt_date DESC NULLS LAST,
+                    fcoh.filing_id ASC
+            ) AS filing_rank
+        FROM filing_cash_on_hand fcoh
+    ),
     filing_breakdowns AS (
         SELECT
             committee_id,
@@ -1117,7 +1130,8 @@ _COMMITTEE_SUMMARY_DERIVED_AGGREGATE_SQL = """
                 )
                 ORDER BY coverage_end_date DESC NULLS LAST, receipt_date DESC NULLS LAST, filing_id ASC
             ) AS filing_breakdown
-        FROM filing_cash_on_hand
+        FROM ranked_filing_cash_on_hand
+        WHERE filing_rank <= {_FILING_BREAKDOWN_STORE_LIMIT}
         GROUP BY committee_id
     ),
     donor_groups AS (

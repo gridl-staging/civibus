@@ -14,6 +14,7 @@ import psycopg
 import pytest
 
 from api.test_campaign_finance_support import (
+    BulkFilingBreakdownCommitteeSeed,
     CommitteeRowSeed,
     CommitteeSummaryRowSeed,
     FilingRowSeed,
@@ -24,6 +25,7 @@ from api.test_campaign_finance_support import (
     insert_filing_row,
     insert_source_record_for_test,
     insert_transaction_row,
+    seed_bulk_filing_breakdown_fixture,
 )
 from core.refresh import job_builders
 from core.refresh.job_builders import build_refresh_plan
@@ -1156,6 +1158,46 @@ class TestCommitteeSummaryDerivedTopLists:
         assert rowcount == 1
         assert requested_summary["derived_filing_breakdown"] == _expected_committee_summary_filing_breakdown(ids)
         assert sentinel_summary["derived_filing_breakdown"] == [{"filing_id": "sentinel"}]
+
+    def test_committee_summary_derived_filing_breakdown_caps_per_committee(
+        self,
+        db_conn: psycopg.Connection,
+    ) -> None:
+        committee_a = _refresh_test_uuid(420)
+        committee_b = _refresh_test_uuid(421)
+        fixture = seed_bulk_filing_breakdown_fixture(
+            db_conn,
+            committees=(
+                BulkFilingBreakdownCommitteeSeed(
+                    committee_id=committee_a,
+                    fec_committee_id="C90000420",
+                    name="Bulk Filing Committee A",
+                    uuid_sequence_start=10_000,
+                ),
+                BulkFilingBreakdownCommitteeSeed(
+                    committee_id=committee_b,
+                    fec_committee_id="C90000421",
+                    name="Bulk Filing Committee B",
+                    uuid_sequence_start=20_000,
+                ),
+            ),
+        )
+
+        rowcount = job_builders.populate_committee_summary_derived_aggregates(db_conn, cycles=(2026,))
+
+        summary_a = _committee_summary_values(db_conn, committee_a)["derived_filing_breakdown"]
+        summary_b = _committee_summary_values(db_conn, committee_b)["derived_filing_breakdown"]
+        expected_a = fixture.expected_recent_rows_by_committee[committee_a]
+        expected_b = fixture.expected_recent_rows_by_committee[committee_b]
+        assert rowcount >= 2
+        assert len(summary_a) == 200
+        assert len(summary_b) == 200
+        assert summary_a == expected_a
+        assert summary_b == expected_b
+        assert summary_a[0]["cash_on_hand"] == expected_a[0]["cash_on_hand"]
+        assert summary_a[-1]["cash_on_hand"] == expected_a[-1]["cash_on_hand"]
+        assert summary_b[0]["cash_on_hand"] == expected_b[0]["cash_on_hand"]
+        assert summary_b[-1]["cash_on_hand"] == expected_b[-1]["cash_on_hand"]
 
 
 @pytest.mark.integration

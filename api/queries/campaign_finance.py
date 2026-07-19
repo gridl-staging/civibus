@@ -19,6 +19,7 @@ from domains.campaign_finance.coverage.registry import (
     CoverageRegistryRow,
     load_registry,
 )
+from domains.campaign_finance.constants import FILING_BREAKDOWN_STORE_LIMIT as _FILING_BREAKDOWN_STORE_LIMIT
 from domains.civics.constants import LAUNCH_SCOPE_USPS_STATES
 
 from api.models.campaign_finance import (
@@ -1553,6 +1554,7 @@ COMMITTEE_FILING_BREAKDOWN_SQL = f"""
         cash_on_hand
     FROM filing_cash_on_hand
     ORDER BY coverage_end_date DESC NULLS LAST, receipt_date DESC NULLS LAST, filing_id ASC
+    LIMIT {_FILING_BREAKDOWN_STORE_LIMIT}
 """
 
 # ---------------------------------------------------------------------------
@@ -3159,27 +3161,57 @@ def fetch_candidate_summary(
 def fetch_committee_filing_breakdown(
     conn: psycopg.Connection,
     committee_id: UUID,
+    *,
+    limit: int = _FILING_BREAKDOWN_STORE_LIMIT,
+    offset: int = 0,
 ) -> list[dict[str, Any]]:
     """Return per-filing fundraising totals for a committee."""
+    bounded_store_page_stop = min(offset + limit, _FILING_BREAKDOWN_STORE_LIMIT)
     with conn.cursor(row_factory=dict_row) as cursor:
         cursor.execute(
             """
-            SELECT derived_filing_breakdown
+            SELECT
+                CASE
+                    WHEN cs.derived_filing_breakdown IS NULL THEN NULL
+                    ELSE (
+                        SELECT COALESCE(jsonb_agg(page.element ORDER BY page.ordinality), '[]'::jsonb)
+                        FROM jsonb_array_elements(cs.derived_filing_breakdown)
+                             WITH ORDINALITY AS page(element, ordinality)
+                        WHERE page.ordinality > %s
+                          AND page.ordinality <= %s
+                    )
+                END AS derived_filing_breakdown
             FROM cf.committee_summary
+                 AS cs
             WHERE committee_id = %s
             ORDER BY derived_data_through DESC NULLS LAST, cycle DESC, id ASC
             LIMIT 1
             """,
-            (committee_id,),
+            (offset, bounded_store_page_stop, committee_id),
         )
         stored_row = cursor.fetchone()
         if stored_row is not None and stored_row["derived_filing_breakdown"] is not None:
             return _normalize_filing_breakdown_rows(_json_rows(stored_row["derived_filing_breakdown"]))
 
-        cursor.execute(COMMITTEE_FILING_BREAKDOWN_SQL, (committee_id, committee_id))
+        cursor.execute(
+            f"""
+            SELECT *
+            FROM ({COMMITTEE_FILING_BREAKDOWN_SQL}) AS recent_filing_breakdown
+            OFFSET %s
+            LIMIT %s
+            """,
+            (committee_id, committee_id, offset, limit),
+        )
         filing_rows = list(cursor.fetchall())
 
     return _normalize_filing_breakdown_rows(filing_rows)
+
+
+def count_committee_filings(conn: psycopg.Connection, committee_id: UUID) -> int:
+    """Return the full filing count for a committee."""
+    with conn.cursor() as cursor:
+        cursor.execute("SELECT count(*) FROM cf.filing WHERE committee_id = %s", (committee_id,))
+        return int(cursor.fetchone()[0])
 
 
 def fetch_cf_summary_by_county(

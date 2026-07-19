@@ -51,6 +51,7 @@ from api.models import (
     TransactionListParams,
     TransactionResponse,
 )
+from domains.campaign_finance.constants import FILING_BREAKDOWN_STORE_LIMIT
 
 
 def _source_info_payload() -> dict[str, object]:
@@ -1651,6 +1652,11 @@ def test_committee_filing_breakdown_serializes_nested_filings_shape_and_round_tr
         {
             "committee_id": committee_id,
             "committee_name": "Committee Filing Breakdown",
+            "total_filings": 12,
+            "store_limit": FILING_BREAKDOWN_STORE_LIMIT,
+            "has_next": True,
+            "offset": 10,
+            "limit": 1,
             "filings": [
                 {
                     "filing_id": filing_id,
@@ -1676,6 +1682,11 @@ def test_committee_filing_breakdown_serializes_nested_filings_shape_and_round_tr
 
     assert dumped["committee_id"] == str(committee_id)
     assert dumped["committee_name"] == "Committee Filing Breakdown"
+    assert dumped["total_filings"] == 12
+    assert dumped["store_limit"] == FILING_BREAKDOWN_STORE_LIMIT
+    assert dumped["has_next"] is True
+    assert dumped["offset"] == 10
+    assert dumped["limit"] == 1
     assert len(dumped["filings"]) == 1
     assert dumped["filings"][0]["filing_id"] == str(filing_id)
     assert dumped["filings"][0]["total_raised"] == "0.00"
@@ -1686,6 +1697,36 @@ def test_committee_filing_breakdown_serializes_nested_filings_shape_and_round_tr
     assert dumped["filings"][0]["transaction_count"] == 0
     assert dumped["filings"][0]["row_id"] == f"{filing_id}:N"
     assert CommitteeFilingBreakdown.model_validate(dumped).model_dump(mode="json") == dumped
+
+
+@pytest.mark.parametrize(
+    ("field_name", "invalid_value"),
+    [
+        ("total_filings", -1),
+        ("store_limit", 0),
+        ("limit", 0),
+        ("limit", FILING_BREAKDOWN_STORE_LIMIT + 1),
+        ("offset", -1),
+    ],
+)
+def test_committee_filing_breakdown_rejects_invalid_pagination_metadata(
+    field_name: str,
+    invalid_value: int,
+) -> None:
+    payload = {
+        "committee_id": uuid4(),
+        "committee_name": "Committee Filing Breakdown",
+        "total_filings": 0,
+        "store_limit": FILING_BREAKDOWN_STORE_LIMIT,
+        "has_next": False,
+        "offset": 0,
+        "limit": 50,
+        "filings": [],
+    }
+    payload[field_name] = invalid_value
+
+    with pytest.raises(ValidationError):
+        CommitteeFilingBreakdown.model_validate(payload)
 
 
 def test_committee_cycle_summary_round_trips_supported_cycle_row() -> None:

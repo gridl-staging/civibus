@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from uuid import UUID
 
@@ -811,6 +811,19 @@ class FilingBreakdownTestContext:
 
 
 @dataclass(frozen=True)
+class BulkFilingBreakdownCommitteeSeed:
+    committee_id: UUID
+    fec_committee_id: str
+    name: str
+    uuid_sequence_start: int
+
+
+@dataclass(frozen=True)
+class BulkFilingBreakdownFixture:
+    expected_recent_rows_by_committee: dict[UUID, list[dict[str, object]]]
+
+
+@dataclass(frozen=True)
 class CountySummaryFixtureContext:
     """Seed ids for county campaign-finance summary tests."""
 
@@ -1083,3 +1096,105 @@ def insert_filing_breakdown_transaction(
             memo_code=memo_code,
         ),
     )
+
+
+def seed_bulk_filing_breakdown_fixture(
+    db_conn: psycopg.Connection,
+    *,
+    committees: tuple[BulkFilingBreakdownCommitteeSeed, ...],
+    filing_count: int = 205,
+    expected_limit: int = 200,
+) -> BulkFilingBreakdownFixture:
+    """Seed deterministic >limit filing histories and expected recent-window rows."""
+    expected_by_committee: dict[UUID, list[dict[str, object]]] = {}
+    for committee in committees:
+        insert_committee_row(
+            db_conn,
+            CommitteeRowSeed(
+                id=committee.committee_id,
+                fec_committee_id=committee.fec_committee_id,
+                name=committee.name,
+            ),
+        )
+        insert_committee_summary_row(
+            db_conn,
+            CommitteeSummaryRowSeed(
+                committee_id=committee.committee_id,
+                cycle=2026,
+                coverage_start_date=date(2025, 1, 1),
+                coverage_end_date=date(2026, 12, 31),
+            ),
+        )
+        rows = _seed_bulk_filing_breakdown_rows(db_conn, committee=committee, filing_count=filing_count)
+        expected_by_committee[committee.committee_id] = list(reversed(rows[-expected_limit:]))
+    return BulkFilingBreakdownFixture(expected_recent_rows_by_committee=expected_by_committee)
+
+
+def _seed_bulk_filing_breakdown_rows(
+    db_conn: psycopg.Connection,
+    *,
+    committee: BulkFilingBreakdownCommitteeSeed,
+    filing_count: int,
+) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    cash_on_hand = Decimal("0.00")
+    for index in range(filing_count):
+        filing_id = UUID(f"b1000000-0000-0000-0000-{committee.uuid_sequence_start + index:012x}")
+        receipt_id = UUID(f"b2000000-0000-0000-0000-{committee.uuid_sequence_start + index:012x}")
+        spend_id = UUID(f"b3000000-0000-0000-0000-{committee.uuid_sequence_start + index:012x}")
+        coverage_start = date(2025, 1, 1) + timedelta(days=index)
+        coverage_end = date(2025, 1, 2) + timedelta(days=index)
+        receipt_date = date(2025, 1, 3) + timedelta(days=index)
+        total_raised = Decimal("1000.00") + Decimal(index)
+        total_spent = Decimal("100.00")
+        net = total_raised - total_spent
+        cash_on_hand += net
+        insert_filing_row(
+            db_conn,
+            FilingRowSeed(
+                id=filing_id,
+                filing_fec_id=f"BULK-{committee.fec_committee_id}-{index:03d}",
+                committee_id=committee.committee_id,
+                report_type="M",
+                amendment_indicator="N",
+                filing_name=f"Bulk Filing {index:03d}",
+                coverage_start_date=coverage_start,
+                coverage_end_date=coverage_end,
+                receipt_date=receipt_date,
+            ),
+        )
+        insert_filing_breakdown_transaction(
+            db_conn,
+            committee_id=committee.committee_id,
+            filing_id=filing_id,
+            transaction_id=receipt_id,
+            transaction_type="15",
+            amount=total_raised,
+        )
+        insert_filing_breakdown_transaction(
+            db_conn,
+            committee_id=committee.committee_id,
+            filing_id=filing_id,
+            transaction_id=spend_id,
+            transaction_type="24A",
+            amount=total_spent,
+        )
+        rows.append(
+            {
+                "filing_id": str(filing_id),
+                "filing_fec_id": f"BULK-{committee.fec_committee_id}-{index:03d}",
+                "filing_name": f"Bulk Filing {index:03d}",
+                "report_type": "M",
+                "amendment_indicator": "N",
+                "coverage_start_date": coverage_start.isoformat(),
+                "coverage_end_date": coverage_end.isoformat(),
+                "receipt_date": receipt_date.isoformat(),
+                "total_raised": f"{total_raised:.2f}",
+                "total_spent": f"{total_spent:.2f}",
+                "net": f"{net:.2f}",
+                "transaction_count": 2,
+                "cash_on_hand": f"{cash_on_hand:.2f}",
+                "row_id": f"{filing_id}:N",
+            }
+        )
+    return rows

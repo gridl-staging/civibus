@@ -48,6 +48,7 @@ from api.queries import (
     fetch_candidate_list,
     fetch_candidate_summary,
     fetch_candidates_by_slug,
+    count_committee_filings,
     fetch_committee_filing_breakdown,
     fetch_committee_fundraising_summary,
     fetch_committee_ie_activity,
@@ -65,6 +66,7 @@ from api.queries import (
 )
 from api.routes.validation import build_query_params_dependency
 from core.types.python.models import validate_optional_state_code
+from domains.campaign_finance.constants import FILING_BREAKDOWN_STORE_LIMIT
 
 router = APIRouter()
 _build_transaction_list_params = build_query_params_dependency(TransactionListParams)
@@ -310,13 +312,27 @@ def get_county_campaign_finance_summary(
 
 @router.get("/committees/{committee_id}/filings/summary", response_model=CommitteeFilingBreakdown)
 def get_committee_filings_summary(
-    committee_id: UUID, conn: psycopg.Connection = Depends(get_db)
+    committee_id: UUID,
+    limit: int = Query(default=50, ge=1, le=FILING_BREAKDOWN_STORE_LIMIT),
+    offset: int = Query(default=0, ge=0),
+    conn: psycopg.Connection = Depends(get_db),
 ) -> CommitteeFilingBreakdown:
     detail_row = _fetch_row_or_404(conn, CAMPAIGN_FINANCE_COMMITTEE_DETAIL_SQL, committee_id, "Committee not found")
 
-    filings = fetch_committee_filing_breakdown(conn, committee_id)
+    filings = fetch_committee_filing_breakdown(conn, committee_id, limit=limit, offset=offset)
+    total_filings = count_committee_filings(conn, committee_id)
+    paginable_filings = min(total_filings, FILING_BREAKDOWN_STORE_LIMIT)
     return CommitteeFilingBreakdown.model_validate(
-        {"committee_id": committee_id, "committee_name": detail_row["name"], "filings": filings}
+        {
+            "committee_id": committee_id,
+            "committee_name": detail_row["name"],
+            "total_filings": total_filings,
+            "store_limit": FILING_BREAKDOWN_STORE_LIMIT,
+            "has_next": offset + len(filings) < paginable_filings,
+            "offset": offset,
+            "limit": limit,
+            "filings": filings,
+        }
     )
 
 

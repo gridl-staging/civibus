@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 from api.models._validation import validate_inclusive_bounds
 from api.models.provenance import SourceInfo
+from domains.campaign_finance.constants import FILING_BREAKDOWN_STORE_LIMIT
 
 _MONEY_QUANTUM = Decimal("0.01")
 
@@ -608,6 +609,13 @@ class FilingPeriodSummary(BaseModel):
 class CommitteeFilingBreakdown(BaseModel):
     committee_id: UUID
     committee_name: str
+    # ``filings`` pages within ``min(store_limit, total_filings)``; ``total_filings``
+    # is the full-count display value, not the paginable recent-window size.
+    total_filings: int = Field(ge=0)
+    store_limit: int = Field(ge=1)
+    has_next: bool
+    offset: int = Field(ge=0)
+    limit: int = Field(ge=1, le=FILING_BREAKDOWN_STORE_LIMIT)
     filings: list[FilingPeriodSummary]
 
 

@@ -281,6 +281,11 @@ export type FilingPeriodSummary = {
 export type CommitteeFilingBreakdown = {
   committee_id: string;
   committee_name: string;
+  total_filings?: number;
+  store_limit?: number;
+  has_next?: boolean;
+  offset?: number;
+  limit?: number;
   filings: FilingPeriodSummary[];
 };
 
