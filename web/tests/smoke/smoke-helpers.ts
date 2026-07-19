@@ -26,6 +26,25 @@ export const BAR_SERIES_MARK_SELECTOR = "svg rect";
 // scores an outage as a PASS. A live deployment must never show this family: it always means
 // the API failed, never that the data is merely absent.
 export const BACKEND_FAILURE_STATE_COPY = /temporarily unavailable/i;
+const CAMPAIGN_FINANCE_KEY_METRICS_SUCCESS_COPY = /\bTotal raised\b/i;
+const RENDERED_MONEY_VALUE_COPY = /\$(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?[KMB]?\b/;
+
+export function assertNoBackendFailureText(renderedText: string): void {
+  if (BACKEND_FAILURE_STATE_COPY.test(renderedText)) {
+    throw new Error("Rendered content contains a backend failure state.");
+  }
+}
+
+export function assertCampaignFinanceKeyMetricsTextReady(renderedText: string): void {
+  assertNoBackendFailureText(renderedText);
+
+  if (!CAMPAIGN_FINANCE_KEY_METRICS_SUCCESS_COPY.test(renderedText)) {
+    throw new Error("Campaign-finance key metrics did not render loaded totals.");
+  }
+  if (!RENDERED_MONEY_VALUE_COPY.test(renderedText)) {
+    throw new Error("Campaign-finance key metrics did not render a loaded money value.");
+  }
+}
 
 /**
  * Assert no panel on the current page is showing a backend-failure state.
@@ -44,7 +63,55 @@ export async function expectNoBackendFailureStates(page: Page): Promise<void> {
   // {#await} has resolved to either data or its {:catch}. toHaveCount auto-retries, which
   // is what makes this a wait rather than a sample.
   await expect(page.locator('[aria-busy="true"]')).toHaveCount(0, { timeout: 20_000 });
+  assertNoBackendFailureText((await page.locator("body").textContent()) ?? "");
   await expect(page.getByText(BACKEND_FAILURE_STATE_COPY)).toHaveCount(0);
+}
+
+export async function expectCampaignFinanceKeyMetricsReady(
+  page: Page,
+  timeoutMs: number
+): Promise<void> {
+  const keyMetrics = page.getByTestId("key-metrics");
+  await expect(keyMetrics).toBeVisible({ timeout: timeoutMs });
+  await expect(keyMetrics.getByText("Total raised", { exact: true })).toBeVisible({
+    timeout: timeoutMs
+  });
+  await expect(keyMetrics.getByText(RENDERED_MONEY_VALUE_COPY).first()).toBeVisible({
+    timeout: timeoutMs
+  });
+  assertCampaignFinanceKeyMetricsTextReady((await keyMetrics.textContent()) ?? "");
+}
+
+/**
+ */
+export async function expectActionToVisibleContentWithinBudget({
+  label,
+  budgetMs,
+  action,
+  visibleContent
+}: {
+  label: string;
+  budgetMs: number;
+  action: () => Promise<void>;
+  visibleContent: () => Promise<void>;
+}): Promise<number> {
+  const startedAt = performance.now();
+  const actionPromise = action();
+  const actionFailure = actionPromise.then(
+    () => new Promise<never>(() => {}),
+    (error) => Promise.reject(error)
+  );
+
+  try {
+    await Promise.race([visibleContent(), actionFailure]);
+    const elapsedMs = performance.now() - startedAt;
+    expect(elapsedMs, `${label} action-to-visible-content`).toBeLessThan(budgetMs);
+    await actionPromise;
+    return elapsedMs;
+  } catch (error) {
+    await Promise.allSettled([actionPromise]);
+    throw error;
+  }
 }
 
 // National party committees (the four Hill committees + RNC/DNC). Their receipts
@@ -95,6 +162,34 @@ type SvgPaintSample = {
 
 export function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+const RENDERED_MONEY_PATTERN =
+  /^\$(?<amount>(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?)(?<magnitude>[KMB])?$/;
+const RENDERED_MONEY_MULTIPLIERS = {
+  K: 1_000,
+  M: 1_000_000,
+  B: 1_000_000_000
+} as const;
+
+/**
+ */
+export function parseRenderedMoneyLabel(label: string): number {
+  const match = RENDERED_MONEY_PATTERN.exec(label.trim());
+  if (!match?.groups) {
+    throw new Error(`Invalid rendered money label: ${label}`);
+  }
+
+  const amount = Number(match.groups.amount.replaceAll(",", ""));
+  const magnitude = match.groups.magnitude as keyof typeof RENDERED_MONEY_MULTIPLIERS | undefined;
+  const multiplier = magnitude === undefined ? 1 : RENDERED_MONEY_MULTIPLIERS[magnitude];
+  const dollars = amount * multiplier;
+
+  if (!Number.isFinite(dollars)) {
+    throw new Error(`Invalid rendered money label: ${label}`);
+  }
+
+  return dollars;
 }
 
 function parseRgbChannels(color: string): [number, number, number] | null {

@@ -3,8 +3,11 @@ import { expect, test } from "playwright/test";
 import {
   capturePageLoadErrors,
   chartRegion,
+  expectActionToVisibleContentWithinBudget,
+  expectCampaignFinanceKeyMetricsReady,
   expectNoBackendFailureStates,
-  expectNoPartyCommitteeInLinkedCommittees
+  expectNoPartyCommitteeInLinkedCommittees,
+  parseRenderedMoneyLabel
 } from "./smoke-helpers";
 
 const MIN_FINANCE_CHART_HEIGHT_PX = 250;
@@ -46,6 +49,9 @@ async function expectRenderedFinanceChartsNotCollapsed(page: any): Promise<void>
 // rather than pinned to a named politician who may leave office.
 const isProductionSmokeMode = (process.env.SMOKE_MODE ?? "local") === "production";
 const PERSON_CAMPAIGN_FINANCE_HEADING = "Campaign finance";
+const PERF_BUDGET_MS = 8000;
+const MONEY_PLAUSIBILITY_CEILING_DOLLARS = 2_000_000_000;
+const PINNED_HIGH_VOLUME_COMMITTEE_PATH = "/committee/jon-ossoff-for-senate";
 // Must match the component's exact rendered text. DetailPage.svelte renders
 // <h4 id="person-outside-spending">Outside spending</h4> (sentence case) and has
 // since the module was built; the prior title-case "Outside Spending" here never
@@ -53,9 +59,21 @@ const PERSON_CAMPAIGN_FINANCE_HEADING = "Campaign finance";
 // first.
 const PERSON_OUTSIDE_SPENDING_HEADING = "Outside spending";
 const CONGRESS_MEMBER_PROFILE_LINK_TEST_ID = "congress-member-profile-link";
+const CONGRESS_MEMBER_ROW_0_TEST_ID = "congress-member-row-0";
 
 function memberProfileLink(row: any): any {
   return row.getByTestId(CONGRESS_MEMBER_PROFILE_LINK_TEST_ID);
+}
+
+function extractRouteId(href: string, routePrefix: "/person" | "/candidate"): string {
+  const path = new URL(href, "https://civibus.local").pathname;
+  const expectedPrefix = `${routePrefix}/`;
+  expect(path.startsWith(expectedPrefix)).toBe(true);
+
+  const id = decodeURIComponent(path.slice(expectedPrefix.length));
+  expect(id.length).toBeGreaterThan(0);
+  expect(id.includes("/")).toBe(false);
+  return id;
 }
 
 test.describe("production deployment smoke (read-only)", () => {
@@ -70,10 +88,10 @@ test.describe("production deployment smoke (read-only)", () => {
 
     // Load-and-verify: the directory must render real member rows from the
     // live DB, not just the page shell (guards response-shape mismatches).
-    await page.goto("/congress");
+    await page.goto("/congress?sort=total_raised");
     await expect(page.getByRole("heading", { name: "Congress" })).toBeVisible();
 
-    const firstMemberRow = page.getByTestId("congress-member-row-0");
+    const firstMemberRow = page.getByTestId(CONGRESS_MEMBER_ROW_0_TEST_ID);
     await expect(firstMemberRow).toBeVisible();
 
     // The federal-first dataset holds 500+ seated members; a directory
@@ -91,6 +109,14 @@ test.describe("production deployment smoke (read-only)", () => {
     const memberLink = memberProfileLink(firstMemberRow);
     const memberName = (await memberLink.textContent())?.trim() ?? "";
     expect(memberName.length).toBeGreaterThan(0);
+    await expect(memberLink).toHaveAttribute("href", /^\/person\/[^/?#]+/);
+    const memberHref = await memberLink.getAttribute("href");
+    const personId = extractRouteId(memberHref as string, "/person");
+    const totalRaisedLabel = firstMemberRow.getByTestId(`comparison-end-label-${personId}`);
+    await expect(totalRaisedLabel).toBeVisible();
+    const totalRaisedDollars = parseRenderedMoneyLabel((await totalRaisedLabel.textContent()) ?? "");
+    expect(totalRaisedDollars).toBeGreaterThan(0);
+    expect(totalRaisedDollars).toBeLessThan(MONEY_PLAUSIBILITY_CEILING_DOLLARS);
     await memberLink.click();
 
     await expect(page.getByRole("heading", { name: memberName })).toBeVisible();
@@ -103,6 +129,7 @@ test.describe("production deployment smoke (read-only)", () => {
     // Settle the streamed money panels, then prove the finance panel is not
     // silently in a backend-failure state before checking chart honesty.
     await expectNoBackendFailureStates(page);
+    await expectNoPartyCommitteeInLinkedCommittees(page);
     await expectRenderedFinanceChartsNotCollapsed(page);
     // The panel settled above (expectNoBackendFailureStates waits out the
     // SkeletonPanel), so only the stable <h4>Outside spending</h4> remains;
@@ -122,7 +149,7 @@ test.describe("production deployment smoke (read-only)", () => {
   test("person page loads without client-side errors", async ({ page }: { page: any }) => {
     const pageLoadErrors = capturePageLoadErrors(page);
     await page.goto("/congress");
-    await memberProfileLink(page.getByTestId("congress-member-row-0")).click();
+    await memberProfileLink(page.getByTestId(CONGRESS_MEMBER_ROW_0_TEST_ID)).click();
     await expect(
       page.getByRole("heading", { name: PERSON_CAMPAIGN_FINANCE_HEADING })
     ).toBeVisible({ timeout: 20_000 });
@@ -177,64 +204,55 @@ test.describe("production deployment smoke (read-only)", () => {
   }: {
     page: any;
   }) => {
-    // This test chains through the heaviest member's pages: row 0 is the
-    // money-sorted top fundraiser, whose committee-detail page carries the most
-    // transactions and currently renders in ~13s server-side on the small prod
-    // instance (a real perf follow-up tracked in ROADMAP -- individual
-    // high-volume committee pages, not just /committees). Give the whole
-    // navigation chain room so the gate reflects navigation correctness rather
-    // than committee-page latency.
-    test.setTimeout(90_000);
     const pageLoadErrors = capturePageLoadErrors(page);
 
-    // Federal member person pages expose linked committees inside the Campaign
-    // finance panel. Follow the rendered person-detail table instead of using
-    // the candidate-detail "Committee record" label, which is not part of this
-    // route's accessible link text.
-    await page.goto("/congress");
-    await memberProfileLink(page.getByTestId("congress-member-row-0")).click();
-    await expect(
-      page.getByRole("heading", { name: PERSON_CAMPAIGN_FINANCE_HEADING })
-    ).toBeVisible({ timeout: 20_000 });
-
-    // Settle the streamed finance panel first. Mid-hydration the section can
-    // briefly hold a transient duplicate "Linked committees" heading (SSR +
-    // streamed re-render), which makes the strict-mode locator below resolve to
-    // two elements under parallel load. Waiting for the panel to settle collapses
-    // it to the single stable heading.
-    await expectNoBackendFailureStates(page);
-    await expect(page.getByRole("heading", { name: "Linked committees" })).toBeVisible({
-      timeout: 20_000
+    await expectActionToVisibleContentWithinBudget({
+      label: "/congress",
+      budgetMs: PERF_BUDGET_MS,
+      action: async () => {
+        await page.goto("/congress");
+      },
+      visibleContent: async () => {
+        await expect(page.getByTestId(CONGRESS_MEMBER_ROW_0_TEST_ID)).toBeVisible({
+          timeout: PERF_BUDGET_MS
+        });
+      }
     });
 
-    // Money-correctness guard on the flagship money-sorted #1 member: their own
-    // linked committees must not include a national party committee. Party
-    // receipts are not the member's money; counting them inflated this exact
-    // leaderboard ~23x. (Helper is a no-op when the table is absent.)
-    await expectNoPartyCommitteeInLinkedCommittees(page);
-
-    const linkedCommitteeHref = await page
-      .getByRole("main")
-      .getByRole("link")
-      .evaluateAll((links: HTMLAnchorElement[]) =>
-        links.map((link) => link.getAttribute("href")).find((href) => href?.startsWith("/committee/"))
-      );
-    expect(linkedCommitteeHref).toBeTruthy();
-    // Committee pages stream money panels, so the "load" event (page.goto's
-    // default wait) can lag well past first paint on the heaviest members;
-    // wait for the DOM instead. Row 0 is now the top fundraiser (money-sorted),
-    // whose committee + candidate pages carry the most finance data.
-    await page.goto(linkedCommitteeHref as string, { waitUntil: "domcontentloaded" });
+    await expectActionToVisibleContentWithinBudget({
+      label: PINNED_HIGH_VOLUME_COMMITTEE_PATH,
+      budgetMs: PERF_BUDGET_MS,
+      action: async () => {
+        await page.goto(PINNED_HIGH_VOLUME_COMMITTEE_PATH);
+      },
+      visibleContent: async () => {
+        await expectCampaignFinanceKeyMetricsReady(page, PERF_BUDGET_MS);
+        await expect(page.getByTestId("committee-linked-candidates")).toBeVisible({
+          timeout: PERF_BUDGET_MS
+        });
+      }
+    });
 
     const linkedCandidates = page.getByTestId("committee-linked-candidates");
-    await expect(linkedCandidates).toBeVisible({ timeout: 20_000 });
     const firstLinkedCandidate = linkedCandidates.getByRole("link").first();
     await expect(firstLinkedCandidate).toBeVisible();
-    await firstLinkedCandidate.click();
-    // SvelteKit holds the URL until the destination's load() resolves; the
-    // heaviest candidate page can exceed the default 5s, so allow generous time
-    // for the live-DB navigation (the per-test budget above covers the total).
-    await expect(page).toHaveURL(/\/candidate\//, { timeout: 30_000 });
+    const candidateName = ((await firstLinkedCandidate.textContent()) ?? "").trim();
+    expect(candidateName.length).toBeGreaterThan(0);
+
+    await expectActionToVisibleContentWithinBudget({
+      label: "linked candidate page",
+      budgetMs: PERF_BUDGET_MS,
+      action: async () => {
+        await firstLinkedCandidate.click();
+      },
+      visibleContent: async () => {
+        await expect(page).toHaveURL(/\/candidate\//, { timeout: PERF_BUDGET_MS });
+        await expect(page.getByRole("heading", { name: candidateName })).toBeVisible({
+          timeout: PERF_BUDGET_MS
+        });
+        await expectCampaignFinanceKeyMetricsReady(page, PERF_BUDGET_MS);
+      }
+    });
 
     await pageLoadErrors.assertNoErrors();
   });
@@ -245,7 +263,7 @@ test.describe("production deployment smoke (read-only)", () => {
     // Arrange: read a real member name off the live directory first, so the
     // search assertion is self-consistent with whatever data is deployed.
     await page.goto("/congress");
-    const memberLink = memberProfileLink(page.getByTestId("congress-member-row-0"));
+    const memberLink = memberProfileLink(page.getByTestId(CONGRESS_MEMBER_ROW_0_TEST_ID));
     const memberName = (await memberLink.textContent())?.trim() ?? "";
     expect(memberName.length).toBeGreaterThan(0);
     const lastName = memberName.split(",")[0]?.trim() ?? memberName;

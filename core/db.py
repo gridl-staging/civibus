@@ -821,7 +821,7 @@ def select_active_roster_portrait_for_person(
               AND sr.superseded_by IS NULL
               AND ds.domain = 'civics'
               AND CASE
-                    WHEN ds.notes ~ '^\s*\\{'
+                    WHEN ds.notes ~ '^\\s*\\{'
                     THEN COALESCE(ds.notes::jsonb->>'roster_source', 'false') = 'true'
                     ELSE FALSE
                   END
