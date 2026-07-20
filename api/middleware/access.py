@@ -13,6 +13,7 @@ from fastapi import Header, HTTPException, Request, status
 
 _API_KEYS_ENV_VAR = "CIVIBUS_API_KEYS"
 ADMIN_API_KEYS_ENV_VAR = "CIVIBUS_ADMIN_API_KEYS"
+FIRST_PARTY_API_KEYS_ENV_VAR = "CIVIBUS_FIRST_PARTY_API_KEYS"
 API_KEY_HEADER_NAME = "X-API-Key"
 _AUTH_FAILURE_DETAIL = "Invalid or missing API key"
 _DEVELOPMENT_ENVIRONMENT = "development"
@@ -156,6 +157,10 @@ def _require_api_key_from_config(
         return
     if x_api_key is None or x_api_key not in configured_keys:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=_AUTH_FAILURE_DETAIL)
+    # Shared SSR may use a first-party key on the standard API path; the
+    # standard-env guard preserves administrative throttling for overlapping keys.
+    if env_var_name == _API_KEYS_ENV_VAR and x_api_key in _configured_api_keys(FIRST_PARTY_API_KEYS_ENV_VAR):
+        return
     _enforce_fixed_window_rate_limit(request=request, api_key=x_api_key)
 
 

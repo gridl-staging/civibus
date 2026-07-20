@@ -7957,6 +7957,7 @@ def _stored_filing_breakdown_payload(
 
 
 def test_filing_breakdown_parity_uses_complete_stored_payload_without_live_tables(
+    api_client: TestClient,
     db_conn: psycopg.Connection,
 ) -> None:
     committee_id = UUID("a0000000-0000-0000-0000-000000000024")
@@ -8009,6 +8010,9 @@ def test_filing_breakdown_parity_uses_complete_stored_payload_without_live_table
     db_conn.execute("DELETE FROM cf.filing WHERE committee_id = %s", (context.committee_id,))
 
     assert fetch_committee_filing_breakdown(db_conn, context.committee_id) == live_rows
+    response = api_client.get(f"/v1/committees/{context.committee_id}/filings/summary")
+    assert response.status_code == 200
+    assert response.json()["total_filings"] == 1
 
 
 def test_fetch_committee_filing_breakdown_slices_stored_jsonb_before_materializing_rows(

@@ -30,12 +30,25 @@ def _build_rate_limited_client(
     *,
     max_requests: int,
     window_seconds: int,
+    administrative: bool = False,
+    first_party_api_keys: str | None = None,
 ) -> TestClient:
     monkeypatch.setenv("CIVIBUS_ENV", "production")
     monkeypatch.setenv("CIVIBUS_API_KEYS", f"{_VALID_API_KEY},{_SECOND_VALID_API_KEY}")
+    if administrative:
+        monkeypatch.setenv("CIVIBUS_ADMIN_API_KEYS", _VALID_API_KEY)
+    if first_party_api_keys is None:
+        monkeypatch.delenv("CIVIBUS_FIRST_PARTY_API_KEYS", raising=False)
+    else:
+        monkeypatch.setenv("CIVIBUS_FIRST_PARTY_API_KEYS", first_party_api_keys)
     monkeypatch.setenv("CIVIBUS_RATE_LIMIT_REQUESTS", str(max_requests))
     monkeypatch.setenv("CIVIBUS_RATE_LIMIT_WINDOW_SECONDS", str(window_seconds))
-    monkeypatch.setattr(api_main, "_v1_routers", lambda: (_build_probe_router(),))
+    if administrative:
+        monkeypatch.setattr(api_main, "_v1_routers", lambda: ())
+        monkeypatch.setattr(api_main, "_administrative_v1_routers", lambda: (_build_probe_router(),))
+    else:
+        monkeypatch.setattr(api_main, "_v1_routers", lambda: (_build_probe_router(),))
+        monkeypatch.setattr(api_main, "_administrative_v1_routers", lambda: ())
     return TestClient(create_app())
 
 
@@ -83,6 +96,76 @@ def test_second_key_isolated_and_window_reset_restores_capacity(
     current_time_seconds["value"] = 111
     reset_window_response = client.get(f"/v1{_PROBE_ROUTE_PATH}", headers={"X-API-Key": _VALID_API_KEY})
     assert reset_window_response.status_code == 200
+
+
+def test_first_party_key_is_exempt_from_rate_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(access_middleware, "_current_epoch_seconds", lambda: 100)
+    client = _build_rate_limited_client(
+        monkeypatch,
+        max_requests=2,
+        window_seconds=10,
+        first_party_api_keys=_VALID_API_KEY,
+    )
+
+    statuses = [
+        client.get(f"/v1{_PROBE_ROUTE_PATH}", headers={"X-API-Key": _VALID_API_KEY}).status_code for _ in range(5)
+    ]
+
+    assert statuses == [200, 200, 200, 200, 200]
+
+
+def test_non_first_party_key_still_rate_limited(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(access_middleware, "_current_epoch_seconds", lambda: 100)
+    client = _build_rate_limited_client(
+        monkeypatch,
+        max_requests=2,
+        window_seconds=10,
+        first_party_api_keys=_VALID_API_KEY,
+    )
+
+    statuses = [
+        client.get(f"/v1{_PROBE_ROUTE_PATH}", headers={"X-API-Key": _SECOND_VALID_API_KEY}).status_code
+        for _ in range(3)
+    ]
+
+    assert statuses == [200, 200, 429]
+
+
+def test_unset_first_party_env_still_rate_limits_normal_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("CIVIBUS_FIRST_PARTY_API_KEYS", raising=False)
+    monkeypatch.setattr(access_middleware, "_current_epoch_seconds", lambda: 100)
+    client = _build_rate_limited_client(monkeypatch, max_requests=2, window_seconds=10)
+
+    statuses = [
+        client.get(f"/v1{_PROBE_ROUTE_PATH}", headers={"X-API-Key": _VALID_API_KEY}).status_code for _ in range(3)
+    ]
+
+    assert statuses == [200, 200, 429]
+
+
+def test_first_party_key_on_administrative_path_still_rate_limited(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(access_middleware, "_current_epoch_seconds", lambda: 100)
+    client = _build_rate_limited_client(
+        monkeypatch,
+        max_requests=2,
+        window_seconds=10,
+        administrative=True,
+        first_party_api_keys=_VALID_API_KEY,
+    )
+
+    statuses = [
+        client.get(f"/v1{_PROBE_ROUTE_PATH}", headers={"X-API-Key": _VALID_API_KEY}).status_code for _ in range(3)
+    ]
+
+    assert statuses == [200, 200, 429]
 
 
 def test_ip_rate_limit_keys_are_isolated(monkeypatch: pytest.MonkeyPatch) -> None:

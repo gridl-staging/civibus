@@ -3208,10 +3208,31 @@ def fetch_committee_filing_breakdown(
 
 
 def count_committee_filings(conn: psycopg.Connection, committee_id: UUID) -> int:
-    """Return the full filing count for a committee."""
+    """Return the filing count for a committee, falling back to stored rows when needed."""
     with conn.cursor() as cursor:
-        cursor.execute("SELECT count(*) FROM cf.filing WHERE committee_id = %s", (committee_id,))
-        return int(cursor.fetchone()[0])
+        cursor.execute(
+            """
+            SELECT
+                COUNT(f.id)::integer AS live_filing_count,
+                (
+                    SELECT jsonb_array_length(cs.derived_filing_breakdown)
+                    FROM cf.committee_summary AS cs
+                    WHERE cs.committee_id = %s
+                      AND cs.derived_filing_breakdown IS NOT NULL
+                    ORDER BY cs.derived_data_through DESC NULLS LAST, cs.cycle DESC, cs.id ASC
+                    LIMIT 1
+                ) AS stored_filing_count
+            FROM cf.filing AS f
+            WHERE f.committee_id = %s
+            """,
+            (committee_id, committee_id),
+        )
+        counts_row = cursor.fetchone()
+    live_filing_count = int(counts_row[0])
+    if live_filing_count > 0:
+        return live_filing_count
+    stored_filing_count = counts_row[1]
+    return int(stored_filing_count or 0)
 
 
 def fetch_cf_summary_by_county(
