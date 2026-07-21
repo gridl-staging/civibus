@@ -300,7 +300,7 @@ export type CommitteeCanonicalDetailRoutePresentation = {
   shell: CommitteeDetailShellPresentation;
   transactions: Deferred<CampaignFinanceTransactionResponse[]>;
   summary: Deferred<CommitteeFundraisingSummary>;
-  filingBreakdown: Deferred<CommitteeFilingBreakdown>;
+  filingBreakdown: CommitteeFilingBreakdown;
   independentExpendituresMade: Deferred<CommitteeIndependentExpenditureActivity>;
 };
 
