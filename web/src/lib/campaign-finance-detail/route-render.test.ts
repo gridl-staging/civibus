@@ -409,7 +409,7 @@ describe("campaign-finance route renders", () => {
             top_vendors: [{ name: "Vendor One", total_amount: "40.00", transaction_count: 1 }],
             spend_categories: [{ category: "media", total_amount: "25.00", transaction_count: 1 }]
           }),
-          filingBreakdown: asDeferredValue({
+          filingBreakdown: {
             ...(COMMITTEE_CANONICAL_DATA.filingBreakdown as unknown as Awaited<typeof COMMITTEE_CANONICAL_DATA.filingBreakdown>),
             filings: [
               {
@@ -445,7 +445,7 @@ describe("campaign-finance route renders", () => {
                 row_id: "f2:N"
               }
             ]
-          })
+          }
         })
       }
     });
@@ -574,10 +574,10 @@ describe("campaign-finance route renders", () => {
             ...(COMMITTEE_CANONICAL_DATA.summary as unknown as Awaited<typeof COMMITTEE_CANONICAL_DATA.summary>),
             spend_categories: null
           }),
-          filingBreakdown: asDeferredValue({
+          filingBreakdown: {
             ...(COMMITTEE_CANONICAL_DATA.filingBreakdown as unknown as Awaited<typeof COMMITTEE_CANONICAL_DATA.filingBreakdown>),
             filings: []
-          })
+          }
         })
       }
     });

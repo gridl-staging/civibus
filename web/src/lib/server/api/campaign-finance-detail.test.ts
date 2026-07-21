@@ -423,12 +423,11 @@ describe("campaign-finance detail api", () => {
 
     expect(data.transactions).toBeInstanceOf(Promise);
     expect(data.summary).toBeInstanceOf(Promise);
-    expect(data.filingBreakdown).toBeInstanceOf(Promise);
+    expect(data.filingBreakdown).toEqual(COMMITTEE_FILING_BREAKDOWN);
     expect(data.independentExpendituresMade).toBeInstanceOf(Promise);
 
     expect(await data.transactions).toHaveLength(1);
     expect(await data.summary).toEqual(COMMITTEE_SUMMARY);
-    expect(await data.filingBreakdown).toEqual(COMMITTEE_FILING_BREAKDOWN);
     expect(await data.independentExpendituresMade).toEqual(COMMITTEE_IE_ACTIVITY);
 
     expect(requestJson.mock.calls.map(([path]) => path)).toEqual([

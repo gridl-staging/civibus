@@ -311,7 +311,7 @@ describe("campaign finance detail presentation", () => {
       expect(canonicalPresentation.shell.canonicalName).toBe("Committee One");
       expect(canonicalPresentation.transactions).toBeInstanceOf(Promise);
       expect(canonicalPresentation.summary).toBeInstanceOf(Promise);
-      expect(canonicalPresentation.filingBreakdown).toBeInstanceOf(Promise);
+      expect(canonicalPresentation.filingBreakdown).toEqual(DEFAULT_FILING_BREAKDOWN);
       expect(canonicalPresentation.independentExpendituresMade).toBeInstanceOf(Promise);
       expect("detail" in canonicalPresentation).toBe(false);
     }

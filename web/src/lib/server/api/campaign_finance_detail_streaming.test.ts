@@ -377,7 +377,7 @@ describe("campaign-finance detail api streaming bundle behavior", () => {
       await expect(bundle.transactions).rejects.toThrow("transactions request failed");
       await expect(bundle.summary).resolves.toEqual(COMMITTEE_SUMMARY);
       await expect(bundle.independentExpendituresMade).resolves.toEqual(COMMITTEE_IE_ACTIVITY);
-      await expect(bundle.filingBreakdown).resolves.toEqual(COMMITTEE_FILING_BREAKDOWN);
+      expect(bundle.filingBreakdown).toEqual(COMMITTEE_FILING_BREAKDOWN);
       expect(unhandled).toEqual([]);
     } finally {
       process.off("unhandledRejection", handleUnhandledRejection);

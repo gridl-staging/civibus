@@ -170,12 +170,11 @@ describe("/committee/[id] +page.server load", () => {
 
     expect(data.transactions).toBeInstanceOf(Promise);
     expect(data.summary).toBeInstanceOf(Promise);
-    expect(data.filingBreakdown).toBeInstanceOf(Promise);
+    expect(data.filingBreakdown).toEqual(filingBreakdown);
     expect(data.independentExpendituresMade).toBeInstanceOf(Promise);
 
     expect(await data.transactions).toEqual([]);
     expect(await data.summary).toEqual(summary);
-    expect(await data.filingBreakdown).toEqual(filingBreakdown);
     expect(await data.independentExpendituresMade).toEqual(independentExpendituresMade);
 
     expect(requestJson.mock.calls.map(([path]) => path)).toEqual([

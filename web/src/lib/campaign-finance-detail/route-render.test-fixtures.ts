@@ -274,11 +274,11 @@ export const COMMITTEE_CANONICAL_DATA = {
     cycle_summaries: [],
     summary_source: "derived"
   }),
-  filingBreakdown: asDeferredValue<CommitteeFilingBreakdown>({
+  filingBreakdown: {
     committee_id: COMMITTEE_ID,
     committee_name: "Citizens for Civibus",
     filings: []
-  }),
+  },
   independentExpendituresMade: asDeferredValue<CommitteeIndependentExpenditureActivity>({
     committee_id: COMMITTEE_ID,
     support_total: "0.00",
@@ -291,7 +291,7 @@ export const COMMITTEE_CANONICAL_DATA = {
 
 export const COMMITTEE_CANONICAL_DATA_WITH_PAGINATED_FILINGS = {
   ...COMMITTEE_CANONICAL_DATA,
-  filingBreakdown: asDeferredValue<CommitteeFilingBreakdown>({
+  filingBreakdown: {
     committee_id: COMMITTEE_ID,
     committee_name: "Citizens for Civibus",
     total_filings: 220706,
@@ -300,7 +300,7 @@ export const COMMITTEE_CANONICAL_DATA_WITH_PAGINATED_FILINGS = {
     offset: 0,
     limit: 200,
     filings: buildUnorderedRouteRenderFilings(60)
-  })
+  }
 };
 
 export const COMMITTEE_CANONICAL_DATA_WITH_IE = {

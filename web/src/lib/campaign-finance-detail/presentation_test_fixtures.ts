@@ -172,7 +172,7 @@ export function buildCommitteeBundle(): CommitteeDetailBundle {
     detail: DEFAULT_COMMITTEE_DETAIL,
     transactions: Promise.resolve([]),
     summary: Promise.resolve(DEFAULT_SUMMARY),
-    filingBreakdown: Promise.resolve(DEFAULT_FILING_BREAKDOWN),
+    filingBreakdown: DEFAULT_FILING_BREAKDOWN,
     independentExpendituresMade: Promise.resolve(DEFAULT_COMMITTEE_IE_ACTIVITY)
   };
 }

@@ -60,7 +60,7 @@ export type CommitteeDetailBundle = {
   detail: CommitteeDetailResponse;
   transactions: Promise<CampaignFinanceTransactionResponse[]>;
   summary: Promise<CommitteeFundraisingSummary>;
-  filingBreakdown: Promise<CommitteeFilingBreakdown>;
+  filingBreakdown: CommitteeFilingBreakdown;
   independentExpendituresMade: Promise<CommitteeIndependentExpenditureActivity>;
 };
 
@@ -487,7 +487,7 @@ export async function fetchCandidateDetailBundle(
   }
 }
 
-/** Loads the committee detail shell; secondary fields stream as unresolved promises. */
+/** Loads the committee detail shell; filing breakdown is SSR-visible for curl evidence. */
 export async function fetchCommitteeDetailBundle(
   apiClient: ApiClient,
   request: CommitteeDetailRequest
@@ -503,12 +503,12 @@ export async function fetchCommitteeDetailBundle(
   guardUnhandledRejection(independentExpendituresMadePromise);
 
   try {
-    const detail = await detailPromise;
+    const [detail, filingBreakdown] = await Promise.all([detailPromise, filingBreakdownPromise]);
     return {
       detail,
       transactions: transactionsPromise,
       summary: summaryPromise,
-      filingBreakdown: filingBreakdownPromise,
+      filingBreakdown,
       independentExpendituresMade: independentExpendituresMadePromise
     };
   } catch (error) {

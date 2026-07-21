@@ -65,8 +65,7 @@ describe("streaming detail shell with deferred sections", () => {
         data: {
           ...COMMITTEE_CANONICAL_DATA,
           transactions: new Promise<CampaignFinanceTransactionResponse[]>(() => {}),
-          summary: new Promise<CommitteeFundraisingSummary>(() => {}),
-          filingBreakdown: new Promise<CommitteeFilingBreakdown>(() => {})
+          summary: new Promise<CommitteeFundraisingSummary>(() => {})
         }
       }
     });
