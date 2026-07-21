@@ -4,6 +4,7 @@ import type {
   CommitteeFilingBreakdown,
   CommitteeFundraisingSummary,
   CommitteeIndependentExpenditureActivity,
+  FilingPeriodSummary,
   IndependentExpenditureResponse,
   IndependentExpenditureSummary
 } from "./contract";
@@ -191,6 +192,46 @@ export const SAMPLE_TRANSACTION = {
   date_is_reliable: true
 };
 
+/**
+ */
+export function buildRouteRenderFilingRow(
+  sequence: number,
+  coverageEndDate: string | null
+): FilingPeriodSummary {
+  const paddedSequence = String(sequence).padStart(3, "0");
+
+  return {
+    filing_id: `filing-${paddedSequence}`,
+    filing_fec_id: `FEC-${paddedSequence}`,
+    filing_name: `Filing ${paddedSequence}`,
+    report_type: "Q",
+    amendment_indicator: "N",
+    coverage_start_date: coverageEndDate === null ? null : `${coverageEndDate.slice(0, 8)}01`,
+    coverage_end_date: coverageEndDate,
+    receipt_date: coverageEndDate,
+    total_raised: `${sequence * 100}.00`,
+    total_spent: `${sequence * 40}.00`,
+    net: `${sequence * 60}.00`,
+    transaction_count: sequence,
+    cash_on_hand: `${sequence * 70}.00`,
+    row_id: `filing-${paddedSequence}:N`
+  };
+}
+
+function routeRenderCoverageEndDate(sequence: number): string {
+  const year = 2021 + Math.floor((sequence - 1) / 12);
+  const month = String(((sequence - 1) % 12) + 1).padStart(2, "0");
+  return `${year}-${month}-28`;
+}
+
+function buildUnorderedRouteRenderFilings(count: number): FilingPeriodSummary[] {
+  const orderedRows = Array.from({ length: count }, (_, index) =>
+    buildRouteRenderFilingRow(index + 1, routeRenderCoverageEndDate(index + 1))
+  );
+
+  return Array.from({ length: count }, (_, index) => orderedRows[(index * 37) % count]);
+}
+
 export const COMMITTEE_CANONICAL_DATA = {
   routeKind: "canonical-detail" as const,
   detail: {
@@ -245,6 +286,20 @@ export const COMMITTEE_CANONICAL_DATA = {
     ie_transaction_count: 0,
     excluded_outlier_count: 0,
     targets: []
+  })
+};
+
+export const COMMITTEE_CANONICAL_DATA_WITH_PAGINATED_FILINGS = {
+  ...COMMITTEE_CANONICAL_DATA,
+  filingBreakdown: asDeferredValue<CommitteeFilingBreakdown>({
+    committee_id: COMMITTEE_ID,
+    committee_name: "Citizens for Civibus",
+    total_filings: 220706,
+    store_limit: 200,
+    has_next: true,
+    offset: 0,
+    limit: 200,
+    filings: buildUnorderedRouteRenderFilings(60)
   })
 };
 

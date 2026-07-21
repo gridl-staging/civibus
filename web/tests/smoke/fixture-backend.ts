@@ -45,6 +45,10 @@ function getComparePersonResponse(url: URL): CompareFixtureResponse | null {
     return null;
   }
 
+  if (getPersonFixtureById(match[1]) !== null) {
+    return null;
+  }
+
   const fixture = compareFixtureById.get(match[1]);
   if (fixture === undefined) {
     return null;
@@ -75,7 +79,12 @@ function getCompareCandidateListResponse(url: URL): CompareFixtureResponse | nul
     return null;
   }
 
-  const fixture = compareFixtureById.get(url.searchParams.get("person_id") ?? "");
+  const personId = url.searchParams.get("person_id") ?? "";
+  if (getPersonFixtureById(personId) !== null) {
+    return null;
+  }
+
+  const fixture = compareFixtureById.get(personId);
   return fixture === undefined ? null : { status: 200, body: fixture.candidateList };
 }
 
@@ -86,6 +95,10 @@ function getCompareCandidateResponse(url: URL): CompareFixtureResponse | null {
     /^\/v1\/candidates\/([^/]+)(?:\/(summary|independent-expenditures(?:\/summary)?))?$/
   );
   if (match === null) {
+    return null;
+  }
+
+  if (isStandardCandidateFixtureId(match[1])) {
     return null;
   }
 
@@ -246,6 +259,8 @@ type CandidateListItem = (typeof smokeFixtures.candidateList.items)[number];
 
 type CommitteeFixture =
   | (typeof smokeFixtures)["committee"]
+  | (typeof smokeFixtures)["committeeFilingsPaged"]
+  | (typeof smokeFixtures)["committeeFilingsHighTotal"]
   | (typeof smokeFixtures)["committeeEmpty"]
   | (typeof smokeFixtures)["committeePhl"];
 type PersonFixture =
@@ -256,6 +271,8 @@ type PersonFixture =
   | (typeof smokeFixtures)["rosterNcHousePerson"]
   | (typeof smokeFixtures)["personMissingPortraitField"];
 
+/**
+ */
 function getCommitteeFixtureById(committeeId: string | null): CommitteeFixture | null {
   if (committeeId === smokeFixtures.committee.id) {
     return smokeFixtures.committee;
@@ -269,22 +286,85 @@ function getCommitteeFixtureById(committeeId: string | null): CommitteeFixture |
     return smokeFixtures.committeePhl;
   }
 
+  if (committeeId === smokeFixtures.committeeFilingsPaged.id) {
+    return smokeFixtures.committeeFilingsPaged;
+  }
+
+  if (committeeId === smokeFixtures.committeeFilingsHighTotal.id) {
+    return smokeFixtures.committeeFilingsHighTotal;
+  }
+
   return null;
 }
 
+function isStandardCandidateFixtureId(candidateId: string): boolean {
+  return [
+    smokeFixtures.candidate.id,
+    smokeFixtures.candidateEmpty.id,
+    smokeFixtures.candidateDeviant.id,
+    smokeFixtures.candidateAl.id,
+    smokeFixtures.candidateGa.id
+  ].includes(candidateId);
+}
+
+// Per-committee request-count diagnostics for the five committee detail bundle
+// subresources. Browser tests reset these before a page load and assert that
+// URL-only filing pagination (client-side, no server round trip) leaves every
+// counter unchanged. The counts object always exposes all five named keys so a
+// renamed or dropped counter fails the browser assertion closed instead of
+// silently reading as zero.
+type CommitteeSubresource =
+  | "detail"
+  | "summary"
+  | "filings_summary"
+  | "independent_expenditures_made"
+  | "transactions";
+
+function buildZeroedCommitteeRequestCounts(): Record<CommitteeSubresource, number> {
+  return {
+    detail: 0,
+    summary: 0,
+    filings_summary: 0,
+    independent_expenditures_made: 0,
+    transactions: 0
+  };
+}
+
+const committeeRequestCounts = new Map<string, Record<CommitteeSubresource, number>>();
+
+function recordCommitteeSubresourceHit(committeeId: string, subresource: CommitteeSubresource): void {
+  const counts = committeeRequestCounts.get(committeeId) ?? buildZeroedCommitteeRequestCounts();
+  counts[subresource] += 1;
+  committeeRequestCounts.set(committeeId, counts);
+}
+
+function getCommitteeRequestCounts(committeeId: string): Record<CommitteeSubresource, number> {
+  return committeeRequestCounts.get(committeeId) ?? buildZeroedCommitteeRequestCounts();
+}
+
 /**
+ * Resolves a committee detail bundle subresource to its fixture body and records the hit
+ * against the per-committee request-count diagnostics used by the pagination smoke test.
  */
 function getCommitteeFixtureResponseByPath(pathname: string): { body: unknown } | null {
   const summaryMatch = pathname.match(/^\/v1\/committees\/([^/]+)\/summary$/);
   if (summaryMatch) {
     const committeeFixture = getCommitteeFixtureById(summaryMatch[1]);
-    return committeeFixture === null ? null : { body: committeeFixture.summary };
+    if (committeeFixture === null) {
+      return null;
+    }
+    recordCommitteeSubresourceHit(summaryMatch[1], "summary");
+    return { body: committeeFixture.summary };
   }
 
   const filingSummaryMatch = pathname.match(/^\/v1\/committees\/([^/]+)\/filings\/summary$/);
   if (filingSummaryMatch) {
     const committeeFixture = getCommitteeFixtureById(filingSummaryMatch[1]);
-    return committeeFixture === null ? null : { body: committeeFixture.filingBreakdown };
+    if (committeeFixture === null) {
+      return null;
+    }
+    recordCommitteeSubresourceHit(filingSummaryMatch[1], "filings_summary");
+    return { body: committeeFixture.filingBreakdown };
   }
 
   const independentExpendituresMadeMatch = pathname.match(
@@ -292,13 +372,21 @@ function getCommitteeFixtureResponseByPath(pathname: string): { body: unknown } 
   );
   if (independentExpendituresMadeMatch) {
     const committeeFixture = getCommitteeFixtureById(independentExpendituresMadeMatch[1]);
-    return committeeFixture === null ? null : { body: committeeFixture.independentExpendituresMade };
+    if (committeeFixture === null) {
+      return null;
+    }
+    recordCommitteeSubresourceHit(independentExpendituresMadeMatch[1], "independent_expenditures_made");
+    return { body: committeeFixture.independentExpendituresMade };
   }
 
   const detailMatch = pathname.match(/^\/v1\/committees\/([^/]+)$/);
   if (detailMatch) {
     const committeeFixture = getCommitteeFixtureById(detailMatch[1]);
-    return committeeFixture === null ? null : { body: committeeFixture.detail };
+    if (committeeFixture === null) {
+      return null;
+    }
+    recordCommitteeSubresourceHit(detailMatch[1], "detail");
+    return { body: committeeFixture.detail };
   }
 
   return null;
@@ -423,6 +511,31 @@ const server = createServer(async (request, response) => {
 
   if (url.pathname === "/healthz") {
     writeJson(response, 200, { status: "ok" });
+    return;
+  }
+
+  // Fixture-backend-only diagnostics for the committee detail bundle request counts.
+  // Reset clears every committee's counters; the read path returns all five named
+  // counters for one committee so the pagination smoke test can prove URL-only filing
+  // navigation triggered no server-side refetch.
+  if (url.pathname === "/_smoke/request-counts/reset") {
+    committeeRequestCounts.clear();
+    writeJson(response, 200, { ok: true });
+    return;
+  }
+
+  if (url.pathname === "/_smoke/request-counts") {
+    const committeeId = url.searchParams.get("committee_id");
+    if (committeeId === null) {
+      writeJson(response, 400, {
+        detail: "request-counts requires a committee_id query parameter."
+      });
+      return;
+    }
+    writeJson(response, 200, {
+      committee_id: committeeId,
+      counts: getCommitteeRequestCounts(committeeId)
+    });
     return;
   }
 
@@ -627,6 +740,7 @@ const server = createServer(async (request, response) => {
       writeJson(response, 400, { detail: "Missing committee fixture for committee transaction request." });
       return;
     }
+    recordCommitteeSubresourceHit(committeeId as string, "transactions");
     writeJson(
       response,
       200,

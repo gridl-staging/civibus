@@ -7,14 +7,12 @@ import {
   buildCandidateDeferredFundraisingSummary,
   buildCandidateDeferredKeyMetrics,
   buildCandidateDeferredOutsideSpending,
-  buildCommitteeDeferredFilingBreakdown,
   buildCommitteeDeferredFundraisingSummary,
   buildCommitteeDeferredHighSignalSummary,
   buildCommitteeDeferredKeyMetrics,
   buildCommitteeDeferredOutsideSpending,
   buildCommitteeDeferredTransactionRows,
   buildCommitteeTransactionRows,
-  buildFilingBreakdownPresentation,
   buildFundraisingSummaryPresentation,
   buildKeyMetrics,
   buildOutsideSpendingPresentation,
@@ -29,7 +27,6 @@ import {
   DEFAULT_SELECTED_CYCLE_FIELDS,
   DEFAULT_SUMMARY,
   DEFAULT_TRANSACTION,
-  FILING_ID,
   ORG_ID,
   PERSON_ID
 } from "./presentation_test_fixtures";
@@ -52,27 +49,6 @@ describe("campaign finance deferred detail presentation", () => {
       summarySourceLabel: "Derived from itemized transactions",
       itemizedCoverageNote:
         "Itemized transactions loaded: 1. Totals above are derived from these itemized transactions."
-    });
-  });
-
-  it("builds filing breakdown presentation with formatted coverage, dates, and currency", () => {
-    expect(buildFilingBreakdownPresentation(DEFAULT_FILING_BREAKDOWN)).toEqual({
-      rows: [
-        {
-          filingId: FILING_ID,
-          filingFecId: "FEC-100",
-          filingName: "Q1 filing",
-          reportType: "Q1",
-          amendmentIndicator: "N",
-          coveragePeriod: "2026-01-01 to 2026-03-31",
-          receiptDate: "2026-04-10",
-          totalReceipts: "$125.00",
-          totalDisbursements: "$50.00",
-          cashOnHand: "$75.00",
-          transactionCount: 1
-        }
-      ],
-      emptyMessage: null
     });
   });
 
@@ -322,7 +298,6 @@ describe("campaign finance deferred detail presentation", () => {
       itemizedCoverageNote:
         "Itemized transactions loaded: 1. Totals above are derived from these itemized transactions."
     });
-    expect(buildCommitteeDeferredFilingBreakdown(filingBreakdown).rows).toHaveLength(1);
     expect(
       buildCommitteeDeferredTransactionRows(transactions, {
         candidateById: {
@@ -629,14 +604,9 @@ describe("campaign finance deferred detail presentation", () => {
     ]);
   });
 
-  it("provides empty messages from filing breakdown and transaction row builders", () => {
-    const filingPresentation = buildFilingBreakdownPresentation({
-      ...DEFAULT_FILING_BREAKDOWN,
-      filings: []
-    });
+  it("provides empty messages from transaction row builders", () => {
     const transactionRows = buildCommitteeTransactionRows([]);
 
-    expect(filingPresentation.emptyMessage).toBe("No filing-period fundraising data available.");
     expect(transactionRows).toEqual([]);
     expect(getCampaignFinanceEmptyMessage()).toBe("No recent committee transactions found.");
   });

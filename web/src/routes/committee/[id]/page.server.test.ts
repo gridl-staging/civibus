@@ -2,7 +2,6 @@ import { ApiResponseError } from "$lib/server/api/client";
 import {
   COMMITTEE_TRANSACTIONS_LIMIT,
   buildCommitteeDetailPath,
-  buildCommitteeFilingBreakdownPath,
   buildCommitteeIndependentExpendituresMadePath,
   buildCommitteeSummaryPath,
   buildCommitteeTransactionsPath,
@@ -19,6 +18,8 @@ const COMMITTEE_ID = "33333333-3333-4333-8333-333333333333";
 const COMMITTEE_ID_ALT = "66666666-6666-4666-8666-666666666666";
 const COMMITTEE_SLUG = "committee-one";
 const UUID_SHAPED_NON_UUID = "33333333-3333-4333-8333-33333333333z";
+const COMMITTEE_FILING_BREAKDOWN_PATH = `/v1/committees/${COMMITTEE_ID}/filings/summary?limit=200`;
+const COMMITTEE_ALT_FILING_BREAKDOWN_PATH = `/v1/committees/${COMMITTEE_ID_ALT}/filings/summary?limit=200`;
 const SELECTED_CYCLE_FIELDS = {
   selected_cycle: 2026,
   coverage_start_date: "2025-01-01",
@@ -149,7 +150,7 @@ describe("/committee/[id] +page.server load", () => {
         return summary;
       }
 
-      if (path === buildCommitteeFilingBreakdownPath(COMMITTEE_ID)) {
+      if (path === COMMITTEE_FILING_BREAKDOWN_PATH) {
         return filingBreakdown;
       }
 
@@ -181,7 +182,7 @@ describe("/committee/[id] +page.server load", () => {
       buildCommitteeDetailPath(COMMITTEE_ID),
       `/v1/transactions?committee_id=${COMMITTEE_ID}&limit=${COMMITTEE_TRANSACTIONS_LIMIT}`,
       buildCommitteeSummaryPath(COMMITTEE_ID),
-      buildCommitteeFilingBreakdownPath(COMMITTEE_ID),
+      COMMITTEE_FILING_BREAKDOWN_PATH,
       buildCommitteeIndependentExpendituresMadePath(COMMITTEE_ID)
     ]);
   });
@@ -210,7 +211,7 @@ describe("/committee/[id] +page.server load", () => {
         return summary;
       }
 
-      if (path === buildCommitteeFilingBreakdownPath(COMMITTEE_ID)) {
+      if (path === COMMITTEE_FILING_BREAKDOWN_PATH) {
         return filingBreakdown;
       }
 
@@ -232,7 +233,7 @@ describe("/committee/[id] +page.server load", () => {
       buildCommitteeDetailPath(COMMITTEE_ID),
       buildCommitteeTransactionsPath(COMMITTEE_ID),
       buildCommitteeSummaryPath(COMMITTEE_ID),
-      buildCommitteeFilingBreakdownPath(COMMITTEE_ID),
+      COMMITTEE_FILING_BREAKDOWN_PATH,
       buildCommitteeIndependentExpendituresMadePath(COMMITTEE_ID)
     ]);
   });
@@ -268,7 +269,7 @@ describe("/committee/[id] +page.server load", () => {
         return summary;
       }
 
-      if (path === buildCommitteeFilingBreakdownPath(COMMITTEE_ID_ALT)) {
+      if (path === COMMITTEE_ALT_FILING_BREAKDOWN_PATH) {
         return filingBreakdown;
       }
 
@@ -288,7 +289,7 @@ describe("/committee/[id] +page.server load", () => {
       buildCommitteeDetailPath(COMMITTEE_ID_ALT),
       buildCommitteeTransactionsPath(COMMITTEE_ID_ALT),
       buildCommitteeSummaryPath(COMMITTEE_ID_ALT),
-      buildCommitteeFilingBreakdownPath(COMMITTEE_ID_ALT),
+      COMMITTEE_ALT_FILING_BREAKDOWN_PATH,
       buildCommitteeIndependentExpendituresMadePath(COMMITTEE_ID_ALT)
     ]);
   });
@@ -307,7 +308,7 @@ describe("/committee/[id] +page.server load", () => {
         return buildCommitteeSummary(COMMITTEE_ID);
       }
 
-      if (path === buildCommitteeFilingBreakdownPath(COMMITTEE_ID)) {
+      if (path === COMMITTEE_FILING_BREAKDOWN_PATH) {
         return buildFilingBreakdown(COMMITTEE_ID);
       }
 

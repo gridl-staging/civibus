@@ -104,8 +104,168 @@ const {
   SMOKE_SEARCH_QUERY,
   SMOKE_SEARCH_RESULT_NAME,
   SMOKE_SEARCH_SLOW_QUERY,
-  SMOKE_SEARCH_VALIDATION_QUERY
+  SMOKE_SEARCH_VALIDATION_QUERY,
+  SMOKE_FILINGS_PAGED_COMMITTEE_ID,
+  SMOKE_FILINGS_HIGH_TOTAL_COMMITTEE_ID,
+  SMOKE_FILINGS_PAGED_COMMITTEE_NAME,
+  SMOKE_FILINGS_HIGH_TOTAL_COMMITTEE_NAME
 } = fixtureConstants;
+
+// A day in milliseconds, used to walk deterministic filing coverage windows backward
+// from a fixed base date so the newest filing is always rank 1.
+const FILING_FIXTURE_DAY_MS = 24 * 60 * 60 * 1000;
+// Fixed base date (2026-12-31). `new Date(<explicit ms>)` is deterministic — no wall clock.
+const FILING_FIXTURE_BASE_MS = Date.UTC(2026, 11, 31);
+
+function toIsoDateOnly(epochMs: number): string {
+  return new Date(epochMs).toISOString().slice(0, 10);
+}
+
+/**
+ * Builds `count` deterministic newest-first-verifiable filings for a committee fixture.
+ *
+ * Rank 1 is the newest filing (latest coverage end date) and is named "Filing 01" (zero
+ * padded to the width of `count`, so 30 rows read "Filing 01".."Filing 30" and 200 rows
+ * read "Filing 001".."Filing 200"). Distinct coverage end dates give the presenter an
+ * unambiguous newest-first sort, so page-1 and page-2 row identities are exactly known.
+ */
+function buildDeterministicFilings(committeeId: string, count: number) {
+  const rankWidth = String(count).length;
+  return Array.from({ length: count }, (_unused, index) => {
+    const rank = index + 1;
+    const coverageEndMs = FILING_FIXTURE_BASE_MS - (rank - 1) * 7 * FILING_FIXTURE_DAY_MS;
+    const paddedRank = String(rank).padStart(rankWidth, "0");
+    return {
+      filing_id: `${committeeId}:filing-${paddedRank}`,
+      filing_fec_id: "F3N",
+      filing_name: `Filing ${paddedRank}`,
+      report_type: "Q",
+      amendment_indicator: "N",
+      coverage_start_date: toIsoDateOnly(coverageEndMs - 89 * FILING_FIXTURE_DAY_MS),
+      coverage_end_date: toIsoDateOnly(coverageEndMs),
+      receipt_date: toIsoDateOnly(coverageEndMs + 15 * FILING_FIXTURE_DAY_MS),
+      total_raised: (1000 + rank).toFixed(2),
+      total_spent: (500 + rank).toFixed(2),
+      net: (500).toFixed(2),
+      transaction_count: (rank % 5) + 1,
+      cash_on_hand: (10000 - rank * 10).toFixed(2),
+      row_id: `${committeeId}:filing-${paddedRank}:N`
+    };
+  });
+}
+
+/**
+ * Builds a self-contained committee detail fixture whose only interesting surface is a
+ * client-paginated filing table. Detail/summary/transactions/IE carry just enough valid
+ * data for the detail page to render every panel without a backend-failure state, while
+ * `filingBreakdown` carries the paginated window plus the backend pagination metadata the
+ * client presenter intentionally ignores. `slug_is_unique` is false so navigating by id
+ * stays on the id URL (no canonical-slug redirect), matching the PHL fixture's contract.
+ */
+function buildFilingPaginationCommitteeFixture(params: {
+  id: string;
+  name: string;
+  slug: string;
+  filings: ReturnType<typeof buildDeterministicFilings>;
+  totalFilings: number;
+  storeLimit: number;
+  hasNext: boolean;
+}) {
+  const { id, name, slug, filings, totalFilings, storeLimit, hasNext } = params;
+  return {
+    id,
+    detail: {
+      id,
+      fec_committee_id: "C90000000",
+      name,
+      slug,
+      slug_is_unique: false,
+      organization_id: null,
+      committee_type: "Q",
+      committee_designation: "P",
+      party: "DEM",
+      state: "NC",
+      city: "Raleigh",
+      zip_code: "27601",
+      treasurer_name: "Jordan Treasurer",
+      linked_candidates: [],
+      sources: [
+        {
+          domain: "campaign_finance",
+          jurisdiction: "federal/fec",
+          data_source_name: "FEC Filings",
+          data_source_url: "https://www.fec.gov",
+          source_record_key: `${id}-source`,
+          record_url: "https://www.fec.gov",
+          pull_date: "2026-03-19T00:00:00Z"
+        }
+      ]
+    },
+    transactions: [],
+    summary: {
+      committee_id: id,
+      committee_name: name,
+      selected_cycle: 2026,
+      coverage_start_date: "2026-01-01",
+      coverage_end_date: "2026-12-31",
+      available_cycles: [2026],
+      total_raised: "1000.00",
+      total_spent: "500.00",
+      net: "500.00",
+      transaction_count: 0,
+      jurisdiction: "federal/fec",
+      data_through: "2026-12-31T00:00:00Z",
+      cash_receipts_total: "1000.00",
+      in_kind_receipts_total: "0.00",
+      loan_receipts_total: "0.00",
+      contribution_receipts_total: "1000.00",
+      top_donors: [],
+      top_vendors: [],
+      spend_categories: null,
+      itemized_transaction_count: 0,
+      cycle_summaries: [],
+      summary_source: "derived" as const
+    },
+    filingBreakdown: {
+      committee_id: id,
+      committee_name: name,
+      total_filings: totalFilings,
+      store_limit: storeLimit,
+      has_next: hasNext,
+      offset: 0,
+      limit: storeLimit,
+      filings
+    },
+    independentExpendituresMade: {
+      committee_id: id,
+      support_total: "0.00",
+      oppose_total: "0.00",
+      ie_transaction_count: 0,
+      excluded_outlier_count: 0,
+      targets: []
+    }
+  };
+}
+
+const committeeFilingsPagedFixture = buildFilingPaginationCommitteeFixture({
+  id: SMOKE_FILINGS_PAGED_COMMITTEE_ID,
+  name: SMOKE_FILINGS_PAGED_COMMITTEE_NAME,
+  slug: "filing-pagination-committee",
+  filings: buildDeterministicFilings(SMOKE_FILINGS_PAGED_COMMITTEE_ID, 30),
+  totalFilings: 30,
+  storeLimit: 200,
+  hasNext: false
+});
+
+const committeeFilingsHighTotalFixture = buildFilingPaginationCommitteeFixture({
+  id: SMOKE_FILINGS_HIGH_TOTAL_COMMITTEE_ID,
+  name: SMOKE_FILINGS_HIGH_TOTAL_COMMITTEE_NAME,
+  slug: "filing-high-total-committee",
+  filings: buildDeterministicFilings(SMOKE_FILINGS_HIGH_TOTAL_COMMITTEE_ID, 200),
+  totalFilings: 220706,
+  storeLimit: 200,
+  hasNext: true
+});
 
 export const smokeFixtures = {
   search: {
@@ -907,6 +1067,8 @@ export const smokeFixtures = {
       ]
     }
   },
+  committeeFilingsPaged: committeeFilingsPagedFixture,
+  committeeFilingsHighTotal: committeeFilingsHighTotalFixture,
   committeeEmpty: {
     id: SMOKE_EMPTY_COMMITTEE_ID,
     detail: {

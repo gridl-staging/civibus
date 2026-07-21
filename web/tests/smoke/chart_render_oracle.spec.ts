@@ -2,9 +2,7 @@ import { expect, test } from "playwright/test";
 import type { Page } from "playwright";
 
 import {
-  SMOKE_PERSON_CANONICAL_NAME,
-  SMOKE_PERSON_DONATION_COUNT_BY_SIZE_HEADING,
-  SMOKE_PERSON_DONATIONS_OVER_TIME_HEADING,
+  SMOKE_COMMITTEE_SLUG,
   SMOKE_PERSON_ID
 } from "./fixtures";
 import {
@@ -25,21 +23,16 @@ test.describe("chart render oracle", () => {
   }: {
     page: Page;
   }) => {
-    await page.goto(`/person/${SMOKE_PERSON_ID}`);
-
-    const lineChartRegion = await chartRegion(
-      page,
-      `${SMOKE_PERSON_DONATIONS_OVER_TIME_HEADING} for ${SMOKE_PERSON_CANONICAL_NAME}`
-    );
-    const barChartRegion = await chartRegion(
-      page,
-      `${SMOKE_PERSON_DONATION_COUNT_BY_SIZE_HEADING} for ${SMOKE_PERSON_CANONICAL_NAME}`
-    );
+    await page.goto(`/committee/${SMOKE_COMMITTEE_SLUG}`);
+    const lineChartRegion = await chartRegion(page, "Cash on hand trend by filing period");
     await expect(lineChartRegion).toBeVisible();
-    await expect(barChartRegion).toBeVisible();
-
     await expectRealChartRender(lineChartRegion, LINE_SERIES_MARK_SELECTOR);
+    await expectNoOpaqueNearBlackPaints(lineChartRegion);
+
+    await page.goto(`/person/${SMOKE_PERSON_ID}`);
+    const barChartRegion = await chartRegion(page, "Itemized contribution-size buckets bar chart");
+    await expect(barChartRegion).toBeVisible();
     await expectRealChartRender(barChartRegion, BAR_SERIES_MARK_SELECTOR);
-    await expectNoOpaqueNearBlackPaints([lineChartRegion, barChartRegion]);
+    await expectNoOpaqueNearBlackPaints(barChartRegion);
   });
 });

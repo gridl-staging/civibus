@@ -2,6 +2,7 @@
 import { encodeRoutePathSegment, type SourceInfo } from "$lib/entity-detail/contract";
 
 export const COMMITTEE_TRANSACTIONS_LIMIT = 25;
+export const COMMITTEE_FILINGS_WINDOW_LIMIT = 200;
 export const CANDIDATES_PAGE_PATH = "/candidates";
 export const COMMITTEES_PAGE_PATH = "/committees";
 export type SerializedMoney = string;
@@ -452,7 +453,19 @@ export function buildCommitteeSummaryPath(
 }
 
 export function buildCommitteeFilingBreakdownPath(committeeId: string): string {
-  return buildCampaignFinancePath("committees", committeeId, "/filings/summary");
+  return buildPathWithQuery(buildCampaignFinancePath("committees", committeeId, "/filings/summary"), {
+    limit: COMMITTEE_FILINGS_WINDOW_LIMIT
+  });
+}
+
+export function buildCommitteeFilingPageHref(currentUrl: URL, targetOffset: number): string {
+  // Clone the live params so repeated unrelated keys (?tag=a&tag=b) survive; a plain
+  // object would collapse them to the last value. Replace only filings_offset.
+  const searchParams = new URLSearchParams(currentUrl.searchParams);
+  searchParams.delete("filings_offset");
+  searchParams.set("filings_offset", String(targetOffset));
+
+  return `${currentUrl.pathname}?${searchParams.toString()}`;
 }
 
 export function buildFilingDetailPath(filingId: string): string {

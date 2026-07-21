@@ -9,6 +9,7 @@ import {
   buildCandidateRoutePresentation,
   buildCommitteeRoutePresentation
 } from "./presentation";
+import { COMMITTEE_FILINGS_WINDOW_LIMIT } from "./contract";
 import {
   CANDIDATE_CANONICAL_DATA,
   CANDIDATE_CANONICAL_DATA_WITH_L10_DEVIATION,
@@ -16,6 +17,7 @@ import {
   CANDIDATE_EMPTY_CANONICAL_DATA,
   CANDIDATE_ID,
   COMMITTEE_CANONICAL_DATA,
+  COMMITTEE_CANONICAL_DATA_WITH_PAGINATED_FILINGS,
   COMMITTEE_CANONICAL_DATA_WITH_IE,
   COMMITTEE_ID,
   DEFAULT_SELECTED_CYCLE_FIELDS,
@@ -31,18 +33,27 @@ vi.mock("$env/dynamic/public", () => ({
   }
 }));
 
+const mockPageStore = vi.hoisted(() => ({
+  url: new URL("https://civibus.test/mock-path")
+}));
+
 vi.mock("$app/stores", () => ({
   page: {
     subscribe(run: (value: { url: URL }) => void): () => void {
-      run({ url: new URL("https://civibus.test/mock-path") });
+      run({ url: mockPageStore.url });
       return () => {};
     }
   }
 }));
 
+function setMockPageUrl(pathAndSearch: string): void {
+  mockPageStore.url = new URL(pathAndSearch, "https://civibus.test");
+}
+
 beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(new Date("2026-03-21T12:00:00Z"));
+  setMockPageUrl("/mock-path");
 });
 
 afterEach(() => {
@@ -103,6 +114,26 @@ function extractElementByTestId(html: string, testId: string): string | null {
   }
 
   return null;
+}
+
+function extractFilingTable(html: string): string {
+  const filingTable = extractElementByTestId(html, "filing-breakdown-scroll");
+  expect(filingTable).not.toBeNull();
+  return filingTable!;
+}
+
+function extractFilingTableRowIdentities(html: string): string[] {
+  return Array.from(html.matchAll(/<td>Filing (\d{3}) \(FEC-\1\)<\/td>/g), ([, sequence]) => {
+    return `filing-${sequence}`;
+  });
+}
+
+function extractHrefByTestId(html: string, testId: string): string {
+  const anchor = extractElementByTestId(html, testId);
+  expect(anchor).not.toBeNull();
+  const href = anchor!.match(/\shref="([^"]+)"/)?.[1];
+  expect(href).toBeDefined();
+  return href!.replaceAll("&amp;", "&");
 }
 
 describe("extractElementByTestId", () => {
@@ -225,6 +256,18 @@ describe("campaign-finance route renders", () => {
     expect(rendered.head).toContain('"name":"Citizens for Civibus"');
     expect(rendered.body).toContain("Committee detail");
     expect(rendered.body).toContain("Citizens for Civibus");
+  });
+
+  it("keeps the frontend filing window limit aligned with the backend SSOT", () => {
+    const backendConstants = readFileSync(
+      new URL("../../../../domains/campaign_finance/constants.py", import.meta.url),
+      "utf8"
+    );
+    const backendWindowLimit = backendConstants.match(/^FILING_BREAKDOWN_STORE_LIMIT = (\d+)$/m);
+
+    expect(backendWindowLimit).not.toBeNull();
+    expect(COMMITTEE_FILINGS_WINDOW_LIMIT).toBe(Number(backendWindowLimit![1]));
+    expect(COMMITTEE_FILINGS_WINDOW_LIMIT).toBe(200);
   });
 
   it("candidate canonical detail follows the presenter section order", () => {
@@ -438,6 +481,88 @@ describe("campaign-finance route renders", () => {
     expect(filingTable).not.toContain("<th>Raised</th>");
     expect(filingTable).not.toContain("<th>Spent</th>");
     expect(filingTable).not.toContain("<th>Net</th>");
+  });
+
+  it("renders the first filing table page from the fetched recent window", () => {
+    setMockPageUrl("/committee/citizens-for-civibus");
+    const rendered = render(DetailPage, {
+      props: {
+        presentation: buildCommitteeRoutePresentation(COMMITTEE_CANONICAL_DATA_WITH_PAGINATED_FILINGS)
+      }
+    });
+
+    const filingTable = extractFilingTable(rendered.body);
+    const rowIdentities = extractFilingTableRowIdentities(filingTable);
+
+    expect(rowIdentities).toHaveLength(25);
+    expect(rowIdentities[0]).toBe("filing-060");
+    expect(rowIdentities[24]).toBe("filing-036");
+    expect(extractElementByTestId(rendered.body, "filing-breakdown-pagination-label")).toContain(
+      "Showing 1–25 of 60 most recent · 220,706 total filings"
+    );
+    expect(extractElementByTestId(rendered.body, "filing-breakdown-next")).not.toBeNull();
+    expect(extractElementByTestId(rendered.body, "filing-breakdown-prev")).toBeNull();
+    expect(extractElementByTestId(rendered.body, "committee-cash-on-hand-trend")).not.toBeNull();
+  });
+
+  it("renders the second filing table page from filings_offset", () => {
+    setMockPageUrl("/committee/citizens-for-civibus?filings_offset=25");
+    const rendered = render(DetailPage, {
+      props: {
+        presentation: buildCommitteeRoutePresentation(COMMITTEE_CANONICAL_DATA_WITH_PAGINATED_FILINGS)
+      }
+    });
+
+    const rowIdentities = extractFilingTableRowIdentities(extractFilingTable(rendered.body));
+
+    expect(rowIdentities).toEqual([
+      "filing-035",
+      "filing-034",
+      "filing-033",
+      "filing-032",
+      "filing-031",
+      "filing-030",
+      "filing-029",
+      "filing-028",
+      "filing-027",
+      "filing-026",
+      "filing-025",
+      "filing-024",
+      "filing-023",
+      "filing-022",
+      "filing-021",
+      "filing-020",
+      "filing-019",
+      "filing-018",
+      "filing-017",
+      "filing-016",
+      "filing-015",
+      "filing-014",
+      "filing-013",
+      "filing-012",
+      "filing-011"
+    ]);
+    expect(extractElementByTestId(rendered.body, "filing-breakdown-pagination-label")).toContain(
+      "Showing 26–50 of 60 most recent · 220,706 total filings"
+    );
+    expect(extractElementByTestId(rendered.body, "filing-breakdown-prev")).not.toBeNull();
+    expect(extractElementByTestId(rendered.body, "filing-breakdown-next")).not.toBeNull();
+  });
+
+  it("preserves unrelated query parameters while building normalized filing page hrefs", () => {
+    setMockPageUrl("/committee/citizens-for-civibus?cycle=2026&filings_offset=26&view=records");
+    const rendered = render(DetailPage, {
+      props: {
+        presentation: buildCommitteeRoutePresentation(COMMITTEE_CANONICAL_DATA_WITH_PAGINATED_FILINGS)
+      }
+    });
+
+    expect(extractHrefByTestId(rendered.body, "filing-breakdown-prev")).toBe(
+      "/committee/citizens-for-civibus?cycle=2026&view=records&filings_offset=0"
+    );
+    expect(extractHrefByTestId(rendered.body, "filing-breakdown-next")).toBe(
+      "/committee/citizens-for-civibus?cycle=2026&view=records&filings_offset=50"
+    );
   });
 
   it("renders explicit no-category and no-trend messages when committee summary omits those aggregates", () => {

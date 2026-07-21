@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   CANDIDATES_PAGE_PATH,
   COMMITTEES_PAGE_PATH,
+  COMMITTEE_FILINGS_WINDOW_LIMIT,
   COMMITTEE_TRANSACTIONS_LIMIT,
   buildCandidateDetailPath,
   buildCandidateHref,
@@ -14,6 +15,7 @@ import {
   buildCountyCampaignFinanceSummaryPath,
   buildCommitteeDetailPath,
   buildCommitteeFilingBreakdownPath,
+  buildCommitteeFilingPageHref,
   buildCommitteeHref,
   buildCommitteeIndependentExpendituresMadePath,
   buildCommitteeListPath,
@@ -59,10 +61,31 @@ describe("campaign-finance detail contract", () => {
   it("builds backend-owned committee summary and filing-breakdown paths", () => {
     expect(buildCommitteeSummaryPath(COMMITTEE_ID)).toBe(`/v1/committees/${COMMITTEE_ID}/summary`);
     expect(buildCommitteeFilingBreakdownPath(COMMITTEE_ID)).toBe(
-      `/v1/committees/${COMMITTEE_ID}/filings/summary`
+      `/v1/committees/${COMMITTEE_ID}/filings/summary?limit=200`
     );
+    expect(COMMITTEE_FILINGS_WINDOW_LIMIT).toBe(200);
     expect(buildCommitteeIndependentExpendituresMadePath(COMMITTEE_ID)).toBe(
       `/v1/committees/${COMMITTEE_ID}/independent-expenditures-made`
+    );
+  });
+
+  it("builds filing table page hrefs by replacing only filings_offset", () => {
+    const currentUrl = new URL(
+      "https://civibus.test/committee/citizens-for-civibus?cycle=2026&filings_offset=26&view=records"
+    );
+
+    expect(buildCommitteeFilingPageHref(currentUrl, 50)).toBe(
+      "/committee/citizens-for-civibus?cycle=2026&view=records&filings_offset=50"
+    );
+  });
+
+  it("preserves repeated unrelated query parameters when replacing filings_offset", () => {
+    const currentUrl = new URL(
+      "https://civibus.test/committee/citizens-for-civibus?tag=a&filings_offset=25&tag=b&view=records"
+    );
+
+    expect(buildCommitteeFilingPageHref(currentUrl, 50)).toBe(
+      "/committee/citizens-for-civibus?tag=a&tag=b&view=records&filings_offset=50"
     );
   });
 
@@ -373,7 +396,7 @@ describe("campaign-finance detail contract", () => {
       "/v1/committees/..%2Fsearch%3Fentity_type%3Dcommittee/summary"
     );
     expect(buildCommitteeFilingBreakdownPath(maliciousId)).toBe(
-      "/v1/committees/..%2Fsearch%3Fentity_type%3Dcommittee/filings/summary"
+      "/v1/committees/..%2Fsearch%3Fentity_type%3Dcommittee/filings/summary?limit=200"
     );
     expect(buildFilingDetailPath(maliciousId)).toBe(
       "/v1/filings/..%2Fsearch%3Fentity_type%3Dcommittee"

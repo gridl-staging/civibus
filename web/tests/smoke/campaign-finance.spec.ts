@@ -87,7 +87,19 @@ import {
   SMOKE_TRUST_ADVISORY,
   SMOKE_TRUST_EMPTY_MESSAGE,
   SMOKE_TRUST_LAST_PULLED_UNAVAILABLE,
-  SMOKE_USE_LIVE_API
+  SMOKE_USE_LIVE_API,
+  SMOKE_COMMITTEE_REQUEST_COUNTER_KEYS,
+  resetSmokeCommitteeRequestCounts,
+  fetchSmokeCommitteeRequestCounts,
+  SMOKE_FILINGS_PAGED_COMMITTEE_ID,
+  SMOKE_FILINGS_HIGH_TOTAL_COMMITTEE_ID,
+  SMOKE_FILINGS_PAGE_1_FIRST_ROW_LABEL,
+  SMOKE_FILINGS_PAGE_1_LAST_ROW_LABEL,
+  SMOKE_FILINGS_PAGE_2_FIRST_ROW_LABEL,
+  SMOKE_FILINGS_PAGE_2_LAST_ROW_LABEL,
+  SMOKE_FILINGS_PAGE_1_LABEL,
+  SMOKE_FILINGS_PAGE_2_LABEL,
+  SMOKE_FILINGS_HIGH_TOTAL_LABEL
 } from "./fixtures";
 import {
   capturePageLoadErrors,
@@ -296,6 +308,95 @@ test.describe("campaign finance smoke", () => {
     );
     await assertBreadcrumbNav(page);
     await assertBreadcrumbJsonLd(page);
+  });
+
+  test("/committee/[id] filing table paginates client-side without refetching the detail bundle", async ({
+    page,
+    request
+  }: {
+    page: any;
+    request: any;
+  }) => {
+    const committeeId = SMOKE_FILINGS_PAGED_COMMITTEE_ID;
+    await resetSmokeCommitteeRequestCounts(request);
+
+    // Navigate by id and carry an unrelated query param so the Stage 3 first-page
+    // href policy (reset filings_offset while preserving other params) is exercised.
+    await page.goto(`/committee/${committeeId}?ref=smoke`);
+    await expect(page).toHaveURL(new RegExp(`/committee/${committeeId}\\?ref=smoke$`));
+
+    // Checklist-mandated: scope filing row counts strictly to the breakdown table's
+    // tbody, never broad document rows.
+    // eslint-disable-next-line playwright/no-raw-locators
+    const filingRows = page.getByTestId("filing-breakdown-scroll").locator("tbody tr");
+    const paginationLabel = page.getByTestId("filing-breakdown-pagination-label");
+
+    // Page 1: exactly 25 rows, newest filing first and 25th newest last, with the
+    // recent-window-vs-all-time label, a Next control, no Previous control, and the
+    // chronological cash trend still present alongside the paginated table.
+    await expect(filingRows).toHaveCount(25);
+    await expect(filingRows.first()).toContainText(SMOKE_FILINGS_PAGE_1_FIRST_ROW_LABEL);
+    await expect(filingRows.nth(24)).toContainText(SMOKE_FILINGS_PAGE_1_LAST_ROW_LABEL);
+    await expect(paginationLabel).toHaveText(SMOKE_FILINGS_PAGE_1_LABEL);
+    await expect(page.getByTestId("filing-breakdown-next")).toBeVisible();
+    await expect(page.getByTestId("filing-breakdown-prev")).toHaveCount(0);
+    await expect(page.getByTestId("committee-cash-on-hand-trend")).toBeVisible();
+
+    // Snapshot the per-committee subresource counts after the initial server render.
+    // Every named counter must be present AND positive: a zero would mean that
+    // detail-bundle fetch never ran on the initial render, so the unchanged-after-
+    // navigation comparison below would prove nothing. Requiring a positive baseline
+    // makes the no-refetch proof fail closed against a dropped or client-moved fetch.
+    const initialCounts = await fetchSmokeCommitteeRequestCounts(request, committeeId);
+    for (const counterKey of SMOKE_COMMITTEE_REQUEST_COUNTER_KEYS) {
+      expect(initialCounts).toHaveProperty(counterKey);
+      expect(initialCounts[counterKey]).toBeGreaterThan(0);
+    }
+
+    // Click Next as a user would: URL gains filings_offset=25 (unrelated param kept),
+    // the table shows the short final page, and the controls flip to Previous-only.
+    await page.getByTestId("filing-breakdown-next").click();
+    await expect(page).toHaveURL(new RegExp(`/committee/${committeeId}\\?ref=smoke&filings_offset=25$`));
+    await expect(filingRows).toHaveCount(5);
+    await expect(filingRows.first()).toContainText(SMOKE_FILINGS_PAGE_2_FIRST_ROW_LABEL);
+    await expect(filingRows.nth(4)).toContainText(SMOKE_FILINGS_PAGE_2_LAST_ROW_LABEL);
+    await expect(paginationLabel).toHaveText(SMOKE_FILINGS_PAGE_2_LABEL);
+    await expect(page.getByTestId("filing-breakdown-prev")).toBeVisible();
+    await expect(page.getByTestId("filing-breakdown-next")).toHaveCount(0);
+
+    // Click Previous: the first-page href resets filings_offset to 0 while preserving
+    // the unrelated param, restoring page-1 content and controls.
+    await page.getByTestId("filing-breakdown-prev").click();
+    await expect(page).toHaveURL(new RegExp(`/committee/${committeeId}\\?ref=smoke&filings_offset=0$`));
+    await expect(filingRows).toHaveCount(25);
+    await expect(filingRows.first()).toContainText(SMOKE_FILINGS_PAGE_1_FIRST_ROW_LABEL);
+    await expect(filingRows.nth(24)).toContainText(SMOKE_FILINGS_PAGE_1_LAST_ROW_LABEL);
+    await expect(paginationLabel).toHaveText(SMOKE_FILINGS_PAGE_1_LABEL);
+    await expect(page.getByTestId("filing-breakdown-next")).toBeVisible();
+    await expect(page.getByTestId("filing-breakdown-prev")).toHaveCount(0);
+
+    // The automated proof that +page.server.ts did not rerun: URL-only filing
+    // navigation left every committee detail bundle subresource count unchanged.
+    const finalCounts = await fetchSmokeCommitteeRequestCounts(request, committeeId);
+    expect(finalCounts).toEqual(initialCounts);
+  });
+
+  test("/committee/[id] filing table shows the recent-window-vs-all-time label for a high-total committee", async ({
+    page
+  }: {
+    page: any;
+  }) => {
+    await page.goto(`/committee/${SMOKE_FILINGS_HIGH_TOTAL_COMMITTEE_ID}`);
+    await expect(page).toHaveURL(new RegExp(`/committee/${SMOKE_FILINGS_HIGH_TOTAL_COMMITTEE_ID}$`));
+
+    // Checklist-mandated: scope filing row counts strictly to the breakdown table's
+    // tbody, never broad document rows.
+    // eslint-disable-next-line playwright/no-raw-locators
+    const filingRows = page.getByTestId("filing-breakdown-scroll").locator("tbody tr");
+    await expect(filingRows).toHaveCount(25);
+    await expect(page.getByTestId("filing-breakdown-pagination-label")).toHaveText(
+      SMOKE_FILINGS_HIGH_TOTAL_LABEL
+    );
   });
 
   test("/committee/[id] PHL fixture renders freshness note on committee detail", async ({ page }: { page: any }) => {

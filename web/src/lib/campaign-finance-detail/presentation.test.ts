@@ -15,14 +15,19 @@ import {
   buildCommitteeRoutePresentation,
   buildFundraisingSummaryPresentation,
   buildKeyMetrics,
-  buildLinkedCandidateLinks
+  buildLinkedCandidateLinks,
+  buildPaginatedCommitteeFilingBreakdown,
+  COMMITTEE_FILINGS_PAGE_SIZE
 } from "./presentation";
+import type { CommitteeFilingBreakdown, FilingPeriodSummary } from "./contract";
 import {
   CANDIDATE_ID,
   COMMITTEE_ID,
   DEFAULT_CANDIDATE_DETAIL,
   DEFAULT_COMMITTEE_DETAIL,
+  DEFAULT_FILING_BREAKDOWN,
   DEFAULT_SUMMARY,
+  FILING_ID,
   ORG_ID,
   PERSON_ID,
   buildCandidateBundle,
@@ -662,4 +667,245 @@ describe("campaign finance detail presentation", () => {
     ]);
   });
 
+});
+
+// Local fixture builders for the client-paginated filing table seam. The 60-row
+// fixture is deliberately supplied out of coverage-date order so ordering bugs
+// (e.g. rendering raw API order or reversing the chronological trend array)
+// cannot pass by accident.
+function makeFilingRow(sequence: number, coverageEndDate: string | null): FilingPeriodSummary {
+  const filingId = `filing-${String(sequence).padStart(3, "0")}`;
+  return {
+    filing_id: filingId,
+    filing_fec_id: `FEC-${filingId}`,
+    filing_name: `${filingId} name`,
+    report_type: "Q1",
+    amendment_indicator: "N",
+    coverage_start_date: coverageEndDate,
+    coverage_end_date: coverageEndDate,
+    receipt_date: coverageEndDate,
+    total_raised: "0.00",
+    total_spent: "0.00",
+    net: "0.00",
+    transaction_count: 0,
+    cash_on_hand: "0.00",
+    row_id: `${filingId}:N`
+  };
+}
+
+// Distinct dates that increase monotonically with the sequence number, so a
+// higher filing-NNN identity is strictly newer. 2015-01 through 2019-12 covers
+// 60 distinct month-ends without spilling past a two-digit month.
+function monotonicCoverageEndDate(sequence: number): string {
+  const year = 2015 + Math.floor((sequence - 1) / 12);
+  const month = String(((sequence - 1) % 12) + 1).padStart(2, "0");
+  return `${year}-${month}-28`;
+}
+
+// Reorders 1..count via an index permutation (stride 37 is coprime with 60),
+// producing a stable but clearly non-sorted API order.
+function buildUnorderedFilings(count: number): FilingPeriodSummary[] {
+  const orderedRows = Array.from({ length: count }, (_, index) =>
+    makeFilingRow(index + 1, monotonicCoverageEndDate(index + 1))
+  );
+  return Array.from({ length: count }, (_, index) => orderedRows[(index * 37) % count]);
+}
+
+function rowIdentities(rows: { filingId: string }[]): string[] {
+  return rows.map((row) => row.filingId);
+}
+
+describe("buildPaginatedCommitteeFilingBreakdown", () => {
+  const SIXTY_ROW_BREAKDOWN: CommitteeFilingBreakdown = {
+    committee_id: "cmte-60",
+    committee_name: "Sixty Filing Committee",
+    total_filings: 60,
+    store_limit: 200,
+    filings: buildUnorderedFilings(60)
+  };
+
+  it("exports the 25-row page size", () => {
+    expect(COMMITTEE_FILINGS_PAGE_SIZE).toBe(25);
+  });
+
+  it("formats each row's coverage period, dates, and currency", () => {
+    const page = buildPaginatedCommitteeFilingBreakdown(DEFAULT_FILING_BREAKDOWN, null);
+
+    expect(page.rows).toEqual([
+      {
+        filingId: FILING_ID,
+        filingFecId: "FEC-100",
+        filingName: "Q1 filing",
+        reportType: "Q1",
+        amendmentIndicator: "N",
+        coveragePeriod: "2026-01-01 to 2026-03-31",
+        receiptDate: "2026-04-10",
+        totalReceipts: "$125.00",
+        totalDisbursements: "$50.00",
+        cashOnHand: "$75.00",
+        transactionCount: 1
+      }
+    ]);
+  });
+
+  it("renders newest-first page 1 with an honest recent-vs-all-time label", () => {
+    const page = buildPaginatedCommitteeFilingBreakdown(SIXTY_ROW_BREAKDOWN, null);
+
+    expect(page.rows).toHaveLength(25);
+    expect(page.rows[0].filingId).toBe("filing-060");
+    expect(page.rows[24].filingId).toBe("filing-036");
+    expect(page.normalizedOffset).toBe(0);
+    expect(page.emptyMessage).toBeNull();
+    expect(page.label).toBe("Showing 1–25 of 60 most recent · 60 total filings");
+    expect(page.pagination.hasPrevious).toBe(false);
+    expect(page.pagination.hasNext).toBe(true);
+  });
+
+  it("renders the middle page 2 with both previous and next controls", () => {
+    const page = buildPaginatedCommitteeFilingBreakdown(SIXTY_ROW_BREAKDOWN, "25");
+
+    expect(page.rows).toHaveLength(25);
+    expect(page.rows[0].filingId).toBe("filing-035");
+    expect(page.rows[24].filingId).toBe("filing-011");
+    expect(page.normalizedOffset).toBe(25);
+    expect(page.label).toBe("Showing 26–50 of 60 most recent · 60 total filings");
+    expect(page.pagination.hasPrevious).toBe(true);
+    expect(page.pagination.hasNext).toBe(true);
+  });
+
+  it("renders the final 10-row page 3 with no next control", () => {
+    const page = buildPaginatedCommitteeFilingBreakdown(SIXTY_ROW_BREAKDOWN, "50");
+
+    expect(page.rows).toHaveLength(10);
+    expect(page.rows[0].filingId).toBe("filing-010");
+    expect(page.rows[9].filingId).toBe("filing-001");
+    expect(page.normalizedOffset).toBe(50);
+    expect(page.label).toBe("Showing 51–60 of 60 most recent · 60 total filings");
+    expect(page.pagination.hasPrevious).toBe(true);
+    expect(page.pagination.hasNext).toBe(false);
+  });
+
+  it("labels a bounded 200-row recent window against a large all-time count", () => {
+    const breakdown: CommitteeFilingBreakdown = {
+      committee_id: "cmte-200",
+      committee_name: "Bounded Window Committee",
+      total_filings: 220706,
+      store_limit: 200,
+      filings: buildUnorderedFilings(200)
+    };
+
+    const page = buildPaginatedCommitteeFilingBreakdown(breakdown, null);
+
+    expect(page.rows).toHaveLength(25);
+    expect(page.label).toBe("Showing 1–25 of 200 most recent · 220,706 total filings");
+    expect(page.pagination.hasNext).toBe(true);
+  });
+
+  it("returns the empty-window presentation with no label or controls", () => {
+    const page = buildPaginatedCommitteeFilingBreakdown(
+      { committee_id: "cmte-empty", committee_name: "Empty Committee", filings: [] },
+      "50"
+    );
+
+    expect(page.rows).toHaveLength(0);
+    expect(page.emptyMessage).toBe("No filing-period fundraising data available.");
+    expect(page.label).toBeNull();
+    expect(page.normalizedOffset).toBe(0);
+    expect(page.pagination.hasPrevious).toBe(false);
+    expect(page.pagination.hasNext).toBe(false);
+  });
+
+  it("orders equal coverage-end dates by their original API order", () => {
+    const breakdown: CommitteeFilingBreakdown = {
+      committee_id: "cmte-ties",
+      committee_name: "Equal Date Committee",
+      filings: [
+        makeFilingRow(1, "2021-06-30"),
+        makeFilingRow(2, "2021-06-30")
+      ]
+    };
+
+    const page = buildPaginatedCommitteeFilingBreakdown(breakdown, null);
+
+    expect(rowIdentities(page.rows)).toEqual(["filing-001", "filing-002"]);
+  });
+
+  it("sorts undated filings after dated ones while keeping their API order", () => {
+    const breakdown: CommitteeFilingBreakdown = {
+      committee_id: "cmte-undated",
+      committee_name: "Undated Committee",
+      filings: [
+        makeFilingRow(1, null),
+        makeFilingRow(2, "2021-06-30"),
+        makeFilingRow(3, "not-a-date")
+      ]
+    };
+
+    const page = buildPaginatedCommitteeFilingBreakdown(breakdown, null);
+
+    expect(rowIdentities(page.rows)).toEqual(["filing-002", "filing-001", "filing-003"]);
+  });
+
+  it("orders newest-first with ties, undated, and invalid dates in a single window", () => {
+    const breakdown: CommitteeFilingBreakdown = {
+      committee_id: "cmte-shared-ordering",
+      committee_name: "Shared Ordering Committee",
+      filings: [
+        makeFilingRow(1, null),
+        makeFilingRow(2, "2021-06-30"),
+        makeFilingRow(3, "not-a-date"),
+        makeFilingRow(4, "2022-01-31"),
+        makeFilingRow(5, "2021-06-30"),
+        makeFilingRow(6, null)
+      ]
+    };
+
+    expect(rowIdentities(buildPaginatedCommitteeFilingBreakdown(breakdown, null).rows)).toEqual([
+      "filing-004",
+      "filing-002",
+      "filing-005",
+      "filing-001",
+      "filing-003",
+      "filing-006"
+    ]);
+  });
+
+  it("normalizes malformed offsets to the first page", () => {
+    for (const rawOffset of [undefined, null, "", "abc", "25.5", "+25", "-25", "-5"]) {
+      const page = buildPaginatedCommitteeFilingBreakdown(SIXTY_ROW_BREAKDOWN, rawOffset);
+      expect(page.normalizedOffset).toBe(0);
+      expect(page.rows[0].filingId).toBe("filing-060");
+    }
+  });
+
+  it("rounds positive offsets down to the nearest page boundary", () => {
+    expect(buildPaginatedCommitteeFilingBreakdown(SIXTY_ROW_BREAKDOWN, "10").normalizedOffset).toBe(0);
+    expect(buildPaginatedCommitteeFilingBreakdown(SIXTY_ROW_BREAKDOWN, "26").normalizedOffset).toBe(25);
+    expect(buildPaginatedCommitteeFilingBreakdown(SIXTY_ROW_BREAKDOWN, "26").rows[0].filingId).toBe(
+      "filing-035"
+    );
+  });
+
+  it("clamps beyond-window offsets to the last non-empty page boundary", () => {
+    expect(buildPaginatedCommitteeFilingBreakdown(SIXTY_ROW_BREAKDOWN, "75").normalizedOffset).toBe(50);
+    expect(buildPaginatedCommitteeFilingBreakdown(SIXTY_ROW_BREAKDOWN, "100000").normalizedOffset).toBe(
+      50
+    );
+  });
+
+  it("clamps digit-only offsets beyond JS number range to the last non-empty page boundary", () => {
+    const overflowingOffset = "9".repeat(400);
+    expect(Number.isFinite(Number(overflowingOffset))).toBe(false);
+    expect(
+      buildPaginatedCommitteeFilingBreakdown(SIXTY_ROW_BREAKDOWN, overflowingOffset).normalizedOffset
+    ).toBe(50);
+  });
+
+  it("clamps any offset to zero for an empty window", () => {
+    const page = buildPaginatedCommitteeFilingBreakdown(
+      { committee_id: "cmte-empty", committee_name: "Empty Committee", filings: [] },
+      "100"
+    );
+    expect(page.normalizedOffset).toBe(0);
+  });
 });

@@ -11,6 +11,10 @@ import {
   buildFilingDetailPath
 } from "$lib/campaign-finance-detail/contract";
 import { sanitizeExternalUrl } from "$lib/url/sanitize-external-url";
+import {
+  buildPaginationContext,
+  type PaginationContext
+} from "$lib/campaign-finance-detail/list-presentation";
 import type { CashOnHandPoint, ChartSource, OutsideSpendingRow } from "$lib/charts/types";
 import type {
   CandidateDetailResponse,
@@ -138,9 +142,13 @@ export type FilingBreakdownRowPresentation = {
   transactionCount: number;
 };
 
-export type FilingBreakdownPresentation = {
+/** Client-paginated slice of the newest-first filing window for the detail table. */
+export type PaginatedFilingBreakdownPresentation = {
   rows: FilingBreakdownRowPresentation[];
   emptyMessage: string | null;
+  normalizedOffset: number;
+  pagination: PaginationContext;
+  label: string | null;
 };
 
 export type KeyMetric = {
@@ -375,6 +383,10 @@ const CURRENCY_FORMATTER = new Intl.NumberFormat("en-US", {
   minimumFractionDigits: 2,
   maximumFractionDigits: 2
 });
+const INTEGER_FORMATTER = new Intl.NumberFormat("en-US");
+
+/** Rows shown per full filing-table page; the final page renders the remainder. */
+export const COMMITTEE_FILINGS_PAGE_SIZE = 25;
 
 function formatRowValue(value: string | null | undefined): string {
   if (value === null || value === undefined || value === "") {
@@ -467,6 +479,38 @@ type NormalizedCommitteeFilingFact = {
   cashOnHandAmount: number | null;
 };
 
+type FilingFactSortDirection = "chronological" | "newest-first";
+
+/**
+ */
+function compareFilingFactsByCoverageEndDate(
+  left: NormalizedCommitteeFilingFact,
+  right: NormalizedCommitteeFilingFact,
+  direction: FilingFactSortDirection
+): number {
+  if (left.coverageEndDate !== null && right.coverageEndDate !== null) {
+    const chronologicalDateComparison =
+      left.coverageEndDate.localeCompare(right.coverageEndDate);
+    if (chronologicalDateComparison !== 0) {
+      return direction === "chronological"
+        ? chronologicalDateComparison
+        : -chronologicalDateComparison;
+    }
+
+    return left.originalIndex - right.originalIndex;
+  }
+
+  if (left.coverageEndDate !== null) {
+    return -1;
+  }
+
+  if (right.coverageEndDate !== null) {
+    return 1;
+  }
+
+  return left.originalIndex - right.originalIndex;
+}
+
 /**
  */
 function buildNormalizedCommitteeFilingFacts(
@@ -479,21 +523,7 @@ function buildNormalizedCommitteeFilingFacts(
       coverageEndDate: parseIsoDateOnly(filing.coverage_end_date) === null ? null : filing.coverage_end_date,
       cashOnHandAmount: parseFiniteSerializedMoney(filing.cash_on_hand)
     }))
-    .sort((left, right) => {
-      if (left.coverageEndDate !== null && right.coverageEndDate !== null) {
-        return left.coverageEndDate.localeCompare(right.coverageEndDate);
-      }
-
-      if (left.coverageEndDate !== null) {
-        return -1;
-      }
-
-      if (right.coverageEndDate !== null) {
-        return 1;
-      }
-
-      return left.originalIndex - right.originalIndex;
-    });
+    .sort((left, right) => compareFilingFactsByCoverageEndDate(left, right, "chronological"));
 }
 
 /**
@@ -599,11 +629,10 @@ export function buildLinkedCandidateLinks(detail: CommitteeDetailResponse): Link
   }));
 }
 
-/** Converts backend filing breakdown rows into table-ready presentation data. */
-export function buildFilingBreakdownPresentation(
-  filingBreakdown: CommitteeFilingBreakdown
-): FilingBreakdownPresentation {
-  const rows = buildNormalizedCommitteeFilingFacts(filingBreakdown).map(({ filing, cashOnHandAmount }) => ({
+/** Maps one normalized filing fact into a table-ready presentation row. */
+function buildFilingBreakdownRow(fact: NormalizedCommitteeFilingFact): FilingBreakdownRowPresentation {
+  const { filing, cashOnHandAmount } = fact;
+  return {
     filingId: filing.filing_id,
     filingFecId: filing.filing_fec_id,
     filingName: formatRowValue(filing.filing_name),
@@ -615,11 +644,108 @@ export function buildFilingBreakdownPresentation(
     totalDisbursements: formatCurrency(filing.total_spent),
     cashOnHand: cashOnHandAmount === null ? "—" : formatCurrency(cashOnHandAmount),
     transactionCount: filing.transaction_count
-  }));
+  };
+}
+
+/**
+ * Resolves the raw `filings_offset` query value to a page-aligned, in-window offset.
+ * Missing, empty, nonnumeric, fractional, explicitly signed, and negative values
+ * resolve to `0`; valid positives round down to the nearest page boundary and clamp
+ * to the last non-empty page (or `0` for an empty window).
+ */
+function normalizeFilingsOffset(
+  rawOffset: string | null | undefined,
+  paginableRecentCount: number
+): number {
+  const lastPageBoundary =
+    paginableRecentCount === 0
+      ? 0
+      : Math.floor((paginableRecentCount - 1) / COMMITTEE_FILINGS_PAGE_SIZE) *
+        COMMITTEE_FILINGS_PAGE_SIZE;
+
+  if (typeof rawOffset !== "string" || !/^\d+$/.test(rawOffset)) {
+    return 0;
+  }
+
+  const parsedOffset = Number(rawOffset);
+  if (!Number.isFinite(parsedOffset)) {
+    // Digit-only positive offset beyond JS numeric range: a beyond-window value, so
+    // clamp to the last non-empty page rather than resetting to the first page.
+    return lastPageBoundary;
+  }
+
+  const pageAlignedOffset =
+    Math.floor(parsedOffset / COMMITTEE_FILINGS_PAGE_SIZE) * COMMITTEE_FILINGS_PAGE_SIZE;
+
+  return Math.min(pageAlignedOffset, lastPageBoundary);
+}
+
+/** Composes the honest recent-window vs all-time filing label from the shared range math. */
+function buildFilingRangeLabel(
+  rangeLabel: string,
+  paginableRecentCount: number,
+  allTimeCount: number
+): string {
+  return (
+    `${rangeLabel} of ${INTEGER_FORMATTER.format(paginableRecentCount)} most recent ` +
+    `· ${INTEGER_FORMATTER.format(allTimeCount)} total filings`
+  );
+}
+
+/**
+ * Builds one client-paginated 25-row slice of the newest-first filing window.
+ *
+ * The full recent window is already fetched, so pagination is derived purely from the
+ * normalized offset, page size, and the paginable recent count — the backend `has_next`
+ * flag is intentionally ignored here. The chronological trend keeps its own owner
+ * (`buildCommitteeCashOnHandTrendFigure`) and is unaffected by the offset.
+ */
+export function buildPaginatedCommitteeFilingBreakdown(
+  filingBreakdown: CommitteeFilingBreakdown,
+  rawOffset: string | null | undefined
+): PaginatedFilingBreakdownPresentation {
+  const fetchedFilingCount = filingBreakdown.filings.length;
+  const allTimeCount = filingBreakdown.total_filings ?? fetchedFilingCount;
+  const paginableRecentCount = Math.min(
+    filingBreakdown.total_filings ?? fetchedFilingCount,
+    filingBreakdown.store_limit ?? fetchedFilingCount,
+    fetchedFilingCount
+  );
+
+  const newestFirstFacts = buildNormalizedCommitteeFilingFacts(filingBreakdown)
+    .slice()
+    .sort((left, right) => compareFilingFactsByCoverageEndDate(left, right, "newest-first"))
+    .slice(0, paginableRecentCount);
+
+  const normalizedOffset = normalizeFilingsOffset(rawOffset, paginableRecentCount);
+  const pageRows = newestFirstFacts
+    .slice(normalizedOffset, normalizedOffset + COMMITTEE_FILINGS_PAGE_SIZE)
+    .map(buildFilingBreakdownRow);
+
+  const hasNext = normalizedOffset + COMMITTEE_FILINGS_PAGE_SIZE < paginableRecentCount;
+  const pagination = buildPaginationContext(
+    normalizedOffset,
+    COMMITTEE_FILINGS_PAGE_SIZE,
+    hasNext,
+    pageRows.length
+  );
+
+  if (paginableRecentCount === 0) {
+    return {
+      rows: pageRows,
+      emptyMessage: EMPTY_FILING_BREAKDOWN_MESSAGE,
+      normalizedOffset,
+      pagination,
+      label: null
+    };
+  }
 
   return {
-    rows,
-    emptyMessage: rows.length === 0 ? EMPTY_FILING_BREAKDOWN_MESSAGE : null
+    rows: pageRows,
+    emptyMessage: null,
+    normalizedOffset,
+    pagination,
+    label: buildFilingRangeLabel(pagination.label, paginableRecentCount, allTimeCount)
   };
 }
 
@@ -900,12 +1026,6 @@ export function buildCommitteeDeferredFundraisingSummary(
   summary: CommitteeFundraisingSummary
 ): FundraisingSummaryPresentation {
   return buildFundraisingSummaryPresentation(summary);
-}
-
-export function buildCommitteeDeferredFilingBreakdown(
-  filingBreakdown: CommitteeFilingBreakdown
-): FilingBreakdownPresentation {
-  return buildFilingBreakdownPresentation(filingBreakdown);
 }
 
 export function buildCommitteeDeferredTransactionRows(

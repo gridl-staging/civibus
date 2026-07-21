@@ -239,6 +239,72 @@ export const SMOKE_COMMITTEE_CONTRIBUTOR_PERSON_LINK_TEXT = "View contributor pe
 export const SMOKE_COMMITTEE_CONTRIBUTOR_ORG_LINK_TEXT = "View contributor organization record";
 export const SMOKE_COMMITTEE_RECIPIENT_CANDIDATE_LINK_TEXT = "View recipient candidate record";
 export const SMOKE_COMMITTEE_RECIPIENT_COMMITTEE_LINK_TEXT = "View recipient committee record";
+
+// Deterministic filing-pagination fixtures (Stage 4 browser proof). Two fixture-only
+// committees exercise the client-paginated filing table without a server round trip:
+// `SMOKE_FILINGS_PAGED_COMMITTEE_ID` fetches 30 filings (a full page 1 followed by a
+// short page 2), while `SMOKE_FILINGS_HIGH_TOTAL_COMMITTEE_ID` fetches the full 200-row
+// recent window over a much larger all-time count so the label separates the two.
+// The row and label text below is the expected rendered output; smoke_fixtures_ssot.test.ts
+// re-derives it from the real presenter so these constants cannot drift from page math.
+export const SMOKE_FILINGS_PAGED_COMMITTEE_ID = "45454545-4545-4545-8545-454545454545";
+export const SMOKE_FILINGS_HIGH_TOTAL_COMMITTEE_ID = "46464646-4646-4646-8646-464646464646";
+export const SMOKE_FILINGS_PAGED_COMMITTEE_NAME = "Filing Pagination Committee";
+export const SMOKE_FILINGS_HIGH_TOTAL_COMMITTEE_NAME = "Filing High-Total Committee";
+export const SMOKE_FILINGS_PAGE_1_FIRST_ROW_LABEL = "Filing 01 (F3N)";
+export const SMOKE_FILINGS_PAGE_1_LAST_ROW_LABEL = "Filing 25 (F3N)";
+export const SMOKE_FILINGS_PAGE_2_FIRST_ROW_LABEL = "Filing 26 (F3N)";
+export const SMOKE_FILINGS_PAGE_2_LAST_ROW_LABEL = "Filing 30 (F3N)";
+export const SMOKE_FILINGS_PAGE_1_LABEL = "Showing 1–25 of 30 most recent · 30 total filings";
+export const SMOKE_FILINGS_PAGE_2_LABEL = "Showing 26–30 of 30 most recent · 30 total filings";
+export const SMOKE_FILINGS_HIGH_TOTAL_LABEL =
+  "Showing 1–25 of 200 most recent · 220,706 total filings";
+
+// The five committee detail bundle subresource counters exposed by the fixture backend's
+// /_smoke/request-counts seam. The pagination smoke test asserts every key is present so a
+// dropped or renamed counter fails the no-refetch proof closed instead of reading as zero.
+export const SMOKE_COMMITTEE_REQUEST_COUNTER_KEYS = [
+  "detail",
+  "summary",
+  "filings_summary",
+  "independent_expenditures_made",
+  "transactions"
+] as const;
+
+/**
+ * Resets the fixture backend's per-committee request-count diagnostics. Lives here (not in a
+ * spec) because API calls belong to the fixtures owner. Throws — fail closed — on a non-ok
+ * response so the smoke test cannot silently proceed against stale counters.
+ */
+export async function resetSmokeCommitteeRequestCounts(request: {
+  get: (url: string) => Promise<{ ok: () => boolean; status: () => number }>;
+}): Promise<void> {
+  const response = await request.get(`${SMOKE_API_BASE_URL}/_smoke/request-counts/reset`);
+  if (!response.ok()) {
+    throw new Error(`request-counts reset failed with status ${response.status()}`);
+  }
+}
+
+/** Reads the fixture backend's per-committee subresource request counts. Throws on non-ok. */
+export async function fetchSmokeCommitteeRequestCounts(
+  request: {
+    get: (url: string) => Promise<{
+      ok: () => boolean;
+      status: () => number;
+      json: () => Promise<{ counts: Record<string, number> }>;
+    }>;
+  },
+  committeeId: string
+): Promise<Record<string, number>> {
+  const response = await request.get(
+    `${SMOKE_API_BASE_URL}/_smoke/request-counts?committee_id=${committeeId}`
+  );
+  if (!response.ok()) {
+    throw new Error(`request-counts fetch failed with status ${response.status()}`);
+  }
+  const body = await response.json();
+  return body.counts;
+}
 export const SMOKE_CANDIDATE_TITLE = "Pat Candidate | Candidate | Civibus";
 export const SMOKE_CANDIDATE_DESCRIPTION = "Candidate profile from campaign-finance records.";
 export const SMOKE_CANDIDATES_TITLE = "Candidates | Civibus";

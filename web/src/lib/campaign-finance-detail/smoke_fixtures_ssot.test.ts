@@ -6,12 +6,23 @@ import {
   discoverLiveLouisianaCommitteeRoute,
   getSeededStage6CommitteeRoute,
   SMOKE_PERSON_SMALL_DOLLAR_HEADLINE,
-  SMOKE_STAGE6_COMMITTEE_ID
+  SMOKE_STAGE6_COMMITTEE_ID,
+  SMOKE_FILINGS_PAGED_COMMITTEE_ID,
+  SMOKE_FILINGS_HIGH_TOTAL_COMMITTEE_ID,
+  SMOKE_FILINGS_PAGE_1_FIRST_ROW_LABEL,
+  SMOKE_FILINGS_PAGE_1_LAST_ROW_LABEL,
+  SMOKE_FILINGS_PAGE_2_FIRST_ROW_LABEL,
+  SMOKE_FILINGS_PAGE_2_LAST_ROW_LABEL,
+  SMOKE_FILINGS_PAGE_1_LABEL,
+  SMOKE_FILINGS_PAGE_2_LABEL,
+  SMOKE_FILINGS_HIGH_TOTAL_LABEL
 } from "../../../tests/smoke/fixtures";
 import { smokeFixtures } from "../../../tests/smoke/fixture-data";
 import {
+  COMMITTEE_FILINGS_PAGE_SIZE,
   COMMITTEE_SUMMARY_SOURCE_LABELS,
-  buildCommitteeItemizedCoverageNote
+  buildCommitteeItemizedCoverageNote,
+  buildPaginatedCommitteeFilingBreakdown
 } from "./presentation";
 
 const fixturesSource = readFileSync(
@@ -232,5 +243,66 @@ describe("smoke fixtures single-source aliases", () => {
       expectedOutsideSpendingEmptyText: null,
       expectedOutsideSpendingTargetName: "LIVE IE TARGET"
     });
+  });
+});
+
+function renderedFilingRowLabel(row: { filingName: string; filingFecId: string }): string {
+  // Mirrors the DetailPage.svelte filing cell: `{row.filingName} ({row.filingFecId})`.
+  return `${row.filingName} (${row.filingFecId})`;
+}
+
+describe("filing pagination smoke fixtures", () => {
+  it("paged committee fixture is a 30-row window carrying backend pagination metadata", () => {
+    const fixture = smokeFixtures.committeeFilingsPaged;
+    expect(fixture.id).toBe(SMOKE_FILINGS_PAGED_COMMITTEE_ID);
+    expect(fixture.filingBreakdown.filings).toHaveLength(30);
+    expect(fixture.filingBreakdown.total_filings).toBe(30);
+    expect(fixture.filingBreakdown.store_limit).toBe(200);
+    expect(fixture.filingBreakdown.has_next).toBe(false);
+    expect(fixture.filingBreakdown.offset).toBe(0);
+    expect(fixture.filingBreakdown.limit).toBe(200);
+  });
+
+  it("high-total committee fixture fetches the full 200-row window over a larger all-time count", () => {
+    const fixture = smokeFixtures.committeeFilingsHighTotal;
+    expect(fixture.id).toBe(SMOKE_FILINGS_HIGH_TOTAL_COMMITTEE_ID);
+    expect(fixture.filingBreakdown.filings).toHaveLength(200);
+    expect(fixture.filingBreakdown.total_filings).toBe(220706);
+    expect(fixture.filingBreakdown.store_limit).toBe(200);
+  });
+
+  it("exported page-1/page-2 labels and row identities match the real presenter", () => {
+    const { filingBreakdown } = smokeFixtures.committeeFilingsPaged;
+    const pageOne = buildPaginatedCommitteeFilingBreakdown(filingBreakdown, "0");
+    const pageTwo = buildPaginatedCommitteeFilingBreakdown(
+      filingBreakdown,
+      String(COMMITTEE_FILINGS_PAGE_SIZE)
+    );
+
+    expect(pageOne.label).toBe(SMOKE_FILINGS_PAGE_1_LABEL);
+    expect(pageTwo.label).toBe(SMOKE_FILINGS_PAGE_2_LABEL);
+
+    expect(pageOne.rows).toHaveLength(25);
+    expect(pageTwo.rows).toHaveLength(5);
+
+    expect(renderedFilingRowLabel(pageOne.rows[0])).toBe(SMOKE_FILINGS_PAGE_1_FIRST_ROW_LABEL);
+    expect(renderedFilingRowLabel(pageOne.rows[24])).toBe(SMOKE_FILINGS_PAGE_1_LAST_ROW_LABEL);
+    expect(renderedFilingRowLabel(pageTwo.rows[0])).toBe(SMOKE_FILINGS_PAGE_2_FIRST_ROW_LABEL);
+    expect(renderedFilingRowLabel(pageTwo.rows[4])).toBe(SMOKE_FILINGS_PAGE_2_LAST_ROW_LABEL);
+  });
+
+  it("exported high-total label matches the real presenter for the 200-row window", () => {
+    const { filingBreakdown } = smokeFixtures.committeeFilingsHighTotal;
+    const pageOne = buildPaginatedCommitteeFilingBreakdown(filingBreakdown, "0");
+    expect(pageOne.label).toBe(SMOKE_FILINGS_HIGH_TOTAL_LABEL);
+  });
+
+  it("filing pagination fixtures use a summary_source known to COMMITTEE_SUMMARY_SOURCE_LABELS", () => {
+    expect(COMMITTEE_SUMMARY_SOURCE_LABELS).toHaveProperty(
+      smokeFixtures.committeeFilingsPaged.summary.summary_source
+    );
+    expect(COMMITTEE_SUMMARY_SOURCE_LABELS).toHaveProperty(
+      smokeFixtures.committeeFilingsHighTotal.summary.summary_source
+    );
   });
 });
