@@ -384,6 +384,69 @@ describe("campaign-finance detail api streaming bundle behavior", () => {
     }
   });
 
+  it("degrades committee filing breakdown to null when the filing-summary endpoint rejects", async () => {
+    let resolveDetail: (value: ReturnType<typeof buildCommitteeDetailResponse>) => void = () => {};
+    const detailPromise = new Promise<ReturnType<typeof buildCommitteeDetailResponse>>((resolve) => {
+      resolveDetail = resolve;
+    });
+    const filingBreakdownFailure = new ApiResponseError(503, { detail: "filings unavailable" });
+    const requestJson = vi.fn((path: string) => {
+      if (path === buildCommitteeDetailPath(COMMITTEE_ID)) {
+        return detailPromise;
+      }
+
+      if (path === buildCommitteeTransactionsPath(COMMITTEE_ID)) {
+        return Promise.resolve([]);
+      }
+
+      if (path === buildCommitteeSummaryPath(COMMITTEE_ID)) {
+        return Promise.resolve(COMMITTEE_SUMMARY);
+      }
+
+      if (path === buildCommitteeFilingBreakdownPath(COMMITTEE_ID)) {
+        return Promise.reject(filingBreakdownFailure);
+      }
+
+      if (path === buildCommitteeIndependentExpendituresMadePath(COMMITTEE_ID)) {
+        return Promise.resolve(COMMITTEE_IE_ACTIVITY);
+      }
+
+      throw new Error(`unexpected path: ${path}`);
+    });
+
+    const unhandled: unknown[] = [];
+    const handleUnhandledRejection = (reason: unknown) => {
+      unhandled.push(reason);
+    };
+    process.on("unhandledRejection", handleUnhandledRejection);
+
+    try {
+      const bundlePromise = fetchCommitteeDetailBundle(
+        { requestJson: requestJson as ApiClient["requestJson"] },
+        { id: COMMITTEE_ID }
+      );
+
+      await Promise.resolve();
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 0);
+      });
+
+      expect(unhandled).toEqual([]);
+
+      const detail = buildCommitteeDetailResponse();
+      resolveDetail(detail);
+      const bundle = await bundlePromise;
+      expect(bundle.detail).toEqual(detail);
+      expect(bundle.filingBreakdown).toBeNull();
+      await expect(bundle.transactions).resolves.toEqual([]);
+      await expect(bundle.summary).resolves.toEqual(COMMITTEE_SUMMARY);
+      await expect(bundle.independentExpendituresMade).resolves.toEqual(COMMITTEE_IE_ACTIVITY);
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", handleUnhandledRejection);
+    }
+  });
+
   it("settles candidate secondary promises when detail rejects", async () => {
     const detailFailure = new ApiResponseError(422, {
       detail: [{ loc: ["path", "candidate_id"], msg: "Input should be a valid UUID" }]

@@ -587,6 +587,23 @@ describe("campaign-finance route renders", () => {
     expect(rendered.body).not.toContain('aria-label="Committee cash-on-hand trend"');
   });
 
+  it("keeps committee records visible when filing-period data is unavailable", () => {
+    const rendered = render(DetailPage, {
+      props: {
+        presentation: buildCommitteeRoutePresentation({
+          ...COMMITTEE_CANONICAL_DATA,
+          filingBreakdown: null
+        })
+      }
+    });
+
+    expect(rendered.body).toContain("<h3>Fundraising summary</h3>");
+    expect(rendered.body).toContain("Committee filing-period data is temporarily unavailable.");
+    expect(rendered.body).toContain("Cash on hand needs two or more dated filing-period values before plotting.");
+    expect(extractElementByTestId(rendered.body, "filing-breakdown-scroll")).toBeNull();
+    expect(extractElementByTestId(rendered.body, "filing-breakdown-pagination-label")).toBeNull();
+  });
+
   it("renders IE-aware committee transaction columns via presenter-normalized fields", () => {
     const rendered = render(DetailPage, {
       props: {
@@ -1043,6 +1060,23 @@ describe("DetailPage route presentation", () => {
       "Civibus shows $250.00 raised, but the NC SBOE anchor reference is $1,000.00. Coverage may be incomplete."
     );
     expect(rendered.body).toContain('href="/methodology"');
+  });
+
+  it("renders L10 warning links with a safe fallback when methodologyHref is hostile", () => {
+    const rendered = render(DetailPage, {
+      props: {
+        presentation: buildCandidateRoutePresentation({
+          ...CANDIDATE_CANONICAL_DATA_WITH_L10_DEVIATION,
+          keelL10Reference: {
+            ...CANDIDATE_CANONICAL_DATA_WITH_L10_DEVIATION.keelL10Reference,
+            methodologyHref: "javascript:alert(1)"
+          }
+        })
+      }
+    });
+
+    expect(rendered.body).toContain('href="/methodology"');
+    expect(rendered.body).not.toContain("javascript:alert(1)");
   });
 });
 

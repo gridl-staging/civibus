@@ -223,7 +223,12 @@
           <SkeletonPanel label="Fundraising summary" lines={6} />
         {:then summary}
           {@const fundraisingSummary = buildCommitteeDeferredFundraisingSummary(summary)}
-          {@const highSignalSummary = buildCommitteeDeferredHighSignalSummary(summary, { committee_id: summary.committee_id, committee_name: summary.committee_name, filings: [] })}
+          {@const filingBreakdownForDerivedPanels = presentation.filingBreakdown ?? {
+            committee_id: summary.committee_id,
+            committee_name: summary.committee_name,
+            filings: []
+          }}
+          {@const highSignalSummary = buildCommitteeDeferredHighSignalSummary(summary, filingBreakdownForDerivedPanels)}
           <section class="detail__panel" aria-label="Fundraising summary">
             <h3>Fundraising summary</h3>
             <dl class="detail__rows">
@@ -385,7 +390,7 @@
 
           {@const trendFigure = buildCommitteeDeferredHighSignalSummary(
             summary,
-            presentation.filingBreakdown
+            filingBreakdownForDerivedPanels
           ).cashOnHandTrend}
           <section class="detail__panel">
             <h3>Cash-on-hand trend</h3>
@@ -404,66 +409,70 @@
           </section>
         {/await}
 
-        {@const filingBreakdownPresentation = buildPaginatedCommitteeFilingBreakdown(
-          presentation.filingBreakdown,
-          $page.url.searchParams.get("filings_offset")
-        )}
         <section class="detail__panel">
           <h3>Filing-period breakdown</h3>
-          {#if filingBreakdownPresentation.label}
-            <p data-testid="filing-breakdown-pagination-label">{filingBreakdownPresentation.label}</p>
-          {/if}
-          {#if filingBreakdownPresentation.rows.length === 0}
-            <p>{filingBreakdownPresentation.emptyMessage}</p>
+          {#if presentation.filingBreakdown === null}
+            <p>Committee filing-period data is temporarily unavailable.</p>
           {:else}
-            <div class="detail__table-scroll" data-testid="filing-breakdown-scroll">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Filing</th>
-                    <th>Coverage</th>
-                    <th>Received</th>
-                    <th>Total receipts</th>
-                    <th>Total disbursements</th>
-                    <th>Cash on hand</th>
-                    <th>Transactions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {#each filingBreakdownPresentation.rows as row (row.filingId + row.amendmentIndicator)}
+            {@const filingBreakdownPresentation = buildPaginatedCommitteeFilingBreakdown(
+              presentation.filingBreakdown,
+              $page.url.searchParams.get("filings_offset")
+            )}
+            {#if filingBreakdownPresentation.label}
+              <p data-testid="filing-breakdown-pagination-label">{filingBreakdownPresentation.label}</p>
+            {/if}
+            {#if filingBreakdownPresentation.rows.length === 0}
+              <p>{filingBreakdownPresentation.emptyMessage}</p>
+            {:else}
+              <div class="detail__table-scroll" data-testid="filing-breakdown-scroll">
+                <table>
+                  <thead>
                     <tr>
-                      <td>{row.filingName} ({row.filingFecId})</td>
-                      <td>{row.coveragePeriod}</td>
-                      <td>{row.receiptDate}</td>
-                      <td>{row.totalReceipts}</td>
-                      <td>{row.totalDisbursements}</td>
-                      <td>{row.cashOnHand}</td>
-                      <td>{row.transactionCount}</td>
+                      <th>Filing</th>
+                      <th>Coverage</th>
+                      <th>Received</th>
+                      <th>Total receipts</th>
+                      <th>Total disbursements</th>
+                      <th>Cash on hand</th>
+                      <th>Transactions</th>
                     </tr>
-                  {/each}
-                </tbody>
-              </table>
-            </div>
-            <nav class="detail__pagination" aria-label="Filing-period breakdown pagination">
-              {#if filingBreakdownPresentation.pagination.hasPrevious}
-                <a
-                  data-testid="filing-breakdown-prev"
-                  href={buildCommitteeFilingPageHref(
-                    $page.url,
-                    filingBreakdownPresentation.normalizedOffset - COMMITTEE_FILINGS_PAGE_SIZE
-                  )}
-                >Previous</a>
-              {/if}
-              {#if filingBreakdownPresentation.pagination.hasNext}
-                <a
-                  data-testid="filing-breakdown-next"
-                  href={buildCommitteeFilingPageHref(
-                    $page.url,
-                    filingBreakdownPresentation.normalizedOffset + COMMITTEE_FILINGS_PAGE_SIZE
-                  )}
-                >Next</a>
-              {/if}
-            </nav>
+                  </thead>
+                  <tbody>
+                    {#each filingBreakdownPresentation.rows as row (row.filingId + row.amendmentIndicator)}
+                      <tr>
+                        <td>{row.filingName} ({row.filingFecId})</td>
+                        <td>{row.coveragePeriod}</td>
+                        <td>{row.receiptDate}</td>
+                        <td>{row.totalReceipts}</td>
+                        <td>{row.totalDisbursements}</td>
+                        <td>{row.cashOnHand}</td>
+                        <td>{row.transactionCount}</td>
+                      </tr>
+                    {/each}
+                  </tbody>
+                </table>
+              </div>
+              <nav class="detail__pagination" aria-label="Filing-period breakdown pagination">
+                {#if filingBreakdownPresentation.pagination.hasPrevious}
+                  <a
+                    data-testid="filing-breakdown-prev"
+                    href={buildCommitteeFilingPageHref(
+                      $page.url,
+                      filingBreakdownPresentation.normalizedOffset - COMMITTEE_FILINGS_PAGE_SIZE
+                    )}
+                  >Previous</a>
+                {/if}
+                {#if filingBreakdownPresentation.pagination.hasNext}
+                  <a
+                    data-testid="filing-breakdown-next"
+                    href={buildCommitteeFilingPageHref(
+                      $page.url,
+                      filingBreakdownPresentation.normalizedOffset + COMMITTEE_FILINGS_PAGE_SIZE
+                    )}
+                  >Next</a>
+                {/if}
+              </nav>
+            {/if}
           {/if}
         </section>
 

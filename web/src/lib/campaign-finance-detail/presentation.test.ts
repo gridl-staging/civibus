@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { buildTrustSection, PHL_FRESHNESS_NOTE } from "$lib/detail-trust/presentation";
 import type { CommitteeDetailBundle } from "$lib/server/api/campaign-finance-detail";
 import {
+  buildCandidateCompletenessWarnings,
   buildCandidateDetailMetadata,
   buildCandidateDetailShellPresentation,
   buildCandidateFactRows,
@@ -24,6 +25,7 @@ import {
   CANDIDATE_ID,
   COMMITTEE_ID,
   DEFAULT_CANDIDATE_DETAIL,
+  DEFAULT_CANDIDATE_SUMMARY,
   DEFAULT_COMMITTEE_DETAIL,
   DEFAULT_FILING_BREAKDOWN,
   DEFAULT_SUMMARY,
@@ -82,6 +84,18 @@ describe("campaign finance detail presentation", () => {
       value: `Committee record (${COMMITTEE_ID})`,
       href: `/committee/${COMMITTEE_ID}`
     });
+  });
+
+  it("fails closed to the internal methodology page when an L10 warning carries an unsafe link", () => {
+    const warnings = buildCandidateCompletenessWarnings(DEFAULT_CANDIDATE_SUMMARY, {
+      totalRaised: "1000.00",
+      sourceLabel: "Injected source",
+      methodologyHref: "javascript:alert(1)",
+      deviationThresholdRatio: 0.2
+    });
+
+    const deviationWarning = warnings.find((warning) => warning.message.includes("Injected source"));
+    expect(deviationWarning?.methodologyHref).toBe("/methodology");
   });
 
   it("builds committee trust-section data from the shared trust contract", () => {

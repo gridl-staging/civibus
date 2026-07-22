@@ -300,7 +300,7 @@ export type CommitteeCanonicalDetailRoutePresentation = {
   shell: CommitteeDetailShellPresentation;
   transactions: Deferred<CampaignFinanceTransactionResponse[]>;
   summary: Deferred<CommitteeFundraisingSummary>;
-  filingBreakdown: CommitteeFilingBreakdown;
+  filingBreakdown: CommitteeFilingBreakdown | null;
   independentExpendituresMade: Deferred<CommitteeIndependentExpenditureActivity>;
 };
 
@@ -335,7 +335,7 @@ export type CampaignFinanceDetailRoutePresentation =
   | CommitteeDetailRoutePresentation;
 
 export type CandidateRouteData =
-  | ({ routeKind: "canonical-detail" } & CandidateDetailBundle)
+  | ({ routeKind: "canonical-detail" } & CandidateDetailBundle & CandidateCanonicalRouteDataExtras)
   | {
       routeKind: "slug-collision";
       slug: string;
@@ -1103,6 +1103,14 @@ function _computeDeviationRatio(currentTotal: number, expectedTotal: number): nu
   return Math.abs(currentTotal - expectedTotal) / expectedTotal;
 }
 
+function sanitizeMethodologyHref(methodologyHref: string): string {
+  if (methodologyHref.startsWith("/") && !methodologyHref.startsWith("//")) {
+    return methodologyHref;
+  }
+
+  return sanitizeExternalUrl(methodologyHref) ?? "/methodology";
+}
+
 /**
  */
 export function buildCandidateCompletenessWarnings(
@@ -1129,7 +1137,7 @@ export function buildCandidateCompletenessWarnings(
           `Civibus shows ${formatCurrency(currentTotalRaised)} raised, ` +
           `but the ${l10Reference.sourceLabel} reference is ${formatCurrency(referenceTotalRaised)}. ` +
           "Coverage may be incomplete.",
-        methodologyHref: l10Reference.methodologyHref
+        methodologyHref: sanitizeMethodologyHref(l10Reference.methodologyHref)
       });
     }
   }

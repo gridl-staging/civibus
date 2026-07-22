@@ -324,6 +324,48 @@ describe("/committee/[id] +page.server load", () => {
     });
   });
 
+  it("returns canonical detail when filing breakdown fetch fails and degrades that panel to null", async () => {
+    const detail = buildCommitteeDetail({ slug_is_unique: false });
+    const summary = buildCommitteeSummary(COMMITTEE_ID);
+    const independentExpendituresMade = buildCommitteeIeActivity(COMMITTEE_ID);
+    const filingBreakdownFailure = new ApiResponseError(503, { detail: "filing summary unavailable" });
+
+    const requestJson = vi.fn(async (path: string) => {
+      if (path === buildCommitteeDetailPath(COMMITTEE_ID)) {
+        return detail;
+      }
+
+      if (path === buildCommitteeTransactionsPath(COMMITTEE_ID)) {
+        return [];
+      }
+
+      if (path === buildCommitteeSummaryPath(COMMITTEE_ID)) {
+        return summary;
+      }
+
+      if (path === COMMITTEE_FILING_BREAKDOWN_PATH) {
+        throw filingBreakdownFailure;
+      }
+
+      if (path === buildCommitteeIndependentExpendituresMadePath(COMMITTEE_ID)) {
+        return independentExpendituresMade;
+      }
+
+      throw new Error(`unexpected path: ${path}`);
+    });
+
+    const data = (await load(createLoadEvent(requestJson))) as CommitteeDetailBundle & {
+      routeKind: string;
+    };
+
+    expect(data.routeKind).toBe("canonical-detail");
+    expect(data.detail).toEqual(detail);
+    expect(data.filingBreakdown).toBeNull();
+    await expect(data.transactions).resolves.toEqual([]);
+    await expect(data.summary).resolves.toEqual(summary);
+    await expect(data.independentExpendituresMade).resolves.toEqual(independentExpendituresMade);
+  });
+
   it("returns deterministic slug-collision payloads without guessing a winner", async () => {
     const requestJson = vi.fn(async (path: string) => {
       if (path === buildCommitteesBySlugPath(COMMITTEE_SLUG)) {

@@ -60,7 +60,7 @@ export type CommitteeDetailBundle = {
   detail: CommitteeDetailResponse;
   transactions: Promise<CampaignFinanceTransactionResponse[]>;
   summary: Promise<CommitteeFundraisingSummary>;
-  filingBreakdown: CommitteeFilingBreakdown;
+  filingBreakdown: CommitteeFilingBreakdown | null;
   independentExpendituresMade: Promise<CommitteeIndependentExpenditureActivity>;
 };
 
@@ -503,7 +503,8 @@ export async function fetchCommitteeDetailBundle(
   guardUnhandledRejection(independentExpendituresMadePromise);
 
   try {
-    const [detail, filingBreakdown] = await Promise.all([detailPromise, filingBreakdownPromise]);
+    const detail = await detailPromise;
+    const filingBreakdown = await filingBreakdownPromise.catch(() => null);
     return {
       detail,
       transactions: transactionsPromise,
