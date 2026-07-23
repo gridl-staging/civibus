@@ -430,10 +430,30 @@ _PERSON_CONTRIBUTION_INSIGHTS_OFFICE_SQL = """
     LIMIT 1
 """
 
-_INDIVIDUAL_RECEIPT_TRANSACTION_WHERE_SQL = contribution_insights_transaction_where_sql(max_date_sql="%s")
+# Two receipt-filter fragments, deliberately NOT one.
+#
+# The person path is cycle-scoped: it binds both edges of the selected cycle
+# (`selected_cycle.coverage_start_date` / `.coverage_end_date`), so its fragment
+# carries the `t.transaction_date <= %s` ceiling.
+#
+# Donor search is NOT cycle-scoped. It binds only the fixed
+# CONTRIBUTION_INSIGHTS_MIN_DATE floor and searches the whole loaded window;
+# the screen spec (docs/reference/screen_specs/donor_lookup.md) scopes results
+# by officeholder currency and itemization, never by a date ceiling.
+#
+# These were one shared constant until 2026-07-23. On 2026-07-13 commit
+# `947dc9df3` added `max_date_sql="%s"` for the person cycle path, which
+# silently gave donor search a fifth placeholder it never bound — every
+# `/donors` query returned HTTP 500 for ten days. Splitting the fragment makes
+# the two callers' differing arities explicit instead of coupling them through
+# a shared default. Arity is pinned by
+# api/queries/test_donor_search_statement_contract.py.
+_PERSON_CYCLE_RECEIPT_TRANSACTION_WHERE_SQL = contribution_insights_transaction_where_sql(max_date_sql="%s")
+
+_DONOR_SEARCH_RECEIPT_TRANSACTION_WHERE_SQL = contribution_insights_transaction_where_sql()
 
 _INDIVIDUAL_RECEIPT_QUALIFYING_WHERE_SQL = (
-    _INDIVIDUAL_RECEIPT_TRANSACTION_WHERE_SQL + NOT_SUPERSEDED_SOURCE_RECORD_WHERE_SQL
+    _PERSON_CYCLE_RECEIPT_TRANSACTION_WHERE_SQL + NOT_SUPERSEDED_SOURCE_RECORD_WHERE_SQL
 )
 
 _PERSON_CONTRIBUTION_INSIGHTS_QUALIFYING_CTE = f"""
@@ -1003,7 +1023,7 @@ _DONOR_SEARCH_SQL_TEMPLATE = f"""
             t.source_record_id
         FROM cf.transaction t
         WHERE {{match_sql}}
-{_INDIVIDUAL_RECEIPT_TRANSACTION_WHERE_SQL}
+{_DONOR_SEARCH_RECEIPT_TRANSACTION_WHERE_SQL}
 {NOT_SUPERSEDED_SOURCE_RECORD_WHERE_SQL}
           AND t.contributor_name_raw IS NOT NULL
           AND BTRIM(t.contributor_name_raw) != ''
