@@ -170,7 +170,7 @@ def test_build_fec_mailing_address_omits_invalid_state_code() -> None:
     assert address.state is None
     assert address.city == "DOWNERS GROVE"
     assert address.zip5 == "60515"
-    assert "14" not in address.raw_address
+    assert address.raw_address == "1901 BUTTERFIELD RD, STE 120, DOWNERS GROVE 60515"
 
 
 @pytest.mark.unit

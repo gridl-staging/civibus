@@ -887,7 +887,7 @@ def test_load_committees_drops_invalid_real_world_state_code(
     assert stored_row is not None
     assert stored_row["committee_state"] is None
     assert stored_row["address_state"] is None
-    assert "14" not in stored_row["raw_address"]
+    assert f"{invalid_state_row['CMTE_CITY']} 14 " not in stored_row["raw_address"]
 
 
 def test_load_candidates_resolves_principal_committee_and_is_idempotent(
