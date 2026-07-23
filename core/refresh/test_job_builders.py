@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import inspect
 import json
+import os
 from datetime import date, datetime, timezone
 from decimal import Decimal
 from pathlib import Path
+from typing import Any, Iterator
 from unittest.mock import MagicMock
 from uuid import UUID
 
@@ -452,6 +454,20 @@ def _refresh_test_uuid(sequence: int) -> UUID:
     return UUID(f"91000000-0000-0000-0000-{sequence:012x}")
 
 
+def _committee_top_list_progress_record(
+    committee_ids: tuple[str, ...],
+    *,
+    cycles: tuple[int, ...] = (2026,),
+    rows_total: int = 1,
+) -> dict[str, object]:
+    return {
+        "source": "committee_top_list_backfill",
+        "rows_total": rows_total,
+        "rows_delta": 1,
+        "detail": {"committee_ids": list(committee_ids), "cycles": list(cycles)},
+    }
+
+
 def _summary_top_list_transaction(
     sequence: int,
     *,
@@ -738,6 +754,258 @@ def _set_committee_summary_top_lists(
                 cycle,
             ),
         )
+
+
+_COMMITTEE_TOP_LIST_BACKFILL_UUIDS = tuple(_refresh_test_uuid(sequence) for sequence in range(900, 980))
+
+
+def _cleanup_committee_top_list_backfill_rows(db_conn: psycopg.Connection) -> None:
+    with db_conn.cursor() as cursor:
+        cursor.execute(
+            """
+            DELETE FROM cf.transaction
+            WHERE committee_id = ANY(%s)
+               OR filing_id = ANY(%s)
+            """,
+            (list(_COMMITTEE_TOP_LIST_BACKFILL_UUIDS), list(_COMMITTEE_TOP_LIST_BACKFILL_UUIDS)),
+        )
+        cursor.execute(
+            """
+            DELETE FROM cf.filing
+            WHERE committee_id = ANY(%s)
+               OR id = ANY(%s)
+            """,
+            (list(_COMMITTEE_TOP_LIST_BACKFILL_UUIDS), list(_COMMITTEE_TOP_LIST_BACKFILL_UUIDS)),
+        )
+        cursor.execute(
+            "DELETE FROM cf.committee_summary WHERE committee_id = ANY(%s)",
+            (list(_COMMITTEE_TOP_LIST_BACKFILL_UUIDS),),
+        )
+        cursor.execute(
+            "DELETE FROM cf.committee WHERE id = ANY(%s)",
+            (list(_COMMITTEE_TOP_LIST_BACKFILL_UUIDS),),
+        )
+
+
+class _NonClosingCommitteeTopListConnection:
+    def __init__(self, connection: psycopg.Connection) -> None:
+        self._connection = connection
+        self.commit_count = 0
+        self.rollback_count = 0
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(self._connection, name)
+
+    def close(self) -> None:
+        return None
+
+    def commit(self) -> None:
+        self.commit_count += 1
+        self._connection.commit()
+
+    def rollback(self) -> None:
+        self.rollback_count += 1
+        self._connection.rollback()
+
+
+class _RecordingCursor:
+    def __init__(self, cursor: psycopg.Cursor, recorder: "_FilingBatchRecordingConnection") -> None:
+        self._cursor = cursor
+        self._recorder = recorder
+
+    def __enter__(self) -> "_RecordingCursor":
+        self._cursor.__enter__()
+        return self
+
+    def __exit__(self, *exc_info: object) -> object:
+        return self._cursor.__exit__(*exc_info)
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(self._cursor, name)
+
+    def execute(self, query: object, params: object = None, *args: object, **kwargs: object) -> object:
+        return self._cursor.execute(query, params, *args, **kwargs)
+
+    def fetchall(self, *args: Any, **kwargs: Any) -> list[object]:
+        rows = self._cursor.fetchall(*args, **kwargs)
+        self._record_filing_rows(rows)
+        return rows
+
+    def fetchmany(self, *args: Any, **kwargs: Any) -> list[object]:
+        rows = self._cursor.fetchmany(*args, **kwargs)
+        self._record_filing_rows(rows)
+        return rows
+
+    def fetchone(self, *args: Any, **kwargs: Any) -> object:
+        row = self._cursor.fetchone(*args, **kwargs)
+        if row is not None:
+            self._record_filing_rows([row])
+        return row
+
+    def _record_filing_rows(self, rows: list[object]) -> None:
+        description = self._cursor.description
+        if description is None:
+            return
+        column_names = [column.name for column in description]
+        if "filing_id" not in column_names:
+            return
+        filing_id_index = column_names.index("filing_id")
+        filing_ids: list[str] = []
+        for row in rows:
+            value: object
+            if isinstance(row, dict):
+                value = row["filing_id"]
+            else:
+                value = row[filing_id_index]  # type: ignore[index]
+            if value is not None:
+                filing_ids.append(str(value))
+        if filing_ids:
+            self._recorder.recorded_filing_batch_ids.append(tuple(filing_ids))
+
+
+class _FilingBatchRecordingConnection:
+    def __init__(self, connection: psycopg.Connection) -> None:
+        self._connection = connection
+        self.recorded_filing_batch_ids: list[tuple[str, ...]] = []
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(self._connection, name)
+
+    def cursor(self, *args: Any, **kwargs: Any) -> _RecordingCursor:
+        return _RecordingCursor(self._connection.cursor(*args, **kwargs), self)
+
+
+class _ServerSideCursorContract:
+    def __init__(self, batches: tuple[tuple[dict[str, object], ...], ...]) -> None:
+        self._batches = list(batches)
+        self.executed_params: object = None
+
+    def __enter__(self) -> "_ServerSideCursorContract":
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        return None
+
+    def execute(self, query: object, params: object = None) -> None:
+        self.executed_params = params
+
+    def fetchmany(self, size: int) -> list[dict[str, object]]:
+        if not self._batches:
+            return []
+        batch = list(self._batches.pop(0))
+        assert len(batch) <= size
+        return batch
+
+
+class _ServerSideCursorConnectionContract:
+    def __init__(self) -> None:
+        self.cursor_kwargs: dict[str, object] | None = None
+        self.cursor_instance = _ServerSideCursorContract(
+            (
+                ({"committee_id": "91000000-0000-0000-0000-000000000001", "filing_id": "filing-a"},),
+                ({"committee_id": "91000000-0000-0000-0000-000000000001", "filing_id": "filing-b"},),
+            )
+        )
+
+    def cursor(self, *args: object, **kwargs: object) -> _ServerSideCursorContract:
+        assert not args
+        self.cursor_kwargs = kwargs
+        if "name" not in kwargs:
+            raise AssertionError("filing rows must use a named server-side cursor")
+        return self.cursor_instance
+
+
+@pytest.fixture
+def committee_top_list_backfill_conn(
+    committing_db_conn: psycopg.Connection,
+) -> Iterator[_NonClosingCommitteeTopListConnection]:
+    host = committing_db_conn.info.host or ""
+    port = str(committing_db_conn.info.port or "")
+    dbname = committing_db_conn.info.dbname or ""
+    if host not in {"localhost", "127.0.0.1"} or port == "5432":
+        pytest.skip(
+            "committee top-list backfill commit tests require a local non-default "
+            f"test database target; got host={host!r} port={port!r} dbname={dbname!r}"
+        )
+    proxy = _NonClosingCommitteeTopListConnection(committing_db_conn)
+    try:
+        _cleanup_committee_top_list_backfill_rows(committing_db_conn)
+        committing_db_conn.commit()
+        yield proxy
+    finally:
+        committing_db_conn.rollback()
+        _cleanup_committee_top_list_backfill_rows(committing_db_conn)
+        committing_db_conn.commit()
+
+
+def _seed_committee_with_filing_count(
+    db_conn: psycopg.Connection,
+    *,
+    committee_id: UUID,
+    fec_committee_id: str,
+    uuid_sequence_start: int,
+    filing_count: int,
+    cycle: int = 2026,
+    selected_cycle_filing_count: int | None = None,
+) -> tuple[UUID, ...]:
+    if selected_cycle_filing_count is None:
+        selected_cycle_filing_count = filing_count
+    assert 0 <= selected_cycle_filing_count <= filing_count
+    insert_committee_row(
+        db_conn,
+        CommitteeRowSeed(
+            id=committee_id,
+            fec_committee_id=fec_committee_id,
+            name=f"Sized Committee {fec_committee_id}",
+        ),
+    )
+    insert_committee_summary_row(
+        db_conn,
+        CommitteeSummaryRowSeed(
+            committee_id=committee_id,
+            cycle=cycle,
+            coverage_start_date=date(cycle - 1, 1, 1),
+            coverage_end_date=date(cycle, 12, 31),
+        ),
+    )
+    filing_ids: list[UUID] = []
+    for index in range(filing_count):
+        filing_id = _refresh_test_uuid(uuid_sequence_start + index)
+        filing_ids.append(filing_id)
+        is_selected_cycle = index < selected_cycle_filing_count
+        filing_cycle = cycle if is_selected_cycle else cycle - 4
+        insert_filing_row(
+            db_conn,
+            FilingRowSeed(
+                id=filing_id,
+                filing_fec_id=f"F{fec_committee_id}-{index}",
+                committee_id=committee_id,
+                coverage_start_date=date(filing_cycle - 1, 1, 1),
+                coverage_end_date=date(filing_cycle - 1, 1, 2 + index),
+                receipt_date=date(filing_cycle - 1, 1, 3 + index),
+            ),
+        )
+    return tuple(filing_ids)
+
+
+def _filing_ids_for_committee(db_conn: psycopg.Connection, committee_id: UUID) -> set[str]:
+    with db_conn.cursor() as cursor:
+        cursor.execute(
+            "SELECT id::text FROM cf.filing WHERE committee_id = %s",
+            (committee_id,),
+        )
+        return {row[0] for row in cursor.fetchall()}
+
+
+def _committee_summary_filing_breakdown_from_new_connection(
+    existing_connection: psycopg.Connection,
+    committee_id: UUID,
+) -> object:
+    with psycopg.connect(
+        existing_connection.info.dsn,
+        password=os.environ.get("POSTGRES_PASSWORD"),
+    ) as verification_connection:
+        return _committee_summary_values(verification_connection, committee_id)["derived_filing_breakdown"]
 
 
 def _seed_committee_summary_filing_breakdown_fixture(db_conn: psycopg.Connection) -> dict[str, UUID]:
@@ -1199,9 +1467,200 @@ class TestCommitteeSummaryDerivedTopLists:
         assert summary_b[0]["cash_on_hand"] == expected_b[0]["cash_on_hand"]
         assert summary_b[-1]["cash_on_hand"] == expected_b[-1]["cash_on_hand"]
 
+    def test_bounded_filing_breakdown_matches_unbounded_jsonb(
+        self,
+        db_conn: psycopg.Connection,
+    ) -> None:
+        committee_id = _refresh_test_uuid(910)
+        seed_bulk_filing_breakdown_fixture(
+            db_conn,
+            committees=(
+                BulkFilingBreakdownCommitteeSeed(
+                    committee_id=committee_id,
+                    fec_committee_id="C90000910",
+                    name="Bounded Parity Committee",
+                    uuid_sequence_start=910,
+                ),
+            ),
+            filing_count=7,
+            expected_limit=7,
+        )
+        expected_filing_ids = _filing_ids_for_committee(db_conn, committee_id)
+
+        unbounded_count = job_builders.populate_committee_summary_derived_aggregates(
+            db_conn,
+            cycles=(2026,),
+            committee_ids=(str(committee_id),),
+        )
+        stored_unbounded = _committee_summary_values(db_conn, committee_id)["derived_filing_breakdown"]
+        recorder = _FilingBatchRecordingConnection(db_conn)
+
+        chunked_count = job_builders.populate_committee_summary_derived_aggregates(
+            recorder,
+            cycles=(2026,),
+            committee_ids=(str(committee_id),),
+            filing_batch_size=3,
+        )
+        stored_chunked = _committee_summary_values(db_conn, committee_id)["derived_filing_breakdown"]
+
+        with db_conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT %s::jsonb = %s::jsonb",
+                (json.dumps(stored_unbounded), json.dumps(stored_chunked)),
+            )
+            payloads_are_equal = cursor.fetchone()[0]
+        assert unbounded_count == chunked_count == 1
+        assert payloads_are_equal is True
+        assert len(recorder.recorded_filing_batch_ids) > 1
+        assert all(len(batch) <= 3 for batch in recorder.recorded_filing_batch_ids)
+        assert {filing_id for batch in recorder.recorded_filing_batch_ids for filing_id in batch} == expected_filing_ids
+
+    def test_bounded_filing_breakdown_preserves_full_history_cash_on_hand(
+        self,
+        db_conn: psycopg.Connection,
+    ) -> None:
+        ids = _seed_committee_summary_filing_breakdown_fixture(db_conn)
+        recorder = _FilingBatchRecordingConnection(db_conn)
+
+        rowcount = job_builders.populate_committee_summary_derived_aggregates(
+            recorder,
+            cycles=(2026,),
+            committee_ids=(str(ids["requested_committee"]),),
+            filing_batch_size=2,
+        )
+
+        stored_payload = _committee_summary_values(db_conn, ids["requested_committee"])["derived_filing_breakdown"]
+        assert rowcount == 1
+        assert stored_payload == _expected_committee_summary_filing_breakdown(ids)
+        cash_on_hand_by_filing = {row["filing_fec_id"]: row["cash_on_hand"] for row in stored_payload}
+        assert cash_on_hand_by_filing == {
+            "FILING-RECENT-LOW": "100.00",
+            "FILING-RECENT-HIGH": "150.00",
+            "FC90000401": "30.00",
+            "FILING-ZERO": "150.00",
+        }
+        assert len(recorder.recorded_filing_batch_ids) > 1
+        assert all(len(batch) <= 2 for batch in recorder.recorded_filing_batch_ids)
+        assert {filing_id for batch in recorder.recorded_filing_batch_ids for filing_id in batch} == {
+            str(ids["filing_older"]),
+            str(ids["filing_recent_low"]),
+            str(ids["filing_recent_high"]),
+            str(ids["filing_zero"]),
+        }
+
+    def test_runtime_filing_breakdown_default_batches_without_retaining_all_rows(
+        self,
+        db_conn: psycopg.Connection,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        committee_id = _refresh_test_uuid(970)
+        seed_bulk_filing_breakdown_fixture(
+            db_conn,
+            committees=(
+                BulkFilingBreakdownCommitteeSeed(
+                    committee_id=committee_id,
+                    fec_committee_id="C90000970",
+                    name="Runtime Bounded Committee",
+                    uuid_sequence_start=970,
+                ),
+            ),
+            filing_count=7,
+            expected_limit=7,
+        )
+        recorder = _FilingBatchRecordingConnection(db_conn)
+        observed_payload_input_sizes: list[int] = []
+        original_payload_builder = job_builders._filing_breakdown_payloads_by_committee
+        monkeypatch.setattr(job_builders, "_COMMITTEE_SUMMARY_FILING_BATCH_SIZE", 3, raising=False)
+
+        def record_payload_input_size(
+            filing_rows: list[dict[str, object]],
+        ) -> dict[str, list[dict[str, object]]]:
+            observed_payload_input_sizes.append(len(filing_rows))
+            return original_payload_builder(filing_rows)
+
+        monkeypatch.setattr(
+            job_builders,
+            "_filing_breakdown_payloads_by_committee",
+            record_payload_input_size,
+        )
+
+        rowcount = job_builders.populate_committee_summary_derived_aggregates(
+            recorder,
+            cycles=(2026,),
+            committee_ids=(str(committee_id),),
+        )
+
+        assert rowcount == 1
+        assert len(recorder.recorded_filing_batch_ids) > 1
+        assert all(len(batch) <= 3 for batch in recorder.recorded_filing_batch_ids)
+        assert observed_payload_input_sizes
+        assert max(observed_payload_input_sizes) <= 3
+
+    def test_filing_breakdown_batches_use_server_side_cursor(self) -> None:
+        connection = _ServerSideCursorConnectionContract()
+
+        batches = list(
+            job_builders._iter_committee_summary_filing_row_batches(
+                connection,
+                committee_ids=("91000000-0000-0000-0000-000000000001",),
+                filing_batch_size=1,
+            )
+        )
+
+        assert batches == [
+            [{"committee_id": "91000000-0000-0000-0000-000000000001", "filing_id": "filing-a"}],
+            [{"committee_id": "91000000-0000-0000-0000-000000000001", "filing_id": "filing-b"}],
+        ]
+        assert connection.cursor_kwargs is not None
+        assert connection.cursor_kwargs["name"] == "committee_summary_filing_breakdown_rows"
+        assert connection.cursor_kwargs["row_factory"] is job_builders.dict_row
+
 
 @pytest.mark.integration
 class TestBackfillCommitteeTopListsEntrypoint:
+    def test_selector_orders_by_all_time_filing_count_and_applies_maximum(
+        self,
+        db_conn: psycopg.Connection,
+    ) -> None:
+        from core.refresh import backfill_committee_top_lists
+
+        size_three_committee_id = _refresh_test_uuid(901)
+        size_one_committee_id = _refresh_test_uuid(902)
+        size_two_committee_id = _refresh_test_uuid(903)
+        _seed_committee_with_filing_count(
+            db_conn,
+            committee_id=size_three_committee_id,
+            fec_committee_id="C90000901",
+            uuid_sequence_start=904,
+            filing_count=3,
+            selected_cycle_filing_count=1,
+        )
+        _seed_committee_with_filing_count(
+            db_conn,
+            committee_id=size_one_committee_id,
+            fec_committee_id="C90000902",
+            uuid_sequence_start=907,
+            filing_count=1,
+            selected_cycle_filing_count=1,
+        )
+        _seed_committee_with_filing_count(
+            db_conn,
+            committee_id=size_two_committee_id,
+            fec_committee_id="C90000903",
+            uuid_sequence_start=908,
+            filing_count=2,
+            selected_cycle_filing_count=1,
+        )
+
+        selected_ids = backfill_committee_top_lists._select_limited_committee_ids(
+            db_conn,
+            cycles=(2026,),
+            limit=3,
+            max_committee_size=2,
+        )
+
+        assert selected_ids == (str(size_one_committee_id), str(size_two_committee_id))
+
     def test_backfill_committee_top_lists_scopes_to_requested_committee(
         self,
         db_conn: psycopg.Connection,
@@ -1264,6 +1723,50 @@ class TestBackfillCommitteeTopListsEntrypoint:
         ]
         assert sentinel_summary["derived_top_donors"] == [{"name": "sentinel donor"}]
         assert sentinel_summary["derived_total_raised"] == Decimal("999.00")
+
+    def test_backfill_committee_top_lists_all_scope_uses_single_committee_batches(
+        self,
+        db_conn: psycopg.Connection,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from core.refresh import backfill_committee_top_lists
+
+        committee_id = _refresh_test_uuid(399)
+        filing_id = _refresh_test_uuid(398)
+        _seed_committee_summary_top_list_committee(
+            db_conn,
+            committee_id=committee_id,
+            fec_committee_id="C90000399",
+            filing_id=filing_id,
+        )
+        recorded_committee_ids: list[tuple[str, ...] | None] = []
+
+        def record_single_committee_batch(
+            connection: psycopg.Connection,
+            *,
+            cycles: tuple[int, ...],
+            committee_ids: tuple[str, ...] | None = None,
+            filing_batch_size: int | None = None,
+        ) -> int:
+            assert cycles == (2026,)
+            assert filing_batch_size is None
+            recorded_committee_ids.append(committee_ids)
+            return 1
+
+        monkeypatch.setattr(
+            backfill_committee_top_lists,
+            "populate_committee_summary_derived_aggregates",
+            record_single_committee_batch,
+        )
+
+        result = backfill_committee_top_lists.backfill_committee_top_lists(
+            db_conn,
+            cycles=(2026,),
+        )
+
+        assert result.rows_updated == 1
+        assert result.committee_ids == (str(committee_id),)
+        assert recorded_committee_ids == [(str(committee_id),)]
 
     def test_backfill_committee_top_lists_limit_selects_bounded_summary_subset(
         self,
@@ -1455,6 +1958,15 @@ class TestBackfillCommitteeTopListsEntrypoint:
             vendors_sql='[{"name": "complete"}]',
             spend_categories_sql='[{"category": "complete"}]',
         )
+        db_conn.execute(
+            """
+            UPDATE cf.committee_summary
+            SET derived_filing_breakdown = '[]'::jsonb
+            WHERE committee_id = %s
+              AND cycle = 2026
+            """,
+            (complete_committee_id,),
+        )
         _set_committee_summary_top_lists(
             db_conn,
             vendor_null_committee_id,
@@ -1504,6 +2016,589 @@ class TestBackfillCommitteeTopListsEntrypoint:
             {"name": "Donor 437", "total_amount": "437.00", "transaction_count": 1}
         ]
         assert _committee_summary_values(db_conn, cycle_duplicate_committee_id, cycle=2024)["derived_top_donors"] == []
+
+    def test_selector_includes_missing_filing_breakdown_with_complete_top_lists(
+        self,
+        db_conn: psycopg.Connection,
+    ) -> None:
+        from core.refresh import backfill_committee_top_lists
+
+        committee_id = _refresh_test_uuid(911)
+        filing_id = _refresh_test_uuid(912)
+        _seed_committee_summary_top_list_committee(
+            db_conn,
+            committee_id=committee_id,
+            fec_committee_id="C90000911",
+            filing_id=filing_id,
+        )
+        _set_committee_summary_top_lists(
+            db_conn,
+            committee_id,
+            donors_sql='[{"name": "complete donor"}]',
+            vendors_sql='[{"name": "complete vendor"}]',
+            spend_categories_sql='[{"category": "complete spend"}]',
+        )
+
+        selected_ids = backfill_committee_top_lists._select_limited_committee_ids(
+            db_conn,
+            cycles=(2026,),
+            limit=1,
+        )
+
+        assert selected_ids == (str(committee_id),)
+
+
+@pytest.mark.integration
+class TestBackfillCommitteeTopListsCLIIntegration:
+    def test_main_max_committee_size_processes_smallest_committees_first(
+        self,
+        committee_top_list_backfill_conn: _NonClosingCommitteeTopListConnection,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from core.refresh import backfill_committee_top_lists
+
+        size_three_committee_id = _refresh_test_uuid(921)
+        size_one_committee_id = _refresh_test_uuid(922)
+        size_two_committee_id = _refresh_test_uuid(923)
+        _seed_committee_with_filing_count(
+            committee_top_list_backfill_conn,
+            committee_id=size_three_committee_id,
+            fec_committee_id="C90000921",
+            uuid_sequence_start=924,
+            filing_count=3,
+            selected_cycle_filing_count=1,
+        )
+        _seed_committee_with_filing_count(
+            committee_top_list_backfill_conn,
+            committee_id=size_one_committee_id,
+            fec_committee_id="C90000922",
+            uuid_sequence_start=927,
+            filing_count=1,
+            selected_cycle_filing_count=1,
+        )
+        _seed_committee_with_filing_count(
+            committee_top_list_backfill_conn,
+            committee_id=size_two_committee_id,
+            fec_committee_id="C90000923",
+            uuid_sequence_start=928,
+            filing_count=2,
+            selected_cycle_filing_count=1,
+        )
+        committee_top_list_backfill_conn.commit()
+        commits_before_main = committee_top_list_backfill_conn.commit_count
+        populate = MagicMock(return_value=2)
+        monkeypatch.setattr(
+            backfill_committee_top_lists,
+            "get_connection",
+            MagicMock(return_value=committee_top_list_backfill_conn),
+        )
+        monkeypatch.setattr(backfill_committee_top_lists, "populate_committee_summary_derived_aggregates", populate)
+
+        result = backfill_committee_top_lists.main(
+            [
+                "--cycles",
+                "2026",
+                "--limit",
+                "2",
+                "--max-committee-size",
+                "2",
+            ]
+        )
+
+        assert result == 0
+        assert len(populate.call_args_list) == 2
+        first_call, second_call = populate.call_args_list
+        assert first_call.args == (committee_top_list_backfill_conn,)
+        assert first_call.kwargs == {
+            "cycles": (2026,),
+            "committee_ids": (str(size_one_committee_id),),
+        }
+        assert second_call.args == (committee_top_list_backfill_conn,)
+        assert second_call.kwargs == {
+            "cycles": (2026,),
+            "committee_ids": (str(size_two_committee_id),),
+        }
+        assert committee_top_list_backfill_conn.commit_count - commits_before_main == 2
+
+    def test_main_commits_each_committee_and_resumes_with_progress(
+        self,
+        committee_top_list_backfill_conn: _NonClosingCommitteeTopListConnection,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        from core.refresh import backfill_committee_top_lists
+
+        first_committee_id = _refresh_test_uuid(931)
+        second_committee_id = _refresh_test_uuid(932)
+        third_committee_id = _refresh_test_uuid(933)
+        for index, committee_id in enumerate((first_committee_id, second_committee_id, third_committee_id), start=934):
+            filing_id = _seed_committee_with_filing_count(
+                committee_top_list_backfill_conn,
+                committee_id=committee_id,
+                fec_committee_id=f"C90000{index}",
+                uuid_sequence_start=index,
+                filing_count=1,
+            )[0]
+            insert_transaction_row(
+                committee_top_list_backfill_conn,
+                _summary_top_list_transaction(
+                    index + 10,
+                    filing_id=filing_id,
+                    committee_id=committee_id,
+                    transaction_type="11",
+                    amount=f"{index}.00",
+                    contributor_name_raw=f"Durable Donor {index}",
+                    memo_text=None,
+                ),
+            )
+        committee_top_list_backfill_conn.commit()
+        committee_top_list_backfill_conn.commit_count = 0
+        processed_ids: list[str] = []
+        original_populate = backfill_committee_top_lists.populate_committee_summary_derived_aggregates
+
+        def fail_after_first_committee(
+            connection: psycopg.Connection,
+            *,
+            cycles: tuple[int, ...],
+            committee_ids: tuple[str, ...] | None = None,
+        ) -> int:
+            assert committee_ids is not None
+            processed_ids.extend(committee_ids)
+            if committee_ids == (str(second_committee_id),):
+                raise RuntimeError("injected backfill failure")
+            return original_populate(connection, cycles=cycles, committee_ids=committee_ids)
+
+        progress_file = tmp_path / "progress.jsonl"
+        monkeypatch.setattr(
+            backfill_committee_top_lists,
+            "get_connection",
+            MagicMock(return_value=committee_top_list_backfill_conn),
+        )
+        monkeypatch.setattr(
+            backfill_committee_top_lists,
+            "populate_committee_summary_derived_aggregates",
+            fail_after_first_committee,
+        )
+
+        with pytest.raises(RuntimeError, match="injected backfill failure"):
+            backfill_committee_top_lists.main(
+                [
+                    "--cycles",
+                    "2026",
+                    "--progress-file",
+                    str(progress_file),
+                ]
+            )
+
+        assert committee_top_list_backfill_conn.commit_count == 1
+        assert processed_ids == [str(first_committee_id), str(second_committee_id)]
+        assert (
+            _committee_summary_values(committee_top_list_backfill_conn, first_committee_id)["derived_filing_breakdown"]
+            is not None
+        )
+        assert (
+            _committee_summary_filing_breakdown_from_new_connection(
+                committee_top_list_backfill_conn,
+                first_committee_id,
+            )
+            is not None
+        )
+        assert (
+            _committee_summary_values(committee_top_list_backfill_conn, second_committee_id)["derived_filing_breakdown"]
+            is None
+        )
+        assert (
+            _committee_summary_filing_breakdown_from_new_connection(
+                committee_top_list_backfill_conn,
+                second_committee_id,
+            )
+            is None
+        )
+        progress_lines = [json.loads(line) for line in progress_file.read_text(encoding="utf-8").splitlines()]
+        assert progress_lines == [
+            {
+                "source": "committee_top_list_backfill",
+                "rows_total": 1,
+                "rows_delta": 1,
+                "detail": {"committee_ids": [str(first_committee_id)], "cycles": [2026]},
+            }
+        ]
+
+        processed_ids.clear()
+
+        def record_and_populate(
+            connection: psycopg.Connection,
+            *,
+            cycles: tuple[int, ...],
+            committee_ids: tuple[str, ...] | None = None,
+        ) -> int:
+            assert committee_ids is not None
+            processed_ids.extend(committee_ids)
+            return original_populate(connection, cycles=cycles, committee_ids=committee_ids)
+
+        monkeypatch.setattr(
+            backfill_committee_top_lists,
+            "populate_committee_summary_derived_aggregates",
+            record_and_populate,
+        )
+        rerun_result = backfill_committee_top_lists.main(
+            [
+                "--cycles",
+                "2026",
+                "--progress-file",
+                str(progress_file),
+            ]
+        )
+
+        assert rerun_result == 0
+        assert processed_ids == [str(second_committee_id), str(third_committee_id)]
+        progress_lines = [json.loads(line) for line in progress_file.read_text(encoding="utf-8").splitlines()]
+        assert progress_lines == [
+            {
+                "source": "committee_top_list_backfill",
+                "rows_total": 1,
+                "rows_delta": 1,
+                "detail": {"committee_ids": [str(first_committee_id)], "cycles": [2026]},
+            },
+            {
+                "source": "committee_top_list_backfill",
+                "rows_total": 2,
+                "rows_delta": 1,
+                "detail": {"committee_ids": [str(second_committee_id)], "cycles": [2026]},
+            },
+            {
+                "source": "committee_top_list_backfill",
+                "rows_total": 3,
+                "rows_delta": 1,
+                "detail": {"committee_ids": [str(third_committee_id)], "cycles": [2026]},
+            },
+        ]
+        assert committee_top_list_backfill_conn.commit_count == 3
+
+    def test_main_progress_file_does_not_skip_same_committee_for_different_cycle(
+        self,
+        committee_top_list_backfill_conn: _NonClosingCommitteeTopListConnection,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        from core.refresh import backfill_committee_top_lists
+
+        committee_id = _refresh_test_uuid(960)
+        _seed_committee_with_filing_count(
+            committee_top_list_backfill_conn,
+            committee_id=committee_id,
+            fec_committee_id="C90000960",
+            uuid_sequence_start=961,
+            filing_count=1,
+            cycle=2026,
+        )
+        committee_top_list_backfill_conn.commit()
+        processed_ids: list[str] = []
+
+        def record_processed_committee(
+            connection: psycopg.Connection,
+            *,
+            cycles: tuple[int, ...],
+            committee_ids: tuple[str, ...] | None = None,
+        ) -> int:
+            assert committee_ids is not None
+            processed_ids.extend(committee_ids)
+            return 1
+
+        progress_file = tmp_path / "progress.jsonl"
+        progress_file.write_text(
+            json.dumps(
+                {
+                    "source": "committee_top_list_backfill",
+                    "rows_total": 1,
+                    "rows_delta": 1,
+                    "detail": {"committee_ids": [str(committee_id)], "cycles": [2024]},
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(
+            backfill_committee_top_lists,
+            "get_connection",
+            MagicMock(return_value=committee_top_list_backfill_conn),
+        )
+        monkeypatch.setattr(
+            backfill_committee_top_lists,
+            "populate_committee_summary_derived_aggregates",
+            record_processed_committee,
+        )
+
+        result = backfill_committee_top_lists.main(
+            [
+                "--cycles",
+                "2026",
+                "--progress-file",
+                str(progress_file),
+            ]
+        )
+
+        assert result == 0
+        assert processed_ids == [str(committee_id)]
+
+    def test_main_ignores_malformed_progress_records_before_selecting_committees(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        from core.refresh import backfill_committee_top_lists
+
+        connection = MagicMock()
+        completed_committee_id = "91000000-0000-0000-0000-000000000975"
+        pending_committee_id = "91000000-0000-0000-0000-000000000976"
+        processed_ids: list[str] = []
+
+        def record_processed_committee(
+            connection: psycopg.Connection,
+            *,
+            cycles: tuple[int, ...],
+            committee_ids: tuple[str, ...] | None = None,
+        ) -> int:
+            assert committee_ids is not None
+            processed_ids.extend(committee_ids)
+            return 1
+
+        def select_pending_committee_ids(
+            connection: psycopg.Connection,
+            *,
+            cycles: tuple[int, ...],
+            limit: int | None,
+            max_committee_size: int | None,
+            exclude_committee_ids: tuple[str, ...],
+        ) -> tuple[str, ...]:
+            assert cycles == (2026,)
+            assert limit is None
+            assert max_committee_size is None
+            assert exclude_committee_ids == (completed_committee_id,)
+            return (pending_committee_id,)
+
+        progress_file = tmp_path / "progress.jsonl"
+        progress_file.write_text(
+            "\n".join(
+                (
+                    "[]",
+                    json.dumps(_committee_top_list_progress_record(("not-a-uuid",))),
+                    json.dumps(_committee_top_list_progress_record((completed_committee_id,))),
+                )
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(
+            backfill_committee_top_lists,
+            "get_connection",
+            MagicMock(return_value=connection),
+        )
+        monkeypatch.setattr(
+            backfill_committee_top_lists,
+            "_select_limited_committee_ids",
+            select_pending_committee_ids,
+        )
+        monkeypatch.setattr(
+            backfill_committee_top_lists,
+            "populate_committee_summary_derived_aggregates",
+            record_processed_committee,
+        )
+
+        result = backfill_committee_top_lists.main(
+            [
+                "--cycles",
+                "2026",
+                "--progress-file",
+                str(progress_file),
+            ]
+        )
+
+        assert result == 0
+        assert processed_ids == [str(pending_committee_id)]
+
+    def test_main_ignores_incomplete_progress_records_before_selecting_committees(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        from core.refresh import backfill_committee_top_lists
+
+        connection = MagicMock()
+        missing_rows_total_committee_id = "91000000-0000-0000-0000-000000000977"
+        missing_rows_delta_committee_id = "91000000-0000-0000-0000-000000000978"
+        boolean_rows_total_committee_id = "91000000-0000-0000-0000-000000000979"
+        boolean_rows_delta_committee_id = "91000000-0000-0000-0000-00000000097a"
+        completed_committee_id = "91000000-0000-0000-0000-00000000097b"
+        pending_committee_id = "91000000-0000-0000-0000-00000000097c"
+        processed_ids: list[str] = []
+
+        def record_processed_committee(
+            connection: psycopg.Connection,
+            *,
+            cycles: tuple[int, ...],
+            committee_ids: tuple[str, ...] | None = None,
+        ) -> int:
+            assert committee_ids is not None
+            processed_ids.extend(committee_ids)
+            return 1
+
+        def select_pending_committee_ids(
+            connection: psycopg.Connection,
+            *,
+            cycles: tuple[int, ...],
+            limit: int | None,
+            max_committee_size: int | None,
+            exclude_committee_ids: tuple[str, ...],
+        ) -> tuple[str, ...]:
+            assert cycles == (2026,)
+            assert limit is None
+            assert max_committee_size is None
+            assert exclude_committee_ids == (completed_committee_id,)
+            return (pending_committee_id,)
+
+        missing_rows_total = _committee_top_list_progress_record((missing_rows_total_committee_id,))
+        missing_rows_total.pop("rows_total")
+        missing_rows_delta = _committee_top_list_progress_record((missing_rows_delta_committee_id,))
+        missing_rows_delta.pop("rows_delta")
+        boolean_rows_total = _committee_top_list_progress_record((boolean_rows_total_committee_id,))
+        boolean_rows_total["rows_total"] = True
+        boolean_rows_delta = _committee_top_list_progress_record((boolean_rows_delta_committee_id,))
+        boolean_rows_delta["rows_delta"] = False
+        progress_file = tmp_path / "progress.jsonl"
+        progress_file.write_text(
+            "\n".join(
+                (
+                    json.dumps(missing_rows_total),
+                    json.dumps(missing_rows_delta),
+                    json.dumps(boolean_rows_total),
+                    json.dumps(boolean_rows_delta),
+                    json.dumps(_committee_top_list_progress_record((completed_committee_id,))),
+                )
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(
+            backfill_committee_top_lists,
+            "get_connection",
+            MagicMock(return_value=connection),
+        )
+        monkeypatch.setattr(
+            backfill_committee_top_lists,
+            "_select_limited_committee_ids",
+            select_pending_committee_ids,
+        )
+        monkeypatch.setattr(
+            backfill_committee_top_lists,
+            "populate_committee_summary_derived_aggregates",
+            record_processed_committee,
+        )
+
+        result = backfill_committee_top_lists.main(
+            [
+                "--cycles",
+                "2026",
+                "--progress-file",
+                str(progress_file),
+            ]
+        )
+
+        assert result == 0
+        assert processed_ids == [str(pending_committee_id)]
+
+    def test_main_ignores_noncanonical_progress_records_before_selecting_committees(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        from core.refresh import backfill_committee_top_lists
+
+        connection = MagicMock()
+        multi_id_first_committee_id = "91000000-0000-0000-0000-00000000097d"
+        multi_id_second_committee_id = "91000000-0000-0000-0000-00000000097e"
+        zero_delta_committee_id = "91000000-0000-0000-0000-00000000097f"
+        two_delta_committee_id = "91000000-0000-0000-0000-000000000980"
+        zero_total_committee_id = "91000000-0000-0000-0000-000000000983"
+        completed_committee_id = "91000000-0000-0000-0000-000000000981"
+        pending_committee_id = "91000000-0000-0000-0000-000000000982"
+        processed_ids: list[str] = []
+
+        def record_processed_committee(
+            connection: psycopg.Connection,
+            *,
+            cycles: tuple[int, ...],
+            committee_ids: tuple[str, ...] | None = None,
+        ) -> int:
+            assert committee_ids is not None
+            processed_ids.extend(committee_ids)
+            return 1
+
+        def select_pending_committee_ids(
+            connection: psycopg.Connection,
+            *,
+            cycles: tuple[int, ...],
+            limit: int | None,
+            max_committee_size: int | None,
+            exclude_committee_ids: tuple[str, ...],
+        ) -> tuple[str, ...]:
+            assert cycles == (2026,)
+            assert limit is None
+            assert max_committee_size is None
+            assert exclude_committee_ids == (completed_committee_id,)
+            return (pending_committee_id,)
+
+        multi_id_record = _committee_top_list_progress_record(
+            (multi_id_first_committee_id, multi_id_second_committee_id),
+            rows_total=2,
+        )
+        multi_id_record["rows_delta"] = 2
+        zero_delta_record = _committee_top_list_progress_record((zero_delta_committee_id,))
+        zero_delta_record["rows_delta"] = 0
+        two_delta_record = _committee_top_list_progress_record((two_delta_committee_id,), rows_total=2)
+        two_delta_record["rows_delta"] = 2
+        zero_total_record = _committee_top_list_progress_record((zero_total_committee_id,), rows_total=0)
+        progress_file = tmp_path / "progress.jsonl"
+        progress_file.write_text(
+            "\n".join(
+                (
+                    json.dumps(multi_id_record),
+                    json.dumps(zero_delta_record),
+                    json.dumps(two_delta_record),
+                    json.dumps(zero_total_record),
+                    json.dumps(_committee_top_list_progress_record((completed_committee_id,))),
+                )
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(
+            backfill_committee_top_lists,
+            "get_connection",
+            MagicMock(return_value=connection),
+        )
+        monkeypatch.setattr(
+            backfill_committee_top_lists,
+            "_select_limited_committee_ids",
+            select_pending_committee_ids,
+        )
+        monkeypatch.setattr(
+            backfill_committee_top_lists,
+            "populate_committee_summary_derived_aggregates",
+            record_processed_committee,
+        )
+
+        result = backfill_committee_top_lists.main(
+            [
+                "--cycles",
+                "2026",
+                "--progress-file",
+                str(progress_file),
+            ]
+        )
+
+        assert result == 0
+        assert processed_ids == [str(pending_committee_id)]
 
 
 @pytest.mark.unit
@@ -1637,12 +2732,19 @@ class TestBackfillCommitteeTopListsCLI:
         monkeypatch.setattr(backfill_committee_top_lists.time, "perf_counter", lambda: next(monotonic_values))
 
         with pytest.raises(RuntimeError, match="populate failed"):
-            backfill_committee_top_lists.main(["--cycles", "2026"])
+            backfill_committee_top_lists.main(
+                [
+                    "--cycles",
+                    "2026",
+                    "--committee-id",
+                    "91000000-0000-0000-0000-000000000101",
+                ]
+            )
 
         connection.transaction.assert_called_once_with()
         connection.close.assert_called_once_with()
 
-    def test_main_reports_null_committee_ids_for_all_scope(
+    def test_main_reports_empty_committee_ids_for_exhausted_all_scope(
         self,
         monkeypatch: pytest.MonkeyPatch,
         capsys: pytest.CaptureFixture[str],
@@ -1653,23 +2755,76 @@ class TestBackfillCommitteeTopListsCLI:
         monkeypatch.setattr(backfill_committee_top_lists, "get_connection", MagicMock(return_value=connection))
         monkeypatch.setattr(
             backfill_committee_top_lists,
-            "populate_committee_summary_derived_aggregates",
-            MagicMock(return_value=7),
+            "_select_limited_committee_ids",
+            MagicMock(return_value=()),
         )
         monotonic_values = iter((20.0, 23.25))
         monkeypatch.setattr(backfill_committee_top_lists.time, "perf_counter", lambda: next(monotonic_values))
 
         assert backfill_committee_top_lists.main(["--cycles", "2026"]) == 0
 
-        backfill_committee_top_lists.populate_committee_summary_derived_aggregates.assert_called_once_with(
+        backfill_committee_top_lists._select_limited_committee_ids.assert_called_once_with(
             connection,
             cycles=(2026,),
-            committee_ids=None,
+            limit=None,
+            max_committee_size=None,
+            exclude_committee_ids=(),
         )
         assert json.loads(capsys.readouterr().out) == {
             "cycles": [2026],
-            "committee_ids": None,
-            "rows_updated": 7,
+            "committee_ids": [],
+            "rows_updated": 0,
+            "elapsed_seconds": 3.25,
+        }
+
+    def test_main_all_scope_uses_per_committee_batches(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        from core.refresh import backfill_committee_top_lists
+
+        connection = MagicMock()
+        selected_committee_ids = (
+            "91000000-0000-0000-0000-000000000011",
+            "91000000-0000-0000-0000-000000000012",
+        )
+        monkeypatch.setattr(backfill_committee_top_lists, "get_connection", MagicMock(return_value=connection))
+        monkeypatch.setattr(
+            backfill_committee_top_lists,
+            "_select_limited_committee_ids",
+            MagicMock(return_value=selected_committee_ids),
+        )
+        monkeypatch.setattr(
+            backfill_committee_top_lists,
+            "populate_committee_summary_derived_aggregates",
+            MagicMock(return_value=1),
+        )
+        monotonic_values = iter((20.0, 23.25))
+        monkeypatch.setattr(backfill_committee_top_lists.time, "perf_counter", lambda: next(monotonic_values))
+
+        assert backfill_committee_top_lists.main(["--cycles", "2026"]) == 0
+
+        backfill_committee_top_lists._select_limited_committee_ids.assert_called_once_with(
+            connection,
+            cycles=(2026,),
+            limit=None,
+            max_committee_size=None,
+            exclude_committee_ids=(),
+        )
+        assert [
+            call.kwargs["committee_ids"]
+            for call in backfill_committee_top_lists.populate_committee_summary_derived_aggregates.call_args_list
+        ] == [(selected_committee_ids[0],), (selected_committee_ids[1],)]
+        assert connection.commit.call_count == 2
+        assert not any(
+            call.kwargs["committee_ids"] is None
+            for call in backfill_committee_top_lists.populate_committee_summary_derived_aggregates.call_args_list
+        )
+        assert json.loads(capsys.readouterr().out) == {
+            "cycles": [2026],
+            "committee_ids": list(selected_committee_ids),
+            "rows_updated": 2,
             "elapsed_seconds": 3.25,
         }
 

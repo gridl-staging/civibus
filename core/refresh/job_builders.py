@@ -7,6 +7,7 @@ import tempfile
 import zipfile
 from dataclasses import replace
 from datetime import date
+from collections.abc import Iterator
 from functools import partial
 import os
 from pathlib import Path
@@ -133,8 +134,11 @@ from domains.civics.loaders.official_rosters.cli import main as run_official_ros
 from domains.civics.loaders.official_rosters.source_registry import list_nc_roster_source_metadata
 
 from datetime import datetime
+from psycopg.rows import dict_row
+from psycopg.types.json import Jsonb
 
 _PRIORITY_CADENCE = "daily"
+_COMMITTEE_SUMMARY_FILING_BATCH_SIZE = 500
 _REFRESH_DATA_DIR_ENV = "CIVIBUS_REFRESH_DATA_DIR"
 _SUPPORTED_REFRESH_SCOPES = {"all", "priority", "federal"}
 _FEDERAL_SCOPE_JOB_KEY_PREFIXES = ("federal-",)
@@ -994,7 +998,7 @@ def _active_committee_summary_cycles(fec_cycle: int) -> tuple[int, ...]:
     return cycles or (fec_cycle,)
 
 
-_COMMITTEE_SUMMARY_DERIVED_AGGREGATE_SQL = f"""
+_COMMITTEE_SUMMARY_DERIVED_AGGREGATE_SQL = """
     WITH target_summaries AS (
         SELECT
             cs.committee_id,
@@ -1004,10 +1008,6 @@ _COMMITTEE_SUMMARY_DERIVED_AGGREGATE_SQL = f"""
         FROM cf.committee_summary cs
         WHERE cs.cycle = ANY(%s)
           AND (%s::uuid[] IS NULL OR cs.committee_id = ANY(%s::uuid[]))
-    ),
-    target_committees AS (
-        SELECT DISTINCT committee_id
-        FROM target_summaries
     ),
     eligible_transactions AS MATERIALIZED (
         SELECT
@@ -1033,106 +1033,6 @@ _COMMITTEE_SUMMARY_DERIVED_AGGREGATE_SQL = f"""
           ON ds.id = sr.data_source_id
         WHERE t.source_record_id IS NULL
            OR sr.superseded_by IS NULL
-    ),
-    filing_eligible_transactions AS MATERIALIZED (
-        SELECT
-            tc.committee_id,
-            t.id,
-            t.filing_id,
-            t.transaction_type,
-            t.amount
-        FROM target_committees tc
-        JOIN cf.transaction t
-          ON t.committee_id = tc.committee_id
-         AND t.is_memo = FALSE
-         AND t.amendment_indicator != 'T'
-        LEFT JOIN core.source_record sr
-          ON sr.id = t.source_record_id
-        WHERE t.source_record_id IS NULL
-           OR sr.superseded_by IS NULL
-    ),
-    filing_totals AS (
-        SELECT
-            f.committee_id,
-            f.id AS filing_id,
-            f.filing_fec_id,
-            f.filing_name,
-            f.report_type,
-            f.amendment_indicator,
-            f.coverage_start_date,
-            f.coverage_end_date,
-            f.receipt_date,
-            COALESCE(SUM(ft.amount) FILTER (WHERE ft.transaction_type LIKE '1%%'), 0) AS total_raised,
-            COALESCE(SUM(ft.amount) FILTER (WHERE ft.transaction_type LIKE '2%%'), 0) AS total_spent,
-            COALESCE(SUM(ft.amount) FILTER (WHERE ft.transaction_type LIKE '1%%'), 0)
-              - COALESCE(SUM(ft.amount) FILTER (WHERE ft.transaction_type LIKE '2%%'), 0) AS net,
-            COUNT(ft.id)::integer AS transaction_count
-        FROM target_committees tc
-        JOIN cf.filing f
-          ON f.committee_id = tc.committee_id
-        LEFT JOIN filing_eligible_transactions ft
-          ON ft.filing_id = f.id
-        GROUP BY
-            f.committee_id,
-            f.id,
-            f.filing_fec_id,
-            f.filing_name,
-            f.report_type,
-            f.amendment_indicator,
-            f.coverage_start_date,
-            f.coverage_end_date,
-            f.receipt_date
-    ),
-    filing_cash_on_hand AS (
-        SELECT
-            ft.*,
-            SUM(ft.net) OVER (
-                PARTITION BY ft.committee_id
-                ORDER BY
-                    ft.coverage_end_date ASC NULLS LAST,
-                    ft.receipt_date ASC NULLS LAST,
-                    ft.filing_id ASC
-                ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
-            ) AS cash_on_hand
-        FROM filing_totals ft
-    ),
-    ranked_filing_cash_on_hand AS (
-        SELECT
-            fcoh.*,
-            ROW_NUMBER() OVER (
-                PARTITION BY fcoh.committee_id
-                ORDER BY
-                    fcoh.coverage_end_date DESC NULLS LAST,
-                    fcoh.receipt_date DESC NULLS LAST,
-                    fcoh.filing_id ASC
-            ) AS filing_rank
-        FROM filing_cash_on_hand fcoh
-    ),
-    filing_breakdowns AS (
-        SELECT
-            committee_id,
-            JSONB_AGG(
-                JSONB_BUILD_OBJECT(
-                    'filing_id', filing_id::text,
-                    'filing_fec_id', filing_fec_id,
-                    'filing_name', filing_name,
-                    'report_type', report_type,
-                    'amendment_indicator', amendment_indicator,
-                    'coverage_start_date', coverage_start_date,
-                    'coverage_end_date', coverage_end_date,
-                    'receipt_date', receipt_date,
-                    'total_raised', TO_CHAR(total_raised, 'FM999999999999990.00'),
-                    'total_spent', TO_CHAR(total_spent, 'FM999999999999990.00'),
-                    'net', TO_CHAR(net, 'FM999999999999990.00'),
-                    'transaction_count', transaction_count,
-                    'cash_on_hand', TO_CHAR(cash_on_hand, 'FM999999999999990.00'),
-                    'row_id', filing_id::text || ':' || amendment_indicator
-                )
-                ORDER BY coverage_end_date DESC NULLS LAST, receipt_date DESC NULLS LAST, filing_id ASC
-            ) AS filing_breakdown
-        FROM ranked_filing_cash_on_hand
-        WHERE filing_rank <= {_FILING_BREAKDOWN_STORE_LIMIT}
-        GROUP BY committee_id
     ),
     donor_groups AS (
         SELECT
@@ -1312,8 +1212,7 @@ _COMMITTEE_SUMMARY_DERIVED_AGGREGATE_SQL = f"""
             a.data_through,
             COALESCE(td.top_donors, '[]'::jsonb) AS top_donors,
             COALESCE(tv.top_vendors, '[]'::jsonb) AS top_vendors,
-            COALESCE(tsc.spend_categories, '[]'::jsonb) AS spend_categories,
-            COALESCE(fb.filing_breakdown, '[]'::jsonb) AS filing_breakdown
+            COALESCE(tsc.spend_categories, '[]'::jsonb) AS spend_categories
         FROM target_summaries ts
         LEFT JOIN aggregates a
           ON a.committee_id = ts.committee_id
@@ -1327,8 +1226,6 @@ _COMMITTEE_SUMMARY_DERIVED_AGGREGATE_SQL = f"""
         LEFT JOIN top_spend_categories tsc
           ON tsc.committee_id = ts.committee_id
          AND tsc.cycle = ts.cycle
-        LEFT JOIN filing_breakdowns fb
-          ON fb.committee_id = ts.committee_id
     )
     UPDATE cf.committee_summary cs
     SET derived_total_raised = au.total_raised,
@@ -1343,12 +1240,232 @@ _COMMITTEE_SUMMARY_DERIVED_AGGREGATE_SQL = f"""
         derived_data_through = au.data_through,
         derived_top_donors = au.top_donors,
         derived_top_vendors = au.top_vendors,
-        derived_spend_categories = au.spend_categories,
-        derived_filing_breakdown = au.filing_breakdown
+        derived_spend_categories = au.spend_categories
     FROM aggregate_updates au
     WHERE cs.committee_id = au.committee_id
       AND cs.cycle = au.cycle
 """
+
+_COMMITTEE_SUMMARY_TARGET_COMMITTEE_SQL = """
+    SELECT DISTINCT cs.committee_id::text
+    FROM cf.committee_summary cs
+    WHERE cs.cycle = ANY(%s)
+      AND (%s::uuid[] IS NULL OR cs.committee_id = ANY(%s::uuid[]))
+    ORDER BY cs.committee_id::text
+"""
+
+_COMMITTEE_SUMMARY_FILING_BREAKDOWN_ROWS_SQL = """
+    WITH target_committees AS (
+        SELECT UNNEST(%s::uuid[]) AS committee_id
+    ),
+    filing_eligible_transactions AS MATERIALIZED (
+        SELECT
+            tc.committee_id,
+            t.id,
+            t.filing_id,
+            t.transaction_type,
+            t.amount
+        FROM target_committees tc
+        JOIN cf.transaction t
+          ON t.committee_id = tc.committee_id
+         AND t.is_memo = FALSE
+         AND t.amendment_indicator != 'T'
+        LEFT JOIN core.source_record sr
+          ON sr.id = t.source_record_id
+        WHERE t.source_record_id IS NULL
+           OR sr.superseded_by IS NULL
+    ),
+    filing_totals AS (
+        SELECT
+            f.committee_id,
+            f.id AS filing_id,
+            f.filing_fec_id,
+            f.filing_name,
+            f.report_type,
+            f.amendment_indicator,
+            f.coverage_start_date,
+            f.coverage_end_date,
+            f.receipt_date,
+            COALESCE(SUM(ft.amount) FILTER (WHERE ft.transaction_type LIKE '1%%'), 0) AS total_raised,
+            COALESCE(SUM(ft.amount) FILTER (WHERE ft.transaction_type LIKE '2%%'), 0) AS total_spent,
+            COALESCE(SUM(ft.amount) FILTER (WHERE ft.transaction_type LIKE '1%%'), 0)
+              - COALESCE(SUM(ft.amount) FILTER (WHERE ft.transaction_type LIKE '2%%'), 0) AS net,
+            COUNT(ft.id)::integer AS transaction_count
+        FROM target_committees tc
+        JOIN cf.filing f
+          ON f.committee_id = tc.committee_id
+        LEFT JOIN filing_eligible_transactions ft
+          ON ft.filing_id = f.id
+        GROUP BY
+            f.committee_id,
+            f.id,
+            f.filing_fec_id,
+            f.filing_name,
+            f.report_type,
+            f.amendment_indicator,
+            f.coverage_start_date,
+            f.coverage_end_date,
+            f.receipt_date
+    ),
+    filing_cash_on_hand AS (
+        SELECT
+            ft.*,
+            SUM(ft.net) OVER (
+                PARTITION BY ft.committee_id
+                ORDER BY
+                    ft.coverage_end_date ASC NULLS LAST,
+                    ft.receipt_date ASC NULLS LAST,
+                    ft.filing_id ASC
+                ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+            ) AS cash_on_hand
+        FROM filing_totals ft
+    ),
+    ranked_filing_cash_on_hand AS (
+        SELECT
+            fcoh.*,
+            ROW_NUMBER() OVER (
+                PARTITION BY fcoh.committee_id
+                ORDER BY
+                    fcoh.coverage_end_date DESC NULLS LAST,
+                    fcoh.receipt_date DESC NULLS LAST,
+                    fcoh.filing_id ASC
+            ) AS filing_rank
+        FROM filing_cash_on_hand fcoh
+    )
+    SELECT
+        committee_id::text AS committee_id,
+        filing_id::text AS filing_id,
+        filing_fec_id,
+        filing_name,
+        report_type,
+        amendment_indicator,
+        coverage_start_date::text AS coverage_start_date,
+        coverage_end_date::text AS coverage_end_date,
+        receipt_date::text AS receipt_date,
+        TO_CHAR(total_raised, 'FM999999999999990.00') AS total_raised,
+        TO_CHAR(total_spent, 'FM999999999999990.00') AS total_spent,
+        TO_CHAR(net, 'FM999999999999990.00') AS net,
+        transaction_count,
+        TO_CHAR(cash_on_hand, 'FM999999999999990.00') AS cash_on_hand,
+        filing_id::text || ':' || amendment_indicator AS row_id,
+        filing_rank
+    FROM ranked_filing_cash_on_hand
+    ORDER BY committee_id ASC, filing_rank ASC
+"""
+
+_COMMITTEE_SUMMARY_FILING_BREAKDOWN_UPDATE_SQL = """
+    UPDATE cf.committee_summary
+    SET derived_filing_breakdown = %s
+    WHERE cycle = ANY(%s)
+      AND committee_id = %s::uuid
+"""
+_COMMITTEE_SUMMARY_FILING_BREAKDOWN_CURSOR_NAME = "committee_summary_filing_breakdown_rows"
+
+
+def _committee_summary_target_committee_ids(
+    connection: object,
+    *,
+    cycles: tuple[int, ...],
+    committee_ids: tuple[str, ...] | None,
+) -> tuple[str, ...]:
+    committee_id_list = None if committee_ids is None else list(committee_ids)
+    with connection.cursor() as cursor:
+        cursor.execute(
+            _COMMITTEE_SUMMARY_TARGET_COMMITTEE_SQL,
+            (list(cycles), committee_id_list, committee_id_list),
+        )
+        return tuple(row[0] for row in cursor.fetchall())
+
+
+def _iter_committee_summary_filing_row_batches(
+    connection: object,
+    *,
+    committee_ids: tuple[str, ...],
+    filing_batch_size: int | None,
+) -> Iterator[list[dict[str, object]]]:
+    if not committee_ids:
+        return
+    effective_batch_size = _COMMITTEE_SUMMARY_FILING_BATCH_SIZE if filing_batch_size is None else filing_batch_size
+    if effective_batch_size <= 0:
+        raise ValueError("filing_batch_size must be greater than 0")
+    with connection.cursor(name=_COMMITTEE_SUMMARY_FILING_BREAKDOWN_CURSOR_NAME, row_factory=dict_row) as cursor:
+        cursor.execute(_COMMITTEE_SUMMARY_FILING_BREAKDOWN_ROWS_SQL, (list(committee_ids),))
+        while batch := cursor.fetchmany(effective_batch_size):
+            yield list(batch)
+
+
+def _filing_breakdown_payloads_by_committee(
+    filing_rows: list[dict[str, object]],
+) -> dict[str, list[dict[str, object]]]:
+    payloads: dict[str, list[dict[str, object]]] = {}
+    for row in filing_rows:
+        if row["filing_rank"] > _FILING_BREAKDOWN_STORE_LIMIT:  # type: ignore[operator]
+            continue
+        committee_id = str(row["committee_id"])
+        payloads.setdefault(committee_id, []).append(
+            {
+                "filing_id": row["filing_id"],
+                "filing_fec_id": row["filing_fec_id"],
+                "filing_name": row["filing_name"],
+                "report_type": row["report_type"],
+                "amendment_indicator": row["amendment_indicator"],
+                "coverage_start_date": row["coverage_start_date"],
+                "coverage_end_date": row["coverage_end_date"],
+                "receipt_date": row["receipt_date"],
+                "total_raised": row["total_raised"],
+                "total_spent": row["total_spent"],
+                "net": row["net"],
+                "transaction_count": row["transaction_count"],
+                "cash_on_hand": row["cash_on_hand"],
+                "row_id": row["row_id"],
+            }
+        )
+    return payloads
+
+
+def _merge_filing_breakdown_payloads(
+    payloads_by_committee: dict[str, list[dict[str, object]]],
+    batch_payloads_by_committee: dict[str, list[dict[str, object]]],
+) -> None:
+    for committee_id, batch_payloads in batch_payloads_by_committee.items():
+        payloads_by_committee.setdefault(committee_id, []).extend(batch_payloads)
+
+
+def _populate_committee_summary_filing_breakdowns(
+    connection: object,
+    *,
+    cycles: tuple[int, ...],
+    committee_ids: tuple[str, ...] | None,
+    filing_batch_size: int | None,
+) -> None:
+    target_committee_ids = _committee_summary_target_committee_ids(
+        connection,
+        cycles=cycles,
+        committee_ids=committee_ids,
+    )
+    if not target_committee_ids:
+        return
+    payloads_by_committee: dict[str, list[dict[str, object]]] = {}
+    # Stream all-history rows so SQL can compute cash-on-hand before the recent-window trim.
+    for filing_rows in _iter_committee_summary_filing_row_batches(
+        connection,
+        committee_ids=target_committee_ids,
+        filing_batch_size=filing_batch_size,
+    ):
+        _merge_filing_breakdown_payloads(
+            payloads_by_committee,
+            _filing_breakdown_payloads_by_committee(filing_rows),
+        )
+    with connection.cursor() as cursor:
+        for committee_id in target_committee_ids:
+            cursor.execute(
+                _COMMITTEE_SUMMARY_FILING_BREAKDOWN_UPDATE_SQL,
+                (
+                    Jsonb(payloads_by_committee.get(committee_id, [])),
+                    list(cycles),
+                    committee_id,
+                ),
+            )
 
 
 def populate_committee_summary_derived_aggregates(
@@ -1356,6 +1473,7 @@ def populate_committee_summary_derived_aggregates(
     *,
     cycles: tuple[int, ...],
     committee_ids: tuple[str, ...] | None = None,
+    filing_batch_size: int | None = None,
 ) -> int:
     committee_id_list = None if committee_ids is None else list(committee_ids)
     with connection.cursor() as cursor:
@@ -1363,7 +1481,14 @@ def populate_committee_summary_derived_aggregates(
             _COMMITTEE_SUMMARY_DERIVED_AGGREGATE_SQL,
             (list(cycles), committee_id_list, committee_id_list),
         )
-        return cursor.rowcount
+        rows_updated = cursor.rowcount
+    _populate_committee_summary_filing_breakdowns(
+        connection,
+        cycles=cycles,
+        committee_ids=committee_ids,
+        filing_batch_size=filing_batch_size,
+    )
+    return rows_updated
 
 
 def _build_fec_committee_summary_job(parameters: RunnerParameters) -> RefreshJob:

@@ -16,11 +16,10 @@ PUBLIC_PAGES=(
   "/committee/jon-ossoff-for-senate|Key metrics"
   "/compare|Compare officeholders"
   "/calendar|Election calendar"
+  "/coverage|campaign_finance"
+  "/data-sources|campaign_finance"
 )
 KNOWN_RED_PUBLIC_PAGES=(
-  "/coverage|runtime metadata rows are not loaded reliably in public deploy|surface-parity-stage-1"
-  "/data-sources|runtime data-source rows are not loaded reliably in public deploy|surface-parity-stage-1"
-  "/state/GA|state detail route is known-red during federal-first v1 public probe hardening|surface-parity-stage-1"
   "/sitemap.xml|dynamic sitemap can depend on campaign-list data not yet promoted to fail-closed|surface-parity-stage-1"
 )
 TMP_DIR="$(mktemp -d)"
