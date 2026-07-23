@@ -20,9 +20,11 @@
     buildPersonOutsideSpendingSection,
     buildEntityDetailShellPresentation,
     type EntityDetailShellPresentation,
+    type PersonMoneyAtGlancePresentation,
     type PersonMoneyAtGlanceSummary
   } from "$lib/entity-detail/presentation";
   import type { EntityDetailPageBundle } from "$lib/server/api/entity-detail";
+  import type { PersonMoneyHeadlineState } from "$lib/server/api/entity-detail";
   import type { PersonCandidateFinanceSection } from "$lib/server/api/campaign-finance-detail";
   import type {
     CandidateFundraisingSummary,
@@ -69,6 +71,8 @@
     data.entityType === "person"
       ? (data.personFinanceSections ?? Promise.resolve(EMPTY_PERSON_FINANCE_SECTIONS))
       : null;
+  $: personMoneyHeadline =
+    data.entityType === "person" ? ((data.personMoneyHeadline ?? null) as PersonMoneyHeadlineState | null) : null;
   $: personContributionInsights =
     data.entityType === "person" ? (data.personContributionInsights ?? null) : null;
   $: personTopDonors =
@@ -349,6 +353,92 @@
   {/if}
 {/snippet}
 
+{#snippet moneyAtGlanceSummaryRows(moneyAtGlance: PersonMoneyAtGlancePresentation)}
+  <dl class="detail__rows">
+    <div class="detail__row">
+      <dt>Coverage</dt>
+      <dd>{moneyAtGlance.coverageLabel}</dd>
+    </div>
+    <div class="detail__row">
+      <dt>Source</dt>
+      <dd>{moneyAtGlance.sourceLabel}</dd>
+    </div>
+    <div class="detail__row">
+      <dt>Outside spending</dt>
+      <dd><a class="detail__cta-link" href="#person-outside-spending">Outside spending details</a></dd>
+    </div>
+  </dl>
+{/snippet}
+
+{#snippet moneyAtGlanceCycleNav(moneyAtGlance: PersonMoneyAtGlancePresentation)}
+  {#if moneyAtGlance.cycleOptions.length > 0}
+    <nav class="detail__cycle-nav" aria-label="Election cycle">
+      {#each moneyAtGlance.cycleOptions as option (option.cycle)}
+        <a href={option.href} aria-current={option.selected ? "page" : undefined}>{option.label}</a>
+      {/each}
+    </nav>
+  {/if}
+{/snippet}
+
+{#snippet moneyAtGlanceMetricRows(
+  moneyAtGlance: PersonMoneyAtGlancePresentation,
+  layout: "rows" | "grid"
+)}
+  {#if layout === "grid"}
+    <dl class="detail__metrics-grid">
+      {#each moneyAtGlance.metricRows as row (row.label)}
+        <div class="detail__metric">
+          <dt class="detail__metric-label">{row.label}</dt>
+          <dd class="detail__metric-value">{row.value}</dd>
+        </div>
+      {/each}
+    </dl>
+  {:else}
+    <dl class="detail__rows">
+      {#each moneyAtGlance.metricRows as row (row.label)}
+        <div class="detail__row">
+          <dt>{row.label}</dt>
+          <dd>{row.value}</dd>
+        </div>
+      {/each}
+    </dl>
+  {/if}
+{/snippet}
+
+{#snippet moneyAtGlanceReceiptComposition(
+  moneyAtGlance: PersonMoneyAtGlancePresentation,
+  testId: string
+)}
+  <ReceiptCompositionChart
+    {testId}
+    cycle={moneyAtGlance.receiptComposition.cycle}
+    coverageThrough={moneyAtGlance.receiptComposition.coverageThrough}
+    sources={moneyAtGlance.receiptComposition.sources}
+    rows={moneyAtGlance.receiptComposition.rows}
+    totalReceipts={moneyAtGlance.receiptComposition.totalReceipts}
+    canPlot={moneyAtGlance.receiptComposition.canPlot}
+    caveat={moneyAtGlance.receiptComposition.caveat}
+  />
+{/snippet}
+
+{#snippet moneyHeadline(headline: PersonMoneyHeadlineState)}
+  {#if headline.kind === "loaded"}
+    {@const moneyAtGlance = buildPersonMoneyAtGlancePresentation(headline.summary)}
+    <h4>{moneyAtGlance.heading}</h4>
+    <p>{moneyAtGlance.cycleLabel}</p>
+    {@render moneyAtGlanceSummaryRows(moneyAtGlance)}
+    {@render moneyAtGlanceCycleNav(moneyAtGlance)}
+    {@render moneyAtGlanceMetricRows(moneyAtGlance, "rows")}
+    {@render moneyAtGlanceReceiptComposition(moneyAtGlance, moneyAtGlance.receiptComposition.testId)}
+  {:else if headline.kind === "no_linked_candidate"}
+    <p>{headline.message}</p>
+  {:else}
+    <h4>Money at a glance</h4>
+    <p>{headline.selectedCycle} cycle</p>
+    <p>{headline.message}</p>
+  {/if}
+{/snippet}
+
 {#snippet moneyAtGlance(sections: PersonCandidateFinanceSection[])}
   {#await buildMoneyAtGlanceSummary(sections)}
     <SkeletonPanel label="Selected-cycle money" lines={4} />
@@ -359,49 +449,10 @@
         <h4>{moneyAtGlance.heading}</h4>
         <p>{moneyAtGlance.cycleLabel}</p>
       </div>
-      <nav class="detail__cycle-selector" aria-label="Election cycle">
-        {#each moneyAtGlance.cycleOptions as option (option.cycle)}
-          <a
-            class="detail__cycle-link"
-            href={option.href}
-            aria-current={option.selected ? "page" : undefined}
-          >
-            {option.label}
-          </a>
-        {/each}
-      </nav>
-      <dl class="detail__rows">
-        <div class="detail__row">
-          <dt>Coverage</dt>
-          <dd>{moneyAtGlance.coverageLabel}</dd>
-        </div>
-        <div class="detail__row">
-          <dt>Source</dt>
-          <dd>{moneyAtGlance.sourceLabel}</dd>
-        </div>
-        <div class="detail__row">
-          <dt>Outside spending</dt>
-          <dd><a class="detail__cta-link" href="#person-outside-spending">Outside spending details</a></dd>
-        </div>
-      </dl>
-      <dl class="detail__metrics-grid">
-        {#each moneyAtGlance.metricRows as row (row.label)}
-          <div class="detail__metric">
-            <dt class="detail__metric-label">{row.label}</dt>
-            <dd class="detail__metric-value">{row.value}</dd>
-          </div>
-        {/each}
-      </dl>
-      <ReceiptCompositionChart
-        testId={moneyAtGlance.receiptComposition.testId}
-        cycle={moneyAtGlance.receiptComposition.cycle}
-        coverageThrough={moneyAtGlance.receiptComposition.coverageThrough}
-        sources={moneyAtGlance.receiptComposition.sources}
-        rows={moneyAtGlance.receiptComposition.rows}
-        totalReceipts={moneyAtGlance.receiptComposition.totalReceipts}
-        canPlot={moneyAtGlance.receiptComposition.canPlot}
-        caveat={moneyAtGlance.receiptComposition.caveat}
-      />
+      {@render moneyAtGlanceCycleNav(moneyAtGlance)}
+      {@render moneyAtGlanceSummaryRows(moneyAtGlance)}
+      {@render moneyAtGlanceMetricRows(moneyAtGlance, "grid")}
+      {@render moneyAtGlanceReceiptComposition(moneyAtGlance, moneyAtGlance.receiptComposition.testId)}
     </section>
   {:catch}
     <p>Selected-cycle money summary is temporarily unavailable.</p>
@@ -482,15 +533,22 @@
       {#if data.entityType === "person" && personFinanceSections !== null}
         <section class="detail__panel">
           <h3>Campaign finance</h3>
+          {#if personMoneyHeadline !== null}
+            {@render moneyHeadline(personMoneyHeadline)}
+          {/if}
           {#await personFinanceSections}
             {@render fundraisingDetail()}
             <SkeletonPanel label="Finance data loading" lines={8} />
           {:then personFinanceSections}
             {#if personFinanceSections.length === 0}
               {@render fundraisingDetail()}
-              <p>No campaign-finance candidacies are linked yet.</p>
+              {#if personMoneyHeadline === null}
+                <p>No campaign-finance candidacies are linked yet.</p>
+              {/if}
             {:else}
-              {@render moneyAtGlance(personFinanceSections)}
+              {#if personMoneyHeadline === null}
+                {@render moneyAtGlance(personFinanceSections)}
+              {/if}
               {@render fundraisingDetail()}
 
               {#each personFinanceSections as section (section.candidate.id)}

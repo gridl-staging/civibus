@@ -138,6 +138,12 @@ const ITEMIZED_TOTALS_CAVEAT =
   "Only itemized individual contributions are included; unitemized totals are unavailable for this view.";
 const MIXED_TOTALS_CAVEAT =
   "Totals combine itemized transactions with available committee-summary data; unitemized coverage may be incomplete.";
+export const PERSON_NO_LINKED_CANDIDACY_MESSAGE =
+  "No campaign-finance candidacies are linked yet.";
+export const PERSON_MISSING_SUMMARY_MESSAGE =
+  "Selected-cycle money summary is not available yet.";
+export const PERSON_TEMPORARILY_UNAVAILABLE_MESSAGE =
+  "Selected-cycle money summary is temporarily unavailable.";
 const APPROXIMATE_DISTRICT_GEOGRAPHY_NOTE =
   "District geography uses a Census 119th-Congress / 2020-ZCTA approximation.";
 const STATE_GEOGRAPHY_NOTE = "Contributor geography by state.";

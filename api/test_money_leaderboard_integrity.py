@@ -15,7 +15,6 @@ import pytest
 import api.queries.campaign_finance as campaign_finance_queries
 from api.queries.civics import fetch_current_federal_members
 from api.routes.public_federal import (
-    _candidate_matches_current_member,
     _select_public_money_candidate,
     _selected_public_money_candidates_by_person,
 )
@@ -95,6 +94,11 @@ def _load_openfec_known_totals_fixture() -> dict[str, Any]:
         assert row["source_url"].startswith(f"https://api.open.fec.gov/v1/candidate/{row['fec_candidate_id']}/totals/")
         assert "api_key" not in row["source_url"].lower()
     return data
+
+
+def _known_total_row(fec_candidate_id: str) -> dict[str, Any]:
+    rows = _load_openfec_known_totals_fixture()["candidates"]
+    return next(row for row in rows if row["fec_candidate_id"] == fec_candidate_id)
 
 
 def _known_total_candidate_id(index: int) -> UUID:
@@ -666,63 +670,199 @@ def test_d_exclusion_preserves_legitimate_fallback_committees(db_conn: psycopg.C
         assert summaries[candidate_id]["summary_source"] == committee_case.expected_summary_source
 
 
-def test_wrong_candidate_selection_flagged(db_conn: psycopg.Connection) -> None:
-    selected_candidate_id = UUID("73000000-0000-0000-0000-000000000001")
-    member = {"chamber": "House", "state": "NC", "district": "01"}
-    nonmatching_candidates = [
-        {
-            "id": selected_candidate_id,
-            "name": "WRONG OFFICE CANDIDATE",
-            "office": "S",
-            "state": "NC",
-            "district": None,
-        },
-        {
-            "id": UUID("73000000-0000-0000-0000-000000000002"),
-            "name": "WRONG STATE CANDIDATE",
-            "office": "H",
-            "state": "VA",
-            "district": "01",
-        },
-        {
-            "id": UUID("73000000-0000-0000-0000-000000000003"),
-            "name": "WRONG DISTRICT CANDIDATE",
-            "office": "H",
-            "state": "NC",
-            "district": "02",
-        },
-    ]
-    mismatched_candidate_ids = [candidate["id"] for candidate in nonmatching_candidates]
-
-    assert all(not _candidate_matches_current_member(candidate, member) for candidate in nonmatching_candidates)
-    selected_candidate = _select_public_money_candidate(nonmatching_candidates, member)
-    assert mismatched_candidate_ids == [
-        UUID("73000000-0000-0000-0000-000000000001"),
-        UUID("73000000-0000-0000-0000-000000000002"),
-        UUID("73000000-0000-0000-0000-000000000003"),
-    ]
-    assert selected_candidate["id"] == selected_candidate_id
-
+def test_relink_policy_selects_authoritative_current_cycle_candidate(
+    db_conn: psycopg.Connection,
+) -> None:
+    member = next(
+        row for row in _seed_current_federal_members_mix(db_conn) if row.person_name == "Alice Representative"
+    )
+    stale_candidate_id = UUID("73000000-0000-0000-0000-000000000001")
+    current_candidate_id = UUID("73000000-0000-0000-0000-000000000002")
+    current_committee_id = UUID("73000000-0000-0000-0000-000000000003")
+    official = _known_total_row("H2NY04244")
     insert_candidate_row(
         db_conn,
         CandidateRowSeed(
-            id=selected_candidate_id,
-            fec_candidate_id="S0ZZ00005",
-            name=str(selected_candidate["name"]),
-            office="S",
+            id=stale_candidate_id,
+            fec_candidate_id="H4NY04158",
+            name="A STALE LINK",
+            office="H",
+            person_id=member.person_id,
             state="NC",
-            total_receipts=Decimal("123456.78"),
-            total_disbursements=Decimal("23456.78"),
-            summary_coverage_end_date=date(2026, 3, 31),
+            district="01",
+            total_receipts=Decimal("0.00"),
+            summary_coverage_end_date=date(2024, 12, 31),
         ),
     )
-    summary = campaign_finance_queries.fetch_candidate_public_money_summaries(
+    insert_candidate_row(
         db_conn,
-        [(selected_candidate_id, str(selected_candidate["name"]))],
-    )[selected_candidate_id]
+        CandidateRowSeed(
+            id=current_candidate_id,
+            fec_candidate_id=official["fec_candidate_id"],
+            name=official["name"],
+            office="H",
+            person_id=member.person_id,
+            state="NC",
+            district="01",
+            total_receipts=Decimal(official["receipts"]),
+            summary_coverage_end_date=date(2026, 6, 30),
+        ),
+    )
+    insert_committee_row(
+        db_conn,
+        CommitteeRowSeed(
+            id=current_committee_id,
+            fec_committee_id="C73000001",
+            name="CURRENT CYCLE COMMITTEE",
+        ),
+    )
+    insert_candidate_committee_link_row(
+        db_conn,
+        CandidateCommitteeLinkSeed(
+            id=UUID("73000000-0000-0000-0000-000000000004"),
+            candidate_id=current_candidate_id,
+            committee_id=current_committee_id,
+            valid_period="[2025-01-01,2027-01-01)",
+            designation="P",
+            candidate_election_year=2026,
+            fec_election_year=2026,
+        ),
+    )
 
-    assert summary["total_raised"] == Decimal("123456.78")
-    assert summary["summary_source"] == "fec_weball"
+    candidates = campaign_finance_queries.fetch_candidates_for_people(
+        db_conn,
+        [member.person_id],
+        selected_cycle=2026,
+    )[member.person_id]
+    selected = _select_public_money_candidate(
+        candidates,
+        {
+            "chamber": member.chamber,
+            "state": member.state,
+            "district": member.district,
+        },
+    )
+
+    assert selected is not None
+    assert selected["id"] == current_candidate_id
+    assert selected["has_selected_cycle_link"] is True
+    assert Decimal("0.00") != Decimal(official["receipts"])
+    assert official["source_url"].endswith("/H2NY04244/totals/?cycle=2026")
+
+
+def test_relink_policy_preserves_source_linked_prior_district_candidate() -> None:
+    official = _known_total_row("H0CA03078")
+    member = {"chamber": "House", "state": "CA", "district": "06"}
+    candidates = [
+        {
+            "id": UUID("73000000-0000-0000-0000-000000000011"),
+            "name": "OLD EXACT DISTRICT",
+            "office": "H",
+            "state": "CA",
+            "district": "06",
+            "has_selected_cycle_link": False,
+        },
+        {
+            "id": UUID("73000000-0000-0000-0000-000000000012"),
+            "name": official["name"],
+            "office": "H",
+            "state": "CA",
+            "district": "03",
+            "has_selected_cycle_link": True,
+        },
+    ]
+
+    selected = _select_public_money_candidate(candidates, member)
+
+    assert selected is not None
+    assert selected["id"] == UUID("73000000-0000-0000-0000-000000000012")
+    assert Decimal(official["receipts"]) == Decimal("1038702.34")
+    assert official["source_url"].endswith("/H0CA03078/totals/?cycle=2026")
+
+
+def test_relink_policy_rejects_prior_office_fallback() -> None:
+    official = _known_total_row("S2OH00436")
+    member = {"chamber": "Executive", "state": None, "district": None}
+    candidates = [
+        {
+            "id": UUID("73000000-0000-0000-0000-000000000021"),
+            "name": official["name"],
+            "office": "S",
+            "state": "OH",
+            "district": None,
+            "has_selected_cycle_link": False,
+        }
+    ]
+
+    selected = _select_public_money_candidate(candidates, member)
+
+    assert selected is None
+    assert Decimal(official["receipts"]) == Decimal("194273.77")
+    assert Decimal("0") != Decimal(official["receipts"])
+
+
+def test_relink_policy_surfaces_documented_no_candidate_absence() -> None:
+    member = {"chamber": "Senate", "state": "OK", "district": None}
+
+    assert _select_public_money_candidate([], member) is None
+    assert Decimal("0") == Decimal("0.00")
+
+
+def test_relink_policy_preserves_source_backed_zero_fallback() -> None:
+    official = _known_total_row("S6WY00068")
+    member = {"chamber": "Senate", "state": "WY", "district": None}
+    candidate = {
+        "id": UUID("73000000-0000-0000-0000-000000000031"),
+        "name": official["name"],
+        "office": "S",
+        "state": "WY",
+        "district": None,
+        "has_selected_cycle_link": False,
+    }
+
+    selected = _select_public_money_candidate([candidate], member)
+
+    assert selected == candidate
+    assert Decimal(official["receipts"]) == Decimal("0.00")
+    assert official["source_url"].endswith("/S6WY00068/totals/?cycle=2026")
+
+
+def test_relink_policy_preserves_cycle_window_and_fallback_exclusions() -> None:
+    selected_cycle = campaign_finance_queries.resolve_selected_cycle(2026)
+    official_row = {
+        "total_receipts": Decimal("1.00"),
+        "total_disbursements": Decimal("0.00"),
+        "cash_on_hand": Decimal("1.00"),
+        "summary_coverage_end_date": selected_cycle.coverage_start_date,
+    }
+    assert campaign_finance_queries._official_candidate_totals_cover_selected_cycle(
+        official_row,
+        selected_cycle,
+    )
+    official_row["summary_coverage_end_date"] = date(2026, 7, 23)
+    assert campaign_finance_queries._official_candidate_totals_cover_selected_cycle(
+        official_row,
+        selected_cycle,
+    )
+    official_row["summary_coverage_end_date"] = selected_cycle.coverage_end_date
+    assert campaign_finance_queries._official_candidate_totals_cover_selected_cycle(
+        official_row,
+        selected_cycle,
+    )
+    official_row["summary_coverage_end_date"] = date(2024, 12, 31)
+    assert not campaign_finance_queries._official_candidate_totals_cover_selected_cycle(
+        official_row,
+        selected_cycle,
+    )
+
+    fallback_filter = campaign_finance_queries._AUTHORIZED_CANDIDATE_COMMITTEE_FILTER
+    assert [value in fallback_filter for value in ("'X'", "'Y'", "'Z'", "'J'", "'D'")] == [
+        True,
+        True,
+        True,
+        True,
+        True,
+    ]
 
 
 def test_populated_db_top_chamber_totals_match_openfec_golden(db_conn: psycopg.Connection) -> None:

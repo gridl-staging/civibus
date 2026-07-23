@@ -15,7 +15,15 @@ import {
   SMOKE_PERSON_DONORS_AND_VENDORS_HEADING,
   SMOKE_PERSON_FUNDRAISING_DETAIL_HEADING,
   SMOKE_PERSON_LINKED_COMMITTEES_HEADING,
+  SMOKE_PERSON_MONEY_AT_GLANCE_HEADING,
+  SMOKE_PERSON_MONEY_CASH_ON_HAND,
+  SMOKE_PERSON_MONEY_COVERAGE,
+  SMOKE_PERSON_MONEY_DEBTS_OWED,
+  SMOKE_PERSON_MONEY_DISBURSEMENTS,
+  SMOKE_PERSON_MONEY_RECEIPTS,
+  SMOKE_PERSON_MONEY_SOURCE_LABEL,
   SMOKE_PERSON_OUTSIDE_SPENDING_HEADING,
+  SMOKE_PERSON_SELECTED_CYCLE,
   SMOKE_PERSON_DISTRICT_SHARE_HEADLINE,
   SMOKE_PERSON_DISTRICT_SHARE_SUMMARY,
   SMOKE_PERSON_SMALL_DOLLAR_HEADLINE,
@@ -97,7 +105,8 @@ import {
   assertBreadcrumbJsonLd,
   assertBreadcrumbNav,
   assertSeoHead,
-  assertSourceRecordLink
+  assertSourceRecordLink,
+  expectNoBackendFailureStates
 } from "./smoke-helpers";
 
 const MIN_FINANCE_CHART_HEIGHT_PX = 250;
@@ -111,6 +120,16 @@ async function expectFinanceChartHasStableHeight(page: any, chartName: string | 
   await expect(chartRegion).toBeVisible();
   const chartBox = await chartRegion.boundingBox();
   expect(chartBox?.height ?? 0).toBeGreaterThanOrEqual(MIN_FINANCE_CHART_HEIGHT_PX);
+}
+
+function stripScriptBlocks(markup: string): string {
+  return markup.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, "");
+}
+
+function expectMarkupIncludes(markup: string, values: readonly string[]): void {
+  for (const value of values) {
+    expect(markup).toContain(value);
+  }
 }
 
 async function seedLivePersonSmokeIfNeeded(): Promise<() => Promise<void>> {
@@ -129,7 +148,24 @@ test.describe("entity and civic detail smoke", () => {
   test.skip(SMOKE_USE_LIVE_API, "fixture-only — live coverage in entity/civic live-mode block");
 
   test("/person/[id] renders SSR detail presentation", async ({ page }: { page: any }) => {
-    await page.goto(`/person/${SMOKE_PERSON_ID}`);
+    const response = await page.goto(`/person/${SMOKE_PERSON_ID}`);
+    expect(response).not.toBeNull();
+    const serverMarkup = stripScriptBlocks(await response!.text());
+    expectMarkupIncludes(serverMarkup, [
+      SMOKE_PERSON_CANONICAL_NAME,
+      SMOKE_PERSON_MONEY_AT_GLANCE_HEADING,
+      `${SMOKE_PERSON_SELECTED_CYCLE} cycle`,
+      SMOKE_PERSON_MONEY_COVERAGE,
+      SMOKE_PERSON_MONEY_SOURCE_LABEL,
+      "Total receipts",
+      SMOKE_PERSON_MONEY_RECEIPTS,
+      "Total disbursements",
+      SMOKE_PERSON_MONEY_DISBURSEMENTS,
+      "Cash on hand",
+      SMOKE_PERSON_MONEY_CASH_ON_HAND,
+      "Debts owed by the committee",
+      SMOKE_PERSON_MONEY_DEBTS_OWED
+    ]);
 
     await expect(page).toHaveTitle(SMOKE_PERSON_TITLE);
     await expect(page.locator('meta[name="description"]')).toHaveAttribute(
@@ -156,6 +192,18 @@ test.describe("entity and civic detail smoke", () => {
     await assertBreadcrumbJsonLd(page);
     await expect(page.getByRole("heading", { name: "Key metrics" })).toBeVisible();
     await expect(page.getByRole("heading", { name: SMOKE_PERSON_CAMPAIGN_FINANCE_HEADING }).first()).toBeVisible();
+    await expect(page.getByRole("heading", { name: SMOKE_PERSON_MONEY_AT_GLANCE_HEADING })).toBeVisible();
+    await expect(page.getByText(`${SMOKE_PERSON_SELECTED_CYCLE} cycle`, { exact: true }).first()).toBeVisible();
+    await expect(page.getByText(SMOKE_PERSON_MONEY_COVERAGE, { exact: true }).first()).toBeVisible();
+    await expect(page.getByText(SMOKE_PERSON_MONEY_SOURCE_LABEL, { exact: true }).first()).toBeVisible();
+    await expect(page.getByText("Total receipts", { exact: true }).first()).toBeVisible();
+    await expect(page.getByText(SMOKE_PERSON_MONEY_RECEIPTS, { exact: true }).first()).toBeVisible();
+    await expect(page.getByText("Total disbursements", { exact: true }).first()).toBeVisible();
+    await expect(page.getByText(SMOKE_PERSON_MONEY_DISBURSEMENTS, { exact: true }).first()).toBeVisible();
+    await expect(page.getByText("Cash on hand", { exact: true }).first()).toBeVisible();
+    await expect(page.getByText(SMOKE_PERSON_MONEY_CASH_ON_HAND, { exact: true }).first()).toBeVisible();
+    await expect(page.getByText("Debts owed by the committee", { exact: true }).first()).toBeVisible();
+    await expect(page.getByText(SMOKE_PERSON_MONEY_DEBTS_OWED, { exact: true }).first()).toBeVisible();
     await expectFinanceChartHasStableHeight(page, "Receipt source composition by dollars");
     await expect(page.getByRole("heading", { name: SMOKE_PERSON_FUNDRAISING_DETAIL_HEADING })).toBeVisible();
     await expect(page.getByText(SMOKE_PERSON_SMALL_DOLLAR_HEADLINE, { exact: true })).toBeVisible();
@@ -213,6 +261,7 @@ test.describe("entity and civic detail smoke", () => {
     await expect(page.getByRole("group", { name: "Entity internals" })).toHaveCount(0);
     await expect(page.getByTestId(SMOKE_ENTITY_PORTRAIT_IMAGE_TEST_ID)).toBeVisible();
     await expect(page.getByTestId(SMOKE_ENTITY_PORTRAIT_SILHOUETTE_TEST_ID)).toHaveCount(0);
+    await expectNoBackendFailureStates(page);
   });
 
   test("/person/[id] with portrait null renders shared fallback avatar", async ({ page }: { page: any }) => {

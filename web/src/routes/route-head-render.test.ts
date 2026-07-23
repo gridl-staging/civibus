@@ -710,7 +710,19 @@ describe("route head rendering", () => {
   it("renders person detail with shared canonical/OG/Twitter tags and one detail JSON-LD block", () => {
     currentPageUrl = new URL(`https://preview.internal:5173/person/${PERSON_ID}?tab=graph`);
     const rendered = render(PersonPage, {
-      props: buildEntityPageData("person", PERSON_ID, PERSON_DETAIL)
+      props: {
+        data: {
+          ...buildEntityPageData("person", PERSON_ID, PERSON_DETAIL).data,
+          personMoneyHeadline: {
+            kind: "no_linked_candidate",
+            message: "No campaign-finance candidacies are linked yet."
+          },
+          personFinanceSections: Promise.resolve([]),
+          personContributionInsights: Promise.resolve(EMPTY_PERSON_CONTRIBUTION_INSIGHTS),
+          personTopDonors: Promise.resolve([]),
+          personTopEmployers: Promise.resolve([])
+        }
+      }
     });
     expectDefaultShareHead(rendered.head, {
       canonicalPath: `/person/${PERSON_ID}`,
@@ -720,8 +732,12 @@ describe("route head rendering", () => {
     expect(rendered.head).toContain('"@type":"Person"');
     expect(rendered.head).toContain('"@type":"BreadcrumbList"');
     expect(rendered.head).toContain('"name":"Jane Doe"');
+    expect(rendered.body).toContain("Jane Doe");
+    expect(rendered.body).toContain("No campaign-finance candidacies are linked yet.");
+    expect(rendered.head).not.toContain('<meta name="robots" content="noindex"');
     expect((rendered.head.match(/<link rel="canonical"/g) ?? []).length).toBe(1);
     expect((rendered.head.match(/<meta name="twitter:card"/g) ?? []).length).toBe(1);
+    expect((rendered.head.match(/<meta name="robots" content="noindex"/g) ?? []).length).toBe(0);
     expect((rendered.head.match(/<script type="application\/ld\+json">/g) ?? []).length).toBe(1);
   });
 
@@ -753,6 +769,10 @@ describe("route head rendering", () => {
                 pull_date: "2026-03-19T00:00:00Z"
               }
             ]
+          },
+          personMoneyHeadline: {
+            kind: "no_linked_candidate",
+            message: "No campaign-finance candidacies are linked yet."
           },
           personFinanceSections: Promise.resolve([]),
           personContributionInsights: Promise.resolve(EMPTY_PERSON_CONTRIBUTION_INSIGHTS),
@@ -790,6 +810,10 @@ describe("route head rendering", () => {
         data: {
           entityType: "person",
           detail: PERSON_DETAIL,
+          personMoneyHeadline: {
+            kind: "no_linked_candidate",
+            message: "No campaign-finance candidacies are linked yet."
+          },
           personFinanceSections: Promise.resolve([]),
           personContributionInsights: Promise.resolve(EMPTY_PERSON_CONTRIBUTION_INSIGHTS),
           personTopDonors: Promise.resolve([]),

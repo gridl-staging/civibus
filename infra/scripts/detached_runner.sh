@@ -235,6 +235,33 @@ shell_quote_command() {
   printf '%s\n' "${quoted% }"
 }
 
+launch_python_session_wrapper() {
+  local directory="$1"
+  shift
+  python3 - "${BASH_SOURCE[0]}" "${directory}" "$@" <<'PY'
+import os
+import subprocess
+import sys
+
+script_path = sys.argv[1]
+job_directory = sys.argv[2]
+command = sys.argv[3:]
+devnull = os.open(os.devnull, os.O_RDWR)
+try:
+    process = subprocess.Popen(
+        ["bash", script_path, "__run_wrapper", job_directory, "--", *command],
+        stdin=devnull,
+        stdout=devnull,
+        stderr=devnull,
+        start_new_session=True,
+        close_fds=True,
+    )
+finally:
+    os.close(devnull)
+print(process.pid)
+PY
+}
+
 emit_status_json() {
   local job_name="$1"
   local directory="$2"
@@ -301,8 +328,33 @@ run_wrapper() {
   export DETACHED_RUNNER_PROGRESS_FILE="${progress_path}"
 
   set +e
+  local child_pid="" child_status="" receipt_written=false
+
+  write_exit_receipt_once() {
+    local status="$1"
+    if [[ "${receipt_written}" == "false" ]]; then
+      atomic_write "${directory}/exit_code" "${status}"
+      receipt_written=true
+    fi
+  }
+
+  forward_signal() {
+    local signal_name="$1"
+    local signal_status="$2"
+    if [[ -n "${child_pid}" ]]; then
+      kill "-${signal_name}" "${child_pid}" 2>/dev/null || true
+      wait "${child_pid}" 2>/dev/null || true
+    fi
+    write_exit_receipt_once "${signal_status}"
+    exit "${signal_status}"
+  }
+
+  trap 'forward_signal INT 130' INT
+  trap 'forward_signal QUIT 131' QUIT
+  trap 'forward_signal TERM 143' TERM
+
   "$@" >> "${log_path}" 2>&1 &
-  local child_pid=$!
+  child_pid=$!
   atomic_write "${directory}/child_pid" "${child_pid}"
   local child_identity
   child_identity="$(stable_process_identity "${child_pid}")"
@@ -310,17 +362,9 @@ run_wrapper() {
     atomic_write "${directory}/child_process_identity" "${child_identity}"
   fi
 
-  forward_term() {
-    kill -TERM "${child_pid}" 2>/dev/null || true
-    wait "${child_pid}" 2>/dev/null
-    atomic_write "${directory}/exit_code" "143"
-    exit 143
-  }
-  trap forward_term TERM
-
   wait "${child_pid}"
-  local child_status=$?
-  atomic_write "${directory}/exit_code" "${child_status}"
+  child_status=$?
+  write_exit_receipt_once "${child_status}"
   exit "${child_status}"
 }
 
@@ -350,13 +394,19 @@ run_start() {
   atomic_write "${directory}/cmd" "${display_command}"
   atomic_write "${directory}/started_at" "${started_at}"
 
-  # Darwin dev hosts usually lack setsid; nohup is the portable baseline.
-  if command -v setsid >/dev/null 2>&1; then
+  # Darwin dev hosts usually lack setsid; Python supplies the same session
+  # detachment semantics without depending on non-portable shell utilities.
+  if [[ "${DETACHED_RUNNER_FORCE_PYTHON_SESSION:-}" == "1" ]]; then
+    wrapper_pid="$(launch_python_session_wrapper "${directory}" "$@")"
+  elif command -v setsid >/dev/null 2>&1; then
     setsid bash "${BASH_SOURCE[0]}" __run_wrapper "${directory}" -- "$@" </dev/null >/dev/null 2>&1 &
+    wrapper_pid=$!
+  elif command -v python3 >/dev/null 2>&1; then
+    wrapper_pid="$(launch_python_session_wrapper "${directory}" "$@")"
   else
     nohup bash "${BASH_SOURCE[0]}" __run_wrapper "${directory}" -- "$@" </dev/null >/dev/null 2>&1 &
+    wrapper_pid=$!
   fi
-  wrapper_pid=$!
   atomic_write "${directory}/pid" "${wrapper_pid}"
 
   process_identity="$(stable_process_identity "${wrapper_pid}")"

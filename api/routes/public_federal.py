@@ -113,7 +113,12 @@ def list_federal_officials(
     ]
 
 
-def _no_fec_money_summary(person_id: UUID, person_name: str) -> PublicMemberMoneySummary:
+def _no_fec_money_summary(
+    person_id: UUID,
+    person_name: str,
+    sources: list[dict[str, Any]] | None = None,
+) -> PublicMemberMoneySummary:
+    """Return an honest, source-linked absence instead of invented FEC money."""
     return PublicMemberMoneySummary(
         person_id=person_id,
         person_name=person_name,
@@ -128,7 +133,7 @@ def _no_fec_money_summary(person_id: UUID, person_name: str) -> PublicMemberMone
         ie_oppose_total=_ZERO_MONEY,
         ie_support_count=0,
         ie_oppose_count=0,
-        sources=[],
+        sources=sources or [],
     )
 
 
@@ -211,9 +216,37 @@ def _select_current_member_candidate(candidates: list[dict[str, Any]], member: d
     return next((candidate for candidate in candidates if _candidate_matches_current_member(candidate, member)), None)
 
 
-def _select_public_money_candidate(candidates: list[dict[str, Any]], member: dict[str, Any]) -> dict[str, Any]:
-    """Prefer current-office rows; fall back to linked FEC rows rather than a false no-money response."""
-    return _select_current_member_candidate(candidates, member) or candidates[0]
+def _candidate_matches_current_office_and_state(
+    candidate: dict[str, Any],
+    member: dict[str, Any],
+) -> bool:
+    expected_office = _CANDIDATE_OFFICE_BY_CHAMBER.get(member["chamber"])
+    if expected_office is None or candidate["office"] != expected_office:
+        return False
+    member_state = _normalized_code(member["state"])
+    return member_state is None or _normalized_code(candidate["state"]) == member_state
+
+
+def _select_public_money_candidate(
+    candidates: list[dict[str, Any]],
+    member: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Rank current-cycle office matches, allowing sourced House map changes."""
+    current_cycle_candidates = [
+        candidate for candidate in candidates if candidate.get("has_selected_cycle_link") is True
+    ]
+    exact_current_cycle = _select_current_member_candidate(current_cycle_candidates, member)
+    if exact_current_cycle is not None:
+        return exact_current_cycle
+    prior_map_current_cycle = next(
+        (
+            candidate
+            for candidate in current_cycle_candidates
+            if _candidate_matches_current_office_and_state(candidate, member)
+        ),
+        None,
+    )
+    return prior_map_current_cycle or _select_current_member_candidate(candidates, member)
 
 
 def _public_money_row_for_member(conn: psycopg.Connection, member: dict[str, Any]) -> PublicMemberMoneySummary:
@@ -232,10 +265,19 @@ def _public_money_row_for_member_candidates(
     provenance_by_person: dict[UUID, list[dict[str, Any]]] | None = None,
 ) -> PublicMemberMoneySummary:
     person_id = member["person_id"]
-    if not candidates:
-        return _no_fec_money_summary(person_id, member["person_name"])
-
     candidate = _select_public_money_candidate(candidates[:_CANDIDATE_LOOKUP_LIMIT], member)
+    if candidate is None:
+        sources = (
+            provenance_by_person.get(person_id, [])
+            if provenance_by_person is not None
+            else fetch_campaign_finance_provenance(
+                conn,
+                row_source_record_id=member.get("officeholding_source_record_id"),
+                canonical_entity_type="person",
+                canonical_entity_id=person_id,
+            )
+        )
+        return _no_fec_money_summary(person_id, member["person_name"], sources)
     return _money_summary_for_candidate(
         conn,
         member=member,
@@ -254,19 +296,29 @@ def _selected_public_money_candidates_by_person(
     for member in members:
         person_id = member["person_id"]
         candidates = candidates_by_person.get(person_id, [])
-        if candidates:
-            selected_candidates[person_id] = _select_public_money_candidate(
-                candidates[:_CANDIDATE_LOOKUP_LIMIT],
-                member,
-            )
+        selected_candidate = _select_public_money_candidate(
+            candidates[:_CANDIDATE_LOOKUP_LIMIT],
+            member,
+        )
+        if selected_candidate is not None:
+            selected_candidates[person_id] = selected_candidate
     return selected_candidates
 
 
-def _provenance_requests_for_selected_candidates(
+def _provenance_requests_for_members(
+    members: list[dict[str, Any]],
     selected_candidates_by_person: dict[UUID, dict[str, Any]],
 ) -> list[tuple[UUID, UUID | None]]:
     return [
-        (person_id, candidate.get("source_record_id")) for person_id, candidate in selected_candidates_by_person.items()
+        (
+            member["person_id"],
+            (
+                selected_candidates_by_person[member["person_id"]].get("source_record_id")
+                if member["person_id"] in selected_candidates_by_person
+                else member.get("officeholding_source_record_id")
+            ),
+        )
+        for member in members
     ]
 
 
@@ -283,7 +335,7 @@ def build_public_federal_money_rows(conn: psycopg.Connection) -> list[PublicMemb
     ie_summaries_by_candidate = fetch_candidate_ie_summaries(conn, selected_candidate_ids)
     provenance_by_person = fetch_campaign_finance_provenance_batch(
         conn,
-        provenance_requests=_provenance_requests_for_selected_candidates(selected_candidates_by_person),
+        provenance_requests=_provenance_requests_for_members(members, selected_candidates_by_person),
         canonical_entity_type="person",
     )
     return [
@@ -305,11 +357,11 @@ def _public_money_row_for_person(conn: psycopg.Connection, person_id: UUID) -> P
     for member in members:
         if member["person_id"] == person_id:
             candidates = candidates_by_person.get(person_id, [])
-            selected_candidate_ids = (
-                [_select_public_money_candidate(candidates[:_CANDIDATE_LOOKUP_LIMIT], member)["id"]]
-                if candidates
-                else []
+            selected_candidate = _select_public_money_candidate(
+                candidates[:_CANDIDATE_LOOKUP_LIMIT],
+                member,
             )
+            selected_candidate_ids = [selected_candidate["id"]] if selected_candidate is not None else []
             return _public_money_row_for_member_candidates(
                 conn,
                 member=member,

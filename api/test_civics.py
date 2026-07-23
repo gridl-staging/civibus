@@ -87,6 +87,7 @@ class _CongressMemberExpectation:
     person_id: UUID
     person_name: str
     officeholding_id: UUID
+    officeholding_source_record_id: UUID
     office_id: UUID
     office_name: str
     chamber: str
@@ -602,6 +603,7 @@ def _insert_current_congress_member(
         person_id=person.id,
         person_name=spec.person_name,
         officeholding_id=officeholding_id,
+        officeholding_source_record_id=source_record_id,
         office_id=spec.office_id,
         office_name=office_seed.office_names_by_id[spec.office_id],
         chamber=spec.chamber,
@@ -770,6 +772,7 @@ def _expected_congress_query_rows(expectations: list[_CongressMemberExpectation]
             "person_id": expected.person_id,
             "person_name": expected.person_name,
             "officeholding_id": expected.officeholding_id,
+            "officeholding_source_record_id": expected.officeholding_source_record_id,
             "office_id": expected.office_id,
             "office_name": expected.office_name,
             "chamber": expected.chamber,
@@ -787,6 +790,7 @@ def _expected_congress_http_rows(expectations: list[_CongressMemberExpectation])
     rows: list[dict[str, object]] = []
     for row in _expected_congress_query_rows(expectations):
         http_row = {key: str(value) if isinstance(value, UUID) else value for key, value in row.items()}
+        http_row.pop("officeholding_source_record_id")
         http_row["person_detail_path"] = f"/person/{http_row['person_id']}"
         rows.append(http_row)
     return rows
@@ -929,7 +933,8 @@ class TestCongressMemberMoneySummaries:
         assert row["candidate_id"] is None
         assert row["summary_source"] is None
         assert row["cash_on_hand"] is None
-        assert row["sources"] == []
+        assert [source["source_record_key"] for source in row["sources"]] == [f"officeholding-{member.person_id}"]
+        assert row["sources"][0]["record_url"] == (f"https://example.org/congress/officeholding-{member.person_id}")
         assert row["total_raised"] == "0"
         assert row["total_spent"] == "0"
         assert row["net"] == "0"

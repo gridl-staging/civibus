@@ -162,6 +162,7 @@ def _current_federal_members_ctes_sql(*, office_names_sql: str) -> str:
             oh.person_id,
             oh.office_id,
             oh.electoral_division_id,
+            oh.source_record_id AS officeholding_source_record_id,
             p.canonical_name AS person_name,
             o.name AS canonical_office_name,
             o.title AS office_title,
@@ -290,6 +291,7 @@ _CURRENT_FEDERAL_MEMBERS_SQL = f"""
         person_id,
         person_name,
         officeholding_id,
+        officeholding_source_record_id,
         office_id,
         CASE
             WHEN canonical_office_name = 'us_house'

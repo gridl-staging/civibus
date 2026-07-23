@@ -12,11 +12,12 @@ import {
 } from "$lib/campaign-finance-detail/contract";
 import {
   CONGRESS_PAGE_PATH,
-  buildElectionDateRoutePath,
-  type UpcomingElectionTimelineEntry
+  buildElectionDateRoutePath
 } from "$lib/civic-detail/contract";
-import { fetchUpcomingElectionTimeline } from "$lib/server/api/civic-detail";
+import { buildEntityRouteHref } from "$lib/entity-detail/contract";
+import { fetchCongressMembers, fetchUpcomingElectionTimeline } from "$lib/server/api/civic-detail";
 import { buildCanonicalUrl } from "$lib/seo/canonical";
+import { PERSON_ROUTE_INDEXABILITY } from "$lib/seo/person_indexability";
 import type { RequestHandler } from "@sveltejs/kit";
 
 // Keep the sitemap walker inside the backend's authoritative list max (`limit <= 200`).
@@ -78,8 +79,16 @@ function buildSitemapXml(paths: string[], eventOrigin: string, canonicalOrigin: 
 export const GET: RequestHandler = async (event) => {
   const { api } = event.locals;
   const origin = env.PUBLIC_ORIGIN || undefined;
-  // Start list and timeline fetches in parallel, then apply branch-local fallbacks.
-  const listFetch = Promise.all([
+  const congressMemberPathsPromise = PERSON_ROUTE_INDEXABILITY.isIndexable
+    ? fetchCongressMembers(api).then((members) =>
+        members.flatMap((member) => {
+          const personPath = buildEntityRouteHref("person", member.person_id);
+          return personPath === null ? [] : [personPath];
+        })
+      )
+    : Promise.resolve<string[]>([]);
+
+  const [candidateItems, committeeItems, timelineEntries, congressMemberPaths] = await Promise.all([
     collectAllItems<CandidateListItem>(
       (path) => api.requestJson<CandidateListResponse>(path),
       buildCandidateListPath
@@ -87,27 +96,22 @@ export const GET: RequestHandler = async (event) => {
     collectAllItems<CommitteeListItem>(
       (path) => api.requestJson<CommitteeListResponse>(path),
       buildCommitteeListPath
-    )
+    ),
+    fetchUpcomingElectionTimeline(api),
+    congressMemberPathsPromise
   ]);
-  const timelineFetch = fetchUpcomingElectionTimeline(api);
-
-  const [listResult, timelineResult] = await Promise.allSettled([listFetch, timelineFetch]);
-
-  const [candidatePaths, committeePaths] =
-    listResult.status === "fulfilled"
-      ? [
-          listResult.value[0].map((item) => buildCandidateHref(item)),
-          listResult.value[1].map((item) => buildCommitteeHref(item))
-        ]
-      : [[], []];
-
-  const electionPaths: string[] =
-    timelineResult.status === "fulfilled"
-      ? timelineResult.value.map((entry) => buildElectionDateRoutePath(entry.date))
-      : [];
+  const candidatePaths = candidateItems.map((item) => buildCandidateHref(item));
+  const committeePaths = committeeItems.map((item) => buildCommitteeHref(item));
+  const electionPaths: string[] = timelineEntries.map((entry) => buildElectionDateRoutePath(entry.date));
 
   // Convert all paths to absolute canonical URLs.
-  const allPaths = [...STATIC_PATHS, ...candidatePaths, ...committeePaths, ...electionPaths];
+  const allPaths = [
+    ...STATIC_PATHS,
+    ...candidatePaths,
+    ...committeePaths,
+    ...electionPaths,
+    ...congressMemberPaths
+  ];
   const xml = buildSitemapXml(allPaths, event.url.origin, origin);
 
   return new Response(xml, {

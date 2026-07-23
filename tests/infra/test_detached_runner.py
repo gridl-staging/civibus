@@ -3,8 +3,10 @@ from __future__ import annotations
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -13,8 +15,12 @@ PROBE_SCRIPT_PATH = REPO_ROOT / "infra/scripts/probe_load_progress.sh"
 UTC_TIMESTAMP = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 
 
-def _run_runner(job_root: Path, *args: str) -> subprocess.CompletedProcess[str]:
-    env = {**os.environ, "DETACHED_RUNNER_ROOT": str(job_root)}
+def _run_runner(
+    job_root: Path,
+    *args: str,
+    extra_env: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
+    env = {**os.environ, "DETACHED_RUNNER_ROOT": str(job_root), **(extra_env or {})}
     return subprocess.run(
         ["bash", str(SCRIPT_PATH), *args],
         capture_output=True,
@@ -28,6 +34,17 @@ def _run_runner(job_root: Path, *args: str) -> subprocess.CompletedProcess[str]:
 def _json_stdout(result: subprocess.CompletedProcess[str]) -> dict:
     assert result.stdout.strip(), result.stderr
     return json.loads(result.stdout)
+
+
+def _wait_for_file(path: Path, *, timeout_seconds: float = 3.0) -> str:
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        if path.exists():
+            value = path.read_text(encoding="utf-8").strip()
+            if value:
+                return value
+        time.sleep(0.05)
+    raise AssertionError(f"timed out waiting for {path}")
 
 
 def _status(job_root: Path, job_name: str) -> dict:
@@ -165,6 +182,75 @@ def test_start_status_and_wait_report_terminal_metadata(tmp_path: Path) -> None:
     }
 
 
+def test_wrapper_writes_receipt_for_direct_normal_child_exit(tmp_path: Path) -> None:
+    job_dir = tmp_path / "jobs" / "normal_wrapper_exit"
+    job_dir.mkdir(parents=True)
+    (job_dir / "log").touch()
+    (job_dir / "progress.jsonl").touch()
+
+    result = subprocess.run(
+        [
+            "bash",
+            str(SCRIPT_PATH),
+            "__run_wrapper",
+            str(job_dir),
+            "--",
+            *_fixture_command(exit_code=0, sleep_seconds="0.1"),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=10,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert (job_dir / "exit_code").read_text(encoding="utf-8") == "0\n"
+    assert (job_dir / "child_pid").read_text(encoding="utf-8").strip()
+    assert "fixture final log" in (job_dir / "log").read_text(encoding="utf-8")
+
+
+def test_wrapper_writes_receipt_and_terminates_child_on_cleanup_signal(tmp_path: Path) -> None:
+    job_dir = tmp_path / "jobs" / "signaled_wrapper"
+    job_dir.mkdir(parents=True)
+    (job_dir / "log").touch()
+    (job_dir / "progress.jsonl").touch()
+
+    wrapper = subprocess.Popen(
+        [
+            "bash",
+            str(SCRIPT_PATH),
+            "__run_wrapper",
+            str(job_dir),
+            "--",
+            *_fixture_command(exit_code=0, sleep_seconds="5.0"),
+        ],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    child_pid = int(_wait_for_file(job_dir / "child_pid"))
+
+    try:
+        os.kill(wrapper.pid, signal.SIGTERM)
+        stderr = wrapper.communicate(timeout=10)[1]
+        assert wrapper.returncode == 143, stderr
+        assert (job_dir / "exit_code").read_text(encoding="utf-8") == "143\n"
+
+        child_status = subprocess.run(
+            ["ps", "-p", str(child_pid), "-o", "command="],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=10,
+        )
+        assert child_status.stdout.strip() == ""
+    finally:
+        if wrapper.poll() is None:
+            wrapper.terminate()
+            wrapper.wait(timeout=10)
+        subprocess.run(["kill", "-TERM", str(child_pid)], capture_output=True, check=False, timeout=10)
+
+
 def test_wait_timeout_is_distinct_and_does_not_kill_job(tmp_path: Path) -> None:
     job_root = tmp_path / "jobs"
     job_name = "timeout_job"
@@ -179,6 +265,26 @@ def test_wait_timeout_is_distinct_and_does_not_kill_job(tmp_path: Path) -> None:
     assert timeout_payload["pid"] == start_payload["pid"]
     assert timeout_payload["alive"] is True
     assert timeout_payload["exit_code"] is None
+
+    status_payload = _status(job_root, job_name)
+    assert status_payload["alive"] is True
+    assert status_payload["exit_code"] is None
+    _stop_if_running(job_root, job_name)
+
+
+def test_start_python_session_fallback_keeps_job_alive_after_launcher_exits(tmp_path: Path) -> None:
+    job_root = tmp_path / "jobs"
+    job_name = "python_session_detach"
+
+    start = _run_runner(
+        job_root,
+        "start",
+        job_name,
+        "--",
+        *_fixture_command(exit_code=0, sleep_seconds="3.0"),
+        extra_env={"DETACHED_RUNNER_FORCE_PYTHON_SESSION": "1"},
+    )
+    assert start.returncode == 0, start.stderr
 
     status_payload = _status(job_root, job_name)
     assert status_payload["alive"] is True

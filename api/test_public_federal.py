@@ -178,6 +178,7 @@ def _seed_member_with_money_and_ie(
             transaction_type="24E",
             amount=Decimal("250.00"),
             amendment_indicator="N",
+            transaction_date=date(2026, 6, 1),
             recipient_candidate_id=candidate_id,
             support_oppose="S",
         ),
@@ -191,6 +192,7 @@ def _seed_member_with_money_and_ie(
             transaction_type="24A",
             amount=Decimal("100.00"),
             amendment_indicator="N",
+            transaction_date=date(2026, 6, 1),
             recipient_candidate_id=candidate_id,
             support_oppose="O",
         ),
@@ -725,7 +727,7 @@ def test_public_member_money_selects_candidate_matching_current_office(
     assert payload["net"] == "202.00"
 
 
-def test_public_member_money_uses_linked_candidate_when_current_office_mismatch(
+def test_public_member_money_rejects_linked_candidate_for_prior_office(
     api_client: TestClient, db_conn: psycopg.Connection
 ) -> None:
     expectations = _seed_current_federal_members_mix(db_conn)
@@ -750,11 +752,11 @@ def test_public_member_money_uses_linked_candidate_when_current_office_mismatch(
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["has_fec_money"] is True
-    assert payload["candidate_id"] == str(candidate_id)
-    assert payload["total_raised"] == "444.00"
-    assert payload["total_spent"] == "40.00"
-    assert payload["net"] == "404.00"
+    assert payload["has_fec_money"] is False
+    assert payload["candidate_id"] is None
+    assert payload["total_raised"] == "0"
+    assert payload["total_spent"] == "0"
+    assert payload["net"] == "0"
 
 
 def test_public_member_money_uses_committee_summary_when_candidate_official_totals_missing(
@@ -858,7 +860,35 @@ def test_public_member_money_reports_no_fec_money_for_member_without_candidate(
     assert payload["ie_oppose_total"] == "0"
     assert payload["ie_support_count"] == 0
     assert payload["ie_oppose_count"] == 0
-    assert payload["sources"] == []
+    assert [source["source_record_key"] for source in payload["sources"]] == [f"officeholding-{member.person_id}"]
+
+
+def test_documented_no_candidate_absence_exposes_source_in_detail_and_exports(
+    api_client: TestClient,
+    db_conn: psycopg.Connection,
+) -> None:
+    expectations = _seed_current_federal_members_mix(db_conn)
+    member = _member_by_name(expectations, "Alice Representative")
+    source_url = f"https://example.org/congress/officeholding-{member.person_id}"
+
+    detail_response = api_client.get(f"/public/v1/federal/officials/{member.person_id}/money")
+    json_response = api_client.get("/public/v1/federal/export.json")
+    csv_response = api_client.get("/public/v1/federal/export.csv")
+
+    assert detail_response.status_code == 200
+    assert json_response.status_code == 200
+    assert csv_response.status_code == 200
+    detail_payload = detail_response.json()
+    json_row = _public_money_row_for_person(json_response.json(), member.person_id)
+    csv_row = _public_money_csv_row_for_person(csv_response.text, member.person_id)
+    assert detail_payload["has_fec_money"] is False
+    assert detail_payload["candidate_id"] is None
+    assert [source["source_record_key"] for source in detail_payload["sources"]] == [
+        f"officeholding-{member.person_id}"
+    ]
+    assert detail_payload["sources"][0]["record_url"] == source_url
+    assert json_row["sources"] == detail_payload["sources"]
+    assert csv_row["source_urls"] == source_url
 
 
 def test_public_member_money_returns_404_for_unknown_person(

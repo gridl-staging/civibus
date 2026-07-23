@@ -1757,10 +1757,16 @@ _CANDIDATES_FOR_PEOPLE_SQL = f"""
         c.state,
         c.district,
         {_SLUG_NAME_EXPR} AS slug,
-        FALSE AS slug_is_unique
+        FALSE AS slug_is_unique,
+        EXISTS (
+            SELECT 1
+            FROM cf.candidate_committee_link selected_cycle_link
+            WHERE selected_cycle_link.candidate_id = c.id
+              AND selected_cycle_link.valid_period && daterange(%s, %s, '[]')
+        ) AS has_selected_cycle_link
     FROM cf.candidate c
     WHERE c.person_id = ANY(%s::uuid[])
-    ORDER BY c.person_id ASC, c.name ASC, c.id ASC
+    ORDER BY c.person_id ASC, has_selected_cycle_link DESC, c.name ASC, c.id ASC
 """
 
 _COMMITTEE_LIST_SQL_TEMPLATE = f"""
@@ -3344,12 +3350,21 @@ def fetch_candidate_list(
 def fetch_candidates_for_people(
     conn: psycopg.Connection,
     person_ids: list[UUID],
+    selected_cycle: SelectedCycle | int | None = None,
 ) -> dict[UUID, list[dict[str, Any]]]:
     """Fetch candidate rows for many people in one query, grouped by person."""
     if not person_ids:
         return {}
+    cycle = _coerce_selected_cycle(selected_cycle)
     with conn.cursor(row_factory=dict_row) as cursor:
-        cursor.execute(_CANDIDATES_FOR_PEOPLE_SQL, (person_ids,))
+        cursor.execute(
+            _CANDIDATES_FOR_PEOPLE_SQL,
+            (
+                cycle.coverage_start_date,
+                cycle.coverage_end_date,
+                person_ids,
+            ),
+        )
         rows = list(cursor.fetchall())
 
     candidates_by_person: dict[UUID, list[dict[str, Any]]] = {}

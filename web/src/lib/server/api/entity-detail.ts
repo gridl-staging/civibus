@@ -10,6 +10,7 @@ import type {
   PersonTopEmployerRow,
   RankedTransactionParty
 } from "$lib/campaign-finance-detail/contract";
+import type { PersonMoneyAtGlanceSummary } from "$lib/entity-detail/person-campaign-finance-presentation";
 import type { PersonCandidateFinanceSection } from "./campaign-finance-detail";
 import type { ApiClient } from "./client";
 
@@ -24,11 +25,18 @@ export type EntityDetailBundle = {
 };
 
 export type PersonDetailPageExtensions = {
+  personMoneyHeadline: PersonMoneyHeadlineState | Promise<PersonMoneyHeadlineState>;
   personFinanceSections: Promise<PersonCandidateFinanceSection[]>;
   personContributionInsights: Promise<PersonContributionInsights>;
   personTopDonors: Promise<RankedTransactionParty[]>;
   personTopEmployers: Promise<PersonTopEmployerRow[]>;
 };
+
+export type PersonMoneyHeadlineState =
+  | { kind: "loaded"; summary: PersonMoneyAtGlanceSummary }
+  | { kind: "no_linked_candidate"; message: string }
+  | { kind: "missing_summary"; message: string; selectedCycle: number }
+  | { kind: "temporarily_unavailable"; message: string; selectedCycle: number };
 
 export type EntityDetailPageBundle = EntityDetailBundle &
   Partial<PersonDetailPageExtensions>;

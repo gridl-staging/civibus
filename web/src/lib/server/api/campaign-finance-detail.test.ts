@@ -1208,7 +1208,16 @@ describe("campaign-finance detail api", () => {
     expect(sections).toHaveLength(1);
     expect(sections[0].candidate.id).toBe(CANDIDATE_ID);
     await expect(sections[0].summary).resolves.toMatchObject({ candidate_id: CANDIDATE_ID });
-    expect(sections[0].ieSummary).toMatchObject({ candidate_id: CANDIDATE_ID });
+    expect(sections[0].ieSummary).toBeInstanceOf(Promise);
+    await expect(sections[0].ieSummary).resolves.toEqual({
+      candidate_id: CANDIDATE_ID,
+      support_total: "0.00",
+      oppose_total: "0.00",
+      support_count: 0,
+      oppose_count: 0,
+      top_spenders: [],
+      excluded_outlier_count: 0
+    });
     await expect(sections[0].ieTransactions).resolves.toEqual([]);
     await expect(sections[0].donorVendorTransactions).resolves.toMatchObject([
       { committee_id: SECOND_COMMITTEE_ID, transaction_identifier: "TX-2" },

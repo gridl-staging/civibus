@@ -53,6 +53,9 @@ from domains.campaign_finance.ingest.federal_officeholder_loader import (
     load_federal_house_officeholders,
     load_federal_senate_officeholders,
 )
+from domains.campaign_finance.ingest.fec_lookup import (
+    resolve_federal_officeholder_fec_candidate_ids,
+)
 from domains.campaign_finance.ingest.officeholder_contact import (
     insert_officeholder_source_record,
     resolve_or_create_person_by_identifier,
@@ -156,6 +159,7 @@ def _converge_spine_identity(
     *,
     person_id: UUID,
     fec_ids: list[str],
+    bioguide_id: str | None = None,
     wikidata_id: str | None = None,
     govtrack_id: str | None = None,
 ) -> int:
@@ -167,7 +171,10 @@ def _converge_spine_identity(
     at ``person_id``, no rows are touched. ``cf.candidate.updated_at`` is set by
     the existing ``trg_candidate_updated_at`` trigger so we do not set it here.
     """
-    normalized_fec_ids = [fec_id for fec_id in (fec_ids or []) if fec_id]
+    normalized_fec_ids = resolve_federal_officeholder_fec_candidate_ids(
+        bioguide_id=bioguide_id,
+        upstream_candidate_ids=fec_ids or [],
+    )
     identifier_payload: dict[str, Any] = {}
     if normalized_fec_ids:
         identifier_payload["fec_candidate_id"] = normalized_fec_ids[0]
@@ -256,8 +263,6 @@ def _converge_chamber_rows(
         if not bioguide_id:
             continue
         fec_ids = list(row.get("fec_ids") or [])
-        if not fec_ids:
-            continue
         person_id = _row_identity_lookup(
             conn,
             bioguide_id=bioguide_id,
@@ -274,6 +279,7 @@ def _converge_chamber_rows(
             conn,
             person_id=person_id,
             fec_ids=fec_ids,
+            bioguide_id=bioguide_id,
             wikidata_id=row.get("wikidata_id"),
             govtrack_id=row.get("govtrack_id"),
         )
@@ -345,6 +351,7 @@ def _load_delegate_row(
                 conn,
                 person_id=person_id,
                 fec_ids=fec_ids,
+                bioguide_id=bioguide_id,
                 wikidata_id=row.get("wikidata_id"),
                 govtrack_id=row.get("govtrack_id"),
             )
@@ -434,6 +441,7 @@ def _load_executive_row(
                 conn,
                 person_id=person_id,
                 fec_ids=fec_ids,
+                bioguide_id=bioguide_id,
                 wikidata_id=wikidata_id,
                 govtrack_id=govtrack_id,
             )

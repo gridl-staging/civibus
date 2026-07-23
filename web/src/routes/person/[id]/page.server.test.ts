@@ -120,13 +120,28 @@ function createPersonRouteApi(cycle?: number) {
         ...SELECTED_CYCLE_FIELDS,
         selected_cycle: selectedCycle,
         candidate_id: CANDIDATE_ID,
-        candidate_name: "Candidate One",
-        total_raised: "100.00",
-        total_spent: "50.00",
-        net: "50.00",
-        transaction_count: 2,
-        committees: []
-      };
+      candidate_name: "Candidate One",
+      total_raised: "100.00",
+      total_spent: "50.00",
+      net: "50.00",
+      transaction_count: 2,
+      itemized_transaction_count: 2,
+      cash_on_hand: "25.00",
+      net_self_funding: null,
+      debts_owed_by_committee: "5.00",
+      summary_source: "fec_weball",
+      receipt_source_composition: [
+        {
+          label: "Gross individual contributions",
+          total_amount: "100.00",
+          source: "fec_committee_summary"
+        }
+      ],
+      selected_cycle_coverage_complete: true,
+      can_render_share: true,
+      receipt_source_caveats: [],
+      committees: []
+    };
     }
 
     if (path === `/v1/candidates/${CANDIDATE_ID}/independent-expenditures${selectedCycleQuery}`) {
@@ -222,7 +237,7 @@ function createPersonRouteApi(cycle?: number) {
 }
 
 describe("/person/[id] +page.server load", () => {
-  it("loads canonical person detail and person-linked finance without ER, graph, or civic-history fields", async () => {
+  it("loads canonical person detail and resolves the SSR money headline before deferred finance detail", async () => {
     const { personDetail, requestJson } = createPersonRouteApi();
 
     const data = (await load(createLoadEvent(requestJson))) as EntityDetailPageBundle;
@@ -232,6 +247,17 @@ describe("/person/[id] +page.server load", () => {
     expect("matches" in data).toBe(false);
     expect("relationships" in data).toBe(false);
     expect("personCivicHistory" in data).toBe(false);
+    expect(data.personMoneyHeadline).toMatchObject({
+      kind: "loaded",
+      summary: {
+        selected_cycle: 2026,
+        total_raised: "100.00",
+        total_spent: "50.00",
+        cash_on_hand: "25.00",
+        debts_owed_by_committee: "5.00"
+      }
+    });
+    expect(data.personMoneyHeadline).not.toBeInstanceOf(Promise);
     expect(data.personContributionInsights).toBeInstanceOf(Promise);
     expect(data.personTopDonors).toBeInstanceOf(Promise);
     expect(data.personTopEmployers).toBeInstanceOf(Promise);
@@ -257,7 +283,7 @@ describe("/person/[id] +page.server load", () => {
     );
   });
 
-  it("streams person contribution insights when the person has no linked candidates", async () => {
+  it("resolves no-linked-candidacy as the SSR headline state while detail streams", async () => {
     const { requestJson } = createPersonRouteApi();
     requestJson.mockImplementation(async (path: string) => {
       if (path === `/v1/person/${PERSON_ID}`) {
@@ -326,6 +352,10 @@ describe("/person/[id] +page.server load", () => {
 
     const data = (await load(createLoadEvent(requestJson))) as EntityDetailPageBundle;
 
+    expect(data.personMoneyHeadline).toEqual({
+      kind: "no_linked_candidate",
+      message: "No campaign-finance candidacies are linked yet."
+    });
     await expect(data.personFinanceSections).resolves.toEqual([]);
     await expect(data.personContributionInsights).resolves.toMatchObject({
       has_data: false,
@@ -464,7 +494,7 @@ describe("/person/[id] +page.server load", () => {
     }
   });
 
-  it("returns bare person route data while contribution insights are still pending", async () => {
+  it("waits for the SSR headline result while keeping non-headline finance fields deferred", async () => {
     const contributionInsights = createDeferred<unknown>();
     const { requestJson } = createPersonRouteApi();
     const fallbackApi = createPersonRouteApi();
@@ -487,12 +517,7 @@ describe("/person/[id] +page.server load", () => {
         await Promise.resolve();
       }
 
-      expect(loadResolved).toBe(true);
-      const data = await loadPromise;
-      expect(data.personContributionInsights).toBeInstanceOf(Promise);
-      expect(data.personTopDonors).toBeInstanceOf(Promise);
-      expect(data.personTopEmployers).toBeInstanceOf(Promise);
-      expect(data.personFinanceSections).toBeInstanceOf(Promise);
+      expect(loadResolved).toBe(false);
     } finally {
       contributionInsights.resolve({
         person_id: PERSON_ID,
@@ -534,11 +559,19 @@ describe("/person/[id] +page.server load", () => {
           available: false
         }
       });
-      await loadPromise;
+      const data = await loadPromise;
+      expect(data.personMoneyHeadline).toMatchObject({
+        kind: "loaded",
+        summary: { selected_cycle: 2026 }
+      });
+      expect(data.personContributionInsights).toBeInstanceOf(Promise);
+      expect(data.personTopDonors).toBeInstanceOf(Promise);
+      expect(data.personTopEmployers).toBeInstanceOf(Promise);
+      expect(data.personFinanceSections).toBeInstanceOf(Promise);
     }
   });
 
-  it("keeps bare person pages renderable when contribution insights are temporarily unavailable", async () => {
+  it("keeps bare person pages renderable with a backend-failure headline state", async () => {
     const contributionInsightsFailure = new ApiResponseError(503, {
       detail: "Contribution insights unavailable."
     });
@@ -555,6 +588,11 @@ describe("/person/[id] +page.server load", () => {
 
     const data = (await load(createLoadEvent(requestJson))) as EntityDetailPageBundle;
 
+    expect(data.personMoneyHeadline).toEqual({
+      kind: "temporarily_unavailable",
+      message: "Selected-cycle money summary is temporarily unavailable.",
+      selectedCycle: 2026
+    });
     await expect(data.personContributionInsights).resolves.toMatchObject({
       has_data: false,
       metadata: { caveats: ["temporarily_unavailable"] }
@@ -565,6 +603,57 @@ describe("/person/[id] +page.server load", () => {
     expect(requestJson.mock.calls.map(([path]) => path)).toEqual([
       `/v1/person/${PERSON_ID}`,
       `/v1/person/${PERSON_ID}/contribution-insights`
+    ]);
+  });
+
+  it("keeps person pages renderable when linked-candidate lookup fails", async () => {
+    const { requestJson } = createPersonRouteApi();
+    requestJson.mockImplementation((path: string): Promise<unknown> => {
+      if (path === `/v1/candidates?person_id=${PERSON_ID}&limit=10&offset=0`) {
+        return Promise.reject(new ApiResponseError(503, { detail: "Candidates unavailable." }));
+      }
+
+      return createPersonRouteApi().requestJson(path);
+    });
+
+    const data = (await load(createLoadEvent(requestJson))) as EntityDetailPageBundle;
+
+    expect(data.personMoneyHeadline).toEqual({
+      kind: "temporarily_unavailable",
+      message: "Selected-cycle money summary is temporarily unavailable.",
+      selectedCycle: 2026
+    });
+    await expect(data.personFinanceSections).rejects.toMatchObject({
+      status: 503,
+      body: { detail: "Candidates unavailable." }
+    });
+    await expect(data.personContributionInsights).resolves.toMatchObject({
+      metadata: { selected_cycle: 2026 }
+    });
+  });
+
+  it("resolves missing-summary as distinct from no-linked-candidacy for SSR", async () => {
+    const summaryFailure = new ApiResponseError(404, { detail: "No candidate summary found." });
+    const { requestJson } = createPersonRouteApi();
+    requestJson.mockImplementation((path: string): Promise<unknown> => {
+      if (path === `/v1/candidates/${CANDIDATE_ID}/summary?cycle=2026`) {
+        return Promise.reject(summaryFailure);
+      }
+
+      return createPersonRouteApi().requestJson(path);
+    });
+
+    const data = (await load(createLoadEvent(requestJson))) as EntityDetailPageBundle;
+
+    expect(data.personMoneyHeadline).toEqual({
+      kind: "missing_summary",
+      message: "Selected-cycle money summary is not available yet.",
+      selectedCycle: 2026
+    });
+    await expect(data.personFinanceSections).resolves.toMatchObject([
+      {
+        candidate: { id: CANDIDATE_ID }
+      }
     ]);
   });
 

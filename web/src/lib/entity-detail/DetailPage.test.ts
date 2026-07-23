@@ -101,6 +101,42 @@ function asSettled<T>(value: T): Promise<T> {
   return value as unknown as Promise<T>;
 }
 
+function buildLoadedMoneyHeadline() {
+  return {
+    kind: "loaded" as const,
+    summary: {
+      ...SELECTED_CYCLE_FIELDS,
+      candidate_id: "person",
+      candidate_name: "Person aggregate",
+      total_raised: "1000.00",
+      total_spent: "600.00",
+      net: "400.00",
+      transaction_count: 3,
+      itemized_transaction_count: 3,
+      cash_on_hand: null,
+      net_self_funding: null,
+      debts_owed_by_committee: "45.00",
+      summary_source: "derived" as const,
+      receipt_source_composition: [
+        {
+          label: "Gross individual contributions",
+          total_amount: "900.00",
+          source: "fec_committee_summary" as const
+        },
+        {
+          label: "PAC/other committee contributions",
+          total_amount: "100.00",
+          source: "fec_committee_summary" as const
+        }
+      ],
+      selected_cycle_coverage_complete: true,
+      can_render_share: true,
+      receipt_source_caveats: [],
+      committees: []
+    }
+  };
+}
+
 function buildPersonFinanceSection(
   overrides: Partial<PersonCandidateFinanceSection> = {}
 ): PersonCandidateFinanceSection {
@@ -499,6 +535,94 @@ describe("entity detail page rendering", () => {
     expect(detailIndex).toBeGreaterThan(-1);
     expect(detailIndex).toBeGreaterThan(moneyAtGlanceIndex);
     expect(linkedCommitteesIndex).toBeGreaterThan(detailIndex);
+  });
+
+  it("renders finance-rich Money at a glance in non-script markup before deferred sections settle", () => {
+    const rendered = render(DetailPage, {
+      props: {
+        data: buildPersonPageBundle({
+          personMoneyHeadline: buildLoadedMoneyHeadline(),
+          personFinanceSections: new Promise(() => {}),
+          personContributionInsights: new Promise(() => {}),
+          personTopDonors: new Promise(() => {}),
+          personTopEmployers: new Promise(() => {})
+        })
+      }
+    });
+
+    expect(rendered.body).toContain("Jane Doe");
+    expect(rendered.body).toContain("Money at a glance");
+    expect(rendered.body).toContain("2026 cycle");
+    expect(rendered.body).toContain("Coverage");
+    expect(rendered.body).toContain("2025-01-01 to 2026-12-31");
+    expect(rendered.body).toContain("Source");
+    expect(rendered.body).toContain("Derived from itemized transactions");
+    expect(rendered.body).toContain("Total receipts");
+    expect(rendered.body).toContain("$1,000.00");
+    expect(rendered.body).toContain("Total disbursements");
+    expect(rendered.body).toContain("$600.00");
+    expect(rendered.body).toContain("Cash on hand");
+    expect(rendered.body).toContain("Not available");
+    expect(rendered.body).toContain("Debts owed by the committee");
+    expect(rendered.body).toContain("$45.00");
+    expect(rendered.body).toContain('href="#person-outside-spending"');
+    expect(rendered.body).toContain("Outside spending details");
+    expect(rendered.body).toContain("Finance data loading");
+    expect(rendered.body.match(/<h4>Money at a glance<\/h4>/g)).toHaveLength(1);
+  });
+
+  it("renders no-linked-candidacy headline copy without waiting for finance sections", () => {
+    const rendered = render(DetailPage, {
+      props: {
+        data: buildPersonPageBundle({
+          personMoneyHeadline: {
+            kind: "no_linked_candidate",
+            message: "No campaign-finance candidacies are linked yet."
+          },
+          personFinanceSections: new Promise(() => {})
+        })
+      }
+    });
+
+    expect(rendered.body).toContain("Jane Doe");
+    expect(rendered.body).toContain("No campaign-finance candidacies are linked yet.");
+    expect(rendered.body).toContain("Finance data loading");
+  });
+
+  it("renders missing-summary unavailable copy without fabricating zero headline values", () => {
+    const rendered = render(DetailPage, {
+      props: {
+        data: buildPersonPageBundle({
+          personMoneyHeadline: {
+            kind: "missing_summary",
+            message: "Selected-cycle money summary is not available yet.",
+            selectedCycle: 2026
+          },
+          personFinanceSections: new Promise(() => {})
+        })
+      }
+    });
+
+    expect(rendered.body).toContain("Selected-cycle money summary is not available yet.");
+    expect(rendered.body).toContain("2026 cycle");
+    expect(rendered.body).not.toContain("<dd>$0.00</dd>");
+    expect(rendered.body).not.toContain("Total receipts");
+  });
+
+  it("keeps identity and headline visible when a deferred non-headline section rejects", () => {
+    const rendered = render(DetailPage, {
+      props: {
+        data: buildPersonPageBundle({
+          personMoneyHeadline: buildLoadedMoneyHeadline(),
+          personFinanceSections: asSettled([buildPersonFinanceSection()]),
+          personContributionInsights: Promise.reject(new Error("insights unavailable"))
+        })
+      }
+    });
+
+    expect(rendered.body).toContain("Jane Doe");
+    expect(rendered.body).toContain("Money at a glance");
+    expect(rendered.body).toContain("Finance data loading");
   });
 
   it("renders selected-cycle money as page-wide content before candidate cards", () => {

@@ -368,6 +368,51 @@
       "receipts": "0.00",
       "source_url": "https://api.open.fec.gov/v1/candidate/P40007296/totals/?cycle=2026",
       "cycle": 2026
+    },
+    {
+      "fec_candidate_id": "H0CA03078",
+      "name": "BERA, AMI",
+      "office": "H",
+      "served_roster_member": false,
+      "receipts": "1038702.34",
+      "source_url": "https://api.open.fec.gov/v1/candidate/H0CA03078/totals/?cycle=2026",
+      "cycle": 2026
+    },
+    {
+      "fec_candidate_id": "H2NY04244",
+      "name": "GILLEN, LAURA",
+      "office": "H",
+      "served_roster_member": false,
+      "receipts": "4587184.65",
+      "source_url": "https://api.open.fec.gov/v1/candidate/H2NY04244/totals/?cycle=2026",
+      "cycle": 2026
+    },
+    {
+      "fec_candidate_id": "H2MD04232",
+      "name": "IVEY, GLENN",
+      "office": "H",
+      "served_roster_member": false,
+      "receipts": "629045.50",
+      "source_url": "https://api.open.fec.gov/v1/candidate/H2MD04232/totals/?cycle=2026",
+      "cycle": 2026
+    },
+    {
+      "fec_candidate_id": "H2TX00064",
+      "name": "SELF, KEITH",
+      "office": "H",
+      "served_roster_member": false,
+      "receipts": "504420.20",
+      "source_url": "https://api.open.fec.gov/v1/candidate/H2TX00064/totals/?cycle=2026",
+      "cycle": 2026
+    },
+    {
+      "fec_candidate_id": "S2OH00436",
+      "name": "VANCE, J D",
+      "office": "S",
+      "served_roster_member": false,
+      "receipts": "194273.77",
+      "source_url": "https://api.open.fec.gov/v1/candidate/S2OH00436/totals/?cycle=2026",
+      "cycle": 2026
     }
   ]
 }

@@ -46,10 +46,12 @@ export const load: PageServerLoad = ({ params, locals, url }) =>
             fallbackWhenBackendSelectedInsightsUnavailable: true
           })
         : await loadPersonMoneyBundle(locals.api, params.id, requestedCycle);
+      const personMoneyHeadline = await moneyBundle.personMoneyHeadline;
 
       return {
         ...bundle,
-        ...moneyBundle
+        ...moneyBundle,
+        personMoneyHeadline
       };
     },
     "Backend person detail request failed."

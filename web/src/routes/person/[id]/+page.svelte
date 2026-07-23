@@ -10,6 +10,7 @@
   import SeoHead from "$lib/seo/SeoHead.svelte";
   import { buildDetailRouteSeo } from "$lib/seo/head";
   import { buildBreadcrumbJsonLd, removeJsonLdContext, type JsonLdObject } from "$lib/seo/jsonld";
+  import { PERSON_ROUTE_INDEXABILITY } from "$lib/seo/person_indexability";
   import { buildCompareUrl } from "../../compare/people-query";
   import type { PageData } from "./$types";
 
@@ -26,7 +27,8 @@
     schemaType: "Person",
     name: data.detail.canonical_name,
     pageUrl: $page.url,
-    publicOrigin: env.PUBLIC_ORIGIN
+    publicOrigin: env.PUBLIC_ORIGIN,
+    robots: PERSON_ROUTE_INDEXABILITY.robots
   });
   $: breadcrumbCrumbs = [
     { label: "Home", href: "/" },

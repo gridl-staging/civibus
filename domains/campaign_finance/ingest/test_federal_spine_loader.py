@@ -33,6 +33,7 @@ from domains.campaign_finance.ingest.federal_officeholder_loader import (
     OFFICE_US_PRESIDENT,
     OFFICE_US_VICE_PRESIDENT,
 )
+from domains.campaign_finance.ingest import fec_lookup as fec_lookup_module
 from domains.campaign_finance.ingest.federal_spine_loader import (
     OFFICE_BY_EXECUTIVE_TYPE,
     SpineLoadResult,
@@ -57,10 +58,25 @@ DELEGATE_FEC = "H0AS00001"
 PREZ_BIO = "TST00P1"
 PREZ_FEC = "P00000001"
 VP_BIO = "TST00V1"
+RELINK_BIO = "G000602"
+RELINK_FEC = "H2NY04244"
+RELINK_STALE_FEC = "H4NY04158"
+ABSENCE_BIO = "A000383"
 
-ALL_BIOS = (HOUSE_BIO, SENATE_BIO, DELEGATE_BIO, PREZ_BIO, VP_BIO)
+CORE_BIOS = (HOUSE_BIO, SENATE_BIO, DELEGATE_BIO, PREZ_BIO, VP_BIO)
+ALL_BIOS = CORE_BIOS + (RELINK_BIO, ABSENCE_BIO)
 ALL_FEC_IDS = (HOUSE_FEC_A, HOUSE_FEC_B, SENATE_FEC, DELEGATE_FEC, PREZ_FEC)
-SEEDED_FEC_IDS = (HOUSE_FEC_A, HOUSE_FEC_B, SENATE_FEC, DELEGATE_FEC)
+CORE_SEEDED_FEC_IDS = (
+    HOUSE_FEC_A,
+    HOUSE_FEC_B,
+    SENATE_FEC,
+    DELEGATE_FEC,
+)
+RELINK_SEEDED_FEC_IDS = (
+    RELINK_FEC,
+    RELINK_STALE_FEC,
+)
+SEEDED_FEC_IDS = CORE_SEEDED_FEC_IDS + RELINK_SEEDED_FEC_IDS
 
 pytestmark = pytest.mark.integration
 
@@ -89,6 +105,48 @@ def _write_cn_fixture(tmp_path: Path) -> Path:
     ]
     path = tmp_path / "cn_test.txt"
     path.write_text("\n".join("|".join(row) for row in cn_rows) + "\n", encoding="latin-1")
+    return path
+
+
+def _write_relink_cn_fixture(tmp_path: Path) -> Path:
+    rows = [
+        (
+            RELINK_FEC,
+            "GILLEN, LAURA",
+            "DEM",
+            "2026",
+            "NY",
+            "H",
+            "04",
+            "I",
+            "C",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+        ),
+        (
+            RELINK_STALE_FEC,
+            "GILLEN, LAURA STALE",
+            "DEM",
+            "2024",
+            "NY",
+            "H",
+            "04",
+            "C",
+            "C",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+        ),
+    ]
+    path = tmp_path / "cn_relink_test.txt"
+    path.write_text("\n".join("|".join(row) for row in rows) + "\n", encoding="latin-1")
     return path
 
 
@@ -199,6 +257,8 @@ def _delete_test_rows(conn: psycopg.Connection) -> None:
         "delegate:" + DELEGATE_BIO,
         "president:" + PREZ_BIO,
         "vp:" + VP_BIO,
+        "house:" + RELINK_BIO,
+        "senate:" + ABSENCE_BIO,
     ]
     candidate_source_record_keys = cn_source_record_keys + spine_source_record_keys
     with conn.cursor() as cur:
@@ -625,10 +685,10 @@ def test_load_federal_spine_converges_candidate_money_onto_spine_person(
     with spine_conn.cursor() as cur:
         cur.execute(
             "SELECT fec_candidate_id, person_id FROM cf.candidate WHERE fec_candidate_id = ANY(%s)",
-            (list(SEEDED_FEC_IDS),),
+            (list(CORE_SEEDED_FEC_IDS),),
         )
         pre_rows = {row[0]: row[1] for row in cur.fetchall()}
-    assert set(pre_rows.keys()) == set(SEEDED_FEC_IDS)
+    assert set(pre_rows.keys()) == set(CORE_SEEDED_FEC_IDS)
     assert all(person_id is not None for person_id in pre_rows.values())
 
     # --- Run the spine loader ----------------------------------------------
@@ -641,7 +701,7 @@ def test_load_federal_spine_converges_candidate_money_onto_spine_person(
     assert isinstance(result, SpineLoadResult)
 
     # --- Assert: exactly one spine person per bioguide ----------------------
-    for bio in ALL_BIOS:
+    for bio in CORE_BIOS:
         person_id = find_person_by_identifier(spine_conn, "bioguide_id", bio)
         assert person_id is not None, f"missing spine person for bioguide {bio!r}"
 
@@ -722,13 +782,114 @@ def test_load_federal_spine_converges_candidate_money_onto_spine_person(
     with spine_conn.cursor() as cur:
         cur.execute(
             "SELECT fec_candidate_id, person_id FROM cf.candidate WHERE fec_candidate_id = ANY(%s)",
-            (list(SEEDED_FEC_IDS),),
+            (list(CORE_SEEDED_FEC_IDS),),
         )
         post_idempotent_rows = dict(cur.fetchall())
     assert post_idempotent_rows[HOUSE_FEC_A] == house_spine_person_id
     assert post_idempotent_rows[HOUSE_FEC_B] == house_spine_person_id
     assert post_idempotent_rows[SENATE_FEC] == senate_spine_person_id
     assert post_idempotent_rows[DELEGATE_FEC] == delegate_spine_person_id
+
+
+def test_relink_policy_refresh_reapplies_source_linked_exception(
+    spine_conn: psycopg.Connection,
+    tmp_path: Path,
+) -> None:
+    candidate_result = load_candidates(
+        spine_conn,
+        _write_relink_cn_fixture(tmp_path),
+        cycle=2024,
+        data_source_id=_ensure_candidates_data_source(spine_conn),
+    )
+    assert candidate_result.inserted == 2
+    base_house_row = _build_adapted_legislators().house_rows[0]
+    adapted = AdaptedLegislators(
+        house_rows=[
+            {
+                **base_house_row,
+                "bioguide_id": RELINK_BIO,
+                "member_name": "Laura Gillen",
+                "first_name": "Laura",
+                "last_name": "Gillen",
+                "state": "NY",
+                "district": "04",
+                "fec_ids": [RELINK_STALE_FEC, "not-a-fec-id"],
+                "wikidata_id": "",
+                "govtrack_id": "",
+            }
+        ]
+    )
+    data_source_id = ensure_federal_spine_data_source(spine_conn)
+
+    first_result = load_federal_spine(spine_conn, adapted, data_source_id=data_source_id)
+    second_result = load_federal_spine(spine_conn, adapted, data_source_id=data_source_id)
+    person_id = find_person_by_identifier(spine_conn, "bioguide_id", RELINK_BIO)
+    assert person_id is not None
+    policy = fec_lookup_module.federal_officeholder_fec_link_policy(RELINK_BIO)
+    assert policy is not None
+    assert policy.source_url == "https://www.fec.gov/data/candidate/H2NY04244/"
+    assert policy.review_condition
+    with spine_conn.cursor() as cursor:
+        cursor.execute("SELECT identifiers FROM core.person WHERE id = %s", (person_id,))
+        identifiers = cursor.fetchone()[0]
+        cursor.execute(
+            "SELECT fec_candidate_id, person_id FROM cf.candidate WHERE fec_candidate_id = ANY(%s)",
+            ([RELINK_FEC, RELINK_STALE_FEC],),
+        )
+        candidate_people = dict(cursor.fetchall())
+
+    assert first_result.converged_candidates == 2
+    assert second_result.converged_candidates == 0
+    assert identifiers["fec_candidate_id"] == RELINK_FEC
+    assert identifiers["fec_candidate_ids"] == [RELINK_FEC, RELINK_STALE_FEC]
+    assert candidate_people == {
+        RELINK_FEC: person_id,
+        RELINK_STALE_FEC: person_id,
+    }
+
+
+def test_relink_policy_refresh_preserves_legitimate_absence(
+    spine_conn: psycopg.Connection,
+) -> None:
+    base_senate_row = _build_adapted_legislators().senate_rows[0]
+    adapted = AdaptedLegislators(
+        senate_rows=[
+            {
+                **base_senate_row,
+                "bioguide_id": ABSENCE_BIO,
+                "member_full": "Alan Armstrong",
+                "first_name": "Alan",
+                "last_name": "Armstrong",
+                "state": "OK",
+                "fec_ids": [],
+                "wikidata_id": "",
+                "govtrack_id": "",
+                "appointed": "2025-01-03",
+            }
+        ]
+    )
+    data_source_id = ensure_federal_spine_data_source(spine_conn)
+
+    first_result = load_federal_spine(spine_conn, adapted, data_source_id=data_source_id)
+    second_result = load_federal_spine(spine_conn, adapted, data_source_id=data_source_id)
+    person_id = find_person_by_identifier(spine_conn, "bioguide_id", ABSENCE_BIO)
+    assert person_id is not None
+    policy = fec_lookup_module.federal_officeholder_fec_link_policy(ABSENCE_BIO)
+    assert policy is not None
+    assert policy.candidate_ids == ()
+    assert policy.source_url == ("https://www.fec.gov/data/candidates/?q=Alan+Armstrong&election_year=2026&cycle=2026")
+    assert policy.review_condition
+    with spine_conn.cursor() as cursor:
+        cursor.execute("SELECT identifiers FROM core.person WHERE id = %s", (person_id,))
+        identifiers = cursor.fetchone()[0]
+        cursor.execute("SELECT count(*) FROM cf.candidate WHERE person_id = %s", (person_id,))
+        candidate_count = cursor.fetchone()[0]
+
+    assert first_result.converged_candidates == 0
+    assert second_result.converged_candidates == 0
+    assert "fec_candidate_id" not in identifiers
+    assert "fec_candidate_ids" not in identifiers
+    assert candidate_count == 0
 
 
 def _count_test_persons(conn: psycopg.Connection) -> int:

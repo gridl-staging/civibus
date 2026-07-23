@@ -15,6 +15,7 @@ export type SeoHeadModelInput = {
   pageUrl: URL;
   publicOrigin: string | undefined;
   imagePath?: string | null;
+  robots?: string | null;
 };
 
 export type DetailRouteSeoInput = SeoHeadModelInput & {
@@ -58,6 +59,7 @@ export function buildSeoHeadModel(input: SeoHeadModelInput): SeoHeadModel {
   return {
     title: input.metadata.title,
     description: input.metadata.description,
+    ...(input.robots ? { robots: input.robots } : {}),
     canonicalUrl,
     openGraph: {
       title: input.metadata.title,

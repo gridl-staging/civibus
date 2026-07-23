@@ -141,7 +141,7 @@ export type PersonCandidateFinanceSection = {
   candidate: CandidateDetailResponse;
   summary: Promise<CandidateFundraisingSummary>;
   ieTransactions: Promise<IndependentExpenditureResponse[]>;
-  ieSummary: IndependentExpenditureSummary | null;
+  ieSummary: Promise<IndependentExpenditureSummary | null> | IndependentExpenditureSummary | null;
   donorVendorTransactions: Promise<CampaignFinanceTransactionResponse[]>;
 };
 
@@ -338,13 +338,11 @@ export async function fetchPersonCandidateFinanceSections(
         return sortMergedDonorVendorTransactions(transactionsByCommittee.flat());
       });
       guardUnhandledRejection(donorVendorTransactions);
-      const ieSummary = await candidateBundle.ieSummary;
-
       return {
         candidate: candidateBundle.detail,
         summary: candidateBundle.summary,
         ieTransactions: candidateBundle.ieTransactions,
-        ieSummary,
+        ieSummary: candidateBundle.ieSummary,
         donorVendorTransactions
       };
     })

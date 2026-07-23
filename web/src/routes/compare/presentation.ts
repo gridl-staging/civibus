@@ -132,6 +132,12 @@ function isCandidateSummary(value: CandidateFundraisingSummary | null): value is
   return value !== null;
 }
 
+function isIndependentExpenditureSummary(
+  value: IndependentExpenditureSummary | null
+): value is IndependentExpenditureSummary {
+  return value !== null;
+}
+
 function formatPercent(value: number): string {
   return `${(value * 100).toFixed(1)}%`;
 }
@@ -188,11 +194,9 @@ function prefixOutsideSpendingRows(
  */
 function buildOutsideSpendingChart(
   sections: ResolvedPersonMoneyBundle["personFinanceSections"],
+  summaryFacts: IndependentExpenditureSummary[],
   presentations: OutsideSpendingPresentation[]
 ): CompareOutsideSpendingChart | null {
-  const summaryFacts = sections.flatMap((section) =>
-    section.ieSummary === null ? [] : [section.ieSummary]
-  );
   if (summaryFacts.length === 0) {
     return null;
   }
@@ -225,6 +229,13 @@ async function resolveCandidateSummary(
   return value ?? null;
 }
 
+async function resolveIndependentExpenditureSummary(
+  summary: Promise<IndependentExpenditureSummary | null> | IndependentExpenditureSummary | null
+): Promise<IndependentExpenditureSummary | null> {
+  const value = await summary;
+  return value ?? null;
+}
+
 /**
  */
 async function resolveColumnPresentation(
@@ -244,11 +255,18 @@ async function resolveColumnPresentation(
   const outsideSpending = await Promise.all(
     bundle.personFinanceSections.map(async (section) =>
       buildPersonOutsideSpendingSection(
-        section.ieSummary,
+        await section.ieSummary,
         (await section.ieTransactions) as IndependentExpenditureResponse[]
       )
     )
   );
+  const outsideSpendingSummaryResults = await Promise.allSettled(
+    bundle.personFinanceSections.map((section) => resolveIndependentExpenditureSummary(section.ieSummary))
+  );
+  const outsideSpendingSummaries = outsideSpendingSummaryResults
+    .filter(fulfilledOutcome)
+    .map((result) => result.value)
+    .filter(isIndependentExpenditureSummary);
   const contributionInsights = buildPersonContributionInsightsPresentation(
     bundle.personContributionInsights,
     bundle.personTopDonors,
@@ -259,7 +277,11 @@ async function resolveColumnPresentation(
     summary,
     moneyAtGlance: summary === null ? null : buildPersonMoneyAtGlancePresentation(summary),
     contributionInsights,
-    outsideSpending: buildOutsideSpendingChart(bundle.personFinanceSections, outsideSpending),
+    outsideSpending: buildOutsideSpendingChart(
+      bundle.personFinanceSections,
+      outsideSpendingSummaries,
+      outsideSpending
+    ),
     outsideSupport: sumOutsideSpending(outsideSpending.map((section) => section.chartRows), "support"),
     outsideOppose: sumOutsideSpending(outsideSpending.map((section) => section.chartRows), "oppose")
   };
