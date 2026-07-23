@@ -29,8 +29,6 @@ from api.models import (
     PersonContributionInsights,
     PersonTopEmployerRow,
     RankedTransactionParty,
-    StateDetailResponse,
-    StateSummaryItem,
     TransactionListParams,
     TransactionResponse,
 )
@@ -59,8 +57,8 @@ from api.queries import (
     fetch_person_contribution_insights,
     fetch_person_top_donors,
     fetch_person_top_employers,
-    fetch_state_campaign_finance_detail,
-    fetch_state_campaign_finance_summaries,
+    fetch_state_campaign_finance_detail,  # noqa: F401 - retained for route-retirement guard tests.
+    fetch_state_campaign_finance_summaries,  # noqa: F401 - retained for route-retirement guard tests.
     fetch_transaction_list,
     resolve_selected_cycle,
 )
@@ -72,6 +70,10 @@ router = APIRouter()
 _build_transaction_list_params = build_query_params_dependency(TransactionListParams)
 _build_candidate_list_params = build_query_params_dependency(CandidateListParams)
 _build_committee_list_params = build_query_params_dependency(CommitteeListParams)
+_STATE_CAMPAIGN_FINANCE_RETIRED_DETAIL = (
+    "State campaign-finance endpoints are retired for federal-first v1; "
+    "use federal candidate, committee, and person endpoints instead."
+)
 
 
 def _selected_cycle_dependency(cycle: int | None = Query(default=None)) -> SelectedCycle:
@@ -390,27 +392,19 @@ def get_candidate_independent_expenditures_summary(
     )
 
 
-@router.get("/campaign-finance/states/summary", response_model=list[StateSummaryItem])
-def get_campaign_finance_state_summary(
-    conn: psycopg.Connection = Depends(get_db),
-) -> list[StateSummaryItem]:
-    summary_rows = fetch_state_campaign_finance_summaries(conn)
-    return [StateSummaryItem.model_validate(summary_row) for summary_row in summary_rows]
+@router.get("/campaign-finance/states/summary")
+def get_campaign_finance_state_summary() -> None:
+    raise HTTPException(status_code=410, detail=_STATE_CAMPAIGN_FINANCE_RETIRED_DETAIL)
 
 
-@router.get("/campaign-finance/states/{state_code}", response_model=StateDetailResponse)
+@router.get("/campaign-finance/states/{state_code}")
 def get_campaign_finance_state_detail(
     state_code: str = Path(pattern=r"^[A-Z]{2}$"),
-    conn: psycopg.Connection = Depends(get_db),
-) -> StateDetailResponse:
+) -> None:
     validated_state_code = validate_optional_state_code(state_code, field_name="state_code")
     if validated_state_code is None:
         raise HTTPException(status_code=404, detail="State not found")
-
-    detail = fetch_state_campaign_finance_detail(conn, validated_state_code)
-    if detail is None:
-        raise HTTPException(status_code=404, detail="State not found")
-    return StateDetailResponse.model_validate(detail)
+    raise HTTPException(status_code=410, detail=_STATE_CAMPAIGN_FINANCE_RETIRED_DETAIL)
 
 
 @router.get(

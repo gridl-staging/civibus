@@ -103,6 +103,9 @@ export const SMOKE_HOME_FORBIDDEN_CANDIDATE_ACTION = "Browse Candidates";
 export const SMOKE_HOME_FORBIDDEN_COMMITTEE_ACTION = "Browse Committees";
 export const SMOKE_STATE_DETAIL_SUPPORTED_CODE = "NC";
 export const SMOKE_STATE_DETAIL_SUPPORTED_NAME = "North Carolina";
+export const SMOKE_STATE_DETAIL_RETIRED_HEADING = "State campaign finance is outside federal-first v1";
+export const SMOKE_STATE_DETAIL_RETIRED_MESSAGE =
+  "Civibus v1 is focused on federal officials, candidates, committees, and independent expenditures.";
 export const SMOKE_STATE_DETAIL_WARNING_STATE_NAME = "Minnesota";
 export const SMOKE_STATE_DETAIL_UNSUPPORTED_CODE = "AR";
 export const SMOKE_STATE_DETAIL_WARNING_CODE = "MN";

@@ -14,6 +14,8 @@ from psycopg.rows import dict_row
 
 import api.queries as campaign_finance_queries
 import api.queries.campaign_finance as campaign_finance_query_module
+import api.routes.campaign_finance as campaign_finance_route_module
+from api.models.campaign_finance import CommitteeListParams
 from api.queries import (
     fetch_candidate_public_money_summaries,
     fetch_candidate_public_money_summary,
@@ -71,6 +73,11 @@ pytestmark = pytest.mark.integration
 
 PrincipalCommitteeFallbackShape = Literal["selected_cycle_fallback", "production_missing_self_funding_columns"]
 
+_STATE_CAMPAIGN_FINANCE_RETIRED_DETAIL = (
+    "State campaign-finance endpoints are retired for federal-first v1; "
+    "use federal candidate, committee, and person endpoints instead."
+)
+
 
 def _stage3_uuid(index: int) -> UUID:
     return UUID(f"e3000000-0000-0000-0000-{index:012d}")
@@ -95,6 +102,117 @@ def _database_current_date(db_conn: psycopg.Connection) -> date:
         current_date = cursor.fetchone()[0]
     assert isinstance(current_date, date)
     return current_date
+
+
+def test_state_campaign_finance_summary_route_is_retired_without_querying_unbounded_owner(
+    api_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_if_called(conn: psycopg.Connection) -> list[dict[str, object]]:
+        raise AssertionError("retired state summary route must not call the unbounded state summary owner")
+
+    monkeypatch.setattr(
+        campaign_finance_route_module,
+        "fetch_state_campaign_finance_summaries",
+        fail_if_called,
+    )
+
+    response = api_client.get("/v1/campaign-finance/states/summary")
+
+    assert response.status_code == 410
+    assert response.json() == {"detail": _STATE_CAMPAIGN_FINANCE_RETIRED_DETAIL}
+
+
+def test_state_campaign_finance_detail_route_is_retired_without_querying_unbounded_owner(
+    api_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_if_called(conn: psycopg.Connection, state_code: str) -> dict[str, object] | None:
+        raise AssertionError(f"retired state detail route must not call the unbounded state detail owner: {state_code}")
+
+    monkeypatch.setattr(
+        campaign_finance_route_module,
+        "fetch_state_campaign_finance_detail",
+        fail_if_called,
+    )
+
+    response = api_client.get("/v1/campaign-finance/states/NC")
+    missing_response = api_client.get("/v1/campaign-finance/states/ZZ")
+    lowercase_response = api_client.get("/v1/campaign-finance/states/nc")
+
+    assert response.status_code == 410
+    assert response.json() == {"detail": _STATE_CAMPAIGN_FINANCE_RETIRED_DETAIL}
+    assert missing_response.status_code == 410
+    assert missing_response.json() == {"detail": _STATE_CAMPAIGN_FINANCE_RETIRED_DETAIL}
+    assert lowercase_response.status_code == 422
+    assert lowercase_response.json()["detail"][0]["loc"] == ["path", "state_code"]
+
+
+def test_committee_list_preserves_global_slug_truth_and_filter_params(
+    api_client: TestClient,
+    db_conn: psycopg.Connection,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen_params: list[CommitteeListParams] = []
+    original_fetch_committee_list = campaign_finance_route_module.fetch_committee_list
+
+    def recording_fetch_committee_list(
+        conn: psycopg.Connection,
+        params: CommitteeListParams,
+    ) -> dict[str, object]:
+        seen_params.append(params)
+        return original_fetch_committee_list(conn, params)
+
+    monkeypatch.setattr(
+        campaign_finance_route_module,
+        "fetch_committee_list",
+        recording_fetch_committee_list,
+    )
+    committees = (
+        (_stage3_uuid(9101), "C99091001", "Stage Two Alpha Committee", "H", "GA"),
+        (_stage3_uuid(9102), "C99091002", "Stage Two Duplicate PAC", "H", "GA"),
+        (_stage3_uuid(9103), "C99091003", "Stage Two Unique Committee", "H", "GA"),
+        (_stage3_uuid(9104), "C99091004", "Stage Two Duplicate PAC", "P", "OH"),
+    )
+    for committee_id, fec_committee_id, name, committee_type, state in committees:
+        insert_committee_row(
+            db_conn,
+            CommitteeRowSeed(
+                id=committee_id,
+                fec_committee_id=fec_committee_id,
+                name=name,
+                committee_type=committee_type,
+                state=state,
+            ),
+        )
+
+    response = api_client.get("/v1/committees?state=GA&committee_type=H&limit=2&offset=1")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert seen_params == [CommitteeListParams(state="GA", committee_type="H", limit=2, offset=1)]
+    assert body["offset"] == 1
+    assert body["limit"] == 2
+    assert body["has_next"] is False
+    assert [
+        {
+            "name": item["name"],
+            "slug": item["slug"],
+            "slug_is_unique": item["slug_is_unique"],
+        }
+        for item in body["items"]
+    ] == [
+        {
+            "name": "Stage Two Duplicate PAC",
+            "slug": "stage-two-duplicate-pac",
+            "slug_is_unique": False,
+        },
+        {
+            "name": "Stage Two Unique Committee",
+            "slug": "stage-two-unique-committee",
+            "slug_is_unique": True,
+        },
+    ]
 
 
 def _expected_complete_2026_monthly_totals(today: date) -> list[dict[str, object]]:
@@ -2676,7 +2794,7 @@ def test_get_candidate_returns_direct_provenance(
         db_conn,
         CandidateRowSeed(
             id=candidate_id,
-            fec_candidate_id="H9NC93001",
+            fec_candidate_id="H0NC01931",
             name="Jane Candidate",
             office="H",
             person_id=person.id,
@@ -2694,7 +2812,7 @@ def test_get_candidate_returns_direct_provenance(
     assert response.status_code == 200
     payload = response.json()
     assert payload["id"] == str(candidate_id)
-    assert payload["fec_candidate_id"] == "H9NC93001"
+    assert payload["fec_candidate_id"] == "H0NC01931"
     assert payload["name"] == "Jane Candidate"
     assert payload["person_id"] == str(person.id)
     assert payload["party"] == "DEM"
@@ -5082,9 +5200,11 @@ def test_get_candidate_independent_expenditure_endpoints_return_empty_state(
 
 
 def test_get_state_summary_returns_all_states_with_ranked_totals_and_registry_flags(
-    api_client: TestClient,
     db_conn: psycopg.Connection,
 ) -> None:
+    baseline_by_state = {
+        row["state_code"]: row for row in campaign_finance_queries.fetch_state_campaign_finance_summaries(db_conn)
+    }
     nc_context = seed_committee_for_summary(
         db_conn,
         committee_id=UUID("d1111111-1111-1111-1111-111111111111"),
@@ -5204,10 +5324,7 @@ def test_get_state_summary_returns_all_states_with_ranked_totals_and_registry_fl
         ),
     )
 
-    response = api_client.get("/v1/campaign-finance/states/summary")
-
-    assert response.status_code == 200
-    payload = response.json()
+    payload = campaign_finance_queries.fetch_state_campaign_finance_summaries(db_conn)
     assert len(payload) == len(LAUNCH_SCOPE_USPS_STATES)
     assert {row["state_code"] for row in payload} == set(LAUNCH_SCOPE_USPS_STATES)
     assert [row["state_code"] for row in payload[:2]] == ["NC", "CA"]
@@ -5217,47 +5334,40 @@ def test_get_state_summary_returns_all_states_with_ranked_totals_and_registry_fl
     ca_row = rows_by_state["CA"]
     dc_row = rows_by_state["DC"]
 
-    assert nc_row["total_raised"] == "275.00"
-    assert nc_row["total_spent"] == "90.00"
-    assert nc_row["net"] == "185.00"
-    assert nc_row["committee_count"] == 1
-    assert nc_row["transaction_count"] == 4
-    assert nc_row["federal_candidate_count"] == 2
-    assert nc_row["ie_support_total"] == "40.00"
-    assert nc_row["ie_oppose_total"] == "0.00"
-    assert nc_row["ie_support_count"] == 1
-    assert nc_row["ie_oppose_count"] == 0
-    assert nc_row["data_through"] == "2026-03-23T12:00:00Z"
+    nc_baseline = baseline_by_state["NC"]
+    ca_baseline = baseline_by_state["CA"]
+    dc_baseline = baseline_by_state["DC"]
+
+    assert nc_row["total_raised"] - nc_baseline["total_raised"] == Decimal("275.00")
+    assert nc_row["total_spent"] - nc_baseline["total_spent"] == Decimal("90.00")
+    assert nc_row["net"] - nc_baseline["net"] == Decimal("185.00")
+    assert nc_row["committee_count"] - nc_baseline["committee_count"] == 1
+    assert nc_row["transaction_count"] - nc_baseline["transaction_count"] == 4
+    assert nc_row["federal_candidate_count"] - nc_baseline["federal_candidate_count"] == 2
+    assert nc_row["ie_support_total"] - (nc_baseline["ie_support_total"] or Decimal("0.00")) == Decimal("40.00")
+    assert nc_row["ie_oppose_total"] - (nc_baseline["ie_oppose_total"] or Decimal("0.00")) == Decimal("0.00")
+    assert nc_row["ie_support_count"] - (nc_baseline["ie_support_count"] or 0) == 1
+    assert nc_row["ie_oppose_count"] - (nc_baseline["ie_oppose_count"] or 0) == 0
+    assert nc_row["data_through"] == datetime(2026, 3, 23, 12, 0, tzinfo=timezone.utc)
     assert nc_row["supported"] is True
 
-    assert ca_row["total_raised"] == "100.00"
-    assert ca_row["total_spent"] == "30.00"
-    assert ca_row["net"] == "70.00"
-    assert ca_row["committee_count"] == 1
-    assert ca_row["transaction_count"] == 3
-    assert ca_row["federal_candidate_count"] == 1
-    assert ca_row["ie_support_total"] == "0.00"
-    assert ca_row["ie_oppose_total"] == "10.00"
-    assert ca_row["ie_support_count"] == 0
-    assert ca_row["ie_oppose_count"] == 1
+    assert ca_row["total_raised"] - ca_baseline["total_raised"] == Decimal("100.00")
+    assert ca_row["total_spent"] - ca_baseline["total_spent"] == Decimal("30.00")
+    assert ca_row["net"] - ca_baseline["net"] == Decimal("70.00")
+    assert ca_row["committee_count"] - ca_baseline["committee_count"] == 1
+    assert ca_row["transaction_count"] - ca_baseline["transaction_count"] == 3
+    assert ca_row["federal_candidate_count"] - ca_baseline["federal_candidate_count"] == 1
+    assert ca_row["ie_support_total"] - (ca_baseline["ie_support_total"] or Decimal("0.00")) == Decimal("0.00")
+    assert ca_row["ie_oppose_total"] - (ca_baseline["ie_oppose_total"] or Decimal("0.00")) == Decimal("10.00")
+    assert ca_row["ie_support_count"] - (ca_baseline["ie_support_count"] or 0) == 0
+    assert ca_row["ie_oppose_count"] - (ca_baseline["ie_oppose_count"] or 0) == 1
     assert ca_row["supported"] is True
 
-    assert dc_row["total_raised"] == "0.00"
-    assert dc_row["total_spent"] == "0.00"
-    assert dc_row["net"] == "0.00"
-    assert dc_row["committee_count"] == 0
-    assert dc_row["transaction_count"] == 0
-    assert dc_row["federal_candidate_count"] == 0
-    assert dc_row["ie_support_total"] is None
-    assert dc_row["ie_oppose_total"] is None
-    assert dc_row["ie_support_count"] is None
-    assert dc_row["ie_oppose_count"] is None
-    assert dc_row["data_through"] is None
+    assert dc_row == dc_baseline
     assert dc_row["supported"] is False
 
 
 def test_state_summary_and_detail_return_null_ie_for_supported_state_without_ie_lane(
-    api_client: TestClient,
     db_conn: psycopg.Connection,
 ) -> None:
     """A launch-support state whose registry evidence shows no IE coverage must return null IE totals.
@@ -5311,14 +5421,13 @@ def test_state_summary_and_detail_return_null_ie_for_supported_state_without_ie_
         aggregate_amount=Decimal("25.00"),
     )
 
-    summary_response = api_client.get("/v1/campaign-finance/states/summary")
-    assert summary_response.status_code == 200
-
-    rows_by_state = {row["state_code"]: row for row in summary_response.json()}
+    rows_by_state = {
+        row["state_code"]: row for row in campaign_finance_queries.fetch_state_campaign_finance_summaries(db_conn)
+    }
     la_summary_row = rows_by_state["LA"]
 
     assert la_summary_row["supported"] is True
-    assert la_summary_row["total_raised"] == "400.00"
+    assert la_summary_row["total_raised"] == Decimal("400.00")
     assert la_summary_row["transaction_count"] == 3
     assert la_summary_row["warning_text"] == "Independent expenditure data is incomplete for this state."
     assert la_summary_row["ie_support_total"] is None
@@ -5326,10 +5435,8 @@ def test_state_summary_and_detail_return_null_ie_for_supported_state_without_ie_
     assert la_summary_row["ie_support_count"] is None
     assert la_summary_row["ie_oppose_count"] is None
 
-    detail_response = api_client.get("/v1/campaign-finance/states/LA")
-    assert detail_response.status_code == 200
-
-    la_detail_payload = detail_response.json()
+    la_detail_payload = campaign_finance_queries.fetch_state_campaign_finance_detail(db_conn, "LA")
+    assert la_detail_payload is not None
     assert la_detail_payload["state_code"] == "LA"
     assert la_detail_payload["supported"] is True
     assert la_detail_payload["warning_text"] == "Independent expenditure data is incomplete for this state."
@@ -5343,9 +5450,13 @@ def test_state_summary_and_detail_return_null_ie_for_supported_state_without_ie_
 
 
 def test_get_state_detail_returns_aggregate_panels_and_validation_behavior(
-    api_client: TestClient,
     db_conn: psycopg.Connection,
 ) -> None:
+    nc_baseline = campaign_finance_queries.fetch_state_campaign_finance_detail(db_conn, "NC")
+    ca_baseline = campaign_finance_queries.fetch_state_campaign_finance_detail(db_conn, "CA")
+    assert nc_baseline is not None
+    assert ca_baseline is not None
+
     nc_committee_a = seed_committee_for_summary(
         db_conn,
         committee_id=UUID("d3333333-3333-3333-3333-333333333333"),
@@ -5471,60 +5582,58 @@ def test_get_state_detail_returns_aggregate_panels_and_validation_behavior(
         source_record_id=ca_committee.source_record_id,
     )
 
-    nc_response = api_client.get("/v1/campaign-finance/states/NC")
-    ca_response = api_client.get("/v1/campaign-finance/states/CA")
-    missing_response = api_client.get("/v1/campaign-finance/states/ZZ")
-    lowercase_response = api_client.get("/v1/campaign-finance/states/nc")
+    nc_payload = campaign_finance_queries.fetch_state_campaign_finance_detail(db_conn, "NC")
+    ca_payload = campaign_finance_queries.fetch_state_campaign_finance_detail(db_conn, "CA")
+    missing_payload = campaign_finance_queries.fetch_state_campaign_finance_detail(db_conn, "ZZ")
 
-    assert nc_response.status_code == 200
-    nc_payload = nc_response.json()
+    assert nc_payload is not None
     assert nc_payload["state_code"] == "NC"
-    assert nc_payload["total_raised"] == "390.00"
-    assert nc_payload["total_spent"] == "130.00"
-    assert nc_payload["net"] == "260.00"
-    assert nc_payload["transaction_count"] == 6
-    assert nc_payload["committee_count"] == 2
-    assert nc_payload["federal_candidate_count"] == 2
-    assert nc_payload["ie_support_total"] == "20.00"
-    assert nc_payload["ie_oppose_total"] == "80.00"
-    assert nc_payload["ie_support_count"] == 1
-    assert nc_payload["ie_oppose_count"] == 1
+    assert nc_payload["total_raised"] - nc_baseline["total_raised"] == Decimal("390.00")
+    assert nc_payload["total_spent"] - nc_baseline["total_spent"] == Decimal("130.00")
+    assert nc_payload["net"] - nc_baseline["net"] == Decimal("260.00")
+    assert nc_payload["transaction_count"] - nc_baseline["transaction_count"] == 6
+    assert nc_payload["committee_count"] - nc_baseline["committee_count"] == 2
+    assert nc_payload["federal_candidate_count"] - nc_baseline["federal_candidate_count"] == 2
+    assert nc_payload["ie_support_total"] - (nc_baseline["ie_support_total"] or Decimal("0.00")) == Decimal("20.00")
+    assert nc_payload["ie_oppose_total"] - (nc_baseline["ie_oppose_total"] or Decimal("0.00")) == Decimal("80.00")
+    assert nc_payload["ie_support_count"] - (nc_baseline["ie_support_count"] or 0) == 1
+    assert nc_payload["ie_oppose_count"] - (nc_baseline["ie_oppose_count"] or 0) == 1
     assert nc_payload["supported"] is True
-    assert nc_payload["data_through"] == "2026-03-26T12:00:00Z"
+    assert nc_payload["data_through"] == datetime(2026, 3, 26, 12, 0, tzinfo=timezone.utc)
     assert nc_payload["top_candidates"] == [
         {
-            "candidate_id": str(nc_candidate_one),
+            "candidate_id": nc_candidate_one,
             "candidate_name": "NC Candidate One",
-            "total_raised": "200.00",
+            "total_raised": Decimal("200.00"),
         },
         {
-            "candidate_id": str(nc_candidate_two),
+            "candidate_id": nc_candidate_two,
             "candidate_name": "NC Candidate Two",
-            "total_raised": "190.00",
+            "total_raised": Decimal("190.00"),
         },
     ]
     assert nc_payload["top_committees"] == [
         {
-            "committee_id": str(nc_committee_a.committee_id),
+            "committee_id": nc_committee_a.committee_id,
             "committee_name": "NC Committee A",
-            "total_raised": "270.00",
+            "total_raised": Decimal("270.00"),
         },
         {
-            "committee_id": str(nc_committee_b.committee_id),
+            "committee_id": nc_committee_b.committee_id,
             "committee_name": "NC Committee B",
-            "total_raised": "120.00",
+            "total_raised": Decimal("120.00"),
         },
     ]
     assert nc_payload["top_ie_spenders"] == [
         {
-            "committee_id": str(nc_committee_b.committee_id),
+            "committee_id": nc_committee_b.committee_id,
             "committee_name": "NC Committee B",
-            "total_amount": "80.00",
+            "total_amount": Decimal("80.00"),
         },
         {
-            "committee_id": str(nc_committee_a.committee_id),
+            "committee_id": nc_committee_a.committee_id,
             "committee_name": "NC Committee A",
-            "total_amount": "20.00",
+            "total_amount": Decimal("20.00"),
         },
     ]
     assert [source["source_record_key"] for source in nc_payload["sources"]] == [
@@ -5546,20 +5655,16 @@ def test_get_state_detail_returns_aggregate_panels_and_validation_behavior(
     )
     assert all(source["jurisdiction"] == "state/nc" for source in nc_payload["sources"])
 
-    assert ca_response.status_code == 200
-    ca_payload = ca_response.json()
+    assert ca_payload is not None
     assert ca_payload["state_code"] == "CA"
+    assert ca_payload["total_raised"] - ca_baseline["total_raised"] == Decimal("55.00")
     assert [source["source_record_key"] for source in ca_payload["sources"]] == [
         f"summary-sr-{ca_committee.committee_id}"
     ]
-    assert missing_response.status_code == 404
-    assert missing_response.json() == {"detail": "State not found"}
-    assert lowercase_response.status_code == 422
-    assert lowercase_response.json()["detail"][0]["loc"] == ["path", "state_code"]
+    assert missing_payload is None
 
 
 def test_state_ie_aggregate_excludes_outlier_spenders_and_reports_count(
-    api_client: TestClient,
     db_conn: psycopg.Connection,
 ) -> None:
     normal_committee = seed_committee_for_summary(
@@ -5611,7 +5716,7 @@ def test_state_ie_aggregate_excludes_outlier_spenders_and_reports_count(
                 aggregate_amount=amount,
             )
 
-        response = api_client.get("/v1/campaign-finance/states/NC")
+        payload = campaign_finance_queries.fetch_state_campaign_finance_detail(db_conn, "NC")
     finally:
         with db_conn.cursor() as cursor:
             cursor.execute("DELETE FROM cf.transaction WHERE id = ANY(%s)", (transaction_ids,))
@@ -5632,19 +5737,18 @@ def test_state_ie_aggregate_excludes_outlier_spenders_and_reports_count(
                 ([context.committee_id for context in seeded_contexts],),
             )
 
-    assert response.status_code == 200
-    payload = response.json()
+    assert payload is not None
     assert payload["excluded_outlier_count"] == 1
     assert payload["top_ie_spenders"] == [
         {
-            "committee_id": str(ceiling_committee.committee_id),
+            "committee_id": ceiling_committee.committee_id,
             "committee_name": "NC Ceiling IE Spender",
-            "total_amount": "100000000.00",
+            "total_amount": Decimal("100000000.00"),
         },
         {
-            "committee_id": str(normal_committee.committee_id),
+            "committee_id": normal_committee.committee_id,
             "committee_name": "NC Normal IE Spender",
-            "total_amount": "20.00",
+            "total_amount": Decimal("20.00"),
         },
     ]
 

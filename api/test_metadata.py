@@ -8,6 +8,7 @@ import psycopg
 import pytest
 from fastapi.testclient import TestClient
 
+from api.queries.metadata import _COVERAGE_REGISTRY_SQL, _DATA_SOURCES_METADATA_SQL
 from api.test_campaign_finance_support import (
     CommitteeRowSeed,
     FilingRowSeed,
@@ -30,12 +31,55 @@ def _parse_iso_datetime(value: str | None) -> datetime | None:
     return datetime.fromisoformat(normalized)
 
 
+def _normalize_sql(sql: str) -> str:
+    return " ".join(sql.lower().split())
+
+
+def _sync_data_source_metadata_for_test(
+    db_conn: psycopg.Connection,
+    *,
+    data_source_id: UUID,
+    record_count: int | None,
+    last_pull_at: datetime | None,
+    last_pull_status: str | None = "success",
+) -> None:
+    with db_conn.cursor() as cursor:
+        cursor.execute(
+            """
+            UPDATE core.data_source
+            SET record_count = %s,
+                last_pull_at = %s,
+                last_pull_status = %s
+            WHERE id = %s
+            """,
+            (record_count, last_pull_at, last_pull_status, data_source_id),
+        )
+
+
+def test_data_sources_metadata_sql_reads_bounded_data_source_snapshot() -> None:
+    normalized_sql = _normalize_sql(_DATA_SOURCES_METADATA_SQL)
+
+    assert "from core.data_source ds" in normalized_sql
+    assert "core.source_record" not in normalized_sql
+    assert "left join lateral" not in normalized_sql
+
+
+def test_coverage_registry_sql_reads_bounded_data_source_snapshot() -> None:
+    normalized_sql = _normalize_sql(_COVERAGE_REGISTRY_SQL)
+
+    assert "from core.data_source ds" in normalized_sql
+    assert "coalesce(ds.record_count, 0) > 0" in normalized_sql
+    assert "core.source_record" not in normalized_sql
+    assert "cf.transaction" not in normalized_sql
+    assert "cf.filing" not in normalized_sql
+
+
 class TestMetadataEndpoints:
     # No existing runtime-only owner fits both endpoint contracts:
     # - api/queries/campaign_finance.py coverage logic depends on file registry loaders.
     # - api/queries/civics.py has no source-registry query surface.
     # Stage 1 therefore adds dedicated metadata owners.
-    def test_data_sources_returns_one_row_per_seeded_source_and_prefers_latest_active_record(
+    def test_data_sources_returns_one_row_per_seeded_source_from_data_source_metadata(
         self,
         api_client: TestClient,
         db_conn: psycopg.Connection,
@@ -53,13 +97,27 @@ class TestMetadataEndpoints:
             name_suffix=f"beta-{uuid4()}",
         )
 
-        alpha_latest_active = insert_source_record_for_test(
+        alpha_last_pull_at = datetime(2026, 4, 10, 12, 0, tzinfo=timezone.utc)
+        beta_last_pull_at = datetime(2026, 4, 11, 8, 30, tzinfo=timezone.utc)
+        _sync_data_source_metadata_for_test(
+            db_conn,
+            data_source_id=data_source_alpha.id,
+            record_count=3,
+            last_pull_at=alpha_last_pull_at,
+        )
+        _sync_data_source_metadata_for_test(
+            db_conn,
+            data_source_id=data_source_beta.id,
+            record_count=1,
+            last_pull_at=beta_last_pull_at,
+        )
+        insert_source_record_for_test(
             db_conn,
             source_record_id=UUID("20000000-0000-0000-0000-000000000001"),
             data_source_id=data_source_alpha.id,
             source_record_key="alpha-active-latest",
             source_url="https://example.org/alpha-active-latest",
-            pull_date=datetime(2026, 4, 10, 12, 0, tzinfo=timezone.utc),
+            pull_date=alpha_last_pull_at,
         )
         insert_source_record_for_test(
             db_conn,
@@ -76,15 +134,15 @@ class TestMetadataEndpoints:
             source_record_key="alpha-superseded-newest",
             source_url="https://example.org/alpha-superseded-newest",
             pull_date=datetime(2026, 4, 20, 12, 0, tzinfo=timezone.utc),
-            superseded_by=alpha_latest_active.id,
+            superseded_by=UUID("20000000-0000-0000-0000-000000000001"),
         )
-        beta_active = insert_source_record_for_test(
+        insert_source_record_for_test(
             db_conn,
             source_record_id=UUID("20000000-0000-0000-0000-000000000004"),
             data_source_id=data_source_beta.id,
             source_record_key="beta-active",
             source_url="https://example.org/beta-active",
-            pull_date=datetime(2026, 4, 11, 8, 30, tzinfo=timezone.utc),
+            pull_date=beta_last_pull_at,
         )
 
         response = api_client.get("/v1/data-sources")
@@ -102,17 +160,19 @@ class TestMetadataEndpoints:
 
         assert alpha_payload["domain"] == "campaign_finance"
         assert alpha_payload["jurisdiction"] == jurisdiction_alpha
-        assert alpha_payload["latest_source_record_id"] == str(alpha_latest_active.id)
-        assert alpha_payload["latest_source_record_key"] == "alpha-active-latest"
-        assert alpha_payload["latest_source_record_url"] == "https://example.org/alpha-active-latest"
-        assert _parse_iso_datetime(alpha_payload["latest_source_pull_date"]) == alpha_latest_active.pull_date
+        assert alpha_payload["record_count"] == 3
+        assert alpha_payload["latest_source_record_id"] is None
+        assert alpha_payload["latest_source_record_key"] is None
+        assert alpha_payload["latest_source_record_url"] is None
+        assert _parse_iso_datetime(alpha_payload["latest_source_pull_date"]) == alpha_last_pull_at
 
         assert beta_payload["domain"] == "campaign_finance"
         assert beta_payload["jurisdiction"] == jurisdiction_beta
-        assert beta_payload["latest_source_record_id"] == str(beta_active.id)
-        assert beta_payload["latest_source_record_key"] == "beta-active"
-        assert beta_payload["latest_source_record_url"] == "https://example.org/beta-active"
-        assert _parse_iso_datetime(beta_payload["latest_source_pull_date"]) == beta_active.pull_date
+        assert beta_payload["record_count"] == 1
+        assert beta_payload["latest_source_record_id"] is None
+        assert beta_payload["latest_source_record_key"] is None
+        assert beta_payload["latest_source_record_url"] is None
+        assert _parse_iso_datetime(beta_payload["latest_source_pull_date"]) == beta_last_pull_at
 
     def test_coverage_registry_aggregates_runtime_rows_by_domain_and_jurisdiction(
         self,
@@ -138,10 +198,34 @@ class TestMetadataEndpoints:
             jurisdiction=alternate_jurisdiction,
             name_suffix=f"alternate-{uuid4()}",
         )
-        insert_data_source_for_test(
+        uningested_source = insert_data_source_for_test(
             db_conn,
             jurisdiction=uningested_jurisdiction,
             name_suffix=f"no-records-{uuid4()}",
+        )
+        _sync_data_source_metadata_for_test(
+            db_conn,
+            data_source_id=source_one.id,
+            record_count=1,
+            last_pull_at=datetime(2026, 4, 1, 12, 0, tzinfo=timezone.utc),
+        )
+        _sync_data_source_metadata_for_test(
+            db_conn,
+            data_source_id=source_two.id,
+            record_count=1,
+            last_pull_at=datetime(2026, 4, 12, 12, 0, tzinfo=timezone.utc),
+        )
+        _sync_data_source_metadata_for_test(
+            db_conn,
+            data_source_id=source_three.id,
+            record_count=1,
+            last_pull_at=datetime(2026, 4, 8, 6, 0, tzinfo=timezone.utc),
+        )
+        _sync_data_source_metadata_for_test(
+            db_conn,
+            data_source_id=uningested_source.id,
+            record_count=0,
+            last_pull_at=datetime(2026, 4, 13, 6, 0, tzinfo=timezone.utc),
         )
 
         insert_source_record_for_test(
@@ -186,6 +270,14 @@ class TestMetadataEndpoints:
         shared_payload = by_jurisdiction[shared_jurisdiction]
         assert shared_payload["domain"] == "campaign_finance"
         assert shared_payload["data_source_count"] == 2
+        assert _parse_iso_datetime(shared_payload["latest_data_source_pull_at"]) == datetime(
+            2026,
+            4,
+            12,
+            12,
+            0,
+            tzinfo=timezone.utc,
+        )
         assert _parse_iso_datetime(shared_payload["latest_source_pull_date"]) == datetime(
             2026,
             4,
@@ -198,6 +290,14 @@ class TestMetadataEndpoints:
         alternate_payload = by_jurisdiction[alternate_jurisdiction]
         assert alternate_payload["domain"] == "campaign_finance"
         assert alternate_payload["data_source_count"] == 1
+        assert _parse_iso_datetime(alternate_payload["latest_data_source_pull_at"]) == datetime(
+            2026,
+            4,
+            8,
+            6,
+            0,
+            tzinfo=timezone.utc,
+        )
         assert _parse_iso_datetime(alternate_payload["latest_source_pull_date"]) == datetime(
             2026,
             4,
@@ -217,6 +317,12 @@ class TestMetadataEndpoints:
             db_conn,
             jurisdiction=jurisdiction,
             name_suffix=f"superseded-{uuid4()}",
+        )
+        _sync_data_source_metadata_for_test(
+            db_conn,
+            data_source_id=source.id,
+            record_count=1,
+            last_pull_at=datetime(2026, 4, 10, 9, 0, tzinfo=timezone.utc),
         )
         active_record = insert_source_record_for_test(
             db_conn,
@@ -261,6 +367,18 @@ class TestMetadataEndpoints:
             db_conn,
             jurisdiction=uncovered_jurisdiction,
             name_suffix=f"uncovered-{uuid4()}",
+        )
+        _sync_data_source_metadata_for_test(
+            db_conn,
+            data_source_id=covered_source.id,
+            record_count=1,
+            last_pull_at=datetime(2026, 4, 13, 10, 0, tzinfo=timezone.utc),
+        )
+        _sync_data_source_metadata_for_test(
+            db_conn,
+            data_source_id=uncovered_source.id,
+            record_count=0,
+            last_pull_at=datetime(2026, 4, 14, 10, 0, tzinfo=timezone.utc),
         )
 
         covered_record = insert_source_record_for_test(
@@ -308,6 +426,12 @@ class TestMetadataEndpoints:
             db_conn,
             jurisdiction=transaction_only_jurisdiction,
             name_suffix=f"transaction-only-{uuid4()}",
+        )
+        _sync_data_source_metadata_for_test(
+            db_conn,
+            data_source_id=source.id,
+            record_count=1,
+            last_pull_at=datetime(2026, 4, 15, 10, 0, tzinfo=timezone.utc),
         )
         source_record = insert_source_record_for_test(
             db_conn,
@@ -381,6 +505,12 @@ class TestMetadataEndpoints:
             jurisdiction=jurisdiction,
             name_suffix=f"active-evidence-{uuid4()}",
         )
+        _sync_data_source_metadata_for_test(
+            db_conn,
+            data_source_id=source.id,
+            record_count=2,
+            last_pull_at=datetime(2026, 4, 18, 10, 0, tzinfo=timezone.utc),
+        )
         evidenced_active_record = insert_source_record_for_test(
             db_conn,
             source_record_id=UUID("70000000-0000-0000-0000-000000000001"),
@@ -405,4 +535,11 @@ class TestMetadataEndpoints:
         payload = response.json()
         seeded_row = next(row for row in payload if row["jurisdiction"] == jurisdiction)
         assert seeded_row["data_source_count"] == 1
-        assert _parse_iso_datetime(seeded_row["latest_source_pull_date"]) == evidenced_active_record.pull_date
+        assert _parse_iso_datetime(seeded_row["latest_source_pull_date"]) == datetime(
+            2026,
+            4,
+            18,
+            10,
+            0,
+            tzinfo=timezone.utc,
+        )

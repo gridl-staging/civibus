@@ -22,9 +22,9 @@ import {
   SMOKE_SEARCH_QUERY,
   SMOKE_SEARCH_RESULT_NAME,
   SMOKE_SEARCH_TITLE,
+  SMOKE_STATE_DETAIL_RETIRED_HEADING,
   SMOKE_STATE_DETAIL_SUPPORTED_CODE,
-  SMOKE_STATE_DETAIL_SUPPORTED_NAME,
-  SMOKE_STATE_DETAIL_TOP_IE_SPENDER_NAME
+  SMOKE_STATE_DETAIL_SUPPORTED_NAME
 } from "./fixtures";
 import { assertSearchHead, assertSeoHead } from "./smoke-helpers";
 
@@ -176,17 +176,14 @@ test.describe("DWO MVP release smoke", () => {
     await expect(page.getByRole("heading", { name: "Filing-period breakdown" })).toBeVisible();
   });
 
-  test("state detail journey renders NC leaderboard and IE signal", async ({ page }: { page: any }) => {
+  test("state detail journey renders retired v1 state page", async ({ page }: { page: any }) => {
     test.skip(isProductionSmokeMode, "Local fixture assertions are not stable for production-target smoke.");
     await page.goto(`/state/${SMOKE_STATE_DETAIL_SUPPORTED_CODE}`);
 
     await expect(page).toHaveURL(new RegExp(`/state/${SMOKE_STATE_DETAIL_SUPPORTED_CODE}$`));
-    await expect(
-      page.getByRole("heading", {
-        name: `${SMOKE_STATE_DETAIL_SUPPORTED_NAME} campaign finance`
-      })
-    ).toBeVisible();
-    await expect(page.getByTestId("top-ie-spender-row-0")).toContainText(SMOKE_STATE_DETAIL_TOP_IE_SPENDER_NAME);
+    await expect(page.getByRole("heading", { name: SMOKE_STATE_DETAIL_SUPPORTED_NAME })).toBeVisible();
+    await expect(page.getByRole("status").filter({ hasText: SMOKE_STATE_DETAIL_RETIRED_HEADING })).toBeVisible();
+    await expect(page.getByTestId("top-ie-spender-row-0")).toHaveCount(0);
   });
 
   test("pm_11 /coverage route check", async ({ page }: { page: any }) => {

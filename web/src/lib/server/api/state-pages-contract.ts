@@ -63,6 +63,12 @@ export type StateDetailResponse = StateSummaryItem & {
   sources: SourceInfo[];
 };
 
+export type RetiredStateCampaignFinancePage = {
+  heading: string;
+  message: string;
+  reversalPath: string;
+};
+
 export type GeometryFeatureProperties = {
   state: string;
   name: string;
@@ -96,5 +102,3 @@ export type GeometryFeatureCollection = {
 };
 
 export const COUNTRY_GEOMETRY_PATH = "/v1/geometry?level=country";
-export const STATE_CAMPAIGN_FINANCE_SUMMARY_PATH = "/v1/campaign-finance/states/summary";
-export const STATE_CAMPAIGN_FINANCE_DETAIL_PATH_PREFIX = "/v1/campaign-finance/states/";

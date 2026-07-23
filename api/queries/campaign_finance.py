@@ -1764,20 +1764,47 @@ _CANDIDATES_FOR_PEOPLE_SQL = f"""
 """
 
 _COMMITTEE_LIST_SQL_TEMPLATE = f"""
+    WITH filtered_committees AS MATERIALIZED (
+        SELECT
+            c.id,
+            c.fec_committee_id,
+            c.name,
+            c.committee_type,
+            c.party,
+            c.state,
+            {_SLUG_NAME_EXPR} AS slug
+        FROM cf.committee c
+        WHERE {{where_sql}}
+        ORDER BY c.name ASC, c.id ASC
+        LIMIT %s + 1
+        OFFSET %s
+    ),
+    page_slugs AS (
+        SELECT DISTINCT slug
+        FROM filtered_committees
+    ),
+    slug_counts AS (
+        SELECT
+            {_SLUG_NORMALIZE_EXPR.format(value="committee.name")} AS slug,
+            COUNT(*) AS committee_count
+        FROM cf.committee committee
+        JOIN page_slugs
+          ON page_slugs.slug = {_SLUG_NORMALIZE_EXPR.format(value="committee.name")}
+        GROUP BY {_SLUG_NORMALIZE_EXPR.format(value="committee.name")}
+    )
     SELECT
-        c.id,
-        c.fec_committee_id,
-        c.name,
-        c.committee_type,
-        c.party,
-        c.state,
-        {_SLUG_NAME_EXPR} AS slug,
-        {_COMMITTEE_SLUG_IS_UNIQUE_SUBQUERY} AS slug_is_unique
-    FROM cf.committee c
-    WHERE {{where_sql}}
-    ORDER BY c.name ASC, c.id ASC
-    LIMIT %s + 1
-    OFFSET %s
+        filtered.id,
+        filtered.fec_committee_id,
+        filtered.name,
+        filtered.committee_type,
+        filtered.party,
+        filtered.state,
+        filtered.slug,
+        slug_counts.committee_count = 1 AS slug_is_unique
+    FROM filtered_committees filtered
+    JOIN slug_counts
+      ON slug_counts.slug = filtered.slug
+    ORDER BY filtered.name ASC, filtered.id ASC
 """
 
 # ---------------------------------------------------------------------------
