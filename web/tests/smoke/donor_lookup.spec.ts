@@ -14,7 +14,47 @@ import {
   SMOKE_DONOR_LOOKUP_SEED_ZIP5,
   SMOKE_USE_LIVE_API
 } from "./fixtures";
+import {
+  SMOKE_DONOR_LOOKUP_PAGINATION_EDIT_QUERY,
+  SMOKE_DONOR_LOOKUP_SECOND_CONTRIBUTOR_NAME,
+  SMOKE_DONOR_LOOKUP_SECOND_PAGE_RESULT_COUNT
+} from "./donor_lookup_fixture";
 import { capturePageLoadErrors } from "./smoke-helpers";
+
+test.describe("donor lookup smoke (fixture mode)", () => {
+  test.skip(SMOKE_USE_LIVE_API, "fixture-mode only");
+
+  test("/donors resynchronizes URL-owned query after same-query pagination", async ({
+    page
+  }: {
+    page: any;
+  }) => {
+    const pageLoadErrors = capturePageLoadErrors(page);
+
+    await page.goto(`/donors?q=${SMOKE_DONOR_LOOKUP_QUERY}&by=name&limit=1&offset=0`);
+
+    const queryInput = page.getByLabel("Query");
+    await expect(page.getByRole("heading", { name: SMOKE_DONOR_LOOKUP_HEADING })).toBeVisible();
+    await expect(queryInput).toHaveValue(SMOKE_DONOR_LOOKUP_QUERY);
+    await expect(page.getByTestId("donor-result-count")).toHaveText(SMOKE_DONOR_LOOKUP_RESULT_COUNT);
+    await expect(page.getByTestId("donor-result-row")).toContainText(SMOKE_DONOR_LOOKUP_SEED_CONTRIBUTOR_NAME);
+
+    await queryInput.fill(SMOKE_DONOR_LOOKUP_PAGINATION_EDIT_QUERY);
+    await page.getByRole("link", { name: "Next" }).click();
+
+    await expect(page).toHaveURL(/\/donors\?[^#]*offset=1/);
+    const currentUrl = new URL(page.url());
+    expect(currentUrl.pathname).toBe("/donors");
+    expect(currentUrl.searchParams.get("q")).toBe(SMOKE_DONOR_LOOKUP_QUERY);
+    expect(currentUrl.searchParams.get("by")).toBe("name");
+    expect(currentUrl.searchParams.get("limit")).toBe("1");
+    expect(currentUrl.searchParams.get("offset")).toBe("1");
+    await expect(queryInput).toHaveValue(SMOKE_DONOR_LOOKUP_QUERY);
+    await expect(page.getByTestId("donor-result-count")).toHaveText(SMOKE_DONOR_LOOKUP_SECOND_PAGE_RESULT_COUNT);
+    await expect(page.getByTestId("donor-result-row")).toContainText(SMOKE_DONOR_LOOKUP_SECOND_CONTRIBUTOR_NAME);
+    await pageLoadErrors.assertNoErrors();
+  });
+});
 
 test.describe("donor lookup smoke (live mode)", () => {
   test.skip(!SMOKE_USE_LIVE_API, "live-mode only — set SMOKE_USE_LIVE_API=1");

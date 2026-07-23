@@ -6,6 +6,8 @@
 
   export let data: PageData;
   export let isSubmitting = false;
+  let queryInputValue = data.query;
+  let renderedDonorStateKey = getDonorStateKey(data);
 
   const currencyFormatter = new Intl.NumberFormat('en-US', {
     style: 'currency',
@@ -17,6 +19,11 @@
   const SHORT_QUERY_MESSAGE = 'Enter at least 3 characters to search by name or employer.';
   const ZERO_RESULTS_MESSAGE = 'No donors match this search.';
 
+  $: donorStateKey = getDonorStateKey(data);
+  $: if (donorStateKey !== renderedDonorStateKey) {
+    queryInputValue = data.query;
+    renderedDonorStateKey = donorStateKey;
+  }
   $: isLoading = isSubmitting || $navigating !== null;
   $: hasSubmittedQuery = data.query.trim() !== '';
   $: hasResults = data.results.length > 0;
@@ -74,6 +81,10 @@
     return `Showing donors ${state.offset + 1}-${state.offset + state.resultCount}.`;
   }
 
+  function getDonorStateKey(value: Pick<PageData, 'query' | 'by' | 'limit' | 'offset'>): string {
+    return JSON.stringify([value.query, value.by, value.limit, value.offset]);
+  }
+
   function formatCurrency(value: string): string {
     return currencyFormatter.format(Number(value));
   }
@@ -97,6 +108,24 @@
   function formatDate(value: string | null | undefined): string {
     return formatNullable(value);
   }
+
+  function personHref(personId: string): string {
+    return `/person/${encodeURIComponent(personId)}`;
+  }
+
+  function safeExternalHref(value: string | null | undefined): string | null {
+    const trimmedValue = value?.trim();
+    if (!trimmedValue) {
+      return null;
+    }
+
+    try {
+      const url = new URL(trimmedValue);
+      return url.protocol === 'https:' || url.protocol === 'http:' ? url.href : null;
+    } catch {
+      return null;
+    }
+  }
 </script>
 
 <svelte:head>
@@ -119,7 +148,7 @@
         data-testid="donor-search-input"
         name="q"
         type="search"
-        value={data.query}
+        bind:value={queryInputValue}
         aria-describedby="donor-search-status"
       />
     </label>
@@ -188,7 +217,7 @@
                     <ul class="donor-lookup__nested-list">
                       {#each result.recipients as recipient (recipient.person_id + recipient.committee_id)}
                         <li>
-                          <a href={`/person/${recipient.person_id}`}>{recipient.candidate_name}</a>
+                          <a href={personHref(recipient.person_id)}>{recipient.candidate_name}</a>
                         </li>
                       {/each}
                     </ul>
@@ -199,9 +228,15 @@
                     <ul class="donor-lookup__nested-list">
                       {#each result.sources as source (source.source_record_key ?? source.data_source_url)}
                         <li>
-                          <a href={source.data_source_url}>{source.data_source_name}</a>
+                          {#if safeExternalHref(source.data_source_url)}
+                            <a href={safeExternalHref(source.data_source_url) ?? ''}>{source.data_source_name}</a>
+                          {:else}
+                            <span>{source.data_source_name}</span>
+                          {/if}
                           {#if source.record_url}
-                            <a href={source.record_url}>Record</a>
+                            {#if safeExternalHref(source.record_url)}
+                              <a href={safeExternalHref(source.record_url) ?? ''}>Record</a>
+                            {/if}
                           {/if}
                         </li>
                       {/each}

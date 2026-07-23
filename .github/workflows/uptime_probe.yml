@@ -42,22 +42,62 @@ jobs:
         env:
           PROBE_URL_OVERRIDE: ${{ github.event.inputs.probe_url_override }}
         run: |
-          set +e
-          TARGET="${PROBE_URL_OVERRIDE:-${PROBE_BASE_URL}/api/health/content}"
-          STATUS=$(curl -sS "$TARGET" \
-            --max-time 30 \
-            --write-out '%{http_code}' \
-            --output /tmp/body.json)
-          CURL_EXIT=$?
-          set -e
+          set -euo pipefail
+
+          normalize_probe_target() {
+            python3 - "$1" <<'PY'
+          import sys
+          from urllib.parse import urlsplit, urlunsplit
+
+
+          raw_url = sys.argv[1].strip()
+          if not raw_url or any(ord(ch) < 32 or ord(ch) == 127 for ch in raw_url):
+              raise SystemExit(1)
+
+          parsed = urlsplit(raw_url)
+          if parsed.scheme != "https":
+              raise SystemExit(1)
+          if not parsed.hostname:
+              raise SystemExit(1)
+          if parsed.username is not None or parsed.password is not None:
+              raise SystemExit(1)
+          if parsed.fragment:
+              raise SystemExit(1)
+
+          hostname = parsed.hostname
+          if ":" in hostname and not hostname.startswith("["):
+              hostname = f"[{hostname}]"
+          netloc = hostname if parsed.port is None else f"{hostname}:{parsed.port}"
+          print(urlunsplit((parsed.scheme, netloc, parsed.path, parsed.query, "")))
+          PY
+          }
+
+          RAW_TARGET="${PROBE_URL_OVERRIDE:-${PROBE_BASE_URL}/api/health/content}"
+          HEALTHY=false
+          DETAIL=""
+          if ! TARGET="$(normalize_probe_target "$RAW_TARGET")"; then
+            TARGET="invalid"
+            STATUS="000"
+            CURL_EXIT=2
+            DETAIL="invalid probe URL (must be credential-free HTTPS without fragments or control characters)"
+          else
+            set +e
+            STATUS=$(curl --proto '=https' -sS \
+              --max-time 30 \
+              --write-out '%{http_code}' \
+              --output /tmp/body.json \
+              -- "$TARGET")
+            CURL_EXIT=$?
+            set -e
+          fi
 
           # Healthiness logic:
           #   - curl error (timeout, connection refused) => unhealthy
           #   - HTTP 200 + body.healthy == true        => healthy
           #   - anything else                          => unhealthy
-          HEALTHY=false
-          DETAIL=""
-          if [ "$CURL_EXIT" -ne 0 ]; then
+          if [ -n "$DETAIL" ]; then
+            :
+          elif [ "$CURL_EXIT" -ne 0 ]; then
             DETAIL="curl exit $CURL_EXIT (timeout, connection refused, or DNS failure)"
           elif [ "$STATUS" = "200" ]; then
             if jq -e '.healthy == true' /tmp/body.json > /dev/null 2>&1; then
@@ -75,12 +115,49 @@ jobs:
           echo "status=${STATUS}" >> "$GITHUB_OUTPUT"
           echo "target=${TARGET}" >> "$GITHUB_OUTPUT"
           # Multi-line-safe output for DETAIL (may contain JSON / newlines).
+          DETAIL_DELIMITER="DETAIL_DELIMITER_$(uuidgen)"
           {
-            echo "detail<<DETAIL_DELIMITER_$$"
-            echo "${DETAIL}"
-            echo "DETAIL_DELIMITER_$$"
+            echo "detail<<${DETAIL_DELIMITER}"
+            printf '%s\n' "${DETAIL}"
+            echo "${DETAIL_DELIMITER}"
           } >> "$GITHUB_OUTPUT"
           echo "Probe result: healthy=${HEALTHY} status=${STATUS}"
+
+      - name: Warn on donor search surface
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          TARGET="${PROBE_BASE_URL%/}/donors?q=smith&by=name"
+          BODY_FILE="$(mktemp)"
+          trap 'rm -f "$BODY_FILE"' EXIT
+
+          set +e
+          STATUS=$(curl -sS "$TARGET" \
+            --max-time 30 \
+            --write-out '%{http_code}' \
+            --output "$BODY_FILE")
+          CURL_EXIT=$?
+          set -e
+
+          if [ "$CURL_EXIT" -ne 0 ]; then
+            echo "::warning::donor surface probe curl_error target=${TARGET} exit=${CURL_EXIT}"
+            exit 1
+          fi
+
+          if [ "$STATUS" != "200" ]; then
+            BODY_EXCERPT=$(head -c 500 "$BODY_FILE" 2>/dev/null || true)
+            echo "::warning::donor surface probe http_status target=${TARGET} status=${STATUS} body=${BODY_EXCERPT}"
+            exit 1
+          fi
+
+          if grep -q 'data-testid="donor-result-row"' "$BODY_FILE"; then
+            echo "donor_surface_ok target=${TARGET} status=200 marker=data-testid=\"donor-result-row\""
+            exit 0
+          fi
+
+          BODY_EXCERPT=$(head -c 500 "$BODY_FILE" 2>/dev/null || true)
+          echo "::warning::donor surface probe missing_marker target=${TARGET} status=${STATUS} marker=data-testid=\"donor-result-row\" body=${BODY_EXCERPT}"
+          exit 1
 
       - name: Warn on public deploy drift
         continue-on-error: true

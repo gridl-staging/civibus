@@ -7,6 +7,8 @@ const { smokeFixtures } =
   (await import(new URL("./fixture-data.ts", import.meta.url).href)) as typeof import("./fixture-data");
 const { compareFixtureByCandidateId, compareFixtureById, compareFixtureBySearchQuery } =
   (await import(new URL("./compare-fixtures.ts", import.meta.url).href)) as typeof import("./compare-fixtures");
+const { buildDonorSearchResponse } =
+  (await import(new URL("./donor_lookup_fixture.ts", import.meta.url).href)) as typeof import("./donor_lookup_fixture");
 
 function writeJson(response: import("node:http").ServerResponse, status: number, body: unknown): void {
   response.writeHead(status, { "content-type": "application/json; charset=utf-8" });
@@ -587,6 +589,12 @@ const server = createServer(async (request, response) => {
 
   if (url.pathname === "/v1/congress/money-summaries" && url.searchParams.size === 0) {
     writeJson(response, 200, smokeFixtures.congressMoneySummaries);
+    return;
+  }
+
+  const donorSearchResponse = buildDonorSearchResponse(url);
+  if (donorSearchResponse !== null) {
+    writeJson(response, 200, donorSearchResponse);
     return;
   }
 

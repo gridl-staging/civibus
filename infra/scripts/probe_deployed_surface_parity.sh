@@ -4,7 +4,25 @@ set -euo pipefail
 BASE_URL="${CIVIBUS_PUBLIC_BASE_URL:-https://civibus-caddy.fly.dev}"
 EXPECTED_SHA="${CIVIBUS_EXPECTED_SHA:-}"
 FIXTURE_DIR="${CIVIBUS_DEPLOYED_SURFACE_FIXTURE_DIR:-}"
-PUBLIC_PAGES=("/" "/congress" "/developers")
+PUBLIC_PAGES=(
+  "/|Follow money around Congress and the White House."
+  "/search?q=ossoff|data-testid=\"search-results-region\""
+  "/donors?q=smith&by=name|data-testid=\"donor-result-row\""
+  "/congress|data-testid=\"congress-member-row-0\""
+  "/methodology|Methodology"
+  "/developers|GET /api/public/v1/federal/officials"
+  "/candidates|Candidates"
+  "/committees|Committees"
+  "/committee/jon-ossoff-for-senate|Key metrics"
+  "/compare|Compare officeholders"
+  "/calendar|Election calendar"
+)
+KNOWN_RED_PUBLIC_PAGES=(
+  "/coverage|runtime metadata rows are not loaded reliably in public deploy|surface-parity-stage-1"
+  "/data-sources|runtime data-source rows are not loaded reliably in public deploy|surface-parity-stage-1"
+  "/state/GA|state detail route is known-red during federal-first v1 public probe hardening|surface-parity-stage-1"
+  "/sitemap.xml|dynamic sitemap can depend on campaign-list data not yet promoted to fail-closed|surface-parity-stage-1"
+)
 TMP_DIR="$(mktemp -d)"
 DEPLOYED_OPENAPI_JSON="${TMP_DIR}/deployed_openapi.json"
 API_VERSION_JSON="${TMP_DIR}/api_health_version.json"
@@ -314,8 +332,33 @@ fixture_page_status() {
     "${FIXTURE_DIR}/page_statuses.tsv"
 }
 
-probe_public_page() {
+page_body_slug() {
   local path="$1"
+
+  # Fixture contract: lowercase hex of the complete UTF-8 path, including query string.
+  # This keeps "/", "/a/b", and query-bearing paths deterministic and collision-free.
+  printf '%s' "${path}" | od -An -tx1 | tr -d ' \n'
+}
+
+copy_fixture_page_body() {
+  local path="$1"
+  local destination_path="$2"
+  local slug
+  local source_path
+
+  slug="$(page_body_slug "${path}")"
+  source_path="${FIXTURE_DIR}/page_bodies/${slug}.html"
+  if [[ ! -f "${source_path}" ]]; then
+    echo "page_fetch_error ${path} fixture_body_missing fixture=${source_path}" >&2
+    return 1
+  fi
+
+  cp "${source_path}" "${destination_path}"
+}
+
+fetch_public_page_body() {
+  local path="$1"
+  local body_path="$2"
   local status
 
   if [[ -n "${FIXTURE_DIR}" ]]; then
@@ -327,14 +370,57 @@ probe_public_page() {
       echo "page_fetch_error ${path} fixture_status_missing" >&2
       return 1
     }
+    copy_fixture_page_body "${path}" "${body_path}" || return 1
   else
     status="$(
-      curl --proto '=http,https' -sS -o /dev/null -w "%{http_code}" "${BASE_URL%/}${path}"
+      curl --proto '=http,https' --max-time 25 -sS -o "${body_path}" -w "%{http_code}" "${BASE_URL%/}${path}"
     )" || {
       echo "page_fetch_error ${path}" >&2
       return 1
     }
   fi
+
+  printf '%s\n' "${status}"
+}
+
+warm_up_public_page() {
+  local path="$1"
+  local body_path="${TMP_DIR}/warmup_$(page_body_slug "${path}").html"
+
+  # 2026-07-23 cold/warm probe showed donor search can exceed the kill window
+  # on first request while a same-URL warm request returns within bounds.
+  fetch_public_page_body "${path}" "${body_path}" >/dev/null || true
+}
+
+assert_public_page_body() {
+  local path="$1"
+  local marker="$2"
+  local body_path="$3"
+
+  # Frontend copy owner: web/tests/smoke/smoke-helpers.ts::BACKEND_FAILURE_STATE_COPY.
+  if grep -Eiq "temporarily unavailable" "${body_path}"; then
+    echo "page_backend_failure_copy ${path} owner=web/tests/smoke/smoke-helpers.ts::BACKEND_FAILURE_STATE_COPY" >&2
+    return 1
+  fi
+
+  if ! grep -Fq "${marker}" "${body_path}"; then
+    echo "page_content_marker_missing ${path} marker=${marker}" >&2
+    return 1
+  fi
+}
+
+probe_public_page() {
+  local entry="$1"
+  local path="${entry%%|*}"
+  local marker="${entry#*|}"
+  local status
+  local body_path="${TMP_DIR}/page_body_$(page_body_slug "${path}").html"
+
+  if [[ "${path}" == "/donors?q=smith&by=name" ]]; then
+    warm_up_public_page "${path}"
+  fi
+
+  status="$(fetch_public_page_body "${path}" "${body_path}")" || return 1
 
   if [[ "${status}" != "200" ]]; then
     if [[ "${status}" == "404" ]]; then
@@ -345,7 +431,48 @@ probe_public_page() {
     return 1
   fi
 
-  echo "page_status ${path} ${status}"
+  assert_public_page_body "${path}" "${marker}" "${body_path}" || return 1
+
+  echo "page_status ${path} ${status} marker_ok"
+}
+
+probe_known_red_public_page() {
+  local entry="$1"
+  local path="${entry%%|*}"
+  local remainder="${entry#*|}"
+  local reason="${remainder%%|*}"
+  local owner="${remainder#*|}"
+  local status
+  local body_path="${TMP_DIR}/known_red_body_$(page_body_slug "${path}").html"
+
+  if status="$(fetch_public_page_body "${path}" "${body_path}")"; then
+    echo "WARN known_red_page ${path} ${status} owner=${owner} reason=${reason}"
+  else
+    echo "WARN known_red_page ${path} fetch_error owner=${owner} reason=${reason}"
+  fi
+}
+
+probe_public_surface() {
+  local entry
+  local surfaces_probed=0
+  local failed=0
+
+  for entry in "${PUBLIC_PAGES[@]}"; do
+    surfaces_probed=$((surfaces_probed + 1))
+    if ! probe_public_page "${entry}"; then
+      failed=$((failed + 1))
+    fi
+  done
+
+  for entry in "${KNOWN_RED_PUBLIC_PAGES[@]}"; do
+    probe_known_red_public_page "${entry}"
+  done
+
+  echo "surfaces_probed=${surfaces_probed} failed=${failed}"
+  if [[ "${failed}" -ne 0 ]]; then
+    echo "surface_parity_failed failed=${failed}" >&2
+    return 1
+  fi
 }
 
 EXPECTED_SHA="$(resolve_expected_sha)" || exit 1
@@ -357,8 +484,6 @@ fi
 fetch_deployed_openapi
 compare_openapi_paths
 compare_deployed_shas "${EXPECTED_SHA}"
-for page_path in "${PUBLIC_PAGES[@]}"; do
-  probe_public_page "${page_path}"
-done
+probe_public_surface
 
 echo "surface_parity_ok"

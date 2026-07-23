@@ -60,6 +60,14 @@ const PINNED_HIGH_VOLUME_COMMITTEE_PATH = "/committee/jon-ossoff-for-senate";
 const PERSON_OUTSIDE_SPENDING_HEADING = "Outside spending";
 const CONGRESS_MEMBER_PROFILE_LINK_TEST_ID = "congress-member-profile-link";
 const CONGRESS_MEMBER_ROW_0_TEST_ID = "congress-member-row-0";
+const PERSON_ROUTE_HREF_PATTERN = /^\/person\/[^/?#]+$/;
+
+type DonorRecipientSelection = {
+  recipientHref: string;
+  recipientLink: any;
+  recipientName: string;
+  resultRow: any;
+};
 
 function memberProfileLink(row: any): any {
   return row.getByTestId(CONGRESS_MEMBER_PROFILE_LINK_TEST_ID);
@@ -74,6 +82,39 @@ function extractRouteId(href: string, routePrefix: "/person" | "/candidate"): st
   expect(id.length).toBeGreaterThan(0);
   expect(id.includes("/")).toBe(false);
   return id;
+}
+
+async function personRecipientLinkInRow(resultRow: any): Promise<DonorRecipientSelection | null> {
+  const links = await resultRow.getByRole("link").all();
+  for (const recipientLink of links) {
+    if (!(await recipientLink.isVisible())) {
+      continue;
+    }
+    const recipientHref = await recipientLink.getAttribute("href");
+    if (!recipientHref || !PERSON_ROUTE_HREF_PATTERN.test(recipientHref)) {
+      continue;
+    }
+    const recipientName = ((await recipientLink.textContent()) ?? "").trim();
+    if (recipientName.length === 0) {
+      continue;
+    }
+    return { recipientHref, recipientLink, recipientName, resultRow };
+  }
+  return null;
+}
+
+async function donorResultWithPersonRecipient(page: any): Promise<DonorRecipientSelection> {
+  const resultRows = page.getByTestId("donor-result-row");
+  await expect(resultRows.first()).toBeVisible({ timeout: 20_000 });
+
+  for (const resultRow of await resultRows.all()) {
+    const selection = await personRecipientLinkInRow(resultRow);
+    if (selection) {
+      return selection;
+    }
+  }
+
+  throw new Error("Expected at least one donor result row with a /person/<id> recipient link");
 }
 
 test.describe("production deployment smoke (read-only)", () => {
@@ -164,6 +205,63 @@ test.describe("production deployment smoke (read-only)", () => {
     await expect(page.getByRole("heading", { name: "Candidacies" })).toHaveCount(0);
     await expect(page.getByRole("group", { name: "Entity internals" })).toHaveCount(0);
 
+    await pageLoadErrors.assertNoErrors();
+  });
+
+  test("donor lookup returns live results and links to recipient finance", async ({
+    page
+  }: {
+    page: any;
+  }) => {
+    // The donor query has a documented ~19.45s cold path before the recipient page load.
+    test.setTimeout(60_000);
+    const pageLoadErrors = capturePageLoadErrors(page);
+    // Intentionally non-empty in production's 16,050,580-row cf.transaction table.
+    const donorQuery = "smith";
+
+    await page.goto("/donors");
+    await expect(page.getByRole("heading", { name: "Donor Lookup", exact: true })).toBeVisible();
+    await expect(page.getByTestId("donor-scope-note")).toBeVisible();
+
+    const queryInput = page.getByLabel("Query");
+    await expect(queryInput).toHaveValue("");
+    await page.getByLabel("Search by").selectOption("name");
+    await queryInput.fill(donorQuery);
+    await expect(queryInput).toHaveValue(donorQuery);
+    await page.getByRole("button", { name: "Search", exact: true }).click();
+
+    await page.waitForURL(
+      (url: URL) =>
+        url.pathname === "/donors" &&
+        url.searchParams.get("q") === donorQuery &&
+        url.searchParams.get("by") === "name"
+    );
+
+    const { recipientHref, recipientLink, recipientName, resultRow } =
+      await donorResultWithPersonRecipient(page);
+    await expect(resultRow).toBeVisible();
+    await expectNoBackendFailureStates(page);
+
+    const contributorName = (
+      (await resultRow.getByRole("cell").first().textContent()) ?? ""
+    ).trim();
+    expect(contributorName.length).toBeGreaterThan(0);
+    await expect(resultRow).toContainText(/\$(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d{2})?/);
+
+    await expect(recipientLink).toBeVisible();
+    await expect(recipientLink).toHaveAttribute("href", PERSON_ROUTE_HREF_PATTERN);
+    expect(recipientName.length).toBeGreaterThan(0);
+
+    await recipientLink.click();
+    await page.waitForURL((url: URL) => url.pathname === recipientHref);
+    expect(new URL(page.url()).pathname).toBe(recipientHref);
+    await expect(
+      page.getByRole("heading", { name: PERSON_CAMPAIGN_FINANCE_HEADING })
+    ).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByRole("heading", { name: "Fundraising detail" })).toBeVisible({
+      timeout: 20_000
+    });
+    await expectNoBackendFailureStates(page);
     await pageLoadErrors.assertNoErrors();
   });
 

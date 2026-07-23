@@ -57,18 +57,30 @@ def test_workflow_uses_probe_base_url_as_single_source_of_truth(workflow_parsed:
     assert "civibus.org" not in workflow_text.lower()
 
 
-def test_workflow_dispatch_accepts_full_probe_url_override(workflow_parsed: dict, workflow_text: str) -> None:
-    """Manual drills may supply a complete one-run target URL used verbatim."""
+def test_workflow_dispatch_validates_full_probe_url_override(workflow_parsed: dict, workflow_text: str) -> None:
+    """Manual drills may supply a complete one-run target URL, but only after URL validation."""
     on_block = workflow_parsed.get("on") or workflow_parsed.get(True)
     probe_override = on_block["workflow_dispatch"]["inputs"]["probe_url_override"]
     assert probe_override["type"] == "string"
     assert probe_override["required"] is False
     assert probe_override["default"] == ""
     assert "${{ github.event.inputs.probe_url_override }}" in workflow_text
-    assert 'TARGET="${PROBE_URL_OVERRIDE:-${PROBE_BASE_URL}/api/health/content}"' in workflow_text
-    assert 'curl -sS "$TARGET"' in workflow_text
+    assert 'RAW_TARGET="${PROBE_URL_OVERRIDE:-${PROBE_BASE_URL}/api/health/content}"' in workflow_text
+    assert 'parsed.scheme != "https"' in workflow_text
+    assert "parsed.username is not None or parsed.password is not None" in workflow_text
+    assert "parsed.fragment" in workflow_text
+    assert "control characters" in workflow_text
+    assert "curl --proto '=https' -sS" in workflow_text
+    assert '-- "$TARGET"' in workflow_text
     assert 'echo "target=${TARGET}" >> "$GITHUB_OUTPUT"' in workflow_text
     assert "PROBE_TARGET: ${{ steps.probe.outputs.target }}" in workflow_text
+
+
+def test_probe_detail_output_uses_random_delimiter(workflow_text: str) -> None:
+    """Untrusted response excerpts must not be able to predict the multiline output terminator."""
+    assert 'DETAIL_DELIMITER="DETAIL_DELIMITER_$(uuidgen)"' in workflow_text
+    assert 'echo "detail<<${DETAIL_DELIMITER}"' in workflow_text
+    assert "DETAIL_DELIMITER_$$" not in workflow_text
 
 
 def test_probe_outputs_are_passed_to_shell_via_env(workflow_text: str) -> None:
@@ -169,6 +181,35 @@ def test_workflow_warns_on_public_deploy_drift_without_failing_job(
     assert "deploy lag" in workflow_text
     assert "cannot detect sync lag" in workflow_text
     assert "Promote this check to fail-closed only after one batch with zero false would-be kills" in workflow_text
+
+
+def test_workflow_warns_on_donor_search_surface_without_failing_job(workflow_steps: list[dict]) -> None:
+    donor_step = next((step for step in workflow_steps if step.get("name") == "Warn on donor search surface"), None)
+    assert donor_step is not None, "missing WARN-only donor search surface step"
+
+    issue_step_index = next(
+        index
+        for index, step in enumerate(workflow_steps)
+        if step.get("name") == "Find existing open uptime-incident issue"
+    )
+    donor_step_index = workflow_steps.index(donor_step)
+    script = donor_step["run"]
+
+    assert donor_step_index < issue_step_index
+    assert donor_step["continue-on-error"] is True
+    assert 'TARGET="${PROBE_BASE_URL%/}/donors?q=smith&by=name"' in script
+    assert "curl" in script
+    assert "--max-time 30" in script
+    assert "grep -q 'data-testid=\"donor-result-row\"'" in script
+    assert 'donor_surface_ok target=${TARGET} status=200 marker=data-testid=\\"donor-result-row\\"' in script
+    assert "::warning::donor surface probe" in script
+    assert "$GITHUB_OUTPUT" not in script
+    assert 'echo "healthy=' not in script
+    assert 'echo "status=' not in script
+    assert 'echo "target=' not in script
+    assert "gh issue" not in script
+    assert "gh label" not in script
+    assert "GH_TOKEN" not in script
 
 
 def test_workflow_keeps_warn_probe_lightweight_and_issue_flow_unchanged(workflow_text: str) -> None:

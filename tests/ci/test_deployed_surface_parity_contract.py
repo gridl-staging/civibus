@@ -27,6 +27,31 @@ DRIFTED_SHA = subprocess.run(
     check=True,
 ).stdout.strip()
 
+FAIL_CLOSED_PAGE_BODIES = {
+    "/": "Follow money around Congress and the White House.",
+    "/search?q=ossoff": 'data-testid="search-results-region"',
+    "/donors?q=smith&by=name": 'data-testid="donor-result-row"',
+    "/congress": 'data-testid="congress-member-row-0"',
+    "/methodology": "Methodology",
+    "/developers": "GET /api/public/v1/federal/officials",
+    "/candidates": "Candidates",
+    "/committees": "Committees",
+    "/committee/jon-ossoff-for-senate": "Key metrics",
+    "/compare": "Compare officeholders",
+    "/calendar": "Election calendar",
+}
+KNOWN_RED_PAGE_BODIES = {
+    "/coverage": "Coverage",
+    "/data-sources": "Data sources",
+    "/state/GA": "Georgia",
+    "/sitemap.xml": "<urlset",
+}
+DEFAULT_PAGE_BODIES = FAIL_CLOSED_PAGE_BODIES | KNOWN_RED_PAGE_BODIES
+
+
+def _fixture_body_slug(path: str) -> str:
+    return path.encode("utf-8").hex()
+
 
 def _write_fixture(
     fixture_dir: Path,
@@ -34,6 +59,7 @@ def _write_fixture(
     repo_paths: set[str],
     deployed_paths: set[str],
     page_statuses: dict[str, int | str] | None = None,
+    page_bodies: dict[str, str] | None = None,
     openapi_status: int = 200,
     api_version_payload: dict[str, str] | None = None,
     web_version_payload: dict[str, str] | None = None,
@@ -53,11 +79,17 @@ def _write_fixture(
         f"{openapi_status}\n",
         encoding="utf-8",
     )
-    statuses = page_statuses or {"/": 200, "/congress": 200, "/developers": 200}
+    statuses = page_statuses or {path: 200 for path in DEFAULT_PAGE_BODIES}
     (fixture_dir / "page_statuses.tsv").write_text(
         "".join(f"{path}\t{status}\n" for path, status in statuses.items()),
         encoding="utf-8",
     )
+    bodies = DEFAULT_PAGE_BODIES | (page_bodies or {})
+    body_dir = fixture_dir / "page_bodies"
+    body_dir.mkdir()
+    for path in statuses:
+        body = bodies.get(path, f"<html><body>{path}</body></html>")
+        (body_dir / f"{_fixture_body_slug(path)}.html").write_text(body, encoding="utf-8")
     (fixture_dir / "api_health_version.json").write_text(
         json.dumps(api_version_payload or {"git_sha": EXPECTED_SHA, "built_at": "2026-07-14T21:20:44Z"}),
         encoding="utf-8",
@@ -99,9 +131,11 @@ def test_deployed_surface_parity_probe_accepts_matching_fixture_surface(tmp_path
     assert f"base_url {DEFAULT_PUBLIC_BASE_URL}" in result.stdout
     assert f"deployed_sha_match expected={EXPECTED_SHA} api={EXPECTED_SHA} web={EXPECTED_SHA}" in result.stdout
     assert "openapi_paths_match repo=3 deployed=3" in result.stdout
-    assert "page_status / 200" in result.stdout
-    assert "page_status /congress 200" in result.stdout
-    assert "page_status /developers 200" in result.stdout
+    for page_path in FAIL_CLOSED_PAGE_BODIES:
+        assert f"page_status {page_path} 200 marker_ok" in result.stdout
+    for page_path in KNOWN_RED_PAGE_BODIES:
+        assert f"WARN known_red_page {page_path} 200" in result.stdout
+    assert "surfaces_probed=11 failed=0" in result.stdout
     assert "surface_parity_ok" in result.stdout
 
 
@@ -210,13 +244,56 @@ def test_deployed_surface_parity_probe_names_missing_public_pages(tmp_path: Path
         fixture_dir,
         repo_paths={"/health"},
         deployed_paths={"/health"},
-        page_statuses={"/": 200, "/congress": 404, "/developers": 200},
+        page_statuses={
+            **{path: 200 for path in DEFAULT_PAGE_BODIES},
+            "/congress": 404,
+        },
     )
 
     result = _run_probe(fixture_dir)
 
     assert result.returncode != 0
     assert "missing_page /congress 404" in result.stderr
+    assert "page_status /developers 200 marker_ok" in result.stdout
+
+
+def test_deployed_surface_parity_probe_fails_on_status_200_without_donor_result_content(tmp_path: Path) -> None:
+    fixture_dir = tmp_path / "donor-content-missing"
+    _write_fixture(
+        fixture_dir,
+        repo_paths={"/health"},
+        deployed_paths={"/health"},
+        page_bodies={"/donors?q=smith&by=name": "<html><body>No donors loaded.</body></html>"},
+    )
+
+    result = _run_probe(fixture_dir)
+
+    assert result.returncode != 0
+    assert 'page_content_marker_missing /donors?q=smith&by=name marker=data-testid="donor-result-row"' in result.stderr
+    assert "surfaces_probed=11 failed=1" in result.stdout
+
+
+def test_deployed_surface_parity_probe_aggregates_failures_and_warns_all_known_red_pages(tmp_path: Path) -> None:
+    fixture_dir = tmp_path / "aggregates-failures"
+    _write_fixture(
+        fixture_dir,
+        repo_paths={"/health"},
+        deployed_paths={"/health"},
+        page_statuses={
+            **{path: 200 for path in DEFAULT_PAGE_BODIES},
+            "/search?q=ossoff": 500,
+        },
+    )
+
+    result = _run_probe(fixture_dir)
+
+    assert result.returncode != 0
+    assert "page_unexpected_http_status /search?q=ossoff 500" in result.stderr
+    assert "page_status /donors?q=smith&by=name 200 marker_ok" in result.stdout
+    assert "page_status /calendar 200 marker_ok" in result.stdout
+    for page_path in KNOWN_RED_PAGE_BODIES:
+        assert f"WARN known_red_page {page_path} 200" in result.stdout
+    assert "surfaces_probed=11 failed=1" in result.stdout
 
 
 def test_fly_runbook_documents_deployed_surface_parity_probe() -> None:
