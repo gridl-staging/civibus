@@ -37,7 +37,7 @@ def test_ci_workflow_commands_enforce_locked_stage1_contract() -> None:
         f"uv run --locked ruff check {PUBLIC_CI_CONTRACT_PATH}",
         f"uv run --locked ruff format --check {PUBLIC_CI_CONTRACT_PATH}",
         "uv sync --locked --extra dev --extra entity-resolution",
-        f"uv run --locked pytest {PUBLIC_CI_CONTRACT_PATH} --tb=short",
+        f'uv run --locked pytest {PUBLIC_CI_CONTRACT_PATH} -m "not dev_repo_only" --tb=short',
     )
 
     for command in required_commands:

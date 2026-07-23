@@ -39,6 +39,10 @@ TERMINAL_STATUSES = {"succeeded", "failed", "interrupted"}
 
 def _build_test_repo(tmp_path: Path) -> Path:
     """Mirror just enough of the repo so the wrapper resolves repo_root correctly."""
+    # GitHub's Linux runner places pytest roots beneath world-writable /tmp.
+    # Production env loading correctly rejects that ancestry, so make this
+    # synthetic repo private before exercising the wrapper contract.
+    tmp_path.chmod(0o700)
     scripts_dir = tmp_path / "infra" / "scripts"
     scripts_dir.mkdir(parents=True)
     shutil.copy(ENV_LIB_PATH, scripts_dir / "env_lib.sh")

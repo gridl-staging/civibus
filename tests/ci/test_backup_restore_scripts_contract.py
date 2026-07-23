@@ -4,6 +4,8 @@ import os
 import subprocess
 from pathlib import Path
 
+import pytest
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 BACKUP_SCRIPT_PATH = REPO_ROOT / "infra/scripts/backup.sh"
@@ -114,6 +116,7 @@ def test_scripts_readme_points_back_to_repo_runtime_contracts() -> None:
         assert required_fragment in readme_text
 
 
+@pytest.mark.dev_repo_only
 def test_db_backup_runbook_uses_current_fly_growth_floor_baseline() -> None:
     assert DB_BACKUP_RUNBOOK_PATH.is_file(), "docs/howto/operations/db-backup-runbook.md must exist"
     assert FLY_BACKUP_BASELINE_PATH.is_file(), "current Fly backup baseline evidence must exist"

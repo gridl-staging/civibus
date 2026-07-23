@@ -3,6 +3,11 @@
 import re
 from pathlib import Path
 
+import pytest
+
+
+pytestmark = pytest.mark.dev_repo_only
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RUNBOOK_PATH = REPO_ROOT / "docs/howto/operations/fly_deployment_runbook.md"

@@ -7,6 +7,8 @@ import os
 import subprocess
 from pathlib import Path
 
+import pytest
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PROBE_PATH = REPO_ROOT / "infra/scripts/probe_deployed_surface_parity.sh"
@@ -295,6 +297,7 @@ def test_deployed_surface_parity_probe_aggregates_failures_and_warns_all_known_r
     assert "surfaces_probed=13 failed=1" in result.stdout
 
 
+@pytest.mark.dev_repo_only
 def test_fly_runbook_documents_deployed_surface_parity_probe() -> None:
     runbook_text = RUNBOOK_PATH.read_text(encoding="utf-8")
 

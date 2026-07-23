@@ -42,4 +42,4 @@ jobs:
       - name: Sync dependencies
         run: uv sync --locked --extra dev --extra entity-resolution
       - name: Unit tests
-        run: uv run --locked pytest tests/ci/ --tb=short
+        run: uv run --locked pytest tests/ci/ -m "not dev_repo_only" --tb=short
