@@ -17,9 +17,11 @@ def test_integration_workflow_uses_push_main_and_python_312() -> None:
     workflow_text = _read_integration_workflow()
 
     assert "push:\n    branches: [main]" in workflow_text
+    assert "pull_request:\n    branches: [main]" in workflow_text
     assert "permissions:\n  contents: read" in workflow_text
     assert "name: integration-tests" in workflow_text
     assert f"uses: actions/checkout@{CHECKOUT_SHA}" in workflow_text
+    assert workflow_text.count("persist-credentials: false") == 1
     assert f"uses: astral-sh/setup-uv@{SETUP_UV_SHA}" in workflow_text
     assert 'python-version: "3.12"' in workflow_text
 
@@ -76,6 +78,9 @@ def test_integration_workflow_waits_for_repo_db_container_before_reset() -> None
     reset_index = workflow_text.index("name: Reset DB schema")
     seed_index = workflow_text.index("name: Seed FEC bulk data")
     graph_index = workflow_text.index("name: Load graph")
+    db_backed_suite_index = workflow_text.index("name: DB-backed product suite")
     test_index = workflow_text.index("name: Integration tests")
+    stop_index = workflow_text.index("name: Stop DB")
 
-    assert start_index < wait_index < reset_index < seed_index < graph_index < test_index
+    assert start_index < wait_index < reset_index < seed_index < graph_index < db_backed_suite_index < test_index
+    assert db_backed_suite_index < stop_index

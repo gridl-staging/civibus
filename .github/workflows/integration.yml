@@ -1,6 +1,8 @@
 name: Integration
 
 on:
+  pull_request:
+    branches: [main]
   push:
     branches: [main]
 
@@ -17,6 +19,8 @@ jobs:
       POSTGRES_PASSWORD: ci-postgres-password
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
       - uses: astral-sh/setup-uv@0c5e2b8115b80b4c7c5ddf6ffdd634974642d182 # v5.4.1
         with:
           python-version: "3.12"
@@ -46,6 +50,21 @@ jobs:
         run: make ingest-fec-bulk-sample
       - name: Load graph
         run: make graph-load
+      - name: DB-backed product suite
+        run: |
+          # The database has already been started, health-checked, reset, seeded,
+          # and graph-loaded by the repo-owned setup path above. Keep this gate as
+          # the complete DB-backed product slice and let the quarantine marker
+          # exclude only known-bad exact nodes.
+          uv run --locked pytest -m "integration and not quarantined" \
+            api/ \
+            core/ \
+            domains/ \
+            tests/integration/ \
+            tests/e2e/ \
+            tests/test_db_integration.py \
+            tests/test_graph_queries.py \
+            tests/test_relational_queries.py
       - name: Integration tests
         run: uv run --locked pytest tests/ci/test_integration_smoke.py --tb=short
       - name: Stop DB

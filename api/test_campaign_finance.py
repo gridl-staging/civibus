@@ -2676,7 +2676,7 @@ def test_get_candidate_returns_direct_provenance(
         db_conn,
         CandidateRowSeed(
             id=candidate_id,
-            fec_candidate_id="H0NC01001",
+            fec_candidate_id="H9NC93001",
             name="Jane Candidate",
             office="H",
             person_id=person.id,
@@ -2694,7 +2694,7 @@ def test_get_candidate_returns_direct_provenance(
     assert response.status_code == 200
     payload = response.json()
     assert payload["id"] == str(candidate_id)
-    assert payload["fec_candidate_id"] == "H0NC01001"
+    assert payload["fec_candidate_id"] == "H9NC93001"
     assert payload["name"] == "Jane Candidate"
     assert payload["person_id"] == str(person.id)
     assert payload["party"] == "DEM"

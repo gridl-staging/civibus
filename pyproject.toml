@@ -51,6 +51,7 @@ markers = [
   "unit: regular suite of tests",
   "integration: requires external services such as Postgres, Docker, or networked APIs",
   "e2e: end-to-end tests requiring Docker, database, and live API access",
+  "quarantined: exact DB-backed test quarantined with a documented reason and owner",
 ]
 timeout = 120
 

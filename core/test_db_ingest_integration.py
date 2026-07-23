@@ -740,11 +740,11 @@ def test_find_person_by_identifier_returns_matching_row(db_conn: psycopg.Connect
         canonical_name="ALICE JONES",
         first_name="ALICE",
         last_name="JONES",
-        identifiers={"fec_candidate_id": "H0NC01001"},
+        identifiers={"fec_candidate_id": "H9NC91001"},
     )
     insert_person(db_conn, person)
 
-    assert find_person_by_identifier(db_conn, "fec_candidate_id", "H0NC01001") == person.id
+    assert find_person_by_identifier(db_conn, "fec_candidate_id", "H9NC91001") == person.id
     assert find_person_by_identifier(db_conn, "fec_candidate_id", "H0NC99999") is None
 
 

@@ -240,7 +240,7 @@ def _seed_recipient_scope(conn: psycopg.Connection, source_record_id: UUID) -> D
             candidate_id=UUID("72000000-0000-0000-0000-000000000014"),
             committee_id=UUID("72000000-0000-0000-0000-000000000015"),
             link_id=UUID("72000000-0000-0000-0000-000000000016"),
-            fec_candidate_id="H0NC01001",
+            fec_candidate_id="H9NC72001",
             fec_committee_id="C72000001",
             state="NC",
             district="01",

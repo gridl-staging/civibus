@@ -8,12 +8,13 @@ from pathlib import Path
 import pytest
 import yaml
 
-from domains.campaign_finance.types.models import OfficeType
+from conftest import _skip_or_fail_for_postgres_unavailable
 from core.schema_sql_runner import (
     build_base_psql_command,
     run_psql_command,
     run_psql_file,
 )
+from domains.campaign_finance.types.models import OfficeType
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -317,7 +318,7 @@ def _skip_if_no_database_access() -> None:
     try:
         _run_psql_command(TEST_DATABASE, "SELECT 1;")
     except Exception as exc:
-        pytest.skip(f"Unable to connect to test database '{TEST_DATABASE}': {exc}")
+        _skip_or_fail_for_postgres_unavailable(f"Unable to connect to test database '{TEST_DATABASE}': {exc}")
 
 
 @pytest.fixture(scope="session", autouse=True)

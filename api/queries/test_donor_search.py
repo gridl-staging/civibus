@@ -39,7 +39,7 @@ def test_search_donors_by_name_rolls_up_current_federal_recipient_activity(
         {
             "person_id": fixture.alpha.person_id,
             "candidate_id": fixture.alpha.candidate_id,
-            "fec_candidate_id": "H0NC01001",
+            "fec_candidate_id": "H9NC72001",
             "candidate_name": "Alpha Officeholder",
             "committee_id": fixture.alpha.committee_id,
             "fec_committee_id": "C72000001",

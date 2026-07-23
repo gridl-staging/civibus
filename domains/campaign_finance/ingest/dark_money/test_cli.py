@@ -6,10 +6,17 @@ from uuid import uuid4
 
 import pytest
 
+from conftest import _skip_or_fail_for_postgres_unavailable
 from domains.campaign_finance.ingest.bulk_stage4_loader import LoadResult
 from domains.campaign_finance.ingest.dark_money import cli
 
 _POSTGRES_UNAVAILABLE_PREFIX = "Unable to connect to PostgreSQL at "
+
+
+def _skip_if_optional_postgres_unavailable(error: RuntimeError) -> None:
+    if str(error).startswith(_POSTGRES_UNAVAILABLE_PREFIX):
+        _skip_or_fail_for_postgres_unavailable(str(error))
+    raise error
 
 
 @pytest.mark.unit
@@ -117,6 +124,32 @@ def test_main_ingest_mode_returns_exit_1_on_runtime_error(
     assert "IRS 527 pipeline failed: ingest exploded" in captured.err
 
 
+@pytest.mark.unit
+def test_skip_if_optional_postgres_unavailable_skips_without_required_db(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("CIVIBUS_REQUIRE_DB", raising=False)
+
+    with pytest.raises(pytest.skip.Exception, match="Unable to connect to PostgreSQL"):
+        _skip_if_optional_postgres_unavailable(RuntimeError("Unable to connect to PostgreSQL at localhost:1/civibus"))
+
+
+@pytest.mark.unit
+def test_skip_if_optional_postgres_unavailable_fails_with_required_db(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CIVIBUS_REQUIRE_DB", "1")
+
+    try:
+        _skip_if_optional_postgres_unavailable(RuntimeError("Unable to connect to PostgreSQL at localhost:1/civibus"))
+    except pytest.skip.Exception as exc:
+        pytest.fail(f"expected required database failure, got skip: {exc}")
+    except pytest.fail.Exception as exc:
+        assert "Unable to connect to PostgreSQL" in str(exc)
+    else:
+        pytest.fail("expected required database failure")
+
+
 @pytest.mark.integration
 def test_run_ingest_fixture_zip_returns_inserted_rows() -> None:
     fixture_path = Path(__file__).resolve().parents[4] / "tests" / "fixtures" / "bulk" / "irs_527_sample.zip"
@@ -125,9 +158,7 @@ def test_run_ingest_fixture_zip_returns_inserted_rows() -> None:
     try:
         first_result = cli.run_ingest(path=fixture_path, batch_size=1000, limit=1000)
     except RuntimeError as error:
-        if str(error).startswith(_POSTGRES_UNAVAILABLE_PREFIX):
-            pytest.skip(str(error))
-        raise
+        _skip_if_optional_postgres_unavailable(error)
 
     assert isinstance(first_result, LoadResult)
     total_processed = first_result.inserted + first_result.skipped

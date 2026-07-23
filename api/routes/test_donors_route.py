@@ -46,7 +46,7 @@ def test_donor_search_route_returns_seeded_name_payload(
             {
                 "person_id": str(fixture.alpha.person_id),
                 "candidate_id": str(fixture.alpha.candidate_id),
-                "fec_candidate_id": "H0NC01001",
+                "fec_candidate_id": "H9NC72001",
                 "candidate_name": "Alpha Officeholder",
                 "committee_id": str(fixture.alpha.committee_id),
                 "fec_committee_id": "C72000001",

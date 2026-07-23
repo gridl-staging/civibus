@@ -21,9 +21,9 @@ It keeps merge-gate settings aligned with workflow source-of-truth files instead
   - `tests/ci/test_integration_workflow_contract.py`
 
 Current PR-required checks from `.github/workflows/ci.yml`: `lint`, `unit-tests`
-Push-only checks from `.github/workflows/integration.yml`: `integration-tests`
+PR-capable checks from `.github/workflows/integration.yml`: `integration-tests`
 
-Do not select `integration-tests` as a required status check for pull requests.
+`integration-tests` must not be declared required until a mirror PR run establishes its real check context and Stage 4 probes branch protection.
 
 ## Required GitHub Rule Settings For `main`
 
@@ -43,7 +43,7 @@ Set these in GitHub Settings -> Branches -> `main`:
 2. Edit or create the branch-protection rule for `main`.
 3. Enable the rule settings listed above.
 4. In required status checks, select only checks derived from `.github/workflows/ci.yml`.
-5. Confirm `integration-tests` is not selected as a merge blocker because it is push-only post-merge verification.
+5. Confirm `integration-tests` is not selected as a merge blocker yet; the workflow is PR-capable, but the required-check context must be proven by a mirror PR run and Stage 4 protection probes first.
 
 ## Repo-Specific Deviations
 

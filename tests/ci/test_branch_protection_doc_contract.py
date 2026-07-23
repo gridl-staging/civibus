@@ -36,6 +36,10 @@ def test_branch_protection_runbook_reflects_pr_vs_push_check_split() -> None:
     integration_workflow_text = _read_text(INTEGRATION_WORKFLOW_PATH)
     runbook_text = _read_text(RUNBOOK_PATH)
 
+    assert "pull_request:\n    branches: [main]" in ci_workflow_text
+    assert "pull_request:\n    branches: [main]" in integration_workflow_text
+    assert "push:\n    branches: [main]" in integration_workflow_text
+
     ci_checks = _extract_job_names(ci_workflow_text)
     integration_checks = _extract_job_names(integration_workflow_text)
 
@@ -45,10 +49,13 @@ def test_branch_protection_runbook_reflects_pr_vs_push_check_split() -> None:
     required_pr_line = "Current PR-required checks from `.github/workflows/ci.yml`: " + ", ".join(
         f"`{check}`" for check in ci_checks
     )
-    push_only_line = "Push-only checks from `.github/workflows/integration.yml`: " + ", ".join(
+    pr_capable_line = "PR-capable checks from `.github/workflows/integration.yml`: " + ", ".join(
         f"`{check}`" for check in integration_checks
     )
 
     assert required_pr_line in runbook_text
-    assert push_only_line in runbook_text
-    assert "Do not select `integration-tests` as a required status check for pull requests." in runbook_text
+    assert pr_capable_line in runbook_text
+    assert (
+        "`integration-tests` must not be declared required until a mirror PR run establishes its real check context "
+        "and Stage 4 probes branch protection."
+    ) in runbook_text

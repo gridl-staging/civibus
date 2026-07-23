@@ -1,6 +1,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 import time
@@ -10,6 +11,7 @@ from typing import TYPE_CHECKING
 
 import psycopg
 import pytest
+from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
 
 if TYPE_CHECKING:
     pass
@@ -154,10 +156,70 @@ _PARKED_JURISDICTION_PARENTS = (
     _REPO_ROOT / "domains" / "campaign_finance" / "jurisdictions" / "states",
     _REPO_ROOT / "domains" / "campaign_finance" / "jurisdictions" / "cities",
 )
+_DB_BACKED_QUARANTINE_PATH = _REPO_ROOT / "tests" / "ci" / "db_backed_quarantine.md"
 if not os.environ.get("CIVIBUS_INCLUDE_PARKED"):
     collect_ignore = [
         str(child) for parent in _PARKED_JURISDICTION_PARENTS for child in sorted(parent.iterdir()) if child.is_dir()
     ]
+
+
+class _DbBackedQuarantineEntry(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    node_id: str
+    reason: str
+    owner: str
+
+    @field_validator("node_id", "reason", "owner")
+    @classmethod
+    def _require_non_blank_value(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("must not be blank")
+        return value
+
+
+def _load_db_backed_quarantine(
+    quarantine_path: Path = _DB_BACKED_QUARANTINE_PATH,
+) -> tuple[_DbBackedQuarantineEntry, ...]:
+    """Load and validate exact node IDs from the canonical DB-backed quarantine."""
+    entries: list[_DbBackedQuarantineEntry] = []
+    node_id_lines: dict[str, int] = {}
+    try:
+        quarantine_lines = quarantine_path.read_text(encoding="utf-8").splitlines()
+    except OSError as error:
+        raise pytest.UsageError(f"Unable to read DB-backed quarantine {quarantine_path}: {error}") from error
+
+    for line_number, line in enumerate(quarantine_lines, start=1):
+        stripped_line = line.strip()
+        if not stripped_line or stripped_line.startswith("#"):
+            continue
+        try:
+            entry_data = json.loads(stripped_line)
+            entry = _DbBackedQuarantineEntry.model_validate(entry_data)
+        except (json.JSONDecodeError, ValidationError) as error:
+            raise pytest.UsageError(
+                f"Invalid DB-backed quarantine entry at {quarantine_path}:{line_number}: {error}"
+            ) from error
+
+        previous_line = node_id_lines.get(entry.node_id)
+        if previous_line is not None:
+            raise pytest.UsageError(
+                f"Invalid DB-backed quarantine entry at {quarantine_path}:{line_number}: "
+                f"duplicate node_id {entry.node_id!r} first declared on line {previous_line}"
+            )
+        node_id_lines[entry.node_id] = line_number
+        entries.append(entry)
+    return tuple(entries)
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+    """Mark exact canonical quarantine matches before built-in marker deselection."""
+    entries_by_node_id = {entry.node_id: entry for entry in _load_db_backed_quarantine()}
+    for item in items:
+        entry = entries_by_node_id.get(item.nodeid)
+        if entry is not None:
+            item.add_marker(pytest.mark.quarantined(reason=entry.reason, owner=entry.owner))
 
 
 def _reexec_pytest_under_project_python_if_needed() -> None:
