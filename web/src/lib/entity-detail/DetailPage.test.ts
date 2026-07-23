@@ -568,6 +568,11 @@ describe("entity detail page rendering", () => {
     expect(rendered.body).toContain('href="#person-outside-spending"');
     expect(rendered.body).toContain("Outside spending details");
     expect(rendered.body).toContain("Finance data loading");
+    expect(
+      rendered.body.match(
+        /<section class="detail__money-glance" aria-label="Money at a glance">/g
+      )
+    ).toHaveLength(1);
     expect(rendered.body.match(/<h4>Money at a glance<\/h4>/g)).toHaveLength(1);
   });
 

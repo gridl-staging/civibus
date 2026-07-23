@@ -424,18 +424,25 @@
 {#snippet moneyHeadline(headline: PersonMoneyHeadlineState)}
   {#if headline.kind === "loaded"}
     {@const moneyAtGlance = buildPersonMoneyAtGlancePresentation(headline.summary)}
-    <h4>{moneyAtGlance.heading}</h4>
-    <p>{moneyAtGlance.cycleLabel}</p>
-    {@render moneyAtGlanceSummaryRows(moneyAtGlance)}
-    {@render moneyAtGlanceCycleNav(moneyAtGlance)}
-    {@render moneyAtGlanceMetricRows(moneyAtGlance, "rows")}
-    {@render moneyAtGlanceReceiptComposition(moneyAtGlance, moneyAtGlance.receiptComposition.testId)}
+    <section class="detail__money-glance" aria-label={moneyAtGlance.heading}>
+      <h4>{moneyAtGlance.heading}</h4>
+      <p>{moneyAtGlance.cycleLabel}</p>
+      {@render moneyAtGlanceSummaryRows(moneyAtGlance)}
+      {@render moneyAtGlanceCycleNav(moneyAtGlance)}
+      {@render moneyAtGlanceMetricRows(moneyAtGlance, "rows")}
+      {@render moneyAtGlanceReceiptComposition(
+        moneyAtGlance,
+        moneyAtGlance.receiptComposition.testId
+      )}
+    </section>
   {:else if headline.kind === "no_linked_candidate"}
     <p>{headline.message}</p>
   {:else}
-    <h4>Money at a glance</h4>
-    <p>{headline.selectedCycle} cycle</p>
-    <p>{headline.message}</p>
+    <section class="detail__money-glance" aria-label="Money at a glance">
+      <h4>Money at a glance</h4>
+      <p>{headline.selectedCycle} cycle</p>
+      <p>{headline.message}</p>
+    </section>
   {/if}
 {/snippet}
 
