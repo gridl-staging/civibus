@@ -1726,23 +1726,53 @@ _TRANSACTION_LIST_SQL_TEMPLATE = """
 """
 
 _CANDIDATE_LIST_SQL_TEMPLATE = f"""
+    WITH filtered_candidates AS MATERIALIZED (
+        SELECT
+            c.id,
+            c.fec_candidate_id,
+            c.name,
+            c.person_id,
+            c.source_record_id,
+            c.party,
+            c.office,
+            c.state,
+            c.district,
+            {_SLUG_NAME_EXPR} AS slug
+        FROM cf.candidate c
+        WHERE {{where_sql}}
+        ORDER BY c.name ASC, c.id ASC
+        LIMIT %s + 1
+        OFFSET %s
+    ),
+    page_slugs AS (
+        SELECT DISTINCT slug
+        FROM filtered_candidates
+    ),
+    slug_counts AS (
+        SELECT
+            {_SLUG_NORMALIZE_EXPR.format(value="candidate.name")} AS slug,
+            COUNT(*) AS candidate_count
+        FROM cf.candidate candidate
+        JOIN page_slugs
+          ON page_slugs.slug = {_SLUG_NORMALIZE_EXPR.format(value="candidate.name")}
+        GROUP BY {_SLUG_NORMALIZE_EXPR.format(value="candidate.name")}
+    )
     SELECT
-        c.id,
-        c.fec_candidate_id,
-        c.name,
-        c.person_id,
-        c.source_record_id,
-        c.party,
-        c.office,
-        c.state,
-        c.district,
-        {_SLUG_NAME_EXPR} AS slug,
-        {_CANDIDATE_SLUG_IS_UNIQUE_SUBQUERY} AS slug_is_unique
-    FROM cf.candidate c
-    WHERE {{where_sql}}
-    ORDER BY c.name ASC, c.id ASC
-    LIMIT %s + 1
-    OFFSET %s
+        filtered.id,
+        filtered.fec_candidate_id,
+        filtered.name,
+        filtered.person_id,
+        filtered.source_record_id,
+        filtered.party,
+        filtered.office,
+        filtered.state,
+        filtered.district,
+        filtered.slug,
+        slug_counts.candidate_count = 1 AS slug_is_unique
+    FROM filtered_candidates filtered
+    JOIN slug_counts
+      ON slug_counts.slug = filtered.slug
+    ORDER BY filtered.name ASC, filtered.id ASC
 """
 
 _CANDIDATES_FOR_PEOPLE_SQL = f"""

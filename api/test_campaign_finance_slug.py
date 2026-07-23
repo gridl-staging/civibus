@@ -379,6 +379,7 @@ def test_candidate_list_slug_is_unique_reflects_global_uniqueness(
     Insert two candidates named "John Smith" in different states, filter to one
     state. The single "John Smith" in filtered results must still show
     slug_is_unique=False because the other "John Smith" exists globally.
+    A distinct Georgia candidate must remain globally unique.
     """
     insert_candidate_row(
         db_conn,
@@ -400,14 +401,33 @@ def test_candidate_list_slug_is_unique_reflects_global_uniqueness(
             state="OH",
         ),
     )
+    insert_candidate_row(
+        db_conn,
+        CandidateRowSeed(
+            id=UUID("00000000-0000-0000-0000-000000000703"),
+            fec_candidate_id="H0GA99002",
+            name="Globally Unique Candidate",
+            office="H",
+            state="GA",
+        ),
+    )
 
     response = api_client.get("/v1/candidates?state=GA")
 
+    assert response.status_code == 200
     body = response.json()
-    john_smiths = [item for item in body["items"] if item["name"] == "John Smith"]
-    assert len(john_smiths) == 1
-    # Must be False because there's a global collision with the OH "John Smith"
-    assert john_smiths[0]["slug_is_unique"] is False
+    items_by_name = {item["name"]: item for item in body["items"]}
+    assert set(items_by_name) == {"Globally Unique Candidate", "John Smith"}
+    john_smith = items_by_name["John Smith"]
+    assert john_smith["id"] == "00000000-0000-0000-0000-000000000701"
+    assert john_smith["state"] == "GA"
+    assert john_smith["office"] == "H"
+    assert john_smith["slug"] == "john-smith"
+    assert all(item["id"] != "00000000-0000-0000-0000-000000000702" for item in body["items"])
+    assert john_smith["slug_is_unique"] is False
+    unique_candidate = items_by_name["Globally Unique Candidate"]
+    assert unique_candidate["slug"] == "globally-unique-candidate"
+    assert unique_candidate["slug_is_unique"] is True
 
 
 # ---------------------------------------------------------------------------
