@@ -1,0 +1,3 @@
+election_date,election_name,county,contest_name,contest_id,candidate_name,candidate_party,votes,percent,certified
+2022-11-08,General Election,Wake,US SENATE,2001,CHERI BEASLEY,DEM,312832,46.02,true
+2022-11-08,General Election,Wake,US SENATE,2001,TED BUDD,REP,361304,53.15,true

@@ -1,0 +1,4 @@
+election_date,election_name,county,contest_name,contest_id,candidate_name,candidate_party,votes,percent,certified
+2024-11-05,General Election,Wake,NC GOVERNOR,4001,JOSH STEIN,DEM,452111,51.12,true
+2024-11-05,General Election,Wake,NC GOVERNOR,4001,MARK ROBINSON,REP,423112,47.84,true
+2024-11-05,General Election,Wake,UNMAPPED SAMPLE CONTEST,9999,CANDIDATE X,UNA,1234,100.00,true

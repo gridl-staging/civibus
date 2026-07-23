@@ -1,0 +1,3 @@
+election_date,election_name,county,contest_name,contest_id,candidate_name,candidate_party,votes,percent,certified
+2024-03-05,Primary Election,Wake,ATTORNEY GENERAL DEM,3001,JEFF JACKSON,DEM,97751,64.87,true
+2024-03-05,Primary Election,Wake,ATTORNEY GENERAL DEM,3001,SATANA DEBERRY,DEM,52957,35.13,true

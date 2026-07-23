@@ -1,0 +1,208 @@
+offices:
+  - id: 8f00ac62-07f9-42bd-b5b6-6ec9a4ca0f0d
+    name: nc_house_member
+    office_level: state
+    title: State Representative
+    jurisdiction_id: null
+    state: NC
+    electoral_division_key: nc_house_district_3
+    is_elected: true
+    number_of_seats: 120
+    source_record_id: null
+
+  - id: 5df89dc1-45cc-4f2f-858d-68febbaf13b2
+    name: durham_county_commissioner
+    office_level: county
+    title: County Commissioner
+    jurisdiction_id: null
+    state: NC
+    electoral_division_key: nc_county_durham
+    is_elected: true
+    number_of_seats: 5
+    source_record_id: null
+
+  - id: 340cf0e7-1d84-441f-b9b5-155c7a0e2bf7
+    name: durham_nc_city_council_member
+    office_level: municipal
+    title: City Council Member
+    jurisdiction_id: null
+    state: NC
+    electoral_division_key: nc_municipal_durham
+    is_elected: true
+    number_of_seats: 6
+    source_record_id: null
+
+  - id: 27440525-e762-4f40-8e18-1456d1ca93fd
+    name: nc_school_board_member_681
+    office_level: school_board
+    title: School Board Member
+    jurisdiction_id: null
+    state: NC
+    electoral_division_key: nc_school_district_681
+    is_elected: true
+    number_of_seats: 1
+    source_record_id: null
+
+elections:
+  - id: 9c055fde-9fd8-4f88-8e66-6c68f88566a8
+    election_key: nc_2026_primary
+    jurisdiction_scope: state
+    state: NC
+    county: null
+    municipality: null
+    election_date: 2026-03-03
+    election_type: primary
+    is_special: false
+    office_id: 8f00ac62-07f9-42bd-b5b6-6ec9a4ca0f0d
+    electoral_division_key: nc_house_district_3
+
+  - id: 2724cbc0-f391-4d9a-a5be-2c6de9303638
+    election_key: nc_2026_general
+    jurisdiction_scope: state
+    state: NC
+    county: null
+    municipality: null
+    election_date: 2026-11-03
+    election_type: general
+    is_special: false
+    office_id: 8f00ac62-07f9-42bd-b5b6-6ec9a4ca0f0d
+    electoral_division_key: nc_house_district_3
+
+contests:
+  - id: 10f4c0c7-4b8d-42d5-9b14-01ffc07301ad
+    name: NC House District 3 General 2026
+    election_id: 2724cbc0-f391-4d9a-a5be-2c6de9303638
+    election_date: 2026-11-03
+    election_type: general
+    office_id: 8f00ac62-07f9-42bd-b5b6-6ec9a4ca0f0d
+    electoral_division_key: nc_house_district_3
+    number_of_seats: 1
+    filing_deadline: null
+    is_partisan: true
+    candidate_list_incomplete: false
+    source_record_id: null
+
+  - id: 4f9cd09d-9182-4d18-9c52-5af50ba9bcd0
+    name: Durham County Commissioner General 2026
+    election_id: 2724cbc0-f391-4d9a-a5be-2c6de9303638
+    election_date: 2026-11-03
+    election_type: general
+    office_id: 5df89dc1-45cc-4f2f-858d-68febbaf13b2
+    electoral_division_key: nc_county_durham
+    number_of_seats: 1
+    filing_deadline: null
+    is_partisan: true
+    candidate_list_incomplete: false
+    source_record_id: null
+
+  - id: f9207f52-ff33-47ee-8ca5-f0c149f6d630
+    name: Durham City Council General 2026
+    election_id: 2724cbc0-f391-4d9a-a5be-2c6de9303638
+    election_date: 2026-11-03
+    election_type: general
+    office_id: 340cf0e7-1d84-441f-b9b5-155c7a0e2bf7
+    electoral_division_key: nc_municipal_durham
+    number_of_seats: 1
+    filing_deadline: null
+    is_partisan: false
+    candidate_list_incomplete: false
+    source_record_id: null
+
+  - id: 0a184f39-6e04-406e-b8e0-6d03bf8f4f2d
+    name: NC School Board District 681 General 2026
+    election_id: 2724cbc0-f391-4d9a-a5be-2c6de9303638
+    election_date: 2026-11-03
+    election_type: general
+    office_id: 27440525-e762-4f40-8e18-1456d1ca93fd
+    electoral_division_key: nc_school_district_681
+    number_of_seats: 1
+    filing_deadline: null
+    is_partisan: false
+    candidate_list_incomplete: false
+    source_record_id: null
+
+filing_deadlines:
+  - election_id: 9c055fde-9fd8-4f88-8e66-6c68f88566a8
+    office_id: 8f00ac62-07f9-42bd-b5b6-6ec9a4ca0f0d
+    electoral_division_key: nc_house_district_3
+    jurisdiction_scope: state
+    state: NC
+    county: null
+    municipality: null
+    deadline_date: 2025-12-01
+    deadline_kind: candidate_filing_open
+
+  - election_id: 9c055fde-9fd8-4f88-8e66-6c68f88566a8
+    office_id: 8f00ac62-07f9-42bd-b5b6-6ec9a4ca0f0d
+    electoral_division_id: null
+    jurisdiction_scope: state
+    state: NC
+    county: null
+    municipality: null
+    deadline_date: 2025-12-16
+    deadline_kind: candidate_withdrawal
+
+  - election_id: 9c055fde-9fd8-4f88-8e66-6c68f88566a8
+    office_id: 8f00ac62-07f9-42bd-b5b6-6ec9a4ca0f0d
+    electoral_division_key: nc_house_district_3
+    jurisdiction_scope: state
+    state: NC
+    county: null
+    municipality: null
+    deadline_date: 2025-12-19
+    deadline_kind: candidate_filing
+
+reporting_periods:
+  - election_id: 9c055fde-9fd8-4f88-8e66-6c68f88566a8
+    period_name: "2026 First Quarter"
+    period_start: 2026-01-01
+    period_end: 2026-02-14
+    report_due_date: 2026-02-24
+    is_pre_election: true
+    is_post_election: false
+    disclosure_kind: periodic
+
+  - election_id: 9c055fde-9fd8-4f88-8e66-6c68f88566a8
+    period_name: "2026 Second Quarter"
+    period_start: 2026-02-15
+    period_end: 2026-06-30
+    report_due_date: 2026-07-10
+    is_pre_election: false
+    is_post_election: true
+    disclosure_kind: periodic
+
+  - election_id: 2724cbc0-f391-4d9a-a5be-2c6de9303638
+    period_name: "2026 Third Quarter"
+    period_start: 2026-07-01
+    period_end: 2026-10-17
+    report_due_date: 2026-10-27
+    is_pre_election: true
+    is_post_election: false
+    disclosure_kind: periodic
+
+  - election_id: 2724cbc0-f391-4d9a-a5be-2c6de9303638
+    period_name: "2026 Fourth Quarter"
+    period_start: 2026-10-18
+    period_end: 2026-12-31
+    report_due_date: 2027-01-12
+    is_pre_election: false
+    is_post_election: true
+    disclosure_kind: periodic
+
+  - election_id: 9c055fde-9fd8-4f88-8e66-6c68f88566a8
+    period_name: "2026 Primary Election 48-Hour"
+    period_start: 2026-02-15
+    period_end: 2026-03-03
+    report_due_date: 2026-03-03
+    is_pre_election: true
+    is_post_election: false
+    disclosure_kind: special
+
+  - election_id: 2724cbc0-f391-4d9a-a5be-2c6de9303638
+    period_name: "2026 General Election 48-Hour"
+    period_start: 2026-10-18
+    period_end: 2026-11-03
+    report_due_date: 2026-11-03
+    is_pre_election: true
+    is_post_election: false
+    disclosure_kind: special

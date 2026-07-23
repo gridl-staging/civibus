@@ -11,6 +11,7 @@ DOCKERFILE_PATH = REPO_ROOT / "infra/api/Dockerfile"
 ENTRYPOINT_PATH = REPO_ROOT / "infra/api/docker-entrypoint.sh"
 DOCKERIGNORE_PATH = REPO_ROOT / ".dockerignore"
 DEBBIE_CONFIG_PATH = REPO_ROOT / ".debbie.toml"
+GITIGNORE_PATH = REPO_ROOT / ".gitignore"
 MAKEFILE_PATH = REPO_ROOT / "Makefile"
 COMPOSE_PATH = REPO_ROOT / "infra/docker-compose.yml"
 
@@ -101,6 +102,17 @@ def test_debbie_sync_includes_api_dockerfile_root_inputs() -> None:
     sync_files = set(debbie_payload["sync"]["files"])
 
     assert "sources.yaml" in sync_files
+    assert (
+        "docs/reference/research/artifacts/nc_2026_civic_calendar_probe_2026_04_25/local_candidate_listing_2026.csv"
+    ) in sync_files
+    raw_extract_root = "docs/reference/research/artifacts/2026_04_30_dwo_past_results/ncsbe/raw_extracts"
+    assert {
+        f"{raw_extract_root}/enrs_2020_11_03_general_sample.csv",
+        f"{raw_extract_root}/enrs_2022_11_08_general_sample.csv",
+        f"{raw_extract_root}/enrs_2024_03_05_primary_sample.csv",
+        f"{raw_extract_root}/enrs_2024_11_05_general_sample.csv",
+    } <= sync_files
+    assert "!domains/civics/data/" in GITIGNORE_PATH.read_text(encoding="utf-8")
 
 
 def test_api_entrypoint_runtime_contract() -> None:

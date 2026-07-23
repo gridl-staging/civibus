@@ -9,6 +9,8 @@ __pycache__/
 htmlcov/
 node_modules/
 data/
+!domains/civics/data/
+!domains/civics/data/*.yaml
 build/detached_jobs/
 *.egg-info/
 

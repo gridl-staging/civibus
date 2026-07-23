@@ -1,0 +1,3 @@
+election_date,election_name,county,contest_name,contest_id,candidate_name,candidate_party,votes,percent,certified
+2020-11-03,General Election,Wake,US PRESIDENT,1001,JOSEPH R BIDEN,DEM,410425,54.22,true
+2020-11-03,General Election,Wake,US PRESIDENT,1001,DONALD J TRUMP,REP,334206,44.18,true
