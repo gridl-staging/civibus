@@ -20,7 +20,8 @@ App `civibus-refresh` has exactly one scheduled Machine,
 - production database: `civibus-db.internal:5432`, database `civibus`.
 
 The runtime job registry and federal ordering remain code-owned by
-`core/refresh/job_builders.py`; do not copy a job list into this runbook.
+`core/refresh/job_builders.py::build_refresh_plan()`; do not copy a job list
+into this runbook.
 
 ### Unattended preflight and acceptance probes
 
@@ -94,11 +95,14 @@ date is red.
 
 ### Recovery and cutover boundary
 
-The Stage 2 one-shot was consumed and ended red (`exit_code=1`,
-`federal-fec-masters` degraded). This lane therefore permits no `77fad`
-resume, force-stop, second writer or second Machine, production volume/app
-identity change, or Debbie deployment. Do not start the Machine again under
-this receipt. Automatic-start acceptance also remains pending until the actual
+The latest L1R4 Stage 2 one-start authorization was consumed and ended red
+(`exit_code=2`) before `core.refresh.runner` started. The earlier L1R receipt
+ended with `exit_code=1` after `federal-fec-masters` degraded; it does not
+supersede the L1R4 result. This lane therefore permits no `77fad` resume,
+force-stop, second writer or second Machine, production volume/app identity
+change, or Debbie deployment. Do not start the Machine again under this
+receipt. L5 remains blocked because only a green L1R4 runtime receipt permits
+dispatch. Automatic-start acceptance also remains pending until the actual
 creation-anchored weekly boundary produces observed Fly events; configuration
 alone is not acceptance.
 
