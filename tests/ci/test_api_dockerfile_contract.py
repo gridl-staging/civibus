@@ -82,17 +82,61 @@ def test_api_dockerfile_contract_inputs_and_entrypoint() -> None:
 
 def test_api_dockerfile_stamps_build_provenance_env() -> None:
     dockerfile_text = DOCKERFILE_PATH.read_text(encoding="utf-8")
+    dockerfile_code = _dockerfile_code(dockerfile_text)
 
-    for arg_line in ("ARG CIVIBUS_GIT_SHA", "ARG CIVIBUS_BUILT_AT"):
+    entrypoint_chmod_commands_by_code = {}
+    root_form_override_code = "\n".join(
+        [
+            dockerfile_code,
+            "RUN chmod 0711 /usr/local/bin/civibus-api-entrypoint",
+        ]
+    )
+    for code_name, code in {
+        "checked_in": dockerfile_code,
+        "root_form_override": root_form_override_code,
+    }.items():
+        entrypoint_chmod_commands = []
+        for dockerfile_line in code.splitlines():
+            normalized_line = dockerfile_line.strip()
+            if normalized_line.startswith("&& "):
+                normalized_line = normalized_line.removeprefix("&& ").strip()
+            normalized_line = normalized_line.removesuffix("\\").strip()
+            if normalized_line.startswith("RUN chmod "):
+                normalized_line = normalized_line.removeprefix("RUN ").strip()
+            if (
+                normalized_line.startswith("chmod ")
+                and "/usr/local/bin/civibus-api-entrypoint" in normalized_line.split()
+            ):
+                entrypoint_chmod_commands.append(normalized_line)
+        entrypoint_chmod_commands_by_code[code_name] = entrypoint_chmod_commands
+
+    assert entrypoint_chmod_commands_by_code["root_form_override"] == [
+        "chmod 0555 /usr/local/bin/civibus-api-entrypoint",
+        "chmod 0711 /usr/local/bin/civibus-api-entrypoint",
+    ]
+    entrypoint_chmod_commands = entrypoint_chmod_commands_by_code["checked_in"]
+
+    assert len(entrypoint_chmod_commands) == 1
+    entrypoint_chmod_command = entrypoint_chmod_commands[0]
+    assert entrypoint_chmod_command == "chmod 0555 /usr/local/bin/civibus-api-entrypoint"
+    assert dockerfile_code.index(entrypoint_chmod_command) < dockerfile_code.index("USER civibus")
+
+    for arg_line in ("ARG CIVIBUS_GIT_SHA=unknown", "ARG CIVIBUS_BUILT_AT=unknown"):
         assert arg_line in dockerfile_text, f"{arg_line} must be declared"
     assert "ENV CIVIBUS_GIT_SHA=$CIVIBUS_GIT_SHA" in dockerfile_text
     assert "ENV CIVIBUS_BUILT_AT=$CIVIBUS_BUILT_AT" in dockerfile_text
 
     # Placed AFTER the cached ``uv sync`` layer so a per-deploy SHA change never
     # busts that expensive layer, and BEFORE dropping to the non-root user.
-    assert dockerfile_text.index("uv sync --locked --extra api") < dockerfile_text.index("ARG CIVIBUS_GIT_SHA")
-    assert dockerfile_text.index("ARG CIVIBUS_GIT_SHA") < dockerfile_text.index("USER civibus")
-    assert dockerfile_text.index("ARG CIVIBUS_BUILT_AT") < dockerfile_text.index("USER civibus")
+    assert dockerfile_text.index("uv sync --locked --extra api") < dockerfile_text.index("ARG CIVIBUS_GIT_SHA=unknown")
+    assert dockerfile_text.index("ARG CIVIBUS_GIT_SHA=unknown") < dockerfile_text.index(
+        "ENV CIVIBUS_GIT_SHA=$CIVIBUS_GIT_SHA"
+    )
+    assert dockerfile_text.index("ENV CIVIBUS_GIT_SHA=$CIVIBUS_GIT_SHA") < dockerfile_text.index("USER civibus")
+    assert dockerfile_text.index("ARG CIVIBUS_BUILT_AT=unknown") < dockerfile_text.index(
+        "ENV CIVIBUS_BUILT_AT=$CIVIBUS_BUILT_AT"
+    )
+    assert dockerfile_text.index("ENV CIVIBUS_BUILT_AT=$CIVIBUS_BUILT_AT") < dockerfile_text.index("USER civibus")
 
 
 @pytest.mark.dev_repo_only

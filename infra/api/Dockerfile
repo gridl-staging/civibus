@@ -18,7 +18,7 @@ COPY infra/api/docker-entrypoint.sh /usr/local/bin/civibus-api-entrypoint
 RUN uv sync --locked --extra api \
     && groupadd --system --gid 10001 civibus \
     && useradd --system --uid 10001 --gid civibus --create-home --home-dir /home/civibus --shell /usr/sbin/nologin civibus \
-    && chmod +x /usr/local/bin/civibus-api-entrypoint \
+    && chmod 0555 /usr/local/bin/civibus-api-entrypoint \
     && chmod -R a+rX /app/api /app/core /app/domains /app/docs
 
 ENV PATH="/app/.venv/bin:$PATH"
