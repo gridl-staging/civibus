@@ -101,7 +101,6 @@ def effective_limit_for_dispatch(file_type: str, config: "CliConfig") -> int | N
 
 @dataclass(frozen=True, slots=True)
 class CliConfig:
-
     mode: Literal["single", "full", "federal"]
     cycle: int
     file_type: str | None

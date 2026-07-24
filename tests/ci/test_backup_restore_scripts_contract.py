@@ -116,7 +116,10 @@ def test_scripts_readme_points_back_to_repo_runtime_contracts() -> None:
         assert required_fragment in readme_text
 
 
-@pytest.mark.dev_repo_only
+@pytest.mark.dev_repo_only(
+    private_asset="docs/howto/operations/db-backup-runbook.md and Fly backup baseline evidence",
+    owner="Fly backup and restore operations docs",
+)
 def test_db_backup_runbook_uses_current_fly_growth_floor_baseline() -> None:
     assert DB_BACKUP_RUNBOOK_PATH.is_file(), "docs/howto/operations/db-backup-runbook.md must exist"
     assert FLY_BACKUP_BASELINE_PATH.is_file(), "current Fly backup baseline evidence must exist"

@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -20,7 +19,6 @@ from domains.campaign_finance.jurisdictions.protected_portal import (
 
 
 class CampaignSiteEnrichmentStrategy:
-
     source_name = "campaign_site"
 
     def __init__(

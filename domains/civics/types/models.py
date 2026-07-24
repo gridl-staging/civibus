@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
@@ -121,7 +120,6 @@ class Office(CivicBaseModel):
 
 
 class ElectoralDivision(CivicBaseModel):
-
     name: str = Field(min_length=1)
     division_type: DivisionTypeLiteral
     state: str | None = None

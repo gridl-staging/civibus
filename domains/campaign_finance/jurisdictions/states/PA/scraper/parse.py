@@ -42,7 +42,6 @@ FILING_COLUMNS = _load_columns_for_data_type("filings")
 
 
 class PACsvParser:
-
     def __init__(
         self,
         path: Path,

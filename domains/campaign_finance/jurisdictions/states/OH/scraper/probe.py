@@ -63,7 +63,6 @@ class OHPortalProbeResult:
 
 
 class _AnchorParser(HTMLParser):
-
     def __init__(self) -> None:
         super().__init__()
         self._active_href: str | None = None

@@ -23,7 +23,6 @@ INDEPENDENT_EXPENDITURE_COLUMNS = _load_columns_for_data_type("independent_expen
 
 
 class WACsvParser:
-
     def __init__(
         self,
         path: Path,

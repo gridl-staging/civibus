@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 import argparse
@@ -67,7 +66,6 @@ _FAILING_STATUSES = frozenset({"crashed", "degraded", "empty", "failed"})
 
 @dataclass(frozen=True, slots=True)
 class RunnerParameters:
-
     fec_cycle: int = 2026
     fec_limit: int = 100
     co_year: int | None = None

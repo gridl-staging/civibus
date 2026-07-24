@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 import re
@@ -17,7 +16,6 @@ _MONEY_QUANTUM = Decimal("0.01")
 
 
 class CommitteeResponse(BaseModel):
-
     id: UUID
     fec_committee_id: str
     name: str
@@ -56,7 +54,6 @@ class CandidateResponse(BaseModel):
 
 
 class FilingResponse(BaseModel):
-
     id: UUID
     filing_fec_id: str
     committee_id: UUID
@@ -77,7 +74,6 @@ class FilingResponse(BaseModel):
 
 
 class TransactionResponse(BaseModel):
-
     id: UUID
     filing_id: UUID
     committee_id: UUID
@@ -334,7 +330,6 @@ class PersonContributionInsights(BaseModel):
 
 
 class TransactionListParams(BaseModel):
-
     committee_id: UUID | None = None
     jurisdiction: str | None = None
     min_date: date | None = None
@@ -460,7 +455,6 @@ class ReceiptSourceComponent(BaseModel):
 
 
 class CommitteeFundraisingSummary(BaseModel):
-
     committee_id: UUID
     committee_name: str
     selected_cycle: int
@@ -498,7 +492,6 @@ class CommitteeFundraisingSummary(BaseModel):
 
 
 class CandidateFundraisingSummary(BaseModel):
-
     candidate_id: UUID
     candidate_name: str
     selected_cycle: int
@@ -560,7 +553,6 @@ class StateIndependentExpenditureTopSpender(BaseModel):
 
 
 class StateSummaryItem(BaseModel):
-
     state_code: str
     total_raised: Decimal
     total_spent: Decimal

@@ -48,7 +48,6 @@ class CampaignFinanceBaseModel(BaseModel):
 
 
 class CommitteeType(str, Enum):
-
     COMMUNICATION_COST = "C"
     DELEGATE_COMMITTEE = "D"
     ELECTIONEERING_COMMUNICATION = "E"
@@ -88,7 +87,6 @@ class Committee(CampaignFinanceBaseModel):
 
 
 class CommitteeSummary(CampaignFinanceBaseModel):
-
     committee_id: UUID
     cycle: int
     link_image: Optional[str] = None
@@ -193,7 +191,6 @@ class CommitteeSummary(CampaignFinanceBaseModel):
 
 
 class Candidate(CampaignFinanceBaseModel):
-
     fec_candidate_id: str = Field(pattern=FEC_CANDIDATE_ID_REGEX)
     name: str
     person_id: Optional[UUID] = None
@@ -221,7 +218,6 @@ class Candidate(CampaignFinanceBaseModel):
 
 
 class Filing(CampaignFinanceBaseModel):
-
     filing_fec_id: str
     committee_id: UUID
     candidate_id: Optional[UUID] = None
@@ -271,7 +267,6 @@ class Filing(CampaignFinanceBaseModel):
 
 
 class Transaction(CampaignFinanceBaseModel):
-
     filing_id: UUID
     committee_id: UUID
     transaction_type: str

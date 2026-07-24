@@ -468,7 +468,10 @@ def test_refresh_runbook_matches_production_cron_wrapper_contract() -> None:
     assert "## Priority membership (config-sourced)" not in runbook_text
 
 
-@pytest.mark.dev_repo_only
+@pytest.mark.dev_repo_only(
+    private_asset="private status docs: ROADMAP.md, .scrai/overview.md, CLAUDE.md, AGENTS.md",
+    owner="backup status documentation contract",
+)
 def test_backup_status_docs_keep_shipped_language_and_forbidden_slug_out() -> None:
     roadmap_text = _read_required_text(
         ROADMAP_PATH,
@@ -499,7 +502,10 @@ def test_backup_status_docs_keep_shipped_language_and_forbidden_slug_out() -> No
         assert "wrong-volume bootstrap incident" in text
 
 
-@pytest.mark.dev_repo_only
+@pytest.mark.dev_repo_only(
+    private_asset="docs/howto/operations/db-backup-runbook.md and Fly backup baseline evidence",
+    owner="Fly backup and restore operations docs",
+)
 def test_db_backup_runbook_retains_throwaway_restore_contract() -> None:
     runbook_text = _read_required_text(
         DB_BACKUP_RUNBOOK_PATH,
@@ -546,7 +552,7 @@ def test_cert_check_cron_schedule_is_installer_owned_single_source_of_truth() ->
     assert "0 6 * * *" not in cert_script_text
 
 
-@pytest.mark.dev_repo_only
+@pytest.mark.dev_repo_only(private_asset="layers.yaml", owner="Keel layer metadata")
 def test_keel_gate_eligibility_is_derived_from_layers_metadata() -> None:
     """Only piloted/enforced global make-gate commands are eligible for unattended cron."""
     layers = _read_required_layers()
@@ -575,7 +581,7 @@ def test_keel_gates_wrapper_is_thin_common_contract_wrapper() -> None:
     assert keel_gates_script_text.index("make gate-L5") < keel_gates_script_text.index("make gate-L7")
 
 
-@pytest.mark.dev_repo_only
+@pytest.mark.dev_repo_only(private_asset=".debbie.toml", owner="Debbie projection contract")
 def test_debbie_sync_keeps_evidence_and_findings_private_by_default() -> None:
     debbie_text = _read_required_text(
         DEBBIE_CONFIG_PATH,

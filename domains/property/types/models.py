@@ -54,7 +54,6 @@ class Assessment(PropertyBaseModel):
 
 
 class Ownership(PropertyBaseModel):
-
     parcel_id: UUID
     owner_name: str = Field(min_length=1)
     owner_mail_line1: str | None = None

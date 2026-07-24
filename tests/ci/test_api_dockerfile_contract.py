@@ -139,7 +139,7 @@ def test_api_dockerfile_stamps_build_provenance_env() -> None:
     assert dockerfile_text.index("ENV CIVIBUS_BUILT_AT=$CIVIBUS_BUILT_AT") < dockerfile_text.index("USER civibus")
 
 
-@pytest.mark.dev_repo_only
+@pytest.mark.dev_repo_only(private_asset=".debbie.toml", owner="Debbie projection contract")
 def test_debbie_sync_includes_api_dockerfile_root_inputs() -> None:
     assert DEBBIE_CONFIG_PATH.is_file(), ".debbie.toml must exist"
     debbie_payload = tomllib.loads(DEBBIE_CONFIG_PATH.read_text(encoding="utf-8"))

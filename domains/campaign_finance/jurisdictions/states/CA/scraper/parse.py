@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 import csv
@@ -58,7 +57,6 @@ def _extract_year_from_ca_date(date_value: str) -> int | None:
 
 
 class CATsvParser:
-
     def __init__(
         self,
         path: Path,

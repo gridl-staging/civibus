@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 import argparse
@@ -45,7 +44,6 @@ class _DataTypeConfig:
 
 
 class _GAArgumentParser(argparse.ArgumentParser):
-
     def parse_args(
         self,
         args: list[str] | None = None,

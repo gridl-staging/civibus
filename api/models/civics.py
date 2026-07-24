@@ -97,7 +97,6 @@ class OfficeRecentContestSummary(BaseModel):
 
 
 class OfficeResponse(BaseModel):
-
     id: UUID
     name: str
     office_level: OfficeLevelLiteral
@@ -119,7 +118,6 @@ class OfficeResponse(BaseModel):
 
 
 class ContestResponse(BaseModel):
-
     id: UUID
     name: str
     election_date: date | None = None

@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -12,7 +11,6 @@ from domains.civics.loaders.official_rosters.source_registry import (
 
 @dataclass(frozen=True, slots=True)
 class RosterSourceTemplate:
-
     registry_source_id: str
     name: str
     source_url: str

@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 import csv
@@ -65,7 +64,6 @@ NCCommitteeDocumentRowKey = tuple[str, ...]
 
 
 class NCSBoECsvParser:
-
     def __init__(
         self,
         path: Path,

@@ -49,7 +49,6 @@ class AnchorFrontmatter(BaseModel, extra="forbid"):
 
 
 class AggregateExpectation(BaseModel, extra="forbid"):
-
     metric: str
     value_expected: int | float | list[int | float]
     unit: str

@@ -44,7 +44,6 @@ class NcGeometrySummary(BaseModel, extra="forbid"):
 
 
 class L14CoverageRow(BaseModel, extra="forbid"):
-
     jurisdiction_code: str
     name: str
     jurisdiction_type: str

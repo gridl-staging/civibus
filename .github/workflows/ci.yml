@@ -40,7 +40,7 @@ jobs:
       - name: Sync dependencies
         run: uv sync --locked --extra dev --extra entity-resolution
       - name: Unit tests
-        run: make test
+        run: make test-public
 
   web:
     name: web

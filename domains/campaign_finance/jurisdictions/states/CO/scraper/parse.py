@@ -55,7 +55,6 @@ EXPENDITURE_COLUMNS = _load_columns(_EXPENDITURE_SOURCE_NAME)
 
 
 class COTracerCsvParser:
-
     def __init__(
         self,
         path: Path,

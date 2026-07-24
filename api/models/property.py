@@ -18,7 +18,6 @@ DatePrecision = Literal["day", "month", "quarter", "year", "approximate"]
 
 
 class ParcelSummaryResponse(BaseModel):
-
     id: UUID
     reid: str
     pin: str
@@ -51,7 +50,6 @@ class PropertyAssessmentResponse(BaseModel):
 
 
 class PropertyOwnershipResponse(BaseModel):
-
     id: UUID
     owner_name: str
     owner_mail_line1: str | None = None
@@ -75,7 +73,6 @@ class ParcelDetailResponse(ParcelSummaryResponse):
 
 
 class ParcelListParams(BaseModel):
-
     city: str | None = None
     zoning_class: str | None = None
     min_acreage: Decimal | None = None

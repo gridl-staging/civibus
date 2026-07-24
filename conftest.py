@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 import json
@@ -134,6 +133,8 @@ if _repo_root_path in sys.path:
     sys.path.remove(_repo_root_path)
 sys.path.insert(0, _repo_root_path)
 
+from tests.ci.public_mirror_contract import DEV_REPO_ONLY_CLASSIFICATIONS_BY_NODE_ID  # noqa: E402
+
 # Test sessions can inherit another repo's `scripts` package on PYTHONPATH.
 _scripts_module = sys.modules.get("scripts")
 _scripts_module_file = getattr(_scripts_module, "__file__", None)
@@ -220,6 +221,14 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         entry = entries_by_node_id.get(item.nodeid)
         if entry is not None:
             item.add_marker(pytest.mark.quarantined(reason=entry.reason, owner=entry.owner))
+        dev_repo_entry = DEV_REPO_ONLY_CLASSIFICATIONS_BY_NODE_ID.get(item.nodeid)
+        if dev_repo_entry is not None:
+            item.add_marker(
+                pytest.mark.dev_repo_only(
+                    private_asset=dev_repo_entry.private_asset,
+                    owner=dev_repo_entry.owner,
+                )
+            )
 
 
 def _reexec_pytest_under_project_python_if_needed() -> None:

@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 import csv
@@ -30,7 +29,6 @@ LOAN_COLUMNS = _load_columns_for_data_type("loans")
 
 
 class TXCsvParser:
-
     def __init__(
         self,
         path: Path,

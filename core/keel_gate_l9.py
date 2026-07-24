@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 import argparse
@@ -126,7 +125,6 @@ class L9TraceOrphan(BaseModel, extra="forbid"):
 
 
 class L9Evidence(BaseModel, extra="forbid"):
-
     layer: Literal["L9"]
     scope: str
     schema_version: Literal[1]

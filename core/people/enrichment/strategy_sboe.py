@@ -27,7 +27,6 @@ _NON_NC_TARGET_SKIP_REASON = "state_not_nc"
 
 
 class SboeEnrichmentStrategy:
-
     source_name = "sboe"
 
     def __init__(

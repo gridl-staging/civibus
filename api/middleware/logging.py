@@ -81,7 +81,6 @@ def configure_api_json_logger() -> logging.Logger:
 
 
 class RequestLoggingMiddleware(BaseHTTPMiddleware):
-
     def __init__(self, app: object) -> None:
         super().__init__(app)
         self._logger = configure_api_json_logger()

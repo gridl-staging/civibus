@@ -6,7 +6,10 @@ from pathlib import Path
 import pytest
 
 
-pytestmark = pytest.mark.dev_repo_only
+pytestmark = pytest.mark.dev_repo_only(
+    private_asset="private Fly ops docs and ledgers: ROADMAP.md, PROJECT_OVERVIEW.md, docs/live-state/",
+    owner="Fly ops documentation and private open-work ledger",
+)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]

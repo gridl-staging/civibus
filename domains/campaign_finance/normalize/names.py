@@ -10,7 +10,6 @@ KNOWN_PREFIXES = frozenset({"MR", "MRS", "MS", "DR", "HON", "REV", "SGT", "CPL",
 
 @dataclass(frozen=True)
 class ParsedName:
-
     prefix: str | None = None
     first: str | None = None
     middle: str | None = None

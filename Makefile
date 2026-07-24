@@ -35,7 +35,7 @@ RETIRED_ALLOWLIST := \
 	Makefile
 
 
-.PHONY: db-up db-down db-reset test test-api test-e2e lint check-retired-symbols ingest-fec-sample ingest-fec-bulk-sample ingest-fec-bulk ingest-fec-federal ingest-fec-ie-sample download-fec-bulk download-fec-weball download-fec-schedule-e download-fec-committee-summary ingest-fec-schedule-e download-irs-527 ingest-irs-527-sample ingest-irs-527 validate-configs validate-registry render-coverage-views render-region-lifecycle ingest-co-sample ingest-durham-sample require-postgres-password ingest-nc-sample ingest-nc-ie-sample ingest-ga-sample ingest-ca-sample ingest-mn-sample ingest-wa-sample ingest-tx-sample ingest-pa-sample ingest-oh-sample ingest-in-sample ingest-il-sample ingest-nj-sample ingest-va-sample ingest-sf-sample ingest-la-city-sample ingest-nyc-sample ingest-nc-past-results-2022-2024 download-ga quality-check quality-freshness entity-resolve entity-resolve-dry api-dev graph-load load-test refresh-cf-data refresh-cf-priority gate-L1 gate-L3 gate-L5 gate-L6 gate-L6-pilot gate-L7 gate-L10 gate-L14 keel-status keel-summary keel-current keel-reviews-status evidence-rotate
+.PHONY: db-up db-down db-reset test test-public test-api test-e2e lint check-retired-symbols ingest-fec-sample ingest-fec-bulk-sample ingest-fec-bulk ingest-fec-federal ingest-fec-ie-sample download-fec-bulk download-fec-weball download-fec-schedule-e download-fec-committee-summary ingest-fec-schedule-e download-irs-527 ingest-irs-527-sample ingest-irs-527 validate-configs validate-registry render-coverage-views render-region-lifecycle ingest-co-sample ingest-durham-sample require-postgres-password ingest-nc-sample ingest-nc-ie-sample ingest-ga-sample ingest-ca-sample ingest-mn-sample ingest-wa-sample ingest-tx-sample ingest-pa-sample ingest-oh-sample ingest-in-sample ingest-il-sample ingest-nj-sample ingest-va-sample ingest-sf-sample ingest-la-city-sample ingest-nyc-sample ingest-nc-past-results-2022-2024 download-ga quality-check quality-freshness entity-resolve entity-resolve-dry api-dev graph-load load-test refresh-cf-data refresh-cf-priority gate-L1 gate-L3 gate-L5 gate-L6 gate-L6-pilot gate-L7 gate-L10 gate-L14 keel-status keel-summary keel-current keel-reviews-status evidence-rotate
 
 require-postgres-password:
 	@test -n "$${POSTGRES_PASSWORD:-}" || { echo "POSTGRES_PASSWORD must be set in the environment" >&2; exit 1; }
@@ -80,6 +80,9 @@ conn.commit(); conn.close()"; \
 
 test:
 	uv run --extra dev --extra entity-resolution pytest -m "not integration and not e2e"
+
+test-public:
+	uv run --extra dev --extra entity-resolution pytest -m "not integration and not e2e and not dev_repo_only"
 
 # Parked state/city pipeline suite (frozen for federal-first v1; excluded from
 # `make test` and CI by the conftest.py quarantine). Run before touching shared

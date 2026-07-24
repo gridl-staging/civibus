@@ -74,7 +74,6 @@ class LoadResult:
 
 @dataclass(frozen=True, slots=True)
 class Stage4LoadOptions:
-
     batch_size: int = 1000
     limit: int | None = None
     graph_enabled: bool = False
@@ -126,7 +125,6 @@ class Stage4ResumeIdentity:
 
 @dataclass(frozen=True, slots=True)
 class Stage4ResumeCheckpoint:
-
     resume_identity: Stage4ResumeIdentity
     archive_fingerprint: str
     archive_member_name: str | None
@@ -170,7 +168,6 @@ class _Stage4CheckpointContext:
 
 @dataclass(frozen=True, slots=True)
 class Stage4LoadRequest:
-
     file_type: Literal["itcont", "itpas2"]
     path: str | Path
     data_source_id: UUID
@@ -223,7 +220,6 @@ class _MappedStage4Row:
 
 @dataclass(slots=True)
 class _Stage4StreamingState:
-
     load_result: LoadResult = field(default_factory=LoadResult)
     processed_rows: int = 0
     selected_rows: int = 0

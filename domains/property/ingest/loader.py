@@ -66,7 +66,6 @@ class _OwnershipInsertPayload:
 
 @dataclass(frozen=True)
 class _OwnershipInsertContext:
-
     parcel_id: UUID
     owner_mail_line1: str | None
     owner_mail_line2: str | None

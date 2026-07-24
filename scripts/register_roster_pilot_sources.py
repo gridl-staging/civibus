@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 import argparse
@@ -21,7 +20,6 @@ _DEFAULT_TEMPLATE_CADENCE = "weekly"
 
 @dataclass(frozen=True, slots=True)
 class RosterSourceTemplate:
-
     registry_source_id: str
     name: str
     source_url: str

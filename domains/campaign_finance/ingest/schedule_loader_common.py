@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 from collections.abc import Mapping
@@ -30,7 +29,6 @@ def json_compatible_raw_fields(row: Mapping[str, object]) -> dict[str, object]:
 
 @dataclass(frozen=True, slots=True)
 class ScheduleLoaderFieldParsers:
-
     loader_label: str
 
     def require_text(self, row: Mapping[str, object], field_name: str) -> str:

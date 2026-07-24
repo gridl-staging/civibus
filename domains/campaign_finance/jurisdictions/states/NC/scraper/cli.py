@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 import argparse
@@ -78,7 +77,6 @@ def _require_download_options(
 
 
 class _NCArgumentParser(argparse.ArgumentParser):
-
     def parse_args(
         self,
         args: list[str] | None = None,

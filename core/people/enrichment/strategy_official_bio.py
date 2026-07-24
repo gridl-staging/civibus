@@ -29,7 +29,6 @@ _ALLOWED_BIO_HOST_SUFFIXES = ("ncleg.gov", "congress.gov", "wikipedia.org", "bal
 
 
 class OfficialBioStrategy:
-
     source_name = "official_bio"
 
     def __init__(

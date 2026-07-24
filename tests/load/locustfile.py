@@ -12,7 +12,6 @@ from locust import HttpUser, between, task
 
 
 class CivibusUser(HttpUser):
-
     host = os.getenv("CIVIBUS_LOCUST_HOST", "http://127.0.0.1:8000")
     wait_time = between(1, 3)
 

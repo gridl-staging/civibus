@@ -711,7 +711,11 @@ def test_load_civic_edges_combined(graph_conn):
         valid_period_end=date(2025, 1, 1),
     )
 
-    total = load_civic_edges(graph_conn, limit=100)
+    loader_limit = max(
+        graph_conn.execute("SELECT COUNT(*) FROM civic.officeholding").fetchone()[0],
+        graph_conn.execute("SELECT COUNT(*) FROM civic.candidacy").fetchone()[0],
+    )
+    total = load_civic_edges(graph_conn, limit=loader_limit)
     assert total >= 4  # HOLDS + RUNS_IN + CANDIDACY_OF + REPRESENTS
 
     # Verify all four edge types

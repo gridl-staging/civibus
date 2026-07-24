@@ -70,7 +70,6 @@ class ProtectedPortalBrowserSettings:
 
 @dataclass(slots=True)
 class BrowserSessionHandle:
-
     browser: object | None
     context: object
 

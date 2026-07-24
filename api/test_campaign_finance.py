@@ -4668,6 +4668,7 @@ def test_get_committee_ie_activity_aggregates_targets_with_provenance(
             "district": "01",
             "slug": "committee-ie-alpha",
             "slug_is_unique": True,
+            "identity_is_safe": True,
             "support_total": "500.00",
             "oppose_total": "75.00",
             "transaction_count": 2,
@@ -4694,6 +4695,7 @@ def test_get_committee_ie_activity_aggregates_targets_with_provenance(
             "district": None,
             "slug": "committee-ie-beta",
             "slug_is_unique": True,
+            "identity_is_safe": True,
             "support_total": "0.00",
             "oppose_total": "350.00",
             "transaction_count": 1,
@@ -4720,6 +4722,7 @@ def test_get_committee_ie_activity_aggregates_targets_with_provenance(
             "district": "03",
             "slug": "committee-ie-gamma",
             "slug_is_unique": True,
+            "identity_is_safe": True,
             "support_total": "100.00",
             "oppose_total": "0.00",
             "transaction_count": 1,
@@ -4857,6 +4860,7 @@ def test_get_committee_ie_activity_excludes_outliers_from_aggregates(
             "district": None,
             "slug": "outlier-committee-ie-target",
             "slug_is_unique": True,
+            "identity_is_safe": True,
             "support_total": "250.00",
             "oppose_total": "0.00",
             "transaction_count": 1,
@@ -9104,6 +9108,7 @@ def test_get_committee_detail_exposes_active_linked_candidates_shape(
         "district",
         "slug",
         "slug_is_unique",
+        "identity_is_safe",
     }
     assert alpha_row["person_id"] == str(person_id_alpha)
     assert alpha_row["fec_candidate_id"] == "H0NC66001"
@@ -9293,6 +9298,11 @@ def test_fetch_candidate_ie_summaries_applies_cycle_qualification_and_outlier_ru
             "oppose_count": 1,
             "top_spenders": [],
             "excluded_outlier_count": 2,
+            "coverage": {
+                "activity_state": "populated",
+                "completeness": "partial",
+                "basis": "fec_schedule_e_transactions",
+            },
         },
         empty_candidate_id: {
             "candidate_id": empty_candidate_id,
@@ -9306,6 +9316,11 @@ def test_fetch_candidate_ie_summaries_applies_cycle_qualification_and_outlier_ru
             "oppose_count": 0,
             "top_spenders": [],
             "excluded_outlier_count": 0,
+            "coverage": {
+                "activity_state": "not_loaded",
+                "completeness": "unknown",
+                "basis": "no_authoritative_load_evidence",
+            },
         },
     }
     assert unrequested_candidate_id not in summaries

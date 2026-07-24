@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 import csv
@@ -41,7 +40,6 @@ _SF_DATE_COLUMNS = {
 
 
 class SFCsvParser:
-
     def __init__(
         self,
         path: Path,

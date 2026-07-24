@@ -22,7 +22,6 @@ class PersonPortraitResponse(BaseModel):
 
 
 class PersonResponse(BaseModel):
-
     id: UUID
     canonical_name: str
     name_variants: list[str] = Field(default_factory=list)

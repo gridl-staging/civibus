@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 import logging
@@ -86,7 +85,6 @@ class _ILLoadCounts:
 
 @dataclass(frozen=True, slots=True)
 class _ILDataTypeSpec:
-
     person_key: str
     organization_key: str
     person_roles: tuple[str, ...]

@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 import time
@@ -25,7 +24,6 @@ _INTER_BATCH_DELAY = 3.0
 
 
 class WikipediaBioStrategy:
-
     source_name = "wikipedia_bio"
 
     def __init__(

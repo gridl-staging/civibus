@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping
@@ -80,7 +79,6 @@ class _FreshnessProbeConfig:
 
 @dataclass(frozen=True, slots=True)
 class _ContributionsProbeConfig:
-
     jurisdiction: str
     temp_dir_prefix: str
     load_date_column: Callable[[], str]
@@ -125,7 +123,6 @@ class _ContributionsProbeConfig:
 
 @dataclass(frozen=True, slots=True)
 class _FreshnessObservation:
-
     jurisdiction: str
     source_url: str
     artifact_url: str

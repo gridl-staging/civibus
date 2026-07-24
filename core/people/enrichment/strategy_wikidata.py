@@ -20,7 +20,6 @@ _WIKIDATA_SPARQL_URL = "https://query.wikidata.org/sparql"
 
 
 class WikidataEnrichmentStrategy:
-
     source_name = "wikidata"
 
     def __init__(

@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 from collections import defaultdict
@@ -61,7 +60,6 @@ def _require_playwright() -> None:
 
 @dataclass(frozen=True, slots=True)
 class TransactionSearchCriteria:
-
     last_name: str = ""
     first_name: str = ""
     org_name: str = ""
@@ -246,7 +244,6 @@ def _normalize_table_cell_text(text: str) -> str:
 
 
 class _DocumentResultGridParser(HTMLParser):
-
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
         self._inside_grid_table = False

@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 import hashlib
@@ -140,7 +139,6 @@ def compute_record_hash(raw_fields: dict[str, object]) -> str:
 
 
 class Person(BaseModel):
-
     id: UUID = Field(default_factory=uuid4)
     canonical_name: str
     name_variants: list[str] = Field(default_factory=list)
@@ -175,7 +173,6 @@ class Person(BaseModel):
 
 
 class Organization(BaseModel):
-
     id: UUID = Field(default_factory=uuid4)
     canonical_name: str
     name_variants: list[str] = Field(default_factory=list)
@@ -207,7 +204,6 @@ class Organization(BaseModel):
 
 
 class Address(BaseModel):
-
     id: UUID = Field(default_factory=uuid4)
     raw_address: str
     normalized_address: str | None = None
@@ -261,7 +257,6 @@ class Address(BaseModel):
 
 
 class Jurisdiction(BaseModel):
-
     id: UUID = Field(default_factory=uuid4)
     name: str
     jurisdiction_type: Literal[
@@ -338,7 +333,6 @@ PortraitRightsStatus = Literal["public_domain", "licensed", "restricted", "unkno
 
 
 class PersonPortrait(BaseModel):
-
     id: UUID = Field(default_factory=uuid4)
     person_id: UUID
     source_record_id: UUID
@@ -378,7 +372,6 @@ class PersonPortrait(BaseModel):
 
 
 class RefreshRun(BaseModel):
-
     id: UUID = Field(default_factory=uuid4)
     job_key: str
     domain: str

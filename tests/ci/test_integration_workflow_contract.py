@@ -1,6 +1,7 @@
 """Integration workflow contract tests for Stage 2 merge-time DB checks."""
 
 from pathlib import Path
+import re
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -64,6 +65,19 @@ def test_integration_workflow_reuses_repo_db_contract_commands() -> None:
 
     for fragment in forbidden_fragments:
         assert fragment not in workflow_text
+
+
+def test_integration_workflow_exports_safe_db_environment() -> None:
+    workflow_text = _read_integration_workflow()
+
+    env_match = re.search(r"^    env:\n(?P<body>(?:      [A-Z0-9_]+: .+\n)+)", workflow_text, re.M)
+    assert env_match is not None
+
+    job_env = env_match.group("body")
+    assert 'CIVIBUS_REQUIRE_DB: "1"' in job_env
+    assert "POSTGRES_PASSWORD: ci-postgres-password" in job_env
+    assert 'POSTGRES_PORT: "5475"' in job_env
+    assert "POSTGRES_HOST" not in job_env
 
 
 def test_integration_workflow_waits_for_repo_db_container_before_reset() -> None:

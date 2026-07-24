@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 import argparse
@@ -58,7 +57,6 @@ class LifecycleBaseModel(BaseModel):
 
 
 class ImplementedRegionLifecycleRow(LifecycleBaseModel):
-
     jurisdiction_code: str
     name: str
     acquisition_pattern: AcquisitionPatternLiteral
