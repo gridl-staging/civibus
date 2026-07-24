@@ -16,6 +16,8 @@ from core.schema_sql_runner import (
 )
 from domains.campaign_finance.types.models import OfficeType
 
+pytestmark = pytest.mark.integration
+
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SCHEMA_FILE = REPO_ROOT / "domains" / "civics" / "schema" / "tables.sql"
@@ -28,6 +30,7 @@ WA_CONFIG_PATH = REPO_ROOT / "domains" / "campaign_finance" / "jurisdictions" / 
 FL_CONFIG_PATH = REPO_ROOT / "domains" / "campaign_finance" / "jurisdictions" / "states" / "FL" / "config.yaml"
 FEC_FIELD_MAPPER_PATH = REPO_ROOT / "domains" / "campaign_finance" / "ingest" / "field_mapper.py"
 TEST_DATABASE = os.getenv("CIVIC_SCHEMA_TEST_DATABASE", "civibus")
+_PROTECTED_DATABASE_NAMES = frozenset({"civibus", "civibus_prod", "civibus_staging"})
 
 CIVIC_TABLES = [
     "candidacy",
@@ -324,6 +327,11 @@ def _skip_if_no_database_access() -> None:
 @pytest.fixture(scope="session", autouse=True)
 def _prepared_schema() -> None:
     _skip_if_no_database_access()
+    if TEST_DATABASE in _PROTECTED_DATABASE_NAMES:
+        pytest.skip(
+            f"Refusing to DROP SCHEMA civic/core CASCADE against protected database {TEST_DATABASE!r}. "
+            "Set CIVIC_SCHEMA_TEST_DATABASE to a dedicated test database to run schema-prep tests."
+        )
 
     _run_psql_command(TEST_DATABASE, "DROP SCHEMA IF EXISTS civic CASCADE;")
     _run_psql_command(TEST_DATABASE, "DROP SCHEMA IF EXISTS core CASCADE;")

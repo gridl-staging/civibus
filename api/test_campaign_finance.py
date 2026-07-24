@@ -19,6 +19,7 @@ from api.models.campaign_finance import CommitteeListParams
 from api.queries import (
     fetch_candidate_public_money_summaries,
     fetch_candidate_public_money_summary,
+    fetch_candidate_ie_summary,
     fetch_candidate_summary,
     fetch_committee_filing_breakdown,
     fetch_committee_fundraising_summary,
@@ -28,6 +29,7 @@ from api.queries.campaign_finance import (
     COMMITTEE_FUNDRAISING_SUMMARY_SQL,
     DISBURSEMENT_TYPE_PREFIX,
     _COUNTY_PROXY_QUALIFYING_TRANSACTIONS_CTE,
+    _zero_candidate_ie_summary,
     fetch_candidate_ie_summaries,
 )
 from api.test_campaign_finance_support import (
@@ -94,6 +96,23 @@ def _assert_selected_cycle_payload(
     assert payload["coverage_start_date"] == coverage_start_date
     assert payload["coverage_end_date"] == coverage_end_date
     assert payload["available_cycles"] == [2022, 2024, 2026]
+
+
+def build_zero_candidate_money_coverage_fixture(
+    payload: dict[str, object] | None,
+    *,
+    activity_state: str,
+    completeness: str,
+    basis: str,
+) -> dict[str, object]:
+    assert payload is not None
+    fixture_payload = dict(payload)
+    fixture_payload["coverage"] = {
+        "activity_state": activity_state,
+        "completeness": completeness,
+        "basis": basis,
+    }
+    return fixture_payload
 
 
 def _database_current_date(db_conn: psycopg.Connection) -> date:
@@ -4068,6 +4087,117 @@ def test_get_candidate_summary_returns_zero_official_payload_when_no_linked_comm
     assert summary["cash_on_hand"] is None
     # No official totals seeded -> derived fallback at zero.
     assert summary["summary_source"] == "derived"
+    assert summary["coverage"] == {
+        "activity_state": "not_loaded",
+        "completeness": "unknown",
+        "basis": "no_authoritative_load_evidence",
+    }
+
+
+def test_fetch_candidate_summary_reports_selected_cycle_money_coverage_states(
+    db_conn: psycopg.Connection,
+) -> None:
+    populated_candidate_id = UUID("3d3f74b8-621b-48d2-b03e-2f6f42fa9e69")
+    partial_candidate_id = UUID("b0000000-0000-0000-0000-000000000661")
+    loaded_zero_candidate_id = UUID("b0000000-0000-0000-0000-000000000662")
+
+    insert_candidate_row(
+        db_conn,
+        CandidateRowSeed(
+            id=populated_candidate_id,
+            fec_candidate_id="H0NC02659",
+            name="Stage One Populated Officeholder",
+            office="H",
+            total_receipts=Decimal("1234.56"),
+            total_disbursements=Decimal("234.56"),
+            cash_on_hand=Decimal("1000.00"),
+            summary_coverage_end_date=date(2026, 6, 30),
+        ),
+    )
+    insert_candidate_row(
+        db_conn,
+        CandidateRowSeed(
+            id=partial_candidate_id,
+            fec_candidate_id="H0NC02661",
+            name="Partial Coverage Candidate",
+            office="H",
+        ),
+    )
+    insert_candidate_row(
+        db_conn,
+        CandidateRowSeed(
+            id=loaded_zero_candidate_id,
+            fec_candidate_id="H0NC02662",
+            name="Loaded Zero Contract Candidate",
+            office="H",
+        ),
+    )
+    partial_context = seed_committee_for_summary(
+        db_conn,
+        committee_id=UUID("b0000000-0000-0000-0000-000000000663"),
+        committee_name="Partial Coverage Committee",
+        fec_committee_id="C99000663",
+    )
+    insert_candidate_committee_link_row(
+        db_conn,
+        CandidateCommitteeLinkSeed(
+            id=UUID("b0000000-0000-0000-0000-000000000664"),
+            candidate_id=partial_candidate_id,
+            committee_id=partial_context.committee_id,
+            valid_period="[2025-01-01,2026-12-31]",
+            designation="P",
+            candidate_election_year=2026,
+            fec_election_year=2026,
+        ),
+    )
+    insert_summary_transaction(
+        db_conn,
+        context=partial_context,
+        transaction_id=UUID("b0000000-0000-0000-0000-000000000665"),
+        transaction_type="15",
+        amount=Decimal("250.00"),
+        source_record_id=partial_context.source_record_id,
+    )
+
+    populated = fetch_candidate_summary(db_conn, populated_candidate_id, "Stage One Populated Officeholder")
+    partial = fetch_candidate_summary(db_conn, partial_candidate_id, "Partial Coverage Candidate")
+    not_loaded = fetch_candidate_summary(db_conn, loaded_zero_candidate_id, "Loaded Zero Contract Candidate")
+    loaded_zero = build_zero_candidate_money_coverage_fixture(
+        not_loaded,
+        activity_state="loaded_zero",
+        completeness="complete",
+        basis="authoritative_load_evidence",
+    )
+
+    assert populated is not None
+    assert partial is not None
+    assert not_loaded is not None
+    assert populated["total_raised"] == Decimal("1234.56")
+    assert populated["transaction_count"] == 0
+    assert populated["coverage"] == {
+        "activity_state": "populated",
+        "completeness": "complete",
+        "basis": "fec_official_candidate_summary",
+    }
+    assert partial["total_raised"] == Decimal("250.00")
+    assert partial["transaction_count"] == 1
+    assert partial["coverage"] == {
+        "activity_state": "populated",
+        "completeness": "partial",
+        "basis": "qualifying_transactions",
+    }
+    assert not_loaded["total_raised"] == Decimal("0.00")
+    assert not_loaded["coverage"] == {
+        "activity_state": "not_loaded",
+        "completeness": "unknown",
+        "basis": "no_authoritative_load_evidence",
+    }
+    assert loaded_zero["total_raised"] == Decimal("0.00")
+    assert loaded_zero["coverage"] == {
+        "activity_state": "loaded_zero",
+        "completeness": "complete",
+        "basis": "authoritative_load_evidence",
+    }
 
 
 def test_get_candidate_summary_single_committee_common_case(
@@ -4178,6 +4308,11 @@ def test_get_candidate_summary_returns_zero_totals_when_no_linked_committees(
         "can_render_share": False,
         "receipt_source_caveats": ["missing_committee_summary"],
         "debts_owed_by_committee": None,
+        "coverage": {
+            "activity_state": "not_loaded",
+            "completeness": "unknown",
+            "basis": "no_authoritative_load_evidence",
+        },
     }
 
 
@@ -4291,6 +4426,11 @@ def test_get_candidate_summary_keeps_linked_committee_with_zero_qualifying_trans
         "can_render_share": False,
         "receipt_source_caveats": ["missing_committee_summary"],
         "debts_owed_by_committee": None,
+        "coverage": {
+            "activity_state": "not_loaded",
+            "completeness": "unknown",
+            "basis": "no_authoritative_load_evidence",
+        },
     }
 
 
@@ -5143,6 +5283,11 @@ def test_get_candidate_independent_expenditure_endpoints_exclude_memo_rows(
             }
         ],
         "excluded_outlier_count": 0,
+        "coverage": {
+            "activity_state": "populated",
+            "completeness": "partial",
+            "basis": "fec_schedule_e_transactions",
+        },
     }
 
 
@@ -5196,6 +5341,195 @@ def test_get_candidate_independent_expenditure_endpoints_return_empty_state(
         "available_cycles": [2022, 2024, 2026],
         "top_spenders": [],
         "excluded_outlier_count": 0,
+        "coverage": {
+            "activity_state": "not_loaded",
+            "completeness": "unknown",
+            "basis": "no_authoritative_load_evidence",
+        },
+    }
+
+
+def test_fetch_candidate_ie_summary_reports_selected_cycle_money_coverage_states(
+    db_conn: psycopg.Connection,
+) -> None:
+    populated_candidate_id = UUID("3d3f74b8-621b-48d2-b03e-2f6f42fa9e69")
+    unknown_candidate_id = UUID("c0000000-0000-0000-0000-000000000361")
+    spender_committee_id = UUID("c0000000-0000-0000-0000-000000000362")
+    filing_id = UUID("c0000000-0000-0000-0000-000000000363")
+    transaction_id = UUID("c0000000-0000-0000-0000-000000000364")
+    insert_candidate_row(
+        db_conn,
+        CandidateRowSeed(
+            id=populated_candidate_id,
+            fec_candidate_id="H0NC03359",
+            name="Stage One Populated IE Officeholder",
+            office="H",
+        ),
+    )
+    insert_candidate_row(
+        db_conn,
+        CandidateRowSeed(
+            id=unknown_candidate_id,
+            fec_candidate_id="H0NC03361",
+            name="Unknown IE Coverage Candidate",
+            office="H",
+        ),
+    )
+    insert_committee_row(
+        db_conn,
+        CommitteeRowSeed(id=spender_committee_id, fec_committee_id="C99800362", name="Schedule E Spender"),
+    )
+    insert_filing_row(
+        db_conn, FilingRowSeed(id=filing_id, filing_fec_id="IE-COVERAGE-FILING", committee_id=spender_committee_id)
+    )
+    insert_transaction_row(
+        db_conn,
+        TransactionRowSeed(
+            id=transaction_id,
+            filing_id=filing_id,
+            committee_id=spender_committee_id,
+            transaction_type="24E",
+            amount=Decimal("321.00"),
+            amendment_indicator="N",
+            recipient_candidate_id=populated_candidate_id,
+            support_oppose="S",
+            transaction_date=date(2026, 2, 1),
+        ),
+    )
+
+    populated = fetch_candidate_ie_summary(db_conn, populated_candidate_id)
+    not_loaded = _zero_candidate_ie_summary(unknown_candidate_id)
+    loaded_zero = build_zero_candidate_money_coverage_fixture(
+        not_loaded,
+        activity_state="loaded_zero",
+        completeness="complete",
+        basis="authoritative_load_evidence",
+    )
+
+    assert populated["support_total"] == Decimal("321.00")
+    assert populated["support_count"] == 1
+    assert populated["coverage"] == {
+        "activity_state": "populated",
+        "completeness": "partial",
+        "basis": "fec_schedule_e_transactions",
+    }
+    assert not_loaded["support_total"] == Decimal("0.00")
+    assert not_loaded["oppose_total"] == Decimal("0.00")
+    assert not_loaded["coverage"] == {
+        "activity_state": "not_loaded",
+        "completeness": "unknown",
+        "basis": "no_authoritative_load_evidence",
+    }
+    assert loaded_zero["support_total"] == Decimal("0.00")
+    assert loaded_zero["oppose_total"] == Decimal("0.00")
+    assert loaded_zero["coverage"] == {
+        "activity_state": "loaded_zero",
+        "completeness": "complete",
+        "basis": "authoritative_load_evidence",
+    }
+
+
+def test_candidate_money_routes_validate_backend_owned_coverage_contract(
+    api_client: TestClient,
+    db_conn: psycopg.Connection,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    candidate_id = UUID("c0000000-0000-0000-0000-000000000371")
+    insert_candidate_row(
+        db_conn,
+        CandidateRowSeed(
+            id=candidate_id,
+            fec_candidate_id="H0NC03371",
+            name="Route Coverage Candidate",
+            office="H",
+        ),
+    )
+
+    def loaded_zero_fundraising_summary(
+        conn: psycopg.Connection,
+        current_candidate_id: UUID,
+        candidate_name: str,
+        selected_cycle: object,
+    ) -> dict[str, object]:
+        assert current_candidate_id == candidate_id
+        assert candidate_name == "Route Coverage Candidate"
+        return {
+            "candidate_id": current_candidate_id,
+            "candidate_name": candidate_name,
+            "selected_cycle": 2026,
+            "coverage_start_date": date(2025, 1, 1),
+            "coverage_end_date": date(2026, 12, 31),
+            "available_cycles": [2022, 2024, 2026],
+            "total_raised": Decimal("0.00"),
+            "total_spent": Decimal("0.00"),
+            "net": Decimal("0.00"),
+            "transaction_count": 0,
+            "itemized_transaction_count": 0,
+            "committees": [],
+            "cash_on_hand": None,
+            "candidate_contrib": None,
+            "candidate_loans": None,
+            "candidate_loan_repay": None,
+            "net_self_funding": None,
+            "summary_source": "derived",
+            "receipt_source_composition": [],
+            "selected_cycle_coverage_complete": False,
+            "can_render_share": False,
+            "receipt_source_caveats": ["missing_committee_summary"],
+            "debts_owed_by_committee": None,
+            "coverage": {
+                "activity_state": "loaded_zero",
+                "completeness": "complete",
+                "basis": "authoritative_load_evidence",
+            },
+        }
+
+    def loaded_zero_ie_summary(
+        conn: psycopg.Connection,
+        current_candidate_id: UUID,
+        *,
+        selected_cycle: object,
+    ) -> dict[str, object]:
+        assert current_candidate_id == candidate_id
+        return {
+            "candidate_id": current_candidate_id,
+            "selected_cycle": 2026,
+            "coverage_start_date": date(2025, 1, 1),
+            "coverage_end_date": date(2026, 12, 31),
+            "available_cycles": [2022, 2024, 2026],
+            "support_total": Decimal("0.00"),
+            "oppose_total": Decimal("0.00"),
+            "support_count": 0,
+            "oppose_count": 0,
+            "top_spenders": [],
+            "excluded_outlier_count": 0,
+            "coverage": {
+                "activity_state": "loaded_zero",
+                "completeness": "complete",
+                "basis": "authoritative_load_evidence",
+            },
+        }
+
+    monkeypatch.setattr(campaign_finance_route_module, "fetch_candidate_summary", loaded_zero_fundraising_summary)
+    monkeypatch.setattr(campaign_finance_route_module, "fetch_candidate_ie_summary", loaded_zero_ie_summary)
+
+    summary_response = api_client.get(f"/v1/candidates/{candidate_id}/summary")
+    list_response = api_client.get(f"/v1/candidates/{candidate_id}/independent-expenditures")
+    ie_summary_response = api_client.get(f"/v1/candidates/{candidate_id}/independent-expenditures/summary")
+
+    assert summary_response.status_code == 200
+    assert summary_response.json()["coverage"] == {
+        "activity_state": "loaded_zero",
+        "completeness": "complete",
+        "basis": "authoritative_load_evidence",
+    }
+    assert list_response.status_code == 200
+    assert list_response.json() == []
+    assert ie_summary_response.status_code == 200
+    assert ie_summary_response.json()["coverage"] == {
+        "activity_state": "loaded_zero",
+        "completeness": "complete",
+        "basis": "authoritative_load_evidence",
     }
 
 

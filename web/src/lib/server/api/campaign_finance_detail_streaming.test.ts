@@ -24,6 +24,7 @@ const CANDIDATE_DETAIL = {
   name: "Candidate One",
   slug: "candidate-one",
   slug_is_unique: true,
+  identity_is_safe: true,
   person_id: null,
   party: null,
   office: "H",
@@ -195,7 +196,7 @@ describe("campaign-finance detail api streaming bundle behavior", () => {
     await bundlePromise;
   });
 
-  it("falls back to empty IE data when candidate IE endpoints return 404", async () => {
+  it("preserves candidate IE 404 responses instead of treating missing data as loaded zero", async () => {
     const candidateSummary = {
       candidate_id: CANDIDATE_ID,
       candidate_name: "Candidate Empty",
@@ -206,7 +207,12 @@ describe("campaign-finance detail api streaming bundle behavior", () => {
       committees: [],
       cash_on_hand: null,
       summary_source: "derived",
-      itemized_transaction_count: 0
+      itemized_transaction_count: 0,
+      coverage: {
+        activity_state: "loaded_zero",
+        completeness: "complete",
+        basis: "authoritative_load_evidence"
+      }
     };
     const missingIeError = new ApiResponseError(404, { detail: "No IE records found" });
 
@@ -245,8 +251,14 @@ describe("campaign-finance detail api streaming bundle behavior", () => {
     expect(bundle.ieSummary).toBeInstanceOf(Promise);
 
     expect(await bundle.summary).toEqual(candidateSummary);
-    expect(await bundle.ieTransactions).toEqual([]);
-    expect(await bundle.ieSummary).toBeNull();
+    await expect(bundle.ieTransactions).rejects.toMatchObject({
+      status: 404,
+      body: { detail: "No IE records found" }
+    });
+    await expect(bundle.ieSummary).rejects.toMatchObject({
+      status: 404,
+      body: { detail: "No IE records found" }
+    });
 
     expect(requestJson.mock.calls.map(([path]) => path)).toEqual([
       buildCandidateDetailPath(CANDIDATE_ID),

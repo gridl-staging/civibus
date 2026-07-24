@@ -159,20 +159,21 @@ def test_donor_search_match_cte_keeps_scope_and_receipt_filters_before_materiali
     assert "t.contributor_entity_type = 'IND'" in match_cte
     assert "t.is_memo = FALSE" in match_cte
     assert "t.amendment_indicator != 'T'" in match_cte
-    # Committee scope must NOT be applied inside the mode-scan CTE: an EXISTS here
-    # made the planner re-scan the whole mode bitmap once per federal committee
-    # (~508 loops, ~12s on q=smith). The scope is applied by the
-    # qualifying_transactions INNER JOIN instead, which prunes with one hash join.
+    # Committee scope must be present at the transaction-matching boundary so a
+    # scoped donor-search index can intersect the trigram match with current
+    # federal candidate committees before reading every high-frequency surname
+    # heap row.
     assert "EXISTS (" not in match_cte
-    assert "scope.committee_id = t.committee_id" not in match_cte
+    assert "JOIN current_federal_committee_scope scope_filter" in match_cte
+    assert "scope_filter.committee_id = t.committee_id" in match_cte
     assert "t.transaction_date >= %s" in match_cte
     assert "t.source_record_id IS NULL" in match_cte
     assert "OR t.source_record_id NOT IN" in match_cte
     assert "superseded.superseded_by IS NOT NULL" in match_cte
 
     qualifying_cte = _cte_sql(sql, name="qualifying_transactions", next_name="donor_groups")
-    assert "JOIN current_federal_candidate_committees scope" in qualifying_cte
-    assert "scope.committee_id = t.committee_id" in qualifying_cte
+    assert "JOIN current_federal_candidate_committees" not in qualifying_cte
+    assert "JOIN current_federal_committee_scope" not in qualifying_cte
 
 
 def test_donor_search_recipient_rollups_are_scoped_to_limited_donor_groups() -> None:

@@ -23,10 +23,8 @@ jobs:
           python-version: "3.12"
       - name: Sync dependencies
         run: uv sync --locked --extra dev
-      - name: Ruff check
-        run: uv run --locked ruff check tests/ci/
-      - name: Ruff format check
-        run: uv run --locked ruff format --check tests/ci/
+      - name: Lint
+        run: make lint
 
   unit-tests:
     name: unit-tests
@@ -42,4 +40,31 @@ jobs:
       - name: Sync dependencies
         run: uv sync --locked --extra dev --extra entity-resolution
       - name: Unit tests
-        run: uv run --locked pytest tests/ci/ -m "not dev_repo_only" --tb=short
+        run: make test
+
+  web:
+    name: web
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: web/package.json
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Install web dependencies
+        working-directory: web
+        run: npm ci
+      - name: Web unit tests
+        working-directory: web
+        run: npm test
+      - name: Web type check
+        working-directory: web
+        run: npm run check
+      - name: Web production build
+        working-directory: web
+        run: npm run build

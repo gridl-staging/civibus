@@ -315,12 +315,14 @@ describe("route head rendering", () => {
     expect(getPrimaryNavigationLinks(rendered.body)).toEqual([
       { label: "Home", href: "/" },
       { label: "Search", href: "/search" },
-      { label: "Donor Lookup", href: "/donors" },
+      { label: "Candidates", href: "/candidates" },
+      { label: "Committees", href: "/committees" },
       { label: "Congress", href: "/congress" },
+      { label: "Developers", href: "/developers" },
       { label: "Methodology", href: "/methodology" }
     ]);
-    expect(rendered.body).not.toContain('href="/candidates"');
-    expect(rendered.body).not.toContain('href="/committees"');
+    expect(rendered.body).toContain('href="/candidates"');
+    expect(rendered.body).toContain('href="/committees"');
     expect(rendered.body).toContain("<footer");
     expect(rendered.body).toContain('aria-label="Footer"');
     expect(rendered.body).toMatch(
@@ -563,7 +565,8 @@ describe("route head rendering", () => {
               state: "NC",
               district: "01",
               slug: "jane-candidate",
-              slug_is_unique: true
+              slug_is_unique: true,
+              identity_is_safe: true
             }
           ],
           offset: 25,

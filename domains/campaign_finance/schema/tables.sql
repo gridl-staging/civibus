@@ -34,6 +34,7 @@
 --       days_late = max(0, receipt_date - due_date) when both dates are present.
 
 CREATE SCHEMA IF NOT EXISTS cf;
+CREATE EXTENSION IF NOT EXISTS btree_gin;
 
 CREATE TABLE cf.committee (
     id               UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -427,6 +428,13 @@ CREATE INDEX idx_transaction_contributor_zip5
 -- indexes are intentionally narrower than the general donor ER indexes above.
 CREATE INDEX idx_transaction_donor_search_name_receipt_trgm
     ON cf.transaction USING GIN (LOWER(contributor_name_raw) gin_trgm_ops)
+    WHERE contributor_name_raw IS NOT NULL
+      AND transaction_type LIKE '1%'
+      AND contributor_entity_type = 'IND'
+      AND is_memo = FALSE
+      AND amendment_indicator != 'T';
+CREATE INDEX idx_transaction_donor_search_name_receipt_committee_gin
+    ON cf.transaction USING GIN (LOWER(contributor_name_raw) gin_trgm_ops, committee_id)
     WHERE contributor_name_raw IS NOT NULL
       AND transaction_type LIKE '1%'
       AND contributor_entity_type = 'IND'

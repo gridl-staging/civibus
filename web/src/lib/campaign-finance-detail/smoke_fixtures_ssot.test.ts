@@ -15,7 +15,11 @@ import {
   SMOKE_FILINGS_PAGE_2_LAST_ROW_LABEL,
   SMOKE_FILINGS_PAGE_1_LABEL,
   SMOKE_FILINGS_PAGE_2_LABEL,
-  SMOKE_FILINGS_HIGH_TOTAL_LABEL
+  SMOKE_FILINGS_HIGH_TOTAL_LABEL,
+  SMOKE_CANDIDATE_ID,
+  SMOKE_EMPTY_CANDIDATE_ID,
+  SMOKE_LOADED_ZERO_CANDIDATE_ID,
+  SMOKE_BACKEND_FAILURE_CANDIDATE_ID
 } from "../../../tests/smoke/fixtures";
 import { smokeFixtures } from "../../../tests/smoke/fixture-data";
 import {
@@ -250,6 +254,199 @@ function renderedFilingRowLabel(row: { filingName: string; filingFecId: string }
   // Mirrors the DetailPage.svelte filing cell: `{row.filingName} ({row.filingFecId})`.
   return `${row.filingName} (${row.filingFecId})`;
 }
+
+describe("candidate money smoke fixture readiness", () => {
+  const candidateFixtures = [
+    {
+      label: "populated",
+      fixture: smokeFixtures.candidate,
+      fundraisingCoverage: {
+        activity_state: "populated",
+        completeness: "complete",
+        basis: "fec_official_candidate_summary"
+      },
+      ieCoverage: {
+        activity_state: "populated",
+        completeness: "complete",
+        basis: "fec_schedule_e_transactions"
+      },
+      fundraisingMetadata: ["2026-01-01", "2026-12-31", [2026]],
+      ieMetadata: ["2026-01-01", "2026-12-31", [2026]]
+    },
+    {
+      label: "not loaded",
+      fixture: smokeFixtures.candidateEmpty,
+      fundraisingCoverage: {
+        activity_state: "not_loaded",
+        completeness: "unknown",
+        basis: "no_authoritative_load_evidence"
+      },
+      ieCoverage: {
+        activity_state: "not_loaded",
+        completeness: "unknown",
+        basis: "no_authoritative_load_evidence"
+      },
+      fundraisingMetadata: [null, null, []],
+      ieMetadata: [null, null, []]
+    },
+    {
+      label: "loaded zero",
+      fixture: smokeFixtures.candidateLoadedZero,
+      fundraisingCoverage: {
+        activity_state: "loaded_zero",
+        completeness: "complete",
+        basis: "authoritative_load_evidence"
+      },
+      ieCoverage: {
+        activity_state: "loaded_zero",
+        completeness: "complete",
+        basis: "authoritative_load_evidence"
+      },
+      fundraisingMetadata: ["2026-01-01", "2026-12-31", [2026]],
+      ieMetadata: ["2026-01-01", "2026-12-31", [2026]]
+    },
+    {
+      label: "deviant",
+      fixture: smokeFixtures.candidateDeviant,
+      fundraisingCoverage: {
+        activity_state: "populated",
+        completeness: "complete",
+        basis: "qualifying_transactions"
+      },
+      ieCoverage: {
+        activity_state: "not_loaded",
+        completeness: "unknown",
+        basis: "no_authoritative_load_evidence"
+      },
+      fundraisingMetadata: ["2026-01-01", "2026-12-31", [2026]],
+      ieMetadata: [null, null, []]
+    },
+    {
+      label: "Alabama",
+      fixture: smokeFixtures.candidateAl,
+      fundraisingCoverage: {
+        activity_state: "populated",
+        completeness: "complete",
+        basis: "qualifying_transactions"
+      },
+      ieCoverage: {
+        activity_state: "not_loaded",
+        completeness: "unknown",
+        basis: "no_authoritative_load_evidence"
+      },
+      fundraisingMetadata: ["2026-01-01", "2026-12-31", [2026]],
+      ieMetadata: [null, null, []]
+    },
+    {
+      label: "Georgia",
+      fixture: smokeFixtures.candidateGa,
+      fundraisingCoverage: {
+        activity_state: "populated",
+        completeness: "complete",
+        basis: "qualifying_transactions"
+      },
+      ieCoverage: {
+        activity_state: "not_loaded",
+        completeness: "unknown",
+        basis: "no_authoritative_load_evidence"
+      },
+      fundraisingMetadata: ["2026-01-01", "2026-12-31", [2026]],
+      ieMetadata: [null, null, []]
+    }
+  ];
+
+  it.each(candidateFixtures)(
+    "$label candidate has contract-complete coverage and selected-cycle metadata",
+    ({ fixture, fundraisingCoverage, ieCoverage, fundraisingMetadata, ieMetadata }) => {
+      expect(fixture.summary.candidate_id).toBe(fixture.id);
+      expect(fixture.summary.selected_cycle).toBe(2026);
+      expect([
+        fixture.summary.coverage_start_date,
+        fixture.summary.coverage_end_date,
+        fixture.summary.available_cycles
+      ]).toEqual(fundraisingMetadata);
+      expect(fixture.summary.coverage).toEqual(fundraisingCoverage);
+      expect(Object.hasOwn(fixture.summary, "cash_on_hand")).toBe(true);
+      expect(fixture.summary).toEqual(
+        expect.objectContaining({
+          summary_source: expect.stringMatching(/^(fec_weball|derived)$/),
+          itemized_transaction_count: expect.any(Number),
+          receipt_source_composition: expect.any(Array),
+          selected_cycle_coverage_complete: expect.any(Boolean),
+          can_render_share: expect.any(Boolean),
+          receipt_source_caveats: expect.any(Array)
+        })
+      );
+      for (const committee of fixture.summary.committees) {
+        expect(committee).toEqual(
+          expect.objectContaining({
+            selected_cycle: 2026,
+            coverage_start_date: "2026-01-01",
+            coverage_end_date: "2026-12-31",
+            available_cycles: [2026],
+            cycle_summaries: expect.any(Array),
+            receipt_source_composition: expect.any(Array),
+            receipt_source_caveats: expect.any(Array)
+          })
+        );
+      }
+
+      expect(fixture.ieSummary.candidate_id).toBe(fixture.id);
+      expect(fixture.ieSummary.selected_cycle).toBe(2026);
+      expect([
+        fixture.ieSummary.coverage_start_date,
+        fixture.ieSummary.coverage_end_date,
+        fixture.ieSummary.available_cycles
+      ]).toEqual(ieMetadata);
+      expect(fixture.ieSummary.coverage).toEqual(ieCoverage);
+      expect(fixture.ieTransactions).toEqual(expect.any(Array));
+    }
+  );
+
+  it("pins deterministic populated, not-loaded, and loaded-zero values used by the browser proof", () => {
+    expect(smokeFixtures.candidate.id).toBe(SMOKE_CANDIDATE_ID);
+    expect(smokeFixtures.candidate.summary).toMatchObject({
+      total_raised: "250.00",
+      total_spent: "80.00",
+      cash_on_hand: "125.00"
+    });
+    expect(smokeFixtures.candidate.ieSummary).toMatchObject({
+      support_total: "15000.00",
+      oppose_total: "8500.00",
+      support_count: 12,
+      oppose_count: 5
+    });
+
+    expect(smokeFixtures.candidateEmpty.id).toBe(SMOKE_EMPTY_CANDIDATE_ID);
+    expect(smokeFixtures.candidateEmpty.summary).toMatchObject({
+      total_raised: "0.00",
+      total_spent: "0.00",
+      itemized_transaction_count: 0
+    });
+
+    expect(smokeFixtures.candidateLoadedZero.id).toBe(SMOKE_LOADED_ZERO_CANDIDATE_ID);
+    expect(smokeFixtures.candidateLoadedZero.summary).toMatchObject({
+      total_raised: "0.00",
+      total_spent: "0.00",
+      itemized_transaction_count: 0
+    });
+    expect(smokeFixtures.candidateLoadedZero.ieSummary).toMatchObject({
+      support_total: "0.00",
+      oppose_total: "0.00",
+      support_count: 0,
+      oppose_count: 0
+    });
+  });
+
+  it("pins all three candidate money failures to the maintained backend response fixture", () => {
+    expect(smokeFixtures.candidateBackendFailure.id).toBe(SMOKE_BACKEND_FAILURE_CANDIDATE_ID);
+    expect(smokeFixtures.candidateBackendFailure.behavior).toEqual({
+      summaryStatus: 503,
+      ieSummaryStatus: 503,
+      ieTransactionsStatus: 503
+    });
+  });
+});
 
 describe("filing pagination smoke fixtures", () => {
   it("paged committee fixture is a 30-row window carrying backend pagination metadata", () => {

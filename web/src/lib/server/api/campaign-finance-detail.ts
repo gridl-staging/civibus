@@ -39,7 +39,7 @@ import {
   type RankedTransactionParty,
   type SelectedCycleRequest
 } from "$lib/campaign-finance-detail/contract";
-import { ApiResponseError, type ApiClient } from "./client";
+import type { ApiClient } from "./client";
 
 type IdRequest = { id: string };
 type CycleScopedIdRequest = IdRequest & SelectedCycleRequest;
@@ -278,18 +278,6 @@ function sortMergedDonorVendorTransactions(
   });
 }
 
-async function fetchOptionalCandidateData<T>(operation: () => Promise<T>, fallbackValue: T): Promise<T> {
-  try {
-    return await operation();
-  } catch (cause) {
-    if (cause instanceof ApiResponseError && cause.status === 404) {
-      return fallbackValue;
-    }
-
-    throw cause;
-  }
-}
-
 export async function fetchCandidateList(
   apiClient: ApiClient,
   request: CandidateListRequest
@@ -459,14 +447,8 @@ export async function fetchCandidateDetailBundle(
 ): Promise<CandidateDetailBundle> {
   const detailPromise = fetchCandidateDetail(apiClient, request);
   const summaryPromise = fetchCandidateSummary(apiClient, request);
-  const ieTransactionsPromise = fetchOptionalCandidateData(
-    () => fetchCandidateIndependentExpenditures(apiClient, request),
-    []
-  );
-  const ieSummaryPromise = fetchOptionalCandidateData(
-    () => fetchCandidateIndependentExpendituresSummary(apiClient, request),
-    null
-  );
+  const ieTransactionsPromise = fetchCandidateIndependentExpenditures(apiClient, request);
+  const ieSummaryPromise = fetchCandidateIndependentExpendituresSummary(apiClient, request);
   guardUnhandledRejection(summaryPromise);
   guardUnhandledRejection(ieTransactionsPromise);
   guardUnhandledRejection(ieSummaryPromise);

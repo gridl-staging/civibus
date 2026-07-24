@@ -1,5 +1,6 @@
 import type {
   CashOnHandPoint,
+  ChartPoint,
   ChartSeries,
   ExactDisclosureRow,
   GeographyShareRow,
@@ -39,6 +40,7 @@ const MONTH_FORMATTER = new Intl.DateTimeFormat("en-US", {
   year: "numeric",
   timeZone: "UTC"
 });
+const SINGLETON_CASH_SEGMENT_MARKER_DAYS = 1;
 
 export function formatCurrency(value: number): string {
   if (Object.is(value, -0)) {
@@ -167,11 +169,24 @@ export function buildCashOnHandSeries(points: CashOnHandPoint[]): ChartSeries[] 
   return segments.map((segment, index) => ({
     id: `cash_on_hand_segment_${index + 1}`,
     label: "Cash on hand",
-    points: segment.map((point) => ({
-      x: new Date(`${point.periodEnd}T00:00:00.000Z`),
-      y: point.amount
-    }))
+    points: cashSegmentToChartPoints(segment)
   }));
+}
+
+function cashSegmentToChartPoints(segment: CashOnHandPoint[]): ChartPoint[] {
+  const points = segment.map((point) => ({
+    x: new Date(`${point.periodEnd}T00:00:00.000Z`),
+    y: point.amount
+  }));
+
+  if (points.length !== 1) {
+    return points;
+  }
+
+  const [point] = points;
+  const markerEnd = new Date(point.x);
+  markerEnd.setUTCDate(markerEnd.getUTCDate() + SINGLETON_CASH_SEGMENT_MARKER_DAYS);
+  return [point, { x: markerEnd, y: point.y }];
 }
 
 export function getContrastRatio(foreground: string, background: string): number {

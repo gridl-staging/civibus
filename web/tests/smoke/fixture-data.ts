@@ -4,6 +4,9 @@ const fixtureConstants =
 const {
   SMOKE_CANDIDACY_ID,
   SMOKE_CANDIDACY_PERSON_NAME,
+  SMOKE_AUDITED_MALFORMED_CANDIDATE_ID,
+  SMOKE_AUDITED_MALFORMED_CANDIDATE_RAW_NAME,
+  SMOKE_AUDITED_MALFORMED_CANDIDATE_SOURCE_URL,
   SMOKE_CANDIDATE_ID,
   SMOKE_AL_CANDIDATE_ID,
   SMOKE_CANDIDATE_CASH_ON_HAND,
@@ -38,6 +41,8 @@ const {
   SMOKE_CONTEST_NAME,
   SMOKE_DEVIANT_CANDIDATE_ID,
   SMOKE_EMPTY_CANDIDATE_ID,
+  SMOKE_LOADED_ZERO_CANDIDATE_ID,
+  SMOKE_BACKEND_FAILURE_CANDIDATE_ID,
   SMOKE_EMPTY_COMMITTEE_ID,
   SMOKE_EMPTY_OFFICE_ID,
   SMOKE_EMPTY_OFFICE_NAME,
@@ -116,6 +121,77 @@ const {
 const FILING_FIXTURE_DAY_MS = 24 * 60 * 60 * 1000;
 // Fixed base date (2026-12-31). `new Date(<explicit ms>)` is deterministic — no wall clock.
 const FILING_FIXTURE_BASE_MS = Date.UTC(2026, 11, 31);
+
+const POPULATED_FUNDRAISING_COVERAGE = {
+  activity_state: "populated",
+  completeness: "complete",
+  basis: "fec_official_candidate_summary"
+} as const;
+const POPULATED_IE_COVERAGE = {
+  activity_state: "populated",
+  completeness: "complete",
+  basis: "fec_schedule_e_transactions"
+} as const;
+const POPULATED_TRANSACTION_COVERAGE = {
+  activity_state: "populated",
+  completeness: "complete",
+  basis: "qualifying_transactions"
+} as const;
+const NOT_LOADED_COVERAGE = {
+  activity_state: "not_loaded",
+  completeness: "unknown",
+  basis: "no_authoritative_load_evidence"
+} as const;
+const LOADED_ZERO_COVERAGE = {
+  activity_state: "loaded_zero",
+  completeness: "complete",
+  basis: "authoritative_load_evidence"
+} as const;
+
+function buildCandidateCommitteeSummary({
+  totalRaised,
+  totalSpent,
+  net,
+  transactionCount,
+  jurisdiction
+}: {
+  totalRaised: string;
+  totalSpent: string;
+  net: string;
+  transactionCount: number;
+  jurisdiction: string;
+}) {
+  return {
+    committee_id: SMOKE_COMMITTEE_ID,
+    committee_name: SMOKE_COMMITTEE_NAME,
+    slug: SMOKE_COMMITTEE_SLUG,
+    slug_is_unique: true,
+    total_raised: totalRaised,
+    total_spent: totalSpent,
+    net,
+    transaction_count: transactionCount,
+    jurisdiction,
+    data_through: "2026-03-19T00:00:00Z",
+    selected_cycle: Number(SMOKE_CANDIDATE_SELECTED_CYCLE),
+    coverage_start_date: "2026-01-01",
+    coverage_end_date: SMOKE_CANDIDATE_COVERAGE_THROUGH,
+    available_cycles: [Number(SMOKE_CANDIDATE_SELECTED_CYCLE)],
+    cash_receipts_total: totalRaised,
+    in_kind_receipts_total: "0.00",
+    loan_receipts_total: "0.00",
+    contribution_receipts_total: totalRaised,
+    top_donors: [],
+    top_vendors: [],
+    spend_categories: null,
+    itemized_transaction_count: transactionCount,
+    cycle_summaries: [],
+    summary_source: "derived" as const,
+    receipt_source_composition: [],
+    selected_cycle_coverage_complete: true,
+    can_render_share: false,
+    receipt_source_caveats: []
+  };
+}
 
 function toIsoDateOnly(epochMs: number): string {
   return new Date(epochMs).toISOString().slice(0, 10);
@@ -1236,6 +1312,7 @@ export const smokeFixtures = {
       name: SMOKE_CANDIDATE_NAME,
       slug: SMOKE_CANDIDATE_SLUG,
       slug_is_unique: true,
+      identity_is_safe: true,
       person_id: SMOKE_PERSON_ID,
       party: "DEM",
       office: "H",
@@ -1283,36 +1360,19 @@ export const smokeFixtures = {
       can_render_share: true,
       receipt_source_caveats: [],
       committees: [
-        {
-          committee_id: SMOKE_COMMITTEE_ID,
-          committee_name: SMOKE_COMMITTEE_NAME,
-          slug: SMOKE_COMMITTEE_SLUG,
-          slug_is_unique: true,
-          total_raised: "250.00",
-          total_spent: "80.00",
+        buildCandidateCommitteeSummary({
+          totalRaised: "250.00",
+          totalSpent: "80.00",
           net: "170.00",
-          transaction_count: 5,
-          jurisdiction: "federal/fec",
-          data_through: "2026-03-19T00:00:00Z",
-          selected_cycle: Number(SMOKE_CANDIDATE_SELECTED_CYCLE),
-          coverage_start_date: "2026-01-01",
-          coverage_end_date: SMOKE_CANDIDATE_COVERAGE_THROUGH,
-          available_cycles: [Number(SMOKE_CANDIDATE_SELECTED_CYCLE)],
-          cash_receipts_total: "250.00",
-          in_kind_receipts_total: "0.00",
-          loan_receipts_total: "0.00",
-          contribution_receipts_total: "250.00",
-          top_donors: [],
-          top_vendors: [],
-          spend_categories: null,
-          itemized_transaction_count: 5,
-          cycle_summaries: [],
-          summary_source: "derived" as const
-        }
+          transactionCount: 5,
+          jurisdiction: "federal/fec"
+        })
       ],
       cash_on_hand: SMOKE_CANDIDATE_CASH_ON_HAND.replace("$", "").replace(",", ""),
+      net_self_funding: "0.00",
       summary_source: "fec_weball" as const,
-      itemized_transaction_count: 5
+      itemized_transaction_count: 5,
+      coverage: POPULATED_FUNDRAISING_COVERAGE
     },
     ieTransactions: [
       {
@@ -1347,7 +1407,8 @@ export const smokeFixtures = {
           transaction_count: 8
         }
       ],
-      excluded_outlier_count: 0
+      excluded_outlier_count: 0,
+      coverage: POPULATED_IE_COVERAGE
     }
   },
   candidateEmpty: {
@@ -1358,6 +1419,7 @@ export const smokeFixtures = {
       name: "Candidate Empty",
       slug: "candidate-empty",
       slug_is_unique: false,
+      identity_is_safe: true,
       person_id: null,
       party: null,
       office: "H",
@@ -1370,11 +1432,119 @@ export const smokeFixtures = {
     summary: {
       candidate_id: SMOKE_EMPTY_CANDIDATE_ID,
       candidate_name: "Candidate Empty",
+      selected_cycle: Number(SMOKE_CANDIDATE_SELECTED_CYCLE),
+      coverage_start_date: null,
+      coverage_end_date: null,
+      available_cycles: [],
       total_raised: "0.00",
       total_spent: "0.00",
       net: "0.00",
       transaction_count: 0,
-      committees: []
+      committees: [],
+      cash_on_hand: null,
+      net_self_funding: null,
+      summary_source: "derived" as const,
+      itemized_transaction_count: 0,
+      receipt_source_composition: [],
+      selected_cycle_coverage_complete: false,
+      can_render_share: false,
+      receipt_source_caveats: [],
+      coverage: NOT_LOADED_COVERAGE
+    },
+    ieTransactions: [],
+    ieSummary: {
+      candidate_id: SMOKE_EMPTY_CANDIDATE_ID,
+      selected_cycle: Number(SMOKE_CANDIDATE_SELECTED_CYCLE),
+      coverage_start_date: null,
+      coverage_end_date: null,
+      available_cycles: [],
+      support_total: "0.00",
+      oppose_total: "0.00",
+      support_count: 0,
+      oppose_count: 0,
+      top_spenders: [],
+      excluded_outlier_count: 0,
+      coverage: NOT_LOADED_COVERAGE
+    }
+  },
+  candidateLoadedZero: {
+    id: SMOKE_LOADED_ZERO_CANDIDATE_ID,
+    detail: {
+      id: SMOKE_LOADED_ZERO_CANDIDATE_ID,
+      fec_candidate_id: "H0NC99996",
+      name: "Candidate Loaded Zero",
+      slug: "candidate-loaded-zero",
+      slug_is_unique: false,
+      identity_is_safe: true,
+      person_id: null,
+      party: null,
+      office: "H",
+      state: "NC",
+      district: "02",
+      incumbent_challenge: "C",
+      principal_committee_id: null,
+      sources: []
+    },
+    summary: {
+      candidate_id: SMOKE_LOADED_ZERO_CANDIDATE_ID,
+      candidate_name: "Candidate Loaded Zero",
+      selected_cycle: Number(SMOKE_CANDIDATE_SELECTED_CYCLE),
+      coverage_start_date: "2026-01-01",
+      coverage_end_date: SMOKE_CANDIDATE_COVERAGE_THROUGH,
+      available_cycles: [Number(SMOKE_CANDIDATE_SELECTED_CYCLE)],
+      total_raised: "0.00",
+      total_spent: "0.00",
+      net: "0.00",
+      transaction_count: 0,
+      committees: [],
+      cash_on_hand: null,
+      net_self_funding: null,
+      summary_source: "derived" as const,
+      itemized_transaction_count: 0,
+      receipt_source_composition: [],
+      selected_cycle_coverage_complete: true,
+      can_render_share: false,
+      receipt_source_caveats: [],
+      coverage: LOADED_ZERO_COVERAGE
+    },
+    ieTransactions: [],
+    ieSummary: {
+      candidate_id: SMOKE_LOADED_ZERO_CANDIDATE_ID,
+      selected_cycle: Number(SMOKE_CANDIDATE_SELECTED_CYCLE),
+      coverage_start_date: "2026-01-01",
+      coverage_end_date: SMOKE_CANDIDATE_COVERAGE_THROUGH,
+      available_cycles: [Number(SMOKE_CANDIDATE_SELECTED_CYCLE)],
+      support_total: "0.00",
+      oppose_total: "0.00",
+      support_count: 0,
+      oppose_count: 0,
+      top_spenders: [],
+      excluded_outlier_count: 0,
+      coverage: LOADED_ZERO_COVERAGE
+    }
+  },
+  candidateBackendFailure: {
+    id: SMOKE_BACKEND_FAILURE_CANDIDATE_ID,
+    detail: {
+      id: SMOKE_BACKEND_FAILURE_CANDIDATE_ID,
+      fec_candidate_id: "H0NC99995",
+      name: "Candidate Backend Failure",
+      slug: "candidate-backend-failure",
+      slug_is_unique: false,
+      identity_is_safe: true,
+      person_id: null,
+      party: null,
+      office: "H",
+      state: "NC",
+      district: "03",
+      incumbent_challenge: "C",
+      principal_committee_id: null,
+      sources: []
+    },
+    behavior: {
+      summaryStatus: 503,
+      ieSummaryStatus: 503,
+      ieTransactionsStatus: 503
     }
   },
   candidateDeviant: {
@@ -1385,6 +1555,7 @@ export const smokeFixtures = {
       name: "Candidate Deviant",
       slug: "candidate-deviant",
       slug_is_unique: false,
+      identity_is_safe: true,
       person_id: null,
       party: "DEM",
       office: "H",
@@ -1403,24 +1574,113 @@ export const smokeFixtures = {
     summary: {
       candidate_id: SMOKE_DEVIANT_CANDIDATE_ID,
       candidate_name: "Candidate Deviant",
+      selected_cycle: Number(SMOKE_CANDIDATE_SELECTED_CYCLE),
+      coverage_start_date: "2026-01-01",
+      coverage_end_date: SMOKE_CANDIDATE_COVERAGE_THROUGH,
+      available_cycles: [Number(SMOKE_CANDIDATE_SELECTED_CYCLE)],
       total_raised: "250.00",
       total_spent: "80.00",
       net: "170.00",
       transaction_count: 5,
       committees: [
-        {
-          committee_id: SMOKE_COMMITTEE_ID,
-          committee_name: SMOKE_COMMITTEE_NAME,
-          slug: SMOKE_COMMITTEE_SLUG,
-          slug_is_unique: true,
-          total_raised: "250.00",
-          total_spent: "80.00",
+        buildCandidateCommitteeSummary({
+          totalRaised: "250.00",
+          totalSpent: "80.00",
           net: "170.00",
-          transaction_count: 5,
+          transactionCount: 5,
+          jurisdiction: "federal/fec"
+        })
+      ],
+      cash_on_hand: null,
+      net_self_funding: null,
+      summary_source: "derived" as const,
+      itemized_transaction_count: 5,
+      receipt_source_composition: [],
+      selected_cycle_coverage_complete: true,
+      can_render_share: false,
+      receipt_source_caveats: [],
+      coverage: POPULATED_TRANSACTION_COVERAGE
+    },
+    ieTransactions: [],
+    ieSummary: {
+      candidate_id: SMOKE_DEVIANT_CANDIDATE_ID,
+      selected_cycle: Number(SMOKE_CANDIDATE_SELECTED_CYCLE),
+      coverage_start_date: null,
+      coverage_end_date: null,
+      available_cycles: [],
+      support_total: "0.00",
+      oppose_total: "0.00",
+      support_count: 0,
+      oppose_count: 0,
+      top_spenders: [],
+      excluded_outlier_count: 0,
+      coverage: NOT_LOADED_COVERAGE
+    }
+  },
+  candidateAuditedMalformed: {
+    id: SMOKE_AUDITED_MALFORMED_CANDIDATE_ID,
+    detail: {
+      id: SMOKE_AUDITED_MALFORMED_CANDIDATE_ID,
+      fec_candidate_id: "H0TX05005",
+      name: SMOKE_AUDITED_MALFORMED_CANDIDATE_RAW_NAME,
+      slug: "212-n-half-w-john-rodney-howard-mr",
+      slug_is_unique: true,
+      identity_is_safe: false,
+      person_id: null,
+      party: "DEM",
+      office: "H",
+      state: "TX",
+      district: "05",
+      incumbent_challenge: "C",
+      principal_committee_id: null,
+      sources: [
+        {
+          domain: "campaign_finance",
           jurisdiction: "federal/fec",
-          data_through: "2026-03-19T00:00:00Z"
+          data_source_name: "Federal Election Commission",
+          data_source_url: "https://www.fec.gov",
+          source_record_key: "H0TX05005",
+          record_url: SMOKE_AUDITED_MALFORMED_CANDIDATE_SOURCE_URL,
+          pull_date: "2026-03-19T00:00:00Z"
         }
       ]
+    },
+    summary: {
+      candidate_id: SMOKE_AUDITED_MALFORMED_CANDIDATE_ID,
+      candidate_name: SMOKE_AUDITED_MALFORMED_CANDIDATE_RAW_NAME,
+      selected_cycle: Number(SMOKE_CANDIDATE_SELECTED_CYCLE),
+      coverage_start_date: null,
+      coverage_end_date: null,
+      available_cycles: [],
+      total_raised: "0.00",
+      total_spent: "0.00",
+      net: "0.00",
+      transaction_count: 0,
+      committees: [],
+      cash_on_hand: null,
+      net_self_funding: null,
+      summary_source: "derived" as const,
+      itemized_transaction_count: 0,
+      receipt_source_composition: [],
+      selected_cycle_coverage_complete: false,
+      can_render_share: false,
+      receipt_source_caveats: [],
+      coverage: NOT_LOADED_COVERAGE
+    },
+    ieTransactions: [],
+    ieSummary: {
+      candidate_id: SMOKE_AUDITED_MALFORMED_CANDIDATE_ID,
+      selected_cycle: Number(SMOKE_CANDIDATE_SELECTED_CYCLE),
+      coverage_start_date: null,
+      coverage_end_date: null,
+      available_cycles: [],
+      support_total: "0.00",
+      oppose_total: "0.00",
+      support_count: 0,
+      oppose_count: 0,
+      top_spenders: [],
+      excluded_outlier_count: 0,
+      coverage: NOT_LOADED_COVERAGE
     }
   },
   candidateAl: {
@@ -1431,6 +1691,7 @@ export const smokeFixtures = {
       name: "Candidate Alabama",
       slug: "candidate-alabama",
       slug_is_unique: false,
+      identity_is_safe: true,
       person_id: null,
       party: "REP",
       office: "S",
@@ -1453,24 +1714,47 @@ export const smokeFixtures = {
     summary: {
       candidate_id: SMOKE_AL_CANDIDATE_ID,
       candidate_name: "Candidate Alabama",
+      selected_cycle: Number(SMOKE_CANDIDATE_SELECTED_CYCLE),
+      coverage_start_date: "2026-01-01",
+      coverage_end_date: SMOKE_CANDIDATE_COVERAGE_THROUGH,
+      available_cycles: [Number(SMOKE_CANDIDATE_SELECTED_CYCLE)],
       total_raised: "900.00",
       total_spent: "325.00",
       net: "575.00",
       transaction_count: 4,
       committees: [
-        {
-          committee_id: SMOKE_COMMITTEE_ID,
-          committee_name: SMOKE_COMMITTEE_NAME,
-          slug: SMOKE_COMMITTEE_SLUG,
-          slug_is_unique: true,
-          total_raised: "900.00",
-          total_spent: "325.00",
+        buildCandidateCommitteeSummary({
+          totalRaised: "900.00",
+          totalSpent: "325.00",
           net: "575.00",
-          transaction_count: 4,
-          jurisdiction: "state/AL",
-          data_through: "2026-03-19T00:00:00Z"
-        }
-      ]
+          transactionCount: 4,
+          jurisdiction: "state/AL"
+        })
+      ],
+      cash_on_hand: null,
+      net_self_funding: null,
+      summary_source: "derived" as const,
+      itemized_transaction_count: 4,
+      receipt_source_composition: [],
+      selected_cycle_coverage_complete: true,
+      can_render_share: false,
+      receipt_source_caveats: [],
+      coverage: POPULATED_TRANSACTION_COVERAGE
+    },
+    ieTransactions: [],
+    ieSummary: {
+      candidate_id: SMOKE_AL_CANDIDATE_ID,
+      selected_cycle: Number(SMOKE_CANDIDATE_SELECTED_CYCLE),
+      coverage_start_date: null,
+      coverage_end_date: null,
+      available_cycles: [],
+      support_total: "0.00",
+      oppose_total: "0.00",
+      support_count: 0,
+      oppose_count: 0,
+      top_spenders: [],
+      excluded_outlier_count: 0,
+      coverage: NOT_LOADED_COVERAGE
     }
   },
   candidateGa: {
@@ -1481,6 +1765,7 @@ export const smokeFixtures = {
       name: "Candidate Georgia",
       slug: "candidate-georgia",
       slug_is_unique: false,
+      identity_is_safe: true,
       person_id: null,
       party: "DEM",
       office: "S",
@@ -1503,24 +1788,47 @@ export const smokeFixtures = {
     summary: {
       candidate_id: SMOKE_GA_CANDIDATE_ID,
       candidate_name: "Candidate Georgia",
+      selected_cycle: Number(SMOKE_CANDIDATE_SELECTED_CYCLE),
+      coverage_start_date: "2026-01-01",
+      coverage_end_date: SMOKE_CANDIDATE_COVERAGE_THROUGH,
+      available_cycles: [Number(SMOKE_CANDIDATE_SELECTED_CYCLE)],
       total_raised: "1200.00",
       total_spent: "475.00",
       net: "725.00",
       transaction_count: 6,
       committees: [
-        {
-          committee_id: SMOKE_COMMITTEE_ID,
-          committee_name: SMOKE_COMMITTEE_NAME,
-          slug: SMOKE_COMMITTEE_SLUG,
-          slug_is_unique: true,
-          total_raised: "1200.00",
-          total_spent: "475.00",
+        buildCandidateCommitteeSummary({
+          totalRaised: "1200.00",
+          totalSpent: "475.00",
           net: "725.00",
-          transaction_count: 6,
-          jurisdiction: "state/GA",
-          data_through: "2026-03-19T00:00:00Z"
-        }
-      ]
+          transactionCount: 6,
+          jurisdiction: "state/GA"
+        })
+      ],
+      cash_on_hand: null,
+      net_self_funding: null,
+      summary_source: "derived" as const,
+      itemized_transaction_count: 6,
+      receipt_source_composition: [],
+      selected_cycle_coverage_complete: true,
+      can_render_share: false,
+      receipt_source_caveats: [],
+      coverage: POPULATED_TRANSACTION_COVERAGE
+    },
+    ieTransactions: [],
+    ieSummary: {
+      candidate_id: SMOKE_GA_CANDIDATE_ID,
+      selected_cycle: Number(SMOKE_CANDIDATE_SELECTED_CYCLE),
+      coverage_start_date: null,
+      coverage_end_date: null,
+      available_cycles: [],
+      support_total: "0.00",
+      oppose_total: "0.00",
+      support_count: 0,
+      oppose_count: 0,
+      top_spenders: [],
+      excluded_outlier_count: 0,
+      coverage: NOT_LOADED_COVERAGE
     }
   },
   candidateList: {
@@ -1535,7 +1843,8 @@ export const smokeFixtures = {
         state: "NC",
         district: "01",
         slug: SMOKE_CANDIDATE_SLUG,
-        slug_is_unique: true
+        slug_is_unique: true,
+        identity_is_safe: true
       },
       {
         id: SMOKE_EMPTY_CANDIDATE_ID,
@@ -1547,7 +1856,8 @@ export const smokeFixtures = {
         state: null,
         district: null,
         slug: "candidate-empty",
-        slug_is_unique: false
+        slug_is_unique: false,
+        identity_is_safe: true
       }
     ],
     has_next: true,

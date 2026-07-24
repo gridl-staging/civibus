@@ -633,7 +633,8 @@ function buildCandidateListItem(id: string, name: string) {
     state: "NC",
     district: "01",
     slug: name.toLowerCase().replaceAll(" ", "-"),
-    slug_is_unique: true
+    slug_is_unique: true,
+    identity_is_safe: true
   };
 }
 
@@ -682,6 +683,11 @@ function buildCandidateSummary() {
     selected_cycle_coverage_complete: true,
     can_render_share: true,
     receipt_source_caveats: [],
-    committees: []
+    committees: [],
+    coverage: {
+      activity_state: "populated" as const,
+      completeness: "complete" as const,
+      basis: "fec_official_candidate_summary" as const
+    }
   };
 }

@@ -115,6 +115,14 @@ def _build_optional_where_sql(
     return " AND ".join(where_clauses), query_params
 
 
+def _render_filtered_rows_query(sql_template: str, *, where_sql: str) -> str:
+    """Replace only the list-query filter token, preserving SQL regex braces."""
+    placeholder = "{where_sql}"
+    if sql_template.count(placeholder) != 1:
+        raise ValueError("Filtered-row SQL template must contain exactly one {where_sql} token.")
+    return sql_template.replace(placeholder, where_sql)
+
+
 def _fetch_filtered_rows(
     conn: psycopg.Connection,
     *,
@@ -125,7 +133,7 @@ def _fetch_filtered_rows(
 ) -> list[dict[str, Any]]:
     where_sql, query_params = _build_optional_where_sql(filter_values)
     query_params.extend([limit, offset])
-    query = sql_template.format(where_sql=where_sql)
+    query = _render_filtered_rows_query(sql_template, where_sql=where_sql)
     with conn.cursor(row_factory=dict_row) as cursor:
         cursor.execute(query, query_params)
         return list(cursor.fetchall())

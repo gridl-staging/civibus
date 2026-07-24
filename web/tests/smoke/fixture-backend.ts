@@ -272,6 +272,17 @@ type PersonFixture =
   | (typeof smokeFixtures)["rosterDurhamPerson"]
   | (typeof smokeFixtures)["rosterNcHousePerson"]
   | (typeof smokeFixtures)["personMissingPortraitField"];
+const standardCandidateFixtures = [
+  smokeFixtures.candidate,
+  smokeFixtures.candidateEmpty,
+  smokeFixtures.candidateLoadedZero,
+  smokeFixtures.candidateBackendFailure,
+  smokeFixtures.candidateDeviant,
+  smokeFixtures.candidateAuditedMalformed,
+  smokeFixtures.candidateAl,
+  smokeFixtures.candidateGa
+] as const;
+type StandardCandidateFixture = (typeof standardCandidateFixtures)[number];
 
 /**
  */
@@ -299,14 +310,47 @@ function getCommitteeFixtureById(committeeId: string | null): CommitteeFixture |
   return null;
 }
 
+function getStandardCandidateFixtureById(candidateId: string): StandardCandidateFixture | null {
+  return standardCandidateFixtures.find((fixture) => fixture.id === candidateId) ?? null;
+}
+
 function isStandardCandidateFixtureId(candidateId: string): boolean {
-  return [
-    smokeFixtures.candidate.id,
-    smokeFixtures.candidateEmpty.id,
-    smokeFixtures.candidateDeviant.id,
-    smokeFixtures.candidateAl.id,
-    smokeFixtures.candidateGa.id
-  ].includes(candidateId);
+  return getStandardCandidateFixtureById(candidateId) !== null;
+}
+
+function getStandardCandidateFixtureResponse(pathname: string): CompareFixtureResponse | null {
+  const match = pathname.match(
+    /^\/v1\/candidates\/([^/]+)(?:\/(summary|independent-expenditures(?:\/summary)?))?$/
+  );
+  if (match === null) {
+    return null;
+  }
+
+  const fixture = getStandardCandidateFixtureById(match[1]);
+  if (fixture === null) {
+    return null;
+  }
+
+  const resource = match[2];
+  if (resource === undefined) {
+    return { status: 200, body: fixture.detail };
+  }
+  if ("behavior" in fixture) {
+    const status =
+      resource === "summary"
+        ? fixture.behavior.summaryStatus
+        : resource === "independent-expenditures/summary"
+          ? fixture.behavior.ieSummaryStatus
+          : fixture.behavior.ieTransactionsStatus;
+    return { status, body: { detail: "Synthetic candidate money failure." } };
+  }
+  if (resource === "summary") {
+    return { status: 200, body: fixture.summary };
+  }
+  if (resource === "independent-expenditures/summary") {
+    return { status: 200, body: fixture.ieSummary };
+  }
+  return { status: 200, body: fixture.ieTransactions };
 }
 
 // Per-committee request-count diagnostics for the five committee detail bundle
@@ -757,63 +801,9 @@ const server = createServer(async (request, response) => {
     return;
   }
 
-  if (url.pathname === `/v1/candidates/${smokeFixtures.candidate.id}/independent-expenditures/summary`) {
-    writeJson(response, 200, smokeFixtures.candidate.ieSummary);
-    return;
-  }
-
-  if (url.pathname === `/v1/candidates/${smokeFixtures.candidate.id}/independent-expenditures`) {
-    writeJson(response, 200, smokeFixtures.candidate.ieTransactions);
-    return;
-  }
-
-  if (url.pathname === `/v1/candidates/${smokeFixtures.candidate.id}/summary`) {
-    writeJson(response, 200, smokeFixtures.candidate.summary);
-    return;
-  }
-
-  if (url.pathname === `/v1/candidates/${smokeFixtures.candidate.id}`) {
-    writeJson(response, 200, smokeFixtures.candidate.detail);
-    return;
-  }
-
-  if (url.pathname === `/v1/candidates/${smokeFixtures.candidateEmpty.id}/summary`) {
-    writeJson(response, 200, smokeFixtures.candidateEmpty.summary);
-    return;
-  }
-
-  if (url.pathname === `/v1/candidates/${smokeFixtures.candidateEmpty.id}`) {
-    writeJson(response, 200, smokeFixtures.candidateEmpty.detail);
-    return;
-  }
-
-  if (url.pathname === `/v1/candidates/${smokeFixtures.candidateDeviant.id}/summary`) {
-    writeJson(response, 200, smokeFixtures.candidateDeviant.summary);
-    return;
-  }
-
-  if (url.pathname === `/v1/candidates/${smokeFixtures.candidateDeviant.id}`) {
-    writeJson(response, 200, smokeFixtures.candidateDeviant.detail);
-    return;
-  }
-
-  if (url.pathname === `/v1/candidates/${smokeFixtures.candidateAl.id}/summary`) {
-    writeJson(response, 200, smokeFixtures.candidateAl.summary);
-    return;
-  }
-
-  if (url.pathname === `/v1/candidates/${smokeFixtures.candidateAl.id}`) {
-    writeJson(response, 200, smokeFixtures.candidateAl.detail);
-    return;
-  }
-
-  if (url.pathname === `/v1/candidates/${smokeFixtures.candidateGa.id}/summary`) {
-    writeJson(response, 200, smokeFixtures.candidateGa.summary);
-    return;
-  }
-
-  if (url.pathname === `/v1/candidates/${smokeFixtures.candidateGa.id}`) {
-    writeJson(response, 200, smokeFixtures.candidateGa.detail);
+  const candidateFixtureResponse = getStandardCandidateFixtureResponse(url.pathname);
+  if (candidateFixtureResponse !== null) {
+    writeJson(response, candidateFixtureResponse.status, candidateFixtureResponse.body);
     return;
   }
 

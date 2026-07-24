@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildCandidateFundraisingRegionViewModels,
+  buildCandidateOutsideSpendingRegionViewModel
+} from "./candidate_money_presentation";
+import {
   buildCandidateCompletenessWarnings,
   buildCandidateAggregateSummaryPresentation,
   buildCandidateCommitteeBreakdown,
@@ -31,6 +35,17 @@ import {
   PERSON_ID
 } from "./presentation_test_fixtures";
 
+const POPULATED_SCHEDULE_E_COVERAGE = {
+  activity_state: "populated" as const,
+  completeness: "complete" as const,
+  basis: "fec_schedule_e_transactions" as const
+};
+const LEGACY_LOADED_ZERO_SCHEDULE_E_COVERAGE = {
+  activity_state: "loaded_zero" as const,
+  completeness: "complete" as const,
+  basis: "authoritative_load_evidence" as const
+};
+
 describe("campaign finance deferred detail presentation", () => {
   it("formats currency for zero, large values, and negatives", () => {
     expect(formatCurrency(0)).toBe("$0.00");
@@ -58,7 +73,8 @@ describe("campaign finance deferred detail presentation", () => {
         [CANDIDATE_ID]: {
           id: CANDIDATE_ID,
           slug: "candidate-one",
-          slug_is_unique: true
+          slug_is_unique: true,
+          identity_is_safe: true
         }
       },
       committeeById: {
@@ -111,8 +127,9 @@ describe("campaign finance deferred detail presentation", () => {
       net: "3000.00",
       transaction_count: 42,
       itemized_transaction_count: 42,
-      cash_on_hand: null,
-      summary_source: "derived" as const,
+      cash_on_hand: "1750.00",
+      debts_owed_by_committee: "250.00",
+      summary_source: "fec_weball" as const,
       committees: [
         {
           ...DEFAULT_SUMMARY,
@@ -123,6 +140,18 @@ describe("campaign finance deferred detail presentation", () => {
           total_spent: "1200.00",
           net: "1800.00",
           transaction_count: 25,
+          debts_owed_by_committee: "125.00",
+          itemized_transaction_count: 25,
+          cycle_summaries: [
+            {
+              cycle: 2026,
+              total_receipts: "3000.00",
+              total_disbursements: "1200.00",
+              cash_on_hand: "900.00",
+              coverage_start_date: "2025-01-01",
+              coverage_end_date: "2026-03-15"
+            }
+          ],
           data_through: "2026-03-15"
         },
         {
@@ -133,6 +162,8 @@ describe("campaign finance deferred detail presentation", () => {
           total_spent: "800.00",
           net: "1200.00",
           transaction_count: 17,
+          debts_owed_by_committee: null,
+          itemized_transaction_count: 17,
           jurisdiction: "state/nc",
           data_through: "2026-03-10"
         }
@@ -143,33 +174,75 @@ describe("campaign finance deferred detail presentation", () => {
     const committeeBreakdown = buildCandidateCommitteeBreakdown(summary);
 
     expect(fundraisingSummary).toEqual({
-      totalRaised: "$5,000.00",
-      totalSpent: "$2,000.00",
-      net: "$3,000.00",
-      transactionCount: 42
+      totalReceipts: "$5,000.00",
+      totalDisbursements: "$2,000.00",
+      cashOnHand: "$1,750.00",
+      debtsOwedByCommittee: "$250.00",
+      itemizedTransactions: 42,
+      selectedCycle: 2026,
+      coveragePeriod: "2025-01-01 to 2026-12-31",
+      summarySourceLabel: "Official FEC candidate summary",
+      factRows: [
+        { label: "Total receipts", value: "$5,000.00" },
+        { label: "Total disbursements", value: "$2,000.00" },
+        { label: "Cash on hand", value: "$1,750.00" },
+        { label: "Debts owed by the committee", value: "$250.00" },
+        { label: "Itemized transactions", value: "42" },
+        { label: "Selected cycle", value: "2026" },
+        { label: "Coverage", value: "2025-01-01 to 2026-12-31" },
+        { label: "Source", value: "Official FEC candidate summary" }
+      ]
     });
     expect(committeeBreakdown).toHaveLength(2);
     expect(committeeBreakdown[0]).toEqual({
       committeeId: COMMITTEE_ID,
       committeeName: "Committee Alpha",
       committeeHref: "/committee/committee-alpha",
+      totalReceipts: "$3,000.00",
+      totalDisbursements: "$1,200.00",
+      cashOnHand: "$900.00",
+      debtsOwedByCommittee: "$125.00",
+      itemizedTransactions: 25,
       totalRaised: "$3,000.00",
       totalSpent: "$1,200.00",
       net: "$1,800.00",
       transactionCount: 25,
       jurisdiction: "federal/fec",
-      dataThrough: "2026-03-15"
+      dataThrough: "2026-03-15",
+      factRows: [
+        { label: "Total receipts", value: "$3,000.00" },
+        { label: "Total disbursements", value: "$1,200.00" },
+        { label: "Cash on hand", value: "$900.00" },
+        { label: "Debts owed by the committee", value: "$125.00" },
+        { label: "Itemized transactions", value: "25" },
+        { label: "Jurisdiction", value: "federal/fec" },
+        { label: "Data through", value: "2026-03-15" }
+      ]
     });
     expect(committeeBreakdown[1]).toEqual({
       committeeId: "99999999-9999-4999-8999-999999999999",
       committeeName: "Committee Beta",
       committeeHref: "/committee/99999999-9999-4999-8999-999999999999",
+      totalReceipts: "$2,000.00",
+      totalDisbursements: "$800.00",
+      cashOnHand: "Not available",
+      debtsOwedByCommittee: "Not available",
+      itemizedTransactions: 17,
       totalRaised: "$2,000.00",
       totalSpent: "$800.00",
       net: "$1,200.00",
       transactionCount: 17,
       jurisdiction: "state/nc",
-      dataThrough: "2026-03-10"
+      dataThrough: "2026-03-10",
+      factRows: [
+        { label: "Total receipts", value: "$2,000.00" },
+        { label: "Total disbursements", value: "$800.00" },
+        { label: "Cash on hand", value: "Not available" },
+        { label: "Debts owed by the committee", value: "Not available" },
+        { label: "Itemized transactions", value: "17" },
+        { label: "Jurisdiction", value: "state/nc" },
+        { label: "Data through", value: "2026-03-10" }
+      ]
     });
   });
 
@@ -178,12 +251,159 @@ describe("campaign finance deferred detail presentation", () => {
     const committeeBreakdown = buildCandidateCommitteeBreakdown(DEFAULT_CANDIDATE_SUMMARY);
 
     expect(fundraisingSummary).toEqual({
-      totalRaised: "$0.00",
-      totalSpent: "$0.00",
-      net: "$0.00",
-      transactionCount: 0
+      totalReceipts: "$0.00",
+      totalDisbursements: "$0.00",
+      cashOnHand: "Not available",
+      debtsOwedByCommittee: "Not available",
+      itemizedTransactions: 0,
+      selectedCycle: 2026,
+      coveragePeriod: "2025-01-01 to 2026-12-31",
+      summarySourceLabel: "Derived from itemized transactions",
+      factRows: [
+        { label: "Total receipts", value: "$0.00" },
+        { label: "Total disbursements", value: "$0.00" },
+        { label: "Cash on hand", value: "Not available" },
+        { label: "Debts owed by the committee", value: "Not available" },
+        { label: "Itemized transactions", value: "0" },
+        { label: "Selected cycle", value: "2026" },
+        { label: "Coverage", value: "2025-01-01 to 2026-12-31" },
+        { label: "Source", value: "Derived from itemized transactions" }
+      ]
     });
     expect(committeeBreakdown).toEqual([]);
+  });
+
+  it("drives candidate fundraising regions from backend coverage state", () => {
+    const populatedSummary = {
+      ...DEFAULT_CANDIDATE_SUMMARY,
+      total_raised: "5000.00",
+      total_spent: "2000.00",
+      cash_on_hand: "1750.00",
+      debts_owed_by_committee: "250.00",
+      itemized_transaction_count: 42,
+      summary_source: "fec_weball" as const,
+      coverage: {
+        activity_state: "populated" as const,
+        completeness: "complete" as const,
+        basis: "fec_official_candidate_summary" as const
+      }
+    };
+    const notLoadedSummary = {
+      ...DEFAULT_CANDIDATE_SUMMARY,
+      coverage: {
+        activity_state: "not_loaded" as const,
+        completeness: "unknown" as const,
+        basis: "no_authoritative_load_evidence" as const
+      }
+    };
+    const loadedZeroSummary = {
+      ...DEFAULT_CANDIDATE_SUMMARY,
+      coverage: {
+        activity_state: "loaded_zero" as const,
+        completeness: "complete" as const,
+        basis: "authoritative_load_evidence" as const
+      }
+    };
+
+    expect(buildCandidateFundraisingRegionViewModels(populatedSummary)).toMatchObject({
+      keyFinancials: {
+        state: "populated",
+        message: null,
+        metrics: [
+          { label: "Total receipts", value: "$5,000.00" },
+          { label: "Total disbursements", value: "$2,000.00" },
+          { label: "Cash on hand", value: "$1,750.00" },
+          { label: "Debts owed by the committee", value: "$250.00" },
+          { label: "Itemized transactions", value: "42" }
+        ]
+      },
+      fundraisingSummary: {
+        state: "populated",
+        message: null,
+        summary: {
+          totalReceipts: "$5,000.00",
+          totalDisbursements: "$2,000.00",
+          cashOnHand: "$1,750.00",
+          debtsOwedByCommittee: "$250.00",
+          itemizedTransactions: 42,
+          selectedCycle: 2026,
+          coveragePeriod: "2025-01-01 to 2026-12-31",
+          summarySourceLabel: "Official FEC candidate summary"
+        }
+      }
+    });
+    expect(buildCandidateFundraisingRegionViewModels(notLoadedSummary)).toEqual({
+      keyFinancials: {
+        state: "not_loaded",
+        message: "Campaign-finance totals are not yet available for this candidate and cycle.",
+        methodologyHref: "/methodology",
+        metrics: []
+      },
+      fundraisingSummary: {
+        state: "not_loaded",
+        message: "Fundraising data is not yet available for this candidate and cycle.",
+        methodologyHref: "/methodology",
+        summary: null
+      },
+      committeeBreakdown: {
+        state: "not_loaded",
+        message: "Committee breakdown is not yet available for this candidate and cycle.",
+        methodologyHref: "/methodology",
+        rows: []
+      }
+    });
+    expect(buildCandidateFundraisingRegionViewModels(loadedZeroSummary)).toMatchObject({
+      keyFinancials: {
+        state: "loaded_zero",
+        message: "No fundraising activity is reported in loaded filings for this candidate and cycle.",
+        metrics: [
+          { label: "Total receipts", value: "$0.00" },
+          { label: "Total disbursements", value: "$0.00" },
+          { label: "Cash on hand", value: "Not available" },
+          { label: "Debts owed by the committee", value: "Not available" },
+          { label: "Itemized transactions", value: "0" }
+        ]
+      },
+      fundraisingSummary: {
+        state: "loaded_zero",
+        message: "No fundraising activity is reported in loaded filings for this candidate and cycle.",
+        summary: {
+          totalReceipts: "$0.00",
+          totalDisbursements: "$0.00",
+          cashOnHand: "Not available",
+          debtsOwedByCommittee: "Not available",
+          itemizedTransactions: 0,
+          selectedCycle: 2026,
+          coveragePeriod: "2025-01-01 to 2026-12-31",
+          summarySourceLabel: "Derived from itemized transactions"
+        }
+      },
+      committeeBreakdown: {
+        state: "loaded_zero",
+        message: "No authorized committee activity is reported in loaded filings for this candidate and cycle.",
+        rows: []
+      }
+    });
+    expect(buildCandidateFundraisingRegionViewModels(null)).toEqual({
+      keyFinancials: {
+        state: "backend_failure",
+        message: "Candidate financial totals are temporarily unavailable.",
+        methodologyHref: null,
+        metrics: []
+      },
+      fundraisingSummary: {
+        state: "backend_failure",
+        message: "Candidate fundraising summary is temporarily unavailable.",
+        methodologyHref: null,
+        summary: null
+      },
+      committeeBreakdown: {
+        state: "backend_failure",
+        message: "Committee breakdown is temporarily unavailable.",
+        methodologyHref: null,
+        rows: []
+      }
+    });
   });
 
   it("builds an L10 completeness warning when no candidate transactions were loaded", () => {
@@ -203,7 +423,12 @@ describe("campaign finance deferred detail presentation", () => {
           total_raised: "250.00",
           total_spent: "80.00",
           net: "170.00",
-          transaction_count: 5
+          transaction_count: 5,
+          coverage: {
+            activity_state: "populated",
+            completeness: "partial",
+            basis: "qualifying_transactions"
+          }
         },
         {
           totalRaised: "1000.00",
@@ -254,16 +479,32 @@ describe("campaign finance deferred detail presentation", () => {
     });
 
     expect(buildCandidateDeferredFundraisingSummary(summary)).toEqual({
-      totalRaised: "$5,000.00",
-      totalSpent: "$2,000.00",
-      net: "$3,000.00",
-      transactionCount: 42
+      totalReceipts: "$5,000.00",
+      totalDisbursements: "$2,000.00",
+      cashOnHand: "Not available",
+      debtsOwedByCommittee: "Not available",
+      itemizedTransactions: 0,
+      selectedCycle: 2026,
+      coveragePeriod: "2025-01-01 to 2026-12-31",
+      summarySourceLabel: "Derived from itemized transactions",
+      factRows: [
+        { label: "Total receipts", value: "$5,000.00" },
+        { label: "Total disbursements", value: "$2,000.00" },
+        { label: "Cash on hand", value: "Not available" },
+        { label: "Debts owed by the committee", value: "Not available" },
+        { label: "Itemized transactions", value: "0" },
+        { label: "Selected cycle", value: "2026" },
+        { label: "Coverage", value: "2025-01-01 to 2026-12-31" },
+        { label: "Source", value: "Derived from itemized transactions" }
+      ]
     });
     expect(buildCandidateDeferredCommitteeBreakdown(summary)).toHaveLength(1);
     expect(buildCandidateDeferredKeyMetrics(summary)).toEqual([
-      { label: "Total raised", value: "$5,000.00" },
-      { label: "Total spent", value: "$2,000.00" },
-      { label: "Itemized transactions loaded", value: "42" }
+      { label: "Total receipts", value: "$5,000.00" },
+      { label: "Total disbursements", value: "$2,000.00" },
+      { label: "Cash on hand", value: "Not available" },
+      { label: "Debts owed by the committee", value: "Not available" },
+      { label: "Itemized transactions", value: "0" }
     ]);
     expect(
       buildCandidateDeferredOutsideSpending(
@@ -275,7 +516,8 @@ describe("campaign finance deferred detail presentation", () => {
           support_count: 1,
           oppose_count: 0,
           top_spenders: [],
-          excluded_outlier_count: 0
+          excluded_outlier_count: 0,
+          coverage: POPULATED_SCHEDULE_E_COVERAGE
         },
         []
       ).explanatoryBlock
@@ -301,7 +543,12 @@ describe("campaign finance deferred detail presentation", () => {
     expect(
       buildCommitteeDeferredTransactionRows(transactions, {
         candidateById: {
-          [CANDIDATE_ID]: { id: CANDIDATE_ID, slug: "candidate-one", slug_is_unique: true }
+          [CANDIDATE_ID]: {
+            id: CANDIDATE_ID,
+            slug: "candidate-one",
+            slug_is_unique: true,
+            identity_is_safe: true
+          }
         },
         committeeById: {
           [COMMITTEE_ID]: { id: COMMITTEE_ID, slug: "committee-one", slug_is_unique: true }
@@ -425,6 +672,7 @@ describe("campaign finance deferred detail presentation", () => {
           district: "01",
           slug: "target-candidate",
           slug_is_unique: true,
+          identity_is_safe: true,
           support_total: "200.00",
           oppose_total: "25.00",
           transaction_count: 2,
@@ -492,7 +740,8 @@ describe("campaign finance deferred detail presentation", () => {
         support_count: 1,
         oppose_count: 1,
         top_spenders: [],
-        excluded_outlier_count: 0
+        excluded_outlier_count: 0,
+        coverage: POPULATED_SCHEDULE_E_COVERAGE
       },
       []
     );
@@ -513,7 +762,8 @@ describe("campaign finance deferred detail presentation", () => {
         support_count: 1,
         oppose_count: 1,
         top_spenders: [],
-        excluded_outlier_count: 0
+        excluded_outlier_count: 0,
+        coverage: POPULATED_SCHEDULE_E_COVERAGE
       },
       [
         {
@@ -563,7 +813,8 @@ describe("campaign finance deferred detail presentation", () => {
         support_count: 0,
         oppose_count: 0,
         top_spenders: [],
-        excluded_outlier_count: 0
+        excluded_outlier_count: 0,
+        coverage: LEGACY_LOADED_ZERO_SCHEDULE_E_COVERAGE
       },
       []
     );
@@ -571,9 +822,82 @@ describe("campaign finance deferred detail presentation", () => {
     expect(outsideSpending.explanatoryBlock).toBe(
       "Outside spending is independent and not controlled by the candidate committee."
     );
-    expect(outsideSpending.emptyMessage).toBe(
-      "No outside spending is reported in available filings. Coverage may be incomplete."
+    expect(outsideSpending.emptyMessage).toBeNull();
+    expect(outsideSpending.supportTotal).toBe("$0.00");
+    expect(outsideSpending.opposeTotal).toBe("$0.00");
+    expect(outsideSpending.supportCountLabel).toBe("0 expenditures");
+    expect(outsideSpending.opposeCountLabel).toBe("0 expenditures");
+    expect(outsideSpending.topSpenders).toEqual([]);
+    expect(outsideSpending.chartRows).toEqual([]);
+    expect(outsideSpending.chartTopSpenders).toEqual([]);
+    expect(outsideSpending.transactionRows).toEqual([]);
+  });
+
+  it("drives candidate outside spending from backend coverage state", () => {
+    const notLoaded = buildCandidateOutsideSpendingRegionViewModel(
+      {
+        ...DEFAULT_SELECTED_CYCLE_FIELDS,
+        candidate_id: CANDIDATE_ID,
+        support_total: "0.00",
+        oppose_total: "0.00",
+        support_count: 0,
+        oppose_count: 0,
+        top_spenders: [],
+        excluded_outlier_count: 0,
+        coverage: {
+          activity_state: "not_loaded",
+          completeness: "unknown",
+          basis: "no_authoritative_load_evidence"
+        }
+      },
+      []
     );
+    const loadedZero = buildCandidateOutsideSpendingRegionViewModel(
+      {
+        ...DEFAULT_SELECTED_CYCLE_FIELDS,
+        candidate_id: CANDIDATE_ID,
+        support_total: "0.00",
+        oppose_total: "0.00",
+        support_count: 0,
+        oppose_count: 0,
+        top_spenders: [],
+        excluded_outlier_count: 0,
+        coverage: {
+          activity_state: "loaded_zero",
+          completeness: "complete",
+          basis: "authoritative_load_evidence"
+        }
+      },
+      []
+    );
+
+    expect(notLoaded).toEqual({
+      state: "not_loaded",
+      message: "FEC Schedule E independent-expenditure coverage is not yet available for this candidate and cycle.",
+      methodologyHref: "/methodology",
+      presentation: null
+    });
+    expect(loadedZero).toMatchObject({
+      state: "loaded_zero",
+      message: "No FEC Schedule E independent expenditures are reported in loaded filings for this candidate and cycle.",
+      methodologyHref: null,
+      presentation: {
+        supportTotal: "$0.00",
+        opposeTotal: "$0.00",
+        supportCountLabel: "0 expenditures",
+        opposeCountLabel: "0 expenditures",
+        topSpenders: [],
+        chartRows: [],
+        chartTopSpenders: [],
+        transactionRows: []
+      }
+    });
+    expect(buildCandidateOutsideSpendingRegionViewModel(null, [])).toEqual({
+      state: "backend_failure",
+      message: "Outside-spending data is temporarily unavailable.",
+      methodologyHref: null,
+      presentation: null
+    });
   });
 
   it("builds key metrics from fundraising totals and transaction count", () => {

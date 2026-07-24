@@ -124,11 +124,17 @@ def test_main_dry_run_with_limit(capsys: pytest.CaptureFixture[str]) -> None:
     assert "VA contributions dry-run: parsed 2 rows" in captured.out
 
 
-def test_main_non_dry_run_returns_error_for_load_not_implemented(
+def test_main_non_dry_run_returns_parked_refusal_before_database_connection(
+    monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """Non-dry-run mode for contributions should fail since load is stubbed."""
+    """Non-dry-run local file mode should refuse writes before DB access."""
     fixture_path = _FIXTURE_DIR / "sample_contributions.csv"
+
+    def raise_if_called() -> None:
+        raise AssertionError("sentinel database connection attempted")
+
+    monkeypatch.setattr(cli, "get_connection", raise_if_called)
 
     exit_code = cli.main(
         [
@@ -140,9 +146,37 @@ def test_main_non_dry_run_returns_error_for_load_not_implemented(
     )
     captured = capsys.readouterr()
 
-    # Load is a stub, so it should error out
     assert exit_code == 1
-    assert "VA ingest failed" in captured.err
+    assert f"VA ingest failed: {cli.VA_WRITE_MODE_REFUSAL}" in captured.err
+    assert "sentinel database connection attempted" not in captured.err
+    assert "Unable to connect to PostgreSQL" not in captured.err
+
+
+def test_main_download_non_dry_run_returns_parked_refusal_before_download(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Non-dry-run download mode should refuse writes before portal access."""
+
+    def raise_if_called(*_args: object, **_kwargs: object) -> Path:
+        raise AssertionError("sentinel download attempted")
+
+    monkeypatch.setattr(cli, "download_va_csv", raise_if_called)
+
+    exit_code = cli.main(
+        [
+            "--download",
+            "--data-type",
+            "contributions",
+            "--year-month",
+            "2026_03",
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    assert f"VA ingest failed: {cli.VA_WRITE_MODE_REFUSAL}" in captured.err
+    assert "sentinel download attempted" not in captured.err
 
 
 def test_run_va_refresh_rejects_unsupported_data_type() -> None:

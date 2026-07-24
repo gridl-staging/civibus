@@ -1,8 +1,21 @@
-export type CommitteeSummarySource = "fec_committee_summary" | "derived";
+import type {
+  CandidateFundraisingSummary,
+  CommitteeFundraisingSummary
+} from "$lib/campaign-finance-detail/contract";
+
+export type CommitteeSummarySource = CommitteeFundraisingSummary["summary_source"];
+export type CandidateSummarySource = CandidateFundraisingSummary["summary_source"];
+
+const DERIVED_SUMMARY_SOURCE_LABEL = "Derived from itemized transactions";
 
 export const COMMITTEE_SUMMARY_SOURCE_LABELS: Record<CommitteeSummarySource, string> = {
   fec_committee_summary: "Official FEC committee summary",
-  derived: "Derived from itemized transactions"
+  derived: DERIVED_SUMMARY_SOURCE_LABEL
+};
+
+export const CANDIDATE_SUMMARY_SOURCE_LABELS: Record<CandidateSummarySource, string> = {
+  fec_weball: "Official FEC candidate summary",
+  derived: DERIVED_SUMMARY_SOURCE_LABEL
 };
 
 /**

@@ -19,6 +19,26 @@ const SELECTED_CYCLE_FIELDS = {
   coverage_end_date: "2026-12-31",
   available_cycles: [2022, 2024, 2026]
 };
+const POPULATED_CANDIDATE_MONEY_COVERAGE = {
+  activity_state: "populated" as const,
+  completeness: "complete" as const,
+  basis: "qualifying_transactions" as const
+};
+const POPULATED_SCHEDULE_E_COVERAGE = {
+  activity_state: "populated" as const,
+  completeness: "complete" as const,
+  basis: "fec_schedule_e_transactions" as const
+};
+const LOADED_ZERO_CANDIDATE_MONEY_COVERAGE = {
+  activity_state: "loaded_zero" as const,
+  completeness: "complete" as const,
+  basis: "authoritative_load_evidence" as const
+};
+const LOADED_ZERO_SCHEDULE_E_COVERAGE = {
+  activity_state: "loaded_zero" as const,
+  completeness: "complete" as const,
+  basis: "authoritative_load_evidence" as const
+};
 
 const CONTRIBUTION_INSIGHTS = {
   person_id: PERSON_ID,
@@ -132,6 +152,7 @@ function buildLoadedMoneyHeadline() {
       selected_cycle_coverage_complete: true,
       can_render_share: true,
       receipt_source_caveats: [],
+      coverage: POPULATED_CANDIDATE_MONEY_COVERAGE,
       committees: []
     }
   };
@@ -147,6 +168,7 @@ function buildPersonFinanceSection(
       name: "Candidate One",
       slug: "candidate-one",
       slug_is_unique: true,
+      identity_is_safe: true,
       person_id: PERSON_ID,
       party: "DEM",
       office: "H",
@@ -184,6 +206,7 @@ function buildPersonFinanceSection(
       selected_cycle_coverage_complete: true,
       can_render_share: true,
       receipt_source_caveats: [],
+      coverage: POPULATED_CANDIDATE_MONEY_COVERAGE,
       committees: [
         {
           ...SELECTED_CYCLE_FIELDS,
@@ -256,7 +279,8 @@ function buildPersonFinanceSection(
           total_amount: "1250.00",
           transaction_count: 1
         }
-      ]
+      ],
+      coverage: POPULATED_SCHEDULE_E_COVERAGE
     },
     donorVendorTransactions: asSettled([
       {
@@ -684,6 +708,7 @@ describe("entity detail page rendering", () => {
                 selected_cycle_coverage_complete: true,
                 can_render_share: true,
                 receipt_source_caveats: [],
+                coverage: POPULATED_CANDIDATE_MONEY_COVERAGE,
                 committees: []
               })
             })
@@ -907,7 +932,8 @@ describe("entity detail page rendering", () => {
                     total_amount: "1250.00",
                     transaction_count: 1
                   }
-                ]
+                ],
+                coverage: POPULATED_SCHEDULE_E_COVERAGE
               },
               ieTransactions: asSettled([])
             })
@@ -945,7 +971,8 @@ describe("entity detail page rendering", () => {
                     total_amount: "980.00",
                     transaction_count: 2
                   }
-                ]
+                ],
+                coverage: POPULATED_SCHEDULE_E_COVERAGE
               },
               ieTransactions: asSettled([])
             })
@@ -979,10 +1006,10 @@ describe("entity detail page rendering", () => {
           support_count: 0,
           oppose_count: 0,
           excluded_outlier_count: 0,
-          top_spenders: []
+          top_spenders: [],
+          coverage: LOADED_ZERO_SCHEDULE_E_COVERAGE
         },
-        expectedCopy:
-          "No outside spending is reported in available filings. Coverage may be incomplete."
+        expectedCopy: "No independent expenditure support or oppose activity is reported for this cycle."
       }
     ];
 
@@ -1337,6 +1364,7 @@ describe("entity detail page rendering", () => {
             name: "Candidate One",
             slug: "a/b",
             slug_is_unique: true,
+            identity_is_safe: true,
             person_id: PERSON_ID,
             party: "DEM",
             office: "H",
@@ -1398,6 +1426,7 @@ describe("entity detail page rendering", () => {
           selected_cycle_coverage_complete: false,
           can_render_share: false,
           receipt_source_caveats: [],
+          coverage: LOADED_ZERO_CANDIDATE_MONEY_COVERAGE,
           committees: []
         }),
         donorVendorTransactions: asSettled([]),
@@ -1434,6 +1463,7 @@ describe("entity detail page rendering", () => {
           selected_cycle_coverage_complete: false,
           can_render_share: false,
           receipt_source_caveats: [],
+          coverage: LOADED_ZERO_CANDIDATE_MONEY_COVERAGE,
           committees: []
         }),
         donorVendorTransactions: asSettled([])

@@ -20,7 +20,7 @@ export type SeoHeadModelInput = {
 
 export type DetailRouteSeoInput = SeoHeadModelInput & {
   schemaType: string;
-  name: string;
+  name: string | null;
   sameAs?: string[] | null;
 };
 

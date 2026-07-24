@@ -38,6 +38,9 @@ from .parse import parse_contributions, parse_expenditures
 
 # Data types supported by this CLI
 _SUPPORTED_DATA_TYPES = ("contributions", "expenditures")
+VA_WRITE_MODE_REFUSAL = (
+    "Virginia campaign-finance write mode is parked for federal-first v1; use --dry-run for VA parsing checks."
+)
 
 
 def _non_negative_int(raw_value: str) -> int:
@@ -189,6 +192,12 @@ def run_va_refresh(
         dry_run=dry_run,
     )
 
+    if args.download and not args.year_month:
+        raise ValueError("--year-month is required when using --download mode")
+
+    if not dry_run:
+        raise RuntimeError(VA_WRITE_MODE_REFUSAL)
+
     temp_dir: tempfile.TemporaryDirectory[str] | None = None
     connection: psycopg.Connection | None = None
     try:
@@ -221,7 +230,7 @@ def main(argv: list[str] | None = None) -> int:
             _print_dry_run_summary(args.data_type, row_count)
             return 0
 
-        # Non-dry-run: attempt full load (currently stubbed)
+        # Non-dry-run: refuse writes while Virginia remains parked for federal-first v1.
         result = run_va_refresh(
             data_type=args.data_type,
             year_month=args.year_month,

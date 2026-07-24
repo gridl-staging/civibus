@@ -1,5 +1,6 @@
 import { redirect } from "@sveltejs/kit";
 import { withApiResponseErrorHandling } from "$lib/server/api/error";
+import { encodeRoutePathSegment } from "$lib/entity-detail/contract";
 import type { ApiClient } from "$lib/server/api/client";
 
 type CanonicalRouteResolution = {
@@ -19,6 +20,7 @@ type DetailRouteResolution<TMatch> =
   | SlugCollisionRouteResolution<TMatch>;
 
 type CanonicalSlugDetail = {
+  id: string;
   slug: string;
   slug_is_unique: boolean;
 };
@@ -47,6 +49,11 @@ type DetailPageLoadOptions<
   buildCanonicalHref: (detail: TDetail) => string;
 };
 
+function buildCurrentDetailHref(canonicalHref: string, routeId: string): string {
+  const routeSegment = canonicalHref.split("/")[1];
+  return `/${routeSegment}/${encodeRoutePathSegment(routeId)}`;
+}
+
 /**
  * Shared detail-page loader for campaign-finance routes that support UUID ids,
  * slug lookups, slug-collision chooser states, and canonical slug redirects.
@@ -71,9 +78,11 @@ export async function loadCampaignFinanceDetailPage<
     const data = await fetchBundle(apiClient, {
       id: routeResolution.canonicalId
     });
+    const canonicalHref = buildCanonicalHref(data.detail);
+    const currentHref = buildCurrentDetailHref(canonicalHref, routeId);
 
-    if (routeResolution.routeIdType === "uuid" && data.detail.slug_is_unique && data.detail.slug !== "") {
-      throw redirect(308, buildCanonicalHref(data.detail));
+    if (canonicalHref !== currentHref) {
+      throw redirect(308, canonicalHref);
     }
 
     return {

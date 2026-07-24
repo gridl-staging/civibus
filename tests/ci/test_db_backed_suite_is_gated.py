@@ -1,9 +1,14 @@
 """Contract test for the complete DB-backed product-suite CI invocation."""
 
 import shlex
+import subprocess
+import sys
 from pathlib import Path
 
+import pytest
 import yaml
+
+import conftest as root_conftest
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -18,6 +23,12 @@ DB_BACKED_TARGET_PATHS = (
     "tests/test_db_integration.py",
     "tests/test_graph_queries.py",
     "tests/test_relational_queries.py",
+)
+STAGE_1_SCHEMA_TARGET_PATHS = (
+    "core/schema/test_provenance_schema.py",
+    "core/schema/test_apply_migrations.py",
+    "domains/civics/tests/test_tables_schema.py",
+    "domains/property/tests/test_tables_schema.py",
 )
 
 
@@ -75,3 +86,61 @@ def test_integration_job_gates_complete_db_backed_product_suite() -> None:
         "DB-backed pytest invocation must target exactly the complete canonical DB-backed product suite; "
         f"expected {DB_BACKED_TARGET_PATHS!r}, got {target_tokens!r}"
     )
+
+
+def _collect_node_ids(paths: tuple[str, ...], *, marker_expression: str | None = None) -> tuple[str, ...]:
+    command = [sys.executable, "-m", "pytest", "--collect-only", "-q"]
+    if marker_expression is not None:
+        command.extend(["-m", marker_expression])
+    command.extend(paths)
+
+    result = subprocess.run(
+        command,
+        cwd=REPO_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert result.returncode == 0, (
+        f"DB-backed schema collection failed with exit {result.returncode}\n"
+        f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    )
+    return tuple(line.strip() for line in result.stdout.splitlines() if "::" in line)
+
+
+def _unquarantined_node_ids(node_ids: tuple[str, ...]) -> tuple[str, ...]:
+    quarantined_node_ids = {entry.node_id for entry in root_conftest._load_db_backed_quarantine()}
+    return tuple(node_id for node_id in node_ids if node_id not in quarantined_node_ids)
+
+
+def test_unquarantined_node_ids_excludes_exact_canonical_quarantines(monkeypatch: pytest.MonkeyPatch) -> None:
+    exact_node_id = "core/schema/test_provenance_schema.py::test_case[param]"
+    quarantine_entry = root_conftest._DbBackedQuarantineEntry(
+        node_id=exact_node_id,
+        reason="Unrepaired DB-backed schema assertion",
+        owner="ROADMAP.md schema guard follow-up",
+    )
+    monkeypatch.setattr(root_conftest, "_load_db_backed_quarantine", lambda: (quarantine_entry,))
+
+    assert _unquarantined_node_ids(
+        (
+            "core/schema/test_provenance_schema.py::test_case",
+            exact_node_id,
+            f"{exact_node_id}extra",
+        )
+    ) == (
+        "core/schema/test_provenance_schema.py::test_case",
+        f"{exact_node_id}extra",
+    )
+
+
+def test_stage_1_schema_modules_are_selected_by_integration_lane() -> None:
+    all_node_ids = _collect_node_ids(STAGE_1_SCHEMA_TARGET_PATHS)
+    selected_node_ids = _collect_node_ids(
+        STAGE_1_SCHEMA_TARGET_PATHS,
+        marker_expression=INTEGRATION_MARKER_EXPRESSION,
+    )
+
+    assert all_node_ids, "Stage 1 DB-backed schema collection was vacuous"
+    assert selected_node_ids == _unquarantined_node_ids(all_node_ids)

@@ -10,11 +10,14 @@ import pytest
 from conftest import _skip_or_fail_for_postgres_unavailable
 from core.schema_sql_runner import run_psql_command, run_psql_file
 
+pytestmark = pytest.mark.integration
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CORE_ENTITIES_SQL = REPO_ROOT / "core" / "schema" / "entities.sql"
 CORE_PROVENANCE_SQL = REPO_ROOT / "core" / "schema" / "provenance.sql"
 TEST_DATABASE = os.getenv("PROVENANCE_SCHEMA_TEST_DATABASE", "civibus")
+_PROTECTED_DATABASE_NAMES = frozenset({"civibus", "civibus_prod", "civibus_staging"})
 
 ALLOWED_ENTITY_TYPES = (
     "person",
@@ -53,6 +56,12 @@ def _skip_if_no_database_access() -> None:
 @pytest.fixture(scope="session", autouse=True)
 def _prepared_schema() -> None:
     _skip_if_no_database_access()
+    if TEST_DATABASE in _PROTECTED_DATABASE_NAMES:
+        pytest.skip(
+            f"Refusing to DROP SCHEMA core CASCADE against protected database {TEST_DATABASE!r}. "
+            "Set PROVENANCE_SCHEMA_TEST_DATABASE to a dedicated test database to run schema-prep tests."
+        )
+
     _run_psql_command(TEST_DATABASE, "DROP SCHEMA IF EXISTS core CASCADE;")
     _run_psql_file(TEST_DATABASE, CORE_ENTITIES_SQL)
     _run_psql_file(TEST_DATABASE, CORE_PROVENANCE_SQL)

@@ -28,6 +28,11 @@ from core.types.python.models import (
     compute_record_hash,
     utc_now,
 )
+from domains.campaign_finance.constants import (
+    FEC_BULK_DATA_SOURCE_DOMAIN as _FEC_BULK_DATA_SOURCE_DOMAIN,
+    FEC_BULK_DATA_SOURCE_JURISDICTION as _FEC_BULK_DATA_SOURCE_JURISDICTION,
+    FEC_BULK_DATA_SOURCE_NAME,
+)
 from domains.campaign_finance.ingest.bulk_loader_addresses import (
     _build_fec_mailing_address,
     _link_row_mailing_address,
@@ -60,9 +65,6 @@ from domains.campaign_finance.ingest.text_utils import normalize_optional_text
 
 LOGGER = logging.getLogger(__name__)
 
-_FEC_BULK_DATA_SOURCE_DOMAIN = "campaign_finance"
-_FEC_BULK_DATA_SOURCE_JURISDICTION = "federal/fec"
-FEC_BULK_DATA_SOURCE_NAME = "FEC Bulk Data"
 _FEC_BULK_DATA_SOURCE_URL = "https://www.fec.gov/data/browse-data/?tab=bulk-data"
 _FEC_BULK_DATA_SOURCE_FORMAT = "pipe_delimited"
 

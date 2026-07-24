@@ -136,6 +136,151 @@ function extractHrefByTestId(html: string, testId: string): string {
   return href!.replaceAll("&amp;", "&");
 }
 
+function expectMethodologyCoverageLink(html: string): void {
+  expect(html).toContain('href="/methodology"');
+  expect(html).toContain("Learn how Civibus reports coverage.");
+}
+
+function buildCandidateMatrixData(
+  fundraisingCoverage: {
+    activity_state: "populated" | "loaded_zero" | "not_loaded";
+    completeness: "complete" | "partial" | "unknown";
+    basis:
+      | "fec_official_candidate_summary"
+      | "qualifying_transactions"
+      | "fec_schedule_e_transactions"
+      | "authoritative_load_evidence"
+      | "no_authoritative_load_evidence";
+  },
+  ieCoverage: {
+    activity_state: "populated" | "loaded_zero" | "not_loaded";
+    completeness: "complete" | "partial" | "unknown";
+    basis:
+      | "fec_official_candidate_summary"
+      | "qualifying_transactions"
+      | "fec_schedule_e_transactions"
+      | "authoritative_load_evidence"
+      | "no_authoritative_load_evidence";
+  }
+) {
+  const fundraisingIsPopulated = fundraisingCoverage.activity_state === "populated";
+  const fundraisingIsLoadedZero = fundraisingCoverage.activity_state === "loaded_zero";
+  const ieIsPopulated = ieCoverage.activity_state === "populated";
+
+  return {
+    ...CANDIDATE_CANONICAL_DATA,
+    summary: asDeferredValue({
+      ...DEFAULT_SELECTED_CYCLE_FIELDS,
+      candidate_id: CANDIDATE_ID,
+      candidate_name: "Pat Candidate",
+      total_raised: fundraisingIsPopulated ? "250.00" : "0.00",
+      total_spent: fundraisingIsPopulated ? "80.00" : "0.00",
+      net: fundraisingIsPopulated ? "170.00" : "0.00",
+      transaction_count: fundraisingIsPopulated ? 5 : 0,
+      committees: fundraisingIsPopulated
+        ? [
+            {
+              ...DEFAULT_SELECTED_CYCLE_FIELDS,
+              committee_id: COMMITTEE_ID,
+              committee_name: "Citizens for Civibus",
+              slug: "citizens-for-civibus",
+              slug_is_unique: true,
+              total_raised: "250.00",
+              total_spent: "80.00",
+              net: "170.00",
+              transaction_count: 5,
+              debts_owed_by_committee: "3.00",
+              jurisdiction: "federal/fec",
+              data_through: "2026-03-19T00:00:00Z",
+              cash_receipts_total: "210.00",
+              in_kind_receipts_total: "30.00",
+              loan_receipts_total: "10.00",
+              contribution_receipts_total: "220.00",
+              top_donors: [],
+              top_vendors: [],
+              spend_categories: null,
+              itemized_transaction_count: 5,
+              cycle_summaries: [
+                {
+                  cycle: 2026,
+                  total_receipts: "250.00",
+                  total_disbursements: "80.00",
+                  cash_on_hand: "12.00",
+                  coverage_start_date: "2025-01-01",
+                  coverage_end_date: "2026-03-19"
+                }
+              ],
+              summary_source: "derived" as const,
+              receipt_source_composition: [],
+              selected_cycle_coverage_complete: false,
+              can_render_share: false,
+              receipt_source_caveats: []
+            }
+          ]
+        : [],
+      cash_on_hand: fundraisingIsLoadedZero ? null : "20.00",
+      net_self_funding: null,
+      debts_owed_by_committee: fundraisingIsLoadedZero ? null : "10.00",
+      summary_source: "derived" as const,
+      itemized_transaction_count: fundraisingIsPopulated ? 5 : 0,
+      receipt_source_composition: [],
+      selected_cycle_coverage_complete: fundraisingCoverage.completeness === "complete",
+      can_render_share: false,
+      receipt_source_caveats: [],
+      coverage: fundraisingCoverage
+    }),
+    ieSummary: asDeferredValue({
+      ...DEFAULT_SELECTED_CYCLE_FIELDS,
+      candidate_id: CANDIDATE_ID,
+      support_total: ieIsPopulated ? "10000.00" : "0.00",
+      oppose_total: ieIsPopulated ? "2500.00" : "0.00",
+      support_count: ieIsPopulated ? 2 : 0,
+      oppose_count: ieIsPopulated ? 1 : 0,
+      top_spenders: ieIsPopulated
+        ? [
+            {
+              committee_id: COMMITTEE_ID,
+              committee_name: "Independent Expenditure Committee",
+              support_oppose: "S" as const,
+              total_amount: "7000.00",
+              transaction_count: 2
+            }
+          ]
+        : [],
+      excluded_outlier_count: 0,
+      coverage: ieCoverage
+    }),
+    ieTransactions: asDeferredValue(
+      ieIsPopulated
+        ? [
+            {
+              id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+              filing_id: "77777777-7777-4777-8777-777777777777",
+              committee_id: COMMITTEE_ID,
+              committee_name: "Independent Expenditure Committee",
+              amount: 5000,
+              transaction_date: "2026-03-19",
+              purpose: "Broadcast ad",
+              dissemination_date: "2026-03-20",
+              aggregate_amount: 5000,
+              support_oppose: "S" as const
+            }
+          ]
+        : []
+    )
+  };
+}
+
+function extractJsonLdGraphObject(head: string, type: string): Record<string, unknown> {
+  const scriptBody = head.match(/<script type="application\/ld\+json">([^<]+)<\/script>/)?.[1];
+  expect(scriptBody).toBeDefined();
+  const parsed = JSON.parse(scriptBody!);
+  const graph = parsed["@graph"] as Record<string, unknown>[];
+  const item = graph.find((entry) => entry["@type"] === type);
+  expect(item).toBeDefined();
+  return item!;
+}
+
 describe("extractElementByTestId", () => {
   it("extracts the full wrapper when the wrapper contains nested elements of the same tag", () => {
     const html =
@@ -173,8 +318,37 @@ describe("campaign-finance route renders", () => {
     expect(countOccurrences(rendered.head, /<script type="application\/ld\+json">/g)).toBe(1);
     expect(rendered.head).toContain('"@type":"Person"');
     expect(rendered.head).toContain('"name":"Pat Candidate"');
+    expect(extractJsonLdGraphObject(rendered.head, "Person").name).toBe("Pat Candidate");
     expect(rendered.body).toContain("Candidate detail");
     expect(rendered.body).toContain("Pat Candidate");
+  });
+
+  it("candidate +page.svelte omits Person JSON-LD name and renders neutral identity for unsafe candidates", () => {
+    const unsafeName = "212 N HALF  W. JOHN, RODNEY HOWARD MR.";
+    const rendered = render(CandidateRoutePage, {
+      props: {
+        data: {
+          ...CANDIDATE_CANONICAL_DATA,
+          detail: {
+            ...CANDIDATE_CANONICAL_DATA.detail,
+            name: unsafeName,
+            slug: "212-n-half-w-john-rodney-howard-mr",
+            slug_is_unique: true,
+            identity_is_safe: false
+          }
+        }
+      }
+    });
+
+    const personJsonLd = extractJsonLdGraphObject(rendered.head, "Person");
+
+    expect(rendered.head).toContain("<title>Candidate record | Civibus</title>");
+    expect(personJsonLd).not.toHaveProperty("name");
+    expect(rendered.body).toContain("<h2>Candidate record</h2>");
+    expect(rendered.body).toContain("FEC-filed candidate name needs review.");
+    expect(rendered.body).toContain("FEC-filed candidate name");
+    expect(rendered.body).toContain(unsafeName);
+    expect(rendered.body).toContain("Source and freshness");
   });
 
   it("candidate +page.svelte renders slug collision chooser and omits canonical SEO head tags", () => {
@@ -193,7 +367,8 @@ describe("campaign-finance route renders", () => {
               state: "NC",
               district: "01",
               slug: "pat-candidate",
-              slug_is_unique: true
+              slug_is_unique: true,
+              identity_is_safe: true
             },
             {
               id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
@@ -204,7 +379,8 @@ describe("campaign-finance route renders", () => {
               state: "NC",
               district: "02",
               slug: "pat-candidate",
-              slug_is_unique: false
+              slug_is_unique: false,
+              identity_is_safe: true
             }
           ]
         }
@@ -281,12 +457,12 @@ describe("campaign-finance route renders", () => {
       rendered.body.indexOf("<h3>Source and freshness</h3>")
     );
     expect(rendered.body.indexOf("<h3>Source and freshness</h3>")).toBeLessThan(
-      rendered.body.indexOf("<h3>Key metrics</h3>")
+      rendered.body.indexOf("<h3>Key financials</h3>")
     );
-    expect(rendered.body.indexOf("<h3>Key metrics</h3>")).toBeLessThan(
-      rendered.body.indexOf("<h3>Outside Spending</h3>")
+    expect(rendered.body.indexOf("<h3>Key financials</h3>")).toBeLessThan(
+      rendered.body.indexOf("<h3>Outside spending</h3>")
     );
-    expect(rendered.body.indexOf("<h3>Outside Spending</h3>")).toBeLessThan(
+    expect(rendered.body.indexOf("<h3>Outside spending</h3>")).toBeLessThan(
       rendered.body.indexOf("<h3>Fundraising summary</h3>")
     );
   });
@@ -1001,19 +1177,204 @@ describe("DetailPage route presentation", () => {
             support_count: 0,
             oppose_count: 0,
             top_spenders: [],
-            excluded_outlier_count: 0
+            excluded_outlier_count: 0,
+            coverage: {
+              activity_state: "loaded_zero" as const,
+              completeness: "complete" as const,
+              basis: "authoritative_load_evidence" as const
+            }
           }),
           ieTransactions: asDeferredValue([])
         })
       }
     });
 
-    expect(missingSummaryRendered.body).toContain(
-      "Outside-spending data is not yet available for this candidate. Coverage may be incomplete."
-    );
+    expect(missingSummaryRendered.body).toContain("Outside-spending data is temporarily unavailable.");
     expect(zeroSummaryRendered.body).toContain(
-      "No outside spending is reported in available filings. Coverage may be incomplete."
+      "No FEC Schedule E independent expenditures are reported in loaded filings for this candidate and cycle."
     );
+  });
+
+  it("renders populated candidate money regions with exact values and source-filing links", () => {
+    const rendered = render(DetailPage, {
+      props: {
+        presentation: buildCandidateRoutePresentation(
+          buildCandidateMatrixData(
+            {
+              activity_state: "populated",
+              completeness: "complete",
+              basis: "qualifying_transactions"
+            },
+            {
+              activity_state: "populated",
+              completeness: "complete",
+              basis: "fec_schedule_e_transactions"
+            }
+          )
+        )
+      }
+    });
+
+    expect(rendered.body).toContain("<h3>Key financials</h3>");
+    expect(rendered.body).toContain("<h3>Outside spending</h3>");
+    expect(rendered.body).toContain("<h3>Fundraising summary</h3>");
+    expect(rendered.body).toContain("<h3>Committee breakdown</h3>");
+    const keyFinancials = extractElementByTestId(rendered.body, "key-metrics");
+    expect(keyFinancials).not.toBeNull();
+    expect(keyFinancials).toContain("Total receipts");
+    expect(keyFinancials).toContain("$250.00");
+    expect(keyFinancials).toContain("Total disbursements");
+    expect(keyFinancials).toContain("$80.00");
+    expect(keyFinancials).toContain("Cash on hand");
+    expect(keyFinancials).toContain("$20.00");
+    expect(keyFinancials).toContain("Debts owed by the committee");
+    expect(keyFinancials).toContain("$10.00");
+    expect(keyFinancials).toContain("Itemized transactions");
+    expect(keyFinancials).toContain(">5<");
+    expect(rendered.body).toContain("<dt>Selected cycle</dt>");
+    expect(rendered.body).toContain("<dd>2026</dd>");
+    expect(rendered.body).toContain("<dt>Coverage</dt>");
+    expect(rendered.body).toContain("<dd>2025-01-01 to 2026-12-31</dd>");
+    expect(rendered.body).toContain("<dt>Source</dt>");
+    expect(rendered.body).toContain("<dd>Derived from itemized transactions</dd>");
+    expect(rendered.body).toContain("<dt>Total receipts</dt>");
+    expect(rendered.body).toContain("<dt>Total disbursements</dt>");
+    expect(rendered.body).toContain("<dt>Cash on hand</dt>");
+    expect(rendered.body).toContain("<dt>Debts owed by the committee</dt>");
+    expect(rendered.body).toContain("<dt>Itemized transactions</dt>");
+    expect(rendered.body).toContain("$12.00");
+    expect(rendered.body).toContain("$3.00");
+    expect(rendered.body).toContain("<dt>Jurisdiction</dt>");
+    expect(rendered.body).toContain("<dd>federal/fec</dd>");
+    expect(rendered.body).toContain("<dt>Data through</dt>");
+    expect(rendered.body).toContain("<dd>2026-03-19</dd>");
+    expect(rendered.body).toContain("$10,000.00");
+    expect(rendered.body).toContain("$2,500.00");
+    expect(rendered.body).toContain("2 expenditures");
+    expect(rendered.body).toContain("1 expenditure");
+    expect(rendered.body).toContain('href="/v1/filings/77777777-7777-4777-8777-777777777777"');
+    expect(extractElementByTestId(rendered.body, "top-spenders-scroll")).not.toBeNull();
+    expect(extractElementByTestId(rendered.body, "outside-spending-transactions-scroll")).not.toBeNull();
+  });
+
+  it("renders not-loaded candidate money regions without zero figures, cards, tables, or charts", () => {
+    const rendered = render(DetailPage, {
+      props: {
+        presentation: buildCandidateRoutePresentation(
+          buildCandidateMatrixData(
+            {
+              activity_state: "not_loaded",
+              completeness: "unknown",
+              basis: "no_authoritative_load_evidence"
+            },
+            {
+              activity_state: "not_loaded",
+              completeness: "unknown",
+              basis: "no_authoritative_load_evidence"
+            }
+          )
+        )
+      }
+    });
+
+    expect(rendered.body).toContain("Campaign-finance totals are not yet available for this candidate and cycle.");
+    expect(rendered.body).toContain("FEC Schedule E independent-expenditure coverage is not yet available for this candidate and cycle.");
+    expect(rendered.body).toContain("Fundraising data is not yet available for this candidate and cycle.");
+    expect(rendered.body).toContain("Committee breakdown is not yet available for this candidate and cycle.");
+    expectMethodologyCoverageLink(rendered.body);
+    expect(rendered.body).not.toContain("$0.00");
+    expect(rendered.body).not.toContain('class="detail__committee-card"');
+    expect(extractElementByTestId(rendered.body, "top-spenders-scroll")).toBeNull();
+    expect(extractElementByTestId(rendered.body, "outside-spending-transactions-scroll")).toBeNull();
+    expect(rendered.body).not.toContain("outside-spending-chart");
+  });
+
+  it("renders loaded-zero candidate money regions with explicit zeroes and suppressed detail tables", () => {
+    const rendered = render(DetailPage, {
+      props: {
+        presentation: buildCandidateRoutePresentation(
+          buildCandidateMatrixData(
+            {
+              activity_state: "loaded_zero",
+              completeness: "complete",
+              basis: "authoritative_load_evidence"
+            },
+            {
+              activity_state: "loaded_zero",
+              completeness: "complete",
+              basis: "authoritative_load_evidence"
+            }
+          )
+        )
+      }
+    });
+
+    expect(rendered.body).toContain("No fundraising activity is reported in loaded filings for this candidate and cycle.");
+    expect(rendered.body).toContain("No FEC Schedule E independent expenditures are reported in loaded filings for this candidate and cycle.");
+    expect(rendered.body).toContain("No authorized committee activity is reported in loaded filings for this candidate and cycle.");
+    expect(rendered.body).toContain("$0.00");
+    expect(rendered.body).toContain("0 expenditures");
+    expect(extractElementByTestId(rendered.body, "top-spenders-scroll")).toBeNull();
+    expect(extractElementByTestId(rendered.body, "outside-spending-transactions-scroll")).toBeNull();
+    expect(rendered.body).not.toContain('class="detail__committee-card"');
+    expect(rendered.body).not.toContain("outside-spending-chart");
+  });
+
+  it("renders backend-failure candidate money view models without zero figures, cards, tables, or charts", () => {
+    const rendered = render(DetailPage, {
+      props: {
+        presentation: buildCandidateRoutePresentation({
+          ...CANDIDATE_CANONICAL_DATA,
+          summary: asDeferredValue(null as never),
+          ieSummary: asDeferredValue(null),
+          ieTransactions: asDeferredValue([])
+        })
+      }
+    });
+
+    expect(rendered.body).toContain("Candidate financial totals are temporarily unavailable.");
+    expect(rendered.body).toContain("Outside-spending data is temporarily unavailable.");
+    expect(rendered.body).toContain("Candidate fundraising summary is temporarily unavailable.");
+    expect(rendered.body).toContain("Committee breakdown is temporarily unavailable.");
+    expect(rendered.body).not.toContain("$0.00");
+    expect(rendered.body).not.toContain('class="detail__committee-card"');
+    expect(extractElementByTestId(rendered.body, "top-spenders-scroll")).toBeNull();
+    expect(extractElementByTestId(rendered.body, "outside-spending-transactions-scroll")).toBeNull();
+    expect(rendered.body).not.toContain("outside-spending-chart");
+  });
+
+  it("keeps identity visible and reaches explicit catch branches for rejected money promises", () => {
+    const summaryFailure = Promise.reject(new Error("candidate summary unavailable"));
+    const ieSummaryFailure = Promise.reject(new Error("candidate IE summary unavailable"));
+    const ieTransactionsFailure = Promise.reject(new Error("candidate IE transactions unavailable"));
+    void summaryFailure.catch(() => {});
+    void ieSummaryFailure.catch(() => {});
+    void ieTransactionsFailure.catch(() => {});
+
+    const rendered = render(DetailPage, {
+      props: {
+        presentation: buildCandidateRoutePresentation({
+          ...CANDIDATE_CANONICAL_DATA,
+          summary: summaryFailure,
+          ieSummary: ieSummaryFailure,
+          ieTransactions: ieTransactionsFailure
+        })
+      }
+    });
+    const source = readFileSync(new URL("./DetailPage.svelte", import.meta.url), "utf8");
+
+    expect(rendered.body).toContain("Pat Candidate");
+    expect(rendered.body).toContain('aria-label="Key financials"');
+    expect(rendered.body).toContain('aria-label="Outside spending"');
+    expect(rendered.body).toContain('aria-label="Fundraising summary"');
+    expect(source).toContain("{:catch}");
+    expect(source).toContain("Candidate financial totals are temporarily unavailable.");
+    expect(source).toContain("Outside-spending data is temporarily unavailable.");
+    expect(source).toContain("Candidate fundraising summary is temporarily unavailable.");
+    expect(source).toContain("Committee breakdown is temporarily unavailable.");
+    expect(rendered.body).not.toContain("$0.00");
+    expect(rendered.body).not.toContain('class="detail__committee-card"');
+    expect(rendered.body).not.toContain("outside-spending-chart");
   });
 
   it("renders L10 coverage warnings before key metrics when a candidate warning exists", () => {
@@ -1027,7 +1388,7 @@ describe("DetailPage route presentation", () => {
       rendered.body.indexOf("<h3>Data coverage warning</h3>")
     );
     expect(rendered.body.indexOf("<h3>Data coverage warning</h3>")).toBeLessThan(
-      rendered.body.indexOf("<h3>Key metrics</h3>")
+      rendered.body.indexOf("<h3>Key financials</h3>")
     );
   });
 
@@ -1120,12 +1481,15 @@ describe("campaign-finance detail key metrics section", () => {
 
     const metricsWrapper = extractElementByTestId(rendered.body, "key-metrics");
     expect(metricsWrapper).not.toBeNull();
-    expect(metricsWrapper).toContain("<h3>Key metrics</h3>");
-    expect(metricsWrapper).toContain("Total raised");
+    expect(metricsWrapper).toContain("<h3>Key financials</h3>");
+    expect(metricsWrapper).toContain("Total receipts");
     expect(metricsWrapper).toContain("$250.00");
-    expect(metricsWrapper).toContain("Total spent");
+    expect(metricsWrapper).toContain("Total disbursements");
     expect(metricsWrapper).toContain("$80.00");
-    expect(metricsWrapper).toContain("Itemized transactions loaded");
+    expect(metricsWrapper).toContain("Cash on hand");
+    expect(metricsWrapper).toContain("Not available");
+    expect(metricsWrapper).toContain("Debts owed by the committee");
+    expect(metricsWrapper).toContain("Itemized transactions");
     expect(metricsWrapper).toContain(">5<");
     // Metrics wrapper must not pull in Fundraising-summary-only fields.
     expect(metricsWrapper).not.toContain("Fundraising summary");
@@ -1249,7 +1613,8 @@ describe("committee detail truthfulness (Stage 6)", () => {
                 state: "LA",
                 district: "04",
                 slug: "mike-johnson",
-                slug_is_unique: true
+                slug_is_unique: true,
+                identity_is_safe: true
               }
             ]
           }
@@ -1310,7 +1675,8 @@ describe("breadcrumb parity on campaign-finance detail routes", () => {
               state: "NC",
               district: "01",
               slug: "pat-candidate",
-              slug_is_unique: true
+              slug_is_unique: true,
+              identity_is_safe: true
             }
           ]
         }

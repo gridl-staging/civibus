@@ -17,6 +17,16 @@ export const DEFAULT_RECEIPT_SOURCE_FIELDS = {
   can_render_share: false,
   receipt_source_caveats: []
 };
+export const DEFAULT_CANDIDATE_MONEY_COVERAGE = {
+  activity_state: "not_loaded" as const,
+  completeness: "unknown" as const,
+  basis: "no_authoritative_load_evidence" as const
+};
+export const POPULATED_CANDIDATE_MONEY_COVERAGE = {
+  activity_state: "populated" as const,
+  completeness: "complete" as const,
+  basis: "qualifying_transactions" as const
+};
 
 type DetailSource = {
   domain: string;
@@ -132,6 +142,7 @@ export const DEFAULT_CANDIDATE_DETAIL = {
   name: "Candidate One",
   slug: "candidate-one",
   slug_is_unique: true,
+  identity_is_safe: true,
   person_id: PERSON_ID,
   party: "DEM",
   office: "H",
@@ -155,7 +166,8 @@ export const DEFAULT_CANDIDATE_SUMMARY = {
   cash_on_hand: null,
   net_self_funding: null,
   summary_source: "derived" as const,
-  itemized_transaction_count: 0
+  itemized_transaction_count: 0,
+  coverage: DEFAULT_CANDIDATE_MONEY_COVERAGE
 };
 
 export function buildCandidateBundle(): CandidateDetailBundle {

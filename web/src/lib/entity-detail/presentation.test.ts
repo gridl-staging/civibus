@@ -20,6 +20,11 @@ const SELECTED_CYCLE_METADATA = {
   selected_cycle: 2026,
   available_cycles: [2022, 2024, 2026]
 };
+const POPULATED_CANDIDATE_MONEY_COVERAGE = {
+  activity_state: "populated" as const,
+  completeness: "complete" as const,
+  basis: "fec_official_candidate_summary" as const
+};
 
 const SOURCES = [
   {
@@ -284,7 +289,8 @@ describe("entity detail presentation", () => {
       selected_cycle_coverage_complete: true,
       can_render_share: true,
       receipt_source_caveats: [],
-      committees: []
+      committees: [],
+      coverage: POPULATED_CANDIDATE_MONEY_COVERAGE
     };
 
     expect(
@@ -412,6 +418,62 @@ describe("entity detail presentation", () => {
 
   });
 
+  it("keeps populated aggregate coverage tied to populated constituent evidence", () => {
+    const officialSummary = {
+      ...SELECTED_CYCLE_METADATA,
+      coverage_start_date: "2025-01-01",
+      coverage_end_date: "2026-12-31",
+      candidate_id: "candidate-1",
+      candidate_name: "Candidate One",
+      total_raised: "125.00",
+      total_spent: "75.00",
+      net: "50.00",
+      transaction_count: 2,
+      itemized_transaction_count: 2,
+      cash_on_hand: "25.00",
+      net_self_funding: "5.00",
+      debts_owed_by_committee: "10.00",
+      summary_source: "fec_weball" as const,
+      receipt_source_composition: [],
+      selected_cycle_coverage_complete: true,
+      can_render_share: true,
+      receipt_source_caveats: [],
+      committees: [],
+      coverage: {
+        activity_state: "populated" as const,
+        completeness: "complete" as const,
+        basis: "fec_official_candidate_summary" as const
+      }
+    };
+    const notLoadedSummary = {
+      ...officialSummary,
+      candidate_id: "candidate-2",
+      candidate_name: "Candidate Two",
+      total_raised: "0.00",
+      total_spent: "0.00",
+      net: "0.00",
+      transaction_count: 0,
+      itemized_transaction_count: 0,
+      cash_on_hand: null,
+      net_self_funding: null,
+      debts_owed_by_committee: null,
+      summary_source: "derived" as const,
+      selected_cycle_coverage_complete: false,
+      can_render_share: false,
+      coverage: {
+        activity_state: "not_loaded" as const,
+        completeness: "unknown" as const,
+        basis: "no_authoritative_load_evidence" as const
+      }
+    };
+
+    expect(buildPersonMoneyAtGlanceSummary([officialSummary, notLoadedSummary]).coverage).toEqual({
+      activity_state: "populated",
+      completeness: "partial",
+      basis: "fec_official_candidate_summary"
+    });
+  });
+
   it("maps candidate receipt-source summaries into shared receipt composition props", () => {
     const firstSummary = {
       ...SELECTED_CYCLE_METADATA,
@@ -443,7 +505,8 @@ describe("entity detail presentation", () => {
       selected_cycle_coverage_complete: true,
       can_render_share: true,
       receipt_source_caveats: [],
-      committees: []
+      committees: [],
+      coverage: POPULATED_CANDIDATE_MONEY_COVERAGE
     };
     const secondSummary = {
       ...firstSummary,
@@ -533,7 +596,8 @@ describe("entity detail presentation", () => {
         selected_cycle_coverage_complete: true,
         can_render_share: false,
         receipt_source_caveats: ["negative_component_table_only"],
-        committees: []
+        committees: [],
+        coverage: POPULATED_CANDIDATE_MONEY_COVERAGE
       }
     ]);
 

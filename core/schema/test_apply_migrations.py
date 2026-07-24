@@ -19,6 +19,8 @@ from pathlib import Path
 import psycopg
 import pytest
 
+pytestmark = pytest.mark.integration
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 _POSTGRES_HOST = os.environ.get("POSTGRES_HOST", "localhost")
@@ -141,6 +143,7 @@ _MINIMAL_CORE_SQL = textwrap.dedent("""\
 
 _MINIMAL_CF_SQL = textwrap.dedent("""\
     CREATE SCHEMA IF NOT EXISTS cf;
+    CREATE EXTENSION IF NOT EXISTS pg_trgm;
 
     CREATE TABLE IF NOT EXISTS core.person (
         id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -206,6 +209,16 @@ _MINIMAL_CF_SQL = textwrap.dedent("""\
         created_at               TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at               TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
+
+    CREATE TABLE IF NOT EXISTS cf.transaction (
+        id                      UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        committee_id            UUID REFERENCES cf.committee(id),
+        contributor_name_raw    TEXT,
+        transaction_type        TEXT,
+        contributor_entity_type TEXT,
+        is_memo                 BOOLEAN,
+        amendment_indicator     TEXT
+    );
 """)
 
 
@@ -232,6 +245,7 @@ _PENDING_FILENAMES = [
     "2026_07_14_zcta_district_boundary_year.sql",
     "2026_07_18_committee_summary_top_lists.sql",
     "2026_07_19_committee_summary_filing_breakdown.sql",
+    "2026_07_24_donor_search_committee_scope_index.sql",
 ]
 
 

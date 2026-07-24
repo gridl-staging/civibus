@@ -9,8 +9,10 @@ import {
   type OutsideSpendingPresentation,
   type RankedPartyRow
 } from "$lib/campaign-finance-detail/presentation";
+import { CANDIDATE_SUMMARY_SOURCE_LABELS } from "$lib/campaign-finance-detail/summary-source";
 import type {
   CandidateFundraisingSummary,
+  CandidateMoneyCoverage,
   CampaignFinanceTransactionResponse,
   ContributionInsightsCareerTotals,
   ContributionInsightsCycleTotal,
@@ -173,8 +175,7 @@ const CONTRIBUTION_INSIGHTS_EXCLUDED_GEOGRAPHY_MESSAGES: Record<string, string> 
 };
 
 const PERSON_SUMMARY_SOURCE_LABELS: Record<PersonMoneySummarySource, string> = {
-  fec_weball: "Official FEC candidate summary",
-  derived: "Derived from itemized transactions",
+  ...CANDIDATE_SUMMARY_SOURCE_LABELS,
   mixed: "Mixed official FEC and derived summary data"
 };
 
@@ -477,6 +478,50 @@ function buildAggregateSummarySource(
   return uniqueSources.size === 1 ? summaries[0].summary_source : "mixed";
 }
 
+function buildAggregateCandidateMoneyCoverage(
+  summaries: CandidateFundraisingSummary[]
+): CandidateMoneyCoverage {
+  if (summaries.some((summary) => summary.coverage.activity_state === "populated")) {
+    const hasUnknownConstituent = summaries.some(
+      (summary) =>
+        summary.coverage.activity_state === "not_loaded" ||
+        summary.coverage.completeness !== "complete"
+    );
+    return {
+      activity_state: "populated",
+      completeness: hasUnknownConstituent ? "partial" : "complete",
+      basis: buildAggregatePopulatedBasis(summaries)
+    };
+  }
+
+  if (summaries.every((summary) => summary.coverage.activity_state === "loaded_zero")) {
+    return {
+      activity_state: "loaded_zero",
+      completeness: "complete",
+      basis: "authoritative_load_evidence"
+    };
+  }
+
+  return {
+    activity_state: "not_loaded",
+    completeness: "unknown",
+    basis: "no_authoritative_load_evidence"
+  };
+}
+
+function buildAggregatePopulatedBasis(
+  summaries: CandidateFundraisingSummary[]
+): CandidateMoneyCoverage["basis"] {
+  const populatedSummaries = summaries.filter(
+    (summary) => summary.coverage.activity_state === "populated"
+  );
+  return populatedSummaries.every(
+    (summary) => summary.coverage.basis === "fec_official_candidate_summary"
+  )
+    ? "fec_official_candidate_summary"
+    : "qualifying_transactions";
+}
+
 /**
  */
 function buildAggregateReceiptSourceComposition(
@@ -565,6 +610,7 @@ export function buildPersonMoneyAtGlanceSummary(
     ),
     can_render_share: summaries.every((summary) => summary.can_render_share),
     receipt_source_caveats: buildAggregateReceiptSourceCaveats(summaries),
+    coverage: buildAggregateCandidateMoneyCoverage(summaries),
     committees: summaries.flatMap((summary) => summary.committees)
   };
 }

@@ -33,10 +33,12 @@ import type {
 } from "$lib/campaign-finance-detail/contract";
 import type { CandidateDetailBundle, CommitteeDetailBundle } from "$lib/server/api/campaign-finance-detail";
 export {
+  CANDIDATE_SUMMARY_SOURCE_LABELS,
   COMMITTEE_SUMMARY_SOURCE_LABELS,
   buildCommitteeItemizedCoverageNote
 } from "$lib/campaign-finance-detail/summary-source";
 import {
+  CANDIDATE_SUMMARY_SOURCE_LABELS,
   COMMITTEE_SUMMARY_SOURCE_LABELS,
   buildCommitteeItemizedCoverageNote
 } from "$lib/campaign-finance-detail/summary-source";
@@ -166,22 +168,33 @@ export type CommitteeDetailShellPresentation = {
 };
 
 export type CandidateAggregateSummaryPresentation = {
-  totalRaised: string;
-  totalSpent: string;
-  net: string;
-  transactionCount: number;
+  totalReceipts: string;
+  totalDisbursements: string;
+  cashOnHand: string;
+  debtsOwedByCommittee: string;
+  itemizedTransactions: number;
+  selectedCycle: number;
+  coveragePeriod: string;
+  summarySourceLabel: string;
+  factRows: KeyMetric[];
 };
 
 export type CandidateCommitteeBreakdownRow = {
   committeeId: string;
   committeeName: string;
   committeeHref: string;
+  totalReceipts: string;
+  totalDisbursements: string;
+  cashOnHand: string;
+  debtsOwedByCommittee: string;
+  itemizedTransactions: number;
   totalRaised: string;
   totalSpent: string;
   net: string;
   transactionCount: number;
   jurisdiction: string;
   dataThrough: string;
+  factRows: KeyMetric[];
 };
 
 export type OutsideSpendingTopSpenderRow = {
@@ -254,6 +267,8 @@ export type CommitteeOutsideSpendingPresentation = {
 
 export type CandidateDetailShellPresentation = {
   canonicalName: string;
+  identityQualifier: string | null;
+  jsonLdName: string | null;
   factRows: CampaignFinanceFactRow[];
   trustSection: TrustSectionViewModel;
   sectionOrder: string[];
@@ -364,6 +379,9 @@ const OUTSIDE_SPENDING_UNAVAILABLE_MESSAGE =
   "Outside-spending data is not yet available for this candidate. Coverage may be incomplete.";
 const OUTSIDE_SPENDING_NO_ACTIVITY_MESSAGE =
   "No outside spending is reported in available filings. Coverage may be incomplete.";
+export const CANDIDATE_IE_NOT_LOADED_MESSAGE =
+  "FEC Schedule E independent-expenditure coverage is not yet available for this candidate and cycle.";
+export const CANDIDATE_METHODOLOGY_HREF = "/methodology";
 const COMMITTEE_OUTSIDE_SPENDING_EMPTY_MESSAGE =
   "This committee reported no independent expenditures";
 const COMMITTEE_SPEND_CATEGORIES_UNAVAILABLE_MESSAGE =
@@ -412,6 +430,10 @@ function parseFiniteSerializedMoney(value: SerializedMoney | number | null): num
 
   const parsedValue = parseSerializedMoney(value);
   return Number.isFinite(parsedValue) ? parsedValue : null;
+}
+
+function formatOptionalCurrency(value: SerializedMoney | null | undefined): string {
+  return value === null || value === undefined ? "Not available" : formatCurrency(value);
 }
 
 function formatDateValue(value: string | null): string {
@@ -551,21 +573,37 @@ function buildCashOnHandTrendPoints(filingFacts: NormalizedCommitteeFilingFact[]
   return points;
 }
 
-type AggregateSummarySource = {
-  total_raised: SerializedMoney;
-  total_spent: SerializedMoney;
-  net: SerializedMoney;
-  transaction_count: number;
-};
-
 export function buildCandidateAggregateSummaryPresentation(
-  summary: AggregateSummarySource
+  summary: CandidateFundraisingSummary
 ): CandidateAggregateSummaryPresentation {
+  const totalReceipts = formatCurrency(summary.total_raised);
+  const totalDisbursements = formatCurrency(summary.total_spent);
+  const cashOnHand = formatOptionalCurrency(summary.cash_on_hand);
+  const debtsOwedByCommittee = formatOptionalCurrency(summary.debts_owed_by_committee);
+  const itemizedTransactions = summary.itemized_transaction_count;
+  const selectedCycle = summary.selected_cycle;
+  const coveragePeriod = buildCoveragePeriodLabel(summary.coverage_start_date, summary.coverage_end_date);
+  const summarySourceLabel = CANDIDATE_SUMMARY_SOURCE_LABELS[summary.summary_source];
+
   return {
-    totalRaised: formatCurrency(summary.total_raised),
-    totalSpent: formatCurrency(summary.total_spent),
-    net: formatCurrency(summary.net),
-    transactionCount: summary.transaction_count
+    totalReceipts,
+    totalDisbursements,
+    cashOnHand,
+    debtsOwedByCommittee,
+    itemizedTransactions,
+    selectedCycle,
+    coveragePeriod,
+    summarySourceLabel,
+    factRows: [
+      { label: "Total receipts", value: totalReceipts },
+      { label: "Total disbursements", value: totalDisbursements },
+      { label: "Cash on hand", value: cashOnHand },
+      { label: "Debts owed by the committee", value: debtsOwedByCommittee },
+      { label: "Itemized transactions", value: String(itemizedTransactions) },
+      { label: "Selected cycle", value: String(selectedCycle) },
+      { label: "Coverage", value: coveragePeriod },
+      { label: "Source", value: summarySourceLabel }
+    ]
   };
 }
 
@@ -573,7 +611,10 @@ export function buildFundraisingSummaryPresentation(
   summary: CommitteeFundraisingSummary
 ): FundraisingSummaryPresentation {
   return {
-    ...buildCandidateAggregateSummaryPresentation(summary),
+    totalRaised: formatCurrency(summary.total_raised),
+    totalSpent: formatCurrency(summary.total_spent),
+    net: formatCurrency(summary.net),
+    transactionCount: summary.transaction_count,
     jurisdiction: formatRowValue(summary.jurisdiction),
     dataThrough: formatDateValue(summary.data_through),
     summarySourceLabel: COMMITTEE_SUMMARY_SOURCE_LABELS[summary.summary_source],
@@ -759,8 +800,12 @@ type SlugRoutableReference = {
   slug_is_unique: boolean;
 };
 
+type CandidateSlugRoutableReference = SlugRoutableReference & {
+  identity_is_safe: boolean;
+};
+
 export type CommitteeTransactionRouteReferences = {
-  candidateById?: Record<string, SlugRoutableReference>;
+  candidateById?: Record<string, CandidateSlugRoutableReference>;
   committeeById?: Record<string, SlugRoutableReference>;
 };
 
@@ -769,6 +814,15 @@ function buildFallbackSlugReference(routeId: string): SlugRoutableReference {
     id: routeId,
     slug: routeId,
     slug_is_unique: false
+  };
+}
+
+function buildFallbackCandidateSlugReference(routeId: string): CandidateSlugRoutableReference {
+  return {
+    id: routeId,
+    slug: routeId,
+    slug_is_unique: false,
+    identity_is_safe: false
   };
 }
 
@@ -785,6 +839,18 @@ function buildOptionalSlugRouteHref(
   return buildHref(reference);
 }
 
+function buildOptionalCandidateRouteHref(
+  routeId: string | null,
+  routeReferences: Record<string, CandidateSlugRoutableReference> | undefined
+): string | null {
+  if (routeId === null) {
+    return null;
+  }
+
+  const reference = routeReferences?.[routeId] ?? buildFallbackCandidateSlugReference(routeId);
+  return buildCandidateHref(reference);
+}
+
 
 export function buildCommitteeDetailMetadata(
   canonicalName: string
@@ -795,9 +861,15 @@ export function buildCommitteeDetailMetadata(
   };
 }
 
-export function buildCandidateDetailMetadata(canonicalName: string): CampaignFinanceDetailMetadata {
+export function buildCandidateDetailMetadata(
+  shell: Pick<CandidateDetailShellPresentation, "canonicalName" | "jsonLdName">
+): CampaignFinanceDetailMetadata {
+  const title = shell.jsonLdName === null
+    ? `${shell.canonicalName} | Civibus`
+    : `${shell.canonicalName} | Candidate | Civibus`;
+
   return {
-    title: `${canonicalName} | Candidate | Civibus`,
+    title,
     description: "Candidate profile from campaign-finance records."
   };
 }
@@ -854,8 +926,9 @@ export function buildCommitteeFactRows(detail: CommitteeDetailResponse): Campaig
 
 /** Formats candidate fields and linked canonical records for the detail summary. */
 export function buildCandidateFactRows(detail: CandidateDetailResponse): CampaignFinanceFactRow[] {
+  const nameLabel = detail.identity_is_safe ? "Candidate name" : "FEC-filed candidate name";
   return [
-    { label: "Candidate name", value: detail.name, href: null },
+    { label: nameLabel, value: detail.name, href: null },
     { label: "FEC candidate ID", value: detail.fec_candidate_id, href: null },
     buildLinkFactRow("Canonical person", "person", detail.person_id, PERSON_RECORD_LINK_VALUE_PREFIX),
     buildLinkFactRow(
@@ -889,10 +962,9 @@ export function buildCommitteeTransactionRows(
     contributorOrgHref: buildOptionalEntityHref("org", transaction.contributor_organization_id),
     contributorOrgLabel:
       transaction.contributor_organization_id === null ? null : CONTRIBUTOR_ORG_LINK_LABEL,
-    recipientCandidateHref: buildOptionalSlugRouteHref(
+    recipientCandidateHref: buildOptionalCandidateRouteHref(
       transaction.recipient_candidate_id,
-      routeReferences.candidateById,
-      buildCandidateHref
+      routeReferences.candidateById
     ),
     recipientCandidateLabel:
       transaction.recipient_candidate_id === null ? null : RECIPIENT_CANDIDATE_LINK_LABEL,
@@ -1012,9 +1084,17 @@ export function buildCandidateDetailShellPresentation(
   }
 ): CandidateDetailShellPresentation {
   const detailExtras = detail as CandidateDetailResponse & CandidateDetailL10Extras;
+  const identityQualifier = detail.identity_is_safe
+    ? null
+    : "FEC-filed candidate name needs review.";
+  const canonicalName = detail.identity_is_safe
+    ? resolveCanonicalName(detail.name, "Candidate")
+    : "Candidate record";
 
   return {
-    canonicalName: resolveCanonicalName(detail.name, "Candidate"),
+    canonicalName,
+    identityQualifier,
+    jsonLdName: detail.identity_is_safe ? canonicalName : null,
     factRows: buildCandidateFactRows(detail),
     trustSection: buildTrustSection(detail.sources, { includeJurisdictionFreshnessNote: true }),
     sectionOrder: ["summary", "trust", "metrics", "outside-spending", "records"],
@@ -1083,16 +1163,20 @@ export function buildCandidateDeferredOutsideSpendingFigure(
 }
 
 export function buildCandidateDeferredKeyMetrics(summary: CandidateFundraisingSummary): KeyMetric[] {
-  return buildKeyMetrics(summary);
+  return [
+    { label: "Total receipts", value: formatCurrency(summary.total_raised) },
+    { label: "Total disbursements", value: formatCurrency(summary.total_spent) },
+    { label: "Cash on hand", value: formatOptionalCurrency(summary.cash_on_hand) },
+    {
+      label: "Debts owed by the committee",
+      value: formatOptionalCurrency(summary.debts_owed_by_committee)
+    },
+    { label: "Itemized transactions", value: String(summary.itemized_transaction_count) }
+  ];
 }
 
-function _hasZeroAggregate(summary: CandidateFundraisingSummary): boolean {
-  return (
-    parseSerializedMoney(summary.total_raised) === 0 &&
-    parseSerializedMoney(summary.total_spent) === 0 &&
-    parseSerializedMoney(summary.net) === 0 &&
-    summary.transaction_count === 0
-  );
+function hasNotLoadedFundraisingCoverage(summary: CandidateFundraisingSummary): boolean {
+  return summary.coverage.activity_state === "not_loaded";
 }
 
 function _computeDeviationRatio(currentTotal: number, expectedTotal: number): number {
@@ -1119,10 +1203,10 @@ export function buildCandidateCompletenessWarnings(
 ): CandidateCompletenessWarning[] {
   const warnings: CandidateCompletenessWarning[] = [];
 
-  if (_hasZeroAggregate(summary)) {
+  if (hasNotLoadedFundraisingCoverage(summary)) {
     warnings.push({
       message: CANDIDATE_EMPTY_COMPLETENESS_WARNING,
-      methodologyHref: "/methodology"
+      methodologyHref: CANDIDATE_METHODOLOGY_HREF
     });
   }
 
@@ -1157,18 +1241,25 @@ function formatOptionalStanceLabel(stance: "S" | "O" | null | undefined): string
   return "—";
 }
 
-export function isOutsideSpendingSummaryEmpty(ieSummary: IndependentExpenditureSummary): boolean {
-  return (
-    parseSerializedMoney(ieSummary.support_total) === 0 &&
-    parseSerializedMoney(ieSummary.oppose_total) === 0 &&
-    ieSummary.support_count === 0 &&
-    ieSummary.oppose_count === 0 &&
-    ieSummary.top_spenders.length === 0
-  );
-}
-
 const OUTSIDE_SPENDING_EXPLANATORY_BLOCK =
   "Outside spending is independent and not controlled by the candidate committee.";
+
+function buildLoadedZeroOutsideSpendingPresentation(
+  ieSummary: IndependentExpenditureSummary
+): OutsideSpendingPresentation {
+  return {
+    supportTotal: formatCurrency(ieSummary.support_total),
+    opposeTotal: formatCurrency(ieSummary.oppose_total),
+    supportCountLabel: formatCountLabel(ieSummary.support_count, "expenditure"),
+    opposeCountLabel: formatCountLabel(ieSummary.oppose_count, "expenditure"),
+    topSpenders: [],
+    chartRows: [],
+    chartTopSpenders: [],
+    explanatoryBlock: OUTSIDE_SPENDING_EXPLANATORY_BLOCK,
+    transactionRows: [],
+    emptyMessage: null
+  };
+}
 
 /** Formats IE transactions for the outside-spending table shown on candidate pages. */
 function buildOutsideSpendingTransactionRows(
@@ -1266,7 +1357,7 @@ function buildOutsideSpendingFigure(
   };
 }
 
-function selectOutsideSpendingSummaryForCycle(
+export function selectOutsideSpendingSummaryForCycle(
   ieSummary: IndependentExpenditureSummary | null,
   selectedCycleOverride: number | null
 ): IndependentExpenditureSummary | null {
@@ -1281,7 +1372,7 @@ function selectOutsideSpendingSummaryForCycle(
   return ieSummary;
 }
 
-function selectOutsideSpendingTransactionsForCycle(
+export function selectOutsideSpendingTransactionsForCycle(
   ieSummary: IndependentExpenditureSummary | null,
   ieTransactions: IndependentExpenditureResponse[],
   selectedCycleOverride: number | null
@@ -1314,7 +1405,7 @@ export function buildOutsideSpendingPresentation(
     };
   }
 
-  if (isOutsideSpendingSummaryEmpty(ieSummary)) {
+  if (ieSummary.coverage?.activity_state === "not_loaded") {
     return {
       supportTotal: "—",
       opposeTotal: "—",
@@ -1323,10 +1414,14 @@ export function buildOutsideSpendingPresentation(
       topSpenders: [],
       chartRows: [],
       chartTopSpenders: [],
-      explanatoryBlock: OUTSIDE_SPENDING_EXPLANATORY_BLOCK,
+      explanatoryBlock: null,
       transactionRows: [],
-      emptyMessage: OUTSIDE_SPENDING_NO_ACTIVITY_MESSAGE
+      emptyMessage: CANDIDATE_IE_NOT_LOADED_MESSAGE
     };
+  }
+
+  if (ieSummary.coverage?.activity_state === "loaded_zero") {
+    return buildLoadedZeroOutsideSpendingPresentation(ieSummary);
   }
 
   return {
@@ -1426,21 +1521,46 @@ export function buildCommitteeOutsideSpendingPresentation(
 export function buildCandidateCommitteeBreakdown(
   summary: CandidateFundraisingSummary
 ): CandidateCommitteeBreakdownRow[] {
-  return summary.committees.map((c) => ({
-    committeeId: c.committee_id,
-    committeeName: c.committee_name,
-    committeeHref: buildCommitteeHref({
-      id: c.committee_id,
-      slug: c.slug ?? c.committee_id,
-      slug_is_unique: c.slug_is_unique ?? false
-    }),
-    totalRaised: formatCurrency(c.total_raised),
-    totalSpent: formatCurrency(c.total_spent),
-    net: formatCurrency(c.net),
-    transactionCount: c.transaction_count,
-    jurisdiction: formatRowValue(c.jurisdiction),
-    dataThrough: formatDateValue(c.data_through)
-  }));
+  return summary.committees.map((c) => {
+    const totalReceipts = formatCurrency(c.total_raised);
+    const totalDisbursements = formatCurrency(c.total_spent);
+    const cashOnHand = formatOptionalCurrency(
+      c.cycle_summaries.find((cycle) => cycle.cycle === c.selected_cycle)?.cash_on_hand
+    );
+    const debtsOwedByCommittee = formatOptionalCurrency(c.debts_owed_by_committee);
+    const itemizedTransactions = c.itemized_transaction_count;
+    const jurisdiction = formatRowValue(c.jurisdiction);
+    const dataThrough = formatDateValue(c.data_through);
+    return {
+      committeeId: c.committee_id,
+      committeeName: c.committee_name,
+      committeeHref: buildCommitteeHref({
+        id: c.committee_id,
+        slug: c.slug ?? c.committee_id,
+        slug_is_unique: c.slug_is_unique ?? false
+      }),
+      totalReceipts,
+      totalDisbursements,
+      cashOnHand,
+      debtsOwedByCommittee,
+      itemizedTransactions,
+      totalRaised: totalReceipts,
+      totalSpent: totalDisbursements,
+      net: formatCurrency(c.net),
+      transactionCount: c.transaction_count,
+      jurisdiction,
+      dataThrough,
+      factRows: [
+        { label: "Total receipts", value: totalReceipts },
+        { label: "Total disbursements", value: totalDisbursements },
+        { label: "Cash on hand", value: cashOnHand },
+        { label: "Debts owed by the committee", value: debtsOwedByCommittee },
+        { label: "Itemized transactions", value: String(itemizedTransactions) },
+        { label: "Jurisdiction", value: jurisdiction },
+        { label: "Data through", value: dataThrough }
+      ]
+    };
+  });
 }
 
 type SlugCollisionMatchItem = CandidateListItem | CommitteeListItem;

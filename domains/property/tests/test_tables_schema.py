@@ -14,6 +14,7 @@ from core.schema_sql_runner import (
     run_psql_file,
 )
 
+pytestmark = pytest.mark.integration
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SCHEMA_FILE = REPO_ROOT / "domains" / "property" / "schema" / "tables.sql"

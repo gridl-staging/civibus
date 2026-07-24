@@ -28,14 +28,14 @@
     ? [{ label: "Home", href: "/" }, { label: routePresentation.shell.canonicalName }]
     : [{ label: "Home", href: "/" }, { label: "Candidates" }];
 
-  $: if (canonicalName !== null) {
-    const metadata = buildCandidateDetailMetadata(canonicalName);
+  $: if (routePresentation.routeKind === "canonical-detail") {
+    const metadata = buildCandidateDetailMetadata(routePresentation.shell);
 
     detailRouteSeo = buildDetailRouteSeo({
       metadata,
       ogType: "profile",
       schemaType: "Person",
-      name: canonicalName,
+      name: routePresentation.shell.jsonLdName,
       pageUrl: $page.url,
       publicOrigin: env.PUBLIC_ORIGIN
     });

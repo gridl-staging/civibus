@@ -17,6 +17,16 @@ const SELECTED_CYCLE_FIELDS = {
   coverage_end_date: "2026-06-30",
   available_cycles: [2026]
 };
+const POPULATED_CANDIDATE_MONEY_COVERAGE = {
+  activity_state: "populated" as const,
+  completeness: "complete" as const,
+  basis: "qualifying_transactions" as const
+};
+const POPULATED_SCHEDULE_E_COVERAGE = {
+  activity_state: "populated" as const,
+  completeness: "complete" as const,
+  basis: "fec_schedule_e_transactions" as const
+};
 
 function resolved<T>(value: T): Promise<T> {
   return value as unknown as Promise<T>;
@@ -83,6 +93,7 @@ function buildSummary(
     can_render_share: true,
     receipt_source_caveats: [],
     committees: [],
+    coverage: POPULATED_CANDIDATE_MONEY_COVERAGE,
     ...overrides
   };
 }
@@ -94,6 +105,7 @@ function buildCandidate(candidateId: string, personId: string): CandidateDetailR
     name: `Candidate ${candidateId}`,
     slug: candidateId,
     slug_is_unique: true,
+    identity_is_safe: true,
     person_id: personId,
     party: null,
     office: "H",
@@ -115,6 +127,7 @@ function buildIeSummary(overrides: Partial<IndependentExpenditureSummary> = {}):
     oppose_count: 1,
     top_spenders: [],
     excluded_outlier_count: 0,
+    coverage: POPULATED_SCHEDULE_E_COVERAGE,
     ...overrides
   };
 }

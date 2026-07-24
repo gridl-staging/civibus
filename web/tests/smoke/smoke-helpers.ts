@@ -158,6 +158,7 @@ type SvgPaintSample = {
   strokeOpacity: string;
   opacity: string;
   boundingBox: { width: number; height: number } | null;
+  pathLength: number | null;
 };
 
 export function escapeRegExp(value: string): string {
@@ -280,13 +281,17 @@ async function sampleVisibleSvgPaints(region: Locator, selector: string): Promis
           stroke: styles.stroke,
           strokeOpacity: styles.strokeOpacity,
           opacity: styles.opacity,
-          boundingBox: box === null ? null : { width: box.width, height: box.height }
+          boundingBox: box === null ? null : { width: box.width, height: box.height },
+          pathLength: element instanceof SVGPathElement ? element.getTotalLength() : null
         };
       })
       .filter(
-        (sample) =>
-          sample.tagName === "path" ||
-          (sample.boundingBox?.width ?? 0) * (sample.boundingBox?.height ?? 0) > 0
+        (sample) => {
+          const boundingBoxArea =
+            (sample.boundingBox?.width ?? 0) * (sample.boundingBox?.height ?? 0);
+          // LayerChart can emit a zero-length path for an empty plot, so tag presence alone is not paint.
+          return sample.tagName === "path" ? (sample.pathLength ?? 0) > 0 : boundingBoxArea > 0;
+        }
       )
   )) as SvgPaintSample[];
 }
@@ -501,6 +506,14 @@ export async function assertBreadcrumbJsonLd(page: any) {
 
 export async function assertSourceRecordLink(page: any, href: string) {
   await expect(page.getByRole("link", { name: "View source record" })).toHaveAttribute("href", href);
+}
+
+export async function readStructuredDataScripts(page: any): Promise<unknown[]> {
+  return page.evaluate(() =>
+    Array.from(document.scripts)
+      .filter((script) => script.type === "application/ld+json")
+      .map((script) => JSON.parse(script.textContent ?? "null"))
+  );
 }
 
 export async function assertPrimaryNavLink(page: any, label: string) {

@@ -19,6 +19,7 @@ const civicDetailMockState = vi.hoisted(() => ({
   fetchUpcomingElectionTimeline: undefined as ((api: any) => Promise<any>) | undefined
 }));
 const STATIC_PATHS = ["/", "/congress", "/candidates", "/committees", "/coverage", "/calendar", "/data-sources"];
+const SITEMAP_PAGE_CONCURRENCY = 6;
 
 const CANDIDATE_PAGE_1: CandidateListResponse = {
   items: [
@@ -31,7 +32,8 @@ const CANDIDATE_PAGE_1: CandidateListResponse = {
       state: "NC",
       district: "01",
       slug: "pat-candidate-2026",
-      slug_is_unique: true
+      slug_is_unique: true,
+      identity_is_safe: true
     },
     {
       id: "22222222-2222-4222-8222-222222222222",
@@ -42,7 +44,20 @@ const CANDIDATE_PAGE_1: CandidateListResponse = {
       state: "GA",
       district: null,
       slug: "duplicate-name",
-      slug_is_unique: false
+      slug_is_unique: false,
+      identity_is_safe: true
+    },
+    {
+      id: "55555555-5555-4555-8555-555555555555",
+      fec_candidate_id: "H0TX05005",
+      name: "212 N HALF  W. JOHN, RODNEY HOWARD MR.",
+      party: "DEM",
+      office: "H",
+      state: "TX",
+      district: "05",
+      slug: "212-n-half-w-john-rodney-howard-mr",
+      slug_is_unique: true,
+      identity_is_safe: false
     }
   ],
   has_next: true,
@@ -61,7 +76,20 @@ const CANDIDATE_PAGE_2: CandidateListResponse = {
       state: "US",
       district: null,
       slug: "solo-runner-2026",
-      slug_is_unique: true
+      slug_is_unique: true,
+      identity_is_safe: true
+    },
+    {
+      id: "66666666-6666-4666-8666-666666666666",
+      fec_candidate_id: "H0NC06006",
+      name: "!!!",
+      party: "IND",
+      office: "H",
+      state: "NC",
+      district: "06",
+      slug: "",
+      slug_is_unique: true,
+      identity_is_safe: false
     }
   ],
   has_next: false,
@@ -82,9 +110,50 @@ const COMMITTEE_PAGE_1: CommitteeListResponse = {
       slug_is_unique: true
     }
   ],
-  has_next: false,
+  has_next: true,
   offset: 0,
   limit: 200
+};
+
+const COMMITTEE_PAGE_2: CommitteeListResponse = {
+  items: [
+    {
+      id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      fec_committee_id: "C00000002",
+      name: "Future Forward Civibus",
+      committee_type: "P",
+      party: null,
+      state: "GA",
+      slug: "future-forward-civibus-2026",
+      slug_is_unique: true
+    }
+  ],
+  has_next: true,
+  offset: 200,
+  limit: 200
+};
+
+const COMMITTEE_PAGE_3: CommitteeListResponse = {
+  items: [
+    {
+      id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+      fec_committee_id: "C00000003",
+      name: "Local Civibus Committee",
+      committee_type: "N",
+      party: "IND",
+      state: "TX",
+      slug: "local-civibus-committee",
+      slug_is_unique: false
+    }
+  ],
+  has_next: false,
+  offset: 400,
+  limit: 200
+};
+
+const TERMINAL_COMMITTEE_PAGE: CommitteeListResponse = {
+  ...COMMITTEE_PAGE_1,
+  has_next: false
 };
 
 const UPCOMING_TIMELINE: UpcomingElectionTimelineEntry[] = [
@@ -191,6 +260,12 @@ function createPaginatedListRequestJson() {
       return Promise.resolve(CANDIDATE_PAGE_1);
     }
     if (path.includes("/v1/committees")) {
+      if (path.includes("offset=400")) {
+        return Promise.resolve(COMMITTEE_PAGE_3);
+      }
+      if (path.includes("offset=200")) {
+        return Promise.resolve(COMMITTEE_PAGE_2);
+      }
       return Promise.resolve(COMMITTEE_PAGE_1);
     }
     if (path.includes("/v1/elections/timeline/upcoming")) {
@@ -209,7 +284,8 @@ function createEmptyListRequestJson() {
       return Promise.resolve({ items: [], has_next: false, offset: 0, limit: 200 });
     }
     if (path.includes("/v1/committees")) {
-      return Promise.resolve({ items: [], has_next: false, offset: 0, limit: 200 });
+      const offset = extractOffset(path);
+      return Promise.resolve({ items: [], has_next: false, offset, limit: 200 });
     }
     if (path.includes("/v1/elections/timeline/upcoming")) {
       return Promise.resolve([]);
@@ -229,6 +305,14 @@ function extractPersonLocPaths(xml: string): string[] {
   return extractLocPaths(xml).filter((path) => path.startsWith("/person/"));
 }
 
+function extractCandidateLocPaths(xml: string): string[] {
+  return extractLocPaths(xml).filter((path) => path.startsWith("/candidate/"));
+}
+
+function extractOffset(path: string): number {
+  return Number(new URL(path, "https://civibus.org").searchParams.get("offset") ?? "0");
+}
+
 function createDeferredPromise<T>() {
   let resolvePromise: (value: T | PromiseLike<T>) => void = () => undefined;
   let rejectPromise: (reason?: unknown) => void = () => undefined;
@@ -243,7 +327,78 @@ function createDeferredPromise<T>() {
   };
 }
 
+async function waitForQueuedPromises(): Promise<void> {
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
 describe("GET /sitemap.xml", () => {
+  it("keeps committee page concurrency bounded while refilling the request window", async () => {
+    const deferredCommitteePages = new Map<
+      number,
+      ReturnType<typeof createDeferredPromise<CommitteeListResponse>>
+    >();
+    const activeCommitteeOffsets = new Set<number>();
+    let maxActiveCommitteeRequests = 0;
+    let autoResolveCommitteePages = false;
+    const firstRefillOffset = SITEMAP_PAGE_CONCURRENCY * 200;
+
+    const committeePageForOffset = (offset: number): CommitteeListResponse => ({
+      items: [],
+      has_next: offset < firstRefillOffset,
+      offset,
+      limit: 200
+    });
+    const resolveCommitteePage = (offset: number) => {
+      deferredCommitteePages.get(offset)?.resolve(committeePageForOffset(offset));
+    };
+    const requestJson = vi.fn((path: string) => {
+      if (path.includes("/v1/candidates")) {
+        const offset = extractOffset(path);
+        return Promise.resolve({ items: [], has_next: false, offset, limit: 200 });
+      }
+      if (path.includes("/v1/committees")) {
+        const offset = extractOffset(path);
+        const deferred = createDeferredPromise<CommitteeListResponse>();
+        deferredCommitteePages.set(offset, deferred);
+        activeCommitteeOffsets.add(offset);
+        maxActiveCommitteeRequests = Math.max(maxActiveCommitteeRequests, activeCommitteeOffsets.size);
+        if (autoResolveCommitteePages) {
+          queueMicrotask(() => resolveCommitteePage(offset));
+        }
+        return deferred.promise.finally(() => activeCommitteeOffsets.delete(offset));
+      }
+      if (path.includes("/v1/elections/timeline/upcoming")) {
+        return Promise.resolve([]);
+      }
+      throw new Error(`Unexpected API call: ${path}`);
+    });
+    const responsePromise = GET(createRequestEvent("https://civibus.org/sitemap.xml", requestJson));
+
+    await waitForQueuedPromises();
+
+    try {
+      expect(activeCommitteeOffsets.size).toBe(SITEMAP_PAGE_CONCURRENCY);
+      expect([...activeCommitteeOffsets]).toEqual([0, 200, 400, 600, 800, 1000]);
+
+      autoResolveCommitteePages = true;
+      for (const offset of deferredCommitteePages.keys()) {
+        resolveCommitteePage(offset);
+      }
+
+      await responsePromise;
+
+      expect(deferredCommitteePages.has(firstRefillOffset)).toBe(true);
+      expect(maxActiveCommitteeRequests).toBeLessThanOrEqual(SITEMAP_PAGE_CONCURRENCY);
+    } finally {
+      autoResolveCommitteePages = true;
+      for (const offset of deferredCommitteePages.keys()) {
+        resolveCommitteePage(offset);
+      }
+      await Promise.resolve(responsePromise).catch(() => undefined);
+    }
+  });
+
   it("walks paginated candidate and committee lists and emits valid sitemap XML", async () => {
     const requestJson = createPaginatedListRequestJson();
 
@@ -257,27 +412,118 @@ describe("GET /sitemap.xml", () => {
     expect(xml).toContain('<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">');
     expect(xml).toContain("</urlset>");
 
-    expect(extractLocPaths(xml).slice(0, STATIC_PATHS.length)).toEqual(STATIC_PATHS);
-
-    const expectedCandidateLocs = [...CANDIDATE_PAGE_1.items, ...CANDIDATE_PAGE_2.items].map(
-      (candidate) => `<loc>https://civibus.org${buildCandidateHref(candidate)}</loc>`
+    const allCandidateItems = [...CANDIDATE_PAGE_1.items, ...CANDIDATE_PAGE_2.items];
+    const expectedCandidatePaths = allCandidateItems
+      .filter(
+        (candidate) =>
+          candidate.slug_is_unique && candidate.identity_is_safe && candidate.slug !== ""
+      )
+      .map((candidate) => buildCandidateHref(candidate));
+    const expectedCommitteePaths = [
+      ...COMMITTEE_PAGE_1.items,
+      ...COMMITTEE_PAGE_2.items,
+      ...COMMITTEE_PAGE_3.items
+    ].map((committee) => buildCommitteeHref(committee));
+    const expectedElectionPaths = UPCOMING_TIMELINE.map((entry) =>
+      buildElectionDateRoutePath(entry.date)
     );
-    const expectedCommitteeLocs = COMMITTEE_PAGE_1.items.map(
-      (committee) => `<loc>https://civibus.org${buildCommitteeHref(committee)}</loc>`
-    );
+    const expectedLocPaths = [
+      ...STATIC_PATHS,
+      ...expectedCandidatePaths,
+      ...expectedCommitteePaths,
+      ...expectedElectionPaths
+    ];
 
-    for (const loc of [...expectedCandidateLocs, ...expectedCommitteeLocs]) {
-      expect(xml).toContain(loc);
-    }
-
-    const expectedElectionLocs = UPCOMING_TIMELINE.map(
-      (entry) => `<loc>https://civibus.org${buildElectionDateRoutePath(entry.date)}</loc>`
+    expect(extractLocPaths(xml)).toEqual(expectedLocPaths);
+    expect(extractLocPaths(xml)).toHaveLength(14);
+    expect(expectedCommitteePaths[0]).toBe("/committee/citizens-for-civibus-2026");
+    expect(expectedCommitteePaths.at(-1)).toBe("/committee/cccccccc-cccc-4ccc-8ccc-cccccccccccc");
+    expect(extractCandidateLocPaths(xml)).toHaveLength(expectedCandidatePaths.length);
+    expect(extractCandidateLocPaths(xml)).not.toContain(`/candidate/${CANDIDATE_PAGE_1.items[1]!.id}`);
+    expect(extractCandidateLocPaths(xml)).not.toContain(`/candidate/${CANDIDATE_PAGE_2.items[1]!.id}`);
+    expect(extractCandidateLocPaths(xml)).not.toContain(
+      `/candidate/${CANDIDATE_PAGE_1.items[2]!.slug}`
     );
-    for (const loc of expectedElectionLocs) {
-      expect(xml).toContain(loc);
-    }
+    expect(extractCandidateLocPaths(xml)).not.toContain("/candidate/");
+    expect(extractCandidateLocPaths(xml).some((path) => /\/candidate\/[0-9a-f-]{36}$/i.test(path))).toBe(
+      false
+    );
 
     expect(extractPersonLocPaths(xml)).toEqual([]);
+  });
+
+  it("keeps sitemap URLs in offset order when committee pages finish out of order", async () => {
+    const committeePages = new Map([
+      [0, COMMITTEE_PAGE_1],
+      [200, COMMITTEE_PAGE_2],
+      [400, COMMITTEE_PAGE_3]
+    ]);
+    const deferredCommitteePages = new Map<
+      number,
+      ReturnType<typeof createDeferredPromise<CommitteeListResponse>>
+    >();
+    const requestJson = vi.fn((path: string) => {
+      if (path.includes("/v1/candidates") && path.includes("offset=200")) {
+        return Promise.resolve(CANDIDATE_PAGE_2);
+      }
+      if (path.includes("/v1/candidates")) {
+        return Promise.resolve(CANDIDATE_PAGE_1);
+      }
+      if (path.includes("/v1/committees")) {
+        const offset = extractOffset(path);
+        const deferred = createDeferredPromise<CommitteeListResponse>();
+        deferredCommitteePages.set(offset, deferred);
+        return deferred.promise;
+      }
+      if (path.includes("/v1/elections/timeline/upcoming")) {
+        return Promise.resolve(UPCOMING_TIMELINE);
+      }
+      throw new Error(`Unexpected API call: ${path}`);
+    });
+    const responsePromise = GET(createRequestEvent("https://civibus.org/sitemap.xml", requestJson));
+
+    await waitForQueuedPromises();
+
+    try {
+      expect([...deferredCommitteePages.keys()]).toContain(400);
+      deferredCommitteePages.get(400)?.resolve(COMMITTEE_PAGE_3);
+      deferredCommitteePages.get(200)?.resolve(COMMITTEE_PAGE_2);
+      deferredCommitteePages.get(0)?.resolve(COMMITTEE_PAGE_1);
+      for (const [offset, deferred] of deferredCommitteePages) {
+        if (offset > 400) {
+          deferred.resolve({
+            items: [],
+            has_next: false,
+            offset,
+            limit: 200
+          });
+        }
+      }
+
+      const response = await responsePromise;
+      const xml = await response.text();
+      expect(extractLocPaths(xml)).toEqual([
+        ...STATIC_PATHS,
+        buildCandidateHref(CANDIDATE_PAGE_1.items[0]!),
+        buildCandidateHref(CANDIDATE_PAGE_2.items[0]!),
+        buildCommitteeHref(COMMITTEE_PAGE_1.items[0]!),
+        buildCommitteeHref(COMMITTEE_PAGE_2.items[0]!),
+        buildCommitteeHref(COMMITTEE_PAGE_3.items[0]!),
+        ...UPCOMING_TIMELINE.map((entry) => buildElectionDateRoutePath(entry.date))
+      ]);
+    } finally {
+      for (const [offset, deferred] of deferredCommitteePages) {
+        deferred.resolve(
+          committeePages.get(offset) ?? {
+            items: [],
+            has_next: false,
+            offset,
+            limit: 200
+          }
+        );
+      }
+      await Promise.resolve(responsePromise).catch(() => undefined);
+    }
   });
 
   it("emits every Congress member person path when person routes are indexable", async () => {
@@ -352,13 +598,15 @@ describe("GET /sitemap.xml", () => {
       (call) => typeof call[0] === "string" && call[0].includes("/v1/elections/timeline/upcoming")
     );
 
-    expect(candidateCalls).toHaveLength(2);
-    expect(committeeCalls).toHaveLength(1);
+    expect(candidateCalls.length).toBeGreaterThanOrEqual(2);
+    expect(committeeCalls.length).toBeGreaterThanOrEqual(3);
     expect(timelineCalls).toHaveLength(1);
 
     const firstCandidateCall = new URL(candidateCalls[0]?.[0] ?? "", "https://civibus.org");
     const secondCandidateCall = new URL(candidateCalls[1]?.[0] ?? "", "https://civibus.org");
     const firstCommitteeCall = new URL(committeeCalls[0]?.[0] ?? "", "https://civibus.org");
+    const secondCommitteeCall = new URL(committeeCalls[1]?.[0] ?? "", "https://civibus.org");
+    const thirdCommitteeCall = new URL(committeeCalls[2]?.[0] ?? "", "https://civibus.org");
 
     expect(firstCandidateCall.searchParams.get("limit")).toBe("200");
     expect(firstCandidateCall.searchParams.get("offset")).toBe("0");
@@ -366,6 +614,10 @@ describe("GET /sitemap.xml", () => {
     expect(secondCandidateCall.searchParams.get("offset")).toBe("200");
     expect(firstCommitteeCall.searchParams.get("limit")).toBe("200");
     expect(firstCommitteeCall.searchParams.get("offset")).toBe("0");
+    expect(secondCommitteeCall.searchParams.get("limit")).toBe("200");
+    expect(secondCommitteeCall.searchParams.get("offset")).toBe("200");
+    expect(thirdCommitteeCall.searchParams.get("limit")).toBe("200");
+    expect(thirdCommitteeCall.searchParams.get("offset")).toBe("400");
   });
 
   it("falls back to event URL origin when PUBLIC_ORIGIN is absent", async () => {
@@ -398,7 +650,7 @@ describe("GET /sitemap.xml", () => {
         return Promise.resolve(CANDIDATE_PAGE_1);
       }
       if (path.includes("/v1/committees")) {
-        return Promise.resolve(COMMITTEE_PAGE_1);
+        return Promise.resolve(TERMINAL_COMMITTEE_PAGE);
       }
       if (path.includes("/v1/elections/timeline/upcoming")) {
         return Promise.resolve([]);
@@ -417,7 +669,7 @@ describe("GET /sitemap.xml", () => {
         return Promise.resolve({ items: [], has_next: true, offset: 0, limit: 0 });
       }
       if (path.includes("/v1/committees")) {
-        return Promise.resolve(COMMITTEE_PAGE_1);
+        return Promise.resolve(TERMINAL_COMMITTEE_PAGE);
       }
       if (path.includes("/v1/elections/timeline/upcoming")) {
         return Promise.resolve(UPCOMING_TIMELINE);
@@ -427,6 +679,25 @@ describe("GET /sitemap.xml", () => {
 
     await expect(GET(createRequestEvent("https://civibus.org/sitemap.xml", requestJson))).rejects.toThrow(
       "Sitemap pagination requires a positive integer page size."
+    );
+  });
+
+  it("rejects when pagination returns a clamped page size that would desynchronize offsets", async () => {
+    const requestJson = vi.fn((path: string) => {
+      if (path.includes("/v1/candidates")) {
+        return Promise.resolve({ items: [], has_next: true, offset: 0, limit: 100 });
+      }
+      if (path.includes("/v1/committees")) {
+        return Promise.resolve(TERMINAL_COMMITTEE_PAGE);
+      }
+      if (path.includes("/v1/elections/timeline/upcoming")) {
+        return Promise.resolve(UPCOMING_TIMELINE);
+      }
+      throw new Error(`Unexpected API call: ${path}`);
+    });
+
+    await expect(GET(createRequestEvent("https://civibus.org/sitemap.xml", requestJson))).rejects.toThrow(
+      "Sitemap pagination expected backend page size 200, got 100."
     );
   });
 
@@ -440,7 +711,7 @@ describe("GET /sitemap.xml", () => {
         return Promise.resolve(CANDIDATE_PAGE_1);
       }
       if (path.includes("/v1/committees")) {
-        return Promise.resolve(COMMITTEE_PAGE_1);
+        return Promise.resolve(TERMINAL_COMMITTEE_PAGE);
       }
       if (path.includes("/v1/elections/timeline/upcoming")) {
         return Promise.reject(timelineError);
@@ -466,7 +737,7 @@ describe("GET /sitemap.xml", () => {
         return Promise.resolve(CANDIDATE_PAGE_1);
       }
       if (path.includes("/v1/committees")) {
-        return Promise.resolve(COMMITTEE_PAGE_1);
+        return Promise.resolve(TERMINAL_COMMITTEE_PAGE);
       }
       throw new Error(`Unexpected API call: ${path}`);
     });

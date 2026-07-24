@@ -11,7 +11,7 @@ from uuid import UUID, uuid4
 import pytest
 
 from core.refresh import job_builders, runner
-from core.refresh.test_job_builders import _EXPECTED_FEDERAL_JOB_KEYS
+from core.refresh.test_job_builders import _EXPECTED_WEEKLY_FEDERAL_SCOPE_JOB_KEYS
 from domains.campaign_finance.ingest.federal_spine_loader import SpineLoadResult
 from domains.civics.loaders.ncsbe_results import NcsbeResultsLoadSummary
 from domains.civics.loaders.official_rosters.source_registry import list_nc_roster_source_metadata
@@ -796,7 +796,7 @@ def test_build_refresh_plan_federal_scope_emits_only_ordered_federal_jobs() -> N
     jobs = job_builders.build_refresh_plan(scope="federal")
     job_keys = tuple(job.key for job in jobs)
 
-    assert job_keys == _EXPECTED_FEDERAL_JOB_KEYS
+    assert job_keys == _EXPECTED_WEEKLY_FEDERAL_SCOPE_JOB_KEYS
     assert not any(job_key.startswith(("state-", "city-", "civic-", "civics-")) for job_key in job_keys)
 
 
@@ -1602,7 +1602,7 @@ def test_run_job_records_success_pull_status_for_skipped_only_loader_result(monk
     sync_data_source_metadata = MagicMock()
 
     monkeypatch.setattr(runner, "_select_data_source_id", MagicMock(return_value=None))
-    monkeypatch.setattr(runner, "_recent_nonempty_insert_counts", MagicMock(return_value=[120, 140, 160]))
+    monkeypatch.setattr(runner, "_recent_nonempty_activity_counts", MagicMock(return_value=[120, 140, 160]))
     monkeypatch.setattr(runner, "sync_data_source_metadata", sync_data_source_metadata)
     monkeypatch.setattr(runner, "insert_refresh_run", insert_refresh_run)
 
@@ -1616,7 +1616,51 @@ def test_run_job_records_success_pull_status_for_skipped_only_loader_result(monk
     assert refresh_run.skipped_count == 37
 
 
-def test_run_job_records_degraded_pull_status_when_inserted_count_is_below_recent_median(
+def test_recent_nonempty_activity_counts_include_processed_non_insert_rows() -> None:
+    connection = MagicMock()
+    cursor = connection.cursor.return_value.__enter__.return_value
+    cursor.fetchall.return_value = [(40_589,), (21_836,)]
+    job = _job_for_tests(key="federal-fec-masters")
+    completed_after = datetime(2026, 6, 24, tzinfo=timezone.utc)
+
+    activity_counts = runner._recent_nonempty_activity_counts(
+        connection,
+        job,
+        completed_after=completed_after,
+    )
+
+    assert activity_counts == [40_589, 21_836]
+    query = " ".join(cursor.execute.call_args.args[0].split())
+    assert (
+        "SELECT inserted_count + skipped_count + quarantined_count + superseded_count FROM core.refresh_run"
+    ) in query
+    assert cursor.execute.call_args.args[1] == ("federal-fec-masters", completed_after)
+
+
+def test_run_job_records_success_when_incremental_activity_matches_bulk_history(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    connection = MagicMock()
+    run_callable = MagicMock(
+        return_value=SimpleNamespace(inserted=175, skipped=40_414, quarantined=0, superseded=0, errors=1)
+    )
+    job = _job_for_tests(key="federal-fec-masters", run_callable=run_callable)
+    insert_refresh_run = MagicMock()
+    sync_data_source_metadata = MagicMock()
+
+    monkeypatch.setattr(runner, "_select_data_source_id", MagicMock(return_value=None))
+    monkeypatch.setattr(runner, "_recent_nonempty_activity_counts", MagicMock(return_value=[21_836]))
+    monkeypatch.setattr(runner, "sync_data_source_metadata", sync_data_source_metadata)
+    monkeypatch.setattr(runner, "insert_refresh_run", insert_refresh_run)
+
+    result = runner.run_job(connection, job)
+
+    assert result.status == "success"
+    assert result.message == ("Refresh job succeeded: inserted=175 skipped=40414 quarantined=0 superseded=0 errors=1")
+    assert insert_refresh_run.call_args.args[1].pull_status == "success"
+
+
+def test_run_job_records_degraded_pull_status_when_activity_is_below_recent_median(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     connection = MagicMock()
@@ -1628,14 +1672,14 @@ def test_run_job_records_degraded_pull_status_when_inserted_count_is_below_recen
     sync_data_source_metadata = MagicMock()
 
     monkeypatch.setattr(runner, "_select_data_source_id", MagicMock(return_value=None))
-    monkeypatch.setattr(runner, "_recent_nonempty_insert_counts", MagicMock(return_value=[180, 200, 220]))
+    monkeypatch.setattr(runner, "_recent_nonempty_activity_counts", MagicMock(return_value=[180, 200, 220]))
     monkeypatch.setattr(runner, "sync_data_source_metadata", sync_data_source_metadata)
     monkeypatch.setattr(runner, "insert_refresh_run", insert_refresh_run)
 
     result = runner.run_job(connection, job)
 
     assert result.status == "degraded"
-    assert result.message == "Refresh job completed below historical volume threshold: inserted=80 median=200"
+    assert result.message == "Refresh job completed below historical volume threshold: activity=85 median=200"
     sync_data_source_metadata.assert_not_called()
     assert insert_refresh_run.call_args.args[1].pull_status == "degraded"
 
@@ -1674,6 +1718,42 @@ def test_run_all_jobs_isolates_failures_and_continues(monkeypatch: pytest.Monkey
     assert [result.status for result in results] == ["crashed", "success"]
     first_callable.assert_called_once_with()
     second_callable.assert_called_once_with()
+
+
+def test_run_all_jobs_stops_after_failure_when_requested(monkeypatch: pytest.MonkeyPatch) -> None:
+    connection = MagicMock()
+    first_job = _job_for_tests(key="first")
+    second_job = _job_for_tests(key="second")
+    first_result = runner.RefreshRunResult(
+        key="first",
+        status="degraded",
+        metadata_updates=0,
+        message="below historical threshold",
+    )
+    second_result = runner.RefreshRunResult(
+        key="second",
+        status="success",
+        metadata_updates=1,
+        message="should not run",
+    )
+    run_job = MagicMock(side_effect=[first_result, second_result])
+    streamed: list[runner.RefreshRunResult] = []
+
+    monkeypatch.setattr(runner, "run_job", run_job)
+
+    results = runner.run_all_jobs(
+        connection,
+        [first_job, second_job],
+        dry_run=False,
+        force=True,
+        on_result=streamed.append,
+        stop_on_failure=True,
+    )
+
+    assert results == [first_result]
+    assert streamed == [first_result]
+    run_job.assert_called_once_with(connection, first_job, dry_run=False)
+    connection.commit.assert_called_once_with()
 
 
 def test_run_all_jobs_commits_after_successful_job(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -2004,6 +2084,30 @@ def test_main_threads_federal_scope_to_build_refresh_plan(monkeypatch: pytest.Mo
     assert captured["scope"] == "federal"
     assert captured["job_key_prefixes"] == ()
     assert isinstance(captured["parameters"], runner.RunnerParameters)
+
+
+def test_main_enables_fail_fast_for_federal_scope(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, object] = {}
+    job = _job_for_tests(key="federal-fec-masters")
+
+    class FakeConnection:
+        def close(self) -> None:
+            pass
+
+    def _fake_run_all_jobs(*args: object, **kwargs: object) -> list[runner.RefreshRunResult]:
+        captured["jobs"] = args[1]
+        captured["stop_on_failure"] = kwargs["stop_on_failure"]
+        return [runner.RefreshRunResult(key=job.key, status="success", metadata_updates=0, message="ok")]
+
+    monkeypatch.setattr(job_builders, "build_refresh_plan", lambda **kwargs: [job])
+    monkeypatch.setattr(runner, "get_connection", lambda: FakeConnection())
+    monkeypatch.setattr(runner, "run_all_jobs", _fake_run_all_jobs)
+
+    exit_code = runner.main(["--scope", "federal", "--no-lock"])
+
+    assert exit_code == 0
+    assert captured["jobs"] == [job]
+    assert captured["stop_on_failure"] is True
 
 
 @pytest.mark.parametrize("failing_status", ["empty", "degraded", "failed", "crashed"])

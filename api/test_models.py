@@ -16,6 +16,7 @@ from api.models import (
     CommitteeFilingBreakdown,
     ClusterMemberResponse,
     CommitteeFundraisingSummary,
+    CommitteeIndependentExpenditureTarget,
     CommitteeResponse,
     PersonContributionInsights,
     DonorsWithPropertyParams,
@@ -63,6 +64,19 @@ def _source_info_payload() -> dict[str, object]:
         "source_record_key": None,
         "record_url": None,
         "pull_date": datetime(2026, 3, 16, 12, 0, tzinfo=timezone.utc),
+    }
+
+
+def _candidate_money_coverage_payload(
+    *,
+    activity_state: str = "populated",
+    completeness: str = "complete",
+    basis: str = "fec_official_candidate_summary",
+) -> dict[str, str]:
+    return {
+        "activity_state": activity_state,
+        "completeness": completeness,
+        "basis": basis,
     }
 
 
@@ -247,6 +261,7 @@ def test_candidate_response_serializes_optional_fields_as_null_and_round_trips()
             "name": "Jane Doe",
             "slug": "jane-doe",
             "slug_is_unique": True,
+            "identity_is_safe": True,
             "office": "H",
             "sources": [_source_info_payload()],
         }
@@ -257,6 +272,7 @@ def test_candidate_response_serializes_optional_fields_as_null_and_round_trips()
     assert dumped["id"] == str(candidate_id)
     assert dumped["slug"] == "jane-doe"
     assert dumped["slug_is_unique"] is True
+    assert dumped["identity_is_safe"] is True
     assert dumped["person_id"] is None
     assert dumped["party"] is None
     assert dumped["state"] is None
@@ -266,6 +282,39 @@ def test_candidate_response_serializes_optional_fields_as_null_and_round_trips()
     assert "created_at" not in dumped
     assert "updated_at" not in dumped
     assert CandidateResponse.model_validate(dumped).model_dump(mode="json") == dumped
+
+
+def test_candidate_response_round_trips_identity_is_safe_false() -> None:
+    payload = {
+        "id": str(uuid4()),
+        "fec_candidate_id": "H0NC01002",
+        "name": "212 N HALF  W. JOHN, RODNEY HOWARD MR.",
+        "slug": "212-n-half-w-john-rodney-howard-mr",
+        "slug_is_unique": True,
+        "identity_is_safe": False,
+        "office": "H",
+        "sources": [_source_info_payload()],
+    }
+
+    dumped = CandidateResponse.model_validate(payload).model_dump(mode="json")
+
+    assert dumped["identity_is_safe"] is False
+    assert CandidateResponse.model_validate(dumped).model_dump(mode="json") == dumped
+
+
+def test_candidate_response_requires_identity_is_safe() -> None:
+    payload = {
+        "id": str(uuid4()),
+        "fec_candidate_id": "H0NC01001",
+        "name": "Jane Doe",
+        "slug": "jane-doe",
+        "slug_is_unique": True,
+        "office": "H",
+        "sources": [_source_info_payload()],
+    }
+
+    with pytest.raises(ValidationError):
+        CandidateResponse.model_validate(payload)
 
 
 def test_person_contribution_insights_geography_round_trips_money_and_metadata() -> None:
@@ -578,11 +627,21 @@ def test_ie_independent_expenditure_summary_round_trips_with_ranked_top_spenders
                     "transaction_count": 1,
                 },
             ],
+            "coverage": _candidate_money_coverage_payload(
+                activity_state="populated",
+                completeness="partial",
+                basis="fec_schedule_e_transactions",
+            ),
         }
     )
 
     dumped = summary.model_dump(mode="json")
 
+    assert dumped["coverage"] == {
+        "activity_state": "populated",
+        "completeness": "partial",
+        "basis": "fec_schedule_e_transactions",
+    }
     assert dumped["support_total"] == "1200.50"
     assert dumped["selected_cycle"] == 2026
     assert dumped["coverage_start_date"] == "2025-01-01"
@@ -594,6 +653,39 @@ def test_ie_independent_expenditure_summary_round_trips_with_ranked_top_spenders
     assert dumped["top_spenders"][0]["support_oppose"] == "S"
     assert dumped["top_spenders"][1]["support_oppose"] == "O"
     assert IndependentExpenditureSummary.model_validate(dumped).model_dump(mode="json") == dumped
+
+
+def test_ie_independent_expenditure_summary_requires_closed_coverage_contract() -> None:
+    payload = {
+        "candidate_id": str(uuid4()),
+        "selected_cycle": 2026,
+        "coverage_start_date": date(2025, 1, 1),
+        "coverage_end_date": date(2026, 12, 31),
+        "available_cycles": [2022, 2024, 2026],
+        "support_total": Decimal("0.00"),
+        "oppose_total": Decimal("0.00"),
+        "support_count": 0,
+        "oppose_count": 0,
+        "top_spenders": [],
+    }
+
+    with pytest.raises(ValidationError):
+        IndependentExpenditureSummary.model_validate(payload)
+
+    for field_name in ("activity_state", "completeness", "basis"):
+        invalid_payload = {
+            **payload,
+            "coverage": {
+                **_candidate_money_coverage_payload(
+                    activity_state="not_loaded",
+                    completeness="unknown",
+                    basis="no_authoritative_load_evidence",
+                ),
+                field_name: "unexpected_value",
+            },
+        }
+        with pytest.raises(ValidationError):
+            IndependentExpenditureSummary.model_validate(invalid_payload)
 
 
 def test_ie_top_spender_entry_rejects_invalid_support_oppose() -> None:
@@ -1377,6 +1469,7 @@ def test_candidate_fundraising_summary_serializes_decimals_and_nested_committees
             "can_render_share": True,
             "receipt_source_caveats": [],
             "debts_owed_by_committee": Decimal("100.00"),
+            "coverage": _candidate_money_coverage_payload(),
         }
     )
 
@@ -1406,7 +1499,47 @@ def test_candidate_fundraising_summary_serializes_decimals_and_nested_committees
     assert dumped["selected_cycle_coverage_complete"] is True
     assert dumped["can_render_share"] is True
     assert dumped["debts_owed_by_committee"] == "100.00"
+    assert dumped["coverage"] == {
+        "activity_state": "populated",
+        "completeness": "complete",
+        "basis": "fec_official_candidate_summary",
+    }
     assert CandidateFundraisingSummary.model_validate(dumped).model_dump(mode="json") == dumped
+
+
+def test_candidate_fundraising_summary_requires_closed_coverage_contract() -> None:
+    payload = {
+        "candidate_id": str(uuid4()),
+        "candidate_name": "Coverage Candidate",
+        "selected_cycle": 2026,
+        "coverage_start_date": date(2025, 1, 1),
+        "coverage_end_date": date(2026, 12, 31),
+        "available_cycles": [2022, 2024, 2026],
+        "total_raised": Decimal("0.00"),
+        "total_spent": Decimal("0.00"),
+        "net": Decimal("0.00"),
+        "transaction_count": 0,
+        "committees": [],
+        "summary_source": "derived",
+    }
+
+    with pytest.raises(ValidationError):
+        CandidateFundraisingSummary.model_validate(payload)
+
+    for field_name in ("activity_state", "completeness", "basis"):
+        invalid_payload = {
+            **payload,
+            "coverage": {
+                **_candidate_money_coverage_payload(
+                    activity_state="not_loaded",
+                    completeness="unknown",
+                    basis="no_authoritative_load_evidence",
+                ),
+                field_name: "unexpected_value",
+            },
+        }
+        with pytest.raises(ValidationError):
+            CandidateFundraisingSummary.model_validate(invalid_payload)
 
 
 def test_candidate_fundraising_summary_serializes_cash_on_hand_and_summary_source_literal() -> None:
@@ -1427,6 +1560,7 @@ def test_candidate_fundraising_summary_serializes_cash_on_hand_and_summary_sourc
             "committees": [],
             "cash_on_hand": Decimal("5500.00"),
             "summary_source": "fec_weball",
+            "coverage": _candidate_money_coverage_payload(),
         }
     )
 
@@ -1452,6 +1586,11 @@ def test_candidate_fundraising_summary_serializes_cash_on_hand_and_summary_sourc
             "committees": [],
             "cash_on_hand": None,
             "summary_source": "derived",
+            "coverage": _candidate_money_coverage_payload(
+                activity_state="not_loaded",
+                completeness="unknown",
+                basis="no_authoritative_load_evidence",
+            ),
         }
     )
     derived_dumped = derived_summary.model_dump(mode="json")
@@ -1835,6 +1974,7 @@ def test_committee_response_round_trips_linked_candidates_reusing_candidate_list
                     "district": "01",
                     "slug": "alpha-candidate",
                     "slug_is_unique": True,
+                    "identity_is_safe": True,
                 }
             ],
         }
@@ -1848,7 +1988,83 @@ def test_committee_response_round_trips_linked_candidates_reusing_candidate_list
     assert linked["office"] == "H"
     assert linked["slug"] == "alpha-candidate"
     assert linked["slug_is_unique"] is True
+    assert linked["identity_is_safe"] is True
     assert CommitteeResponse.model_validate(dumped).model_dump(mode="json") == dumped
+
+
+def test_candidate_list_item_requires_and_round_trips_identity_is_safe() -> None:
+    base_payload = {
+        "id": uuid4(),
+        "fec_candidate_id": "H0NC01001",
+        "name": "Jane Doe",
+        "office": "H",
+        "state": "NC",
+        "district": "01",
+        "slug": "jane-doe",
+        "slug_is_unique": True,
+    }
+
+    with pytest.raises(ValidationError):
+        CandidateListItem.model_validate(base_payload)
+
+    true_item = CandidateListItem.model_validate({**base_payload, "identity_is_safe": True})
+    false_item = CandidateListItem.model_validate(
+        {
+            **base_payload,
+            "id": uuid4(),
+            "name": "212 N HALF  W. JOHN, RODNEY HOWARD MR.",
+            "slug": "212-n-half-w-john-rodney-howard-mr",
+            "identity_is_safe": False,
+        }
+    )
+
+    assert true_item.model_dump(mode="json")["identity_is_safe"] is True
+    assert false_item.model_dump(mode="json")["identity_is_safe"] is False
+    assert (
+        CandidateListItem.model_validate(false_item.model_dump(mode="json")).model_dump(mode="json")["identity_is_safe"]
+        is False
+    )
+
+
+def test_committee_independent_expenditure_target_requires_and_round_trips_identity_is_safe() -> None:
+    base_payload = {
+        "candidate_id": uuid4(),
+        "fec_candidate_id": "H0NC01001",
+        "candidate_name": "Jane Doe",
+        "party": "DEM",
+        "office": "H",
+        "state": "NC",
+        "district": "01",
+        "slug": "jane-doe",
+        "slug_is_unique": True,
+        "support_total": Decimal("10.00"),
+        "oppose_total": Decimal("0.00"),
+        "transaction_count": 1,
+        "sources": [_source_info_payload()],
+    }
+
+    with pytest.raises(ValidationError):
+        CommitteeIndependentExpenditureTarget.model_validate(base_payload)
+
+    true_target = CommitteeIndependentExpenditureTarget.model_validate({**base_payload, "identity_is_safe": True})
+    false_target = CommitteeIndependentExpenditureTarget.model_validate(
+        {
+            **base_payload,
+            "candidate_id": uuid4(),
+            "candidate_name": "375 ROB ROY DR, DAVID J SR SR",
+            "slug": "375-rob-roy-dr-david-j-sr-sr",
+            "identity_is_safe": False,
+        }
+    )
+
+    assert true_target.model_dump(mode="json")["identity_is_safe"] is True
+    assert false_target.model_dump(mode="json")["identity_is_safe"] is False
+    assert (
+        CommitteeIndependentExpenditureTarget.model_validate(false_target.model_dump(mode="json")).model_dump(
+            mode="json"
+        )["identity_is_safe"]
+        is False
+    )
 
 
 def test_committee_response_linked_candidates_defaults_to_empty_list() -> None:
@@ -1885,6 +2101,7 @@ def test_candidate_fundraising_summary_round_trips_itemized_transaction_count() 
             "committees": [],
             "cash_on_hand": Decimal("5500.00"),
             "summary_source": "fec_weball",
+            "coverage": _candidate_money_coverage_payload(),
         }
     )
     dumped = summary.model_dump(mode="json")
@@ -1907,6 +2124,11 @@ def test_independent_expenditure_summary_round_trips_excluded_outlier_count() ->
             "oppose_count": 0,
             "top_spenders": [],
             "excluded_outlier_count": 3,
+            "coverage": _candidate_money_coverage_payload(
+                activity_state="populated",
+                completeness="partial",
+                basis="fec_schedule_e_transactions",
+            ),
         }
     )
     dumped = summary.model_dump(mode="json")
@@ -1926,6 +2148,11 @@ def test_independent_expenditure_summary_round_trips_excluded_outlier_count() ->
             "support_count": 0,
             "oppose_count": 0,
             "top_spenders": [],
+            "coverage": _candidate_money_coverage_payload(
+                activity_state="not_loaded",
+                completeness="unknown",
+                basis="no_authoritative_load_evidence",
+            ),
         }
     )
     assert without_count.excluded_outlier_count == 0

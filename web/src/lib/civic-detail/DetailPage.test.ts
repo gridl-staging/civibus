@@ -36,6 +36,21 @@ const CONTEST_ID = "77777777-7777-4777-8777-777777777777";
 const CANDIDACY_ID = "88888888-8888-4888-8888-888888888888";
 const PERSON_ID = "11111111-1111-4111-8111-111111111111";
 const ELECTORAL_DIVISION_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+const POPULATED_CANDIDATE_MONEY_COVERAGE = {
+  activity_state: "populated" as const,
+  completeness: "complete" as const,
+  basis: "qualifying_transactions" as const
+};
+const POPULATED_SCHEDULE_E_COVERAGE = {
+  activity_state: "populated" as const,
+  completeness: "complete" as const,
+  basis: "fec_schedule_e_transactions" as const
+};
+const LOADED_ZERO_SCHEDULE_E_COVERAGE = {
+  activity_state: "loaded_zero" as const,
+  completeness: "complete" as const,
+  basis: "authoritative_load_evidence" as const
+};
 
 const CONTEST_DETAIL: ContestDetailResponse = {
   id: CONTEST_ID,
@@ -584,6 +599,7 @@ describe("civic detail page rendering", () => {
               selected_cycle_coverage_complete: false,
               can_render_share: false,
               receipt_source_caveats: [],
+              coverage: POPULATED_CANDIDATE_MONEY_COVERAGE,
               committees: []
             },
             ieSummary: {
@@ -605,7 +621,8 @@ describe("civic detail page rendering", () => {
                   transaction_count: 1
                 }
               ],
-              excluded_outlier_count: 0
+              excluded_outlier_count: 0,
+              coverage: POPULATED_SCHEDULE_E_COVERAGE
             },
             ieTransactions: [
               {
@@ -722,7 +739,8 @@ describe("civic detail page rendering", () => {
               support_count: 0,
               oppose_count: 0,
               top_spenders: [],
-              excluded_outlier_count: 0
+              excluded_outlier_count: 0,
+              coverage: LOADED_ZERO_SCHEDULE_E_COVERAGE
             },
             ieTransactions: []
           }

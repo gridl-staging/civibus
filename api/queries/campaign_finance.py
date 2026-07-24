@@ -49,6 +49,36 @@ from api.queries._common import (
 _SLUG_NAME_EXPR = _SLUG_NORMALIZE_EXPR.format(value="c.name")
 _SLUG_PARAM_EXPR = _SLUG_NORMALIZE_EXPR.format(value="%s")
 
+
+def _candidate_identity_is_safe_expr(*, name_sql: str, slug_sql: str) -> str:
+    """Build the candidate-only public identity safety predicate.
+
+    Raw FEC ``cf.candidate.name`` remains source evidence. This predicate only
+    decides whether that source string may be promoted into canonical public
+    identity surfaces. Stage 1 examples such as ``212 N HALF  W. JOHN, RODNEY
+    HOWARD MR.`` and ``375 ROB ROY DR, DAVID J SR SR`` show address-like source
+    strings; the street-token check requires address context so standalone
+    title/honorific ``DR`` names such as ``ADLAKHA, SARAH ANNE DR`` stay safe.
+    """
+    normalized_name = f"COALESCE({name_sql}, '')"
+    address_context_re = (
+        r"'^\s*\d+[a-z]?\b(?:\s+\S+){0,6}\s+"
+        r"(?:aly|alley|ave|avenue|blvd|boulevard|cir|circle|ct|court|dr|drive|"
+        r"hwy|highway|ln|lane|pkwy|parkway|pl|place|rd|road|st|street|ter|"
+        r"terrace|trl|trail|way)\b'"
+    )
+    return f"""(
+        {slug_sql} <> ''
+        AND {normalized_name} !~ '[0-9]'
+        AND {normalized_name} !~* {address_context_re}
+    )"""
+
+
+_CANDIDATE_IDENTITY_IS_SAFE_EXPR = _candidate_identity_is_safe_expr(
+    name_sql="c.name",
+    slug_sql=_SLUG_NAME_EXPR,
+)
+
 PERSON_BY_SLUG_SQL = f"""
     SELECT
         id,
@@ -72,7 +102,8 @@ CANDIDATE_BY_SLUG_SQL = f"""
         c.state,
         c.district,
         {_SLUG_NAME_EXPR} AS slug,
-        (COUNT(*) OVER (PARTITION BY {_SLUG_NAME_EXPR}) = 1) AS slug_is_unique
+        (COUNT(*) OVER (PARTITION BY {_SLUG_NAME_EXPR}) = 1) AS slug_is_unique,
+        {_CANDIDATE_IDENTITY_IS_SAFE_EXPR} AS identity_is_safe
     FROM cf.candidate c
     WHERE {_SLUG_NAME_EXPR} = {_SLUG_PARAM_EXPR}
     ORDER BY c.name ASC, c.id ASC
@@ -138,6 +169,7 @@ CAMPAIGN_FINANCE_CANDIDATE_DETAIL_SQL = f"""
         c.name,
         {_SLUG_NAME_EXPR} AS slug,
         {_CANDIDATE_SLUG_IS_UNIQUE_SUBQUERY} AS slug_is_unique,
+        {_CANDIDATE_IDENTITY_IS_SAFE_EXPR} AS identity_is_safe,
         c.person_id,
         c.party,
         c.office,
@@ -254,7 +286,8 @@ COMMITTEE_LINKED_CANDIDATES_SQL = f"""
         c.state,
         c.district,
         {_SLUG_NAME_EXPR} AS slug,
-        {_CANDIDATE_SLUG_IS_UNIQUE_SUBQUERY} AS slug_is_unique
+        {_CANDIDATE_SLUG_IS_UNIQUE_SUBQUERY} AS slug_is_unique,
+        {_CANDIDATE_IDENTITY_IS_SAFE_EXPR} AS identity_is_safe
     FROM cf.candidate_committee_link link
     JOIN cf.candidate c ON c.id = link.candidate_id
     WHERE link.committee_id = %s
@@ -995,20 +1028,20 @@ _DONOR_SEARCH_SQL_TEMPLATE = f"""
             candidate.name ASC,
             candidate.id ASC
     ),
+    current_federal_committee_scope AS (
+        SELECT DISTINCT committee_id
+        FROM current_federal_candidate_committees
+    ),
     matching_transactions AS MATERIALIZED (
         -- This is the first materialized transaction boundary: keeping the mode
-        -- predicate, receipt filters, date window, and source-record validity
-        -- together lets the mode index (name/employer trigram or ZIP) be scanned
-        -- exactly once. Committee scope is deliberately NOT applied here: an
-        -- EXISTS against current_federal_candidate_committees made the planner
-        -- re-scan the whole mode bitmap once per federal committee (~508 loops,
-        -- ~12s on q=smith). The committee scope is instead applied by the
-        -- qualifying_transactions INNER JOIN below, which prunes the same rows
-        -- with a single hash join. Do not cap matched rows here: donor LIMIT
-        -- belongs after GROUP BY so high-volume donors are counted completely
-        -- before pagination. Source validity uses an anti-superseded check
-        -- here; provenance details are fetched after donor rollup so the live
-        -- path does not do source-record lookups for every matched row.
+        -- predicate, receipt filters, date window, source-record validity, and
+        -- committee scope together lets the scoped donor-search index intersect
+        -- common-name matches with federal officeholder committees before heap
+        -- materialization. Do not cap matched rows here: donor LIMIT belongs
+        -- after GROUP BY so high-volume donors are counted completely before
+        -- pagination. Source validity uses an anti-superseded check here;
+        -- provenance details are fetched after donor rollup so the live path
+        -- does not do source-record lookups for every matched row.
         SELECT
             t.id,
             t.committee_id,
@@ -1022,14 +1055,16 @@ _DONOR_SEARCH_SQL_TEMPLATE = f"""
             NULLIF(LEFT(t.contributor_zip, 5), '') AS normalized_zip5,
             t.source_record_id
         FROM cf.transaction t
+{{scope_from_sql}}
         WHERE {{match_sql}}
+{{scope_where_sql}}
 {_DONOR_SEARCH_RECEIPT_TRANSACTION_WHERE_SQL}
 {NOT_SUPERSEDED_SOURCE_RECORD_WHERE_SQL}
           AND t.contributor_name_raw IS NOT NULL
           AND BTRIM(t.contributor_name_raw) != ''
     ),
     qualifying_transactions AS MATERIALIZED (
-        -- Materialized so the mode scan + committee-scope join runs exactly once:
+        -- Materialized so the scoped mode scan runs exactly once:
         -- donor_groups and donor_page_transactions both read this set, and an
         -- inline CTE would otherwise recompute the scan-and-join for each. Keep
         -- it narrow: candidate/committee labels are joined only after donor
@@ -1049,8 +1084,6 @@ _DONOR_SEARCH_SQL_TEMPLATE = f"""
             {_donor_key_sql("t")} AS donor_key,
             t.source_record_id
         FROM matching_transactions t
-        JOIN current_federal_candidate_committees scope
-          ON scope.committee_id = t.committee_id
     ),
     donor_groups AS (
         SELECT
@@ -1737,7 +1770,8 @@ _CANDIDATE_LIST_SQL_TEMPLATE = f"""
             c.office,
             c.state,
             c.district,
-            {_SLUG_NAME_EXPR} AS slug
+            {_SLUG_NAME_EXPR} AS slug,
+            {_CANDIDATE_IDENTITY_IS_SAFE_EXPR} AS identity_is_safe
         FROM cf.candidate c
         WHERE {{where_sql}}
         ORDER BY c.name ASC, c.id ASC
@@ -1768,7 +1802,8 @@ _CANDIDATE_LIST_SQL_TEMPLATE = f"""
         filtered.state,
         filtered.district,
         filtered.slug,
-        slug_counts.candidate_count = 1 AS slug_is_unique
+        slug_counts.candidate_count = 1 AS slug_is_unique,
+        filtered.identity_is_safe
     FROM filtered_candidates filtered
     JOIN slug_counts
       ON slug_counts.slug = filtered.slug
@@ -1788,6 +1823,7 @@ _CANDIDATES_FOR_PEOPLE_SQL = f"""
         c.district,
         {_SLUG_NAME_EXPR} AS slug,
         FALSE AS slug_is_unique,
+        {_CANDIDATE_IDENTITY_IS_SAFE_EXPR} AS identity_is_safe,
         EXISTS (
             SELECT 1
             FROM cf.candidate_committee_link selected_cycle_link
@@ -2073,6 +2109,23 @@ def _donor_search_match_sql(by: str) -> str:
     raise ValueError(f"Unsupported donor search mode: {by}")
 
 
+def _donor_search_scope_sql(by: str) -> tuple[str, str]:
+    if by == "zip":
+        return (
+            "",
+            "          AND EXISTS (\n"
+            "              SELECT 1\n"
+            "              FROM current_federal_committee_scope scope_filter\n"
+            "              WHERE scope_filter.committee_id = t.committee_id\n"
+            "          )",
+        )
+    return (
+        "        JOIN current_federal_committee_scope scope_filter\n"
+        "          ON scope_filter.committee_id = t.committee_id",
+        "",
+    )
+
+
 def _build_donor_search_statement(
     *,
     q: str,
@@ -2092,8 +2145,13 @@ def _build_donor_search_statement(
         limit=limit,
         offset=offset,
     )
+    scope_from_sql, scope_where_sql = _donor_search_scope_sql(normalized_by)
     return (
-        _DONOR_SEARCH_SQL_TEMPLATE.format(match_sql=_donor_search_match_sql(normalized_by)),
+        _DONOR_SEARCH_SQL_TEMPLATE.format(
+            match_sql=_donor_search_match_sql(normalized_by),
+            scope_from_sql=scope_from_sql,
+            scope_where_sql=scope_where_sql,
+        ),
         (normalized_query, CONTRIBUTION_INSIGHTS_MIN_DATE, clamped_limit, clamped_offset),
     )
 
@@ -2690,6 +2748,66 @@ def _null_candidate_self_funding_payload() -> dict[str, Decimal | None]:
     }
 
 
+def _candidate_money_coverage(
+    *,
+    activity_state: str,
+    completeness: str,
+    basis: str,
+) -> dict[str, str]:
+    return {
+        "activity_state": activity_state,
+        "completeness": completeness,
+        "basis": basis,
+    }
+
+
+def _not_loaded_candidate_money_coverage() -> dict[str, str]:
+    return _candidate_money_coverage(
+        activity_state="not_loaded",
+        completeness="unknown",
+        basis="no_authoritative_load_evidence",
+    )
+
+
+def _official_candidate_summary_coverage() -> dict[str, str]:
+    return _candidate_money_coverage(
+        activity_state="populated",
+        completeness="complete",
+        basis="fec_official_candidate_summary",
+    )
+
+
+def _qualifying_fundraising_coverage(
+    *,
+    total_raised: Decimal,
+    total_spent: Decimal,
+    transaction_count: int,
+) -> dict[str, str]:
+    if transaction_count > 0 or total_raised != _MONEY_SCALE or total_spent != _MONEY_SCALE:
+        return _candidate_money_coverage(
+            activity_state="populated",
+            completeness="partial",
+            basis="qualifying_transactions",
+        )
+    return _not_loaded_candidate_money_coverage()
+
+
+def _schedule_e_coverage(
+    *,
+    support_total: Decimal,
+    oppose_total: Decimal,
+    support_count: int,
+    oppose_count: int,
+) -> dict[str, str]:
+    if support_count > 0 or oppose_count > 0 or support_total != _MONEY_SCALE or oppose_total != _MONEY_SCALE:
+        return _candidate_money_coverage(
+            activity_state="populated",
+            completeness="partial",
+            basis="fec_schedule_e_transactions",
+        )
+    return _not_loaded_candidate_money_coverage()
+
+
 def build_zero_candidate_fundraising_summary(
     *,
     candidate_id: UUID,
@@ -2721,6 +2839,7 @@ def build_zero_candidate_fundraising_summary(
         "can_render_share": False,
         "receipt_source_caveats": ["missing_committee_summary"],
         "debts_owed_by_committee": None,
+        "coverage": _not_loaded_candidate_money_coverage(),
     }
 
 
@@ -2858,6 +2977,7 @@ def _build_candidate_summary_from_official_totals(
         "candidate_loan_repay": candidate_loan_repay,
         "net_self_funding": net_self_funding,
         "summary_source": "fec_weball",
+        "coverage": _official_candidate_summary_coverage(),
         **_combine_candidate_receipt_source_payload(committee_summaries),
     }
 
@@ -3027,6 +3147,7 @@ def _build_zero_public_candidate_summary(
         "can_render_share": False,
         "receipt_source_caveats": ["missing_committee_summary"],
         "debts_owed_by_committee": None,
+        "coverage": _not_loaded_candidate_money_coverage(),
     }
 
 
@@ -3082,6 +3203,11 @@ def _build_public_candidate_summary_from_batch_row(
         "can_render_share": False,
         "receipt_source_caveats": ["missing_committee_summary"],
         "debts_owed_by_committee": None,
+        "coverage": _qualifying_fundraising_coverage(
+            total_raised=total_receipts,
+            total_spent=total_disbursements,
+            transaction_count=0,
+        ),
     }
 
 
@@ -3157,6 +3283,11 @@ def fetch_candidate_public_money_summary(
         "cash_on_hand": committee_summary_row["cash_on_hand"],
         **_null_candidate_self_funding_payload(),
         "summary_source": "fec_committee_summary",
+        "coverage": _qualifying_fundraising_coverage(
+            total_raised=total_receipts,
+            total_spent=total_disbursements,
+            transaction_count=0,
+        ),
         **_fetch_receipt_source_payload(conn, linked_committee_ids, cycle),
     }
 
@@ -3237,6 +3368,11 @@ def fetch_candidate_summary(
         "cash_on_hand": None,
         **_null_candidate_self_funding_payload(),
         "summary_source": "derived",
+        "coverage": _qualifying_fundraising_coverage(
+            total_raised=derived_total_raised,
+            total_spent=derived_total_spent,
+            transaction_count=derived_transaction_count,
+        ),
         **receipt_source_payload,
     }
 
@@ -4556,6 +4692,12 @@ def fetch_candidate_ie_summary(
         "oppose_count": summary_row["oppose_count"],
         "top_spenders": top_spender_rows,
         "excluded_outlier_count": excluded_outlier_count,
+        "coverage": _schedule_e_coverage(
+            support_total=_quantize_money(summary_row["support_total"]),
+            oppose_total=_quantize_money(summary_row["oppose_total"]),
+            support_count=summary_row["support_count"],
+            oppose_count=summary_row["oppose_count"],
+        ),
     }
 
 
@@ -4573,6 +4715,7 @@ def _zero_candidate_ie_summary(
         "oppose_count": 0,
         "top_spenders": [],
         "excluded_outlier_count": 0,
+        "coverage": _not_loaded_candidate_money_coverage(),
     }
 
 
@@ -4601,20 +4744,32 @@ def fetch_candidate_ie_summaries(
 
     for row in rows:
         candidate_id = row["candidate_id"]
+        support_total = _quantize_money(row["support_total"])
+        oppose_total = _quantize_money(row["oppose_total"])
         summaries[candidate_id] = {
             "candidate_id": candidate_id,
             **cycle.as_payload(),
-            "support_total": _quantize_money(row["support_total"]),
-            "oppose_total": _quantize_money(row["oppose_total"]),
+            "support_total": support_total,
+            "oppose_total": oppose_total,
             "support_count": row["support_count"],
             "oppose_count": row["oppose_count"],
             "top_spenders": [],
             "excluded_outlier_count": row["excluded_outlier_count"],
+            "coverage": _schedule_e_coverage(
+                support_total=support_total,
+                oppose_total=oppose_total,
+                support_count=row["support_count"],
+                oppose_count=row["oppose_count"],
+            ),
         }
     return summaries
 
 
 _COMMITTEE_IE_CANDIDATE_SLUG_EXPR = _SLUG_NORMALIZE_EXPR.format(value="cand.name")
+_COMMITTEE_IE_CANDIDATE_IDENTITY_IS_SAFE_EXPR = _candidate_identity_is_safe_expr(
+    name_sql="cand.name",
+    slug_sql=_COMMITTEE_IE_CANDIDATE_SLUG_EXPR,
+)
 _COMMITTEE_IE_CANDIDATE_SLUG_IS_UNIQUE_SUBQUERY = f"""(
         SELECT COUNT(*) FROM cf.candidate cand2
         WHERE {_SLUG_NORMALIZE_EXPR.format(value="cand2.name")}
@@ -4633,6 +4788,7 @@ _COMMITTEE_IE_TARGETS_SQL = f"""
         cand.district,
         {_COMMITTEE_IE_CANDIDATE_SLUG_EXPR} AS slug,
         {_COMMITTEE_IE_CANDIDATE_SLUG_IS_UNIQUE_SUBQUERY} AS slug_is_unique,
+        {_COMMITTEE_IE_CANDIDATE_IDENTITY_IS_SAFE_EXPR} AS identity_is_safe,
         COALESCE(SUM(t.amount) FILTER (WHERE t.support_oppose = 'S'), 0) AS support_total,
         COALESCE(SUM(t.amount) FILTER (WHERE t.support_oppose = 'O'), 0) AS oppose_total,
         COUNT(*)::integer AS transaction_count

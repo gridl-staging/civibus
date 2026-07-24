@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from typing import Mapping
 
 import psycopg
@@ -34,6 +35,11 @@ from api.contribution_insights_contract import (
     CONTRIBUTION_INSIGHTS_MIN_DATE,
     NOT_SUPERSEDED_SOURCE_RECORD_WHERE_SQL,
     contribution_insights_transaction_where_sql,
+)
+from domains.campaign_finance.constants import (
+    FEC_BULK_DATA_SOURCE_DOMAIN,
+    FEC_BULK_DATA_SOURCE_JURISDICTION,
+    FEC_BULK_DATA_SOURCE_NAME,
 )
 
 
@@ -74,6 +80,11 @@ _DEFAULT_FLOORS: Mapping[str, int] = FEDERAL_FIRST_CONTENT_FLOORS
 
 _FLOOR_ENV_VAR_PREFIX = "CIVIBUS_HEALTH_CONTENT_FLOOR_"
 
+_FEC_BULK_FRESHNESS_CHECK = "campaign_finance_federal_fec_fresh"
+_FEC_BULK_FRESHNESS_MAX_AGE = timedelta(days=7)
+_FEC_BULK_FRESHNESS_INDETERMINATE_ACTUAL = 0
+_FEC_BULK_FRESHNESS_SUCCESS_STATUS = "success"
+
 
 # Per-check SQL. Order is preserved so the cursor's ``executed`` log lines
 # up 1:1 with the failures returned — useful when reading test output.
@@ -100,6 +111,22 @@ _CHECK_QUERIES: Mapping[str, str] = {
     ),
 }
 
+_FEC_BULK_FRESHNESS_QUERY = """
+    SELECT MAX(last_pull_at)
+    FROM core.data_source
+    WHERE domain = %s
+      AND jurisdiction = %s
+      AND name = %s
+      AND last_pull_status = %s
+"""
+
+_FEC_BULK_FRESHNESS_PARAMS = (
+    FEC_BULK_DATA_SOURCE_DOMAIN,
+    FEC_BULK_DATA_SOURCE_JURISDICTION,
+    FEC_BULK_DATA_SOURCE_NAME,
+    _FEC_BULK_FRESHNESS_SUCCESS_STATUS,
+)
+
 
 @dataclass(frozen=True)
 class ContentHealthFailure:
@@ -108,6 +135,45 @@ class ContentHealthFailure:
     check: str
     actual: int
     floor: int
+
+
+def _to_utc_epoch_seconds(value: object) -> int | None:
+    if not isinstance(value, datetime):
+        return None
+    if value.tzinfo is None or value.utcoffset() is None:
+        return None
+    return int(value.astimezone(timezone.utc).timestamp())
+
+
+def _resolve_health_now(now: datetime | None) -> datetime:
+    if now is None:
+        return datetime.now(timezone.utc)
+    if now.tzinfo is None or now.utcoffset() is None:
+        raise ValueError("content-health now must be an aware UTC datetime")
+    return now.astimezone(timezone.utc)
+
+
+def _fec_bulk_freshness_failure(
+    last_pull_at: object,
+    *,
+    now: datetime,
+) -> ContentHealthFailure | None:
+    cutoff_epoch = int((now - _FEC_BULK_FRESHNESS_MAX_AGE).timestamp())
+    now_epoch = int(now.timestamp())
+    source_epoch = _to_utc_epoch_seconds(last_pull_at)
+    if source_epoch is None or source_epoch > now_epoch:
+        return ContentHealthFailure(
+            check=_FEC_BULK_FRESHNESS_CHECK,
+            actual=_FEC_BULK_FRESHNESS_INDETERMINATE_ACTUAL,
+            floor=cutoff_epoch,
+        )
+    if source_epoch < cutoff_epoch:
+        return ContentHealthFailure(
+            check=_FEC_BULK_FRESHNESS_CHECK,
+            actual=source_epoch,
+            floor=cutoff_epoch,
+        )
+    return None
 
 
 def floors_from_env(env: Mapping[str, str] | None = None) -> dict[str, int]:
@@ -140,6 +206,7 @@ def evaluate_content_health(
     connection: psycopg.Connection,
     *,
     floors: Mapping[str, int] | None = None,
+    now: datetime | None = None,
 ) -> list[ContentHealthFailure]:
     """Run all content-health checks against ``connection``.
 
@@ -147,6 +214,7 @@ def evaluate_content_health(
     Caller decides the HTTP / exit-code mapping.
     """
     resolved_floors = dict(floors) if floors is not None else floors_from_env()
+    resolved_now = _resolve_health_now(now)
     failures: list[ContentHealthFailure] = []
     with connection.cursor() as cursor:
         for check, query in _CHECK_QUERIES.items():
@@ -159,4 +227,10 @@ def evaluate_content_health(
             floor = resolved_floors.get(check, _DEFAULT_FLOORS[check])
             if actual < floor:
                 failures.append(ContentHealthFailure(check=check, actual=actual, floor=floor))
+        cursor.execute(SQL(_FEC_BULK_FRESHNESS_QUERY), _FEC_BULK_FRESHNESS_PARAMS)  # type: ignore[arg-type]
+        row = cursor.fetchone()
+        last_pull_at = row[0] if row is not None else None
+        freshness_failure = _fec_bulk_freshness_failure(last_pull_at, now=resolved_now)
+        if freshness_failure is not None:
+            failures.append(freshness_failure)
     return failures

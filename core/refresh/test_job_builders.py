@@ -285,6 +285,8 @@ _EXPECTED_FEDERAL_JOB_KEYS = (
     "federal-geometry-probe",
 )
 
+_EXPECTED_WEEKLY_FEDERAL_SCOPE_JOB_KEYS = tuple(key for key in _EXPECTED_FEDERAL_JOB_KEYS if key != "federal-irs-527")
+
 
 @pytest.mark.unit
 class TestJobKeyPrefixFiltering:
@@ -350,9 +352,14 @@ class TestFederalPrefixFilterContract:
         jobs = build_refresh_plan(scope="federal")
 
         actual_keys = tuple(job.key for job in jobs)
-        assert actual_keys == _EXPECTED_FEDERAL_JOB_KEYS
-        assert actual_keys == self._expected_federal_order()
+        assert actual_keys == _EXPECTED_WEEKLY_FEDERAL_SCOPE_JOB_KEYS
         assert not any(job.key.startswith(("state-", "city-", "civic-", "civics-")) for job in jobs)
+        assert "federal-irs-527" not in actual_keys
+
+    def test_federal_scope_preserves_explicit_irs_527_prefix(self) -> None:
+        jobs = build_refresh_plan(scope="federal", job_key_prefixes=("federal-irs-527",))
+
+        assert tuple(job.key for job in jobs) == ("federal-irs-527",)
 
 
 @pytest.mark.unit

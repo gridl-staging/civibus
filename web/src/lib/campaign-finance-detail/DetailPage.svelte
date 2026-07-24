@@ -4,12 +4,10 @@
   import TrustSection from "$lib/detail-trust/TrustSection.svelte";
   import SkeletonPanel from "$lib/loading/SkeletonPanel.svelte";
   import CashOnHandTrendChart from "$lib/charts/CashOnHandTrendChart.svelte";
+  import FactRows from "$lib/campaign-finance-detail/FactRows.svelte";
+  import * as candidateMoneyPresentation from "$lib/campaign-finance-detail/candidate_money_presentation";
   import {
     buildCandidateCompletenessWarnings,
-    buildCandidateDeferredCommitteeBreakdown,
-    buildCandidateDeferredFundraisingSummary,
-    buildCandidateDeferredKeyMetrics,
-    buildCandidateDeferredOutsideSpending,
     buildCommitteeCycleSummaryRows,
     buildCommitteeDeferredFundraisingSummary,
     buildCommitteeDeferredHighSignalSummary,
@@ -21,7 +19,6 @@
     getCampaignFinanceEmptyMessage,
     type CampaignFinanceDetailRoutePresentation
   } from "$lib/campaign-finance-detail/presentation";
-
   export let presentation: CampaignFinanceDetailRoutePresentation;
 </script>
 
@@ -30,6 +27,15 @@
     <h3>Data coverage warning</h3>
     <p>{message} <a href={methodologyHref}>See methodology.</a></p>
   </section>
+{/snippet}
+
+{#snippet coverageMessage(message: string, methodologyHref: string | null)}
+  <p>
+    {message}
+    {#if methodologyHref}
+      <a href={methodologyHref}>Learn how Civibus reports coverage.</a>
+    {/if}
+  </p>
 {/snippet}
 
 {#if presentation.routeKind === "slug-collision"}
@@ -553,6 +559,9 @@
     <header class="detail__header">
       <h2>{shellViewModel.canonicalName}</h2>
       <p class="detail__type">candidate</p>
+      {#if shellViewModel.identityQualifier}
+        <p class="detail__qualifier">{shellViewModel.identityQualifier}</p>
+      {/if}
     </header>
 
     {#each shellViewModel.sectionOrder as sectionKey (sectionKey)}
@@ -578,33 +587,41 @@
         <TrustSection trustSection={shellViewModel.trustSection} />
       {:else if sectionKey === "metrics"}
         {#await presentation.summary}
-          <SkeletonPanel label="Key metrics" lines={3} />
+          <SkeletonPanel label="Key financials" lines={3} />
         {:then summary}
-          {@const completenessWarnings = buildCandidateCompletenessWarnings(
-            summary,
-            shellViewModel.l10Reference
-          )}
-          {@const keyMetrics = buildCandidateDeferredKeyMetrics(summary)}
-          {#each completenessWarnings as warning (warning.message)}
-            {@render caveatBanner(warning.message, warning.methodologyHref)}
-          {/each}
-          {#if keyMetrics.length > 0}
-            <section class="detail__panel" data-testid="key-metrics">
-              <h3>Key metrics</h3>
+          {@const fundraisingRegions = candidateMoneyPresentation.buildCandidateFundraisingRegionViewModels(summary)}
+          {#if summary}
+            {@const completenessWarnings = buildCandidateCompletenessWarnings(
+              summary,
+              shellViewModel.l10Reference
+            )}
+            {#each completenessWarnings as warning (warning.message)}
+              {@render caveatBanner(warning.message, warning.methodologyHref)}
+            {/each}
+          {/if}
+          <section class="detail__panel" data-testid="key-metrics">
+            <h3>Key financials</h3>
+            {#if fundraisingRegions.keyFinancials.message}
+              {@render coverageMessage(
+                fundraisingRegions.keyFinancials.message,
+                fundraisingRegions.keyFinancials.methodologyHref
+              )}
+            {/if}
+            {#if fundraisingRegions.keyFinancials.metrics.length > 0}
               <dl class="detail__rows">
-                {#each keyMetrics as metric (metric.label)}
+                {#each fundraisingRegions.keyFinancials.metrics as metric (metric.label)}
                   <div class="detail__row">
                     <dt>{metric.label}</dt>
                     <dd>{metric.value}</dd>
                   </div>
                 {/each}
               </dl>
-            </section>
-          {/if}
+            {/if}
+          </section>
         {:catch}
           <section class="detail__panel" data-testid="key-metrics">
-            <h3>Key metrics</h3>
-            <p>Candidate metrics are temporarily unavailable.</p>
+            <h3>Key financials</h3>
+            <p>Candidate financial totals are temporarily unavailable.</p>
           </section>
         {/await}
       {:else if sectionKey === "outside-spending"}
@@ -614,15 +631,22 @@
           {#await presentation.ieTransactions}
             <SkeletonPanel label="Outside spending" lines={5} />
           {:then ieTransactions}
-            {@const outsideSpending = buildCandidateDeferredOutsideSpending(ieSummary, ieTransactions)}
-            <section class="detail__panel">
-              <h3>Outside Spending</h3>
-              {#if outsideSpending.explanatoryBlock}
+            {@const outsideSpendingRegion = candidateMoneyPresentation.buildCandidateOutsideSpendingRegionViewModel(ieSummary, ieTransactions)}
+            {@const outsideSpending = outsideSpendingRegion.presentation}
+            <section class="detail__panel" data-testid="candidate-outside-spending">
+              <h3>Outside spending</h3>
+              {#if outsideSpendingRegion.message}
+                {@render coverageMessage(
+                  outsideSpendingRegion.message,
+                  outsideSpendingRegion.methodologyHref
+                )}
+              {/if}
+              {#if outsideSpending?.explanatoryBlock}
                 <p>{outsideSpending.explanatoryBlock}</p>
               {/if}
-              {#if outsideSpending.emptyMessage}
+              {#if outsideSpending?.emptyMessage}
                 <p>{outsideSpending.emptyMessage}</p>
-              {:else}
+              {:else if outsideSpending}
                 <h4>Support spending</h4>
                 <dl class="detail__rows">
                   <div class="detail__row">
@@ -681,6 +705,7 @@
                           <th>Stance</th>
                           <th>Amount</th>
                           <th>Dissemination Date</th>
+                          <th>Source</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -691,6 +716,13 @@
                             <td>{row.stance}</td>
                             <td>{row.amount}</td>
                             <td>{row.disseminationDate}</td>
+                            <td>
+                              {#if row.sourceHref}
+                                <a href={row.sourceHref}>Source filing</a>
+                              {:else}
+                                —
+                              {/if}
+                            </td>
                           </tr>
                         {/each}
                       </tbody>
@@ -700,85 +732,64 @@
               {/if}
             </section>
           {:catch}
-            <section class="detail__panel">
-              <h3>Outside Spending</h3>
-              <p>Outside-spending transactions are temporarily unavailable.</p>
+            <!-- Jul15 production-shape guard: transport failure is not the same state as loaded zero. -->
+            <section class="detail__panel" data-testid="candidate-outside-spending">
+              <h3>Outside spending</h3>
+              <p>Outside-spending data is temporarily unavailable.</p>
             </section>
           {/await}
         {:catch}
-          <section class="detail__panel">
-            <h3>Outside Spending</h3>
-            <p>Outside-spending summary data is temporarily unavailable.</p>
+          <!-- Jul15 production-shape guard: transport failure is not the same state as loaded zero. -->
+          <section class="detail__panel" data-testid="candidate-outside-spending">
+            <h3>Outside spending</h3>
+            <p>Outside-spending data is temporarily unavailable.</p>
           </section>
         {/await}
       {:else if sectionKey === "records"}
         {#await presentation.summary}
           <SkeletonPanel label="Fundraising summary" lines={4} />
         {:then summary}
-          {@const fundraisingSummary = buildCandidateDeferredFundraisingSummary(summary)}
-          {@const committeeBreakdown = buildCandidateDeferredCommitteeBreakdown(summary)}
-          <section class="detail__panel" aria-label="Fundraising summary">
+          {@const fundraisingRegions = candidateMoneyPresentation.buildCandidateFundraisingRegionViewModels(summary)}
+          {@const fundraisingSummary = fundraisingRegions.fundraisingSummary.summary}
+          {@const committeeBreakdown = fundraisingRegions.committeeBreakdown.rows}
+          <section class="detail__panel" aria-label="Fundraising summary" data-testid="candidate-fundraising-summary">
             <h3>Fundraising summary</h3>
-            <dl class="detail__rows">
-              <div class="detail__row">
-                <dt>Total raised</dt>
-                <dd>{fundraisingSummary.totalRaised}</dd>
-              </div>
-              <div class="detail__row">
-                <dt>Total spent</dt>
-                <dd>{fundraisingSummary.totalSpent}</dd>
-              </div>
-              <div class="detail__row">
-                <dt>Net</dt>
-                <dd>{fundraisingSummary.net}</dd>
-              </div>
-              <div class="detail__row">
-                <dt>Transaction count</dt>
-                <dd>{fundraisingSummary.transactionCount}</dd>
-              </div>
-            </dl>
+            {#if fundraisingRegions.fundraisingSummary.message}
+              {@render coverageMessage(
+                fundraisingRegions.fundraisingSummary.message,
+                fundraisingRegions.fundraisingSummary.methodologyHref
+              )}
+            {/if}
+            {#if fundraisingSummary}
+              <FactRows rows={fundraisingSummary.factRows} />
+            {/if}
           </section>
 
-          {#if committeeBreakdown.length > 0}
-            <section class="detail__panel" aria-label="Committee breakdown">
-              <h3>Committee breakdown</h3>
+          <section class="detail__panel" aria-label="Committee breakdown" data-testid="candidate-committee-breakdown">
+            <h3>Committee breakdown</h3>
+            {#if fundraisingRegions.committeeBreakdown.message}
+              {@render coverageMessage(
+                fundraisingRegions.committeeBreakdown.message,
+                fundraisingRegions.committeeBreakdown.methodologyHref
+              )}
+            {/if}
+            {#if committeeBreakdown.length > 0}
               {#each committeeBreakdown as committee (committee.committeeId)}
                 <div class="detail__committee-card">
                   <h4><a href={committee.committeeHref}>{committee.committeeName}</a></h4>
-                  <dl class="detail__rows">
-                    <div class="detail__row">
-                      <dt>Total raised</dt>
-                      <dd>{committee.totalRaised}</dd>
-                    </div>
-                    <div class="detail__row">
-                      <dt>Total spent</dt>
-                      <dd>{committee.totalSpent}</dd>
-                    </div>
-                    <div class="detail__row">
-                      <dt>Net</dt>
-                      <dd>{committee.net}</dd>
-                    </div>
-                    <div class="detail__row">
-                      <dt>Transaction count</dt>
-                      <dd>{committee.transactionCount}</dd>
-                    </div>
-                    <div class="detail__row">
-                      <dt>Jurisdiction</dt>
-                      <dd>{committee.jurisdiction}</dd>
-                    </div>
-                    <div class="detail__row">
-                      <dt>Data through</dt>
-                      <dd>{committee.dataThrough}</dd>
-                    </div>
-                  </dl>
+                  <FactRows rows={committee.factRows} />
                 </div>
               {/each}
-            </section>
-          {/if}
+            {/if}
+          </section>
         {:catch}
-          <section class="detail__panel" aria-label="Fundraising summary">
+          <section class="detail__panel" aria-label="Fundraising summary" data-testid="candidate-fundraising-summary">
             <h3>Fundraising summary</h3>
             <p>Candidate fundraising summary is temporarily unavailable.</p>
+          </section>
+          <section class="detail__panel" aria-label="Committee breakdown" data-testid="candidate-committee-breakdown">
+            <h3>Committee breakdown</h3>
+            <p>Committee breakdown is temporarily unavailable.</p>
           </section>
         {/await}
       {/if}

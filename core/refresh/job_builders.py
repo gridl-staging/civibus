@@ -142,6 +142,7 @@ _COMMITTEE_SUMMARY_FILING_BATCH_SIZE = 500
 _REFRESH_DATA_DIR_ENV = "CIVIBUS_REFRESH_DATA_DIR"
 _SUPPORTED_REFRESH_SCOPES = {"all", "priority", "federal"}
 _FEDERAL_SCOPE_JOB_KEY_PREFIXES = ("federal-",)
+_PARKED_WEEKLY_FEDERAL_JOB_KEYS = frozenset({"federal-irs-527"})
 AL_LOADABLE_REFRESH_DATA_TYPES = load_al_data_types()
 KY_LOADABLE_REFRESH_DATA_TYPES = load_ky_data_types()
 LA_LOADABLE_REFRESH_DATA_TYPES = load_la_data_types()
@@ -250,6 +251,17 @@ def _temporary_refresh_directory(*, prefix: str) -> tempfile.TemporaryDirectory[
     temp_root = _refresh_data_root() / "tmp"
     temp_root.mkdir(parents=True, exist_ok=True)
     return tempfile.TemporaryDirectory(prefix=prefix, dir=temp_root)
+
+
+def _filter_weekly_federal_scope_jobs(
+    jobs: list[RefreshJob],
+    *,
+    job_key_prefixes: tuple[str, ...],
+) -> list[RefreshJob]:
+    federal_jobs = _filter_jobs_by_key_prefixes(jobs, job_key_prefixes=_FEDERAL_SCOPE_JOB_KEY_PREFIXES)
+    if job_key_prefixes:
+        return federal_jobs
+    return [job for job in federal_jobs if job.key not in _PARKED_WEEKLY_FEDERAL_JOB_KEYS]
 
 
 def _resolve_date_range(*, start: str | None, end: str | None, now: datetime) -> tuple[str, str]:
@@ -1948,6 +1960,6 @@ def build_refresh_plan(
             if any(source_name in allowed_sources for source_name in job.data_source_names)
         ]
     elif scope == "federal":
-        jobs = _filter_jobs_by_key_prefixes(jobs, job_key_prefixes=_FEDERAL_SCOPE_JOB_KEY_PREFIXES)
+        jobs = _filter_weekly_federal_scope_jobs(jobs, job_key_prefixes=job_key_prefixes)
 
     return _filter_jobs_by_key_prefixes(jobs, job_key_prefixes=job_key_prefixes)

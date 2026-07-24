@@ -23,6 +23,9 @@ type SlugRoutableItem = {
   slug: string;
   slug_is_unique: boolean;
 };
+export type CandidateSlugRoutableItem = SlugRoutableItem & {
+  identity_is_safe: boolean;
+};
 
 /** Committee detail payload returned by the campaign-finance API. */
 export type CommitteeDetailResponse = {
@@ -49,6 +52,7 @@ export type CandidateDetailResponse = {
   name: string;
   slug: string;
   slug_is_unique: boolean;
+  identity_is_safe: boolean;
   person_id: string | null;
   party: string | null;
   office: string;
@@ -70,6 +74,7 @@ export type CandidateListItem = {
   district: string | null;
   slug: string;
   slug_is_unique: boolean;
+  identity_is_safe: boolean;
 };
 
 export type CommitteeListItem = {
@@ -165,6 +170,25 @@ export type TopSpenderEntry = {
   transaction_count: number;
 };
 
+export const CANDIDATE_MONEY_ACTIVITY_STATES = ["populated", "loaded_zero", "not_loaded"] as const;
+export const CANDIDATE_MONEY_COMPLETENESS_VALUES = ["complete", "partial", "unknown"] as const;
+export const CANDIDATE_MONEY_EVIDENCE_BASIS_VALUES = [
+  "fec_official_candidate_summary",
+  "qualifying_transactions",
+  "fec_schedule_e_transactions",
+  "authoritative_load_evidence",
+  "no_authoritative_load_evidence"
+] as const;
+
+export type CandidateMoneyActivityState = (typeof CANDIDATE_MONEY_ACTIVITY_STATES)[number];
+export type CandidateMoneyCompleteness = (typeof CANDIDATE_MONEY_COMPLETENESS_VALUES)[number];
+export type CandidateMoneyEvidenceBasis = (typeof CANDIDATE_MONEY_EVIDENCE_BASIS_VALUES)[number];
+export type CandidateMoneyCoverage = {
+  activity_state: CandidateMoneyActivityState;
+  completeness: CandidateMoneyCompleteness;
+  basis: CandidateMoneyEvidenceBasis;
+};
+
 export type IndependentExpenditureSummary = SelectedCycleMetadata & {
   candidate_id: string;
   support_total: SerializedMoney;
@@ -173,6 +197,7 @@ export type IndependentExpenditureSummary = SelectedCycleMetadata & {
   oppose_count: number;
   top_spenders: TopSpenderEntry[];
   excluded_outlier_count: number;
+  coverage: CandidateMoneyCoverage;
 };
 
 /**
@@ -188,6 +213,7 @@ export type CommitteeIndependentExpenditureTarget = {
   district: string | null;
   slug: string;
   slug_is_unique: boolean;
+  identity_is_safe: boolean;
   support_total: SerializedMoney;
   oppose_total: SerializedMoney;
   transaction_count: number;
@@ -425,6 +451,14 @@ function buildSlugAwareHref(routeSegment: "candidate" | "committee", item: SlugR
   return `/${routeSegment}/${encodeRoutePathSegment(routeId)}`;
 }
 
+export function hasCanonicalCandidateSlug(item: CandidateSlugRoutableItem): boolean {
+  return item.identity_is_safe && item.slug_is_unique && item.slug !== "";
+}
+
+function buildCandidateRouteId(item: CandidateSlugRoutableItem): string {
+  return hasCanonicalCandidateSlug(item) ? item.slug : item.id;
+}
+
 export function buildCommitteeDetailPath(committeeId: string): string {
   return buildCampaignFinancePath("committees", committeeId);
 }
@@ -497,6 +531,7 @@ export type CandidateFundraisingSummary = SelectedCycleMetadata & {
   selected_cycle_coverage_complete: boolean;
   can_render_share: boolean;
   receipt_source_caveats: string[];
+  coverage: CandidateMoneyCoverage;
 };
 
 export type CountySummaryRecipientCommittee = {
@@ -543,8 +578,8 @@ export function buildCandidatesBySlugPath(slug: string): string {
   return buildCampaignFinanceBySlugPath("candidates", slug);
 }
 
-export function buildCandidateHref(item: SlugRoutableItem): string {
-  return buildSlugAwareHref("candidate", item);
+export function buildCandidateHref(item: CandidateSlugRoutableItem): string {
+  return `/candidate/${encodeRoutePathSegment(buildCandidateRouteId(item))}`;
 }
 
 export function buildCandidateSummaryPath(

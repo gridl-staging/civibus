@@ -25,6 +25,16 @@ const DEFAULT_RECEIPT_SOURCE_FIELDS = {
   can_render_share: false,
   receipt_source_caveats: []
 };
+const POPULATED_CANDIDATE_MONEY_COVERAGE = {
+  activity_state: "populated" as const,
+  completeness: "complete" as const,
+  basis: "qualifying_transactions" as const
+};
+const NOT_LOADED_CANDIDATE_MONEY_COVERAGE = {
+  activity_state: "not_loaded" as const,
+  completeness: "unknown" as const,
+  basis: "no_authoritative_load_evidence" as const
+};
 
 export function asDeferredValue<T>(value: T): Promise<T> {
   return value as unknown as Promise<T>;
@@ -38,6 +48,7 @@ export const CANDIDATE_CANONICAL_DATA = {
     name: "Pat Candidate",
     slug: "pat-candidate",
     slug_is_unique: true,
+    identity_is_safe: true,
     person_id: null,
     party: "DEM",
     office: "H",
@@ -85,7 +96,8 @@ export const CANDIDATE_CANONICAL_DATA = {
     cash_on_hand: null,
     net_self_funding: null,
     summary_source: "derived",
-    itemized_transaction_count: 5
+    itemized_transaction_count: 5,
+    coverage: POPULATED_CANDIDATE_MONEY_COVERAGE
   }),
   ieTransactions: asDeferredValue<IndependentExpenditureResponse[]>([]),
   ieSummary: asDeferredValue<IndependentExpenditureSummary | null>(null)
@@ -99,6 +111,7 @@ export const CANDIDATE_EMPTY_CANONICAL_DATA = {
     name: "Candidate Empty",
     slug: "candidate-empty",
     slug_is_unique: false,
+    identity_is_safe: true,
     person_id: null,
     principal_committee_id: null
   },
@@ -115,7 +128,8 @@ export const CANDIDATE_EMPTY_CANONICAL_DATA = {
     cash_on_hand: null,
     net_self_funding: null,
     summary_source: "derived",
-    itemized_transaction_count: 0
+    itemized_transaction_count: 0,
+    coverage: NOT_LOADED_CANDIDATE_MONEY_COVERAGE
   }),
   ieTransactions: asDeferredValue<IndependentExpenditureResponse[]>([]),
   ieSummary: asDeferredValue<IndependentExpenditureSummary | null>(null)
@@ -163,7 +177,12 @@ export const CANDIDATE_CANONICAL_DATA_WITH_IE = {
         transaction_count: 2
       }
     ],
-    excluded_outlier_count: 0
+    excluded_outlier_count: 0,
+    coverage: {
+      activity_state: "populated" as const,
+      completeness: "complete" as const,
+      basis: "fec_schedule_e_transactions" as const
+    }
   })
 };
 
@@ -323,6 +342,7 @@ export const COMMITTEE_CANONICAL_DATA_WITH_IE = {
         district: "01",
         slug: "pat-candidate",
         slug_is_unique: true,
+        identity_is_safe: true,
         support_total: "1500.00",
         oppose_total: "250.00",
         transaction_count: 3,
@@ -349,6 +369,7 @@ export const COMMITTEE_CANONICAL_DATA_WITH_IE = {
         district: "02",
         slug: "lower-target",
         slug_is_unique: true,
+        identity_is_safe: true,
         support_total: "200.00",
         oppose_total: "0.00",
         transaction_count: 1,

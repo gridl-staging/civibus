@@ -62,6 +62,7 @@ _CADENCE_INTERVALS = {
     "annual": timedelta(days=365),
 }
 _REFRESH_HISTORY_CADENCE_PULL_STATUSES = ("success",)
+_FAILING_STATUSES = frozenset({"crashed", "degraded", "empty", "failed"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -250,10 +251,15 @@ def _dry_run_result(job_key: str) -> RefreshRunResult:
 
 
 _LOADER_COUNT_FIELDS = ("inserted", "skipped", "quarantined", "superseded", "errors")
+_ACTIVITY_COUNT_FIELDS = ("inserted", "skipped", "quarantined", "superseded")
 
 
 def _zero_loader_counts() -> dict[str, int]:
     return {field_name: 0 for field_name in _LOADER_COUNT_FIELDS}
+
+
+def _activity_count(counts: Mapping[str, int]) -> int:
+    return sum(counts[field_name] for field_name in _ACTIVITY_COUNT_FIELDS)
 
 
 def _single_loader_counts(execution_result: object) -> dict[str, int] | None:
@@ -294,20 +300,22 @@ def _loader_counts(execution_result: object | None) -> dict[str, int] | None:
     return _single_loader_counts(execution_result)
 
 
-def _recent_nonempty_insert_counts(
+def _recent_nonempty_activity_counts(
     connection: psycopg.Connection,
     job: RefreshJob,
     *,
     completed_after: datetime,
 ) -> list[int]:
+    """Return recent processed-row volumes for the job's degraded-volume guard."""
+    activity_expression = " + ".join(f"{field_name}_count" for field_name in _ACTIVITY_COUNT_FIELDS)
     with connection.cursor() as cursor:
         cursor.execute(
-            """
-            SELECT inserted_count
+            f"""
+            SELECT {activity_expression}
             FROM core.refresh_run
             WHERE job_key = %s
               AND completed_at >= %s
-              AND inserted_count > 0
+              AND {activity_expression} > 0
               AND pull_status IN ('success', 'degraded')
             ORDER BY completed_at DESC
             """,
@@ -349,15 +357,16 @@ def _derive_pull_status(
         return "empty", counts, "Refresh job completed with no inserted rows"
 
     lookback_floor = completed_at - timedelta(days=_DEGRADED_LOOKBACK_DAYS)
-    prior_insert_counts = _recent_nonempty_insert_counts(connection, job, completed_after=lookback_floor)
-    if counts["inserted"] > 0 and prior_insert_counts:
-        median_insert_count = int(statistics.median(prior_insert_counts))
-        if counts["inserted"] < max(1, int(median_insert_count * _DEGRADED_VOLUME_RATIO_THRESHOLD)):
+    prior_activity_counts = _recent_nonempty_activity_counts(connection, job, completed_after=lookback_floor)
+    activity_count = _activity_count(counts)
+    if counts["inserted"] > 0 and prior_activity_counts:
+        median_activity_count = int(statistics.median(prior_activity_counts))
+        if activity_count < max(1, int(median_activity_count * _DEGRADED_VOLUME_RATIO_THRESHOLD)):
             return (
                 "degraded",
                 counts,
-                f"Refresh job completed below historical volume threshold: inserted={counts['inserted']} "
-                f"median={median_insert_count}",
+                f"Refresh job completed below historical volume threshold: activity={activity_count} "
+                f"median={median_activity_count}",
             )
 
     return (
@@ -527,6 +536,7 @@ def run_all_jobs(
     force: bool = False,
     now: datetime | None = None,
     on_result: Callable[[RefreshRunResult], None] | None = None,
+    stop_on_failure: bool = False,
 ) -> list[RefreshRunResult]:
     if not dry_run and connection is None:
         raise ValueError("run_all_jobs requires a database connection when dry_run=False")
@@ -554,6 +564,8 @@ def run_all_jobs(
                 error=str(error),
             )
         _record_result(results, result, on_result=on_result)
+        if stop_on_failure and result.status in _FAILING_STATUSES:
+            break
 
     return results
 
@@ -720,7 +732,14 @@ def main(argv: list[str] | None = None) -> int:
         connection: psycopg.Connection | None = None
         try:
             connection = get_connection()
-            results = run_all_jobs(connection, jobs, dry_run=False, force=args.force, on_result=_stream_result)
+            results = run_all_jobs(
+                connection,
+                jobs,
+                dry_run=False,
+                force=args.force,
+                on_result=_stream_result,
+                stop_on_failure=args.scope == "federal",
+            )
         except Exception as error:  # noqa: BLE001
             print(f"Refresh runner failed: {error}", file=sys.stderr)
             return 1
@@ -728,8 +747,7 @@ def main(argv: list[str] | None = None) -> int:
             if connection is not None:
                 connection.close()
 
-    failing_statuses = {"crashed", "degraded", "empty", "failed"}
-    return 1 if any(result.status in failing_statuses for result in results) else 0
+    return 1 if any(result.status in _FAILING_STATUSES for result in results) else 0
 
 
 if __name__ == "__main__":

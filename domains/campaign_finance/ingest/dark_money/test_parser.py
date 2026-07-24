@@ -230,6 +230,94 @@ class TestReadIrs527RecordsTypedOutput:
         assert e.expenditure_date == date(2025, 4, 1)
         assert e.purpose == "TELEVISION ADVERTISING"
 
+    def test_conversion_errors_are_summarized_without_traceback(self, tmp_path: Path, caplog: pytest.LogCaptureFixture):
+        lines: list[str] = []
+        for index in range(5):
+            fields = [
+                "B",
+                f"30000000{index}",
+                f"B9000{index}",
+                "TEST ORG",
+                "12-3456789",
+                "VENDOR",
+                "200 ELM",
+                "",
+                "TOWN",
+                "CA",
+                "90210",
+                "",
+                "MEDIA",
+                "",
+                "CONSULT",
+                "20250101",
+                "MAIL",
+            ]
+            lines.append("|".join(fields) + "|\n")
+        txt = tmp_path / "bad_rows.txt"
+        txt.write_text("".join(lines), encoding="latin-1")
+
+        records = list(read_irs_527_records(txt))
+
+        assert records == []
+        assert "Traceback" not in caplog.text
+        assert "For further information" not in caplog.text
+        assert "Skipping type B row due to conversion error: 300000000" in caplog.text
+        assert "Skipping type B row due to conversion error: 300000002" in caplog.text
+        assert "300000003" not in caplog.text
+        assert "Skipped 5 type B rows due to conversion errors; suppressed 2 after the first 3" in caplog.text
+
+    def test_stale_dated_rows_are_filtered_before_validation(self, tmp_path: Path, caplog: pytest.LogCaptureFixture):
+        stale_bad_contribution = [
+            "A",
+            "300000001",
+            "A99999",
+            "TEST ORG",
+            "12-3456789",
+            "TEST DONOR",
+            "100 MAIN",
+            "",
+            "CITY",
+            "ST",
+            "12345",
+            "",
+            "ACME",
+            "",
+            "ENG",
+            "2000.00",
+            "20200101",
+        ]
+        stale_bad_expenditure = [
+            "B",
+            "300000002",
+            "B99999",
+            "TEST ORG",
+            "12-3456789",
+            "VENDOR",
+            "200 ELM",
+            "",
+            "TOWN",
+            "CA",
+            "90210",
+            "",
+            "MEDIA",
+            "",
+            "CONSULT",
+            "20200101",
+            "MAIL",
+        ]
+        txt = tmp_path / "stale_bad_rows.txt"
+        txt.write_text(
+            "|".join(stale_bad_contribution) + "|\n" + "|".join(stale_bad_expenditure) + "|\n",
+            encoding="latin-1",
+        )
+
+        with patch("domains.campaign_finance.ingest.dark_money.parser._recency_cutoff_date") as mock_cutoff:
+            mock_cutoff.return_value = date(2022, 1, 1)
+            records = list(read_irs_527_records(txt))
+
+        assert records == []
+        assert "conversion error" not in caplog.text
+
     def test_coerces_date_fields(self):
         txt = _fixture_txt_path()
         records = list(read_irs_527_records(txt))

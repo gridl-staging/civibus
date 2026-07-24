@@ -1,15 +1,151 @@
 from __future__ import annotations
 
+from datetime import date
 from decimal import Decimal
+from uuid import UUID
 
 import psycopg
 import pytest
 
 import api.queries as public_queries
 import api.queries.campaign_finance as campaign_finance_queries
+from api.test_campaign_finance_support import (
+    CandidateCommitteeLinkSeed,
+    CandidateRowSeed,
+    FilingRowSeed,
+    TransactionRowSeed,
+    insert_candidate_committee_link_row,
+    insert_candidate_row,
+    insert_electoral_division_row,
+    insert_filing_row,
+    insert_office_row,
+    insert_officeholding_row,
+    insert_transaction_row,
+)
+from core.db import insert_person
+from core.types.python.models import Person
 from test_support.donor_search_fixture import seed_donor_search_fixture
 
 pytestmark = pytest.mark.integration
+
+_SHARED_COMMITTEE_PERSON_ID = UUID("72000000-0000-4000-8000-000000000191")
+_SHARED_COMMITTEE_OFFICEHOLDING_ID = UUID("72000000-0000-0000-0000-000000000191")
+_SHARED_COMMITTEE_OFFICE_ID = UUID("72000000-0000-0000-0000-000000000192")
+_SHARED_COMMITTEE_DIVISION_ID = UUID("72000000-0000-0000-0000-000000000193")
+_SHARED_COMMITTEE_CANDIDATE_ID = UUID("72000000-0000-0000-0000-000000000194")
+_SHARED_COMMITTEE_LINK_ID = UUID("72000000-0000-0000-0000-000000000196")
+_SHARED_COMMITTEE_FILING_ID = UUID("72000000-0000-0000-0000-000000000197")
+_SHARED_COMMITTEE_TRANSACTION_ID = UUID("72000000-0000-0000-0000-000000000198")
+
+
+def _seed_shared_committee_officeholder(conn: psycopg.Connection) -> None:
+    insert_person(
+        conn,
+        Person(
+            id=_SHARED_COMMITTEE_PERSON_ID,
+            canonical_name="Gamma Officeholder",
+            first_name="Gamma",
+            last_name="Officeholder",
+        ),
+    )
+    insert_electoral_division_row(
+        conn,
+        division_id=_SHARED_COMMITTEE_DIVISION_ID,
+        name="NC gamma federal division",
+        division_type="congressional_district",
+        state="NC",
+        district_number="03",
+    )
+    insert_office_row(
+        conn,
+        office_id=_SHARED_COMMITTEE_OFFICE_ID,
+        name="us_house",
+        title="Representative",
+        state="NC",
+        electoral_division_id=_SHARED_COMMITTEE_DIVISION_ID,
+    )
+    insert_officeholding_row(
+        conn,
+        officeholding_id=_SHARED_COMMITTEE_OFFICEHOLDING_ID,
+        person_id=_SHARED_COMMITTEE_PERSON_ID,
+        office_id=_SHARED_COMMITTEE_OFFICE_ID,
+        electoral_division_id=_SHARED_COMMITTEE_DIVISION_ID,
+    )
+
+
+def _seed_shared_committee_candidate(
+    conn: psycopg.Connection,
+    *,
+    committee_id: UUID,
+    source_record_id: UUID,
+) -> None:
+    _seed_shared_committee_officeholder(conn)
+    insert_candidate_row(
+        conn,
+        CandidateRowSeed(
+            id=_SHARED_COMMITTEE_CANDIDATE_ID,
+            fec_candidate_id="H0NC03004",
+            name="Gamma Officeholder",
+            office="H",
+            person_id=_SHARED_COMMITTEE_PERSON_ID,
+            principal_committee_id=committee_id,
+            source_record_id=source_record_id,
+            state="NC",
+            district="03",
+        ),
+    )
+    insert_candidate_committee_link_row(
+        conn,
+        CandidateCommitteeLinkSeed(
+            id=_SHARED_COMMITTEE_LINK_ID,
+            candidate_id=_SHARED_COMMITTEE_CANDIDATE_ID,
+            committee_id=committee_id,
+            valid_period="[2024-01-01,2100-01-01)",
+            designation="J",
+            source_record_id=source_record_id,
+        ),
+    )
+
+
+def _seed_shared_committee_donation(
+    conn: psycopg.Connection,
+    *,
+    committee_id: UUID,
+    source_record_id: UUID,
+) -> None:
+    insert_filing_row(
+        conn,
+        FilingRowSeed(
+            id=_SHARED_COMMITTEE_FILING_ID,
+            filing_fec_id="donor-search-shared-committee-filing",
+            committee_id=committee_id,
+            amendment_indicator="N",
+            source_record_id=source_record_id,
+        ),
+    )
+    insert_transaction_row(
+        conn,
+        TransactionRowSeed(
+            id=_SHARED_COMMITTEE_TRANSACTION_ID,
+            filing_id=_SHARED_COMMITTEE_FILING_ID,
+            committee_id=committee_id,
+            transaction_type="15",
+            amount=Decimal("80.00"),
+            amendment_indicator="N",
+            source_record_id=source_record_id,
+            transaction_identifier="donor-search-shared-committee-donation",
+            transaction_date=date(2025, 6, 1),
+            contributor_name_raw="JOINT SMITH",
+            contributor_entity_type="IND",
+            contributor_employer="Shared Committee Fixture",
+            contributor_occupation="Engineer",
+            contributor_city="Durham",
+            contributor_state="NC",
+            contributor_zip="27701",
+            recipient_candidate_id=_SHARED_COMMITTEE_CANDIDATE_ID,
+            recipient_committee_id=committee_id,
+        ),
+    )
 
 
 def test_search_donors_by_name_rolls_up_current_federal_recipient_activity(
@@ -79,6 +215,34 @@ def test_search_donors_by_name_rolls_up_current_federal_recipient_activity(
     assert john["transaction_count"] == 1
     assert [recipient["person_id"] for recipient in john["recipients"]] == [fixture.alpha.person_id]
     assert john["recipients"][0]["person_id"] == fixture.alpha.person_id
+
+
+def test_search_donors_counts_shared_committee_transactions_once(db_conn: psycopg.Connection) -> None:
+    fixture = seed_donor_search_fixture(db_conn)
+    _seed_shared_committee_candidate(
+        db_conn,
+        committee_id=fixture.alpha.committee_id,
+        source_record_id=fixture.source_record_current,
+    )
+    _seed_shared_committee_donation(
+        db_conn,
+        committee_id=fixture.alpha.committee_id,
+        source_record_id=fixture.source_record_current,
+    )
+
+    payload = campaign_finance_queries.search_donors(db_conn, q="joint smith", by="name", limit=20, offset=0)
+
+    assert [row["contributor_name"] for row in payload["results"]] == ["JOINT SMITH"]
+    donor = payload["results"][0]
+    assert donor["total_amount"] == Decimal("80.00")
+    assert donor["transaction_count"] == 1
+    assert [
+        (recipient["person_id"], recipient["total_amount"], recipient["transaction_count"])
+        for recipient in donor["recipients"]
+    ] == [
+        (fixture.alpha.person_id, Decimal("80.00"), 1),
+        (_SHARED_COMMITTEE_PERSON_ID, Decimal("80.00"), 1),
+    ]
 
 
 def test_search_donors_supports_employer_and_zip_modes(db_conn: psycopg.Connection) -> None:

@@ -8,6 +8,9 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DONOR_SEARCH_INDEX_MIGRATION_FILE = REPO_ROOT / "core" / "schema" / "migrations" / "2026_07_09_donor_search_index.sql"
+DONOR_SEARCH_COMMITTEE_SCOPE_MIGRATION_FILE = (
+    REPO_ROOT / "core" / "schema" / "migrations" / "2026_07_24_donor_search_committee_scope_index.sql"
+)
 CANONICAL_TABLES_FILE = REPO_ROOT / "domains" / "campaign_finance" / "schema" / "tables.sql"
 DONOR_SEARCH_INDEX_NAMES = (
     "idx_transaction_contributor_name_lower_trgm",
@@ -19,10 +22,15 @@ DONOR_SEARCH_PARTIAL_INDEX_NAMES = (
     "idx_transaction_donor_search_employer_receipt_trgm",
     "idx_transaction_donor_search_zip5_receipt",
 )
+DONOR_SEARCH_COMMITTEE_SCOPE_INDEX_NAMES = ("idx_transaction_donor_search_name_receipt_committee_gin",)
 
 
 def _migration_sql() -> str:
     return DONOR_SEARCH_INDEX_MIGRATION_FILE.read_text(encoding="utf-8")
+
+
+def _committee_scope_migration_sql() -> str:
+    return DONOR_SEARCH_COMMITTEE_SCOPE_MIGRATION_FILE.read_text(encoding="utf-8")
 
 
 def _compact(sql: str) -> str:
@@ -76,8 +84,29 @@ def test_donor_search_index_migration_create_indexes_are_idempotent() -> None:
     assert len(create_index_clauses) == len(create_index_if_not_exists)
 
 
+def test_donor_search_committee_scope_index_migration_contract() -> None:
+    assert DONOR_SEARCH_COMMITTEE_SCOPE_MIGRATION_FILE.exists(), (
+        "Missing follow-up migration for scoped donor-search index: "
+        "core/schema/migrations/2026_07_24_donor_search_committee_scope_index.sql"
+    )
+    compact_sql = _compact(_committee_scope_migration_sql())
+
+    assert "create extension if not exists btree_gin" in compact_sql
+    assert (
+        "create index if not exists idx_transaction_donor_search_name_receipt_committee_gin "
+        "on cf.transaction using gin (lower(contributor_name_raw) gin_trgm_ops, committee_id)"
+    ) in compact_sql
+    assert "where contributor_name_raw is not null" in compact_sql
+    assert "and transaction_type like '1%'" in compact_sql
+    assert "and contributor_entity_type = 'ind'" in compact_sql
+    assert "and is_memo = false" in compact_sql
+    assert "and amendment_indicator != 't'" in compact_sql
+
+
 def test_donor_search_indexes_are_in_canonical_schema_once() -> None:
     canonical_sql = CANONICAL_TABLES_FILE.read_text(encoding="utf-8")
 
-    for index_name in DONOR_SEARCH_INDEX_NAMES + DONOR_SEARCH_PARTIAL_INDEX_NAMES:
+    for index_name in (
+        DONOR_SEARCH_INDEX_NAMES + DONOR_SEARCH_PARTIAL_INDEX_NAMES + DONOR_SEARCH_COMMITTEE_SCOPE_INDEX_NAMES
+    ):
         assert canonical_sql.count(index_name) == 1

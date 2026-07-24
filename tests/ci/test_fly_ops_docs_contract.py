@@ -50,6 +50,7 @@ def test_fly_runbook_documents_current_refresh_machine_model() -> None:
         "`civibus-db.internal:5432`",
         "database `civibus`",
         "Stage 3 Fly Refresh Deployment Evidence",
+        "Automatic scheduled-start acceptance remains pending",
     )
     for fragment in required_fragments:
         assert fragment in runbook_text
@@ -133,7 +134,9 @@ def test_roadmap_tracks_only_unresolved_stage4_and_rotation_work() -> None:
     roadmap_text = _read_text(ROADMAP_PATH)
     runbook_text = _read_text(RUNBOOK_PATH)
 
-    assert "Weekly refresh is implemented on Fly Machines" in runbook_text
+    assert "Weekly refresh is configured on one Fly Machine" in runbook_text
+    assert "Automatic scheduled-start acceptance remains pending" in runbook_text
+    assert "Weekly refresh is implemented on Fly Machines" not in runbook_text
     assert "App `civibus-refresh`" in runbook_text
     assert "`deploy.yml` is implemented for Fly serving apps" in runbook_text
     assert "corrected Stage 5 rotation evidence at HEAD" in runbook_text

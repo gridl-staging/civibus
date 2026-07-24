@@ -30,7 +30,7 @@ export type MethodologyJsonLdInput = BaseJsonLdInput & {
 
 export type DetailRouteJsonLdInput = BaseJsonLdInput & {
   schemaType: string;
-  name: string;
+  name: string | null;
   description?: string | null;
   imagePath?: string | null;
   sameAs?: string[] | null;

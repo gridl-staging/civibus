@@ -62,6 +62,7 @@ const CANDIDATE_DETAIL = {
   name: "Candidate One",
   slug: "candidate-one",
   slug_is_unique: true,
+  identity_is_safe: true,
   person_id: null,
   party: null,
   office: "H",
@@ -135,6 +136,7 @@ const COMMITTEE_IE_ACTIVITY = {
       district: "01",
       slug: "target-candidate",
       slug_is_unique: true,
+      identity_is_safe: true,
       support_total: "1500.00",
       oppose_total: "250.00",
       transaction_count: 3,
@@ -199,7 +201,8 @@ const CANDIDATE_LIST_RESPONSE = {
       state: "NC",
       district: "01",
       slug: "candidate-one",
-      slug_is_unique: true
+      slug_is_unique: true,
+      identity_is_safe: true
     }
   ],
   has_next: true,
@@ -309,7 +312,8 @@ const CANDIDATE_SLUG_MATCHES = [
     state: "NC",
     district: "01",
     slug: "candidate-one",
-    slug_is_unique: false
+    slug_is_unique: false,
+    identity_is_safe: true
   },
   {
     id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
@@ -320,7 +324,8 @@ const CANDIDATE_SLUG_MATCHES = [
     state: "NC",
     district: "02",
     slug: "candidate-one",
-    slug_is_unique: false
+    slug_is_unique: false,
+    identity_is_safe: true
   }
 ];
 
@@ -955,6 +960,55 @@ describe("campaign-finance detail api", () => {
     ]);
   });
 
+  it("keeps candidate IE 404s as transport failures in the streamed bundle", async () => {
+    const requestJson = vi.fn(async (path: string) => {
+      if (path === buildCandidateDetailPath(CANDIDATE_ID)) {
+        return CANDIDATE_DETAIL;
+      }
+      if (path === buildCandidateSummaryPath(CANDIDATE_ID)) {
+        return {
+          ...SELECTED_CYCLE_FIELDS,
+          candidate_id: CANDIDATE_ID,
+          candidate_name: "Candidate One",
+          total_raised: "0.00",
+          total_spent: "0.00",
+          net: "0.00",
+          transaction_count: 0,
+          committees: [],
+          cash_on_hand: null,
+          net_self_funding: null,
+          summary_source: "derived" as const,
+          itemized_transaction_count: 0,
+          receipt_source_composition: [],
+          selected_cycle_coverage_complete: false,
+          can_render_share: false,
+          receipt_source_caveats: [],
+          coverage: {
+            activity_state: "not_loaded",
+            completeness: "unknown",
+            basis: "no_authoritative_load_evidence"
+          }
+        };
+      }
+      if (
+        path === buildCandidateIndependentExpendituresPath(CANDIDATE_ID) ||
+        path === buildCandidateIndependentExpendituresSummaryPath(CANDIDATE_ID)
+      ) {
+        throw new ApiResponseError(404, { detail: "Candidate IE data unavailable" });
+      }
+
+      throw new Error(`unexpected path: ${path}`);
+    });
+
+    const bundle = await fetchCandidateDetailBundle(
+      { requestJson: requestJson as ApiClient["requestJson"] },
+      { id: CANDIDATE_ID }
+    );
+
+    await expect(bundle.ieTransactions).rejects.toMatchObject({ status: 404 });
+    await expect(bundle.ieSummary).rejects.toMatchObject({ status: 404 });
+  });
+
   it("fetches candidate list using URLSearchParams serialization and preserves envelope payloads", async () => {
     const requestJson = vi.fn(async (path: string) => {
       void path;
@@ -1084,7 +1138,8 @@ describe("campaign-finance detail api", () => {
               state: "NC",
               district: "01",
               slug: "candidate-one",
-              slug_is_unique: true
+              slug_is_unique: true,
+              identity_is_safe: true
             }
           ],
           has_next: false,
@@ -1249,7 +1304,8 @@ describe("campaign-finance detail api", () => {
               state: "NC",
               district: "01",
               slug: "candidate-one",
-              slug_is_unique: true
+              slug_is_unique: true,
+              identity_is_safe: true
             }
           ],
           has_next: false,

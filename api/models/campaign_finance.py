@@ -44,6 +44,7 @@ class CandidateResponse(BaseModel):
     name: str
     slug: str
     slug_is_unique: bool
+    identity_is_safe: bool
     person_id: UUID | None = None
     party: str | None = None
     office: str
@@ -160,6 +161,23 @@ class TopSpenderEntry(BaseModel):
     transaction_count: int
 
 
+CandidateMoneyActivityState = Literal["populated", "loaded_zero", "not_loaded"]
+CandidateMoneyCompleteness = Literal["complete", "partial", "unknown"]
+CandidateMoneyEvidenceBasis = Literal[
+    "fec_official_candidate_summary",
+    "qualifying_transactions",
+    "fec_schedule_e_transactions",
+    "authoritative_load_evidence",
+    "no_authoritative_load_evidence",
+]
+
+
+class CandidateMoneyCoverage(BaseModel):
+    activity_state: CandidateMoneyActivityState
+    completeness: CandidateMoneyCompleteness
+    basis: CandidateMoneyEvidenceBasis
+
+
 class IndependentExpenditureSummary(BaseModel):
     candidate_id: UUID
     selected_cycle: int
@@ -175,6 +193,7 @@ class IndependentExpenditureSummary(BaseModel):
     # ``support_total`` / ``oppose_total`` / ``support_count`` / ``oppose_count`` /
     # ``top_spenders`` and counted here. The raw IE list endpoint stays source-faithful.
     excluded_outlier_count: int = 0
+    coverage: CandidateMoneyCoverage
 
 
 class CommitteeIndependentExpenditureTarget(BaseModel):
@@ -188,6 +207,7 @@ class CommitteeIndependentExpenditureTarget(BaseModel):
     district: str | None = None
     slug: str
     slug_is_unique: bool
+    identity_is_safe: bool
     support_total: Decimal
     oppose_total: Decimal
     transaction_count: int
@@ -352,6 +372,7 @@ class CandidateListItem(BaseModel):
     district: str | None = None
     slug: str
     slug_is_unique: bool
+    identity_is_safe: bool
 
 
 class CommitteeListItem(BaseModel):
@@ -508,6 +529,7 @@ class CandidateFundraisingSummary(BaseModel):
     can_render_share: bool = False
     receipt_source_caveats: list[str] = Field(default_factory=list)
     debts_owed_by_committee: Decimal | None = None
+    coverage: CandidateMoneyCoverage
 
 
 StateCoverageTier = Literal[

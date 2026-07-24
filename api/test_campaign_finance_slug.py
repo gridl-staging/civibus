@@ -430,6 +430,143 @@ def test_candidate_list_slug_is_unique_reflects_global_uniqueness(
     assert unique_candidate["slug_is_unique"] is True
 
 
+def test_candidate_identity_safety_is_exposed_on_slug_list_and_detail_surfaces(
+    api_client: TestClient,
+    db_conn: psycopg.Connection,
+) -> None:
+    seeds = [
+        CandidateRowSeed(
+            id=UUID("00000000-0000-0000-0000-000000000721"),
+            fec_candidate_id="H0NC21001",
+            name="212 N HALF  W. JOHN, RODNEY HOWARD MR.",
+            office="H",
+            state="NC",
+        ),
+        CandidateRowSeed(
+            id=UUID("00000000-0000-0000-0000-000000000722"),
+            fec_candidate_id="H0NC22001",
+            name="375 ROB ROY DR, DAVID J SR SR",
+            office="H",
+            state="NC",
+        ),
+        CandidateRowSeed(
+            id=UUID("00000000-0000-0000-0000-000000000723"),
+            fec_candidate_id="H0NC23001",
+            name="!!!",
+            office="H",
+            state="NC",
+        ),
+        CandidateRowSeed(
+            id=UUID("00000000-0000-0000-0000-000000000724"),
+            fec_candidate_id="H0NC24001",
+            name="SOLOMON, GAVIN",
+            office="H",
+            state="NC",
+        ),
+        CandidateRowSeed(
+            id=UUID("00000000-0000-0000-0000-000000000725"),
+            fec_candidate_id="S0GA25001",
+            name="SOLOMON, GAVIN",
+            office="S",
+            state="GA",
+        ),
+        CandidateRowSeed(
+            id=UUID("00000000-0000-0000-0000-000000000726"),
+            fec_candidate_id="H0NC26001",
+            name="ADLAKHA, SARAH ANNE DR",
+            office="H",
+            state="NC",
+        ),
+        CandidateRowSeed(
+            id=UUID("00000000-0000-0000-0000-000000000727"),
+            fec_candidate_id="H0NC27001",
+            name="Pat Candidate",
+            office="H",
+            state="NC",
+        ),
+    ]
+    for seed in seeds:
+        insert_candidate_row(db_conn, seed)
+
+    expected = {
+        "00000000-0000-0000-0000-000000000721": {
+            "slug": "212-n-half-w-john-rodney-howard-mr",
+            "slug_is_unique": True,
+            "identity_is_safe": False,
+        },
+        "00000000-0000-0000-0000-000000000722": {
+            "slug": "375-rob-roy-dr-david-j-sr-sr",
+            "slug_is_unique": True,
+            "identity_is_safe": False,
+        },
+        "00000000-0000-0000-0000-000000000723": {
+            "slug": "",
+            "slug_is_unique": True,
+            "identity_is_safe": False,
+        },
+        "00000000-0000-0000-0000-000000000724": {
+            "slug": "solomon-gavin",
+            "slug_is_unique": False,
+            "identity_is_safe": True,
+        },
+        "00000000-0000-0000-0000-000000000725": {
+            "slug": "solomon-gavin",
+            "slug_is_unique": False,
+            "identity_is_safe": True,
+        },
+        "00000000-0000-0000-0000-000000000726": {
+            "slug": "adlakha-sarah-anne-dr",
+            "slug_is_unique": True,
+            "identity_is_safe": True,
+        },
+        "00000000-0000-0000-0000-000000000727": {
+            "slug": "pat-candidate",
+            "slug_is_unique": True,
+            "identity_is_safe": True,
+        },
+    }
+
+    list_response = api_client.get("/v1/candidates?limit=50")
+    assert list_response.status_code == 200
+    listed_by_id = {item["id"]: item for item in list_response.json()["items"]}
+    assert {candidate_id: listed_by_id[candidate_id] for candidate_id in expected} == {
+        candidate_id: {
+            **listed_by_id[candidate_id],
+            "slug": fields["slug"],
+            "slug_is_unique": fields["slug_is_unique"],
+            "identity_is_safe": fields["identity_is_safe"],
+        }
+        for candidate_id, fields in expected.items()
+    }
+
+    for candidate_id, fields in expected.items():
+        detail_response = api_client.get(f"/v1/candidates/{candidate_id}")
+        assert detail_response.status_code == 200
+        detail = detail_response.json()
+        assert detail["slug"] == fields["slug"]
+        assert detail["slug_is_unique"] is fields["slug_is_unique"]
+        assert detail["identity_is_safe"] is fields["identity_is_safe"]
+
+    by_slug_expectations = {
+        "212-n-half-w-john-rodney-howard-mr": [("00000000-0000-0000-0000-000000000721", False)],
+        "375-rob-roy-dr-david-j-sr-sr": [("00000000-0000-0000-0000-000000000722", False)],
+        "solomon-gavin": [
+            ("00000000-0000-0000-0000-000000000724", True),
+            ("00000000-0000-0000-0000-000000000725", True),
+        ],
+        "adlakha-sarah-anne-dr": [("00000000-0000-0000-0000-000000000726", True)],
+        "pat-candidate": [("00000000-0000-0000-0000-000000000727", True)],
+    }
+    for slug, expected_matches in by_slug_expectations.items():
+        slug_response = api_client.get(f"/v1/candidates/by-slug/{slug}")
+        assert slug_response.status_code == 200
+        matches = slug_response.json()
+        assert [(item["id"], item["identity_is_safe"]) for item in matches] == expected_matches
+        for item in matches:
+            assert item["slug"] == slug
+            assert item["slug_is_unique"] is expected[item["id"]]["slug_is_unique"]
+
+
 # ---------------------------------------------------------------------------
 # Committee list endpoint tests
 # ---------------------------------------------------------------------------

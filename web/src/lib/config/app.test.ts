@@ -39,10 +39,14 @@ describe('APP_SHELL shared static-route contract', () => {
     expect(APP_SHELL.shellNavigation).toEqual([
       { label: 'Home', href: '/' },
       { label: 'Search', href: '/search' },
-      { label: 'Donor Lookup', href: '/donors' },
+      { label: 'Candidates', href: '/candidates' },
+      { label: 'Committees', href: '/committees' },
       { label: 'Congress', href: '/congress' },
+      { label: 'Developers', href: '/developers' },
       { label: 'Methodology', href: '/methodology' }
     ]);
+    expect(APP_SHELL.shellNavigation).not.toContainEqual({ label: 'Compare', href: '/compare' });
+    expect(APP_SHELL.shellNavigation).not.toContainEqual({ label: 'Donor Lookup', href: '/donors' });
   });
 
   it('keeps federal landing action and coverage summary copy in shared config', () => {

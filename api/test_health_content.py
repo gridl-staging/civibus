@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import importlib
 import sys
+from datetime import datetime, timedelta, timezone
 from types import ModuleType
 from unittest.mock import MagicMock
 
@@ -25,7 +26,14 @@ from api._federal_first_test_support import (
     FEDERAL_FIRST_COUNTS,
     FEDERAL_FIRST_FLOORS,
     FakeConnection,
+    fresh_federal_fec_bulk_pull_row,
 )
+
+FEC_FRESHNESS_CHECK = "campaign_finance_federal_fec_fresh"
+FIXED_NOW = datetime(2026, 7, 24, 12, 0, tzinfo=timezone.utc)
+FEC_FRESHNESS_CUTOFF = datetime(2026, 7, 17, 12, 0, tzinfo=timezone.utc)
+FEC_FRESHNESS_CUTOFF_EPOCH = 1_784_289_600
+FEC_FRESHNESS_STALE_EPOCH = 1_784_289_599
 
 EXPECTED_FEDERAL_FIRST_CHECKS = {
     "cf_transaction_total",
@@ -36,6 +44,14 @@ EXPECTED_FEDERAL_FIRST_CHECKS = {
     "cf_transaction_with_support_oppose",
     "cf_transaction_contribution_insights_sentinel",
 }
+
+
+def _healthy_counts() -> list[int]:
+    return list(FEDERAL_FIRST_COUNTS.values())
+
+
+def _healthy_connection(*, freshness_result: tuple[object, ...] | None) -> FakeConnection:
+    return FakeConnection(_healthy_counts(), freshness_result=freshness_result)
 
 
 def _load_api_main(monkeypatch: pytest.MonkeyPatch) -> ModuleType:
@@ -111,7 +127,10 @@ def test_evaluate_content_health_returns_empty_when_all_floors_met() -> None:
     }
     # Every count is at least the floor — this is a healthy DB.
     counts = [100, 10, 5, 50, 20, 5, 25]
-    failures = evaluate_content_health(FakeConnection(counts), floors=floors)
+    failures = evaluate_content_health(
+        FakeConnection(counts, freshness_result=fresh_federal_fec_bulk_pull_row()),
+        floors=floors,
+    )
 
     assert failures == []
 
@@ -122,7 +141,7 @@ def test_evaluate_content_health_accepts_federal_first_floors() -> None:
     counts = list(FEDERAL_FIRST_COUNTS.values())
 
     failures = evaluate_content_health(
-        FakeConnection(counts),
+        FakeConnection(counts, freshness_result=fresh_federal_fec_bulk_pull_row()),
         floors=FEDERAL_FIRST_FLOORS,
     )
 
@@ -135,9 +154,12 @@ def test_evaluate_content_health_rejects_federal_floor_above_actual(check_name: 
 
     floors = dict(FEDERAL_FIRST_FLOORS)
     floors[check_name] = FEDERAL_FIRST_COUNTS[check_name] + 1
-    counts = list(FEDERAL_FIRST_COUNTS.values())
+    counts = _healthy_counts()
 
-    failures = evaluate_content_health(FakeConnection(counts), floors=floors)
+    failures = evaluate_content_health(
+        FakeConnection(counts, freshness_result=fresh_federal_fec_bulk_pull_row()),
+        floors=floors,
+    )
 
     assert len(failures) == 1
     assert failures[0].check == check_name
@@ -159,7 +181,10 @@ def test_evaluate_content_health_flags_table_below_floor() -> None:
     }
     # cf.transaction returning 0 is the literal Apr 30 failure mode.
     counts = [0, 5_000, 500, 2_500, 32_404, 1, 1]
-    failures = evaluate_content_health(FakeConnection(counts), floors=floors)
+    failures = evaluate_content_health(
+        FakeConnection(counts, freshness_result=fresh_federal_fec_bulk_pull_row()),
+        floors=floors,
+    )
 
     assert len(failures) == 1
     failure = failures[0]
@@ -173,7 +198,7 @@ def test_evaluate_content_health_runs_expected_sql_queries() -> None:
     schema/table names that a smoke test would miss."""
     from api.health_content import evaluate_content_health
 
-    fake = FakeConnection([100, 10, 5, 50, 20, 5, 25])
+    fake = FakeConnection([100, 10, 5, 50, 20, 5, 25], freshness_result=fresh_federal_fec_bulk_pull_row())
     evaluate_content_health(
         fake,
         floors={
@@ -218,6 +243,20 @@ def test_evaluate_content_health_runs_expected_sql_queries() -> None:
         )
         for q in executed
     ), executed
+    freshness_query = executed[-1]
+    freshness_params = fake._cursor.executed_params[-1]
+    assert "MAX(last_pull_at)" in freshness_query
+    assert "FROM core.data_source" in freshness_query
+    assert "last_pull_status = %s" in freshness_query
+    assert "core.source_record" not in freshness_query
+    assert "core.refresh_run" not in freshness_query
+    assert "copied" not in freshness_query.lower()
+    assert freshness_params == (
+        "campaign_finance",
+        "federal/fec",
+        "FEC Bulk Data",
+        "success",
+    )
 
 
 def test_evaluate_content_health_reports_contribution_insights_floor_values() -> None:
@@ -228,13 +267,90 @@ def test_evaluate_content_health_reports_contribution_insights_floor_values() ->
     floors["cf_transaction_contribution_insights_sentinel"] = 42
     counts = [100, 10, 5, 50, 20, 5, 41]
 
-    failures = evaluate_content_health(FakeConnection(counts), floors=floors)
+    failures = evaluate_content_health(
+        FakeConnection(counts, freshness_result=fresh_federal_fec_bulk_pull_row()),
+        floors=floors,
+    )
 
     assert failures == [
         ContentHealthFailure(
             check="cf_transaction_contribution_insights_sentinel",
             actual=41,
             floor=42,
+        )
+    ]
+
+
+@pytest.mark.parametrize(
+    "freshness_result",
+    [
+        (FEC_FRESHNESS_CUTOFF,),
+        (FEC_FRESHNESS_CUTOFF + timedelta(seconds=1),),
+    ],
+)
+def test_evaluate_content_health_accepts_fec_bulk_freshness_at_boundary_or_newer(
+    freshness_result: tuple[datetime],
+) -> None:
+    from api.health_content import evaluate_content_health
+
+    failures = evaluate_content_health(
+        _healthy_connection(freshness_result=freshness_result),
+        floors=FEDERAL_FIRST_FLOORS,
+        now=FIXED_NOW,
+    )
+
+    assert failures == []
+
+
+def test_evaluate_content_health_rejects_stale_fec_bulk_freshness_with_source_epoch() -> None:
+    from api.health_content import ContentHealthFailure
+    from api.health_content import evaluate_content_health
+
+    failures = evaluate_content_health(
+        _healthy_connection(freshness_result=(FEC_FRESHNESS_CUTOFF - timedelta(seconds=1),)),
+        floors=FEDERAL_FIRST_FLOORS,
+        now=FIXED_NOW,
+    )
+
+    assert failures == [
+        ContentHealthFailure(
+            check=FEC_FRESHNESS_CHECK,
+            actual=FEC_FRESHNESS_STALE_EPOCH,
+            floor=FEC_FRESHNESS_CUTOFF_EPOCH,
+        )
+    ]
+
+
+@pytest.mark.parametrize(
+    ("case_name", "freshness_result"),
+    [
+        ("null", (None,)),
+        ("non_success_canonical_row", (None,)),
+        ("future", (FIXED_NOW + timedelta(seconds=1),)),
+        ("malformed", ("2026-07-24T12:00:00Z",)),
+        ("naive_datetime", (datetime(2026, 7, 24, 12, 0),)),
+        ("aggregate_no_row", None),
+    ],
+)
+def test_evaluate_content_health_rejects_indeterminate_fec_bulk_freshness(
+    case_name: str,
+    freshness_result: tuple[object, ...] | None,
+) -> None:
+    from api.health_content import ContentHealthFailure
+    from api.health_content import evaluate_content_health
+
+    failures = evaluate_content_health(
+        _healthy_connection(freshness_result=freshness_result),
+        floors=FEDERAL_FIRST_FLOORS,
+        now=FIXED_NOW,
+    )
+
+    assert case_name
+    assert failures == [
+        ContentHealthFailure(
+            check=FEC_FRESHNESS_CHECK,
+            actual=0,
+            floor=FEC_FRESHNESS_CUTOFF_EPOCH,
         )
     ]
 

@@ -95,7 +95,7 @@ def test_main_uses_fallback_lock_when_primary_lock_path_setup_fails(
     monkeypatch.setattr(
         runner,
         "run_all_jobs",
-        lambda connection, jobs, dry_run, force, on_result: [
+        lambda connection, jobs, dry_run, force, on_result, stop_on_failure=False: [
             runner.RefreshRunResult(
                 key="federal-congress-spine",
                 status="success",

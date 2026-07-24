@@ -4,6 +4,9 @@ import {
   COMMITTEES_PAGE_PATH,
   COMMITTEE_FILINGS_WINDOW_LIMIT,
   COMMITTEE_TRANSACTIONS_LIMIT,
+  CANDIDATE_MONEY_ACTIVITY_STATES,
+  CANDIDATE_MONEY_COMPLETENESS_VALUES,
+  CANDIDATE_MONEY_EVIDENCE_BASIS_VALUES,
   buildCandidateDetailPath,
   buildCandidateHref,
   buildCandidateIndependentExpendituresPath,
@@ -37,6 +40,7 @@ import {
   type CommitteeFundraisingSummary,
   type CommitteeIndependentExpenditureActivity,
   type CandidateFundraisingSummary,
+  type CandidateMoneyCoverage,
   type IndependentExpenditureSummary,
   type PersonContributionInsights
 } from "./contract";
@@ -49,10 +53,27 @@ const SELECTED_CYCLE_FIELDS = {
   coverage_end_date: "2026-12-31",
   available_cycles: [2022, 2024, 2026]
 };
+const POPULATED_COVERAGE: CandidateMoneyCoverage = {
+  activity_state: "populated",
+  completeness: "complete",
+  basis: "fec_official_candidate_summary"
+};
 
 function expectType<T extends true>(): void {}
 
 describe("campaign-finance detail contract", () => {
+  it("mirrors the backend-owned candidate money coverage vocabulary", () => {
+    expect(CANDIDATE_MONEY_ACTIVITY_STATES).toEqual(["populated", "loaded_zero", "not_loaded"]);
+    expect(CANDIDATE_MONEY_COMPLETENESS_VALUES).toEqual(["complete", "partial", "unknown"]);
+    expect(CANDIDATE_MONEY_EVIDENCE_BASIS_VALUES).toEqual([
+      "fec_official_candidate_summary",
+      "qualifying_transactions",
+      "fec_schedule_e_transactions",
+      "authoritative_load_evidence",
+      "no_authoritative_load_evidence"
+    ]);
+  });
+
   it("builds backend-owned committee and candidate detail paths", () => {
     expect(buildCommitteeDetailPath(COMMITTEE_ID)).toBe(`/v1/committees/${COMMITTEE_ID}`);
     expect(buildCandidateDetailPath(CANDIDATE_ID)).toBe(`/v1/candidates/${CANDIDATE_ID}`);
@@ -252,7 +273,8 @@ describe("campaign-finance detail contract", () => {
       receipt_source_composition: [],
       selected_cycle_coverage_complete: false,
       can_render_share: false,
-      receipt_source_caveats: []
+      receipt_source_caveats: [],
+      coverage: POPULATED_COVERAGE
     } satisfies import("./contract").CandidateFundraisingSummary;
 
     const derivedSummary = {
@@ -274,7 +296,12 @@ describe("campaign-finance detail contract", () => {
       receipt_source_composition: [],
       selected_cycle_coverage_complete: false,
       can_render_share: false,
-      receipt_source_caveats: []
+      receipt_source_caveats: [],
+      coverage: {
+        activity_state: "not_loaded",
+        completeness: "unknown",
+        basis: "no_authoritative_load_evidence"
+      }
     } satisfies import("./contract").CandidateFundraisingSummary;
 
     expect(weballSummary.cash_on_hand).toBe("5500.00");
@@ -305,7 +332,8 @@ describe("campaign-finance detail contract", () => {
       receipt_source_composition: [],
       selected_cycle_coverage_complete: false,
       can_render_share: false,
-      receipt_source_caveats: []
+      receipt_source_caveats: [],
+      coverage: POPULATED_COVERAGE
     };
     const committeeSummary: CommitteeFundraisingSummary = {
       committee_id: COMMITTEE_ID,
@@ -346,7 +374,12 @@ describe("campaign-finance detail contract", () => {
       selected_cycle: 2026,
       coverage_start_date: "2025-01-01",
       coverage_end_date: "2026-12-31",
-      available_cycles: [2022, 2024, 2026]
+      available_cycles: [2022, 2024, 2026],
+      coverage: {
+        activity_state: "populated",
+        completeness: "partial",
+        basis: "fec_schedule_e_transactions"
+      }
     };
 
     expect(candidateSummary.selected_cycle).toBe(2026);
@@ -415,6 +448,7 @@ describe("Stage 1 slug fields on detail responses", () => {
       name: "Jane Smith",
       slug: "jane-smith",
       slug_is_unique: true,
+      identity_is_safe: true,
       person_id: null,
       party: "DEM",
       office: "H",
@@ -461,7 +495,8 @@ describe("campaign-finance list item and envelope types", () => {
     state: "NC",
     district: "01",
     slug: "jane-smith",
-    slug_is_unique: true
+    slug_is_unique: true,
+    identity_is_safe: true
   };
 
   const committeeListItem: CommitteeListItem = {
@@ -662,19 +697,51 @@ describe("buildCommitteesPagePath", () => {
 });
 
 describe("buildCandidateHref and buildCommitteeHref", () => {
-  it("uses slug path when slug_is_unique is true", () => {
-    expect(
-      buildCandidateHref({ id: CANDIDATE_ID, slug: "jane-smith", slug_is_unique: true })
-    ).toBe("/candidate/jane-smith");
+  it("uses candidate slug path only when the backend marks the identity safe and slug unique", () => {
+    const candidate = {
+      id: CANDIDATE_ID,
+      slug: "jane-smith",
+      slug_is_unique: true,
+      identity_is_safe: true
+    };
+
+    expect(buildCandidateHref(candidate)).toBe("/candidate/jane-smith");
   });
 
-  it("falls back to UUID path when slug_is_unique is false", () => {
-    expect(
-      buildCandidateHref({ id: CANDIDATE_ID, slug: "john-smith", slug_is_unique: false })
-    ).toBe(`/candidate/${CANDIDATE_ID}`);
+  it("falls back to candidate UUID when the backend marks the identity unsafe", () => {
+    const candidate = {
+      id: CANDIDATE_ID,
+      slug: "212-n-half-w-john-rodney-howard-mr",
+      slug_is_unique: true,
+      identity_is_safe: false
+    };
+
+    expect(buildCandidateHref(candidate)).toBe(`/candidate/${CANDIDATE_ID}`);
   });
 
-  it("uses slug path for committees when unique", () => {
+  it("falls back to candidate UUID when the normalized slug is empty", () => {
+    const candidate = {
+      id: CANDIDATE_ID,
+      slug: "",
+      slug_is_unique: true,
+      identity_is_safe: true
+    };
+
+    expect(buildCandidateHref(candidate)).toBe(`/candidate/${CANDIDATE_ID}`);
+  });
+
+  it("falls back to candidate UUID when slug_is_unique is false", () => {
+    const candidate = {
+      id: CANDIDATE_ID,
+      slug: "john-smith",
+      slug_is_unique: false,
+      identity_is_safe: true
+    };
+
+    expect(buildCandidateHref(candidate)).toBe(`/candidate/${CANDIDATE_ID}`);
+  });
+
+  it("preserves committee slug path behavior when slug_is_unique is true", () => {
     expect(
       buildCommitteeHref({ id: COMMITTEE_ID, slug: "friends-of-jane", slug_is_unique: true })
     ).toBe("/committee/friends-of-jane");
@@ -687,9 +754,20 @@ describe("buildCandidateHref and buildCommitteeHref", () => {
   });
 
   it("encodes special characters in slug href paths", () => {
+    const candidate = {
+      id: CANDIDATE_ID,
+      slug: "a/b",
+      slug_is_unique: true,
+      identity_is_safe: true
+    };
+
+    expect(buildCandidateHref(candidate)).toBe("/candidate/a%2Fb");
+  });
+
+  it("preserves committee special character encoding", () => {
     expect(
-      buildCandidateHref({ id: CANDIDATE_ID, slug: "a/b", slug_is_unique: true })
-    ).toBe("/candidate/a%2Fb");
+      buildCommitteeHref({ id: COMMITTEE_ID, slug: "a/b", slug_is_unique: true })
+    ).toBe("/committee/a%2Fb");
   });
 });
 
@@ -765,7 +843,8 @@ describe("Stage 5 contract fields", () => {
           state: "NC",
           district: "01",
           slug: "linked-candidate",
-          slug_is_unique: true
+          slug_is_unique: true,
+          identity_is_safe: true
         }
       ]
     };
@@ -882,7 +961,8 @@ describe("Stage 5 contract fields", () => {
       receipt_source_composition: [],
       selected_cycle_coverage_complete: false,
       can_render_share: false,
-      receipt_source_caveats: []
+      receipt_source_caveats: [],
+      coverage: POPULATED_COVERAGE
     } satisfies import("./contract").CandidateFundraisingSummary;
     expect(summary.itemized_transaction_count).toBe(42);
     expect(summary.transaction_count).toBe(summary.itemized_transaction_count);
@@ -898,7 +978,12 @@ describe("Stage 5 contract fields", () => {
       support_count: 10,
       oppose_count: 5,
       top_spenders: [],
-      excluded_outlier_count: 2
+      excluded_outlier_count: 2,
+      coverage: {
+        activity_state: "populated",
+        completeness: "partial",
+        basis: "fec_schedule_e_transactions"
+      }
     };
     expect(summary.excluded_outlier_count).toBe(2);
   });
@@ -922,6 +1007,7 @@ describe("Stage 5 contract fields", () => {
           district: "01",
           slug: "target-candidate",
           slug_is_unique: true,
+          identity_is_safe: true,
           support_total: "1500.00",
           oppose_total: "250.00",
           transaction_count: 3,

@@ -26,6 +26,7 @@ from api._federal_first_test_support import (
     FEDERAL_FIRST_COUNTS,
     FEDERAL_FIRST_FLOORS,
     FakeConnection,
+    fresh_federal_fec_bulk_pull_row,
     set_federal_floor_env,
 )
 
@@ -172,7 +173,10 @@ def test_canary_exits_zero_with_federal_first_floors(monkeypatch: pytest.MonkeyP
     set_federal_floor_env(monkeypatch, FEDERAL_FIRST_FLOORS)
     canary = _fresh_canary_module()
 
-    fake_connection = FakeConnection(list(FEDERAL_FIRST_COUNTS.values()))
+    fake_connection = FakeConnection(
+        list(FEDERAL_FIRST_COUNTS.values()),
+        freshness_result=fresh_federal_fec_bulk_pull_row(),
+    )
     monkeypatch.setattr(canary, "get_connection", lambda: fake_connection)
 
     assert canary.main() == 0
@@ -190,7 +194,10 @@ def test_canary_exits_one_when_any_federal_floor_exceeds_actual(
     set_federal_floor_env(monkeypatch, floors)
     canary = _fresh_canary_module()
 
-    fake_connection = FakeConnection(list(FEDERAL_FIRST_COUNTS.values()))
+    fake_connection = FakeConnection(
+        list(FEDERAL_FIRST_COUNTS.values()),
+        freshness_result=fresh_federal_fec_bulk_pull_row(),
+    )
     monkeypatch.setattr(canary, "get_connection", lambda: fake_connection)
 
     assert canary.main() == 1

@@ -140,8 +140,13 @@ function createPersonRouteApi(cycle?: number) {
       selected_cycle_coverage_complete: true,
       can_render_share: true,
       receipt_source_caveats: [],
-      committees: []
-    };
+      committees: [],
+      coverage: {
+        activity_state: "populated",
+        completeness: "complete",
+        basis: "fec_official_candidate_summary"
+      }
+      };
     }
 
     if (path === `/v1/candidates/${CANDIDATE_ID}/independent-expenditures${selectedCycleQuery}`) {

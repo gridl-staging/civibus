@@ -64,6 +64,7 @@ describe("campaign finance detail presentation", () => {
       name: "Candidate One",
       slug: "candidate-one",
       slug_is_unique: true,
+      identity_is_safe: true,
       person_id: PERSON_ID,
       party: "DEM",
       office: "H",
@@ -185,8 +186,25 @@ describe("campaign finance detail presentation", () => {
   });
 
   it("builds candidate metadata from canonical candidate name", () => {
-    expect(buildCandidateDetailMetadata("Candidate One")).toEqual({
+    const shell = buildCandidateDetailShellPresentation(DEFAULT_CANDIDATE_DETAIL);
+
+    expect(buildCandidateDetailMetadata(shell)).toEqual({
       title: "Candidate One | Candidate | Civibus",
+      description: "Candidate profile from campaign-finance records."
+    });
+  });
+
+  it("builds the screen-specified neutral title for an unsafe candidate identity", () => {
+    const shell = buildCandidateDetailShellPresentation({
+      ...DEFAULT_CANDIDATE_DETAIL,
+      name: "212 N HALF  W. JOHN, RODNEY HOWARD MR.",
+      slug: "212-n-half-w-john-rodney-howard-mr",
+      slug_is_unique: true,
+      identity_is_safe: false
+    });
+
+    expect(buildCandidateDetailMetadata(shell)).toEqual({
+      title: "Candidate record | Civibus",
       description: "Candidate profile from campaign-finance records."
     });
   });
@@ -201,6 +219,38 @@ describe("campaign finance detail presentation", () => {
     const shell = buildCandidateDetailShellPresentation({ ...DEFAULT_CANDIDATE_DETAIL, name: "" });
 
     expect(shell.canonicalName).toBe("Candidate");
+  });
+
+  it("uses neutral public identity text for unsafe candidate names while preserving the FEC-filed fact", () => {
+    const unsafeName = "212 N HALF  W. JOHN, RODNEY HOWARD MR.";
+    const shell = buildCandidateDetailShellPresentation({
+      ...DEFAULT_CANDIDATE_DETAIL,
+      name: unsafeName,
+      slug: "212-n-half-w-john-rodney-howard-mr",
+      slug_is_unique: true,
+      identity_is_safe: false
+    });
+
+    expect(shell.canonicalName).toBe("Candidate record");
+    expect(shell.identityQualifier).toBe("FEC-filed candidate name needs review.");
+    expect(shell.factRows).toContainEqual({
+      label: "FEC-filed candidate name",
+      value: unsafeName,
+      href: null
+    });
+  });
+
+  it("keeps well-formed candidate names as public identity text", () => {
+    const shell = buildCandidateDetailShellPresentation({
+      ...DEFAULT_CANDIDATE_DETAIL,
+      name: "Pat Candidate",
+      slug: "pat-candidate",
+      slug_is_unique: true,
+      identity_is_safe: true
+    });
+
+    expect(shell.canonicalName).toBe("Pat Candidate");
+    expect(shell.identityQualifier).toBeNull();
   });
 
   it("builds committee route metadata from shell-only detail (no transaction count)", () => {
@@ -241,7 +291,8 @@ describe("campaign finance detail presentation", () => {
           state: "NC",
           district: "01",
           slug: "candidate-one",
-          slug_is_unique: true
+          slug_is_unique: true,
+          identity_is_safe: true
         },
         {
           id: "99999999-9999-4999-8999-999999999999",
@@ -252,7 +303,8 @@ describe("campaign finance detail presentation", () => {
           state: "NC",
           district: "02",
           slug: "candidate-one",
-          slug_is_unique: false
+          slug_is_unique: false,
+          identity_is_safe: true
         }
       ]
     });
@@ -381,6 +433,7 @@ describe("campaign finance detail presentation", () => {
           district: "01",
           slug: "target-candidate",
           slug_is_unique: true,
+          identity_is_safe: true,
           support_total: "1500.00",
           oppose_total: "250.00",
           transaction_count: 3,
@@ -447,6 +500,7 @@ describe("campaign finance detail presentation", () => {
           district: "01",
           slug: "duplicate-name",
           slug_is_unique: false,
+          identity_is_safe: true,
           support_total: "100.00",
           oppose_total: "0.00",
           transaction_count: 1,
@@ -473,6 +527,7 @@ describe("campaign finance detail presentation", () => {
           district: "02",
           slug: "duplicate-name",
           slug_is_unique: false,
+          identity_is_safe: true,
           support_total: "200.00",
           oppose_total: "0.00",
           transaction_count: 1,
@@ -621,7 +676,8 @@ describe("campaign finance detail presentation", () => {
           state: "LA",
           district: "04",
           slug: "mike-johnson",
-          slug_is_unique: true
+          slug_is_unique: true,
+          identity_is_safe: true
         },
         {
           id: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
@@ -632,7 +688,8 @@ describe("campaign finance detail presentation", () => {
           state: "LA",
           district: null,
           slug: "other-candidate",
-          slug_is_unique: false
+          slug_is_unique: false,
+          identity_is_safe: true
         }
       ]
     });
@@ -666,7 +723,8 @@ describe("campaign finance detail presentation", () => {
           state: "LA",
           district: "04",
           slug: "mike-johnson",
-          slug_is_unique: true
+          slug_is_unique: true,
+          identity_is_safe: true
         }
       ]
     });

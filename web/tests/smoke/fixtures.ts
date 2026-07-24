@@ -43,6 +43,8 @@ export const SMOKE_COLLIDING_CANDIDATE_ID = "88888888-8888-4888-8888-88888888888
 export const SMOKE_EMPTY_COMMITTEE_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 export const SMOKE_EMPTY_CANDIDATE_ID = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 export const SMOKE_DEVIANT_CANDIDATE_ID = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+export const SMOKE_LOADED_ZERO_CANDIDATE_ID = "edededed-eded-4ede-8ede-edededededed";
+export const SMOKE_BACKEND_FAILURE_CANDIDATE_ID = "fdfdfdfd-fdfd-4fdf-8fdf-fdfdfdfdfdfd";
 export const SMOKE_AL_CANDIDATE_ID = "abababab-abab-4aba-8aba-abababababab";
 export const SMOKE_GA_CANDIDATE_ID = "cdcdcdcd-cdcd-4cdc-8cdc-cdcdcdcdcdcd";
 export const SMOKE_EMPTY_PROPERTY_ID = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
@@ -132,12 +134,20 @@ export const SMOKE_METHODOLOGY_SECTION_BODY =
 export const SMOKE_METHODOLOGY_CONFIDENCE_HEADING = "Entity resolution confidence labels";
 export const SMOKE_SHELL_NAV_HOME = "Home";
 export const SMOKE_SHELL_NAV_SEARCH = "Search";
-export const SMOKE_SHELL_NAV_DONORS = "Donor Lookup";
+export const SMOKE_SHELL_NAV_CANDIDATES = "Candidates";
+export const SMOKE_SHELL_NAV_COMMITTEES = "Committees";
 export const SMOKE_SHELL_NAV_CONGRESS = "Congress";
+export const SMOKE_SHELL_NAV_DEVELOPERS = "Developers";
 export const SMOKE_SHELL_NAV_METHODOLOGY = "Methodology";
-export const SMOKE_SHELL_PRIMARY_NAV_LABELS = APP_SHELL.shellNavigation.map((link) => link.label);
-export const SMOKE_SHELL_FORBIDDEN_CANDIDATES = "Candidates";
-export const SMOKE_SHELL_FORBIDDEN_COMMITTEES = "Committees";
+export const SMOKE_SHELL_PRIMARY_NAV_LABELS = [
+  SMOKE_SHELL_NAV_HOME,
+  SMOKE_SHELL_NAV_SEARCH,
+  SMOKE_SHELL_NAV_CANDIDATES,
+  SMOKE_SHELL_NAV_COMMITTEES,
+  SMOKE_SHELL_NAV_CONGRESS,
+  SMOKE_SHELL_NAV_DEVELOPERS,
+  SMOKE_SHELL_NAV_METHODOLOGY
+] as const;
 export const SMOKE_DONOR_LOOKUP_QUERY = "Jane";
 export const SMOKE_DONOR_LOOKUP_HEADING = "Donor Lookup";
 export const SMOKE_DONOR_LOOKUP_SCOPE_NOTE =
@@ -325,8 +335,15 @@ export const SMOKE_EMPTY_COMMITTEE_TITLE = "Committee Empty | Committee | Civibu
 export const SMOKE_EMPTY_COMMITTEE_DESCRIPTION = "Committee profile from campaign-finance records.";
 export const SMOKE_EMPTY_CANDIDATE_TITLE = "Candidate Empty | Candidate | Civibus";
 export const SMOKE_EMPTY_CANDIDATE_DESCRIPTION = "Candidate profile from campaign-finance records.";
+export const SMOKE_LOADED_ZERO_CANDIDATE_TITLE = "Candidate Loaded Zero | Candidate | Civibus";
+export const SMOKE_BACKEND_FAILURE_CANDIDATE_TITLE = "Candidate Backend Failure | Candidate | Civibus";
 export const SMOKE_DEVIANT_CANDIDATE_TITLE = "Candidate Deviant | Candidate | Civibus";
 export const SMOKE_DEVIANT_CANDIDATE_DESCRIPTION = "Candidate profile from campaign-finance records.";
+export const SMOKE_AUDITED_MALFORMED_CANDIDATE_ID = "99999999-9999-4999-8999-999999999999";
+export const SMOKE_AUDITED_MALFORMED_CANDIDATE_RAW_NAME = "212 N HALF  W. JOHN, RODNEY HOWARD MR.";
+export const SMOKE_AUDITED_MALFORMED_CANDIDATE_SOURCE_URL =
+  "https://www.fec.gov/data/candidate/H0TX05005/";
+export const SMOKE_AUDITED_MALFORMED_CANDIDATE_TITLE = "Candidate record | Civibus";
 export const SMOKE_AL_CANDIDATE_TITLE = "Candidate Alabama | Candidate | Civibus";
 export const SMOKE_AL_CANDIDATE_DESCRIPTION = "Candidate profile from campaign-finance records.";
 export const SMOKE_GA_CANDIDATE_TITLE = "Candidate Georgia | Candidate | Civibus";

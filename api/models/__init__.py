@@ -1,5 +1,6 @@
 from api.models.campaign_finance import (
     CandidateFundraisingSummary,
+    CandidateMoneyCoverage,
     CountyCampaignFinanceSummary,
     CountySummaryLinkedCandidate,
     CountySummaryRecipientCommittee,
@@ -98,6 +99,7 @@ __all__ = [
     "OfficeListItem",
     "OfficeResponse",
     "CandidateFundraisingSummary",
+    "CandidateMoneyCoverage",
     "CountyCampaignFinanceSummary",
     "CountySummaryLinkedCandidate",
     "CountySummaryRecipientCommittee",

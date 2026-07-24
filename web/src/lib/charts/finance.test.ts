@@ -96,7 +96,10 @@ describe("charts/finance helpers", () => {
       {
         id: "cash_on_hand_segment_1",
         label: "Cash on hand",
-        points: [{ x: new Date("2026-03-31T00:00:00.000Z"), y: 1200 }]
+        points: [
+          { x: new Date("2026-03-31T00:00:00.000Z"), y: 1200 },
+          { x: new Date("2026-04-01T00:00:00.000Z"), y: 1200 }
+        ]
       },
       {
         id: "cash_on_hand_segment_2",
@@ -104,6 +107,32 @@ describe("charts/finance helpers", () => {
         points: [
           { x: new Date("2026-06-30T00:00:00.000Z"), y: 1400 },
           { x: new Date("2026-09-30T00:00:00.000Z"), y: 1800 }
+        ]
+      }
+    ]);
+  });
+
+  it("preserves a missing interval instead of reconnecting singleton cash-on-hand segments", () => {
+    const points: CashOnHandPoint[] = [
+      { periodEnd: "2026-06-30", amount: 1400, missingIntervalBefore: true },
+      { periodEnd: "2026-03-31", amount: 1200, missingIntervalBefore: false }
+    ];
+
+    expect(buildCashOnHandSeries(points)).toEqual([
+      {
+        id: "cash_on_hand_segment_1",
+        label: "Cash on hand",
+        points: [
+          { x: new Date("2026-03-31T00:00:00.000Z"), y: 1200 },
+          { x: new Date("2026-04-01T00:00:00.000Z"), y: 1200 }
+        ]
+      },
+      {
+        id: "cash_on_hand_segment_2",
+        label: "Cash on hand",
+        points: [
+          { x: new Date("2026-06-30T00:00:00.000Z"), y: 1400 },
+          { x: new Date("2026-07-01T00:00:00.000Z"), y: 1400 }
         ]
       }
     ]);

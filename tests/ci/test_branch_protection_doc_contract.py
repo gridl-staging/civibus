@@ -43,7 +43,7 @@ def test_branch_protection_runbook_reflects_pr_vs_push_check_split() -> None:
     ci_checks = _extract_job_names(ci_workflow_text)
     integration_checks = _extract_job_names(integration_workflow_text)
 
-    assert ci_checks == ["lint", "unit-tests"]
+    assert ci_checks == ["lint", "unit-tests", "web"]
     assert integration_checks == ["integration-tests"]
 
     required_pr_line = "Current PR-required checks from `.github/workflows/ci.yml`: " + ", ".join(

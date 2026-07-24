@@ -5,7 +5,7 @@ from types import ModuleType
 
 import pytest
 
-from core.schema import test_contact_point_schema, test_provenance_schema
+from core.schema import test_apply_migrations, test_contact_point_schema, test_provenance_schema
 
 
 @pytest.mark.parametrize(
@@ -40,6 +40,26 @@ def test_skip_if_no_database_access_fails_when_database_is_required(
         pytest.fail(f"expected required database failure, got skip: {exc}")
     except pytest.fail.Exception as exc:
         assert "Unable to connect to test database" in str(exc)
+    else:
+        pytest.fail("expected required database failure")
+
+
+def test_apply_migrations_skip_or_fail_skips_when_database_is_optional(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("CIVIBUS_REQUIRE_DB", raising=False)
+
+    with pytest.raises(pytest.skip.Exception, match="connection refused"):
+        test_apply_migrations._skip_or_fail("connection refused")
+
+
+def test_apply_migrations_skip_or_fail_fails_when_database_is_required(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("CIVIBUS_REQUIRE_DB", "1")
+
+    try:
+        test_apply_migrations._skip_or_fail("connection refused")
+    except pytest.skip.Exception as exc:
+        pytest.fail(f"expected required database failure, got skip: {exc}")
+    except pytest.fail.Exception as exc:
+        assert "connection refused" in str(exc)
     else:
         pytest.fail("expected required database failure")
 

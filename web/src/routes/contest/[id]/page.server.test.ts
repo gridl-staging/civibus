@@ -123,7 +123,8 @@ describe("/contest/[id] +page.server load", () => {
               state: "NC",
               district: "01",
               slug: "jane-candidate",
-              slug_is_unique: true
+              slug_is_unique: true,
+              identity_is_safe: true
             }
           ],
           has_next: false,
@@ -138,6 +139,7 @@ describe("/contest/[id] +page.server load", () => {
           name: "Jane Candidate",
           slug: "jane-candidate",
           slug_is_unique: true,
+          identity_is_safe: true,
           person_id: PERSON_ID,
           party: "DEM",
           office: "H",
@@ -275,7 +277,8 @@ describe("/contest/[id] +page.server load", () => {
               state: "NC",
               district: "01",
               slug: "jane-candidate",
-              slug_is_unique: true
+              slug_is_unique: true,
+              identity_is_safe: true
             }
           ],
           has_next: false,
@@ -290,6 +293,7 @@ describe("/contest/[id] +page.server load", () => {
           name: "Jane Candidate",
           slug: "jane-candidate",
           slug_is_unique: true,
+          identity_is_safe: true,
           person_id: PERSON_ID,
           party: "DEM",
           office: "H",

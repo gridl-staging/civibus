@@ -91,8 +91,10 @@ export const APP_SHELL = {
   shellNavigation: [
     { label: "Home", href: "/" },
     { label: "Search", href: "/search" },
-    { label: "Donor Lookup", href: "/donors" },
+    { label: "Candidates", href: "/candidates" },
+    { label: "Committees", href: "/committees" },
     { label: "Congress", href: "/congress" },
+    { label: "Developers", href: "/developers" },
     { label: "Methodology", href: "/methodology" }
   ],
   staticRoutes: {

@@ -24,10 +24,7 @@ import {
   SMOKE_HOME_SCOPE_LINK_HREF,
   SMOKE_HOME_SEARCH_ACTION,
   SMOKE_HOME_SEARCH_ACTION_HREF,
-  SMOKE_HOME_TITLE,
-  SMOKE_SHELL_FORBIDDEN_CANDIDATES,
-  SMOKE_SHELL_FORBIDDEN_COMMITTEES,
-  SMOKE_SHELL_PRIMARY_NAV_LABELS
+  SMOKE_HOME_TITLE
 } from "./fixtures";
 import { assertSeoHead } from "./smoke-helpers";
 
@@ -75,19 +72,6 @@ test.describe("federal landing smoke", () => {
     await primaryAction.click();
     await expect(page).toHaveURL(new RegExp(`${SMOKE_HOME_PRIMARY_ACTION_HREF}$`));
     await expect(page.getByRole("heading", { name: "Congress" })).toBeVisible();
-  });
-
-  test("exposes only the federal primary shell navigation", async ({ page }: { page: any }) => {
-    await page.goto("/");
-
-    const primaryNav = page.getByRole("navigation", { name: "Primary" });
-    await expect(primaryNav.getByRole("link")).toHaveText(SMOKE_SHELL_PRIMARY_NAV_LABELS);
-    await expect(
-      primaryNav.getByRole("link", { name: SMOKE_SHELL_FORBIDDEN_CANDIDATES, exact: true })
-    ).toHaveCount(0);
-    await expect(
-      primaryNav.getByRole("link", { name: SMOKE_SHELL_FORBIDDEN_COMMITTEES, exact: true })
-    ).toHaveCount(0);
   });
 
   test("does not expose retired state-map or list-promotion surfaces", async ({ page }: { page: any }) => {

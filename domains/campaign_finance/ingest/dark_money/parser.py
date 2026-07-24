@@ -1,6 +1,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 import logging
 from datetime import date
 from decimal import Decimal, InvalidOperation
@@ -15,6 +16,7 @@ from domains.campaign_finance.types import (
 )
 
 LOGGER = logging.getLogger(__name__)
+_CONVERSION_ERROR_LOG_LIMIT = 3
 
 # Column tuples per record type (excludes the Record Type dispatch field).
 # Field names are snake_case conversions of the IRS PolOrgsFileLayout.doc headers.
@@ -390,6 +392,47 @@ def _type_b_to_model(row: dict[str, str | None]) -> Expenditure527:
     )
 
 
+def _log_conversion_error(
+    record_type: str,
+    row: dict[str, str | None],
+    error: Exception,
+    *,
+    skipped_count: int,
+) -> None:
+    if skipped_count > _CONVERSION_ERROR_LOG_LIMIT:
+        return
+    LOGGER.warning(
+        "Skipping type %s row due to conversion error: %s (%s: %s)",
+        record_type,
+        row.get("form_id_number", "???"),
+        type(error).__name__,
+        _first_error_line(error),
+    )
+
+
+def _first_error_line(error: Exception) -> str:
+    message = str(error).splitlines()
+    return message[0] if message else ""
+
+
+def _log_conversion_error_summary(skipped_counts: Counter[str]) -> None:
+    for record_type, skipped_count in sorted(skipped_counts.items()):
+        if skipped_count <= _CONVERSION_ERROR_LOG_LIMIT:
+            continue
+        LOGGER.warning(
+            "Skipped %d type %s rows due to conversion errors; suppressed %d after the first %d",
+            skipped_count,
+            record_type,
+            skipped_count - _CONVERSION_ERROR_LOG_LIMIT,
+            _CONVERSION_ERROR_LOG_LIMIT,
+        )
+
+
+def _is_recent_or_undated(raw_date: str | None, *, cutoff: date) -> bool:
+    parsed_date = _parse_date(raw_date)
+    return parsed_date is None or parsed_date >= cutoff
+
+
 # -- public streaming entry point --
 
 
@@ -400,6 +443,7 @@ def read_irs_527_records(txt_path: Path) -> Iterator[Irs527Record]:
     Type 1 organization records are always emitted for join support.
     """
     cutoff = _recency_cutoff_date()
+    skipped_conversion_counts: Counter[str] = Counter()
 
     with txt_path.open(encoding="latin-1") as f:
         for record_type, row in iter_irs_527_rows(f):
@@ -407,21 +451,26 @@ def read_irs_527_records(txt_path: Path) -> Iterator[Irs527Record]:
                 if record_type == "1":
                     yield _type_1_to_model(row)
                 elif record_type == "2":
+                    if not _is_recent_or_undated(row.get("period_begin_date"), cutoff=cutoff):
+                        continue
                     model = _type_2_to_model(row)
-                    if model.period_begin_date is None or model.period_begin_date >= cutoff:
-                        yield model
+                    yield model
                 elif record_type == "A":
+                    if not _is_recent_or_undated(row.get("contribution_date"), cutoff=cutoff):
+                        continue
                     model = _type_a_to_model(row)
-                    if model.contribution_date is None or model.contribution_date >= cutoff:
-                        yield model
+                    yield model
                 elif record_type == "B":
+                    if not _is_recent_or_undated(row.get("expenditure_date"), cutoff=cutoff):
+                        continue
                     model = _type_b_to_model(row)
-                    if model.expenditure_date is None or model.expenditure_date >= cutoff:
-                        yield model
-            except Exception:
-                LOGGER.warning(
-                    "Skipping type %s row due to conversion error: %s",
+                    yield model
+            except Exception as error:
+                skipped_conversion_counts[record_type] += 1
+                _log_conversion_error(
                     record_type,
-                    row.get("form_id_number", "???"),
-                    exc_info=True,
+                    row,
+                    error,
+                    skipped_count=skipped_conversion_counts[record_type],
                 )
+    _log_conversion_error_summary(skipped_conversion_counts)

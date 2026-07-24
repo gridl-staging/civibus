@@ -30,6 +30,11 @@ const RECEIPT_SOURCE_FIELDS = {
   can_render_share: false,
   receipt_source_caveats: []
 };
+const POPULATED_CANDIDATE_MONEY_COVERAGE = {
+  activity_state: "populated" as const,
+  completeness: "complete" as const,
+  basis: "qualifying_transactions" as const
+};
 
 function createLoadEvent(requestJson: ReturnType<typeof vi.fn>, id = CANDIDATE_ID) {
   return {
@@ -46,6 +51,7 @@ const BASE_CANDIDATE_DETAIL = {
   name: "Candidate One",
   slug: CANDIDATE_SLUG,
   slug_is_unique: false,
+  identity_is_safe: true,
   person_id: null,
   party: null,
   office: "H",
@@ -105,7 +111,8 @@ function buildCandidateSummary(candidateId: string, candidateName = "Candidate O
     cash_on_hand: null,
     net_self_funding: null,
     summary_source: "derived" as const,
-    itemized_transaction_count: 5
+    itemized_transaction_count: 5,
+    coverage: POPULATED_CANDIDATE_MONEY_COVERAGE
   };
 }
 
@@ -119,7 +126,8 @@ function buildSlugMatch(item: Partial<CandidateListItem> & Pick<CandidateListIte
     state: item.state ?? null,
     district: item.district ?? null,
     slug: item.slug,
-    slug_is_unique: item.slug_is_unique ?? false
+    slug_is_unique: item.slug_is_unique ?? false,
+    identity_is_safe: item.identity_is_safe ?? true
   };
 }
 
@@ -172,7 +180,7 @@ describe("/candidate/[id] +page.server load", () => {
   });
 
   it("dispatches slug route ids through fetchCandidatesBySlug before fetching canonical detail bundle", async () => {
-    const detail = buildCandidateDetail();
+    const detail = buildCandidateDetail({ slug_is_unique: true });
     const summary = buildCandidateSummary(CANDIDATE_ID);
     const matches = [buildSlugMatch({ id: CANDIDATE_ID, name: "Candidate One", slug: CANDIDATE_SLUG, slug_is_unique: true })];
 
@@ -267,7 +275,7 @@ describe("/candidate/[id] +page.server load", () => {
   it("redirects UUID routes to canonical slug paths with 308 when detail slug is unique", async () => {
     const requestJson = vi.fn(async (path: string) => {
       if (path === buildCandidateDetailPath(CANDIDATE_ID)) {
-        return buildCandidateDetail({ slug: CANDIDATE_SLUG, slug_is_unique: true });
+        return buildCandidateDetail({ slug: CANDIDATE_SLUG, slug_is_unique: true, identity_is_safe: true });
       }
 
       if (path === buildCandidateSummaryPath(CANDIDATE_ID)) {
@@ -288,6 +296,92 @@ describe("/candidate/[id] +page.server load", () => {
     await expect(load(createLoadEvent(requestJson))).rejects.toMatchObject({
       status: 308,
       location: `/candidate/${CANDIDATE_SLUG}`
+    });
+  });
+
+  it("does not redirect UUID routes to unsafe candidate slugs", async () => {
+    const unsafeSlug = "212-n-half-w-john-rodney-howard-mr";
+    const detail = buildCandidateDetail({
+      name: "212 N HALF  W. JOHN, RODNEY HOWARD MR.",
+      slug: unsafeSlug,
+      slug_is_unique: true,
+      identity_is_safe: false
+    });
+    const summary = buildCandidateSummary(CANDIDATE_ID, "212 N HALF  W. JOHN, RODNEY HOWARD MR.");
+
+    const requestJson = vi.fn(async (path: string) => {
+      if (path === buildCandidateDetailPath(CANDIDATE_ID)) {
+        return detail;
+      }
+
+      if (path === buildCandidateSummaryPath(CANDIDATE_ID)) {
+        return summary;
+      }
+
+      if (path === buildCandidateIndependentExpendituresPath(CANDIDATE_ID)) {
+        return [];
+      }
+
+      if (path === buildCandidateIndependentExpendituresSummaryPath(CANDIDATE_ID)) {
+        return null;
+      }
+
+      throw new Error(`unexpected path: ${path}`);
+    });
+
+    const data = (await load(createLoadEvent(requestJson))) as CandidateDetailBundle & {
+      routeKind: string;
+    };
+
+    expect(data.routeKind).toBe("canonical-detail");
+    expect(data.detail).toEqual(detail);
+  });
+
+  it("redirects direct unsafe slug requests to the candidate UUID route", async () => {
+    const unsafeSlug = "212-n-half-w-john-rodney-howard-mr";
+    const detail = buildCandidateDetail({
+      name: "212 N HALF  W. JOHN, RODNEY HOWARD MR.",
+      slug: unsafeSlug,
+      slug_is_unique: true,
+      identity_is_safe: false
+    });
+    const matches = [
+      buildSlugMatch({
+        id: CANDIDATE_ID,
+        name: detail.name,
+        slug: unsafeSlug,
+        slug_is_unique: true,
+        identity_is_safe: false
+      })
+    ];
+
+    const requestJson = vi.fn(async (path: string) => {
+      if (path === buildCandidatesBySlugPath(unsafeSlug)) {
+        return matches;
+      }
+
+      if (path === buildCandidateDetailPath(CANDIDATE_ID)) {
+        return detail;
+      }
+
+      if (path === buildCandidateSummaryPath(CANDIDATE_ID)) {
+        return buildCandidateSummary(CANDIDATE_ID, detail.name);
+      }
+
+      if (path === buildCandidateIndependentExpendituresPath(CANDIDATE_ID)) {
+        return [];
+      }
+
+      if (path === buildCandidateIndependentExpendituresSummaryPath(CANDIDATE_ID)) {
+        return null;
+      }
+
+      throw new Error(`unexpected path: ${path}`);
+    });
+
+    await expect(load(createLoadEvent(requestJson, unsafeSlug))).rejects.toMatchObject({
+      status: 308,
+      location: `/candidate/${CANDIDATE_ID}`
     });
   });
 
@@ -334,7 +428,7 @@ describe("/candidate/[id] +page.server load", () => {
     });
   });
 
-  it("keeps candidate detail routes renderable when IE endpoints return 404", async () => {
+  it("streams candidate IE 404 responses instead of treating missing data as loaded zero", async () => {
     const detail = buildCandidateDetail({ name: "Candidate Empty", slug_is_unique: false });
     const summary = buildCandidateSummary(CANDIDATE_ID, "Candidate Empty");
     const missingIeError = new ApiResponseError(404, { detail: "No IE records found" });
@@ -369,8 +463,14 @@ describe("/candidate/[id] +page.server load", () => {
     expect(data.ieTransactions).toBeInstanceOf(Promise);
     expect(data.ieSummary).toBeInstanceOf(Promise);
 
-    expect(await data.ieTransactions).toEqual([]);
-    expect(await data.ieSummary).toBeNull();
+    await expect(data.ieTransactions).rejects.toMatchObject({
+      status: 404,
+      body: { detail: "No IE records found" }
+    });
+    await expect(data.ieSummary).rejects.toMatchObject({
+      status: 404,
+      body: { detail: "No IE records found" }
+    });
   });
 
   it("preserves backend 404 payloads", async () => {

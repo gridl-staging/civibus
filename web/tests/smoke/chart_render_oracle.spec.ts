@@ -10,12 +10,40 @@ import {
   LINE_SERIES_MARK_SELECTOR,
   chartRegion,
   expectNoOpaqueNearBlackPaints,
-  expectRealChartRender
+  expectRealChartRender,
+  sampleVisibleRectPaints
 } from "./smoke-helpers";
 
 test.describe("chart render oracle", () => {
   test("line chart proof targets a LayerChart series path instead of generic SVG scaffolding", () => {
     expect(LINE_SERIES_MARK_SELECTOR).toBe("svg path.lc-path");
+  });
+
+  test("zero-length LayerChart paths do not count as visible chart paint", async ({
+    page
+  }: {
+    page: Page;
+  }) => {
+    await page.setContent(`
+      <main>
+        <section data-testid="empty-chart">
+          <svg width="120" height="40" viewBox="0 0 120 40">
+            <path class="lc-path" d="" fill="none" stroke="rgb(30, 90, 160)" />
+          </svg>
+        </section>
+        <section data-testid="line-chart">
+          <svg width="120" height="40" viewBox="0 0 120 40">
+            <path class="lc-path" d="M 4 32 L 116 8" fill="none" stroke="rgb(30, 90, 160)" />
+          </svg>
+        </section>
+      </main>
+    `);
+
+    await expect(page.getByTestId("empty-chart")).toBeVisible();
+    await expect(page.getByTestId("line-chart")).toBeVisible();
+
+    await expect(sampleVisibleRectPaints(page.getByTestId("empty-chart"))).resolves.toEqual([]);
+    await expect(sampleVisibleRectPaints(page.getByTestId("line-chart"))).resolves.toHaveLength(1);
   });
 
   test("real chart package line and bar renders do not paint opaque near-black SVG rectangles", async ({
