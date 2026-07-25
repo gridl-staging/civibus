@@ -8,6 +8,10 @@ import {
   TRUST_SECTION_EMPTY_MESSAGE,
   TRUST_SECTION_LAST_PULLED_UNAVAILABLE
 } from "./presentation";
+import {
+  COMMITTEE_CANONICAL_DATA_WITH_DUPLICATE_FEC_SOURCES as DUPLICATE_SOURCE_FIXTURE,
+  COMMITTEE_CANONICAL_DATA_WITH_SAME_KEY_DISTINCT_SOURCES as DISTINCT_SOURCE_FIXTURE
+} from "$lib/campaign-finance-detail/route-render.test-fixtures";
 
 const EXPECTED_INDIANA_FRESHNESS_NOTE =
   "Indiana bulk campaign finance data refreshes less often than weekly; this view may be up to 30 days stale.";
@@ -51,6 +55,8 @@ describe("detail trust presentation helper", () => {
     expect(section).toEqual({
       rows: [
         {
+          rowKey:
+            '["FEC (campaign_finance/federal/fec)","—","2026-03-19T00:00:00Z","https://example.org/safe"]',
           source: "campaign_finance/federal/fec",
           sourceName: "FEC",
           sourceLabel: "FEC (campaign_finance/federal/fec)",
@@ -59,6 +65,8 @@ describe("detail trust presentation helper", () => {
           recordUrl: "https://example.org/safe"
         },
         {
+          rowKey:
+            '["Durham County (property)","parcel-1","2026-03-20T00:00:00Z","https://example.org/durham"]',
           source: "property",
           sourceName: "Durham County",
           sourceLabel: "Durham County (property)",
@@ -73,6 +81,65 @@ describe("detail trust presentation helper", () => {
       advisoryMessage: TRUST_SECTION_ADVISORY_MESSAGE,
       freshnessNote: null
     });
+  });
+
+  it("assigns stable row identities from rendered provenance evidence", () => {
+    const section = buildTrustSection([
+      {
+        domain: "campaign_finance",
+        jurisdiction: "federal/fec",
+        data_source_name: "FEC",
+        data_source_url: "https://www.fec.gov",
+        source_record_key: "cm:2026:C00718866",
+        record_url: "https://www.fec.gov/data/committee/C00718866/",
+        pull_date: "2026-03-20T00:00:00Z"
+      },
+      {
+        domain: "campaign_finance",
+        jurisdiction: "federal/fec",
+        data_source_name: "FEC (amended filing)",
+        data_source_url: "https://www.fec.gov",
+        source_record_key: "cm:2026:C00718866",
+        record_url: "https://www.fec.gov/data/committee/C00718866/?amended=1",
+        pull_date: "2026-03-20T00:00:00Z"
+      }
+    ]);
+
+    expect(section.rows.map((row) => row.rowKey)).toEqual([
+      '["FEC (campaign_finance/federal/fec)","cm:2026:C00718866","2026-03-20T00:00:00Z","https://www.fec.gov/data/committee/C00718866/"]',
+      '["FEC (amended filing) (campaign_finance/federal/fec)","cm:2026:C00718866","2026-03-20T00:00:00Z","https://www.fec.gov/data/committee/C00718866/?amended=1"]'
+    ]);
+  });
+
+  it("coalesces byte-identical provenance rows while preserving deterministic order", () => {
+    const section = buildTrustSection(
+      DUPLICATE_SOURCE_FIXTURE.detail.sources
+    );
+
+    expect(section.rows).toHaveLength(1);
+    expect(section.rows.map((row) => row.rowKey)).toEqual([
+      '["FEC (campaign_finance/federal/fec)","cm:2026:C00718866","2026-03-20T00:00:00Z","https://www.fec.gov/data/committee/C00718866/"]'
+    ]);
+    expect(section.rows[0]).toMatchObject({
+      sourceLabel: "FEC (campaign_finance/federal/fec)",
+      sourceRecordKey: "cm:2026:C00718866",
+      recordUrl: "https://www.fec.gov/data/committee/C00718866/"
+    });
+  });
+
+  it("preserves same-record-key provenance rows with different displayed source evidence", () => {
+    const section = buildTrustSection(DISTINCT_SOURCE_FIXTURE.detail.sources);
+
+    expect(section.rows).toHaveLength(2);
+    expect(new Set(section.rows.map((row) => row.rowKey)).size).toBe(2);
+    expect(section.rows.map((row) => row.sourceLabel)).toEqual([
+      "FEC (campaign_finance/federal/fec)",
+      "FEC (amended filing) (campaign_finance/federal/fec)"
+    ]);
+    expect(section.rows.map((row) => row.recordUrl)).toEqual([
+      "https://www.fec.gov/data/committee/C00718866/",
+      "https://www.fec.gov/data/committee/C00718866/?amended=1"
+    ]);
   });
 
   it("returns tightened empty copy when source payload is empty", () => {

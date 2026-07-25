@@ -6,6 +6,7 @@ import { formatAbsolutePullDate, formatRelativePullDate } from "./relative-date"
 export type FreshnessSeverity = "fresh" | "stale" | "unknown";
 
 export type TrustSectionRow = {
+  rowKey: string;
   source: string;
   sourceName: string;
   sourceLabel: string;
@@ -117,10 +118,13 @@ function deriveFreshnessSeverity(freshest: FreshestPullDate | null): FreshnessSe
 }
 
 function buildTrustRows(sources: SourceInfo[]): TrustSectionRow[] {
-  return sources.map((source) => {
+  const rows: TrustSectionRow[] = [];
+  const seenRowKeys = new Set<string>();
+
+  for (const source of sources) {
     const sourcePath = buildSourceLabel(source);
     const recordUrl = sanitizeExternalUrl(source.record_url) ?? sanitizeExternalUrl(source.data_source_url);
-    return {
+    const row = {
       source: sourcePath,
       sourceName: source.data_source_name,
       sourceLabel: `${source.data_source_name} (${sourcePath})`,
@@ -128,7 +132,15 @@ function buildTrustRows(sources: SourceInfo[]): TrustSectionRow[] {
       pullDate: source.pull_date,
       recordUrl
     };
-  });
+    const rowKey = JSON.stringify([row.sourceLabel, row.sourceRecordKey, row.pullDate, row.recordUrl]);
+
+    if (!seenRowKeys.has(rowKey)) {
+      rows.push({ rowKey, ...row });
+      seenRowKeys.add(rowKey);
+    }
+  }
+
+  return rows;
 }
 
 function buildFreshnessNote(sources: SourceInfo[]): string | null {

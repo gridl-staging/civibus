@@ -3,7 +3,7 @@ import { render } from "svelte/server";
 import { readFileSync } from "node:fs";
 import CandidateRoutePage from "../../routes/candidate/[id]/+page.svelte";
 import CommitteeRoutePage from "../../routes/committee/[id]/+page.svelte";
-import { PHL_FRESHNESS_NOTE } from "$lib/detail-trust/presentation";
+import { PHL_FRESHNESS_NOTE, buildTrustSection } from "$lib/detail-trust/presentation";
 import DetailPage from "./DetailPage.svelte";
 import {
   buildCandidateRoutePresentation,
@@ -19,6 +19,9 @@ import {
   COMMITTEE_CANONICAL_DATA,
   COMMITTEE_CANONICAL_DATA_WITH_PAGINATED_FILINGS,
   COMMITTEE_CANONICAL_DATA_WITH_IE,
+  COMMITTEE_CANONICAL_DATA_WITH_DUPLICATE_FEC_SOURCES,
+  COMMITTEE_CANONICAL_DATA_WITH_SAME_KEY_DISTINCT_SOURCES,
+  DUPLICATE_FEC_PROVENANCE_ROW,
   COMMITTEE_ID,
   DEFAULT_SELECTED_CYCLE_FIELDS,
   ORG_ID,
@@ -1684,5 +1687,94 @@ describe("breadcrumb parity on campaign-finance detail routes", () => {
     });
 
     expect(rendered.head).not.toContain('"BreadcrumbList"');
+  });
+});
+
+describe("committee trust section duplicate-provenance regression (prod run 30159110547)", () => {
+  // The deployed committee page crashed with Svelte `each_key_duplicate` when a
+  // committee carried two byte-identical federal FEC provenance rows: the keyed
+  // `each` in TrustSection.svelte keys rows by
+  // (row.source + row.sourceRecordKey + row.pullDate), so identical rows collide
+  // on the same key and the client throws before `data-testid="key-metrics"`
+  // resolves. The client-only key contract is covered by
+  // detail-trust/TrustSection.client.test.ts; these SSR tests keep the route
+  // shell and provenance-preservation known answers pinned.
+
+  it("passes byte-identical duplicate FEC provenance rows into the trust presentation", () => {
+    const viewModel = buildTrustSection(
+      COMMITTEE_CANONICAL_DATA_WITH_DUPLICATE_FEC_SOURCES.detail.sources
+    );
+
+    expect(COMMITTEE_CANONICAL_DATA_WITH_DUPLICATE_FEC_SOURCES.detail.sources).toHaveLength(2);
+    expect(
+      COMMITTEE_CANONICAL_DATA_WITH_DUPLICATE_FEC_SOURCES.detail.sources.map((source) => [
+        source.domain,
+        source.jurisdiction,
+        source.data_source_name,
+        source.source_record_key,
+        source.record_url,
+        source.pull_date
+      ])
+    ).toEqual([
+      [
+        "campaign_finance",
+        "federal/fec",
+        "FEC",
+        "cm:2026:C00718866",
+        "https://www.fec.gov/data/committee/C00718866/",
+        "2026-03-20T00:00:00Z"
+      ],
+      [
+        "campaign_finance",
+        "federal/fec",
+        "FEC",
+        "cm:2026:C00718866",
+        "https://www.fec.gov/data/committee/C00718866/",
+        "2026-03-20T00:00:00Z"
+      ]
+    ]);
+    expect(viewModel.rows.map((row) => row.sourceRecordKey)).toEqual(
+      expect.arrayContaining(["cm:2026:C00718866"])
+    );
+  });
+
+  it("renders the duplicate FEC source specimen with a single resolved key-metrics region", () => {
+    const rendered = render(CommitteeRoutePage, {
+      props: {
+        data: COMMITTEE_CANONICAL_DATA_WITH_DUPLICATE_FEC_SOURCES
+      }
+    });
+
+    // The client failure prevented this region from resolving at all; SSR stays
+    // useful here as the route-shell known answer.
+    expect(countOccurrences(rendered.body, /data-testid="key-metrics"/g)).toBe(1);
+    expect(extractElementByTestId(rendered.body, "key-metrics")).not.toBeNull();
+    expect(rendered.body).toContain("Source record ID: cm:2026:C00718866");
+    expect(
+      countOccurrences(rendered.body, new RegExp(DUPLICATE_FEC_PROVENANCE_ROW.record_url, "g"))
+    ).toBeGreaterThanOrEqual(1);
+  });
+
+  it("preserves distinct provenance rows that share a record key", () => {
+    const viewModel = buildTrustSection(
+      COMMITTEE_CANONICAL_DATA_WITH_SAME_KEY_DISTINCT_SOURCES.detail.sources
+    );
+
+    // Both rows share source_record_key cm:2026:C00718866 but carry different
+    // record_url / data_source_name: dropping either would lose real provenance.
+    expect(viewModel.rows).toHaveLength(2);
+    const recordUrls = viewModel.rows.map((row) => row.recordUrl);
+    expect(recordUrls).toContain("https://www.fec.gov/data/committee/C00718866/");
+    expect(recordUrls).toContain("https://www.fec.gov/data/committee/C00718866/?amended=1");
+
+    const rendered = render(CommitteeRoutePage, {
+      props: {
+        data: COMMITTEE_CANONICAL_DATA_WITH_SAME_KEY_DISTINCT_SOURCES
+      }
+    });
+    expect(rendered.body).toContain('href="https://www.fec.gov/data/committee/C00718866/"');
+    expect(rendered.body).toContain('href="https://www.fec.gov/data/committee/C00718866/?amended=1"');
+    expect(rendered.body).toContain("FEC (amended filing)");
+    expect(countOccurrences(rendered.body, /data-testid="key-metrics"/g)).toBe(1);
   });
 });

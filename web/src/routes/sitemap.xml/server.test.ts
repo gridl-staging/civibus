@@ -2,6 +2,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildCandidateHref,
   buildCommitteeHref,
+  hasCanonicalCandidateSlug,
+  type CandidateListItem,
   type CandidateListResponse,
   type CommitteeListResponse
 } from "$lib/campaign-finance-detail/contract";
@@ -785,5 +787,230 @@ describe("GET /sitemap.xml", () => {
     expect(xml).toContain(
       `<loc>https://civibus.org${buildElectionDateRoutePath(UPCOMING_TIMELINE[0]!.date)}</loc>`
     );
+  });
+});
+
+describe("GET /sitemap.xml candidate-eligibility known answers (prod run 30159110547)", () => {
+  // The deployed sitemap proof (docs/live-state/2026_07_23_candidate_identity_deployed_proof.md,
+  // "Wrap-up proof 3") accepted the post-deploy candidate count with the equation
+  // `expected_candidates = PRE_CANDIDATES - PRE_BARE_UUID`, where PRE_BARE_UUID
+  // counts pre-deploy candidate `<loc>`s whose path is a bare UUID. That equation
+  // is REJECTED: the live sitemap filters candidates through the canonical
+  // predicate `hasCanonicalCandidateSlug`, which also excludes unsafe-identity
+  // candidates that carry a unique, non-empty slug (so their pre-deploy URL was a
+  // slug, NOT a bare UUID, and PRE_BARE_UUID never counted them). Prod run
+  // 30159110547 measured PRE_CANDIDATES=8249, PRE_BARE_UUID=1047, canonical=7183:
+  // 8249 - 1047 = 7202, off by exactly the 19 unsafe-identity unique-slug
+  // candidates. `hasCanonicalCandidateSlug` is the single route-policy owner; the
+  // old arithmetic is rejected proof logic, not expected production behavior.
+
+  // Bare-UUID path regex, identical to the deployed proof parser.
+  const BARE_UUID_CANDIDATE_PATH =
+    /^\/candidate\/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+
+  // Five candidates, one per eligibility scenario. Exactly one is canonical.
+  const CANDIDATE_SAFE_UNIQUE_SLUG: CandidateListItem = {
+    id: "11111111-1111-4111-8111-111111111111",
+    fec_candidate_id: "H0NC01001",
+    name: "Alice Representative",
+    party: "DEM",
+    office: "H",
+    state: "NC",
+    district: "01",
+    slug: "alice-representative-2026",
+    slug_is_unique: true,
+    identity_is_safe: true
+  };
+  const CANDIDATE_UNSAFE_UNIQUE_SLUG: CandidateListItem = {
+    // The 19-candidate gap: usable unique non-UUID slug, excluded only by identity.
+    id: "22222222-2222-4222-8222-222222222222",
+    fec_candidate_id: "H0TX05005",
+    name: "212 N HALF  W. JOHN, RODNEY HOWARD MR.",
+    party: "REP",
+    office: "H",
+    state: "TX",
+    district: "05",
+    slug: "212-n-half-w-john-rodney-howard-mr",
+    slug_is_unique: true,
+    identity_is_safe: false
+  };
+  const CANDIDATE_SAFE_DUPLICATE_SLUG: CandidateListItem = {
+    id: "33333333-3333-4333-8333-333333333333",
+    fec_candidate_id: "S0GA02002",
+    name: "Duplicate Name",
+    party: "DEM",
+    office: "S",
+    state: "GA",
+    district: null,
+    slug: "shared-committee-slug",
+    slug_is_unique: false,
+    identity_is_safe: true
+  };
+  const CANDIDATE_SAFE_EMPTY_SLUG: CandidateListItem = {
+    id: "44444444-4444-4444-8444-444444444444",
+    fec_candidate_id: "P0US00003",
+    name: "No Slug Runner",
+    party: "IND",
+    office: "P",
+    state: "US",
+    district: null,
+    slug: "",
+    slug_is_unique: true,
+    identity_is_safe: true
+  };
+  const CANDIDATE_BARE_UUID_FALLBACK: CandidateListItem = {
+    // Slug is itself a bare UUID; kept unsafe so the canonical predicate excludes
+    // it and no bare-UUID URL reaches the sitemap.
+    id: "66666666-6666-4666-8666-666666666666",
+    fec_candidate_id: "H0NC06006",
+    name: "!!!",
+    party: "IND",
+    office: "H",
+    state: "NC",
+    district: "06",
+    slug: "55555555-5555-4555-8555-555555555555",
+    slug_is_unique: true,
+    identity_is_safe: false
+  };
+
+  const KNOWN_ANSWER_CANDIDATES: CandidateListItem[] = [
+    CANDIDATE_SAFE_UNIQUE_SLUG,
+    CANDIDATE_UNSAFE_UNIQUE_SLUG,
+    CANDIDATE_SAFE_DUPLICATE_SLUG,
+    CANDIDATE_SAFE_EMPTY_SLUG,
+    CANDIDATE_BARE_UUID_FALLBACK
+  ];
+
+  const KNOWN_ANSWER_COMMITTEE = {
+    id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    fec_committee_id: "C00000001",
+    name: "Citizens for Civibus",
+    committee_type: "O",
+    party: "DEM",
+    state: "NC",
+    slug: "citizens-for-civibus-2026",
+    slug_is_unique: true
+  };
+  const KNOWN_ANSWER_TIMELINE: UpcomingElectionTimelineEntry[] = [{ date: "2026-11-03", contests: [] }];
+
+  // Old-deploy routing had no identity gate: routeId = usable slug else id.
+  function oldSlugOnlyCandidatePath(item: CandidateListItem): string {
+    const routeId = item.slug_is_unique && item.slug !== "" ? item.slug : item.id;
+    return `/candidate/${routeId}`;
+  }
+
+  // Reason a candidate is excluded from the canonical sitemap. Priority is chosen
+  // so each known-answer specimen lands in exactly one bucket; a UUID-shaped slug
+  // is flagged first because it would route to a bare UUID even when "unique".
+  function exclusionReason(
+    item: CandidateListItem
+  ): "unsafe_identity" | "duplicate_slug" | "empty_slug" | "bare_uuid_fallback" {
+    if (BARE_UUID_CANDIDATE_PATH.test(`/candidate/${item.slug}`)) return "bare_uuid_fallback";
+    if (!item.identity_is_safe) return "unsafe_identity";
+    if (item.slug === "") return "empty_slug";
+    return "duplicate_slug";
+  }
+
+  function knownAnswerRequestJson() {
+    return vi.fn((path: string) => {
+      if (path.includes("/v1/candidates")) {
+        return Promise.resolve({
+          items: KNOWN_ANSWER_CANDIDATES,
+          has_next: false,
+          offset: 0,
+          limit: 200
+        });
+      }
+      if (path.includes("/v1/committees")) {
+        return Promise.resolve({
+          items: [KNOWN_ANSWER_COMMITTEE],
+          has_next: false,
+          offset: 0,
+          limit: 200
+        });
+      }
+      if (path.includes("/v1/elections/timeline/upcoming")) {
+        return Promise.resolve(KNOWN_ANSWER_TIMELINE);
+      }
+      throw new Error(`Unexpected API call: ${path}`);
+    });
+  }
+
+  it("emits only canonical candidate URLs with hand-calculated per-reason exclusion counts", async () => {
+    const requestJson = knownAnswerRequestJson();
+    const response = await GET(createRequestEvent("https://civibus.org/sitemap.xml", requestJson));
+    const xml = await response.text();
+
+    // Route policy is derived through the canonical predicate — the sole owner.
+    const eligible = KNOWN_ANSWER_CANDIDATES.filter(hasCanonicalCandidateSlug);
+    const excluded = KNOWN_ANSWER_CANDIDATES.filter((item) => !hasCanonicalCandidateSlug(item));
+    expect(eligible).toHaveLength(1);
+    expect(eligible[0]).toBe(CANDIDATE_SAFE_UNIQUE_SLUG);
+
+    // Hand-calculated exclusion counts by reason.
+    const reasonCounts = excluded.reduce<Record<string, number>>((acc, item) => {
+      const reason = exclusionReason(item);
+      acc[reason] = (acc[reason] ?? 0) + 1;
+      return acc;
+    }, {});
+    expect(reasonCounts).toEqual({
+      unsafe_identity: 1,
+      duplicate_slug: 1,
+      empty_slug: 1,
+      bare_uuid_fallback: 1
+    });
+
+    // Exact sitemap contents.
+    const candidateLocs = extractCandidateLocPaths(xml);
+    expect(candidateLocs).toEqual([buildCandidateHref(CANDIDATE_SAFE_UNIQUE_SLUG)]);
+    expect(candidateLocs).toEqual(["/candidate/alice-representative-2026"]);
+    // Every eligible canonical candidate URL appears exactly once.
+    for (const item of eligible) {
+      expect(candidateLocs.filter((loc) => loc === buildCandidateHref(item))).toHaveLength(1);
+    }
+    // Zero bare-UUID candidate URLs.
+    expect(candidateLocs.filter((loc) => BARE_UUID_CANDIDATE_PATH.test(loc))).toHaveLength(0);
+
+    // Exact total <loc> count: 7 static + 1 candidate + 1 committee + 1 election.
+    expect(extractLocPaths(xml)).toHaveLength(STATIC_PATHS.length + 1 + 1 + 1);
+    expect(extractLocPaths(xml)).toHaveLength(10);
+  });
+
+  it("rejects the deployed PRE_CANDIDATES - PRE_BARE_UUID proof equation (unsafe-identity gap)", async () => {
+    const requestJson = knownAnswerRequestJson();
+    const response = await GET(createRequestEvent("https://civibus.org/sitemap.xml", requestJson));
+    const xml = await response.text();
+
+    // Reconstruct the deployed proof's fresh-baseline inputs from the fixture,
+    // exactly as its parser would measure them off a pre-deploy sitemap.
+    const PRE_CANDIDATES = KNOWN_ANSWER_CANDIDATES.length;
+    const PRE_BARE_UUID = KNOWN_ANSWER_CANDIDATES.map(oldSlugOnlyCandidatePath).filter((path) =>
+      BARE_UUID_CANDIDATE_PATH.test(path)
+    ).length;
+    expect(PRE_CANDIDATES).toBe(5);
+    expect(PRE_BARE_UUID).toBe(3);
+
+    // The rejected acceptance equation from the deployed proof.
+    const rejectedEquationCandidateCount = PRE_CANDIDATES - PRE_BARE_UUID;
+    expect(rejectedEquationCandidateCount).toBe(2);
+
+    // The canonical truth: only hasCanonicalCandidateSlug decides eligibility, and
+    // it equals the candidate `<loc>` count actually served.
+    const canonicalCandidateCount = KNOWN_ANSWER_CANDIDATES.filter(hasCanonicalCandidateSlug).length;
+    expect(canonicalCandidateCount).toBe(1);
+    expect(extractCandidateLocPaths(xml)).toHaveLength(canonicalCandidateCount);
+
+    // The equation is wrong: it over-counts by exactly the unsafe-identity
+    // candidates that still carry a unique, non-empty, non-UUID slug.
+    const unsafeUniqueSlugGap = KNOWN_ANSWER_CANDIDATES.filter(
+      (item) =>
+        !item.identity_is_safe &&
+        item.slug_is_unique &&
+        item.slug !== "" &&
+        !BARE_UUID_CANDIDATE_PATH.test(`/candidate/${item.slug}`)
+    ).length;
+    expect(unsafeUniqueSlugGap).toBe(1);
+    expect(rejectedEquationCandidateCount).not.toBe(canonicalCandidateCount);
+    expect(rejectedEquationCandidateCount - canonicalCandidateCount).toBe(unsafeUniqueSlugGap);
   });
 });

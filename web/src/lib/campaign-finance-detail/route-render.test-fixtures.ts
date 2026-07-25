@@ -378,3 +378,62 @@ export const COMMITTEE_CANONICAL_DATA_WITH_IE = {
     ]
   })
 };
+
+// Prod run 30159110547: a committee whose detail carries two byte-identical
+// federal FEC provenance rows (same source_record_key, source, URL, and pull
+// date). The keyed trust `each` in TrustSection.svelte keys rows by
+// (source + sourceRecordKey + pullDate), so identical rows collide on the same
+// key and crash the client with `each_key_duplicate` before the key-metrics
+// region resolves. The render must be made stable either by collapsing
+// fully-identical provenance rows before render or by giving the keyed renderer
+// collision-free row identity.
+export const DUPLICATE_FEC_PROVENANCE_ROW = {
+  domain: "campaign_finance",
+  jurisdiction: "federal/fec",
+  data_source_name: "FEC",
+  data_source_url: "https://www.fec.gov",
+  source_record_key: "cm:2026:C00718866",
+  record_url: "https://www.fec.gov/data/committee/C00718866/",
+  pull_date: "2026-03-20T00:00:00Z"
+};
+
+export const COMMITTEE_CANONICAL_DATA_WITH_DUPLICATE_FEC_SOURCES = {
+  ...COMMITTEE_CANONICAL_DATA,
+  detail: {
+    ...COMMITTEE_CANONICAL_DATA.detail,
+    sources: [{ ...DUPLICATE_FEC_PROVENANCE_ROW }, { ...DUPLICATE_FEC_PROVENANCE_ROW }]
+  }
+};
+
+// Companion specimen: two provenance rows that share the SAME source_record_key
+// (cm:2026:C00718866) but carry genuinely different displayed evidence — a
+// distinct record_url, data_source_name, and pull_date. These collide on the
+// current (source + sourceRecordKey + pullDate) key because pull_date also
+// matches, so the repair cannot simply dedupe by record key: both distinct
+// source links/labels must survive with unique renderer keys.
+export const COMMITTEE_CANONICAL_DATA_WITH_SAME_KEY_DISTINCT_SOURCES = {
+  ...COMMITTEE_CANONICAL_DATA,
+  detail: {
+    ...COMMITTEE_CANONICAL_DATA.detail,
+    sources: [
+      {
+        domain: "campaign_finance",
+        jurisdiction: "federal/fec",
+        data_source_name: "FEC",
+        data_source_url: "https://www.fec.gov",
+        source_record_key: "cm:2026:C00718866",
+        record_url: "https://www.fec.gov/data/committee/C00718866/",
+        pull_date: "2026-03-20T00:00:00Z"
+      },
+      {
+        domain: "campaign_finance",
+        jurisdiction: "federal/fec",
+        data_source_name: "FEC (amended filing)",
+        data_source_url: "https://www.fec.gov",
+        source_record_key: "cm:2026:C00718866",
+        record_url: "https://www.fec.gov/data/committee/C00718866/?amended=1",
+        pull_date: "2026-03-20T00:00:00Z"
+      }
+    ]
+  }
+};

@@ -23,7 +23,7 @@
     <p>{trustSection.emptyMessage}</p>
   {:else}
     <ul class="detail__list">
-      {#each trustSection.rows as row (row.source + row.sourceRecordKey + row.pullDate)}
+      {#each trustSection.rows as row (row.rowKey)}
         <li>
           <p>{row.sourceLabel}</p>
           <p>Source record ID: {row.sourceRecordKey}</p>
