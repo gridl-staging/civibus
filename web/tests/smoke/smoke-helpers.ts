@@ -27,6 +27,7 @@ export const BAR_SERIES_MARK_SELECTOR = "svg rect";
 // the API failed, never that the data is merely absent.
 export const BACKEND_FAILURE_STATE_COPY = /temporarily unavailable/i;
 const CAMPAIGN_FINANCE_KEY_METRICS_SUCCESS_COPY = /\bTotal raised\b/i;
+const CANDIDATE_KEY_FINANCIALS_SUCCESS_COPY = /\bTotal receipts\b/i;
 const RENDERED_MONEY_VALUE_COPY = /\$(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?[KMB]?\b/;
 
 export function assertNoBackendFailureText(renderedText: string): void {
@@ -43,6 +44,17 @@ export function assertCampaignFinanceKeyMetricsTextReady(renderedText: string): 
   }
   if (!RENDERED_MONEY_VALUE_COPY.test(renderedText)) {
     throw new Error("Campaign-finance key metrics did not render a loaded money value.");
+  }
+}
+
+export function assertCandidateKeyFinancialsTextReady(renderedText: string): void {
+  assertNoBackendFailureText(renderedText);
+
+  if (!CANDIDATE_KEY_FINANCIALS_SUCCESS_COPY.test(renderedText)) {
+    throw new Error("Candidate key financials did not render loaded totals.");
+  }
+  if (!RENDERED_MONEY_VALUE_COPY.test(renderedText)) {
+    throw new Error("Candidate key financials did not render a loaded money value.");
   }
 }
 
@@ -80,6 +92,21 @@ export async function expectCampaignFinanceKeyMetricsReady(
     timeout: timeoutMs
   });
   assertCampaignFinanceKeyMetricsTextReady((await keyMetrics.textContent()) ?? "");
+}
+
+export async function expectCandidateKeyFinancialsReady(
+  page: Page,
+  timeoutMs: number
+): Promise<void> {
+  const keyMetrics = page.getByTestId("key-metrics");
+  await expect(keyMetrics).toBeVisible({ timeout: timeoutMs });
+  await expect(keyMetrics.getByText("Total receipts", { exact: true })).toBeVisible({
+    timeout: timeoutMs
+  });
+  await expect(keyMetrics.getByText(RENDERED_MONEY_VALUE_COPY).first()).toBeVisible({
+    timeout: timeoutMs
+  });
+  assertCandidateKeyFinancialsTextReady((await keyMetrics.textContent()) ?? "");
 }
 
 /**

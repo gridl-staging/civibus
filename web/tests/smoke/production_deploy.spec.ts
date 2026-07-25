@@ -5,6 +5,7 @@ import {
   chartRegion,
   expectActionToVisibleContentWithinBudget,
   expectCampaignFinanceKeyMetricsReady,
+  expectCandidateKeyFinancialsReady,
   expectNoBackendFailureStates,
   expectNoPartyCommitteeInLinkedCommittees,
   parseRenderedMoneyLabel
@@ -348,7 +349,7 @@ test.describe("production deployment smoke (read-only)", () => {
         await expect(page.getByRole("heading", { name: candidateName })).toBeVisible({
           timeout: PERF_BUDGET_MS
         });
-        await expectCampaignFinanceKeyMetricsReady(page, PERF_BUDGET_MS);
+        await expectCandidateKeyFinancialsReady(page, PERF_BUDGET_MS);
       }
     });
 
