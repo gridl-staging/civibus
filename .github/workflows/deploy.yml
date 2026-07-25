@@ -51,14 +51,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          flyctl deploy -c infra/fly/api.fly.toml --remote-only --depot=false --build-arg CIVIBUS_GIT_SHA=${{ steps.provenance.outputs.dev_sha }} --build-arg CIVIBUS_BUILT_AT=${{ steps.provenance.outputs.built_at }}
+          flyctl deploy -c infra/fly/api.fly.toml --remote-only --build-arg CIVIBUS_GIT_SHA=${{ steps.provenance.outputs.dev_sha }} --build-arg CIVIBUS_BUILT_AT=${{ steps.provenance.outputs.built_at }}
 
       - name: Deploy web to Fly
         shell: bash
         run: |
           set -euo pipefail
           # The positional web directory changes -c resolution, so anchor the config at the workspace.
-          flyctl deploy web -c "$GITHUB_WORKSPACE/infra/fly/web.fly.toml" --remote-only --depot=false --build-arg CIVIBUS_GIT_SHA=${{ steps.provenance.outputs.dev_sha }} --build-arg CIVIBUS_BUILT_AT=${{ steps.provenance.outputs.built_at }}
+          flyctl deploy web -c "$GITHUB_WORKSPACE/infra/fly/web.fly.toml" --remote-only --build-arg CIVIBUS_GIT_SHA=${{ steps.provenance.outputs.dev_sha }} --build-arg CIVIBUS_BUILT_AT=${{ steps.provenance.outputs.built_at }}
 
       - name: Deploy Caddy to Fly
         shell: bash

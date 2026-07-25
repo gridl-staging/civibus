@@ -653,8 +653,8 @@ def _sample_l13_live_snapshot() -> dict[str, object]:
                 "PROD_SMOKE_BASE_URL": "${{ vars.PROD_SMOKE_BASE_URL }}",
             },
             "fly_deploy_commands": [
-                "flyctl deploy -c infra/fly/api.fly.toml --remote-only --depot=false",
-                'flyctl deploy web -c "$GITHUB_WORKSPACE/infra/fly/web.fly.toml" --remote-only --depot=false',
+                "flyctl deploy -c infra/fly/api.fly.toml --remote-only",
+                "flyctl deploy web -c infra/fly/web.fly.toml --remote-only",
                 "flyctl deploy -c infra/fly/caddy.fly.toml --remote-only",
             ],
         },
@@ -674,8 +674,8 @@ def test_deploy_workflow_replaces_ssh_compose_rollout_with_fly_deploys():
         "deploy workflow must remove placeholder message and run the real rollout"
     )
     expected_deploy_commands = [
-        "flyctl deploy -c infra/fly/api.fly.toml --remote-only --depot=false",
-        'flyctl deploy web -c "$GITHUB_WORKSPACE/infra/fly/web.fly.toml" --remote-only --depot=false',
+        "flyctl deploy -c infra/fly/api.fly.toml --remote-only",
+        'flyctl deploy web -c "$GITHUB_WORKSPACE/infra/fly/web.fly.toml" --remote-only',
         "flyctl deploy -c infra/fly/caddy.fly.toml --remote-only",
     ]
     assert sum("flyctl deploy" in script for script in deploy_scripts) == 3
