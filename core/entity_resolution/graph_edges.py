@@ -1,6 +1,4 @@
-"""
-Stub summary for MAR18_cross_domain_er_and_property_graph/civibus_dev/core/entity_resolution/graph_edges.py.
-"""
+"""Build graph edges (e.g. CONTRIBUTED_TO) from persisted ER match decisions into the AGE graph."""
 
 from __future__ import annotations
 

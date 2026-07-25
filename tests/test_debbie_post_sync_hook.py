@@ -26,12 +26,12 @@ PUBLIC_RUN_SPECIMENS = (
     "docs/reference/keel/",
     "evidence/",
 )
-EXPECTED_PUBLIC_ELIGIBLE_NODE_TOTAL = 3063
+EXPECTED_PUBLIC_ELIGIBLE_NODE_TOTAL = 3064
 EXPECTED_PUBLIC_NODE_PREFIX_TOTALS = {
     "api/": 249,
     "core/": 654,
     "domains/": 1646,
-    "tests/": 514,
+    "tests/": 515,
 }
 
 

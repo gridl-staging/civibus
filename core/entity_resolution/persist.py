@@ -1,3 +1,5 @@
+"""Persist entity-resolution match decisions and clusters to the database."""
+
 from __future__ import annotations
 
 from datetime import UTC, datetime

@@ -1,3 +1,6 @@
+"""L8 entity-resolution regression harness: scores the matcher against labeled pairs
+(tests/er_regression_pairs.yaml) and gates ER threshold changes."""
+
 from __future__ import annotations
 
 import argparse

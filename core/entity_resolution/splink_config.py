@@ -1,3 +1,14 @@
+"""Splink/DuckDB entity-resolution settings for person and organization dedupe.
+
+Owns the comparison levels, blocking rules, deterministic identifier rules, confidence
+thresholds, and preprocessing SQL over core.person_er_view / core.organization_er_view.
+
+Runtime status: built and tested; used by the person-spine, property-owner, and NC donor
+ER paths. NOT yet run over the ~16M FEC individual contributors -- those rows are not in
+core.person (the federal load runs transactions_only), so contributor_person_id is null
+at scale. Extending ER to donors is tracked in ROADMAP.md (Planned -> Donor Intelligence).
+"""
+
 from __future__ import annotations
 
 from copy import deepcopy
@@ -73,8 +84,8 @@ def _build_person_settings(
             block_on("date_of_birth", "last_name_prefix3"),
             # Block 5: Deterministic identifier match
             # Any shared identifier is an immediate block (FEC ID, voter reg, etc.)
-            # NOTE: Requires person_er_view to unnest identifiers JSONB into individual
-            # rows with an identifier_key column. View assembly is deferred to Stage 2.
+            # Uses the identifier_key column that core.person_er_view already unnests from
+            # the identifiers JSONB (see core/schema/er_views.sql) -- live, not deferred.
             block_on("identifier_key"),
         ],
         comparisons=[
@@ -180,15 +191,15 @@ ORGANIZATION_SETTINGS = _build_organization_settings() if _SPLINK_IMPORT_ERROR i
 # Pre-processing functions for blocking columns
 # =============================================================================
 
-# These reference views (person_er_view, organization_er_view) don't exist yet.
-# They'll join core tables + domain data to surface the columns needed for blocking.
-# Stage 2 work includes:
-#   - View assembly (which tables/domains contribute which columns)
-#   - Identifier unnesting: identifiers JSONB must be unnested into rows with
-#     (identifier_key, identifier_value) columns for block_on("identifier_key") to work
-#   - Cross-domain link_type configuration
-#
-# The SQL below is illustrative — column availability depends on view implementation.
+# These reference views EXIST in core/schema/er_views.sql and already assemble the
+# blocking columns below:
+#   - core.person_er_view: canonical_name/first_name/last_name/date_of_birth, the latest
+#     address (normalized_address, street_number, zip5, state), employer + occupation from
+#     the identifiers JSONB, and an unnested identifier_key for block_on("identifier_key").
+#     The last_name_prefix5/3 columns are derived in the preprocessing SQL below.
+#   - core.organization_er_view: the organization blocking columns.
+# Open work is running this pipeline over the ~16M FEC donors (they are not yet in
+# core.person), not view assembly. See ROADMAP.md (Planned -> Donor Intelligence).
 
 PERSON_PREPROCESSING_SQL = """
     SELECT

@@ -1,3 +1,6 @@
+"""Resolve official-roster candidacies to person/candidate entities via the shared ER
+scoring and confidence pipeline."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

@@ -1,6 +1,6 @@
-"""
-Stub summary for MAR18_cross_domain_er_and_property_graph/civibus_dev/core/entity_resolution/cli.py.
-"""
+"""Entity-resolution CLI (`python -m core.entity_resolution.cli`, `make er`): describe
+blocking, score/cluster candidate pairs, classify confidence, and persist match decisions.
+Runs the person/organization pipeline; not yet run over the ~16M FEC donors."""
 
 from __future__ import annotations
 

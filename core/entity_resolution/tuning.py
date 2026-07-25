@@ -1,3 +1,6 @@
+"""Entity-resolution threshold tuning CLI: cluster scored pairs and classify confidence
+over the ER pipeline."""
+
 from __future__ import annotations
 
 import argparse

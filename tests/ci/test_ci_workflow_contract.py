@@ -143,7 +143,7 @@ def test_public_mirror_classification_contract_is_valid_and_exact() -> None:
     entries = validate_public_mirror_classifications()
 
     assert len(entries) == len({entry.node_id for entry in entries})
-    assert len(entries) == 115
+    assert len(entries) == 118
     assert {entry.category for entry in entries} == {PublicMirrorCategory.DEV_REPO_ONLY}
     assert "tests/ci/test_api_dockerfile_contract.py::test_debbie_sync_includes_api_dockerfile_root_inputs" in (
         DEV_REPO_ONLY_CLASSIFICATIONS_BY_NODE_ID

@@ -1,3 +1,5 @@
+"""Generate entity-resolution proof/evidence artifacts from persisted match decisions (CLI)."""
+
 from __future__ import annotations
 
 import argparse

@@ -114,6 +114,21 @@ PUBLIC_MIRROR_TEST_CLASSIFICATIONS: tuple[PublicMirrorTestClassification, ...] =
         ),
     ),
     *_entries(
+        private_asset="private single-deploy recovery receipt under docs/live-state/",
+        owner="single deploy recovery receipt contract",
+        node_ids=(
+            "tests/ci/test_single_deploy_receipt_contract.py::test_single_deploy_receipt_contains_fail_closed_recovery_chain",
+        ),
+    ),
+    *_entries(
+        private_asset="ROADMAP.md and .github/workflows/uptime_probe.yml",
+        owner="single deploy recovery receipt contract",
+        node_ids=(
+            "tests/ci/test_single_deploy_receipt_contract.py::test_roadmap_closes_only_authorized_single_deploy_rows",
+            "tests/ci/test_single_deploy_receipt_contract.py::test_roadmap_guard_fails_when_extra_row_closes_on_single_deploy_date",
+        ),
+    ),
+    *_entries(
         private_asset="private status docs: ROADMAP.md, .scrai/overview.md, CLAUDE.md, AGENTS.md",
         owner="backup status documentation contract",
         node_ids=(
