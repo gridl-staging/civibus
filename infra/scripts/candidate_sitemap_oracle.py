@@ -5,9 +5,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 from collections import Counter
+from pathlib import Path
 from typing import Any, Callable
 from urllib.error import HTTPError, URLError
 from urllib.parse import urljoin, urlparse
@@ -18,6 +20,8 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 
 
 BATCH_LIMIT = 200
+PUBLIC_CANDIDATE_LIST_PATH = "/api/v1/candidates"
+REPO_SECRET_ENV_PATH = Path(__file__).resolve().parents[2] / ".secret" / "civibus-fly.env"
 BARE_UUID_CANDIDATE_PATH = re.compile(
     r"^/candidate/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
     r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
@@ -116,7 +120,7 @@ def _decode_json_body(response: HttpResponse, *, label: str) -> dict[str, Any]:
 
 
 def _fetch_candidate_page(fetch_url: FetchUrl, base_url: str, offset: int) -> CandidateListPage:
-    path = f"/v1/candidates?limit={BATCH_LIMIT}&offset={offset}"
+    path = f"{PUBLIC_CANDIDATE_LIST_PATH}?limit={BATCH_LIMIT}&offset={offset}"
     response = fetch_url(_build_url(base_url, path))
     if response.status_code != 200:
         raise OracleError(f"candidate_api_unexpected_http_status {response.status_code} path={path}")
@@ -203,17 +207,45 @@ def evaluate_candidate_sitemap(base_url: str, fetch_url: FetchUrl) -> CandidateS
     )
 
 
-def _http_fetch_url(url: str) -> HttpResponse:
-    request = Request(url, headers={"User-Agent": "civibus-candidate-sitemap-oracle/1.0"})
-    try:
-        with urlopen(request, timeout=60) as response:
-            body = response.read().decode(response.headers.get_content_charset() or "utf-8")
-            return HttpResponse(status_code=response.status, body=body)
-    except HTTPError as exc:
-        body = exc.read().decode("utf-8", errors="replace")
-        return HttpResponse(status_code=exc.code, body=body)
-    except URLError as exc:
-        raise OracleError(f"http_request_failed {url} {exc.reason}") from exc
+def _read_env_file_api_key(path: Path) -> str:
+    if not path.exists():
+        return ""
+    values: dict[str, str] = {}
+    for raw_line in path.read_text().splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        values[key.strip()] = value.strip().strip("\"'")
+    return values.get("CIVIBUS_API_KEY", "") or values.get("CIVIBUS_API_KEYS", "").split(",", 1)[0].strip()
+
+
+def _candidate_api_key(environ: dict[str, str] | None = None, env_path: Path = REPO_SECRET_ENV_PATH) -> str:
+    source = os.environ if environ is None else environ
+    return (
+        source.get("CIVIBUS_API_KEY", "")
+        or source.get("CIVIBUS_API_KEYS", "").split(",", 1)[0].strip()
+        or _read_env_file_api_key(env_path)
+    )
+
+
+def _build_http_fetch_url(candidate_api_key: str) -> FetchUrl:
+    def fetch_url(url: str) -> HttpResponse:
+        headers = {"User-Agent": "civibus-candidate-sitemap-oracle/1.0"}
+        if candidate_api_key and urlparse(url).path.startswith(PUBLIC_CANDIDATE_LIST_PATH):
+            headers["X-API-Key"] = candidate_api_key
+        request = Request(url, headers=headers)
+        try:
+            with urlopen(request, timeout=60) as response:
+                body = response.read().decode(response.headers.get_content_charset() or "utf-8")
+                return HttpResponse(status_code=response.status, body=body)
+        except HTTPError as exc:
+            body = exc.read().decode("utf-8", errors="replace")
+            return HttpResponse(status_code=exc.code, body=body)
+        except URLError as exc:
+            raise OracleError(f"http_request_failed {url} {exc.reason}") from exc
+
+    return fetch_url
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -228,7 +260,7 @@ def main() -> int:
     parser = _build_parser()
     args = parser.parse_args()
     try:
-        report = evaluate_candidate_sitemap(args.base_url, _http_fetch_url)
+        report = evaluate_candidate_sitemap(args.base_url, _build_http_fetch_url(_candidate_api_key()))
     except OracleError as exc:
         print(f"candidate_sitemap_oracle_error {exc}", file=sys.stderr)
         return 2

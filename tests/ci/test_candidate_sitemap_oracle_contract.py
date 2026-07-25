@@ -7,6 +7,8 @@ import pytest
 from infra.scripts.candidate_sitemap_oracle import (
     HttpResponse,
     OracleError,
+    PUBLIC_CANDIDATE_LIST_PATH,
+    _candidate_api_key,
     evaluate_candidate_sitemap,
 )
 
@@ -82,7 +84,7 @@ class FixtureSurface:
         path = url.removeprefix(BASE_URL)
         self.requested_paths.append(path)
         status = self.status_by_path.get(path, 200)
-        if path.startswith("/v1/candidates"):
+        if path.startswith(PUBLIC_CANDIDATE_LIST_PATH):
             offset = int(path.split("offset=", 1)[1])
             page_index = offset // 200
             return HttpResponse(status_code=status, body=self.candidate_pages[page_index])
@@ -114,8 +116,8 @@ def test_candidate_sitemap_oracle_accepts_canonical_sitemap() -> None:
     report = evaluate_candidate_sitemap(BASE_URL, surface.fetch)
 
     assert surface.requested_paths == [
-        "/v1/candidates?limit=200&offset=0",
-        "/v1/candidates?limit=200&offset=200",
+        f"{PUBLIC_CANDIDATE_LIST_PATH}?limit=200&offset=0",
+        f"{PUBLIC_CANDIDATE_LIST_PATH}?limit=200&offset=200",
         "/sitemap.xml",
     ]
     assert report.ok is True
@@ -171,8 +173,23 @@ def test_candidate_sitemap_oracle_fails_closed_on_unexpected_http_status() -> No
     surface = FixtureSurface(
         candidate_pages=_candidate_pages(),
         sitemap_xml=_sitemap([SAFE_URL]),
-        status_by_path={"/v1/candidates?limit=200&offset=0": 503},
+        status_by_path={f"{PUBLIC_CANDIDATE_LIST_PATH}?limit=200&offset=0": 503},
     )
 
     with pytest.raises(OracleError, match="candidate_api_unexpected_http_status 503"):
         evaluate_candidate_sitemap(BASE_URL, surface.fetch)
+
+
+def test_candidate_sitemap_oracle_reads_api_key_from_environment(tmp_path) -> None:
+    env_path = tmp_path / "civibus-fly.env"
+    env_path.write_text("CIVIBUS_API_KEY=file-key\nCIVIBUS_API_KEYS=file-list-key,second\n")
+
+    assert _candidate_api_key({"CIVIBUS_API_KEY": "env-key"}, env_path) == "env-key"
+    assert _candidate_api_key({"CIVIBUS_API_KEYS": "env-list-key,second"}, env_path) == "env-list-key"
+
+
+def test_candidate_sitemap_oracle_reads_api_key_from_repo_secret_env_file(tmp_path) -> None:
+    env_path = tmp_path / "civibus-fly.env"
+    env_path.write_text("# local deploy proof secrets\nCIVIBUS_API_KEYS=file-list-key,second\n")
+
+    assert _candidate_api_key({}, env_path) == "file-list-key"
