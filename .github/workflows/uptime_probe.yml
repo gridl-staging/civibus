@@ -123,72 +123,6 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           echo "Probe result: healthy=${HEALTHY} status=${STATUS}"
 
-      - name: Warn on donor search surface
-        continue-on-error: true
-        run: |
-          set -euo pipefail
-          TARGET="${PROBE_BASE_URL%/}/donors?q=smith&by=name"
-          BODY_FILE="$(mktemp)"
-          trap 'rm -f "$BODY_FILE"' EXIT
-
-          set +e
-          STATUS=$(curl -sS "$TARGET" \
-            --max-time 30 \
-            --write-out '%{http_code}' \
-            --output "$BODY_FILE")
-          CURL_EXIT=$?
-          set -e
-
-          if [ "$CURL_EXIT" -ne 0 ]; then
-            echo "::warning::donor surface probe curl_error target=${TARGET} exit=${CURL_EXIT}"
-            exit 1
-          fi
-
-          if [ "$STATUS" != "200" ]; then
-            BODY_EXCERPT=$(head -c 500 "$BODY_FILE" 2>/dev/null || true)
-            echo "::warning::donor surface probe http_status target=${TARGET} status=${STATUS} body=${BODY_EXCERPT}"
-            exit 1
-          fi
-
-          if grep -q 'data-testid="donor-result-row"' "$BODY_FILE"; then
-            echo "donor_surface_ok target=${TARGET} status=200 marker=data-testid=\"donor-result-row\""
-            exit 0
-          fi
-
-          BODY_EXCERPT=$(head -c 500 "$BODY_FILE" 2>/dev/null || true)
-          echo "::warning::donor surface probe missing_marker target=${TARGET} status=${STATUS} marker=data-testid=\"donor-result-row\" body=${BODY_EXCERPT}"
-          exit 1
-
-      - name: Warn on public deploy drift
-        continue-on-error: true
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          # WARN-only shadow mode. This mirror-side check detects deploy lag
-          # (public host not serving the latest synced mirror commit) but cannot
-          # detect sync lag (gridl-dev/civibus_dev main ahead of the mirror).
-          # Promote this check to fail-closed only after one batch with zero false would-be kills cited in closing evidence.
-          manifest_json="$(
-            gh api repos/${{ github.repository }}/contents/.debbie/sync_manifest.json --jq '.content' | base64 -d
-          )"
-          expected_sha="$(printf '%s' "$manifest_json" | jq -r '.dev_sha // empty')"
-          api_sha="$(curl -fsS "${PROBE_BASE_URL%/}/api/health/version" | jq -r '.git_sha // "unknown"' || true)"
-          web_sha="$(curl -fsS "${PROBE_BASE_URL%/}/version.json" | jq -r '.git_sha // "unknown"' || true)"
-
-          if [[ ! "$expected_sha" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "::warning::deploy lag check could not read a valid dev_sha from the mirror sync manifest"
-            exit 1
-          fi
-
-          if [[ "$api_sha" == "$expected_sha" && "$web_sha" == "$expected_sha" ]]; then
-            echo "deploy_drift_ok expected=$expected_sha api=$api_sha web=$web_sha"
-            exit 0
-          fi
-
-          echo "::warning::deploy lag detected for ${PROBE_BASE_URL}: expected=$expected_sha api=$api_sha web=$web_sha. This mirror-side warning cannot detect sync lag; the dev-repo parity probe owns that."
-          exit 1
-
       - name: Find existing open uptime-incident issue
         id: find
         env:
@@ -275,6 +209,68 @@ jobs:
             --title "[uptime] /api/health/content returned ${STATUS} at ${NOW}" \
             --body "${BODY}"
 
-      # The job ALWAYS exits 0. The issue is the alert; a non-zero job exit
-      # would create a second notification path (workflow-failed email)
-      # and risk masking real failures behind workflow-noise emails.
+      # Content-health issue management intentionally runs before the fatal
+      # donor-surface and deploy-drift gates.
+      - name: Check donor search surface
+        run: |
+          set -euo pipefail
+          TARGET="${PROBE_BASE_URL%/}/donors?q=smith&by=name"
+          BODY_FILE="$(mktemp)"
+          trap 'rm -f "$BODY_FILE"' EXIT
+
+          set +e
+          STATUS=$(curl -sS "$TARGET" \
+            --max-time 30 \
+            --write-out '%{http_code}' \
+            --output "$BODY_FILE")
+          CURL_EXIT=$?
+          set -e
+
+          if [ "$CURL_EXIT" -ne 0 ]; then
+            echo "::error::donor surface probe curl_error target=${TARGET} exit=${CURL_EXIT}"
+            exit 1
+          fi
+
+          if [ "$STATUS" != "200" ]; then
+            BODY_EXCERPT=$(head -c 500 "$BODY_FILE" 2>/dev/null || true)
+            echo "::error::donor surface probe http_status target=${TARGET} status=${STATUS} body=${BODY_EXCERPT}"
+            exit 1
+          fi
+
+          if grep -q 'data-testid="donor-result-row"' "$BODY_FILE"; then
+            echo "donor_surface_ok target=${TARGET} status=200 marker=data-testid=\"donor-result-row\""
+            exit 0
+          fi
+
+          BODY_EXCERPT=$(head -c 500 "$BODY_FILE" 2>/dev/null || true)
+          echo "::error::donor surface probe missing_marker target=${TARGET} status=${STATUS} marker=data-testid=\"donor-result-row\" body=${BODY_EXCERPT}"
+          exit 1
+
+      - name: Check public deploy drift
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # This fatal mirror-side check detects deploy lag (public host not
+          # serving the latest synced mirror commit) but cannot detect sync lag
+          # (gridl-dev/civibus_dev main ahead of the mirror); the dev-repo
+          # parity probe owns that limitation.
+          manifest_json="$(
+            gh api repos/${{ github.repository }}/contents/.debbie/sync_manifest.json --jq '.content' | base64 -d
+          )"
+          expected_sha="$(printf '%s' "$manifest_json" | jq -r '.dev_sha // empty')"
+          api_sha="$(curl -fsS "${PROBE_BASE_URL%/}/api/health/version" | jq -r '.git_sha // "unknown"' || true)"
+          web_sha="$(curl -fsS "${PROBE_BASE_URL%/}/version.json" | jq -r '.git_sha // "unknown"' || true)"
+
+          if [[ ! "$expected_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::deploy lag check could not read a valid dev_sha from the mirror sync manifest"
+            exit 1
+          fi
+
+          if [[ "$api_sha" == "$expected_sha" && "$web_sha" == "$expected_sha" ]]; then
+            echo "deploy_drift_ok expected=$expected_sha api=$api_sha web=$web_sha"
+            exit 0
+          fi
+
+          echo "::error::deploy lag detected for ${PROBE_BASE_URL}: expected=$expected_sha api=$api_sha web=$web_sha. This mirror-side warning cannot detect sync lag; the dev-repo parity probe owns that."
+          exit 1

@@ -2,14 +2,15 @@
 
 The workflow itself runs on staging/prod (debbie syncs it from this dev repo).
 These tests assert the dev-repo file's structural contract — cron cadence,
-target endpoint, dedup label, recovery behavior — so a future edit that
-silently loosens any of those gets caught at PR time.
+target endpoint, content-health issue handling, and fatal donor/deploy surface
+gates — so a future edit that silently loosens any of those gets caught at PR
+time.
 
 The workflow's *runtime* behavior cannot be exercised here (would require
 GitHub Actions infra), so these tests are deliberately limited to file-shape
 assertions. The failure mode they catch is "someone refactored the workflow
-and broke its dedup/cadence contract"; runtime failures are caught by the
-workflow itself opening an issue.
+and broke its dedup/cadence contract"; content-health runtime failures open an
+issue, while donor/deploy surface failures fail the workflow job.
 """
 
 from __future__ import annotations
@@ -165,44 +166,71 @@ def test_label_create_command_includes_explicit_repository_context(workflow_text
     assert '--repo="${{ github.repository }}"' in label_command, "gh label create must include explicit --repo context"
 
 
-def test_workflow_warns_on_public_deploy_drift_without_failing_job(
-    workflow_text: str, workflow_steps: list[dict]
-) -> None:
-    drift_step = next(step for step in workflow_steps if step.get("name") == "Warn on public deploy drift")
+def test_workflow_fails_on_public_deploy_drift(workflow_text: str, workflow_steps: list[dict]) -> None:
+    drift_step = next(step for step in workflow_steps if step.get("name") == "Check public deploy drift")
     script = drift_step["run"]
 
-    assert drift_step["continue-on-error"] is True
+    assert "continue-on-error" not in drift_step
     assert "gh api repos/${{ github.repository }}/contents/.debbie/sync_manifest.json" in script
     assert "base64 -d" in script
-    assert ".dev_sha" in script
-    assert "/api/health/version" in script
-    assert "/version.json" in script
-    assert "::warning::" in script
-    assert "deploy lag" in workflow_text
+    assert "jq -r '.dev_sha // empty'" in script
+    assert '[[ ! "$expected_sha" =~ ^[0-9a-f]{40}$ ]]' in script
+    assert 'curl -fsS "${PROBE_BASE_URL%/}/api/health/version"' in script
+    assert 'curl -fsS "${PROBE_BASE_URL%/}/version.json"' in script
+    assert '[[ "$api_sha" == "$expected_sha" && "$web_sha" == "$expected_sha" ]]' in script
+    assert 'echo "deploy_drift_ok expected=$expected_sha api=$api_sha web=$web_sha"' in script
+    assert (
+        'echo "::error::deploy lag check could not read a valid dev_sha from the mirror sync manifest"\n  exit 1'
+    ) in script
+    assert (
+        'echo "::error::deploy lag detected for ${PROBE_BASE_URL}: expected=$expected_sha '
+        "api=$api_sha web=$web_sha. This mirror-side warning cannot detect sync lag; "
+        'the dev-repo parity probe owns that."\n'
+        "exit 1"
+    ) in script
     assert "cannot detect sync lag" in workflow_text
-    assert "Promote this check to fail-closed only after one batch with zero false would-be kills" in workflow_text
 
 
-def test_workflow_warns_on_donor_search_surface_without_failing_job(workflow_steps: list[dict]) -> None:
-    donor_step = next((step for step in workflow_steps if step.get("name") == "Warn on donor search surface"), None)
-    assert donor_step is not None, "missing WARN-only donor search surface step"
-
-    issue_step_index = next(
-        index
-        for index, step in enumerate(workflow_steps)
-        if step.get("name") == "Find existing open uptime-incident issue"
-    )
-    donor_step_index = workflow_steps.index(donor_step)
+def test_workflow_fails_on_donor_search_surface(workflow_steps: list[dict]) -> None:
+    donor_step = next(step for step in workflow_steps if step.get("name") == "Check donor search surface")
     script = donor_step["run"]
 
-    assert donor_step_index < issue_step_index
-    assert donor_step["continue-on-error"] is True
+    ordered_step_names = (
+        "Probe content health endpoint",
+        "Find existing open uptime-incident issue",
+        "Close existing issue (endpoint recovered)",
+        "Comment on existing issue (endpoint still failing)",
+        "Open new uptime-incident issue (endpoint failing, no existing issue)",
+        "Check donor search surface",
+        "Check public deploy drift",
+    )
+    ordered_step_indexes = [
+        next(index for index, step in enumerate(workflow_steps) if step.get("name") == name)
+        for name in ordered_step_names
+    ]
+
+    assert ordered_step_indexes == sorted(ordered_step_indexes)
+    assert "continue-on-error" not in donor_step
     assert 'TARGET="${PROBE_BASE_URL%/}/donors?q=smith&by=name"' in script
-    assert "curl" in script
     assert "--max-time 30" in script
-    assert "grep -q 'data-testid=\"donor-result-row\"'" in script
+    assert "set +e" in script
+    assert "CURL_EXIT=$?" in script
+    assert "set -e" in script
+    assert 'if [ "$CURL_EXIT" -ne 0 ]; then' in script
+    assert ('echo "::error::donor surface probe curl_error target=${TARGET} exit=${CURL_EXIT}"\n  exit 1') in script
+    assert 'if [ "$STATUS" != "200" ]; then' in script
+    assert (
+        'echo "::error::donor surface probe http_status target=${TARGET} status=${STATUS} '
+        'body=${BODY_EXCERPT}"\n'
+        "  exit 1"
+    ) in script
+    assert 'if grep -q \'data-testid="donor-result-row"\' "$BODY_FILE"; then' in script
     assert 'donor_surface_ok target=${TARGET} status=200 marker=data-testid=\\"donor-result-row\\"' in script
-    assert "::warning::donor surface probe" in script
+    assert (
+        'echo "::error::donor surface probe missing_marker target=${TARGET} status=${STATUS} '
+        'marker=data-testid=\\"donor-result-row\\" body=${BODY_EXCERPT}"\n'
+        "exit 1"
+    ) in script
     assert "$GITHUB_OUTPUT" not in script
     assert 'echo "healthy=' not in script
     assert 'echo "status=' not in script
@@ -212,8 +240,32 @@ def test_workflow_warns_on_donor_search_surface_without_failing_job(workflow_ste
     assert "GH_TOKEN" not in script
 
 
-def test_workflow_keeps_warn_probe_lightweight_and_issue_flow_unchanged(workflow_text: str) -> None:
+def test_workflow_preserves_content_health_issue_flow_before_fatal_gates(
+    workflow_text: str, workflow_steps: list[dict]
+) -> None:
+    find_step = next(step for step in workflow_steps if step.get("name") == "Find existing open uptime-incident issue")
+    close_step = next(
+        step for step in workflow_steps if step.get("name") == "Close existing issue (endpoint recovered)"
+    )
+    comment_step = next(
+        step for step in workflow_steps if step.get("name") == "Comment on existing issue (endpoint still failing)"
+    )
+    open_step = next(
+        step
+        for step in workflow_steps
+        if step.get("name") == "Open new uptime-incident issue (endpoint failing, no existing issue)"
+    )
+
+    assert find_step["id"] == "find"
+    assert "if" not in find_step
+    assert find_step["run"].strip().startswith("NUMBER=$(gh issue list")
+    assert close_step["if"] == "steps.probe.outputs.healthy == 'true' && steps.find.outputs.number != ''"
+    assert comment_step["if"] == "steps.probe.outputs.healthy == 'false' && steps.find.outputs.number != ''"
+    assert open_step["if"] == "steps.probe.outputs.healthy == 'false' && steps.find.outputs.number == ''"
     assert "actions/checkout@" not in workflow_text
     assert "uv sync" not in workflow_text
     assert "gh issue create" in workflow_text
     assert "gh issue close" in workflow_text
+    assert "WARN-only shadow mode" not in workflow_text
+    assert "Promote this check to fail-closed only after" not in workflow_text
+    assert "The job ALWAYS exits 0" not in workflow_text

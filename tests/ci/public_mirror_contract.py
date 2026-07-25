@@ -121,7 +121,7 @@ PUBLIC_MIRROR_TEST_CLASSIFICATIONS: tuple[PublicMirrorTestClassification, ...] =
         ),
     ),
     *_entries(
-        private_asset="ROADMAP.md and .github/workflows/uptime_probe.yml",
+        private_asset="ROADMAP.md",
         owner="single deploy recovery receipt contract",
         node_ids=(
             "tests/ci/test_single_deploy_receipt_contract.py::test_roadmap_closes_only_authorized_single_deploy_rows",

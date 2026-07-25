@@ -11,7 +11,6 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RECEIPT_PATH = REPO_ROOT / "docs/live-state/2026_07_24_single_deploy.md"
 ROADMAP_PATH = REPO_ROOT / "ROADMAP.md"
-UPTIME_PROBE_WORKFLOW_PATH = REPO_ROOT / ".github/workflows/uptime_probe.yml"
 
 RECEIPT_RELATIVE_PATH = "docs/live-state/2026_07_24_single_deploy.md"
 EXPECTED_CLOSED_TITLES = {
@@ -97,7 +96,7 @@ def _closed_pass_titles_for_date(roadmap_text: str, close_date: str) -> set[str]
     return closed_titles
 
 
-def _assert_roadmap_contract(roadmap_text: str, uptime_probe_workflow_text: str) -> None:
+def _assert_roadmap_contract(roadmap_text: str) -> None:
     rows = _roadmap_rows(roadmap_text)
     closed_pass_marker = "**CLOSED/PASS 2026-07-25**"
 
@@ -114,10 +113,9 @@ def _assert_roadmap_contract(roadmap_text: str, uptime_probe_workflow_text: str)
     assert len(deploy_currency_rows) == 1
     deploy_currency_row = deploy_currency_rows[0]
     assert "**CLOSED/PASS 2026-07-17**" in deploy_currency_row
-    assert "Promotion still not done" in deploy_currency_row
-    assert "continue-on-error: true" in deploy_currency_row
-    assert "(2×) in `uptime_probe.yml`" in deploy_currency_row
-    assert uptime_probe_workflow_text.count("continue-on-error: true") == 2
+    assert "20 consecutive observations per gate" in deploy_currency_row
+    assert "at least one deploy in the combined window" in deploy_currency_row
+    assert "zero false would-be kills" in deploy_currency_row
 
 
 @pytest.mark.dev_repo_only(
@@ -129,21 +127,20 @@ def test_single_deploy_receipt_contains_fail_closed_recovery_chain() -> None:
 
 
 @pytest.mark.dev_repo_only(
-    private_asset="ROADMAP.md and .github/workflows/uptime_probe.yml",
+    private_asset="ROADMAP.md",
     owner="single deploy recovery receipt contract",
 )
 def test_roadmap_closes_only_authorized_single_deploy_rows() -> None:
     roadmap_text = ROADMAP_PATH.read_text(encoding="utf-8")
-    workflow_text = UPTIME_PROBE_WORKFLOW_PATH.read_text(encoding="utf-8")
 
-    _assert_roadmap_contract(roadmap_text, workflow_text)
+    _assert_roadmap_contract(roadmap_text)
 
     duplicate_closed_row = (
         "\n| P0 | CI does not run most of the suite — **CLOSED/PASS 2026-07-25** | "
         "duplicate closure with docs/live-state/2026_07_24_single_deploy.md evidence | duplicate gate |"
     )
     with pytest.raises(AssertionError):
-        _assert_roadmap_contract(roadmap_text + duplicate_closed_row, workflow_text)
+        _assert_roadmap_contract(roadmap_text + duplicate_closed_row)
 
 
 def test_receipt_guard_fails_when_required_sha_or_count_is_removed() -> None:
@@ -162,7 +159,7 @@ def test_receipt_guard_fails_when_required_sha_or_count_is_removed() -> None:
 
 
 @pytest.mark.dev_repo_only(
-    private_asset="ROADMAP.md and .github/workflows/uptime_probe.yml",
+    private_asset="ROADMAP.md",
     owner="single deploy recovery receipt contract",
 )
 def test_roadmap_guard_fails_when_extra_row_closes_on_single_deploy_date() -> None:
@@ -170,7 +167,4 @@ def test_roadmap_guard_fails_when_extra_row_closes_on_single_deploy_date() -> No
     extra_closed_row = "\n| P0 | Deploy currency — **CLOSED/PASS 2026-07-25** | bad closure | bad gate |"
 
     with pytest.raises(AssertionError):
-        _assert_roadmap_contract(
-            roadmap_text + extra_closed_row,
-            UPTIME_PROBE_WORKFLOW_PATH.read_text(encoding="utf-8"),
-        )
+        _assert_roadmap_contract(roadmap_text + extra_closed_row)
