@@ -80,34 +80,39 @@ def _assert_receipt_contract(receipt_text: str) -> None:
     assert missing_coupled_snippets == []
 
 
-def _roadmap_rows(roadmap_text: str) -> dict[str, str]:
-    rows: dict[str, str] = {}
+def _roadmap_rows(roadmap_text: str) -> dict[str, list[str]]:
+    rows: dict[str, list[str]] = {}
     for line in roadmap_text.splitlines():
         match = re.match(r"^\| P\d \| (?P<title>.+?) — .+? \|", line)
         if match:
-            rows[match.group("title")] = line
+            rows.setdefault(match.group("title"), []).append(line)
     return rows
 
 
 def _closed_pass_titles_for_date(roadmap_text: str, close_date: str) -> set[str]:
     closed_titles: set[str] = set()
-    for title, row in _roadmap_rows(roadmap_text).items():
-        if f"**CLOSED/PASS {close_date}**" in row:
+    for title, row_lines in _roadmap_rows(roadmap_text).items():
+        if any(f"**CLOSED/PASS {close_date}**" in row for row in row_lines):
             closed_titles.add(title)
     return closed_titles
 
 
 def _assert_roadmap_contract(roadmap_text: str, uptime_probe_workflow_text: str) -> None:
     rows = _roadmap_rows(roadmap_text)
+    closed_pass_marker = "**CLOSED/PASS 2026-07-25**"
 
     assert _closed_pass_titles_for_date(roadmap_text, "2026-07-25") == EXPECTED_CLOSED_TITLES
     for title in EXPECTED_CLOSED_TITLES:
-        assert RECEIPT_RELATIVE_PATH in rows[title]
+        closed_rows = [row for row in rows[title] if closed_pass_marker in row]
+        assert len(closed_rows) == 1
+        assert RECEIPT_RELATIVE_PATH in closed_rows[0]
 
     assert "Weekly federal refresh terminal RED" in rows
     assert "Serving gates cannot observe endpoint failure" in rows
 
-    deploy_currency_row = rows["Deploy currency"]
+    deploy_currency_rows = rows["Deploy currency"]
+    assert len(deploy_currency_rows) == 1
+    deploy_currency_row = deploy_currency_rows[0]
     assert "**CLOSED/PASS 2026-07-17**" in deploy_currency_row
     assert "Promotion still not done" in deploy_currency_row
     assert "continue-on-error: true" in deploy_currency_row
@@ -128,10 +133,17 @@ def test_single_deploy_receipt_contains_fail_closed_recovery_chain() -> None:
     owner="single deploy recovery receipt contract",
 )
 def test_roadmap_closes_only_authorized_single_deploy_rows() -> None:
-    _assert_roadmap_contract(
-        ROADMAP_PATH.read_text(encoding="utf-8"),
-        UPTIME_PROBE_WORKFLOW_PATH.read_text(encoding="utf-8"),
+    roadmap_text = ROADMAP_PATH.read_text(encoding="utf-8")
+    workflow_text = UPTIME_PROBE_WORKFLOW_PATH.read_text(encoding="utf-8")
+
+    _assert_roadmap_contract(roadmap_text, workflow_text)
+
+    duplicate_closed_row = (
+        "\n| P0 | CI does not run most of the suite — **CLOSED/PASS 2026-07-25** | "
+        "duplicate closure with docs/live-state/2026_07_24_single_deploy.md evidence | duplicate gate |"
     )
+    with pytest.raises(AssertionError):
+        _assert_roadmap_contract(roadmap_text + duplicate_closed_row, workflow_text)
 
 
 def test_receipt_guard_fails_when_required_sha_or_count_is_removed() -> None:
@@ -139,6 +151,14 @@ def test_receipt_guard_fails_when_required_sha_or_count_is_removed() -> None:
 
     with pytest.raises(AssertionError):
         _assert_receipt_contract(specimen.replace("candidate_api_total=8249", ""))
+
+    with pytest.raises(AssertionError):
+        _assert_receipt_contract(
+            specimen.replace(
+                "Prod Deploy run `30171507412` for prod SHA `1af3e2e106f831ea119f599fbfacb0ac2aaf3770` passed job `89713328037`.",
+                "",
+            )
+        )
 
 
 @pytest.mark.dev_repo_only(
