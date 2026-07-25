@@ -60,7 +60,11 @@ from domains.campaign_finance.ingest.field_mapper import (
     map_ccl_fields,
     map_committee_fields,
 )
-from domains.campaign_finance.ingest.fec_lookup import find_candidate_id_by_fec_id, find_committee_id_by_fec_id
+from domains.campaign_finance.ingest.fec_lookup import (
+    build_committee_master_source_record_key,
+    find_candidate_id_by_fec_id,
+    find_committee_id_by_fec_id,
+)
 from domains.campaign_finance.ingest.text_utils import normalize_optional_text
 
 LOGGER = logging.getLogger(__name__)
@@ -250,7 +254,10 @@ def load_committees(
         source_record_id = _try_insert_bulk_source_record(
             conn,
             data_source_id=data_source_id,
-            source_record_key=f"cm:{cycle_key}:{fec_committee_id}",
+            source_record_key=build_committee_master_source_record_key(
+                cycle=cycle_key,
+                fec_committee_id=fec_committee_id,
+            ),
             raw_row=dict(raw_row),
         )
         if source_record_id is None:

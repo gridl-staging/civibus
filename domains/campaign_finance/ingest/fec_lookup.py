@@ -11,6 +11,7 @@ from uuid import UUID
 import psycopg
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
+from core.db import select_active_source_record_by_key
 from core.people.federal_officeholders import active_federal_candidate_scope_cte
 from domains.campaign_finance.ingest.text_utils import normalize_optional_text
 
@@ -146,6 +147,25 @@ def find_committee_id_by_fec_id(conn: psycopg.Connection, fec_id: str) -> UUID |
     return row[0]
 
 
+def build_committee_master_source_record_key(*, cycle: int | str, fec_committee_id: str) -> str:
+    return f"cm:{cycle}:{fec_committee_id}"
+
+
+def has_active_committee_master_source_record(
+    conn: psycopg.Connection,
+    *,
+    data_source_id: UUID,
+    cycle: int | str,
+    fec_committee_id: str,
+) -> bool:
+    source_record = select_active_source_record_by_key(
+        conn,
+        data_source_id=data_source_id,
+        source_record_key=build_committee_master_source_record_key(cycle=cycle, fec_committee_id=fec_committee_id),
+    )
+    return source_record is not None
+
+
 def find_committee_ids_by_fec_ids(
     conn: psycopg.Connection,
     fec_ids: Iterable[str],
@@ -219,10 +239,12 @@ def current_federal_officeholder_committee_fec_ids(conn: psycopg.Connection) -> 
 
 __all__ = [
     "FederalOfficeholderFecLinkPolicy",
+    "build_committee_master_source_record_key",
     "current_federal_officeholder_committee_fec_ids",
     "federal_officeholder_fec_link_policy",
     "find_committee_id_by_fec_id",
     "find_committee_ids_by_fec_ids",
     "find_candidate_id_by_fec_id",
+    "has_active_committee_master_source_record",
     "resolve_federal_officeholder_fec_candidate_ids",
 ]

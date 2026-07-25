@@ -23,6 +23,12 @@ from core.db import get_connection
 from domains.campaign_finance.ingest.bulk_loader import ensure_fec_bulk_data_source
 from domains.campaign_finance.ingest.schedule_b_loader import load_schedule_b
 from domains.campaign_finance.ingest.schedule_b_parser import SCHEDULE_B_COLUMNS
+from test_support.fec_master_source import (
+    delete_fec_committee_master_source_records,
+    fec_committee_master_source_key,
+    seed_fec_committee_master_source_record,
+    select_fec_committee_master_source_keys,
+)
 from test_support.schedule_e import seed_schedule_e_committee
 
 pytestmark = [pytest.mark.integration, pytest.mark.e2e]
@@ -138,6 +144,14 @@ def _cleanup_schedule_b_test_data(
                 "DELETE FROM cf.filing WHERE filing_fec_id = ANY(%s)",
                 (file_nums,),
             )
+            cur.execute(
+                """
+                DELETE FROM core.source_record
+                WHERE source_record_key LIKE 'schedule_b:%%'
+                  AND source_record_key LIKE ANY(%s)
+                """,
+                ([f"%:{file_num}:%" for file_num in file_nums],),
+            )
         if committee_fec_ids:
             cur.execute(
                 """
@@ -245,23 +259,57 @@ class TestScheduleBFilingPersistence:
         data_source_id: UUID,
         tmp_path: Path,
     ) -> None:
-        nonexistent_cmte_id = _unique_committee_fec_id()
-        file_num = _unique_file_num()
-        rows = [_make_row(cmte_id=nonexistent_cmte_id, file_num=file_num)]
+        source_orphan_cmte_id = _unique_committee_fec_id()
+        recoverable_cmte_id = _unique_committee_fec_id()
+        source_orphan_file_num = _unique_file_num()
+        recoverable_file_num = _unique_file_num()
+        seed_fec_committee_master_source_record(
+            db_conn,
+            data_source_id=data_source_id,
+            cycle=2024,
+            fec_committee_id=recoverable_cmte_id,
+            name="Recoverable Missing Committee",
+        )
+        assert select_fec_committee_master_source_keys(
+            db_conn,
+            cycle=2024,
+            committee_fec_ids=[source_orphan_cmte_id, recoverable_cmte_id],
+        ) == {fec_committee_master_source_key(2024, recoverable_cmte_id)}
+        rows = [
+            _make_row(cmte_id=source_orphan_cmte_id, file_num=source_orphan_file_num),
+            _make_row(cmte_id=recoverable_cmte_id, file_num=recoverable_file_num),
+        ]
         oppexp_path = _write_oppexp_file(tmp_path, rows)
 
-        result = load_schedule_b(
-            db_conn,
-            oppexp_path,
-            cycle=2024,
-            data_source_id=data_source_id,
-            batch_size=100,
-        )
-        assert result.inserted == 0
-        assert result.errors == 1
+        try:
+            result = load_schedule_b(
+                db_conn,
+                oppexp_path,
+                cycle=2024,
+                data_source_id=data_source_id,
+                batch_size=100,
+            )
+            assert result.inserted == 0
+            assert result.skipped == 1
+            assert result.quarantined == 0
+            assert result.superseded == 0
+            assert result.errors == 1
 
-        filing = _select_filing_by_fec_id(db_conn, file_num)
-        assert filing is None
+            assert _select_filing_by_fec_id(db_conn, source_orphan_file_num) is None
+            assert _select_transactions_by_filing_fec_id(db_conn, source_orphan_file_num) == []
+            assert _select_filing_by_fec_id(db_conn, recoverable_file_num) is None
+            assert _select_transactions_by_filing_fec_id(db_conn, recoverable_file_num) == []
+        finally:
+            _cleanup_schedule_b_test_data(
+                db_conn,
+                [source_orphan_cmte_id, recoverable_cmte_id],
+                [source_orphan_file_num, recoverable_file_num],
+            )
+            delete_fec_committee_master_source_records(
+                db_conn,
+                cycle=2024,
+                committee_fec_ids=[source_orphan_cmte_id, recoverable_cmte_id],
+            )
 
 
 class TestScheduleBTransactionPersistence:

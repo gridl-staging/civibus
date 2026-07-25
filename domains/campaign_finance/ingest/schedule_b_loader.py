@@ -10,7 +10,10 @@ import psycopg
 from core.db import try_insert_source_record
 from core.types.python.models import SourceRecord, compute_record_hash, utc_now
 from domains.campaign_finance.ingest.bulk_stage4_loader import LoadResult
-from domains.campaign_finance.ingest.fec_lookup import find_committee_id_by_fec_id
+from domains.campaign_finance.ingest.fec_lookup import (
+    find_committee_id_by_fec_id,
+    has_active_committee_master_source_record,
+)
 from domains.campaign_finance.ingest.filing_loader import upsert_filing, upsert_transaction
 from domains.campaign_finance.ingest.schedule_loader_common import (
     create_schedule_loader_field_parsers,
@@ -135,6 +138,14 @@ def _process_schedule_b_row(
     committee_fec_id = _require_text(mapped_row, "committee_id")
     committee_id = find_committee_id_by_fec_id(conn, committee_fec_id)
     if committee_id is None:
+        if not has_active_committee_master_source_record(
+            conn,
+            data_source_id=data_source_id,
+            cycle=cycle,
+            fec_committee_id=committee_fec_id,
+        ):
+            result.skipped += 1
+            return
         raise ValueError(
             f"Schedule B row references missing committee CMTE_ID={committee_fec_id}; load committees first"
         )

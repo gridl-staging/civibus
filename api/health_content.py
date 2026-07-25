@@ -24,9 +24,10 @@ Design constraints:
 from __future__ import annotations
 
 import os
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Mapping
+from typing import Mapping, Protocol
 
 import psycopg
 from psycopg.sql import SQL
@@ -84,12 +85,18 @@ _FEC_BULK_FRESHNESS_CHECK = "campaign_finance_federal_fec_fresh"
 _FEC_BULK_FRESHNESS_MAX_AGE = timedelta(days=7)
 _FEC_BULK_FRESHNESS_INDETERMINATE_ACTUAL = 0
 _FEC_BULK_FRESHNESS_SUCCESS_STATUS = "success"
+_CF_TRANSACTION_TOTAL_CHECK = "cf_transaction_total"
+_CF_TRANSACTION_TOTAL_CONFIRM_QUERY = "SELECT count(*) FROM cf.transaction"
+_CF_TRANSACTION_TOTAL_CONFIRM_TIMEOUT_MS = 5_000
+_CF_TRANSACTION_TOTAL_CONFIRM_SAVEPOINT = "content_health_transaction_total_confirm"
+_CF_TRANSACTION_TOTAL_CONFIRM_TIMEOUT_SQL = f"SET LOCAL statement_timeout = {_CF_TRANSACTION_TOTAL_CONFIRM_TIMEOUT_MS}"
+_RESET_LOCAL_STATEMENT_TIMEOUT_SQL = "SET LOCAL statement_timeout = DEFAULT"
 
 
 # Per-check SQL. Order is preserved so the cursor's ``executed`` log lines
 # up 1:1 with the failures returned — useful when reading test output.
 _CHECK_QUERIES: Mapping[str, str] = {
-    "cf_transaction_total": (
+    _CF_TRANSACTION_TOTAL_CHECK: (
         "SELECT COALESCE((SELECT s.n_live_tup FROM pg_stat_user_tables s "
         "WHERE s.schemaname = 'cf' AND s.relname = 'transaction'), 0)"
     ),
@@ -135,6 +142,33 @@ class ContentHealthFailure:
     check: str
     actual: int
     floor: int
+
+
+class _HealthCursor(Protocol):
+    def execute(self, query: object, params: object = None) -> object: ...
+
+    def fetchone(self) -> tuple[object, ...] | None: ...
+
+
+def _fetch_single_int(cursor: _HealthCursor) -> int:
+    row = cursor.fetchone()
+    return int(row[0]) if row is not None else 0
+
+
+def _confirm_transaction_total(cursor: _HealthCursor) -> int:
+    cursor.execute(SQL(f"SAVEPOINT {_CF_TRANSACTION_TOTAL_CONFIRM_SAVEPOINT}"))
+    try:
+        cursor.execute(SQL(_CF_TRANSACTION_TOTAL_CONFIRM_TIMEOUT_SQL))
+        cursor.execute(SQL(_CF_TRANSACTION_TOTAL_CONFIRM_QUERY))
+        actual = _fetch_single_int(cursor)
+    except Exception:
+        with suppress(Exception):
+            cursor.execute(SQL(f"ROLLBACK TO SAVEPOINT {_CF_TRANSACTION_TOTAL_CONFIRM_SAVEPOINT}"))
+            cursor.execute(SQL(f"RELEASE SAVEPOINT {_CF_TRANSACTION_TOTAL_CONFIRM_SAVEPOINT}"))
+        raise
+    cursor.execute(SQL(_RESET_LOCAL_STATEMENT_TIMEOUT_SQL))
+    cursor.execute(SQL(f"RELEASE SAVEPOINT {_CF_TRANSACTION_TOTAL_CONFIRM_SAVEPOINT}"))
+    return actual
 
 
 def _to_utc_epoch_seconds(value: object) -> int | None:
@@ -222,9 +256,18 @@ def evaluate_content_health(
             # defined in this module (no user input), so SQL() is safe and
             # satisfies the typed cursor.execute() contract.
             cursor.execute(SQL(query))  # type: ignore[arg-type]
-            row = cursor.fetchone()
-            actual = int(row[0]) if row is not None else 0
+            actual = _fetch_single_int(cursor)
             floor = resolved_floors.get(check, _DEFAULT_FLOORS[check])
+            if check == _CF_TRANSACTION_TOTAL_CHECK and actual <= floor:
+                try:
+                    # The exact count is expensive on the hot path, so it only
+                    # confirms suspicious stale-low estimates. If confirmation
+                    # cannot complete, fail closed with the existing integer
+                    # sentinel instead of reporting the database as healthy.
+                    actual = _confirm_transaction_total(cursor)
+                except Exception:
+                    failures.append(ContentHealthFailure(check=check, actual=0, floor=floor))
+                    continue
             if actual < floor:
                 failures.append(ContentHealthFailure(check=check, actual=actual, floor=floor))
         cursor.execute(SQL(_FEC_BULK_FRESHNESS_QUERY), _FEC_BULK_FRESHNESS_PARAMS)  # type: ignore[arg-type]

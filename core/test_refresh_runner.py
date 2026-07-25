@@ -17,7 +17,13 @@ from domains.civics.loaders.ncsbe_results import NcsbeResultsLoadSummary
 from domains.civics.loaders.official_rosters.source_registry import list_nc_roster_source_metadata
 
 
-def _job_for_tests(*, key: str, run_callable: MagicMock | None = None) -> runner.RefreshJob:
+def _job_for_tests(
+    *,
+    key: str,
+    run_callable: MagicMock | None = None,
+    refresh_history_key: str | None = None,
+    activity_denominator_result_field: str | None = None,
+) -> runner.RefreshJob:
     return runner.RefreshJob(
         key=key,
         domain="campaign_finance",
@@ -25,6 +31,8 @@ def _job_for_tests(*, key: str, run_callable: MagicMock | None = None) -> runner
         cadence="daily",
         data_source_names=("TRACER Bulk Download — Contributions",),
         run_callable=run_callable or MagicMock(),
+        refresh_history_key=refresh_history_key,
+        activity_denominator_result_field=activity_denominator_result_field,
     )
 
 
@@ -1470,9 +1478,13 @@ def test_run_job_records_federal_spine_result_counts(monkeypatch: pytest.MonkeyP
 
     result = runner.run_job(connection, job)
 
-    assert result.status == "success"
-    assert result.message == "Refresh job succeeded: inserted=541 skipped=1 quarantined=0 superseded=0 errors=1"
+    assert result.status == "degraded"
+    assert (
+        result.message
+        == "Refresh job completed with loader errors: inserted=541 skipped=1 quarantined=0 superseded=0 errors=1"
+    )
     refresh_run = insert_refresh_run.call_args.args[1]
+    assert refresh_run.pull_status == "degraded"
     assert refresh_run.inserted_count == 541
     assert refresh_run.skipped_count == 1
     assert refresh_run.quarantined_count == 0
@@ -1562,9 +1574,13 @@ def test_run_job_aggregates_loader_counts_from_multi_file_result(monkeypatch: py
 
     result = runner.run_job(connection, job)
 
-    assert result.status == "success"
-    assert result.message == "Refresh job succeeded: inserted=60 skipped=6 quarantined=1 superseded=1 errors=1"
+    assert result.status == "degraded"
+    assert (
+        result.message
+        == "Refresh job completed with loader errors: inserted=60 skipped=6 quarantined=1 superseded=1 errors=1"
+    )
     refresh_run = insert_refresh_run.call_args.args[1]
+    assert refresh_run.pull_status == "degraded"
     assert refresh_run.inserted_count == 60
     assert refresh_run.skipped_count == 6
     assert refresh_run.quarantined_count == 1
@@ -1637,7 +1653,24 @@ def test_recent_nonempty_activity_counts_include_processed_non_insert_rows() -> 
     assert cursor.execute.call_args.args[1] == ("federal-fec-masters", completed_after)
 
 
-def test_run_job_records_success_when_incremental_activity_matches_bulk_history(
+def test_recent_nonempty_activity_counts_uses_job_key_for_historical_volume_fallback() -> None:
+    connection = MagicMock()
+    cursor = connection.cursor.return_value.__enter__.return_value
+    cursor.fetchall.return_value = [(526,)]
+    job = _job_for_tests(key="generic-materialization-job")
+    completed_after = datetime(2026, 6, 24, tzinfo=timezone.utc)
+
+    activity_counts = runner._recent_nonempty_activity_counts(
+        connection,
+        job,
+        completed_after=completed_after,
+    )
+
+    assert activity_counts == [526]
+    assert cursor.execute.call_args.args[1] == ("generic-materialization-job", completed_after)
+
+
+def test_run_job_records_degraded_when_loader_reports_errors_even_with_bulk_activity(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     connection = MagicMock()
@@ -1655,9 +1688,12 @@ def test_run_job_records_success_when_incremental_activity_matches_bulk_history(
 
     result = runner.run_job(connection, job)
 
-    assert result.status == "success"
-    assert result.message == ("Refresh job succeeded: inserted=175 skipped=40414 quarantined=0 superseded=0 errors=1")
-    assert insert_refresh_run.call_args.args[1].pull_status == "success"
+    assert result.status == "degraded"
+    assert result.message == (
+        "Refresh job completed with loader errors: inserted=175 skipped=40414 quarantined=0 superseded=0 errors=1"
+    )
+    sync_data_source_metadata.assert_not_called()
+    assert insert_refresh_run.call_args.args[1].pull_status == "degraded"
 
 
 def test_run_job_records_degraded_pull_status_when_activity_is_below_recent_median(
@@ -1682,6 +1718,172 @@ def test_run_job_records_degraded_pull_status_when_activity_is_below_recent_medi
     assert result.message == "Refresh job completed below historical volume threshold: activity=85 median=200"
     sync_data_source_metadata.assert_not_called()
     assert insert_refresh_run.call_args.args[1].pull_status == "degraded"
+
+
+def test_derive_pull_status_compares_incremental_enrichment_with_like_for_like_history() -> None:
+    """Federal enrichment uses the selected population as its current workload."""
+    connection = MagicMock()
+    job = _job_for_tests(
+        key="federal-enrichment",
+        activity_denominator_result_field="selected",
+    )
+    execution_result = {
+        "selected": 540,
+        "inserted": 525,
+        "skipped": 0,
+        "quarantined": 0,
+        "superseded": 0,
+        "errors": 0,
+    }
+
+    status, counts, message = runner._derive_pull_status(
+        connection,
+        job,
+        execution_error=None,
+        execution_result=execution_result,
+        completed_at=datetime(2026, 7, 25, 3, 21, 16, tzinfo=timezone.utc),
+    )
+
+    connection.cursor.assert_not_called()
+    assert status == "success"
+    assert counts == {
+        "inserted": 525,
+        "skipped": 0,
+        "quarantined": 0,
+        "superseded": 0,
+        "errors": 0,
+    }
+    assert message == (
+        "Refresh job succeeded: inserted=525 skipped=0 quarantined=0 superseded=0 errors=0 activity=525 denominator=540"
+    )
+
+
+def test_derive_pull_status_degrades_incremental_enrichment_below_selected_denominator() -> None:
+    connection = MagicMock()
+    job = _job_for_tests(
+        key="federal-enrichment",
+        activity_denominator_result_field="selected",
+    )
+
+    status, counts, message = runner._derive_pull_status(
+        connection,
+        job,
+        execution_error=None,
+        execution_result={
+            "selected": 200,
+            "inserted": 85,
+            "skipped": 0,
+            "quarantined": 0,
+            "superseded": 0,
+            "errors": 0,
+        },
+        completed_at=datetime(2026, 7, 25, 3, 21, 16, tzinfo=timezone.utc),
+    )
+
+    connection.cursor.assert_not_called()
+    assert status == "degraded"
+    assert counts == {
+        "inserted": 85,
+        "skipped": 0,
+        "quarantined": 0,
+        "superseded": 0,
+        "errors": 0,
+    }
+    assert message == "Refresh job completed below configured volume threshold: activity=85 denominator=200"
+
+
+def test_derive_pull_status_fails_closed_for_invalid_configured_denominator() -> None:
+    connection = MagicMock()
+    job = _job_for_tests(
+        key="federal-enrichment",
+        activity_denominator_result_field="selected",
+    )
+
+    status, counts, message = runner._derive_pull_status(
+        connection,
+        job,
+        execution_error=None,
+        execution_result={
+            "inserted": 525,
+            "skipped": 0,
+            "quarantined": 0,
+            "superseded": 0,
+            "errors": 0,
+        },
+        completed_at=datetime(2026, 7, 25, 3, 21, 16, tzinfo=timezone.utc),
+    )
+
+    connection.cursor.assert_not_called()
+    assert status == "degraded"
+    assert counts == {
+        "inserted": 525,
+        "skipped": 0,
+        "quarantined": 0,
+        "superseded": 0,
+        "errors": 0,
+    }
+    assert message == "Refresh job configured invalid activity denominator: field=selected"
+
+
+def test_derive_pull_status_fails_closed_for_configured_denominator_without_loader_counts() -> None:
+    connection = MagicMock()
+    job = _job_for_tests(
+        key="federal-enrichment",
+        activity_denominator_result_field="selected",
+    )
+
+    status, counts, message = runner._derive_pull_status(
+        connection,
+        job,
+        execution_error=None,
+        execution_result={"selected": 540},
+        completed_at=datetime(2026, 7, 25, 3, 21, 16, tzinfo=timezone.utc),
+    )
+
+    connection.cursor.assert_not_called()
+    assert status == "degraded"
+    assert counts == {
+        "inserted": 0,
+        "skipped": 0,
+        "quarantined": 0,
+        "superseded": 0,
+        "errors": 0,
+    }
+    assert message == "Refresh job configured activity denominator but loader counts are unavailable: field=selected"
+
+
+def test_derive_pull_status_fails_closed_for_empty_counts_with_invalid_configured_denominator() -> None:
+    connection = MagicMock()
+    job = _job_for_tests(
+        key="federal-enrichment",
+        activity_denominator_result_field="selected",
+    )
+
+    status, counts, message = runner._derive_pull_status(
+        connection,
+        job,
+        execution_error=None,
+        execution_result={
+            "selected": 0,
+            "inserted": 0,
+            "skipped": 0,
+            "quarantined": 0,
+            "superseded": 0,
+            "errors": 0,
+        },
+        completed_at=datetime(2026, 7, 25, 3, 21, 16, tzinfo=timezone.utc),
+    )
+
+    connection.cursor.assert_not_called()
+    assert status == "degraded"
+    assert counts == {
+        "inserted": 0,
+        "skipped": 0,
+        "quarantined": 0,
+        "superseded": 0,
+        "errors": 0,
+    }
+    assert message == "Refresh job configured invalid activity denominator: field=selected"
 
 
 def test_run_job_records_crashed_pull_status_on_exception(monkeypatch: pytest.MonkeyPatch) -> None:

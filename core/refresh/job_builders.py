@@ -49,7 +49,6 @@ from domains.campaign_finance.ingest.congress_legislators_adapter import (
     fetch_legislators_entries,
     select_most_recent_vacancy_predecessors,
 )
-from domains.campaign_finance.ingest.fec_client import FecClient
 from domains.campaign_finance.ingest.dark_money.download import (
     download_irs_527_full_data,
     extract_irs_527_txt,
@@ -148,6 +147,15 @@ KY_LOADABLE_REFRESH_DATA_TYPES = load_ky_data_types()
 LA_LOADABLE_REFRESH_DATA_TYPES = load_la_data_types()
 NE_LOADABLE_REFRESH_DATA_TYPES = load_ne_data_types()
 OR_LOADABLE_REFRESH_DATA_TYPES = load_or_data_types()
+
+
+class _ComputedElectionDatesClient:
+    """Election-date client that activates the races loader's deterministic fallback."""
+
+    def fetch_election_dates(self, **_filters: object) -> list[dict]:
+        return []
+
+
 FL_LOADABLE_REFRESH_DATA_TYPES: tuple[str, ...] = ("contributions", "expenditures", "transfers", "other")
 _PRIORITY_STATE_TRANSACTION_TYPES: dict[str, frozenset[str]] = {
     "AL": frozenset({"contributions", "expenditures"}),
@@ -1701,7 +1709,7 @@ def _build_federal_fec_races_job(parameters: RunnerParameters) -> RefreshJob:
                 connection,
                 races_data_source_id=races_data_source_id,
                 cn_data_source_id=cn_data_source_id,
-                election_client=FecClient(),
+                election_client=_ComputedElectionDatesClient(),
                 min_election_year=_federal_fec_races_min_election_year(parameters),
             )
         finally:
@@ -1738,6 +1746,7 @@ def _build_federal_enrichment_job() -> RefreshJob:
         cadence="weekly",
         data_source_names=(FEDERAL_ENRICHMENT_DATA_SOURCE_NAME,),
         run_callable=_run_federal_enrichment_job,
+        activity_denominator_result_field="selected",
     )
 
 

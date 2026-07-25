@@ -215,6 +215,8 @@ class TestFederalEnrichmentJobContract:
         assert job.domain == "people_enrichment"
         assert job.jurisdiction == "federal/congress"
         assert job.cadence == "weekly"
+        assert job.refresh_history_key is None
+        assert job.activity_denominator_result_field == "selected"
         assert job.data_source_names == ("people-enrichment-federal-congress",)
 
     def test_priority_scope_includes_federal_spine_before_weekly_enrichment(self) -> None:
@@ -431,6 +433,35 @@ class TestFederalFecRacesJobContract:
             and parameter.kind not in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD)
         ]
         assert required_params == []
+
+    def test_run_callable_does_not_require_fec_api_key(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.delenv("FEC_API_KEY", raising=False)
+        connection = MagicMock()
+        result = object()
+        races_data_source_id = UUID("5f56f4ad-8de1-4854-a5e6-35ff681335ef")
+        cn_data_source_id = UUID("5f56f4ad-8de1-4854-a5e6-35ff681335f0")
+        monkeypatch.setattr(job_builders, "get_connection", MagicMock(return_value=connection))
+        monkeypatch.setattr(
+            job_builders,
+            "ensure_federal_fec_races_data_source",
+            MagicMock(return_value=races_data_source_id),
+        )
+        monkeypatch.setattr(job_builders, "ensure_fec_bulk_data_source", MagicMock(return_value=cn_data_source_id))
+        monkeypatch.setattr(job_builders, "load_federal_fec_races", MagicMock(return_value=result))
+
+        assert self._find_races_job().run_callable() is result
+
+        job_builders.load_federal_fec_races.assert_called_once()
+        _, call_kwargs = job_builders.load_federal_fec_races.call_args
+        assert call_kwargs["races_data_source_id"] == races_data_source_id
+        assert call_kwargs["cn_data_source_id"] == cn_data_source_id
+        assert call_kwargs["election_client"].fetch_election_dates(election_year=2026) == []
+        assert call_kwargs["min_election_year"] == 2022
+        connection.transaction.assert_called_once_with()
+        connection.close.assert_called_once_with()
 
     def test_federal_scope_places_races_after_congress_spine(self) -> None:
         keys = [job.key for job in build_refresh_plan(scope="federal")]

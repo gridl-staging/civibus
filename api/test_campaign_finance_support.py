@@ -376,12 +376,16 @@ def insert_data_source_for_test(
     *,
     jurisdiction: str,
     name_suffix: str,
+    last_pull_at: datetime | None = None,
+    last_pull_status: str | None = None,
 ) -> DataSource:
     data_source = DataSource(
         domain="campaign_finance",
         jurisdiction=jurisdiction,
         name=f"Campaign Finance API Source {name_suffix}",
         source_url="https://example.org/campaign-finance-source",
+        last_pull_at=last_pull_at,
+        last_pull_status=last_pull_status,
     )
     insert_data_source(db_conn, data_source)
     return data_source

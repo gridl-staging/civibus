@@ -54,6 +54,11 @@ def _healthy_connection(*, freshness_result: tuple[object, ...] | None) -> FakeC
     return FakeConnection(_healthy_counts(), freshness_result=freshness_result)
 
 
+def _is_transaction_confirm_query(query: str) -> bool:
+    normalized_query = " ".join(query.lower().split())
+    return "select count(*) from cf.transaction" in normalized_query and " where " not in normalized_query
+
+
 def _load_api_main(monkeypatch: pytest.MonkeyPatch) -> ModuleType:
     """Mirror api/test_main.py loader: env must be set before import."""
     monkeypatch.setenv("CIVIBUS_ENV", "production")
@@ -146,6 +151,99 @@ def test_evaluate_content_health_accepts_federal_first_floors() -> None:
     )
 
     assert failures == []
+
+
+def test_evaluate_content_health_confirms_stale_low_transaction_estimate() -> None:
+    from api.health_content import evaluate_content_health
+
+    counts = list(FEDERAL_FIRST_COUNTS.values())
+    counts[0] = 0
+    fake = FakeConnection(
+        counts,
+        freshness_result=fresh_federal_fec_bulk_pull_row(),
+        transaction_confirm_count=FEDERAL_FIRST_COUNTS["cf_transaction_total"],
+    )
+
+    failures = evaluate_content_health(
+        fake,
+        floors=FEDERAL_FIRST_FLOORS,
+    )
+
+    assert failures == []
+    assert any(_is_transaction_confirm_query(query) for query in fake._cursor.executed)
+
+
+def test_evaluate_content_health_flags_confirmed_transaction_loss() -> None:
+    from api.health_content import ContentHealthFailure
+    from api.health_content import evaluate_content_health
+
+    floors = dict(FEDERAL_FIRST_FLOORS)
+    floors["cf_transaction_total"] = 1_000
+    counts = list(FEDERAL_FIRST_COUNTS.values())
+    counts[0] = 0
+
+    failures = evaluate_content_health(
+        FakeConnection(
+            counts,
+            freshness_result=fresh_federal_fec_bulk_pull_row(),
+            transaction_confirm_count=100,
+        ),
+        floors=floors,
+    )
+
+    assert failures == [
+        ContentHealthFailure(
+            check="cf_transaction_total",
+            actual=100,
+            floor=1_000,
+        )
+    ]
+
+
+def test_evaluate_content_health_skips_transaction_confirmation_when_estimate_is_healthy() -> None:
+    from api.health_content import evaluate_content_health
+
+    fake = FakeConnection(
+        list(FEDERAL_FIRST_COUNTS.values()),
+        freshness_result=fresh_federal_fec_bulk_pull_row(),
+        transaction_confirm_count=AssertionError("confirmation count should not run"),
+    )
+
+    failures = evaluate_content_health(
+        fake,
+        floors=FEDERAL_FIRST_FLOORS,
+    )
+
+    assert failures == []
+    assert not any(_is_transaction_confirm_query(query) for query in fake._cursor.executed)
+
+
+def test_evaluate_content_health_fails_when_transaction_confirmation_is_indeterminate() -> None:
+    from api.health_content import ContentHealthFailure
+    from api.health_content import evaluate_content_health
+
+    counts = list(FEDERAL_FIRST_COUNTS.values())
+    counts[0] = 0
+
+    fake = FakeConnection(
+        counts,
+        freshness_result=fresh_federal_fec_bulk_pull_row(),
+        transaction_confirm_count=TimeoutError("simulated statement timeout"),
+    )
+
+    failures = evaluate_content_health(
+        fake,
+        floors=FEDERAL_FIRST_FLOORS,
+    )
+
+    assert any(_is_transaction_confirm_query(query) for query in fake._cursor.executed)
+    assert failures == [
+        ContentHealthFailure(
+            check="cf_transaction_total",
+            actual=0,
+            floor=FEDERAL_FIRST_FLOORS["cf_transaction_total"],
+        )
+    ]
 
 
 @pytest.mark.parametrize("check_name", FEDERAL_FIRST_COUNTS.keys())

@@ -238,11 +238,20 @@ def _insert_candidate_with_official_totals(
 
 def _seed_member_with_candidate_direct_source(
     db_conn: psycopg.Connection,
+    *,
+    last_pull_at: datetime | None = None,
+    last_pull_status: str | None = None,
 ) -> tuple[_CongressMemberExpectation, UUID, str]:
     expectations = _seed_current_federal_members_mix(db_conn)
     member = _member_by_name(expectations, "Alice Representative")
     source_url = "https://example.org/fec/public-candidate-direct"
-    data_source = insert_data_source_for_test(db_conn, jurisdiction="federal/fec", name_suffix="public-money-source")
+    data_source = insert_data_source_for_test(
+        db_conn,
+        jurisdiction="federal/fec",
+        name_suffix="public-money-source",
+        last_pull_at=last_pull_at,
+        last_pull_status=last_pull_status,
+    )
     candidate_source = insert_source_record_for_test(
         db_conn,
         source_record_id=UUID("bb000000-0000-0000-0000-000000000301"),
@@ -276,6 +285,39 @@ def _seed_member_with_candidate_direct_source(
         source_record_id=candidate_source.id,
     )
     return member, candidate_id, source_url
+
+
+def test_public_federal_list_and_detail_share_effective_provenance_freshness(
+    api_client: TestClient,
+    db_conn: psycopg.Connection,
+) -> None:
+    effective_pull_at = datetime(2026, 7, 25, 7, 35, 34, tzinfo=timezone.utc)
+    member, _candidate_id, _source_url = _seed_member_with_candidate_direct_source(
+        db_conn,
+        last_pull_at=effective_pull_at,
+        last_pull_status="success",
+    )
+
+    export_response = api_client.get("/public/v1/federal/export.json")
+    detail_response = api_client.get(f"/public/v1/federal/officials/{member.person_id}/money")
+
+    assert export_response.status_code == 200
+    assert detail_response.status_code == 200
+    export_sources = _public_money_row_for_person(export_response.json(), member.person_id)["sources"]
+    detail_sources = detail_response.json()["sources"]
+    expected_source_record_keys = [
+        "public-candidate-direct",
+        "public-person-fallback",
+    ]
+    expected_pull_dates = [
+        "2026-07-25T07:35:34Z",
+        "2026-07-25T07:35:34Z",
+    ]
+    assert [source["source_record_key"] for source in export_sources] == expected_source_record_keys
+    assert [source["pull_date"] for source in export_sources] == expected_pull_dates
+    assert [source["source_record_key"] for source in detail_sources] == expected_source_record_keys
+    assert [source["pull_date"] for source in detail_sources] == expected_pull_dates
+    assert export_sources == detail_sources
 
 
 def test_public_officials_requires_no_api_key(db_conn: psycopg.Connection, monkeypatch: pytest.MonkeyPatch) -> None:

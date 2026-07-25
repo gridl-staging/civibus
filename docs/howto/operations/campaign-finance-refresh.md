@@ -95,16 +95,19 @@ date is red.
 
 ### Recovery and cutover boundary
 
-The latest L1R4 Stage 2 one-start authorization was consumed and ended red
-(`exit_code=2`) before `core.refresh.runner` started. The earlier L1R receipt
-ended with `exit_code=1` after `federal-fec-masters` degraded; it does not
-supersede the L1R4 result. This lane therefore permits no `77fad` resume,
-force-stop, second writer or second Machine, production volume/app identity
-change, or Debbie deployment. Do not start the Machine again under this
-receipt. L5 remains blocked because only a green L1R4 runtime receipt permits
-dispatch. Automatic-start acceptance also remains pending until the actual
-creation-anchored weekly boundary produces observed Fly events; configuration
-alone is not acceptance.
+The third authorized recovery start was consumed on 2026-07-25 and reached
+terminal Fly state with process exit `0`, but the Wave 2 receipt is terminal
+RED because the public person trust surface still rendered stale source text
+instead of `Data is current.` with the DB-derived FEC pull date. The earlier
+starts remain part of the ledger: the first ended with `exit_code=1` after a
+federal refresh degradation, and the L1R4 start ended with `exit_code=2` before
+`core.refresh.runner` started. This lane therefore permits no fourth start,
+`77fad` resume, force-stop, second writer or second Machine, production
+volume/app identity change, or Debbie deployment. L5 remains blocked because
+only a GREEN terminal receipt permits dispatch. Automatic-start acceptance also
+remains pending until the actual creation-anchored weekly boundary
+`2026-07-28T18:53:21Z` produces observed Fly events; configuration alone is not
+acceptance.
 
 ## Legacy VM and non-federal priority support
 

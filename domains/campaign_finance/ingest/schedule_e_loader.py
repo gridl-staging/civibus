@@ -14,7 +14,11 @@ import psycopg
 from core.db import try_insert_source_record
 from core.types.python.models import SourceRecord, compute_record_hash, utc_now
 from domains.campaign_finance.ingest.bulk_stage4_loader import LoadResult
-from domains.campaign_finance.ingest.fec_lookup import find_candidate_id_by_fec_id, find_committee_id_by_fec_id
+from domains.campaign_finance.ingest.fec_lookup import (
+    find_candidate_id_by_fec_id,
+    find_committee_id_by_fec_id,
+    has_active_committee_master_source_record,
+)
 from domains.campaign_finance.ingest.filing_loader import upsert_filing, upsert_transaction
 from domains.campaign_finance.ingest.schedule_loader_common import (
     create_schedule_loader_field_parsers,
@@ -183,6 +187,17 @@ def load_schedule_e(
                 committee_fec_id = _require_text(row, "spe_id")
                 committee_id = find_committee_id_by_fec_id(conn, committee_fec_id)
                 if committee_id is None:
+                    if not has_active_committee_master_source_record(
+                        conn,
+                        data_source_id=data_source_id,
+                        cycle=cycle,
+                        fec_committee_id=committee_fec_id,
+                    ):
+                        result.skipped += 1
+                        cursor.execute(f"ROLLBACK TO SAVEPOINT {_SCHEDULE_E_ROW_SAVEPOINT}")
+                        cursor.execute(f"RELEASE SAVEPOINT {_SCHEDULE_E_ROW_SAVEPOINT}")
+                        processed_since_commit = _commit_batch(conn, processed_since_commit, batch_size)
+                        continue
                     raise ValueError(
                         f"Schedule E row references missing committee spe_id={committee_fec_id}; load committees first"
                     )

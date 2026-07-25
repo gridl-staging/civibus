@@ -96,6 +96,7 @@ class RefreshJob:
     data_source_names: tuple[str, ...]
     run_callable: Callable[[], object]
     refresh_history_key: str | None = None
+    activity_denominator_result_field: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -267,16 +268,20 @@ def _single_loader_counts(execution_result: object) -> dict[str, int] | None:
         return {field_name: int(execution_result[field_name]) for field_name in _LOADER_COUNT_FIELDS}
 
     if all(hasattr(execution_result, field_name) for field_name in _LOADER_COUNT_FIELDS):
-        return {field_name: int(getattr(execution_result, field_name)) for field_name in _LOADER_COUNT_FIELDS}
+        count_values = {field_name: getattr(execution_result, field_name) for field_name in _LOADER_COUNT_FIELDS}
+        if all(isinstance(value, int) for value in count_values.values()):
+            return count_values
 
     if hasattr(execution_result, "result_row_count"):
-        return {
-            "inserted": int(getattr(execution_result, "result_row_count")),
-            "skipped": 0,
-            "quarantined": 0,
-            "superseded": 0,
-            "errors": 0,
-        }
+        result_row_count = getattr(execution_result, "result_row_count")
+        if isinstance(result_row_count, int):
+            return {
+                "inserted": result_row_count,
+                "skipped": 0,
+                "quarantined": 0,
+                "superseded": 0,
+                "errors": 0,
+            }
     return None
 
 
@@ -296,6 +301,72 @@ def _loader_counts(execution_result: object | None) -> dict[str, int] | None:
         return aggregate_counts
 
     return _single_loader_counts(execution_result)
+
+
+def _result_field_value(execution_result: object, field_name: str) -> object | None:
+    if isinstance(execution_result, Mapping):
+        return execution_result.get(field_name)
+    return getattr(execution_result, field_name, None)
+
+
+def _positive_int_result_field(execution_result: object, field_name: str) -> int | None:
+    value = _result_field_value(execution_result, field_name)
+    if type(value) is not int or value <= 0:
+        return None
+    return value
+
+
+def _format_loader_counts(prefix: str, counts: Mapping[str, int]) -> str:
+    return prefix + " ".join(
+        f"{field_name}={counts[field_name]}"
+        for field_name in ("inserted", "skipped", "quarantined", "superseded", "errors")
+    )
+
+
+def _derive_configured_denominator_pull_status(
+    job: RefreshJob,
+    execution_result: object | None,
+    counts: dict[str, int] | None,
+) -> tuple[str, dict[str, int], str] | None:
+    denominator_field = job.activity_denominator_result_field
+    if denominator_field is None:
+        return None
+
+    if counts is None:
+        return (
+            "degraded",
+            _zero_loader_counts(),
+            f"Refresh job configured activity denominator but loader counts are unavailable: field={denominator_field}",
+        )
+
+    activity_denominator = _positive_int_result_field(execution_result, denominator_field)
+    if activity_denominator is None:
+        return (
+            "degraded",
+            counts,
+            f"Refresh job configured invalid activity denominator: field={denominator_field}",
+        )
+
+    activity_count = _activity_count(counts)
+    if counts["errors"] > 0:
+        return (
+            "degraded",
+            counts,
+            _format_loader_counts("Refresh job completed with loader errors: ", counts),
+        )
+    if activity_count < max(1, int(activity_denominator * _DEGRADED_VOLUME_RATIO_THRESHOLD)):
+        return (
+            "degraded",
+            counts,
+            f"Refresh job completed below configured volume threshold: "
+            f"activity={activity_count} denominator={activity_denominator}",
+        )
+    return (
+        "success",
+        counts,
+        _format_loader_counts("Refresh job succeeded: ", counts)
+        + f" activity={activity_count} denominator={activity_denominator}",
+    )
 
 
 def _recent_nonempty_activity_counts(
@@ -338,6 +409,10 @@ def _derive_pull_status(
         )
 
     counts = _loader_counts(execution_result)
+    configured_denominator_status = _derive_configured_denominator_pull_status(job, execution_result, counts)
+    if configured_denominator_status is not None:
+        return configured_denominator_status
+
     if counts is None:
         return (
             "success",
@@ -353,6 +428,13 @@ def _derive_pull_status(
         and counts["errors"] == 0
     ):
         return "empty", counts, "Refresh job completed with no inserted rows"
+
+    if counts["errors"] > 0:
+        return (
+            "degraded",
+            counts,
+            _format_loader_counts("Refresh job completed with loader errors: ", counts),
+        )
 
     lookback_floor = completed_at - timedelta(days=_DEGRADED_LOOKBACK_DAYS)
     prior_activity_counts = _recent_nonempty_activity_counts(connection, job, completed_after=lookback_floor)
@@ -370,11 +452,7 @@ def _derive_pull_status(
     return (
         "success",
         counts,
-        "Refresh job succeeded: "
-        + " ".join(
-            f"{field_name}={counts[field_name]}"
-            for field_name in ("inserted", "skipped", "quarantined", "superseded", "errors")
-        ),
+        _format_loader_counts("Refresh job succeeded: ", counts),
     )
 
 

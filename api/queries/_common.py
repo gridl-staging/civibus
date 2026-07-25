@@ -39,7 +39,16 @@ _CAMPAIGN_FINANCE_PROVENANCE_SOURCE_IDS_SQL = """
       AND entity_id = %s
 """
 
-_CAMPAIGN_FINANCE_BATCH_PROVENANCE_SQL = """
+_EFFECTIVE_PROVENANCE_PULL_DATE_SQL = """
+    CASE
+        WHEN ds.last_pull_status = 'success'
+         AND ds.last_pull_at IS NOT NULL
+        THEN GREATEST(sr.pull_date, ds.last_pull_at)
+        ELSE sr.pull_date
+    END
+""".strip()
+
+_CAMPAIGN_FINANCE_BATCH_PROVENANCE_SQL = f"""
     WITH requests AS (
         SELECT *
         FROM unnest(%s::uuid[], %s::uuid[]) AS request(canonical_entity_id, row_source_record_id)
@@ -77,13 +86,13 @@ _CAMPAIGN_FINANCE_BATCH_PROVENANCE_SQL = """
         ds.source_url AS data_source_url,
         sr.source_record_key AS source_record_key,
         sr.source_url AS record_url,
-        sr.pull_date AS pull_date
+        {_EFFECTIVE_PROVENANCE_PULL_DATE_SQL} AS pull_date
     FROM dedup_source_ids ids
     JOIN core.source_record sr
       ON sr.id = ids.source_record_id
     JOIN core.data_source ds
       ON ds.id = sr.data_source_id
-    ORDER BY ids.canonical_entity_id, sr.pull_date DESC, sr.id ASC
+    ORDER BY ids.canonical_entity_id, pull_date DESC, sr.id ASC
 """
 
 # ---------------------------------------------------------------------------
@@ -175,6 +184,11 @@ def _fetch_provenance_rows(
     query_params: Sequence[object],
 ) -> list[dict[str, Any]]:
     """Fetch provenance source rows by joining source IDs to data sources."""
+    if source_ids_sql not in (
+        _ENTITY_PROVENANCE_SOURCE_IDS_SQL,
+        _CAMPAIGN_FINANCE_PROVENANCE_SOURCE_IDS_SQL,
+    ):
+        raise ValueError("Unsupported provenance source-id SQL template.")
     query = f"""
         WITH source_ids AS (
             {source_ids_sql}
@@ -191,13 +205,13 @@ def _fetch_provenance_rows(
             ds.source_url AS data_source_url,
             sr.source_record_key AS source_record_key,
             sr.source_url AS record_url,
-            sr.pull_date AS pull_date
+            {_EFFECTIVE_PROVENANCE_PULL_DATE_SQL} AS pull_date
         FROM dedup_source_ids ids
         JOIN core.source_record sr
           ON sr.id = ids.source_record_id
         JOIN core.data_source ds
           ON ds.id = sr.data_source_id
-        ORDER BY sr.pull_date DESC, sr.id ASC
+        ORDER BY pull_date DESC, sr.id ASC
     """
 
     with conn.cursor(row_factory=dict_row) as cursor:

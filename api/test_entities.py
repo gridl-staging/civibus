@@ -21,6 +21,41 @@ from core.types.python.models import DataSource, Organization, Person, PersonPor
 
 pytestmark = pytest.mark.integration
 
+_SOURCE_RECORD_PULL_AT = datetime(2026, 7, 10, 9, 20, 44, tzinfo=timezone.utc)
+_LATER_DATA_SOURCE_PULL_AT = datetime(2026, 7, 25, 7, 35, 34, tzinfo=timezone.utc)
+
+
+def _get_person_sources_with_data_source_pull_state(
+    api_client: TestClient,
+    db_conn: psycopg.Connection,
+    *,
+    last_pull_at: datetime | None,
+    last_pull_status: str | None,
+) -> list[dict[str, object]]:
+    person = Person(canonical_name="Freshness Contract Person", first_name="Freshness", last_name="Contract")
+    insert_person(db_conn, person)
+    data_source = insert_data_source_for_test(
+        db_conn,
+        jurisdiction="federal/fec",
+        name_suffix=str(uuid4()),
+        last_pull_at=last_pull_at,
+        last_pull_status=last_pull_status,
+    )
+    source_record = insert_source_record_for_test(
+        db_conn,
+        source_record_id=uuid4(),
+        data_source_id=data_source.id,
+        source_record_key=f"freshness-{uuid4()}",
+        source_url="https://example.org/record/freshness-contract",
+        pull_date=_SOURCE_RECORD_PULL_AT,
+    )
+    insert_entity_source(db_conn, "person", person.id, source_record.id, "candidate")
+
+    response = api_client.get(f"/v1/person/{person.id}")
+
+    assert response.status_code == 200
+    return response.json()["sources"]
+
 
 def test_get_person_returns_person_response_with_provenance(
     api_client: TestClient,
@@ -140,6 +175,59 @@ def test_get_person_returns_person_response_with_provenance(
     assert missing_bio_payload["bio_source_url"] is None
     assert missing_bio_payload["bio_license"] is None
     assert missing_bio_payload["bio_pulled_at"] is None
+
+
+def test_get_person_uses_latest_successful_data_source_pull_for_effective_freshness(
+    api_client: TestClient,
+    db_conn: psycopg.Connection,
+) -> None:
+    sources = _get_person_sources_with_data_source_pull_state(
+        api_client,
+        db_conn,
+        last_pull_at=_LATER_DATA_SOURCE_PULL_AT,
+        last_pull_status="success",
+    )
+
+    assert [source["pull_date"] for source in sources] == ["2026-07-25T07:35:34Z"]
+
+
+@pytest.mark.parametrize(
+    ("last_pull_status", "last_pull_at"),
+    [
+        pytest.param("failed", _LATER_DATA_SOURCE_PULL_AT, id="failed"),
+        pytest.param("partial", _LATER_DATA_SOURCE_PULL_AT, id="partial"),
+        pytest.param(None, _LATER_DATA_SOURCE_PULL_AT, id="null-status"),
+        pytest.param("success", None, id="success-with-null-time"),
+    ],
+)
+def test_get_person_does_not_advance_freshness_for_unsuccessful_source_state(
+    api_client: TestClient,
+    db_conn: psycopg.Connection,
+    last_pull_status: str | None,
+    last_pull_at: datetime | None,
+) -> None:
+    sources = _get_person_sources_with_data_source_pull_state(
+        api_client,
+        db_conn,
+        last_pull_at=last_pull_at,
+        last_pull_status=last_pull_status,
+    )
+
+    assert [source["pull_date"] for source in sources] == ["2026-07-10T09:20:44Z"]
+
+
+def test_get_person_does_not_move_freshness_backward(
+    api_client: TestClient,
+    db_conn: psycopg.Connection,
+) -> None:
+    sources = _get_person_sources_with_data_source_pull_state(
+        api_client,
+        db_conn,
+        last_pull_at=datetime(2026, 7, 1, 8, 0, tzinfo=timezone.utc),
+        last_pull_status="success",
+    )
+
+    assert [source["pull_date"] for source in sources] == ["2026-07-10T09:20:44Z"]
 
 
 def test_get_person_returns_404_for_missing_person(api_client: TestClient) -> None:

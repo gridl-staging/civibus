@@ -18,6 +18,7 @@ from api import health_content
 
 FEDERAL_FIRST_COUNTS = health_content.FEDERAL_FIRST_CONTENT_COUNTS
 FEDERAL_FIRST_FLOORS = health_content.FEDERAL_FIRST_CONTENT_FLOORS
+_DEFAULT_TRANSACTION_CONFIRM_COUNT = object()
 
 
 def fresh_federal_fec_bulk_pull_row() -> tuple[datetime]:
@@ -37,13 +38,17 @@ class FakeCursor:
         counts: list[int],
         freshness_result: tuple[object, ...] | None,
         present_schema_columns: set[tuple[str, str, str]] | None = None,
+        transaction_confirm_count: object = _DEFAULT_TRANSACTION_CONFIRM_COUNT,
     ) -> None:
         self._counts = list(counts)
         self._freshness_result = freshness_result
         self._present_schema_columns = present_schema_columns
+        self._transaction_confirm_count = transaction_confirm_count
+        self._transaction_estimate: int | None = None
         self.executed: list[str] = []
         self.executed_params: list[object] = []
         self._schema_rows: list[tuple[str, str, str]] = []
+        self._last_query_kind = "count"
 
     def __enter__(self) -> "FakeCursor":
         return self
@@ -56,6 +61,14 @@ class FakeCursor:
         query_text = str(query)
         self.executed.append(query_text)
         self.executed_params.append(params)
+        normalized_query = " ".join(query_text.lower().split())
+        if "select count(*) from cf.transaction" in normalized_query and " where " not in normalized_query:
+            self._last_query_kind = "transaction_confirm"
+            return
+        if "pg_stat_user_tables" in normalized_query and "relname = 'transaction'" in normalized_query:
+            self._last_query_kind = "transaction_estimate"
+            return
+        self._last_query_kind = "count"
         if params is None:
             return
         if "information_schema.columns" not in query_text:
@@ -65,8 +78,17 @@ class FakeCursor:
         self._schema_rows = sorted(required_columns - present_columns)
 
     def fetchone(self) -> tuple[object, ...] | None:
+        if self._last_query_kind == "transaction_confirm":
+            if isinstance(self._transaction_confirm_count, BaseException):
+                raise self._transaction_confirm_count
+            if self._transaction_confirm_count is _DEFAULT_TRANSACTION_CONFIRM_COUNT:
+                return (self._transaction_estimate or 0,)
+            return (self._transaction_confirm_count,)
         if self._counts:
-            return (self._counts.pop(0),)
+            count = self._counts.pop(0)
+            if self._last_query_kind == "transaction_estimate":
+                self._transaction_estimate = count
+            return (count,)
         return self._freshness_result
 
     def fetchall(self) -> list[tuple[str, str, str]]:
@@ -85,11 +107,13 @@ class FakeConnection:
         counts: list[int],
         freshness_result: tuple[object, ...] | None = None,
         present_schema_columns: set[tuple[str, str, str]] | None = None,
+        transaction_confirm_count: object = _DEFAULT_TRANSACTION_CONFIRM_COUNT,
     ) -> None:
         self._cursor = FakeCursor(
             counts,
             freshness_result=freshness_result,
             present_schema_columns=present_schema_columns,
+            transaction_confirm_count=transaction_confirm_count,
         )
         self.closed = False
 
