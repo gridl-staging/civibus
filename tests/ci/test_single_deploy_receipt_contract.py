@@ -116,6 +116,7 @@ def _assert_roadmap_contract(roadmap_text: str) -> None:
     assert "20 consecutive observations per gate" in deploy_currency_row
     assert "at least one deploy in the combined window" in deploy_currency_row
     assert "zero false would-be kills" in deploy_currency_row
+    assert "docs/live-state/2026_07_24_shadow_gate_promotion.md" in deploy_currency_row
 
 
 @pytest.mark.dev_repo_only(
@@ -135,12 +136,28 @@ def test_roadmap_closes_only_authorized_single_deploy_rows() -> None:
 
     _assert_roadmap_contract(roadmap_text)
 
+    shadow_gate_receipt_text = (REPO_ROOT / "docs/live-state/2026_07_24_shadow_gate_promotion.md").read_text(
+        encoding="utf-8"
+    )
+    assert "Canonical deployed dev SHA:" in shadow_gate_receipt_text
+    assert "Prod `Deploy` run `30179991749`:" in shadow_gate_receipt_text
+    assert "Post-promotion run:" in shadow_gate_receipt_text
+    assert "This receipt is private dev evidence." in shadow_gate_receipt_text
+
     duplicate_closed_row = (
         "\n| P0 | CI does not run most of the suite — **CLOSED/PASS 2026-07-25** | "
         "duplicate closure with docs/live-state/2026_07_24_single_deploy.md evidence | duplicate gate |"
     )
     with pytest.raises(AssertionError):
         _assert_roadmap_contract(roadmap_text + duplicate_closed_row)
+
+    with pytest.raises(AssertionError):
+        _assert_roadmap_contract(
+            roadmap_text.replace(
+                "Promotion receipt: `docs/live-state/2026_07_24_shadow_gate_promotion.md`.",
+                "Promotion receipt removed.",
+            )
+        )
 
 
 def test_receipt_guard_fails_when_required_sha_or_count_is_removed() -> None:
