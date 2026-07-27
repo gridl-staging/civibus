@@ -26,13 +26,9 @@ PUBLIC_RUN_SPECIMENS = (
     "docs/reference/keel/",
     "evidence/",
 )
-EXPECTED_PUBLIC_ELIGIBLE_NODE_TOTAL = 3064
-EXPECTED_PUBLIC_NODE_PREFIX_TOTALS = {
-    "api/": 249,
-    "core/": 654,
-    "domains/": 1646,
-    "tests/": 515,
-}
+EXPECTED_PUBLIC_ELIGIBLE_NODE_TOTAL = 3252
+EXPECTED_PUBLIC_NODE_PREFIX_TOTALS = {"api/": 249, "core/": 680, "domains/": 1694, "tests/": 629}
+PROJECTED_PYTEST_TIMEOUT_SECONDS = 300
 
 
 @dataclass(frozen=True)
@@ -159,7 +155,10 @@ def _run_projected_pytest(projected_mirror: ProjectedMirror, command: list[str])
         env=projected_mirror.env,
         capture_output=True,
         text=True,
-        timeout=170,
+        # The projected mirror creates its own environment and runs the full
+        # public unit selection. Keep a bounded timeout, but leave enough margin
+        # for the measured ~160-second quiet-host run under shared-host load.
+        timeout=PROJECTED_PYTEST_TIMEOUT_SECONDS,
         check=False,
     )
 

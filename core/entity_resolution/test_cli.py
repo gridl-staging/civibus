@@ -367,7 +367,7 @@ def test_main_rejects_invalid_min_threshold_arguments(
     assert error_text in capsys.readouterr().err
 
 
-def test_main_action_block_prints_rule_and_pair_count_summary(
+def test_main_action_block_prints_rule_and_stage4_count_summary(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -380,8 +380,18 @@ def test_main_action_block_prints_rule_and_pair_count_summary(
         {"rule_index": 1, "blocking_rule": "l.zip5 = r.zip5"},
     ]
     pair_counts = [
-        {"rule_index": 0, "blocking_rule": "l.last_name = r.last_name", "pair_count": 9},
-        {"rule_index": 1, "blocking_rule": "l.zip5 = r.zip5", "pair_count": 4},
+        {
+            "rule_index": 0,
+            "blocking_rule": "l.last_name = r.last_name",
+            "exclusive_pair_count": 9,
+            "cumulative_pair_count": 9,
+        },
+        {
+            "rule_index": 1,
+            "blocking_rule": "l.zip5 = r.zip5",
+            "exclusive_pair_count": 4,
+            "cumulative_pair_count": 13,
+        },
     ]
     call_order: list[str] = []
 
@@ -414,9 +424,9 @@ def test_main_action_block_prints_rule_and_pair_count_summary(
     output = capsys.readouterr().out
     assert "Blocking diagnostics (person)" in output
     assert "l.last_name = r.last_name" in output
-    assert "pairs=9" in output
+    assert "exclusive_pairs=9 cumulative_pairs=9" in output
     assert "l.zip5 = r.zip5" in output
-    assert "pairs=4" in output
+    assert "exclusive_pairs=4 cumulative_pairs=13" in output
 
 
 def test_main_action_score_prints_decision_tier_breakdown(

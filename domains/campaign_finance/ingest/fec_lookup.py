@@ -205,6 +205,24 @@ def find_candidate_id_by_fec_id(conn: psycopg.Connection, fec_id: str) -> UUID |
     return row[0]
 
 
+def candidate_name_or_fec_id_label(
+    candidate_name: str | None,
+    fec_candidate_id: str,
+    *,
+    existing_name: str | None = None,
+) -> str:
+    return candidate_name or existing_name or f"FEC candidate {fec_candidate_id}"
+
+
+def find_person_canonical_name(conn: psycopg.Connection, person_id: UUID | None) -> str | None:
+    if person_id is None:
+        return None
+    with conn.cursor() as cursor:
+        cursor.execute("SELECT canonical_name FROM core.person WHERE id = %s", (person_id,))
+        row = cursor.fetchone()
+    return normalize_optional_text(row[0]) if row is not None else None
+
+
 def current_federal_officeholder_committee_fec_ids(conn: psycopg.Connection) -> frozenset[str]:
     with conn.cursor() as cursor:
         cursor.execute(
@@ -237,6 +255,34 @@ def current_federal_officeholder_committee_fec_ids(conn: psycopg.Connection) -> 
     return frozenset(row[0] for row in rows if row[0])
 
 
+def pa_union_committee_fec_ids_for_election_years(
+    conn: psycopg.Connection,
+    *,
+    election_years: Iterable[int],
+) -> frozenset[str]:
+    years = sorted(set(election_years))
+    if not years:
+        return frozenset()
+
+    with conn.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT DISTINCT cm.fec_committee_id
+            FROM cf.candidate_committee_link ccl
+            JOIN cf.candidate cand ON cand.id = ccl.candidate_id
+            JOIN cf.committee cm ON cm.id = ccl.committee_id
+            WHERE cand.office IN ('H', 'S', 'P')
+              AND ccl.designation IN ('P', 'A')
+              AND ccl.fec_election_year = ANY(%s)
+              AND cm.committee_designation IS DISTINCT FROM 'J'
+              AND cm.fec_committee_id IS NOT NULL
+            """,
+            (years,),
+        )
+        rows: Iterable[tuple[str]] = cursor.fetchall()
+    return frozenset(row[0] for row in rows if row[0])
+
+
 __all__ = [
     "FederalOfficeholderFecLinkPolicy",
     "build_committee_master_source_record_key",
@@ -246,5 +292,6 @@ __all__ = [
     "find_committee_ids_by_fec_ids",
     "find_candidate_id_by_fec_id",
     "has_active_committee_master_source_record",
+    "pa_union_committee_fec_ids_for_election_years",
     "resolve_federal_officeholder_fec_candidate_ids",
 ]

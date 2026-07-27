@@ -11,7 +11,7 @@ from domains.campaign_finance.tests.model_payload_builders import (
     build_transaction_payload,
     build_uuid_string,
 )
-from domains.campaign_finance.types import Transaction
+from domains.campaign_finance.types import Transaction, is_fec_memo_code
 
 
 def _assert_transaction_validation_error(**overrides: object) -> None:
@@ -80,6 +80,32 @@ def test_transaction_enforces_contributor_mutual_exclusivity():
         contributor_person_id=build_uuid_string(),
         contributor_organization_id=build_uuid_string(),
     )
+
+
+@pytest.mark.parametrize(
+    ("memo_code", "expected_is_memo"),
+    [("X", True), ("x", True), ("Y", False), ("", False), (None, False)],
+)
+def test_public_memo_helper_matches_fec_x_only_rule(
+    memo_code: str | None,
+    expected_is_memo: bool,
+):
+    assert is_fec_memo_code(memo_code) is expected_is_memo
+
+
+def test_transaction_is_memo_delegates_to_public_memo_helper(monkeypatch: pytest.MonkeyPatch):
+    calls: list[str | None] = []
+
+    def patched_helper(memo_code: str | None) -> bool:
+        calls.append(memo_code)
+        return memo_code == "PATCHED"
+
+    monkeypatch.setattr("domains.campaign_finance.types.models.is_fec_memo_code", patched_helper)
+
+    transaction = Transaction.model_validate(build_transaction_payload(memo_code="PATCHED"))
+
+    assert calls == ["PATCHED"]
+    assert transaction.is_memo is True
 
 
 @pytest.mark.parametrize(

@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import date
+
+from domains.campaign_finance.ingest.field_mapper import parse_fec_date
+from domains.campaign_finance.types import is_fec_memo_code
 
 
 RECEIPT_TYPE_PREFIX = "1"
@@ -54,3 +58,44 @@ def contribution_insights_transaction_where_sql(*, min_date_sql: str = "%s", max
           AND t.is_memo = FALSE
           AND t.amendment_indicator != 'T'
 """
+
+
+def is_contribution_insights_mapped_row(row: Mapping[str, object]) -> bool:
+    transaction_date = _mapped_contribution_date(row.get("contribution_receipt_date"))
+    transaction_type = _mapped_text(row.get("transaction_type"))
+    entity_type = _mapped_text(row.get("entity_type"))
+    amendment_indicator = _mapped_text(row.get("amendment_indicator"))
+    memo_code = _mapped_text(row.get("memo_code"))
+
+    return (
+        transaction_date is not None
+        and transaction_date >= CONTRIBUTION_INSIGHTS_MIN_DATE
+        and transaction_type is not None
+        and transaction_type.startswith(RECEIPT_TYPE_PREFIX)
+        and entity_type == "IND"
+        and not is_fec_memo_code(memo_code)
+        and amendment_indicator is not None
+        and amendment_indicator != "T"
+    )
+
+
+def _mapped_text(value: object) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _mapped_contribution_date(value: object) -> date | None:
+    if isinstance(value, date):
+        return value
+    text = _mapped_text(value)
+    if text is None:
+        return None
+    try:
+        return date.fromisoformat(text)
+    except ValueError:
+        parsed_fec_date = parse_fec_date(text)
+        if parsed_fec_date is None:
+            return None
+        return date.fromisoformat(parsed_fec_date)

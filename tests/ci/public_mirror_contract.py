@@ -79,9 +79,29 @@ PUBLIC_MIRROR_TEST_CLASSIFICATIONS: tuple[PublicMirrorTestClassification, ...] =
         ),
     ),
     *_entries(
+        # `tests/` syncs as a whole directory, but `scripts/` is a file allowlist and
+        # `chats/icg/` never syncs at all. Without this the public mirror would carry
+        # a test importing a script that is not there, scanning a corpus that is not
+        # there. The checker is a dev-repo authoring tool by design.
+        private_asset="chats/icg/ and scripts/lane_authoring_hazard_checker.py",
+        owner="Lane-authoring hazard checker corpus",
+        node_ids=(
+            "tests/ci/test_lane_authoring_hazard_checker.py::test_clean_fixture_reports_no_findings",
+            "tests/ci/test_lane_authoring_hazard_checker.py::test_dirty_fixture_reports_exactly_the_three_expected_findings",
+            "tests/ci/test_lane_authoring_hazard_checker.py::test_prose_mentioning_the_env_var_does_not_clear_a_file",
+            "tests/ci/test_lane_authoring_hazard_checker.py::test_fenced_assignment_does_clear_a_file",
+            "tests/ci/test_lane_authoring_hazard_checker.py::test_named_test_file_targets_are_refined_out_but_still_counted_strictly",
+            "tests/ci/test_lane_authoring_hazard_checker.py::test_directory_level_pytest_target_is_a_refined_hit",
+            "tests/ci/test_lane_authoring_hazard_checker.py::test_file_without_a_stages_heading_is_not_a_direct_mode_hit",
+            "tests/ci/test_lane_authoring_hazard_checker.py::test_slice_boundary_matches_direct_mode_semantics",
+            "tests/ci/test_lane_authoring_hazard_checker.py::test_checker_runs_over_the_real_corpus_and_stays_shadow_mode",
+        ),
+    ),
+    *_entries(
         private_asset=".debbie.toml",
         owner="Debbie projection contract",
         node_ids=(
+            "tests/test_donor_er_scale_spike.py::test_debbie_projection_includes_harness_script_and_tests_mirror",
             "tests/ci/test_api_dockerfile_contract.py::test_debbie_sync_includes_api_dockerfile_root_inputs",
             "tests/ci/test_refresh_cron_scripts_contract.py::test_debbie_sync_keeps_evidence_and_findings_private_by_default",
         ),

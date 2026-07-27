@@ -10,6 +10,7 @@ import pytest
 
 from domains.campaign_finance.ingest import bulk_cli
 from domains.campaign_finance.ingest.bulk_loader import LoadResult, Stage4LoadOptions
+from domains.campaign_finance.ingest.fec_bulk_files import fec_bulk_data_cache_path, fec_bulk_data_root
 
 
 def _build_connection() -> MagicMock:
@@ -33,6 +34,14 @@ def test_validate_cli_arguments_accepts_single_file_mode(tmp_path: Path) -> None
     assert config.file_type == "cm"
     assert config.directory is None
     assert config.canonical_stage4_resume_enabled is False
+
+
+@pytest.mark.unit
+def test_fec_bulk_data_root_is_canonical_parent_for_cache_paths(tmp_path: Path) -> None:
+    root = fec_bulk_data_root(tmp_path)
+
+    assert root == tmp_path / "fec" / "bulk"
+    assert fec_bulk_data_cache_path(tmp_path, cycle=2026, file_type="itcont").is_relative_to(root)
 
 
 @pytest.mark.unit

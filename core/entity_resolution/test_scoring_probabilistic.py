@@ -692,3 +692,97 @@ def test_score_with_splink_uses_explicit_candidate_settings(
             "decided_by": "splink_v1",
         }
     ]
+
+
+@pytest.mark.parametrize("failure_phase", [None, "training", "prediction"])
+def test_score_with_splink_owns_connection_until_training_and_prediction_finish(
+    monkeypatch: pytest.MonkeyPatch,
+    failure_phase: str | None,
+) -> None:
+    left_id = uuid4()
+    right_id = uuid4()
+    rows: list[RowDict] = [
+        {"id": left_id, "canonical_name": "Alpha"},
+        {"id": right_id, "canonical_name": "Beta"},
+    ]
+    events: list[str] = []
+
+    class FakeConnection:
+        def close(self) -> None:
+            events.append("close")
+
+    connection = FakeConnection()
+
+    class FakeDuckDBAPI:
+        def __init__(self, *, connection: object | None = None) -> None:
+            assert connection is not None, "default DuckDBAPI() must not be constructed"
+            assert connection is globals_connection
+            events.append("duckdb_api")
+
+    class FakePredictions:
+        def as_record_dict(self) -> list[dict[str, object]]:
+            events.append("records")
+            return [
+                {
+                    "unique_id_l": str(left_id),
+                    "unique_id_r": str(right_id),
+                    "match_probability": 0.84,
+                }
+            ]
+
+    class FakeTraining:
+        def estimate_u_using_random_sampling(self, *, max_pairs: int) -> None:
+            events.append("train_u")
+            if failure_phase == "training":
+                raise RuntimeError("scoring failed during training")
+
+        def estimate_parameters_using_expectation_maximisation(self, rule: str) -> None:
+            events.append("train_em")
+
+    class FakeInference:
+        def predict(self) -> FakePredictions:
+            events.append("predict")
+            if failure_phase == "prediction":
+                raise RuntimeError("scoring failed during prediction")
+            return FakePredictions()
+
+    class FakeLinker:
+        def __init__(self, input_rows: list[RowDict], settings: object, db_api: object) -> None:
+            events.append("linker")
+            self.training = FakeTraining()
+            self.inference = FakeInference()
+
+    globals_connection = connection
+    monkeypatch.setattr(
+        "core.entity_resolution.scoring.get_probabilistic_settings",
+        lambda entity_type: object(),
+    )
+    monkeypatch.setattr(
+        "core.entity_resolution.scoring.get_blocking_rule_sqls",
+        lambda entity_type: ["rule"],
+    )
+    monkeypatch.setattr(
+        "core.entity_resolution.scoring.get_splink_runtime",
+        lambda: (FakeLinker, FakeDuckDBAPI),
+    )
+
+    kwargs = {"bounded_connection_factory": lambda: connection}
+    if failure_phase:
+        with pytest.raises(RuntimeError, match=f"scoring failed during {failure_phase}"):
+            score_with_splink(rows, "person", **kwargs)
+    else:
+        result = score_with_splink(rows, "person", **kwargs)
+        assert result == [
+            {
+                "entity_id_a": min(left_id, right_id),
+                "entity_id_b": max(left_id, right_id),
+                "confidence": 0.84,
+                "decision_method": "probabilistic",
+                "decided_by": "splink_v1",
+            }
+        ]
+
+    assert events.count("duckdb_api") == 1
+    assert events[-1] == "close"
+    last_scoring_event = "train_u" if failure_phase == "training" else "predict"
+    assert events.index("close") > events.index(last_scoring_event)

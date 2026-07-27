@@ -19,6 +19,8 @@ from core.entity_resolution.splink_config import (
     get_probabilistic_settings,
 )
 from core.entity_resolution.splink_runtime import (
+    BoundedConnectionFactory,
+    BoundedSplinkLinker,
     build_splink_linker,
     get_splink_runtime,
     prediction_records,
@@ -113,6 +115,7 @@ def score_with_splink(
     entity_type: str,
     *,
     probabilistic_settings: Any | None = None,
+    bounded_connection_factory: BoundedConnectionFactory | None = None,
 ) -> list[ScoredPair]:
     """Run probabilistic matching with Splink and return Stage 3 scored-pair contract."""
     settings = require_probabilistic_settings(
@@ -128,11 +131,27 @@ def score_with_splink(
         blocking_rules = get_blocking_rule_sqls(entity_type)
     else:
         blocking_rules = get_blocking_rule_sqls(entity_type, probabilistic_settings=settings)
-    linker = build_splink_linker(
+    built_linker = build_splink_linker(
         prepared_rows,
         settings,
         runtime_resolver=lambda: runtime,
+        bounded_connection_factory=bounded_connection_factory,
     )
+    if bounded_connection_factory is None:
+        return _score_linker_predictions(built_linker, blocking_rules)
+    if not isinstance(built_linker, BoundedSplinkLinker):
+        raise RuntimeError("bounded linker construction did not return an owned session")
+    try:
+        return _score_linker_predictions(built_linker.linker, blocking_rules)
+    finally:
+        built_linker.close()
+
+
+def _score_linker_predictions(
+    linker: Any,
+    blocking_rules: list[Any],
+) -> list[ScoredPair]:
+    """Train one linker and map its predictions to canonical scored pairs."""
     train_linker(linker, blocking_rules)
     predictions = linker.inference.predict()
 
@@ -164,6 +183,7 @@ def score_rows(
     *,
     deterministic_pairs: list[ScoredPair] | None = None,
     probabilistic_settings: Any | None = None,
+    bounded_connection_factory: BoundedConnectionFactory | None = None,
 ) -> list[ScoredPair]:
     """Score already-materialized ER rows through the standard deterministic/probabilistic pipeline.
 
@@ -175,14 +195,16 @@ def score_rows(
     if not unresolved_rows:
         return resolved_deterministic_pairs
 
-    if probabilistic_settings is None:
-        probabilistic_pairs = score_with_splink(unresolved_rows, entity_type)
-    else:
-        probabilistic_pairs = score_with_splink(
-            unresolved_rows,
-            entity_type,
-            probabilistic_settings=probabilistic_settings,
-        )
+    scoring_options: dict[str, Any] = {}
+    if probabilistic_settings is not None:
+        scoring_options["probabilistic_settings"] = probabilistic_settings
+    if bounded_connection_factory is not None:
+        scoring_options["bounded_connection_factory"] = bounded_connection_factory
+    probabilistic_pairs = score_with_splink(
+        unresolved_rows,
+        entity_type,
+        **scoring_options,
+    )
     return resolved_deterministic_pairs + probabilistic_pairs
 
 

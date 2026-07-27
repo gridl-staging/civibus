@@ -142,6 +142,48 @@ def test_read_bulk_file_reads_matching_member_from_zip(tmp_path: Path) -> None:
 
 
 @pytest.mark.unit
+def test_read_bulk_file_accepts_expected_zip_member_name(tmp_path: Path) -> None:
+    fixture_path = _FIXTURE_DIR / "itcont_sample.txt"
+    zip_path = tmp_path / "indiv24.zip"
+
+    with zipfile.ZipFile(zip_path, "w") as archive:
+        archive.write(fixture_path, arcname="evidence/itcont_exact.txt")
+
+    text_rows = list(read_bulk_file(fixture_path, "itcont", limit=2))
+    zip_rows = list(
+        read_bulk_file(
+            zip_path,
+            "itcont",
+            limit=2,
+            expected_member_name="evidence/itcont_exact.txt",
+        )
+    )
+
+    assert zip_rows == text_rows
+
+
+@pytest.mark.unit
+def test_read_bulk_file_rejects_expected_zip_member_mismatch_before_parsing(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    fixture_path = _FIXTURE_DIR / "itcont_sample.txt"
+    zip_path = tmp_path / "indiv24.zip"
+
+    with zipfile.ZipFile(zip_path, "w") as archive:
+        archive.write(fixture_path, arcname="itcont_actual.txt")
+
+    monkeypatch.setattr(
+        bulk_parser,
+        "parse_pipe_delimited",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("rows must not parse on member mismatch")),
+    )
+
+    with pytest.raises(ValueError, match="expected ZIP member"):
+        list(read_bulk_file(zip_path, "itcont", expected_member_name="itcont_expected.txt"))
+
+
+@pytest.mark.unit
 @pytest.mark.parametrize("fixture_name", ["itcont_sample.txt", "indiv24.zip"])
 def test_read_bulk_file_skips_persisted_source_row_cursor(tmp_path: Path, fixture_name: str) -> None:
     fixture_path = _FIXTURE_DIR / "itcont_sample.txt"

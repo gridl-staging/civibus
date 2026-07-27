@@ -5,7 +5,7 @@ from uuid import uuid4
 import pytest
 
 from core.entity_resolution.extract import RowDict
-from core.entity_resolution.scoring import score_entities
+from core.entity_resolution.scoring import score_entities, score_rows
 
 
 def test_score_entities_runs_deterministic_then_probabilistic(
@@ -159,3 +159,58 @@ def test_score_entities_threads_explicit_probabilistic_settings(
     )
 
     assert captured_settings == [candidate_settings]
+
+
+def test_score_rows_threads_bounded_factory_after_deterministic_filtering(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    person_a = uuid4()
+    person_b = uuid4()
+    person_c = uuid4()
+    rows: list[RowDict] = [
+        {"id": person_a, "canonical_name": "A"},
+        {"id": person_b, "canonical_name": "B"},
+        {"id": person_c, "canonical_name": "C"},
+    ]
+    deterministic_pair = {
+        "entity_id_a": min(person_a, person_b),
+        "entity_id_b": max(person_a, person_b),
+        "confidence": 1.0,
+        "decision_method": "deterministic",
+        "decided_by": "deterministic_fec_id_match",
+    }
+    probabilistic_pair = {
+        "entity_id_a": person_c,
+        "entity_id_b": person_c,
+        "confidence": 0.73,
+        "decision_method": "probabilistic",
+        "decided_by": "splink_v1",
+    }
+
+    def bounded_factory() -> object:
+        return object()
+
+    def fake_score_with_splink(
+        unresolved_rows: list[RowDict],
+        entity_type: str,
+        *,
+        bounded_connection_factory: object,
+    ) -> list[dict]:
+        assert unresolved_rows == [rows[2]]
+        assert entity_type == "person"
+        assert bounded_connection_factory is bounded_factory
+        return [probabilistic_pair]
+
+    monkeypatch.setattr(
+        "core.entity_resolution.scoring.score_with_splink",
+        fake_score_with_splink,
+    )
+
+    result = score_rows(
+        rows,
+        "person",
+        deterministic_pairs=[deterministic_pair],
+        bounded_connection_factory=bounded_factory,
+    )
+
+    assert result == [deterministic_pair, probabilistic_pair]

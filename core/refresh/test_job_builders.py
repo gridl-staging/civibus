@@ -488,6 +488,89 @@ class TestRunnerFECDefaultOwnership:
         assert build_argument_parser().parse_args([]).fec_cycle == 2026
 
 
+@pytest.mark.unit
+class TestFECMastersJobContract:
+    def _find_masters_job(self, *, fec_cycle: int = 2026) -> RefreshJob:
+        jobs = build_refresh_plan(
+            parameters=RunnerParameters(fec_cycle=fec_cycle),
+            job_key_prefixes=("federal-fec-masters",),
+        )
+        assert len(jobs) == 1
+        return jobs[0]
+
+    def test_masters_job_metadata_keeps_weekly_history_key(self) -> None:
+        job = self._find_masters_job()
+
+        assert job.key == "federal-fec-masters"
+        assert job.refresh_history_key == "federal-fec-masters"
+
+    def test_masters_run_callable_dispatches_recent_cycles_oldest_first(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        connection = MagicMock()
+        data_source_id = UUID("cc8dd23d-f9c7-4e1d-8e4c-6134a8e9992b")
+        load_results = [object() for _ in range(12)]
+        urlretrieve = MagicMock()
+        ensure_fec_bulk_data_source = MagicMock(return_value=data_source_id)
+        dispatch_load = MagicMock(side_effect=load_results)
+        get_connection = MagicMock(return_value=connection)
+
+        monkeypatch.setattr(job_builders, "urlretrieve", urlretrieve)
+        monkeypatch.setattr(job_builders, "get_connection", get_connection)
+        monkeypatch.setattr(job_builders, "ensure_fec_bulk_data_source", ensure_fec_bulk_data_source)
+        monkeypatch.setattr(job_builders, "dispatch_load", dispatch_load)
+
+        result = self._find_masters_job(fec_cycle=2026).run_callable()
+
+        expected_dispatches = [
+            (cycle, file_type) for cycle in (2022, 2024, 2026) for file_type in ("cm", "cn", "ccl", "weball")
+        ]
+        assert result == load_results
+        assert [call.args[0] for call in urlretrieve.call_args_list] == [
+            (
+                job_builders.fec_weball_url(cycle)
+                if file_type == "weball"
+                else job_builders.fec_baseline_url(cycle, file_type)
+            )
+            for cycle, file_type in expected_dispatches
+        ]
+
+        downloaded_paths = [Path(call.args[1]) for call in urlretrieve.call_args_list]
+        assert [path.name for path in downloaded_paths] == [
+            f"{file_type}{str(cycle)[-2:]}.zip" for cycle, file_type in expected_dispatches
+        ]
+
+        get_connection.assert_called_once_with()
+        connection.transaction.assert_called_once_with()
+        ensure_fec_bulk_data_source.assert_called_once_with(connection)
+        connection.close.assert_called_once_with()
+
+        assert dispatch_load.call_count == len(expected_dispatches)
+        assert [call.kwargs["conn"] for call in dispatch_load.call_args_list] == [connection] * len(expected_dispatches)
+        assert [call.kwargs["data_source_id"] for call in dispatch_load.call_args_list] == [data_source_id] * len(
+            expected_dispatches
+        )
+
+        for (cycle, file_type), path, call in zip(
+            expected_dispatches,
+            downloaded_paths,
+            dispatch_load.call_args_list,
+        ):
+            assert call.kwargs["config"] == job_builders.CliConfig(
+                mode="single",
+                cycle=cycle,
+                file_type=file_type,
+                path=path,
+                directory=None,
+                batch_size=1000,
+                limit=None,
+                graph_enabled=False,
+                with_transactions=False,
+            )
+            assert call.kwargs["request"] == job_builders.LoadRequest(file_type=file_type, path=path)
+
+
 def _refresh_test_uuid(sequence: int) -> UUID:
     return UUID(f"91000000-0000-0000-0000-{sequence:012x}")
 

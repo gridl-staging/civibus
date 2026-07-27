@@ -41,6 +41,12 @@ def _assert_fixture_skips_when_postgres_is_unavailable(
     fixture_func: object,
 ) -> None:
     sleep_calls: list[float] = []
+    # This test asserts the SKIP branch specifically. `CIVIBUS_REQUIRE_DB=1` makes
+    # `_skip_or_fail_for_postgres_unavailable` call `pytest.fail` instead, so with
+    # that variable set in the ambient environment the test's own premise inverts
+    # and it fails for a reason unrelated to the behaviour under test. The
+    # merged-union sweep sets it deliberately, so pin it off here.
+    monkeypatch.delenv("CIVIBUS_REQUIRE_DB", raising=False)
     monkeypatch.setattr(
         root_conftest,
         "get_connection",

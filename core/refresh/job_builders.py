@@ -954,21 +954,23 @@ def _build_fec_job(parameters: RunnerParameters) -> RefreshJob:
 
 def _build_fec_masters_job(parameters: RunnerParameters) -> RefreshJob:
     file_types = ("cm", "cn", "ccl", "weball")
+    cycles = _active_committee_summary_cycles(parameters.fec_cycle)
 
-    def _fec_masters_url(file_type: str) -> str:
+    def _fec_masters_url(cycle: int, file_type: str) -> str:
         if file_type == "weball":
-            return fec_weball_url(parameters.fec_cycle)
-        return fec_baseline_url(parameters.fec_cycle, file_type)
+            return fec_weball_url(cycle)
+        return fec_baseline_url(cycle, file_type)
 
     def _run_fec_masters_job() -> list[object]:
         with _temporary_refresh_directory(prefix="refresh-fec-masters-") as temp_dir:
             temp_dir_path = Path(temp_dir)
-            cycle_suffix = str(parameters.fec_cycle)[-2:]
-            download_paths: list[tuple[str, Path]] = []
-            for file_type in file_types:
-                archive_path = temp_dir_path / f"{file_type}{cycle_suffix}.zip"
-                urlretrieve(_fec_masters_url(file_type), archive_path)
-                download_paths.append((file_type, archive_path))
+            download_paths: list[tuple[int, str, Path]] = []
+            for cycle in cycles:
+                cycle_suffix = str(cycle)[-2:]
+                for file_type in file_types:
+                    archive_path = temp_dir_path / f"{file_type}{cycle_suffix}.zip"
+                    urlretrieve(_fec_masters_url(cycle, file_type), archive_path)
+                    download_paths.append((cycle, file_type, archive_path))
 
             connection = get_connection()
             try:
@@ -976,13 +978,13 @@ def _build_fec_masters_job(parameters: RunnerParameters) -> RefreshJob:
                     data_source_id = ensure_fec_bulk_data_source(connection)
 
                 results: list[object] = []
-                for file_type, archive_path in download_paths:
+                for cycle, file_type, archive_path in download_paths:
                     results.append(
                         dispatch_load(
                             conn=connection,
                             config=CliConfig(
                                 mode="single",
-                                cycle=parameters.fec_cycle,
+                                cycle=cycle,
                                 file_type=file_type,
                                 path=archive_path,
                                 directory=None,

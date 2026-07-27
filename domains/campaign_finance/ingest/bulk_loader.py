@@ -62,8 +62,10 @@ from domains.campaign_finance.ingest.field_mapper import (
 )
 from domains.campaign_finance.ingest.fec_lookup import (
     build_committee_master_source_record_key,
+    candidate_name_or_fec_id_label,
     find_candidate_id_by_fec_id,
     find_committee_id_by_fec_id,
+    find_person_canonical_name,
 )
 from domains.campaign_finance.ingest.text_utils import normalize_optional_text
 
@@ -386,6 +388,16 @@ def load_candidates(
     processed_rows = 0
     processed_since_commit = 0
 
+    def _finalize_candidate_row() -> int:
+        return _finalize_stage3_row(
+            conn,
+            file_type="cn",
+            processed_rows=processed_rows,
+            load_result=load_result,
+            processed_since_commit=processed_since_commit,
+            batch_size=batch_size,
+        )
+
     for raw_row in read_bulk_file(path, "cn", limit=limit):
         processed_rows += 1
         processed_since_commit += 1
@@ -394,19 +406,11 @@ def load_candidates(
         fec_candidate_id = normalize_optional_text(mapped_fields.get("fec_candidate_id"))
         candidate_name = normalize_optional_text(mapped_fields.get("name"))
         candidate_office = normalize_optional_text(mapped_fields.get("office"))
-        if fec_candidate_id is None or candidate_name is None or candidate_office is None:
+        if fec_candidate_id is None or candidate_office is None:
             load_result.errors += 1
             LOGGER.warning("Skipping candidate row with missing required fields: %s", raw_row)
-            processed_since_commit = _finalize_stage3_row(
-                conn,
-                file_type="cn",
-                processed_rows=processed_rows,
-                load_result=load_result,
-                processed_since_commit=processed_since_commit,
-                batch_size=batch_size,
-            )
+            processed_since_commit = _finalize_candidate_row()
             continue
-
         source_record_id = _try_insert_bulk_source_record(
             conn,
             data_source_id=data_source_id,
@@ -415,25 +419,30 @@ def load_candidates(
         )
         if source_record_id is None:
             load_result.skipped += 1
-            processed_since_commit = _finalize_stage3_row(
-                conn,
-                file_type="cn",
-                processed_rows=processed_rows,
-                load_result=load_result,
-                processed_since_commit=processed_since_commit,
-                batch_size=batch_size,
-            )
+            processed_since_commit = _finalize_candidate_row()
             continue
 
         person_id = find_person_by_identifier(conn, "fec_candidate_id", fec_candidate_id)
+        existing_person_name = find_person_canonical_name(conn, person_id)
+        resolved_candidate_name = candidate_name_or_fec_id_label(
+            candidate_name,
+            fec_candidate_id,
+            existing_name=existing_person_name,
+        )
         if person_id is None:
             person_id = insert_person(
                 conn,
                 Person(
-                    canonical_name=candidate_name,
+                    canonical_name=resolved_candidate_name,
                     identifiers={"fec_candidate_id": fec_candidate_id},
                 ),
             )
+        elif candidate_name is not None and existing_person_name in {
+            None,
+            candidate_name_or_fec_id_label(None, fec_candidate_id),
+        }:
+            with conn.cursor() as cursor:
+                cursor.execute("UPDATE core.person SET canonical_name = %s WHERE id = %s", (candidate_name, person_id))
 
         insert_entity_source(conn, "person", person_id, source_record_id, "candidate")
 
@@ -457,7 +466,7 @@ def load_candidates(
             mapped_fields={
                 **mapped_fields,
                 "fec_candidate_id": fec_candidate_id,
-                "name": candidate_name,
+                "name": resolved_candidate_name,
                 "office": candidate_office,
             },
             principal_committee_id=principal_committee_id,
@@ -466,14 +475,7 @@ def load_candidates(
         )
 
         load_result.inserted += 1
-        processed_since_commit = _finalize_stage3_row(
-            conn,
-            file_type="cn",
-            processed_rows=processed_rows,
-            load_result=load_result,
-            processed_since_commit=processed_since_commit,
-            batch_size=batch_size,
-        )
+        processed_since_commit = _finalize_candidate_row()
 
     _commit_final_batch(conn, processed_since_commit)
     return load_result

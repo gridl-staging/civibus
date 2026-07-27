@@ -1,11 +1,18 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from collections.abc import Callable
 from urllib.request import urlretrieve
 
 
 FEC_BULK_DOWNLOAD_BASE = "https://www.fec.gov/files/bulk-downloads"
+
+FEC_DATA_ROOT_ENV_VAR = "CIVIBUS_FEC_DATA_ROOT"
+
+# ingest -> campaign_finance -> domains -> repo root. NB: two levels up is the
+# `domains` package, which would silently resolve archives to `<repo>/domains/data`.
+_REPO_ROOT = Path(__file__).resolve().parents[3]
 FEC_BULK_URL_SLUGS: dict[str, str] = {
     "cm": "cm",
     "cn": "cn",
@@ -53,6 +60,48 @@ def fec_bulk_cache_path(repo_root: Path, *, cycle: int, file_type: str) -> Path:
     return fec_bulk_data_cache_path(repo_root / "data", cycle=cycle, file_type=file_type)
 
 
+def fec_bulk_data_root(data_root: Path) -> Path:
+    return data_root / "fec" / "bulk"
+
+
+class FecDataRootMissingError(RuntimeError):
+    """Raised when no usable FEC bulk archive root can be resolved."""
+
+
+def resolve_fec_data_root(*, repo_root: Path | None = None) -> Path:
+    """Resolve the `data/` root holding FEC bulk archives.
+
+    Returns the **`data/` root** — the parent of `fec/` — because
+    `fec_bulk_data_cache_path` appends `fec/bulk` itself. `CIVIBUS_FEC_DATA_ROOT`
+    must therefore be set to `.../data`, not `.../data/fec`; the variable name
+    invites the wrong value.
+
+    Resolution order is the environment variable, then `<repo_root>/data`. The
+    chosen root is only returned when `fec/bulk` exists beneath it: `.gitignore`
+    excludes `data/`, so a git worktree has no archives at all and a lane that
+    assumed otherwise would fail later with an unrelated error.
+
+    `repo_root` exists so tests can build the fallback branch in a tmp dir instead
+    of depending on where the suite happens to run.
+    """
+    configured = os.environ.get(FEC_DATA_ROOT_ENV_VAR)
+    if configured:
+        data_root = Path(configured)
+        source = f"{FEC_DATA_ROOT_ENV_VAR}={configured}"
+    else:
+        data_root = (repo_root if repo_root is not None else _REPO_ROOT) / "data"
+        source = f"{FEC_DATA_ROOT_ENV_VAR} unset; fell back to <repo_root>/data"
+
+    archive_root = fec_bulk_data_root(data_root)
+    if not archive_root.is_dir():
+        raise FecDataRootMissingError(
+            f"No FEC bulk archives at {archive_root} ({source}). "
+            f"Set {FEC_DATA_ROOT_ENV_VAR} to the data/ root that contains fec/bulk "
+            f"— note that git worktrees never carry archives, because .gitignore excludes data/."
+        )
+    return data_root
+
+
 def fec_bulk_data_cache_path(data_root: Path, *, cycle: int, file_type: str) -> Path:
     cycle_suffix = str(cycle)[-2:]
     if file_type == "schedule_e":
@@ -61,7 +110,7 @@ def fec_bulk_data_cache_path(data_root: Path, *, cycle: int, file_type: str) -> 
         filename = f"oppexp{cycle_suffix}.zip"
     else:
         filename = f"{file_type}{cycle_suffix}.zip"
-    return data_root / "fec" / "bulk" / str(cycle) / filename
+    return fec_bulk_data_root(data_root) / str(cycle) / filename
 
 
 def download_fec_bulk_file_to_cache(

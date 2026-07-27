@@ -926,6 +926,81 @@ def test_load_candidates_resolves_principal_committee_and_is_idempotent(
     _assert_candidate_addresses(bulk_loader_conn, bulk_loader_fixture_set.candidate_rows)
 
 
+def test_load_candidates_preserves_source_rows_with_missing_name(
+    bulk_loader_conn: psycopg.Connection,
+    bulk_loader_fixture_set: BulkLoaderFixtureSet,
+    tmp_path: Path,
+) -> None:
+    data_source_id = ensure_fec_bulk_data_source(bulk_loader_conn)
+    load_committees(
+        bulk_loader_conn,
+        bulk_loader_fixture_set.committee_path,
+        cycle=_PRIMARY_CYCLE,
+        data_source_id=data_source_id,
+        batch_size=2,
+    )
+
+    missing_name_rows = [dict(row) for row in bulk_loader_fixture_set.candidate_rows]
+    missing_name_candidate_id = missing_name_rows[0]["CAND_ID"]
+    missing_name_rows[0]["CAND_NAME"] = None
+    missing_name_path = tmp_path / "cn_missing_candidate_name.txt"
+    _write_fixture_file(missing_name_path, CN_COLUMNS, missing_name_rows)
+
+    first_result = load_candidates(
+        bulk_loader_conn,
+        missing_name_path,
+        cycle=_PRIMARY_CYCLE,
+        data_source_id=data_source_id,
+        batch_size=2,
+    )
+    second_result = load_candidates(
+        bulk_loader_conn,
+        bulk_loader_fixture_set.candidate_path,
+        cycle=_SECONDARY_CYCLE,
+        data_source_id=data_source_id,
+        batch_size=2,
+    )
+    third_result = load_candidates(
+        bulk_loader_conn,
+        missing_name_path,
+        cycle=_SECONDARY_CYCLE + 2,
+        data_source_id=data_source_id,
+        batch_size=2,
+    )
+
+    assert (first_result.inserted, first_result.skipped, first_result.errors) == (5, 0, 0)
+    assert (second_result.inserted, second_result.skipped, second_result.errors) == (5, 0, 0)
+    assert (third_result.inserted, third_result.skipped, third_result.errors) == (5, 0, 0)
+
+    expected_name = next(
+        row["CAND_NAME"]
+        for row in bulk_loader_fixture_set.candidate_rows
+        if row["CAND_ID"] == missing_name_candidate_id
+    )
+    assert expected_name is not None
+    with bulk_loader_conn.cursor(row_factory=dict_row) as cursor:
+        cursor.execute(
+            """
+            SELECT candidate.name,
+                   person.canonical_name,
+                   source_record.source_record_key
+            FROM cf.candidate candidate
+            JOIN core.person person
+              ON person.id = candidate.person_id
+            JOIN core.source_record source_record
+              ON source_record.id = candidate.source_record_id
+            WHERE candidate.fec_candidate_id = %s
+            """,
+            (missing_name_candidate_id,),
+        )
+        stored_row = cursor.fetchone()
+
+    assert stored_row is not None
+    assert stored_row["name"] == expected_name
+    assert stored_row["canonical_name"] == expected_name
+    assert stored_row["source_record_key"] == f"cn:{_SECONDARY_CYCLE + 2}:{missing_name_candidate_id}"
+
+
 def test_load_candidate_summaries_updates_existing_candidates_and_skips_unresolved(
     bulk_loader_conn: psycopg.Connection,
     bulk_loader_fixture_set: BulkLoaderFixtureSet,

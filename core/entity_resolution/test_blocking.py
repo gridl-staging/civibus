@@ -92,10 +92,78 @@ def test_count_blocked_pairs_raises_when_runtime_unavailable(
         count_blocked_pairs(rows, "person")
 
 
-def test_count_blocked_pairs_uses_predict_and_counts_by_match_key(
+def test_count_blocked_pairs_empty_rows_still_enforce_runtime_contract(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Per-rule counts are derived from Splink prediction output match_key values."""
+    """Empty inputs must still prove the blocking-analysis runtime boundary."""
+    person_settings = _FakeSettings([_FakeBlockingRule("l.last_name = r.last_name")])
+
+    def _raise_runtime_error() -> tuple[object, object]:
+        raise RuntimeError("Splink runtime is required for probabilistic scoring.")
+
+    monkeypatch.setattr(
+        "core.entity_resolution.blocking.get_probabilistic_settings",
+        lambda entity_type: person_settings if entity_type == "person" else None,
+    )
+    monkeypatch.setattr(
+        "core.entity_resolution.blocking.get_splink_runtime",
+        _raise_runtime_error,
+    )
+
+    with pytest.raises(RuntimeError, match="Splink"):
+        count_blocked_pairs([], "person")
+
+
+def test_count_blocked_pairs_raises_when_blocking_analysis_apis_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rows: list[RowDict] = [{"id": uuid4(), "canonical_name": "No Blocking Analysis"}]
+    person_settings = _FakeSettings([_FakeBlockingRule("l.last_name = r.last_name")])
+
+    class FakeDuckDBAPI:
+        pass
+
+    monkeypatch.setattr(
+        "core.entity_resolution.blocking.get_probabilistic_settings",
+        lambda entity_type: person_settings if entity_type == "person" else None,
+    )
+    monkeypatch.setattr(
+        "core.entity_resolution.blocking.get_splink_runtime",
+        lambda: (object, FakeDuckDBAPI),
+    )
+    monkeypatch.setattr(
+        "core.entity_resolution.blocking.cumulative_comparisons_to_be_scored_from_blocking_rules_data",
+        None,
+    )
+    monkeypatch.setattr("core.entity_resolution.blocking.n_largest_blocks", None)
+
+    with pytest.raises(RuntimeError, match="Splink blocking-analysis APIs are required"):
+        count_blocked_pairs(rows, "person")
+
+
+def _patch_blocking_analysis(
+    monkeypatch: pytest.MonkeyPatch,
+    calls: list[object],
+    cumulative_records: list[dict[str, object]],
+    largest_records_by_rule: dict[str, list[dict[str, object]]] | None = None,
+) -> None:
+    largest_records = largest_records_by_rule or {}
+
+    monkeypatch.setattr(
+        "core.entity_resolution.blocking.cumulative_comparisons_to_be_scored_from_blocking_rules_data",
+        lambda **kwargs: calls.append(("cumulative", kwargs)) or cumulative_records,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "core.entity_resolution.blocking.n_largest_blocks",
+        lambda **kwargs: calls.append(("largest", kwargs)) or largest_records.get(str(kwargs["blocking_rule"]), []),
+        raising=False,
+    )
+
+
+def test_count_blocked_pairs_uses_public_blocking_analysis_counts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     rows: list[RowDict] = [
         {"id": uuid4(), "canonical_name": "One"},
         {"id": uuid4(), "canonical_name": "Two"},
@@ -106,43 +174,11 @@ def test_count_blocked_pairs_uses_predict_and_counts_by_match_key(
             _FakeBlockingRule("rule_1_sql"),
         ]
     )
-    runtime_calls: dict[str, object] = {}
+    calls: list[object] = []
 
     class FakeDuckDBAPI:
         def __init__(self) -> None:
-            runtime_calls["duckdb_created"] = True
-
-    class FakePredictions:
-        def as_record_dict(self) -> list[dict[str, object]]:
-            return [
-                {
-                    "match_key": "0",
-                    "unique_id_l": str(rows[0]["id"]),
-                    "unique_id_r": str(rows[1]["id"]),
-                },
-                {
-                    "match_key": "0",
-                    "unique_id_l": str(rows[1]["id"]),
-                    "unique_id_r": str(rows[0]["id"]),
-                },
-                {
-                    "match_key": "1",
-                    "unique_id_l": str(rows[0]["id"]),
-                    "unique_id_r": str(rows[1]["id"]),
-                },
-            ]
-
-    class FakeInference:
-        def predict(self) -> FakePredictions:
-            runtime_calls["predict_called"] = True
-            return FakePredictions()
-
-    class FakeLinker:
-        def __init__(self, input_rows: list[RowDict], in_settings: object, db_api: object) -> None:
-            runtime_calls["rows"] = input_rows
-            runtime_calls["settings"] = in_settings
-            runtime_calls["db_api"] = db_api
-            self.inference = FakeInference()
+            calls.append("duckdb_created")
 
     monkeypatch.setattr(
         "core.entity_resolution.blocking.get_probabilistic_settings",
@@ -150,21 +186,116 @@ def test_count_blocked_pairs_uses_predict_and_counts_by_match_key(
     )
     monkeypatch.setattr(
         "core.entity_resolution.blocking.get_splink_runtime",
-        lambda: (FakeLinker, FakeDuckDBAPI),
+        lambda: (object, FakeDuckDBAPI),
+    )
+    _patch_blocking_analysis(
+        monkeypatch,
+        calls,
+        [
+            {"match_key": "0", "row_count": 2, "cumulative_rows": 2},
+            {"match_key": "1", "row_count": 1, "cumulative_rows": 3},
+        ],
+        {
+            "rule_0_sql": [{"block_count": 2}],
+            "rule_1_sql": [{"block_count": 1}],
+        },
     )
 
     counts = count_blocked_pairs(rows, "organization")
 
-    assert runtime_calls["duckdb_created"] is True
-    assert runtime_calls["rows"] == [
-        {"id": str(rows[0]["id"]), "canonical_name": "One"},
-        {"id": str(rows[1]["id"]), "canonical_name": "Two"},
+    assert calls[0] == "duckdb_created"
+    assert calls[1][0] == "cumulative"
+    assert calls[1][1]["table_or_tables"] == [
+        [
+            {"id": str(rows[0]["id"]), "canonical_name": "One"},
+            {"id": str(rows[1]["id"]), "canonical_name": "Two"},
+        ]
     ]
-    assert runtime_calls["settings"] is settings
-    assert runtime_calls["predict_called"] is True
+    assert calls[1][1]["blocking_rules"] == ["rule_0_sql", "rule_1_sql"]
     assert counts == [
-        {"rule_index": 0, "blocking_rule": "rule_0_sql", "pair_count": 2},
-        {"rule_index": 1, "blocking_rule": "rule_1_sql", "pair_count": 1},
+        {
+            "rule_index": 0,
+            "blocking_rule": "rule_0_sql",
+            "exclusive_pair_count": 2,
+            "cumulative_pair_count": 2,
+            "max_block_size": 2,
+        },
+        {
+            "rule_index": 1,
+            "blocking_rule": "rule_1_sql",
+            "exclusive_pair_count": 1,
+            "cumulative_pair_count": 3,
+            "max_block_size": 1,
+        },
+    ]
+
+
+def test_count_blocked_pairs_uses_public_blocking_analysis_without_predict(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rows: list[RowDict] = [
+        {"id": uuid4(), "canonical_name": "One"},
+        {"id": uuid4(), "canonical_name": "Two"},
+    ]
+    settings = _FakeSettings(
+        [
+            _FakeBlockingRule("rule_0_sql"),
+            _FakeBlockingRule("rule_1_sql"),
+        ]
+    )
+    calls: list[object] = []
+
+    class FakeDuckDBAPI:
+        pass
+
+    monkeypatch.setattr(
+        "core.entity_resolution.blocking.get_probabilistic_settings",
+        lambda entity_type: settings if entity_type == "person" else None,
+    )
+    monkeypatch.setattr(
+        "core.entity_resolution.blocking.get_splink_runtime",
+        lambda: (object, FakeDuckDBAPI),
+    )
+    _patch_blocking_analysis(
+        monkeypatch,
+        calls,
+        [
+            {"match_key": "0", "row_count": 3, "cumulative_rows": 3},
+            {"match_key": "1", "row_count": 1, "cumulative_rows": 4},
+        ],
+        {"rule_1_sql": [{"block_count": 4}]},
+    )
+
+    counts = count_blocked_pairs(rows, "person")
+
+    assert calls[0][0] == "cumulative"
+    assert calls[0][1]["table_or_tables"] == [
+        [
+            {"id": str(rows[0]["id"]), "canonical_name": "One"},
+            {"id": str(rows[1]["id"]), "canonical_name": "Two"},
+        ]
+    ]
+    assert calls[0][1]["blocking_rules"] == ["rule_0_sql", "rule_1_sql"]
+    assert calls[0][1]["link_type"] == "dedupe_only"
+    assert calls[0][1]["unique_id_column_name"] == "id"
+    assert calls[2][0] == "largest"
+    assert calls[2][1]["blocking_rule"] == "rule_1_sql"
+    assert calls[2][1]["n_largest"] == 1
+    assert counts == [
+        {
+            "rule_index": 0,
+            "blocking_rule": "rule_0_sql",
+            "exclusive_pair_count": 3,
+            "cumulative_pair_count": 3,
+            "max_block_size": 0,
+        },
+        {
+            "rule_index": 1,
+            "blocking_rule": "rule_1_sql",
+            "exclusive_pair_count": 1,
+            "cumulative_pair_count": 4,
+            "max_block_size": 4,
+        },
     ]
 
 
@@ -179,23 +310,10 @@ def test_count_blocked_pairs_prepares_duplicate_entity_rows_with_unique_ids(
         {"id": other_id, "canonical_name": "Two", "identifier_key": None},
     ]
     settings = _FakeSettings([_FakeBlockingRule("rule_0_sql")])
-    runtime_calls: dict[str, object] = {}
+    calls: list[object] = []
 
     class FakeDuckDBAPI:
         pass
-
-    class FakePredictions:
-        def as_record_dict(self) -> list[dict[str, object]]:
-            return []
-
-    class FakeInference:
-        def predict(self) -> FakePredictions:
-            return FakePredictions()
-
-    class FakeLinker:
-        def __init__(self, input_rows: list[RowDict], in_settings: object, db_api: object) -> None:
-            runtime_calls["rows"] = input_rows
-            self.inference = FakeInference()
 
     monkeypatch.setattr(
         "core.entity_resolution.blocking.get_probabilistic_settings",
@@ -203,63 +321,41 @@ def test_count_blocked_pairs_prepares_duplicate_entity_rows_with_unique_ids(
     )
     monkeypatch.setattr(
         "core.entity_resolution.blocking.get_splink_runtime",
-        lambda: (FakeLinker, FakeDuckDBAPI),
+        lambda: (object, FakeDuckDBAPI),
     )
+    _patch_blocking_analysis(monkeypatch, calls, [{"match_key": "0", "row_count": 0, "cumulative_rows": 0}])
 
     count_blocked_pairs(rows, "person")
 
-    assert runtime_calls["rows"] == [
-        {
-            "id": f"{shared_id}__splink_row__0",
-            "canonical_name": "One",
-            "identifier_key": "fec_id:FEC-123",
-        },
-        {
-            "id": f"{shared_id}__splink_row__1",
-            "canonical_name": "One",
-            "identifier_key": "voter_reg_id:VR-123",
-        },
-        {"id": str(other_id), "canonical_name": "Two", "identifier_key": None},
+    assert calls[0][1]["table_or_tables"] == [
+        [
+            {
+                "id": f"{shared_id}__splink_row__0",
+                "canonical_name": "One",
+                "identifier_key": "fec_id:FEC-123",
+            },
+            {
+                "id": f"{shared_id}__splink_row__1",
+                "canonical_name": "One",
+                "identifier_key": "voter_reg_id:VR-123",
+            },
+            {"id": str(other_id), "canonical_name": "Two", "identifier_key": None},
+        ]
     ]
 
 
-def test_count_blocked_pairs_ignores_same_entity_synthetic_row_pairs(
+def test_count_blocked_pairs_returns_exclusive_counts_from_cumulative_rows(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    shared_id = uuid4()
-    other_id = uuid4()
     rows: list[RowDict] = [
-        {"id": shared_id, "canonical_name": "One", "identifier_key": "fec_id:FEC-123"},
-        {"id": shared_id, "canonical_name": "One", "identifier_key": "voter_reg_id:VR-123"},
-        {"id": other_id, "canonical_name": "Two", "identifier_key": None},
+        {"id": uuid4(), "canonical_name": "One"},
+        {"id": uuid4(), "canonical_name": "Two"},
     ]
     settings = _FakeSettings([_FakeBlockingRule("rule_0_sql"), _FakeBlockingRule("rule_1_sql")])
+    calls: list[object] = []
 
     class FakeDuckDBAPI:
         pass
-
-    class FakePredictions:
-        def as_record_dict(self) -> list[dict[str, object]]:
-            return [
-                {
-                    "match_key": "0",
-                    "unique_id_l": f"{shared_id}__splink_row__0",
-                    "unique_id_r": f"{shared_id}__splink_row__1",
-                },
-                {
-                    "match_key": "1",
-                    "unique_id_l": f"{shared_id}__splink_row__1",
-                    "unique_id_r": str(other_id),
-                },
-            ]
-
-    class FakeInference:
-        def predict(self) -> FakePredictions:
-            return FakePredictions()
-
-    class FakeLinker:
-        def __init__(self, input_rows: list[RowDict], in_settings: object, db_api: object) -> None:
-            self.inference = FakeInference()
 
     monkeypatch.setattr(
         "core.entity_resolution.blocking.get_probabilistic_settings",
@@ -267,12 +363,98 @@ def test_count_blocked_pairs_ignores_same_entity_synthetic_row_pairs(
     )
     monkeypatch.setattr(
         "core.entity_resolution.blocking.get_splink_runtime",
-        lambda: (FakeLinker, FakeDuckDBAPI),
+        lambda: (object, FakeDuckDBAPI),
+    )
+    _patch_blocking_analysis(
+        monkeypatch,
+        calls,
+        [
+            {"match_key": "0", "row_count": 0, "cumulative_rows": 0},
+            {"match_key": "1", "row_count": 1, "cumulative_rows": 1},
+        ],
     )
 
     counts = count_blocked_pairs(rows, "person")
 
     assert counts == [
-        {"rule_index": 0, "blocking_rule": "rule_0_sql", "pair_count": 0},
-        {"rule_index": 1, "blocking_rule": "rule_1_sql", "pair_count": 1},
+        {
+            "rule_index": 0,
+            "blocking_rule": "rule_0_sql",
+            "exclusive_pair_count": 0,
+            "cumulative_pair_count": 0,
+            "max_block_size": 0,
+        },
+        {
+            "rule_index": 1,
+            "blocking_rule": "rule_1_sql",
+            "exclusive_pair_count": 1,
+            "cumulative_pair_count": 1,
+            "max_block_size": 0,
+        },
     ]
+
+
+@pytest.mark.parametrize(
+    ("cumulative_record", "missing_field"),
+    [
+        ({"row_count": 1, "cumulative_rows": 1}, "rule index"),
+        ({"match_key": "0", "row_count": 1}, "cumulative pair count"),
+    ],
+)
+def test_count_blocked_pairs_rejects_unrecognized_cumulative_record_shape(
+    monkeypatch: pytest.MonkeyPatch,
+    cumulative_record: dict[str, object],
+    missing_field: str,
+) -> None:
+    rows: list[RowDict] = [
+        {"id": uuid4(), "canonical_name": "One"},
+        {"id": uuid4(), "canonical_name": "Two"},
+    ]
+    settings = _FakeSettings([_FakeBlockingRule("rule_0_sql")])
+
+    class FakeDuckDBAPI:
+        pass
+
+    monkeypatch.setattr(
+        "core.entity_resolution.blocking.get_probabilistic_settings",
+        lambda entity_type: settings if entity_type == "person" else None,
+    )
+    monkeypatch.setattr(
+        "core.entity_resolution.blocking.get_splink_runtime",
+        lambda: (object, FakeDuckDBAPI),
+    )
+    _patch_blocking_analysis(monkeypatch, [], [cumulative_record])
+
+    with pytest.raises(RuntimeError, match=missing_field):
+        count_blocked_pairs(rows, "person")
+
+
+def test_count_blocked_pairs_rejects_unrecognized_largest_block_record_shape(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rows: list[RowDict] = [
+        {"id": uuid4(), "canonical_name": "One"},
+        {"id": uuid4(), "canonical_name": "Two"},
+    ]
+    settings = _FakeSettings([_FakeBlockingRule("rule_0_sql")])
+
+    class FakeDuckDBAPI:
+        pass
+
+    monkeypatch.setattr(
+        "core.entity_resolution.blocking.get_probabilistic_settings",
+        lambda entity_type: settings if entity_type == "person" else None,
+    )
+    monkeypatch.setattr(
+        "core.entity_resolution.blocking.get_splink_runtime",
+        lambda: (object, FakeDuckDBAPI),
+    )
+    _patch_blocking_analysis(
+        monkeypatch,
+        [],
+        [{"match_key": "0", "row_count": 1, "cumulative_rows": 1}],
+        {"rule_0_sql": [{"unexpected_count": 4}]},
+    )
+
+    with pytest.raises(RuntimeError, match="maximum block size"):
+        count_blocked_pairs(rows, "person")

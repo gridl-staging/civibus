@@ -23,6 +23,10 @@ CommitteeSummaryMoney = FecMoney
 CandidateMoney = FecMoney
 
 
+def is_fec_memo_code(memo_code: str | None) -> bool:
+    return memo_code in {"X", "x"}
+
+
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -302,7 +306,7 @@ class Transaction(CampaignFinanceBaseModel):
     def _derive_is_memo_and_validate_contributor_ids(self) -> Transaction:
         if self.contributor_person_id is not None and self.contributor_organization_id is not None:
             raise ValueError("Only one contributor identifier may be provided")
-        self.is_memo = self.memo_code in {"X", "x"}
+        self.is_memo = is_fec_memo_code(self.memo_code)
         return self
 
 

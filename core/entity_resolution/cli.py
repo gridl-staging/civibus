@@ -169,19 +169,59 @@ def _print_blocking_summary(
     blocking_rules: list[dict[str, Any]],
     blocked_pair_counts: list[dict[str, Any]],
 ) -> None:
-    pair_counts_by_rule_index = {
-        int(item["rule_index"]): int(item.get("pair_count", 0)) for item in blocked_pair_counts
-    }
     print(f"Blocking diagnostics ({entity_type})")
     if not blocking_rules:
         print("  No blocking rules configured.")
         return
 
+    pair_counts_by_rule_index = _blocking_summary_counts_by_rule_index(blocked_pair_counts)
     for rule in blocking_rules:
         rule_index = int(rule["rule_index"])
         blocking_rule = str(rule["blocking_rule"])
-        pair_count = pair_counts_by_rule_index.get(rule_index, 0)
-        print(f"  rule[{rule_index}] {blocking_rule} | pairs={pair_count}")
+        exclusive_count, cumulative_count = _required_blocking_summary_counts(
+            pair_counts_by_rule_index,
+            rule_index,
+        )
+        print(
+            f"  rule[{rule_index}] {blocking_rule} | "
+            f"exclusive_pairs={exclusive_count} cumulative_pairs={cumulative_count}"
+        )
+
+
+def _blocking_summary_counts_by_rule_index(
+    blocked_pair_counts: list[dict[str, Any]],
+) -> dict[int, tuple[int, int]]:
+    return {
+        int(item["rule_index"]): (
+            _required_count_field(item, "exclusive_pair_count", "exclusive pair count"),
+            _required_count_field(item, "cumulative_pair_count", "cumulative pair count"),
+        )
+        for item in blocked_pair_counts
+    }
+
+
+def _required_blocking_summary_counts(
+    counts_by_rule_index: dict[int, tuple[int, int]],
+    rule_index: int,
+) -> tuple[int, int]:
+    counts = counts_by_rule_index.get(rule_index)
+    if counts is None:
+        raise RuntimeError(f"Blocking diagnostics omitted counts for rule index {rule_index}.")
+    return counts
+
+
+def _required_count_field(
+    item: dict[str, Any],
+    key: str,
+    field_description: str,
+) -> int:
+    if key not in item or item[key] is None:
+        columns = ", ".join(sorted(item)) or "<none>"
+        raise RuntimeError(
+            "Blocking diagnostics count output is missing the required "
+            f"{field_description} field {key!r}; received fields: {columns}."
+        )
+    return int(item[key])
 
 
 def _score_and_classify_pairs(

@@ -176,9 +176,19 @@ def parse_pipe_delimited(stream: Iterable[str], columns: tuple[str, ...]) -> Ite
         yield dict(zip(columns, row_values, strict=True))
 
 
-def _find_matching_txt_member(archive_path: Path, file_type: str) -> str:
+def _find_matching_txt_member(
+    archive_path: Path,
+    file_type: str,
+    *,
+    expected_member_name: str | None = None,
+) -> str:
     with ZipFile(archive_path) as archive:
         text_members = [name for name in archive.namelist() if name.lower().endswith(".txt")]
+
+    if expected_member_name is not None:
+        if expected_member_name in text_members:
+            return expected_member_name
+        raise ValueError(f"Archive {archive_path} does not contain expected ZIP member {expected_member_name!r}")
 
     expected_prefix = file_type.lower()
     prefix_matches = [name for name in text_members if Path(name).name.lower().startswith(expected_prefix)]
@@ -219,6 +229,7 @@ def read_bulk_file(
     limit: int | None = None,
     *,
     next_source_row_number: int = 0,
+    expected_member_name: str | None = None,
 ) -> Iterator[dict[str, str | None]]:
     normalized_file_type = file_type.lower()
     if normalized_file_type not in COLUMNS_BY_FILE_TYPE:
@@ -235,7 +246,11 @@ def read_bulk_file(
     file_path = Path(path)
 
     if file_path.suffix.lower() == ".zip":
-        member_name = _find_matching_txt_member(file_path, normalized_file_type)
+        member_name = _find_matching_txt_member(
+            file_path,
+            normalized_file_type,
+            expected_member_name=expected_member_name,
+        )
         with ZipFile(file_path) as archive:
             with archive.open(member_name, "r") as binary_stream:
                 with io.TextIOWrapper(binary_stream, encoding="latin-1") as text_stream:
