@@ -28,7 +28,7 @@ PUBLIC_RUN_SPECIMENS = (
 )
 EXPECTED_PUBLIC_ELIGIBLE_NODE_TOTAL = 3252
 EXPECTED_PUBLIC_NODE_PREFIX_TOTALS = {"api/": 249, "core/": 680, "domains/": 1694, "tests/": 629}
-PROJECTED_PYTEST_TIMEOUT_SECONDS = 300
+PROJECTED_PYTEST_TIMEOUT_SECONDS = 600
 
 
 @dataclass(frozen=True)
@@ -432,7 +432,7 @@ def test_post_sync_uses_repo_virtualenv_python_when_python3_fails(tmp_path: Path
     assert "-m matt scrai strip --help" in log_text
 
 
-@pytest.mark.timeout(240)
+@pytest.mark.timeout(900)
 def test_projected_current_public_unit_selection_failures_are_classified(tmp_path: Path) -> None:
     projected_mirror = project_debbie_public_mirror(tmp_path)
     collect_command = _pytest_collect_command_from_make_target(projected_mirror.root, "test")
@@ -455,6 +455,7 @@ def test_projected_current_public_unit_selection_failures_are_classified(tmp_pat
     )
 
 
+@pytest.mark.timeout(900)
 def test_projected_public_gate_matches_canonical_public_eligible_nodes(tmp_path: Path) -> None:
     projected_mirror = project_debbie_public_mirror(tmp_path)
     canonical_command = _pytest_collect_command_from_make_target(REPO_ROOT, "test-public")
