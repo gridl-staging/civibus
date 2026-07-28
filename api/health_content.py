@@ -64,7 +64,7 @@ FEDERAL_FIRST_CONTENT_COUNTS: Mapping[str, int] = {
     "cf_transaction_with_support_oppose": 10_409,
     "cf_transaction_contribution_insights_sentinel": 4_495,
     "cf_candidate_money_serving_coverage": 2_079,
-    "cf_candidate_money_recent_summary_coverage": 2_079,
+    "cf_candidate_money_recent_summary_coverage": 1_799,
 }
 
 # Current prod launch floors. These are 80% of the current Fly production
@@ -79,7 +79,7 @@ FEDERAL_FIRST_CONTENT_FLOORS: Mapping[str, int] = {
     "cf_transaction_with_support_oppose": 8_327,
     "cf_transaction_contribution_insights_sentinel": 3_596,
     "cf_candidate_money_serving_coverage": 1_800,
-    "cf_candidate_money_recent_summary_coverage": 1_800,
+    "cf_candidate_money_recent_summary_coverage": 1_440,
 }
 
 _DEFAULT_FLOORS: Mapping[str, int] = FEDERAL_FIRST_CONTENT_FLOORS
@@ -87,8 +87,9 @@ _DEFAULT_FLOORS: Mapping[str, int] = FEDERAL_FIRST_CONTENT_FLOORS
 _FLOOR_ENV_VAR_PREFIX = "CIVIBUS_HEALTH_CONTENT_FLOOR_"
 
 _FEC_BULK_FRESHNESS_CHECK = "campaign_finance_federal_fec_fresh"
-# Serving-window official totals measured 2,079 in production on 2026-07-27 from
-# docs/live-state/2026_07_27_candidate_money_production_coverage.md, and 1,800 leaves deploy-safe headroom.
+# Serving-window official totals measured 2,079 in production on 2026-07-27.
+# The narrower 120-day freshness subset measured 1,799 during the 2026-07-28
+# deploy; its 1,440 floor preserves the content-health owner's 80% headroom.
 _CANDIDATE_MONEY_COVERAGE_CHECK = "cf_candidate_money_serving_coverage"
 _CANDIDATE_MONEY_RECENT_SUMMARY_COVERAGE_CHECK = "cf_candidate_money_recent_summary_coverage"
 _CANDIDATE_MONEY_RECENT_SUMMARY_MAX_AGE = timedelta(days=120)

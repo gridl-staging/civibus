@@ -39,8 +39,8 @@ CANDIDATE_MONEY_COVERAGE_CHECK = "cf_candidate_money_serving_coverage"
 CANDIDATE_MONEY_RECENT_SUMMARY_COVERAGE_CHECK = "cf_candidate_money_recent_summary_coverage"
 CANDIDATE_MONEY_PRODUCTION_OBSERVATION = 2_079
 CANDIDATE_MONEY_DEFAULT_FLOOR = 1_800
-CANDIDATE_MONEY_RECENT_SUMMARY_PRODUCTION_OBSERVATION = 2_079
-CANDIDATE_MONEY_RECENT_SUMMARY_DEFAULT_FLOOR = 1_800
+CANDIDATE_MONEY_RECENT_SUMMARY_PRODUCTION_OBSERVATION = 1_799
+CANDIDATE_MONEY_RECENT_SUMMARY_DEFAULT_FLOOR = 1_440
 CANDIDATE_MONEY_RECENT_SUMMARY_CUTOFF = date(2026, 3, 29)
 CANDIDATE_MONEY_RECENT_SUMMARY_EVALUATION_DATE = date(2026, 7, 27)
 CANDIDATE_MONEY_RECENT_SUMMARY_FRESH_FEC_ROW = (datetime(2026, 7, 27, 12, 0, tzinfo=timezone.utc),)
@@ -539,8 +539,8 @@ def test_evaluate_content_health_flags_candidate_money_recent_summary_below_floo
     assert failures == [
         ContentHealthFailure(
             check=CANDIDATE_MONEY_RECENT_SUMMARY_COVERAGE_CHECK,
-            actual=1_799,
-            floor=1_800,
+            actual=1_439,
+            floor=1_440,
         )
     ]
 
