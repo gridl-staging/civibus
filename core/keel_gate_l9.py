@@ -325,7 +325,7 @@ def build_trace_report(
 
 
 def _evidence_status(report: L9TraceReport) -> Literal["pass", "fail"]:
-    return "pass" if not report.orphan_records else "fail"
+    return "pass" if report.sampled_records and not report.orphan_records else "fail"
 
 
 def _build_gate_command(evidence_date: date, sample_limit: int) -> str:

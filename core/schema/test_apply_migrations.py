@@ -29,6 +29,7 @@ _POSTGRES_USER = os.environ.get("POSTGRES_USER", "civibus")
 _POSTGRES_PASSWORD = os.environ.get("POSTGRES_PASSWORD", "civibus_dev")
 _DB_NAME_PREFIX = "test_migrations_"
 _SAFE_HOSTS = {None, "", "localhost", "127.0.0.1"}
+_SAFE_PORTS = {5475, 5477}
 
 
 def _skip_or_fail(message: str) -> None:
@@ -41,8 +42,8 @@ def _admin_connect() -> psycopg.Connection:
     raw_host = os.environ.get("POSTGRES_HOST")
     if raw_host not in _SAFE_HOSTS:
         _skip_or_fail(f"POSTGRES_HOST={raw_host} is not a safe local host for destructive tests")
-    if _POSTGRES_PORT != 5475:
-        _skip_or_fail(f"POSTGRES_PORT={_POSTGRES_PORT} is not the Stage 1 safe-local test port 5475")
+    if _POSTGRES_PORT not in _SAFE_PORTS:
+        _skip_or_fail(f"POSTGRES_PORT={_POSTGRES_PORT} is not an approved safe-local test port")
 
     try:
         conn = psycopg.connect(

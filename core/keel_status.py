@@ -46,7 +46,7 @@ class LayerSummary:
 # resolved-status string outside this set is bucketed as "other" by the
 # casual interpretation (it can occur when an evidence payload's `status`
 # field passes through unchanged — see `core/keel_status.py:202-203`).
-_CANONICAL_STATUSES = ("pass", "stale", "error", "waived")
+_CANONICAL_STATUSES = ("pass", "stale", "error", "waived", "vacuous")
 
 
 def _today_utc() -> date:
@@ -404,10 +404,11 @@ def _interpret_scope_rows(*, scope_rows: list[StatusRow], scope_strategy_type: s
         if row.status == "error" and row.detail == "missing evidence":
             return f"missing emitted scope: {row.scope}"
 
-    # Branch 7 — catch-all distribution. Counts canonical buckets plus an
-    # "other" bucket for any passthrough status outside the four canonical
-    # values (e.g. payload `status: "warn"`).
-    counts = {key: 0 for key in _CANONICAL_STATUSES}
+    # Branch 7 — catch-all distribution. `fail` is part of the mechanical
+    # status vocabulary and must render explicitly rather than being buried in
+    # "other"; only truly unknown passthrough statuses belong there.
+    distribution_statuses = ("pass", "fail", "stale", "error", "waived", "vacuous")
+    counts = {key: 0 for key in distribution_statuses}
     other = 0
     for s in statuses:
         if s in counts:
@@ -415,7 +416,7 @@ def _interpret_scope_rows(*, scope_rows: list[StatusRow], scope_strategy_type: s
         else:
             other += 1
     parts: list[str] = []
-    for key in _CANONICAL_STATUSES:
+    for key in distribution_statuses:
         if counts[key]:
             parts.append(f"{counts[key]} {key}")
     if other:

@@ -1,6 +1,7 @@
 POSTGRES_USER ?= civibus
 POSTGRES_DB ?= civibus
 POSTGRES_PORT ?= 5433
+INTEGRATION_POSTGRES_PORT_OVERRIDE_INVALID := $(if $(filter environment command line,$(origin POSTGRES_PORT)),1)
 WORKSPACE_SLUG := $(shell basename "$$(dirname "$(CURDIR)")" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9' '_' | sed 's/_$$//')
 COMPOSE_PROJECT_NAME ?= civibus_$(WORKSPACE_SLUG)
 
@@ -83,6 +84,64 @@ test:
 
 test-public:
 	uv run --extra dev --extra entity-resolution pytest -m "not integration and not e2e and not dev_repo_only"
+
+# .github/workflows/integration.yml is the source of truth; change this local
+# mirror whenever its DB-backed product suite changes.
+.PHONY: test-integration-local
+test-integration-local: override POSTGRES_PORT := 5475
+test-integration-local:
+	@set -eu; \
+	if [ -n "$(INTEGRATION_POSTGRES_PORT_OVERRIDE_INVALID)" ]; then \
+		echo "test-integration-local pins POSTGRES_PORT=5475 internally; do not provide a POSTGRES_PORT override" >&2; \
+		exit 1; \
+	fi; \
+	if ! POSTGRES_PORT=5475 python3 -c 'import os, socket; probe = socket.socket(); probe.bind(("127.0.0.1", int(os.environ["POSTGRES_PORT"])))'; then \
+		echo "Port 5475 is already bound by a likely concurrent integration run; wait for it to finish, then retry" >&2; \
+		exit 1; \
+	fi; \
+	started_db=0; \
+	cleanup() { \
+		target_status=$$?; \
+		trap - EXIT; \
+		if [ "$$started_db" -eq 1 ]; then \
+			make db-down || target_status=$$?; \
+		fi; \
+		exit "$$target_status"; \
+	}; \
+	trap cleanup EXIT; \
+	trap 'exit 129' HUP; \
+	trap 'exit 130' INT; \
+	trap 'exit 143' TERM; \
+	make db-up; \
+	started_db=1; \
+	container_id="$$(docker compose -f infra/docker-compose.yml ps -q db)"; \
+	if [ -z "$$container_id" ]; then \
+		echo "Database container ID not found" >&2; \
+		exit 1; \
+	fi; \
+	for attempt in $$(seq 1 60); do \
+		status="$$(docker inspect -f '{{.State.Health.Status}}' "$$container_id" 2>/dev/null || true)"; \
+		if [ "$$status" = "healthy" ]; then \
+			break; \
+		fi; \
+		if [ "$$attempt" -eq 60 ]; then \
+			echo "Database did not become healthy in time" >&2; \
+			exit 1; \
+		fi; \
+		sleep 2; \
+	done; \
+	make db-reset; \
+	make ingest-fec-bulk-sample; \
+	make graph-load; \
+	CIVIBUS_REQUIRE_DB=1 uv run --extra dev --extra entity-resolution pytest -m "integration and not quarantined" \
+		api/ \
+		core/ \
+		domains/ \
+		tests/integration/ \
+		tests/e2e/ \
+		tests/test_db_integration.py \
+		tests/test_graph_queries.py \
+		tests/test_relational_queries.py
 
 # Parked state/city pipeline suite (frozen for federal-first v1; excluded from
 # `make test` and CI by the conftest.py quarantine). Run before touching shared

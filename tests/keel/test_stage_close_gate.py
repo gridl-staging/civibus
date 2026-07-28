@@ -213,7 +213,7 @@ def _write_schema_files(repo_root: Path) -> None:
                     "produced_at_utc": {"type": "string", "format": "date-time"},
                     "repo_sha": {"type": "string"},
                     "gate_command": {"type": "string"},
-                    "status": {"type": "string"},
+                    "status": {"type": "string", "enum": ["pass", "fail", "error", "waived", "stale", "vacuous"]},
                 },
             },
             indent=2,
@@ -684,6 +684,30 @@ def test_stage_close_gate_requires_fresh_l7_evidence_when_l7_owner_changes(tmp_p
     assert result.exit_code == 1
     assert result.touched_layers == ["L7"]
     assert result.failures == ["L7: missing fresh evidence for fixed scope 'global'"]
+
+
+def test_stage_close_gate_rejects_schema_valid_l7_vacuous_evidence_without_waiver(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    _write_repo_contract(repo_root, include_l7=True)
+    _write_fixed_scope_evidence(
+        repo_root,
+        layer="L7",
+        scope="global",
+        evidence_date=date(2026, 4, 24),
+        produced_at=datetime(2026, 4, 24, 12, 0, tzinfo=timezone.utc),
+        status="vacuous",
+    )
+
+    result = stage_close_gate.evaluate_stage_close(
+        repo_root=repo_root,
+        changed_files=["core/keel_gate_l7.py"],
+        today_utc=date(2026, 4, 24),
+    )
+
+    assert result.exit_code == 1
+    assert result.touched_layers == ["L7"]
+    assert result.failures == ["L7: non-passing evidence status at evidence/L7/global/2026-04-24.json"]
 
 
 def test_stage_close_gate_treats_layers_yaml_as_control_plane_for_all_phase1_layers(tmp_path: Path) -> None:

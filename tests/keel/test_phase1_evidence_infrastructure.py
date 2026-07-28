@@ -28,6 +28,7 @@ COMMON_METADATA_FIELDS = {
     "status",
 }
 WAIVER_SCHEMA_PATH = REPO_ROOT / "evidence_schemas" / "waiver.json"
+SHARED_MECHANICAL_STATUS_ENUM = ["pass", "fail", "error", "waived", "stale", "vacuous"]
 
 
 def _load_yaml(path: Path) -> dict:
@@ -66,7 +67,37 @@ def test_phase1_layer_schemas_exist_and_validate_as_json_schema() -> None:
         assert COMMON_METADATA_FIELDS.issubset(required), (
             f"{layer['id']} schema must require the common Keel metadata fields"
         )
-        assert schema["properties"]["status"]["enum"] == ["pass", "fail", "error", "waived", "stale"]
+        assert schema["properties"]["status"]["enum"] == SHARED_MECHANICAL_STATUS_ENUM
+
+
+def test_l_layer_mechanical_schemas_share_exact_status_enum() -> None:
+    schema_paths = [
+        schema_path
+        for schema_path in sorted((REPO_ROOT / "evidence_schemas").glob("L*.json"))
+        if not schema_path.name.endswith("_judge_verdict.json")
+        and "enum" in _load_schema(schema_path).get("properties", {}).get("status", {})
+    ]
+
+    assert [path.name for path in schema_paths] == [
+        "L1.json",
+        "L10.json",
+        "L11.json",
+        "L12.json",
+        "L13.json",
+        "L14.json",
+        "L15.json",
+        "L3.json",
+        "L4.json",
+        "L5.json",
+        "L6.json",
+        "L7.json",
+        "L8.json",
+        "L8_threshold_review.json",
+        "L9.json",
+    ]
+    assert {
+        schema_path.name: _load_schema(schema_path)["properties"]["status"]["enum"] for schema_path in schema_paths
+    } == {schema_path.name: SHARED_MECHANICAL_STATUS_ENUM for schema_path in schema_paths}
 
 
 def test_phase1_waiver_schema_exists_and_covers_required_fields() -> None:

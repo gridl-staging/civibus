@@ -15,7 +15,8 @@ from __future__ import annotations
 
 import importlib
 import sys
-from datetime import datetime, timedelta, timezone
+from dataclasses import dataclass
+from datetime import date, datetime, timedelta, timezone
 from types import ModuleType
 from unittest.mock import MagicMock
 
@@ -34,6 +35,15 @@ FIXED_NOW = datetime(2026, 7, 24, 12, 0, tzinfo=timezone.utc)
 FEC_FRESHNESS_CUTOFF = datetime(2026, 7, 17, 12, 0, tzinfo=timezone.utc)
 FEC_FRESHNESS_CUTOFF_EPOCH = 1_784_289_600
 FEC_FRESHNESS_STALE_EPOCH = 1_784_289_599
+CANDIDATE_MONEY_COVERAGE_CHECK = "cf_candidate_money_serving_coverage"
+CANDIDATE_MONEY_RECENT_SUMMARY_COVERAGE_CHECK = "cf_candidate_money_recent_summary_coverage"
+CANDIDATE_MONEY_PRODUCTION_OBSERVATION = 2_079
+CANDIDATE_MONEY_DEFAULT_FLOOR = 1_800
+CANDIDATE_MONEY_RECENT_SUMMARY_PRODUCTION_OBSERVATION = 2_079
+CANDIDATE_MONEY_RECENT_SUMMARY_DEFAULT_FLOOR = 1_800
+CANDIDATE_MONEY_RECENT_SUMMARY_CUTOFF = date(2026, 3, 29)
+CANDIDATE_MONEY_RECENT_SUMMARY_EVALUATION_DATE = date(2026, 7, 27)
+CANDIDATE_MONEY_RECENT_SUMMARY_FRESH_FEC_ROW = (datetime(2026, 7, 27, 12, 0, tzinfo=timezone.utc),)
 
 EXPECTED_FEDERAL_FIRST_CHECKS = {
     "cf_transaction_total",
@@ -43,7 +53,15 @@ EXPECTED_FEDERAL_FIRST_CHECKS = {
     "cf_committee_summary_total",
     "cf_transaction_with_support_oppose",
     "cf_transaction_contribution_insights_sentinel",
+    CANDIDATE_MONEY_COVERAGE_CHECK,
+    CANDIDATE_MONEY_RECENT_SUMMARY_COVERAGE_CHECK,
 }
+
+
+@dataclass(frozen=True)
+class _SyntheticSelectedCycle:
+    coverage_start_date: date
+    coverage_end_date: date
 
 
 def _healthy_counts() -> list[int]:
@@ -57,6 +75,56 @@ def _healthy_connection(*, freshness_result: tuple[object, ...] | None) -> FakeC
 def _is_transaction_confirm_query(query: str) -> bool:
     normalized_query = " ".join(query.lower().split())
     return "select count(*) from cf.transaction" in normalized_query and " where " not in normalized_query
+
+
+def _normalized_sql(query: str) -> str:
+    return " ".join(query.replace("\\n", " ").split())
+
+
+def _candidate_money_serving_query_indices(fake: FakeConnection) -> list[int]:
+    return [
+        index
+        for index, query in enumerate(fake._cursor.executed)
+        if (
+            "FROM cf.candidate" in query
+            and "summary_coverage_end_date BETWEEN %s AND %s" in query
+            and "summary_coverage_end_date >= %s" not in query
+        )
+    ]
+
+
+def _candidate_money_recent_summary_query_indices(fake: FakeConnection) -> list[int]:
+    return [
+        index
+        for index, query in enumerate(fake._cursor.executed)
+        if (
+            "FROM cf.candidate" in query
+            and "summary_coverage_end_date BETWEEN %s AND %s" in query
+            and "summary_coverage_end_date >= %s" in query
+        )
+    ]
+
+
+def _single_query(fake: FakeConnection, indices: list[int]) -> str:
+    assert len(indices) == 1, fake._cursor.executed
+    return fake._cursor.executed[indices[0]]
+
+
+def _single_query_params(fake: FakeConnection, indices: list[int]) -> object:
+    assert len(indices) == 1, fake._cursor.executed
+    return fake._cursor.executed_params[indices[0]]
+
+
+def _candidate_money_query(fake: FakeConnection) -> str:
+    candidate_query_indices = _candidate_money_serving_query_indices(fake)
+    assert len(candidate_query_indices) == 1, fake._cursor.executed
+    return fake._cursor.executed[candidate_query_indices[0]]
+
+
+def _candidate_money_query_params(fake: FakeConnection) -> object:
+    candidate_query_indices = _candidate_money_serving_query_indices(fake)
+    assert len(candidate_query_indices) == 1, fake._cursor.executed
+    return fake._cursor.executed_params[candidate_query_indices[0]]
 
 
 def _load_api_main(monkeypatch: pytest.MonkeyPatch) -> ModuleType:
@@ -73,6 +141,25 @@ def _load_api_main(monkeypatch: pytest.MonkeyPatch) -> ModuleType:
 def test_federal_first_owner_declares_expected_checks() -> None:
     assert set(FEDERAL_FIRST_COUNTS) == EXPECTED_FEDERAL_FIRST_CHECKS
     assert set(FEDERAL_FIRST_FLOORS) == EXPECTED_FEDERAL_FIRST_CHECKS
+    assert FEDERAL_FIRST_COUNTS[CANDIDATE_MONEY_COVERAGE_CHECK] == CANDIDATE_MONEY_PRODUCTION_OBSERVATION
+    assert FEDERAL_FIRST_FLOORS[CANDIDATE_MONEY_COVERAGE_CHECK] == CANDIDATE_MONEY_DEFAULT_FLOOR
+    assert (
+        FEDERAL_FIRST_COUNTS[CANDIDATE_MONEY_RECENT_SUMMARY_COVERAGE_CHECK]
+        == CANDIDATE_MONEY_RECENT_SUMMARY_PRODUCTION_OBSERVATION
+    )
+    assert (
+        FEDERAL_FIRST_FLOORS[CANDIDATE_MONEY_RECENT_SUMMARY_COVERAGE_CHECK]
+        == CANDIDATE_MONEY_RECENT_SUMMARY_DEFAULT_FLOOR
+    )
+    # Keep the deploy-safe default below the 2026-07-27 production observation:
+    # docs/live-state/2026_07_27_candidate_money_production_coverage.md
+    # Follow-up: the tighter post-recovery bound is recorded in the receipt,
+    # not shipped as the default floor while production is still at 2,079.
+    assert FEDERAL_FIRST_FLOORS[CANDIDATE_MONEY_COVERAGE_CHECK] < CANDIDATE_MONEY_PRODUCTION_OBSERVATION
+    assert (
+        FEDERAL_FIRST_FLOORS[CANDIDATE_MONEY_RECENT_SUMMARY_COVERAGE_CHECK]
+        < CANDIDATE_MONEY_RECENT_SUMMARY_PRODUCTION_OBSERVATION
+    )
     assert FEDERAL_FIRST_COUNTS["cf_transaction_with_support_oppose"] > 0
     assert FEDERAL_FIRST_FLOORS["cf_transaction_with_support_oppose"] > 0
     assert FEDERAL_FIRST_COUNTS["cf_transaction_contribution_insights_sentinel"] > 0
@@ -90,9 +177,17 @@ def test_floors_from_env_returns_defaults_when_unset() -> None:
 def test_floors_from_env_overrides_specific_keys() -> None:
     from api.health_content import floors_from_env
 
-    floors = floors_from_env(env={"CIVIBUS_HEALTH_CONTENT_FLOOR_CF_TRANSACTION_TOTAL": "42"})
+    floors = floors_from_env(
+        env={
+            "CIVIBUS_HEALTH_CONTENT_FLOOR_CF_TRANSACTION_TOTAL": "42",
+            "CIVIBUS_HEALTH_CONTENT_FLOOR_CF_CANDIDATE_MONEY_SERVING_COVERAGE": "43",
+            "CIVIBUS_HEALTH_CONTENT_FLOOR_CF_CANDIDATE_MONEY_RECENT_SUMMARY_COVERAGE": "44",
+        }
+    )
 
     assert floors["cf_transaction_total"] == 42
+    assert floors[CANDIDATE_MONEY_COVERAGE_CHECK] == 43
+    assert floors[CANDIDATE_MONEY_RECENT_SUMMARY_COVERAGE_CHECK] == 44
     assert floors["cf_committee_summary_total"] == FEDERAL_FIRST_FLOORS["cf_committee_summary_total"]
     assert floors["cf_transaction_with_support_oppose"] == FEDERAL_FIRST_FLOORS["cf_transaction_with_support_oppose"]
     assert (
@@ -129,9 +224,11 @@ def test_evaluate_content_health_returns_empty_when_all_floors_met() -> None:
         "cf_committee_summary_total": 20,
         "cf_transaction_with_support_oppose": 5,
         "cf_transaction_contribution_insights_sentinel": 25,
+        CANDIDATE_MONEY_COVERAGE_CHECK: 30,
+        CANDIDATE_MONEY_RECENT_SUMMARY_COVERAGE_CHECK: 30,
     }
     # Every count is at least the floor — this is a healthy DB.
-    counts = [100, 10, 5, 50, 20, 5, 25]
+    counts = [100, 10, 5, 50, 20, 5, 25, 30, 30]
     failures = evaluate_content_health(
         FakeConnection(counts, freshness_result=fresh_federal_fec_bulk_pull_row()),
         floors=floors,
@@ -276,9 +373,11 @@ def test_evaluate_content_health_flags_table_below_floor() -> None:
         "cf_committee_summary_total": 1_000,
         "cf_transaction_with_support_oppose": 1,
         "cf_transaction_contribution_insights_sentinel": 1,
+        CANDIDATE_MONEY_COVERAGE_CHECK: 1,
+        CANDIDATE_MONEY_RECENT_SUMMARY_COVERAGE_CHECK: 1,
     }
     # cf.transaction returning 0 is the literal Apr 30 failure mode.
-    counts = [0, 5_000, 500, 2_500, 32_404, 1, 1]
+    counts = [0, 5_000, 500, 2_500, 32_404, 1, 1, 1, 1]
     failures = evaluate_content_health(
         FakeConnection(counts, freshness_result=fresh_federal_fec_bulk_pull_row()),
         floors=floors,
@@ -296,7 +395,10 @@ def test_evaluate_content_health_runs_expected_sql_queries() -> None:
     schema/table names that a smoke test would miss."""
     from api.health_content import evaluate_content_health
 
-    fake = FakeConnection([100, 10, 5, 50, 20, 5, 25], freshness_result=fresh_federal_fec_bulk_pull_row())
+    from api.queries.campaign_finance import resolve_selected_cycle
+
+    selected = resolve_selected_cycle(None)
+    fake = FakeConnection([100, 10, 5, 50, 20, 5, 25, 30, 31], freshness_result=fresh_federal_fec_bulk_pull_row())
     evaluate_content_health(
         fake,
         floors={
@@ -307,7 +409,10 @@ def test_evaluate_content_health_runs_expected_sql_queries() -> None:
             "cf_committee_summary_total": 1,
             "cf_transaction_with_support_oppose": 1,
             "cf_transaction_contribution_insights_sentinel": 1,
+            CANDIDATE_MONEY_COVERAGE_CHECK: 1,
+            CANDIDATE_MONEY_RECENT_SUMMARY_COVERAGE_CHECK: 1,
         },
+        now=datetime(2026, 7, 27, 12, 0, tzinfo=timezone.utc),
     )
 
     executed = fake._cursor.executed
@@ -341,6 +446,25 @@ def test_evaluate_content_health_runs_expected_sql_queries() -> None:
         )
         for q in executed
     ), executed
+    candidate_query = _normalized_sql(_candidate_money_query(fake))
+    assert (
+        "total_receipts IS NOT NULL OR total_disbursements IS NOT NULL OR cash_on_hand IS NOT NULL"
+    ) in candidate_query
+    assert "summary_coverage_end_date BETWEEN %s AND %s" in candidate_query
+    assert _candidate_money_query_params(fake) == (selected.coverage_start_date, selected.coverage_end_date)
+    recent_summary_query = _normalized_sql(_single_query(fake, _candidate_money_recent_summary_query_indices(fake)))
+    assert (
+        "total_receipts IS NOT NULL OR total_disbursements IS NOT NULL OR cash_on_hand IS NOT NULL"
+    ) in recent_summary_query
+    assert "summary_coverage_end_date BETWEEN %s AND %s" in recent_summary_query
+    assert "summary_coverage_end_date >= %s" in recent_summary_query
+    assert "summary_coverage_end_date <= %s" in recent_summary_query
+    assert _single_query_params(fake, _candidate_money_recent_summary_query_indices(fake)) == (
+        selected.coverage_start_date,
+        selected.coverage_end_date,
+        CANDIDATE_MONEY_RECENT_SUMMARY_CUTOFF,
+        CANDIDATE_MONEY_RECENT_SUMMARY_EVALUATION_DATE,
+    )
     freshness_query = executed[-1]
     freshness_params = fake._cursor.executed_params[-1]
     assert "MAX(last_pull_at)" in freshness_query
@@ -367,13 +491,156 @@ def test_candidate_money_serving_coverage_count() -> None:
 
     count = candidate_money_serving_coverage_count(fake, cycle=cycle)
 
-    normalized_sql = " ".join(fake._cursor.executed[0].replace("\\n", " ").split())
+    normalized_sql = _normalized_sql(_candidate_money_query(fake))
     assert count == 17
     assert (
         "total_receipts IS NOT NULL OR total_disbursements IS NOT NULL OR cash_on_hand IS NOT NULL"
     ) in normalized_sql
     assert "summary_coverage_end_date BETWEEN %s AND %s" in normalized_sql
-    assert fake._cursor.executed_params == [(selected.coverage_start_date, selected.coverage_end_date)]
+    assert _candidate_money_query_params(fake) == (selected.coverage_start_date, selected.coverage_end_date)
+
+
+def test_evaluate_content_health_flags_candidate_money_coverage_below_floor() -> None:
+    from api.health_content import ContentHealthFailure
+    from api.health_content import evaluate_content_health
+
+    floors = {key: 0 for key in EXPECTED_FEDERAL_FIRST_CHECKS}
+    floors[CANDIDATE_MONEY_COVERAGE_CHECK] = CANDIDATE_MONEY_DEFAULT_FLOOR
+    counts = [100, 10, 5, 50, 20, 5, 25, CANDIDATE_MONEY_DEFAULT_FLOOR - 1, 30]
+
+    failures = evaluate_content_health(
+        FakeConnection(counts, freshness_result=fresh_federal_fec_bulk_pull_row()),
+        floors=floors,
+    )
+
+    assert failures == [
+        ContentHealthFailure(
+            check=CANDIDATE_MONEY_COVERAGE_CHECK,
+            actual=1_799,
+            floor=1_800,
+        )
+    ]
+
+
+def test_evaluate_content_health_flags_candidate_money_recent_summary_below_floor() -> None:
+    from api.health_content import ContentHealthFailure
+    from api.health_content import evaluate_content_health
+
+    floors = {key: 0 for key in EXPECTED_FEDERAL_FIRST_CHECKS}
+    floors[CANDIDATE_MONEY_RECENT_SUMMARY_COVERAGE_CHECK] = CANDIDATE_MONEY_RECENT_SUMMARY_DEFAULT_FLOOR
+    counts = [100, 10, 5, 50, 20, 5, 25, 30, CANDIDATE_MONEY_RECENT_SUMMARY_DEFAULT_FLOOR - 1]
+
+    failures = evaluate_content_health(
+        FakeConnection(counts, freshness_result=CANDIDATE_MONEY_RECENT_SUMMARY_FRESH_FEC_ROW),
+        floors=floors,
+        now=datetime(2026, 7, 27, 12, 0, tzinfo=timezone.utc),
+    )
+
+    assert failures == [
+        ContentHealthFailure(
+            check=CANDIDATE_MONEY_RECENT_SUMMARY_COVERAGE_CHECK,
+            actual=1_799,
+            floor=1_800,
+        )
+    ]
+
+
+def test_candidate_money_recent_summary_fixture_excludes_null_and_future_dates() -> None:
+    from api.health_content import ContentHealthFailure
+    from api.health_content import evaluate_content_health
+
+    fake = FakeConnection(
+        [100, 10, 5, 50, 20, 5, 25],
+        freshness_result=CANDIDATE_MONEY_RECENT_SUMMARY_FRESH_FEC_ROW,
+        candidate_money_rows=[
+            {"summary_coverage_end_date": date(2026, 6, 30), "total_receipts": 1},
+            {"summary_coverage_end_date": None, "total_receipts": 1},
+            {"summary_coverage_end_date": date(2026, 7, 28), "total_receipts": 1},
+            {"summary_coverage_end_date": date(2026, 3, 28), "total_receipts": 1},
+            {"summary_coverage_end_date": date(2026, 6, 30)},
+        ],
+    )
+
+    failures = evaluate_content_health(
+        fake,
+        floors={
+            **{key: 0 for key in EXPECTED_FEDERAL_FIRST_CHECKS},
+            CANDIDATE_MONEY_COVERAGE_CHECK: 3,
+            CANDIDATE_MONEY_RECENT_SUMMARY_COVERAGE_CHECK: 2,
+        },
+        now=datetime(2026, 7, 27, 12, 0, tzinfo=timezone.utc),
+    )
+
+    assert failures == [
+        ContentHealthFailure(
+            check=CANDIDATE_MONEY_RECENT_SUMMARY_COVERAGE_CHECK,
+            actual=1,
+            floor=2,
+        )
+    ]
+    assert _single_query_params(fake, _candidate_money_recent_summary_query_indices(fake)) == (
+        date(2025, 1, 1),
+        date(2026, 12, 31),
+        CANDIDATE_MONEY_RECENT_SUMMARY_CUTOFF,
+        CANDIDATE_MONEY_RECENT_SUMMARY_EVALUATION_DATE,
+    )
+
+
+def test_evaluate_content_health_resolves_candidate_money_window_each_evaluation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import api.health_content as health_content
+
+    calls: list[int | None] = []
+    windows = [
+        _SyntheticSelectedCycle(date(2025, 1, 1), date(2026, 12, 31)),
+        _SyntheticSelectedCycle(date(2027, 1, 1), date(2028, 12, 31)),
+    ]
+
+    def fake_resolve_selected_cycle(cycle: int | None) -> _SyntheticSelectedCycle:
+        calls.append(cycle)
+        return windows[len(calls) - 1]
+
+    monkeypatch.setattr(health_content, "resolve_selected_cycle", fake_resolve_selected_cycle)
+
+    first = FakeConnection(_healthy_counts(), freshness_result=CANDIDATE_MONEY_RECENT_SUMMARY_FRESH_FEC_ROW)
+    second = FakeConnection(
+        _healthy_counts(),
+        freshness_result=(datetime(2026, 7, 28, 12, 0, tzinfo=timezone.utc),),
+    )
+
+    assert (
+        health_content.evaluate_content_health(
+            first,
+            floors={key: 0 for key in EXPECTED_FEDERAL_FIRST_CHECKS},
+            now=datetime(2026, 7, 27, 12, 0, tzinfo=timezone.utc),
+        )
+        == []
+    )
+    assert (
+        health_content.evaluate_content_health(
+            second,
+            floors={key: 0 for key in EXPECTED_FEDERAL_FIRST_CHECKS},
+            now=datetime(2026, 7, 28, 12, 0, tzinfo=timezone.utc),
+        )
+        == []
+    )
+
+    assert calls == [None, None]
+    assert _candidate_money_query_params(first) == (date(2025, 1, 1), date(2026, 12, 31))
+    assert _candidate_money_query_params(second) == (date(2027, 1, 1), date(2028, 12, 31))
+    assert _single_query_params(first, _candidate_money_recent_summary_query_indices(first)) == (
+        date(2025, 1, 1),
+        date(2026, 12, 31),
+        date(2026, 3, 29),
+        date(2026, 7, 27),
+    )
+    assert _single_query_params(second, _candidate_money_recent_summary_query_indices(second)) == (
+        date(2027, 1, 1),
+        date(2028, 12, 31),
+        date(2026, 3, 30),
+        date(2026, 7, 28),
+    )
 
 
 def test_evaluate_content_health_reports_contribution_insights_floor_values() -> None:
@@ -382,7 +649,7 @@ def test_evaluate_content_health_reports_contribution_insights_floor_values() ->
 
     floors = {key: 0 for key in EXPECTED_FEDERAL_FIRST_CHECKS}
     floors["cf_transaction_contribution_insights_sentinel"] = 42
-    counts = [100, 10, 5, 50, 20, 5, 41]
+    counts = [100, 10, 5, 50, 20, 5, 41, 30, 30]
 
     failures = evaluate_content_health(
         FakeConnection(counts, freshness_result=fresh_federal_fec_bulk_pull_row()),

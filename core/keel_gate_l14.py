@@ -201,8 +201,6 @@ def _collect_nc_geometry_summary() -> NcGeometrySummary | None:
         WHERE state = 'NC'
           AND division_type = ANY(%s)
     """
-    expected_count = _nc_geometry_expected_count()
-    fallback_summary = NcGeometrySummary(total_count=expected_count, srid_4326_count=expected_count)
     try:
         with get_connection() as connection, connection.cursor() as cursor:
             cursor.execute(query, (list(_NC_GEOMETRY_EXPECTED_COUNT_BY_DIVISION_TYPE.keys()),))
@@ -213,8 +211,6 @@ def _collect_nc_geometry_summary() -> NcGeometrySummary | None:
     if row is None:
         return None
     observed_summary = NcGeometrySummary(total_count=int(row[0]), srid_4326_count=int(row[1]))
-    if observed_summary.total_count == 0 and observed_summary.srid_4326_count == 0:
-        return fallback_summary
     return observed_summary
 
 

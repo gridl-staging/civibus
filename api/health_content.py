@@ -26,8 +26,8 @@ from __future__ import annotations
 import os
 from contextlib import suppress
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
-from typing import Mapping, Protocol
+from datetime import date, datetime, timedelta, timezone
+from typing import Callable, Mapping, Protocol
 
 import psycopg
 from psycopg.sql import SQL
@@ -63,6 +63,8 @@ FEDERAL_FIRST_CONTENT_COUNTS: Mapping[str, int] = {
     "cf_committee_summary_total": 32_404,
     "cf_transaction_with_support_oppose": 10_409,
     "cf_transaction_contribution_insights_sentinel": 4_495,
+    "cf_candidate_money_serving_coverage": 2_079,
+    "cf_candidate_money_recent_summary_coverage": 2_079,
 }
 
 # Current prod launch floors. These are 80% of the current Fly production
@@ -76,6 +78,8 @@ FEDERAL_FIRST_CONTENT_FLOORS: Mapping[str, int] = {
     "cf_committee_summary_total": 25_923,
     "cf_transaction_with_support_oppose": 8_327,
     "cf_transaction_contribution_insights_sentinel": 3_596,
+    "cf_candidate_money_serving_coverage": 1_800,
+    "cf_candidate_money_recent_summary_coverage": 1_800,
 }
 
 _DEFAULT_FLOORS: Mapping[str, int] = FEDERAL_FIRST_CONTENT_FLOORS
@@ -83,8 +87,11 @@ _DEFAULT_FLOORS: Mapping[str, int] = FEDERAL_FIRST_CONTENT_FLOORS
 _FLOOR_ENV_VAR_PREFIX = "CIVIBUS_HEALTH_CONTENT_FLOOR_"
 
 _FEC_BULK_FRESHNESS_CHECK = "campaign_finance_federal_fec_fresh"
-# This remains a shadow-only measurement until L7 promotes it into health enforcement.
+# Serving-window official totals measured 2,079 in production on 2026-07-27 from
+# docs/live-state/2026_07_27_candidate_money_production_coverage.md, and 1,800 leaves deploy-safe headroom.
 _CANDIDATE_MONEY_COVERAGE_CHECK = "cf_candidate_money_serving_coverage"
+_CANDIDATE_MONEY_RECENT_SUMMARY_COVERAGE_CHECK = "cf_candidate_money_recent_summary_coverage"
+_CANDIDATE_MONEY_RECENT_SUMMARY_MAX_AGE = timedelta(days=120)
 _FEC_BULK_FRESHNESS_MAX_AGE = timedelta(days=7)
 _FEC_BULK_FRESHNESS_INDETERMINATE_ACTUAL = 0
 _FEC_BULK_FRESHNESS_SUCCESS_STATUS = "success"
@@ -96,28 +103,114 @@ _CF_TRANSACTION_TOTAL_CONFIRM_TIMEOUT_SQL = f"SET LOCAL statement_timeout = {_CF
 _RESET_LOCAL_STATEMENT_TIMEOUT_SQL = "SET LOCAL statement_timeout = DEFAULT"
 
 
-# Per-check SQL. Order is preserved so the cursor's ``executed`` log lines
-# up 1:1 with the failures returned — useful when reading test output.
-_CHECK_QUERIES: Mapping[str, str] = {
-    _CF_TRANSACTION_TOTAL_CHECK: (
+class _SelectedCycleWindow(Protocol):
+    coverage_start_date: date
+    coverage_end_date: date
+
+
+_QueryParams = tuple[object, ...] | None
+_CheckParamsResolver = Callable[[_SelectedCycleWindow, datetime], _QueryParams]
+
+
+@dataclass(frozen=True)
+class _ContentCheckSpec:
+    query: str
+    params_resolver: _CheckParamsResolver | None = None
+
+    def params(self, *, selected_cycle: _SelectedCycleWindow, now: datetime) -> _QueryParams:
+        if self.params_resolver is None:
+            return None
+        return self.params_resolver(selected_cycle, now)
+
+
+def _candidate_money_serving_coverage_params(
+    selected_cycle: _SelectedCycleWindow,
+    now: datetime,
+) -> tuple[object, object]:
+    del now
+    return (selected_cycle.coverage_start_date, selected_cycle.coverage_end_date)
+
+
+def _candidate_money_recent_summary_coverage_params(
+    selected_cycle: _SelectedCycleWindow,
+    now: datetime,
+) -> tuple[object, object, object, object]:
+    evaluation_date = now.date()
+    cutoff_date = evaluation_date - _CANDIDATE_MONEY_RECENT_SUMMARY_MAX_AGE
+    return (
+        selected_cycle.coverage_start_date,
+        selected_cycle.coverage_end_date,
+        cutoff_date,
+        evaluation_date,
+    )
+
+
+_CANDIDATE_MONEY_OFFICIAL_TOTALS_PREDICATE = """
+    (
+        total_receipts IS NOT NULL
+        OR total_disbursements IS NOT NULL
+        OR cash_on_hand IS NOT NULL
+    )
+"""
+
+_CANDIDATE_MONEY_SERVING_COVERAGE_QUERY = (
+    """
+    SELECT COUNT(*)
+    FROM cf.candidate
+    WHERE """
+    + _CANDIDATE_MONEY_OFFICIAL_TOTALS_PREDICATE
+    + """
+      AND summary_coverage_end_date BETWEEN %s AND %s
+"""
+)
+
+_CANDIDATE_MONEY_RECENT_SUMMARY_COVERAGE_QUERY = (
+    """
+    SELECT COUNT(*)
+    FROM cf.candidate
+    WHERE """
+    + _CANDIDATE_MONEY_OFFICIAL_TOTALS_PREDICATE
+    + """
+      AND summary_coverage_end_date BETWEEN %s AND %s
+      AND summary_coverage_end_date >= %s
+      AND summary_coverage_end_date <= %s
+"""
+)
+
+
+# Per-check specs. Order is preserved so the cursor's ``executed`` log lines
+# up 1:1 with the failures returned. The shape supports dynamic parameters for
+# selected-cycle checks while static checks keep params as ``None``.
+_CHECK_QUERIES: Mapping[str, _ContentCheckSpec] = {
+    _CF_TRANSACTION_TOTAL_CHECK: _ContentCheckSpec(
         "SELECT COALESCE((SELECT s.n_live_tup FROM pg_stat_user_tables s "
         "WHERE s.schemaname = 'cf' AND s.relname = 'transaction'), 0)"
     ),
-    "core_person_total": "SELECT COUNT(*) FROM core.person",
-    "civic_officeholding_total": "SELECT COUNT(*) FROM civic.officeholding",
+    "core_person_total": _ContentCheckSpec("SELECT COUNT(*) FROM core.person"),
+    "civic_officeholding_total": _ContentCheckSpec("SELECT COUNT(*) FROM civic.officeholding"),
     # Cross-domain link probe: at least N transactions resolved to a person
     # entity. Catches "schema bootstrapped fine but ER never ran / data
     # never landed in core.person" partial-failure modes.
-    "cf_transaction_with_resolved_person": (
+    "cf_transaction_with_resolved_person": _ContentCheckSpec(
         "SELECT COUNT(*) FROM cf.transaction WHERE contributor_person_id IS NOT NULL"
     ),
-    "cf_committee_summary_total": "SELECT COUNT(*) FROM cf.committee_summary",
-    "cf_transaction_with_support_oppose": "SELECT COUNT(*) FROM cf.transaction WHERE support_oppose IS NOT NULL",
-    "cf_transaction_contribution_insights_sentinel": (
+    "cf_committee_summary_total": _ContentCheckSpec("SELECT COUNT(*) FROM cf.committee_summary"),
+    "cf_transaction_with_support_oppose": _ContentCheckSpec(
+        "SELECT COUNT(*) FROM cf.transaction WHERE support_oppose IS NOT NULL"
+    ),
+    "cf_transaction_contribution_insights_sentinel": _ContentCheckSpec(
         "SELECT COUNT(*) FROM cf.transaction t "
         f"WHERE lower(t.contributor_name_raw) LIKE '{_CONTRIBUTION_INSIGHTS_SENTINEL_DONOR_PREFIX}'"
         f"{_CONTRIBUTION_INSIGHTS_TRANSACTION_WHERE_SQL}"
         f"{NOT_SUPERSEDED_SOURCE_RECORD_WHERE_SQL}"
+    ),
+    _CANDIDATE_MONEY_COVERAGE_CHECK: _ContentCheckSpec(
+        _CANDIDATE_MONEY_SERVING_COVERAGE_QUERY,
+        params_resolver=_candidate_money_serving_coverage_params,
+    ),
+    _CANDIDATE_MONEY_RECENT_SUMMARY_COVERAGE_CHECK: _ContentCheckSpec(
+        _CANDIDATE_MONEY_RECENT_SUMMARY_COVERAGE_QUERY,
+        params_resolver=_candidate_money_recent_summary_coverage_params,
     ),
 }
 
@@ -165,28 +258,16 @@ def candidate_money_serving_coverage_count(
 ) -> int:
     """Count candidates whose official totals are served for the selected cycle.
 
-    This shadow-only aggregate mirrors
-    ``_official_candidate_totals_cover_selected_cycle()`` and
-    ``_has_official_candidate_totals()``. The health owner needs aggregate SQL,
-    while ``resolve_selected_cycle()`` remains the cycle-window owner. L7 owns
-    promotion into health enforcement.
+    This aggregate mirrors ``_official_candidate_totals_cover_selected_cycle()``
+    and ``_has_official_candidate_totals()``. The health owner needs aggregate
+    SQL, while ``resolve_selected_cycle()`` remains the cycle-window owner.
     """
+    spec = _CHECK_QUERIES[_CANDIDATE_MONEY_COVERAGE_CHECK]
     selected_cycle = resolve_selected_cycle(cycle)
     with connection.cursor() as cursor:
         cursor.execute(
-            SQL(
-                """
-                SELECT COUNT(*)
-                FROM cf.candidate
-                WHERE (
-                    total_receipts IS NOT NULL
-                    OR total_disbursements IS NOT NULL
-                    OR cash_on_hand IS NOT NULL
-                )
-                  AND summary_coverage_end_date BETWEEN %s AND %s
-                """
-            ),
-            (selected_cycle.coverage_start_date, selected_cycle.coverage_end_date),
+            SQL(spec.query),
+            spec.params(selected_cycle=selected_cycle, now=_resolve_health_now(None)),  # type: ignore[arg-type]
         )
         return _fetch_single_int(cursor)
 
@@ -285,13 +366,17 @@ def evaluate_content_health(
     """
     resolved_floors = dict(floors) if floors is not None else floors_from_env()
     resolved_now = _resolve_health_now(now)
+    selected_cycle = resolve_selected_cycle(None)
     failures: list[ContentHealthFailure] = []
     with connection.cursor() as cursor:
-        for check, query in _CHECK_QUERIES.items():
+        for check, spec in _CHECK_QUERIES.items():
             # Wrap as psycopg SQL composable: queries are static literals
             # defined in this module (no user input), so SQL() is safe and
             # satisfies the typed cursor.execute() contract.
-            cursor.execute(SQL(query))  # type: ignore[arg-type]
+            cursor.execute(
+                SQL(spec.query),
+                spec.params(selected_cycle=selected_cycle, now=resolved_now),  # type: ignore[arg-type]
+            )
             actual = _fetch_single_int(cursor)
             floor = resolved_floors.get(check, _DEFAULT_FLOORS[check])
             if check == _CF_TRANSACTION_TOTAL_CHECK and actual <= floor:

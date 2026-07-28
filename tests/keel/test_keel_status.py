@@ -154,7 +154,7 @@ def _write_schema(path: Path, *, layer: str, extra_required: list[str], extra_pr
             "produced_at_utc": {"type": "string", "format": "date-time"},
             "repo_sha": {"type": "string"},
             "gate_command": {"type": "string"},
-            "status": {"type": "string", "enum": ["pass", "fail", "error", "waived", "stale"]},
+            "status": {"type": "string", "enum": ["pass", "fail", "error", "waived", "stale", "vacuous"]},
             **extra_properties,
         },
     }
@@ -565,6 +565,35 @@ def test_collect_status_rows_handles_l7_registered_as_fixed_scope_global(tmp_pat
 
     l7_rows = [row for row in rows if row.layer_id == "L7"]
     assert [(row.scope, row.status) for row in l7_rows] == [("global", "pass")]
+    assert l7_rows[0].evidence_path == Path("evidence/L7/global/2026-04-24.json")
+
+
+def test_collect_status_rows_preserves_fresh_l7_vacuous_status(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    _write_repo_contract(repo_root, include_l7=True)
+    _write_evidence(
+        repo_root,
+        layer="L7",
+        scope="global",
+        file_name="2026-04-24.json",
+        produced_at=datetime(2026, 4, 24, 10, 0, tzinfo=UTC),
+        status="vacuous",
+        extras={
+            "checked_clusters": 0,
+            "overlapping_clusters": 0,
+            "discrepancy_count": 0,
+            "discrepancies_by_field": {"canonical_name": 0, "primary_address": 0},
+            "sample_discrepancies": [],
+        },
+    )
+
+    rows = keel_status.collect_status_rows(repo_root=repo_root, today_utc=date(2026, 4, 24))
+
+    l7_rows = [row for row in rows if row.layer_id == "L7"]
+    assert [(row.scope, row.status, row.detail) for row in l7_rows] == [
+        ("global", "vacuous", "evidence status vacuous")
+    ]
     assert l7_rows[0].evidence_path == Path("evidence/L7/global/2026-04-24.json")
 
 

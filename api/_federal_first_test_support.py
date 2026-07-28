@@ -10,7 +10,7 @@ module.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 import pytest
 
@@ -27,10 +27,11 @@ def fresh_federal_fec_bulk_pull_row() -> tuple[datetime]:
 
 
 class FakeCursor:
-    """Cursor that returns counts in declaration order of ``_CHECK_QUERIES``.
+    """Cursor that returns static and parameterized counts in ``_CHECK_QUERIES`` order.
 
-    Records executed SQL text in ``executed`` so contract tests can assert on
-    the query strings the production module issues.
+    Records SQL text and params in ``executed`` / ``executed_params`` so
+    contract tests can assert on the exact parameterized queries the production
+    module issues.
     """
 
     def __init__(
@@ -39,16 +40,19 @@ class FakeCursor:
         freshness_result: tuple[object, ...] | None,
         present_schema_columns: set[tuple[str, str, str]] | None = None,
         transaction_confirm_count: object = _DEFAULT_TRANSACTION_CONFIRM_COUNT,
+        candidate_money_rows: list[dict[str, object]] | None = None,
     ) -> None:
         self._counts = list(counts)
         self._freshness_result = freshness_result
         self._present_schema_columns = present_schema_columns
         self._transaction_confirm_count = transaction_confirm_count
+        self._candidate_money_rows = candidate_money_rows
         self._transaction_estimate: int | None = None
         self.executed: list[str] = []
         self.executed_params: list[object] = []
         self._schema_rows: list[tuple[str, str, str]] = []
         self._last_query_kind = "count"
+        self._last_query_params: object = None
 
     def __enter__(self) -> "FakeCursor":
         return self
@@ -61,12 +65,19 @@ class FakeCursor:
         query_text = str(query)
         self.executed.append(query_text)
         self.executed_params.append(params)
+        self._last_query_params = params
         normalized_query = " ".join(query_text.lower().split())
         if "select count(*) from cf.transaction" in normalized_query and " where " not in normalized_query:
             self._last_query_kind = "transaction_confirm"
             return
         if "pg_stat_user_tables" in normalized_query and "relname = 'transaction'" in normalized_query:
             self._last_query_kind = "transaction_estimate"
+            return
+        if self._candidate_money_rows is not None and "from cf.candidate" in normalized_query:
+            if "summary_coverage_end_date >= %s" in normalized_query:
+                self._last_query_kind = "candidate_money_recent_summary"
+                return
+            self._last_query_kind = "candidate_money_serving"
             return
         self._last_query_kind = "count"
         if params is None:
@@ -84,6 +95,10 @@ class FakeCursor:
             if self._transaction_confirm_count is _DEFAULT_TRANSACTION_CONFIRM_COUNT:
                 return (self._transaction_estimate or 0,)
             return (self._transaction_confirm_count,)
+        if self._last_query_kind == "candidate_money_serving":
+            return (self._candidate_money_count(require_recent_summary=False),)
+        if self._last_query_kind == "candidate_money_recent_summary":
+            return (self._candidate_money_count(require_recent_summary=True),)
         if self._counts:
             count = self._counts.pop(0)
             if self._last_query_kind == "transaction_estimate":
@@ -94,9 +109,34 @@ class FakeCursor:
     def fetchall(self) -> list[tuple[str, str, str]]:
         return self._schema_rows
 
+    def _candidate_money_count(self, *, require_recent_summary: bool) -> int:
+        assert self._candidate_money_rows is not None
+        params = self._last_query_params
+        assert isinstance(params, tuple)
+        window_start, window_end = params[0], params[1]
+        cutoff = params[2] if require_recent_summary else None
+        evaluation_date = params[3] if require_recent_summary else None
+        assert isinstance(window_start, date)
+        assert isinstance(window_end, date)
+        if require_recent_summary:
+            assert isinstance(cutoff, date)
+            assert isinstance(evaluation_date, date)
+        return sum(
+            1
+            for row in self._candidate_money_rows
+            if _has_candidate_money_totals(row)
+            and _candidate_money_date_is_in_window(
+                row.get("summary_coverage_end_date"),
+                window_start=window_start,
+                window_end=window_end,
+                cutoff=cutoff,
+                evaluation_date=evaluation_date,
+            )
+        )
+
 
 class FakeConnection:
-    """Stand-in psycopg connection.
+    """Stand-in psycopg connection for ordered content-health query results.
 
     Tracks ``close()`` so canary tests can assert the container does not leak
     connections on repeated boot attempts.
@@ -108,12 +148,14 @@ class FakeConnection:
         freshness_result: tuple[object, ...] | None = None,
         present_schema_columns: set[tuple[str, str, str]] | None = None,
         transaction_confirm_count: object = _DEFAULT_TRANSACTION_CONFIRM_COUNT,
+        candidate_money_rows: list[dict[str, object]] | None = None,
     ) -> None:
         self._cursor = FakeCursor(
             counts,
             freshness_result=freshness_result,
             present_schema_columns=present_schema_columns,
             transaction_confirm_count=transaction_confirm_count,
+            candidate_money_rows=candidate_money_rows,
         )
         self.closed = False
 
@@ -131,3 +173,26 @@ def set_federal_floor_env(
     """Apply the floor map to the ``CIVIBUS_HEALTH_CONTENT_FLOOR_*`` env vars."""
     for key, value in floors.items():
         monkeypatch.setenv(f"CIVIBUS_HEALTH_CONTENT_FLOOR_{key.upper()}", str(value))
+
+
+def _has_candidate_money_totals(row: dict[str, object]) -> bool:
+    return any(row.get(key) is not None for key in ("total_receipts", "total_disbursements", "cash_on_hand"))
+
+
+def _candidate_money_date_is_in_window(
+    value: object,
+    *,
+    window_start: date,
+    window_end: date,
+    cutoff: date | None,
+    evaluation_date: date | None,
+) -> bool:
+    if not isinstance(value, date) or isinstance(value, datetime):
+        return False
+    if not window_start <= value <= window_end:
+        return False
+    if cutoff is not None and value < cutoff:
+        return False
+    if evaluation_date is not None and value > evaluation_date:
+        return False
+    return True

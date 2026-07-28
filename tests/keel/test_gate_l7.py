@@ -20,6 +20,21 @@ from core.db import (
 from core.types.python.models import Address, DataSource, Organization, Person, SourceRecord
 
 
+def _summary(
+    *,
+    checked_clusters: int = 0,
+    overlapping_clusters: int,
+    discrepancy_count: int,
+) -> keel_gate_l7.L7Summary:
+    return keel_gate_l7.L7Summary(
+        checked_clusters=checked_clusters,
+        overlapping_clusters=overlapping_clusters,
+        discrepancy_count=discrepancy_count,
+        discrepancies_by_field={"canonical_name": 0, "primary_address": 0},
+        sample_discrepancies=[],
+    )
+
+
 def _insert_test_data_source(
     conn: psycopg.Connection,
     *,
@@ -84,8 +99,9 @@ def _insert_clustered_organization(
     canonical_name: str,
     address_text: str | None,
     source_record_id: UUID,
+    primary_address_id: UUID | None = None,
 ) -> Organization:
-    address_id = None
+    address_id = primary_address_id
     if address_text is not None:
         address = Address(raw_address=address_text, normalized_address=address_text)
         insert_address(conn, address)
@@ -144,7 +160,7 @@ def test_summarize_discrepancies_flags_only_multi_source_cluster_conflicts(db_co
     )
 
     agreeing_org_cluster = uuid4()
-    _insert_clustered_organization(
+    agreeing_org = _insert_clustered_organization(
         db_conn,
         cluster_id=agreeing_org_cluster,
         canonical_name="Civibus Action Fund",
@@ -155,8 +171,9 @@ def test_summarize_discrepancies_flags_only_multi_source_cluster_conflicts(db_co
         db_conn,
         cluster_id=agreeing_org_cluster,
         canonical_name="Civibus Action Fund",
-        address_text="200 BROAD ST RALEIGH NC 27601",
+        address_text=None,
         source_record_id=record_b.id,
+        primary_address_id=agreeing_org.primary_address_id,
     )
 
     summary = keel_gate_l7.summarize_discrepancies(db_conn)
@@ -170,6 +187,47 @@ def test_summarize_discrepancies_flags_only_multi_source_cluster_conflicts(db_co
         ("person", "primary_address"),
     }
     assert all(str(same_source_only_cluster) != item.cluster_id for item in summary.sample_discrepancies)
+
+
+def test_evidence_status_uses_overlapping_cluster_denominator() -> None:
+    assert keel_gate_l7._evidence_status(_summary(overlapping_clusters=0, discrepancy_count=0)) == "vacuous"
+    assert keel_gate_l7._evidence_status(_summary(overlapping_clusters=3, discrepancy_count=0)) == "pass"
+    assert keel_gate_l7._evidence_status(_summary(overlapping_clusters=0, discrepancy_count=1)) == "fail"
+    assert keel_gate_l7._evidence_status(_summary(overlapping_clusters=3, discrepancy_count=1)) == "fail"
+
+
+def test_main_writes_vacuous_evidence_and_exits_nonzero(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys,
+) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    summary = _summary(checked_clusters=0, overlapping_clusters=0, discrepancy_count=0)
+
+    class _FakeConnection:
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(keel_gate_l7, "get_connection", lambda: _FakeConnection())
+    monkeypatch.setattr(
+        keel_gate_l7,
+        "summarize_discrepancies",
+        lambda connection, sample_limit=20: summary,
+    )
+    monkeypatch.setattr(keel_gate_l7, "_repo_sha", lambda repo_root: "6a78078d")
+    monkeypatch.setattr(keel_gate_l7, "_utc_now", lambda: datetime(2026, 4, 24, 13, 30, tzinfo=UTC))
+
+    exit_code = keel_gate_l7.main(["--repo-root", str(repo_root), "--date", "2026-04-24"])
+
+    evidence_path = repo_root / "evidence" / "L7" / "global" / "2026-04-24.json"
+    payload = json.loads(evidence_path.read_text(encoding="utf-8"))
+
+    assert exit_code == 1
+    assert payload["status"] == "vacuous"
+    assert payload["overlapping_clusters"] == 0
+    assert payload["discrepancy_count"] == 0
+    assert "VACUOUS: checked_clusters=0 overlapping_clusters=0 discrepancies=0" in capsys.readouterr().out
 
 
 def test_main_writes_fail_evidence_and_replaces_l7_findings_section(

@@ -19,6 +19,7 @@ _DEFAULT_EVIDENCE_ROOT = _REPO_ROOT / "evidence" / "L7"
 _DEFAULT_FINDINGS_ROOT = _REPO_ROOT / "findings"
 _L7_FINDINGS_START = "<!-- keel:L7:start -->"
 _L7_FINDINGS_END = "<!-- keel:L7:end -->"
+VACUOUS = "vacuous"
 
 _DISCREPANCY_SQL = """
 WITH entity_source_rows AS (
@@ -271,7 +272,11 @@ def summarize_discrepancies(
 
 
 def _evidence_status(summary: L7Summary) -> str:
-    return "pass" if summary.discrepancy_count == 0 else "fail"
+    if summary.overlapping_clusters > 0 and summary.discrepancy_count == 0:
+        return "pass"
+    if summary.overlapping_clusters == 0 and summary.discrepancy_count == 0:
+        return VACUOUS
+    return "fail"
 
 
 def write_l7_evidence(

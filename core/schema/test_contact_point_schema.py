@@ -16,6 +16,7 @@ from core.schema_sql_runner import (
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CORE_ENTITIES_SQL = REPO_ROOT / "core" / "schema" / "entities.sql"
+CORE_JURISDICTION_SQL = REPO_ROOT / "core" / "schema" / "jurisdiction.sql"
 CORE_PROVENANCE_SQL = REPO_ROOT / "core" / "schema" / "provenance.sql"
 TEST_DATABASE = os.getenv("CONTACT_POINT_SCHEMA_TEST_DATABASE", "civibus")
 
@@ -70,9 +71,22 @@ def _skip_if_no_database_access() -> None:
 
 @pytest.fixture(scope="session", autouse=True)
 def _prepared_schema() -> None:
+    configured_database = os.getenv("CONTACT_POINT_SCHEMA_TEST_DATABASE")
+    safe_database = TEST_DATABASE.lower()
+    if configured_database is None:
+        pytest.skip(
+            "Set CONTACT_POINT_SCHEMA_TEST_DATABASE to a dedicated test database before destructive schema setup"
+        )
+    if not (
+        safe_database.startswith(("test_", "tmp_", "pytest_", "ci_")) or safe_database.endswith(("_test", "_tests"))
+    ):
+        pytest.skip(
+            "CONTACT_POINT_SCHEMA_TEST_DATABASE must name a dedicated test database before destructive schema setup"
+        )
     _skip_if_no_database_access()
     _run_psql_command(TEST_DATABASE, "DROP SCHEMA IF EXISTS core CASCADE;")
     _run_psql_file(TEST_DATABASE, CORE_ENTITIES_SQL)
+    _run_psql_file(TEST_DATABASE, CORE_JURISDICTION_SQL)
     _run_psql_file(TEST_DATABASE, CORE_PROVENANCE_SQL)
 
 

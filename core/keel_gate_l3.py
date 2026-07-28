@@ -405,6 +405,8 @@ def evaluate_registry(
     jurisdiction_entry = next((entry for entry in registry.jurisdictions if entry.scope == jurisdiction), None)
     if jurisdiction_entry is None:
         raise ValueError(f"jurisdiction {jurisdiction!r} is not present in {sources_path}")
+    if not jurisdiction_entry.sources:
+        return RegistryEvaluationResult(exit_code=1, source_results=[])
 
     resolved_produced_at = _utc_now() if produced_at is None else produced_at
     resolved_evidence_root = repo_root / "evidence" / "L3" if evidence_root is None else evidence_root

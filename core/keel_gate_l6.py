@@ -224,7 +224,7 @@ def _load_nc_rows(path: Path, *, data_type: str) -> list[dict[str, str | None]]:
 
 
 def _status(summary: TemporalValidationSummary) -> str:
-    return "pass" if summary.out_of_range_rows == 0 else "fail"
+    return "pass" if summary.total_rows > 0 and summary.out_of_range_rows == 0 else "fail"
 
 
 def write_l6_evidence(

@@ -106,14 +106,19 @@ def test_interpret_branch_7_omits_zero_count_buckets() -> None:
     assert _interpret_scope_rows(scope_rows=rows, scope_strategy_type="emitted_by_gate") == "1 pass, 1 stale"
 
 
-def test_interpret_branch_7_passthrough_other_bucket() -> None:
-    # Payload statuses outside the four canonical values bucket under "other".
+def test_interpret_branch_7_renders_vacuous_bucket_and_passthrough_other_bucket() -> None:
+    # Mechanical fail stays explicit; only unknown passthrough statuses bucket
+    # under "other".
     rows = [
         _row(scope="a", status="pass"),
-        _row(scope="b", status="warn"),
-        _row(scope="c", status="fail"),
+        _row(scope="b", status="vacuous"),
+        _row(scope="c", status="warn"),
+        _row(scope="d", status="fail"),
     ]
-    assert _interpret_scope_rows(scope_rows=rows, scope_strategy_type="emitted_by_gate") == "1 pass, 2 other"
+    assert (
+        _interpret_scope_rows(scope_rows=rows, scope_strategy_type="emitted_by_gate")
+        == "1 pass, 1 fail, 1 vacuous, 1 other"
+    )
 
 
 def test_interpret_branch_4_all_error_does_not_get_caught_by_missing_first() -> None:
