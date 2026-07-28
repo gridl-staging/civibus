@@ -89,6 +89,7 @@ test-public:
 # mirror whenever its DB-backed product suite changes.
 .PHONY: test-integration-local
 test-integration-local: override POSTGRES_PORT := 5475
+test-integration-local: override COMPOSE_PROJECT_NAME := civibus_integration_local
 test-integration-local:
 	@set -eu; \
 	if [ -n "$(INTEGRATION_POSTGRES_PORT_OVERRIDE_INVALID)" ]; then \
@@ -104,7 +105,7 @@ test-integration-local:
 		target_status=$$?; \
 		trap - EXIT; \
 		if [ "$$started_db" -eq 1 ]; then \
-			make db-down || target_status=$$?; \
+			docker compose -f infra/docker-compose.yml down --volumes --remove-orphans || target_status=$$?; \
 		fi; \
 		exit "$$target_status"; \
 	}; \
@@ -112,6 +113,7 @@ test-integration-local:
 	trap 'exit 129' HUP; \
 	trap 'exit 130' INT; \
 	trap 'exit 143' TERM; \
+	docker compose -f infra/docker-compose.yml down --volumes --remove-orphans; \
 	make db-up; \
 	started_db=1; \
 	container_id="$$(docker compose -f infra/docker-compose.yml ps -q db)"; \

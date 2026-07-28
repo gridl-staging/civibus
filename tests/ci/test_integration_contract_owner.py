@@ -81,9 +81,13 @@ def test_local_target_owns_workflow_setup_and_standalone_lifecycle() -> None:
     setup_positions = [target_block.index(command) for command in setup_commands]
     assert setup_positions == sorted(setup_positions)
     assert "test-integration-local: override POSTGRES_PORT := 5475" in makefile_text
+    assert "test-integration-local: override COMPOSE_PROJECT_NAME := civibus_integration_local" in makefile_text
     assert "POSTGRES_PORT=5475" in target_block
     assert "started_db=0" in target_block
+    volume_cleanup = "docker compose -f infra/docker-compose.yml down --volumes --remove-orphans"
+    assert target_block.count(volume_cleanup) == 2
     assert "make db-up" in target_block
+    assert target_block.index(volume_cleanup) < target_block.index("make db-up")
     make_db_up_position = target_block.index("make db-up")
     started_db_position = target_block.index("started_db=1", make_db_up_position)
     container_lookup_position = target_block.index(
@@ -91,7 +95,7 @@ def test_local_target_owns_workflow_setup_and_standalone_lifecycle() -> None:
     )
     assert make_db_up_position < started_db_position < container_lookup_position
     assert "docker inspect" in target_block
-    assert "make db-down" in target_block
+    assert "make db-down" not in target_block
     assert "CIVIBUS_REQUIRE_DB=1" in target_block
     assert "uv run --extra dev --extra entity-resolution pytest" in target_block
 
