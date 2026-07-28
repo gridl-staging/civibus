@@ -97,7 +97,8 @@ export const CANDIDATE_CANONICAL_DATA = {
     net_self_funding: null,
     summary_source: "derived",
     itemized_transaction_count: 5,
-    coverage: POPULATED_CANDIDATE_MONEY_COVERAGE
+    coverage: POPULATED_CANDIDATE_MONEY_COVERAGE,
+    out_of_cycle_official_total: null
   }),
   ieTransactions: asDeferredValue<IndependentExpenditureResponse[]>([]),
   ieSummary: asDeferredValue<IndependentExpenditureSummary | null>(null)
@@ -129,7 +130,8 @@ export const CANDIDATE_EMPTY_CANONICAL_DATA = {
     net_self_funding: null,
     summary_source: "derived",
     itemized_transaction_count: 0,
-    coverage: NOT_LOADED_CANDIDATE_MONEY_COVERAGE
+    coverage: NOT_LOADED_CANDIDATE_MONEY_COVERAGE,
+    out_of_cycle_official_total: null
   }),
   ieTransactions: asDeferredValue<IndependentExpenditureResponse[]>([]),
   ieSummary: asDeferredValue<IndependentExpenditureSummary | null>(null)

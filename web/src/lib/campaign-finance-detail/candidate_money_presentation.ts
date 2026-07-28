@@ -1,4 +1,5 @@
 import type {
+  CandidateFundraisingActivityState,
   CandidateFundraisingSummary,
   CandidateMoneyActivityState,
   IndependentExpenditureResponse,
@@ -11,6 +12,7 @@ import {
   buildOutsideSpendingPresentation,
   CANDIDATE_IE_NOT_LOADED_MESSAGE,
   CANDIDATE_METHODOLOGY_HREF,
+  formatCurrency,
   selectOutsideSpendingSummaryForCycle,
   selectOutsideSpendingTransactionsForCycle,
   type CandidateAggregateSummaryPresentation,
@@ -20,22 +22,30 @@ import {
 } from "$lib/campaign-finance-detail/presentation";
 
 type CandidateMoneyRegionState = CandidateMoneyActivityState | "backend_failure";
+type CandidateFundraisingRegionState = CandidateFundraisingActivityState | "backend_failure";
+
+export type CandidateEarlierCycleOfficialTotalPresentation = {
+  label: string;
+  period: string;
+  factRows: KeyMetric[];
+};
 
 export type CandidateFundraisingRegionViewModels = {
   keyFinancials: {
-    state: CandidateMoneyRegionState;
+    state: CandidateFundraisingRegionState;
     message: string | null;
     methodologyHref: string | null;
     metrics: KeyMetric[];
   };
   fundraisingSummary: {
-    state: CandidateMoneyRegionState;
+    state: CandidateFundraisingRegionState;
     message: string | null;
     methodologyHref: string | null;
     summary: CandidateAggregateSummaryPresentation | null;
+    earlierCycleOfficialTotal: CandidateEarlierCycleOfficialTotalPresentation | null;
   };
   committeeBreakdown: {
-    state: CandidateMoneyRegionState;
+    state: CandidateFundraisingRegionState;
     message: string | null;
     methodologyHref: string | null;
     rows: CandidateCommitteeBreakdownRow[];
@@ -87,7 +97,8 @@ function buildUnavailableFundraisingRegions(
       state,
       message: isNotLoaded ? FUNDRAISING_NOT_LOADED_MESSAGE : FUNDRAISING_BACKEND_FAILURE_MESSAGE,
       methodologyHref,
-      summary: null
+      summary: null,
+      earlierCycleOfficialTotal: null
     },
     committeeBreakdown: {
       state,
@@ -95,6 +106,54 @@ function buildUnavailableFundraisingRegions(
         ? COMMITTEE_BREAKDOWN_NOT_LOADED_MESSAGE
         : COMMITTEE_BREAKDOWN_BACKEND_FAILURE_MESSAGE,
       methodologyHref,
+      rows: []
+    }
+  };
+}
+
+function buildEarlierCycleOfficialTotalRegions(
+  summary: CandidateFundraisingSummary
+): CandidateFundraisingRegionViewModels {
+  const officialTotal = summary.out_of_cycle_official_total;
+  return {
+    keyFinancials: {
+      state: "out_of_cycle_official_total",
+      message: null,
+      methodologyHref: null,
+      metrics: []
+    },
+    fundraisingSummary: {
+      state: "out_of_cycle_official_total",
+      message: null,
+      methodologyHref: null,
+      summary: null,
+      earlierCycleOfficialTotal:
+        officialTotal === null
+          ? null
+          : {
+              label: "Earlier-cycle official total",
+              period: `Official FEC total from ${officialTotal.coverage_start_date} to ${officialTotal.coverage_end_date}; not part of the ${summary.selected_cycle} selected-cycle totals.`,
+              factRows: [
+                { label: "Total receipts", value: formatCurrency(officialTotal.total_raised) },
+                {
+                  label: "Total disbursements",
+                  value: formatCurrency(officialTotal.total_spent)
+                },
+                { label: "Net", value: formatCurrency(officialTotal.net) },
+                {
+                  label: "Cash on hand",
+                  value:
+                    officialTotal.cash_on_hand === null
+                      ? "Not available"
+                      : formatCurrency(officialTotal.cash_on_hand)
+                }
+              ]
+            }
+    },
+    committeeBreakdown: {
+      state: "out_of_cycle_official_total",
+      message: null,
+      methodologyHref: null,
       rows: []
     }
   };
@@ -108,6 +167,12 @@ export function buildCandidateFundraisingRegionViewModels(
   }
   if (summary.coverage.activity_state === "not_loaded") {
     return buildUnavailableFundraisingRegions("not_loaded");
+  }
+  if (summary.coverage.activity_state === "out_of_cycle_official_total") {
+    if (summary.out_of_cycle_official_total === null) {
+      return buildUnavailableFundraisingRegions("backend_failure");
+    }
+    return buildEarlierCycleOfficialTotalRegions(summary);
   }
 
   const state = summary.coverage.activity_state;
@@ -123,7 +188,8 @@ export function buildCandidateFundraisingRegionViewModels(
       state,
       message: loadedZeroMessage,
       methodologyHref: null,
-      summary: buildCandidateDeferredFundraisingSummary(summary)
+      summary: buildCandidateDeferredFundraisingSummary(summary),
+      earlierCycleOfficialTotal: null
     },
     committeeBreakdown: {
       state,

@@ -1,24 +1,33 @@
 from __future__ import annotations
 
 from collections import Counter, defaultdict
+from collections.abc import Sequence
 from typing import Any
-from uuid import UUID
+from uuid import NAMESPACE_URL, UUID, uuid5
 
 import psycopg
 from psycopg.rows import dict_row
 
 from core.entity_resolution.splink_config import (
+    DONOR_PREPROCESSING_SQL,
     ORGANIZATION_PREPROCESSING_SQL,
     PERSON_PREPROCESSING_SQL,
 )
+from domains.campaign_finance.entity_extractors.extract import _normalize_zip_parts
 
 RowDict = dict[str, Any]
 _PROBABILISTIC_ROW_ID_SEPARATOR = "__splink_row__"
+_DONOR_IDENTITY_ID_SEPARATOR = "\x1f"
+_DONOR_IDENTITY_ID_NAMESPACE = uuid5(NAMESPACE_URL, "civibus:federal:fec:donor_identity:v1")
 
 
-def _fetch_preprocessed_rows(conn: psycopg.Connection, preprocessing_sql: str) -> list[RowDict]:
+def _fetch_preprocessed_rows(
+    conn: psycopg.Connection,
+    preprocessing_sql: str,
+    params: Sequence[Any] | None = None,
+) -> list[RowDict]:
     with conn.cursor(row_factory=dict_row) as cursor:
-        cursor.execute(preprocessing_sql)
+        cursor.execute(preprocessing_sql, params)
         rows = cursor.fetchall()
 
     return list(rows)
@@ -32,16 +41,194 @@ def extract_organizations_for_matching(conn: psycopg.Connection) -> list[RowDict
     return _fetch_preprocessed_rows(conn, ORGANIZATION_PREPROCESSING_SQL)
 
 
+def _donor_identity_id(row: RowDict) -> UUID:
+    parts = [
+        row["contributor_name_raw"],
+        row["contributor_employer"] or "",
+        row["contributor_occupation"] or "",
+        row["contributor_city"] or "",
+        row["contributor_state"] or "",
+        row["contributor_zip"] or "",
+    ]
+    if any(_DONOR_IDENTITY_ID_SEPARATOR in part for part in parts):
+        # Keep ordinary v1 IDs stable while making embedded separators unambiguous.
+        identity_namespace = uuid5(_DONOR_IDENTITY_ID_NAMESPACE, "length_prefixed:v2")
+        identity_name = "".join(f"{len(part)}:{part}" for part in parts)
+        return uuid5(identity_namespace, identity_name)
+    return uuid5(_DONOR_IDENTITY_ID_NAMESPACE, _DONOR_IDENTITY_ID_SEPARATOR.join(parts))
+
+
+def _donor_scope_committee_ids(scope: dict[str, Any] | None) -> list[UUID]:
+    committee_ids = scope.get("committee_ids") if isinstance(scope, dict) else None
+    if (
+        isinstance(committee_ids, (str, bytes))
+        or not isinstance(committee_ids, Sequence)
+        or not committee_ids
+        or any(not isinstance(committee_id, UUID) for committee_id in committee_ids)
+    ):
+        raise ValueError("scope['committee_ids'] must be a non-empty sequence of UUID values")
+    return list(committee_ids)
+
+
+def _donor_identity_source_rows(conn: psycopg.Connection, committee_ids: list[UUID]) -> list[RowDict]:
+    return _fetch_preprocessed_rows(
+        conn,
+        """
+        WITH donor_source AS (
+            SELECT
+                contributor_name_raw,
+                COALESCE(contributor_employer, '') AS contributor_employer,
+                COALESCE(contributor_occupation, '') AS contributor_occupation,
+                COALESCE(contributor_city, '') AS contributor_city,
+                COALESCE(contributor_state, '') AS contributor_state,
+                COALESCE(contributor_zip, '') AS contributor_zip
+            FROM cf.transaction
+            WHERE committee_id = ANY(%s)
+              AND transaction_type LIKE '1%%'
+              AND contributor_entity_type = 'IND'
+              AND is_memo = FALSE
+              AND amendment_indicator != 'T'
+              AND NULLIF(BTRIM(contributor_name_raw), '') IS NOT NULL
+        )
+        SELECT
+            contributor_name_raw,
+            contributor_employer,
+            contributor_occupation,
+            contributor_city,
+            contributor_state,
+            contributor_zip,
+            COUNT(*)::int AS transaction_count
+        FROM donor_source
+        GROUP BY
+            contributor_name_raw,
+            contributor_employer,
+            contributor_occupation,
+            contributor_city,
+            contributor_state,
+            contributor_zip
+        ORDER BY
+            COUNT(*) DESC,
+            contributor_name_raw,
+            contributor_employer,
+            contributor_occupation,
+            contributor_city,
+            contributor_state,
+            contributor_zip
+        """,
+        (committee_ids,),
+    )
+
+
+def _donor_identity_row(source_row: RowDict) -> RowDict:
+    zip5, _, _ = _normalize_zip_parts(source_row["contributor_zip"])
+    return {
+        "id": _donor_identity_id(source_row),
+        "canonical_name": source_row["contributor_name_raw"],
+        "contributor_name_raw": source_row["contributor_name_raw"],
+        "contributor_employer": source_row["contributor_employer"],
+        "contributor_occupation": source_row["contributor_occupation"],
+        "contributor_city": source_row["contributor_city"],
+        "contributor_state": source_row["contributor_state"],
+        "contributor_zip": source_row["contributor_zip"],
+        "zip5": zip5,
+        "transaction_count": source_row["transaction_count"],
+    }
+
+
+def _upsert_donor_identity(conn: psycopg.Connection, row: RowDict) -> None:
+    conn.execute(
+        """
+        INSERT INTO core.donor_identity (
+            id,
+            canonical_name,
+            contributor_name_raw,
+            contributor_employer,
+            contributor_occupation,
+            contributor_city,
+            contributor_state,
+            contributor_zip,
+            zip5,
+            transaction_count
+        )
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (id) DO UPDATE
+        SET canonical_name = EXCLUDED.canonical_name,
+            contributor_name_raw = EXCLUDED.contributor_name_raw,
+            contributor_employer = EXCLUDED.contributor_employer,
+            contributor_occupation = EXCLUDED.contributor_occupation,
+            contributor_city = EXCLUDED.contributor_city,
+            contributor_state = EXCLUDED.contributor_state,
+            contributor_zip = EXCLUDED.contributor_zip,
+            zip5 = EXCLUDED.zip5,
+            transaction_count = EXCLUDED.transaction_count
+        """,
+        (
+            row["id"],
+            row["canonical_name"],
+            row["contributor_name_raw"],
+            row["contributor_employer"],
+            row["contributor_occupation"],
+            row["contributor_city"],
+            row["contributor_state"],
+            row["contributor_zip"],
+            row["zip5"],
+            row["transaction_count"],
+        ),
+    )
+
+
+def materialize_donor_identities(
+    conn: psycopg.Connection,
+    *,
+    scope: dict[str, Any] | None = None,
+) -> list[RowDict]:
+    committee_ids = _donor_scope_committee_ids(scope)
+    rows = [_donor_identity_row(row) for row in _donor_identity_source_rows(conn, committee_ids)]
+    for row in rows:
+        _upsert_donor_identity(conn, row)
+    return rows
+
+
+def extract_donors_for_matching(
+    conn: psycopg.Connection,
+    *,
+    scope: dict[str, Any] | None = None,
+) -> list[RowDict]:
+    materialized_rows = materialize_donor_identities(conn, scope=scope)
+    if not materialized_rows:
+        return []
+    return _fetch_preprocessed_rows(
+        conn,
+        f"""
+        {DONOR_PREPROCESSING_SQL}
+        WHERE id = ANY(%s)
+        ORDER BY
+            transaction_count DESC,
+            contributor_name_raw,
+            contributor_employer NULLS FIRST,
+            contributor_occupation NULLS FIRST,
+            contributor_city NULLS FIRST,
+            contributor_state NULLS FIRST,
+            contributor_zip NULLS FIRST
+        """,
+        ([row["id"] for row in materialized_rows],),
+    )
+
+
 def extract_rows_for_matching(
     conn: psycopg.Connection,
     entity_type: str,
+    *,
+    scope: dict[str, Any] | None = None,
 ) -> list[RowDict]:
     if entity_type == "person":
         return extract_persons_for_matching(conn)
     if entity_type == "organization":
         return extract_organizations_for_matching(conn)
+    if entity_type == "donor_identity":
+        return extract_donors_for_matching(conn, scope=scope)
 
-    raise ValueError(f"entity_type must be 'person' or 'organization', got {entity_type!r}")
+    raise ValueError(f"entity_type must be one of 'donor_identity', 'organization', or 'person', got {entity_type!r}")
 
 
 def _synthetic_probabilistic_row_id(entity_id: Any, row_index: int) -> str:

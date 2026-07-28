@@ -24,7 +24,7 @@ CREATE SCHEMA IF NOT EXISTS core;
 
 CREATE TABLE core.match_decision (
     id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    entity_type     TEXT NOT NULL CHECK (entity_type IN ('person', 'organization')),
+    entity_type     TEXT NOT NULL CHECK (entity_type IN ('person', 'organization', 'donor_identity')),
     entity_id_a     UUID NOT NULL,           -- First entity in the pair
     entity_id_b     UUID NOT NULL,           -- Second entity in the pair
     decision        TEXT NOT NULL CHECK (decision IN ('match', 'probable_match', 'possible_match', 'no_match')),
@@ -67,7 +67,7 @@ ALTER TABLE core.match_decision
 
 CREATE TABLE core.entity_cluster (
     id                  UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    entity_type         TEXT NOT NULL CHECK (entity_type IN ('person', 'organization')),
+    entity_type         TEXT NOT NULL CHECK (entity_type IN ('person', 'organization', 'donor_identity')),
     canonical_entity_id UUID NOT NULL,       -- The entity that represents this cluster
     cluster_confidence  REAL,                -- Aggregate confidence for the cluster
     member_count        INTEGER NOT NULL DEFAULT 1,
@@ -88,7 +88,7 @@ CREATE INDEX idx_cluster_canonical ON core.entity_cluster (entity_type, canonica
 CREATE TABLE core.cluster_member (
     id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     cluster_id      UUID NOT NULL,
-    entity_type     TEXT NOT NULL CHECK (entity_type IN ('person', 'organization')),
+    entity_type     TEXT NOT NULL CHECK (entity_type IN ('person', 'organization', 'donor_identity')),
     entity_id       UUID NOT NULL,           -- The member entity (may be the canonical or a merged-in record)
     is_canonical    BOOLEAN NOT NULL DEFAULT FALSE,
     merged_at       TIMESTAMPTZ,             -- When this entity was merged into the cluster
@@ -121,7 +121,7 @@ CREATE UNIQUE INDEX idx_cluster_member_active
 CREATE TABLE core.manual_override (
     id                  UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     match_decision_id   UUID REFERENCES core.match_decision(id),  -- The decision being overridden (if any)
-    entity_type         TEXT NOT NULL CHECK (entity_type IN ('person', 'organization')),
+    entity_type         TEXT NOT NULL CHECK (entity_type IN ('person', 'organization', 'donor_identity')),
     entity_id_a         UUID NOT NULL,
     entity_id_b         UUID NOT NULL,
     override_decision   TEXT NOT NULL CHECK (override_decision IN ('confirmed_match', 'confirmed_non_match')),
@@ -155,7 +155,7 @@ CREATE UNIQUE INDEX idx_override_active_pair
 
 CREATE TABLE core.splink_run (
     id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    entity_type     TEXT NOT NULL CHECK (entity_type IN ('person', 'organization')),
+    entity_type     TEXT NOT NULL CHECK (entity_type IN ('person', 'organization', 'donor_identity')),
     splink_version  TEXT NOT NULL,
     model_config    JSONB NOT NULL,          -- Full Splink settings: blocking rules, comparisons, thresholds
     input_record_count BIGINT,
@@ -175,6 +175,33 @@ CREATE TABLE core.splink_run (
 
 CREATE INDEX idx_splink_run_entity_type ON core.splink_run (entity_type);
 CREATE INDEX idx_splink_run_status ON core.splink_run (status);
+
+-- ============================================================================
+-- Donor Identity
+-- ============================================================================
+-- Materialized FEC Schedule A contributor tuples for donor ER input. This table
+-- intentionally does not write back to cf.transaction.contributor_person_id.
+
+CREATE TABLE core.donor_identity (
+    id                      UUID PRIMARY KEY,
+    canonical_name          TEXT NOT NULL,
+    contributor_name_raw    TEXT NOT NULL,
+    contributor_employer    TEXT,
+    contributor_occupation  TEXT,
+    contributor_city        TEXT,
+    contributor_state       TEXT,
+    contributor_zip         TEXT,
+    zip5                    TEXT,
+    transaction_count       INTEGER NOT NULL CHECK (transaction_count > 0),
+    er_cluster_id           UUID,
+    er_confidence           REAL,
+    created_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at              TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_donor_identity_name ON core.donor_identity (canonical_name);
+CREATE INDEX idx_donor_identity_zip5 ON core.donor_identity (zip5) WHERE zip5 IS NOT NULL;
+CREATE INDEX idx_donor_identity_cluster ON core.donor_identity (er_cluster_id) WHERE er_cluster_id IS NOT NULL;
 
 -- ============================================================================
 -- Views for common queries
@@ -205,4 +232,8 @@ ORDER BY md.confidence DESC;
 
 CREATE TRIGGER trg_cluster_updated_at
     BEFORE UPDATE ON core.entity_cluster
+    FOR EACH ROW EXECUTE FUNCTION core.set_updated_at();
+
+CREATE TRIGGER trg_donor_identity_updated_at
+    BEFORE UPDATE ON core.donor_identity
     FOR EACH ROW EXECUTE FUNCTION core.set_updated_at();

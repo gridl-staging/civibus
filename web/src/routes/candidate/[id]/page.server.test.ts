@@ -112,7 +112,8 @@ function buildCandidateSummary(candidateId: string, candidateName = "Candidate O
     net_self_funding: null,
     summary_source: "derived" as const,
     itemized_transaction_count: 5,
-    coverage: POPULATED_CANDIDATE_MONEY_COVERAGE
+    coverage: POPULATED_CANDIDATE_MONEY_COVERAGE,
+    out_of_cycle_official_total: null
   };
 }
 

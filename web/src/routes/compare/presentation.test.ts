@@ -94,6 +94,7 @@ function buildSummary(
     receipt_source_caveats: [],
     committees: [],
     coverage: POPULATED_CANDIDATE_MONEY_COVERAGE,
+    out_of_cycle_official_total: null,
     ...overrides
   };
 }

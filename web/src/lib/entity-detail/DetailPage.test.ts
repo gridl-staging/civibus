@@ -172,6 +172,7 @@ function buildLoadedMoneyHeadline() {
       can_render_share: true,
       receipt_source_caveats: [],
       coverage: POPULATED_CANDIDATE_MONEY_COVERAGE,
+      out_of_cycle_official_total: null,
       committees: []
     }
   };
@@ -226,6 +227,7 @@ function buildPersonFinanceSection(
       can_render_share: true,
       receipt_source_caveats: [],
       coverage: POPULATED_CANDIDATE_MONEY_COVERAGE,
+      out_of_cycle_official_total: null,
       committees: [
         {
           ...SELECTED_CYCLE_FIELDS,
@@ -730,6 +732,7 @@ describe("entity detail page rendering", () => {
                 can_render_share: true,
                 receipt_source_caveats: [],
                 coverage: POPULATED_CANDIDATE_MONEY_COVERAGE,
+                out_of_cycle_official_total: null,
                 committees: []
               })
             })
@@ -1511,6 +1514,7 @@ describe("entity detail page rendering", () => {
           can_render_share: false,
           receipt_source_caveats: [],
           coverage: LOADED_ZERO_CANDIDATE_MONEY_COVERAGE,
+          out_of_cycle_official_total: null,
           committees: []
         }),
         donorVendorTransactions: asSettled([]),
@@ -1548,6 +1552,7 @@ describe("entity detail page rendering", () => {
           can_render_share: false,
           receipt_source_caveats: [],
           coverage: LOADED_ZERO_CANDIDATE_MONEY_COVERAGE,
+          out_of_cycle_official_total: null,
           committees: []
         }),
         donorVendorTransactions: asSettled([])

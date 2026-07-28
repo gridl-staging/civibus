@@ -13,6 +13,7 @@ import zipfile
 import json
 from pathlib import Path
 from typing import Any, get_type_hints
+from uuid import UUID
 
 import pytest
 from pydantic import ValidationError
@@ -94,6 +95,40 @@ BENCHMARK_REQUIRED_OPTIONS = (
     "--temp-bytes",
     "--temp-root",
 )
+DONOR_PROXY_ARGUMENTS = [
+    "donor-proxy",
+    "--committee-id",
+    "00000000-0000-0000-0000-000000000001",
+    "--committee-id",
+    "00000000-0000-0000-0000-000000000002",
+    "--slice-size",
+    "125",
+    "--cluster-sample-size",
+    "2",
+    "--seed",
+    "stage-2-seed",
+    "--output-path",
+    "donor_proxy_receipt.md",
+    "--timeout-seconds",
+    "30",
+    "--memory-bytes",
+    "1048576",
+    "--temp-bytes",
+    "1048576",
+    "--temp-root",
+    "tmp",
+]
+DONOR_PROXY_REQUIRED_OPTIONS = (
+    "--committee-id",
+    "--slice-size",
+    "--cluster-sample-size",
+    "--seed",
+    "--output-path",
+    "--timeout-seconds",
+    "--memory-bytes",
+    "--temp-bytes",
+    "--temp-root",
+)
 
 
 def _load_harness() -> Any:
@@ -108,8 +143,15 @@ def _subcommand_choices(parser: Any) -> set[str]:
 
 
 def _without_option(argv: list[str], option: str) -> list[str]:
-    option_index = argv.index(option)
-    return argv[:option_index] + argv[option_index + 2 :]
+    stripped: list[str] = []
+    index = 0
+    while index < len(argv):
+        if argv[index] == option:
+            index += 2
+            continue
+        stripped.append(argv[index])
+        index += 1
+    return stripped
 
 
 def _sha256_file(path: Path) -> str:
@@ -232,6 +274,29 @@ def _benchmark_child_args(tmp_path: Path, **overrides: object) -> argparse.Names
     return _benchmark_args(tmp_path, _run_in_process=True, **overrides)
 
 
+def _donor_proxy_args(tmp_path: Path, **overrides: object) -> argparse.Namespace:
+    harness = _load_harness()
+    temp_root = tmp_path / "lane"
+    temp_root.mkdir(parents=True, exist_ok=True)
+    values: dict[str, object] = {
+        "committee_ids": [
+            "00000000-0000-0000-0000-000000000001",
+            "00000000-0000-0000-0000-000000000002",
+        ],
+        "slice_size": 125,
+        "cluster_sample_size": 2,
+        "seed": "stage-2-seed",
+        "output_path": str(temp_root / "donor_proxy_receipt.md"),
+        "timeout_seconds": 30,
+        "memory_bytes": 64 * 1024 * 1024,
+        "temp_bytes": 64 * 1024 * 1024,
+        "temp_root": str(temp_root),
+        "func": harness._donor_proxy,
+    }
+    values.update(overrides)
+    return argparse.Namespace(**values)
+
+
 def _passed_benchmark_receipt(
     harness: Any,
     args: argparse.Namespace,
@@ -283,7 +348,7 @@ def test_public_module_surface_and_cli_subcommands() -> None:
     assert main_signature.parameters["argv"].default is None
     assert type_hints == {"argv": list[str] | None, "return": int}
     parser = harness.build_argument_parser()
-    assert _subcommand_choices(parser) == {"materialize", "benchmark", "validate-receipt"}
+    assert _subcommand_choices(parser) == {"materialize", "benchmark", "donor-proxy", "validate-receipt"}
 
 
 @pytest.mark.parametrize(
@@ -291,8 +356,11 @@ def test_public_module_surface_and_cli_subcommands() -> None:
     [
         *((MATERIALIZE_ARGUMENTS, option) for option in MATERIALIZE_REQUIRED_OPTIONS),
         *((BENCHMARK_ARGUMENTS, option) for option in BENCHMARK_REQUIRED_OPTIONS),
+        *((DONOR_PROXY_ARGUMENTS, option) for option in DONOR_PROXY_REQUIRED_OPTIONS),
     ],
-    ids=[option for option in (*MATERIALIZE_REQUIRED_OPTIONS, *BENCHMARK_REQUIRED_OPTIONS)],
+    ids=[
+        option for option in (*MATERIALIZE_REQUIRED_OPTIONS, *BENCHMARK_REQUIRED_OPTIONS, *DONOR_PROXY_REQUIRED_OPTIONS)
+    ],
 )
 def test_each_cli_required_evidence_option_exits_nonzero_before_work_when_missing(
     monkeypatch: pytest.MonkeyPatch,
@@ -306,6 +374,7 @@ def test_each_cli_required_evidence_option_exits_nonzero_before_work_when_missin
 
     monkeypatch.setattr(harness, "_materialize", fail_if_called)
     monkeypatch.setattr(harness, "_benchmark", fail_if_called)
+    monkeypatch.setattr(harness, "_donor_proxy", fail_if_called)
 
     assert harness.main(_without_option(complete_argv, missing_option)) != 0
 
@@ -2164,6 +2233,390 @@ def test_benchmark_duckdb_boundaries_fail_before_rows_are_processed(
                 output_path=str(tmp_path / "outside.json"),
             )
         )
+
+
+def _donor_proxy_owner_spy_data() -> dict[str, object]:
+    db_rows: list[dict[str, object]] = [
+        {
+            "id": f"donor-{index:03d}",
+            "canonical_name": "DOE, JANE",
+            "contributor_name_raw": "DOE, JANE",
+            "contributor_employer": "ACME",
+            "contributor_occupation": "ENGINEER",
+            "contributor_city": "RALEIGH",
+            "contributor_state": "NC",
+            "contributor_zip": "276011234",
+            "zip5": "27601",
+            "transaction_count": index,
+        }
+        for index in range(130)
+    ]
+    scored = [
+        {
+            "entity_id_a": "donor-001",
+            "entity_id_b": "donor-002",
+            "confidence": 0.97,
+            "decided_by": "splink_v1",
+            "decision_method": "probabilistic",
+        }
+    ]
+    classified = [{**scored[0], "decision": "match"}]
+    clustered = {
+        "auto_merge_clusters": [
+            {
+                "member_ids": ["donor-001", "donor-002"],
+                "canonical_entity_id": "donor-001",
+                "min_confidence": 0.97,
+                "min_decision": "match",
+            }
+        ],
+        "review_components": [],
+        "pairwise_decisions": classified,
+    }
+    return {"db_rows": db_rows, "scored": scored, "classified": classified, "clustered": clustered}
+
+
+def _patch_donor_proxy_owner_spies(
+    monkeypatch: pytest.MonkeyPatch,
+    harness: Any,
+    events: list[tuple[str, object]],
+) -> dict[str, object]:
+    spy_data = _donor_proxy_owner_spy_data()
+
+    class FakeConnection:
+        def __enter__(self) -> object:
+            events.append(("connection_enter", None))
+            return self
+
+        def __exit__(self, *_exc: object) -> None:
+            events.append(("connection_exit", None))
+
+    conn = FakeConnection()
+    monkeypatch.setattr(harness, "get_connection", lambda: events.append(("get_connection", None)) or conn)
+
+    def extract(fake_conn: object, *, scope: dict[str, object]) -> list[dict[str, object]]:
+        events.append(("extract", (fake_conn, scope)))
+        return spy_data["db_rows"]
+
+    def count(rows: list[dict[str, object]], entity_type: str, **kwargs: object) -> list[dict[str, object]]:
+        events.append(("count", (rows, entity_type, sorted(kwargs))))
+        return [{"rule_index": 0, "exclusive_pair_count": 4, "cumulative_pair_count": 4, "max_block_size": 2}]
+
+    def score(rows: list[dict[str, object]], entity_type: str, **kwargs: object) -> list[dict[str, object]]:
+        events.append(("score", (rows, entity_type, sorted(kwargs))))
+        return spy_data["scored"]
+
+    def classify(pairs: list[dict[str, object]]) -> list[dict[str, object]]:
+        events.append(("classify", pairs))
+        return spy_data["classified"]
+
+    def cluster(pairs: list[dict[str, object]], rows: list[dict[str, object]]) -> dict[str, object]:
+        events.append(("cluster", (pairs, rows)))
+        return spy_data["clustered"]
+
+    def persist_decisions(fake_conn: object, pairs: list[dict[str, object]], entity_type: str) -> list[str]:
+        events.append(("persist_decisions", (fake_conn, pairs, entity_type)))
+        return ["decision-id"]
+
+    def persist_clusters(fake_conn: object, clusters: list[dict[str, object]], entity_type: str) -> list[str]:
+        events.append(("persist_clusters", (fake_conn, clusters, entity_type)))
+        return ["cluster-id"]
+
+    monkeypatch.setattr(harness, "extract_donors_for_matching", extract)
+    monkeypatch.setattr(harness, "count_blocked_pairs", count)
+    monkeypatch.setattr(harness, "score_rows", score)
+    monkeypatch.setattr(harness, "classify_scored_pairs", classify)
+    monkeypatch.setattr(harness, "cluster_scored_pairs", cluster)
+    monkeypatch.setattr(harness, "persist_match_decisions", persist_decisions)
+    monkeypatch.setattr(harness, "persist_auto_merge_clusters", persist_clusters)
+    monkeypatch.setattr(harness, "_current_process_peak_rss_bytes", lambda: 2048)
+    return {"conn": conn, "classified": spy_data["classified"], "clustered": spy_data["clustered"]}
+
+
+def test_donor_proxy_db_path_calls_existing_er_owners_in_order(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    harness = _load_harness()
+    events: list[tuple[str, object]] = []
+    fixtures = _patch_donor_proxy_owner_spies(monkeypatch, harness, events)
+
+    result = harness._donor_proxy(_donor_proxy_args(tmp_path))
+
+    assert result == 0
+    assert [event[0] for event in events] == [
+        "get_connection",
+        "connection_enter",
+        "extract",
+        "count",
+        "score",
+        "classify",
+        "cluster",
+        "persist_decisions",
+        "persist_clusters",
+        "connection_exit",
+    ]
+    committee_ids = [UUID("00000000-0000-0000-0000-000000000001"), UUID("00000000-0000-0000-0000-000000000002")]
+    assert events[2][1] == (fixtures["conn"], {"committee_ids": committee_ids})
+    assert events[3][1][1] == "person"
+    assert len(events[3][1][0]) == 125
+    assert events[4][1][1] == "person"
+    assert events[3][1][0][0] == {
+        "id": "donor-041",
+        "canonical_name": "JANE DOE",
+        "first_name": "JANE",
+        "last_name": "DOE",
+        "last_name_prefix5": "DOE",
+        "last_name_prefix3": "DOE",
+        "date_of_birth": None,
+        "normalized_address": None,
+        "street_number": None,
+        "zip5": "27601",
+        "state": "NC",
+        "employer": "ACME",
+        "occupation": "ENGINEER",
+        "identifier_key": None,
+    }
+    assert events[7][1] == (fixtures["conn"], fixtures["classified"], "donor_identity")
+    clustered = fixtures["clustered"]
+    assert events[8][1] == (fixtures["conn"], clustered["auto_merge_clusters"], "donor_identity")
+
+
+def test_benchmark_path_never_opens_db_or_persists_while_donor_proxy_is_the_persistence_path(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    harness = _load_harness()
+    temp_root = tmp_path / "lane"
+    temp_root.mkdir()
+    input_path = temp_root / "normalized_rows.jsonl"
+    _write_normalized_jsonl(input_path, [])
+    persistence_events: list[str] = []
+
+    monkeypatch.setattr(harness, "get_connection", lambda: (_ for _ in ()).throw(AssertionError("DB opened")))
+    monkeypatch.setattr(harness, "persist_match_decisions", lambda *args: persistence_events.append("decisions"))
+    monkeypatch.setattr(harness, "persist_auto_merge_clusters", lambda *args: persistence_events.append("clusters"))
+    monkeypatch.setattr(harness, "count_blocked_pairs", lambda *args, **kwargs: [])
+
+    assert harness._benchmark(_benchmark_child_args(tmp_path, input_path=str(input_path))) == 0
+    assert persistence_events == []
+
+    class FakeConnection:
+        def __enter__(self) -> FakeConnection:
+            return self
+
+        def __exit__(self, *_exc: object) -> None:
+            return None
+
+    monkeypatch.setattr(harness, "get_connection", lambda: FakeConnection())
+    monkeypatch.setattr(harness, "extract_donors_for_matching", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(harness, "score_rows", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(harness, "classify_scored_pairs", lambda pairs: pairs)
+    monkeypatch.setattr(
+        harness,
+        "cluster_scored_pairs",
+        lambda *_args, **_kwargs: {"auto_merge_clusters": [], "review_components": [], "pairwise_decisions": []},
+    )
+
+    assert harness._donor_proxy(_donor_proxy_args(tmp_path, slice_size=125)) == 0
+    assert persistence_events == ["decisions", "clusters"]
+
+
+def test_deterministic_db_prefix_and_cluster_sample_use_sha256_seeded_keys() -> None:
+    harness = _load_harness()
+    rows = [{"id": f"donor-{index:03d}"} for index in range(150)]
+    expected_prefix = sorted(
+        rows,
+        key=lambda row: (
+            hashlib.sha256(f"db-prefix-seed\x00{row['id']}".encode("utf-8")).hexdigest(),
+            row["id"],
+        ),
+    )[:101]
+
+    selected = harness.select_deterministic_db_prefix(rows, seed="db-prefix-seed", size=101)
+
+    assert selected == expected_prefix
+    assert len(selected) == 101
+    assert harness._MAX_COHORT_SIZE == 100
+
+    clusters = [
+        {"cluster_id": "cluster-c", "member_ids": ["donor-003", "donor-004"]},
+        {"cluster_id": "cluster-a", "member_ids": ["donor-001", "donor-002"]},
+        {"member_ids": {"donor-006", "donor-005"}},
+    ]
+    expected_clusters = sorted(
+        clusters,
+        key=lambda cluster: (
+            hashlib.sha256(
+                f"cluster-sample-seed\x00{cluster.get('cluster_id') or 'donor-005|donor-006'}".encode("utf-8")
+            ).hexdigest(),
+            cluster.get("cluster_id") or "donor-005|donor-006",
+        ),
+    )[:2]
+    expected_clusters = [{**cluster, "member_ids": sorted(cluster["member_ids"])} for cluster in expected_clusters]
+
+    assert (
+        harness.select_deterministic_cluster_sample(clusters, seed="cluster-sample-seed", size=2) == expected_clusters
+    )
+
+
+def _donor_proxy_receipt_kwargs() -> dict[str, object]:
+    return {
+        "schema_version": "donor_er_proxy_measurement.v1",
+        "verdict": "SCALE_NOW",
+        "donor_denominator": 100,
+        "cluster_count": 40,
+        "compression_ratio": 2.5,
+        "cluster_size_distribution": {"1": 10, "2": 30},
+        "confidence_band_counts": {"match": 96, "probable_match": 2, "possible_match": 1, "no_match": 1},
+        "blocking_rule_selectivity": [{"rule_index": 0, "exclusive_pair_count": 9}],
+        "chosen_slice_size": 125,
+        "timing_seconds": 1.25,
+        "peak_child_rss_bytes": 4096,
+        "db_counts": {"extracted_donors": 150, "selected_donors": 125},
+        "seed": "stage-2-seed",
+        "precision_successes": 96,
+        "precision_denominator": 100,
+        "precision_wilson_low": 0.901629,
+        "precision_wilson_high": 0.984337,
+        "undecidable_count": 0,
+        "deterministic_cluster_sample": [{"cluster_id": "cluster-a", "member_ids": ["donor-001", "donor-002"]}],
+        "named_transaction_write_defect": None,
+    }
+
+
+def test_wilson_interval_and_verdict_precedence_are_known_answers() -> None:
+    harness = _load_harness()
+
+    assert harness.wilson_95_interval(successes=96, denominator=100) == pytest.approx((0.901629, 0.984337))
+    assert harness.wilson_95_interval(successes=0, denominator=10) == pytest.approx((0.0, 0.277533))
+    assert (
+        harness.choose_scale_verdict(
+            named_transaction_write_defect={"owner": "core/entity_resolution/persist.py"},
+            denominator=100,
+            undecidable_count=0,
+            precision_lower_bound=0.99,
+            minimum_precision=0.95,
+        )
+        == "BLOCKED_ON_NAMED_DEFECT"
+    )
+    assert (
+        harness.choose_scale_verdict(
+            named_transaction_write_defect=None,
+            denominator=0,
+            undecidable_count=0,
+            precision_lower_bound=1.0,
+            minimum_precision=0.95,
+        )
+        == "PRECISION_INSUFFICIENT"
+    )
+    assert (
+        harness.choose_scale_verdict(
+            named_transaction_write_defect=None,
+            denominator=100,
+            undecidable_count=1,
+            precision_lower_bound=0.99,
+            minimum_precision=0.95,
+        )
+        == "SCALE_WITH_CHANGES"
+    )
+    assert (
+        harness.choose_scale_verdict(
+            named_transaction_write_defect=None,
+            denominator=100,
+            undecidable_count=0,
+            precision_lower_bound=0.99,
+            minimum_precision=0.95,
+        )
+        == "SCALE_NOW"
+    )
+
+
+def test_proxy_receipt_validation_requires_single_verdict_and_evidence() -> None:
+    harness = _load_harness()
+    receipt = harness.DonorProxyMeasurementReceipt(**_donor_proxy_receipt_kwargs())
+    markdown = harness.format_donor_proxy_measurement_receipt(receipt)
+
+    assert markdown.startswith("## VERDICT: SCALE_NOW\n\n```donor_er_proxy_measurement_receipt\n")
+    assert harness.validate_donor_proxy_measurement_receipt_markdown(markdown) == receipt
+
+    payload = json.loads(receipt.model_dump_json())
+    for missing in ("precision_denominator", "donor_denominator", "undecidable_count", "seed"):
+        invalid = dict(payload)
+        invalid.pop(missing)
+        invalid_markdown = (
+            f"## VERDICT: SCALE_NOW\n\n```donor_er_proxy_measurement_receipt\n{json.dumps(invalid)}\n```\n"
+        )
+        with pytest.raises(ValueError, match=missing):
+            harness.validate_donor_proxy_measurement_receipt_markdown(invalid_markdown)
+
+    with pytest.raises(ValueError, match="exactly one verdict heading"):
+        harness.validate_donor_proxy_measurement_receipt_markdown(markdown.replace("## VERDICT: SCALE_NOW\n\n", ""))
+    with pytest.raises(ValueError, match="exactly one verdict heading"):
+        harness.validate_donor_proxy_measurement_receipt_markdown(markdown + "\n## VERDICT: SCALE_NOW\n")
+
+
+def test_validate_receipt_cli_accepts_donor_proxy_measurement_receipt(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    harness = _load_harness()
+    receipt = harness.DonorProxyMeasurementReceipt(**_donor_proxy_receipt_kwargs())
+    receipt_path = tmp_path / "donor_proxy_receipt.md"
+    receipt_path.write_text(harness.format_donor_proxy_measurement_receipt(receipt), encoding="utf-8")
+
+    assert harness.main(["validate-receipt", "--receipt", str(receipt_path)]) == 0
+    assert (
+        capsys.readouterr().out == "validate-receipt schema_version=donor_er_proxy_measurement.v1 verdict=SCALE_NOW\n"
+    )
+
+    assert (
+        harness.main(
+            [
+                "validate-receipt",
+                "--receipt",
+                str(receipt_path),
+                "--emit-validated-json",
+            ]
+        )
+        == 0
+    )
+    assert json.loads(capsys.readouterr().out) == json.loads(receipt.model_dump_json())
+
+    assert (
+        harness.main(
+            [
+                "validate-receipt",
+                "--receipt",
+                str(receipt_path),
+                "--require-cleanup",
+            ]
+        )
+        == 1
+    )
+    assert "cleanup evidence is not part of donor proxy measurement receipts" in capsys.readouterr().err
+
+    payload = json.loads(receipt.model_dump_json())
+    payload["seed"] = "PGPASSWORD=super-secret-token-5150"
+    leaky_receipt_path = tmp_path / "leaky_donor_proxy_receipt.md"
+    leaky_receipt_path.write_text(
+        f"## VERDICT: SCALE_NOW\n\n```donor_er_proxy_measurement_receipt\n{json.dumps(payload)}\n```\n",
+        encoding="utf-8",
+    )
+    assert (
+        harness.main(
+            [
+                "validate-receipt",
+                "--receipt",
+                str(leaky_receipt_path),
+                "--emit-validated-json",
+            ]
+        )
+        == 1
+    )
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "super-secret-token-5150" not in captured.err
 
 
 def test_benchmark_in_process_path_stays_offline_and_avoids_persistence_imports(

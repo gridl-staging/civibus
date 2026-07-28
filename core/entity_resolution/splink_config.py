@@ -1,12 +1,12 @@
-"""Splink/DuckDB entity-resolution settings for person and organization dedupe.
+"""Splink/DuckDB entity-resolution settings and input projections.
 
 Owns the comparison levels, blocking rules, deterministic identifier rules, confidence
-thresholds, and preprocessing SQL over core.person_er_view / core.organization_er_view.
+thresholds, and preprocessing SQL over the shared ER views.
 
 Runtime status: built and tested; used by the person-spine, property-owner, and NC donor
-ER paths. NOT yet run over the ~16M FEC individual contributors -- those rows are not in
-core.person (the federal load runs transactions_only), so contributor_person_id is null
-at scale. Extending ER to donors is tracked in ROADMAP.md (Planned -> Donor Intelligence).
+ER paths. Federal FEC contributor tuples can now be materialized and extracted through
+core.donor_er_view without writing core.person or contributor_person_id. Donor-specific
+blocking, scoring, and matcher execution remain future work.
 """
 
 from __future__ import annotations
@@ -89,21 +89,23 @@ def _build_person_settings(
             block_on("identifier_key"),
         ],
         comparisons=[
+            # Rare-name agreement is load-bearing for donor identity; geography, DOB,
+            # employer, and occupation stay ordinary corroborating signals, not rarity priors.
             # Name comparison: Jaro-Winkler (good for typos/transpositions in names)
             cl.JaroWinklerAtThresholds(
                 "canonical_name",
                 score_threshold_or_thresholds=tuning["canonical_name"],
-            ),
+            ).configure(term_frequency_adjustments=True),
             # First name: handles nicknames, abbreviations
             cl.JaroWinklerAtThresholds(
                 "first_name",
                 score_threshold_or_thresholds=tuning["first_name"],
-            ),
+            ).configure(term_frequency_adjustments=True),
             # Last name: exact + fuzzy
             cl.JaroWinklerAtThresholds(
                 "last_name",
                 score_threshold_or_thresholds=tuning["last_name"],
-            ),
+            ).configure(term_frequency_adjustments=True),
             # Address: token sort ratio handles word order differences
             # "123 Main St Apt 4" vs "Apt 4, 123 Main Street"
             cl.JaroWinklerAtThresholds(
@@ -198,8 +200,8 @@ ORGANIZATION_SETTINGS = _build_organization_settings() if _SPLINK_IMPORT_ERROR i
 #     the identifiers JSONB, and an unnested identifier_key for block_on("identifier_key").
 #     The last_name_prefix5/3 columns are derived in the preprocessing SQL below.
 #   - core.organization_er_view: the organization blocking columns.
-# Open work is running this pipeline over the ~16M FEC donors (they are not yet in
-# core.person), not view assembly. See ROADMAP.md (Planned -> Donor Intelligence).
+#   - core.donor_er_view: bounded, materialized federal contributor tuples for downstream
+#     donor-specific matching; this module does not yet own donor matcher settings.
 
 PERSON_PREPROCESSING_SQL = """
     SELECT
@@ -234,6 +236,21 @@ ORGANIZATION_PREPROCESSING_SQL = """
         identifiers->>'fec_committee_id' AS fec_committee_id,
         registered_agent_name
     FROM core.organization_er_view
+"""
+
+DONOR_PREPROCESSING_SQL = """
+    SELECT
+        id,
+        canonical_name,
+        contributor_name_raw,
+        contributor_employer,
+        contributor_occupation,
+        contributor_city,
+        contributor_state,
+        contributor_zip,
+        zip5,
+        transaction_count
+    FROM core.donor_er_view
 """
 
 

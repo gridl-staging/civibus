@@ -1,21 +1,66 @@
 from __future__ import annotations
 
+import gc
 import json
 import os
+import subprocess
 import sys
 import time
 import types
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-import psycopg
-import pytest
-from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
+from _pytest.capture import CaptureManager
+
+
+_REEXEC_SENTINEL_ENV_VAR = "CIVIBUS_PYTEST_REEXEC"
+
+
+def _finish_bootstrap_parent(completed_process: subprocess.CompletedProcess[bytes]) -> None:
+    # Initial conftest loading runs inside pytest's global capture. Finish that
+    # capture explicitly so the child report reaches the original output FDs.
+    capture_managers = [candidate for candidate in gc.get_objects() if isinstance(candidate, CaptureManager)]
+    if len(capture_managers) != 1:
+        raise RuntimeError(f"Expected one active pytest capture manager, found {len(capture_managers)}")
+
+    capture_managers[0].stop_global_capturing()
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(completed_process.returncode)
+
+
+def _run_pytest_under_project_python_and_exit_if_needed() -> None:
+    """Run under uv-managed Python 3.12+ if the current interpreter is older."""
+    if sys.version_info >= (3, 12):
+        return
+    if os.environ.get(_REEXEC_SENTINEL_ENV_VAR) == "1":
+        return
+
+    os.environ[_REEXEC_SENTINEL_ENV_VAR] = "1"
+    reexec_command = [
+        "uv",
+        "run",
+        "--extra",
+        "dev",
+        "--extra",
+        "entity-resolution",
+        "pytest",
+        *sys.argv[1:],
+    ]
+    completed_process = subprocess.run(reexec_command, check=False)
+    _finish_bootstrap_parent(completed_process)
+
+
+_run_pytest_under_project_python_and_exit_if_needed()
+
+# These imports must remain below the dependency-free interpreter bootstrap.
+import psycopg  # noqa: E402
+import pytest  # noqa: E402
+from pydantic import BaseModel, ConfigDict, ValidationError, field_validator  # noqa: E402
 
 if TYPE_CHECKING:
     pass
 
-_REEXEC_SENTINEL_ENV_VAR = "CIVIBUS_PYTEST_REEXEC"
 _POSTGRES_UNAVAILABLE_PREFIX = "Unable to connect to PostgreSQL at "
 _DB_CONNECTION_STARTUP_RETRY_ATTEMPTS = 10
 _DB_CONNECTION_STARTUP_RETRY_DELAY_SECONDS = 1.0
@@ -230,29 +275,6 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 )
             )
 
-
-def _reexec_pytest_under_project_python_if_needed() -> None:
-    """Re-exec under uv-managed Python 3.12+ if the current interpreter is older."""
-    if sys.version_info >= (3, 12):
-        return
-    if os.environ.get(_REEXEC_SENTINEL_ENV_VAR) == "1":
-        return
-
-    os.environ[_REEXEC_SENTINEL_ENV_VAR] = "1"
-    reexec_command = [
-        "uv",
-        "run",
-        "--extra",
-        "dev",
-        "--extra",
-        "entity-resolution",
-        "pytest",
-        *sys.argv[1:],
-    ]
-    os.execvp("uv", reexec_command)
-
-
-_reexec_pytest_under_project_python_if_needed()
 
 # Module-level imports for patchability in tests/test_conftest_db_fixtures.py.
 from core.db import get_connection  # noqa: E402

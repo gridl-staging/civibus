@@ -751,6 +751,7 @@
         {:then summary}
           {@const fundraisingRegions = candidateMoneyPresentation.buildCandidateFundraisingRegionViewModels(summary)}
           {@const fundraisingSummary = fundraisingRegions.fundraisingSummary.summary}
+          {@const earlierCycleOfficialTotal = fundraisingRegions.fundraisingSummary.earlierCycleOfficialTotal}
           {@const committeeBreakdown = fundraisingRegions.committeeBreakdown.rows}
           <section class="detail__panel" aria-label="Fundraising summary" data-testid="candidate-fundraising-summary">
             <h3>Fundraising summary</h3>
@@ -762,6 +763,16 @@
             {/if}
             {#if fundraisingSummary}
               <FactRows rows={fundraisingSummary.factRows} />
+            {/if}
+            {#if earlierCycleOfficialTotal}
+              <div
+                class="detail__advisory"
+                data-testid="candidate-earlier-cycle-official-total"
+              >
+                <h4>{earlierCycleOfficialTotal.label}</h4>
+                <p class="detail__summary">{earlierCycleOfficialTotal.period}</p>
+                <FactRows rows={earlierCycleOfficialTotal.factRows} />
+              </div>
             {/if}
           </section>
 

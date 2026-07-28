@@ -40,12 +40,13 @@ def test_pyproject_entity_resolution_extra_includes_pandas_for_direct_runtime_im
     assert '  "pandas",' in entity_resolution_section.group(0)
 
 
-def test_conftest_reexecs_pytest_under_project_python_for_pre312_interpreters() -> None:
+def test_conftest_runs_pytest_under_project_python_for_pre312_interpreters() -> None:
     conftest_text = read_repo_text("conftest.py")
 
     assert "_REEXEC_SENTINEL_ENV_VAR" in conftest_text
     assert "sys.version_info >= (3, 12)" in conftest_text
-    assert 'os.execvp("uv", reexec_command)' in conftest_text
+    assert "subprocess.run(reexec_command, check=False)" in conftest_text
+    assert "_finish_bootstrap_parent(completed_process)" in conftest_text
     assert '"--extra"' in conftest_text
     assert '"dev"' in conftest_text
     assert '"entity-resolution"' in conftest_text

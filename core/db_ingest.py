@@ -6,14 +6,16 @@ from enum import StrEnum
 from uuid import UUID
 
 import psycopg
+from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 from psycopg.types.range import DateRange
 
-from core.types.python.models import Address, ContactPoint, SourceRecord
+from core.types.python.models import Address, ContactPoint, EntitySourceLink, SourceRecord
 
 
 class SourceRecordBulkInsertAttribution(StrEnum):
     FAST_PATH_INSERTED = "fast_path_inserted"
+    FAST_PATH_REUSED = "fast_path_reused"
     FAST_PATH_FALLBACK = "fast_path_fallback"
     FORCED_PER_ROW = "forced_per_row"
 
@@ -30,6 +32,7 @@ class SourceRecordBulkInsertAttributionCounts:
     fast_path_candidates: int
     forced_per_row_rows: int
     fast_path_inserted: int
+    fast_path_reused: int
     fast_path_fallbacks: int
 
 
@@ -42,13 +45,17 @@ def summarize_source_record_bulk_insert_attribution(
     fast_path_fallbacks = sum(
         result.attribution == SourceRecordBulkInsertAttribution.FAST_PATH_FALLBACK for result in results
     )
+    fast_path_reused = sum(
+        result.attribution == SourceRecordBulkInsertAttribution.FAST_PATH_REUSED for result in results
+    )
     forced_per_row_rows = sum(
         result.attribution == SourceRecordBulkInsertAttribution.FORCED_PER_ROW for result in results
     )
     return SourceRecordBulkInsertAttributionCounts(
-        fast_path_candidates=fast_path_inserted + fast_path_fallbacks,
+        fast_path_candidates=fast_path_inserted + fast_path_reused + fast_path_fallbacks,
         forced_per_row_rows=forced_per_row_rows,
         fast_path_inserted=fast_path_inserted,
+        fast_path_reused=fast_path_reused,
         fast_path_fallbacks=fast_path_fallbacks,
     )
 
@@ -320,6 +327,55 @@ def try_insert_source_record(conn: psycopg.Connection, sr: SourceRecord) -> UUID
         return new_id
 
 
+def select_active_source_records_by_keys(
+    conn: psycopg.Connection,
+    keys: list[tuple[UUID, str]],
+    *,
+    for_update: bool = False,
+) -> dict[tuple[UUID, str], SourceRecord]:
+    """Select active source records for natural keys in one statement."""
+    unique_keys = list(dict.fromkeys(keys))
+    if not unique_keys:
+        return {}
+
+    lock_clause = "FOR UPDATE OF source_record" if for_update else ""
+    with conn.cursor(row_factory=dict_row) as cursor:
+        cursor.execute(
+            f"""
+            WITH incoming (data_source_id, source_record_key) AS (
+                SELECT *
+                FROM unnest(%s::uuid[], %s::text[])
+            )
+            SELECT
+                source_record.id,
+                source_record.data_source_id,
+                source_record.source_record_key,
+                source_record.source_url,
+                source_record.raw_fields,
+                source_record.pull_date,
+                source_record.record_hash,
+                source_record.superseded_by,
+                source_record.created_at
+            FROM core.source_record AS source_record
+            JOIN incoming
+              ON incoming.data_source_id = source_record.data_source_id
+             AND incoming.source_record_key = source_record.source_record_key
+            WHERE source_record.superseded_by IS NULL
+            {lock_clause}
+            """,
+            (
+                [data_source_id for data_source_id, _source_record_key in unique_keys],
+                [source_record_key for _data_source_id, source_record_key in unique_keys],
+            ),
+        )
+        records = [SourceRecord(**row) for row in cursor]
+    return {
+        (record.data_source_id, record.source_record_key): record
+        for record in records
+        if record.source_record_key is not None
+    }
+
+
 def _is_setwise_bulk_candidate(record: SourceRecord, key_counts: dict[tuple[UUID, str | None], int]) -> bool:
     if record.source_record_key is None:
         return False
@@ -441,29 +497,74 @@ def try_insert_source_records_bulk(
         else:
             inserted_id = try_insert_source_record(conn, record)
             results[index] = SourceRecordBulkInsertResult(
-                inserted_id,
+                inserted_id or _active_source_record_id(conn, record),
                 inserted_id is not None,
                 SourceRecordBulkInsertAttribution.FORCED_PER_ROW,
             )
 
-    inserted_ordinals = _bulk_insert_fresh_source_records(conn, setwise_records)
+    active_records = select_active_source_records_by_keys(
+        conn,
+        [
+            (record.data_source_id, record.source_record_key)
+            for record in setwise_records
+            if record.source_record_key is not None
+        ],
+        for_update=True,
+    )
+    fresh_records: list[SourceRecord] = []
+    fresh_ordinals: list[int] = []
     for ordinal, record in enumerate(setwise_records):
         result_index = setwise_indexes[ordinal]
-        if ordinal in inserted_ordinals:
+        key = (record.data_source_id, record.source_record_key)
+        active_record = active_records.get(key)  # type: ignore[arg-type]
+        if active_record is None:
+            fresh_records.append(record)
+            fresh_ordinals.append(ordinal)
+        elif active_record.record_hash == record.record_hash:
+            results[result_index] = SourceRecordBulkInsertResult(
+                active_record.id,
+                False,
+                SourceRecordBulkInsertAttribution.FAST_PATH_REUSED,
+            )
+        else:
+            inserted_id = try_insert_source_record(conn, record)
+            results[result_index] = SourceRecordBulkInsertResult(
+                inserted_id or _active_source_record_id(conn, record),
+                inserted_id is not None,
+                SourceRecordBulkInsertAttribution.FAST_PATH_FALLBACK,
+            )
+
+    inserted_fresh_ordinals = _bulk_insert_fresh_source_records(conn, fresh_records)
+    for fresh_ordinal, record in enumerate(fresh_records):
+        ordinal = fresh_ordinals[fresh_ordinal]
+        result_index = setwise_indexes[ordinal]
+        if fresh_ordinal in inserted_fresh_ordinals:
             results[result_index] = SourceRecordBulkInsertResult(
                 record.id,
                 True,
                 SourceRecordBulkInsertAttribution.FAST_PATH_INSERTED,
             )
-        else:
-            inserted_id = try_insert_source_record(conn, record)
-            results[result_index] = SourceRecordBulkInsertResult(
-                inserted_id,
-                inserted_id is not None,
-                SourceRecordBulkInsertAttribution.FAST_PATH_FALLBACK,
-            )
+            continue
+        inserted_id = try_insert_source_record(conn, record)
+        results[result_index] = SourceRecordBulkInsertResult(
+            inserted_id or _active_source_record_id(conn, record),
+            inserted_id is not None,
+            SourceRecordBulkInsertAttribution.FAST_PATH_FALLBACK,
+        )
 
     return [result for result in results if result is not None]
+
+
+def _active_source_record_id(conn: psycopg.Connection, record: SourceRecord) -> UUID:
+    if record.source_record_key is None:
+        raise RuntimeError("NULL-key source records always insert and cannot resolve an active key")
+    active_record = select_active_source_records_by_keys(
+        conn,
+        [(record.data_source_id, record.source_record_key)],
+    ).get((record.data_source_id, record.source_record_key))
+    if active_record is None:
+        raise RuntimeError(f"Expected active source record for key={record.source_record_key}")
+    return active_record.id
 
 
 def find_organization_by_canonical_name(conn: psycopg.Connection, canonical_name: str) -> UUID | None:
@@ -494,6 +595,54 @@ def find_person_by_name_and_zip(
 
     with conn.cursor() as cursor:
         return _select_existing_id(cursor, query, params)
+
+
+def find_people_by_name_and_zip(
+    conn: psycopg.Connection,
+    keys: list[tuple[str, str, str | None]],
+) -> dict[tuple[str, str, str | None], UUID]:
+    """Resolve name/ZIP keys in one query using the single-row match semantics."""
+    unique_keys = list(dict.fromkeys(keys))
+    if not unique_keys:
+        return {}
+
+    with conn.cursor() as cursor:
+        cursor.execute(
+            """
+            WITH incoming (last_name, first_name, zip5) AS (
+                SELECT *
+                FROM unnest(%s::text[], %s::text[], %s::text[])
+            )
+            SELECT DISTINCT ON (incoming.last_name, incoming.first_name, incoming.zip5)
+                incoming.last_name,
+                incoming.first_name,
+                incoming.zip5,
+                person.id
+            FROM incoming
+            JOIN core.person AS person
+              ON person.last_name = incoming.last_name
+             AND person.first_name = incoming.first_name
+            LEFT JOIN core.entity_address AS entity_address
+              ON incoming.zip5 IS NOT NULL
+             AND entity_address.entity_type = 'person'
+             AND entity_address.entity_id = person.id
+            LEFT JOIN core.address AS address
+              ON address.id = entity_address.address_id
+            WHERE incoming.zip5 IS NULL
+               OR address.zip5 = incoming.zip5
+            ORDER BY
+                incoming.last_name,
+                incoming.first_name,
+                incoming.zip5,
+                person.id
+            """,
+            (
+                [last_name for last_name, _first_name, _zip5 in unique_keys],
+                [first_name for _last_name, first_name, _zip5 in unique_keys],
+                [zip5 for _last_name, _first_name, zip5 in unique_keys],
+            ),
+        )
+        return {(last_name, first_name, zip5): person_id for last_name, first_name, zip5, person_id in cursor}
 
 
 def insert_entity_source(
@@ -542,6 +691,81 @@ def insert_entity_source(
         select_params=(entity_type, entity_id, source_record_id, extraction_role),
         conflict_error="Entity source insert conflict occurred but existing row was not found",
     )
+
+
+def insert_entity_sources_bulk(
+    conn: psycopg.Connection,
+    links: list[EntitySourceLink],
+) -> list[UUID]:
+    """Insert provenance links setwise and return their IDs in input order."""
+    if not links:
+        return []
+
+    with conn.cursor() as cursor:
+        cursor.execute(
+            """
+            INSERT INTO core.entity_source (
+                entity_type,
+                entity_id,
+                source_record_id,
+                extraction_role,
+                confidence,
+                extracted_fields
+            )
+            SELECT *
+            FROM unnest(
+                %s::text[],
+                %s::uuid[],
+                %s::uuid[],
+                %s::text[],
+                %s::real[],
+                %s::jsonb[]
+            )
+            ON CONFLICT (entity_type, entity_id, source_record_id, extraction_role)
+            DO NOTHING
+            """,
+            (
+                [link.entity_type for link in links],
+                [link.entity_id for link in links],
+                [link.source_record_id for link in links],
+                [link.extraction_role for link in links],
+                [link.confidence for link in links],
+                [Jsonb(link.extracted_fields) if link.extracted_fields is not None else None for link in links],
+            ),
+        )
+        cursor.execute(
+            """
+            WITH incoming (ordinal, entity_type, entity_id, source_record_id, extraction_role) AS (
+                SELECT *
+                FROM unnest(
+                    %s::integer[],
+                    %s::text[],
+                    %s::uuid[],
+                    %s::uuid[],
+                    %s::text[]
+                )
+            )
+            SELECT incoming.ordinal, entity_source.id
+            FROM incoming
+            JOIN core.entity_source AS entity_source
+              ON entity_source.entity_type = incoming.entity_type
+             AND entity_source.entity_id = incoming.entity_id
+             AND entity_source.source_record_id = incoming.source_record_id
+             AND entity_source.extraction_role IS NOT DISTINCT FROM incoming.extraction_role
+            ORDER BY incoming.ordinal
+            """,
+            (
+                list(range(len(links))),
+                [link.entity_type for link in links],
+                [link.entity_id for link in links],
+                [link.source_record_id for link in links],
+                [link.extraction_role for link in links],
+            ),
+        )
+        rows = cursor.fetchall()
+    if len(rows) != len(links):
+        raise RuntimeError("Entity source bulk insert could not resolve every input row")
+    return [row_id for _ordinal, row_id in rows]
 
 
 def _clear_current_field_provenance(

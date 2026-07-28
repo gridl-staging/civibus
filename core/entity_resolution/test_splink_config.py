@@ -10,8 +10,12 @@ from __future__ import annotations
 import uuid
 from datetime import date
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
+
+from core.entity_resolution.scoring import score_with_splink
+from core.entity_resolution.splink_config import build_person_probabilistic_settings
 
 # Synthetic test data — realistic but entirely fictitious records
 # designed to test specific matching scenarios.
@@ -154,6 +158,133 @@ SYNTHETIC_ORGANIZATIONS = [
         "registered_agent_name": "CT Corporation",
     },
 ]
+
+COMMON_NAME_PAIR = (
+    uuid.UUID("00000000-0000-0000-0002-000000000001"),
+    uuid.UUID("00000000-0000-0000-0002-000000000002"),
+)
+RARE_NAME_PAIR = (
+    uuid.UUID("00000000-0000-0000-0002-000000000101"),
+    uuid.UUID("00000000-0000-0000-0002-000000000102"),
+)
+
+
+def _name_rarity_row(
+    entity_id: uuid.UUID,
+    row_values: dict[str, Any],
+) -> dict[str, Any]:
+    row = {"id": entity_id, **row_values}
+    last_name = row["last_name"]
+    row["last_name_prefix5"] = last_name[:5]
+    row["last_name_prefix3"] = last_name[:3]
+    return row
+
+
+def _name_rarity_rows() -> list[dict[str, Any]]:
+    rows = [
+        _name_rarity_row(
+            COMMON_NAME_PAIR[0],
+            {
+                "canonical_name": "James Smith",
+                "first_name": "James",
+                "last_name": "Smith",
+                "date_of_birth": date(1978, 4, 20),
+                "normalized_address": "100 Target Common St",
+                "street_number": "100",
+                "zip5": "10001",
+                "state": "AA",
+                "employer": "Acme Civic Group",
+                "occupation": "Consultant",
+                "identifier_key": "common_target_shared",
+            },
+        ),
+        _name_rarity_row(
+            COMMON_NAME_PAIR[1],
+            {
+                "canonical_name": "James Smith",
+                "first_name": "James",
+                "last_name": "Smith",
+                "date_of_birth": date(1978, 4, 20),
+                "normalized_address": "100 Target Common St",
+                "street_number": "100",
+                "zip5": "10001",
+                "state": "AA",
+                "employer": "Acme Civic Group",
+                "occupation": "Consultant",
+                "identifier_key": "common_target_shared",
+            },
+        ),
+        _name_rarity_row(
+            RARE_NAME_PAIR[0],
+            {
+                "canonical_name": "Zephyr Quill",
+                "first_name": "Zephyr",
+                "last_name": "Quill",
+                "date_of_birth": date(1978, 4, 20),
+                "normalized_address": "200 Target Rare St",
+                "street_number": "200",
+                "zip5": "20002",
+                "state": "BB",
+                "employer": "Acme Civic Group",
+                "occupation": "Consultant",
+                "identifier_key": "rare_target_shared",
+            },
+        ),
+        _name_rarity_row(
+            RARE_NAME_PAIR[1],
+            {
+                "canonical_name": "Zephyr Quill",
+                "first_name": "Zephyr",
+                "last_name": "Quill",
+                "date_of_birth": date(1978, 4, 20),
+                "normalized_address": "200 Target Rare St",
+                "street_number": "200",
+                "zip5": "20002",
+                "state": "BB",
+                "employer": "Acme Civic Group",
+                "occupation": "Consultant",
+                "identifier_key": "rare_target_shared",
+            },
+        ),
+    ]
+    for index in range(12):
+        rows.append(
+            _name_rarity_row(
+                uuid.UUID(f"00000000-0000-0000-0003-{index + 1:012d}"),
+                {
+                    "canonical_name": "James Smith",
+                    "first_name": "James",
+                    "last_name": "Smith",
+                    "date_of_birth": date(1960 + index, 1, 1),
+                    "normalized_address": f"{900 + index} Frequency Filler Rd",
+                    "street_number": str(900 + index),
+                    "zip5": f"30{index:03d}",
+                    "state": f"F{index:02d}",
+                    "employer": f"Frequency Employer {index}",
+                    "occupation": f"Frequency Occupation {index}",
+                    "identifier_key": f"common_filler_{index}",
+                },
+            )
+        )
+    return rows
+
+
+def _score_map_by_pair(
+    rows: list[dict[str, Any]],
+) -> dict[tuple[uuid.UUID, uuid.UUID], float]:
+    person_settings = build_person_probabilistic_settings()
+    scores = score_with_splink(rows, "person", probabilistic_settings=person_settings)
+    return {(score["entity_id_a"], score["entity_id_b"]): score["confidence"] for score in scores}
+
+
+def _term_frequency_adjusted_columns(person_settings: Any) -> set[str]:
+    settings_metadata = person_settings.create_settings_dict("duckdb")
+    return {
+        level["tf_adjustment_column"]
+        for comparison in settings_metadata["comparisons"]
+        for level in comparison["comparison_levels"]
+        if "tf_adjustment_column" in level
+    }
 
 
 # =============================================================================
@@ -314,3 +445,24 @@ def test_get_blocking_rule_sqls_keeps_splink4_rule_objects(
     assert rules[0] is splink4_rule
     assert rules[1] == 'l."id" = r."id"'
     assert rules[2] == "l.id = r.id"
+
+
+def test_person_splink_scores_rare_exact_name_above_common_exact_name() -> None:
+    scores_by_pair = _score_map_by_pair(_name_rarity_rows())
+
+    assert set(scores_by_pair) == {COMMON_NAME_PAIR, RARE_NAME_PAIR}
+    common_score = scores_by_pair[COMMON_NAME_PAIR]
+    rare_score = scores_by_pair[RARE_NAME_PAIR]
+    assert rare_score > common_score, (
+        f"expected rare-name confidence to exceed common-name confidence; rare={rare_score}, common={common_score}"
+    )
+
+
+def test_person_settings_term_frequency_adjustments_are_name_only() -> None:
+    person_settings = build_person_probabilistic_settings()
+
+    assert _term_frequency_adjusted_columns(person_settings) == {
+        "canonical_name",
+        "first_name",
+        "last_name",
+    }

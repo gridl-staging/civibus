@@ -320,6 +320,20 @@ class SourceRecord(BaseModel):
         return validate_json_dictionary(value, field_name="raw_fields")
 
 
+class EntitySourceLink(BaseModel):
+    entity_type: str
+    entity_id: UUID
+    source_record_id: UUID
+    extraction_role: str
+    confidence: float | None = None
+    extracted_fields: dict[str, object] | None = None
+
+    @field_validator("confidence")
+    @classmethod
+    def validate_confidence(cls, value: float | None) -> float | None:
+        return validate_optional_confidence(value, field_name="confidence")
+
+
 PortraitStatus = Literal[
     "active",
     "not_found",

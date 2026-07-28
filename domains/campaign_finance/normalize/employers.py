@@ -6,12 +6,13 @@ import unicodedata
 
 UNKNOWN_INDUSTRY = "UNKNOWN_INDUSTRY"
 JUNK_EMPLOYER_WEIGHT = 0.01
-# Stage 1's fixed random sample reaches 226 known rows out of 14,324 after
-# this expansion. The rounded-down floor still fails if any mapped top-20
+# The staged employer mappings in the fixed random sample now cover 320 known
+# rows out of 14,324. The rounded-down floor still fails if any mapped top-20
 # employer disappears.
 INDUSTRY_BY_EMPLOYER_MIN_COVERAGE = 0.015
 
 _JUNK_EMPLOYER_REASONS: dict[str, str] = {
+    "DISABLED": "FEC filer supplied disability status instead of an employer.",
     "ENTREPRENEUR": "FEC filer supplied an occupation instead of an employer.",
     "HOMEMAKER": "FEC filer supplied an occupation or status instead of an employer.",
     "RETIRED": "FEC filer supplied retirement status instead of an employer.",
@@ -37,24 +38,39 @@ _EMPLOYER_INDUSTRIES: dict[str, str] = {
     # The broad Amazon employer label is assigned to its consumer-commerce sector.
     "AMAZON": "Retail",
     "AMERICAN AIRLINES": "Transportation",
+    "AFSCME INT L": "Labor",
+    "ALTRIA GROUP DISTRIBUTION": "Tobacco",
+    "BNSF RAILWAY COMPANY": "Transportation",
     "BOEING": "Aerospace and Defense",
     "COMCAST CC OF WILLOW GROVE": "Telecommunications",
+    "DELTA AIR LINES": "Transportation",
     "ELECTRICIANS LOCAL 98": "Labor",
+    "FEDERAL GOVERNMENT": "Government",
     # Public agencies remain distinguishable from private transport operators.
     "FEDERAL AVIATION ADMINISTRATION": "Government",
+    "FORD MOTOR COMPANY": "Automotive",
     "FRIAS TRANSPORTATION": "Transportation",
     "GENERAL MOTORS COMPANY": "Automotive",
+    "GENENTECH USA": "Health Care",
     "GLAXOSMITHKLINE": "Health Care",
     "GOOGLE": "Technology",
     "HOME DEPOT U S A": "Retail",
     "JPMORGAN CHASE": "Finance",
+    "LOCKHEED MARTIN": "Aerospace and Defense",
+    "MICROSOFT": "Technology",
+    "NEW YORK LIFE INSURANCE COMPANY": "Insurance",
     "NORTHROP GRUMMAN CORPORATION": "Aerospace and Defense",
+    "NOVO NORDISK": "Health Care",
     "PFIZER": "Health Care",
+    "SOUTHWEST AIRLINES": "Transportation",
+    "SPACE EXPLORATION TECHNOLOGIES": "Aerospace and Defense",
     "THE ELEVANCE HEALTH COMPANIES": "Health Care",
     "UNITED AIRLINES": "Transportation",
     "UNITED PARCEL SERVICE": "Transportation",
     # USPS is an independent federal establishment, not a private carrier.
     "USPS": "Government",
+    "VALERO SERVICES": "Energy",
+    "WALMART": "Retail",
 }
 
 

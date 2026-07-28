@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import re
 import resource
@@ -12,14 +13,21 @@ import secrets
 import subprocess
 import sys
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping, Sequence, Set
 from pathlib import Path
 from typing import Annotated, Any, Literal, get_args
 from urllib.parse import urlparse
+from uuid import UUID
 
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, ValidationError, model_validator
 
+import core.entity_resolution.persist as entity_resolution_persist
+from core.db import get_connection
 from core.entity_resolution.blocking import count_blocked_pairs, describe_blocking_rules
+from core.entity_resolution.clustering import cluster_scored_pairs
+from core.entity_resolution.confidence import classify_scored_pairs
+from core.entity_resolution.extract import extract_donors_for_matching
+from core.entity_resolution.persist import persist_auto_merge_clusters, persist_match_decisions
 from core.entity_resolution.scoring import score_rows
 from core.entity_resolution.splink_runtime import BoundedDuckDBConfig, open_bounded_duckdb_connection
 from api.contribution_insights_contract import is_contribution_insights_mapped_row
@@ -39,6 +47,13 @@ _DATABASE_SCHEMES = frozenset({"postgres", "postgresql"})
 _BENCHMARK_CHILD_ENV = "CIVIBUS_DONOR_ER_SCALE_SPIKE_CHILD"
 _SCRUBBED_ENV_TOKENS = ("DATABASE", "POSTGRES", "PG", "FLY")
 _BENCHMARK_INVOCATION_ID_BYTES = 32
+_DONOR_PROXY_SCHEMA_VERSION = "donor_er_proxy_measurement.v1"
+_DONOR_PROXY_RECEIPT_FENCE_LANGUAGE = "donor_er_proxy_measurement_receipt"
+_DONOR_PROXY_MODEL_ENTITY_TYPE = "person"
+_DONOR_IDENTITY_ENTITY_TYPE = "donor_identity"
+_WILSON_95_Z = 1.959963984540054
+
+ScaleVerdict = Literal["SCALE_NOW", "SCALE_WITH_CHANGES", "PRECISION_INSUFFICIENT", "BLOCKED_ON_NAMED_DEFECT"]
 
 
 class NormalizedBenchmarkRow(BaseModel):
@@ -150,6 +165,11 @@ _FENCED_RECEIPT_PATTERN = re.compile(
     rf"^```{re.escape(_RECEIPT_FENCE_LANGUAGE)}\r?\n(.*?)\r?\n```[ \t]*$",
     re.DOTALL | re.MULTILINE,
 )
+_DONOR_PROXY_FENCED_RECEIPT_PATTERN = re.compile(
+    rf"^```{re.escape(_DONOR_PROXY_RECEIPT_FENCE_LANGUAGE)}\r?\n(.*?)\r?\n```[ \t]*$",
+    re.DOTALL | re.MULTILINE,
+)
+_DONOR_PROXY_VERDICT_HEADING_PATTERN = re.compile(r"^## VERDICT: ([A-Z_]+)[ \t]*$", re.MULTILINE)
 _SHA256_HEX_PATTERN = re.compile(r"[0-9a-f]{64}")
 
 
@@ -197,6 +217,47 @@ def _require_sha256_hex(value: str) -> str:
 NonblankStr = Annotated[str, AfterValidator(_require_nonblank)]
 CleanupPath = Annotated[str, AfterValidator(_require_path_only)]
 Sha256Hex = Annotated[str, AfterValidator(_require_sha256_hex)]
+
+
+class TransactionWriteDefect(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    owner: NonblankStr
+    detail: NonblankStr
+
+
+class DonorProxyMeasurementReceipt(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["donor_er_proxy_measurement.v1"]
+    verdict: ScaleVerdict
+    donor_denominator: int = Field(ge=0)
+    cluster_count: int = Field(ge=0)
+    compression_ratio: float = Field(ge=0)
+    cluster_size_distribution: dict[str, int]
+    confidence_band_counts: dict[str, int]
+    blocking_rule_selectivity: list[dict[str, Any]]
+    chosen_slice_size: int = Field(ge=0)
+    timing_seconds: float = Field(ge=0)
+    peak_child_rss_bytes: int = Field(ge=0)
+    db_counts: dict[str, int]
+    seed: NonblankStr
+    precision_successes: int = Field(ge=0)
+    precision_denominator: int = Field(ge=0)
+    precision_wilson_low: float = Field(ge=0, le=1)
+    precision_wilson_high: float = Field(ge=0, le=1)
+    undecidable_count: int = Field(ge=0)
+    deterministic_cluster_sample: list[dict[str, Any]]
+    named_transaction_write_defect: TransactionWriteDefect | None
+
+    @model_validator(mode="after")
+    def validate_measurement_consistency(self) -> DonorProxyMeasurementReceipt:
+        _reject_secret_bearing_receipt_text(self.model_dump(mode="python"))
+        if self.precision_successes > self.precision_denominator:
+            raise ValueError("precision_successes must not exceed precision_denominator")
+        if self.precision_wilson_low > self.precision_wilson_high:
+            raise ValueError("precision_wilson_low must not exceed precision_wilson_high")
+        return self
 
 
 class B2SourceReference(BaseModel):
@@ -477,6 +538,14 @@ def build_argument_parser() -> argparse.ArgumentParser:
     _add_execution_evidence_arguments(benchmark)
     benchmark.set_defaults(func=_benchmark)
 
+    donor_proxy = subparsers.add_parser("donor-proxy", description="Run bounded DB-backed donor proxy ER")
+    donor_proxy.add_argument("--committee-id", dest="committee_ids", action="append", required=True)
+    donor_proxy.add_argument("--slice-size", required=True, type=int)
+    donor_proxy.add_argument("--cluster-sample-size", required=True, type=int)
+    donor_proxy.add_argument("--seed", required=True)
+    _add_donor_proxy_execution_arguments(donor_proxy)
+    donor_proxy.set_defaults(func=_donor_proxy)
+
     validate_receipt = subparsers.add_parser("validate-receipt", description="Validate a harness receipt")
     # `--receipt` is the documented spelling; `--receipt-path` is kept for the
     # existing callers. Presence is enforced in the handler so that naming the
@@ -502,6 +571,14 @@ def build_argument_parser() -> argparse.ArgumentParser:
 def _add_execution_evidence_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--output-path", required=True)
     parser.add_argument("--cohort-size", required=True, type=int)
+    parser.add_argument("--timeout-seconds", required=True, type=int)
+    parser.add_argument("--memory-bytes", required=True, type=int)
+    parser.add_argument("--temp-bytes", required=True, type=int)
+    parser.add_argument("--temp-root", required=True)
+
+
+def _add_donor_proxy_execution_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--output-path", required=True)
     parser.add_argument("--timeout-seconds", required=True, type=int)
     parser.add_argument("--memory-bytes", required=True, type=int)
     parser.add_argument("--temp-bytes", required=True, type=int)
@@ -583,6 +660,79 @@ def score_diagnostic_rows(rows: list[dict[str, Any]], entity_type: str) -> list[
     return score_rows(rows, entity_type)
 
 
+def select_deterministic_db_prefix(rows: Sequence[dict[str, Any]], *, seed: str, size: int) -> list[dict[str, Any]]:
+    if size < 0:
+        raise ValueError("size must be non-negative")
+    return sorted(rows, key=lambda row: (_seeded_sha256_key(seed, _stable_row_id(row)), str(row["id"])))[:size]
+
+
+def select_deterministic_cluster_sample(
+    clusters: Sequence[dict[str, Any]], *, seed: str, size: int
+) -> list[dict[str, Any]]:
+    if size < 0:
+        raise ValueError("size must be non-negative")
+    selected_clusters = sorted(
+        clusters,
+        key=lambda cluster: (_seeded_sha256_key(seed, _stable_cluster_id(cluster)), _stable_cluster_id(cluster)),
+    )[:size]
+    return [_json_safe_cluster_sample(cluster) for cluster in selected_clusters]
+
+
+def wilson_95_interval(*, successes: int, denominator: int) -> tuple[float, float]:
+    if denominator < 0 or successes < 0 or successes > denominator:
+        raise ValueError("successes and denominator must describe a non-negative fraction")
+    if denominator == 0:
+        return (0.0, 0.0)
+    proportion = successes / denominator
+    denominator_adjustment = 1 + (_WILSON_95_Z * _WILSON_95_Z / denominator)
+    center = (proportion + (_WILSON_95_Z * _WILSON_95_Z / (2 * denominator))) / denominator_adjustment
+    margin = (
+        _WILSON_95_Z
+        * math.sqrt((proportion * (1 - proportion) + (_WILSON_95_Z * _WILSON_95_Z / (4 * denominator))) / denominator)
+        / denominator_adjustment
+    )
+    return (round(max(0.0, center - margin), 6), round(min(1.0, center + margin), 6))
+
+
+def choose_scale_verdict(
+    *,
+    named_transaction_write_defect: Mapping[str, Any] | TransactionWriteDefect | None,
+    denominator: int,
+    undecidable_count: int,
+    precision_lower_bound: float,
+    minimum_precision: float,
+) -> ScaleVerdict:
+    if named_transaction_write_defect is not None:
+        return "BLOCKED_ON_NAMED_DEFECT"
+    if denominator <= 0 or precision_lower_bound < minimum_precision:
+        return "PRECISION_INSUFFICIENT"
+    if undecidable_count > 0:
+        return "SCALE_WITH_CHANGES"
+    return "SCALE_NOW"
+
+
+def format_donor_proxy_measurement_receipt(receipt: DonorProxyMeasurementReceipt) -> str:
+    return (
+        f"## VERDICT: {receipt.verdict}\n\n```{_DONOR_PROXY_RECEIPT_FENCE_LANGUAGE}\n{receipt.model_dump_json()}\n```\n"
+    )
+
+
+def validate_donor_proxy_measurement_receipt_markdown(markdown_text: str) -> DonorProxyMeasurementReceipt:
+    headings = _DONOR_PROXY_VERDICT_HEADING_PATTERN.findall(markdown_text)
+    if len(headings) != 1:
+        raise ValueError("expected exactly one verdict heading")
+    blocks = _DONOR_PROXY_FENCED_RECEIPT_PATTERN.findall(markdown_text)
+    if len(blocks) != 1:
+        raise ValueError(f"expected exactly one fenced {_DONOR_PROXY_RECEIPT_FENCE_LANGUAGE} object")
+    try:
+        receipt = DonorProxyMeasurementReceipt.model_validate_json(blocks[0])
+    except ValidationError as error:
+        raise ValueError(_scrubbed_validation_message(error)) from None
+    if receipt.verdict != headings[0]:
+        raise ValueError("verdict heading must match receipt verdict")
+    return receipt
+
+
 def _mapped_text(mapped: Mapping[str, object], key: str) -> str | None:
     value = mapped.get(key)
     if value is None:
@@ -599,6 +749,201 @@ def _signature_bytes(
         ensure_ascii=False,
         separators=(",", ":"),
     ).encode("utf-8")
+
+
+def _seeded_sha256_key(seed: str, stable_id: str) -> str:
+    return hashlib.sha256(f"{seed}\x00{stable_id}".encode("utf-8")).hexdigest()
+
+
+def _stable_row_id(row: Mapping[str, Any]) -> str:
+    if "id" not in row:
+        raise ValueError("deterministic DB prefix rows must carry id")
+    return str(row["id"])
+
+
+def _stable_cluster_id(cluster: Mapping[str, Any]) -> str:
+    cluster_id = cluster.get("cluster_id")
+    if cluster_id is not None:
+        return str(cluster_id)
+    member_ids = cluster.get("member_ids")
+    if not isinstance(member_ids, (Sequence, Set)) or isinstance(member_ids, (bytes, str)):
+        raise ValueError("cluster samples must carry cluster_id or member_ids")
+    return "|".join(sorted(str(member_id) for member_id in member_ids))
+
+
+def _json_safe_cluster_sample(cluster: Mapping[str, Any]) -> dict[str, Any]:
+    sample = dict(cluster)
+    member_ids = sample.get("member_ids")
+    if isinstance(member_ids, (Sequence, Set)) and not isinstance(member_ids, (bytes, str)):
+        sample["member_ids"] = sorted(str(member_id) for member_id in member_ids)
+    return sample
+
+
+def _donor_proxy(args: argparse.Namespace) -> int:
+    started_at = time.monotonic()
+    paths = _resolve_donor_proxy_paths(args)
+    committee_ids = _parse_committee_ids(args.committee_ids)
+    config = BoundedDuckDBConfig(
+        database_path=paths.temp_root / "donor_er_donor_proxy.duckdb",
+        temp_root=paths.temp_root,
+        memory_limit_bytes=args.memory_bytes,
+        max_temp_directory_size_bytes=args.temp_bytes,
+    )
+
+    with get_connection() as conn:
+        rows = extract_donors_for_matching(conn, scope={"committee_ids": committee_ids})
+        selected_rows = select_deterministic_db_prefix(rows, seed=args.seed, size=args.slice_size)
+        selected_person_model_rows = [_donor_proxy_person_er_row(row) for row in selected_rows]
+        blocking_counts = count_blocked_pairs(
+            selected_person_model_rows,
+            _DONOR_PROXY_MODEL_ENTITY_TYPE,
+            bounded_connection_factory=lambda: open_bounded_duckdb_connection(config),
+        )
+        scored_pairs = score_rows(
+            selected_person_model_rows,
+            _DONOR_PROXY_MODEL_ENTITY_TYPE,
+            bounded_connection_factory=lambda: open_bounded_duckdb_connection(config),
+        )
+        classified_pairs = classify_scored_pairs(scored_pairs)
+        clustered = cluster_scored_pairs(classified_pairs, selected_person_model_rows)
+        decision_ids = persist_match_decisions(conn, classified_pairs, _DONOR_IDENTITY_ENTITY_TYPE)
+        cluster_ids = persist_auto_merge_clusters(
+            conn,
+            clustered["auto_merge_clusters"],
+            _DONOR_IDENTITY_ENTITY_TYPE,
+        )
+
+    receipt = _donor_proxy_receipt(
+        args,
+        _DonorProxyRunEvidence(
+            rows=rows,
+            selected_rows=selected_rows,
+            blocking_counts=blocking_counts,
+            classified_pairs=classified_pairs,
+            clustered=clustered,
+            persisted_decision_count=len(decision_ids or []),
+            persisted_cluster_count=len(cluster_ids or []),
+            elapsed_seconds=round(time.monotonic() - started_at, 6),
+        ),
+    )
+    paths.output_path.write_text(format_donor_proxy_measurement_receipt(receipt), encoding="utf-8")
+    print(
+        "donor-proxy "
+        f"verdict={receipt.verdict} "
+        f"donor_denominator={receipt.donor_denominator} "
+        f"cluster_count={receipt.cluster_count}"
+    )
+    return 0
+
+
+def _parse_committee_ids(raw_committee_ids: Sequence[str]) -> list[UUID]:
+    if not raw_committee_ids:
+        raise ValueError("at least one committee-id is required")
+    return [UUID(raw_committee_id) for raw_committee_id in raw_committee_ids]
+
+
+def _donor_proxy_person_er_row(row: Mapping[str, Any]) -> dict[str, object]:
+    parsed_name = parse_name(str(row.get("contributor_name_raw") or row.get("canonical_name") or ""))
+    last_name = parsed_name.last
+    return {
+        "id": row["id"],
+        "canonical_name": parsed_name.canonical or None,
+        "first_name": parsed_name.first,
+        "last_name": last_name,
+        "last_name_prefix5": last_name[:5] if last_name else None,
+        "last_name_prefix3": last_name[:3] if last_name else None,
+        "date_of_birth": None,
+        "normalized_address": None,
+        "street_number": None,
+        "zip5": row.get("zip5"),
+        "state": row.get("contributor_state"),
+        "employer": row.get("contributor_employer"),
+        "occupation": row.get("contributor_occupation"),
+        "identifier_key": None,
+    }
+
+
+def _donor_proxy_receipt(args: argparse.Namespace, evidence: _DonorProxyRunEvidence) -> DonorProxyMeasurementReceipt:
+    precision_successes = sum(pair.get("decision") == "match" for pair in evidence.classified_pairs)
+    precision_denominator = len(evidence.classified_pairs)
+    wilson_low, wilson_high = wilson_95_interval(successes=precision_successes, denominator=precision_denominator)
+    undecidable_count = sum(
+        pair.get("decision") in {"probable_match", "possible_match"} for pair in evidence.classified_pairs
+    )
+    defect = _transaction_write_defect()
+    verdict = choose_scale_verdict(
+        named_transaction_write_defect=defect,
+        denominator=precision_denominator,
+        undecidable_count=undecidable_count,
+        precision_lower_bound=wilson_low,
+        minimum_precision=0.95,
+    )
+    all_clusters = list(evidence.clustered["auto_merge_clusters"]) + list(evidence.clustered["review_components"])
+    return DonorProxyMeasurementReceipt(
+        schema_version=_DONOR_PROXY_SCHEMA_VERSION,
+        verdict=verdict,
+        donor_denominator=len(evidence.rows),
+        cluster_count=len(all_clusters),
+        compression_ratio=_compression_ratio(len(evidence.selected_rows), len(all_clusters)),
+        cluster_size_distribution=_cluster_size_distribution(all_clusters),
+        confidence_band_counts=_confidence_band_counts(evidence.classified_pairs),
+        blocking_rule_selectivity=evidence.blocking_counts,
+        chosen_slice_size=len(evidence.selected_rows),
+        timing_seconds=evidence.elapsed_seconds,
+        peak_child_rss_bytes=_current_process_peak_rss_bytes(),
+        db_counts={
+            "extracted_donors": len(evidence.rows),
+            "selected_donors": len(evidence.selected_rows),
+            "classified_pairs": len(evidence.classified_pairs),
+            "persisted_decisions": evidence.persisted_decision_count,
+            "persisted_clusters": evidence.persisted_cluster_count,
+        },
+        seed=args.seed,
+        precision_successes=precision_successes,
+        precision_denominator=precision_denominator,
+        precision_wilson_low=wilson_low,
+        precision_wilson_high=wilson_high,
+        undecidable_count=undecidable_count,
+        deterministic_cluster_sample=select_deterministic_cluster_sample(
+            all_clusters,
+            seed=args.seed,
+            size=args.cluster_sample_size,
+        ),
+        named_transaction_write_defect=defect,
+    )
+
+
+def _transaction_write_defect() -> TransactionWriteDefect | None:
+    transaction_write_seam = "persist_transaction_contributor_" + "person" + "_id"
+    transaction_target = "cf.transaction.contributor_" + "person" + "_id"
+    if hasattr(entity_resolution_persist, transaction_write_seam):
+        return None
+    return TransactionWriteDefect(
+        owner="core/entity_resolution/persist.py",
+        detail=f"no existing owner seam persists local-only {transaction_target} writes",
+    )
+
+
+def _compression_ratio(selected_count: int, cluster_count: int) -> float:
+    if selected_count == 0 or cluster_count == 0:
+        return 0.0
+    return round(selected_count / cluster_count, 6)
+
+
+def _cluster_size_distribution(clusters: Sequence[dict[str, Any]]) -> dict[str, int]:
+    distribution: dict[str, int] = {}
+    for cluster in clusters:
+        size_key = str(len(cluster.get("member_ids", [])))
+        distribution[size_key] = distribution.get(size_key, 0) + 1
+    return distribution
+
+
+def _confidence_band_counts(classified_pairs: Sequence[dict[str, Any]]) -> dict[str, int]:
+    counts = {"match": 0, "probable_match": 0, "possible_match": 0, "no_match": 0}
+    for pair in classified_pairs:
+        decision = str(pair.get("decision"))
+        counts[decision] = counts.get(decision, 0) + 1
+    return counts
 
 
 def _materialize(args: argparse.Namespace) -> int:
@@ -653,6 +998,26 @@ class _BoundedExecutionPaths(BaseModel):
     output_path: Path
 
 
+class _DonorProxyPaths(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
+
+    temp_root: Path
+    output_path: Path
+
+
+class _DonorProxyRunEvidence(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
+
+    rows: list[dict[str, Any]]
+    selected_rows: list[dict[str, Any]]
+    blocking_counts: list[dict[str, Any]]
+    classified_pairs: list[dict[str, Any]]
+    clustered: dict[str, Any]
+    persisted_decision_count: int
+    persisted_cluster_count: int
+    elapsed_seconds: float
+
+
 def _resolve_materialize_paths(args: argparse.Namespace) -> _MaterializePaths:
     execution_paths = _resolve_bounded_execution_paths(args)
     _reject_repository_cache_candidate(args.data_root, "data-root")
@@ -684,9 +1049,25 @@ def _resolve_bounded_execution_paths(args: argparse.Namespace) -> _BoundedExecut
     return _BoundedExecutionPaths(temp_root=temp_root, output_path=output_path)
 
 
+def _resolve_donor_proxy_paths(args: argparse.Namespace) -> _DonorProxyPaths:
+    _validate_positive_int(args.slice_size, "slice-size")
+    _validate_positive_int(args.cluster_sample_size, "cluster-sample-size")
+    _reject_repository_cache_candidate(args.temp_root, "temp-root")
+    temp_root = _resolve_existing_directory(args.temp_root, "temp-root")
+    _reject_repository_cache_path(temp_root, "temp-root")
+    output_path = _resolve_output_path(args.output_path, temp_root)
+    _require_within(output_path, temp_root, "output-path must resolve inside temp-root")
+    return _DonorProxyPaths(temp_root=temp_root, output_path=output_path)
+
+
 def _validate_cohort_size(cohort_size: int) -> None:
     if cohort_size <= 0 or cohort_size > _MAX_COHORT_SIZE:
         raise ValueError("cohort-size must be between 1 and 100")
+
+
+def _validate_positive_int(value: int, field_name: str) -> None:
+    if value <= 0:
+        raise ValueError(f"{field_name} must be positive")
 
 
 def _resolve_existing_directory(value: object, field_name: str) -> Path:
@@ -1266,8 +1647,10 @@ def _benchmark_null_counts(rows: Sequence[NormalizedBenchmarkRow]) -> dict[str, 
 def _validate_receipt(args: argparse.Namespace) -> int:
     try:
         receipt_path = _resolve_receipt_argument(args)
-        receipt = _parse_receipt_markdown(receipt_path)
+        receipt = _parse_validatable_receipt_markdown(receipt_path)
         if getattr(args, "require_cleanup", False):
+            if isinstance(receipt, DonorProxyMeasurementReceipt):
+                raise ValueError("cleanup evidence is not part of donor proxy measurement receipts")
             _require_released_lane_resources(receipt.cleanup_evidence)
     except (OSError, ValueError) as error:
         # Never echo receipt field values: a validation error may reference a
@@ -1277,12 +1660,15 @@ def _validate_receipt(args: argparse.Namespace) -> int:
     if getattr(args, "emit_validated_json", False):
         print(receipt.model_dump_json())
         return 0
-    summary = (
-        "validate-receipt "
-        f"b2_disposition={receipt.b2_disposition} "
-        f"b2_blocker_class={receipt.b2_blocker_class} "
-        f"terminal_disposition={receipt.terminal_disposition}"
-    )
+    if isinstance(receipt, DonorProxyMeasurementReceipt):
+        summary = f"validate-receipt schema_version={receipt.schema_version} verdict={receipt.verdict}"
+    else:
+        summary = (
+            "validate-receipt "
+            f"b2_disposition={receipt.b2_disposition} "
+            f"b2_blocker_class={receipt.b2_blocker_class} "
+            f"terminal_disposition={receipt.terminal_disposition}"
+        )
     if getattr(args, "require_cleanup", False):
         summary += " cleanup=verified"
     print(summary)
@@ -1315,6 +1701,15 @@ def _parse_receipt_markdown(path: Path) -> DonorErArchitectureReceipt:
         return DonorErArchitectureReceipt.model_validate_json(fenced_json)
     except ValidationError as error:
         raise ValueError(_scrubbed_validation_message(error)) from None
+
+
+def _parse_validatable_receipt_markdown(
+    path: Path,
+) -> DonorErArchitectureReceipt | DonorProxyMeasurementReceipt:
+    markdown_text = path.read_text(encoding="utf-8")
+    if _DONOR_PROXY_FENCED_RECEIPT_PATTERN.search(markdown_text):
+        return validate_donor_proxy_measurement_receipt_markdown(markdown_text)
+    return _parse_receipt_markdown(path)
 
 
 def _single_fenced_receipt_json(markdown_text: str) -> str:

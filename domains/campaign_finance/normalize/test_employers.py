@@ -148,6 +148,33 @@ def test_random_sample_employers_map_to_curated_industries(
     assert industry_for_employer(raw_employer) == expected_industry
 
 
+@pytest.mark.parametrize(
+    "raw_employer, expected_industry",
+    [
+        ("LOCKHEED MARTIN", "Aerospace and Defense"),
+        ("VALERO SERVICES, INC.", "Energy"),
+        ("MICROSOFT", "Technology"),
+        ("WALMART", "Retail"),
+        ("BNSF RAILWAY COMPANY", "Transportation"),
+        ("DELTA AIR LINES", "Transportation"),
+        ("FEDERAL GOVERNMENT", "Government"),
+        ("FORD MOTOR COMPANY", "Automotive"),
+        ("GENENTECH USA, INC.", "Health Care"),
+        ("NEW YORK LIFE INSURANCE COMPANY", "Insurance"),
+        ("NOVO NORDISK", "Health Care"),
+        ("SOUTHWEST AIRLINES", "Transportation"),
+        ("SPACE EXPLORATION TECHNOLOGIES CORP.", "Aerospace and Defense"),
+        ("AFSCME INT'L", "Labor"),
+        ("ALTRIA GROUP DISTRIBUTION CO", "Tobacco"),
+    ],
+)
+def test_round_two_random_sample_employers_map_to_curated_industries(
+    raw_employer: str,
+    expected_industry: str,
+) -> None:
+    assert industry_for_employer(raw_employer) == expected_industry
+
+
 @pytest.mark.parametrize("status_value", ["HOMEMAKER", "ENTREPRENEUR"])
 def test_random_sample_status_values_are_junk(status_value: str) -> None:
     assert is_junk_employer(status_value) is True
@@ -156,7 +183,22 @@ def test_random_sample_status_values_are_junk(status_value: str) -> None:
     assert industry_for_employer(status_value) == UNKNOWN_INDUSTRY
 
 
-@pytest.mark.parametrize("ambiguous_employer", ["CHARTER", "HONEYWELL INTERNATIONAL", "WILLIAMS WPC-I, LLC."])
+def test_round_two_status_value_disabled_is_junk() -> None:
+    assert is_junk_employer("DISABLED") is True
+    assert canonicalize_employer("DISABLED") is None
+    assert employer_junk_weight("DISABLED") == JUNK_EMPLOYER_WEIGHT
+    assert industry_for_employer("DISABLED") == UNKNOWN_INDUSTRY
+
+
+@pytest.mark.parametrize(
+    "ambiguous_employer",
+    [
+        "CHARTER",
+        "HONEYWELL INTERNATIONAL",
+        "WILLIAMS WPC-I, LLC.",
+        "LDC AND AFFILIATED LOCALS",
+    ],
+)
 def test_random_sample_ambiguous_employers_remain_unmapped(ambiguous_employer: str) -> None:
     assert is_junk_employer(ambiguous_employer) is False
     assert canonicalize_employer(ambiguous_employer) is not None
@@ -184,14 +226,34 @@ def test_random_sample_industry_coverage_meets_module_contract() -> None:
         "FRIAS TRANSPORTATION": 8,
         "GLAXOSMITHKLINE": 11,
     }
+    round_two_newly_mapped_sample_counts = {
+        "LOCKHEED MARTIN": 8,
+        "VALERO SERVICES, INC.": 8,
+        "MICROSOFT": 7,
+        "WALMART": 7,
+        "BNSF RAILWAY COMPANY": 6,
+        "DELTA AIR LINES": 6,
+        "FEDERAL GOVERNMENT": 6,
+        "FORD MOTOR COMPANY": 6,
+        "GENENTECH USA, INC.": 6,
+        "NEW YORK LIFE INSURANCE COMPANY": 6,
+        "NOVO NORDISK": 6,
+        "SOUTHWEST AIRLINES": 6,
+        "SPACE EXPLORATION TECHNOLOGIES CORP.": 6,
+        "AFSCME INT'L": 5,
+        "ALTRIA GROUP DISTRIBUTION CO": 5,
+    }
+    newly_junk_sample_counts = {"DISABLED": 7}
 
-    newly_mapped_count = sum(newly_mapped_sample_counts.values())
+    newly_mapped_count = sum(newly_mapped_sample_counts.values()) + sum(round_two_newly_mapped_sample_counts.values())
+    newly_junk_count = sum(newly_junk_sample_counts.values())
     achieved_known_count = baseline_known_count + newly_mapped_count
     achieved_share = achieved_known_count / sample_size
 
-    assert newly_mapped_count == 207
-    assert achieved_known_count == 226
-    assert achieved_share == 226 / 14_324
+    assert newly_mapped_count == 301
+    assert newly_junk_count == 7
+    assert achieved_known_count == 320
+    assert achieved_share == 320 / 14_324
     assert hasattr(employers, "INDUSTRY_BY_EMPLOYER_MIN_COVERAGE")
     minimum_coverage = getattr(employers, "INDUSTRY_BY_EMPLOYER_MIN_COVERAGE", float("inf"))
     assert achieved_share >= minimum_coverage

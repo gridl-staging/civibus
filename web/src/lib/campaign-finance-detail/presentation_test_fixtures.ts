@@ -167,7 +167,8 @@ export const DEFAULT_CANDIDATE_SUMMARY = {
   net_self_funding: null,
   summary_source: "derived" as const,
   itemized_transaction_count: 0,
-  coverage: DEFAULT_CANDIDATE_MONEY_COVERAGE
+  coverage: DEFAULT_CANDIDATE_MONEY_COVERAGE,
+  out_of_cycle_official_total: null
 };
 
 export function buildCandidateBundle(): CandidateDetailBundle {

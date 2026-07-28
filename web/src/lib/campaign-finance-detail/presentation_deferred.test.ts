@@ -304,6 +304,27 @@ describe("campaign finance deferred detail presentation", () => {
         basis: "authoritative_load_evidence" as const
       }
     };
+    const outOfCycleOfficialTotalSummary = {
+      ...DEFAULT_CANDIDATE_SUMMARY,
+      coverage: {
+        activity_state: "out_of_cycle_official_total" as const,
+        completeness: "complete" as const,
+        basis: "fec_official_candidate_summary" as const
+      },
+      out_of_cycle_official_total: {
+        coverage_start_date: "2023-01-01",
+        coverage_end_date: "2024-12-31",
+        total_raised: "1234.56",
+        total_spent: "234.56",
+        net: "1000.00",
+        cash_on_hand: "345.67",
+        summary_source: "fec_weball" as const
+      }
+    };
+    const invalidOutOfCycleOfficialTotalSummary = {
+      ...outOfCycleOfficialTotalSummary,
+      out_of_cycle_official_total: null
+    };
 
     expect(buildCandidateFundraisingRegionViewModels(populatedSummary)).toMatchObject({
       keyFinancials: {
@@ -329,7 +350,8 @@ describe("campaign finance deferred detail presentation", () => {
           selectedCycle: 2026,
           coveragePeriod: "2025-01-01 to 2026-12-31",
           summarySourceLabel: "Official FEC candidate summary"
-        }
+        },
+        earlierCycleOfficialTotal: null
       }
     });
     expect(buildCandidateFundraisingRegionViewModels(notLoadedSummary)).toEqual({
@@ -343,7 +365,8 @@ describe("campaign finance deferred detail presentation", () => {
         state: "not_loaded",
         message: "Fundraising data is not yet available for this candidate and cycle.",
         methodologyHref: "/methodology",
-        summary: null
+        summary: null,
+        earlierCycleOfficialTotal: null
       },
       committeeBreakdown: {
         state: "not_loaded",
@@ -376,7 +399,8 @@ describe("campaign finance deferred detail presentation", () => {
           selectedCycle: 2026,
           coveragePeriod: "2025-01-01 to 2026-12-31",
           summarySourceLabel: "Derived from itemized transactions"
-        }
+        },
+        earlierCycleOfficialTotal: null
       },
       committeeBreakdown: {
         state: "loaded_zero",
@@ -395,11 +419,46 @@ describe("campaign finance deferred detail presentation", () => {
         state: "backend_failure",
         message: "Candidate fundraising summary is temporarily unavailable.",
         methodologyHref: null,
-        summary: null
+        summary: null,
+        earlierCycleOfficialTotal: null
       },
       committeeBreakdown: {
         state: "backend_failure",
         message: "Committee breakdown is temporarily unavailable.",
+        methodologyHref: null,
+        rows: []
+      }
+    });
+    expect(buildCandidateFundraisingRegionViewModels(invalidOutOfCycleOfficialTotalSummary)).toEqual(
+      buildCandidateFundraisingRegionViewModels(null)
+    );
+    expect(buildCandidateFundraisingRegionViewModels(outOfCycleOfficialTotalSummary)).toEqual({
+      keyFinancials: {
+        state: "out_of_cycle_official_total",
+        message: null,
+        methodologyHref: null,
+        metrics: []
+      },
+      fundraisingSummary: {
+        state: "out_of_cycle_official_total",
+        message: null,
+        methodologyHref: null,
+        summary: null,
+        earlierCycleOfficialTotal: {
+          label: "Earlier-cycle official total",
+          period:
+            "Official FEC total from 2023-01-01 to 2024-12-31; not part of the 2026 selected-cycle totals.",
+          factRows: [
+            { label: "Total receipts", value: "$1,234.56" },
+            { label: "Total disbursements", value: "$234.56" },
+            { label: "Net", value: "$1,000.00" },
+            { label: "Cash on hand", value: "$345.67" }
+          ]
+        }
+      },
+      committeeBreakdown: {
+        state: "out_of_cycle_official_total",
+        message: null,
         methodologyHref: null,
         rows: []
       }

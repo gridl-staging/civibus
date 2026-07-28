@@ -69,6 +69,20 @@ def _skip_if_no_database_access() -> None:
         _skip_or_fail_for_postgres_unavailable(f"Unable to connect to test database '{TEST_DATABASE}': {exc}")
 
 
+def _reset_schema_already_has_contact_point_contract() -> bool:
+    return _query_returns_truthy_first_row(
+        TEST_DATABASE,
+        """
+        SELECT (
+            to_regclass('core.contact_point') IS NOT NULL
+            AND to_regclass('core.person_er_view') IS NOT NULL
+            AND to_regclass('core.organization_er_view') IS NOT NULL
+            AND to_regclass('core.donor_er_view') IS NOT NULL
+        )::text;
+        """,
+    )
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _prepared_schema() -> None:
     configured_database = os.getenv("CONTACT_POINT_SCHEMA_TEST_DATABASE")
@@ -84,10 +98,14 @@ def _prepared_schema() -> None:
             "CONTACT_POINT_SCHEMA_TEST_DATABASE must name a dedicated test database before destructive schema setup"
         )
     _skip_if_no_database_access()
+    if _reset_schema_already_has_contact_point_contract():
+        return
     _run_psql_command(TEST_DATABASE, "DROP SCHEMA IF EXISTS core CASCADE;")
     _run_psql_file(TEST_DATABASE, CORE_ENTITIES_SQL)
     _run_psql_file(TEST_DATABASE, CORE_JURISDICTION_SQL)
     _run_psql_file(TEST_DATABASE, CORE_PROVENANCE_SQL)
+    _run_psql_file(TEST_DATABASE, REPO_ROOT / "core" / "schema" / "entity_resolution.sql")
+    _run_psql_file(TEST_DATABASE, REPO_ROOT / "core" / "schema" / "er_views.sql")
 
 
 def test_contact_point_table_exists() -> None:

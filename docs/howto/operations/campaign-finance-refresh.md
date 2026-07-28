@@ -23,6 +23,37 @@ The runtime job registry and federal ordering remain code-owned by
 `core/refresh/job_builders.py::build_refresh_plan()`; do not copy a job list
 into this runbook.
 
+### Automatic scheduler observation
+
+A scheduler watch is read-only and must use the creation-anchored window recorded
+in the current `ROADMAP.md` weekly-refresh row. Before any Fly or database probe,
+record that the watcher issued no lifecycle or production command and prove
+there are zero other running Civibus lanes, unless the dispatch record contains
+an explicit pre-watch waiver.
+
+Capture timestamped raw output from `flyctl status -a civibus-refresh --json`
+and `flyctl machine status 859e0da479e678 -a civibus-refresh` at the start of
+the window, after each observed state change, and at the deadline. A passing Fly
+observation requires a `start` event inside the window whose source is
+scheduler/host-originated rather than user/operator-originated, followed by the
+same Machine reaching terminal `stopped` with `exit_code=0`. An absent start at
+the deadline is `AUTOMATIC_START_NOT_OBSERVED`; a conflicting event source,
+wrong Machine, nonzero exit, or nonterminal state is
+`AUTOMATIC_REFRESH_RED`.
+
+After a qualifying Fly start, use the read-only database and active-writer gate
+below. Correlate the event window to matching federal `core.refresh_run` rows,
+require every executed job to be successful, and reconcile any cadence-skipped
+jobs against `core/refresh/job_builders.py::build_refresh_plan()`. Also require
+the successful federal/FEC `core.data_source` freshness row used by the public
+person probe. The receipt must record the connection host, port, database name,
+exact read-only SQL and output, and the row counts used for correlation.
+
+Run the public probes below only after Fly and database correlation pass. Missing,
+ambiguous, unavailable, or attribution-conflicted evidence is RED. Record the
+first failed condition and stop further downstream probes; only a complete
+Fly/DB/public chain is `AUTOMATIC_REFRESH_GREEN`.
+
 ### Unattended preflight and acceptance probes
 
 These Machine probes are read-only. They must show exactly one Machine and the
@@ -105,9 +136,12 @@ federal refresh degradation, and the L1R4 start ended with `exit_code=2` before
 `77fad` resume, force-stop, second writer or second Machine, production
 volume/app identity change, or Debbie deployment. L5 remains blocked because
 only a GREEN terminal receipt permits dispatch. Automatic-start acceptance also
-remains pending until the actual creation-anchored weekly boundary
-`2026-07-28T18:53:21Z` produces observed Fly events; configuration alone is not
-acceptance.
+remains pending: the 2026-07-28 watch was terminal `AUTOMATIC_REFRESH_RED` at
+the no-other-running-Civibus-lane attribution gate, so scheduler-sourced Fly,
+DB, and public evidence remained unavailable rather than accepted
+(`docs/live-state/2026_07_28_refresh_scheduler_boundary.md`). The next bounded
+read-only recheck is `2026-08-04T18:53:21Z` through
+`2026-08-04T19:23:21Z`; configuration alone is not acceptance.
 
 ## Legacy VM and non-federal priority support
 

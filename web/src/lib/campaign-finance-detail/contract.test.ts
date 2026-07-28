@@ -39,6 +39,7 @@ import {
   type CommitteeCycleSummary,
   type CommitteeFundraisingSummary,
   type CommitteeIndependentExpenditureActivity,
+  type CandidateFundraisingActivityState,
   type CandidateFundraisingSummary,
   type CandidateMoneyCoverage,
   type IndependentExpenditureSummary,
@@ -287,7 +288,8 @@ describe("campaign-finance detail contract", () => {
       selected_cycle_coverage_complete: false,
       can_render_share: false,
       receipt_source_caveats: [],
-      coverage: POPULATED_COVERAGE
+      coverage: POPULATED_COVERAGE,
+      out_of_cycle_official_total: null
     } satisfies import("./contract").CandidateFundraisingSummary;
 
     const derivedSummary = {
@@ -314,7 +316,8 @@ describe("campaign-finance detail contract", () => {
         activity_state: "not_loaded",
         completeness: "unknown",
         basis: "no_authoritative_load_evidence"
-      }
+      },
+      out_of_cycle_official_total: null
     } satisfies import("./contract").CandidateFundraisingSummary;
 
     expect(weballSummary.cash_on_hand).toBe("5500.00");
@@ -323,6 +326,99 @@ describe("campaign-finance detail contract", () => {
     expect(derivedSummary.cash_on_hand).toBeNull();
     expect(derivedSummary.net_self_funding).toBeNull();
     expect(derivedSummary.summary_source).toBe("derived");
+  });
+
+  it("CandidateFundraisingSummary accepts supplemental out-of-cycle official totals", () => {
+    const outOfCycleSummary = {
+      candidate_id: CANDIDATE_ID,
+      candidate_name: "Earlier Cycle Candidate",
+      total_raised: "0.00",
+      total_spent: "0.00",
+      net: "0.00",
+      transaction_count: 0,
+      itemized_transaction_count: 0,
+      committees: [],
+      cash_on_hand: null,
+      net_self_funding: null,
+      summary_source: "derived",
+      selected_cycle: 2026,
+      coverage_start_date: "2025-01-01",
+      coverage_end_date: "2026-12-31",
+      available_cycles: [2022, 2024, 2026],
+      receipt_source_composition: [],
+      selected_cycle_coverage_complete: false,
+      can_render_share: false,
+      receipt_source_caveats: [],
+      coverage: {
+        activity_state: "out_of_cycle_official_total",
+        completeness: "partial",
+        basis: "fec_official_candidate_summary"
+      },
+      out_of_cycle_official_total: {
+        summary_source: "fec_weball",
+        coverage_start_date: "2023-01-01",
+        coverage_end_date: "2024-12-31",
+        total_raised: "1234.56",
+        total_spent: "234.56",
+        net: "1000.00",
+        cash_on_hand: "345.67"
+      }
+    } satisfies CandidateFundraisingSummary;
+
+    expect(outOfCycleSummary.candidate_id).toBe("44444444-4444-4444-8444-444444444444");
+    expect(outOfCycleSummary.coverage.activity_state).toBe("out_of_cycle_official_total");
+    expect(outOfCycleSummary.out_of_cycle_official_total.coverage_start_date).toBe("2023-01-01");
+    expect(outOfCycleSummary.out_of_cycle_official_total.coverage_end_date).toBe("2024-12-31");
+    expect(outOfCycleSummary.out_of_cycle_official_total.total_raised).toBe("1234.56");
+    expect(outOfCycleSummary.out_of_cycle_official_total.total_spent).toBe("234.56");
+    expect(outOfCycleSummary.out_of_cycle_official_total.net).toBe("1000.00");
+    expect(outOfCycleSummary.out_of_cycle_official_total.cash_on_hand).toBe("345.67");
+  });
+
+  it("keeps ordinary selected-cycle fundraising summaries without supplemental totals valid", () => {
+    const loadedZeroSummary = {
+      candidate_id: CANDIDATE_ID,
+      candidate_name: "Loaded Zero Candidate",
+      total_raised: "0.00",
+      total_spent: "0.00",
+      net: "0.00",
+      transaction_count: 0,
+      itemized_transaction_count: 0,
+      committees: [],
+      cash_on_hand: null,
+      net_self_funding: null,
+      summary_source: "derived",
+      selected_cycle: 2026,
+      coverage_start_date: "2025-01-01",
+      coverage_end_date: "2026-12-31",
+      available_cycles: [2022, 2024, 2026],
+      receipt_source_composition: [],
+      selected_cycle_coverage_complete: true,
+      can_render_share: false,
+      receipt_source_caveats: [],
+      coverage: {
+        activity_state: "loaded_zero",
+        completeness: "complete",
+        basis: "authoritative_load_evidence"
+      },
+      out_of_cycle_official_total: null
+    } satisfies CandidateFundraisingSummary;
+    const fundraisingStates: CandidateFundraisingActivityState[] = [
+      "populated",
+      "loaded_zero",
+      "not_loaded",
+      "out_of_cycle_official_total"
+    ];
+
+    expect(loadedZeroSummary.coverage.activity_state).toBe("loaded_zero");
+    expect(loadedZeroSummary.out_of_cycle_official_total).toBeNull();
+    expect(fundraisingStates).toEqual([
+      "populated",
+      "loaded_zero",
+      "not_loaded",
+      "out_of_cycle_official_total"
+    ]);
+    expect(CANDIDATE_MONEY_ACTIVITY_STATES).toEqual(["populated", "loaded_zero", "not_loaded"]);
   });
 
   it("summary contracts preserve selected-cycle metadata from the backend", () => {
@@ -346,7 +442,8 @@ describe("campaign-finance detail contract", () => {
       selected_cycle_coverage_complete: false,
       can_render_share: false,
       receipt_source_caveats: [],
-      coverage: POPULATED_COVERAGE
+      coverage: POPULATED_COVERAGE,
+      out_of_cycle_official_total: null
     };
     const committeeSummary: CommitteeFundraisingSummary = {
       committee_id: COMMITTEE_ID,
@@ -975,7 +1072,8 @@ describe("Stage 5 contract fields", () => {
       selected_cycle_coverage_complete: false,
       can_render_share: false,
       receipt_source_caveats: [],
-      coverage: POPULATED_COVERAGE
+      coverage: POPULATED_COVERAGE,
+      out_of_cycle_official_total: null
     } satisfies import("./contract").CandidateFundraisingSummary;
     expect(summary.itemized_transaction_count).toBe(42);
     expect(summary.transaction_count).toBe(summary.itemized_transaction_count);

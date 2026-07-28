@@ -14,13 +14,21 @@ import psycopg
 
 from core.db import (
     get_connection,
-    resolve_person_by_name_and_zip,
-    select_active_source_record_by_key,
+    resolve_people_by_name_and_zip,
     try_insert_data_source,
 )
-from core.db_ingest import try_insert_source_record
+from core.db_ingest import EntitySourceLink, insert_entity_sources_bulk, try_insert_source_records_bulk
 from core.types.python.models import DataSource, Person, SourceRecord, compute_record_hash, utc_now
 from domains.civics.ingest import (
+    candidacy_natural_key,
+    contest_natural_key,
+    electoral_division_natural_key,
+    office_natural_key,
+    office_preexistence_key,
+    select_candidacy_ids_by_natural_key,
+    select_contest_ids_by_natural_key,
+    select_electoral_division_ids_by_natural_key,
+    select_office_ids_and_preexistence,
     upsert_candidacy,
     upsert_contest,
     upsert_electoral_division,
@@ -101,6 +109,22 @@ class CandidateListingParseResult:
             "Candidate listing fixture row not found for "
             f"county_name={county_name}, contest_name={contest_name}, name_on_ballot={name_on_ballot}"
         )
+
+
+@dataclass(frozen=True)
+class _PreparedCandidateListingRow:
+    parsed: CandidateListingRow
+    raw_fields: dict[str, str]
+    source_record: SourceRecord
+
+
+@dataclass(frozen=True)
+class _CandidateListingPreparation:
+    header: list[str]
+    today: date
+    year_from: int | None
+    data_source_id: UUID
+    pull_date: datetime
 
 
 def _parse_bool(raw_value: str) -> bool:
@@ -327,135 +351,6 @@ def _ensure_ncsbe_data_source(conn: psycopg.Connection, *, csv_path: Path) -> UU
     return _lookup_existing_data_source_id(conn)
 
 
-def _resolve_source_record_id(
-    conn: psycopg.Connection,
-    *,
-    data_source_id: UUID,
-    source_url: str,
-    raw_fields: dict[str, str],
-    pull_date: datetime,
-) -> tuple[UUID, bool]:
-    record_hash = compute_record_hash(raw_fields)
-    source_record_key = f"{_NCSBE_SOURCE_RECORD_KEY_PREFIX}:{record_hash}"
-    source_record = SourceRecord(
-        data_source_id=data_source_id,
-        source_record_key=source_record_key,
-        source_url=source_url,
-        raw_fields=raw_fields,
-        pull_date=pull_date,
-        record_hash=record_hash,
-    )
-    inserted_source_record_id = try_insert_source_record(conn, source_record)
-    if inserted_source_record_id is not None:
-        return inserted_source_record_id, True
-
-    active_source_record = select_active_source_record_by_key(
-        conn,
-        data_source_id=data_source_id,
-        source_record_key=source_record_key,
-    )
-    if active_source_record is None:
-        raise RuntimeError(f"Expected active source_record after idempotent insert miss for key={source_record_key}")
-    return active_source_record.id, False
-
-
-def _office_exists(conn: psycopg.Connection, *, office_level: str, state: str, name: str) -> bool:
-    row = conn.execute(
-        """
-        SELECT 1
-        FROM civic.office
-        WHERE office_level = %s
-          AND COALESCE(state, '') = %s
-          AND name = %s
-        LIMIT 1
-        """,
-        (office_level, state, name),
-    ).fetchone()
-    return row is not None
-
-
-def _electoral_division_exists(
-    conn: psycopg.Connection,
-    *,
-    division_type: str,
-    state: str,
-    name: str,
-) -> bool:
-    row = conn.execute(
-        """
-        SELECT 1
-        FROM civic.electoral_division
-        WHERE division_type = %s
-          AND COALESCE(state, '') = %s
-          AND name = %s
-          AND COALESCE(boundary_year, 0) = 0
-        LIMIT 1
-        """,
-        (division_type, state, name),
-    ).fetchone()
-    return row is not None
-
-
-def _contest_exists(
-    conn: psycopg.Connection,
-    *,
-    office_id: UUID,
-    electoral_division_id: UUID,
-    election_date: date,
-    election_type: str,
-) -> bool:
-    row = conn.execute(
-        """
-        SELECT 1
-        FROM civic.contest
-        WHERE office_id = %s
-          AND electoral_division_id IS NOT DISTINCT FROM %s
-          AND election_date IS NOT DISTINCT FROM %s
-          AND election_type = %s
-        LIMIT 1
-        """,
-        (office_id, electoral_division_id, election_date, election_type),
-    ).fetchone()
-    return row is not None
-
-
-def _candidacy_exists(conn: psycopg.Connection, *, person_id: UUID, contest_id: UUID) -> bool:
-    row = conn.execute(
-        """
-        SELECT 1
-        FROM civic.candidacy
-        WHERE person_id = %s
-          AND contest_id = %s
-        LIMIT 1
-        """,
-        (person_id, contest_id),
-    ).fetchone()
-    return row is not None
-
-
-def _contest_id_for_canonical_key(
-    conn: psycopg.Connection,
-    *,
-    office_id: UUID,
-    electoral_division_id: UUID,
-    election_date: date,
-    election_type: str,
-) -> UUID | None:
-    row = conn.execute(
-        """
-        SELECT id
-        FROM civic.contest
-        WHERE office_id = %s
-          AND electoral_division_id = %s
-          AND election_date IS NOT DISTINCT FROM %s
-          AND election_type = %s
-        LIMIT 1
-        """,
-        (office_id, electoral_division_id, election_date, election_type),
-    ).fetchone()
-    return None if row is None else row[0]
-
-
 def _legacy_statewide_state_senate_contest_id(
     conn: psycopg.Connection,
     *,
@@ -491,9 +386,10 @@ def _reconcile_state_senate_legacy_scope(
     canonical_division_id: UUID,
     election_type: str,
     source_record_id: UUID,
-) -> None:
+    canonical_contest_id: UUID | None,
+) -> UUID | None:
     if not parsed_row.contest_name.upper().startswith("NC STATE SENATE DISTRICT "):
-        return
+        return canonical_contest_id
 
     legacy_contest_id = _legacy_statewide_state_senate_contest_id(
         conn,
@@ -503,15 +399,7 @@ def _reconcile_state_senate_legacy_scope(
         election_type=election_type,
     )
     if legacy_contest_id is None:
-        return
-
-    canonical_contest_id = _contest_id_for_canonical_key(
-        conn,
-        office_id=office_id,
-        electoral_division_id=canonical_division_id,
-        election_date=parsed_row.election_date,
-        election_type=election_type,
-    )
+        return canonical_contest_id
 
     if canonical_contest_id is None:
         conn.execute(
@@ -524,10 +412,10 @@ def _reconcile_state_senate_legacy_scope(
             """,
             (canonical_division_id, source_record_id, legacy_contest_id),
         )
-        return
+        return legacy_contest_id
 
     if canonical_contest_id == legacy_contest_id:
-        return
+        return canonical_contest_id
 
     # Merge stale candidacies into the canonical contest before dropping legacy row.
     conn.execute(
@@ -557,6 +445,7 @@ def _reconcile_state_senate_legacy_scope(
         """,
         (legacy_contest_id,),
     )
+    return canonical_contest_id
 
 
 def _build_person_stub(raw_fields: dict[str, str], *, candidate_display_name: str) -> Person:
@@ -568,6 +457,226 @@ def _build_person_stub(raw_fields: dict[str, str], *, candidate_display_name: st
         suffix=_non_empty_or_none(raw_fields["name_suffix_lbl"]),
         identifiers=_STUB_IDENTIFIERS,
     )
+
+
+def _prepare_supported_rows(
+    parsed_rows: list[CandidateListingRow],
+    raw_rows: list[dict[str, str]],
+    preparation: _CandidateListingPreparation,
+) -> tuple[list[_PreparedCandidateListingRow], int]:
+    prepared_rows: list[_PreparedCandidateListingRow] = []
+    skipped = 0
+    for parsed_row, source_row in zip(parsed_rows, raw_rows, strict=True):
+        if not _in_supported_window(
+            parsed_row.election_date,
+            today=preparation.today,
+            year_from=preparation.year_from,
+        ):
+            skipped += 1
+            continue
+        raw_fields = _normalize_raw_row(source_row, header=preparation.header)
+        record_hash = compute_record_hash(raw_fields)
+        prepared_rows.append(
+            _PreparedCandidateListingRow(
+                parsed=parsed_row,
+                raw_fields=raw_fields,
+                source_record=SourceRecord(
+                    data_source_id=preparation.data_source_id,
+                    source_record_key=f"{_NCSBE_SOURCE_RECORD_KEY_PREFIX}:{record_hash}",
+                    source_url=_NCSBE_CANDIDATE_LISTING_SOURCE_URL,
+                    raw_fields=raw_fields,
+                    pull_date=preparation.pull_date,
+                    record_hash=record_hash,
+                ),
+            )
+        )
+    return prepared_rows, skipped
+
+
+def _upsert_prepared_offices(
+    conn: psycopg.Connection,
+    prepared_rows: list[_PreparedCandidateListingRow],
+    source_record_ids: list[UUID],
+) -> tuple[list[UUID], int]:
+    offices = [
+        Office(
+            name=row.parsed.contest_name,
+            office_level=_office_level_for_contest(row.parsed.contest_name),
+            state="NC",
+            number_of_seats=max(1, row.parsed.vote_for),
+            source_record_id=source_record_id,
+        )
+        for row, source_record_id in zip(prepared_rows, source_record_ids, strict=True)
+    ]
+    existing_ids, preexisting_keys = select_office_ids_and_preexistence(conn, offices)
+    last_office_by_key = {office_natural_key(office): office for office in offices}
+    created = 0
+    for key, office in last_office_by_key.items():
+        created += office_preexistence_key(office) not in preexisting_keys
+        existing_ids[key] = upsert_office(conn, office, link_source=False)
+    return [existing_ids[office_natural_key(office)] for office in offices], created
+
+
+def _upsert_prepared_divisions(
+    conn: psycopg.Connection,
+    prepared_rows: list[_PreparedCandidateListingRow],
+    source_record_ids: list[UUID],
+) -> tuple[list[UUID], int]:
+    divisions = []
+    for row, source_record_id in zip(prepared_rows, source_record_ids, strict=True):
+        scope = _derive_division_scope(row.parsed)
+        divisions.append(
+            ElectoralDivision(
+                name=scope.division_name,
+                division_type=scope.division_type,
+                state="NC",
+                district_number=scope.district_number,
+                source_record_id=source_record_id,
+            )
+        )
+    existing_ids = select_electoral_division_ids_by_natural_key(conn, divisions)
+    last_division_by_key = {electoral_division_natural_key(division): division for division in divisions}
+    created = 0
+    for key, division in last_division_by_key.items():
+        created += key not in existing_ids
+        existing_ids[key] = upsert_electoral_division(conn, division, link_source=False)
+    return [existing_ids[electoral_division_natural_key(division)] for division in divisions], created
+
+
+def _build_prepared_contests(
+    prepared_rows: list[_PreparedCandidateListingRow],
+    source_record_ids: list[UUID],
+    office_ids: list[UUID],
+    division_ids: list[UUID],
+) -> list[Contest]:
+    return [
+        Contest(
+            name=row.parsed.contest_name,
+            election_date=row.parsed.election_date,
+            election_type=_candidacy_election_type(row.parsed),
+            office_id=office_id,
+            electoral_division_id=division_id,
+            number_of_seats=max(1, row.parsed.vote_for),
+            is_partisan=row.parsed.is_partisan,
+            source_record_id=source_record_id,
+        )
+        for row, source_record_id, office_id, division_id in zip(
+            prepared_rows,
+            source_record_ids,
+            office_ids,
+            division_ids,
+            strict=True,
+        )
+    ]
+
+
+def _upsert_prepared_contests(
+    conn: psycopg.Connection,
+    prepared_rows: list[_PreparedCandidateListingRow],
+    contests: list[Contest],
+) -> tuple[list[UUID], int]:
+    existing_ids = select_contest_ids_by_natural_key(conn, contests)
+    last_contest_by_key = {
+        contest_natural_key(contest): (row, contest) for row, contest in zip(prepared_rows, contests, strict=True)
+    }
+    created = 0
+    for key, (row, contest) in last_contest_by_key.items():
+        reconciled_id = _reconcile_state_senate_legacy_scope(
+            conn,
+            parsed_row=row.parsed,
+            office_id=contest.office_id,
+            canonical_division_id=contest.electoral_division_id,
+            election_type=contest.election_type,
+            source_record_id=contest.source_record_id,
+            canonical_contest_id=existing_ids.get(key),
+        )
+        if reconciled_id is not None:
+            existing_ids[key] = reconciled_id
+        created += key not in existing_ids
+        existing_ids[key] = upsert_contest(conn, contest, link_source=False)
+    return [existing_ids[contest_natural_key(contest)] for contest in contests], created
+
+
+def _build_prepared_candidacies(
+    prepared_rows: list[_PreparedCandidateListingRow],
+    source_record_ids: list[UUID],
+    person_ids: list[UUID],
+    contest_ids: list[UUID],
+) -> list[Candidacy]:
+    return [
+        Candidacy(
+            person_id=person_id,
+            contest_id=contest_id,
+            party=_non_empty_or_none(row.parsed.party_candidate),
+            filing_date=_parse_optional_mmddyyyy(row.raw_fields["candidacy_dt"]),
+            status="filed",
+            incumbent_challenge=None,
+            candidate_number=None,
+            name_on_ballot=row.parsed.name_on_ballot,
+            is_unexpired_term=_parse_bool(row.raw_fields["is_unexpired"]),
+            raw_fields=row.raw_fields,
+            committee_id=_parse_committee_id(row.raw_fields),
+            source_record_id=source_record_id,
+        )
+        for row, source_record_id, person_id, contest_id in zip(
+            prepared_rows,
+            source_record_ids,
+            person_ids,
+            contest_ids,
+            strict=True,
+        )
+    ]
+
+
+def _upsert_prepared_candidacies(
+    conn: psycopg.Connection,
+    candidacies: list[Candidacy],
+) -> tuple[list[UUID], int]:
+    existing_ids = select_candidacy_ids_by_natural_key(conn, candidacies)
+    candidacies_by_key: dict[tuple[UUID, UUID], list[Candidacy]] = {}
+    for candidacy in candidacies:
+        candidacies_by_key.setdefault(candidacy_natural_key(candidacy), []).append(candidacy)
+
+    created = 0
+    for key, grouped_candidacies in candidacies_by_key.items():
+        created += key not in existing_ids
+        for candidacy in grouped_candidacies:
+            existing_ids[key] = upsert_candidacy(conn, candidacy, link_source=False)
+    return [existing_ids[candidacy_natural_key(candidacy)] for candidacy in candidacies], created
+
+
+def _insert_prepared_provenance(
+    conn: psycopg.Connection,
+    source_record_ids: list[UUID],
+    office_ids: list[UUID],
+    division_ids: list[UUID],
+    contest_ids: list[UUID],
+    candidacy_ids: list[UUID],
+) -> None:
+    links: list[EntitySourceLink] = []
+    for source_id, office_id, division_id, contest_id, candidacy_id in zip(
+        source_record_ids,
+        office_ids,
+        division_ids,
+        contest_ids,
+        candidacy_ids,
+        strict=True,
+    ):
+        links.extend(
+            EntitySourceLink(
+                entity_type=entity_type,
+                entity_id=entity_id,
+                source_record_id=source_id,
+                extraction_role=entity_type,
+            )
+            for entity_type, entity_id in (
+                ("office", office_id),
+                ("electoral_division", division_id),
+                ("contest", contest_id),
+                ("candidacy", candidacy_id),
+            )
+        )
+    insert_entity_sources_bulk(conn, links)
 
 
 def load_candidate_listing(
@@ -590,145 +699,65 @@ def load_candidate_listing(
             f"Candidate listing parser/raw row mismatch: parsed_rows={len(parsed.rows)} raw_rows={len(raw_rows)}"
         )
 
-    resolved_today = today or datetime.now().date()
-    pull_date = utc_now()
     data_source_id = _ensure_ncsbe_data_source(conn, csv_path=csv_path)
-
-    rows_loaded = 0
-    rows_skipped_out_of_window = 0
-    offices_upserted = 0
-    electoral_divisions_upserted = 0
-    contests_upserted = 0
-    candidacies_upserted = 0
-    source_records_inserted = 0
-    source_records_reused = 0
-
-    for parsed_row, source_row in zip(parsed.rows, raw_rows, strict=True):
-        if not _in_supported_window(parsed_row.election_date, today=resolved_today, year_from=year_from):
-            rows_skipped_out_of_window += 1
-            continue
-
-        raw_fields = _normalize_raw_row(source_row, header=parsed.header)
-        source_record_id, source_record_inserted = _resolve_source_record_id(
-            conn,
+    prepared_rows, rows_skipped_out_of_window = _prepare_supported_rows(
+        parsed.rows,
+        raw_rows,
+        _CandidateListingPreparation(
+            header=parsed.header,
+            today=today or datetime.now().date(),
+            year_from=year_from,
             data_source_id=data_source_id,
-            source_url=_NCSBE_CANDIDATE_LISTING_SOURCE_URL,
-            raw_fields=raw_fields,
-            pull_date=pull_date,
-        )
-        if source_record_inserted:
-            source_records_inserted += 1
-        else:
-            source_records_reused += 1
+            pull_date=utc_now(),
+        ),
+    )
+    source_results = try_insert_source_records_bulk(
+        conn,
+        [row.source_record for row in prepared_rows],
+    )
+    if any(result.source_record_id is None for result in source_results):
+        raise RuntimeError("Bulk source-record resolution did not return every active identity")
+    source_record_ids = [result.source_record_id for result in source_results if result.source_record_id is not None]
 
-        office_name = parsed_row.contest_name
-        office_level = _office_level_for_contest(parsed_row.contest_name)
-        office_exists_before = _office_exists(conn, office_level=office_level, state="NC", name=office_name)
-        office_id = upsert_office(
-            conn,
-            Office(
-                name=office_name,
-                office_level=office_level,
-                state="NC",
-                number_of_seats=max(1, parsed_row.vote_for),
-                source_record_id=source_record_id,
-            ),
-        )
-        if not office_exists_before:
-            offices_upserted += 1
-
-        division_scope = _derive_division_scope(parsed_row)
-        division_exists_before = _electoral_division_exists(
-            conn,
-            division_type=division_scope.division_type,
-            state="NC",
-            name=division_scope.division_name,
-        )
-        division_id = upsert_electoral_division(
-            conn,
-            ElectoralDivision(
-                name=division_scope.division_name,
-                division_type=division_scope.division_type,
-                state="NC",
-                district_number=division_scope.district_number,
-                source_record_id=source_record_id,
-            ),
-        )
-        if not division_exists_before:
-            electoral_divisions_upserted += 1
-
-        election_type = _candidacy_election_type(parsed_row)
-        _reconcile_state_senate_legacy_scope(
-            conn,
-            parsed_row=parsed_row,
-            office_id=office_id,
-            canonical_division_id=division_id,
-            election_type=election_type,
-            source_record_id=source_record_id,
-        )
-        contest_exists_before = _contest_exists(
-            conn,
-            office_id=office_id,
-            electoral_division_id=division_id,
-            election_date=parsed_row.election_date,
-            election_type=election_type,
-        )
-        contest_id = upsert_contest(
-            conn,
-            Contest(
-                name=parsed_row.contest_name,
-                election_date=parsed_row.election_date,
-                election_type=election_type,
-                office_id=office_id,
-                electoral_division_id=division_id,
-                number_of_seats=max(1, parsed_row.vote_for),
-                is_partisan=parsed_row.is_partisan,
-                source_record_id=source_record_id,
-            ),
-        )
-        if not contest_exists_before:
-            contests_upserted += 1
-
-        person_id = resolve_person_by_name_and_zip(
-            conn,
-            _build_person_stub(raw_fields, candidate_display_name=parsed_row.candidate_display_name),
-            None,
-        )
-        if person_id is None:
-            raise RuntimeError("resolve_person_by_name_and_zip returned None for candidate stub row")
-
-        candidacy_exists_before = _candidacy_exists(conn, person_id=person_id, contest_id=contest_id)
-        upsert_candidacy(
-            conn,
-            Candidacy(
-                person_id=person_id,
-                contest_id=contest_id,
-                party=_non_empty_or_none(parsed_row.party_candidate),
-                filing_date=_parse_optional_mmddyyyy(raw_fields["candidacy_dt"]),
-                status="filed",
-                incumbent_challenge=None,
-                candidate_number=None,
-                name_on_ballot=parsed_row.name_on_ballot,
-                is_unexpired_term=_parse_bool(raw_fields["is_unexpired"]),
-                raw_fields=raw_fields,
-                committee_id=_parse_committee_id(raw_fields),
-                source_record_id=source_record_id,
-            ),
-        )
-        if not candidacy_exists_before:
-            candidacies_upserted += 1
-        rows_loaded += 1
+    office_ids, offices_upserted = _upsert_prepared_offices(conn, prepared_rows, source_record_ids)
+    division_ids, electoral_divisions_upserted = _upsert_prepared_divisions(
+        conn,
+        prepared_rows,
+        source_record_ids,
+    )
+    contests = _build_prepared_contests(prepared_rows, source_record_ids, office_ids, division_ids)
+    contest_ids, contests_upserted = _upsert_prepared_contests(conn, prepared_rows, contests)
+    people = [
+        _build_person_stub(row.raw_fields, candidate_display_name=row.parsed.candidate_display_name)
+        for row in prepared_rows
+    ]
+    person_ids = resolve_people_by_name_and_zip(conn, people, [None] * len(people))
+    candidacies = _build_prepared_candidacies(
+        prepared_rows,
+        source_record_ids,
+        person_ids,
+        contest_ids,
+    )
+    candidacy_ids, candidacies_upserted = _upsert_prepared_candidacies(conn, candidacies)
+    _insert_prepared_provenance(
+        conn,
+        source_record_ids,
+        office_ids,
+        division_ids,
+        contest_ids,
+        candidacy_ids,
+    )
 
     return CandidateListingLoadSummary(
         rows_read=len(parsed.rows),
-        rows_loaded=rows_loaded,
+        rows_loaded=len(prepared_rows),
         rows_skipped_out_of_window=rows_skipped_out_of_window,
         offices_upserted=offices_upserted,
         electoral_divisions_upserted=electoral_divisions_upserted,
         contests_upserted=contests_upserted,
         candidacies_upserted=candidacies_upserted,
-        source_records_inserted=source_records_inserted,
-        source_records_reused=source_records_reused,
+        source_records_inserted=sum(result.inserted for result in source_results),
+        source_records_reused=sum(not result.inserted for result in source_results),
     )
 
 

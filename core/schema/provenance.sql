@@ -134,7 +134,7 @@ ALTER TABLE core.person_portrait
 CREATE TABLE core.entity_source (
     id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     entity_type     TEXT NOT NULL CHECK (entity_type IN (
-                        'person', 'organization', 'address',
+                        'person', 'organization', 'donor_identity', 'address',
                         'office', 'electoral_division', 'contest',
                         'election', 'filing_deadline', 'reporting_period',
                         'candidacy', 'officeholding', 'contact_point'
@@ -165,7 +165,7 @@ CREATE UNIQUE INDEX idx_entity_source_dedup
 CREATE TABLE core.field_provenance (
     id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     entity_type     TEXT NOT NULL CHECK (entity_type IN (
-                        'person', 'organization', 'address',
+                        'person', 'organization', 'donor_identity', 'address',
                         'office', 'electoral_division', 'contest',
                         'election', 'filing_deadline', 'reporting_period',
                         'candidacy', 'officeholding', 'contact_point'

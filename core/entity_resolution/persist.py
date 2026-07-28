@@ -20,6 +20,7 @@ _MATCH_DECISION_BASE_KEYS = {
     "decision_method",
 }
 _ENTITY_TABLE_NAMES = {
+    "donor_identity": "donor_identity",
     "person": "person",
     "organization": "organization",
 }
@@ -37,7 +38,11 @@ _ENTITY_SOURCE_OWNER_IDS_KEY = "_er_source_entity_ids"
 def _entity_table_name(entity_type: str) -> str:
     table_name = _ENTITY_TABLE_NAMES.get(entity_type)
     if table_name is None:
-        raise ValueError(f"entity_type must be 'person' or 'organization', got {entity_type!r}")
+        supported_types = sorted(_ENTITY_TABLE_NAMES)
+        supported_message = ", ".join(f"'{supported_type}'" for supported_type in supported_types[:-1])
+        raise ValueError(
+            f"entity_type must be one of {supported_message}, or '{supported_types[-1]}', got {entity_type!r}"
+        )
     return table_name
 
 

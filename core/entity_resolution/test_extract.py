@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import date
-from uuid import UUID, uuid4
+from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 import psycopg
 import pytest
@@ -64,6 +64,21 @@ _ORGANIZATION_OUTPUT_COLUMNS = {
     "registered_agent_name",
 }
 
+_DONOR_IDENTITY_OUTPUT_COLUMNS = {
+    "id",
+    "canonical_name",
+    "contributor_name_raw",
+    "contributor_employer",
+    "contributor_occupation",
+    "contributor_city",
+    "contributor_state",
+    "contributor_zip",
+    "zip5",
+    "transaction_count",
+}
+_DONOR_IDENTITY_ID_SEPARATOR = "\x1f"
+_DONOR_IDENTITY_ID_NAMESPACE = uuid5(NAMESPACE_URL, "civibus:federal:fec:donor_identity:v1")
+
 
 def _insert_address(
     db_conn: psycopg.Connection,
@@ -83,6 +98,204 @@ def _insert_address(
         (address_id, raw_address, normalized_address, street_number, state, zip5),
     )
     return address_id
+
+
+def _insert_fec_committee(
+    db_conn: psycopg.Connection,
+    *,
+    fec_committee_id: str,
+    name: str,
+) -> UUID:
+    committee_id = uuid4()
+    db_conn.execute(
+        """
+        INSERT INTO cf.committee (id, fec_committee_id, name)
+        VALUES (%s, %s, %s)
+        """,
+        (committee_id, fec_committee_id, name),
+    )
+    return committee_id
+
+
+def _insert_fec_filing(
+    db_conn: psycopg.Connection,
+    *,
+    committee_id: UUID,
+    filing_fec_id: str,
+    amendment_indicator: str = "N",
+) -> UUID:
+    filing_id = uuid4()
+    db_conn.execute(
+        """
+        INSERT INTO cf.filing (id, filing_fec_id, committee_id, amendment_indicator)
+        VALUES (%s, %s, %s, %s)
+        """,
+        (filing_id, filing_fec_id, committee_id, amendment_indicator),
+    )
+    return filing_id
+
+
+def _insert_fec_transaction(
+    db_conn: psycopg.Connection,
+    *,
+    filing_id: UUID,
+    committee_id: UUID,
+    transaction_type: str = "15",
+    contributor_entity_type: str = "IND",
+    contributor_name_raw: str = "DOE, JANE",
+    contributor_employer: str | None = "ACME CORP",
+    contributor_occupation: str | None = "ENGINEER",
+    contributor_city: str | None = "DURHAM",
+    contributor_state: str | None = "NC",
+    contributor_zip: str | None = "277011234",
+    is_memo: bool = False,
+    memo_code: str | None = None,
+    amendment_indicator: str = "N",
+    sub_id: int,
+) -> UUID:
+    transaction_id = uuid4()
+    db_conn.execute(
+        """
+        INSERT INTO cf.transaction (
+            id,
+            filing_id,
+            committee_id,
+            transaction_type,
+            sub_id,
+            amount,
+            contributor_name_raw,
+            contributor_entity_type,
+            contributor_employer,
+            contributor_occupation,
+            contributor_city,
+            contributor_state,
+            contributor_zip,
+            memo_code,
+            is_memo,
+            amendment_indicator
+        )
+        VALUES (%s, %s, %s, %s, %s, 25.00, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """,
+        (
+            transaction_id,
+            filing_id,
+            committee_id,
+            transaction_type,
+            sub_id,
+            contributor_name_raw,
+            contributor_entity_type,
+            contributor_employer,
+            contributor_occupation,
+            contributor_city,
+            contributor_state,
+            contributor_zip,
+            memo_code,
+            is_memo,
+            amendment_indicator,
+        ),
+    )
+    return transaction_id
+
+
+def _expected_donor_identity_id(
+    *,
+    contributor_name_raw: str,
+    contributor_employer: str | None,
+    contributor_occupation: str | None,
+    contributor_city: str | None,
+    contributor_state: str | None,
+    contributor_zip: str | None,
+) -> UUID:
+    parts = [
+        contributor_name_raw,
+        contributor_employer or "",
+        contributor_occupation or "",
+        contributor_city or "",
+        contributor_state or "",
+        contributor_zip or "",
+    ]
+    if any(_DONOR_IDENTITY_ID_SEPARATOR in part for part in parts):
+        identity_namespace = uuid5(_DONOR_IDENTITY_ID_NAMESPACE, "length_prefixed:v2")
+        identity_name = "".join(f"{len(part)}:{part}" for part in parts)
+        return uuid5(identity_namespace, identity_name)
+    return uuid5(_DONOR_IDENTITY_ID_NAMESPACE, _DONOR_IDENTITY_ID_SEPARATOR.join(parts))
+
+
+def _seed_doe_jane_donor_transactions(
+    db_conn: psycopg.Connection,
+) -> tuple[UUID, UUID]:
+    included_committee_id = _insert_fec_committee(
+        db_conn,
+        fec_committee_id="C10000001",
+        name="Included Test Committee",
+    )
+    excluded_committee_id = _insert_fec_committee(
+        db_conn,
+        fec_committee_id="C10000002",
+        name="Excluded Test Committee",
+    )
+    included_filing_id = _insert_fec_filing(
+        db_conn,
+        committee_id=included_committee_id,
+        filing_fec_id="100000001",
+    )
+    excluded_filing_id = _insert_fec_filing(
+        db_conn,
+        committee_id=excluded_committee_id,
+        filing_fec_id="100000002",
+    )
+
+    for sub_id in (1001, 1002):
+        _insert_fec_transaction(
+            db_conn,
+            filing_id=included_filing_id,
+            committee_id=included_committee_id,
+            sub_id=sub_id,
+        )
+    _insert_fec_transaction(
+        db_conn,
+        filing_id=included_filing_id,
+        committee_id=included_committee_id,
+        contributor_employer="BETA LLC",
+        sub_id=1003,
+    )
+    _insert_fec_transaction(
+        db_conn,
+        filing_id=included_filing_id,
+        committee_id=included_committee_id,
+        is_memo=True,
+        memo_code="X",
+        sub_id=1004,
+    )
+    _insert_fec_transaction(
+        db_conn,
+        filing_id=included_filing_id,
+        committee_id=included_committee_id,
+        amendment_indicator="T",
+        sub_id=1005,
+    )
+    _insert_fec_transaction(
+        db_conn,
+        filing_id=included_filing_id,
+        committee_id=included_committee_id,
+        contributor_entity_type="ORG",
+        sub_id=1006,
+    )
+    _insert_fec_transaction(
+        db_conn,
+        filing_id=included_filing_id,
+        committee_id=included_committee_id,
+        transaction_type="22Y",
+        sub_id=1007,
+    )
+    _insert_fec_transaction(
+        db_conn,
+        filing_id=excluded_filing_id,
+        committee_id=excluded_committee_id,
+        contributor_employer="OUT OF SCOPE",
+        sub_id=1008,
+    )
+    return included_committee_id, excluded_committee_id
 
 
 def _insert_person(
@@ -434,6 +647,261 @@ def test_extract_organizations_for_matching_includes_orgs_without_addresses(
     assert row["zip5"] is None
 
 
+def test_extract_donors_for_matching_returns_exact_grouped_schedule_a_receipts(
+    db_conn: psycopg.Connection,
+) -> None:
+    committee_id, _ = _seed_doe_jane_donor_transactions(db_conn)
+
+    rows = extract_module.extract_donors_for_matching(
+        db_conn,
+        scope={"committee_ids": [committee_id]},
+    )
+
+    assert rows == [
+        {
+            "id": _expected_donor_identity_id(
+                contributor_name_raw="DOE, JANE",
+                contributor_employer="ACME CORP",
+                contributor_occupation="ENGINEER",
+                contributor_city="DURHAM",
+                contributor_state="NC",
+                contributor_zip="277011234",
+            ),
+            "canonical_name": "DOE, JANE",
+            "contributor_name_raw": "DOE, JANE",
+            "contributor_employer": "ACME CORP",
+            "contributor_occupation": "ENGINEER",
+            "contributor_city": "DURHAM",
+            "contributor_state": "NC",
+            "contributor_zip": "277011234",
+            "zip5": "27701",
+            "transaction_count": 2,
+        },
+        {
+            "id": _expected_donor_identity_id(
+                contributor_name_raw="DOE, JANE",
+                contributor_employer="BETA LLC",
+                contributor_occupation="ENGINEER",
+                contributor_city="DURHAM",
+                contributor_state="NC",
+                contributor_zip="277011234",
+            ),
+            "canonical_name": "DOE, JANE",
+            "contributor_name_raw": "DOE, JANE",
+            "contributor_employer": "BETA LLC",
+            "contributor_occupation": "ENGINEER",
+            "contributor_city": "DURHAM",
+            "contributor_state": "NC",
+            "contributor_zip": "277011234",
+            "zip5": "27701",
+            "transaction_count": 1,
+        },
+    ]
+    assert [row["transaction_count"] for row in rows] == [2, 1]
+    assert all(isinstance(row["id"], UUID) for row in rows)
+    assert all(set(row) == _DONOR_IDENTITY_OUTPUT_COLUMNS for row in rows)
+
+
+def test_extract_donors_for_matching_scope_limits_materialized_rows(
+    db_conn: psycopg.Connection,
+) -> None:
+    committee_id, excluded_committee_id = _seed_doe_jane_donor_transactions(db_conn)
+
+    invalid_scopes = [
+        None,
+        {},
+        {"committee_ids": []},
+        {"committee_ids": str(committee_id)},
+        {"committee_ids": [str(committee_id)]},
+        {"committee_ids": 7},
+    ]
+    for invalid_scope in invalid_scopes:
+        with pytest.raises(
+            ValueError,
+            match=r"scope\['committee_ids'\] must be a non-empty sequence of UUID values",
+        ):
+            extract_module.materialize_donor_identities(db_conn, scope=invalid_scope)
+
+    scoped_rows = extract_rows_for_matching(
+        db_conn,
+        "donor_identity",
+        scope={"committee_ids": [committee_id]},
+    )
+    excluded_rows = extract_rows_for_matching(
+        db_conn,
+        "donor_identity",
+        scope={"committee_ids": [excluded_committee_id]},
+    )
+
+    assert [row["transaction_count"] for row in scoped_rows] == [2, 1]
+    assert excluded_rows == [
+        {
+            "id": _expected_donor_identity_id(
+                contributor_name_raw="DOE, JANE",
+                contributor_employer="OUT OF SCOPE",
+                contributor_occupation="ENGINEER",
+                contributor_city="DURHAM",
+                contributor_state="NC",
+                contributor_zip="277011234",
+            ),
+            "canonical_name": "DOE, JANE",
+            "contributor_name_raw": "DOE, JANE",
+            "contributor_employer": "OUT OF SCOPE",
+            "contributor_occupation": "ENGINEER",
+            "contributor_city": "DURHAM",
+            "contributor_state": "NC",
+            "contributor_zip": "277011234",
+            "zip5": "27701",
+            "transaction_count": 1,
+        }
+    ]
+
+
+def test_materialize_donor_identities_canonicalizes_null_and_empty_optional_tuple_fields(
+    db_conn: psycopg.Connection,
+) -> None:
+    separator_in_name = {
+        "contributor_name_raw": f"DOE{_DONOR_IDENTITY_ID_SEPARATOR}JANE",
+        "contributor_employer": "ACME",
+        "contributor_occupation": "ENGINEER",
+        "contributor_city": "DURHAM",
+        "contributor_state": "NC",
+        "contributor_zip": "27701",
+    }
+    separator_in_employer = {
+        "contributor_name_raw": "DOE",
+        "contributor_employer": f"JANE{_DONOR_IDENTITY_ID_SEPARATOR}ACME",
+        "contributor_occupation": "ENGINEER",
+        "contributor_city": "DURHAM",
+        "contributor_state": "NC",
+        "contributor_zip": "27701",
+    }
+    assert extract_module._donor_identity_id(separator_in_name) != extract_module._donor_identity_id(
+        separator_in_employer
+    )
+
+    committee_id = _insert_fec_committee(
+        db_conn,
+        fec_committee_id="C10000003",
+        name="Null Empty Tuple Committee",
+    )
+    filing_id = _insert_fec_filing(
+        db_conn,
+        committee_id=committee_id,
+        filing_fec_id="100000003",
+    )
+    _insert_fec_transaction(
+        db_conn,
+        filing_id=filing_id,
+        committee_id=committee_id,
+        contributor_employer=None,
+        sub_id=2001,
+    )
+    _insert_fec_transaction(
+        db_conn,
+        filing_id=filing_id,
+        committee_id=committee_id,
+        contributor_employer="",
+        sub_id=2002,
+    )
+
+    rows = extract_module.materialize_donor_identities(
+        db_conn,
+        scope={"committee_ids": [committee_id]},
+    )
+
+    expected_id = _expected_donor_identity_id(
+        contributor_name_raw="DOE, JANE",
+        contributor_employer="",
+        contributor_occupation="ENGINEER",
+        contributor_city="DURHAM",
+        contributor_state="NC",
+        contributor_zip="277011234",
+    )
+    assert rows == [
+        {
+            "id": expected_id,
+            "canonical_name": "DOE, JANE",
+            "contributor_name_raw": "DOE, JANE",
+            "contributor_employer": "",
+            "contributor_occupation": "ENGINEER",
+            "contributor_city": "DURHAM",
+            "contributor_state": "NC",
+            "contributor_zip": "277011234",
+            "zip5": "27701",
+            "transaction_count": 2,
+        }
+    ]
+
+    with db_conn.cursor(row_factory=dict_row) as cursor:
+        cursor.execute(
+            """
+            SELECT contributor_employer, transaction_count
+            FROM core.donor_identity
+            WHERE id = %s
+            """,
+            (expected_id,),
+        )
+        persisted_row = cursor.fetchone()
+
+    assert persisted_row == {"contributor_employer": "", "transaction_count": 2}
+
+
+def test_materialize_donor_identities_applies_scope_before_materializing_rows(
+    db_conn: psycopg.Connection,
+) -> None:
+    committee_id, _ = _seed_doe_jane_donor_transactions(db_conn)
+
+    materialized_rows = extract_module.materialize_donor_identities(
+        db_conn,
+        scope={"committee_ids": [committee_id]},
+    )
+
+    assert materialized_rows == [
+        {
+            "id": _expected_donor_identity_id(
+                contributor_name_raw="DOE, JANE",
+                contributor_employer="ACME CORP",
+                contributor_occupation="ENGINEER",
+                contributor_city="DURHAM",
+                contributor_state="NC",
+                contributor_zip="277011234",
+            ),
+            "canonical_name": "DOE, JANE",
+            "contributor_name_raw": "DOE, JANE",
+            "contributor_employer": "ACME CORP",
+            "contributor_occupation": "ENGINEER",
+            "contributor_city": "DURHAM",
+            "contributor_state": "NC",
+            "contributor_zip": "277011234",
+            "zip5": "27701",
+            "transaction_count": 2,
+        },
+        {
+            "id": _expected_donor_identity_id(
+                contributor_name_raw="DOE, JANE",
+                contributor_employer="BETA LLC",
+                contributor_occupation="ENGINEER",
+                contributor_city="DURHAM",
+                contributor_state="NC",
+                contributor_zip="277011234",
+            ),
+            "canonical_name": "DOE, JANE",
+            "contributor_name_raw": "DOE, JANE",
+            "contributor_employer": "BETA LLC",
+            "contributor_occupation": "ENGINEER",
+            "contributor_city": "DURHAM",
+            "contributor_state": "NC",
+            "contributor_zip": "277011234",
+            "zip5": "27701",
+            "transaction_count": 1,
+        },
+    ]
+    assert {row["contributor_employer"] for row in materialized_rows} == {"ACME CORP", "BETA LLC"}
+    assert all(row["contributor_employer"] != "OUT OF SCOPE" for row in materialized_rows)
+    assert [row["transaction_count"] for row in materialized_rows] == [2, 1]
+
+
 def test_extract_functions_include_durham_fixture_owners_via_shared_er_views(
     db_conn: psycopg.Connection,
 ) -> None:
@@ -497,9 +965,11 @@ def test_extract_rows_for_matching_dispatches_to_entity_wrappers(
 
     person_rows = [{"id": uuid4(), "canonical_name": "Person Example"}]
     organization_rows = [{"id": uuid4(), "canonical_name": "Organization Example"}]
+    donor_rows = [{"id": uuid4(), "canonical_name": "DOE, JANE"}]
 
     person_calls = 0
     organization_calls = 0
+    donor_calls: list[dict[str, object] | None] = []
 
     def _fake_extract_persons_for_matching(incoming_conn: object) -> list[dict[str, object]]:
         nonlocal person_calls
@@ -515,6 +985,15 @@ def test_extract_rows_for_matching_dispatches_to_entity_wrappers(
         assert incoming_conn is conn
         return organization_rows
 
+    def _fake_extract_donors_for_matching(
+        incoming_conn: object,
+        *,
+        scope: dict[str, object] | None = None,
+    ) -> list[dict[str, object]]:
+        donor_calls.append(scope)
+        assert incoming_conn is conn
+        return donor_rows
+
     monkeypatch.setattr(
         extract_module,
         "extract_persons_for_matching",
@@ -525,11 +1004,19 @@ def test_extract_rows_for_matching_dispatches_to_entity_wrappers(
         "extract_organizations_for_matching",
         _fake_extract_organizations_for_matching,
     )
+    monkeypatch.setattr(
+        extract_module,
+        "extract_donors_for_matching",
+        _fake_extract_donors_for_matching,
+        raising=False,
+    )
 
     assert extract_rows_for_matching(conn, "person") == person_rows
     assert extract_rows_for_matching(conn, "organization") == organization_rows
+    assert extract_rows_for_matching(conn, "donor_identity", scope={"committee_ids": ["C10000001"]}) == donor_rows
     assert person_calls == 1
     assert organization_calls == 1
+    assert donor_calls == [{"committee_ids": ["C10000001"]}]
 
 
 @pytest.mark.parametrize(
@@ -539,6 +1026,6 @@ def test_extract_rows_for_matching_dispatches_to_entity_wrappers(
 def test_extract_rows_for_matching_rejects_unsupported_entity_type(entity_type: str) -> None:
     with pytest.raises(
         ValueError,
-        match=rf"entity_type must be 'person' or 'organization', got '{entity_type}'",
+        match=rf"entity_type must be one of 'donor_identity', 'organization', or 'person', got '{entity_type}'",
     ):
         extract_rows_for_matching(object(), entity_type)

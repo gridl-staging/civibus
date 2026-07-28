@@ -427,7 +427,7 @@ def test_try_insert_source_records_bulk_preserves_order_and_supersession(
 
     assert [(result.source_record_id, result.inserted) for result in results] == [
         (fresh_record.id, True),
-        (None, False),
+        (duplicate_original.id, False),
         (amended_reingest.id, True),
     ]
     with db_conn.cursor() as cursor:
@@ -513,7 +513,7 @@ def test_try_insert_source_records_bulk_attributes_mixed_batch_lanes(
         (fresh_record.id, True),
         (duplicate_first.id, True),
         (null_key_record.id, True),
-        (None, False),
+        (same_hash_original.id, False),
         (duplicate_second.id, True),
         (amended_reingest.id, True),
     ]
@@ -522,7 +522,8 @@ def test_try_insert_source_records_bulk_attributes_mixed_batch_lanes(
         fast_path_candidates=3,
         forced_per_row_rows=3,
         fast_path_inserted=1,
-        fast_path_fallbacks=2,
+        fast_path_reused=1,
+        fast_path_fallbacks=1,
     )
 
     with db_conn.cursor() as cursor:
@@ -590,7 +591,7 @@ def test_try_insert_source_records_bulk_skips_same_hash_reingest_that_reuses_act
 
     results = db_ingest.try_insert_source_records_bulk(db_conn, [reingest_reusing_active_id])
 
-    assert [(result.source_record_id, result.inserted) for result in results] == [(None, False)]
+    assert [(result.source_record_id, result.inserted) for result in results] == [(original.id, False)]
     assert (
         _select_count(
             db_conn,
@@ -773,6 +774,54 @@ def test_insert_entity_source_is_idempotent(db_conn: psycopg.Connection) -> None
         )
         == 1
     )
+
+
+def test_insert_entity_sources_bulk_matches_single_row_identity_and_role_semantics(
+    db_conn: psycopg.Connection,
+) -> None:
+    data_source = _insert_test_data_source(db_conn)
+    source_record = _insert_test_source_record(db_conn, data_source.id, "source-link-bulk")
+    person = Person(canonical_name="Alice Jones", first_name="ALICE", last_name="JONES")
+    insert_person(db_conn, person)
+    donor_id = insert_entity_source(db_conn, "person", person.id, source_record.id, "donor")
+
+    links = [
+        db_ingest.EntitySourceLink(
+            entity_type="person",
+            entity_id=person.id,
+            source_record_id=source_record.id,
+            extraction_role="donor",
+        ),
+        db_ingest.EntitySourceLink(
+            entity_type="person",
+            entity_id=person.id,
+            source_record_id=source_record.id,
+            extraction_role="recipient",
+        ),
+        db_ingest.EntitySourceLink(
+            entity_type="person",
+            entity_id=person.id,
+            source_record_id=source_record.id,
+            extraction_role="donor",
+        ),
+    ]
+    result_ids = db_ingest.insert_entity_sources_bulk(db_conn, links)
+
+    assert result_ids[0] == donor_id
+    assert result_ids[2] == donor_id
+    assert result_ids[1] != donor_id
+    assert db_conn.execute(
+        """
+        SELECT extraction_role, COUNT(*)
+        FROM core.entity_source
+        WHERE entity_type = 'person'
+          AND entity_id = %s
+          AND source_record_id = %s
+        GROUP BY extraction_role
+        ORDER BY extraction_role
+        """,
+        (person.id, source_record.id),
+    ).fetchall() == [("donor", 1), ("recipient", 1)]
 
 
 def test_insert_entity_address_is_idempotent_and_person_lookup_uses_zip(

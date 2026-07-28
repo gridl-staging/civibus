@@ -1614,6 +1614,155 @@ def test_candidate_fundraising_summary_serializes_cash_on_hand_and_summary_sourc
         )
 
 
+def _candidate_fundraising_summary_payload(
+    *,
+    coverage: dict[str, str] | None = None,
+    out_of_cycle_official_total: dict[str, object] | None = None,
+) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "candidate_id": uuid4(),
+        "candidate_name": "Out Of Cycle Candidate",
+        "selected_cycle": 2026,
+        "coverage_start_date": date(2025, 1, 1),
+        "coverage_end_date": date(2026, 12, 31),
+        "available_cycles": [2022, 2024, 2026],
+        "total_raised": Decimal("0.00"),
+        "total_spent": Decimal("0.00"),
+        "net": Decimal("0.00"),
+        "transaction_count": 0,
+        "committees": [],
+        "cash_on_hand": None,
+        "summary_source": "derived",
+        "coverage": coverage or _candidate_money_coverage_payload(),
+    }
+    if out_of_cycle_official_total is not None:
+        payload["out_of_cycle_official_total"] = out_of_cycle_official_total
+    return payload
+
+
+def test_candidate_fundraising_summary_round_trips_out_of_cycle_official_total() -> None:
+    supplemental_total = {
+        "coverage_start_date": date(2023, 1, 1),
+        "coverage_end_date": date(2024, 12, 31),
+        "total_raised": Decimal("1234.56"),
+        "total_spent": Decimal("234.56"),
+        "net": Decimal("1000.00"),
+        "cash_on_hand": Decimal("345.67"),
+        "summary_source": "fec_weball",
+    }
+    coverage = _candidate_money_coverage_payload(activity_state="out_of_cycle_official_total")
+    summary = CandidateFundraisingSummary.model_validate(
+        _candidate_fundraising_summary_payload(
+            coverage=coverage,
+            out_of_cycle_official_total=supplemental_total,
+        )
+    )
+
+    dumped = summary.model_dump(mode="json")
+
+    assert dumped["out_of_cycle_official_total"] == {
+        "coverage_start_date": "2023-01-01",
+        "coverage_end_date": "2024-12-31",
+        "total_raised": "1234.56",
+        "total_spent": "234.56",
+        "net": "1000.00",
+        "cash_on_hand": "345.67",
+        "summary_source": "fec_weball",
+    }
+    assert CandidateFundraisingSummary.model_validate(dumped).model_dump(mode="json") == dumped
+
+    omitted = CandidateFundraisingSummary.model_validate(_candidate_fundraising_summary_payload())
+    assert omitted.model_dump(mode="json")["out_of_cycle_official_total"] is None
+
+    for invalid_start, invalid_end in (
+        (date(2025, 1, 1), date(2026, 12, 31)),
+        (date(2024, 12, 31), date(2023, 1, 1)),
+    ):
+        invalid_total = {
+            **supplemental_total,
+            "coverage_start_date": invalid_start,
+            "coverage_end_date": invalid_end,
+        }
+        with pytest.raises(ValidationError):
+            CandidateFundraisingSummary.model_validate(
+                _candidate_fundraising_summary_payload(
+                    coverage=coverage,
+                    out_of_cycle_official_total=invalid_total,
+                )
+            )
+
+
+def test_candidate_fundraising_summary_rejects_supplemental_total_for_selected_cycle_states() -> None:
+    supplemental_total = {
+        "coverage_start_date": date(2023, 1, 1),
+        "coverage_end_date": date(2024, 12, 31),
+        "total_raised": Decimal("1234.56"),
+        "total_spent": Decimal("234.56"),
+        "net": Decimal("1000.00"),
+        "cash_on_hand": Decimal("345.67"),
+        "summary_source": "fec_weball",
+    }
+
+    for activity_state in ("populated", "loaded_zero", "not_loaded"):
+        payload = _candidate_fundraising_summary_payload(
+            coverage=_candidate_money_coverage_payload(activity_state=activity_state),
+            out_of_cycle_official_total=supplemental_total,
+        )
+        with pytest.raises(ValidationError) as exc_info:
+            CandidateFundraisingSummary.model_validate(payload)
+
+        assert "out_of_cycle_official_total" in str(exc_info.value)
+
+
+def test_candidate_fundraising_summary_rejects_out_of_cycle_state_without_supplemental_total() -> None:
+    payload = _candidate_fundraising_summary_payload(
+        coverage=_candidate_money_coverage_payload(activity_state="out_of_cycle_official_total")
+    )
+
+    with pytest.raises(ValidationError) as exc_info:
+        CandidateFundraisingSummary.model_validate(payload)
+
+    assert "out_of_cycle_official_total" in str(exc_info.value)
+
+
+def test_out_of_cycle_activity_state_is_fundraising_only() -> None:
+    coverage = _candidate_money_coverage_payload(activity_state="out_of_cycle_official_total")
+    supplemental_total = {
+        "coverage_start_date": date(2023, 1, 1),
+        "coverage_end_date": date(2024, 12, 31),
+        "total_raised": Decimal("1234.56"),
+        "total_spent": Decimal("234.56"),
+        "net": Decimal("1000.00"),
+        "cash_on_hand": Decimal("345.67"),
+        "summary_source": "fec_weball",
+    }
+    summary = CandidateFundraisingSummary.model_validate(
+        _candidate_fundraising_summary_payload(
+            coverage=coverage,
+            out_of_cycle_official_total=supplemental_total,
+        )
+    )
+
+    assert summary.coverage.activity_state == "out_of_cycle_official_total"
+
+    with pytest.raises(ValidationError):
+        IndependentExpenditureSummary.model_validate(
+            {
+                "candidate_id": str(uuid4()),
+                "selected_cycle": 2026,
+                "coverage_start_date": date(2025, 1, 1),
+                "coverage_end_date": date(2026, 12, 31),
+                "available_cycles": [2022, 2024, 2026],
+                "support_total": Decimal("0.00"),
+                "oppose_total": Decimal("0.00"),
+                "support_count": 0,
+                "oppose_count": 0,
+                "top_spenders": [],
+                "coverage": coverage,
+            }
+        )
+
+
 def test_state_summary_item_serializes_decimal_date_and_nullable_ie_fields() -> None:
     summary_item = StateSummaryItem.model_validate(
         {

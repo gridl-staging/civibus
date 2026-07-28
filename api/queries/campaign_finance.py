@@ -2777,13 +2777,34 @@ def _official_candidate_summary_coverage() -> dict[str, str]:
     )
 
 
+def _out_of_cycle_official_total_coverage() -> dict[str, str]:
+    return _candidate_money_coverage(
+        activity_state="out_of_cycle_official_total",
+        completeness="complete",
+        basis="fec_official_candidate_summary",
+    )
+
+
+def _has_selected_cycle_fundraising_activity(
+    *,
+    total_raised: Decimal,
+    total_spent: Decimal,
+    transaction_count: int,
+) -> bool:
+    return transaction_count > 0 or total_raised != _MONEY_SCALE or total_spent != _MONEY_SCALE
+
+
 def _qualifying_fundraising_coverage(
     *,
     total_raised: Decimal,
     total_spent: Decimal,
     transaction_count: int,
 ) -> dict[str, str]:
-    if transaction_count > 0 or total_raised != _MONEY_SCALE or total_spent != _MONEY_SCALE:
+    if _has_selected_cycle_fundraising_activity(
+        total_raised=total_raised,
+        total_spent=total_spent,
+        transaction_count=transaction_count,
+    ):
         return _candidate_money_coverage(
             activity_state="populated",
             completeness="partial",
@@ -2840,6 +2861,7 @@ def build_zero_candidate_fundraising_summary(
         "receipt_source_caveats": ["missing_committee_summary"],
         "debts_owed_by_committee": None,
         "coverage": _not_loaded_candidate_money_coverage(),
+        "out_of_cycle_official_total": None,
     }
 
 
@@ -2881,6 +2903,34 @@ def _official_candidate_totals_cover_selected_cycle(
         and coverage_end is not None
         and selected_cycle.coverage_start_date <= coverage_end <= selected_cycle.coverage_end_date
     )
+
+
+def _build_out_of_cycle_official_total(
+    official_row: dict[str, Any],
+    selected_cycle: SelectedCycle,
+) -> dict[str, Any] | None:
+    coverage_end = official_row["summary_coverage_end_date"]
+    if (
+        not _has_official_candidate_totals(official_row)
+        or coverage_end is None
+        or _official_candidate_totals_cover_selected_cycle(official_row, selected_cycle)
+        or coverage_end > selected_cycle.coverage_end_date
+    ):
+        return None
+
+    total_receipts = _quantize_money(official_row["total_receipts"] or _MONEY_SCALE)
+    total_disbursements = _quantize_money(official_row["total_disbursements"] or _MONEY_SCALE)
+    cash_on_hand = official_row["cash_on_hand"]
+    coverage_start_year = coverage_end.year if coverage_end.year % 2 == 1 else coverage_end.year - 1
+    return {
+        "coverage_start_date": date(coverage_start_year, 1, 1),
+        "coverage_end_date": coverage_end,
+        "total_raised": total_receipts,
+        "total_spent": total_disbursements,
+        "net": _quantize_money(total_receipts - total_disbursements),
+        "cash_on_hand": _quantize_money(cash_on_hand) if cash_on_hand is not None else None,
+        "summary_source": "fec_weball",
+    }
 
 
 def _fetch_cycle_linked_candidate_committee_ids(
@@ -2978,6 +3028,7 @@ def _build_candidate_summary_from_official_totals(
         "net_self_funding": net_self_funding,
         "summary_source": "fec_weball",
         "coverage": _official_candidate_summary_coverage(),
+        "out_of_cycle_official_total": None,
         **_combine_candidate_receipt_source_payload(committee_summaries),
     }
 
@@ -3319,6 +3370,7 @@ def fetch_candidate_summary(
 
     if official_row is None:
         return None
+    out_of_cycle_official_total = _build_out_of_cycle_official_total(official_row, cycle)
 
     linked_committee_ids = _resolve_candidate_finance_committee_ids(
         conn,
@@ -3355,6 +3407,20 @@ def fetch_candidate_summary(
     derived_total_spent = sum((committee["total_spent"] for committee in committee_summaries), start=_MONEY_SCALE)
     derived_net = sum((committee["net"] for committee in committee_summaries), start=_MONEY_SCALE)
     receipt_source_payload = _combine_candidate_receipt_source_payload(committee_summaries)
+    has_selected_cycle_fundraising_activity = _has_selected_cycle_fundraising_activity(
+        total_raised=derived_total_raised,
+        total_spent=derived_total_spent,
+        transaction_count=derived_transaction_count,
+    )
+    coverage = _qualifying_fundraising_coverage(
+        total_raised=derived_total_raised,
+        total_spent=derived_total_spent,
+        transaction_count=derived_transaction_count,
+    )
+    supplemental_official_total = None
+    if out_of_cycle_official_total is not None and not has_selected_cycle_fundraising_activity:
+        coverage = _out_of_cycle_official_total_coverage()
+        supplemental_official_total = out_of_cycle_official_total
     return {
         "candidate_id": candidate_id,
         "candidate_name": candidate_name,
@@ -3368,11 +3434,8 @@ def fetch_candidate_summary(
         "cash_on_hand": None,
         **_null_candidate_self_funding_payload(),
         "summary_source": "derived",
-        "coverage": _qualifying_fundraising_coverage(
-            total_raised=derived_total_raised,
-            total_spent=derived_total_spent,
-            transaction_count=derived_transaction_count,
-        ),
+        "coverage": coverage,
+        "out_of_cycle_official_total": supplemental_official_total,
         **receipt_source_payload,
     }
 

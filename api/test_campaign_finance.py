@@ -4085,6 +4085,156 @@ def test_get_candidate_summary_ignores_official_weball_totals_for_non_selected_c
     assert payload["net"] == "100.00"
     assert payload["cash_on_hand"] is None
     assert payload["transaction_count"] == 2
+    assert payload["out_of_cycle_official_total"] is None
+
+    earlier_cycle_response = api_client.get(f"/v1/candidates/{candidate_id}/summary?cycle=2022")
+
+    assert earlier_cycle_response.status_code == 200
+    earlier_cycle_payload = earlier_cycle_response.json()
+    assert earlier_cycle_payload["selected_cycle"] == 2022
+    assert earlier_cycle_payload["coverage"]["activity_state"] == "not_loaded"
+    assert earlier_cycle_payload["out_of_cycle_official_total"] is None
+
+
+def test_fetch_candidate_summary_returns_out_of_cycle_official_total_as_supplemental_data(
+    db_conn: psycopg.Connection,
+) -> None:
+    cases = (
+        (
+            UUID("44444444-4444-4444-8444-444444444444"),
+            "H0NC02444",
+            date(2024, 12, 31),
+            2026,
+            date(2023, 1, 1),
+        ),
+        (
+            UUID("44444444-4444-4444-8446-444444444446"),
+            "H0NC02446",
+            date(2023, 6, 30),
+            2026,
+            date(2023, 1, 1),
+        ),
+    )
+    for candidate_id, fec_candidate_id, official_coverage_end, selected_cycle, expected_start in cases:
+        candidate_name = f"Earlier Cycle Official Total Candidate {selected_cycle}"
+        insert_candidate_row(
+            db_conn,
+            CandidateRowSeed(
+                id=candidate_id,
+                fec_candidate_id=fec_candidate_id,
+                name=candidate_name,
+                office="H",
+                total_receipts=Decimal("1234.56"),
+                total_disbursements=Decimal("234.56"),
+                cash_on_hand=Decimal("345.67"),
+                summary_coverage_end_date=official_coverage_end,
+            ),
+        )
+
+        summary = fetch_candidate_summary(db_conn, candidate_id, candidate_name, selected_cycle=selected_cycle)
+
+        assert summary is not None
+        assert summary["selected_cycle"] == selected_cycle
+        assert summary["coverage_start_date"] == date(2025, 1, 1)
+        assert summary["coverage_end_date"] == date(2026, 12, 31)
+        assert summary["available_cycles"] == [2022, 2024, 2026]
+        assert summary["total_raised"] == Decimal("0.00")
+        assert summary["total_spent"] == Decimal("0.00")
+        assert summary["net"] == Decimal("0.00")
+        assert summary["transaction_count"] == 0
+        assert summary["itemized_transaction_count"] == 0
+        assert summary["committees"] == []
+        assert summary["cash_on_hand"] is None
+        assert summary["candidate_contrib"] is None
+        assert summary["candidate_loans"] is None
+        assert summary["candidate_loan_repay"] is None
+        assert summary["net_self_funding"] is None
+        assert summary["summary_source"] == "derived"
+        assert summary["receipt_source_composition"] == []
+        assert summary["selected_cycle_coverage_complete"] is False
+        assert summary["can_render_share"] is False
+        assert summary["receipt_source_caveats"] == ["missing_committee_summary"]
+        assert summary["debts_owed_by_committee"] is None
+        assert summary["coverage"] == {
+            "activity_state": "out_of_cycle_official_total",
+            "completeness": "complete",
+            "basis": "fec_official_candidate_summary",
+        }
+        assert summary["out_of_cycle_official_total"] == {
+            "coverage_start_date": expected_start,
+            "coverage_end_date": official_coverage_end,
+            "total_raised": Decimal("1234.56"),
+            "total_spent": Decimal("234.56"),
+            "net": Decimal("1000.00"),
+            "cash_on_hand": Decimal("345.67"),
+            "summary_source": "fec_weball",
+        }
+
+
+def test_fetch_candidate_summary_keeps_out_of_cycle_state_with_zero_committee_placeholder(
+    db_conn: psycopg.Connection,
+) -> None:
+    candidate_id = UUID("44444444-4444-4444-8445-444444444445")
+    candidate_name = "Earlier Cycle Official Total With Empty Committee"
+    committee_context = seed_committee_for_summary(
+        db_conn,
+        committee_id=UUID("44444444-4444-4444-9445-444444444445"),
+        committee_name="Earlier Cycle Empty Committee",
+        fec_committee_id="C99004445",
+    )
+    insert_candidate_row(
+        db_conn,
+        CandidateRowSeed(
+            id=candidate_id,
+            fec_candidate_id="H0NC02445",
+            name=candidate_name,
+            office="H",
+            total_receipts=Decimal("1234.56"),
+            total_disbursements=Decimal("234.56"),
+            cash_on_hand=Decimal("345.67"),
+            summary_coverage_end_date=date(2024, 12, 31),
+        ),
+    )
+    insert_candidate_committee_link_row(
+        db_conn,
+        CandidateCommitteeLinkSeed(
+            id=UUID("44444444-4444-4444-a445-444444444445"),
+            candidate_id=candidate_id,
+            committee_id=committee_context.committee_id,
+            valid_period="[2025-01-01,2027-01-01)",
+            designation="P",
+            candidate_election_year=2026,
+            fec_election_year=2026,
+        ),
+    )
+
+    summary = fetch_candidate_summary(db_conn, candidate_id, candidate_name, selected_cycle=2026)
+
+    assert summary is not None
+    assert summary["total_raised"] == Decimal("0.00")
+    assert summary["total_spent"] == Decimal("0.00")
+    assert summary["net"] == Decimal("0.00")
+    assert summary["transaction_count"] == 0
+    assert summary["itemized_transaction_count"] == 0
+    assert [committee["committee_id"] for committee in summary["committees"]] == [committee_context.committee_id]
+    assert summary["committees"][0]["total_raised"] == Decimal("0.00")
+    assert summary["committees"][0]["total_spent"] == Decimal("0.00")
+    assert summary["committees"][0]["net"] == Decimal("0.00")
+    assert summary["committees"][0]["transaction_count"] == 0
+    assert summary["coverage"] == {
+        "activity_state": "out_of_cycle_official_total",
+        "completeness": "complete",
+        "basis": "fec_official_candidate_summary",
+    }
+    assert summary["out_of_cycle_official_total"] == {
+        "coverage_start_date": date(2023, 1, 1),
+        "coverage_end_date": date(2024, 12, 31),
+        "total_raised": Decimal("1234.56"),
+        "total_spent": Decimal("234.56"),
+        "net": Decimal("1000.00"),
+        "cash_on_hand": Decimal("345.67"),
+        "summary_source": "fec_weball",
+    }
 
 
 def test_get_candidate_summary_returns_zero_official_payload_when_no_linked_committees_direct_owner(
@@ -4120,6 +4270,7 @@ def test_get_candidate_summary_returns_zero_official_payload_when_no_linked_comm
     assert summary["cash_on_hand"] is None
     # No official totals seeded -> derived fallback at zero.
     assert summary["summary_source"] == "derived"
+    assert summary["out_of_cycle_official_total"] is None
     assert summary["coverage"] == {
         "activity_state": "not_loaded",
         "completeness": "unknown",
@@ -4207,6 +4358,8 @@ def test_fetch_candidate_summary_reports_selected_cycle_money_coverage_states(
     assert not_loaded is not None
     assert populated["total_raised"] == Decimal("1234.56")
     assert populated["transaction_count"] == 0
+    assert populated["summary_source"] == "fec_weball"
+    assert populated["out_of_cycle_official_total"] is None
     assert populated["coverage"] == {
         "activity_state": "populated",
         "completeness": "complete",
@@ -4220,6 +4373,7 @@ def test_fetch_candidate_summary_reports_selected_cycle_money_coverage_states(
         "basis": "qualifying_transactions",
     }
     assert not_loaded["total_raised"] == Decimal("0.00")
+    assert not_loaded["out_of_cycle_official_total"] is None
     assert not_loaded["coverage"] == {
         "activity_state": "not_loaded",
         "completeness": "unknown",
@@ -4346,6 +4500,7 @@ def test_get_candidate_summary_returns_zero_totals_when_no_linked_committees(
             "completeness": "unknown",
             "basis": "no_authoritative_load_evidence",
         },
+        "out_of_cycle_official_total": None,
     }
 
 
@@ -4464,6 +4619,7 @@ def test_get_candidate_summary_keeps_linked_committee_with_zero_qualifying_trans
             "completeness": "unknown",
             "basis": "no_authoritative_load_evidence",
         },
+        "out_of_cycle_official_total": None,
     }
 
 

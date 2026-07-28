@@ -135,9 +135,88 @@ _MINIMAL_CORE_SQL = textwrap.dedent("""\
         field_name      TEXT NOT NULL,
         field_value     TEXT NOT NULL,
         source_record_id UUID NOT NULL REFERENCES core.source_record(id),
-        first_seen      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        last_seen       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        first_seen      TIMESTAMPTZ NOT NULL,
+        last_seen       TIMESTAMPTZ NOT NULL,
         is_current      BOOLEAN NOT NULL DEFAULT TRUE,
+        created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS core.match_decision (
+        id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        entity_type     TEXT NOT NULL CHECK (entity_type IN ('person', 'organization')),
+        entity_id_a     UUID NOT NULL,
+        entity_id_b     UUID NOT NULL,
+        decision        TEXT NOT NULL CHECK (decision IN ('match', 'probable_match', 'possible_match', 'no_match')),
+        confidence      REAL NOT NULL,
+        decided_by      TEXT NOT NULL,
+        decision_method TEXT NOT NULL,
+        match_evidence  JSONB,
+        decided_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        superseded_by   UUID,
+        superseded_at   TIMESTAMPTZ,
+        created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        CONSTRAINT chk_ordered_pair CHECK (entity_id_a < entity_id_b)
+    );
+
+    CREATE TABLE IF NOT EXISTS core.entity_cluster (
+        id                  UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        entity_type         TEXT NOT NULL CHECK (entity_type IN ('person', 'organization')),
+        canonical_entity_id UUID NOT NULL,
+        cluster_confidence  REAL,
+        member_count        INTEGER NOT NULL DEFAULT 1,
+        created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        CONSTRAINT uq_cluster_id_type UNIQUE (id, entity_type)
+    );
+
+    CREATE TABLE IF NOT EXISTS core.cluster_member (
+        id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        cluster_id      UUID NOT NULL,
+        entity_type     TEXT NOT NULL CHECK (entity_type IN ('person', 'organization')),
+        entity_id       UUID NOT NULL,
+        is_canonical    BOOLEAN NOT NULL DEFAULT FALSE,
+        merged_at       TIMESTAMPTZ,
+        merged_by       TEXT,
+        split_at        TIMESTAMPTZ,
+        split_by        TEXT,
+        created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        CONSTRAINT fk_cluster_member_cluster
+            FOREIGN KEY (cluster_id, entity_type)
+            REFERENCES core.entity_cluster(id, entity_type)
+    );
+
+    CREATE TABLE IF NOT EXISTS core.manual_override (
+        id                  UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        match_decision_id   UUID REFERENCES core.match_decision(id),
+        entity_type         TEXT NOT NULL CHECK (entity_type IN ('person', 'organization')),
+        entity_id_a         UUID NOT NULL,
+        entity_id_b         UUID NOT NULL,
+        override_decision   TEXT NOT NULL CHECK (override_decision IN ('confirmed_match', 'confirmed_non_match')),
+        reason              TEXT,
+        decided_by          TEXT NOT NULL,
+        decided_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        superseded_by       UUID,
+        superseded_at       TIMESTAMPTZ,
+        created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        CONSTRAINT chk_override_ordered CHECK (entity_id_a < entity_id_b)
+    );
+
+    CREATE TABLE IF NOT EXISTS core.splink_run (
+        id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        entity_type     TEXT NOT NULL CHECK (entity_type IN ('person', 'organization')),
+        splink_version  TEXT NOT NULL,
+        model_config    JSONB NOT NULL,
+        input_record_count BIGINT,
+        pairs_compared  BIGINT,
+        matches_found   BIGINT,
+        auto_merged     BIGINT,
+        probable_matches BIGINT,
+        possible_matches BIGINT,
+        duration_seconds REAL,
+        started_at      TIMESTAMPTZ NOT NULL,
+        completed_at    TIMESTAMPTZ,
+        status          TEXT NOT NULL DEFAULT 'running' CHECK (status IN ('running', 'completed', 'failed')),
+        error_message   TEXT,
         created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
 """)
@@ -247,6 +326,46 @@ _PENDING_FILENAMES = [
     "2026_07_18_committee_summary_top_lists.sql",
     "2026_07_19_committee_summary_filing_breakdown.sql",
     "2026_07_24_donor_search_committee_scope_index.sql",
+    "2026_07_28_donor_identity_er_contract.sql",
+]
+
+_DONOR_IDENTITY_MIGRATION = "2026_07_28_donor_identity_er_contract.sql"
+_DONOR_IDENTITY_COLUMNS = [
+    "id",
+    "canonical_name",
+    "contributor_name_raw",
+    "contributor_employer",
+    "contributor_occupation",
+    "contributor_city",
+    "contributor_state",
+    "contributor_zip",
+    "zip5",
+    "transaction_count",
+    "er_cluster_id",
+    "er_confidence",
+    "created_at",
+    "updated_at",
+]
+_DONOR_ER_VIEW_COLUMNS = [
+    "id",
+    "canonical_name",
+    "contributor_name_raw",
+    "contributor_employer",
+    "contributor_occupation",
+    "contributor_city",
+    "contributor_state",
+    "contributor_zip",
+    "zip5",
+    "transaction_count",
+]
+_DONOR_IDENTITY_ENTITY_TYPE_TABLES = [
+    "entity_source",
+    "field_provenance",
+    "match_decision",
+    "entity_cluster",
+    "cluster_member",
+    "manual_override",
+    "splink_run",
 ]
 
 
@@ -368,6 +487,89 @@ def _run_main(
                 os.environ.pop(k, None)
             else:
                 os.environ[k] = v
+
+
+def _column_names(conn: psycopg.Connection, *, table_schema: str, table_name: str) -> list[str]:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_schema = %s
+              AND table_name = %s
+            ORDER BY ordinal_position
+            """,
+            (table_schema, table_name),
+        )
+        return [row[0] for row in cur.fetchall()]
+
+
+def _entity_type_check_definitions(conn: psycopg.Connection) -> dict[str, str]:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT rel.relname, pg_get_constraintdef(con.oid)
+            FROM pg_constraint con
+            JOIN pg_class rel ON rel.oid = con.conrelid
+            JOIN pg_namespace nsp ON nsp.oid = rel.relnamespace
+            WHERE nsp.nspname = 'core'
+              AND rel.relname = ANY(%s)
+              AND con.contype = 'c'
+              AND pg_get_constraintdef(con.oid) LIKE '%%entity_type%%'
+            ORDER BY rel.relname
+            """,
+            (_DONOR_IDENTITY_ENTITY_TYPE_TABLES,),
+        )
+        return {row[0]: row[1] for row in cur.fetchall()}
+
+
+def _assert_donor_identity_upgrade_contract(conn: psycopg.Connection) -> None:
+    assert _column_names(conn, table_schema="core", table_name="donor_identity") == _DONOR_IDENTITY_COLUMNS
+    assert _column_names(conn, table_schema="core", table_name="donor_er_view") == _DONOR_ER_VIEW_COLUMNS
+
+    definitions = _entity_type_check_definitions(conn)
+    assert sorted(definitions) == sorted(_DONOR_IDENTITY_ENTITY_TYPE_TABLES)
+    for table_name, definition in definitions.items():
+        assert "'donor_identity'" in definition, f"{table_name} does not accept donor_identity: {definition}"
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT indexname
+            FROM pg_indexes
+            WHERE schemaname = 'core'
+              AND tablename = 'donor_identity'
+              AND indexname IN (
+                  'idx_donor_identity_cluster',
+                  'idx_donor_identity_name',
+                  'idx_donor_identity_zip5'
+              )
+            ORDER BY indexname
+            """
+        )
+        assert [row[0] for row in cur.fetchall()] == [
+            "idx_donor_identity_cluster",
+            "idx_donor_identity_name",
+            "idx_donor_identity_zip5",
+        ]
+
+        cur.execute(
+            """
+            SELECT EXISTS (
+                SELECT 1
+                FROM pg_trigger t
+                JOIN pg_class c ON c.oid = t.tgrelid
+                JOIN pg_proc p ON p.oid = t.tgfoid
+                WHERE c.relnamespace = 'core'::regnamespace
+                  AND c.relname = 'donor_identity'
+                  AND p.proname = 'set_updated_at'
+                  AND NOT t.tgisinternal
+                  AND lower(pg_get_triggerdef(t.oid)) LIKE '%before update%'
+                  AND pg_get_triggerdef(t.oid) LIKE '%core.set_updated_at%'
+            )
+            """
+        )
+        assert cur.fetchone()[0] is True
 
 
 # ---------------------------------------------------------------------------
@@ -575,6 +777,104 @@ class TestApplyMigrations:
             ("derived_top_vendors", "jsonb", "YES"),
         ]
 
+    def test_donor_identity_migration_is_pending_delta(self, fixture_paths: dict[str, Path]) -> None:
+        assert _DONOR_IDENTITY_MIGRATION in _PENDING_FILENAMES
+        assert _DONOR_IDENTITY_MIGRATION not in _BASELINE_ENTRIES
+        assert (fixture_paths["migrations_dir"] / _DONOR_IDENTITY_MIGRATION).is_file()
+
+    def test_donor_identity_upgrade_schema_contract(
+        self, disposable_db: str, fixture_paths: dict[str, Path], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _run_main(disposable_db, fixture_paths, monkeypatch)
+        conn = _connect_to(disposable_db)
+        try:
+            _assert_donor_identity_upgrade_contract(conn)
+        finally:
+            conn.close()
+
+    def test_donor_identity_entity_type_is_accepted_by_upgraded_constraints(
+        self, disposable_db: str, fixture_paths: dict[str, Path], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _run_main(disposable_db, fixture_paths, monkeypatch)
+        donor_id_a = "00000000-0000-0000-0000-000000000001"
+        donor_id_b = "00000000-0000-0000-0000-000000000002"
+        conn = _connect_to(disposable_db)
+        try:
+            with conn.cursor() as cur:
+                cur.execute("INSERT INTO core.source_record DEFAULT VALUES RETURNING id")
+                source_record_id = cur.fetchone()[0]
+                cur.execute(
+                    """
+                    INSERT INTO core.donor_identity
+                        (id, canonical_name, contributor_name_raw, transaction_count)
+                    VALUES
+                        (%s, 'DOE, JANE', 'Doe, Jane', 1),
+                        (%s, 'DOE, JANE', 'DOE JANE', 1)
+                    """,
+                    (donor_id_a, donor_id_b),
+                )
+                cur.execute(
+                    """
+                    INSERT INTO core.entity_source (entity_type, entity_id, source_record_id)
+                    VALUES ('donor_identity', %s, %s)
+                    """,
+                    (donor_id_a, source_record_id),
+                )
+                cur.execute(
+                    """
+                    INSERT INTO core.field_provenance
+                        (entity_type, entity_id, field_name, field_value,
+                         source_record_id, first_seen, last_seen)
+                    VALUES
+                        ('donor_identity', %s, 'canonical_name', 'DOE, JANE',
+                         %s, NOW(), NOW())
+                    """,
+                    (donor_id_a, source_record_id),
+                )
+                cur.execute(
+                    """
+                    INSERT INTO core.match_decision
+                        (entity_type, entity_id_a, entity_id_b, decision, confidence, decided_by, decision_method)
+                    VALUES ('donor_identity', %s, %s, 'match', 0.99, 'test', 'deterministic')
+                    """,
+                    (donor_id_a, donor_id_b),
+                )
+                cur.execute(
+                    """
+                    INSERT INTO core.entity_cluster
+                        (entity_type, canonical_entity_id, cluster_confidence, member_count)
+                    VALUES ('donor_identity', %s, 0.99, 1)
+                    RETURNING id
+                    """,
+                    (donor_id_a,),
+                )
+                cluster_id = cur.fetchone()[0]
+                cur.execute(
+                    """
+                    INSERT INTO core.cluster_member (cluster_id, entity_type, entity_id, is_canonical)
+                    VALUES (%s, 'donor_identity', %s, TRUE)
+                    """,
+                    (cluster_id, donor_id_a),
+                )
+                cur.execute(
+                    """
+                    INSERT INTO core.manual_override
+                        (entity_type, entity_id_a, entity_id_b, override_decision, reason, decided_by)
+                    VALUES (%s, %s, %s, 'confirmed_match', 'same donor tuple', 'test')
+                    """,
+                    ("donor_identity", donor_id_a, donor_id_b),
+                )
+                cur.execute(
+                    """
+                    INSERT INTO core.splink_run
+                        (entity_type, splink_version, model_config, started_at, status)
+                    VALUES ('donor_identity', 'test', '{}'::jsonb, NOW(), 'completed')
+                    """
+                )
+                conn.commit()
+        finally:
+            conn.close()
+
     def test_second_run_is_noop(
         self, disposable_db: str, fixture_paths: dict[str, Path], monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -608,6 +908,15 @@ class TestApplyMigrations:
 
 class TestFailClosed:
     """Failure-mode tests: empty DB, bad baseline, CONCURRENTLY, rollback."""
+
+    def test_admin_connect_fails_non_migration_port_when_db_is_required(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(sys.modules[__name__], "_POSTGRES_PORT", 5485)
+        monkeypatch.setenv("CIVIBUS_REQUIRE_DB", "1")
+
+        # The approved set is `_SAFE_PORTS`, not the single Stage 1 port, so the
+        # refusal names the port that was rejected rather than the one allowed.
+        with pytest.raises(pytest.fail.Exception, match="POSTGRES_PORT=5485 is not an approved safe-local test port"):
+            _admin_connect()
 
     def test_empty_db_no_sentinel_returns_nonzero(
         self,

@@ -333,7 +333,8 @@ describe("entity detail presentation", () => {
       can_render_share: true,
       receipt_source_caveats: [],
       committees: [],
-      coverage: POPULATED_CANDIDATE_MONEY_COVERAGE
+      coverage: POPULATED_CANDIDATE_MONEY_COVERAGE,
+      out_of_cycle_official_total: null
     };
 
     expect(
@@ -486,7 +487,8 @@ describe("entity detail presentation", () => {
         activity_state: "populated" as const,
         completeness: "complete" as const,
         basis: "fec_official_candidate_summary" as const
-      }
+      },
+      out_of_cycle_official_total: null
     };
     const notLoadedSummary = {
       ...officialSummary,
@@ -549,7 +551,8 @@ describe("entity detail presentation", () => {
       can_render_share: true,
       receipt_source_caveats: [],
       committees: [],
-      coverage: POPULATED_CANDIDATE_MONEY_COVERAGE
+      coverage: POPULATED_CANDIDATE_MONEY_COVERAGE,
+      out_of_cycle_official_total: null
     };
     const secondSummary = {
       ...firstSummary,
@@ -640,7 +643,8 @@ describe("entity detail presentation", () => {
         can_render_share: false,
         receipt_source_caveats: ["negative_component_table_only"],
         committees: [],
-        coverage: POPULATED_CANDIDATE_MONEY_COVERAGE
+        coverage: POPULATED_CANDIDATE_MONEY_COVERAGE,
+        out_of_cycle_official_total: null
       }
     ]);
 

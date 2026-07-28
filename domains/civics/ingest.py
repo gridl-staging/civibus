@@ -25,6 +25,201 @@ _UNSET_ELECTORAL_DIVISION = object()
 _ELECTORAL_DIVISION_HAS_GEOMETRY: bool | None = None
 _OFFICE_HAS_ELECTORAL_DIVISION_COLUMN: bool | None = None
 _FEDERAL_HOUSE_OFFICE_ID = UUID("00000000-0000-4000-8000-000000000101")
+_NULL_UUID = UUID("00000000-0000-0000-0000-000000000000")
+
+OfficeNaturalKey = tuple[str, str, str, UUID]
+OfficePreexistenceKey = tuple[str, str, str]
+ElectoralDivisionNaturalKey = tuple[str, str, str, int]
+ContestNaturalKey = tuple[UUID, UUID, date | None, str]
+CandidacyNaturalKey = tuple[UUID, UUID]
+
+
+def office_natural_key(office: Office) -> OfficeNaturalKey:
+    return (
+        office.office_level,
+        office.state or "",
+        office.name,
+        office.electoral_division_id or _NULL_UUID,
+    )
+
+
+def office_preexistence_key(office: Office) -> OfficePreexistenceKey:
+    """Return the legacy loader counter key, which predates division-scoped offices."""
+    return (office.office_level, office.state or "", office.name)
+
+
+def electoral_division_natural_key(division: ElectoralDivision) -> ElectoralDivisionNaturalKey:
+    return (
+        division.division_type,
+        division.state or "",
+        division.name,
+        division.boundary_year or 0,
+    )
+
+
+def contest_natural_key(contest: Contest) -> ContestNaturalKey:
+    return (
+        contest.office_id,
+        contest.electoral_division_id or _NULL_UUID,
+        contest.election_date,
+        contest.election_type,
+    )
+
+
+def candidacy_natural_key(candidacy: Candidacy) -> CandidacyNaturalKey:
+    return (candidacy.person_id, candidacy.contest_id)
+
+
+def select_office_ids_and_preexistence(
+    conn: psycopg.Connection,
+    offices: list[Office],
+) -> tuple[dict[OfficeNaturalKey, UUID], set[OfficePreexistenceKey]]:
+    """Select exact office identities and legacy division-agnostic counter matches."""
+    keys = list(dict.fromkeys(office_natural_key(office) for office in offices))
+    if not keys:
+        return {}, set()
+
+    division_expression = (
+        "COALESCE(office.electoral_division_id, '00000000-0000-0000-0000-000000000000'::uuid)"
+        if _office_has_electoral_division_column(conn)
+        else "'00000000-0000-0000-0000-000000000000'::uuid"
+    )
+    with conn.cursor() as cursor:
+        cursor.execute(
+            f"""
+            WITH incoming (office_level, state, name, electoral_division_id) AS (
+                SELECT *
+                FROM unnest(%s::text[], %s::text[], %s::text[], %s::uuid[])
+            )
+            SELECT
+                incoming.office_level,
+                incoming.state,
+                incoming.name,
+                incoming.electoral_division_id,
+                {division_expression},
+                office.id
+            FROM civic.office AS office
+            JOIN incoming
+              ON incoming.office_level = office.office_level
+             AND incoming.state = COALESCE(office.state, '')
+             AND incoming.name = office.name
+            """,
+            tuple([key[index] for key in keys] for index in range(4)),
+        )
+        identities: dict[OfficeNaturalKey, UUID] = {}
+        preexisting_keys: set[OfficePreexistenceKey] = set()
+        for office_level, state, name, requested_division_id, actual_division_id, office_id in cursor:
+            preexisting_keys.add((office_level, state, name))
+            if requested_division_id == actual_division_id:
+                identities[(office_level, state, name, requested_division_id)] = office_id
+        return identities, preexisting_keys
+
+
+def select_electoral_division_ids_by_natural_key(
+    conn: psycopg.Connection,
+    divisions: list[ElectoralDivision],
+) -> dict[ElectoralDivisionNaturalKey, UUID]:
+    """Select canonical electoral-division identities for the supplied models."""
+    keys = list(dict.fromkeys(electoral_division_natural_key(division) for division in divisions))
+    if not keys:
+        return {}
+
+    with conn.cursor() as cursor:
+        cursor.execute(
+            """
+            WITH incoming (division_type, state, name, boundary_year) AS (
+                SELECT *
+                FROM unnest(%s::text[], %s::text[], %s::text[], %s::integer[])
+            )
+            SELECT
+                division.division_type,
+                COALESCE(division.state, ''),
+                division.name,
+                COALESCE(division.boundary_year, 0),
+                division.id
+            FROM civic.electoral_division AS division
+            JOIN incoming
+              ON incoming.division_type = division.division_type
+             AND incoming.state = COALESCE(division.state, '')
+             AND incoming.name = division.name
+             AND incoming.boundary_year = COALESCE(division.boundary_year, 0)
+            """,
+            tuple([key[index] for key in keys] for index in range(4)),
+        )
+        return {
+            (division_type, state, name, boundary_year): division_id
+            for division_type, state, name, boundary_year, division_id in cursor
+        }
+
+
+def select_contest_ids_by_natural_key(
+    conn: psycopg.Connection,
+    contests: list[Contest],
+) -> dict[ContestNaturalKey, UUID]:
+    """Select canonical contest identities for the supplied models."""
+    keys = list(dict.fromkeys(contest_natural_key(contest) for contest in contests))
+    if not keys:
+        return {}
+
+    with conn.cursor() as cursor:
+        cursor.execute(
+            """
+            WITH incoming (office_id, electoral_division_id, election_date, election_type) AS (
+                SELECT *
+                FROM unnest(%s::uuid[], %s::uuid[], %s::date[], %s::text[])
+            )
+            SELECT
+                contest.office_id,
+                COALESCE(
+                    contest.electoral_division_id,
+                    '00000000-0000-0000-0000-000000000000'::uuid
+                ),
+                contest.election_date,
+                contest.election_type,
+                contest.id
+            FROM civic.contest AS contest
+            JOIN incoming
+              ON incoming.office_id = contest.office_id
+             AND incoming.electoral_division_id = COALESCE(
+                    contest.electoral_division_id,
+                    '00000000-0000-0000-0000-000000000000'::uuid
+                 )
+             AND incoming.election_date IS NOT DISTINCT FROM contest.election_date
+             AND incoming.election_type = contest.election_type
+            """,
+            tuple([key[index] for key in keys] for index in range(4)),
+        )
+        return {
+            (office_id, electoral_division_id, election_date, election_type): contest_id
+            for office_id, electoral_division_id, election_date, election_type, contest_id in cursor
+        }
+
+
+def select_candidacy_ids_by_natural_key(
+    conn: psycopg.Connection,
+    candidacies: list[Candidacy],
+) -> dict[CandidacyNaturalKey, UUID]:
+    """Select canonical candidacy identities for the supplied models."""
+    keys = list(dict.fromkeys(candidacy_natural_key(candidacy) for candidacy in candidacies))
+    if not keys:
+        return {}
+
+    with conn.cursor() as cursor:
+        cursor.execute(
+            """
+            WITH incoming (person_id, contest_id) AS (
+                SELECT *
+                FROM unnest(%s::uuid[], %s::uuid[])
+            )
+            SELECT candidacy.person_id, candidacy.contest_id, candidacy.id
+            FROM civic.candidacy AS candidacy
+            JOIN incoming
+              ON incoming.person_id = candidacy.person_id
+             AND incoming.contest_id = candidacy.contest_id
+            """,
+            tuple([key[index] for key in keys] for index in range(2)),
+        )
+        return {(person_id, contest_id): candidacy_id for person_id, contest_id, candidacy_id in cursor}
 
 
 def _find_existing_officeholding_id(
@@ -152,7 +347,12 @@ def supersede_officeholdings_for_successor(
         return cur.rowcount
 
 
-def upsert_office(conn: psycopg.Connection, office: Office) -> UUID:
+def upsert_office(
+    conn: psycopg.Connection,
+    office: Office,
+    *,
+    link_source: bool = True,
+) -> UUID:
     """Upsert an office row keyed by the canonical office natural key."""
     office_has_electoral_division_column = _office_has_electoral_division_column(conn)
     if office_has_electoral_division_column and office.electoral_division_id is not None:
@@ -190,7 +390,7 @@ def upsert_office(conn: psycopg.Connection, office: Office) -> UUID:
             promoted_row = cur.fetchone()
             if promoted_row is not None:
                 row_id: UUID = promoted_row[0]
-                if office.source_record_id is not None:
+                if link_source and office.source_record_id is not None:
                     insert_entity_source(conn, "office", row_id, office.source_record_id, "office")
                 return row_id
 
@@ -268,13 +468,18 @@ def upsert_office(conn: psycopg.Connection, office: Office) -> UUID:
             )
         row_id: UUID = cur.fetchone()[0]
 
-    if office.source_record_id is not None:
+    if link_source and office.source_record_id is not None:
         insert_entity_source(conn, "office", row_id, office.source_record_id, "office")
 
     return row_id
 
 
-def upsert_electoral_division(conn: psycopg.Connection, division: ElectoralDivision) -> UUID:
+def upsert_electoral_division(
+    conn: psycopg.Connection,
+    division: ElectoralDivision,
+    *,
+    link_source: bool = True,
+) -> UUID:
     """Upsert an electoral division keyed by (division_type, COALESCE(state,''), name, COALESCE(boundary_year,0))."""
     global _ELECTORAL_DIVISION_HAS_GEOMETRY
     if _ELECTORAL_DIVISION_HAS_GEOMETRY is None:
@@ -366,7 +571,7 @@ def upsert_electoral_division(conn: psycopg.Connection, division: ElectoralDivis
             )
         row_id: UUID = cur.fetchone()[0]
 
-    if division.source_record_id is not None:
+    if link_source and division.source_record_id is not None:
         insert_entity_source(conn, "electoral_division", row_id, division.source_record_id, "electoral_division")
 
     return row_id
@@ -391,7 +596,12 @@ def _office_has_electoral_division_column(conn: psycopg.Connection) -> bool:
     return _OFFICE_HAS_ELECTORAL_DIVISION_COLUMN
 
 
-def upsert_contest(conn: psycopg.Connection, contest: Contest) -> UUID:
+def upsert_contest(
+    conn: psycopg.Connection,
+    contest: Contest,
+    *,
+    link_source: bool = True,
+) -> UUID:
     """Upsert a contest keyed by (office_id, COALESCE(electoral_division_id, NULL_UUID), COALESCE(election_date, 0001-01-01), election_type)."""
     if contest.electoral_division_id is not None:
         with conn.cursor() as cur:
@@ -441,7 +651,7 @@ def upsert_contest(conn: psycopg.Connection, contest: Contest) -> UUID:
             promoted_row = cur.fetchone()
             if promoted_row is not None:
                 row_id: UUID = promoted_row[0]
-                if contest.source_record_id is not None:
+                if link_source and contest.source_record_id is not None:
                     insert_entity_source(conn, "contest", row_id, contest.source_record_id, "contest")
                 return row_id
 
@@ -489,7 +699,7 @@ def upsert_contest(conn: psycopg.Connection, contest: Contest) -> UUID:
         )
         row_id: UUID = cur.fetchone()[0]
 
-    if contest.source_record_id is not None:
+    if link_source and contest.source_record_id is not None:
         insert_entity_source(conn, "contest", row_id, contest.source_record_id, "contest")
 
     return row_id
@@ -681,7 +891,12 @@ def upsert_reporting_period(conn: psycopg.Connection, reporting_period: Reportin
     return row_id
 
 
-def upsert_candidacy(conn: psycopg.Connection, candidacy: Candidacy) -> UUID:
+def upsert_candidacy(
+    conn: psycopg.Connection,
+    candidacy: Candidacy,
+    *,
+    link_source: bool = True,
+) -> UUID:
     """Upsert a candidacy keyed by (person_id, contest_id)."""
     should_update_is_unexpired_term = "is_unexpired_term" in candidacy.model_fields_set
     should_update_raw_fields = "raw_fields" in candidacy.model_fields_set
@@ -730,7 +945,7 @@ def upsert_candidacy(conn: psycopg.Connection, candidacy: Candidacy) -> UUID:
         )
         row_id: UUID = cur.fetchone()[0]
 
-    if candidacy.source_record_id is not None:
+    if link_source and candidacy.source_record_id is not None:
         insert_entity_source(conn, "candidacy", row_id, candidacy.source_record_id, "candidacy")
 
     return row_id

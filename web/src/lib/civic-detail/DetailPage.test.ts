@@ -600,6 +600,7 @@ describe("civic detail page rendering", () => {
               can_render_share: false,
               receipt_source_caveats: [],
               coverage: POPULATED_CANDIDATE_MONEY_COVERAGE,
+              out_of_cycle_official_total: null,
               committees: []
             },
             ieSummary: {

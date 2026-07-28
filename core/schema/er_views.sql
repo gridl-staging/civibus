@@ -63,3 +63,17 @@ LEFT JOIN LATERAL (
     ORDER BY ea.created_at DESC, ea.id DESC
     LIMIT 1
 ) AS address_choice ON TRUE;
+
+CREATE OR REPLACE VIEW core.donor_er_view AS
+SELECT
+    id,
+    canonical_name,
+    contributor_name_raw,
+    contributor_employer,
+    contributor_occupation,
+    contributor_city,
+    contributor_state,
+    contributor_zip,
+    zip5,
+    transaction_count
+FROM core.donor_identity;

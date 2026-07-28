@@ -181,12 +181,28 @@ export const CANDIDATE_MONEY_EVIDENCE_BASIS_VALUES = [
 ] as const;
 
 export type CandidateMoneyActivityState = (typeof CANDIDATE_MONEY_ACTIVITY_STATES)[number];
+export type CandidateFundraisingActivityState =
+  | CandidateMoneyActivityState
+  | "out_of_cycle_official_total";
 export type CandidateMoneyCompleteness = (typeof CANDIDATE_MONEY_COMPLETENESS_VALUES)[number];
 export type CandidateMoneyEvidenceBasis = (typeof CANDIDATE_MONEY_EVIDENCE_BASIS_VALUES)[number];
 export type CandidateMoneyCoverage = {
   activity_state: CandidateMoneyActivityState;
   completeness: CandidateMoneyCompleteness;
   basis: CandidateMoneyEvidenceBasis;
+};
+export type CandidateFundraisingCoverage = Omit<CandidateMoneyCoverage, "activity_state"> & {
+  activity_state: CandidateFundraisingActivityState;
+};
+
+export type CandidateOutOfCycleOfficialTotal = {
+  coverage_start_date: string;
+  coverage_end_date: string;
+  total_raised: SerializedMoney;
+  total_spent: SerializedMoney;
+  net: SerializedMoney;
+  cash_on_hand: SerializedMoney | null;
+  summary_source: "fec_weball";
 };
 
 export type IndependentExpenditureSummary = SelectedCycleMetadata & {
@@ -533,7 +549,8 @@ export type CandidateFundraisingSummary = SelectedCycleMetadata & {
   selected_cycle_coverage_complete: boolean;
   can_render_share: boolean;
   receipt_source_caveats: string[];
-  coverage: CandidateMoneyCoverage;
+  coverage: CandidateFundraisingCoverage;
+  out_of_cycle_official_total: CandidateOutOfCycleOfficialTotal | null;
 };
 
 export type CountySummaryRecipientCommittee = {

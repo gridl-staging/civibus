@@ -158,6 +158,7 @@ class TopSpenderEntry(BaseModel):
 
 
 CandidateMoneyActivityState = Literal["populated", "loaded_zero", "not_loaded"]
+CandidateFundraisingActivityState = Literal["populated", "loaded_zero", "not_loaded", "out_of_cycle_official_total"]
 CandidateMoneyCompleteness = Literal["complete", "partial", "unknown"]
 CandidateMoneyEvidenceBasis = Literal[
     "fec_official_candidate_summary",
@@ -170,6 +171,12 @@ CandidateMoneyEvidenceBasis = Literal[
 
 class CandidateMoneyCoverage(BaseModel):
     activity_state: CandidateMoneyActivityState
+    completeness: CandidateMoneyCompleteness
+    basis: CandidateMoneyEvidenceBasis
+
+
+class CandidateFundraisingCoverage(BaseModel):
+    activity_state: CandidateFundraisingActivityState
     completeness: CandidateMoneyCompleteness
     basis: CandidateMoneyEvidenceBasis
 
@@ -493,6 +500,16 @@ class CommitteeFundraisingSummary(BaseModel):
     debts_owed_by_committee: Decimal | None = None
 
 
+class CandidateOutOfCycleOfficialTotal(BaseModel):
+    coverage_start_date: date
+    coverage_end_date: date
+    total_raised: Decimal
+    total_spent: Decimal
+    net: Decimal
+    cash_on_hand: Decimal | None = None
+    summary_source: Literal["fec_weball"]
+
+
 class CandidateFundraisingSummary(BaseModel):
     candidate_id: UUID
     candidate_name: str
@@ -524,7 +541,28 @@ class CandidateFundraisingSummary(BaseModel):
     can_render_share: bool = False
     receipt_source_caveats: list[str] = Field(default_factory=list)
     debts_owed_by_committee: Decimal | None = None
-    coverage: CandidateMoneyCoverage
+    coverage: CandidateFundraisingCoverage
+    out_of_cycle_official_total: CandidateOutOfCycleOfficialTotal | None = None
+
+    @model_validator(mode="after")
+    def validate_out_of_cycle_official_total_state(self) -> CandidateFundraisingSummary:
+        has_supplemental_total = self.out_of_cycle_official_total is not None
+        has_supplemental_state = self.coverage.activity_state == "out_of_cycle_official_total"
+        if has_supplemental_total and not has_supplemental_state:
+            raise ValueError(
+                "out_of_cycle_official_total requires coverage.activity_state 'out_of_cycle_official_total'"
+            )
+        if has_supplemental_state and not has_supplemental_total:
+            raise ValueError(
+                "coverage.activity_state 'out_of_cycle_official_total' requires out_of_cycle_official_total"
+            )
+        if self.out_of_cycle_official_total is not None:
+            supplemental_total = self.out_of_cycle_official_total
+            if supplemental_total.coverage_start_date > supplemental_total.coverage_end_date:
+                raise ValueError("out_of_cycle_official_total coverage_start_date must not follow coverage_end_date")
+            if supplemental_total.coverage_end_date >= self.coverage_start_date:
+                raise ValueError("out_of_cycle_official_total coverage_end_date must precede selected-cycle coverage")
+        return self
 
 
 StateCoverageTier = Literal[

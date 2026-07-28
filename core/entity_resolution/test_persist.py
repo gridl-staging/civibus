@@ -9,12 +9,19 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
 from core.entity_resolution.persist import (
+    _ENTITY_TABLE_NAMES,
+    _entity_table_name,
     log_splink_run_complete,
     log_splink_run_failed,
     log_splink_run_start,
+    persist_auto_merge_clusters,
     persist_match_decisions,
 )
-from core.entity_resolution.test_extract import _insert_organization, _insert_person
+from core.entity_resolution.test_extract import (
+    _expected_donor_identity_id,
+    _insert_organization,
+    _insert_person,
+)
 
 pytestmark = pytest.mark.integration
 
@@ -101,6 +108,18 @@ def _create_org(db_conn: psycopg.Connection, *, organization_id: UUID, name: str
     )
 
 
+def _create_donor_identity(db_conn: psycopg.Connection, *, donor_id: UUID, employer: str) -> None:
+    db_conn.execute(
+        """
+        INSERT INTO core.donor_identity (
+            id, canonical_name, contributor_name_raw, contributor_employer, transaction_count
+        )
+        VALUES (%s, 'DOE, JANE', 'DOE, JANE', %s, 1)
+        """,
+        (donor_id, employer),
+    )
+
+
 def _match_pair(
     entity_id_a: UUID,
     entity_id_b: UUID,
@@ -118,6 +137,32 @@ def _match_pair(
         "decision_method": decision_method,
         "decided_by": decided_by,
     }
+
+
+def _cluster_component(
+    *,
+    canonical_entity_id: UUID,
+    member_ids: set[UUID],
+    min_confidence: float,
+) -> dict[str, object]:
+    return {
+        "canonical_entity_id": canonical_entity_id,
+        "member_ids": member_ids,
+        "min_confidence": min_confidence,
+        "min_decision": "match",
+        "links": [],
+    }
+
+
+def _donor_identity_id(*, employer: str, zip_code: str = "277011234") -> UUID:
+    return _expected_donor_identity_id(
+        contributor_name_raw="DOE, JANE",
+        contributor_employer=employer,
+        contributor_occupation="ENGINEER",
+        contributor_city="DURHAM",
+        contributor_state="NC",
+        contributor_zip=zip_code,
+    )
 
 
 def test_log_splink_run_start_inserts_running_row_with_explicit_started_at(
@@ -145,6 +190,82 @@ def test_log_splink_run_start_inserts_running_row_with_explicit_started_at(
     assert row["model_config"] == model_config
     assert row["started_at"] == started_at
     assert row["completed_at"] is None
+
+
+def test_log_splink_run_lifecycle_accepts_donor_identity_entity_type(
+    db_conn: psycopg.Connection,
+) -> None:
+    started_at = datetime(2026, 3, 17, 8, 0, 0, tzinfo=UTC)
+    completed_at = datetime(2026, 3, 17, 8, 2, 0, tzinfo=UTC)
+
+    completed_run_id = log_splink_run_start(
+        db_conn,
+        entity_type="donor_identity",
+        splink_version="3.9.8",
+        model_config={"model": "donor-v1", "blocking_rules": ["l.zip5 = r.zip5"]},
+        started_at=started_at,
+    )
+    failed_run_id = log_splink_run_start(
+        db_conn,
+        entity_type="donor_identity",
+        splink_version="3.9.8",
+        model_config={"model": "donor-v1"},
+        started_at=started_at,
+    )
+
+    log_splink_run_complete(
+        db_conn,
+        completed_run_id,
+        completed_at=completed_at,
+        duration_seconds=120.0,
+        counts={
+            "input_record_count": 3,
+            "pairs_compared": 2,
+            "matches_found": 1,
+            "auto_merged": 1,
+            "probable_matches": 0,
+            "possible_matches": 0,
+        },
+    )
+    log_splink_run_failed(
+        db_conn,
+        failed_run_id,
+        completed_at=completed_at,
+        duration_seconds=12.5,
+        error_message="donor scoring failed",
+    )
+
+    with db_conn.cursor(row_factory=dict_row) as cursor:
+        cursor.execute(
+            """
+            SELECT id, entity_type, status, model_config, input_record_count, pairs_compared,
+                   matches_found, auto_merged, probable_matches, possible_matches,
+                   duration_seconds, error_message
+            FROM core.splink_run
+            WHERE id IN (%s, %s)
+            ORDER BY status
+            """,
+            (completed_run_id, failed_run_id),
+        )
+        rows = cursor.fetchall()
+
+    completed_row = next(row for row in rows if row["id"] == completed_run_id)
+    failed_row = next(row for row in rows if row["id"] == failed_run_id)
+    assert completed_row["entity_type"] == "donor_identity"
+    assert completed_row["status"] == "completed"
+    assert completed_row["model_config"] == {"model": "donor-v1", "blocking_rules": ["l.zip5 = r.zip5"]}
+    assert completed_row["input_record_count"] == 3
+    assert completed_row["pairs_compared"] == 2
+    assert completed_row["matches_found"] == 1
+    assert completed_row["auto_merged"] == 1
+    assert completed_row["probable_matches"] == 0
+    assert completed_row["possible_matches"] == 0
+    assert completed_row["duration_seconds"] == pytest.approx(120.0)
+    assert completed_row["error_message"] is None
+    assert failed_row["entity_type"] == "donor_identity"
+    assert failed_row["status"] == "failed"
+    assert failed_row["duration_seconds"] == pytest.approx(12.5)
+    assert failed_row["error_message"] == "donor scoring failed"
 
 
 def test_log_splink_run_complete_sets_status_timestamps_and_count_fields(
@@ -299,6 +420,57 @@ def test_persist_match_decisions_canonicalizes_pairs_and_persists_metadata_and_e
     assert all(row["match_evidence_type"] is None for row in probabilistic_rows)
 
 
+def test_persist_match_decisions_accepts_donor_identity_and_persists_ordered_evidence(
+    db_conn: psycopg.Connection,
+) -> None:
+    donor_a = _donor_identity_id(employer="ACME CORP")
+    donor_b = _donor_identity_id(employer="BETA LLC")
+    inserted_ids = persist_match_decisions(
+        db_conn,
+        [
+            {
+                **_match_pair(
+                    donor_b,
+                    donor_a,
+                    confidence=0.94,
+                    decision="probable_match",
+                    decided_by="splink_donor_v1",
+                ),
+                "matched_fields": ["contributor_name_raw", "contributor_zip"],
+                "transaction_counts": {"left": 2, "right": 1},
+            }
+        ],
+        "donor_identity",
+    )
+
+    with db_conn.cursor(row_factory=dict_row) as cursor:
+        cursor.execute(
+            """
+            SELECT id, entity_type, entity_id_a, entity_id_b, decision, confidence,
+                   decided_by, decision_method, match_evidence
+            FROM core.match_decision
+            WHERE id = %s
+            """,
+            (inserted_ids[0],),
+        )
+        row = cursor.fetchone()
+
+    assert row is not None
+    assert row["entity_type"] == "donor_identity"
+    assert isinstance(row["entity_id_a"], UUID)
+    assert isinstance(row["entity_id_b"], UUID)
+    assert row["entity_id_a"] == min(donor_a, donor_b)
+    assert row["entity_id_b"] == max(donor_a, donor_b)
+    assert row["decision"] == "probable_match"
+    assert row["confidence"] == pytest.approx(0.94)
+    assert row["decided_by"] == "splink_donor_v1"
+    assert row["decision_method"] == "probabilistic"
+    assert row["match_evidence"] == {
+        "matched_fields": ["contributor_name_raw", "contributor_zip"],
+        "transaction_counts": {"left": 2, "right": 1},
+    }
+
+
 def test_persist_match_decisions_supersedes_existing_active_decision_on_rerun(
     db_conn: psycopg.Connection,
 ) -> None:
@@ -370,3 +542,200 @@ def test_persist_match_decisions_supersedes_existing_active_decision_on_rerun(
     assert active_row is not None
     assert active_row[0] == new_row["id"]
     assert active_row[1] == "match"
+
+
+def test_persist_auto_merge_clusters_accepts_and_persists_donor_identity_type(
+    db_conn: psycopg.Connection,
+) -> None:
+    canonical_id = _donor_identity_id(employer="ACME CORP")
+    member_id = _donor_identity_id(employer="BETA LLC")
+
+    cluster_ids = persist_auto_merge_clusters(
+        db_conn,
+        [
+            _cluster_component(
+                canonical_entity_id=canonical_id,
+                member_ids={canonical_id, member_id},
+                min_confidence=0.97,
+            )
+        ],
+        "donor_identity",
+        merged_by="splink_donor_v1",
+    )
+
+    assert len(cluster_ids) == 1
+    with db_conn.cursor(row_factory=dict_row) as cursor:
+        cursor.execute(
+            """
+            SELECT entity_type, canonical_entity_id, cluster_confidence, member_count
+            FROM core.entity_cluster
+            WHERE id = %s
+            """,
+            (cluster_ids[0],),
+        )
+        cluster_row = cursor.fetchone()
+        cursor.execute(
+            """
+            SELECT entity_type, entity_id, is_canonical, merged_by, split_at
+            FROM core.cluster_member
+            WHERE cluster_id = %s
+            ORDER BY entity_id
+            """,
+            (cluster_ids[0],),
+        )
+        member_rows = cursor.fetchall()
+
+    assert cluster_row == {
+        "entity_type": "donor_identity",
+        "canonical_entity_id": canonical_id,
+        "cluster_confidence": pytest.approx(0.97),
+        "member_count": 2,
+    }
+    assert member_rows == [
+        {
+            "entity_type": "donor_identity",
+            "entity_id": min(canonical_id, member_id),
+            "is_canonical": min(canonical_id, member_id) == canonical_id,
+            "merged_by": "splink_donor_v1",
+            "split_at": None,
+        },
+        {
+            "entity_type": "donor_identity",
+            "entity_id": max(canonical_id, member_id),
+            "is_canonical": max(canonical_id, member_id) == canonical_id,
+            "merged_by": "splink_donor_v1",
+            "split_at": None,
+        },
+    ]
+
+
+def test_persist_auto_merge_clusters_rerun_preserves_donor_provenance(
+    db_conn: psycopg.Connection,
+) -> None:
+    donor_a = _donor_identity_id(employer="ACME CORP")
+    donor_b = _donor_identity_id(employer="BETA LLC")
+    _create_donor_identity(db_conn, donor_id=donor_a, employer="ACME CORP")
+    _create_donor_identity(db_conn, donor_id=donor_b, employer="BETA LLC")
+
+    data_source_id = _insert_data_source(db_conn, name="donor-cluster-rerun")
+    source_a = _insert_source_record(db_conn, data_source_id=data_source_id, source_record_key="donor-a")
+    source_b = _insert_source_record(db_conn, data_source_id=data_source_id, source_record_key="donor-b")
+    _insert_entity_source(
+        db_conn,
+        entity_type="donor_identity",
+        entity_id=donor_a,
+        source_record_id=source_a,
+        extraction_role="donor",
+    )
+    _insert_entity_source(
+        db_conn,
+        entity_type="donor_identity",
+        entity_id=donor_b,
+        source_record_id=source_b,
+        extraction_role="donor",
+    )
+
+    persist_auto_merge_clusters(
+        db_conn,
+        [_cluster_component(canonical_entity_id=donor_a, member_ids={donor_a, donor_b}, min_confidence=0.97)],
+        "donor_identity",
+    )
+    final_cluster_id = persist_auto_merge_clusters(
+        db_conn,
+        [_cluster_component(canonical_entity_id=donor_b, member_ids={donor_a, donor_b}, min_confidence=0.99)],
+        "donor_identity",
+    )[0]
+
+    with db_conn.cursor(row_factory=dict_row) as cursor:
+        cursor.execute(
+            """
+            SELECT id, er_cluster_id, er_confidence
+            FROM core.donor_identity
+            WHERE id IN (%s, %s)
+            ORDER BY id
+            """,
+            (donor_a, donor_b),
+        )
+        donor_rows = cursor.fetchall()
+        cursor.execute(
+            """
+            SELECT entity_id, source_record_id, extracted_fields
+            FROM core.entity_source
+            WHERE entity_type = 'donor_identity'
+            ORDER BY source_record_id
+            """
+        )
+        source_rows = cursor.fetchall()
+
+    assert all(row["er_cluster_id"] == final_cluster_id for row in donor_rows)
+    assert all(row["er_confidence"] == pytest.approx(0.99) for row in donor_rows)
+    source_by_id = {row["source_record_id"]: row for row in source_rows}
+    assert source_by_id == {
+        source_a: {
+            "entity_id": donor_b,
+            "source_record_id": source_a,
+            "extracted_fields": {"_er_source_entity_ids": [str(donor_a)]},
+        },
+        source_b: {
+            "entity_id": donor_b,
+            "source_record_id": source_b,
+            "extracted_fields": None,
+        },
+    }
+
+
+def test_manual_override_schema_accepts_donor_identity_entity_type(
+    db_conn: psycopg.Connection,
+) -> None:
+    donor_a, donor_b = sorted(
+        [
+            _donor_identity_id(employer="ACME CORP"),
+            _donor_identity_id(employer="BETA LLC"),
+        ]
+    )
+    override_id = uuid4()
+
+    db_conn.execute(
+        """
+        INSERT INTO core.manual_override (
+            id,
+            entity_type,
+            entity_id_a,
+            entity_id_b,
+            override_decision,
+            reason,
+            decided_by
+        )
+        VALUES (%s, 'donor_identity', %s, %s, 'confirmed_match', 'same donor tuple', 'test:audit')
+        """,
+        (override_id, donor_a, donor_b),
+    )
+
+    row = db_conn.execute(
+        """
+        SELECT entity_type, entity_id_a, entity_id_b, override_decision, reason, decided_by
+        FROM core.manual_override
+        WHERE id = %s
+        """,
+        (override_id,),
+    ).fetchone()
+
+    assert row == (
+        "donor_identity",
+        donor_a,
+        donor_b,
+        "confirmed_match",
+        "same donor tuple",
+        "test:audit",
+    )
+
+
+def test_persist_entity_table_name_accepts_donor_identity_and_lists_supported_types() -> None:
+    assert "donor_identity" in _ENTITY_TABLE_NAMES
+    assert _entity_table_name("donor_identity") == _ENTITY_TABLE_NAMES["donor_identity"]
+
+    with pytest.raises(
+        ValueError,
+        match="entity_type must be one of 'donor_identity', 'organization', or 'person', got 'committee'",
+    ):
+        _entity_table_name("committee")

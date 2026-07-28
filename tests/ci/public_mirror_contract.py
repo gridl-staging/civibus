@@ -145,6 +145,7 @@ PUBLIC_MIRROR_TEST_CLASSIFICATIONS: tuple[PublicMirrorTestClassification, ...] =
             "tests/ci/test_fly_ops_docs_contract.py::test_fly_runbook_password_guidance_points_to_pgpass_owners",
             "tests/ci/test_fly_ops_docs_contract.py::test_stage_owned_runnable_docs_do_not_publish_password_prefix_commands",
             "tests/ci/test_fly_ops_docs_contract.py::test_roadmap_tracks_only_unresolved_stage4_and_rotation_work",
+            "tests/ci/test_fly_ops_docs_contract.py::test_scheduler_boundary_red_keeps_weekly_refresh_recheck_open",
             "tests/ci/test_fly_ops_docs_contract.py::test_project_overview_current_scope_matches_implemented_fly_refresh_model",
         ),
     ),

@@ -9,7 +9,10 @@ import {
   buildCandidateRoutePresentation,
   buildCommitteeRoutePresentation
 } from "./presentation";
-import { COMMITTEE_FILINGS_WINDOW_LIMIT } from "./contract";
+import {
+  COMMITTEE_FILINGS_WINDOW_LIMIT,
+  type CandidateOutOfCycleOfficialTotal
+} from "./contract";
 import {
   CANDIDATE_CANONICAL_DATA,
   CANDIDATE_CANONICAL_DATA_WITH_L10_DEVIATION,
@@ -146,7 +149,7 @@ function expectMethodologyCoverageLink(html: string): void {
 
 function buildCandidateMatrixData(
   fundraisingCoverage: {
-    activity_state: "populated" | "loaded_zero" | "not_loaded";
+    activity_state: "populated" | "loaded_zero" | "not_loaded" | "out_of_cycle_official_total";
     completeness: "complete" | "partial" | "unknown";
     basis:
       | "fec_official_candidate_summary"
@@ -164,10 +167,13 @@ function buildCandidateMatrixData(
       | "fec_schedule_e_transactions"
       | "authoritative_load_evidence"
       | "no_authoritative_load_evidence";
-  }
+  },
+  outOfCycleOfficialTotal: CandidateOutOfCycleOfficialTotal | null = null
 ) {
   const fundraisingIsPopulated = fundraisingCoverage.activity_state === "populated";
-  const fundraisingIsLoadedZero = fundraisingCoverage.activity_state === "loaded_zero";
+  const hasSelectedCycleBalances =
+    fundraisingCoverage.activity_state !== "loaded_zero" &&
+    fundraisingCoverage.activity_state !== "out_of_cycle_official_total";
   const ieIsPopulated = ieCoverage.activity_state === "populated";
 
   return {
@@ -221,16 +227,17 @@ function buildCandidateMatrixData(
             }
           ]
         : [],
-      cash_on_hand: fundraisingIsLoadedZero ? null : "20.00",
+      cash_on_hand: hasSelectedCycleBalances ? "20.00" : null,
       net_self_funding: null,
-      debts_owed_by_committee: fundraisingIsLoadedZero ? null : "10.00",
+      debts_owed_by_committee: hasSelectedCycleBalances ? "10.00" : null,
       summary_source: "derived" as const,
       itemized_transaction_count: fundraisingIsPopulated ? 5 : 0,
       receipt_source_composition: [],
       selected_cycle_coverage_complete: fundraisingCoverage.completeness === "complete",
       can_render_share: false,
       receipt_source_caveats: [],
-      coverage: fundraisingCoverage
+      coverage: fundraisingCoverage,
+      out_of_cycle_official_total: outOfCycleOfficialTotal
     }),
     ieSummary: asDeferredValue({
       ...DEFAULT_SELECTED_CYCLE_FIELDS,
@@ -1321,6 +1328,76 @@ describe("DetailPage route presentation", () => {
     expect(extractElementByTestId(rendered.body, "outside-spending-transactions-scroll")).toBeNull();
     expect(rendered.body).not.toContain('class="detail__committee-card"');
     expect(rendered.body).not.toContain("outside-spending-chart");
+  });
+
+  it("renders an earlier-cycle official total only as supplemental fundraising information", () => {
+    const rendered = render(DetailPage, {
+      props: {
+        presentation: buildCandidateRoutePresentation(
+          buildCandidateMatrixData(
+            {
+              activity_state: "out_of_cycle_official_total",
+              completeness: "complete",
+              basis: "fec_official_candidate_summary"
+            },
+            {
+              activity_state: "loaded_zero",
+              completeness: "complete",
+              basis: "authoritative_load_evidence"
+            },
+            {
+              coverage_start_date: "2023-01-01",
+              coverage_end_date: "2024-12-31",
+              total_raised: "1234.56",
+              total_spent: "234.56",
+              net: "1000.00",
+              cash_on_hand: "345.67",
+              summary_source: "fec_weball"
+            }
+          )
+        )
+      }
+    });
+
+    const fundraisingSummary = extractElementByTestId(
+      rendered.body,
+      "candidate-fundraising-summary"
+    );
+    const earlierCycleOfficialTotal = extractElementByTestId(
+      rendered.body,
+      "candidate-earlier-cycle-official-total"
+    );
+    const keyFinancials = extractElementByTestId(rendered.body, "key-metrics");
+    const committeeBreakdown = extractElementByTestId(
+      rendered.body,
+      "candidate-committee-breakdown"
+    );
+    const outsideSpending = extractElementByTestId(rendered.body, "candidate-outside-spending");
+
+    expect(fundraisingSummary).not.toBeNull();
+    expect(earlierCycleOfficialTotal).not.toBeNull();
+    expect(fundraisingSummary).toContain(earlierCycleOfficialTotal);
+    expect(earlierCycleOfficialTotal).toContain("Earlier-cycle official total");
+    expect(earlierCycleOfficialTotal).toContain(
+      "Official FEC total from 2023-01-01 to 2024-12-31; not part of the 2026 selected-cycle totals."
+    );
+    expect(earlierCycleOfficialTotal).toContain("$1,234.56");
+    expect(earlierCycleOfficialTotal).toContain("$234.56");
+    expect(earlierCycleOfficialTotal).toContain("$1,000.00");
+    expect(earlierCycleOfficialTotal).toContain("$345.67");
+
+    expect(keyFinancials).not.toBeNull();
+    expect(keyFinancials).not.toContain('class="detail__row"');
+    expect(keyFinancials).not.toContain("Earlier-cycle official total");
+    expect(committeeBreakdown).not.toBeNull();
+    expect(committeeBreakdown).not.toContain('class="detail__committee-card"');
+    expect(committeeBreakdown).not.toContain("Earlier-cycle official total");
+    expect(outsideSpending).not.toBeNull();
+    expect(outsideSpending).not.toContain("Earlier-cycle official total");
+    expect(outsideSpending).not.toContain("$1,234.56");
+    expect(fundraisingSummary).not.toContain("<dt>Selected cycle</dt>");
+    expect(fundraisingSummary).not.toContain("<dt>Coverage</dt>");
+    expect(fundraisingSummary).not.toContain("<dt>Source</dt>");
   });
 
   it("renders backend-failure candidate money view models without zero figures, cards, tables, or charts", () => {

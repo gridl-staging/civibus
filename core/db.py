@@ -157,7 +157,9 @@ find_organization_by_canonical_name = db_ingest.find_organization_by_canonical_n
 find_organization_by_identifier = db_ingest.find_organization_by_identifier
 find_person_by_identifier = db_ingest.find_person_by_identifier
 find_person_by_name_and_zip = db_ingest.find_person_by_name_and_zip
+find_people_by_name_and_zip = db_ingest.find_people_by_name_and_zip
 insert_entity_source = db_ingest.insert_entity_source
+insert_entity_sources_bulk = db_ingest.insert_entity_sources_bulk
 insert_field_provenance = db_ingest.insert_field_provenance
 insert_entity_address = db_ingest.insert_entity_address
 try_insert_source_record = db_ingest.try_insert_source_record
@@ -180,6 +182,39 @@ def resolve_person_by_name_and_zip(
         return existing_person_id
 
     return insert_person(conn, person)
+
+
+def resolve_people_by_name_and_zip(
+    conn: psycopg.Connection,
+    people: Sequence[Person],
+    addresses: Sequence[Address | None],
+) -> list[UUID]:
+    """Resolve people setwise while preserving input order and new-person reuse."""
+    if len(people) != len(addresses):
+        raise ValueError("people and addresses must contain the same number of rows")
+
+    keys = [
+        (person.last_name, person.first_name, address.zip5 if address is not None else None)
+        for person, address in zip(people, addresses, strict=True)
+        if person.last_name and person.first_name
+    ]
+    resolved_by_key = find_people_by_name_and_zip(conn, keys)
+    resolved_ids: list[UUID] = []
+    for person, address in zip(people, addresses, strict=True):
+        key = (
+            person.last_name,
+            person.first_name,
+            address.zip5 if address is not None else None,
+        )
+        if person.last_name and person.first_name and key in resolved_by_key:
+            resolved_ids.append(resolved_by_key[key])
+            continue
+
+        person_id = insert_person(conn, person)
+        resolved_ids.append(person_id)
+        if person.last_name and person.first_name:
+            resolved_by_key[key] = person_id
+    return resolved_ids
 
 
 def resolve_organization_by_canonical_name(
@@ -699,22 +734,20 @@ def select_active_source_record_by_key(
     source_record_key: str,
 ) -> SourceRecord | None:
     """Return the active source record for a (data_source_id, source_record_key) pair."""
-    with conn.cursor() as cursor:
-        cursor.execute(
-            """
-            SELECT id
-            FROM core.source_record
-            WHERE data_source_id = %s
-              AND source_record_key = %s
-              AND superseded_by IS NULL
-            LIMIT 1
-            """,
-            (data_source_id, source_record_key),
-        )
-        row = cursor.fetchone()
-    if row is None:
-        return None
-    return select_source_record(conn, row[0])
+    return select_active_source_records_by_keys(
+        conn,
+        [(data_source_id, source_record_key)],
+    ).get((data_source_id, source_record_key))
+
+
+def select_active_source_records_by_keys(
+    conn: psycopg.Connection,
+    keys: list[tuple[UUID, str]],
+    *,
+    for_update: bool = False,
+) -> dict[tuple[UUID, str], SourceRecord]:
+    """Return active source records for natural keys in one statement."""
+    return db_ingest.select_active_source_records_by_keys(conn, keys, for_update=for_update)
 
 
 def _person_portrait_values(portrait: PersonPortrait) -> tuple[object, ...]:

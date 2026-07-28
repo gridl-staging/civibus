@@ -6,7 +6,6 @@ import shlex
 import shutil
 import stat
 import subprocess
-import sys
 import textwrap
 import tomllib
 from dataclasses import dataclass
@@ -26,8 +25,8 @@ PUBLIC_RUN_SPECIMENS = (
     "docs/reference/keel/",
     "evidence/",
 )
-EXPECTED_PUBLIC_ELIGIBLE_NODE_TOTAL = 3334
-EXPECTED_PUBLIC_NODE_PREFIX_TOTALS = {"api/": 258, "core/": 680, "domains/": 1716, "tests/": 680}
+EXPECTED_PUBLIC_ELIGIBLE_NODE_TOTAL = 3382
+EXPECTED_PUBLIC_NODE_PREFIX_TOTALS = {"api/": 262, "core/": 682, "domains/": 1740, "tests/": 698}
 PROJECTED_PYTEST_TIMEOUT_SECONDS = 600
 
 
@@ -132,8 +131,14 @@ def _pytest_collect_command_from_make_target(project_root: Path, target_name: st
     pytest_line = next((line for line in recipe if " pytest" in line or line.startswith("pytest ")), None)
     assert pytest_line is not None, f"Makefile:{target_name} must run pytest"
     pytest_parts = shlex.split(pytest_line)
+    assert "pytest" in pytest_parts, f"Makefile:{target_name} must expose pytest as a shell token"
     pytest_index = pytest_parts.index("pytest")
-    return [sys.executable, "-m", "pytest", "--collect-only", "-q", *pytest_parts[pytest_index + 1 :]]
+    return [
+        *pytest_parts[: pytest_index + 1],
+        "--collect-only",
+        "-q",
+        *pytest_parts[pytest_index + 1 :],
+    ]
 
 
 def _make_target_recipe(makefile_path: Path, target_name: str) -> list[str]:
@@ -436,13 +441,15 @@ def test_post_sync_uses_repo_virtualenv_python_when_python3_fails(tmp_path: Path
 def test_projected_current_public_unit_selection_failures_are_classified(tmp_path: Path) -> None:
     projected_mirror = project_debbie_public_mirror(tmp_path)
     collect_command = _pytest_collect_command_from_make_target(projected_mirror.root, "test")
+    assert collect_command[:7] == ["uv", "run", "--extra", "dev", "--extra", "entity-resolution", "pytest"]
     collected = _run_projected_pytest(projected_mirror, collect_command)
     collected_node_ids = _collected_node_ids(collected.stdout)
 
     assert collected.returncode == 0, _collection_diagnostics(collected)
     assert collected_node_ids, _collection_diagnostics(collected)
 
-    run_command = [*collect_command[:3], *collect_command[5:], "--tb=no", "-q"]
+    run_command = [part for part in collect_command if part != "--collect-only"]
+    run_command.append("--tb=no")
     completed = _run_projected_pytest(projected_mirror, run_command)
     reproduced_failure_nodes = _failed_node_ids(completed.stdout)
     expected_failure_nodes = set(DEV_REPO_ONLY_CLASSIFICATIONS_BY_NODE_ID)
