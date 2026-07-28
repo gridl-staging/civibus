@@ -133,7 +133,15 @@ describe("loadPersonMoneyBundle", () => {
         return [{ name: "Donor", total_amount: "100.00", transaction_count: 1 }];
       }
       if (path === `/v1/person/${PERSON_ID}/top-employers?cycle=${SELECTED_CYCLE}`) {
-        return [{ employer: "Employer", total_amount: "100.00", transaction_count: 1 }];
+        return [
+          {
+            employer: "Employer",
+            total_amount: "100.00",
+            transaction_count: 1,
+            industry: "UNKNOWN_INDUSTRY",
+            industry_rollup_eligible: true
+          }
+        ];
       }
 
       throw new Error(`Unexpected path: ${path}`);

@@ -1041,7 +1041,7 @@ def _benchmark_child_environment() -> dict[str, str]:
 
 
 def _new_benchmark_invocation_id() -> str:
-    return secrets.token_urlsafe(_BENCHMARK_INVOCATION_ID_BYTES)
+    return secrets.token_hex(_BENCHMARK_INVOCATION_ID_BYTES)
 
 
 def _benchmark_in_process_invocation_id(args: argparse.Namespace) -> str:

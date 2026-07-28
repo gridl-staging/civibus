@@ -113,8 +113,27 @@ const PERSON_TOP_DONORS = [
 ];
 
 const PERSON_TOP_EMPLOYERS = [
-  { employer: "ACME CORP", total_amount: "600.00", transaction_count: 3 },
-  { employer: "State University", total_amount: "150.00", transaction_count: 1 }
+  {
+    employer: "ACME CORP",
+    total_amount: "600.00",
+    transaction_count: 3,
+    industry: "Technology",
+    industry_rollup_eligible: true
+  },
+  {
+    employer: "State University",
+    total_amount: "150.00",
+    transaction_count: 1,
+    industry: "UNKNOWN_INDUSTRY",
+    industry_rollup_eligible: true
+  },
+  {
+    employer: "Legacy employer bucket",
+    total_amount: "25.00",
+    transaction_count: 1,
+    industry: "UNKNOWN_INDUSTRY",
+    industry_rollup_eligible: false
+  }
 ];
 
 function asSettled<T>(value: T): Promise<T> {
@@ -523,7 +542,9 @@ describe("entity detail page rendering", () => {
     expect(rendered.body).toContain("Second Person Donor");
     expect(rendered.body).toContain("<h5>Top reported employer names</h5>");
     expect(rendered.body).toContain("Top employers aggregate raw employer names from itemized individual contributions only.");
-    expect(rendered.body).toContain("They are not industry- or sector-coded; see Methodology for source-linking and evidence limitations.");
+    expect(rendered.body).toContain(
+      "The raw ranking remains employer-name data; see Methodology for source-linking and evidence limitations."
+    );
     expect(rendered.body).toContain('data-testid="person-top-employers-scroll"');
     expect(rendered.body).toContain("ACME CORP");
     expect(rendered.body).toContain("$600.00");
@@ -813,6 +834,69 @@ describe("entity detail page rendering", () => {
     expect(topEmployersTable?.match(/<thead>/g)).toHaveLength(1);
     expect(donorVendorIndex).toBeGreaterThan(topEmployersIndex);
     expect(chronologicalDonorIndex).toBeGreaterThan(donorVendorIndex);
+  });
+
+  it("renders the server-owned industry rollup after the unchanged employer-name table", () => {
+    const rendered = render(DetailPage, {
+      props: {
+        data: buildPersonPageBundle({
+          personFinanceSections: asSettled([buildPersonFinanceSection()])
+        })
+      }
+    });
+
+    const topEmployersIndex = rendered.body.indexOf("<h5>Top reported employer names</h5>");
+    const legacyEmployerIndex = rendered.body.indexOf("Legacy employer bucket", topEmployersIndex);
+    const industryHeadingIndex = rendered.body.indexOf(
+      "<h5>Industries among top reported employer names</h5>",
+      topEmployersIndex
+    );
+    const industryRows = rendered.body.match(/data-testid="industry-rollup-row"/g) ?? [];
+
+    expect(topEmployersIndex).toBeGreaterThan(-1);
+    expect(legacyEmployerIndex).toBeGreaterThan(topEmployersIndex);
+    expect(industryHeadingIndex).toBeGreaterThan(legacyEmployerIndex);
+    expect(industryRows).toHaveLength(2);
+    expect(rendered.body).toContain(
+      '<tr data-testid="industry-rollup-row"><td>Technology</td><td>$600.00</td><td>3 transactions</td></tr>'
+    );
+    expect(rendered.body).toContain(
+      '<tr data-testid="industry-rollup-row"><td>Unknown / unclassified</td><td>$150.00</td><td>1 transaction</td></tr>'
+    );
+    expect(rendered.body).toContain(
+      "Classified: $600.00 and 3 transactions out of $750.00 and 4 transactions among eligible top-employer rows."
+    );
+    expect(rendered.body).toContain(
+      "Industries are assigned from reported employer names by the server. This rollup covers only eligible returned top-employer rows for the selected cycle."
+    );
+    expect(rendered.body).toContain("<th>Employer</th><th>Total</th><th>Transactions</th>");
+  });
+
+  it("renders an honest industry empty state when no employer row is eligible", () => {
+    const rendered = render(DetailPage, {
+      props: {
+        data: buildPersonPageBundle({
+          personFinanceSections: asSettled([buildPersonFinanceSection()]),
+          personTopEmployers: asSettled([
+            {
+              employer: "Legacy employer bucket",
+              total_amount: "25.00",
+              transaction_count: 1,
+              industry: "UNKNOWN_INDUSTRY",
+              industry_rollup_eligible: false
+            }
+          ])
+        })
+      }
+    });
+
+    expect(rendered.body).toContain("<h5>Industries among top reported employer names</h5>");
+    expect(rendered.body).toContain(
+      "No industry data is available among eligible top-employer rows for this cycle."
+    );
+    expect(rendered.body).not.toContain('data-testid="industry-rollup-row"');
+    expect(rendered.body).not.toContain("Classified:");
+    expect(rendered.body).toContain("Legacy employer bucket");
   });
 
   it("renders no-itemized-data and no-ranked-donors empty states", () => {

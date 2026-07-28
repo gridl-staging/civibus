@@ -3,25 +3,45 @@
   import type { SubmitFunction } from '@sveltejs/kit';
   import SkeletonPanel from '$lib/loading/SkeletonPanel.svelte';
   import { SEARCH_QUERY_MIN_LENGTH } from '$lib/search/contract';
-  import { buildSearchPagePresentation, buildSearchResultKey } from '$lib/search/presentation';
+  import {
+    buildSearchPagePresentation,
+    buildSearchResultKey,
+    type SearchPageFormState
+  } from '$lib/search/presentation';
   import type { ActionData, PageData } from './$types';
 
   export let data: PageData;
   export let form: ActionData | null = null;
   export let isSubmitting = false;
 
-  const enhanceSearchSubmit: SubmitFunction = () => {
+  let pendingForm: SearchPageFormState | null = null;
+
+  function readFormValueAsString(formData: FormData, key: string): string {
+    const rawValue = formData.get(key);
+    return typeof rawValue === 'string' ? rawValue : '';
+  }
+
+  const enhanceSearchSubmit: SubmitFunction = ({ formData }) => {
+    pendingForm = {
+      query: readFormValueAsString(formData, 'q'),
+      entityType: readFormValueAsString(formData, 'entity_type'),
+      validationMessage: ''
+    };
     isSubmitting = true;
 
     return async ({ update }) => {
-      await update();
-      isSubmitting = false;
+      try {
+        await update();
+      } finally {
+        isSubmitting = false;
+        pendingForm = null;
+      }
     };
   };
 
   $: viewModel = buildSearchPagePresentation({
     ...data,
-    form: form ?? null,
+    form: form ?? pendingForm,
     isSubmitting
   });
 </script>

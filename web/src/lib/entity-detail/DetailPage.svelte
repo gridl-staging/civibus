@@ -346,6 +346,33 @@
             </table>
           </div>
         {/if}
+        <h5>{fundraisingDetail.industryRollup.heading}</h5>
+        <p>{fundraisingDetail.industryRollup.sourceNote}</p>
+        {#if fundraisingDetail.industryRollup.emptyMessage !== null}
+          <p>{fundraisingDetail.industryRollup.emptyMessage}</p>
+        {:else}
+          <div class="detail__table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Industry</th>
+                  <th>Total</th>
+                  <th>Transactions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {#each fundraisingDetail.industryRollup.rows as industry (industry.label)}
+                  <tr data-testid="industry-rollup-row">
+                    <td>{industry.label}</td>
+                    <td>{industry.totalAmount}</td>
+                    <td>{industry.transactionCountLabel}</td>
+                  </tr>
+                {/each}
+              </tbody>
+            </table>
+          </div>
+          <p>{fundraisingDetail.industryRollup.coverageSummary}</p>
+        {/if}
       {/if}
     {:catch}
       <p>Contribution insights are temporarily unavailable.</p>

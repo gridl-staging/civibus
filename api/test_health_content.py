@@ -357,6 +357,25 @@ def test_evaluate_content_health_runs_expected_sql_queries() -> None:
     )
 
 
+def test_candidate_money_serving_coverage_count() -> None:
+    from api.health_content import candidate_money_serving_coverage_count
+    from api.queries.campaign_finance import resolve_selected_cycle
+
+    cycle = 2026
+    selected = resolve_selected_cycle(cycle)
+    fake = FakeConnection([17])
+
+    count = candidate_money_serving_coverage_count(fake, cycle=cycle)
+
+    normalized_sql = " ".join(fake._cursor.executed[0].replace("\\n", " ").split())
+    assert count == 17
+    assert (
+        "total_receipts IS NOT NULL OR total_disbursements IS NOT NULL OR cash_on_hand IS NOT NULL"
+    ) in normalized_sql
+    assert "summary_coverage_end_date BETWEEN %s AND %s" in normalized_sql
+    assert fake._cursor.executed_params == [(selected.coverage_start_date, selected.coverage_end_date)]
+
+
 def test_evaluate_content_health_reports_contribution_insights_floor_values() -> None:
     from api.health_content import ContentHealthFailure
     from api.health_content import evaluate_content_health

@@ -31,6 +31,13 @@ function parseSelectedCycle(searchParams: URLSearchParams): number | undefined {
   return Number(rawCycle);
 }
 
+function fulfilledValueOrOriginal<T>(
+  outcome: PromiseSettledResult<T>,
+  original: T | Promise<T>
+): T | Promise<T> {
+  return outcome.status === "fulfilled" ? outcome.value : original;
+}
+
 /**
  */
 export const load: PageServerLoad = ({ params, locals, url }) =>
@@ -47,11 +54,37 @@ export const load: PageServerLoad = ({ params, locals, url }) =>
           })
         : await loadPersonMoneyBundle(locals.api, params.id, requestedCycle);
       const personMoneyHeadline = await moneyBundle.personMoneyHeadline;
+      if (requestedCycle === undefined) {
+        return {
+          ...bundle,
+          ...moneyBundle,
+          personMoneyHeadline
+        };
+      }
+
+      const [contributionInsightsOutcome, topDonorsOutcome, topEmployersOutcome] =
+        await Promise.allSettled([
+          moneyBundle.personContributionInsights,
+          moneyBundle.personTopDonors,
+          moneyBundle.personTopEmployers
+        ]);
 
       return {
         ...bundle,
         ...moneyBundle,
-        personMoneyHeadline
+        personMoneyHeadline,
+        personContributionInsights: fulfilledValueOrOriginal(
+          contributionInsightsOutcome,
+          moneyBundle.personContributionInsights
+        ),
+        personTopDonors: fulfilledValueOrOriginal(
+          topDonorsOutcome,
+          moneyBundle.personTopDonors
+        ),
+        personTopEmployers: fulfilledValueOrOriginal(
+          topEmployersOutcome,
+          moneyBundle.personTopEmployers
+        )
       };
     },
     "Backend person detail request failed."

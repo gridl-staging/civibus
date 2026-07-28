@@ -37,6 +37,7 @@ from api.contribution_insights_contract import (
     NOT_SUPERSEDED_SOURCE_RECORD_WHERE_SQL,
     contribution_insights_transaction_where_sql,
 )
+from api.queries.campaign_finance import resolve_selected_cycle
 from domains.campaign_finance.constants import (
     FEC_BULK_DATA_SOURCE_DOMAIN,
     FEC_BULK_DATA_SOURCE_JURISDICTION,
@@ -82,6 +83,8 @@ _DEFAULT_FLOORS: Mapping[str, int] = FEDERAL_FIRST_CONTENT_FLOORS
 _FLOOR_ENV_VAR_PREFIX = "CIVIBUS_HEALTH_CONTENT_FLOOR_"
 
 _FEC_BULK_FRESHNESS_CHECK = "campaign_finance_federal_fec_fresh"
+# This remains a shadow-only measurement until L7 promotes it into health enforcement.
+_CANDIDATE_MONEY_COVERAGE_CHECK = "cf_candidate_money_serving_coverage"
 _FEC_BULK_FRESHNESS_MAX_AGE = timedelta(days=7)
 _FEC_BULK_FRESHNESS_INDETERMINATE_ACTUAL = 0
 _FEC_BULK_FRESHNESS_SUCCESS_STATUS = "success"
@@ -153,6 +156,39 @@ class _HealthCursor(Protocol):
 def _fetch_single_int(cursor: _HealthCursor) -> int:
     row = cursor.fetchone()
     return int(row[0]) if row is not None else 0
+
+
+def candidate_money_serving_coverage_count(
+    connection: psycopg.Connection,
+    *,
+    cycle: int | None = None,
+) -> int:
+    """Count candidates whose official totals are served for the selected cycle.
+
+    This shadow-only aggregate mirrors
+    ``_official_candidate_totals_cover_selected_cycle()`` and
+    ``_has_official_candidate_totals()``. The health owner needs aggregate SQL,
+    while ``resolve_selected_cycle()`` remains the cycle-window owner. L7 owns
+    promotion into health enforcement.
+    """
+    selected_cycle = resolve_selected_cycle(cycle)
+    with connection.cursor() as cursor:
+        cursor.execute(
+            SQL(
+                """
+                SELECT COUNT(*)
+                FROM cf.candidate
+                WHERE (
+                    total_receipts IS NOT NULL
+                    OR total_disbursements IS NOT NULL
+                    OR cash_on_hand IS NOT NULL
+                )
+                  AND summary_coverage_end_date BETWEEN %s AND %s
+                """
+            ),
+            (selected_cycle.coverage_start_date, selected_cycle.coverage_end_date),
+        )
+        return _fetch_single_int(cursor)
 
 
 def _confirm_transaction_total(cursor: _HealthCursor) -> int:

@@ -121,6 +121,7 @@ lint:
 	$(MAKE) check-retired-symbols
 	uv run --extra dev ruff check .
 	uv run --extra dev ruff format --check .
+	@if [ -f scripts/lane_authoring_hazard_checker.py ]; then uv run python scripts/lane_authoring_hazard_checker.py; fi
 
 validate-configs:
 	uv run python -m domains.campaign_finance.validate_configs

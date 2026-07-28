@@ -163,6 +163,19 @@ describe("campaign-finance detail contract", () => {
     expect(buildPersonTopEmployersPath(personId)).toBe(`/v1/person/${personId}/top-employers`);
   });
 
+  it("PersonTopEmployerRow mirrors backend-owned industry metadata", () => {
+    const topEmployer = {
+      employer: "GOOGLE",
+      total_amount: "600.00",
+      transaction_count: 3,
+      industry: "Technology",
+      industry_rollup_eligible: true
+    } satisfies import("./contract").PersonTopEmployerRow;
+
+    expect(topEmployer.industry).toBe("Technology");
+    expect(topEmployer.industry_rollup_eligible).toBe(true);
+  });
+
   it("PersonContributionInsights mirrors backend serialized money fields", () => {
     const insights: PersonContributionInsights = {
       person_id: "11111111-1111-4111-8111-111111111111",

@@ -582,6 +582,7 @@ describe("route head rendering", () => {
       expectsJsonLd: false
     });
     expect(rendered.body).toContain('<h3 class="campaign-list__name');
+    expect(rendered.body).toContain('data-testid="candidate-result-row"');
     expect(rendered.body).toContain('href="/candidate/jane-candidate"');
     expect(rendered.body).toContain("DEM · H · NC-01");
     expect(rendered.body).toContain("Showing 26–26");
@@ -639,6 +640,7 @@ describe("route head rendering", () => {
       expectsJsonLd: false
     });
     expect(rendered.body).toContain('<h3 class="campaign-list__name');
+    expect(rendered.body).toContain('data-testid="committee-result-row"');
     expect(rendered.body).toContain('href="/committee/civibus-committee"');
     expect(rendered.body).toContain("Q · DEM · NC");
     expect(rendered.body).toContain("Showing 26–26");

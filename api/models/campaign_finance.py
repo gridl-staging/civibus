@@ -422,6 +422,8 @@ class PersonTopEmployerRow(BaseModel):
     employer: str
     total_amount: Decimal
     transaction_count: int
+    industry: str
+    industry_rollup_eligible: bool
 
 
 class SpendCategorySummary(BaseModel):

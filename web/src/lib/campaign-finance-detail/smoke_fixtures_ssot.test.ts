@@ -146,6 +146,32 @@ describe("smoke fixtures single-source aliases", () => {
     expect(share).toBeCloseTo(smallDollarAmount / totalContributionAmount, 4);
   });
 
+  it("fixture-mode person top employers expose server-owned industry metadata", () => {
+    expect(smokeFixtures.person.topEmployers).toEqual([
+      {
+        employer: "GOOGLE",
+        total_amount: "600.00",
+        transaction_count: 3,
+        industry: "Technology",
+        industry_rollup_eligible: true
+      },
+      {
+        employer: "ACME CORP",
+        total_amount: "150.00",
+        transaction_count: 1,
+        industry: "UNKNOWN_INDUSTRY",
+        industry_rollup_eligible: true
+      },
+      {
+        employer: "Unclassified / not provided",
+        total_amount: "25.00",
+        transaction_count: 1,
+        industry: "UNKNOWN_INDUSTRY",
+        industry_rollup_eligible: false
+      }
+    ]);
+  });
+
   it("live-mode seeded person small-dollar headline matches the exported smoke expectation", () => {
     const seedSql = buildCongressSmokeSeedSql();
     const { totalReceipts, unitemizedReceipts } = seededCommitteeSummaryAmounts(seedSql);

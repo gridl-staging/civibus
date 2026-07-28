@@ -27,9 +27,9 @@ export type EntityDetailBundle = {
 export type PersonDetailPageExtensions = {
   personMoneyHeadline: PersonMoneyHeadlineState | Promise<PersonMoneyHeadlineState>;
   personFinanceSections: Promise<PersonCandidateFinanceSection[]>;
-  personContributionInsights: Promise<PersonContributionInsights>;
-  personTopDonors: Promise<RankedTransactionParty[]>;
-  personTopEmployers: Promise<PersonTopEmployerRow[]>;
+  personContributionInsights: PersonContributionInsights | Promise<PersonContributionInsights>;
+  personTopDonors: RankedTransactionParty[] | Promise<RankedTransactionParty[]>;
+  personTopEmployers: PersonTopEmployerRow[] | Promise<PersonTopEmployerRow[]>;
 };
 
 export type PersonMoneyHeadlineState =

@@ -6,8 +6,14 @@ import unicodedata
 
 UNKNOWN_INDUSTRY = "UNKNOWN_INDUSTRY"
 JUNK_EMPLOYER_WEIGHT = 0.01
+# Stage 1's fixed random sample reaches 226 known rows out of 14,324 after
+# this expansion. The rounded-down floor still fails if any mapped top-20
+# employer disappears.
+INDUSTRY_BY_EMPLOYER_MIN_COVERAGE = 0.015
 
 _JUNK_EMPLOYER_REASONS: dict[str, str] = {
+    "ENTREPRENEUR": "FEC filer supplied an occupation instead of an employer.",
+    "HOMEMAKER": "FEC filer supplied an occupation or status instead of an employer.",
     "RETIRED": "FEC filer supplied retirement status instead of an employer.",
     "SELF": "FEC filer supplied self-employment shorthand instead of an employer.",
     "SELF EMPLOYED": "FEC filer supplied self-employment status instead of an employer.",
@@ -27,9 +33,28 @@ _LEGAL_SUFFIX_REASONS: dict[str, str] = {
 LEGAL_SUFFIXES = frozenset(_LEGAL_SUFFIX_REASONS)
 
 _EMPLOYER_INDUSTRIES: dict[str, str] = {
+    "ABBOTT": "Health Care",
+    # The broad Amazon employer label is assigned to its consumer-commerce sector.
+    "AMAZON": "Retail",
+    "AMERICAN AIRLINES": "Transportation",
+    "BOEING": "Aerospace and Defense",
+    "COMCAST CC OF WILLOW GROVE": "Telecommunications",
+    "ELECTRICIANS LOCAL 98": "Labor",
+    # Public agencies remain distinguishable from private transport operators.
+    "FEDERAL AVIATION ADMINISTRATION": "Government",
+    "FRIAS TRANSPORTATION": "Transportation",
+    "GENERAL MOTORS COMPANY": "Automotive",
+    "GLAXOSMITHKLINE": "Health Care",
     "GOOGLE": "Technology",
+    "HOME DEPOT U S A": "Retail",
     "JPMORGAN CHASE": "Finance",
+    "NORTHROP GRUMMAN CORPORATION": "Aerospace and Defense",
     "PFIZER": "Health Care",
+    "THE ELEVANCE HEALTH COMPANIES": "Health Care",
+    "UNITED AIRLINES": "Transportation",
+    "UNITED PARCEL SERVICE": "Transportation",
+    # USPS is an independent federal establishment, not a private carrier.
+    "USPS": "Government",
 }
 
 
@@ -104,6 +129,7 @@ def _strip_legal_suffix(normalized_employer: str) -> str | None:
 
 
 __all__ = [
+    "INDUSTRY_BY_EMPLOYER_MIN_COVERAGE",
     "JUNK_EMPLOYER_WEIGHT",
     "JUNK_EMPLOYERS",
     "LEGAL_SUFFIXES",

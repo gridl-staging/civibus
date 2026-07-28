@@ -115,6 +115,21 @@ def _insert_officeholder_candidate(
     )
 
 
+# Every committee this test inserts, including the three it expects the resolver to
+# exclude. Used to scope assertions away from data seeded by the CI Integration job.
+_FIXTURE_COMMITTEE_FEC_IDS = frozenset(
+    {
+        "C32000001",
+        "C32000002",
+        "C32000003",
+        "C32000004",
+        "C32000005",
+        "C32000006",
+        "C32000007",
+    }
+)
+
+
 @pytest.mark.integration
 def test_pa_union_committee_fec_ids_for_election_years_scopes_principal_and_authorized_links(
     db_conn: psycopg.Connection,
@@ -246,7 +261,16 @@ def test_pa_union_committee_fec_ids_for_election_years_scopes_principal_and_auth
         election_years=(2022, 2024, 2026),
     )
 
-    assert committee_fec_ids == frozenset({"C32000001", "C32000002", "C32000003", "C32000004"})
+    # The resolver reads the whole cf.candidate_committee_link table, and the CI
+    # Integration job seeds tests/fixtures/bulk before this suite runs, so the
+    # result legitimately contains committees this test never inserted. Scope the
+    # comparison to this test's own C320000xx universe instead of asserting over
+    # the global set; that keeps both failure directions live -- a dropped
+    # C32000001-4 and a wrongly included C32000005/6/7 each still red -- without
+    # depending on an empty database.
+    assert committee_fec_ids & _FIXTURE_COMMITTEE_FEC_IDS == frozenset(
+        {"C32000001", "C32000002", "C32000003", "C32000004"}
+    )
     assert (
         fec_lookup.pa_union_committee_fec_ids_for_election_years(
             db_conn,

@@ -53,6 +53,20 @@ type PersonRankedPartyRow = RankedPartyRow & {
   barPercent: number;
 };
 
+type PersonIndustryRollupRow = {
+  label: string;
+  totalAmount: string;
+  transactionCountLabel: string;
+};
+
+type PersonIndustryRollupPresentation = {
+  heading: string;
+  rows: PersonIndustryRollupRow[];
+  coverageSummary: string | null;
+  sourceNote: string;
+  emptyMessage: string | null;
+};
+
 /**
  */
 export type PersonContributionInsightsPresentation = {
@@ -65,6 +79,7 @@ export type PersonContributionInsightsPresentation = {
   topEmployersEmptyMessage: string | null;
   topEmployerDisclaimer: string;
   topEmployerMethodologyReference: string;
+  industryRollup: PersonIndustryRollupPresentation;
   rankingLabels: {
     topDonors: string;
     topEmployers: string;
@@ -131,7 +146,14 @@ const PERSON_TOP_EMPLOYERS_EMPTY_MESSAGE = "No employer rankings available.";
 const PERSON_TOP_EMPLOYER_DISCLAIMER =
   "Top employers aggregate raw employer names from itemized individual contributions only.";
 const PERSON_TOP_EMPLOYER_METHODOLOGY_REFERENCE =
-  "They are not industry- or sector-coded; see Methodology for source-linking and evidence limitations.";
+  "The raw ranking remains employer-name data; see Methodology for source-linking and evidence limitations.";
+const PERSON_INDUSTRY_ROLLUP_HEADING = "Industries among top reported employer names";
+const PERSON_INDUSTRY_ROLLUP_SOURCE_NOTE =
+  "Industries are assigned from reported employer names by the server. This rollup covers only eligible returned top-employer rows for the selected cycle.";
+const PERSON_INDUSTRY_ROLLUP_EMPTY_MESSAGE =
+  "No industry data is available among eligible top-employer rows for this cycle.";
+const UNKNOWN_INDUSTRY = "UNKNOWN_INDUSTRY";
+const UNKNOWN_INDUSTRY_LABEL = "Unknown / unclassified";
 const PERSON_TOTALS_EMPTY_MESSAGE = "No itemized individual-contribution totals are available yet.";
 const DISTRICT_SHARE_UNAVAILABLE_HEADLINE = "District share unavailable";
 const DISTRICT_SHARE_UNAVAILABLE_SUMMARY =
@@ -349,6 +371,118 @@ function buildTopEmployerRowsWithBars(
       transaction_count: row.transaction_count
     }))
   );
+}
+
+function parseIndustryRollupCents(value: SerializedMoney): number {
+  if (!/^-?\d+(?:\.\d{1,2})?$/.test(value)) {
+    throw new Error(
+      `Industry rollup money must be a plain amount with at most two decimal places: ${value}`
+    );
+  }
+
+  const negative = value.startsWith("-");
+  const unsignedValue = negative ? value.slice(1) : value;
+  const [wholeDollars, fractionalDollars = ""] = unsignedValue.split(".");
+  const cents =
+    Number.parseInt(wholeDollars, 10) * 100 +
+    Number.parseInt(fractionalDollars.padEnd(2, "0") || "0", 10);
+  const signedCents = negative ? -cents : cents;
+
+  if (!Number.isSafeInteger(signedCents)) {
+    throw new Error(`Industry rollup money exceeds the supported range: ${value}`);
+  }
+
+  return signedCents;
+}
+
+function sumIndustryRollupCents(rows: { totalCents: number }[]): number {
+  const totalCents = rows.reduce((total, row) => total + row.totalCents, 0);
+  if (!Number.isSafeInteger(totalCents)) {
+    throw new Error("Industry rollup total exceeds the supported range.");
+  }
+  return totalCents;
+}
+
+function formatIndustryRollupCents(cents: number): string {
+  const absoluteCents = Math.abs(cents);
+  const wholeDollars = Math.floor(absoluteCents / 100);
+  const fractionalDollars = String(absoluteCents % 100).padStart(2, "0");
+  return `${cents < 0 ? "-" : ""}$${wholeDollars.toLocaleString("en-US")}.${fractionalDollars}`;
+}
+
+function buildIndustryRollup(
+  personTopEmployers: PersonTopEmployerRow[]
+): PersonIndustryRollupPresentation {
+  const eligibleRows = personTopEmployers
+    .filter((row) => row.industry_rollup_eligible)
+    .map((row) => ({
+      label: row.industry === UNKNOWN_INDUSTRY ? UNKNOWN_INDUSTRY_LABEL : row.industry,
+      totalCents: parseIndustryRollupCents(row.total_amount),
+      transactionCount: row.transaction_count
+    }));
+
+  if (eligibleRows.length === 0) {
+    return {
+      heading: PERSON_INDUSTRY_ROLLUP_HEADING,
+      rows: [],
+      coverageSummary: null,
+      sourceNote: PERSON_INDUSTRY_ROLLUP_SOURCE_NOTE,
+      emptyMessage: PERSON_INDUSTRY_ROLLUP_EMPTY_MESSAGE
+    };
+  }
+
+  const totalsByIndustry = new Map<
+    string,
+    { label: string; totalCents: number; transactionCount: number }
+  >();
+  for (const row of eligibleRows) {
+    const current = totalsByIndustry.get(row.label);
+    totalsByIndustry.set(row.label, {
+      label: row.label,
+      totalCents: (current?.totalCents ?? 0) + row.totalCents,
+      transactionCount: (current?.transactionCount ?? 0) + row.transactionCount
+    });
+  }
+
+  const industryTotals = [...totalsByIndustry.values()];
+  const classifiedRows = eligibleRows.filter((row) => row.label !== UNKNOWN_INDUSTRY_LABEL);
+  const eligibleTransactionCount = eligibleRows.reduce(
+    (total, row) => total + row.transactionCount,
+    0
+  );
+  const classifiedTransactionCount = classifiedRows.reduce(
+    (total, row) => total + row.transactionCount,
+    0
+  );
+
+  return {
+    heading: PERSON_INDUSTRY_ROLLUP_HEADING,
+    rows: industryTotals
+      .sort(
+        (left, right) =>
+          right.totalCents - left.totalCents ||
+          right.transactionCount - left.transactionCount ||
+          left.label.localeCompare(right.label)
+      )
+      .map((row) => ({
+        label: row.label,
+        totalAmount: formatIndustryRollupCents(row.totalCents),
+        transactionCountLabel: formatCountLabel(row.transactionCount, "transaction")
+      })),
+    coverageSummary: `Classified: ${formatIndustryRollupCents(
+      sumIndustryRollupCents(classifiedRows)
+    )} and ${formatCountLabel(
+      classifiedTransactionCount,
+      "transaction"
+    )} out of ${formatIndustryRollupCents(
+      sumIndustryRollupCents(eligibleRows)
+    )} and ${formatCountLabel(
+      eligibleTransactionCount,
+      "transaction"
+    )} among eligible top-employer rows.`,
+    sourceNote: PERSON_INDUSTRY_ROLLUP_SOURCE_NOTE,
+    emptyMessage: null
+  };
 }
 
 function resolveTotalsCaveat(source: ContributionInsightsTotalsSource): string | null {
@@ -667,6 +801,7 @@ export function buildPersonContributionInsightsPresentation(
       personTopEmployers.length === 0 ? PERSON_TOP_EMPLOYERS_EMPTY_MESSAGE : null,
     topEmployerDisclaimer: PERSON_TOP_EMPLOYER_DISCLAIMER,
     topEmployerMethodologyReference: PERSON_TOP_EMPLOYER_METHODOLOGY_REFERENCE,
+    industryRollup: buildIndustryRollup(personTopEmployers),
     rankingLabels: {
       topDonors: "Top reported contributor names",
       topEmployers: "Top reported employer names"

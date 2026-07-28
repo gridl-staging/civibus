@@ -19,6 +19,7 @@ from domains.campaign_finance.coverage.registry import (
     load_registry,
 )
 from domains.campaign_finance.constants import FILING_BREAKDOWN_STORE_LIMIT as _FILING_BREAKDOWN_STORE_LIMIT
+from domains.campaign_finance.normalize.employers import industry_for_employer, is_junk_employer
 from domains.civics.constants import LAUNCH_SCOPE_USPS_STATES
 
 from api.models.campaign_finance import (
@@ -5012,6 +5013,12 @@ _PERSON_TOP_EMPLOYERS_SQL = f"""
     LIMIT %s
 """
 
+_PERSON_TOP_EMPLOYERS_UNCLASSIFIED_BUCKET = "Unclassified / not provided"
+
+
+def _is_industry_rollup_eligible(employer: str) -> bool:
+    return employer != _PERSON_TOP_EMPLOYERS_UNCLASSIFIED_BUCKET and not is_junk_employer(employer)
+
 
 def fetch_person_top_donors(
     conn: psycopg.Connection,
@@ -5055,10 +5062,20 @@ def fetch_person_top_employers(
     if not committee_ids:
         return []
 
-    return _fetch_person_insights_rows(
+    employer_rows = _fetch_person_insights_rows(
         conn,
         _PERSON_TOP_EMPLOYERS_SQL,
         committee_ids,
         cycle,
         limit,
     )
+    # Keep classification server-owned: SQL ranks source employer labels, while
+    # Python composes the legacy collapsed bucket with canonical junk rules.
+    return [
+        {
+            **row,
+            "industry": industry_for_employer(row["employer"]),
+            "industry_rollup_eligible": _is_industry_rollup_eligible(row["employer"]),
+        }
+        for row in employer_rows
+    ]

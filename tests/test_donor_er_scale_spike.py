@@ -1976,6 +1976,15 @@ def test_benchmark_subprocess_zero_exit_rejects_concurrently_recreated_receipt(
     assert receipt.observations[0].output_rows == 0
 
 
+def test_benchmark_invocation_id_is_safe_as_a_separate_cli_argument() -> None:
+    harness = _load_harness()
+
+    benchmark_invocation_id = harness._new_benchmark_invocation_id()
+
+    assert len(benchmark_invocation_id) == 64
+    assert set(benchmark_invocation_id) <= set("0123456789abcdef")
+
+
 @pytest.mark.parametrize(
     "mutation",
     [

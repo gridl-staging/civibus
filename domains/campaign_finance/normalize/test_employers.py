@@ -2,6 +2,7 @@
 
 import pytest
 
+from domains.campaign_finance.normalize import employers
 from domains.campaign_finance.normalize.employers import (
     JUNK_EMPLOYER_WEIGHT,
     UNKNOWN_INDUSTRY,
@@ -117,3 +118,80 @@ def test_canonicalize_employer_normalizes_canonically_equivalent_unicode() -> No
 )
 def test_known_employers_map_to_curated_industries(raw_employer: str, expected_industry: str) -> None:
     assert industry_for_employer(raw_employer) == expected_industry
+
+
+@pytest.mark.parametrize(
+    "raw_employer, expected_industry",
+    [
+        ("NORTHROP GRUMMAN CORPORATION", "Aerospace and Defense"),
+        ("BOEING", "Aerospace and Defense"),
+        ("USPS", "Government"),
+        ("UNITED PARCEL SERVICE", "Transportation"),
+        ("COMCAST (CC) OF WILLOW GROVE", "Telecommunications"),
+        ("FEDERAL AVIATION ADMINISTRATION", "Government"),
+        ("HOME DEPOT U.S.A., INC.", "Retail"),
+        ("GENERAL MOTORS COMPANY", "Automotive"),
+        ("ABBOTT", "Health Care"),
+        ("AMERICAN AIRLINES", "Transportation"),
+        ("THE ELEVANCE HEALTH COMPANIES, INC.", "Health Care"),
+        ("UNITED AIRLINES", "Transportation"),
+        ("AMAZON", "Retail"),
+        ("ELECTRICIANS LOCAL 98", "Labor"),
+        ("FRIAS TRANSPORTATION", "Transportation"),
+        ("GlaxoSmithKline LLC", "Health Care"),
+    ],
+)
+def test_random_sample_employers_map_to_curated_industries(
+    raw_employer: str,
+    expected_industry: str,
+) -> None:
+    assert industry_for_employer(raw_employer) == expected_industry
+
+
+@pytest.mark.parametrize("status_value", ["HOMEMAKER", "ENTREPRENEUR"])
+def test_random_sample_status_values_are_junk(status_value: str) -> None:
+    assert is_junk_employer(status_value) is True
+    assert canonicalize_employer(status_value) is None
+    assert employer_junk_weight(status_value) == JUNK_EMPLOYER_WEIGHT
+    assert industry_for_employer(status_value) == UNKNOWN_INDUSTRY
+
+
+@pytest.mark.parametrize("ambiguous_employer", ["CHARTER", "HONEYWELL INTERNATIONAL", "WILLIAMS WPC-I, LLC."])
+def test_random_sample_ambiguous_employers_remain_unmapped(ambiguous_employer: str) -> None:
+    assert is_junk_employer(ambiguous_employer) is False
+    assert canonicalize_employer(ambiguous_employer) is not None
+    assert industry_for_employer(ambiguous_employer) == UNKNOWN_INDUSTRY
+
+
+def test_random_sample_industry_coverage_meets_module_contract() -> None:
+    sample_size = 14_324
+    baseline_known_count = 19
+    newly_mapped_sample_counts = {
+        "NORTHROP GRUMMAN CORPORATION": 28,
+        "BOEING": 24,
+        "USPS": 21,
+        "UNITED PARCEL SERVICE": 16,
+        "COMCAST (CC) OF WILLOW GROVE": 13,
+        "FEDERAL AVIATION ADMINISTRATION": 13,
+        "HOME DEPOT U.S.A., INC.": 11,
+        "GENERAL MOTORS COMPANY": 10,
+        "ABBOTT": 9,
+        "AMERICAN AIRLINES": 9,
+        "THE ELEVANCE HEALTH COMPANIES, INC.": 9,
+        "UNITED AIRLINES": 9,
+        "AMAZON": 8,
+        "ELECTRICIANS LOCAL 98": 8,
+        "FRIAS TRANSPORTATION": 8,
+        "GLAXOSMITHKLINE": 11,
+    }
+
+    newly_mapped_count = sum(newly_mapped_sample_counts.values())
+    achieved_known_count = baseline_known_count + newly_mapped_count
+    achieved_share = achieved_known_count / sample_size
+
+    assert newly_mapped_count == 207
+    assert achieved_known_count == 226
+    assert achieved_share == 226 / 14_324
+    assert hasattr(employers, "INDUSTRY_BY_EMPLOYER_MIN_COVERAGE")
+    minimum_coverage = getattr(employers, "INDUSTRY_BY_EMPLOYER_MIN_COVERAGE", float("inf"))
+    assert achieved_share >= minimum_coverage

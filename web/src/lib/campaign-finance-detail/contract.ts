@@ -416,6 +416,8 @@ export type PersonTopEmployerRow = {
   employer: string;
   total_amount: SerializedMoney;
   transaction_count: number;
+  industry: string;
+  industry_rollup_eligible: boolean;
 };
 
 function buildCampaignFinancePath(resource: string, id: string, suffix = ""): string {

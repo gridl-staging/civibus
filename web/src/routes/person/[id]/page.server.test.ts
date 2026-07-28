@@ -227,7 +227,15 @@ function createPersonRouteApi(cycle?: number) {
     }
 
     if (path === `/v1/person/${PERSON_ID}/top-employers${selectedCycleQuery}`) {
-      return [{ employer: "ACME CORP", total_amount: "100.00", transaction_count: 1 }];
+      return [
+        {
+          employer: "ACME CORP",
+          total_amount: "100.00",
+          transaction_count: 1,
+          industry: "UNKNOWN_INDUSTRY",
+          industry_rollup_eligible: true
+        }
+      ];
     }
 
     const transactionPath = `/v1/transactions?committee_id=${COMMITTEE_ID}&limit=25&cycle=${selectedCycle}`;
@@ -280,7 +288,13 @@ describe("/person/[id] +page.server load", () => {
       { name: "Top Donor", total_amount: "100.00", transaction_count: 1 }
     ]);
     await expect(data.personTopEmployers).resolves.toEqual([
-      { employer: "ACME CORP", total_amount: "100.00", transaction_count: 1 }
+      {
+        employer: "ACME CORP",
+        total_amount: "100.00",
+        transaction_count: 1,
+        industry: "UNKNOWN_INDUSTRY",
+        industry_rollup_eligible: true
+      }
     ]);
     expect(requestJson.mock.calls.map(([path]) => path)).not.toContain(`/v1/er/person/${PERSON_ID}/matches`);
     expect(requestJson.mock.calls.map(([path]) => path)).not.toContain(
@@ -385,19 +399,29 @@ describe("/person/[id] +page.server load", () => {
 
     const data = (await load(createLoadEvent(requestJson, url))) as EntityDetailPageBundle;
 
+    expect(data.personContributionInsights).not.toBeInstanceOf(Promise);
+    expect(data.personTopDonors).not.toBeInstanceOf(Promise);
+    expect(data.personTopEmployers).not.toBeInstanceOf(Promise);
+    expect(data.personFinanceSections).toBeInstanceOf(Promise);
     await expect(data.personFinanceSections).resolves.toMatchObject([{ candidate: { id: CANDIDATE_ID } }]);
-    await expect(data.personContributionInsights).resolves.toMatchObject({
+    expect(data.personContributionInsights).toMatchObject({
       metadata: {
         selected_cycle: 2024,
         coverage_start_date: "2023-01-01",
         coverage_end_date: "2024-12-31"
       }
     });
-    await expect(data.personTopDonors).resolves.toEqual([
+    expect(data.personTopDonors).toEqual([
       { name: "Top Donor", total_amount: "100.00", transaction_count: 1 }
     ]);
-    await expect(data.personTopEmployers).resolves.toEqual([
-      { employer: "ACME CORP", total_amount: "100.00", transaction_count: 1 }
+    expect(data.personTopEmployers).toEqual([
+      {
+        employer: "ACME CORP",
+        total_amount: "100.00",
+        transaction_count: 1,
+        industry: "UNKNOWN_INDUSTRY",
+        industry_rollup_eligible: true
+      }
     ]);
     expect(requestJson.mock.calls.map(([path]) => path)).toEqual([
       `/v1/person/${PERSON_ID}`,
@@ -411,6 +435,46 @@ describe("/person/[id] +page.server load", () => {
       `/v1/candidates/${CANDIDATE_ID}/independent-expenditures/summary?cycle=2024`,
       `/v1/transactions?committee_id=${COMMITTEE_ID}&limit=25&cycle=2024`
     ]);
+  });
+
+  it("keeps explicit-cycle contribution-insights backend failures section-scoped", async () => {
+    const requestJson = vi.fn(async (path: string): Promise<unknown> => {
+      if (path === `/v1/person/${PERSON_ID}`) {
+        return buildPersonDetail();
+      }
+      if (path === `/v1/candidates?person_id=${PERSON_ID}&limit=10&offset=0`) {
+        return { items: [], has_next: false, offset: 0, limit: 10 };
+      }
+      if (path === `/v1/person/${PERSON_ID}/contribution-insights?cycle=2024`) {
+        throw new ApiResponseError(503, { detail: "Contribution insights unavailable." });
+      }
+      if (path === `/v1/person/${PERSON_ID}/top-donors?cycle=2024`) {
+        return [];
+      }
+      if (path === `/v1/person/${PERSON_ID}/top-employers?cycle=2024`) {
+        return [];
+      }
+      throw new Error(`unexpected path: ${path}`);
+    });
+
+    const data = (await load(
+      createLoadEvent(requestJson, new URL(`https://example.test/person/${PERSON_ID}?cycle=2024`))
+    )) as EntityDetailPageBundle;
+
+    expect(data.detail.id).toBe(PERSON_ID);
+    expect(data.personMoneyHeadline).toEqual({
+      kind: "no_linked_candidate",
+      message: "No campaign-finance candidacies are linked yet."
+    });
+    expect(data.personContributionInsights).toMatchObject({
+      has_data: false,
+      metadata: {
+        selected_cycle: 2024,
+        caveats: ["temporarily_unavailable"]
+      }
+    });
+    expect(data.personTopDonors).toEqual([]);
+    expect(data.personTopEmployers).toEqual([]);
   });
 
   it("starts explicit-cycle donor and employer fetches before contribution-insights validation resolves", async () => {

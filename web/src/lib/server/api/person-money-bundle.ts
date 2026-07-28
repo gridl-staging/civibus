@@ -30,14 +30,18 @@ function guardUnhandledRejection(promise: Promise<unknown>): void {
   void promise.catch(() => {});
 }
 
-function guardMoneyBundle(bundle: PersonDetailPageExtensions): PersonDetailPageExtensions {
-  if (bundle.personMoneyHeadline instanceof Promise) {
-    guardUnhandledRejection(bundle.personMoneyHeadline);
+function guardIfPromise(value: unknown): void {
+  if (value instanceof Promise) {
+    guardUnhandledRejection(value);
   }
+}
+
+function guardMoneyBundle(bundle: PersonDetailPageExtensions): PersonDetailPageExtensions {
+  guardIfPromise(bundle.personMoneyHeadline);
   guardUnhandledRejection(bundle.personFinanceSections);
-  guardUnhandledRejection(bundle.personContributionInsights);
-  guardUnhandledRejection(bundle.personTopDonors);
-  guardUnhandledRejection(bundle.personTopEmployers);
+  guardIfPromise(bundle.personContributionInsights);
+  guardIfPromise(bundle.personTopDonors);
+  guardIfPromise(bundle.personTopEmployers);
   return bundle;
 }
 
@@ -163,23 +167,32 @@ function buildUnavailableContributionInsights(
   };
 }
 
+function shouldSurfaceContributionInsightsError(error: unknown): boolean {
+  return error instanceof ApiResponseError && error.status === 400;
+}
+
 /**
  */
 async function loadContributionInsightsOutcome(
   apiClient: ApiClient,
   personId: string,
-  fallbackWhenUnavailable: boolean
+  fallbackWhenUnavailable: boolean,
+  selectedCycle?: number
 ): Promise<ContributionInsightsOutcome> {
   try {
     const insights = await fetchPersonContributionInsights(apiClient, {
-      id: personId
+      id: personId,
+      cycle: selectedCycle
     });
     return { kind: "loaded", insights };
   } catch (error) {
-    if (!fallbackWhenUnavailable) {
+    if (!fallbackWhenUnavailable || shouldSurfaceContributionInsightsError(error)) {
       throw error;
     }
-    return { kind: "unavailable", insights: buildUnavailableContributionInsights(personId) };
+    return {
+      kind: "unavailable",
+      insights: buildUnavailableContributionInsights(personId, selectedCycle ?? DEFAULT_BACKEND_SELECTED_CYCLE)
+    };
   }
 }
 
@@ -243,10 +256,12 @@ async function loadExplicitCycleMoney(
   cycle: number
 ): Promise<PersonDetailPageExtensions> {
   const personFinanceSections = fetchPersonCandidateFinanceSections(apiClient, { personId, cycle });
+  const contributionInsightsOutcome = loadContributionInsightsOutcome(apiClient, personId, true, cycle);
+  const personContributionInsights = contributionInsightsOutcome.then((outcome) => outcome.insights);
   const bundle = guardMoneyBundle({
     personMoneyHeadline: resolvePersonMoneyHeadlineFromSections(personFinanceSections, cycle),
     personFinanceSections,
-    personContributionInsights: fetchPersonContributionInsights(apiClient, { id: personId, cycle }),
+    personContributionInsights,
     personTopDonors: fetchPersonTopDonors(apiClient, { id: personId, cycle }),
     personTopEmployers: fetchPersonTopEmployers(apiClient, { id: personId, cycle })
   });

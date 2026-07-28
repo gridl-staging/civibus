@@ -85,6 +85,7 @@ const {
   SMOKE_PERSON_TOP_DONOR_ONE_NAME,
   SMOKE_PERSON_TOP_DONOR_TWO_NAME,
   SMOKE_PERSON_TOP_EMPLOYER_ONE_NAME,
+  SMOKE_PERSON_TOP_EMPLOYER_THREE_NAME,
   SMOKE_PERSON_TOP_EMPLOYER_TWO_NAME,
   SMOKE_PERSON_TOTAL_CONTRIBUTION_DOLLARS,
   SMOKE_PERSON_UNITEMIZED_DOLLARS,
@@ -364,7 +365,7 @@ export const smokeFixtures = {
   searchSlow: {
     query: SMOKE_SEARCH_SLOW_QUERY,
     entityType: "org",
-    delayMs: 350,
+    delayMs: 1500,
     results: [
       {
         entity_type: "org",
@@ -725,13 +726,24 @@ export const smokeFixtures = {
     topEmployers: [
       {
         employer: SMOKE_PERSON_TOP_EMPLOYER_ONE_NAME,
-        total_amount: SMOKE_PERSON_LARGE_ITEMIZED_DOLLARS,
-        transaction_count: 1
+        total_amount: "600.00",
+        transaction_count: 3,
+        industry: "Technology",
+        industry_rollup_eligible: true
       },
       {
         employer: SMOKE_PERSON_TOP_EMPLOYER_TWO_NAME,
-        total_amount: SMOKE_PERSON_SMALL_ITEMIZED_DOLLARS,
-        transaction_count: 1
+        total_amount: "150.00",
+        transaction_count: 1,
+        industry: "UNKNOWN_INDUSTRY",
+        industry_rollup_eligible: true
+      },
+      {
+        employer: SMOKE_PERSON_TOP_EMPLOYER_THREE_NAME,
+        total_amount: "25.00",
+        transaction_count: 1,
+        industry: "UNKNOWN_INDUSTRY",
+        industry_rollup_eligible: false
       }
     ]
   },

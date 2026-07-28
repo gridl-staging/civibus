@@ -175,8 +175,51 @@ const PERSON_TOP_DONORS = [
 ];
 
 const PERSON_TOP_EMPLOYERS = [
-  { employer: "ACME CORP", total_amount: "600.00", transaction_count: 3 },
-  { employer: "State University", total_amount: "150.00", transaction_count: 1 }
+  {
+    employer: "ACME CORP",
+    total_amount: "600.00",
+    transaction_count: 3,
+    industry: "UNKNOWN_INDUSTRY",
+    industry_rollup_eligible: true
+  },
+  {
+    employer: "State University",
+    total_amount: "150.00",
+    transaction_count: 1,
+    industry: "UNKNOWN_INDUSTRY",
+    industry_rollup_eligible: true
+  }
+];
+
+const PERSON_TOP_EMPLOYERS_WITH_INDUSTRIES = [
+  {
+    employer: "Undisclosed employer",
+    total_amount: "150.00",
+    transaction_count: 1,
+    industry: "UNKNOWN_INDUSTRY",
+    industry_rollup_eligible: true
+  },
+  {
+    employer: "Technology employer two",
+    total_amount: "299.90",
+    transaction_count: 2,
+    industry: "Technology",
+    industry_rollup_eligible: true
+  },
+  {
+    employer: "Legacy employer bucket",
+    total_amount: "25.00",
+    transaction_count: 1,
+    industry: "UNKNOWN_INDUSTRY",
+    industry_rollup_eligible: false
+  },
+  {
+    employer: "Technology employer one",
+    total_amount: "300.10",
+    transaction_count: 1,
+    industry: "Technology",
+    industry_rollup_eligible: true
+  }
 ];
 
 describe("entity detail presentation", () => {
@@ -664,7 +707,7 @@ describe("entity detail presentation", () => {
       "Top employers aggregate raw employer names from itemized individual contributions only."
     );
     expect(viewModel.topEmployerMethodologyReference).toBe(
-      "They are not industry- or sector-coded; see Methodology for source-linking and evidence limitations."
+      "The raw ranking remains employer-name data; see Methodology for source-linking and evidence limitations."
     );
     expect(viewModel.defaultTotalSummaryKey).toBe("cycle");
     expect(viewModel.totalsEmptyMessage).toBeNull();
@@ -881,6 +924,161 @@ describe("entity detail presentation", () => {
     expect(viewModel.topDonors[0]).toMatchObject({ barPercent: 100 });
     expect(viewModel.topDonors[1]).toMatchObject({ barPercent: 50 });
   });
+
+  it("aggregates eligible server-owned industries with exact classified coverage", () => {
+    const viewModel = buildPersonContributionInsightsPresentation(
+      CONTRIBUTION_INSIGHTS,
+      PERSON_TOP_DONORS,
+      PERSON_TOP_EMPLOYERS_WITH_INDUSTRIES
+    );
+
+    expect(viewModel.industryRollup).toEqual({
+      heading: "Industries among top reported employer names",
+      rows: [
+        {
+          label: "Technology",
+          totalAmount: "$600.00",
+          transactionCountLabel: "3 transactions"
+        },
+        {
+          label: "Unknown / unclassified",
+          totalAmount: "$150.00",
+          transactionCountLabel: "1 transaction"
+        }
+      ],
+      coverageSummary:
+        "Classified: $600.00 and 3 transactions out of $750.00 and 4 transactions among eligible top-employer rows.",
+      sourceNote:
+        "Industries are assigned from reported employer names by the server. This rollup covers only eligible returned top-employer rows for the selected cycle.",
+      emptyMessage: null
+    });
+  });
+
+  it("orders industry rollups by integer cents, transaction count, then label", () => {
+    const viewModel = buildPersonContributionInsightsPresentation(CONTRIBUTION_INSIGHTS, [], [
+      {
+        employer: "Public employer",
+        total_amount: "1.00",
+        transaction_count: 2,
+        industry: "Public Service",
+        industry_rollup_eligible: true
+      },
+      {
+        employer: "Health employer one",
+        total_amount: "0.10",
+        transaction_count: 1,
+        industry: "Health",
+        industry_rollup_eligible: true
+      },
+      {
+        employer: "Agriculture employer",
+        total_amount: "1.00",
+        transaction_count: 2,
+        industry: "Agriculture",
+        industry_rollup_eligible: true
+      },
+      {
+        employer: "Energy employer",
+        total_amount: "0.30",
+        transaction_count: 2,
+        industry: "Energy",
+        industry_rollup_eligible: true
+      },
+      {
+        employer: "Finance employer",
+        total_amount: "1.00",
+        transaction_count: 3,
+        industry: "Finance",
+        industry_rollup_eligible: true
+      },
+      {
+        employer: "Health employer two",
+        total_amount: "0.20",
+        transaction_count: 1,
+        industry: "Health",
+        industry_rollup_eligible: true
+      }
+    ]);
+
+    expect(viewModel.industryRollup.rows.map((row) => row.label)).toEqual([
+      "Finance",
+      "Agriculture",
+      "Public Service",
+      "Energy",
+      "Health"
+    ]);
+  });
+
+  it("keeps an all-unknown eligible rollup visible with zero classified coverage", () => {
+    const viewModel = buildPersonContributionInsightsPresentation(CONTRIBUTION_INSIGHTS, [], [
+      {
+        employer: "Unknown employer one",
+        total_amount: "100.00",
+        transaction_count: 2,
+        industry: "UNKNOWN_INDUSTRY",
+        industry_rollup_eligible: true
+      },
+      {
+        employer: "Unknown employer two",
+        total_amount: "50.00",
+        transaction_count: 1,
+        industry: "UNKNOWN_INDUSTRY",
+        industry_rollup_eligible: true
+      }
+    ]);
+
+    expect(viewModel.industryRollup.rows).toEqual([
+      {
+        label: "Unknown / unclassified",
+        totalAmount: "$150.00",
+        transactionCountLabel: "3 transactions"
+      }
+    ]);
+    expect(viewModel.industryRollup.coverageSummary).toBe(
+      "Classified: $0.00 and 0 transactions out of $150.00 and 3 transactions among eligible top-employer rows."
+    );
+    expect(viewModel.industryRollup.emptyMessage).toBeNull();
+  });
+
+  it("returns an honest no-industry-data state when every employer row is ineligible", () => {
+    const viewModel = buildPersonContributionInsightsPresentation(CONTRIBUTION_INSIGHTS, [], [
+      {
+        employer: "Legacy employer bucket",
+        total_amount: "25.00",
+        transaction_count: 1,
+        industry: "UNKNOWN_INDUSTRY",
+        industry_rollup_eligible: false
+      }
+    ]);
+
+    expect(viewModel.industryRollup).toEqual({
+      heading: "Industries among top reported employer names",
+      rows: [],
+      coverageSummary: null,
+      sourceNote:
+        "Industries are assigned from reported employer names by the server. This rollup covers only eligible returned top-employer rows for the selected cycle.",
+      emptyMessage: "No industry data is available among eligible top-employer rows for this cycle."
+    });
+  });
+
+  it.each(["not-money", "1.001"])(
+    "rejects invalid industry rollup money %s instead of silently coercing it",
+    (totalAmount) => {
+      expect(() =>
+        buildPersonContributionInsightsPresentation(CONTRIBUTION_INSIGHTS, [], [
+          {
+            employer: "Malformed amount employer",
+            total_amount: totalAmount,
+            transaction_count: 1,
+            industry: "Technology",
+            industry_rollup_eligible: true
+          }
+        ])
+      ).toThrowError(
+        `Industry rollup money must be a plain amount with at most two decimal places: ${totalAmount}`
+      );
+    }
+  );
 
   it("builds no-itemized-data empty state when cycle and career totals have no source", () => {
     const viewModel = buildPersonContributionInsightsPresentation(

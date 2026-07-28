@@ -280,8 +280,27 @@ const PERSON_TOP_DONORS = [
 ];
 
 const PERSON_TOP_EMPLOYERS = [
-  { employer: "ACME CORP", total_amount: "500.00", transaction_count: 2 },
-  { employer: "STATE UNIVERSITY", total_amount: "250.00", transaction_count: 1 }
+  {
+    employer: "GOOGLE",
+    total_amount: "600.00",
+    transaction_count: 3,
+    industry: "Technology",
+    industry_rollup_eligible: true
+  },
+  {
+    employer: "ACME CORP",
+    total_amount: "150.00",
+    transaction_count: 1,
+    industry: "UNKNOWN_INDUSTRY",
+    industry_rollup_eligible: true
+  },
+  {
+    employer: "Unclassified / not provided",
+    total_amount: "25.00",
+    transaction_count: 1,
+    industry: "UNKNOWN_INDUSTRY",
+    industry_rollup_eligible: false
+  }
 ];
 
 const COMMITTEE_LIST_RESPONSE = {

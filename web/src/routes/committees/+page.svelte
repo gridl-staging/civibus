@@ -92,7 +92,8 @@
       {:else}
         <ul class="campaign-list__items">
           {#each committeeItems as itemView (itemView.item.id)}
-            <li class="campaign-list__item">
+            <!-- Load-bearing smoke gate selector: keep this stable for non-empty primary-nav checks. -->
+            <li class="campaign-list__item" data-testid="committee-result-row">
               <!-- The list presenter packages the canonical route target with the
                    committee metadata needed to distinguish similar committee names. -->
               <h3 class="campaign-list__name">

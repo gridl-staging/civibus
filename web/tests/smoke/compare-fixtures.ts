@@ -350,7 +350,15 @@ function buildOfficeholderFixture(config: FixtureConfig) {
       ? [{ name: `${config.name} Top Donor`, total_amount: "250000.00", transaction_count: 2 }]
       : [],
     topEmployers: hasItemizedData
-      ? [{ employer: `${config.name} Top Employer`, total_amount: "175000.00", transaction_count: 2 }]
+      ? [
+          {
+            employer: `${config.name} Top Employer`,
+            total_amount: "175000.00",
+            transaction_count: 2,
+            industry: "UNKNOWN_INDUSTRY",
+            industry_rollup_eligible: true
+          }
+        ]
       : [],
     candidate,
     candidateList: {

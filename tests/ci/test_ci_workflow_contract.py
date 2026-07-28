@@ -71,6 +71,17 @@ def _job_block(workflow_text: str, job_name: str) -> str:
     return "\n".join(workflow_lines[start_index:end_index])
 
 
+def _make_target_block(makefile_text: str, target_name: str) -> str:
+    lines = makefile_text.splitlines()
+    start_index = lines.index(f"{target_name}:")
+    end_index = len(lines)
+    for index, line in enumerate(lines[start_index + 1 :], start_index + 1):
+        if line and not line.startswith(("\t", " ")):
+            end_index = index
+            break
+    return "\n".join(lines[start_index:end_index])
+
+
 def test_ci_workflow_commands_use_make_owned_python_gates() -> None:
     workflow_text = _read_ci_workflow()
     lint_job = _job_block(workflow_text, "lint")
@@ -139,11 +150,21 @@ def test_makefile_owns_public_python_gate_selector() -> None:
     )
 
 
+def test_makefile_lint_runs_lane_authoring_hazard_ratchet() -> None:
+    makefile_text = MAKEFILE_PATH.read_text(encoding="utf-8")
+    lint_block = _make_target_block(makefile_text, "lint")
+
+    assert (
+        "\t@if [ -f scripts/lane_authoring_hazard_checker.py ]; "
+        "then uv run python scripts/lane_authoring_hazard_checker.py; fi"
+    ) in lint_block
+
+
 def test_public_mirror_classification_contract_is_valid_and_exact() -> None:
     entries = validate_public_mirror_classifications()
 
     assert len(entries) == len({entry.node_id for entry in entries})
-    assert len(entries) == 128
+    assert len(entries) == 143
     assert {entry.category for entry in entries} == {PublicMirrorCategory.DEV_REPO_ONLY}
     assert "tests/ci/test_api_dockerfile_contract.py::test_debbie_sync_includes_api_dockerfile_root_inputs" in (
         DEV_REPO_ONLY_CLASSIFICATIONS_BY_NODE_ID

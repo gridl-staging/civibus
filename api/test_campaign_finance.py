@@ -2415,13 +2415,12 @@ def _seed_person_top_employers_rows(
         )
 
     employer_receipts: list[tuple[str, str, str | None, bool, str, bool]] = [
-        ("d1000000-0000-0000-0000-000000000044", "100.00", "ACME CORP", False, "IND", False),
+        ("d1000000-0000-0000-0000-000000000044", "200.00", "GOOGLE", False, "IND", False),
         ("d1000000-0000-0000-0000-000000000045", "150.00", "ACME CORP", True, "IND", False),
-        ("d1000000-0000-0000-0000-000000000046", "50.00", "acme  corp ", True, "IND", False),
-        ("d1000000-0000-0000-0000-000000000047", "40.00", "", False, "IND", False),
-        ("d1000000-0000-0000-0000-000000000048", "30.00", None, True, "IND", False),
-        ("d1000000-0000-0000-0000-000000000049", "20.00", "RETIRED", True, "IND", False),
-        ("d1000000-0000-0000-0000-000000000052", "15.00", "SELF EMPLOYED", True, "IND", False),
+        ("d1000000-0000-0000-0000-000000000046", "250.00", "google", True, "IND", False),
+        ("d1000000-0000-0000-0000-000000000047", "75.00", "HOMEMAKER", False, "IND", False),
+        ("d1000000-0000-0000-0000-000000000048", "150.00", "Google", True, "IND", False),
+        ("d1000000-0000-0000-0000-000000000049", "25.00", "RETIRED", True, "IND", False),
         ("d1000000-0000-0000-0000-000000000050", "5000.00", "ACTBLUE", True, "PAC", False),
         ("d1000000-0000-0000-0000-000000000051", "700.00", "EXCLUDED EMPLOYER", True, "IND", True),
     ]
@@ -2511,8 +2510,34 @@ def test_get_person_top_employers_ranks_summed_employers_across_linked_committee
 
     assert response.status_code == 200
     assert response.json() == [
-        {"employer": "ACME CORP", "total_amount": "300.00", "transaction_count": 3},
-        {"employer": "Unclassified / not provided", "total_amount": "105.00", "transaction_count": 4},
+        {
+            "employer": "GOOGLE",
+            "total_amount": "600.00",
+            "transaction_count": 3,
+            "industry": "Technology",
+            "industry_rollup_eligible": True,
+        },
+        {
+            "employer": "ACME CORP",
+            "total_amount": "150.00",
+            "transaction_count": 1,
+            "industry": "UNKNOWN_INDUSTRY",
+            "industry_rollup_eligible": True,
+        },
+        {
+            "employer": "HOMEMAKER",
+            "total_amount": "75.00",
+            "transaction_count": 1,
+            "industry": "UNKNOWN_INDUSTRY",
+            "industry_rollup_eligible": False,
+        },
+        {
+            "employer": "Unclassified / not provided",
+            "total_amount": "25.00",
+            "transaction_count": 1,
+            "industry": "UNKNOWN_INDUSTRY",
+            "industry_rollup_eligible": False,
+        },
     ]
 
 
@@ -2526,7 +2551,15 @@ def test_get_person_top_employers_honors_limit(
     response = api_client.get(f"/v1/person/{person_id}/top-employers?limit=1&cycle=2024")
 
     assert response.status_code == 200
-    assert response.json() == [{"employer": "ACME CORP", "total_amount": "300.00", "transaction_count": 3}]
+    assert response.json() == [
+        {
+            "employer": "GOOGLE",
+            "total_amount": "600.00",
+            "transaction_count": 3,
+            "industry": "Technology",
+            "industry_rollup_eligible": True,
+        }
+    ]
 
 
 def test_get_person_top_employers_returns_empty_for_person_without_linked_committees(

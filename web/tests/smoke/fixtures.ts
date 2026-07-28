@@ -527,10 +527,12 @@ export const SMOKE_PERSON_TOP_DONOR_TWO_NAME = "Smoke Donor One";
 export const SMOKE_PERSON_TOP_DONOR_ONE_TOTAL = "$225.00";
 export const SMOKE_PERSON_TOP_DONOR_TWO_TOTAL = "$125.00";
 export const SMOKE_PERSON_TOP_EMPLOYERS_HEADING = "Top reported employer names";
-export const SMOKE_PERSON_TOP_EMPLOYER_ONE_NAME = "ACME CORP";
-export const SMOKE_PERSON_TOP_EMPLOYER_TWO_NAME = "STATE UNIVERSITY";
-export const SMOKE_PERSON_TOP_EMPLOYER_ONE_TOTAL = "$225.00";
-export const SMOKE_PERSON_TOP_EMPLOYER_TWO_TOTAL = "$125.00";
+export const SMOKE_PERSON_TOP_EMPLOYER_ONE_NAME = "GOOGLE";
+export const SMOKE_PERSON_TOP_EMPLOYER_TWO_NAME = "ACME CORP";
+export const SMOKE_PERSON_TOP_EMPLOYER_THREE_NAME = "Unclassified / not provided";
+export const SMOKE_PERSON_TOP_EMPLOYER_ONE_TOTAL = "$600.00";
+export const SMOKE_PERSON_TOP_EMPLOYER_TWO_TOTAL = "$150.00";
+export const SMOKE_PERSON_TOP_EMPLOYER_THREE_TOTAL = "$25.00";
 export const SMOKE_PERSON_TOP_EMPLOYER_DISCLAIMER =
   "Top employers aggregate raw employer names from itemized individual contributions only.";
 export const SMOKE_PERSON_TOP_EMPLOYER_METHODOLOGY =
