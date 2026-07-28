@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Keel L4 Pair Summary Evidence",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "layer",
+    "scope",
+    "schema_version",
+    "produced_at_utc",
+    "repo_sha",
+    "gate_command",
+    "status",
+    "primary_verdict",
+    "skeptic_verdict",
+    "pair_outcome",
+    "primary_verdict_path",
+    "skeptic_verdict_path",
+    "bundle_artifacts",
+    "criteria_summary",
+    "escalation_path"
+  ],
+  "properties": {
+    "layer": {
+      "const": "L4"
+    },
+    "scope": {
+      "type": "string",
+      "minLength": 1
+    },
+    "schema_version": {
+      "const": 1
+    },
+    "produced_at_utc": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "repo_sha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{7,40}$"
+    },
+    "gate_command": {
+      "type": "string",
+      "minLength": 1
+    },
+    "status": {
+      "type": "string",
+      "enum": ["pass", "fail", "error", "waived", "stale", "vacuous"]
+    },
+    "primary_verdict": {
+      "type": "string",
+      "enum": ["pass", "fail", "uncertain"]
+    },
+    "skeptic_verdict": {
+      "type": "string",
+      "enum": ["pass", "fail", "uncertain"]
+    },
+    "pair_outcome": {
+      "type": "string",
+      "enum": ["agreement_pass", "agreement_fail", "escalated"]
+    },
+    "primary_verdict_path": {
+      "type": "string",
+      "minLength": 1
+    },
+    "skeptic_verdict_path": {
+      "type": "string",
+      "minLength": 1
+    },
+    "bundle_artifacts": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "criteria_summary": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "primary_result", "skeptic_result"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "primary_result": {
+            "type": "string",
+            "enum": ["pass", "fail", "uncertain"]
+          },
+          "skeptic_result": {
+            "type": "string",
+            "enum": ["pass", "fail", "uncertain"]
+          }
+        }
+      }
+    },
+    "escalation_path": {
+      "type": ["string", "null"]
+    }
+  }
+}

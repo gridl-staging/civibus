@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Keel L6 Evidence",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "layer",
+    "scope",
+    "schema_version",
+    "produced_at_utc",
+    "repo_sha",
+    "gate_command",
+    "status",
+    "load_id",
+    "total_rows",
+    "out_of_range_rows",
+    "example_rows"
+  ],
+  "properties": {
+    "layer": {
+      "const": "L6"
+    },
+    "scope": {
+      "type": "string",
+      "minLength": 1
+    },
+    "schema_version": {
+      "const": 1
+    },
+    "produced_at_utc": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "repo_sha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{7,40}$"
+    },
+    "gate_command": {
+      "type": "string",
+      "minLength": 1
+    },
+    "status": {
+      "type": "string",
+      "enum": ["pass", "fail", "error", "waived", "stale", "vacuous"]
+    },
+    "load_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "total_rows": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "out_of_range_rows": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "example_rows": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["record_id", "field", "value"],
+        "properties": {
+          "record_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "field": {
+            "type": "string",
+            "minLength": 1
+          },
+          "value": {}
+        }
+      }
+    }
+  }
+}

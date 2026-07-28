@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Keel L1 Evidence",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "layer",
+    "scope",
+    "schema_version",
+    "produced_at_utc",
+    "repo_sha",
+    "gate_command",
+    "status",
+    "current_total",
+    "expected_range",
+    "ratio",
+    "anchor_path",
+    "anchor_schema_version",
+    "data_store_environment"
+  ],
+  "properties": {
+    "layer": {
+      "const": "L1"
+    },
+    "scope": {
+      "type": "string",
+      "minLength": 1
+    },
+    "schema_version": {
+      "const": 1
+    },
+    "produced_at_utc": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "repo_sha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{7,40}$"
+    },
+    "gate_command": {
+      "type": "string",
+      "minLength": 1
+    },
+    "status": {
+      "type": "string",
+      "enum": ["pass", "fail", "error", "waived", "stale", "vacuous"]
+    },
+    "current_total": {
+      "type": "number",
+      "minimum": 0
+    },
+    "expected_range": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["minimum", "maximum"],
+      "properties": {
+        "minimum": {
+          "type": "number",
+          "minimum": 0
+        },
+        "maximum": {
+          "type": "number",
+          "minimum": 0
+        }
+      }
+    },
+    "ratio": {
+      "type": "number",
+      "minimum": 0
+    },
+    "anchor_path": {
+      "type": "string",
+      "minLength": 1
+    },
+    "anchor_schema_version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "data_store_environment": {
+      "type": "string",
+      "minLength": 1
+    }
+  }
+}

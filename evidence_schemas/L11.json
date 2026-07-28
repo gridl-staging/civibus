@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Keel L11 Editorial Evidence",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "layer",
+    "scope",
+    "schema_version",
+    "produced_at_utc",
+    "repo_sha",
+    "gate_command",
+    "status",
+    "owner_files",
+    "rows"
+  ],
+  "properties": {
+    "layer": {
+      "const": "L11"
+    },
+    "scope": {
+      "type": "string",
+      "minLength": 1
+    },
+    "schema_version": {
+      "const": 1
+    },
+    "produced_at_utc": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "repo_sha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{7,40}$"
+    },
+    "gate_command": {
+      "type": "string",
+      "minLength": 1
+    },
+    "status": {
+      "type": "string",
+      "enum": ["pass", "fail", "error", "waived", "stale", "vacuous"]
+    },
+    "owner_files": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "minItems": 1
+    },
+    "rows": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["copy_id", "owner_file", "text"],
+        "properties": {
+          "copy_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "owner_file": {
+            "type": "string",
+            "minLength": 1
+          },
+          "text": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    }
+  }
+}

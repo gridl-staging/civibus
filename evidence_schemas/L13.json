@@ -1,0 +1,190 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Keel L13 Evidence",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "layer",
+    "scope",
+    "schema_version",
+    "produced_at_utc",
+    "repo_sha",
+    "gate_command",
+    "status",
+    "diff_summary",
+    "diff_entries",
+    "allowed_drift_entries",
+    "reconciliation"
+  ],
+  "properties": {
+    "layer": {
+      "const": "L13"
+    },
+    "scope": {
+      "type": "string",
+      "minLength": 1
+    },
+    "schema_version": {
+      "const": 1
+    },
+    "produced_at_utc": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "repo_sha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{7,40}$"
+    },
+    "gate_command": {
+      "type": "string",
+      "minLength": 1
+    },
+    "status": {
+      "type": "string",
+      "enum": ["pass", "fail", "error", "waived", "stale", "vacuous"]
+    },
+    "diff_summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "total_drift",
+        "unexpected_drift",
+        "allowed_drift",
+        "expired_debt_entries",
+        "unmatched_debt_entries"
+      ],
+      "properties": {
+        "total_drift": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "unexpected_drift": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "allowed_drift": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "expired_debt_entries": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "unmatched_debt_entries": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "diff_entries": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/diffEntry"
+      }
+    },
+    "allowed_drift_entries": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/diffEntry"
+      }
+    },
+    "reconciliation": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "$ref": "#/$defs/reconciliationEntry"
+      }
+    }
+  },
+  "$defs": {
+    "diffEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "drift_type",
+        "repo_value",
+        "live_value",
+        "reason",
+        "allowed",
+        "debt_entry_id"
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "drift_type": {
+          "type": "string",
+          "enum": [
+            "non_secret_mismatch",
+            "secret_presence_mismatch",
+            "outside_diff_surface",
+            "secret_exposure"
+          ]
+        },
+        "repo_value": {},
+        "live_value": {},
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        },
+        "allowed": {
+          "type": "boolean"
+        },
+        "debt_entry_id": {
+          "type": ["string", "null"]
+        }
+      }
+    },
+    "reconciliationEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "deploy_id",
+        "status",
+        "total_drift_count",
+        "unexpected_drift_count",
+        "allowed_drift_count",
+        "expired_debt_ids",
+        "unmatched_debt_ids"
+      ],
+      "properties": {
+        "deploy_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "status": {
+          "type": "string",
+          "enum": ["pass", "fail", "error", "waived", "stale"]
+        },
+        "total_drift_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "unexpected_drift_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "allowed_drift_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "expired_debt_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "unmatched_debt_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    }
+  }
+}

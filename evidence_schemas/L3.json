@@ -1,0 +1,107 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Keel L3 Evidence",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "layer",
+    "scope",
+    "schema_version",
+    "produced_at_utc",
+    "repo_sha",
+    "gate_command",
+    "status",
+    "source_id",
+    "current_state",
+    "transition_date",
+    "linked_evidence",
+    "validation_checks"
+  ],
+  "properties": {
+    "layer": {
+      "const": "L3"
+    },
+    "scope": {
+      "type": "string",
+      "minLength": 1
+    },
+    "schema_version": {
+      "const": 1
+    },
+    "produced_at_utc": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "repo_sha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{7,40}$"
+    },
+    "gate_command": {
+      "type": "string",
+      "minLength": 1
+    },
+    "status": {
+      "type": "string",
+      "enum": ["pass", "fail", "error", "waived", "stale", "vacuous"]
+    },
+    "source_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "current_state": {
+      "type": "string",
+      "enum": ["discovered", "prototyped", "validated", "operationalized", "degraded", "deferred"]
+    },
+    "transition_date": {
+      "type": "string",
+      "format": "date"
+    },
+    "linked_evidence": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["layer", "scope", "path", "status"],
+        "properties": {
+          "layer": {
+            "type": "string",
+            "pattern": "^(L[0-9]+|docs)$",
+            "description": "Either an L# layer ID, or the synthetic value 'docs' for deferred-state docs/-tree references that have no schema-bound layer."
+          },
+          "scope": {
+            "type": "string",
+            "minLength": 1
+          },
+          "path": {
+            "type": "string",
+            "minLength": 1
+          },
+          "status": {
+            "type": "string",
+            "enum": ["pass", "fail", "error", "waived", "stale"]
+          }
+        }
+      }
+    },
+    "validation_checks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "ok"],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "ok": {
+            "type": "boolean"
+          },
+          "detail": {
+            "type": ["string", "null"]
+          }
+        }
+      }
+    }
+  }
+}

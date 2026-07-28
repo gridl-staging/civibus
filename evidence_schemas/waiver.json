@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Keel Waiver",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "layer",
+    "scope",
+    "reason",
+    "created_at_utc",
+    "expires_at_utc",
+    "owner",
+    "evidence_path",
+    "followup_ticket"
+  ],
+  "properties": {
+    "layer": {
+      "type": "string",
+      "pattern": "^L[0-9]+$"
+    },
+    "scope": {
+      "type": "string",
+      "minLength": 1
+    },
+    "reason": {
+      "type": "string",
+      "minLength": 1
+    },
+    "created_at_utc": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "expires_at_utc": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "owner": {
+      "type": "string",
+      "minLength": 1
+    },
+    "evidence_path": {
+      "type": "string",
+      "minLength": 1
+    },
+    "followup_ticket": {
+      "type": "string",
+      "minLength": 1
+    }
+  }
+}

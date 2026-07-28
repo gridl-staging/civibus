@@ -1,0 +1,136 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Keel L9 Evidence",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "layer",
+    "scope",
+    "schema_version",
+    "produced_at_utc",
+    "repo_sha",
+    "gate_command",
+    "status",
+    "sampled_record_count",
+    "orphan_record_count",
+    "sampled_records",
+    "orphan_records"
+  ],
+  "properties": {
+    "layer": {
+      "const": "L9"
+    },
+    "scope": {
+      "type": "string",
+      "minLength": 1
+    },
+    "schema_version": {
+      "const": 1
+    },
+    "produced_at_utc": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "repo_sha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{7,40}$"
+    },
+    "gate_command": {
+      "type": "string",
+      "minLength": 1
+    },
+    "status": {
+      "type": "string",
+      "enum": ["pass", "fail", "error", "waived", "stale", "vacuous"]
+    },
+    "sampled_record_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "orphan_record_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "sampled_records": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "route",
+          "detail_id",
+          "data_source_name",
+          "selected_url",
+          "selected_url_source"
+        ],
+        "properties": {
+          "route": {
+            "type": "string",
+            "minLength": 1
+          },
+          "detail_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "data_source_name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "source_record_key": {
+            "type": ["string", "null"]
+          },
+          "selected_url": {
+            "type": "string",
+            "format": "uri",
+            "minLength": 1
+          },
+          "selected_url_source": {
+            "type": "string",
+            "enum": ["record_url", "data_source_url"]
+          }
+        }
+      }
+    },
+    "orphan_records": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "route",
+          "detail_id",
+          "data_source_name",
+          "data_source_url",
+          "orphan_reason"
+        ],
+        "properties": {
+          "route": {
+            "type": "string",
+            "minLength": 1
+          },
+          "detail_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "data_source_name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "source_record_key": {
+            "type": ["string", "null"]
+          },
+          "record_url": {
+            "type": ["string", "null"]
+          },
+          "data_source_url": {
+            "type": "string",
+            "minLength": 1
+          },
+          "orphan_reason": {
+            "const": "missing_safe_trace_url"
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Keel L10 Evidence",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "layer",
+    "scope",
+    "schema_version",
+    "produced_at_utc",
+    "repo_sha",
+    "gate_command",
+    "status",
+    "evaluated_routes",
+    "empty_banner_cases",
+    "deviation_banner_cases",
+    "al_freshness_note_cases",
+    "ga_freshness_note_cases",
+    "failing_routes"
+  ],
+  "properties": {
+    "layer": {
+      "const": "L10"
+    },
+    "scope": {
+      "type": "string",
+      "minLength": 1
+    },
+    "schema_version": {
+      "const": 2
+    },
+    "produced_at_utc": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "repo_sha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{7,40}$"
+    },
+    "gate_command": {
+      "type": "string",
+      "minLength": 1
+    },
+    "status": {
+      "type": "string",
+      "enum": ["pass", "fail", "error", "waived", "stale", "vacuous"]
+    },
+    "evaluated_routes": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "empty_banner_cases": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "deviation_banner_cases": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "al_freshness_note_cases": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "ga_freshness_note_cases": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "failing_routes": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    }
+  }
+}

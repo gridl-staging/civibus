@@ -39,6 +39,7 @@ PUBLIC_CI_SUPPORT_FILES = {
 }
 PUBLIC_CI_SUPPORT_DIRS = {
     "docs/reference/research/artifacts/2026_04_29_dwo_county_muni",
+    "evidence_schemas",
 }
 
 

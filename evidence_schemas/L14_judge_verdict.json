@@ -1,0 +1,228 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Keel L14 Coverage Verdict",
+  "description": "Judge verdict for the L14 coverage boundary projection over the office-and-contest universe owners.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "layer",
+    "scope",
+    "verdict",
+    "confidence",
+    "rubric_version",
+    "notes",
+    "session_id",
+    "timestamp",
+    "registry_path",
+    "lifecycle_path",
+    "lifecycle_updated_at",
+    "rows"
+  ],
+  "properties": {
+    "layer": {
+      "const": "L14"
+    },
+    "scope": {
+      "type": "string",
+      "minLength": 1
+    },
+    "verdict": {
+      "type": "string",
+      "enum": ["pass", "fail", "uncertain"]
+    },
+    "confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "rubric_version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$"
+    },
+    "notes": {
+      "type": "string",
+      "minLength": 1
+    },
+    "session_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "registry_path": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Repo-relative path to the coverage-boundary owner registry."
+    },
+    "lifecycle_path": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Repo-relative path to the lifecycle owner registry."
+    },
+    "lifecycle_updated_at": {
+      "type": "string",
+      "format": "date"
+    },
+    "rows": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/coverage_row"
+      }
+    }
+  },
+  "$defs": {
+    "coverage_row": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "jurisdiction_code",
+        "name",
+        "jurisdiction_type",
+        "best_update_frequency",
+        "runner_wired",
+        "tier",
+        "operational_reason",
+        "next_action",
+        "evidence_date",
+        "loaded_count",
+        "expected_count",
+        "acquisition_pattern",
+        "discovery_maturity",
+        "source_contract_maturity",
+        "legal_filing_semantics_maturity",
+        "implementation_maturity",
+        "operational_maturity",
+        "public_claim_status",
+        "completeness_intelligence_maturity",
+        "civics_candidacy_status",
+        "main_blocker"
+        ,
+        "nc_geometry_total_count",
+        "nc_geometry_srid_4326_count",
+        "nc_geometry_expected_count",
+        "nc_geometry_counts_match_expected"
+      ],
+      "properties": {
+        "jurisdiction_code": {
+          "type": "string",
+          "minLength": 1
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "jurisdiction_type": {
+          "type": "string",
+          "minLength": 1
+        },
+        "best_update_frequency": {
+          "type": "string",
+          "minLength": 1
+        },
+        "runner_wired": {
+          "type": "boolean"
+        },
+        "tier": {
+          "type": ["string", "null"],
+          "enum": [
+            "launch-support candidate",
+            "freshness-limited",
+            "deferred/blocked",
+            "implemented but unproven",
+            null
+          ]
+        },
+        "operational_reason": {
+          "type": ["string", "null"]
+        },
+        "next_action": {
+          "type": ["string", "null"]
+        },
+        "evidence_date": {
+          "type": ["string", "null"],
+          "format": "date"
+        },
+        "loaded_count": {
+          "type": ["integer", "null"]
+        },
+        "expected_count": {
+          "type": ["integer", "null"]
+        },
+        "acquisition_pattern": {
+          "type": ["string", "null"],
+          "enum": [
+            "bulk_file",
+            "bulk_api",
+            "search_export_portal",
+            "browser_session_portal",
+            "protected_or_blocked",
+            "unknown",
+            null
+          ]
+        },
+        "discovery_maturity": {
+          "type": ["string", "null"],
+          "enum": ["not_started", "researched", "interactively_proven", "blocked", null]
+        },
+        "source_contract_maturity": {
+          "type": ["string", "null"],
+          "enum": ["not_started", "partial", "encoded", "verified", null]
+        },
+        "legal_filing_semantics_maturity": {
+          "type": ["string", "null"],
+          "enum": ["not_started", "partial", "substantial", "verified", null]
+        },
+        "implementation_maturity": {
+          "type": ["string", "null"],
+          "enum": ["not_started", "scaffolded", "fixture_tested", "live_proven", "full_history_proven", null]
+        },
+        "operational_maturity": {
+          "type": ["string", "null"],
+          "enum": ["unknown", "manual_only", "runner_wired", "operational", null]
+        },
+        "public_claim_status": {
+          "type": ["string", "null"],
+          "enum": [
+            "launch-support candidate",
+            "freshness-limited",
+            "deferred/blocked",
+            "implemented but unproven",
+            null
+          ]
+        },
+        "completeness_intelligence_maturity": {
+          "type": ["string", "null"],
+          "enum": ["not_started", "rules_only", "observed_only", "gap_detection_ready", null]
+        },
+        "civics_candidacy_status": {
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": ["not_started", "loaded", "full_csv_proven"]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "main_blocker": {
+          "type": ["string", "null"]
+        },
+        "nc_geometry_total_count": {
+          "type": ["integer", "null"]
+        },
+        "nc_geometry_srid_4326_count": {
+          "type": ["integer", "null"]
+        },
+        "nc_geometry_expected_count": {
+          "type": ["integer", "null"]
+        },
+        "nc_geometry_counts_match_expected": {
+          "type": ["boolean", "null"]
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Keel Calibration Audit Verdict",
+  "description": "Quarterly per-rubric review of judge layers. Decides whether each rubric should be kept, retuned, or deprecated based on its 90-day signal-to-noise.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "review_id",
+    "verdict",
+    "confidence",
+    "rubric_version",
+    "session_id",
+    "timestamp",
+    "window_start",
+    "window_end",
+    "rubrics_reviewed",
+    "notes"
+  ],
+  "properties": {
+    "review_id": { "const": "calibration_audit" },
+    "verdict": {
+      "type": "string",
+      "enum": ["pass", "fail", "uncertain"]
+    },
+    "confidence": {
+      "type": "string",
+      "enum": ["low", "medium", "high"]
+    },
+    "rubric_version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$"
+    },
+    "session_id": { "type": "string", "minLength": 1 },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "window_start": { "type": "string", "format": "date" },
+    "window_end": { "type": "string", "format": "date" },
+    "rubrics_reviewed": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["layer", "rubric_version", "verdict_count", "escalation_count", "recommendation"],
+        "properties": {
+          "layer": { "type": "string", "pattern": "^L[0-9]+$" },
+          "rubric_version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$" },
+          "verdict_count": { "type": "integer", "minimum": 0 },
+          "escalation_count": { "type": "integer", "minimum": 0 },
+          "recommendation": {
+            "type": "string",
+            "enum": ["keep", "retune", "deprecate"]
+          },
+          "rationale": { "type": "string" }
+        }
+      }
+    },
+    "notes": { "type": "string" }
+  }
+}

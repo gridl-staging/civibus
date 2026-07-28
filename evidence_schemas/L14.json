@@ -1,0 +1,268 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Keel L14 Coverage Projection Evidence",
+  "description": "Schema-validated L14 coverage boundary projection for office-and-contest universe tracking.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "layer",
+    "scope",
+    "schema_version",
+    "produced_at_utc",
+    "repo_sha",
+    "gate_command",
+    "status",
+    "registry_path",
+    "lifecycle_path",
+    "lifecycle_updated_at",
+    "rows"
+  ],
+  "properties": {
+    "layer": {
+      "const": "L14"
+    },
+    "scope": {
+      "type": "string",
+      "minLength": 1
+    },
+    "schema_version": {
+      "const": 1
+    },
+    "produced_at_utc": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "repo_sha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{7,40}$"
+    },
+    "gate_command": {
+      "type": "string",
+      "minLength": 1
+    },
+    "status": {
+      "type": "string",
+      "enum": ["pass", "fail", "error", "waived", "stale", "vacuous"]
+    },
+    "registry_path": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Repo-relative path to the coverage-boundary owner registry."
+    },
+    "lifecycle_path": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Repo-relative path to the lifecycle owner registry."
+    },
+    "lifecycle_updated_at": {
+      "type": "string",
+      "format": "date"
+    },
+    "rows": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/coverage_row"
+      }
+    },
+    "federal_gate": {
+      "oneOf": [
+        { "$ref": "#/$defs/federal_coverage_gate" },
+        { "type": "null" }
+      ]
+    }
+  },
+  "$defs": {
+    "federal_coverage_gate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "active_officeholders",
+        "total_seats",
+        "portrait_coverage_pct",
+        "bio_coverage_pct",
+        "candidate_link_coverage_pct",
+        "ie_coverage_pct"
+      ],
+      "properties": {
+        "active_officeholders": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "total_seats": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "portrait_coverage_pct": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "bio_coverage_pct": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "candidate_link_coverage_pct": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "ie_coverage_pct": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100
+        }
+      }
+    },
+    "coverage_row": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "jurisdiction_code",
+        "name",
+        "jurisdiction_type",
+        "best_update_frequency",
+        "runner_wired",
+        "tier",
+        "operational_reason",
+        "next_action",
+        "evidence_date",
+        "acquisition_pattern",
+        "discovery_maturity",
+        "source_contract_maturity",
+        "legal_filing_semantics_maturity",
+        "implementation_maturity",
+        "operational_maturity",
+        "public_claim_status",
+        "completeness_intelligence_maturity",
+        "civics_candidacy_status",
+        "main_blocker",
+        "nc_geometry_total_count",
+        "nc_geometry_srid_4326_count",
+        "nc_geometry_expected_count",
+        "nc_geometry_counts_match_expected"
+      ],
+      "properties": {
+        "jurisdiction_code": {
+          "type": "string",
+          "minLength": 1
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "jurisdiction_type": {
+          "type": "string",
+          "minLength": 1
+        },
+        "best_update_frequency": {
+          "type": "string",
+          "minLength": 1
+        },
+        "runner_wired": {
+          "type": "boolean"
+        },
+        "tier": {
+          "type": ["string", "null"],
+          "enum": [
+            "launch-support candidate",
+            "freshness-limited",
+            "deferred/blocked",
+            "implemented but unproven",
+            null
+          ]
+        },
+        "operational_reason": {
+          "type": ["string", "null"]
+        },
+        "next_action": {
+          "type": ["string", "null"]
+        },
+        "evidence_date": {
+          "type": ["string", "null"],
+          "format": "date"
+        },
+        "loaded_count": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
+        "expected_count": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
+        "acquisition_pattern": {
+          "type": ["string", "null"],
+          "enum": [
+            "bulk_file",
+            "bulk_api",
+            "search_export_portal",
+            "browser_session_portal",
+            "protected_or_blocked",
+            "unknown",
+            null
+          ]
+        },
+        "discovery_maturity": {
+          "type": ["string", "null"],
+          "enum": ["not_started", "researched", "interactively_proven", "blocked", null]
+        },
+        "source_contract_maturity": {
+          "type": ["string", "null"],
+          "enum": ["not_started", "partial", "encoded", "verified", null]
+        },
+        "legal_filing_semantics_maturity": {
+          "type": ["string", "null"],
+          "enum": ["not_started", "partial", "substantial", "verified", null]
+        },
+        "implementation_maturity": {
+          "type": ["string", "null"],
+          "enum": ["not_started", "scaffolded", "fixture_tested", "live_proven", "full_history_proven", null]
+        },
+        "operational_maturity": {
+          "type": ["string", "null"],
+          "enum": ["unknown", "manual_only", "runner_wired", "operational", null]
+        },
+        "public_claim_status": {
+          "type": ["string", "null"],
+          "enum": [
+            "launch-support candidate",
+            "freshness-limited",
+            "deferred/blocked",
+            "implemented but unproven",
+            null
+          ]
+        },
+        "completeness_intelligence_maturity": {
+          "type": ["string", "null"],
+          "enum": ["not_started", "rules_only", "observed_only", "gap_detection_ready", null]
+        },
+        "civics_candidacy_status": {
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": ["not_started", "loaded", "full_csv_proven"]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "main_blocker": {
+          "type": ["string", "null"]
+        },
+        "nc_geometry_total_count": {
+          "type": ["integer", "null"]
+        },
+        "nc_geometry_srid_4326_count": {
+          "type": ["integer", "null"]
+        },
+        "nc_geometry_expected_count": {
+          "type": ["integer", "null"]
+        },
+        "nc_geometry_counts_match_expected": {
+          "type": ["boolean", "null"]
+        }
+      }
+    }
+  }
+}

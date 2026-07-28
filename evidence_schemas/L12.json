@@ -1,0 +1,120 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Keel L12 Session Output Evidence",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "layer",
+    "scope",
+    "schema_version",
+    "produced_at_utc",
+    "repo_sha",
+    "gate_command",
+    "status",
+    "session_id",
+    "changed_files",
+    "touched_layers",
+    "produced_evidence_layers",
+    "row_count_deltas",
+    "anchor_ratio_deltas"
+  ],
+  "properties": {
+    "layer": {
+      "const": "L12"
+    },
+    "scope": {
+      "type": "string",
+      "minLength": 1
+    },
+    "schema_version": {
+      "const": 1
+    },
+    "produced_at_utc": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "repo_sha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{7,40}$"
+    },
+    "gate_command": {
+      "type": "string",
+      "minLength": 1
+    },
+    "status": {
+      "type": "string",
+      "enum": ["pass", "fail", "error", "waived", "stale", "vacuous"]
+    },
+    "session_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "changed_files": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "touched_layers": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^L[0-9]+$"
+      }
+    },
+    "produced_evidence_layers": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^L[0-9]+$"
+      }
+    },
+    "row_count_deltas": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["source_id", "before", "after", "delta"],
+        "properties": {
+          "source_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "before": {
+            "type": "integer"
+          },
+          "after": {
+            "type": "integer"
+          },
+          "delta": {
+            "type": "integer"
+          }
+        }
+      }
+    },
+    "anchor_ratio_deltas": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["scope", "before", "after", "delta"],
+        "properties": {
+          "scope": {
+            "type": "string",
+            "minLength": 1
+          },
+          "before": {
+            "type": "number"
+          },
+          "after": {
+            "type": "number"
+          },
+          "delta": {
+            "type": "number"
+          }
+        }
+      }
+    }
+  }
+}

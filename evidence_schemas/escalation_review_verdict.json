@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Keel Escalation Review Verdict",
+  "description": "Weekly triage of the open escalation queue. Decides which escalations resolve, which require maintainer attention, and which are stale.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "review_id",
+    "verdict",
+    "confidence",
+    "rubric_version",
+    "session_id",
+    "timestamp",
+    "window_start",
+    "window_end",
+    "escalations_reviewed",
+    "open_count",
+    "resolved_count",
+    "auto_block_count",
+    "notes"
+  ],
+  "properties": {
+    "review_id": { "const": "escalation_review" },
+    "verdict": {
+      "type": "string",
+      "enum": ["pass", "fail", "uncertain"]
+    },
+    "confidence": {
+      "type": "string",
+      "enum": ["low", "medium", "high"]
+    },
+    "rubric_version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$"
+    },
+    "session_id": { "type": "string", "minLength": 1 },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "window_start": { "type": "string", "format": "date" },
+    "window_end": { "type": "string", "format": "date" },
+    "escalations_reviewed": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["escalation_path", "layer", "age_days", "disposition"],
+        "properties": {
+          "escalation_path": { "type": "string", "minLength": 1 },
+          "layer": { "type": "string", "pattern": "^L[0-9]+$" },
+          "age_days": { "type": "integer", "minimum": 0 },
+          "disposition": {
+            "type": "string",
+            "enum": ["resolved", "needs_maintainer", "auto_block_pending", "stale_close"]
+          },
+          "rationale": { "type": "string" }
+        }
+      }
+    },
+    "open_count": { "type": "integer", "minimum": 0 },
+    "resolved_count": { "type": "integer", "minimum": 0 },
+    "auto_block_count": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Count of escalations crossing the 14-day auto-block threshold per docs/reference/keel/open_questions.md item 3."
+    },
+    "notes": { "type": "string" }
+  }
+}

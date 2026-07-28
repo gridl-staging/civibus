@@ -1,0 +1,127 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Keel L7 Evidence",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "layer",
+    "scope",
+    "schema_version",
+    "produced_at_utc",
+    "repo_sha",
+    "gate_command",
+    "status",
+    "checked_clusters",
+    "overlapping_clusters",
+    "discrepancy_count",
+    "discrepancies_by_field",
+    "sample_discrepancies"
+  ],
+  "properties": {
+    "layer": {
+      "const": "L7"
+    },
+    "scope": {
+      "type": "string",
+      "minLength": 1
+    },
+    "schema_version": {
+      "const": 1
+    },
+    "produced_at_utc": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "repo_sha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{7,40}$"
+    },
+    "gate_command": {
+      "type": "string",
+      "minLength": 1
+    },
+    "status": {
+      "type": "string",
+      "enum": ["pass", "fail", "error", "waived", "stale", "vacuous"]
+    },
+    "checked_clusters": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "overlapping_clusters": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "discrepancy_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "discrepancies_by_field": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["canonical_name", "primary_address"],
+      "properties": {
+        "canonical_name": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "primary_address": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "sample_discrepancies": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "entity_type",
+          "cluster_id",
+          "field",
+          "source_count",
+          "distinct_value_count",
+          "source_names",
+          "values"
+        ],
+        "properties": {
+          "entity_type": {
+            "type": "string",
+            "enum": ["person", "organization"]
+          },
+          "cluster_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "field": {
+            "type": "string",
+            "enum": ["canonical_name", "primary_address"]
+          },
+          "source_count": {
+            "type": "integer",
+            "minimum": 2
+          },
+          "distinct_value_count": {
+            "type": "integer",
+            "minimum": 2
+          },
+          "source_names": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "values": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      }
+    }
+  }
+}
