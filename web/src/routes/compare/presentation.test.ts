@@ -107,6 +107,7 @@ function buildCandidate(candidateId: string, personId: string): CandidateDetailR
     slug: candidateId,
     slug_is_unique: true,
     identity_is_safe: true,
+    has_official_total: true,
     person_id: personId,
     party: null,
     office: "H",

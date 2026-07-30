@@ -325,12 +325,48 @@ describe("campaign-finance route renders", () => {
     expect(countOccurrences(rendered.head, /meta name="twitter:title"/g)).toBe(1);
     expect(countOccurrences(rendered.head, /meta name="twitter:description"/g)).toBe(1);
     expect(countOccurrences(rendered.head, /meta name="twitter:image"/g)).toBe(1);
+    expect(countOccurrences(rendered.head, /meta name="robots"/g)).toBe(0);
     expect(countOccurrences(rendered.head, /<script type="application\/ld\+json">/g)).toBe(1);
     expect(rendered.head).toContain('"@type":"Person"');
     expect(rendered.head).toContain('"name":"Pat Candidate"');
     expect(extractJsonLdGraphObject(rendered.head, "Person").name).toBe("Pat Candidate");
     expect(rendered.body).toContain("Candidate detail");
     expect(rendered.body).toContain("Pat Candidate");
+  });
+
+  it("candidate +page.svelte indexes an out-of-cycle official total and noindexes a thin canonical route", () => {
+    const outOfCycleData = buildCandidateMatrixData(
+      {
+        activity_state: "out_of_cycle_official_total",
+        completeness: "partial",
+        basis: "fec_official_candidate_summary"
+      },
+      {
+        activity_state: "loaded_zero",
+        completeness: "complete",
+        basis: "authoritative_load_evidence"
+      },
+      {
+        coverage_start_date: "2023-01-01",
+        coverage_end_date: "2024-12-31",
+        total_raised: "1234.56",
+        total_spent: "234.56",
+        net: "1000.00",
+        cash_on_hand: "345.67",
+        summary_source: "fec_weball"
+      }
+    );
+    const outOfCycleRendered = render(CandidateRoutePage, {
+      props: { data: outOfCycleData }
+    });
+    const thinRendered = render(CandidateRoutePage, {
+      props: { data: CANDIDATE_EMPTY_CANONICAL_DATA }
+    });
+
+    expect(countOccurrences(outOfCycleRendered.head, /meta name="robots"/g)).toBe(0);
+    expect(outOfCycleRendered.body).toContain("Earlier-cycle official total");
+    expect(countOccurrences(thinRendered.head, /meta name="robots"/g)).toBe(1);
+    expect(thinRendered.head).toContain('meta name="robots" content="noindex"');
   });
 
   it("candidate +page.svelte omits Person JSON-LD name and renders neutral identity for unsafe candidates", () => {
@@ -378,7 +414,8 @@ describe("campaign-finance route renders", () => {
               district: "01",
               slug: "pat-candidate",
               slug_is_unique: true,
-              identity_is_safe: true
+              identity_is_safe: true,
+              has_official_total: true
             },
             {
               id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
@@ -390,7 +427,8 @@ describe("campaign-finance route renders", () => {
               district: "02",
               slug: "pat-candidate",
               slug_is_unique: false,
-              identity_is_safe: true
+              identity_is_safe: true,
+              has_official_total: false
             }
           ]
         }
@@ -1694,7 +1732,8 @@ describe("committee detail truthfulness (Stage 6)", () => {
                 district: "04",
                 slug: "mike-johnson",
                 slug_is_unique: true,
-                identity_is_safe: true
+                identity_is_safe: true,
+                has_official_total: true
               }
             ]
           }
@@ -1756,7 +1795,8 @@ describe("breadcrumb parity on campaign-finance detail routes", () => {
               district: "01",
               slug: "pat-candidate",
               slug_is_unique: true,
-              identity_is_safe: true
+              identity_is_safe: true,
+              has_official_total: true
             }
           ]
         }

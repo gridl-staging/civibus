@@ -275,7 +275,8 @@ def test_deploy_workflow_keeps_production_smoke_gate_after_all_deploys() -> None
     assert (
         "bash ./tests/smoke/run-playwright.sh -- "
         "tests/smoke/production_deploy.spec.ts "
-        "tests/smoke/production_finance_visuals.spec.ts --reporter=line" in smoke_script
+        "tests/smoke/production_finance_visuals.spec.ts "
+        "tests/smoke/primary_nav_nonempty.spec.ts --reporter=line" in smoke_script
     )
     assert smoke_step["working-directory"] == "web"
 

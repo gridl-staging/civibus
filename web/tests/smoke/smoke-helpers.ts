@@ -497,6 +497,14 @@ export async function assertSeoHead(
   await expect(ogSiteName).toHaveAttribute("content", "Civibus");
 }
 
+export async function assertRobotsHead(page: any, expectedContent: "noindex" | null) {
+  const robots = page.locator('meta[name="robots"]');
+  await expect(robots).toHaveCount(expectedContent === null ? 0 : 1);
+  if (expectedContent !== null) {
+    await expect(robots).toHaveAttribute("content", expectedContent);
+  }
+}
+
 /** Asserts the intentionally minimal head tags for the `/search` route. */
 export async function assertSearchHead(page: any, opts: { title: string; description: string }) {
   await expect(page).toHaveTitle(opts.title);

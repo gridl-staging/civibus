@@ -49,6 +49,7 @@ export const CANDIDATE_CANONICAL_DATA = {
     slug: "pat-candidate",
     slug_is_unique: true,
     identity_is_safe: true,
+    has_official_total: true,
     person_id: null,
     party: "DEM",
     office: "H",
@@ -113,6 +114,7 @@ export const CANDIDATE_EMPTY_CANONICAL_DATA = {
     slug: "candidate-empty",
     slug_is_unique: false,
     identity_is_safe: true,
+    has_official_total: false,
     person_id: null,
     principal_committee_id: null
   },

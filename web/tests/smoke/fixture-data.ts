@@ -12,6 +12,9 @@ const {
   SMOKE_CANDIDATE_CASH_ON_HAND,
   SMOKE_CANDIDATE_COVERAGE_THROUGH,
   SMOKE_CANDIDATE_NAME,
+  SMOKE_OUT_OF_CYCLE_CANDIDATE_ID,
+  SMOKE_OUT_OF_CYCLE_CANDIDATE_NAME,
+  SMOKE_OUT_OF_CYCLE_CANDIDATE_SLUG,
   SMOKE_CANDIDATE_SELECTED_CYCLE,
   SMOKE_CANDIDATE_SLUG,
   SMOKE_COVERAGE_DOMAIN,
@@ -41,7 +44,9 @@ const {
   SMOKE_CONTEST_NAME,
   SMOKE_DEVIANT_CANDIDATE_ID,
   SMOKE_EMPTY_CANDIDATE_ID,
+  SMOKE_EMPTY_CANDIDATE_SLUG,
   SMOKE_LOADED_ZERO_CANDIDATE_ID,
+  SMOKE_LOADED_ZERO_CANDIDATE_SLUG,
   SMOKE_BACKEND_FAILURE_CANDIDATE_ID,
   SMOKE_EMPTY_COMMITTEE_ID,
   SMOKE_EMPTY_OFFICE_ID,
@@ -365,7 +370,7 @@ export const smokeFixtures = {
   searchSlow: {
     query: SMOKE_SEARCH_SLOW_QUERY,
     entityType: "org",
-    delayMs: 1500,
+    delayMs: 3000,
     results: [
       {
         entity_type: "org",
@@ -1016,7 +1021,9 @@ export const smokeFixtures = {
           state: "NC",
           district: "01",
           slug: SMOKE_CANDIDATE_SLUG,
-          slug_is_unique: true
+          slug_is_unique: true,
+          identity_is_safe: true,
+          has_official_total: true
         }
       ],
       sources: [
@@ -1325,6 +1332,7 @@ export const smokeFixtures = {
       slug: SMOKE_CANDIDATE_SLUG,
       slug_is_unique: true,
       identity_is_safe: true,
+      has_official_total: true,
       person_id: SMOKE_PERSON_ID,
       party: "DEM",
       office: "H",
@@ -1423,15 +1431,86 @@ export const smokeFixtures = {
       coverage: POPULATED_IE_COVERAGE
     }
   },
+  candidateOutOfCycle: {
+    id: SMOKE_OUT_OF_CYCLE_CANDIDATE_ID,
+    detail: {
+      id: SMOKE_OUT_OF_CYCLE_CANDIDATE_ID,
+      fec_candidate_id: "H0NC04004",
+      name: SMOKE_OUT_OF_CYCLE_CANDIDATE_NAME,
+      slug: SMOKE_OUT_OF_CYCLE_CANDIDATE_SLUG,
+      slug_is_unique: true,
+      identity_is_safe: true,
+      has_official_total: true,
+      person_id: null,
+      party: "IND",
+      office: "H",
+      state: "NC",
+      district: "04",
+      incumbent_challenge: "C",
+      principal_committee_id: null,
+      sources: []
+    },
+    summary: {
+      candidate_id: SMOKE_OUT_OF_CYCLE_CANDIDATE_ID,
+      candidate_name: SMOKE_OUT_OF_CYCLE_CANDIDATE_NAME,
+      selected_cycle: Number(SMOKE_CANDIDATE_SELECTED_CYCLE),
+      coverage_start_date: "2025-01-01",
+      coverage_end_date: SMOKE_CANDIDATE_COVERAGE_THROUGH,
+      available_cycles: [2024, Number(SMOKE_CANDIDATE_SELECTED_CYCLE)],
+      total_raised: "0.00",
+      total_spent: "0.00",
+      net: "0.00",
+      transaction_count: 0,
+      committees: [],
+      cash_on_hand: null,
+      net_self_funding: null,
+      summary_source: "derived" as const,
+      itemized_transaction_count: 0,
+      receipt_source_composition: [],
+      selected_cycle_coverage_complete: false,
+      can_render_share: false,
+      receipt_source_caveats: [],
+      coverage: {
+        activity_state: "out_of_cycle_official_total",
+        completeness: "partial",
+        basis: "fec_official_candidate_summary"
+      },
+      out_of_cycle_official_total: {
+        summary_source: "fec_weball",
+        coverage_start_date: "2023-01-01",
+        coverage_end_date: "2024-12-31",
+        total_raised: "1234.56",
+        total_spent: "234.56",
+        net: "1000.00",
+        cash_on_hand: "345.67"
+      }
+    },
+    ieTransactions: [],
+    ieSummary: {
+      candidate_id: SMOKE_OUT_OF_CYCLE_CANDIDATE_ID,
+      selected_cycle: Number(SMOKE_CANDIDATE_SELECTED_CYCLE),
+      coverage_start_date: "2026-01-01",
+      coverage_end_date: SMOKE_CANDIDATE_COVERAGE_THROUGH,
+      available_cycles: [Number(SMOKE_CANDIDATE_SELECTED_CYCLE)],
+      support_total: "0.00",
+      oppose_total: "0.00",
+      support_count: 0,
+      oppose_count: 0,
+      top_spenders: [],
+      excluded_outlier_count: 0,
+      coverage: LOADED_ZERO_COVERAGE
+    }
+  },
   candidateEmpty: {
     id: SMOKE_EMPTY_CANDIDATE_ID,
     detail: {
       id: SMOKE_EMPTY_CANDIDATE_ID,
       fec_candidate_id: "H0NC99998",
       name: "Candidate Empty",
-      slug: "candidate-empty",
-      slug_is_unique: false,
+      slug: SMOKE_EMPTY_CANDIDATE_SLUG,
+      slug_is_unique: true,
       identity_is_safe: true,
+      has_official_total: false,
       person_id: null,
       party: null,
       office: "H",
@@ -1485,9 +1564,10 @@ export const smokeFixtures = {
       id: SMOKE_LOADED_ZERO_CANDIDATE_ID,
       fec_candidate_id: "H0NC99996",
       name: "Candidate Loaded Zero",
-      slug: "candidate-loaded-zero",
-      slug_is_unique: false,
+      slug: SMOKE_LOADED_ZERO_CANDIDATE_SLUG,
+      slug_is_unique: true,
       identity_is_safe: true,
+      has_official_total: false,
       person_id: null,
       party: null,
       office: "H",
@@ -1544,6 +1624,7 @@ export const smokeFixtures = {
       slug: "candidate-backend-failure",
       slug_is_unique: false,
       identity_is_safe: true,
+      has_official_total: false,
       person_id: null,
       party: null,
       office: "H",
@@ -1568,6 +1649,7 @@ export const smokeFixtures = {
       slug: "candidate-deviant",
       slug_is_unique: false,
       identity_is_safe: true,
+      has_official_total: false,
       person_id: null,
       party: "DEM",
       office: "H",
@@ -1638,6 +1720,7 @@ export const smokeFixtures = {
       slug: "212-n-half-w-john-rodney-howard-mr",
       slug_is_unique: true,
       identity_is_safe: false,
+      has_official_total: false,
       person_id: null,
       party: "DEM",
       office: "H",
@@ -1704,6 +1787,7 @@ export const smokeFixtures = {
       slug: "candidate-alabama",
       slug_is_unique: false,
       identity_is_safe: true,
+      has_official_total: false,
       person_id: null,
       party: "REP",
       office: "S",
@@ -1778,6 +1862,7 @@ export const smokeFixtures = {
       slug: "candidate-georgia",
       slug_is_unique: false,
       identity_is_safe: true,
+      has_official_total: false,
       person_id: null,
       party: "DEM",
       office: "S",
@@ -1856,7 +1941,36 @@ export const smokeFixtures = {
         district: "01",
         slug: SMOKE_CANDIDATE_SLUG,
         slug_is_unique: true,
-        identity_is_safe: true
+        identity_is_safe: true,
+        has_official_total: true
+      },
+      {
+        id: SMOKE_OUT_OF_CYCLE_CANDIDATE_ID,
+        fec_candidate_id: "H0NC04004",
+        name: SMOKE_OUT_OF_CYCLE_CANDIDATE_NAME,
+        person_id: null,
+        party: "IND",
+        office: "H",
+        state: "NC",
+        district: "04",
+        slug: SMOKE_OUT_OF_CYCLE_CANDIDATE_SLUG,
+        slug_is_unique: true,
+        identity_is_safe: true,
+        has_official_total: true
+      },
+      {
+        id: SMOKE_LOADED_ZERO_CANDIDATE_ID,
+        fec_candidate_id: "H0NC99996",
+        name: "Candidate Loaded Zero",
+        person_id: null,
+        party: null,
+        office: "H",
+        state: "NC",
+        district: "02",
+        slug: SMOKE_LOADED_ZERO_CANDIDATE_SLUG,
+        slug_is_unique: true,
+        identity_is_safe: true,
+        has_official_total: false
       },
       {
         id: SMOKE_EMPTY_CANDIDATE_ID,
@@ -1867,9 +1981,10 @@ export const smokeFixtures = {
         office: "H",
         state: null,
         district: null,
-        slug: "candidate-empty",
-        slug_is_unique: false,
-        identity_is_safe: true
+        slug: SMOKE_EMPTY_CANDIDATE_SLUG,
+        slug_is_unique: true,
+        identity_is_safe: true,
+        has_official_total: false
       }
     ],
     has_next: true,
@@ -1915,7 +2030,54 @@ export const smokeFixtures = {
           state: "NC",
           district: "01",
           slug: SMOKE_CANDIDATE_SLUG,
-          slug_is_unique: true
+          slug_is_unique: true,
+          identity_is_safe: true,
+          has_official_total: true
+        }
+      ],
+      [SMOKE_OUT_OF_CYCLE_CANDIDATE_SLUG]: [
+        {
+          id: SMOKE_OUT_OF_CYCLE_CANDIDATE_ID,
+          fec_candidate_id: "H0NC04004",
+          name: SMOKE_OUT_OF_CYCLE_CANDIDATE_NAME,
+          party: "IND",
+          office: "H",
+          state: "NC",
+          district: "04",
+          slug: SMOKE_OUT_OF_CYCLE_CANDIDATE_SLUG,
+          slug_is_unique: true,
+          identity_is_safe: true,
+          has_official_total: true
+        }
+      ],
+      [SMOKE_LOADED_ZERO_CANDIDATE_SLUG]: [
+        {
+          id: SMOKE_LOADED_ZERO_CANDIDATE_ID,
+          fec_candidate_id: "H0NC99996",
+          name: "Candidate Loaded Zero",
+          party: null,
+          office: "H",
+          state: "NC",
+          district: "02",
+          slug: SMOKE_LOADED_ZERO_CANDIDATE_SLUG,
+          slug_is_unique: true,
+          identity_is_safe: true,
+          has_official_total: false
+        }
+      ],
+      [SMOKE_EMPTY_CANDIDATE_SLUG]: [
+        {
+          id: SMOKE_EMPTY_CANDIDATE_ID,
+          fec_candidate_id: "H0NC99998",
+          name: "Candidate Empty",
+          party: null,
+          office: "H",
+          state: null,
+          district: null,
+          slug: SMOKE_EMPTY_CANDIDATE_SLUG,
+          slug_is_unique: true,
+          identity_is_safe: true,
+          has_official_total: false
         }
       ],
       [SMOKE_COLLIDING_CANDIDATE_SLUG]: [
@@ -1928,7 +2090,9 @@ export const smokeFixtures = {
           state: "NC",
           district: "01",
           slug: SMOKE_COLLIDING_CANDIDATE_SLUG,
-          slug_is_unique: false
+          slug_is_unique: false,
+          identity_is_safe: true,
+          has_official_total: true
         },
         {
           id: SMOKE_COLLIDING_CANDIDATE_ID,
@@ -1939,7 +2103,9 @@ export const smokeFixtures = {
           state: "NC",
           district: "02",
           slug: SMOKE_COLLIDING_CANDIDATE_SLUG,
-          slug_is_unique: false
+          slug_is_unique: false,
+          identity_is_safe: true,
+          has_official_total: false
         }
       ]
     },

@@ -566,7 +566,8 @@ describe("route head rendering", () => {
               district: "01",
               slug: "jane-candidate",
               slug_is_unique: true,
-              identity_is_safe: true
+              identity_is_safe: true,
+              has_official_total: true
             }
           ],
           offset: 25,

@@ -262,6 +262,7 @@ def test_candidate_response_serializes_optional_fields_as_null_and_round_trips()
             "slug": "jane-doe",
             "slug_is_unique": True,
             "identity_is_safe": True,
+            "has_official_total": True,
             "office": "H",
             "sources": [_source_info_payload()],
         }
@@ -273,6 +274,7 @@ def test_candidate_response_serializes_optional_fields_as_null_and_round_trips()
     assert dumped["slug"] == "jane-doe"
     assert dumped["slug_is_unique"] is True
     assert dumped["identity_is_safe"] is True
+    assert dumped["has_official_total"] is True
     assert dumped["person_id"] is None
     assert dumped["party"] is None
     assert dumped["state"] is None
@@ -292,6 +294,7 @@ def test_candidate_response_round_trips_identity_is_safe_false() -> None:
         "slug": "212-n-half-w-john-rodney-howard-mr",
         "slug_is_unique": True,
         "identity_is_safe": False,
+        "has_official_total": False,
         "office": "H",
         "sources": [_source_info_payload()],
     }
@@ -299,6 +302,7 @@ def test_candidate_response_round_trips_identity_is_safe_false() -> None:
     dumped = CandidateResponse.model_validate(payload).model_dump(mode="json")
 
     assert dumped["identity_is_safe"] is False
+    assert dumped["has_official_total"] is False
     assert CandidateResponse.model_validate(dumped).model_dump(mode="json") == dumped
 
 
@@ -309,6 +313,22 @@ def test_candidate_response_requires_identity_is_safe() -> None:
         "name": "Jane Doe",
         "slug": "jane-doe",
         "slug_is_unique": True,
+        "office": "H",
+        "sources": [_source_info_payload()],
+    }
+
+    with pytest.raises(ValidationError):
+        CandidateResponse.model_validate(payload)
+
+
+def test_candidate_response_requires_has_official_total() -> None:
+    payload = {
+        "id": str(uuid4()),
+        "fec_candidate_id": "H0NC01001",
+        "name": "Jane Doe",
+        "slug": "jane-doe",
+        "slug_is_unique": True,
+        "identity_is_safe": True,
         "office": "H",
         "sources": [_source_info_payload()],
     }
@@ -2124,6 +2144,7 @@ def test_committee_response_round_trips_linked_candidates_reusing_candidate_list
                     "slug": "alpha-candidate",
                     "slug_is_unique": True,
                     "identity_is_safe": True,
+                    "has_official_total": True,
                 }
             ],
         }
@@ -2138,6 +2159,7 @@ def test_committee_response_round_trips_linked_candidates_reusing_candidate_list
     assert linked["slug"] == "alpha-candidate"
     assert linked["slug_is_unique"] is True
     assert linked["identity_is_safe"] is True
+    assert linked["has_official_total"] is True
     assert CommitteeResponse.model_validate(dumped).model_dump(mode="json") == dumped
 
 
@@ -2156,7 +2178,10 @@ def test_candidate_list_item_requires_and_round_trips_identity_is_safe() -> None
     with pytest.raises(ValidationError):
         CandidateListItem.model_validate(base_payload)
 
-    true_item = CandidateListItem.model_validate({**base_payload, "identity_is_safe": True})
+    with pytest.raises(ValidationError):
+        CandidateListItem.model_validate({**base_payload, "identity_is_safe": True})
+
+    true_item = CandidateListItem.model_validate({**base_payload, "identity_is_safe": True, "has_official_total": True})
     false_item = CandidateListItem.model_validate(
         {
             **base_payload,
@@ -2164,15 +2189,17 @@ def test_candidate_list_item_requires_and_round_trips_identity_is_safe() -> None
             "name": "212 N HALF  W. JOHN, RODNEY HOWARD MR.",
             "slug": "212-n-half-w-john-rodney-howard-mr",
             "identity_is_safe": False,
+            "has_official_total": False,
         }
     )
 
     assert true_item.model_dump(mode="json")["identity_is_safe"] is True
+    assert true_item.model_dump(mode="json")["has_official_total"] is True
     assert false_item.model_dump(mode="json")["identity_is_safe"] is False
-    assert (
-        CandidateListItem.model_validate(false_item.model_dump(mode="json")).model_dump(mode="json")["identity_is_safe"]
-        is False
-    )
+    assert false_item.model_dump(mode="json")["has_official_total"] is False
+    assert CandidateListItem.model_validate(false_item.model_dump(mode="json")).model_dump(
+        mode="json"
+    ) == false_item.model_dump(mode="json")
 
 
 def test_committee_independent_expenditure_target_requires_and_round_trips_identity_is_safe() -> None:

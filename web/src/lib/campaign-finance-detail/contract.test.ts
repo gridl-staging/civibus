@@ -550,8 +550,8 @@ describe("campaign-finance detail contract", () => {
   });
 });
 
-describe("Stage 1 slug fields on detail responses", () => {
-  it("CandidateDetailResponse includes slug and slug_is_unique", () => {
+describe("candidate detail response fields", () => {
+  it("CandidateDetailResponse includes canonical routing and official-total fields", () => {
     const candidate: CandidateDetailResponse = {
       id: CANDIDATE_ID,
       fec_candidate_id: "H0NC01001",
@@ -559,6 +559,7 @@ describe("Stage 1 slug fields on detail responses", () => {
       slug: "jane-smith",
       slug_is_unique: true,
       identity_is_safe: true,
+      has_official_total: true,
       person_id: null,
       party: "DEM",
       office: "H",
@@ -568,8 +569,11 @@ describe("Stage 1 slug fields on detail responses", () => {
       principal_committee_id: null,
       sources: []
     };
-    expect(candidate.slug).toBe("jane-smith");
-    expect(candidate.slug_is_unique).toBe(true);
+    expect(candidate).toMatchObject({
+      slug: "jane-smith",
+      slug_is_unique: true,
+      has_official_total: true
+    });
   });
 
   it("CommitteeDetailResponse includes slug and slug_is_unique", () => {
@@ -606,7 +610,8 @@ describe("campaign-finance list item and envelope types", () => {
     district: "01",
     slug: "jane-smith",
     slug_is_unique: true,
-    identity_is_safe: true
+    identity_is_safe: true,
+    has_official_total: true
   };
 
   const committeeListItem: CommitteeListItem = {
@@ -620,9 +625,12 @@ describe("campaign-finance list item and envelope types", () => {
     slug_is_unique: true
   };
 
-  it("CandidateListItem carries slug and slug_is_unique", () => {
-    expect(candidateListItem.slug).toBe("jane-smith");
-    expect(candidateListItem.slug_is_unique).toBe(true);
+  it("CandidateListItem carries canonical routing and official-total fields", () => {
+    expect(candidateListItem).toMatchObject({
+      slug: "jane-smith",
+      slug_is_unique: true,
+      has_official_total: true
+    });
   });
 
   it("CommitteeListItem carries slug and slug_is_unique", () => {
@@ -883,6 +891,8 @@ describe("buildCandidateHref and buildCommitteeHref", () => {
 
 describe("Stage 5 contract fields", () => {
   it("Stage 5 API-owned fields stay required in the TypeScript contract", () => {
+    expectType<{} extends Pick<CandidateDetailResponse, "has_official_total"> ? false : true>();
+    expectType<{} extends Pick<CandidateListItem, "has_official_total"> ? false : true>();
     expectType<{} extends Pick<PersonContributionInsights["metadata"], "selected_cycle"> ? false : true>();
     expectType<
       {} extends Pick<PersonContributionInsights["metadata"], "coverage_start_date"> ? false : true
@@ -954,7 +964,8 @@ describe("Stage 5 contract fields", () => {
           district: "01",
           slug: "linked-candidate",
           slug_is_unique: true,
-          identity_is_safe: true
+          identity_is_safe: true,
+          has_official_total: true
         }
       ]
     };

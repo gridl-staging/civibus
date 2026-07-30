@@ -143,6 +143,7 @@ export const DEFAULT_CANDIDATE_DETAIL = {
   slug: "candidate-one",
   slug_is_unique: true,
   identity_is_safe: true,
+  has_official_total: true,
   person_id: PERSON_ID,
   party: "DEM",
   office: "H",

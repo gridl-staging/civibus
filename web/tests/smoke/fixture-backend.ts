@@ -274,6 +274,7 @@ type PersonFixture =
   | (typeof smokeFixtures)["personMissingPortraitField"];
 const standardCandidateFixtures = [
   smokeFixtures.candidate,
+  smokeFixtures.candidateOutOfCycle,
   smokeFixtures.candidateEmpty,
   smokeFixtures.candidateLoadedZero,
   smokeFixtures.candidateBackendFailure,

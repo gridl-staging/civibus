@@ -9,6 +9,7 @@
     type CandidateDetailRoutePresentation
   } from "$lib/campaign-finance-detail/presentation";
   import SeoHead from "$lib/seo/SeoHead.svelte";
+  import { CANDIDATE_ROUTE_INDEXABILITY } from "$lib/seo/candidate_indexability";
   import { buildDetailRouteSeo, type DetailRouteSeoModel } from "$lib/seo/head";
   import { buildBreadcrumbJsonLd, removeJsonLdContext, type JsonLdObject } from "$lib/seo/jsonld";
   import type { PageData } from "./$types";
@@ -28,7 +29,7 @@
     ? [{ label: "Home", href: "/" }, { label: routePresentation.shell.canonicalName }]
     : [{ label: "Home", href: "/" }, { label: "Candidates" }];
 
-  $: if (routePresentation.routeKind === "canonical-detail") {
+  $: if (routePresentation.routeKind === "canonical-detail" && data.detail) {
     const metadata = buildCandidateDetailMetadata(routePresentation.shell);
 
     detailRouteSeo = buildDetailRouteSeo({
@@ -37,7 +38,8 @@
       schemaType: "Person",
       name: routePresentation.shell.jsonLdName,
       pageUrl: $page.url,
-      publicOrigin: env.PUBLIC_ORIGIN
+      publicOrigin: env.PUBLIC_ORIGIN,
+      robots: CANDIDATE_ROUTE_INDEXABILITY.robots(data.detail)
     });
 
     const breadcrumbJsonLd = buildBreadcrumbJsonLd({

@@ -53,6 +53,7 @@ export type CandidateDetailResponse = {
   slug: string;
   slug_is_unique: boolean;
   identity_is_safe: boolean;
+  has_official_total: boolean;
   person_id: string | null;
   party: string | null;
   office: string;
@@ -75,6 +76,7 @@ export type CandidateListItem = {
   slug: string;
   slug_is_unique: boolean;
   identity_is_safe: boolean;
+  has_official_total: boolean;
 };
 
 export type CommitteeListItem = {

@@ -79,6 +79,15 @@ _CANDIDATE_IDENTITY_IS_SAFE_EXPR = _candidate_identity_is_safe_expr(
     slug_sql=_SLUG_NAME_EXPR,
 )
 
+
+def _has_official_candidate_totals_sql(candidate_alias: str) -> str:
+    return (
+        f"({candidate_alias}.total_receipts IS NOT NULL "
+        f"OR {candidate_alias}.total_disbursements IS NOT NULL "
+        f"OR {candidate_alias}.cash_on_hand IS NOT NULL)"
+    )
+
+
 PERSON_BY_SLUG_SQL = f"""
     SELECT
         id,
@@ -103,7 +112,8 @@ CANDIDATE_BY_SLUG_SQL = f"""
         c.district,
         {_SLUG_NAME_EXPR} AS slug,
         (COUNT(*) OVER (PARTITION BY {_SLUG_NAME_EXPR}) = 1) AS slug_is_unique,
-        {_CANDIDATE_IDENTITY_IS_SAFE_EXPR} AS identity_is_safe
+        {_CANDIDATE_IDENTITY_IS_SAFE_EXPR} AS identity_is_safe,
+        {_has_official_candidate_totals_sql("c")} AS has_official_total
     FROM cf.candidate c
     WHERE {_SLUG_NAME_EXPR} = {_SLUG_PARAM_EXPR}
     ORDER BY c.name ASC, c.id ASC
@@ -177,6 +187,7 @@ CAMPAIGN_FINANCE_CANDIDATE_DETAIL_SQL = f"""
         c.district,
         c.incumbent_challenge,
         c.principal_committee_id,
+        {_has_official_candidate_totals_sql("c")} AS has_official_total,
         c.source_record_id
     FROM cf.candidate c
     WHERE c.id = %s
@@ -287,7 +298,8 @@ COMMITTEE_LINKED_CANDIDATES_SQL = f"""
         c.district,
         {_SLUG_NAME_EXPR} AS slug,
         {_CANDIDATE_SLUG_IS_UNIQUE_SUBQUERY} AS slug_is_unique,
-        {_CANDIDATE_IDENTITY_IS_SAFE_EXPR} AS identity_is_safe
+        {_CANDIDATE_IDENTITY_IS_SAFE_EXPR} AS identity_is_safe,
+        {_has_official_candidate_totals_sql("c")} AS has_official_total
     FROM cf.candidate_committee_link link
     JOIN cf.candidate c ON c.id = link.candidate_id
     WHERE link.committee_id = %s
@@ -2001,7 +2013,8 @@ _CANDIDATE_LIST_SQL_TEMPLATE = f"""
             c.state,
             c.district,
             {_SLUG_NAME_EXPR} AS slug,
-            {_CANDIDATE_IDENTITY_IS_SAFE_EXPR} AS identity_is_safe
+            {_CANDIDATE_IDENTITY_IS_SAFE_EXPR} AS identity_is_safe,
+            {_has_official_candidate_totals_sql("c")} AS has_official_total
         FROM cf.candidate c
         WHERE {{where_sql}}
         ORDER BY c.name ASC, c.id ASC
@@ -2033,7 +2046,8 @@ _CANDIDATE_LIST_SQL_TEMPLATE = f"""
         filtered.district,
         filtered.slug,
         slug_counts.candidate_count = 1 AS slug_is_unique,
-        filtered.identity_is_safe
+        filtered.identity_is_safe,
+        filtered.has_official_total
     FROM filtered_candidates filtered
     JOIN slug_counts
       ON slug_counts.slug = filtered.slug

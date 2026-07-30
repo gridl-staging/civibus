@@ -33,9 +33,13 @@ export const SMOKE_ORG_ID = "22222222-2222-4222-8222-222222222222";
 export const SMOKE_FILING_ID = "33333333-3333-4333-8333-333333333333";
 export const SMOKE_COMMITTEE_ID = process.env.SMOKE_COMMITTEE_ID ?? "44444444-4444-4444-8444-444444444444";
 export const SMOKE_CANDIDATE_ID = process.env.SMOKE_CANDIDATE_ID ?? "55555555-5555-4555-8555-555555555555";
+export const SMOKE_OUT_OF_CYCLE_CANDIDATE_ID = "56565656-5656-4565-8565-565656565656";
 export const SMOKE_PROPERTY_ID = "66666666-6666-4666-8666-666666666666";
 export const SMOKE_COMMITTEE_SLUG = process.env.SMOKE_COMMITTEE_SLUG ?? "citizens-for-civibus";
 export const SMOKE_CANDIDATE_SLUG = "pat-candidate";
+export const SMOKE_OUT_OF_CYCLE_CANDIDATE_SLUG = "candidate-earlier-cycle-total";
+export const SMOKE_EMPTY_CANDIDATE_SLUG = "candidate-empty";
+export const SMOKE_LOADED_ZERO_CANDIDATE_SLUG = "candidate-loaded-zero";
 export const SMOKE_COLLIDING_COMMITTEE_SLUG = "shared-committee";
 export const SMOKE_COLLIDING_CANDIDATE_SLUG = "shared-candidate";
 export const SMOKE_COLLIDING_COMMITTEE_ID = "77777777-7777-4777-8777-777777777777";
@@ -219,6 +223,7 @@ export const SMOKE_ORG_DESCRIPTION =
 export const SMOKE_COMMITTEE_NAME = "Citizens for Civibus";
 export const SMOKE_PHL_COMMITTEE_NAME = "Philadelphia Transit Neighbors";
 export const SMOKE_CANDIDATE_NAME = "Pat Candidate";
+export const SMOKE_OUT_OF_CYCLE_CANDIDATE_NAME = "Candidate Earlier Cycle Total";
 export const SMOKE_COMMITTEE_TITLE = "Citizens for Civibus | Committee | Civibus";
 export const SMOKE_PHL_COMMITTEE_TITLE = "Philadelphia Transit Neighbors | Committee | Civibus";
 export const SMOKE_COMMITTEE_DESCRIPTION = "Committee profile from campaign-finance records.";
@@ -319,6 +324,8 @@ export async function fetchSmokeCommitteeRequestCounts(
   return body.counts;
 }
 export const SMOKE_CANDIDATE_TITLE = "Pat Candidate | Candidate | Civibus";
+export const SMOKE_OUT_OF_CYCLE_CANDIDATE_TITLE =
+  "Candidate Earlier Cycle Total | Candidate | Civibus";
 export const SMOKE_CANDIDATE_DESCRIPTION = "Candidate profile from campaign-finance records.";
 export const SMOKE_CANDIDATES_TITLE = "Candidates | Civibus";
 export const SMOKE_CANDIDATES_DESCRIPTION = "Campaign-finance candidates with server-rendered pagination.";

@@ -37,6 +37,7 @@ type PrimaryNavigationLabel =
   | typeof SMOKE_SHELL_NAV_DEVELOPERS
   | typeof SMOKE_SHELL_NAV_METHODOLOGY;
 
+const isProductionSmokeMode = (process.env.SMOKE_MODE ?? "local") === "production";
 const primaryNavigationPathsByLabel = new Map(
   APP_SHELL.shellNavigation.map((destination) => [destination.label, destination.href])
 );
@@ -59,6 +60,82 @@ async function expectVisibleRows(rows: Locator): Promise<void> {
   expect(await rows.count()).toBeGreaterThan(0);
 }
 
+async function expectFixtureSearchResult(page: Page): Promise<void> {
+  await expect(page.getByRole("link", { name: SMOKE_SEARCH_RESULT_NAME })).toBeVisible();
+}
+
+async function expectProductionSearchResult(page: Page): Promise<void> {
+  await expect(page.getByTestId("search-status")).toHaveText(/^[1-9]\d* results found\.$/);
+  const matchingResult = page
+    .getByTestId("search-results-region")
+    .getByRole("link", { name: new RegExp(SMOKE_SEARCH_QUERY, "i") })
+    .first();
+  await expect(matchingResult).toBeVisible();
+  await expect(matchingResult).toHaveAttribute("href", /^\/org\/[^/?#]+$/);
+}
+
+async function expectFixtureCandidateRows(page: Page): Promise<void> {
+  await expect(page.getByRole("link", { name: SMOKE_CANDIDATE_NAME })).toBeVisible();
+  await expect(page.getByText(SMOKE_CANDIDATE_LIST_CONTEXT)).toBeVisible();
+  await expect(page.getByText(SMOKE_CANDIDATES_FIRST_PAGE_LABEL)).toBeVisible();
+}
+
+async function expectProductionCandidateRows(page: Page, candidateRows: Locator): Promise<void> {
+  const candidateLink = candidateRows.getByRole("link").filter({ hasText: /\S/ }).first();
+  await expect(candidateLink).toBeVisible();
+  await expect(candidateLink).toHaveAttribute("href", /^\/candidate\/[^/?#]+$/);
+  await expect(
+    candidateRows.getByText(/^[A-Z0-9]{1,4} · [HSP] · (?:[A-Z]{2}|US)-\d{2}$/).first()
+  ).toBeVisible();
+  await expect(page.getByText(/^Showing 1–[1-9]\d*$/)).toBeVisible();
+}
+
+async function expectFixtureCommitteeRows(page: Page): Promise<void> {
+  await expect(page.getByRole("link", { name: SMOKE_COMMITTEE_NAME })).toBeVisible();
+  await expect(page.getByText(SMOKE_COMMITTEE_LIST_CONTEXT)).toBeVisible();
+  await expect(page.getByText(SMOKE_COMMITTEES_FIRST_PAGE_LABEL)).toBeVisible();
+}
+
+async function expectProductionCommitteeRows(page: Page, committeeRows: Locator): Promise<void> {
+  const committeeLink = committeeRows.getByRole("link").filter({ hasText: /[A-Za-z0-9]/ }).first();
+  await expect(committeeLink).toBeVisible();
+  await expect(committeeLink).toHaveAttribute("href", /^\/committee\/[^/?#]+$/);
+  await expect(
+    committeeRows.getByText(/^[A-Z] · (?:[A-Z]{2,3} · )?[A-Z]{2}$/).first()
+  ).toBeVisible();
+  await expect(page.getByText(/^Showing 1–[1-9]\d*$/)).toBeVisible();
+}
+
+async function expectFixtureCongressRows(page: Page): Promise<void> {
+  await expect(page.getByTestId("congress-result-count")).toHaveText("3 members");
+  await expect(page.getByRole("link", { name: SMOKE_CONGRESS_LEADER_NAME, exact: true })).toBeVisible();
+}
+
+async function expectProductionCongressRows(page: Page): Promise<void> {
+  const resultCount = await page.getByTestId("congress-result-count").textContent();
+  expect(Number.parseInt(resultCount ?? "0", 10)).toBeGreaterThanOrEqual(500);
+  const memberLink = page
+    .getByTestId("congress-member-row-0")
+    .getByRole("link")
+    .filter({ hasText: /\S/ })
+    .first();
+  await expect(memberLink).toBeVisible();
+  await expect(memberLink).toHaveAttribute("href", /^\/person\/[^/?#]+$/);
+}
+
+const expectSearchResult = isProductionSmokeMode
+  ? expectProductionSearchResult
+  : expectFixtureSearchResult;
+const expectCandidateRows = isProductionSmokeMode
+  ? expectProductionCandidateRows
+  : expectFixtureCandidateRows;
+const expectCommitteeRows = isProductionSmokeMode
+  ? expectProductionCommitteeRows
+  : expectFixtureCommitteeRows;
+const expectCongressRows = isProductionSmokeMode
+  ? expectProductionCongressRows
+  : expectFixtureCongressRows;
+
 test.describe("primary nav non-empty smoke", () => {
   test(`primary-nav non-empty: ${SMOKE_SHELL_NAV_HOME}`, async ({ page }: { page: Page }) => {
     await expectDirectRoute(page, primaryNavigationPath(SMOKE_SHELL_NAV_HOME));
@@ -79,35 +156,32 @@ test.describe("primary nav non-empty smoke", () => {
 
     await page.goto(`${primaryNavigationPath(SMOKE_SHELL_NAV_SEARCH)}?q=${SMOKE_SEARCH_QUERY}&entity_type=org`);
     await expect(page).toHaveURL(new RegExp(`/search\\?q=${SMOKE_SEARCH_QUERY}&entity_type=org$`));
-    await expect(page.getByRole("link", { name: SMOKE_SEARCH_RESULT_NAME })).toBeVisible();
+    await expectSearchResult(page);
   });
 
   test(`primary-nav non-empty: ${SMOKE_SHELL_NAV_CANDIDATES}`, async ({ page }: { page: Page }) => {
     await expectDirectRoute(page, primaryNavigationPath(SMOKE_SHELL_NAV_CANDIDATES));
 
     await expect(page.getByRole("heading", { name: "Candidates" })).toBeVisible();
-    await expectVisibleRows(page.getByTestId("candidate-result-row"));
-    await expect(page.getByRole("link", { name: SMOKE_CANDIDATE_NAME })).toBeVisible();
-    await expect(page.getByText(SMOKE_CANDIDATE_LIST_CONTEXT)).toBeVisible();
-    await expect(page.getByText(SMOKE_CANDIDATES_FIRST_PAGE_LABEL)).toBeVisible();
+    const candidateRows = page.getByTestId("candidate-result-row");
+    await expectVisibleRows(candidateRows);
+    await expectCandidateRows(page, candidateRows);
   });
 
   test(`primary-nav non-empty: ${SMOKE_SHELL_NAV_COMMITTEES}`, async ({ page }: { page: Page }) => {
     await expectDirectRoute(page, primaryNavigationPath(SMOKE_SHELL_NAV_COMMITTEES));
 
     await expect(page.getByRole("heading", { name: "Committees" })).toBeVisible();
-    await expectVisibleRows(page.getByTestId("committee-result-row"));
-    await expect(page.getByRole("link", { name: SMOKE_COMMITTEE_NAME })).toBeVisible();
-    await expect(page.getByText(SMOKE_COMMITTEE_LIST_CONTEXT)).toBeVisible();
-    await expect(page.getByText(SMOKE_COMMITTEES_FIRST_PAGE_LABEL)).toBeVisible();
+    const committeeRows = page.getByTestId("committee-result-row");
+    await expectVisibleRows(committeeRows);
+    await expectCommitteeRows(page, committeeRows);
   });
 
   test(`primary-nav non-empty: ${SMOKE_SHELL_NAV_CONGRESS}`, async ({ page }: { page: Page }) => {
     await expectDirectRoute(page, primaryNavigationPath(SMOKE_SHELL_NAV_CONGRESS));
 
     await expect(page.getByRole("heading", { name: "Congress" })).toBeVisible();
-    await expect(page.getByTestId("congress-result-count")).toHaveText("3 members");
-    await expect(page.getByRole("link", { name: SMOKE_CONGRESS_LEADER_NAME, exact: true })).toBeVisible();
+    await expectCongressRows(page);
   });
 
   test(`primary-nav non-empty: ${SMOKE_SHELL_NAV_DEVELOPERS}`, async ({ page }: { page: Page }) => {

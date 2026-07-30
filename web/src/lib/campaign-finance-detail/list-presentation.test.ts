@@ -19,7 +19,8 @@ const FULL_CANDIDATE: CandidateListItem = {
   district: "01",
   slug: "candidate-one",
   slug_is_unique: true,
-  identity_is_safe: true
+  identity_is_safe: true,
+  has_official_total: true
 };
 
 const SPARSE_CANDIDATE: CandidateListItem = {
@@ -32,7 +33,8 @@ const SPARSE_CANDIDATE: CandidateListItem = {
   district: null,
   slug: "sparse-candidate",
   slug_is_unique: true,
-  identity_is_safe: true
+  identity_is_safe: true,
+  has_official_total: false
 };
 
 const FULL_COMMITTEE: CommitteeListItem = {

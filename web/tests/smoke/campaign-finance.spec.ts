@@ -22,6 +22,10 @@ import {
   SMOKE_CANDIDATE_OPPOSE_TOTAL,
   SMOKE_CANDIDATE_PERSON_LINK_TEXT,
   SMOKE_CANDIDATE_SLUG,
+  SMOKE_OUT_OF_CYCLE_CANDIDATE_ID,
+  SMOKE_OUT_OF_CYCLE_CANDIDATE_NAME,
+  SMOKE_OUT_OF_CYCLE_CANDIDATE_SLUG,
+  SMOKE_OUT_OF_CYCLE_CANDIDATE_TITLE,
   SMOKE_CANDIDATE_SUPPORT_TOTAL,
   SMOKE_CANDIDATE_TITLE,
   SMOKE_CANDIDATE_TOTAL_RAISED,
@@ -66,8 +70,10 @@ import {
   SMOKE_GA_CANDIDATE_TITLE,
   SMOKE_EMPTY_CANDIDATE_DESCRIPTION,
   SMOKE_EMPTY_CANDIDATE_ID,
+  SMOKE_EMPTY_CANDIDATE_SLUG,
   SMOKE_EMPTY_CANDIDATE_TITLE,
   SMOKE_LOADED_ZERO_CANDIDATE_ID,
+  SMOKE_LOADED_ZERO_CANDIDATE_SLUG,
   SMOKE_LOADED_ZERO_CANDIDATE_TITLE,
   SMOKE_DEVIANT_CANDIDATE_DESCRIPTION,
   SMOKE_DEVIANT_CANDIDATE_ID,
@@ -109,6 +115,7 @@ import {
   capturePageLoadErrors,
   assertBreadcrumbJsonLd,
   assertBreadcrumbNav,
+  assertRobotsHead,
   assertSeoHead,
   expectNoBackendFailureStates
 } from "./smoke-helpers";
@@ -152,7 +159,7 @@ test.describe("campaign finance smoke", () => {
     await expect(page.locator('link[rel="canonical"]')).toHaveAttribute("href", candidatesCanonical);
     await expect(page.getByText(SMOKE_CANDIDATES_SECOND_PAGE_LABEL)).toBeVisible();
     await expect(page.getByRole("link", { name: "Previous" })).toBeVisible();
-    await expect(page.getByRole("link", { name: "Next" })).toHaveCount(0);
+    await expect(page.getByRole("link", { name: "Next" })).toBeVisible();
   });
 
   test("/candidates filter form applies query params and clear filters restores the default browse state", async ({
@@ -254,6 +261,7 @@ test.describe("campaign finance smoke", () => {
       ogType: "website",
       jsonLdCount: 1
     });
+    await assertRobotsHead(page, null);
     await expect(page.getByRole("heading", { name: SMOKE_COMMITTEE_NAME })).toBeVisible();
     await expect(page.getByText(SMOKE_CAMPAIGN_FINANCE_IN_PROVENANCE_SOURCE_NAME)).toBeVisible();
     await expect(page.getByText(SMOKE_PROVENANCE_LAST_PULLED)).toHaveCount(1);
@@ -313,6 +321,27 @@ test.describe("campaign finance smoke", () => {
     );
     await assertBreadcrumbNav(page);
     await assertBreadcrumbJsonLd(page);
+  });
+
+  test("/candidate/[id] out-of-cycle official-total fixture remains indexable", async ({
+    page
+  }: {
+    page: any;
+  }) => {
+    const response = await page.goto(`/candidate/${SMOKE_OUT_OF_CYCLE_CANDIDATE_ID}`);
+
+    expect(response?.status()).toBe(200);
+    await expect(page).toHaveURL(new RegExp(`/candidate/${SMOKE_OUT_OF_CYCLE_CANDIDATE_SLUG}$`));
+    await expect(page).toHaveTitle(SMOKE_OUT_OF_CYCLE_CANDIDATE_TITLE);
+    await assertRobotsHead(page, null);
+    await expect(page.getByRole("heading", { name: SMOKE_OUT_OF_CYCLE_CANDIDATE_NAME })).toBeVisible();
+    await expect(page.getByText("Earlier-cycle official total")).toBeVisible();
+    await expect(page.getByText("$1,234.56")).toBeVisible();
+    await expect(
+      page.getByText(
+        "Official FEC total from 2023-01-01 to 2024-12-31; not part of the 2026 selected-cycle totals."
+      )
+    ).toBeVisible();
   });
 
   test("/committee/[id] filing table paginates client-side without refetching the detail bundle", async ({
@@ -444,6 +473,7 @@ test.describe("campaign finance smoke", () => {
       ogType: "profile",
       jsonLdCount: 1
     });
+    await assertRobotsHead(page, null);
     await expect(page.getByRole("heading", { name: SMOKE_CANDIDATE_NAME })).toBeVisible();
     await expect(page.getByRole("link", { name: SMOKE_CANDIDATE_PERSON_LINK_TEXT })).toHaveAttribute(
       "href",
@@ -462,6 +492,8 @@ test.describe("campaign finance smoke", () => {
     await expect(keyFinancials.getByText(SMOKE_CANDIDATE_TOTAL_RAISED)).toBeVisible();
     await expect(keyFinancials.getByText(SMOKE_CANDIDATE_TOTAL_SPENT)).toBeVisible();
     await expect(keyFinancials.getByText(SMOKE_CANDIDATE_CASH_ON_HAND)).toBeVisible();
+    await expect(keyFinancials.getByText(SMOKE_CANDIDATE_SUPPORT_TOTAL)).toHaveCount(0);
+    await expect(keyFinancials.getByText(SMOKE_CANDIDATE_OPPOSE_TOTAL)).toHaveCount(0);
 
     const outsideSpending = page.getByTestId("candidate-outside-spending");
     await expect(outsideSpending).toBeVisible();
@@ -488,6 +520,8 @@ test.describe("campaign finance smoke", () => {
     await expect(candidateFundraisingSummary.getByText(SMOKE_CANDIDATE_TOTAL_RAISED)).toBeVisible();
     await expect(candidateFundraisingSummary.getByText(SMOKE_CANDIDATE_TOTAL_SPENT)).toBeVisible();
     await expect(candidateFundraisingSummary.getByText(SMOKE_CANDIDATE_CASH_ON_HAND)).toBeVisible();
+    await expect(candidateFundraisingSummary.getByText(SMOKE_CANDIDATE_SUPPORT_TOTAL)).toHaveCount(0);
+    await expect(candidateFundraisingSummary.getByText(SMOKE_CANDIDATE_OPPOSE_TOTAL)).toHaveCount(0);
 
     const committeeBreakdownRegion = page.getByTestId("candidate-committee-breakdown");
     await expect(committeeBreakdownRegion).toBeVisible();
@@ -538,8 +572,9 @@ test.describe("campaign finance smoke", () => {
   }: {
     page: any;
   }) => {
-    await page.goto(`/candidate/${SMOKE_EMPTY_CANDIDATE_ID}`);
+    const response = await page.goto(`/candidate/${SMOKE_EMPTY_CANDIDATE_ID}`);
 
+    expect(response?.status()).toBe(200);
     await expect(page).toHaveTitle(SMOKE_EMPTY_CANDIDATE_TITLE);
     await expect(page.locator('meta[name="description"]')).toHaveAttribute(
       "content",
@@ -551,6 +586,7 @@ test.describe("campaign finance smoke", () => {
       ogType: "profile",
       jsonLdCount: 1
     });
+    await assertRobotsHead(page, "noindex");
     await expect(page.getByText("Canonical person")).toBeVisible();
     await expect(page.getByText("Principal committee")).toBeVisible();
     await expect(page.getByRole("link", { name: /Person record/ })).toHaveCount(0);
@@ -614,9 +650,11 @@ test.describe("campaign finance smoke", () => {
   }: {
     page: any;
   }) => {
-    await page.goto(`/candidate/${SMOKE_LOADED_ZERO_CANDIDATE_ID}`);
+    const response = await page.goto(`/candidate/${SMOKE_LOADED_ZERO_CANDIDATE_ID}`);
 
+    expect(response?.status()).toBe(200);
     await expect(page).toHaveTitle(SMOKE_LOADED_ZERO_CANDIDATE_TITLE);
+    await assertRobotsHead(page, "noindex");
 
     const keyFinancials = page.getByTestId("key-metrics");
     await expect(
@@ -650,6 +688,9 @@ test.describe("campaign finance smoke", () => {
     await expect(page.getByTestId("top-spenders-scroll")).toHaveCount(0);
     await expect(page.getByTestId("outside-spending-transactions-scroll")).toHaveCount(0);
     await expect(page.getByRole("link", { name: "Source filing" })).toHaveCount(0);
+    await expect(page.getByText(SMOKE_CANDIDATE_TOTAL_RAISED)).toHaveCount(0);
+    await expect(page.getByText(SMOKE_CANDIDATE_TOTAL_SPENT)).toHaveCount(0);
+    await expect(page.getByText(SMOKE_CANDIDATE_CASH_ON_HAND)).toHaveCount(0);
     await expectNoBackendFailureStates(page);
   });
 
@@ -729,16 +770,29 @@ test.describe("sitemap.xml fixture detail URLs", () => {
   // synthetic fixture seed and fixture-only IDs/slugs.
   test.skip(SMOKE_USE_LIVE_API, "fixture-only — sitemap detail URLs reflect fixture seed");
 
-  test("contains fixture-specific candidate and committee detail URLs", async ({ page }: { page: any }) => {
+  test("applies candidate money eligibility while preserving thin-page reachability", async ({
+    page
+  }: {
+    page: any;
+  }) => {
     const response = (await page.goto("/sitemap.xml"))!;
     const xml = await response.text();
 
     // Slug-based detail URL from fixture (pat-candidate has slug_is_unique: true).
     expect(xml).toContain(`/candidate/${SMOKE_CANDIDATE_SLUG}</loc>`);
+    expect(xml).toContain(`/candidate/${SMOKE_OUT_OF_CYCLE_CANDIDATE_SLUG}</loc>`);
 
-    // Candidates without a safe unique slug remain reachable by UUID but are
-    // intentionally excluded from the canonical-only sitemap.
+    expect(xml).not.toContain(`/candidate/${SMOKE_EMPTY_CANDIDATE_SLUG}</loc>`);
+    expect(xml).not.toContain(`/candidate/${SMOKE_LOADED_ZERO_CANDIDATE_SLUG}</loc>`);
     expect(xml).not.toContain(`/candidate/${SMOKE_EMPTY_CANDIDATE_ID}</loc>`);
+    expect(xml).not.toContain(`/candidate/${SMOKE_LOADED_ZERO_CANDIDATE_ID}</loc>`);
+
+    const [notLoadedResponse, loadedZeroResponse] = await Promise.all([
+      page.request.get(`/candidate/${SMOKE_EMPTY_CANDIDATE_SLUG}`),
+      page.request.get(`/candidate/${SMOKE_LOADED_ZERO_CANDIDATE_SLUG}`)
+    ]);
+    expect(notLoadedResponse.status()).toBe(200);
+    expect(loadedZeroResponse.status()).toBe(200);
 
     // Committee slug-based detail URL.
     expect(xml).toContain(`/committee/${SMOKE_COMMITTEE_SLUG}</loc>`);

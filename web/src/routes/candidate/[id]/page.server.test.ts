@@ -52,6 +52,7 @@ const BASE_CANDIDATE_DETAIL = {
   slug: CANDIDATE_SLUG,
   slug_is_unique: false,
   identity_is_safe: true,
+  has_official_total: true,
   person_id: null,
   party: null,
   office: "H",
@@ -117,7 +118,10 @@ function buildCandidateSummary(candidateId: string, candidateName = "Candidate O
   };
 }
 
-function buildSlugMatch(item: Partial<CandidateListItem> & Pick<CandidateListItem, "id" | "name" | "slug">): CandidateListItem {
+function buildSlugMatch(
+  item: Partial<CandidateListItem> &
+    Pick<CandidateListItem, "id" | "name" | "slug" | "has_official_total">
+): CandidateListItem {
   return {
     id: item.id,
     fec_candidate_id: item.fec_candidate_id ?? "H0NC01001",
@@ -128,7 +132,8 @@ function buildSlugMatch(item: Partial<CandidateListItem> & Pick<CandidateListIte
     district: item.district ?? null,
     slug: item.slug,
     slug_is_unique: item.slug_is_unique ?? false,
-    identity_is_safe: item.identity_is_safe ?? true
+    identity_is_safe: item.identity_is_safe ?? true,
+    has_official_total: item.has_official_total
   };
 }
 
@@ -183,7 +188,15 @@ describe("/candidate/[id] +page.server load", () => {
   it("dispatches slug route ids through fetchCandidatesBySlug before fetching canonical detail bundle", async () => {
     const detail = buildCandidateDetail({ slug_is_unique: true });
     const summary = buildCandidateSummary(CANDIDATE_ID);
-    const matches = [buildSlugMatch({ id: CANDIDATE_ID, name: "Candidate One", slug: CANDIDATE_SLUG, slug_is_unique: true })];
+    const matches = [
+      buildSlugMatch({
+        id: CANDIDATE_ID,
+        name: "Candidate One",
+        slug: CANDIDATE_SLUG,
+        slug_is_unique: true,
+        has_official_total: true
+      })
+    ];
 
     const requestJson = vi.fn(async (path: string) => {
       if (path === buildCandidatesBySlugPath(CANDIDATE_SLUG)) {
@@ -232,7 +245,8 @@ describe("/candidate/[id] +page.server load", () => {
         id: CANDIDATE_ID_ALT,
         name: "Candidate Alias",
         slug: UUID_SHAPED_NON_UUID,
-        slug_is_unique: true
+        slug_is_unique: true,
+        has_official_total: true
       })
     ];
 
@@ -352,7 +366,8 @@ describe("/candidate/[id] +page.server load", () => {
         name: detail.name,
         slug: unsafeSlug,
         slug_is_unique: true,
-        identity_is_safe: false
+        identity_is_safe: false,
+        has_official_total: true
       })
     ];
 
@@ -390,8 +405,18 @@ describe("/candidate/[id] +page.server load", () => {
     const requestJson = vi.fn(async (path: string) => {
       if (path === buildCandidatesBySlugPath(CANDIDATE_SLUG)) {
         return [
-          buildSlugMatch({ id: CANDIDATE_ID_ALT, name: "Candidate Alpha", slug: CANDIDATE_SLUG }),
-          buildSlugMatch({ id: CANDIDATE_ID, name: "Candidate Zeta", slug: CANDIDATE_SLUG })
+          buildSlugMatch({
+            id: CANDIDATE_ID_ALT,
+            name: "Candidate Alpha",
+            slug: CANDIDATE_SLUG,
+            has_official_total: true
+          }),
+          buildSlugMatch({
+            id: CANDIDATE_ID,
+            name: "Candidate Zeta",
+            slug: CANDIDATE_SLUG,
+            has_official_total: false
+          })
         ];
       }
 
@@ -408,8 +433,18 @@ describe("/candidate/[id] +page.server load", () => {
       routeKind: "slug-collision",
       slug: CANDIDATE_SLUG,
       matches: [
-        buildSlugMatch({ id: CANDIDATE_ID_ALT, name: "Candidate Alpha", slug: CANDIDATE_SLUG }),
-        buildSlugMatch({ id: CANDIDATE_ID, name: "Candidate Zeta", slug: CANDIDATE_SLUG })
+        buildSlugMatch({
+          id: CANDIDATE_ID_ALT,
+          name: "Candidate Alpha",
+          slug: CANDIDATE_SLUG,
+          has_official_total: true
+        }),
+        buildSlugMatch({
+          id: CANDIDATE_ID,
+          name: "Candidate Zeta",
+          slug: CANDIDATE_SLUG,
+          has_official_total: false
+        })
       ]
     });
   });

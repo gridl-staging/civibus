@@ -21,6 +21,7 @@ from pydantic import ValidationError
 from tests.test_debbie_post_sync_hook import project_debbie_public_mirror
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+_DEBBIE_PROJECTION_HANG_GUARD_SECONDS = 300
 
 MATERIALIZE_ARGUMENTS = [
     "materialize",
@@ -3502,6 +3503,7 @@ def test_benchmark_rejects_repository_fec_cache_paths_before_subprocess_launch(
 
 
 @pytest.mark.dev_repo_only(private_asset=".debbie.toml", owner="Debbie projection contract")
+@pytest.mark.timeout(_DEBBIE_PROJECTION_HANG_GUARD_SECONDS)
 def test_debbie_projection_includes_harness_script_and_tests_mirror(tmp_path: Path) -> None:
     payload = tomllib.loads((REPO_ROOT / ".debbie.toml").read_text(encoding="utf-8"))
 

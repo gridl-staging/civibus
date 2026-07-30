@@ -28,14 +28,15 @@ const CANDIDATE_PAGE_1: CandidateListResponse = {
     {
       id: "11111111-1111-4111-8111-111111111111",
       fec_candidate_id: "H0NC01001",
-      name: "Pat Candidate",
+      name: "Rich Candidate",
       party: "DEM",
       office: "H",
       state: "NC",
       district: "01",
       slug: "pat-candidate-2026",
       slug_is_unique: true,
-      identity_is_safe: true
+      identity_is_safe: true,
+      has_official_total: true
     },
     {
       id: "22222222-2222-4222-8222-222222222222",
@@ -47,7 +48,8 @@ const CANDIDATE_PAGE_1: CandidateListResponse = {
       district: null,
       slug: "duplicate-name",
       slug_is_unique: false,
-      identity_is_safe: true
+      identity_is_safe: true,
+      has_official_total: true
     },
     {
       id: "55555555-5555-4555-8555-555555555555",
@@ -59,7 +61,8 @@ const CANDIDATE_PAGE_1: CandidateListResponse = {
       district: "05",
       slug: "212-n-half-w-john-rodney-howard-mr",
       slug_is_unique: true,
-      identity_is_safe: false
+      identity_is_safe: false,
+      has_official_total: true
     }
   ],
   has_next: true,
@@ -72,14 +75,15 @@ const CANDIDATE_PAGE_2: CandidateListResponse = {
     {
       id: "33333333-3333-4333-8333-333333333333",
       fec_candidate_id: "P0US00003",
-      name: "Solo Runner",
+      name: "Out-of-Cycle Official Total Candidate",
       party: "IND",
       office: "P",
       state: "US",
       district: null,
       slug: "solo-runner-2026",
       slug_is_unique: true,
-      identity_is_safe: true
+      identity_is_safe: true,
+      has_official_total: true
     },
     {
       id: "66666666-6666-4666-8666-666666666666",
@@ -91,7 +95,21 @@ const CANDIDATE_PAGE_2: CandidateListResponse = {
       district: "06",
       slug: "",
       slug_is_unique: true,
-      identity_is_safe: false
+      identity_is_safe: false,
+      has_official_total: false
+    },
+    {
+      id: "77777777-7777-4777-8777-777777777777",
+      fec_candidate_id: "H0NC07007",
+      name: "Thin Canonical Candidate",
+      party: "IND",
+      office: "H",
+      state: "NC",
+      district: "07",
+      slug: "thin-canonical-candidate",
+      slug_is_unique: true,
+      identity_is_safe: true,
+      has_official_total: false
     }
   ],
   has_next: false,
@@ -418,7 +436,7 @@ describe("GET /sitemap.xml", () => {
     const expectedCandidatePaths = allCandidateItems
       .filter(
         (candidate) =>
-          candidate.slug_is_unique && candidate.identity_is_safe && candidate.slug !== ""
+          hasCanonicalCandidateSlug(candidate) && candidate.has_official_total
       )
       .map((candidate) => buildCandidateHref(candidate));
     const expectedCommitteePaths = [
@@ -438,11 +456,18 @@ describe("GET /sitemap.xml", () => {
 
     expect(extractLocPaths(xml)).toEqual(expectedLocPaths);
     expect(extractLocPaths(xml)).toHaveLength(14);
+    expect(expectedCandidatePaths).toEqual([
+      "/candidate/pat-candidate-2026",
+      "/candidate/solo-runner-2026"
+    ]);
     expect(expectedCommitteePaths[0]).toBe("/committee/citizens-for-civibus-2026");
     expect(expectedCommitteePaths.at(-1)).toBe("/committee/cccccccc-cccc-4ccc-8ccc-cccccccccccc");
     expect(extractCandidateLocPaths(xml)).toHaveLength(expectedCandidatePaths.length);
     expect(extractCandidateLocPaths(xml)).not.toContain(`/candidate/${CANDIDATE_PAGE_1.items[1]!.id}`);
     expect(extractCandidateLocPaths(xml)).not.toContain(`/candidate/${CANDIDATE_PAGE_2.items[1]!.id}`);
+    expect(extractCandidateLocPaths(xml)).not.toContain(
+      buildCandidateHref(CANDIDATE_PAGE_2.items[2]!)
+    );
     expect(extractCandidateLocPaths(xml)).not.toContain(
       `/candidate/${CANDIDATE_PAGE_1.items[2]!.slug}`
     );
@@ -819,7 +844,8 @@ describe("GET /sitemap.xml candidate-eligibility known answers (prod run 3015911
     district: "01",
     slug: "alice-representative-2026",
     slug_is_unique: true,
-    identity_is_safe: true
+    identity_is_safe: true,
+    has_official_total: true
   };
   const CANDIDATE_UNSAFE_UNIQUE_SLUG: CandidateListItem = {
     // The 19-candidate gap: usable unique non-UUID slug, excluded only by identity.
@@ -832,7 +858,8 @@ describe("GET /sitemap.xml candidate-eligibility known answers (prod run 3015911
     district: "05",
     slug: "212-n-half-w-john-rodney-howard-mr",
     slug_is_unique: true,
-    identity_is_safe: false
+    identity_is_safe: false,
+    has_official_total: true
   };
   const CANDIDATE_SAFE_DUPLICATE_SLUG: CandidateListItem = {
     id: "33333333-3333-4333-8333-333333333333",
@@ -844,7 +871,8 @@ describe("GET /sitemap.xml candidate-eligibility known answers (prod run 3015911
     district: null,
     slug: "shared-committee-slug",
     slug_is_unique: false,
-    identity_is_safe: true
+    identity_is_safe: true,
+    has_official_total: true
   };
   const CANDIDATE_SAFE_EMPTY_SLUG: CandidateListItem = {
     id: "44444444-4444-4444-8444-444444444444",
@@ -856,7 +884,8 @@ describe("GET /sitemap.xml candidate-eligibility known answers (prod run 3015911
     district: null,
     slug: "",
     slug_is_unique: true,
-    identity_is_safe: true
+    identity_is_safe: true,
+    has_official_total: true
   };
   const CANDIDATE_BARE_UUID_FALLBACK: CandidateListItem = {
     // Slug is itself a bare UUID; kept unsafe so the canonical predicate excludes
@@ -870,7 +899,8 @@ describe("GET /sitemap.xml candidate-eligibility known answers (prod run 3015911
     district: "06",
     slug: "55555555-5555-4555-8555-555555555555",
     slug_is_unique: true,
-    identity_is_safe: false
+    identity_is_safe: false,
+    has_official_total: true
   };
 
   const KNOWN_ANSWER_CANDIDATES: CandidateListItem[] = [

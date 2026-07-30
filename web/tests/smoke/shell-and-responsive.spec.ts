@@ -1,3 +1,4 @@
+import type { Response } from "playwright-core";
 import { expect, test } from "playwright/test";
 
 import {
@@ -256,7 +257,13 @@ test.describe("shell and responsive smoke", () => {
 
     await page.getByLabel("Query").fill(SMOKE_SEARCH_VALIDATION_QUERY);
     await page.getByLabel("Entity type").selectOption("candidate");
+    const validationResponse = page.waitForResponse(
+      (response: Response) => response.url().endsWith("/search") && response.request().method() === "POST",
+      { timeout: 10_000 }
+    );
+
     await page.getByRole("button", { name: "Search" }).click();
+    await validationResponse;
 
     await expect(page).toHaveURL("/search");
     await expect(page.getByLabel("Query")).toHaveValue(SMOKE_SEARCH_VALIDATION_QUERY);
@@ -301,7 +308,9 @@ test.describe("shell and responsive smoke", () => {
     await expect(page.getByTestId("search-status")).toHaveText("Searching...");
 
     await submitPromise;
-    await expect(page).toHaveURL(`/search?q=${SMOKE_SEARCH_SLOW_QUERY}&entity_type=org`);
+    await expect(page).toHaveURL(`/search?q=${SMOKE_SEARCH_SLOW_QUERY}&entity_type=org`, {
+      timeout: 10_000
+    });
   });
 
   test("/search contest results route to contest detail", async ({ page }: { page: any }) => {

@@ -63,6 +63,7 @@ const CANDIDATE_DETAIL = {
   slug: "candidate-one",
   slug_is_unique: true,
   identity_is_safe: true,
+  has_official_total: true,
   person_id: null,
   party: null,
   office: "H",

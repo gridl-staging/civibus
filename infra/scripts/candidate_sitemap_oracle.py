@@ -16,7 +16,7 @@ from urllib.parse import urljoin, urlparse
 from urllib.request import Request, urlopen
 from xml.etree import ElementTree
 
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, StrictBool, ValidationError
 
 
 BATCH_LIMIT = 200
@@ -43,6 +43,7 @@ class CandidateListItem(BaseModel):
     slug: str
     slug_is_unique: bool
     identity_is_safe: bool
+    has_official_total: StrictBool
 
 
 class CandidateListPage(BaseModel):
@@ -189,7 +190,9 @@ def evaluate_candidate_sitemap(base_url: str, fetch_url: FetchUrl) -> CandidateS
     canonical_base = _canonical_base_url(base_url)
     candidates = _collect_candidates(fetch_url, canonical_base)
     eligible_urls = sorted(
-        _candidate_url(canonical_base, item) for item in candidates if has_canonical_candidate_slug(item)
+        _candidate_url(canonical_base, item)
+        for item in candidates
+        if has_canonical_candidate_slug(item) and item.has_official_total
     )
     sitemap_candidate_urls = [loc for loc in _fetch_sitemap_locs(fetch_url, canonical_base) if _is_candidate_url(loc)]
     sitemap_counts = Counter(sitemap_candidate_urls)

@@ -43,6 +43,7 @@ class CandidateResponse(BaseModel):
     slug: str
     slug_is_unique: bool
     identity_is_safe: bool
+    has_official_total: bool
     person_id: UUID | None = None
     party: str | None = None
     office: str
@@ -417,6 +418,7 @@ class CandidateListItem(BaseModel):
     slug: str
     slug_is_unique: bool
     identity_is_safe: bool
+    has_official_total: bool
 
 
 class CommitteeListItem(BaseModel):

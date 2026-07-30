@@ -109,4 +109,4 @@ jobs:
             exit 1
           fi
           SMOKE_MODE=production SMOKE_BASE_URL="${PROD_SMOKE_BASE_URL}" \
-            bash ./tests/smoke/run-playwright.sh -- tests/smoke/production_deploy.spec.ts tests/smoke/production_finance_visuals.spec.ts --reporter=line
+            bash ./tests/smoke/run-playwright.sh -- tests/smoke/production_deploy.spec.ts tests/smoke/production_finance_visuals.spec.ts tests/smoke/primary_nav_nonempty.spec.ts --reporter=line

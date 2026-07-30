@@ -865,6 +865,70 @@ def test_relink_policy_preserves_cycle_window_and_fallback_exclusions() -> None:
     ]
 
 
+@pytest.mark.parametrize(
+    ("official_row", "selected_cycle", "expected_any_date_total", "expected_selected_cycle_total"),
+    [
+        (
+            {
+                "total_receipts": Decimal("100.00"),
+                "total_disbursements": None,
+                "cash_on_hand": None,
+                "summary_coverage_end_date": date(2026, 3, 31),
+            },
+            2026,
+            True,
+            True,
+        ),
+        (
+            {
+                "total_receipts": None,
+                "total_disbursements": Decimal("25.00"),
+                "cash_on_hand": None,
+                "summary_coverage_end_date": date(2024, 12, 31),
+            },
+            2026,
+            True,
+            False,
+        ),
+        (
+            {
+                "total_receipts": None,
+                "total_disbursements": None,
+                "cash_on_hand": None,
+                "summary_coverage_end_date": date(2026, 3, 31),
+            },
+            2026,
+            False,
+            False,
+        ),
+        (
+            {
+                "total_receipts": Decimal("0.00"),
+                "total_disbursements": None,
+                "cash_on_hand": None,
+                "summary_coverage_end_date": date(2026, 3, 31),
+            },
+            2026,
+            True,
+            True,
+        ),
+    ],
+)
+def test_any_date_official_candidate_total_signal_is_independent_of_selected_cycle_window(
+    official_row: dict[str, object],
+    selected_cycle: int,
+    expected_any_date_total: bool,
+    expected_selected_cycle_total: bool,
+) -> None:
+    cycle = campaign_finance_queries.resolve_selected_cycle(selected_cycle)
+
+    assert campaign_finance_queries._has_official_candidate_totals(official_row) is expected_any_date_total
+    assert (
+        campaign_finance_queries._official_candidate_totals_cover_selected_cycle(official_row, cycle)
+        is expected_selected_cycle_total
+    )
+
+
 def test_populated_db_top_chamber_totals_match_openfec_golden(db_conn: psycopg.Connection) -> None:
     """L5 runs this read-only node against production with transaction read-only enforced."""
     with db_conn.cursor() as cursor:

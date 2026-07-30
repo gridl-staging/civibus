@@ -65,6 +65,7 @@ describe("campaign finance detail presentation", () => {
       slug: "candidate-one",
       slug_is_unique: true,
       identity_is_safe: true,
+      has_official_total: true,
       person_id: PERSON_ID,
       party: "DEM",
       office: "H",
@@ -292,7 +293,8 @@ describe("campaign finance detail presentation", () => {
           district: "01",
           slug: "candidate-one",
           slug_is_unique: true,
-          identity_is_safe: true
+          identity_is_safe: true,
+          has_official_total: true
         },
         {
           id: "99999999-9999-4999-8999-999999999999",
@@ -304,7 +306,8 @@ describe("campaign finance detail presentation", () => {
           district: "02",
           slug: "candidate-one",
           slug_is_unique: false,
-          identity_is_safe: true
+          identity_is_safe: true,
+          has_official_total: false
         }
       ]
     });
@@ -677,7 +680,8 @@ describe("campaign finance detail presentation", () => {
           district: "04",
           slug: "mike-johnson",
           slug_is_unique: true,
-          identity_is_safe: true
+          identity_is_safe: true,
+          has_official_total: true
         },
         {
           id: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
@@ -689,7 +693,8 @@ describe("campaign finance detail presentation", () => {
           district: null,
           slug: "other-candidate",
           slug_is_unique: false,
-          identity_is_safe: true
+          identity_is_safe: true,
+          has_official_total: false
         }
       ]
     });
@@ -724,7 +729,8 @@ describe("campaign finance detail presentation", () => {
           district: "04",
           slug: "mike-johnson",
           slug_is_unique: true,
-          identity_is_safe: true
+          identity_is_safe: true,
+          has_official_total: true
         }
       ]
     });

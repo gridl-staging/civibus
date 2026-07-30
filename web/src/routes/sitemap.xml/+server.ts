@@ -16,6 +16,7 @@ import {
   buildElectionDateRoutePath
 } from "$lib/civic-detail/contract";
 import { buildEntityRouteHref } from "$lib/entity-detail/contract";
+import { CANDIDATE_ROUTE_INDEXABILITY } from "$lib/seo/candidate_indexability";
 import { fetchCongressMembers, fetchUpcomingElectionTimeline } from "$lib/server/api/civic-detail";
 import { buildCanonicalUrl } from "$lib/seo/canonical";
 import { PERSON_ROUTE_INDEXABILITY } from "$lib/seo/person_indexability";
@@ -157,7 +158,10 @@ export const GET: RequestHandler = async (event) => {
     congressMemberPathsPromise
   ]);
   const candidatePaths = candidateItems
-    .filter(hasCanonicalCandidateSlug)
+    .filter(
+      (item) =>
+        hasCanonicalCandidateSlug(item) && CANDIDATE_ROUTE_INDEXABILITY.isIndexable(item)
+    )
     .map((item) => buildCandidateHref(item));
   const committeePaths = committeeItems.map((item) => buildCommitteeHref(item));
   const electionPaths: string[] = timelineEntries.map((entry) => buildElectionDateRoutePath(entry.date));

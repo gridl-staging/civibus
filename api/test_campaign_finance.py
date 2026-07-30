@@ -2856,6 +2856,7 @@ def test_get_candidate_returns_direct_provenance(
             state="NC",
             district="01",
             incumbent_challenge="I",
+            total_receipts=Decimal("0.00"),
         ),
     )
 
@@ -2863,9 +2864,27 @@ def test_get_candidate_returns_direct_provenance(
 
     assert response.status_code == 200
     payload = response.json()
+    assert set(payload.keys()) == {
+        "id",
+        "fec_candidate_id",
+        "name",
+        "slug",
+        "slug_is_unique",
+        "identity_is_safe",
+        "has_official_total",
+        "person_id",
+        "party",
+        "office",
+        "state",
+        "district",
+        "incumbent_challenge",
+        "principal_committee_id",
+        "sources",
+    }
     assert payload["id"] == str(candidate_id)
     assert payload["fec_candidate_id"] == "H0NC01931"
     assert payload["name"] == "Jane Candidate"
+    assert payload["has_official_total"] is True
     assert payload["person_id"] == str(person.id)
     assert payload["party"] == "DEM"
     assert payload["office"] == "H"
@@ -3044,6 +3063,122 @@ def test_list_candidates_filters_by_person_id(
     assert payload["limit"] == 10
     assert [row["id"] for row in payload["items"]] == ["91000000-0000-0000-0000-000000000001"]
     assert payload["items"][0]["person_id"] == str(person_a.id)
+
+
+def test_candidate_routes_expose_any_date_official_total_signal(
+    api_client: TestClient,
+    db_conn: psycopg.Connection,
+) -> None:
+    committee_id = UUID("93000000-0000-0000-0000-000000000001")
+    insert_committee_row(
+        db_conn,
+        CommitteeRowSeed(
+            id=committee_id,
+            fec_committee_id="C93000001",
+            name="Official Total Signal Committee",
+        ),
+    )
+    candidate_cases = [
+        (
+            UUID("93000000-0000-0000-0000-000000000101"),
+            "H0NC09301",
+            "Official Total In Window Candidate",
+            Decimal("125.00"),
+            None,
+            None,
+            date(2026, 3, 31),
+            True,
+        ),
+        (
+            UUID("93000000-0000-0000-0000-000000000102"),
+            "H0NC09302",
+            "Official Total Out Of Cycle Candidate",
+            None,
+            Decimal("80.00"),
+            None,
+            date(2024, 12, 31),
+            True,
+        ),
+        (
+            UUID("93000000-0000-0000-0000-000000000103"),
+            "H0NC09303",
+            "Official Total Thin Candidate",
+            None,
+            None,
+            None,
+            None,
+            False,
+        ),
+        (
+            UUID("93000000-0000-0000-0000-000000000104"),
+            "H0NC09304",
+            "Official Total Zero Candidate",
+            Decimal("0.00"),
+            None,
+            None,
+            date(2026, 3, 31),
+            True,
+        ),
+    ]
+    for index, (
+        candidate_id,
+        fec_candidate_id,
+        name,
+        total_receipts,
+        total_disbursements,
+        cash_on_hand,
+        summary_coverage_end_date,
+        _expected,
+    ) in enumerate(candidate_cases, start=1):
+        insert_candidate_row(
+            db_conn,
+            CandidateRowSeed(
+                id=candidate_id,
+                fec_candidate_id=fec_candidate_id,
+                name=name,
+                office="H",
+                state="NC",
+                total_receipts=total_receipts,
+                total_disbursements=total_disbursements,
+                cash_on_hand=cash_on_hand,
+                summary_coverage_end_date=summary_coverage_end_date,
+            ),
+        )
+        insert_candidate_committee_link_row(
+            db_conn,
+            CandidateCommitteeLinkSeed(
+                id=UUID(f"93000000-0000-0000-0000-00000000020{index}"),
+                candidate_id=candidate_id,
+                committee_id=committee_id,
+                valid_period="[2000-01-01,2100-01-01)",
+                designation="P",
+            ),
+        )
+
+    expected_by_id = {str(candidate_id): expected for candidate_id, *_rest, expected in candidate_cases}
+
+    list_response = api_client.get("/v1/candidates?state=NC&office=H&limit=20&offset=0")
+    assert list_response.status_code == 200
+    list_items = [item for item in list_response.json()["items"] if item["id"] in expected_by_id]
+    assert {item["id"]: item["has_official_total"] for item in list_items} == expected_by_id
+
+    for candidate_id, _fec_candidate_id, name, *_rest, expected in candidate_cases:
+        detail_response = api_client.get(f"/v1/candidates/{candidate_id}")
+        assert detail_response.status_code == 200
+        assert detail_response.json()["has_official_total"] is expected
+
+        slug = name.lower().replace(" ", "-")
+        slug_response = api_client.get(f"/v1/candidates/by-slug/{slug}")
+        assert slug_response.status_code == 200
+        slug_rows = [row for row in slug_response.json() if row["id"] == str(candidate_id)]
+        assert [row["has_official_total"] for row in slug_rows] == [expected]
+
+    committee_response = api_client.get(f"/v1/committees/{committee_id}")
+    assert committee_response.status_code == 200
+    linked_candidates = committee_response.json()["linked_candidates"]
+    assert {
+        row["id"]: row["has_official_total"] for row in linked_candidates if row["id"] in expected_by_id
+    } == expected_by_id
 
 
 def test_get_candidate_summary_aggregates_multi_committee_totals(
@@ -9298,6 +9433,7 @@ def test_get_committee_detail_exposes_active_linked_candidates_shape(
         "slug",
         "slug_is_unique",
         "identity_is_safe",
+        "has_official_total",
     }
     assert alpha_row["person_id"] == str(person_id_alpha)
     assert alpha_row["fec_candidate_id"] == "H0NC66001"
@@ -9307,6 +9443,7 @@ def test_get_committee_detail_exposes_active_linked_candidates_shape(
     assert alpha_row["district"] == "01"
     assert alpha_row["slug"] == "alpha-candidate"
     assert alpha_row["slug_is_unique"] is True
+    assert alpha_row["has_official_total"] is False
 
 
 # ---------------------------------------------------------------------------
