@@ -467,7 +467,7 @@ function buildCampaignFinanceBySlugPath(resource: "candidates" | "committees", s
 }
 
 function buildSlugAwareHref(routeSegment: "candidate" | "committee", item: SlugRoutableItem): string {
-  const routeId = item.slug_is_unique ? item.slug : item.id;
+  const routeId = item.slug_is_unique && item.slug !== "" ? item.slug : item.id;
   return `/${routeSegment}/${encodeRoutePathSegment(routeId)}`;
 }
 

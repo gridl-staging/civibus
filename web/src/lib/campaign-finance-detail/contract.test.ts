@@ -871,6 +871,12 @@ describe("buildCandidateHref and buildCommitteeHref", () => {
     ).toBe(`/committee/${COMMITTEE_ID}`);
   });
 
+  it("falls back to committee UUID when the normalized slug is empty", () => {
+    expect(
+      buildCommitteeHref({ id: COMMITTEE_ID, slug: "", slug_is_unique: true })
+    ).toBe(`/committee/${COMMITTEE_ID}`);
+  });
+
   it("encodes special characters in slug href paths", () => {
     const candidate = {
       id: CANDIDATE_ID,

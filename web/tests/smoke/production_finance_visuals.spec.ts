@@ -1,6 +1,7 @@
 import { expect, test } from "playwright/test";
 import type { Locator, Page } from "playwright";
 
+import releaseTargets from "./production_release_targets.json" with { type: "json" };
 import {
   capturePageLoadErrors,
   chartRegion,
@@ -21,7 +22,7 @@ import {
 // no-data state) so it never breaks when production data drifts.
 const isProductionSmokeMode = (process.env.SMOKE_MODE ?? "local") === "production";
 
-const RELEASE_PERSON_ID = "4f9bb4e4-40de-4d40-89ed-4205f05f435b";
+const RELEASE_PERSON_ID = releaseTargets.finance_visual_person_id;
 const RELEASE_PERSON_PATH = `/person/${RELEASE_PERSON_ID}`;
 const SELECTED_CYCLE = "2024";
 const SELECTED_CYCLE_COPY = `${SELECTED_CYCLE} cycle`;

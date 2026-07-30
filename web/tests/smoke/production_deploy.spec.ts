@@ -76,7 +76,14 @@ function memberProfileLink(row: any): any {
 }
 
 async function firstCommitteeDetailLink(page: any): Promise<any> {
-  const committeeLinks = await page.getByRole("heading", { level: 3 }).getByRole("link").all();
+  const committeeRows = page.getByTestId("committee-result-row");
+  await expect(committeeRows.first()).toBeVisible({ timeout: 20_000 });
+
+  const firstVisibleCommitteeLink = committeeRows.first().getByRole("link").first();
+  await expect(firstVisibleCommitteeLink).toBeVisible();
+  await expect(firstVisibleCommitteeLink).toHaveAttribute("href", COMMITTEE_ROUTE_HREF_PATTERN);
+
+  const committeeLinks = await committeeRows.getByRole("link").all();
   for (const committeeLink of committeeLinks) {
     const href = await committeeLink.getAttribute("href");
     if (href && COMMITTEE_ROUTE_HREF_PATTERN.test(href)) {

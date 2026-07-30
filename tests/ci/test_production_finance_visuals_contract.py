@@ -1,11 +1,14 @@
 """Static contracts for the production finance visual smoke probes."""
 
+import json
+import re
 from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PRODUCTION_DEPLOY_SPEC = REPO_ROOT / "web/tests/smoke/production_deploy.spec.ts"
 PRODUCTION_FINANCE_SPEC = REPO_ROOT / "web/tests/smoke/production_finance_visuals.spec.ts"
+PRODUCTION_RELEASE_TARGETS = REPO_ROOT / "web/tests/smoke/production_release_targets.json"
 SMOKE_HELPERS = REPO_ROOT / "web/tests/smoke/smoke-helpers.ts"
 
 
@@ -37,6 +40,46 @@ def test_production_deploy_smoke_uses_current_chart_accessibility_labels() -> No
     assert "Monthly contribution columns" in source
     assert "Itemized contribution-size buckets bar chart" in source
     assert "Geography dollar share by contributor location" in source
+
+
+def test_production_committee_discovery_waits_for_owned_result_row() -> None:
+    source = _production_deploy_spec()
+    helper = source.split("async function firstCommitteeDetailLink", maxsplit=1)[1].split("\n}", maxsplit=1)[0]
+
+    assert 'page.getByTestId("committee-result-row")' in helper
+    assert "await expect(committeeRows.first()).toBeVisible" in helper
+    assert 'committeeRows.getByRole("link").all()' in helper
+    assert 'page.getByRole("heading", { level: 3 }).getByRole("link").all()' not in helper
+
+
+def test_production_committee_discovery_rejects_a_malformed_first_visible_link() -> None:
+    source = _production_deploy_spec()
+    helper = source.split("async function firstCommitteeDetailLink", maxsplit=1)[1].split("\n}", maxsplit=1)[0]
+
+    first_link_lookup = 'committeeRows.first().getByRole("link").first()'
+    first_link_assertion = (
+        'await expect(firstVisibleCommitteeLink).toHaveAttribute("href", COMMITTEE_ROUTE_HREF_PATTERN)'
+    )
+    fallback_lookup = 'committeeRows.getByRole("link").all()'
+
+    assert first_link_lookup in helper
+    assert first_link_assertion in helper
+    assert helper.index(first_link_assertion) < helper.index(fallback_lookup)
+
+
+def test_production_finance_release_person_has_one_shared_owner() -> None:
+    source = _production_finance_spec()
+    release_targets = json.loads(PRODUCTION_RELEASE_TARGETS.read_text(encoding="utf-8"))
+    release_person_id = release_targets["finance_visual_person_id"]
+    smoke_spec_sources = "\n".join(path.read_text(encoding="utf-8") for path in _smoke_specs())
+
+    assert re.fullmatch(
+        r"[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}",
+        release_person_id,
+    )
+    assert 'import releaseTargets from "./production_release_targets.json"' in source
+    assert "releaseTargets.finance_visual_person_id" in source
+    assert release_person_id not in smoke_spec_sources
 
 
 def test_production_finance_smoke_exercises_each_chart_disclosure() -> None:
