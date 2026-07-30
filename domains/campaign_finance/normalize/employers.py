@@ -6,10 +6,9 @@ import unicodedata
 
 UNKNOWN_INDUSTRY = "UNKNOWN_INDUSTRY"
 JUNK_EMPLOYER_WEIGHT = 0.01
-# The staged employer mappings in the fixed random sample now cover 320 known
-# rows out of 14,324. The rounded-down floor still fails if any mapped top-20
-# employer disappears.
-INDUSTRY_BY_EMPLOYER_MIN_COVERAGE = 0.015
+# The staged employer mappings in the fixed random sample cover 370 known rows
+# out of 14,324; losing any counted mapping breaks the owner contract.
+INDUSTRY_BY_EMPLOYER_MIN_COVERAGE = 370 / 14_324
 
 _JUNK_EMPLOYER_REASONS: dict[str, str] = {
     "DISABLED": "FEC filer supplied disability status instead of an employer.",
@@ -39,11 +38,16 @@ _EMPLOYER_INDUSTRIES: dict[str, str] = {
     "AMAZON": "Retail",
     "AMERICAN AIRLINES": "Transportation",
     "AFSCME INT L": "Labor",
+    "ABBVIE": "Health Care",
     "ALTRIA GROUP DISTRIBUTION": "Tobacco",
+    "AMGEN": "Health Care",
     "BNSF RAILWAY COMPANY": "Transportation",
+    "APPLE": "Technology",
+    "BANK OF AMERICA": "Finance",
     "BOEING": "Aerospace and Defense",
     "COMCAST CC OF WILLOW GROVE": "Telecommunications",
     "DELTA AIR LINES": "Transportation",
+    "DELL TECHNOLOGIES": "Technology",
     "ELECTRICIANS LOCAL 98": "Labor",
     "FEDERAL GOVERNMENT": "Government",
     # Public agencies remain distinguishable from private transport operators.
@@ -55,9 +59,11 @@ _EMPLOYER_INDUSTRIES: dict[str, str] = {
     "GLAXOSMITHKLINE": "Health Care",
     "GOOGLE": "Technology",
     "HOME DEPOT U S A": "Retail",
+    "IBM": "Technology",
     "JPMORGAN CHASE": "Finance",
     "LOCKHEED MARTIN": "Aerospace and Defense",
     "MICROSOFT": "Technology",
+    "MORGAN STANLEY": "Finance",
     "NEW YORK LIFE INSURANCE COMPANY": "Insurance",
     "NORTHROP GRUMMAN CORPORATION": "Aerospace and Defense",
     "NOVO NORDISK": "Health Care",
@@ -67,6 +73,7 @@ _EMPLOYER_INDUSTRIES: dict[str, str] = {
     "THE ELEVANCE HEALTH COMPANIES": "Health Care",
     "UNITED AIRLINES": "Transportation",
     "UNITED PARCEL SERVICE": "Transportation",
+    "VERIZON": "Telecommunications",
     # USPS is an independent federal establishment, not a private carrier.
     "USPS": "Government",
     "VALERO SERVICES": "Energy",

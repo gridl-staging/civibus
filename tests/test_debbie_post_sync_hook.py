@@ -13,7 +13,10 @@ from pathlib import Path
 
 import pytest
 
-from tests.ci.public_mirror_contract import DEV_REPO_ONLY_CLASSIFICATIONS_BY_NODE_ID
+from tests.ci.public_mirror_contract import (
+    DEV_REPO_ONLY_CLASSIFICATIONS_BY_NODE_ID,
+    evaluate_public_node_expectations,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 POST_SYNC_SCRIPT = REPO_ROOT / ".debbie" / "post-sync.sh"
@@ -25,8 +28,6 @@ PUBLIC_RUN_SPECIMENS = (
     "docs/reference/keel/",
     "evidence/",
 )
-EXPECTED_PUBLIC_ELIGIBLE_NODE_TOTAL = 3382
-EXPECTED_PUBLIC_NODE_PREFIX_TOTALS = {"api/": 262, "core/": 682, "domains/": 1740, "tests/": 698}
 PROJECTED_PYTEST_TIMEOUT_SECONDS = 600
 
 
@@ -483,13 +484,13 @@ def test_projected_public_gate_matches_canonical_public_eligible_nodes(tmp_path:
 
     assert canonical.returncode == 0, _collection_diagnostics(canonical)
     assert projected.returncode == 0, _collection_diagnostics(projected)
-    assert len(canonical_nodes) == EXPECTED_PUBLIC_ELIGIBLE_NODE_TOTAL
-    assert len(projected_nodes) == EXPECTED_PUBLIC_ELIGIBLE_NODE_TOTAL
-    for prefix, expected_total in EXPECTED_PUBLIC_NODE_PREFIX_TOTALS.items():
-        assert sum(1 for node_id in canonical_nodes if node_id.startswith(prefix)) == expected_total
-        assert sum(1 for node_id in projected_nodes if node_id.startswith(prefix)) == expected_total
-    assert canonical_nodes == projected_nodes, (
-        f"missing={sorted(canonical_nodes - projected_nodes)}\n"
-        f"extra={sorted(projected_nodes - canonical_nodes)}\n"
-        f"canonical_total={len(canonical_nodes)} projected_total={len(projected_nodes)}"
+
+    # Both clauses — exact projection fidelity and the non-collapse floors — live
+    # in `tests/ci/public_mirror_contract.py` so they are unit-testable without
+    # this test's multi-minute double collection. See
+    # `tests/ci/test_public_mirror_node_expectations.py`.
+    violations = evaluate_public_node_expectations(canonical_nodes, projected_nodes)
+
+    assert violations == (), (
+        "\n".join(violations) + f"\ncanonical_total={len(canonical_nodes)} projected_total={len(projected_nodes)}"
     )

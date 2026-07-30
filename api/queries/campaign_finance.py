@@ -484,6 +484,9 @@ _PERSON_CONTRIBUTION_INSIGHTS_OFFICE_SQL = """
 _PERSON_CYCLE_RECEIPT_TRANSACTION_WHERE_SQL = contribution_insights_transaction_where_sql(max_date_sql="%s")
 
 _DONOR_SEARCH_RECEIPT_TRANSACTION_WHERE_SQL = contribution_insights_transaction_where_sql()
+_DONOR_SEARCH_EVIDENCE_TRANSACTION_WHERE_SQL = contribution_insights_transaction_where_sql(
+    min_date_sql=f"DATE '{CONTRIBUTION_INSIGHTS_MIN_DATE.isoformat()}'"
+)
 
 _INDIVIDUAL_RECEIPT_QUALIFYING_WHERE_SQL = (
     _PERSON_CYCLE_RECEIPT_TRANSACTION_WHERE_SQL + NOT_SUPERSEDED_SOURCE_RECORD_WHERE_SQL
@@ -1053,6 +1056,12 @@ _DONOR_SEARCH_SQL_TEMPLATE = f"""
             NULLIF(BTRIM(t.contributor_city), '') AS contributor_city,
             NULLIF(BTRIM(t.contributor_state), '') AS contributor_state,
             NULLIF(LEFT(t.contributor_zip, 5), '') AS normalized_zip5,
+            t.contributor_name_raw AS identity_name,
+            COALESCE(t.contributor_employer, '') AS identity_employer,
+            COALESCE(t.contributor_occupation, '') AS identity_occupation,
+            COALESCE(t.contributor_city, '') AS identity_city,
+            COALESCE(t.contributor_state, '') AS identity_state,
+            COALESCE(t.contributor_zip, '') AS identity_zip,
             t.source_record_id
         FROM cf.transaction t
 {{scope_from_sql}}
@@ -1075,15 +1084,51 @@ _DONOR_SEARCH_SQL_TEMPLATE = f"""
             t.committee_id,
             t.amount,
             t.transaction_date,
-            t.contributor_name,
-            t.contributor_employer,
-            t.contributor_occupation,
-            t.contributor_city,
-            t.contributor_state,
-            t.normalized_zip5,
-            {_donor_key_sql("t")} AS donor_key,
+            CASE
+                WHEN active_cluster.id IS NULL THEN t.contributor_name
+                ELSE BTRIM(canonical_identity.contributor_name_raw)
+            END AS contributor_name,
+            CASE
+                WHEN active_cluster.id IS NULL THEN t.contributor_employer
+                ELSE NULLIF(BTRIM(canonical_identity.contributor_employer), '')
+            END AS contributor_employer,
+            CASE
+                WHEN active_cluster.id IS NULL THEN t.contributor_occupation
+                ELSE NULLIF(BTRIM(canonical_identity.contributor_occupation), '')
+            END AS contributor_occupation,
+            CASE
+                WHEN active_cluster.id IS NULL THEN t.contributor_city
+                ELSE NULLIF(BTRIM(canonical_identity.contributor_city), '')
+            END AS contributor_city,
+            CASE
+                WHEN active_cluster.id IS NULL THEN t.contributor_state
+                ELSE NULLIF(BTRIM(canonical_identity.contributor_state), '')
+            END AS contributor_state,
+            CASE
+                WHEN active_cluster.id IS NULL THEN t.normalized_zip5
+                ELSE canonical_identity.zip5
+            END AS normalized_zip5,
+            identity_record.id AS donor_identity_record_id,
+            active_cluster.canonical_entity_id AS resolved_donor_identity_id,
+            COALESCE(active_cluster.canonical_entity_id::text, {_donor_key_sql("t")}) AS donor_key,
             t.source_record_id
         FROM matching_transactions t
+        LEFT JOIN core.donor_identity identity_record
+          ON identity_record.contributor_name_raw = t.identity_name
+         AND identity_record.contributor_employer = t.identity_employer
+         AND identity_record.contributor_occupation = t.identity_occupation
+         AND identity_record.contributor_city = t.identity_city
+         AND identity_record.contributor_state = t.identity_state
+         AND identity_record.contributor_zip = t.identity_zip
+        LEFT JOIN core.cluster_member active_member
+          ON active_member.entity_id = identity_record.id
+         AND active_member.entity_type = 'donor_identity'
+         AND active_member.split_at IS NULL
+        LEFT JOIN core.entity_cluster active_cluster
+          ON active_cluster.id = active_member.cluster_id
+         AND active_cluster.entity_type = 'donor_identity'
+        LEFT JOIN core.donor_identity canonical_identity
+          ON canonical_identity.id = active_cluster.canonical_entity_id
     ),
     donor_groups AS (
         SELECT
@@ -1094,9 +1139,14 @@ _DONOR_SEARCH_SQL_TEMPLATE = f"""
             contributor_city,
             contributor_state,
             normalized_zip5,
+            resolved_donor_identity_id,
             donor_key,
             COALESCE(SUM(amount), 0) AS total_amount,
             COUNT(*)::integer AS transaction_count,
+            CASE
+                WHEN resolved_donor_identity_id IS NULL THEN 1
+                ELSE COUNT(DISTINCT donor_identity_record_id)::integer
+            END AS combined_record_count,
             MAX(transaction_date) AS latest_transaction_date
         FROM qualifying_transactions
         GROUP BY
@@ -1106,6 +1156,7 @@ _DONOR_SEARCH_SQL_TEMPLATE = f"""
             contributor_city,
             contributor_state,
             normalized_zip5,
+            resolved_donor_identity_id,
             donor_key
         ORDER BY total_amount DESC, transaction_count DESC, contributor_name ASC, id ASC
         LIMIT %s
@@ -1211,9 +1262,142 @@ _DONOR_SEARCH_SQL_TEMPLATE = f"""
             FROM source_rollups
         ) ranked_sources
         WHERE source_rank <= {_DONOR_SEARCH_NESTED_DETAIL_LIMIT}
+    ),
+    page_cluster_members AS (
+        SELECT DISTINCT
+            dg.donor_key,
+            cluster_member.cluster_id,
+            cluster_member.entity_id
+        FROM donor_groups dg
+        JOIN core.cluster_member canonical_member
+          ON canonical_member.entity_type = 'donor_identity'
+         AND canonical_member.entity_id = dg.resolved_donor_identity_id
+         AND canonical_member.split_at IS NULL
+        JOIN core.cluster_member cluster_member
+          ON cluster_member.cluster_id = canonical_member.cluster_id
+         AND cluster_member.entity_type = 'donor_identity'
+         AND cluster_member.split_at IS NULL
+    ),
+    page_cluster_confidence AS (
+        SELECT
+            left_member.donor_key,
+            CASE
+                WHEN BOOL_OR(decision.decision = 'probable_match') THEN 'probable_match'
+                ELSE 'match'
+            END AS confidence_band
+        FROM page_cluster_members left_member
+        JOIN page_cluster_members right_member
+          ON right_member.donor_key = left_member.donor_key
+         AND right_member.entity_id > left_member.entity_id
+        JOIN core.match_decision decision
+          ON decision.entity_type = 'donor_identity'
+         AND decision.entity_id_a = left_member.entity_id
+         AND decision.entity_id_b = right_member.entity_id
+         AND decision.decision IN ('match', 'probable_match')
+         AND decision.superseded_by IS NULL
+        GROUP BY left_member.donor_key
+    ),
+    underlying_record_rollups AS (
+        SELECT DISTINCT
+            dg.donor_key,
+            identity_record.id AS underlying_donor_identity_id,
+            BTRIM(identity_record.contributor_name_raw) AS underlying_contributor_name,
+            NULLIF(BTRIM(identity_record.contributor_employer), '') AS underlying_contributor_employer,
+            NULLIF(BTRIM(identity_record.contributor_occupation), '') AS underlying_contributor_occupation,
+            NULLIF(BTRIM(identity_record.contributor_city), '') AS underlying_contributor_city,
+            NULLIF(BTRIM(identity_record.contributor_state), '') AS underlying_contributor_state,
+            identity_record.zip5 AS underlying_normalized_zip5,
+            sr.id AS underlying_source_record_id,
+            ds.domain AS underlying_domain,
+            ds.jurisdiction AS underlying_jurisdiction,
+            ds.name AS underlying_data_source_name,
+            ds.source_url AS underlying_data_source_url,
+            sr.source_record_key AS underlying_source_record_key,
+            sr.source_url AS underlying_record_url,
+            sr.pull_date AS underlying_pull_date
+        FROM donor_groups dg
+        JOIN qualifying_transactions qt
+          ON qt.donor_key = dg.donor_key
+         AND dg.resolved_donor_identity_id IS NOT NULL
+        JOIN core.donor_identity identity_record
+          ON identity_record.id = qt.donor_identity_record_id
+        JOIN core.source_record sr
+          ON sr.id = qt.source_record_id
+         AND sr.superseded_by IS NULL
+         AND sr.source_url IS NOT NULL
+        JOIN core.data_source ds
+          ON ds.id = sr.data_source_id
+    ),
+    possible_match_pairs AS (
+        SELECT DISTINCT
+            member.donor_key,
+            member.cluster_id,
+            CASE
+                WHEN decision.entity_id_a = member.entity_id THEN decision.entity_id_b
+                ELSE decision.entity_id_a
+            END AS candidate_entity_id
+        FROM page_cluster_members member
+        JOIN core.match_decision decision
+          ON decision.entity_type = 'donor_identity'
+         AND decision.decision = 'possible_match'
+         AND decision.superseded_by IS NULL
+         AND (
+             decision.entity_id_a = member.entity_id
+             OR decision.entity_id_b = member.entity_id
+         )
+    ),
+    not_combined_candidate_rollups AS (
+        SELECT DISTINCT
+            possible.donor_key,
+            candidate.id AS candidate_donor_identity_id,
+            BTRIM(candidate.contributor_name_raw) AS candidate_contributor_name,
+            NULLIF(BTRIM(candidate.contributor_employer), '') AS candidate_contributor_employer,
+            NULLIF(BTRIM(candidate.contributor_occupation), '') AS candidate_contributor_occupation,
+            NULLIF(BTRIM(candidate.contributor_city), '') AS candidate_contributor_city,
+            NULLIF(BTRIM(candidate.contributor_state), '') AS candidate_contributor_state,
+            candidate.zip5 AS candidate_normalized_zip5,
+            'possible_match'::text AS candidate_confidence_band,
+            sr.id AS candidate_source_record_id,
+            ds.domain AS candidate_domain,
+            ds.jurisdiction AS candidate_jurisdiction,
+            ds.name AS candidate_data_source_name,
+            ds.source_url AS candidate_data_source_url,
+            sr.source_record_key AS candidate_source_record_key,
+            sr.source_url AS candidate_record_url,
+            sr.pull_date AS candidate_pull_date
+        FROM possible_match_pairs possible
+        JOIN core.donor_identity candidate
+          ON candidate.id = possible.candidate_entity_id
+        JOIN cf.transaction t
+          ON t.contributor_name_raw = candidate.contributor_name_raw
+         AND COALESCE(t.contributor_employer, '') = candidate.contributor_employer
+         AND COALESCE(t.contributor_occupation, '') = candidate.contributor_occupation
+         AND COALESCE(t.contributor_city, '') = candidate.contributor_city
+         AND COALESCE(t.contributor_state, '') = candidate.contributor_state
+         AND COALESCE(t.contributor_zip, '') = candidate.contributor_zip
+        JOIN current_federal_committee_scope candidate_scope
+          ON candidate_scope.committee_id = t.committee_id
+        JOIN core.source_record sr
+          ON sr.id = t.source_record_id
+         AND sr.superseded_by IS NULL
+         AND sr.source_url IS NOT NULL
+        JOIN core.data_source ds
+          ON ds.id = sr.data_source_id
+        WHERE NOT EXISTS (
+            SELECT 1
+            FROM core.cluster_member combined_member
+            WHERE combined_member.cluster_id = possible.cluster_id
+              AND combined_member.entity_type = 'donor_identity'
+              AND combined_member.entity_id = candidate.id
+              AND combined_member.split_at IS NULL
+        )
+{_DONOR_SEARCH_EVIDENCE_TRANSACTION_WHERE_SQL}
+{NOT_SUPERSEDED_SOURCE_RECORD_WHERE_SQL}
     )
     SELECT
         dg.id,
+        dg.donor_key,
+        dg.resolved_donor_identity_id,
         dg.contributor_name,
         dg.contributor_employer,
         dg.contributor_occupation,
@@ -1222,6 +1406,11 @@ _DONOR_SEARCH_SQL_TEMPLATE = f"""
         dg.normalized_zip5,
         dg.total_amount,
         dg.transaction_count,
+        dg.combined_record_count,
+        CASE
+            WHEN dg.resolved_donor_identity_id IS NULL THEN NULL
+            ELSE COALESCE(cluster_confidence.confidence_band, 'match')
+        END AS confidence_band,
         dg.latest_transaction_date,
         recipient.person_id,
         recipient.candidate_id,
@@ -1239,12 +1428,49 @@ _DONOR_SEARCH_SQL_TEMPLATE = f"""
         source.data_source_url,
         source.source_record_key,
         source.record_url,
-        source.pull_date
+        source.pull_date,
+        underlying.underlying_donor_identity_id,
+        underlying.underlying_contributor_name,
+        underlying.underlying_contributor_employer,
+        underlying.underlying_contributor_occupation,
+        underlying.underlying_contributor_city,
+        underlying.underlying_contributor_state,
+        underlying.underlying_normalized_zip5,
+        underlying.underlying_source_record_id,
+        underlying.underlying_domain,
+        underlying.underlying_jurisdiction,
+        underlying.underlying_data_source_name,
+        underlying.underlying_data_source_url,
+        underlying.underlying_source_record_key,
+        underlying.underlying_record_url,
+        underlying.underlying_pull_date,
+        candidate.candidate_donor_identity_id,
+        candidate.candidate_contributor_name,
+        candidate.candidate_contributor_employer,
+        candidate.candidate_contributor_occupation,
+        candidate.candidate_contributor_city,
+        candidate.candidate_contributor_state,
+        candidate.candidate_normalized_zip5,
+        candidate.candidate_confidence_band,
+        candidate.candidate_source_record_id,
+        candidate.candidate_domain,
+        candidate.candidate_jurisdiction,
+        candidate.candidate_data_source_name,
+        candidate.candidate_data_source_url,
+        candidate.candidate_source_record_key,
+        candidate.candidate_record_url,
+        candidate.candidate_pull_date
     FROM donor_groups dg
+    LEFT JOIN page_cluster_confidence cluster_confidence
+      ON cluster_confidence.donor_key = dg.donor_key
     LEFT JOIN limited_recipient_rollups recipient
       ON recipient.donor_key = dg.donor_key
     LEFT JOIN limited_source_rollups source
       ON source.donor_key = dg.donor_key
+    LEFT JOIN underlying_record_rollups underlying
+      ON underlying.donor_key = dg.donor_key
+    LEFT JOIN not_combined_candidate_rollups candidate
+      ON candidate.donor_key = dg.donor_key
     ORDER BY
         dg.total_amount DESC,
         dg.transaction_count DESC,
@@ -1255,7 +1481,11 @@ _DONOR_SEARCH_SQL_TEMPLATE = f"""
         recipient.candidate_name ASC NULLS LAST,
         recipient.person_id ASC NULLS LAST,
         source.pull_date DESC NULLS LAST,
-        source.source_record_key ASC NULLS LAST
+        source.source_record_key ASC NULLS LAST,
+        underlying.underlying_donor_identity_id ASC NULLS LAST,
+        underlying.underlying_pull_date DESC NULLS LAST,
+        candidate.candidate_donor_identity_id ASC NULLS LAST,
+        candidate.candidate_pull_date DESC NULLS LAST
 """
 
 
@@ -2166,15 +2396,15 @@ def _empty_donor_search_payload(*, q: str, by: str, limit: int, offset: int) -> 
     }
 
 
-def _source_payload(row: dict[str, Any]) -> dict[str, Any]:
+def _source_payload(row: dict[str, Any], *, prefix: str = "") -> dict[str, Any]:
     return {
-        "domain": row["domain"],
-        "jurisdiction": row["jurisdiction"],
-        "data_source_name": row["data_source_name"],
-        "data_source_url": row["data_source_url"],
-        "source_record_key": row["source_record_key"],
-        "record_url": row["record_url"],
-        "pull_date": row["pull_date"],
+        "domain": row[f"{prefix}domain"],
+        "jurisdiction": row[f"{prefix}jurisdiction"],
+        "data_source_name": row[f"{prefix}data_source_name"],
+        "data_source_url": row[f"{prefix}data_source_url"],
+        "source_record_key": row[f"{prefix}source_record_key"],
+        "record_url": row[f"{prefix}record_url"],
+        "pull_date": row[f"{prefix}pull_date"],
     }
 
 
@@ -2195,6 +2425,9 @@ def _recipient_payload(row: dict[str, Any]) -> dict[str, Any]:
 def _donor_payload(row: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": str(row["id"]),
+        "donor_identity_id": (
+            str(row["resolved_donor_identity_id"]) if row["resolved_donor_identity_id"] is not None else None
+        ),
         "contributor_name": row["contributor_name"],
         "contributor_employer": row["contributor_employer"],
         "contributor_occupation": row["contributor_occupation"],
@@ -2204,8 +2437,32 @@ def _donor_payload(row: dict[str, Any]) -> dict[str, Any]:
         "total_amount": _quantize_money(row["total_amount"]),
         "transaction_count": row["transaction_count"],
         "latest_transaction_date": row["latest_transaction_date"],
+        "combined_record_count": row["combined_record_count"],
+        "confidence_band": row["confidence_band"],
         "recipients": [],
         "sources": [],
+        "underlying_records": [],
+        "not_combined_candidates": [],
+    }
+
+
+def _identity_record_payload(row: dict[str, Any], *, prefix: str) -> dict[str, Any]:
+    return {
+        "donor_identity_id": str(row[f"{prefix}donor_identity_id"]),
+        "contributor_name": row[f"{prefix}contributor_name"],
+        "contributor_employer": row[f"{prefix}contributor_employer"],
+        "contributor_occupation": row[f"{prefix}contributor_occupation"],
+        "contributor_city": row[f"{prefix}contributor_city"],
+        "contributor_state": row[f"{prefix}contributor_state"],
+        "normalized_zip5": row[f"{prefix}normalized_zip5"],
+        "sources": [],
+    }
+
+
+def _not_combined_candidate_payload(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        **_identity_record_payload(row, prefix="candidate_"),
+        "confidence_band": row["candidate_confidence_band"],
     }
 
 
@@ -2217,29 +2474,63 @@ def _shape_donor_search_results(rows: list[dict[str, Any]]) -> list[dict[str, An
     once, and de-duplicates recipients by person ID and sources by source record.
     """
     donors: list[dict[str, Any]] = []
-    donors_by_id: dict[UUID, dict[str, Any]] = {}
-    recipient_keys_by_donor_id: dict[UUID, set[UUID]] = {}
-    source_keys_by_donor_id: dict[UUID, set[UUID]] = {}
+    donors_by_key: dict[str, dict[str, Any]] = {}
+    recipient_keys_by_donor: dict[str, set[UUID]] = {}
+    source_keys_by_donor: dict[str, set[UUID]] = {}
+    underlying_records_by_donor: dict[str, dict[UUID, dict[str, Any]]] = {}
+    underlying_source_keys_by_donor: dict[str, dict[UUID, set[UUID]]] = {}
+    candidates_by_donor: dict[str, dict[UUID, dict[str, Any]]] = {}
+    candidate_source_keys_by_donor: dict[str, dict[UUID, set[UUID]]] = {}
 
     for row in rows:
-        donor_id = row["id"]
-        donor = donors_by_id.get(donor_id)
+        donor_key = row["donor_key"]
+        donor = donors_by_key.get(donor_key)
         if donor is None:
             donor = _donor_payload(row)
             donors.append(donor)
-            donors_by_id[donor_id] = donor
-            recipient_keys_by_donor_id[donor_id] = set()
-            source_keys_by_donor_id[donor_id] = set()
+            donors_by_key[donor_key] = donor
+            recipient_keys_by_donor[donor_key] = set()
+            source_keys_by_donor[donor_key] = set()
+            underlying_records_by_donor[donor_key] = {}
+            underlying_source_keys_by_donor[donor_key] = {}
+            candidates_by_donor[donor_key] = {}
+            candidate_source_keys_by_donor[donor_key] = {}
 
         if row["person_id"] is not None:
             recipient_key = row["person_id"]
-            if recipient_key not in recipient_keys_by_donor_id[donor_id]:
+            if recipient_key not in recipient_keys_by_donor[donor_key]:
                 donor["recipients"].append(_recipient_payload(row))
-                recipient_keys_by_donor_id[donor_id].add(recipient_key)
+                recipient_keys_by_donor[donor_key].add(recipient_key)
 
-        if row["source_record_id"] is not None and row["source_record_id"] not in source_keys_by_donor_id[donor_id]:
+        if row["source_record_id"] is not None and row["source_record_id"] not in source_keys_by_donor[donor_key]:
             donor["sources"].append(_source_payload(row))
-            source_keys_by_donor_id[donor_id].add(row["source_record_id"])
+            source_keys_by_donor[donor_key].add(row["source_record_id"])
+
+        underlying_id = row["underlying_donor_identity_id"]
+        if underlying_id is not None:
+            underlying_record = underlying_records_by_donor[donor_key].get(underlying_id)
+            if underlying_record is None:
+                underlying_record = _identity_record_payload(row, prefix="underlying_")
+                underlying_records_by_donor[donor_key][underlying_id] = underlying_record
+                underlying_source_keys_by_donor[donor_key][underlying_id] = set()
+                donor["underlying_records"].append(underlying_record)
+            underlying_source_id = row["underlying_source_record_id"]
+            if underlying_source_id not in underlying_source_keys_by_donor[donor_key][underlying_id]:
+                underlying_record["sources"].append(_source_payload(row, prefix="underlying_"))
+                underlying_source_keys_by_donor[donor_key][underlying_id].add(underlying_source_id)
+
+        candidate_id = row["candidate_donor_identity_id"]
+        if candidate_id is not None:
+            candidate = candidates_by_donor[donor_key].get(candidate_id)
+            if candidate is None:
+                candidate = _not_combined_candidate_payload(row)
+                candidates_by_donor[donor_key][candidate_id] = candidate
+                candidate_source_keys_by_donor[donor_key][candidate_id] = set()
+                donor["not_combined_candidates"].append(candidate)
+            candidate_source_id = row["candidate_source_record_id"]
+            if candidate_source_id not in candidate_source_keys_by_donor[donor_key][candidate_id]:
+                candidate["sources"].append(_source_payload(row, prefix="candidate_"))
+                candidate_source_keys_by_donor[donor_key][candidate_id].add(candidate_source_id)
 
     return donors
 

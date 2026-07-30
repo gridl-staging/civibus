@@ -120,7 +120,7 @@ function getCompareCandidateResponse(url: URL): CompareFixtureResponse | null {
   }
   if (resource === "independent-expenditures/summary") {
     return fixture.independentExpenditureSummary === null
-      ? { status: 404, body: { detail: "No independent-expenditure summary fixture." } }
+      ? { status: 200, body: null }
       : { status: 200, body: fixture.independentExpenditureSummary };
   }
   return { status: 200, body: fixture.independentExpenditures };

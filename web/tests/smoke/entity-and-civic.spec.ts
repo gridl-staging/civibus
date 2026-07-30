@@ -233,7 +233,7 @@ test.describe("entity and civic detail smoke", () => {
     await expect(topDonorRows.nth(1)).toContainText(SMOKE_PERSON_TOP_DONOR_ONE_TOTAL);
     await expect(topDonorRows.nth(2)).toContainText(SMOKE_PERSON_TOP_DONOR_TWO_NAME);
     await expect(topDonorRows.nth(2)).toContainText(SMOKE_PERSON_TOP_DONOR_TWO_TOTAL);
-    await expect(page.getByRole("heading", { name: SMOKE_PERSON_TOP_EMPLOYERS_HEADING })).toBeVisible();
+    await expect(page.getByRole("heading", { name: SMOKE_PERSON_TOP_EMPLOYERS_HEADING, exact: true })).toBeVisible();
     await expect(page.getByText(SMOKE_PERSON_TOP_EMPLOYER_DISCLAIMER, { exact: true })).toBeVisible();
     await expect(page.getByText(SMOKE_PERSON_TOP_EMPLOYER_METHODOLOGY, { exact: true })).toBeVisible();
     const topEmployerRows = page.getByTestId("person-top-employers-scroll").getByRole("row");
@@ -604,7 +604,7 @@ test.describe.serial("entity and civic detail smoke (live mode)", () => {
     const topDonorRows = page.getByTestId("person-top-donors-scroll").getByRole("row");
     await expect(topDonorRows.nth(1)).toContainText(SMOKE_PERSON_TOP_DONOR_ONE_NAME);
     await expect(topDonorRows.nth(2)).toContainText(SMOKE_PERSON_TOP_DONOR_TWO_NAME);
-    await expect(page.getByRole("heading", { name: SMOKE_PERSON_TOP_EMPLOYERS_HEADING })).toBeVisible();
+    await expect(page.getByRole("heading", { name: SMOKE_PERSON_TOP_EMPLOYERS_HEADING, exact: true })).toBeVisible();
     const topEmployerRows = page.getByTestId("person-top-employers-scroll").getByRole("row");
     await expect(topEmployerRows.nth(1)).toContainText(SMOKE_PERSON_TOP_EMPLOYER_ONE_NAME);
     await expect(topEmployerRows.nth(2)).toContainText(SMOKE_PERSON_TOP_EMPLOYER_TWO_NAME);

@@ -300,13 +300,14 @@ for _env_var_name, _env_var_value in _TEST_ENV_DEFAULTS.items():
 
 def _require_postgres_password() -> None:
     """Default DB-backed tests to the standard local development password."""
-    os.environ.setdefault("POSTGRES_PASSWORD", "civibus_dev")
+    if not os.environ.get("POSTGRES_PASSWORD"):
+        os.environ["POSTGRES_PASSWORD"] = "civibus_dev"
 
 
 def _connection_or_skip(*, post_connect=None) -> psycopg.Connection:
     """Try to connect with retries; skip or fail if PostgreSQL is unavailable."""
     global _postgres_unavailable_error_message
-    if _postgres_unavailable_error_message is not None:
+    if _postgres_unavailable_error_message is not None and os.environ.get("CIVIBUS_REQUIRE_DB") != "1":
         _skip_or_fail_for_postgres_unavailable(_postgres_unavailable_error_message)
 
     last_connection_error: RuntimeError | None = None
@@ -325,11 +326,13 @@ def _connection_or_skip(*, post_connect=None) -> psycopg.Connection:
 
     assert last_connection_error is not None
     _postgres_unavailable_error_message = str(last_connection_error)
-    _skip_or_fail_for_postgres_unavailable(_postgres_unavailable_error_message)
+    _skip_or_fail_for_postgres_unavailable(_postgres_unavailable_error_message, cause=last_connection_error)
 
 
-def _skip_or_fail_for_postgres_unavailable(message: str) -> None:
+def _skip_or_fail_for_postgres_unavailable(message: str, *, cause: BaseException | None = None) -> None:
     if os.environ.get("CIVIBUS_REQUIRE_DB") == "1":
+        if cause is not None:
+            raise pytest.fail.Exception(message) from cause
         pytest.fail(message)
     pytest.skip(message)
 

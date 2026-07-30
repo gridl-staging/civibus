@@ -113,8 +113,31 @@ class DonorSearchRecipient(BaseModel):
     transaction_count: int
 
 
+class DonorSearchUnderlyingRecord(BaseModel):
+    donor_identity_id: UUID
+    contributor_name: str
+    contributor_employer: str | None = None
+    contributor_occupation: str | None = None
+    contributor_city: str | None = None
+    contributor_state: str | None = None
+    normalized_zip5: str | None = None
+    sources: list[SourceInfo] = Field(min_length=1)
+
+    @field_validator("sources")
+    @classmethod
+    def require_source_filing_urls(cls, sources: list[SourceInfo]) -> list[SourceInfo]:
+        if any(not source.record_url for source in sources):
+            raise ValueError("donor identity records require a source filing URL")
+        return sources
+
+
+class DonorSearchNotCombinedCandidate(DonorSearchUnderlyingRecord):
+    confidence_band: Literal["possible_match"]
+
+
 class DonorSearchResult(BaseModel):
     id: UUID
+    donor_identity_id: UUID | None = None
     contributor_name: str
     contributor_employer: str | None = None
     contributor_occupation: str | None = None
@@ -124,8 +147,27 @@ class DonorSearchResult(BaseModel):
     total_amount: Decimal
     transaction_count: int
     latest_transaction_date: date | None = None
+    combined_record_count: int = Field(default=1, ge=1)
+    confidence_band: Literal["match", "probable_match"] | None = None
     recipients: list[DonorSearchRecipient] = Field(default_factory=list)
     sources: list[SourceInfo] = Field(default_factory=list)
+    underlying_records: list[DonorSearchUnderlyingRecord] = Field(default_factory=list)
+    not_combined_candidates: list[DonorSearchNotCombinedCandidate] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_identity_transparency(self) -> DonorSearchResult:
+        if self.donor_identity_id is None:
+            if self.confidence_band is not None or self.underlying_records or self.not_combined_candidates:
+                raise ValueError("unresolved donors cannot expose resolved identity evidence")
+            if self.combined_record_count != 1:
+                raise ValueError("unresolved donors represent one fallback identity record")
+            return self
+
+        if self.confidence_band is None:
+            raise ValueError("resolved donors require a confidence band")
+        if self.combined_record_count != len(self.underlying_records):
+            raise ValueError("combined_record_count must equal the number of underlying records")
+        return self
 
 
 class DonorSearchResponse(BaseModel):

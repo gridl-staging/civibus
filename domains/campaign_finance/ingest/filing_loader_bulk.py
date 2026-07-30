@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from functools import lru_cache
-from typing import Literal
+from typing import Literal, TypeVar
 from uuid import UUID
 
 import psycopg
@@ -15,6 +15,9 @@ from domains.campaign_finance.ingest.filing_loader import (
     upsert_transaction_with_status,
 )
 from domains.campaign_finance.types.models import Filing, Transaction
+
+_POSTGRES_PARAMETER_LIMIT = 65_535
+_Row = TypeVar("_Row")
 
 
 @lru_cache(maxsize=32)
@@ -30,6 +33,18 @@ def _values_placeholders(*, row_count: int, column_count: int) -> str:
 
 def _flatten_rows(rows: Sequence[tuple[object, ...]]) -> list[object]:
     return [value for row in rows for value in row]
+
+
+def _parameter_safe_batches(rows: Sequence[_Row], column_count: int) -> Iterator[Sequence[_Row]]:
+    if column_count <= 0:
+        raise ValueError("column_count must be greater than zero")
+
+    rows_per_batch = _POSTGRES_PARAMETER_LIMIT // column_count
+    if rows_per_batch == 0:
+        raise ValueError("one row exceeds the PostgreSQL parameter limit")
+
+    for start_index in range(0, len(rows), rows_per_batch):
+        yield rows[start_index : start_index + rows_per_batch]
 
 
 def _filing_values(filing: Filing) -> tuple[object, ...]:
@@ -253,10 +268,13 @@ def upsert_filings_bulk(conn: psycopg.Connection, filings: Sequence[Filing]) -> 
 
     ordered_filings = list(deduped_by_filing_fec_id.values())
     rows = [_filing_values(filing) for filing in ordered_filings]
-    statement = _filing_upsert_statement(row_count=len(rows), column_count=len(rows[0]))
-    with conn.cursor() as cursor:
-        cursor.execute(statement, _flatten_rows(rows))
-        return {filing_fec_id: filing_id for filing_id, filing_fec_id in cursor.fetchall()}
+    filing_id_by_fec_id: dict[str, UUID] = {}
+    for batch in _parameter_safe_batches(rows, len(rows[0])):
+        statement = _filing_upsert_statement(row_count=len(batch), column_count=len(batch[0]))
+        with conn.cursor() as cursor:
+            cursor.execute(statement, _flatten_rows(batch))
+            filing_id_by_fec_id.update({filing_fec_id: filing_id for filing_id, filing_fec_id in cursor.fetchall()})
+    return filing_id_by_fec_id
 
 
 def _bulk_upsert_transactions_for_conflict_target(
@@ -269,14 +287,17 @@ def _bulk_upsert_transactions_for_conflict_target(
         return []
 
     rows = [(transaction.id, *_transaction_values(transaction)) for transaction in transactions]
-    statement = _transaction_upsert_statement(
-        row_count=len(rows),
-        column_count=len(rows[0]),
-        conflict_mode=conflict_mode,
-    )
-    with conn.cursor() as cursor:
-        cursor.execute(statement, _flatten_rows(rows))
-        return cursor.fetchall()
+    results: list[tuple[UUID, bool, int | None, UUID, str | None]] = []
+    for batch in _parameter_safe_batches(rows, len(rows[0])):
+        statement = _transaction_upsert_statement(
+            row_count=len(batch),
+            column_count=len(batch[0]),
+            conflict_mode=conflict_mode,
+        )
+        with conn.cursor() as cursor:
+            cursor.execute(statement, _flatten_rows(batch))
+            results.extend(cursor.fetchall())
+    return results
 
 
 def _has_duplicate_transaction_idempotency_keys(transactions: Sequence[Transaction]) -> bool:
@@ -308,10 +329,13 @@ def _has_existing_dual_key_filing_identifier_conflict(
     if not dual_key_rows:
         return False
 
-    statement = _dual_key_conflict_probe_statement(row_count=len(dual_key_rows), column_count=len(dual_key_rows[0]))
-    with conn.cursor() as cursor:
-        cursor.execute(statement, _flatten_rows(dual_key_rows))
-        return cursor.fetchone() is not None
+    for batch in _parameter_safe_batches(dual_key_rows, len(dual_key_rows[0])):
+        statement = _dual_key_conflict_probe_statement(row_count=len(batch), column_count=len(batch[0]))
+        with conn.cursor() as cursor:
+            cursor.execute(statement, _flatten_rows(batch))
+            if cursor.fetchone() is not None:
+                return True
+    return False
 
 
 def upsert_transactions_with_status_bulk(

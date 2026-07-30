@@ -146,7 +146,8 @@ test.describe("fixture-backed finance visuals", () => {
 
       await expect(page).toHaveScreenshot(`person-finance-${viewport.name}.png`, {
         fullPage: true,
-        animations: "disabled"
+        animations: "disabled",
+        mask: [page.getByText(/^Last pulled:/)]
       });
     });
   }
@@ -174,7 +175,8 @@ test.describe("fixture-backed finance visuals", () => {
 
       await expect(page).toHaveScreenshot(`contest-finance-${viewport.name}.png`, {
         fullPage: true,
-        animations: "disabled"
+        animations: "disabled",
+        mask: [page.getByText(/^Last pulled:/)]
       });
     });
   }
@@ -223,7 +225,8 @@ test.describe("fixture-backed finance visuals", () => {
 
       await expect(page).toHaveScreenshot(`committee-finance-${viewport.name}.png`, {
         fullPage: true,
-        animations: "disabled"
+        animations: "disabled",
+        mask: [page.getByText(/^Last pulled:/)]
       });
     });
   }
@@ -327,7 +330,11 @@ async function expectMoneyAtGlance(page: Page): Promise<void> {
   await expect(moneyAtGlance.getByText(SMOKE_PERSON_MONEY_RECEIPTS, { exact: true })).toBeVisible();
   await expect(moneyAtGlance.getByText(SMOKE_PERSON_MONEY_DISBURSEMENTS, { exact: true })).toBeVisible();
   await expect(moneyAtGlance.getByText(SMOKE_PERSON_MONEY_CASH_ON_HAND, { exact: true })).toBeVisible();
-  await expect(moneyAtGlance.getByText(SMOKE_PERSON_MONEY_DEBTS_OWED, { exact: true })).toBeVisible();
+      const debtTerm = moneyAtGlance.getByText("Debts owed by the committee", { exact: true });
+      await expect(debtTerm).toBeVisible();
+      await expect(
+        moneyAtGlance.getByText(SMOKE_PERSON_MONEY_DEBTS_OWED, { exact: true }).last(),
+      ).toBeVisible();
 }
 
 async function expectChartSummariesAndTables(page: Page): Promise<void> {

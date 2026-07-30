@@ -524,6 +524,98 @@ def _validated_cluster_member_ids(
     return normalized_member_ids
 
 
+def _active_donor_person_ids_by_member_id(
+    conn: psycopg.Connection,
+    member_ids: list[UUID],
+) -> dict[UUID, UUID]:
+    if not member_ids:
+        return {}
+
+    rows = conn.execute(
+        """
+        SELECT cm.entity_id, dcp.person_id
+        FROM core.cluster_member cm
+        JOIN core.donor_cluster_person dcp ON dcp.cluster_id = cm.cluster_id
+        WHERE cm.entity_type = 'donor_identity'
+          AND cm.entity_id = ANY(%s)
+          AND cm.split_at IS NULL
+        """,
+        (member_ids,),
+    ).fetchall()
+    return {entity_id: person_id for entity_id, person_id in rows}
+
+
+def _insert_person_for_donor_identity(
+    conn: psycopg.Connection,
+    donor_identity_id: UUID,
+) -> UUID:
+    row = conn.execute(
+        """
+        SELECT canonical_name, contributor_occupation
+        FROM core.donor_identity
+        WHERE id = %s
+        """,
+        (donor_identity_id,),
+    ).fetchone()
+    if row is None:
+        raise ValueError(f"donor identity {donor_identity_id} does not exist")
+
+    person_id = uuid4()
+    conn.execute(
+        """
+        INSERT INTO core.person (id, canonical_name, occupation)
+        VALUES (%s, %s, %s)
+        """,
+        (person_id, row[0], row[1]),
+    )
+    return person_id
+
+
+def _reusable_donor_person_id_for_component(
+    *,
+    canonical_entity_id: UUID,
+    member_ids: list[UUID],
+    prior_person_ids_by_member_id: dict[UUID, UUID],
+    claimed_prior_person_ids: set[UUID],
+) -> UUID | None:
+    prioritized_person_ids: list[UUID] = []
+    canonical_person_id = prior_person_ids_by_member_id.get(canonical_entity_id)
+    if canonical_person_id is not None:
+        prioritized_person_ids.append(canonical_person_id)
+
+    prioritized_person_ids.extend(
+        sorted(
+            {
+                prior_person_ids_by_member_id[member_id]
+                for member_id in member_ids
+                if member_id in prior_person_ids_by_member_id
+            }
+            - set(prioritized_person_ids)
+        )
+    )
+    return next(
+        (person_id for person_id in prioritized_person_ids if person_id not in claimed_prior_person_ids),
+        None,
+    )
+
+
+def _persist_donor_cluster_person_mapping(
+    conn: psycopg.Connection,
+    *,
+    cluster_id: UUID,
+    canonical_entity_id: UUID,
+    person_id: UUID | None,
+) -> None:
+    mapped_person_id = person_id or _insert_person_for_donor_identity(conn, canonical_entity_id)
+    conn.execute(
+        """
+        INSERT INTO core.donor_cluster_person (cluster_id, person_id)
+        VALUES (%s, %s)
+        """,
+        (cluster_id, mapped_person_id),
+    )
+
+
 def persist_auto_merge_clusters(
     conn: psycopg.Connection,
     auto_merge_clusters: list[dict[str, Any]],
@@ -548,6 +640,10 @@ def persist_auto_merge_clusters(
         conn,
         entity_type=entity_type,
     )
+    prior_donor_person_ids_by_member_id = (
+        _active_donor_person_ids_by_member_id(conn, prior_member_ids) if entity_type == "donor_identity" else {}
+    )
+    claimed_donor_person_ids: set[UUID] = set()
 
     if prior_member_ids:
         _unwind_entity_source_links(
@@ -616,6 +712,22 @@ def persist_auto_merge_clusters(
             member_ids=member_ids,
             canonical_entity_id=canonical_entity_id,
         )
+        if entity_type == "donor_identity":
+            # Auto-merge is the precision gate that authorizes donor-cluster promotion.
+            reusable_person_id = _reusable_donor_person_id_for_component(
+                canonical_entity_id=canonical_entity_id,
+                member_ids=member_ids,
+                prior_person_ids_by_member_id=prior_donor_person_ids_by_member_id,
+                claimed_prior_person_ids=claimed_donor_person_ids,
+            )
+            if reusable_person_id is not None:
+                claimed_donor_person_ids.add(reusable_person_id)
+            _persist_donor_cluster_person_mapping(
+                conn,
+                cluster_id=cluster_id,
+                canonical_entity_id=canonical_entity_id,
+                person_id=reusable_person_id,
+            )
         cluster_ids.append(cluster_id)
 
     return cluster_ids

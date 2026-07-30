@@ -1,5 +1,24 @@
 schema_version: 1
 must_match:
+  - case_id: fec_person_douglas_throp_retired_vs_not_employed_same_address
+    entity_type: person
+    left_entity:
+      canonical_name: Douglas Throp
+      primary_address: Norfolk, VA 23518-4443
+      employer: RETIRED
+      occupation: RETIRED
+      jurisdiction: state/va
+      source_record_key: "4100120242067065553"
+    right_entity:
+      canonical_name: Douglas Throp
+      primary_address: Norfolk, VA 23518-4443
+      employer: NOT EMPLOYED
+      occupation: RETIRED
+      jurisdiction: state/va
+      source_record_key: "4091820242040977191"
+    rationale: The same 2024 FEC donor appears at the same Norfolk ZIP9 address while the filer-supplied employer status varies between RETIRED and NOT EMPLOYED.
+    source_notes:
+      - https://www.fec.gov/data/receipts/individual-contributions/?contributor_name=Douglas%20Throp&contributor_zip=23518
   - case_id: nc_organization_adams_for_nc_house_suffix_normalization
     entity_type: organization
     left_entity:
@@ -57,6 +76,45 @@ must_match:
       - https://www.fec.gov/data/
       - https://cal-access.sos.ca.gov/
 must_not_match:
+  - case_id: fec_person_cluster_030872d9_dennis_vs_stephanie_robinson
+    entity_type: person
+    left_entity:
+      canonical_name: Dennis Robinson
+      primary_address: Winters, CA 95694-9659
+      employer: NOT EMPLOYED
+      occupation: NOT EMPLOYED
+      jurisdiction: state/ca
+      source_record_key: "4051020251191662253"
+    right_entity:
+      canonical_name: Stephanie Robinson
+      primary_address: Beverly Hills, CA 90212-4516
+      employer: NOT EMPLOYED
+      occupation: NOT EMPLOYED
+      jurisdiction: state/ca
+      source_record_key: "4051020251192288091"
+    rationale: Audit cluster 030872d9 was a false merge of distinct California donors sharing only surname and state; corrected given names must keep Dennis and Stephanie Robinson apart.
+    source_notes:
+      - https://www.fec.gov/data/filings/1891326/
+  - case_id: fec_person_cluster_81136b39_linda_vs_ryan_garcia
+    entity_type: person
+    left_entity:
+      canonical_name: Linda Garcia
+      primary_address: Arlington, TX 76001-5541
+      employer: NOT EMPLOYED
+      occupation: NOT EMPLOYED
+      jurisdiction: state/tx
+      source_record_key: "4100120242066892113"
+    right_entity:
+      canonical_name: Ryan Garcia
+      primary_address: Rosenberg, TX 77471-9303
+      employer: ROSENBERG PLUMBING SERVICE INC.
+      occupation: ACCOUNTANT
+      jurisdiction: state/tx
+      source_record_key: "4051020251193212520"
+    rationale: Audit cluster 81136b39 was a false merge of distinct Texas donors sharing only surname and state; corrected given names must keep Linda and Ryan Garcia apart.
+    source_notes:
+      - https://www.fec.gov/data/filings/1817925/
+      - https://www.fec.gov/data/filings/1891326/
   - case_id: nc_person_julia_howard_vs_mitchell_setzer_distinct_legislators
     entity_type: person
     left_entity:

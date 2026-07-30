@@ -203,6 +203,24 @@ CREATE INDEX idx_donor_identity_name ON core.donor_identity (canonical_name);
 CREATE INDEX idx_donor_identity_zip5 ON core.donor_identity (zip5) WHERE zip5 IS NOT NULL;
 CREATE INDEX idx_donor_identity_cluster ON core.donor_identity (er_cluster_id) WHERE er_cluster_id IS NOT NULL;
 
+-- Explicit promotion from a donor-identity cluster to the valid person entity
+-- used by downstream transaction writeback. Donor and person ER cluster IDs
+-- remain type-local and are never interpreted as cross-type foreign keys.
+CREATE TABLE core.donor_cluster_person (
+    cluster_id     UUID PRIMARY KEY,
+    entity_type    TEXT NOT NULL DEFAULT 'donor_identity'
+                   CHECK (entity_type = 'donor_identity'),
+    person_id      UUID NOT NULL REFERENCES core.person(id),
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+    CONSTRAINT fk_donor_cluster_person_cluster
+        FOREIGN KEY (cluster_id, entity_type)
+        REFERENCES core.entity_cluster(id, entity_type)
+        ON DELETE CASCADE
+);
+
+CREATE INDEX idx_donor_cluster_person_person ON core.donor_cluster_person (person_id);
+
 -- ============================================================================
 -- Views for common queries
 -- ============================================================================

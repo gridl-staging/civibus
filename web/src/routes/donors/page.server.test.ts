@@ -25,6 +25,16 @@ function emptyResponse(params: Partial<DonorSearchResponse> = {}): DonorSearchRe
   };
 }
 
+const source = {
+  domain: 'campaign_finance',
+  jurisdiction: 'federal/fec',
+  data_source_name: 'FEC filing',
+  data_source_url: 'https://www.fec.gov/data/',
+  source_record_key: 'filing-1',
+  record_url: 'https://www.fec.gov/data/receipts/?data_type=processed',
+  pull_date: '2026-07-09T12:00:00Z'
+};
+
 describe('/donors +page.server load', () => {
   it('returns untouched empty state without backend calls', async () => {
     const requestJson = vi.fn();
@@ -76,6 +86,7 @@ describe('/donors +page.server load', () => {
       results: [
         {
           id: '72000000-0000-0000-0000-000000000101',
+          donor_identity_id: '72100000-0000-0000-0000-000000000001',
           contributor_name: 'JANE SMITH',
           contributor_employer: 'Civibus Labs',
           contributor_occupation: 'Engineer',
@@ -85,8 +96,35 @@ describe('/donors +page.server load', () => {
           total_amount: '500.00',
           transaction_count: 3,
           latest_transaction_date: '2024-07-15',
+          combined_record_count: 1,
+          confidence_band: 'match',
           recipients: [],
-          sources: []
+          sources: [source],
+          underlying_records: [
+            {
+              donor_identity_id: '72100000-0000-0000-0000-000000000001',
+              contributor_name: 'JANE SMITH',
+              contributor_employer: 'Civibus Labs',
+              contributor_occupation: 'Engineer',
+              contributor_city: 'Durham',
+              contributor_state: 'NC',
+              normalized_zip5: '27701',
+              sources: [source]
+            }
+          ],
+          not_combined_candidates: [
+            {
+              donor_identity_id: '72100000-0000-0000-0000-000000000002',
+              contributor_name: 'JANE SMYTH',
+              contributor_employer: 'Civibus Labs',
+              contributor_occupation: 'Engineer',
+              contributor_city: 'Durham',
+              contributor_state: 'NC',
+              normalized_zip5: '27701',
+              confidence_band: 'possible_match',
+              sources: [source]
+            }
+          ]
         }
       ]
     });
@@ -98,6 +136,27 @@ describe('/donors +page.server load', () => {
     expect(requestJson).toHaveBeenCalledWith(
       buildDonorSearchPath({ q: 'Jane', by: 'name', limit: 20, offset: 0 })
     );
+  });
+
+  it('rejects a successful backend response that drifts from the donor contract', async () => {
+    const response = {
+      query: 'Jane',
+      by: 'name',
+      limit: 20,
+      offset: 0,
+      results: [
+        {
+          id: '72000000-0000-0000-0000-000000000101',
+          contributor_name: 'JANE SMITH',
+          total_amount: '500.00'
+        }
+      ]
+    };
+    const requestJson = vi.fn().mockResolvedValue(response);
+
+    await expect(
+      load(createLoadEvent('https://web.civibus.local/donors?q=Jane&by=name', requestJson))
+    ).rejects.toThrow('results[0].donor_identity_id must be a string or null.');
   });
 
   it.each([

@@ -1552,6 +1552,89 @@ class TestStage4StreamingLoop:
             ("SUB-2", False),
         ]
 
+    def test_duplicate_source_record_key_preserves_first_provenance_insert_count(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        conn = self._RecordingConnection()
+        committee_id = uuid4()
+        shared_source_record_id = uuid4()
+        rows = [
+            {"SUB_ID": "SUB-1", "TRAN_ID": "TRAN-1", "CMTE_ID": "C00000001", "DATE": "2024-01-15"},
+            {"SUB_ID": "SUB-1", "TRAN_ID": "TRAN-2", "CMTE_ID": "C00000001", "DATE": "2024-01-16"},
+        ]
+        provenance_inserted_flags: list[bool] = []
+
+        monkeypatch.setattr(bulk_stage4_loader, "read_bulk_file", lambda path, file_type, limit=None: iter(rows))
+        monkeypatch.setattr(
+            bulk_stage4_loader,
+            "map_contribution_fields",
+            lambda row: {
+                "sub_id": row["SUB_ID"],
+                "transaction_identifier": row["TRAN_ID"],
+                "committee_id": row["CMTE_ID"],
+                "contribution_receipt_date": row["DATE"],
+                "contribution_receipt_date_is_reliable": True,
+            },
+        )
+        monkeypatch.setattr(
+            bulk_stage4_loader,
+            "find_committee_ids_by_fec_ids",
+            lambda conn, committee_fec_ids: {"C00000001": committee_id},
+        )
+        monkeypatch.setattr(
+            bulk_stage4_loader,
+            "try_insert_source_records_bulk",
+            lambda conn, source_records: [
+                provenance_inserted_flags.append(inserted)
+                or SimpleNamespace(source_record_id=shared_source_record_id, inserted=inserted)
+                for inserted in (True, False)
+            ],
+        )
+        monkeypatch.setattr(
+            bulk_stage4_loader,
+            "resolve_source_record_ids",
+            lambda conn, data_source_id, source_record_keys: {"SUB-1": shared_source_record_id},
+        )
+        monkeypatch.setattr(
+            bulk_stage4_loader,
+            "build_filing_from_contribution",
+            lambda conn, contribution_record, **kwargs: SimpleNamespace(
+                committee_id=committee_id,
+                filing_fec_id=contribution_record["sub_id"],
+            ),
+        )
+        monkeypatch.setattr(
+            bulk_stage4_loader,
+            "upsert_filings_bulk",
+            lambda conn, filings: {str(filing.filing_fec_id): uuid4() for filing in filings},
+        )
+        monkeypatch.setattr(
+            bulk_stage4_loader,
+            "build_transaction_from_contribution",
+            lambda conn, contribution_record, **kwargs: SimpleNamespace(
+                sub_id=contribution_record["sub_id"],
+                transaction_identifier=contribution_record["transaction_identifier"],
+            ),
+        )
+        monkeypatch.setattr(
+            bulk_stage4_loader,
+            "upsert_transactions_with_status_bulk",
+            lambda conn, transactions: [
+                SimpleNamespace(transaction_id=uuid4(), inserted=False) for _transaction in transactions
+            ],
+        )
+        monkeypatch.setattr(
+            bulk_stage4_loader,
+            "load_contribution",
+            lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("transactions-only should bypass entities")),
+        )
+
+        result = self._load_transactions_only(conn, data_source_id=uuid4())
+
+        assert (result.inserted, result.skipped, result.errors) == (1, 1, 0)
+        assert provenance_inserted_flags == [True, False]
+
     def test_committee_lookup_is_cached(
         self,
         monkeypatch: pytest.MonkeyPatch,

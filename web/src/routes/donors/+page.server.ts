@@ -1,4 +1,5 @@
 import {
+  assertDonorSearchResponse,
   hasDonorShortNameQueryGuidance,
   type DonorSearchByMode,
   type DonorSearchResponse
@@ -99,12 +100,14 @@ export const load = (async ({ url, locals }): Promise<DonorPageData> => {
   }
 
   try {
-    return await fetchDonorSearch(locals.api, {
+    const response = await fetchDonorSearch(locals.api, {
       q: params.query,
       by: params.by,
       limit: params.limit,
       offset: params.offset
     });
+    assertDonorSearchResponse(response);
+    return response;
   } catch (cause) {
     if (cause instanceof ApiResponseError && cause.status === 422) {
       return emptyDonorPageData(params, {

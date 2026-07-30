@@ -175,6 +175,33 @@ def test_round_two_random_sample_employers_map_to_curated_industries(
     assert industry_for_employer(raw_employer) == expected_industry
 
 
+@pytest.mark.parametrize(
+    "raw_employer, expected_industry",
+    [
+        ("APPLE", "Technology"),
+        ("APPLE INC", "Technology"),
+        ("APPLE INC.", "Technology"),
+        ("APPLE, INC.", "Technology"),
+        ("DELL TECHNOLOGIES, INC.", "Technology"),
+        ("DELL TECHNOLOGIES", "Technology"),
+        ("AMGEN INC.", "Health Care"),
+        ("AMGEN", "Health Care"),
+        ("BANK OF AMERICA", "Finance"),
+        ("IBM", "Technology"),
+        ("IBM CORP", "Technology"),
+        ("MORGAN STANLEY", "Finance"),
+        ("ABBVIE INC.", "Health Care"),
+        ("ABBVIE", "Health Care"),
+        ("VERIZON", "Telecommunications"),
+    ],
+)
+def test_stage_three_random_sample_employers_map_to_curated_industries(
+    raw_employer: str,
+    expected_industry: str,
+) -> None:
+    assert industry_for_employer(raw_employer) == expected_industry
+
+
 @pytest.mark.parametrize("status_value", ["HOMEMAKER", "ENTREPRENEUR"])
 def test_random_sample_status_values_are_junk(status_value: str) -> None:
     assert is_junk_employer(status_value) is True
@@ -207,32 +234,38 @@ def test_random_sample_ambiguous_employers_remain_unmapped(ambiguous_employer: s
 
 def test_random_sample_industry_coverage_meets_module_contract() -> None:
     sample_size = 14_324
-    baseline_known_count = 19
-    newly_mapped_sample_counts = {
+    selected_known_sample_counts = {
+        "GOOGLE": 7,
+        "GOOGLE LLC": 5,
+        "PFIZER, INC": 4,
+        "PFIZER INC": 3,
         "NORTHROP GRUMMAN CORPORATION": 28,
         "BOEING": 24,
         "USPS": 21,
         "UNITED PARCEL SERVICE": 16,
+        "UNITED PARCEL SERVICE, INC.": 5,
         "COMCAST (CC) OF WILLOW GROVE": 13,
         "FEDERAL AVIATION ADMINISTRATION": 13,
         "HOME DEPOT U.S.A., INC.": 11,
         "GENERAL MOTORS COMPANY": 10,
         "ABBOTT": 9,
         "AMERICAN AIRLINES": 9,
+        "AMERICAN AIRLINES, INC.": 4,
         "THE ELEVANCE HEALTH COMPANIES, INC.": 9,
         "UNITED AIRLINES": 9,
+        "UNITED AIRLINES INC.": 2,
         "AMAZON": 8,
         "ELECTRICIANS LOCAL 98": 8,
         "FRIAS TRANSPORTATION": 8,
-        "GLAXOSMITHKLINE": 11,
-    }
-    round_two_newly_mapped_sample_counts = {
         "LOCKHEED MARTIN": 8,
         "VALERO SERVICES, INC.": 8,
         "MICROSOFT": 7,
+        "MICROSOFT CORP.": 1,
         "WALMART": 7,
+        "WALMART INC": 2,
         "BNSF RAILWAY COMPANY": 6,
         "DELTA AIR LINES": 6,
+        "DELTA AIR LINES, INC.": 5,
         "FEDERAL GOVERNMENT": 6,
         "FORD MOTOR COMPANY": 6,
         "GENENTECH USA, INC.": 6,
@@ -242,18 +275,32 @@ def test_random_sample_industry_coverage_meets_module_contract() -> None:
         "SPACE EXPLORATION TECHNOLOGIES CORP.": 6,
         "AFSCME INT'L": 5,
         "ALTRIA GROUP DISTRIBUTION CO": 5,
+        "APPLE": 3,
+        "APPLE INC": 2,
+        "APPLE INC.": 1,
+        "APPLE, INC.": 1,
+        "DELL TECHNOLOGIES, INC.": 5,
+        "DELL TECHNOLOGIES": 2,
+        "AMGEN INC.": 3,
+        "AMGEN": 2,
+        "BANK OF AMERICA": 5,
+        "IBM": 4,
+        "IBM CORP": 1,
+        "MORGAN STANLEY": 5,
+        "ABBVIE INC.": 3,
+        "ABBVIE": 1,
+        "VERIZON": 4,
     }
     newly_junk_sample_counts = {"DISABLED": 7}
 
-    newly_mapped_count = sum(newly_mapped_sample_counts.values()) + sum(round_two_newly_mapped_sample_counts.values())
+    selected_known_count = sum(selected_known_sample_counts.values())
     newly_junk_count = sum(newly_junk_sample_counts.values())
-    achieved_known_count = baseline_known_count + newly_mapped_count
-    achieved_share = achieved_known_count / sample_size
+    achieved_share = selected_known_count / sample_size
 
-    assert newly_mapped_count == 301
     assert newly_junk_count == 7
-    assert achieved_known_count == 320
-    assert achieved_share == 320 / 14_324
+    assert selected_known_count == 370
+    assert achieved_share == 370 / 14_324
     assert hasattr(employers, "INDUSTRY_BY_EMPLOYER_MIN_COVERAGE")
     minimum_coverage = getattr(employers, "INDUSTRY_BY_EMPLOYER_MIN_COVERAGE", float("inf"))
+    assert minimum_coverage == 370 / 14_324
     assert achieved_share >= minimum_coverage

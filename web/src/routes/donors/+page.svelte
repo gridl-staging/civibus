@@ -1,7 +1,10 @@
 <script lang="ts">
   import { navigating } from '$app/stores';
+  import { formatDisplayValue } from '$lib/detail-format';
   import { buildDonorPagePath, DONOR_SEARCH_BY_MODES, DONOR_SEARCH_PAGE_PATH } from '$lib/donors/contract';
+  import IdentityEvidence from '$lib/entity-detail/IdentityEvidence.svelte';
   import SkeletonPanel from '$lib/loading/SkeletonPanel.svelte';
+  import { sanitizeExternalUrl } from '$lib/url/sanitize-external-url';
   import type { PageData } from './$types';
 
   export let data: PageData;
@@ -89,11 +92,6 @@
     return currencyFormatter.format(Number(value));
   }
 
-  function formatNullable(value: string | null | undefined): string {
-    const trimmedValue = value?.trim();
-    return trimmedValue ? trimmedValue : '—';
-  }
-
   function formatLocation(city: string | null | undefined, state: string | null | undefined): string {
     const cityValue = city?.trim() ?? '';
     const stateValue = state?.trim() ?? '';
@@ -102,30 +100,17 @@
       return `${cityValue}, ${stateValue}`;
     }
 
-    return formatNullable(cityValue || stateValue);
+    return formatDisplayValue(cityValue || stateValue || null);
   }
 
   function formatDate(value: string | null | undefined): string {
-    return formatNullable(value);
+    return formatDisplayValue(value);
   }
 
   function personHref(personId: string): string {
     return `/person/${encodeURIComponent(personId)}`;
   }
 
-  function safeExternalHref(value: string | null | undefined): string | null {
-    const trimmedValue = value?.trim();
-    if (!trimmedValue) {
-      return null;
-    }
-
-    try {
-      const url = new URL(trimmedValue);
-      return url.protocol === 'https:' || url.protocol === 'http:' ? url.href : null;
-    } catch {
-      return null;
-    }
-  }
 </script>
 
 <svelte:head>
@@ -202,13 +187,13 @@
             </tr>
           </thead>
           <tbody>
-            {#each data.results as result (result.id)}
+            {#each data.results as result, resultIndex (result.id)}
               <tr data-testid="donor-result-row">
                 <td>{result.contributor_name}</td>
-                <td>{formatNullable(result.contributor_employer)}</td>
-                <td>{formatNullable(result.contributor_occupation)}</td>
+                <td>{formatDisplayValue(result.contributor_employer)}</td>
+                <td>{formatDisplayValue(result.contributor_occupation)}</td>
                 <td>{formatLocation(result.contributor_city, result.contributor_state)}</td>
-                <td>{formatNullable(result.normalized_zip5)}</td>
+                <td>{formatDisplayValue(result.normalized_zip5)}</td>
                 <td>{formatCurrency(result.total_amount)}</td>
                 <td>{result.transaction_count}</td>
                 <td>{formatDate(result.latest_transaction_date)}</td>
@@ -228,19 +213,27 @@
                     <ul class="donor-lookup__nested-list">
                       {#each result.sources as source (source.source_record_key ?? source.data_source_url)}
                         <li>
-                          {#if safeExternalHref(source.data_source_url)}
-                            <a href={safeExternalHref(source.data_source_url) ?? ''}>{source.data_source_name}</a>
+                          {#if sanitizeExternalUrl(source.data_source_url)}
+                            <a href={sanitizeExternalUrl(source.data_source_url) ?? ''}>{source.data_source_name}</a>
                           {:else}
                             <span>{source.data_source_name}</span>
                           {/if}
-                          {#if source.record_url}
-                            {#if safeExternalHref(source.record_url)}
-                              <a href={safeExternalHref(source.record_url) ?? ''}>Record</a>
-                            {/if}
+                          {#if sanitizeExternalUrl(source.record_url)}
+                            <a href={sanitizeExternalUrl(source.record_url) ?? ''}>Record</a>
                           {/if}
                         </li>
                       {/each}
                     </ul>
+                  {/if}
+                  {#if result.donor_identity_id !== null && result.confidence_band !== null}
+                    <IdentityEvidence
+                      donorName={result.contributor_name}
+                      idPrefix={`donor-identity-evidence-${resultIndex}`}
+                      combinedRecordCount={result.combined_record_count}
+                      confidenceBand={result.confidence_band}
+                      underlyingRecords={result.underlying_records}
+                      notCombinedCandidates={result.not_combined_candidates}
+                    />
                   {/if}
                 </td>
               </tr>

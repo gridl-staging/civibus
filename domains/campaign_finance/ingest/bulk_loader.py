@@ -54,6 +54,9 @@ from domains.campaign_finance.ingest.bulk_loader_ccl import (
     _build_ccl_source_record_key,
     _insert_candidate_committee_link,
 )
+from domains.campaign_finance.ingest.candidate_summary_loader import (
+    update_candidate_summary as _update_candidate_summary,
+)
 from domains.campaign_finance.ingest.field_mapper import (
     map_candidate_fields,
     map_candidate_summary_fields,
@@ -479,40 +482,6 @@ def load_candidates(
 
     _commit_final_batch(conn, processed_since_commit)
     return load_result
-
-
-def _update_candidate_summary(
-    conn: psycopg.Connection,
-    *,
-    mapped_fields: dict[str, object],
-) -> None:
-    with conn.cursor() as cursor:
-        cursor.execute(
-            """
-            UPDATE cf.candidate
-            SET total_receipts = %s,
-                total_disbursements = %s,
-                cash_on_hand = %s,
-                candidate_contrib = %s,
-                candidate_loans = %s,
-                candidate_loan_repay = %s,
-                summary_coverage_end_date = %s,
-                updated_at = NOW()
-            WHERE fec_candidate_id = %s
-            """,
-            (
-                mapped_fields["total_receipts"],
-                mapped_fields["total_disbursements"],
-                mapped_fields["cash_on_hand"],
-                mapped_fields["candidate_contrib"],
-                mapped_fields["candidate_loans"],
-                mapped_fields["candidate_loan_repay"],
-                mapped_fields["summary_coverage_end_date"],
-                mapped_fields["fec_candidate_id"],
-            ),
-        )
-        if cursor.rowcount != 1:
-            raise RuntimeError(f"Expected one candidate summary update for {mapped_fields['fec_candidate_id']}")
 
 
 def load_candidate_summaries(

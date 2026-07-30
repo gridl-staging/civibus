@@ -14,11 +14,28 @@ from core.entity_resolution.splink_config import (
     PERSON_PREPROCESSING_SQL,
 )
 from domains.campaign_finance.entity_extractors.extract import _normalize_zip_parts
+from domains.campaign_finance.normalize.names import parse_name
 
 RowDict = dict[str, Any]
 _PROBABILISTIC_ROW_ID_SEPARATOR = "__splink_row__"
 _DONOR_IDENTITY_ID_SEPARATOR = "\x1f"
 _DONOR_IDENTITY_ID_NAMESPACE = uuid5(NAMESPACE_URL, "civibus:federal:fec:donor_identity:v1")
+
+
+def _donor_identity_schedule_a_predicate_sql(*, table_alias: str | None = None) -> str:
+    prefix = f"{table_alias}." if table_alias else ""
+    return f"""
+{prefix}transaction_type LIKE '1%%'
+  AND {prefix}contributor_entity_type = 'IND'
+  AND {prefix}is_memo = FALSE
+  AND {prefix}amendment_indicator != 'T'
+  AND NULLIF(BTRIM({prefix}contributor_name_raw), '') IS NOT NULL
+"""
+
+
+_DONOR_IDENTITY_SCHEDULE_A_FROM_WHERE_SQL = (
+    "\nFROM cf.transaction\nWHERE committee_id = ANY(%s)\n  AND " + _donor_identity_schedule_a_predicate_sql()
+)
 
 
 def _fetch_preprocessed_rows(
@@ -60,6 +77,10 @@ def _donor_identity_id(row: RowDict) -> UUID:
 
 def _donor_scope_committee_ids(scope: dict[str, Any] | None) -> list[UUID]:
     committee_ids = scope.get("committee_ids") if isinstance(scope, dict) else None
+    return _validated_donor_committee_ids(committee_ids)
+
+
+def _validated_donor_committee_ids(committee_ids: Any) -> list[UUID]:
     if (
         isinstance(committee_ids, (str, bytes))
         or not isinstance(committee_ids, Sequence)
@@ -70,10 +91,96 @@ def _donor_scope_committee_ids(scope: dict[str, Any] | None) -> list[UUID]:
     return list(committee_ids)
 
 
-def _donor_identity_source_rows(conn: psycopg.Connection, committee_ids: list[UUID]) -> list[RowDict]:
+def _donor_identity_transaction_rows(conn: psycopg.Connection, committee_ids: list[UUID]) -> list[RowDict]:
+    scoped_committee_ids = _validated_donor_committee_ids(committee_ids)
     return _fetch_preprocessed_rows(
         conn,
-        """
+        f"""
+        SELECT
+            id,
+            contributor_name_raw,
+            COALESCE(contributor_employer, '') AS contributor_employer,
+            COALESCE(contributor_occupation, '') AS contributor_occupation,
+            COALESCE(contributor_city, '') AS contributor_city,
+            COALESCE(contributor_state, '') AS contributor_state,
+            COALESCE(contributor_zip, '') AS contributor_zip
+        {_DONOR_IDENTITY_SCHEDULE_A_FROM_WHERE_SQL}
+        ORDER BY
+            contributor_name_raw,
+            contributor_employer,
+            contributor_occupation,
+            contributor_city,
+            contributor_state,
+            contributor_zip,
+            id
+        """,
+        (scoped_committee_ids,),
+    )
+
+
+def _donor_identity_transaction_rows_for_existing_identities(conn: psycopg.Connection) -> list[RowDict]:
+    schedule_a_predicate = _donor_identity_schedule_a_predicate_sql(table_alias="t")
+    return _fetch_preprocessed_rows(
+        conn,
+        f"""
+        SELECT
+            t.id,
+            t.contributor_organization_id,
+            t.contributor_name_raw,
+            COALESCE(t.contributor_employer, '') AS contributor_employer,
+            COALESCE(t.contributor_occupation, '') AS contributor_occupation,
+            COALESCE(t.contributor_city, '') AS contributor_city,
+            COALESCE(t.contributor_state, '') AS contributor_state,
+            COALESCE(t.contributor_zip, '') AS contributor_zip
+        FROM cf.transaction t
+        JOIN core.donor_identity di
+          ON di.contributor_name_raw = t.contributor_name_raw
+         AND COALESCE(di.contributor_employer, '') = COALESCE(t.contributor_employer, '')
+         AND COALESCE(di.contributor_occupation, '') = COALESCE(t.contributor_occupation, '')
+         AND COALESCE(di.contributor_city, '') = COALESCE(t.contributor_city, '')
+         AND COALESCE(di.contributor_state, '') = COALESCE(t.contributor_state, '')
+         AND COALESCE(di.contributor_zip, '') = COALESCE(t.contributor_zip, '')
+        WHERE {schedule_a_predicate}
+        ORDER BY
+            t.contributor_name_raw,
+            contributor_employer,
+            contributor_occupation,
+            contributor_city,
+            contributor_state,
+            contributor_zip,
+            t.id
+        """,
+    )
+
+
+def _donor_identity_committee_ids_for_existing_identities(conn: psycopg.Connection) -> list[UUID]:
+    schedule_a_predicate = _donor_identity_schedule_a_predicate_sql(table_alias="t")
+    return [
+        row["committee_id"]
+        for row in _fetch_preprocessed_rows(
+            conn,
+            f"""
+            SELECT DISTINCT t.committee_id
+            FROM cf.transaction t
+            JOIN core.donor_identity di
+              ON di.contributor_name_raw = t.contributor_name_raw
+             AND COALESCE(di.contributor_employer, '') = COALESCE(t.contributor_employer, '')
+             AND COALESCE(di.contributor_occupation, '') = COALESCE(t.contributor_occupation, '')
+             AND COALESCE(di.contributor_city, '') = COALESCE(t.contributor_city, '')
+             AND COALESCE(di.contributor_state, '') = COALESCE(t.contributor_state, '')
+             AND COALESCE(di.contributor_zip, '') = COALESCE(t.contributor_zip, '')
+            WHERE {schedule_a_predicate}
+            ORDER BY t.committee_id
+            """,
+        )
+    ]
+
+
+def _donor_identity_source_rows(conn: psycopg.Connection, committee_ids: list[UUID]) -> list[RowDict]:
+    scoped_committee_ids = _validated_donor_committee_ids(committee_ids)
+    return _fetch_preprocessed_rows(
+        conn,
+        f"""
         WITH donor_source AS (
             SELECT
                 contributor_name_raw,
@@ -82,13 +189,7 @@ def _donor_identity_source_rows(conn: psycopg.Connection, committee_ids: list[UU
                 COALESCE(contributor_city, '') AS contributor_city,
                 COALESCE(contributor_state, '') AS contributor_state,
                 COALESCE(contributor_zip, '') AS contributor_zip
-            FROM cf.transaction
-            WHERE committee_id = ANY(%s)
-              AND transaction_type LIKE '1%%'
-              AND contributor_entity_type = 'IND'
-              AND is_memo = FALSE
-              AND amendment_indicator != 'T'
-              AND NULLIF(BTRIM(contributor_name_raw), '') IS NOT NULL
+            {_DONOR_IDENTITY_SCHEDULE_A_FROM_WHERE_SQL}
         )
         SELECT
             contributor_name_raw,
@@ -115,15 +216,16 @@ def _donor_identity_source_rows(conn: psycopg.Connection, committee_ids: list[UU
             contributor_state,
             contributor_zip
         """,
-        (committee_ids,),
+        (scoped_committee_ids,),
     )
 
 
 def _donor_identity_row(source_row: RowDict) -> RowDict:
     zip5, _, _ = _normalize_zip_parts(source_row["contributor_zip"])
+    parsed_name = parse_name(source_row["contributor_name_raw"])
     return {
         "id": _donor_identity_id(source_row),
-        "canonical_name": source_row["contributor_name_raw"],
+        "canonical_name": parsed_name.canonical or source_row["contributor_name_raw"],
         "contributor_name_raw": source_row["contributor_name_raw"],
         "contributor_employer": source_row["contributor_employer"],
         "contributor_occupation": source_row["contributor_occupation"],

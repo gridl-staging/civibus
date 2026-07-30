@@ -140,7 +140,7 @@ def _fetch_person_source_rows_by_source_record(
 def test_persist_auto_merge_clusters_inserts_cluster_members_updates_entities_and_relinks_sources(
     db_conn: psycopg.Connection,
 ) -> None:
-    people, _ = _setup_people_with_individual_sources(
+    people, source_records = _setup_people_with_individual_sources(
         db_conn,
         scenario_prefix="Cluster",
         count=3,
@@ -229,8 +229,10 @@ def test_persist_auto_merge_clusters_inserts_cluster_members_updates_entities_an
             SELECT entity_id, source_record_id, extraction_role
             FROM core.entity_source
             WHERE entity_type = 'person'
+              AND source_record_id = ANY(%s)
             ORDER BY source_record_id
-            """
+            """,
+            ([*source_records, source_dup],),
         )
         source_rows = cursor.fetchall()
 
@@ -243,7 +245,7 @@ def test_persist_auto_merge_clusters_inserts_cluster_members_updates_entities_an
 def test_persist_auto_merge_clusters_rerun_supersedes_active_memberships_and_reassigns_canonical(
     db_conn: psycopg.Connection,
 ) -> None:
-    people, _ = _setup_people_with_individual_sources(
+    people, source_records = _setup_people_with_individual_sources(
         db_conn,
         scenario_prefix="Rerun",
         count=2,
@@ -269,8 +271,10 @@ def test_persist_auto_merge_clusters_rerun_supersedes_active_memberships_and_rea
             SELECT cluster_id, entity_id, split_at, split_by
             FROM core.cluster_member
             WHERE entity_type = 'person'
+              AND entity_id IN (%s, %s)
             ORDER BY created_at
-            """
+            """,
+            (person_a, person_b),
         )
         rows = cursor.fetchall()
 
@@ -303,8 +307,10 @@ def test_persist_auto_merge_clusters_rerun_supersedes_active_memberships_and_rea
             SELECT entity_id, source_record_id
             FROM core.entity_source
             WHERE entity_type = 'person'
+              AND source_record_id = ANY(%s)
             ORDER BY source_record_id
-            """
+            """,
+            (source_records,),
         )
         entity_source_rows = cursor.fetchall()
 
@@ -345,8 +351,10 @@ def test_persist_auto_merge_clusters_rerun_shrink_restores_dropped_member_state_
             SELECT cluster_id, entity_id, split_at
             FROM core.cluster_member
             WHERE entity_type = 'person'
+              AND entity_id IN (%s, %s, %s)
             ORDER BY created_at, entity_id
-            """
+            """,
+            (person_a, person_b, person_c),
         )
         membership_rows = cursor.fetchall()
 
@@ -388,8 +396,10 @@ def test_persist_auto_merge_clusters_rerun_shrink_restores_dropped_member_state_
             SELECT entity_id, source_record_id
             FROM core.entity_source
             WHERE entity_type = 'person'
+              AND source_record_id = ANY(%s)
             ORDER BY source_record_id
-            """
+            """,
+            (source_records,),
         )
         entity_source_rows = cursor.fetchall()
 
@@ -492,8 +502,10 @@ def test_persist_auto_merge_clusters_rerun_shrink_then_reexpand_restores_shared_
             SELECT entity_id, source_record_id
             FROM core.entity_source
             WHERE entity_type = 'person'
+              AND source_record_id = ANY(%s)
             ORDER BY source_record_id, entity_id
-            """
+            """,
+            ([source_a, source_b, source_c, source_shared],),
         )
         final_source_rows = cursor.fetchall()
 
@@ -592,8 +604,10 @@ def test_persist_auto_merge_clusters_empty_rerun_clears_previous_active_cluster_
             SELECT entity_id, source_record_id
             FROM core.entity_source
             WHERE entity_type = 'person'
+              AND source_record_id IN (%s, %s)
             ORDER BY source_record_id
-            """
+            """,
+            (source_a, source_b),
         )
         entity_source_rows = cursor.fetchall()
 

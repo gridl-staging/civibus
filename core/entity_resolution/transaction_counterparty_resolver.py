@@ -9,7 +9,11 @@ import psycopg
 from psycopg.rows import dict_row
 
 from core.entity_resolution.confidence import classify_scored_pairs
-from core.entity_resolution.extract import extract_rows_for_matching
+from core.entity_resolution.extract import (
+    _donor_identity_id,
+    _donor_identity_transaction_rows_for_existing_identities,
+    extract_rows_for_matching,
+)
 from core.entity_resolution.l8_regression import _normalize_address
 from core.entity_resolution.scoring import score_rows
 from domains.campaign_finance.ingest.filing_loader import update_transaction_contributor_identity_ids
@@ -51,6 +55,8 @@ def _normalize_text(value: Any) -> str | None:
     return text or None
 
 
+# NC transaction matching preserves the original input-order split; see
+# test_transaction_name_splitter.py for the executable local contract.
 def _split_first_and_last_name(value: str | None) -> tuple[str | None, str | None]:
     normalized = _normalize_text(value)
     if normalized is None:
@@ -503,6 +509,162 @@ def _resolve_match_for_entity_type(
         candidate_ids=candidate_ids,
         classified_pairs=classified_pairs,
     )
+
+
+def _empty_donor_identity_summary() -> dict[str, int]:
+    return {
+        "candidate_transactions": 0,
+        "mutated_rows": 0,
+        "matched_person_rows": 0,
+        "skipped_rows": 0,
+        "unresolved_rows": 0,
+        "ambiguous_cluster_rows": 0,
+        "invalid_cluster_rows": 0,
+        "dual_populated_rows": 0,
+    }
+
+
+def _person_resolution_by_donor_identity_id(
+    conn: psycopg.Connection,
+    donor_identity_ids: list[UUID],
+) -> dict[UUID, tuple[UUID | None, str]]:
+    if not donor_identity_ids:
+        return {}
+
+    with conn.cursor(row_factory=dict_row) as cursor:
+        cursor.execute(
+            """
+            SELECT
+                di.id AS donor_identity_id,
+                di.er_cluster_id,
+                bool_or(cm.id IS NOT NULL) AS has_active_cluster_membership,
+                array_agg(DISTINCT p.id) FILTER (WHERE p.id IS NOT NULL) AS person_ids
+            FROM core.donor_identity di
+            LEFT JOIN core.cluster_member cm
+              ON cm.cluster_id = di.er_cluster_id
+             AND cm.entity_type = 'donor_identity'
+             AND cm.entity_id = di.id
+             AND cm.split_at IS NULL
+            LEFT JOIN core.donor_cluster_person dcp
+              ON dcp.cluster_id = di.er_cluster_id
+            LEFT JOIN core.person p
+              ON p.id = dcp.person_id
+            WHERE di.id = ANY(%s)
+            GROUP BY di.id, di.er_cluster_id
+            """,
+            (donor_identity_ids,),
+        )
+        rows = cursor.fetchall()
+
+    resolution_by_donor_identity_id: dict[UUID, tuple[UUID | None, str]] = {}
+    for row in rows:
+        if row["er_cluster_id"] is None or not row["has_active_cluster_membership"]:
+            resolution_by_donor_identity_id[row["donor_identity_id"]] = (None, "invalid")
+            continue
+
+        person_ids = list(row["person_ids"] or [])
+        if len(person_ids) == 1:
+            resolution_by_donor_identity_id[row["donor_identity_id"]] = (person_ids[0], "matched")
+        elif len(person_ids) > 1:
+            resolution_by_donor_identity_id[row["donor_identity_id"]] = (None, "ambiguous")
+        else:
+            resolution_by_donor_identity_id[row["donor_identity_id"]] = (None, "invalid")
+    return resolution_by_donor_identity_id
+
+
+def _dual_populated_transaction_count(conn: psycopg.Connection, transaction_ids: list[UUID]) -> int:
+    if not transaction_ids:
+        return 0
+    with conn.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT count(*)::int
+            FROM cf.transaction
+            WHERE id = ANY(%s)
+              AND num_nonnulls(contributor_person_id, contributor_organization_id) > 1
+            """,
+            (transaction_ids,),
+        )
+        return cursor.fetchone()[0]
+
+
+def _clear_donor_transaction_identity(
+    conn: psycopg.Connection,
+    transaction_id: UUID,
+    contributor_organization_id: UUID | None,
+) -> bool:
+    return update_transaction_contributor_identity_ids(
+        conn,
+        transaction_id=transaction_id,
+        contributor_person_id=None,
+        contributor_organization_id=contributor_organization_id,
+    )
+
+
+def resolve_donor_identity_transactions(conn: psycopg.Connection) -> dict[str, int]:
+    """Resolve local FEC donor identity clusters onto Schedule A transactions."""
+    # Local-only writeback: extraction owns the Schedule A predicate and exact persisted-donor scope.
+    transaction_rows = _donor_identity_transaction_rows_for_existing_identities(conn)
+    if not transaction_rows:
+        return _empty_donor_identity_summary()
+
+    donor_identity_ids = list({_donor_identity_id(row) for row in transaction_rows})
+    person_resolution_by_donor_identity_id = _person_resolution_by_donor_identity_id(conn, donor_identity_ids)
+    mutated_rows = 0
+    matched_person_rows = 0
+    unresolved_rows = 0
+    ambiguous_cluster_rows = 0
+    invalid_cluster_rows = 0
+
+    def clear_transaction_identity(transaction_row: dict[str, Any]) -> None:
+        nonlocal mutated_rows
+        if _clear_donor_transaction_identity(
+            conn,
+            transaction_row["id"],
+            transaction_row["contributor_organization_id"],
+        ):
+            mutated_rows += 1
+
+    for transaction_row in transaction_rows:
+        donor_identity_id = _donor_identity_id(transaction_row)
+        if donor_identity_id not in person_resolution_by_donor_identity_id:
+            unresolved_rows += 1
+            clear_transaction_identity(transaction_row)
+            continue
+
+        person_id, resolution_status = person_resolution_by_donor_identity_id[donor_identity_id]
+        if resolution_status == "ambiguous":
+            ambiguous_cluster_rows += 1
+            clear_transaction_identity(transaction_row)
+            continue
+        if resolution_status == "invalid" or person_id is None:
+            invalid_cluster_rows += 1
+            clear_transaction_identity(transaction_row)
+            continue
+
+        matched_person_rows += 1
+        # Idempotency rests on the filing-loader updater's guarded IS DISTINCT FROM write.
+        did_mutate = update_transaction_contributor_identity_ids(
+            conn,
+            transaction_id=transaction_row["id"],
+            contributor_person_id=person_id,
+            contributor_organization_id=None,
+        )
+        if did_mutate:
+            mutated_rows += 1
+
+    skipped_rows = unresolved_rows + ambiguous_cluster_rows + invalid_cluster_rows
+    transaction_ids = [row["id"] for row in transaction_rows]
+    return {
+        "candidate_transactions": len(transaction_rows),
+        "mutated_rows": mutated_rows,
+        "matched_person_rows": matched_person_rows,
+        "skipped_rows": skipped_rows,
+        "unresolved_rows": unresolved_rows,
+        "ambiguous_cluster_rows": ambiguous_cluster_rows,
+        "invalid_cluster_rows": invalid_cluster_rows,
+        "dual_populated_rows": _dual_populated_transaction_count(conn, transaction_ids),
+    }
 
 
 def resolve_nc_transaction_counterparties(

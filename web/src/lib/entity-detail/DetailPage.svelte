@@ -401,7 +401,7 @@
   {#if moneyAtGlance.cycleOptions.length > 0}
     <nav class="detail__cycle-nav" aria-label="Election cycle">
       {#each moneyAtGlance.cycleOptions as option (option.cycle)}
-        <a href={option.href} aria-current={option.selected ? "page" : undefined}>{option.label}</a>
+        <a class="detail__cycle-link" href={option.href} aria-current={option.selected ? "page" : undefined}>{option.label}</a>
       {/each}
     </nav>
   {/if}

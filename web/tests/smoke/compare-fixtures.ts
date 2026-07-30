@@ -254,6 +254,7 @@ function buildCandidateSummary(config: FixtureConfig) {
     receipt_source_composition: [],
     selected_cycle_coverage_complete: true,
     can_render_share: true,
+    coverage: { activity_state: "populated", completeness: "complete", basis: "fec_official_candidate_summary" },
     receipt_source_caveats: []
   };
 }
@@ -270,6 +271,7 @@ function buildIndependentExpenditureSummary(config: FixtureConfig) {
     support_count: 2,
     oppose_count: 1,
     top_spenders: [],
+    coverage: { activity_state: "populated", completeness: "complete", basis: "qualifying_transactions" },
     excluded_outlier_count: 0
   };
 }

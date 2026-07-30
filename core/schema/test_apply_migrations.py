@@ -327,9 +327,11 @@ _PENDING_FILENAMES = [
     "2026_07_19_committee_summary_filing_breakdown.sql",
     "2026_07_24_donor_search_committee_scope_index.sql",
     "2026_07_28_donor_identity_er_contract.sql",
+    "2026_07_28_donor_identity_person_mapping.sql",
 ]
 
 _DONOR_IDENTITY_MIGRATION = "2026_07_28_donor_identity_er_contract.sql"
+_DONOR_CLUSTER_PERSON_MIGRATION = "2026_07_28_donor_identity_person_mapping.sql"
 _DONOR_IDENTITY_COLUMNS = [
     "id",
     "canonical_name",
@@ -526,6 +528,12 @@ def _entity_type_check_definitions(conn: psycopg.Connection) -> dict[str, str]:
 def _assert_donor_identity_upgrade_contract(conn: psycopg.Connection) -> None:
     assert _column_names(conn, table_schema="core", table_name="donor_identity") == _DONOR_IDENTITY_COLUMNS
     assert _column_names(conn, table_schema="core", table_name="donor_er_view") == _DONOR_ER_VIEW_COLUMNS
+    assert _column_names(conn, table_schema="core", table_name="donor_cluster_person") == [
+        "cluster_id",
+        "entity_type",
+        "person_id",
+        "created_at",
+    ]
 
     definitions = _entity_type_check_definitions(conn)
     assert sorted(definitions) == sorted(_DONOR_IDENTITY_ENTITY_TYPE_TABLES)
@@ -781,6 +789,14 @@ class TestApplyMigrations:
         assert _DONOR_IDENTITY_MIGRATION in _PENDING_FILENAMES
         assert _DONOR_IDENTITY_MIGRATION not in _BASELINE_ENTRIES
         assert (fixture_paths["migrations_dir"] / _DONOR_IDENTITY_MIGRATION).is_file()
+
+    def test_donor_cluster_person_mapping_migration_is_pending_delta(
+        self,
+        fixture_paths: dict[str, Path],
+    ) -> None:
+        assert _DONOR_CLUSTER_PERSON_MIGRATION in _PENDING_FILENAMES
+        assert _DONOR_CLUSTER_PERSON_MIGRATION not in _BASELINE_ENTRIES
+        assert (fixture_paths["migrations_dir"] / _DONOR_CLUSTER_PERSON_MIGRATION).is_file()
 
     def test_donor_identity_upgrade_schema_contract(
         self, disposable_db: str, fixture_paths: dict[str, Path], monkeypatch: pytest.MonkeyPatch

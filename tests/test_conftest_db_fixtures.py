@@ -114,6 +114,23 @@ def test_connection_or_skip_fails_when_require_db_after_postgres_retry_exhaustio
     )
 
 
+def test_connection_or_skip_preserves_required_db_connection_failure_cause(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    connection_error = RuntimeError(_POSTGRES_UNAVAILABLE)
+    get_connection = MagicMock(side_effect=connection_error)
+    monkeypatch.setenv("CIVIBUS_REQUIRE_DB", "1")
+    monkeypatch.setattr(root_conftest, "get_connection", get_connection)
+    monkeypatch.setattr(root_conftest.time, "sleep", lambda _delay: None)
+
+    with pytest.raises(pytest.fail.Exception) as excinfo:
+        root_conftest._connection_or_skip()
+
+    assert str(excinfo.value) == _POSTGRES_UNAVAILABLE
+    assert excinfo.value.__cause__ is connection_error
+    assert get_connection.call_count == root_conftest._DB_CONNECTION_STARTUP_RETRY_ATTEMPTS
+
+
 def test_connection_or_skip_reuses_postgres_unavailable_result_after_retry_exhaustion(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -166,6 +183,29 @@ def test_db_conn_fixture_retries_transient_startup_failures(monkeypatch: pytest.
     fixture_generator.close()
     assert mocked_connection.rollback.call_count == 2
     mocked_connection.execute.assert_called_once_with("BEGIN")
+    mocked_connection.close.assert_called_once()
+
+
+def test_db_conn_fixture_defaults_empty_postgres_password_before_connecting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mocked_connection = MagicMock()
+    _mock_canonical_contest_result_preflight(mocked_connection)
+    monkeypatch.setenv("POSTGRES_PASSWORD", "")
+    monkeypatch.setattr(root_conftest, "_collect_missing_stage1_canaries", lambda _connection: [])
+
+    def _get_connection_with_default_password(*_args: object, **_kwargs: object) -> object:
+        assert root_conftest.os.environ["POSTGRES_PASSWORD"] == "civibus_dev"
+        return mocked_connection
+
+    monkeypatch.setattr(root_conftest, "get_connection", _get_connection_with_default_password)
+
+    fixture_generator = root_conftest.db_conn.__wrapped__()
+    connection = next(fixture_generator)
+
+    assert connection is mocked_connection
+
+    fixture_generator.close()
     mocked_connection.close.assert_called_once()
 
 

@@ -780,7 +780,7 @@ def _load_stage4_transactions_batch(
         cursor.execute(f"SAVEPOINT {_STAGE4_BATCH_SAVEPOINT}")
 
     try:
-        provenance_inserted_by_key: dict[str, bool] = {}
+        provenance_inserted_by_row_index: dict[int, bool] = {}
         source_record_keys = [row.source_record_key for _row_index, row, _committee_id in resolved_rows]
         source_records = [
             _build_stage4_source_record(request.data_source_id, row.contribution_record)
@@ -793,7 +793,7 @@ def _load_stage4_transactions_batch(
             strict=True,
         ):
             provenance_inserted = provenance_result.inserted
-            provenance_inserted_by_key[row.source_record_key] = provenance_inserted
+            provenance_inserted_by_row_index[_row_index] = provenance_inserted
         source_record_id_by_key = resolve_source_record_ids(conn, request.data_source_id, source_record_keys)
 
         filings = [
@@ -843,8 +843,8 @@ def _load_stage4_transactions_batch(
     with conn.cursor() as cursor:
         cursor.execute(f"RELEASE SAVEPOINT {_STAGE4_BATCH_SAVEPOINT}")
 
-    for (row_index, row, _committee_id), transaction_result in zip(resolved_rows, transaction_results, strict=True):
-        durable_work = provenance_inserted_by_key[row.source_record_key] or transaction_result.inserted
+    for (row_index, _row, _committee_id), transaction_result in zip(resolved_rows, transaction_results, strict=True):
+        durable_work = provenance_inserted_by_row_index[row_index] or transaction_result.inserted
         if durable_work:
             load_result.inserted += 1
         else:

@@ -549,6 +549,8 @@ def test_persist_auto_merge_clusters_accepts_and_persists_donor_identity_type(
 ) -> None:
     canonical_id = _donor_identity_id(employer="ACME CORP")
     member_id = _donor_identity_id(employer="BETA LLC")
+    _create_donor_identity(db_conn, donor_id=canonical_id, employer="ACME CORP")
+    _create_donor_identity(db_conn, donor_id=member_id, employer="BETA LLC")
 
     cluster_ids = persist_auto_merge_clusters(
         db_conn,
@@ -584,6 +586,16 @@ def test_persist_auto_merge_clusters_accepts_and_persists_donor_identity_type(
             (cluster_ids[0],),
         )
         member_rows = cursor.fetchall()
+        cursor.execute(
+            """
+            SELECT dcp.person_id, p.canonical_name, p.er_cluster_id
+            FROM core.donor_cluster_person dcp
+            JOIN core.person p ON p.id = dcp.person_id
+            WHERE dcp.cluster_id = %s
+            """,
+            (cluster_ids[0],),
+        )
+        person_mapping_row = cursor.fetchone()
 
     assert cluster_row == {
         "entity_type": "donor_identity",
@@ -607,6 +619,9 @@ def test_persist_auto_merge_clusters_accepts_and_persists_donor_identity_type(
             "split_at": None,
         },
     ]
+    assert person_mapping_row is not None
+    assert person_mapping_row["canonical_name"] == "DOE, JANE"
+    assert person_mapping_row["er_cluster_id"] is None
 
 
 def test_persist_auto_merge_clusters_rerun_preserves_donor_provenance(

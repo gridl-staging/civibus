@@ -221,6 +221,51 @@ def _expected_donor_identity_id(
     return uuid5(_DONOR_IDENTITY_ID_NAMESPACE, _DONOR_IDENTITY_ID_SEPARATOR.join(parts))
 
 
+def _fec_transaction_ids_by_sub_id(
+    db_conn: psycopg.Connection,
+    sub_ids: tuple[int, ...],
+) -> dict[int, UUID]:
+    with db_conn.cursor(row_factory=dict_row) as cursor:
+        cursor.execute(
+            """
+            SELECT sub_id, id
+            FROM cf.transaction
+            WHERE sub_id = ANY(%s)
+            """,
+            (list(sub_ids),),
+        )
+        return {row["sub_id"]: row["id"] for row in cursor.fetchall()}
+
+
+def _expected_doe_jane_transaction_row(
+    transaction_ids: dict[int, UUID],
+    *,
+    sub_id: int,
+    contributor_employer: str,
+) -> dict[str, object]:
+    return {
+        "id": transaction_ids[sub_id],
+        "contributor_name_raw": "DOE, JANE",
+        "contributor_employer": contributor_employer,
+        "contributor_occupation": "ENGINEER",
+        "contributor_city": "DURHAM",
+        "contributor_state": "NC",
+        "contributor_zip": "277011234",
+    }
+
+
+def _donor_identity_transaction_order_key(row: dict[str, object]) -> tuple[object, ...]:
+    return (
+        row["contributor_name_raw"],
+        row["contributor_employer"],
+        row["contributor_occupation"],
+        row["contributor_city"],
+        row["contributor_state"],
+        row["contributor_zip"],
+        row["id"],
+    )
+
+
 def _seed_doe_jane_donor_transactions(
     db_conn: psycopg.Connection,
 ) -> tuple[UUID, UUID]:
@@ -294,6 +339,13 @@ def _seed_doe_jane_donor_transactions(
         committee_id=excluded_committee_id,
         contributor_employer="OUT OF SCOPE",
         sub_id=1008,
+    )
+    _insert_fec_transaction(
+        db_conn,
+        filing_id=included_filing_id,
+        committee_id=included_committee_id,
+        contributor_name_raw="   ",
+        sub_id=1009,
     )
     return included_committee_id, excluded_committee_id
 
@@ -564,6 +616,47 @@ def test_prepare_rows_for_probabilistic_scoring_preserves_shape_without_identifi
     ]
 
 
+def test_donor_identity_row_keeps_ambiguous_comma_less_name_order() -> None:
+    source_row = {
+        "contributor_name_raw": "ROBINSON STEPHANIE",
+        "contributor_employer": "ACME CORP",
+        "contributor_occupation": "ENGINEER",
+        "contributor_city": "DURHAM",
+        "contributor_state": "NC",
+        "contributor_zip": "277011234",
+        "transaction_count": 2,
+    }
+
+    row = extract_module._donor_identity_row(source_row)
+
+    assert row == {
+        "id": _expected_donor_identity_id(
+            contributor_name_raw="ROBINSON STEPHANIE",
+            contributor_employer="ACME CORP",
+            contributor_occupation="ENGINEER",
+            contributor_city="DURHAM",
+            contributor_state="NC",
+            contributor_zip="277011234",
+        ),
+        "canonical_name": "ROBINSON STEPHANIE",
+        "contributor_name_raw": "ROBINSON STEPHANIE",
+        "contributor_employer": "ACME CORP",
+        "contributor_occupation": "ENGINEER",
+        "contributor_city": "DURHAM",
+        "contributor_state": "NC",
+        "contributor_zip": "277011234",
+        "zip5": "27701",
+        "transaction_count": 2,
+    }
+
+    affix_only_source_row = {
+        **source_row,
+        "contributor_name_raw": "DR.",
+    }
+
+    assert extract_module._donor_identity_row(affix_only_source_row)["canonical_name"] == "DR."
+
+
 def test_restore_entity_id_from_probabilistic_row_returns_original_uuid() -> None:
     entity_id = uuid4()
 
@@ -647,6 +740,44 @@ def test_extract_organizations_for_matching_includes_orgs_without_addresses(
     assert row["zip5"] is None
 
 
+def test_donor_identity_transaction_rows_return_exact_scoped_schedule_a_transactions(
+    db_conn: psycopg.Connection,
+) -> None:
+    committee_id, _ = _seed_doe_jane_donor_transactions(db_conn)
+    transaction_ids = _fec_transaction_ids_by_sub_id(
+        db_conn,
+        (1001, 1002, 1003, 1004, 1005, 1006, 1007, 1008, 1009),
+    )
+
+    rows = extract_module._donor_identity_transaction_rows(db_conn, [committee_id])
+
+    expected_rows = sorted(
+        [
+            _expected_doe_jane_transaction_row(transaction_ids, sub_id=1001, contributor_employer="ACME CORP"),
+            _expected_doe_jane_transaction_row(transaction_ids, sub_id=1002, contributor_employer="ACME CORP"),
+            _expected_doe_jane_transaction_row(transaction_ids, sub_id=1003, contributor_employer="BETA LLC"),
+        ],
+        key=_donor_identity_transaction_order_key,
+    )
+
+    assert rows == expected_rows
+    assert {row["id"] for row in rows}.isdisjoint(
+        {
+            transaction_ids[1004],
+            transaction_ids[1005],
+            transaction_ids[1006],
+            transaction_ids[1007],
+            transaction_ids[1008],
+            transaction_ids[1009],
+        }
+    )
+    with pytest.raises(
+        ValueError,
+        match=r"scope\['committee_ids'\] must be a non-empty sequence of UUID values",
+    ):
+        extract_module._donor_identity_transaction_rows(db_conn, [])
+
+
 def test_extract_donors_for_matching_returns_exact_grouped_schedule_a_receipts(
     db_conn: psycopg.Connection,
 ) -> None:
@@ -667,7 +798,7 @@ def test_extract_donors_for_matching_returns_exact_grouped_schedule_a_receipts(
                 contributor_state="NC",
                 contributor_zip="277011234",
             ),
-            "canonical_name": "DOE, JANE",
+            "canonical_name": "JANE DOE",
             "contributor_name_raw": "DOE, JANE",
             "contributor_employer": "ACME CORP",
             "contributor_occupation": "ENGINEER",
@@ -686,7 +817,7 @@ def test_extract_donors_for_matching_returns_exact_grouped_schedule_a_receipts(
                 contributor_state="NC",
                 contributor_zip="277011234",
             ),
-            "canonical_name": "DOE, JANE",
+            "canonical_name": "JANE DOE",
             "contributor_name_raw": "DOE, JANE",
             "contributor_employer": "BETA LLC",
             "contributor_occupation": "ENGINEER",
@@ -700,6 +831,35 @@ def test_extract_donors_for_matching_returns_exact_grouped_schedule_a_receipts(
     assert [row["transaction_count"] for row in rows] == [2, 1]
     assert all(isinstance(row["id"], UUID) for row in rows)
     assert all(set(row) == _DONOR_IDENTITY_OUTPUT_COLUMNS for row in rows)
+
+
+def test_donor_identity_source_rows_preserve_grouped_schedule_a_counts(
+    db_conn: psycopg.Connection,
+) -> None:
+    committee_id, _ = _seed_doe_jane_donor_transactions(db_conn)
+
+    rows = extract_module._donor_identity_source_rows(db_conn, [committee_id])
+
+    assert rows == [
+        {
+            "contributor_name_raw": "DOE, JANE",
+            "contributor_employer": "ACME CORP",
+            "contributor_occupation": "ENGINEER",
+            "contributor_city": "DURHAM",
+            "contributor_state": "NC",
+            "contributor_zip": "277011234",
+            "transaction_count": 2,
+        },
+        {
+            "contributor_name_raw": "DOE, JANE",
+            "contributor_employer": "BETA LLC",
+            "contributor_occupation": "ENGINEER",
+            "contributor_city": "DURHAM",
+            "contributor_state": "NC",
+            "contributor_zip": "277011234",
+            "transaction_count": 1,
+        },
+    ]
 
 
 def test_extract_donors_for_matching_scope_limits_materialized_rows(
@@ -744,7 +904,7 @@ def test_extract_donors_for_matching_scope_limits_materialized_rows(
                 contributor_state="NC",
                 contributor_zip="277011234",
             ),
-            "canonical_name": "DOE, JANE",
+            "canonical_name": "JANE DOE",
             "contributor_name_raw": "DOE, JANE",
             "contributor_employer": "OUT OF SCOPE",
             "contributor_occupation": "ENGINEER",
@@ -821,7 +981,7 @@ def test_materialize_donor_identities_canonicalizes_null_and_empty_optional_tupl
     assert rows == [
         {
             "id": expected_id,
-            "canonical_name": "DOE, JANE",
+            "canonical_name": "JANE DOE",
             "contributor_name_raw": "DOE, JANE",
             "contributor_employer": "",
             "contributor_occupation": "ENGINEER",
@@ -867,7 +1027,7 @@ def test_materialize_donor_identities_applies_scope_before_materializing_rows(
                 contributor_state="NC",
                 contributor_zip="277011234",
             ),
-            "canonical_name": "DOE, JANE",
+            "canonical_name": "JANE DOE",
             "contributor_name_raw": "DOE, JANE",
             "contributor_employer": "ACME CORP",
             "contributor_occupation": "ENGINEER",
@@ -886,7 +1046,7 @@ def test_materialize_donor_identities_applies_scope_before_materializing_rows(
                 contributor_state="NC",
                 contributor_zip="277011234",
             ),
-            "canonical_name": "DOE, JANE",
+            "canonical_name": "JANE DOE",
             "contributor_name_raw": "DOE, JANE",
             "contributor_employer": "BETA LLC",
             "contributor_occupation": "ENGINEER",

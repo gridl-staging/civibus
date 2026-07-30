@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from decimal import Decimal
+from uuid import UUID
 
 import psycopg
 import pytest
@@ -11,6 +13,172 @@ from api.main import create_app
 from test_support.donor_search_fixture import DONOR_SEARCH_ALPHA_PERSON_ID, seed_donor_search_fixture
 
 pytestmark = pytest.mark.integration
+
+_RESOLVED_IDENTITY_ID = UUID("72100000-0000-0000-0000-000000000001")
+_POSSIBLE_IDENTITY_ID = UUID("72100000-0000-0000-0000-000000000003")
+_IDENTITY_PULL_DATE = datetime(2026, 7, 9, 12, 0, tzinfo=timezone.utc)
+
+
+def _identity_source() -> dict[str, object]:
+    return {
+        "domain": "campaign_finance",
+        "jurisdiction": "federal/fec",
+        "data_source_name": "FEC filing",
+        "data_source_url": "https://www.fec.gov/data/",
+        "source_record_key": "filing-1",
+        "record_url": "https://www.fec.gov/data/receipts/?data_type=processed",
+        "pull_date": _IDENTITY_PULL_DATE,
+    }
+
+
+def _resolved_identity_query_result(source: dict[str, object]) -> dict[str, object]:
+    return {
+        "id": UUID("72100000-0000-0000-0000-000000000101"),
+        "donor_identity_id": _RESOLVED_IDENTITY_ID,
+        "contributor_name": "TRANSPARENT IDENTITY",
+        "contributor_employer": "Civibus Labs",
+        "contributor_occupation": "Engineer",
+        "contributor_city": "Durham",
+        "contributor_state": "NC",
+        "normalized_zip5": "27701",
+        "total_amount": Decimal("200.00"),
+        "transaction_count": 2,
+        "latest_transaction_date": "2025-06-02",
+        "combined_record_count": 2,
+        "confidence_band": "match",
+        "recipients": [],
+        "sources": [source],
+        "underlying_records": [
+            {
+                "donor_identity_id": _RESOLVED_IDENTITY_ID,
+                "contributor_name": "TRANSPARENT IDENTITY",
+                "contributor_employer": "Civibus Labs",
+                "contributor_occupation": "Engineer",
+                "contributor_city": "Durham",
+                "contributor_state": "NC",
+                "normalized_zip5": "27701",
+                "sources": [source],
+            },
+            {
+                "donor_identity_id": UUID("72100000-0000-0000-0000-000000000002"),
+                "contributor_name": "TRANSPARENT IDENTITY ALT",
+                "contributor_employer": "Open Civic Works",
+                "contributor_occupation": "Architect",
+                "contributor_city": "Raleigh",
+                "contributor_state": "NC",
+                "normalized_zip5": "27601",
+                "sources": [source],
+            },
+        ],
+        "not_combined_candidates": [
+            {
+                "donor_identity_id": _POSSIBLE_IDENTITY_ID,
+                "contributor_name": "POSSIBLE IDENTITY",
+                "contributor_employer": "Civibus Labs",
+                "contributor_occupation": "Analyst",
+                "contributor_city": "Chapel Hill",
+                "contributor_state": "NC",
+                "normalized_zip5": "27514",
+                "confidence_band": "possible_match",
+                "sources": [source],
+            }
+        ],
+    }
+
+
+def _unresolved_identity_query_result(source: dict[str, object]) -> dict[str, object]:
+    return {
+        "id": UUID("72000000-0000-0000-0000-000000000101"),
+        "donor_identity_id": None,
+        "contributor_name": "JANE SMITH",
+        "contributor_employer": "Civibus Labs",
+        "contributor_occupation": "Engineer",
+        "contributor_city": "Durham",
+        "contributor_state": "NC",
+        "normalized_zip5": "27701",
+        "total_amount": Decimal("500.00"),
+        "transaction_count": 3,
+        "latest_transaction_date": "2024-07-15",
+        "combined_record_count": 1,
+        "confidence_band": None,
+        "recipients": [],
+        "sources": [source],
+        "underlying_records": [],
+        "not_combined_candidates": [],
+    }
+
+
+def _serialized_source(source: dict[str, object]) -> dict[str, object]:
+    return {**source, "pull_date": "2026-07-09T12:00:00Z"}
+
+
+def _resolved_identity_json(
+    query_result: dict[str, object],
+    source: dict[str, object],
+) -> dict[str, object]:
+    underlying_records = query_result["underlying_records"]
+    candidates = query_result["not_combined_candidates"]
+    assert isinstance(underlying_records, list)
+    assert isinstance(candidates, list)
+    return {
+        **query_result,
+        "id": "72100000-0000-0000-0000-000000000101",
+        "donor_identity_id": str(_RESOLVED_IDENTITY_ID),
+        "total_amount": "200.00",
+        "sources": [_serialized_source(source)],
+        "underlying_records": [
+            {
+                **underlying_records[0],
+                "donor_identity_id": str(_RESOLVED_IDENTITY_ID),
+                "sources": [_serialized_source(source)],
+            },
+            {
+                **underlying_records[1],
+                "donor_identity_id": "72100000-0000-0000-0000-000000000002",
+                "sources": [_serialized_source(source)],
+            },
+        ],
+        "not_combined_candidates": [
+            {
+                **candidates[0],
+                "donor_identity_id": str(_POSSIBLE_IDENTITY_ID),
+                "sources": [_serialized_source(source)],
+            }
+        ],
+    }
+
+
+def test_donor_search_route_serializes_identity_transparency_payload_exactly(
+    api_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = _identity_source()
+    resolved = _resolved_identity_query_result(source)
+    unresolved = _unresolved_identity_query_result(source)
+    query_payload = {
+        "query": "identity",
+        "by": "name",
+        "limit": 20,
+        "offset": 0,
+        "results": [resolved, unresolved],
+    }
+    monkeypatch.setattr("api.routes.donors.search_donors", lambda *_args, **_kwargs: query_payload)
+
+    response = api_client.get("/v1/donors/search", params={"q": "identity", "by": "name"})
+
+    assert response.status_code == 200
+    assert response.json() == {
+        **query_payload,
+        "results": [
+            _resolved_identity_json(resolved, source),
+            {
+                **unresolved,
+                "id": "72000000-0000-0000-0000-000000000101",
+                "total_amount": "500.00",
+                "sources": [_serialized_source(source)],
+            },
+        ],
+    }
 
 
 def test_donor_search_route_returns_seeded_name_payload(
@@ -33,6 +201,7 @@ def test_donor_search_route_returns_seeded_name_payload(
     assert jane["recipients"][0]["person_id"] == str(DONOR_SEARCH_ALPHA_PERSON_ID)
     assert jane == {
         "id": "72000000-0000-0000-0000-000000000101",
+        "donor_identity_id": None,
         "contributor_name": "JANE SMITH",
         "contributor_employer": "Civibus Labs",
         "contributor_occupation": "Engineer",
@@ -42,6 +211,8 @@ def test_donor_search_route_returns_seeded_name_payload(
         "total_amount": "500.00",
         "transaction_count": 3,
         "latest_transaction_date": "2024-07-15",
+        "combined_record_count": 1,
+        "confidence_band": None,
         "recipients": [
             {
                 "person_id": str(fixture.alpha.person_id),
@@ -86,6 +257,8 @@ def test_donor_search_route_returns_seeded_name_payload(
                 "pull_date": "2026-07-09T11:00:00Z",
             },
         ],
+        "underlying_records": [],
+        "not_combined_candidates": [],
     }
 
 

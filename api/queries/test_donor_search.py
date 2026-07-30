@@ -36,6 +36,10 @@ _SHARED_COMMITTEE_CANDIDATE_ID = UUID("72000000-0000-0000-0000-000000000194")
 _SHARED_COMMITTEE_LINK_ID = UUID("72000000-0000-0000-0000-000000000196")
 _SHARED_COMMITTEE_FILING_ID = UUID("72000000-0000-0000-0000-000000000197")
 _SHARED_COMMITTEE_TRANSACTION_ID = UUID("72000000-0000-0000-0000-000000000198")
+_RESOLVED_DONOR_ID = UUID("72100000-0000-0000-0000-000000000001")
+_RESOLVED_DONOR_MEMBER_ID = UUID("72100000-0000-0000-0000-000000000002")
+_POSSIBLE_DONOR_ID = UUID("72100000-0000-0000-0000-000000000000")
+_RESOLVED_CLUSTER_ID = UUID("72100000-0000-0000-0000-000000000011")
 
 
 def _seed_shared_committee_officeholder(conn: psycopg.Connection) -> None:
@@ -146,6 +150,324 @@ def _seed_shared_committee_donation(
             recipient_committee_id=committee_id,
         ),
     )
+
+
+def _insert_donor_identity_rows(conn: psycopg.Connection) -> None:
+    donor_rows = [
+        (
+            _RESOLVED_DONOR_ID,
+            "TRANSPARENT IDENTITY",
+            "Civibus Labs",
+            "Engineer",
+            "Durham",
+            "NC",
+            "27701",
+        ),
+        (
+            _RESOLVED_DONOR_MEMBER_ID,
+            "TRANSPARENT IDENTITY ALT",
+            "Open Civic Works",
+            "Architect",
+            "Raleigh",
+            "NC",
+            "27601",
+        ),
+        (
+            _POSSIBLE_DONOR_ID,
+            "OUTSIDE ALIAS",
+            "Civibus Labs",
+            "Analyst",
+            "Chapel Hill",
+            "NC",
+            "27514",
+        ),
+    ]
+    with conn.cursor() as cursor:
+        cursor.executemany(
+            """
+            INSERT INTO core.donor_identity (
+                id,
+                canonical_name,
+                contributor_name_raw,
+                contributor_employer,
+                contributor_occupation,
+                contributor_city,
+                contributor_state,
+                contributor_zip,
+                zip5,
+                transaction_count
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 1)
+            """,
+            [
+                (donor_id, name, name, employer, occupation, city, state, zip_code, zip_code)
+                for donor_id, name, employer, occupation, city, state, zip_code in donor_rows
+            ],
+        )
+
+
+def _insert_donor_identity_cluster(conn: psycopg.Connection) -> None:
+    conn.execute(
+        """
+        INSERT INTO core.entity_cluster (
+            id,
+            entity_type,
+            canonical_entity_id,
+            cluster_confidence,
+            member_count
+        )
+        VALUES (%s, 'donor_identity', %s, 0.99, 2)
+        """,
+        (_RESOLVED_CLUSTER_ID, _RESOLVED_DONOR_ID),
+    )
+    with conn.cursor() as cursor:
+        cursor.executemany(
+            """
+            INSERT INTO core.cluster_member (
+                id,
+                cluster_id,
+                entity_type,
+                entity_id,
+                is_canonical,
+                merged_at,
+                merged_by
+            )
+            VALUES (%s, %s, 'donor_identity', %s, %s, CURRENT_TIMESTAMP, 'test_fixture')
+            """,
+            [
+                (
+                    UUID("72100000-0000-0000-0000-000000000021"),
+                    _RESOLVED_CLUSTER_ID,
+                    _RESOLVED_DONOR_ID,
+                    True,
+                ),
+                (
+                    UUID("72100000-0000-0000-0000-000000000022"),
+                    _RESOLVED_CLUSTER_ID,
+                    _RESOLVED_DONOR_MEMBER_ID,
+                    False,
+                ),
+            ],
+        )
+
+
+def _insert_donor_identity_decisions(conn: psycopg.Connection) -> None:
+    with conn.cursor() as cursor:
+        cursor.executemany(
+            """
+            INSERT INTO core.match_decision (
+                id,
+                entity_type,
+                entity_id_a,
+                entity_id_b,
+                decision,
+                confidence,
+                decided_by,
+                decision_method
+            )
+            VALUES (%s, 'donor_identity', %s, %s, %s, %s, 'test_fixture', 'probabilistic')
+            """,
+            [
+                (
+                    UUID("72100000-0000-0000-0000-000000000031"),
+                    _RESOLVED_DONOR_ID,
+                    _RESOLVED_DONOR_MEMBER_ID,
+                    "match",
+                    0.99,
+                ),
+                (
+                    UUID("72100000-0000-0000-0000-000000000032"),
+                    _POSSIBLE_DONOR_ID,
+                    _RESOLVED_DONOR_ID,
+                    "possible_match",
+                    0.72,
+                ),
+            ],
+        )
+
+
+def _insert_donor_identity_transactions(conn: psycopg.Connection) -> None:
+    transaction_rows = [
+        TransactionRowSeed(
+            id=UUID("72100000-0000-0000-0000-000000000101"),
+            filing_id=UUID("72000000-0000-0000-0000-000000000041"),
+            committee_id=UUID("72000000-0000-0000-0000-000000000015"),
+            transaction_type="15",
+            amount=Decimal("120.00"),
+            amendment_indicator="N",
+            source_record_id=UUID("72000000-0000-0000-0000-000000000001"),
+            transaction_identifier="donor-search-identity-resolved",
+            transaction_date=date(2025, 6, 1),
+            contributor_name_raw="TRANSPARENT IDENTITY",
+            contributor_entity_type="IND",
+            contributor_employer="Civibus Labs",
+            contributor_occupation="Engineer",
+            contributor_city="Durham",
+            contributor_state="NC",
+            contributor_zip="27701",
+        ),
+        TransactionRowSeed(
+            id=UUID("72100000-0000-0000-0000-000000000102"),
+            filing_id=UUID("72000000-0000-0000-0000-000000000042"),
+            committee_id=UUID("72000000-0000-0000-0000-000000000025"),
+            transaction_type="15",
+            amount=Decimal("80.00"),
+            amendment_indicator="N",
+            source_record_id=UUID("72000000-0000-0000-0000-000000000002"),
+            transaction_identifier="donor-search-identity-member",
+            transaction_date=date(2025, 6, 2),
+            contributor_name_raw="TRANSPARENT IDENTITY ALT",
+            contributor_entity_type="IND",
+            contributor_employer="Open Civic Works",
+            contributor_occupation="Architect",
+            contributor_city="Raleigh",
+            contributor_state="NC",
+            contributor_zip="27601",
+        ),
+        TransactionRowSeed(
+            id=UUID("72100000-0000-0000-0000-000000000103"),
+            filing_id=UUID("72000000-0000-0000-0000-000000000041"),
+            committee_id=UUID("72000000-0000-0000-0000-000000000015"),
+            transaction_type="15",
+            amount=Decimal("60.00"),
+            amendment_indicator="N",
+            source_record_id=UUID("72000000-0000-0000-0000-000000000003"),
+            transaction_identifier="donor-search-identity-possible",
+            transaction_date=date(2025, 6, 3),
+            contributor_name_raw="OUTSIDE ALIAS",
+            contributor_entity_type="IND",
+            contributor_employer="Civibus Labs",
+            contributor_occupation="Analyst",
+            contributor_city="Chapel Hill",
+            contributor_state="NC",
+            contributor_zip="27514",
+        ),
+    ]
+    for transaction in transaction_rows:
+        insert_transaction_row(conn, transaction)
+
+
+def _seed_donor_identity_transparency_fixture(
+    conn: psycopg.Connection,
+) -> None:
+    _insert_donor_identity_rows(conn)
+    _insert_donor_identity_cluster(conn)
+    _insert_donor_identity_decisions(conn)
+    _insert_donor_identity_transactions(conn)
+
+
+def test_search_donors_discloses_resolved_identity_and_keeps_possible_match_separate(
+    db_conn: psycopg.Connection,
+) -> None:
+    seed_donor_search_fixture(db_conn)
+    _seed_donor_identity_transparency_fixture(db_conn)
+
+    payload = campaign_finance_queries.search_donors(db_conn, q="transparent", by="name", limit=20, offset=0)
+
+    resolved = payload["results"][0]
+    assert resolved["donor_identity_id"] == str(_RESOLVED_DONOR_ID)
+    assert resolved["total_amount"] == Decimal("200.00")
+    assert resolved["transaction_count"] == 2
+    assert resolved["combined_record_count"] == 2
+    assert resolved["confidence_band"] == "match"
+    assert [
+        (
+            record["donor_identity_id"],
+            record["contributor_name"],
+            record["contributor_employer"],
+            record["contributor_occupation"],
+            record["contributor_city"],
+            record["contributor_state"],
+            record["normalized_zip5"],
+            [source["record_url"] for source in record["sources"]],
+        )
+        for record in resolved["underlying_records"]
+    ] == [
+        (
+            str(_RESOLVED_DONOR_ID),
+            "TRANSPARENT IDENTITY",
+            "Civibus Labs",
+            "Engineer",
+            "Durham",
+            "NC",
+            "27701",
+            ["https://example.org/fec/donor-search/current"],
+        ),
+        (
+            str(_RESOLVED_DONOR_MEMBER_ID),
+            "TRANSPARENT IDENTITY ALT",
+            "Open Civic Works",
+            "Architect",
+            "Raleigh",
+            "NC",
+            "27601",
+            ["https://example.org/fec/donor-search/secondary"],
+        ),
+    ]
+    assert resolved["not_combined_candidates"] == [
+        {
+            "donor_identity_id": str(_POSSIBLE_DONOR_ID),
+            "contributor_name": "OUTSIDE ALIAS",
+            "contributor_employer": "Civibus Labs",
+            "contributor_occupation": "Analyst",
+            "contributor_city": "Chapel Hill",
+            "contributor_state": "NC",
+            "normalized_zip5": "27514",
+            "confidence_band": "possible_match",
+            "sources": [
+                {
+                    "domain": "campaign_finance",
+                    "jurisdiction": "federal/fec",
+                    "data_source_name": "Campaign Finance API Source donor-search-fixture",
+                    "data_source_url": "https://example.org/campaign-finance-source",
+                    "source_record_key": "donor-search-replacement",
+                    "record_url": "https://example.org/fec/donor-search/replacement",
+                    "pull_date": db_conn.execute(
+                        "SELECT pull_date FROM core.source_record WHERE id = %s",
+                        (UUID("72000000-0000-0000-0000-000000000003"),),
+                    ).fetchone()[0],
+                }
+            ],
+        }
+    ]
+    assert _POSSIBLE_DONOR_ID not in {UUID(record["donor_identity_id"]) for record in resolved["underlying_records"]}
+    assert resolved["combined_record_count"] == len(resolved["underlying_records"])
+    assert (
+        db_conn.execute(
+            """
+        SELECT COUNT(*)
+        FROM cf.transaction
+        WHERE id::text LIKE '72100000-%'
+          AND contributor_person_id IS NOT NULL
+        """
+        ).fetchone()[0]
+        == 0
+    )
+
+
+def test_search_donors_preserves_unresolved_md5_fallback_identity(
+    db_conn: psycopg.Connection,
+) -> None:
+    seed_donor_search_fixture(db_conn)
+
+    payload = campaign_finance_queries.search_donors(db_conn, q="jane", by="name", limit=20, offset=0)
+
+    assert len(payload["results"]) == 1
+    unresolved = payload["results"][0]
+    assert unresolved["id"] == "72000000-0000-0000-0000-000000000101"
+    assert unresolved["donor_identity_id"] is None
+    assert unresolved["contributor_name"] == "JANE SMITH"
+    assert unresolved["contributor_employer"] == "Civibus Labs"
+    assert unresolved["contributor_occupation"] == "Engineer"
+    assert unresolved["contributor_city"] == "Durham"
+    assert unresolved["contributor_state"] == "NC"
+    assert unresolved["normalized_zip5"] == "27701"
+    assert unresolved["total_amount"] == Decimal("500.00")
+    assert unresolved["transaction_count"] == 3
+    assert unresolved["combined_record_count"] == 1
+    assert unresolved["confidence_band"] is None
+    assert unresolved["underlying_records"] == []
+    assert unresolved["not_combined_candidates"] == []
 
 
 def test_search_donors_by_name_rolls_up_current_federal_recipient_activity(

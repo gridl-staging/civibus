@@ -19,10 +19,13 @@ describe('/donors page Svelte contract', () => {
   });
 
   it('guards API-provided source links before binding href attributes', () => {
-    expect(donorPageSource).toContain('function safeExternalHref');
-    expect(donorPageSource).toContain("url.protocol === 'https:' || url.protocol === 'http:'");
-    expect(donorPageSource).toContain('{#if safeExternalHref(source.data_source_url)}');
-    expect(donorPageSource).toContain("{#if safeExternalHref(source.record_url)}");
+    expect(donorPageSource).toContain(
+      "import { sanitizeExternalUrl } from '$lib/url/sanitize-external-url';"
+    );
+    expect(donorPageSource).toContain("from '$lib/entity-detail/IdentityEvidence.svelte'");
+    expect(donorPageSource).toContain('{#if sanitizeExternalUrl(source.data_source_url)}');
+    expect(donorPageSource).toContain("{#if sanitizeExternalUrl(source.record_url)}");
+    expect(donorPageSource).not.toContain('function safeExternalHref');
     expect(donorPageSource).not.toContain('<a href={source.data_source_url}>');
     expect(donorPageSource).not.toContain('<a href={source.record_url}>');
   });

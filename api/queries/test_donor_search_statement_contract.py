@@ -71,3 +71,20 @@ def test_donor_search_statement_binds_one_parameter_per_placeholder(
 
     assert len(parameters) == _EXPECTED_DONOR_SEARCH_PARAMETER_COUNT
     assert len(_PLACEHOLDER_PATTERN.findall(statement)) == len(parameters)
+
+
+def test_donor_search_statement_groups_by_active_donor_identity_cluster_or_fallback() -> None:
+    statement, _parameters = campaign_finance_queries._build_donor_search_statement(
+        q="smith",
+        by="name",
+        limit=20,
+        offset=0,
+    )
+
+    fallback_key = campaign_finance_queries._donor_key_sql("t")
+    expected_grouping_key = f"COALESCE(active_cluster.canonical_entity_id::text, {fallback_key})"
+
+    assert expected_grouping_key in statement
+    assert "active_cluster.entity_type = 'donor_identity'" in statement
+    assert "active_member.entity_type = 'donor_identity'" in statement
+    assert "t.contributor_person_id" not in statement

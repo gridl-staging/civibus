@@ -116,6 +116,7 @@ def score_with_splink(
     *,
     probabilistic_settings: Any | None = None,
     bounded_connection_factory: BoundedConnectionFactory | None = None,
+    include_diagnostics: bool = False,
 ) -> list[ScoredPair]:
     """Run probabilistic matching with Splink and return Stage 3 scored-pair contract."""
     settings = require_probabilistic_settings(
@@ -138,11 +139,15 @@ def score_with_splink(
         bounded_connection_factory=bounded_connection_factory,
     )
     if bounded_connection_factory is None:
-        return _score_linker_predictions(built_linker, blocking_rules)
+        return _score_linker_predictions(built_linker, blocking_rules, include_diagnostics=include_diagnostics)
     if not isinstance(built_linker, BoundedSplinkLinker):
         raise RuntimeError("bounded linker construction did not return an owned session")
     try:
-        return _score_linker_predictions(built_linker.linker, blocking_rules)
+        return _score_linker_predictions(
+            built_linker.linker,
+            blocking_rules,
+            include_diagnostics=include_diagnostics,
+        )
     finally:
         built_linker.close()
 
@@ -150,31 +155,44 @@ def score_with_splink(
 def _score_linker_predictions(
     linker: Any,
     blocking_rules: list[Any],
+    *,
+    include_diagnostics: bool = False,
 ) -> list[ScoredPair]:
     """Train one linker and map its predictions to canonical scored pairs."""
     train_linker(linker, blocking_rules)
     predictions = linker.inference.predict()
 
-    scores_by_pair: dict[tuple[Any, Any], float] = {}
+    records_by_pair: dict[tuple[Any, Any], dict[str, Any]] = {}
     for record in prediction_records(predictions):
         if prediction_record_restores_same_entity(record):
             continue
         pair_key = _record_entity_ids(record)
         confidence = float(record["match_probability"])
-        current_confidence = scores_by_pair.get(pair_key)
-        if current_confidence is None or confidence > current_confidence:
-            scores_by_pair[pair_key] = confidence
+        selected_record = records_by_pair.get(pair_key)
+        if selected_record is None or confidence > float(selected_record["match_probability"]):
+            records_by_pair[pair_key] = record
 
-    return [
-        {
+    scored_pairs: list[ScoredPair] = []
+    for pair_key, record in records_by_pair.items():
+        scored_pair = {
             "entity_id_a": pair_key[0],
             "entity_id_b": pair_key[1],
-            "confidence": confidence,
+            "confidence": float(record["match_probability"]),
             "decision_method": "probabilistic",
             "decided_by": "splink_v1",
         }
-        for pair_key, confidence in scores_by_pair.items()
-    ]
+        if include_diagnostics:
+            scored_pair.update(_selected_prediction_diagnostics(record))
+        scored_pairs.append(scored_pair)
+    return scored_pairs
+
+
+def _selected_prediction_diagnostics(record: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in record.items()
+        if key in {"match_key", "match_weight", "match_probability"} or key.startswith(("gamma_", "bf_"))
+    }
 
 
 def score_rows(
@@ -184,6 +202,7 @@ def score_rows(
     deterministic_pairs: list[ScoredPair] | None = None,
     probabilistic_settings: Any | None = None,
     bounded_connection_factory: BoundedConnectionFactory | None = None,
+    include_diagnostics: bool = False,
 ) -> list[ScoredPair]:
     """Score already-materialized ER rows through the standard deterministic/probabilistic pipeline.
 
@@ -200,6 +219,8 @@ def score_rows(
         scoring_options["probabilistic_settings"] = probabilistic_settings
     if bounded_connection_factory is not None:
         scoring_options["bounded_connection_factory"] = bounded_connection_factory
+    if include_diagnostics:
+        scoring_options["include_diagnostics"] = True
     probabilistic_pairs = score_with_splink(
         unresolved_rows,
         entity_type,

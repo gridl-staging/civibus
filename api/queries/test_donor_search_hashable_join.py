@@ -29,6 +29,8 @@ def test_donor_rollup_joins_use_hashable_key_not_is_not_distinct_from() -> None:
     assert "recipient.donor_key = dg.donor_key" in sql
     assert "source.donor_key = dg.donor_key" in sql
     assert "qt.donor_key = dg.donor_key" in sql
+    assert sql.count("qt.donor_key = dg.donor_key") >= 2
+    assert sql.count(_donor_key_sql("t")) == 1
 
 
 def test_donor_search_nested_details_are_bounded_before_final_join() -> None:

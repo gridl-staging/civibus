@@ -74,3 +74,45 @@ def test_canonical_with_suffix() -> None:
 
 def test_canonical_omits_prefix() -> None:
     assert ParsedName(prefix="DR", first="JOHN", last="SMITH").canonical == "JOHN SMITH"
+
+
+def test_surname_first_comma_less_two_token_donor_order() -> None:
+    assert parse_name("ROBINSON STEPHANIE", surname_first=True) == ParsedName(
+        first="STEPHANIE",
+        last="ROBINSON",
+    )
+    assert parse_name("GARCIA RYAN", surname_first=True) == ParsedName(
+        first="RYAN",
+        last="GARCIA",
+    )
+
+
+def test_surname_first_comma_less_multi_token_donor_order_after_affix_stripping() -> None:
+    # In this delimiter-free FEC mode, every core token before the given name belongs to the surname.
+    assert parse_name("DR. VAN DYKE AMY JR.", surname_first=True) == ParsedName(
+        prefix="DR",
+        first="AMY",
+        middle=None,
+        last="VAN DYKE",
+        suffix="JR",
+    )
+
+
+def test_surname_first_keeps_default_natural_order_unchanged() -> None:
+    assert parse_name("Stephanie Robinson") == ParsedName(
+        first="STEPHANIE",
+        last="ROBINSON",
+    )
+
+
+def test_surname_first_does_not_double_invert_comma_bearing_name() -> None:
+    expected = ParsedName(first="STEPHANIE", last="ROBINSON")
+
+    assert parse_name("ROBINSON, STEPHANIE") == expected
+    assert parse_name("ROBINSON, STEPHANIE", surname_first=True) == expected
+
+
+def test_surname_first_retains_empty_and_single_token_outcomes() -> None:
+    assert parse_name("", surname_first=True) == ParsedName()
+    assert parse_name("SMITH", surname_first=True) == ParsedName(last="SMITH")
+    assert parse_name("JOHN JR.", surname_first=True) == ParsedName(first="JOHN", suffix="JR")

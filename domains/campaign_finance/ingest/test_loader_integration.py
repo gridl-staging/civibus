@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from uuid import uuid4
+
 import psycopg
 import pytest
 from psycopg.rows import dict_row
@@ -52,6 +54,7 @@ def test_ensure_fec_data_source_is_idempotent(db_conn: psycopg.Connection) -> No
 
 def test_load_contribution_round_trip(db_conn: psycopg.Connection) -> None:
     contribution = clone_with_unique_sub_id(load_fixture_results()[0])
+    contribution["committee_id"] = f"C{uuid4().hex[:8].upper()}"
     extracted = extract_contribution(contribution)
 
     data_source_id = ensure_fec_data_source(db_conn)

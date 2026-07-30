@@ -536,7 +536,7 @@ export const SMOKE_PERSON_TOP_EMPLOYER_THREE_TOTAL = "$25.00";
 export const SMOKE_PERSON_TOP_EMPLOYER_DISCLAIMER =
   "Top employers aggregate raw employer names from itemized individual contributions only.";
 export const SMOKE_PERSON_TOP_EMPLOYER_METHODOLOGY =
-  "They are not industry- or sector-coded; see Methodology for source-linking and evidence limitations.";
+  "The raw ranking remains employer-name data; see Methodology for source-linking and evidence limitations.";
 export const SMOKE_PERSON_DISTRICT_SHARE_HEADLINE = "36% in district";
 export const SMOKE_PERSON_DISTRICT_SHARE_SUMMARY =
   "$125.00 in district and $225.00 out of district.";

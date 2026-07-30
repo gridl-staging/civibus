@@ -245,6 +245,7 @@ def seed_entity_source(
     source_record_id: UUID,
     extraction_role: str,
 ) -> None:
+    entity_type = entity_type.lower()
     conn.execute(
         """
         INSERT INTO core.entity_source (id, entity_type, entity_id, source_record_id, extraction_role)

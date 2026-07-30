@@ -32,12 +32,16 @@ class ParsedName:
         return " ".join(parts)
 
 
-def parse_name(raw: str | None) -> ParsedName:
+def parse_name(raw: str | None, *, surname_first: bool = False) -> ParsedName:
     cleaned_name = _clean_name_input(raw)
     if cleaned_name is None:
         return ParsedName()
     if "," in cleaned_name:
         return _parse_fec_format(cleaned_name)
+    if surname_first:
+        # The FEC caller knows its source ordering. Sniffing order here would create
+        # a second, corpus-dependent identity rule that could disagree between loads.
+        return _parse_surname_first_format(cleaned_name)
     return _parse_natural_format(cleaned_name)
 
 
@@ -65,7 +69,21 @@ def _parse_fec_format(raw_name: str) -> ParsedName:
 
 def _parse_natural_format(raw_name: str) -> ParsedName:
     prefix, core_tokens, suffix = _strip_known_affixes(_normalize_tokens(raw_name.split()))
+    return _parsed_name_from_core_tokens(prefix, core_tokens, suffix, surname_first=False)
 
+
+def _parse_surname_first_format(raw_name: str) -> ParsedName:
+    prefix, core_tokens, suffix = _strip_known_affixes(_normalize_tokens(raw_name.split()))
+    return _parsed_name_from_core_tokens(prefix, core_tokens, suffix, surname_first=True)
+
+
+def _parsed_name_from_core_tokens(
+    prefix: str | None,
+    core_tokens: list[str],
+    suffix: str | None,
+    *,
+    surname_first: bool,
+) -> ParsedName:
     if not core_tokens:
         return ParsedName(prefix=prefix, suffix=suffix)
     if len(core_tokens) == 1:
@@ -73,6 +91,11 @@ def _parse_natural_format(raw_name: str) -> ParsedName:
         if prefix or suffix:
             return ParsedName(prefix=prefix, first=single_name_token, suffix=suffix)
         return ParsedName(last=single_name_token)
+
+    if surname_first:
+        first = core_tokens[-1]
+        last = _join_tokens(core_tokens[:-1])
+        return ParsedName(prefix=prefix, first=first, last=last, suffix=suffix)
 
     first = core_tokens[0]
     last = core_tokens[-1]

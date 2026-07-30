@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Collection, Mapping
 from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
@@ -312,3 +313,71 @@ DEV_REPO_ONLY_CLASSIFICATIONS_BY_NODE_ID = {
     for entry in validate_public_mirror_classifications()
     if entry.category == PublicMirrorCategory.DEV_REPO_ONLY
 }
+
+
+# Non-collapse floors for the public-eligible pytest selection.
+#
+# These are FLOORS, deliberately not equalities. They exist to catch a collapse —
+# a broken `-m` selector, a swallowed collection error, a mis-scoped `.debbie.toml`
+# projection — that reduces the canonical and projected node sets by the SAME
+# amount and therefore slips past the exact `canonical == projected` clause.
+#
+# They were exact equalities until 2026-07-29. That made every merge that added a
+# public-eligible test fail post-merge validation until a human hand-bumped the
+# literal: 19 of the 49 commits touching this module and its consumer between
+# 2026-07-24 and 2026-07-29 were pure ratchet bumps (3336 -> 3346 -> 3363 -> 3403),
+# and with N parallel test-adding lanes the second lane to merge was stale again.
+# Adding tests must never require editing these numbers. Deliberately REMOVING
+# enough tests to cross a floor should require a deliberate edit here, which is
+# the behaviour an equality was standing in for.
+MINIMUM_PUBLIC_ELIGIBLE_NODE_TOTAL = 3403
+MINIMUM_PUBLIC_NODE_PREFIX_TOTALS = {"api/": 263, "core/": 692, "domains/": 1748, "tests/": 700}
+
+
+def evaluate_public_node_expectations(
+    canonical_nodes: Collection[str],
+    projected_nodes: Collection[str],
+    *,
+    minimum_total: int = MINIMUM_PUBLIC_ELIGIBLE_NODE_TOTAL,
+    minimum_prefix_totals: Mapping[str, int] = MINIMUM_PUBLIC_NODE_PREFIX_TOTALS,
+) -> tuple[str, ...]:
+    """Return violation messages for the public-mirror node expectations.
+
+    Two independent clauses, both load-bearing:
+
+    * **Projection fidelity** — the canonical repo and the projected public mirror
+      must collect the identical node set. Exact, in both directions. This is the
+      clause that proves `.debbie.toml` does not silently drop or add coverage.
+    * **Non-collapse floors** — total and per-prefix counts must not fall below the
+      recorded minimums. Set equality cannot see a symmetric collapse, so this is
+      not redundant with the clause above.
+
+    An empty side is reported by the floors rather than passing vacuously.
+
+    Returns an empty tuple when every expectation holds.
+    """
+    canonical = set(canonical_nodes)
+    projected = set(projected_nodes)
+    violations: list[str] = []
+
+    if canonical != projected:
+        missing = sorted(canonical - projected)
+        extra = sorted(projected - canonical)
+        violations.append(
+            f"public mirror projection drift: missing_from_projection={missing} extra_in_projection={extra}"
+        )
+
+    # Both sides are floored independently; a collapse confined to one side would
+    # already trip the drift clause, but reporting it here keeps the diagnosis
+    # pointed at the side that actually shrank.
+    for label, nodes in (("canonical", canonical), ("projected", projected)):
+        if len(nodes) < minimum_total:
+            violations.append(f"{label} total below floor: collected {len(nodes)}, floor {minimum_total}")
+
+    for prefix, minimum in sorted(minimum_prefix_totals.items()):
+        for label, nodes in (("canonical", canonical), ("projected", projected)):
+            observed = sum(1 for node_id in nodes if node_id.startswith(prefix))
+            if observed < minimum:
+                violations.append(f"{prefix} {label} below floor: collected {observed}, floor {minimum}")
+
+    return tuple(violations)

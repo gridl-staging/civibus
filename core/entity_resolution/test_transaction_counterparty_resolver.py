@@ -16,6 +16,9 @@ from core.db import (
     insert_source_record,
 )
 from core.entity_resolution.l8_regression import _normalize_address
+from core.entity_resolution import transaction_counterparty_resolver as resolver_module
+from core.entity_resolution.extract import _donor_identity_id
+from core.entity_resolution.persist import persist_auto_merge_clusters
 from core.types.python.models import (
     DataSource,
     Organization,
@@ -27,6 +30,7 @@ from core.types.python.models import (
 from core.entity_resolution.transaction_counterparty_resolver import (
     resolve_nc_transaction_counterparties,
 )
+from domains.campaign_finance.ingest.filing_loader import update_transaction_contributor_identity_ids
 
 
 pytestmark = pytest.mark.integration
@@ -37,6 +41,7 @@ _TEST_TRANSACTION_PREFIX = "test-nc-counterparty-resolver-transaction-"
 _TEST_ADDRESS_PREFIX = "TEST NC COUNTERPARTY RESOLVER ADDRESS "
 _TEST_COMMITTEE_PREFIX = "Test NC Counterparty Resolver Committee "
 _TEST_FILING_PREFIX = "test-nc-counterparty-resolver-filing-"
+_TEST_DONOR_WRITEBACK_PREFIX = "Test Donor Writeback "
 _TEST_SUB_ID_BASE = 970_000_000_000_000_000
 
 
@@ -54,6 +59,42 @@ def _cleanup_test_rows(db_conn: psycopg.Connection) -> None:
                OR (sub_id IS NOT NULL AND sub_id >= %s)
             """,
             (f"{_TEST_TRANSACTION_PREFIX}%", _TEST_SUB_ID_BASE),
+        )
+        cursor.execute(
+            """
+            DELETE FROM core.cluster_member
+            WHERE entity_type = 'donor_identity'
+              AND entity_id IN (
+                SELECT id
+                FROM core.donor_identity
+                WHERE canonical_name LIKE %s
+              )
+            """,
+            (f"{_TEST_DONOR_WRITEBACK_PREFIX}%",),
+        )
+        cursor.execute(
+            """
+            DELETE FROM core.entity_cluster
+            WHERE entity_type = 'donor_identity'
+              AND canonical_entity_id IN (
+                SELECT id
+                FROM core.donor_identity
+                WHERE canonical_name LIKE %s
+              )
+            """,
+            (f"{_TEST_DONOR_WRITEBACK_PREFIX}%",),
+        )
+        cursor.execute(
+            "DELETE FROM core.donor_identity WHERE canonical_name LIKE %s",
+            (f"{_TEST_DONOR_WRITEBACK_PREFIX}%",),
+        )
+        cursor.execute(
+            "DELETE FROM core.person WHERE canonical_name LIKE %s",
+            (f"{_TEST_DONOR_WRITEBACK_PREFIX}%",),
+        )
+        cursor.execute(
+            "DELETE FROM core.organization WHERE canonical_name LIKE %s",
+            (f"{_TEST_DONOR_WRITEBACK_PREFIX}%",),
         )
         cursor.execute(
             """
@@ -145,6 +186,274 @@ def _insert_test_committee(conn: psycopg.Connection, label: str) -> UUID:
             (committee_fec_id, f"{_TEST_COMMITTEE_PREFIX}{label}"),
         )
         return cursor.fetchone()[0]
+
+
+def _donor_identity_tuple(
+    *,
+    contributor_name_raw: str,
+    contributor_employer: str = "",
+    contributor_occupation: str = "",
+    contributor_city: str = "Raleigh",
+    contributor_state: str = "NC",
+    contributor_zip: str = "27601",
+) -> dict[str, str]:
+    return {
+        "contributor_name_raw": contributor_name_raw,
+        "contributor_employer": contributor_employer,
+        "contributor_occupation": contributor_occupation,
+        "contributor_city": contributor_city,
+        "contributor_state": contributor_state,
+        "contributor_zip": contributor_zip,
+    }
+
+
+def _insert_donor_writeback_person(
+    conn: psycopg.Connection,
+    canonical_name: str,
+) -> UUID:
+    _, last_name = canonical_name.rsplit(" ", 1)
+    return insert_person(
+        conn,
+        Person(
+            canonical_name=canonical_name,
+            first_name=canonical_name.removeprefix(_TEST_DONOR_WRITEBACK_PREFIX).rsplit(" ", 1)[0],
+            last_name=last_name,
+        ),
+    )
+
+
+def _insert_donor_identity(
+    conn: psycopg.Connection,
+    donor_tuple: dict[str, str],
+    *,
+    person_id: UUID | None,
+    create_cluster: bool = True,
+) -> UUID:
+    donor_id = _donor_identity_id(donor_tuple)
+    with conn.cursor() as cursor:
+        cursor.execute(
+            """
+            INSERT INTO core.donor_identity (
+                id,
+                canonical_name,
+                contributor_name_raw,
+                contributor_employer,
+                contributor_occupation,
+                contributor_city,
+                contributor_state,
+                contributor_zip,
+                zip5,
+                transaction_count
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 1)
+            """,
+            (
+                donor_id,
+                donor_tuple["contributor_name_raw"],
+                donor_tuple["contributor_name_raw"],
+                donor_tuple["contributor_employer"],
+                donor_tuple["contributor_occupation"],
+                donor_tuple["contributor_city"],
+                donor_tuple["contributor_state"],
+                donor_tuple["contributor_zip"],
+                donor_tuple["contributor_zip"][:5],
+            ),
+        )
+        if not create_cluster:
+            return donor_id
+
+        cursor.execute(
+            """
+            INSERT INTO core.entity_cluster (
+                entity_type,
+                canonical_entity_id,
+                cluster_confidence,
+                member_count
+            )
+            VALUES ('donor_identity', %s, 0.99, 1)
+            RETURNING id
+            """,
+            (donor_id,),
+        )
+        cluster_id = cursor.fetchone()[0]
+        cursor.execute(
+            """
+            INSERT INTO core.cluster_member (cluster_id, entity_type, entity_id, is_canonical)
+            VALUES (%s, 'donor_identity', %s, TRUE)
+            """,
+            (cluster_id, donor_id),
+        )
+        cursor.execute(
+            """
+            UPDATE core.donor_identity
+            SET er_cluster_id = %s,
+                er_confidence = 0.99
+            WHERE id = %s
+            """,
+            (cluster_id, donor_id),
+        )
+        if person_id is not None:
+            cursor.execute(
+                """
+                INSERT INTO core.donor_cluster_person (cluster_id, person_id)
+                VALUES (%s, %s)
+                """,
+                (cluster_id, person_id),
+            )
+    return donor_id
+
+
+def _insert_donor_writeback_transaction(
+    conn: psycopg.Connection,
+    *,
+    label: str,
+    committee_id: UUID,
+    filing_id: UUID,
+    donor_tuple: dict[str, str],
+) -> UUID:
+    with conn.cursor() as cursor:
+        cursor.execute(
+            """
+            INSERT INTO cf.transaction (
+                filing_id,
+                committee_id,
+                transaction_type,
+                transaction_identifier,
+                sub_id,
+                amount,
+                contributor_name_raw,
+                contributor_entity_type,
+                contributor_employer,
+                contributor_occupation,
+                contributor_city,
+                contributor_state,
+                contributor_zip,
+                amendment_indicator
+            )
+            VALUES (%s, %s, '15', %s, %s, %s, %s, 'IND', %s, %s, %s, %s, %s, 'N')
+            RETURNING id
+            """,
+            (
+                filing_id,
+                committee_id,
+                f"{_TEST_TRANSACTION_PREFIX}{label}",
+                _TEST_SUB_ID_BASE + int(label[-3:]),
+                Decimal("100.00"),
+                donor_tuple["contributor_name_raw"],
+                donor_tuple["contributor_employer"],
+                donor_tuple["contributor_occupation"],
+                donor_tuple["contributor_city"],
+                donor_tuple["contributor_state"],
+                donor_tuple["contributor_zip"],
+            ),
+        )
+        return cursor.fetchone()[0]
+
+
+def _seed_donor_writeback_fixture(
+    conn: psycopg.Connection,
+) -> tuple[dict[str, UUID], UUID]:
+    committee_id = _insert_test_committee(conn, "donor-writeback")
+    filing_id = _insert_test_filing(conn, committee_id, "donor-writeback")
+    resolved_person_id = _insert_donor_writeback_person(conn, f"{_TEST_DONOR_WRITEBACK_PREFIX}Alice Smith")
+    resolved_tuple = _donor_identity_tuple(
+        contributor_name_raw=f"{_TEST_DONOR_WRITEBACK_PREFIX}Alice Smith",
+        contributor_employer="ACME CORP",
+        contributor_occupation="ENGINEER",
+        contributor_city="Raleigh",
+        contributor_zip="276010001",
+    )
+    invalid_cluster_tuple = _donor_identity_tuple(
+        contributor_name_raw=f"{_TEST_DONOR_WRITEBACK_PREFIX}Invalid Cluster",
+        contributor_employer="VOID LLC",
+        contributor_occupation="CONSULTANT",
+        contributor_city="Raleigh",
+        contributor_zip="276020002",
+    )
+    unresolved_tuple = _donor_identity_tuple(
+        contributor_name_raw=f"{_TEST_DONOR_WRITEBACK_PREFIX}Unresolved Donor",
+        contributor_employer="UNKNOWN",
+        contributor_occupation="RETIRED",
+        contributor_city="Raleigh",
+        contributor_zip="276030003",
+    )
+
+    _insert_donor_identity(conn, resolved_tuple, person_id=resolved_person_id)
+    _insert_donor_identity(conn, invalid_cluster_tuple, person_id=None)
+
+    transaction_ids = {
+        "resolved_a": _insert_donor_writeback_transaction(
+            conn,
+            label="401",
+            committee_id=committee_id,
+            filing_id=filing_id,
+            donor_tuple=resolved_tuple,
+        ),
+        "resolved_b": _insert_donor_writeback_transaction(
+            conn,
+            label="402",
+            committee_id=committee_id,
+            filing_id=filing_id,
+            donor_tuple=resolved_tuple,
+        ),
+        "invalid_cluster": _insert_donor_writeback_transaction(
+            conn,
+            label="403",
+            committee_id=committee_id,
+            filing_id=filing_id,
+            donor_tuple=invalid_cluster_tuple,
+        ),
+        "unresolved": _insert_donor_writeback_transaction(
+            conn,
+            label="404",
+            committee_id=committee_id,
+            filing_id=filing_id,
+            donor_tuple=unresolved_tuple,
+        ),
+    }
+    return transaction_ids, resolved_person_id
+
+
+def _donor_writeback_rows(
+    conn: psycopg.Connection,
+    transaction_ids: dict[str, UUID],
+) -> dict[str, dict[str, object]]:
+    with conn.cursor(row_factory=dict_row) as cursor:
+        cursor.execute(
+            """
+            SELECT
+                id,
+                contributor_person_id,
+                contributor_organization_id,
+                num_nonnulls(contributor_person_id, contributor_organization_id) AS identity_count
+            FROM cf.transaction
+            WHERE id = ANY(%s)
+            ORDER BY id
+            """,
+            (list(transaction_ids.values()),),
+        )
+        rows_by_id = {row["id"]: row for row in cursor.fetchall()}
+    return {label: rows_by_id[transaction_id] for label, transaction_id in transaction_ids.items()}
+
+
+def _donor_person_mapping_by_identity_id(
+    conn: psycopg.Connection,
+    donor_identity_ids: list[UUID],
+) -> dict[UUID, UUID]:
+    with conn.cursor(row_factory=dict_row) as cursor:
+        cursor.execute(
+            """
+            SELECT cm.entity_id, dcp.person_id
+            FROM core.cluster_member cm
+            JOIN core.donor_cluster_person dcp ON dcp.cluster_id = cm.cluster_id
+            WHERE cm.entity_type = 'donor_identity'
+              AND cm.entity_id = ANY(%s)
+              AND cm.split_at IS NULL
+            ORDER BY cm.entity_id
+            """,
+            (donor_identity_ids,),
+        )
+        return {row["entity_id"]: row["person_id"] for row in cursor.fetchall()}
 
 
 def _insert_test_filing(conn: psycopg.Connection, committee_id: UUID, label: str) -> UUID:
@@ -535,6 +844,458 @@ def test_resolver_links_known_donor_and_vendor_and_skips_ambiguous_match(
     assert vendor_row["contributor_organization_id"] == expected_ids["vendor_org_id"]
     assert ambiguity_row["contributor_person_id"] is None
     assert ambiguity_row["contributor_organization_id"] is None
+
+
+def test_donor_writeback_links_resolved_cluster_transactions_and_preserves_nulls(
+    db_conn: psycopg.Connection,
+) -> None:
+    transaction_ids, resolved_person_id = _seed_donor_writeback_fixture(db_conn)
+
+    summary = resolver_module.resolve_donor_identity_transactions(db_conn)
+
+    assert summary == {
+        "candidate_transactions": 3,
+        "mutated_rows": 2,
+        "matched_person_rows": 2,
+        "skipped_rows": 1,
+        "unresolved_rows": 0,
+        "ambiguous_cluster_rows": 0,
+        "invalid_cluster_rows": 1,
+        "dual_populated_rows": 0,
+    }
+
+    rows = _donor_writeback_rows(db_conn, transaction_ids)
+    assert rows["resolved_a"]["contributor_person_id"] == resolved_person_id
+    assert rows["resolved_b"]["contributor_person_id"] == resolved_person_id
+    assert rows["resolved_a"]["contributor_organization_id"] is None
+    assert rows["resolved_b"]["contributor_organization_id"] is None
+    assert rows["invalid_cluster"]["contributor_person_id"] is None
+    assert rows["unresolved"]["contributor_person_id"] is None
+    assert all(row["identity_count"] <= 1 for row in rows.values())
+
+    with db_conn.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT count(*)::int
+            FROM cf.transaction
+            WHERE id = ANY(%s)
+              AND contributor_person_id IS NOT NULL
+            """,
+            (list(transaction_ids.values()),),
+        )
+        assert cursor.fetchone()[0] == 2
+
+
+def test_donor_writeback_second_run_is_idempotent_and_keeps_identity_columns_stable(
+    db_conn: psycopg.Connection,
+) -> None:
+    transaction_ids, _ = _seed_donor_writeback_fixture(db_conn)
+
+    first_summary = resolver_module.resolve_donor_identity_transactions(db_conn)
+    before_second_run = _select_transaction_identity_snapshot(db_conn, list(transaction_ids.values()))
+    second_summary = resolver_module.resolve_donor_identity_transactions(db_conn)
+    after_second_run = _select_transaction_identity_snapshot(db_conn, list(transaction_ids.values()))
+
+    assert first_summary["mutated_rows"] == 2
+    assert second_summary == {
+        "candidate_transactions": 3,
+        "mutated_rows": 0,
+        "matched_person_rows": 2,
+        "skipped_rows": 1,
+        "unresolved_rows": 0,
+        "ambiguous_cluster_rows": 0,
+        "invalid_cluster_rows": 1,
+        "dual_populated_rows": 0,
+    }
+    assert after_second_run == before_second_run
+
+
+def test_donor_writeback_excludes_unpersisted_donor_in_mixed_committee(
+    db_conn: psycopg.Connection,
+) -> None:
+    committee_id = _insert_test_committee(db_conn, "mixed-donor-writeback")
+    filing_id = _insert_test_filing(db_conn, committee_id, "mixed-donor-writeback")
+    resolved_person_id = _insert_donor_writeback_person(
+        db_conn,
+        f"{_TEST_DONOR_WRITEBACK_PREFIX}Mixed Committee Match",
+    )
+    persisted_tuple = _donor_identity_tuple(
+        contributor_name_raw=f"{_TEST_DONOR_WRITEBACK_PREFIX}Mixed Committee Match",
+        contributor_employer="PERSISTED INC",
+        contributor_occupation="ARCHITECT",
+        contributor_city="Raleigh",
+        contributor_zip="276050005",
+    )
+    unrelated_tuple = _donor_identity_tuple(
+        contributor_name_raw=f"{_TEST_DONOR_WRITEBACK_PREFIX}Same Committee Stranger",
+        contributor_employer="UNRELATED LLC",
+        contributor_occupation="DESIGNER",
+        contributor_city="Raleigh",
+        contributor_zip="276060006",
+    )
+    _insert_donor_identity(db_conn, persisted_tuple, person_id=resolved_person_id)
+    transaction_ids = {
+        "persisted": _insert_donor_writeback_transaction(
+            db_conn,
+            label="406",
+            committee_id=committee_id,
+            filing_id=filing_id,
+            donor_tuple=persisted_tuple,
+        ),
+        "unrelated": _insert_donor_writeback_transaction(
+            db_conn,
+            label="407",
+            committee_id=committee_id,
+            filing_id=filing_id,
+            donor_tuple=unrelated_tuple,
+        ),
+    }
+
+    summary = resolver_module.resolve_donor_identity_transactions(db_conn)
+
+    assert summary == {
+        "candidate_transactions": 1,
+        "mutated_rows": 1,
+        "matched_person_rows": 1,
+        "skipped_rows": 0,
+        "unresolved_rows": 0,
+        "ambiguous_cluster_rows": 0,
+        "invalid_cluster_rows": 0,
+        "dual_populated_rows": 0,
+    }
+    rows = _donor_writeback_rows(db_conn, transaction_ids)
+    assert rows["persisted"]["contributor_person_id"] == resolved_person_id
+    assert rows["unrelated"]["contributor_person_id"] is None
+    assert rows["unrelated"]["contributor_organization_id"] is None
+
+
+def test_donor_writeback_counts_clusterless_donor_identity_as_invalid_cluster(
+    db_conn: psycopg.Connection,
+) -> None:
+    committee_id = _insert_test_committee(db_conn, "clusterless-donor-writeback")
+    filing_id = _insert_test_filing(db_conn, committee_id, "clusterless-donor-writeback")
+    donor_tuple = _donor_identity_tuple(
+        contributor_name_raw=f"{_TEST_DONOR_WRITEBACK_PREFIX}Clusterless Donor",
+        contributor_employer="NO CLUSTER INC",
+        contributor_occupation="ANALYST",
+        contributor_city="Raleigh",
+        contributor_zip="276040004",
+    )
+    _insert_donor_identity(db_conn, donor_tuple, person_id=None, create_cluster=False)
+    transaction_id = _insert_donor_writeback_transaction(
+        db_conn,
+        label="405",
+        committee_id=committee_id,
+        filing_id=filing_id,
+        donor_tuple=donor_tuple,
+    )
+
+    summary = resolver_module.resolve_donor_identity_transactions(db_conn)
+
+    assert summary == {
+        "candidate_transactions": 1,
+        "mutated_rows": 0,
+        "matched_person_rows": 0,
+        "skipped_rows": 1,
+        "unresolved_rows": 0,
+        "ambiguous_cluster_rows": 0,
+        "invalid_cluster_rows": 1,
+        "dual_populated_rows": 0,
+    }
+    rows = _donor_writeback_rows(db_conn, {"clusterless": transaction_id})
+    assert rows["clusterless"]["contributor_person_id"] is None
+    assert rows["clusterless"]["contributor_organization_id"] is None
+
+
+def test_donor_writeback_uses_person_mapping_created_by_donor_cluster_persistence(
+    db_conn: psycopg.Connection,
+) -> None:
+    committee_id = _insert_test_committee(db_conn, "persisted-mapping-donor-writeback")
+    filing_id = _insert_test_filing(db_conn, committee_id, "persisted-mapping-donor-writeback")
+    donor_tuple = _donor_identity_tuple(
+        contributor_name_raw=f"{_TEST_DONOR_WRITEBACK_PREFIX}Persisted Mapping",
+        contributor_employer="MAPPING INC",
+        contributor_occupation="ENGINEER",
+        contributor_city="Raleigh",
+        contributor_zip="276070007",
+    )
+    donor_identity_id = _insert_donor_identity(
+        db_conn,
+        donor_tuple,
+        person_id=None,
+        create_cluster=False,
+    )
+    transaction_id = _insert_donor_writeback_transaction(
+        db_conn,
+        label="408",
+        committee_id=committee_id,
+        filing_id=filing_id,
+        donor_tuple=donor_tuple,
+    )
+
+    cluster_id = persist_auto_merge_clusters(
+        db_conn,
+        [
+            {
+                "canonical_entity_id": donor_identity_id,
+                "member_ids": {donor_identity_id},
+                "min_confidence": 0.99,
+                "min_decision": "match",
+                "links": [],
+            }
+        ],
+        "donor_identity",
+    )[0]
+
+    summary = resolver_module.resolve_donor_identity_transactions(db_conn)
+
+    assert summary == {
+        "candidate_transactions": 1,
+        "mutated_rows": 1,
+        "matched_person_rows": 1,
+        "skipped_rows": 0,
+        "unresolved_rows": 0,
+        "ambiguous_cluster_rows": 0,
+        "invalid_cluster_rows": 0,
+        "dual_populated_rows": 0,
+    }
+    with db_conn.cursor(row_factory=dict_row) as cursor:
+        cursor.execute(
+            """
+            SELECT
+                dcp.person_id,
+                p.er_cluster_id AS person_cluster_id,
+                t.contributor_person_id
+            FROM core.donor_cluster_person dcp
+            JOIN core.person p ON p.id = dcp.person_id
+            JOIN cf.transaction t ON t.id = %s
+            WHERE dcp.cluster_id = %s
+            """,
+            (transaction_id, cluster_id),
+        )
+        mapping_row = cursor.fetchone()
+
+    assert mapping_row is not None
+    assert mapping_row["contributor_person_id"] == mapping_row["person_id"]
+    assert mapping_row["person_cluster_id"] is None
+
+
+def test_donor_writeback_split_donor_clusters_map_to_distinct_people(
+    db_conn: psycopg.Connection,
+) -> None:
+    committee_id = _insert_test_committee(db_conn, "split-donor-writeback")
+    filing_id = _insert_test_filing(db_conn, committee_id, "split-donor-writeback")
+    donor_a_tuple = _donor_identity_tuple(
+        contributor_name_raw=f"{_TEST_DONOR_WRITEBACK_PREFIX}Split Alpha",
+        contributor_employer="ORIGINAL CO",
+        contributor_occupation="ENGINEER",
+        contributor_city="Raleigh",
+        contributor_zip="276080008",
+    )
+    donor_b_tuple = _donor_identity_tuple(
+        contributor_name_raw=f"{_TEST_DONOR_WRITEBACK_PREFIX}Split Beta",
+        contributor_employer="BRANCH CO",
+        contributor_occupation="DESIGNER",
+        contributor_city="Raleigh",
+        contributor_zip="276090009",
+    )
+    donor_a_id = _insert_donor_identity(db_conn, donor_a_tuple, person_id=None, create_cluster=False)
+    donor_b_id = _insert_donor_identity(db_conn, donor_b_tuple, person_id=None, create_cluster=False)
+    transaction_ids = {
+        "donor_a": _insert_donor_writeback_transaction(
+            db_conn,
+            label="409",
+            committee_id=committee_id,
+            filing_id=filing_id,
+            donor_tuple=donor_a_tuple,
+        ),
+        "donor_b": _insert_donor_writeback_transaction(
+            db_conn,
+            label="410",
+            committee_id=committee_id,
+            filing_id=filing_id,
+            donor_tuple=donor_b_tuple,
+        ),
+    }
+
+    persist_auto_merge_clusters(
+        db_conn,
+        [
+            {
+                "canonical_entity_id": donor_a_id,
+                "member_ids": {donor_a_id, donor_b_id},
+                "min_confidence": 0.99,
+                "min_decision": "match",
+                "links": [],
+            }
+        ],
+        "donor_identity",
+    )
+    first_summary = resolver_module.resolve_donor_identity_transactions(db_conn)
+    first_rows = _donor_writeback_rows(db_conn, transaction_ids)
+
+    persist_auto_merge_clusters(
+        db_conn,
+        [
+            {
+                "canonical_entity_id": donor_a_id,
+                "member_ids": {donor_a_id},
+                "min_confidence": 0.99,
+                "min_decision": "match",
+                "links": [],
+            },
+            {
+                "canonical_entity_id": donor_b_id,
+                "member_ids": {donor_b_id},
+                "min_confidence": 0.99,
+                "min_decision": "match",
+                "links": [],
+            },
+        ],
+        "donor_identity",
+    )
+    second_summary = resolver_module.resolve_donor_identity_transactions(db_conn)
+    second_rows = _donor_writeback_rows(db_conn, transaction_ids)
+    mapped_people = _donor_person_mapping_by_identity_id(db_conn, [donor_a_id, donor_b_id])
+
+    assert first_summary["mutated_rows"] == 2
+    assert first_rows["donor_a"]["contributor_person_id"] == first_rows["donor_b"]["contributor_person_id"]
+    assert second_summary == {
+        "candidate_transactions": 2,
+        "mutated_rows": 1,
+        "matched_person_rows": 2,
+        "skipped_rows": 0,
+        "unresolved_rows": 0,
+        "ambiguous_cluster_rows": 0,
+        "invalid_cluster_rows": 0,
+        "dual_populated_rows": 0,
+    }
+    assert set(mapped_people) == {donor_a_id, donor_b_id}
+    assert mapped_people[donor_a_id] != mapped_people[donor_b_id]
+    assert second_rows["donor_a"]["contributor_person_id"] == mapped_people[donor_a_id]
+    assert second_rows["donor_b"]["contributor_person_id"] == mapped_people[donor_b_id]
+    assert second_rows["donor_a"]["contributor_person_id"] != second_rows["donor_b"]["contributor_person_id"]
+    assert all(row["identity_count"] <= 1 for row in second_rows.values())
+
+
+def test_donor_writeback_clears_stale_person_when_mapping_becomes_invalid(
+    db_conn: psycopg.Connection,
+) -> None:
+    committee_id = _insert_test_committee(db_conn, "stale-clear-donor-writeback")
+    filing_id = _insert_test_filing(db_conn, committee_id, "stale-clear-donor-writeback")
+    person_id = _insert_donor_writeback_person(db_conn, f"{_TEST_DONOR_WRITEBACK_PREFIX}Stale Clear")
+    donor_tuple = _donor_identity_tuple(
+        contributor_name_raw=f"{_TEST_DONOR_WRITEBACK_PREFIX}Stale Clear",
+        contributor_employer="STALE INC",
+        contributor_occupation="ANALYST",
+        contributor_city="Raleigh",
+        contributor_zip="276100010",
+    )
+    donor_identity_id = _insert_donor_identity(db_conn, donor_tuple, person_id=person_id)
+    transaction_id = _insert_donor_writeback_transaction(
+        db_conn,
+        label="411",
+        committee_id=committee_id,
+        filing_id=filing_id,
+        donor_tuple=donor_tuple,
+    )
+
+    first_summary = resolver_module.resolve_donor_identity_transactions(db_conn)
+    db_conn.execute(
+        """
+        DELETE FROM core.donor_cluster_person
+        WHERE cluster_id = (
+            SELECT er_cluster_id
+            FROM core.donor_identity
+            WHERE id = %s
+        )
+        """,
+        (donor_identity_id,),
+    )
+    second_summary = resolver_module.resolve_donor_identity_transactions(db_conn)
+    rows = _donor_writeback_rows(db_conn, {"stale": transaction_id})
+
+    assert first_summary["mutated_rows"] == 1
+    assert second_summary == {
+        "candidate_transactions": 1,
+        "mutated_rows": 1,
+        "matched_person_rows": 0,
+        "skipped_rows": 1,
+        "unresolved_rows": 0,
+        "ambiguous_cluster_rows": 0,
+        "invalid_cluster_rows": 1,
+        "dual_populated_rows": 0,
+    }
+    assert rows["stale"]["contributor_person_id"] is None
+    assert rows["stale"]["contributor_organization_id"] is None
+
+
+def test_donor_writeback_preserves_organization_when_person_mapping_becomes_invalid(
+    db_conn: psycopg.Connection,
+) -> None:
+    committee_id = _insert_test_committee(db_conn, "organization-preservation-donor-writeback")
+    filing_id = _insert_test_filing(db_conn, committee_id, "organization-preservation-donor-writeback")
+    person_id = _insert_donor_writeback_person(
+        db_conn,
+        f"{_TEST_DONOR_WRITEBACK_PREFIX}Organization Preservation",
+    )
+    organization_id = insert_organization(
+        db_conn,
+        Organization(canonical_name=f"{_TEST_DONOR_WRITEBACK_PREFIX}Organization Owner"),
+    )
+    donor_tuple = _donor_identity_tuple(
+        contributor_name_raw=f"{_TEST_DONOR_WRITEBACK_PREFIX}Organization Preservation",
+        contributor_employer="OWNERSHIP INC",
+        contributor_occupation="ANALYST",
+        contributor_city="Raleigh",
+        contributor_zip="276110011",
+    )
+    donor_identity_id = _insert_donor_identity(db_conn, donor_tuple, person_id=person_id)
+    transaction_id = _insert_donor_writeback_transaction(
+        db_conn,
+        label="412",
+        committee_id=committee_id,
+        filing_id=filing_id,
+        donor_tuple=donor_tuple,
+    )
+
+    first_summary = resolver_module.resolve_donor_identity_transactions(db_conn)
+    organization_assignment_mutated = update_transaction_contributor_identity_ids(
+        db_conn,
+        transaction_id=transaction_id,
+        contributor_person_id=None,
+        contributor_organization_id=organization_id,
+    )
+    db_conn.execute(
+        """
+        DELETE FROM core.donor_cluster_person
+        WHERE cluster_id = (
+            SELECT er_cluster_id
+            FROM core.donor_identity
+            WHERE id = %s
+        )
+        """,
+        (donor_identity_id,),
+    )
+
+    second_summary = resolver_module.resolve_donor_identity_transactions(db_conn)
+    rows = _donor_writeback_rows(db_conn, {"organization_owned": transaction_id})
+
+    assert first_summary["mutated_rows"] == 1
+    assert organization_assignment_mutated is True
+    assert second_summary == {
+        "candidate_transactions": 1,
+        "mutated_rows": 0,
+        "matched_person_rows": 0,
+        "skipped_rows": 1,
+        "unresolved_rows": 0,
+        "ambiguous_cluster_rows": 0,
+        "invalid_cluster_rows": 1,
+        "dual_populated_rows": 0,
+    }
+    assert rows["organization_owned"]["contributor_person_id"] is None
+    assert rows["organization_owned"]["contributor_organization_id"] == organization_id
+    assert rows["organization_owned"]["identity_count"] == 1
 
 
 def test_resolver_includes_transactions_seeded_with_loader_jurisdiction_casing(

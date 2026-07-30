@@ -19,6 +19,7 @@
     "test:smoke": "bash ./tests/smoke/run-playwright.sh"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.12.1",
     "@sveltejs/adapter-node": "^5.5.4",
     "@sveltejs/kit": "^2.55.0",
     "@sveltejs/vite-plugin-svelte": "^7.0.0",
