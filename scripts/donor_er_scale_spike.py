@@ -12,6 +12,7 @@ import os
 import re
 import resource
 import secrets
+import shlex
 import subprocess
 import sys
 import sysconfig
@@ -31,7 +32,7 @@ if _INTERPRETER_SITE_PACKAGES and _INTERPRETER_SITE_PACKAGES not in sys.path:
 
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, ValidationError, create_model, model_validator
 
-import core.entity_resolution.persist as entity_resolution_persist
+import core.entity_resolution.transaction_counterparty_resolver as transaction_counterparty_resolver
 from core.db import get_connection
 from core.entity_resolution.blocking import count_blocked_pairs, describe_blocking_rules
 from core.entity_resolution.clustering import cluster_scored_pairs
@@ -348,6 +349,85 @@ class TransactionWriteDefect(BaseModel):
     detail: NonblankStr
 
 
+class FiredBlockingRule(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    match_key: NonblankStr
+    blocking_rule: NonblankStr
+
+
+class DonorPairAttribution(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    entity_id_a: NonblankStr
+    entity_id_b: NonblankStr
+    match_key: NonblankStr
+    fired_blocking_rules: list[FiredBlockingRule] = Field(min_length=1)
+    comparison_levels: dict[NonblankStr, int] = Field(min_length=1)
+    match_weight: float
+    confidence: float = Field(ge=0, le=1)
+    decision: NonblankStr
+
+    @model_validator(mode="after")
+    def validate_actual_run_attribution(self) -> DonorPairAttribution:
+        if self.entity_id_a == self.entity_id_b:
+            raise ValueError("pair members must be distinct")
+        if not math.isfinite(self.match_weight):
+            raise ValueError("match_weight must be finite")
+        if not math.isfinite(self.confidence):
+            raise ValueError("confidence must be finite")
+        if self.match_key not in {rule.match_key for rule in self.fired_blocking_rules}:
+            raise ValueError("match_key must identify one of the fired blocking rules")
+        return self
+
+
+class SampledFalsePairCoverage(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    audit_pair_keys: list[NonblankStr]
+    attributed_pair_keys: list[NonblankStr]
+    coverage_ratio: float = Field(ge=0, le=1)
+
+    @model_validator(mode="after")
+    def require_complete_coverage(self) -> SampledFalsePairCoverage:
+        if sorted(self.audit_pair_keys) != sorted(self.attributed_pair_keys) or self.coverage_ratio != 1.0:
+            raise ValueError("complete sampled-false-pair coverage is required")
+        if len(set(self.audit_pair_keys)) != len(self.audit_pair_keys):
+            raise ValueError("sampled pair keys must be unique")
+        return self
+
+
+class DonorErPairAttributionArtifact(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["donor_er_pair_attribution.v1"]
+    seed: NonblankStr
+    chosen_slice_size: int = Field(ge=0)
+    pair_attributions: list[DonorPairAttribution]
+    sampled_false_pair_coverage: SampledFalsePairCoverage
+
+    @model_validator(mode="after")
+    def validate_pair_frame(self) -> DonorErPairAttributionArtifact:
+        _reject_secret_bearing_receipt_text(self.model_dump(mode="python"))
+        pair_keys = [_donor_pair_key(pair.entity_id_a, pair.entity_id_b) for pair in self.pair_attributions]
+        if len(set(pair_keys)) != len(pair_keys):
+            raise ValueError("pair_attributions must identify unique entity pairs")
+        missing_attribution = set(self.sampled_false_pair_coverage.attributed_pair_keys) - set(pair_keys)
+        if missing_attribution:
+            raise ValueError("sampled coverage references a pair absent from pair_attributions")
+        return self
+
+
+class PairAttributionArtifactReference(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    path: CleanupPath
+    sha256: Sha256Hex
+    validator_command: NonblankStr
+    pair_count: int = Field(ge=0)
+    sampled_pair_count: int = Field(ge=0)
+
+
 class DonorProxyMeasurementReceipt(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -371,6 +451,7 @@ class DonorProxyMeasurementReceipt(BaseModel):
     undecidable_count: int = Field(ge=0)
     deterministic_cluster_sample: list[dict[str, Any]]
     named_transaction_write_defect: TransactionWriteDefect | None
+    pair_attribution_artifact: PairAttributionArtifactReference | None = None
 
     @model_validator(mode="after")
     def validate_measurement_consistency(self) -> DonorProxyMeasurementReceipt:
@@ -668,6 +749,14 @@ def build_argument_parser() -> argparse.ArgumentParser:
     _add_donor_proxy_execution_arguments(donor_proxy)
     donor_proxy.set_defaults(func=_donor_proxy)
 
+    validate_pair_attribution = subparsers.add_parser(
+        "validate-pair-attribution",
+        description="Validate a donor-proxy receipt and its actual-run pair attribution artifact",
+    )
+    validate_pair_attribution.add_argument("--receipt", required=True)
+    validate_pair_attribution.add_argument("--artifact", required=True)
+    validate_pair_attribution.set_defaults(func=_validate_pair_attribution)
+
     validate_receipt = subparsers.add_parser("validate-receipt", description="Validate a harness receipt")
     # `--receipt` is the documented spelling; `--receipt-path` is kept for the
     # existing callers. Presence is enforced in the handler so that naming the
@@ -702,6 +791,7 @@ def _add_execution_evidence_arguments(parser: argparse.ArgumentParser) -> None:
 def _add_donor_proxy_execution_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--output-path", required=True)
     parser.add_argument("--attribution-output-path", default=None)
+    parser.add_argument("--pair-attribution-output-path", default=None)
     parser.add_argument("--timeout-seconds", required=True, type=int)
     parser.add_argument("--memory-bytes", required=True, type=int)
     parser.add_argument("--temp-bytes", required=True, type=int)
@@ -1003,9 +1093,11 @@ def _donor_proxy(args: argparse.Namespace) -> int:
             selected_person_model_rows,
             _DONOR_PROXY_MODEL_ENTITY_TYPE,
             bounded_connection_factory=bounded_connection_factory,
+            include_attribution=True,
         )
         classified_pairs = classify_scored_pairs(scored_pairs)
         clustered = cluster_scored_pairs(classified_pairs, selected_person_model_rows)
+        attribution_classified_pairs = [dict(pair) for pair in classified_pairs]
         if paths.attribution_output_path is not None:
             diagnostic_scored_pairs = score_diagnostic_rows(
                 selected_person_model_rows,
@@ -1024,6 +1116,7 @@ def _donor_proxy(args: argparse.Namespace) -> int:
                 entity_type=_DONOR_PROXY_MODEL_ENTITY_TYPE,
             )
             paths.attribution_output_path.write_text(artifact.model_dump_json(), encoding="utf-8")
+        _strip_pair_attribution_fields(classified_pairs)
         decision_ids = persist_match_decisions(conn, classified_pairs, _DONOR_IDENTITY_ENTITY_TYPE)
         cluster_ids = persist_auto_merge_clusters(
             conn,
@@ -1044,6 +1137,25 @@ def _donor_proxy(args: argparse.Namespace) -> int:
             elapsed_seconds=round(time.monotonic() - started_at, 6),
         ),
     )
+    if paths.pair_attribution_output_path is not None:
+        artifact = _build_pair_attribution_artifact(receipt, attribution_classified_pairs)
+        paths.pair_attribution_output_path.write_text(artifact.model_dump_json() + "\n", encoding="utf-8")
+        artifact_reference = PairAttributionArtifactReference(
+            path=str(paths.pair_attribution_output_path),
+            sha256=hashlib.sha256(paths.pair_attribution_output_path.read_bytes()).hexdigest(),
+            validator_command=_pair_attribution_validator_command(
+                paths.output_path,
+                paths.pair_attribution_output_path,
+            ),
+            pair_count=len(artifact.pair_attributions),
+            sampled_pair_count=len(artifact.sampled_false_pair_coverage.audit_pair_keys),
+        )
+        receipt = DonorProxyMeasurementReceipt.model_validate(
+            {
+                **receipt.model_dump(mode="python"),
+                "pair_attribution_artifact": artifact_reference.model_dump(mode="python"),
+            }
+        )
     paths.output_path.write_text(format_donor_proxy_measurement_receipt(receipt), encoding="utf-8")
     print(
         "donor-proxy "
@@ -1052,6 +1164,82 @@ def _donor_proxy(args: argparse.Namespace) -> int:
         f"cluster_count={receipt.cluster_count}"
     )
     return 0
+
+
+def _strip_pair_attribution_fields(classified_pairs: Sequence[dict[str, Any]]) -> None:
+    attribution_fields = {"match_key", "fired_blocking_rules", "comparison_levels", "match_weight"}
+    for pair in classified_pairs:
+        for field_name in attribution_fields:
+            pair.pop(field_name, None)
+
+
+def _build_pair_attribution_artifact(
+    receipt: DonorProxyMeasurementReceipt,
+    classified_pairs: Sequence[Mapping[str, Any]],
+) -> DonorErPairAttributionArtifact:
+    pair_attributions = [
+        DonorPairAttribution(
+            entity_id_a=str(pair["entity_id_a"]),
+            entity_id_b=str(pair["entity_id_b"]),
+            match_key=str(pair["match_key"]),
+            fired_blocking_rules=pair["fired_blocking_rules"],
+            comparison_levels=pair["comparison_levels"],
+            match_weight=float(pair["match_weight"]),
+            confidence=float(pair["confidence"]),
+            decision=str(pair["decision"]),
+        )
+        for pair in classified_pairs
+    ]
+    audit_pair_keys = _sampled_audit_pair_keys(
+        receipt.deterministic_cluster_sample,
+        pair_attributions,
+    )
+    return DonorErPairAttributionArtifact(
+        schema_version="donor_er_pair_attribution.v1",
+        seed=receipt.seed,
+        chosen_slice_size=receipt.chosen_slice_size,
+        pair_attributions=pair_attributions,
+        sampled_false_pair_coverage=SampledFalsePairCoverage(
+            audit_pair_keys=audit_pair_keys,
+            attributed_pair_keys=list(audit_pair_keys),
+            coverage_ratio=1.0,
+        ),
+    )
+
+
+def _sampled_audit_pair_keys(
+    cluster_sample: Sequence[Mapping[str, Any]],
+    pair_attributions: Sequence[DonorPairAttribution],
+) -> list[str]:
+    sampled_pair_keys: set[str] = set()
+    for cluster in cluster_sample:
+        member_ids = {str(member_id) for member_id in cluster.get("member_ids", [])}
+        for pair in pair_attributions:
+            if pair.entity_id_a in member_ids and pair.entity_id_b in member_ids:
+                sampled_pair_keys.add(_donor_pair_key(pair.entity_id_a, pair.entity_id_b))
+    return sorted(sampled_pair_keys)
+
+
+def _donor_pair_key(entity_id_a: str, entity_id_b: str) -> str:
+    return "|".join(sorted((str(entity_id_a), str(entity_id_b))))
+
+
+def _pair_attribution_validator_command(receipt_path: Path, artifact_path: Path) -> str:
+    return shlex.join(
+        [
+            "uv",
+            "run",
+            "--extra",
+            "entity-resolution",
+            "python",
+            "scripts/donor_er_scale_spike.py",
+            "validate-pair-attribution",
+            "--receipt",
+            str(receipt_path),
+            "--artifact",
+            str(artifact_path),
+        ]
+    )
 
 
 def _parse_committee_ids(raw_committee_ids: Sequence[str]) -> list[UUID]:
@@ -1140,13 +1328,13 @@ def select_donor_proxy_cluster_sample(clustered: Mapping[str, Any], *, seed: str
 
 
 def _transaction_write_defect() -> TransactionWriteDefect | None:
-    transaction_write_seam = "persist_transaction_contributor_" + "person" + "_id"
+    transaction_write_seam = "resolve_donor_identity_transactions"
     transaction_target = "cf.transaction.contributor_" + "person" + "_id"
-    if hasattr(entity_resolution_persist, transaction_write_seam):
+    if callable(getattr(transaction_counterparty_resolver, transaction_write_seam, None)):
         return None
     return TransactionWriteDefect(
-        owner="core/entity_resolution/persist.py",
-        detail=f"no existing owner seam persists local-only {transaction_target} writes",
+        owner="core/entity_resolution/transaction_counterparty_resolver.py",
+        detail=f"no existing owner seam resolves donor identities onto local-only {transaction_target} writes",
     )
 
 
@@ -1230,6 +1418,7 @@ class _DonorProxyPaths(BaseModel):
     temp_root: Path
     output_path: Path
     attribution_output_path: Path | None = None
+    pair_attribution_output_path: Path | None = None
 
 
 class _DonorProxyRunEvidence(BaseModel):
@@ -1283,10 +1472,19 @@ def _resolve_donor_proxy_paths(args: argparse.Namespace) -> _DonorProxyPaths:
         attribution_output_path = _resolve_contained_attribution_output_path(args.attribution_output_path, temp_root)
         if attribution_output_path == output_path:
             raise ValueError("attribution-output-path must differ from output-path")
+    raw_pair_attribution_path = getattr(args, "pair_attribution_output_path", None)
+    pair_attribution_output_path = (
+        _resolve_contained_output_path(raw_pair_attribution_path, temp_root)
+        if raw_pair_attribution_path is not None
+        else None
+    )
+    if pair_attribution_output_path == output_path:
+        raise ValueError("pair-attribution-output-path must not alias output-path")
     return _DonorProxyPaths(
         temp_root=temp_root,
         output_path=output_path,
         attribution_output_path=attribution_output_path,
+        pair_attribution_output_path=pair_attribution_output_path,
     )
 
 
@@ -1925,6 +2123,49 @@ def _validate_receipt(args: argparse.Namespace) -> int:
     if getattr(args, "require_cleanup", False):
         summary += " cleanup=verified"
     print(summary)
+    return 0
+
+
+def _validate_pair_attribution(args: argparse.Namespace) -> int:
+    try:
+        receipt_path = Path(args.receipt).resolve(strict=True)
+        artifact_path = Path(args.artifact).resolve(strict=True)
+        receipt = validate_donor_proxy_measurement_receipt_markdown(receipt_path.read_text(encoding="utf-8"))
+        reference = receipt.pair_attribution_artifact
+        if reference is None:
+            raise ValueError("receipt does not declare a pair attribution artifact")
+        if Path(reference.path).resolve(strict=True) != artifact_path:
+            raise ValueError("receipt pair attribution path does not match --artifact")
+        if hashlib.sha256(artifact_path.read_bytes()).hexdigest() != reference.sha256:
+            raise ValueError("pair attribution artifact SHA-256 does not match receipt")
+        artifact = DonorErPairAttributionArtifact.model_validate_json(artifact_path.read_text(encoding="utf-8"))
+        if artifact.seed != receipt.seed or artifact.chosen_slice_size != receipt.chosen_slice_size:
+            raise ValueError("pair attribution run identity does not match receipt")
+        expected_audit_pair_keys = _sampled_audit_pair_keys(
+            receipt.deterministic_cluster_sample,
+            artifact.pair_attributions,
+        )
+        if artifact.sampled_false_pair_coverage.audit_pair_keys != expected_audit_pair_keys:
+            raise ValueError("sampled-false-pair coverage does not match the receipt cluster sample")
+        if reference.pair_count != len(artifact.pair_attributions):
+            raise ValueError("receipt pair attribution count does not match artifact")
+        if reference.sampled_pair_count != len(expected_audit_pair_keys):
+            raise ValueError("receipt sampled pair count does not match artifact")
+        if reference.validator_command != _pair_attribution_validator_command(receipt_path, artifact_path):
+            raise ValueError("receipt validator command does not match the validated paths")
+    except (OSError, ValidationError, ValueError) as error:
+        if isinstance(error, ValidationError):
+            message = _scrubbed_validation_message(error)
+        else:
+            message = str(error)
+        print(f"validate-pair-attribution failed: {message}", file=sys.stderr)
+        return 1
+    print(
+        "validate-pair-attribution "
+        f"schema_version={artifact.schema_version} "
+        f"pairs={len(artifact.pair_attributions)} "
+        f"sampled_pairs={len(expected_audit_pair_keys)}"
+    )
     return 0
 
 

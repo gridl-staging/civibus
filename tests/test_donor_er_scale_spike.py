@@ -109,6 +109,8 @@ DONOR_PROXY_ARGUMENTS = [
     "stage-2-seed",
     "--output-path",
     "donor_proxy_receipt.md",
+    "--pair-attribution-output-path",
+    "donor_pair_attribution.json",
     "--timeout-seconds",
     "30",
     "--memory-bytes",
@@ -287,6 +289,7 @@ def _donor_proxy_args(tmp_path: Path, **overrides: object) -> argparse.Namespace
         "cluster_sample_size": 2,
         "seed": "stage-2-seed",
         "output_path": str(temp_root / "donor_proxy_receipt.md"),
+        "pair_attribution_output_path": str(temp_root / "donor_pair_attribution.json"),
         "timeout_seconds": 30,
         "memory_bytes": 64 * 1024 * 1024,
         "temp_bytes": 64 * 1024 * 1024,
@@ -348,7 +351,13 @@ def test_public_module_surface_and_cli_subcommands() -> None:
     assert main_signature.parameters["argv"].default is None
     assert type_hints == {"argv": list[str] | None, "return": int}
     parser = harness.build_argument_parser()
-    assert _subcommand_choices(parser) == {"materialize", "benchmark", "donor-proxy", "validate-receipt"}
+    assert _subcommand_choices(parser) == {
+        "materialize",
+        "benchmark",
+        "donor-proxy",
+        "validate-receipt",
+        "validate-pair-attribution",
+    }
 
 
 @pytest.mark.parametrize(
@@ -2553,6 +2562,19 @@ def _donor_proxy_owner_spy_data() -> dict[str, object]:
             "confidence": 0.97,
             "decided_by": "splink_v1",
             "decision_method": "probabilistic",
+            "match_key": "0",
+            "fired_blocking_rules": [
+                {
+                    "match_key": "0",
+                    "blocking_rule": 'l."last_name" = r."last_name" AND l."state" = r."state"',
+                },
+                {
+                    "match_key": "1",
+                    "blocking_rule": 'l."zip5" = r."zip5" AND l."last_name_prefix5" = r."last_name_prefix5"',
+                },
+            ],
+            "comparison_levels": {"canonical_name": 3, "state": 1},
+            "match_weight": 5.01,
         }
     ]
     classified = [{**scored[0], "decision": "match"}]
@@ -2656,6 +2678,7 @@ def test_donor_proxy_db_path_calls_existing_er_owners_in_order(
     assert events[3][1][1] == "person"
     assert len(events[3][1][0]) == 125
     assert events[4][1][1] == "person"
+    assert events[4][1][2] == ["bounded_connection_factory", "include_attribution"]
     assert events[3][1][0][0] == {
         "id": "donor-041",
         "canonical_name": "JANE DOE",
@@ -2675,6 +2698,86 @@ def test_donor_proxy_db_path_calls_existing_er_owners_in_order(
     assert events[7][1] == (fixtures["conn"], fixtures["classified"], "donor_identity")
     clustered = fixtures["clustered"]
     assert events[8][1] == (fixtures["conn"], clustered["auto_merge_clusters"], "donor_identity")
+
+    receipt_path = tmp_path / "lane" / "donor_proxy_receipt.md"
+    artifact_path = tmp_path / "lane" / "donor_pair_attribution.json"
+    receipt = harness.validate_donor_proxy_measurement_receipt_markdown(receipt_path.read_text(encoding="utf-8"))
+    artifact = harness.DonorErPairAttributionArtifact.model_validate_json(artifact_path.read_text(encoding="utf-8"))
+    assert receipt.pair_attribution_artifact is not None
+    assert receipt.pair_attribution_artifact.sha256 == _sha256_file(artifact_path)
+    assert artifact.schema_version == "donor_er_pair_attribution.v1"
+    assert artifact.pair_attributions[0].model_dump() == {
+        "entity_id_a": "donor-001",
+        "entity_id_b": "donor-002",
+        "match_key": "0",
+        "fired_blocking_rules": [
+            {
+                "match_key": "0",
+                "blocking_rule": 'l."last_name" = r."last_name" AND l."state" = r."state"',
+            },
+            {
+                "match_key": "1",
+                "blocking_rule": 'l."zip5" = r."zip5" AND l."last_name_prefix5" = r."last_name_prefix5"',
+            },
+        ],
+        "comparison_levels": {"canonical_name": 3, "state": 1},
+        "match_weight": 5.01,
+        "confidence": 0.97,
+        "decision": "match",
+    }
+    assert artifact.sampled_false_pair_coverage.model_dump() == {
+        "audit_pair_keys": ["donor-001|donor-002"],
+        "attributed_pair_keys": ["donor-001|donor-002"],
+        "coverage_ratio": 1.0,
+    }
+    assert (
+        harness.main(
+            [
+                "validate-pair-attribution",
+                "--receipt",
+                str(receipt_path),
+                "--artifact",
+                str(artifact_path),
+            ]
+        )
+        == 0
+    )
+
+
+def test_pair_attribution_contract_fails_closed_on_incomplete_sample_coverage() -> None:
+    harness = _load_harness()
+    artifact = harness.DonorErPairAttributionArtifact(
+        schema_version="donor_er_pair_attribution.v1",
+        seed="known-answer",
+        chosen_slice_size=2,
+        pair_attributions=[
+            {
+                "entity_id_a": "donor-a",
+                "entity_id_b": "donor-b",
+                "match_key": "0",
+                "fired_blocking_rules": [
+                    {
+                        "match_key": "0",
+                        "blocking_rule": 'l."last_name" = r."last_name"',
+                    }
+                ],
+                "comparison_levels": {"canonical_name": 2},
+                "match_weight": 3.5,
+                "confidence": 0.9,
+                "decision": "probable_match",
+            }
+        ],
+        sampled_false_pair_coverage={
+            "audit_pair_keys": ["donor-a|donor-b"],
+            "attributed_pair_keys": ["donor-a|donor-b"],
+            "coverage_ratio": 1.0,
+        },
+    )
+    payload = json.loads(artifact.model_dump_json())
+    payload["sampled_false_pair_coverage"]["attributed_pair_keys"] = []
+
+    with pytest.raises(ValidationError, match="complete sampled-false-pair coverage"):
+        harness.DonorErPairAttributionArtifact.model_validate(payload)
 
 
 def test_donor_proxy_attribution_output_option_is_contained_in_temp_root(tmp_path: Path) -> None:
@@ -2998,6 +3101,27 @@ def test_wilson_interval_and_verdict_precedence_are_known_answers() -> None:
         )
         == "SCALE_NOW"
     )
+
+
+def test_transaction_write_defect_tracks_resolver_owner(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    harness = _load_harness()
+
+    assert harness._transaction_write_defect() is None
+
+    monkeypatch.setattr(
+        harness.transaction_counterparty_resolver,
+        "resolve_donor_identity_transactions",
+        None,
+    )
+    assert harness._transaction_write_defect().model_dump() == {
+        "owner": "core/entity_resolution/transaction_counterparty_resolver.py",
+        "detail": (
+            "no existing owner seam resolves donor identities onto local-only "
+            "cf.transaction.contributor_person_id writes"
+        ),
+    }
 
 
 def test_proxy_receipt_validation_requires_single_verdict_and_evidence() -> None:

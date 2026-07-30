@@ -146,6 +146,111 @@ def test_score_with_splink_runs_training_and_maps_predictions(
     ]
 
 
+def test_score_with_splink_can_preserve_actual_run_pair_attribution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    left_id = uuid4()
+    right_id = uuid4()
+    rows: list[RowDict] = [
+        {
+            "id": left_id,
+            "canonical_name": "Doe, Jane",
+            "last_name": "DOE",
+            "state": "NC",
+            "zip5": "27601",
+            "last_name_prefix5": "DOE",
+        },
+        {
+            "id": right_id,
+            "canonical_name": "Doe, Janet",
+            "last_name": "DOE",
+            "state": "NC",
+            "zip5": "27601",
+            "last_name_prefix5": "DOE",
+        },
+    ]
+    rule_metadata = [
+        {
+            "rule_index": 0,
+            "blocking_rule": 'l."last_name" = r."last_name" AND l."state" = r."state"',
+        },
+        {
+            "rule_index": 1,
+            "blocking_rule": 'l."zip5" = r."zip5" AND l."last_name_prefix5" = r."last_name_prefix5"',
+        },
+    ]
+
+    class FakeDuckDBAPI:
+        pass
+
+    class FakePredictions:
+        def as_record_dict(self) -> list[dict[str, object]]:
+            return [
+                {
+                    "id_l": str(left_id),
+                    "id_r": str(right_id),
+                    "match_key": "0",
+                    "match_probability": 0.91,
+                    "match_weight": 3.25,
+                    "gamma_canonical_name": 2,
+                    "gamma_state": 1,
+                }
+            ]
+
+    class FakeTraining:
+        def estimate_u_using_random_sampling(self, *, max_pairs: int) -> None:
+            pass
+
+        def estimate_parameters_using_expectation_maximisation(self, blocking_rule: str) -> None:
+            pass
+
+    class FakeInference:
+        def predict(self) -> FakePredictions:
+            return FakePredictions()
+
+    class FakeLinker:
+        def __init__(self, input_rows: list[RowDict], settings: object, db_api: object) -> None:
+            self.training = FakeTraining()
+            self.inference = FakeInference()
+
+    monkeypatch.setattr(
+        "core.entity_resolution.scoring.get_probabilistic_settings",
+        lambda entity_type: object(),
+    )
+    monkeypatch.setattr(
+        "core.entity_resolution.scoring.get_blocking_rule_sqls",
+        lambda entity_type: [rule["blocking_rule"] for rule in rule_metadata],
+    )
+    monkeypatch.setattr(
+        "core.entity_resolution.scoring.describe_blocking_rules",
+        lambda entity_type: rule_metadata,
+    )
+    monkeypatch.setattr(
+        "core.entity_resolution.scoring.get_splink_runtime",
+        lambda: (FakeLinker, FakeDuckDBAPI),
+    )
+
+    assert score_with_splink(rows, "person", include_attribution=True) == [
+        {
+            "entity_id_a": min(left_id, right_id),
+            "entity_id_b": max(left_id, right_id),
+            "confidence": 0.91,
+            "decision_method": "probabilistic",
+            "decided_by": "splink_v1",
+            "match_key": "0",
+            "fired_blocking_rules": [
+                {"match_key": "0", "blocking_rule": rule_metadata[0]["blocking_rule"]},
+                {"match_key": "1", "blocking_rule": rule_metadata[1]["blocking_rule"]},
+            ],
+            "comparison_levels": {
+                "canonical_name": 2,
+                "state": 1,
+            },
+            "match_weight": 3.25,
+        }
+    ]
+
+
 def test_score_with_splink_registers_rows_before_linker_init_when_supported(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

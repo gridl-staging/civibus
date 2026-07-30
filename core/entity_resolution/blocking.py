@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 from core.entity_resolution.extract import (
@@ -15,6 +16,12 @@ from core.entity_resolution.splink_runtime import (
     get_splink_runtime,
     require_probabilistic_settings,
 )
+
+try:
+    from sqlglot import exp, parse_one
+except (ImportError, ModuleNotFoundError):
+    exp = None
+    parse_one = None
 
 try:
     from splink.blocking_analysis import (
@@ -79,9 +86,90 @@ def _zero_counts_by_rule(
     ]
 
 
-def describe_blocking_rules(entity_type: str) -> list[BlockingRuleMetadata]:
+def describe_blocking_rules(
+    entity_type: str,
+    *,
+    probabilistic_settings: Any | None = None,
+) -> list[BlockingRuleMetadata]:
     """Return blocking-rule metadata from Splink settings."""
-    return _blocking_rule_metadata(_probabilistic_settings(entity_type))
+    settings = (
+        _probabilistic_settings(entity_type)
+        if probabilistic_settings is None
+        else require_probabilistic_settings(probabilistic_settings, entity_type=entity_type)
+    )
+    return _blocking_rule_metadata(settings)
+
+
+def fired_blocking_rules_for_pair(
+    left_row: Mapping[str, Any],
+    right_row: Mapping[str, Any],
+    rule_metadata: list[BlockingRuleMetadata],
+) -> list[BlockingRuleMetadata]:
+    """Evaluate configured equality/AND rules against one actual prediction pair.
+
+    The configured ER rules are generated with Splink's equality-based
+    ``block_on`` helper. Fail closed if that contract expands to SQL we do not
+    explicitly understand; silently approximating a rule would make attribution
+    evidence untrustworthy.
+    """
+    fired_rules: list[BlockingRuleMetadata] = []
+    if exp is None or parse_one is None:
+        raise RuntimeError("sqlglot is required for actual-run blocking-rule attribution")
+    for rule in rule_metadata:
+        rule_sql = str(rule["blocking_rule"])
+        expression = parse_one(rule_sql, read="duckdb")
+        if _evaluate_blocking_expression(expression, left_row, right_row):
+            fired_rules.append(
+                {
+                    "match_key": str(rule["rule_index"]),
+                    "blocking_rule": rule_sql,
+                }
+            )
+    return fired_rules
+
+
+def _evaluate_blocking_expression(
+    expression: exp.Expression,
+    left_row: Mapping[str, Any],
+    right_row: Mapping[str, Any],
+) -> bool:
+    if exp is None:
+        raise RuntimeError("sqlglot is required for actual-run blocking-rule attribution")
+    if isinstance(expression, exp.Paren):
+        return _evaluate_blocking_expression(expression.this, left_row, right_row)
+    if isinstance(expression, exp.And):
+        return _evaluate_blocking_expression(expression.this, left_row, right_row) and _evaluate_blocking_expression(
+            expression.expression,
+            left_row,
+            right_row,
+        )
+    if isinstance(expression, exp.EQ):
+        left_value = _blocking_column_value(expression.this, left_row, right_row)
+        right_value = _blocking_column_value(expression.expression, left_row, right_row)
+        return left_value is not None and right_value is not None and left_value == right_value
+    raise ValueError(f"unsupported blocking-rule expression: {type(expression).__name__}")
+
+
+def _blocking_column_value(
+    expression: exp.Expression,
+    left_row: Mapping[str, Any],
+    right_row: Mapping[str, Any],
+) -> Any:
+    if exp is None:
+        raise RuntimeError("sqlglot is required for actual-run blocking-rule attribution")
+    if not isinstance(expression, exp.Column):
+        raise ValueError(f"unsupported blocking-rule operand: {type(expression).__name__}")
+    table = expression.table
+    if table == "l":
+        row = left_row
+    elif table == "r":
+        row = right_row
+    else:
+        raise ValueError(f"unsupported blocking-rule table alias: {table!r}")
+    column_name = expression.name
+    if column_name not in row:
+        raise ValueError(f"blocking-rule column absent from scored row: {table}.{column_name}")
+    return row[column_name]
 
 
 def count_blocked_pairs(

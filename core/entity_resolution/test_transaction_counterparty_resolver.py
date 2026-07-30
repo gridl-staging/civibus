@@ -15,9 +15,12 @@ from core.db import (
     insert_person,
     insert_source_record,
 )
-from core.entity_resolution.l8_regression import _normalize_address
 from core.entity_resolution import transaction_counterparty_resolver as resolver_module
-from core.entity_resolution.extract import _donor_identity_id
+from core.entity_resolution.extract import (
+    _donor_identity_id,
+    _donor_identity_schedule_a_predicate_sql,
+)
+from core.entity_resolution.l8_regression import _normalize_address
 from core.entity_resolution.persist import persist_auto_merge_clusters
 from core.types.python.models import (
     DataSource,
@@ -56,9 +59,8 @@ def _cleanup_test_rows(db_conn: psycopg.Connection) -> None:
             """
             DELETE FROM cf.transaction
             WHERE transaction_identifier LIKE %s
-               OR (sub_id IS NOT NULL AND sub_id >= %s)
             """,
-            (f"{_TEST_TRANSACTION_PREFIX}%", _TEST_SUB_ID_BASE),
+            (f"{_TEST_TRANSACTION_PREFIX}%",),
         )
         cursor.execute(
             """
@@ -434,6 +436,56 @@ def _donor_writeback_rows(
         )
         rows_by_id = {row["id"]: row for row in cursor.fetchall()}
     return {label: rows_by_id[transaction_id] for label, transaction_id in transaction_ids.items()}
+
+
+def _scope_donor_writeback_resolver_to_transactions(
+    monkeypatch: pytest.MonkeyPatch,
+    transaction_ids: dict[str, UUID] | list[UUID],
+) -> None:
+    selected_transaction_ids = list(transaction_ids.values()) if isinstance(transaction_ids, dict) else transaction_ids
+    schedule_a_predicate = _donor_identity_schedule_a_predicate_sql(table_alias="t")
+
+    def _fixture_rows(conn: psycopg.Connection) -> list[dict[str, object]]:
+        with conn.cursor(row_factory=dict_row) as cursor:
+            cursor.execute(
+                f"""
+                SELECT
+                    t.id,
+                    t.contributor_organization_id,
+                    t.contributor_name_raw,
+                    COALESCE(t.contributor_employer, '') AS contributor_employer,
+                    COALESCE(t.contributor_occupation, '') AS contributor_occupation,
+                    COALESCE(t.contributor_city, '') AS contributor_city,
+                    COALESCE(t.contributor_state, '') AS contributor_state,
+                    COALESCE(t.contributor_zip, '') AS contributor_zip
+                FROM cf.transaction t
+                JOIN core.donor_identity di
+                  ON di.contributor_name_raw = t.contributor_name_raw
+                 AND COALESCE(di.contributor_employer, '') = COALESCE(t.contributor_employer, '')
+                 AND COALESCE(di.contributor_occupation, '') = COALESCE(t.contributor_occupation, '')
+                 AND COALESCE(di.contributor_city, '') = COALESCE(t.contributor_city, '')
+                 AND COALESCE(di.contributor_state, '') = COALESCE(t.contributor_state, '')
+                 AND COALESCE(di.contributor_zip, '') = COALESCE(t.contributor_zip, '')
+                WHERE t.id = ANY(%s)
+                  AND {schedule_a_predicate}
+                ORDER BY
+                    t.contributor_name_raw,
+                    contributor_employer,
+                    contributor_occupation,
+                    contributor_city,
+                    contributor_state,
+                    contributor_zip,
+                    t.id
+                """,
+                (selected_transaction_ids,),
+            )
+            return list(cursor.fetchall())
+
+    monkeypatch.setattr(
+        resolver_module,
+        "_donor_identity_transaction_rows_for_existing_identities",
+        _fixture_rows,
+    )
 
 
 def _donor_person_mapping_by_identity_id(
@@ -848,8 +900,10 @@ def test_resolver_links_known_donor_and_vendor_and_skips_ambiguous_match(
 
 def test_donor_writeback_links_resolved_cluster_transactions_and_preserves_nulls(
     db_conn: psycopg.Connection,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     transaction_ids, resolved_person_id = _seed_donor_writeback_fixture(db_conn)
+    _scope_donor_writeback_resolver_to_transactions(monkeypatch, transaction_ids)
 
     summary = resolver_module.resolve_donor_identity_transactions(db_conn)
 
@@ -888,8 +942,10 @@ def test_donor_writeback_links_resolved_cluster_transactions_and_preserves_nulls
 
 def test_donor_writeback_second_run_is_idempotent_and_keeps_identity_columns_stable(
     db_conn: psycopg.Connection,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     transaction_ids, _ = _seed_donor_writeback_fixture(db_conn)
+    _scope_donor_writeback_resolver_to_transactions(monkeypatch, transaction_ids)
 
     first_summary = resolver_module.resolve_donor_identity_transactions(db_conn)
     before_second_run = _select_transaction_identity_snapshot(db_conn, list(transaction_ids.values()))
@@ -912,6 +968,7 @@ def test_donor_writeback_second_run_is_idempotent_and_keeps_identity_columns_sta
 
 def test_donor_writeback_excludes_unpersisted_donor_in_mixed_committee(
     db_conn: psycopg.Connection,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     committee_id = _insert_test_committee(db_conn, "mixed-donor-writeback")
     filing_id = _insert_test_filing(db_conn, committee_id, "mixed-donor-writeback")
@@ -950,6 +1007,7 @@ def test_donor_writeback_excludes_unpersisted_donor_in_mixed_committee(
             donor_tuple=unrelated_tuple,
         ),
     }
+    _scope_donor_writeback_resolver_to_transactions(monkeypatch, transaction_ids)
 
     summary = resolver_module.resolve_donor_identity_transactions(db_conn)
 
@@ -971,6 +1029,7 @@ def test_donor_writeback_excludes_unpersisted_donor_in_mixed_committee(
 
 def test_donor_writeback_counts_clusterless_donor_identity_as_invalid_cluster(
     db_conn: psycopg.Connection,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     committee_id = _insert_test_committee(db_conn, "clusterless-donor-writeback")
     filing_id = _insert_test_filing(db_conn, committee_id, "clusterless-donor-writeback")
@@ -989,6 +1048,7 @@ def test_donor_writeback_counts_clusterless_donor_identity_as_invalid_cluster(
         filing_id=filing_id,
         donor_tuple=donor_tuple,
     )
+    _scope_donor_writeback_resolver_to_transactions(monkeypatch, [transaction_id])
 
     summary = resolver_module.resolve_donor_identity_transactions(db_conn)
 
@@ -1009,6 +1069,7 @@ def test_donor_writeback_counts_clusterless_donor_identity_as_invalid_cluster(
 
 def test_donor_writeback_uses_person_mapping_created_by_donor_cluster_persistence(
     db_conn: psycopg.Connection,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     committee_id = _insert_test_committee(db_conn, "persisted-mapping-donor-writeback")
     filing_id = _insert_test_filing(db_conn, committee_id, "persisted-mapping-donor-writeback")
@@ -1032,6 +1093,7 @@ def test_donor_writeback_uses_person_mapping_created_by_donor_cluster_persistenc
         filing_id=filing_id,
         donor_tuple=donor_tuple,
     )
+    _scope_donor_writeback_resolver_to_transactions(monkeypatch, [transaction_id])
 
     cluster_id = persist_auto_merge_clusters(
         db_conn,
@@ -1082,6 +1144,7 @@ def test_donor_writeback_uses_person_mapping_created_by_donor_cluster_persistenc
 
 def test_donor_writeback_split_donor_clusters_map_to_distinct_people(
     db_conn: psycopg.Connection,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     committee_id = _insert_test_committee(db_conn, "split-donor-writeback")
     filing_id = _insert_test_filing(db_conn, committee_id, "split-donor-writeback")
@@ -1117,6 +1180,7 @@ def test_donor_writeback_split_donor_clusters_map_to_distinct_people(
             donor_tuple=donor_b_tuple,
         ),
     }
+    _scope_donor_writeback_resolver_to_transactions(monkeypatch, transaction_ids)
 
     persist_auto_merge_clusters(
         db_conn,
@@ -1180,6 +1244,7 @@ def test_donor_writeback_split_donor_clusters_map_to_distinct_people(
 
 def test_donor_writeback_clears_stale_person_when_mapping_becomes_invalid(
     db_conn: psycopg.Connection,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     committee_id = _insert_test_committee(db_conn, "stale-clear-donor-writeback")
     filing_id = _insert_test_filing(db_conn, committee_id, "stale-clear-donor-writeback")
@@ -1199,6 +1264,7 @@ def test_donor_writeback_clears_stale_person_when_mapping_becomes_invalid(
         filing_id=filing_id,
         donor_tuple=donor_tuple,
     )
+    _scope_donor_writeback_resolver_to_transactions(monkeypatch, [transaction_id])
 
     first_summary = resolver_module.resolve_donor_identity_transactions(db_conn)
     db_conn.execute(
@@ -1232,6 +1298,7 @@ def test_donor_writeback_clears_stale_person_when_mapping_becomes_invalid(
 
 def test_donor_writeback_preserves_organization_when_person_mapping_becomes_invalid(
     db_conn: psycopg.Connection,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     committee_id = _insert_test_committee(db_conn, "organization-preservation-donor-writeback")
     filing_id = _insert_test_filing(db_conn, committee_id, "organization-preservation-donor-writeback")
@@ -1258,6 +1325,7 @@ def test_donor_writeback_preserves_organization_when_person_mapping_becomes_inva
         filing_id=filing_id,
         donor_tuple=donor_tuple,
     )
+    _scope_donor_writeback_resolver_to_transactions(monkeypatch, [transaction_id])
 
     first_summary = resolver_module.resolve_donor_identity_transactions(db_conn)
     organization_assignment_mutated = update_transaction_contributor_identity_ids(

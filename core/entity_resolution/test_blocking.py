@@ -7,6 +7,7 @@ import pytest
 from core.entity_resolution.blocking import (
     count_blocked_pairs,
     describe_blocking_rules,
+    fired_blocking_rules_for_pair,
 )
 from core.entity_resolution.extract import RowDict
 
@@ -67,6 +68,50 @@ def test_describe_blocking_rules_returns_rule_metadata(monkeypatch: pytest.Monke
         {"rule_index": 0, "blocking_rule": "l.last_name = r.last_name"},
         {"rule_index": 1, "blocking_rule": "l.zip5 = r.zip5"},
     ]
+
+
+def test_fired_blocking_rules_for_pair_returns_every_true_rule() -> None:
+    rules = [
+        {
+            "rule_index": 0,
+            "blocking_rule": 'l."last_name" = r."last_name" AND l."state" = r."state"',
+        },
+        {
+            "rule_index": 1,
+            "blocking_rule": 'l."zip5" = r."zip5" AND l."last_name_prefix5" = r."last_name_prefix5"',
+        },
+        {
+            "rule_index": 2,
+            "blocking_rule": 'l."street_number" = r."street_number"',
+        },
+    ]
+    left = {
+        "last_name": "DOE",
+        "state": "NC",
+        "zip5": "27601",
+        "last_name_prefix5": "DOE",
+        "street_number": None,
+    }
+    right = dict(left)
+
+    assert fired_blocking_rules_for_pair(left, right, rules) == [
+        {"match_key": "0", "blocking_rule": rules[0]["blocking_rule"]},
+        {"match_key": "1", "blocking_rule": rules[1]["blocking_rule"]},
+    ]
+
+
+def test_fired_blocking_rules_for_pair_fails_closed_on_unsupported_sql() -> None:
+    with pytest.raises(ValueError, match="unsupported blocking-rule expression"):
+        fired_blocking_rules_for_pair(
+            {"last_name": "DOE"},
+            {"last_name": "DOE"},
+            [
+                {
+                    "rule_index": 0,
+                    "blocking_rule": 'levenshtein(l."last_name", r."last_name") <= 1',
+                }
+            ],
+        )
 
 
 def test_count_blocked_pairs_raises_when_runtime_unavailable(

@@ -6,10 +6,15 @@ from uuid import UUID
 import psycopg
 from psycopg.rows import dict_row
 
+from core.entity_resolution.blocking import (
+    describe_blocking_rules,
+    fired_blocking_rules_for_pair,
+)
 from core.entity_resolution.extract import (
     RowDict,
     extract_rows_for_matching,
     prepare_rows_for_probabilistic_scoring,
+    prediction_row_ids_from_record,
     prediction_record_restores_same_entity,
     restore_entity_pair_from_prediction_record,
 )
@@ -117,6 +122,7 @@ def score_with_splink(
     probabilistic_settings: Any | None = None,
     bounded_connection_factory: BoundedConnectionFactory | None = None,
     include_diagnostics: bool = False,
+    include_attribution: bool = False,
 ) -> list[ScoredPair]:
     """Run probabilistic matching with Splink and return Stage 3 scored-pair contract."""
     settings = require_probabilistic_settings(
@@ -130,8 +136,12 @@ def score_with_splink(
 
     if probabilistic_settings is None:
         blocking_rules = get_blocking_rule_sqls(entity_type)
+        rule_metadata = describe_blocking_rules(entity_type) if include_attribution else None
     else:
         blocking_rules = get_blocking_rule_sqls(entity_type, probabilistic_settings=settings)
+        rule_metadata = (
+            describe_blocking_rules(entity_type, probabilistic_settings=settings) if include_attribution else None
+        )
     built_linker = build_splink_linker(
         prepared_rows,
         settings,
@@ -139,7 +149,13 @@ def score_with_splink(
         bounded_connection_factory=bounded_connection_factory,
     )
     if bounded_connection_factory is None:
-        return _score_linker_predictions(built_linker, blocking_rules, include_diagnostics=include_diagnostics)
+        return _score_linker_predictions(
+            built_linker,
+            blocking_rules,
+            include_diagnostics=include_diagnostics,
+            prepared_rows=prepared_rows,
+            rule_metadata=rule_metadata,
+        )
     if not isinstance(built_linker, BoundedSplinkLinker):
         raise RuntimeError("bounded linker construction did not return an owned session")
     try:
@@ -147,6 +163,8 @@ def score_with_splink(
             built_linker.linker,
             blocking_rules,
             include_diagnostics=include_diagnostics,
+            prepared_rows=prepared_rows,
+            rule_metadata=rule_metadata,
         )
     finally:
         built_linker.close()
@@ -157,34 +175,51 @@ def _score_linker_predictions(
     blocking_rules: list[Any],
     *,
     include_diagnostics: bool = False,
+    prepared_rows: list[RowDict],
+    rule_metadata: list[dict[str, Any]] | None,
 ) -> list[ScoredPair]:
     """Train one linker and map its predictions to canonical scored pairs."""
     train_linker(linker, blocking_rules)
     predictions = linker.inference.predict()
 
-    records_by_pair: dict[tuple[Any, Any], dict[str, Any]] = {}
+    prepared_rows_by_id = {str(row["id"]): row for row in prepared_rows}
+    scored_pairs_by_pair: dict[tuple[Any, Any], ScoredPair] = {}
     for record in prediction_records(predictions):
         if prediction_record_restores_same_entity(record):
             continue
         pair_key = _record_entity_ids(record)
         confidence = float(record["match_probability"])
-        selected_record = records_by_pair.get(pair_key)
-        if selected_record is None or confidence > float(selected_record["match_probability"]):
-            records_by_pair[pair_key] = record
-
-    scored_pairs: list[ScoredPair] = []
-    for pair_key, record in records_by_pair.items():
-        scored_pair = {
+        scored_pair: ScoredPair = {
             "entity_id_a": pair_key[0],
             "entity_id_b": pair_key[1],
-            "confidence": float(record["match_probability"]),
+            "confidence": confidence,
             "decision_method": "probabilistic",
             "decided_by": "splink_v1",
         }
         if include_diagnostics:
             scored_pair.update(_selected_prediction_diagnostics(record))
-        scored_pairs.append(scored_pair)
-    return scored_pairs
+        if rule_metadata is not None:
+            scored_pair.update(
+                _actual_run_attribution(
+                    record,
+                    prepared_rows_by_id=prepared_rows_by_id,
+                    rule_metadata=rule_metadata,
+                )
+            )
+
+        current_pair = scored_pairs_by_pair.get(pair_key)
+        if current_pair is None:
+            scored_pairs_by_pair[pair_key] = scored_pair
+            continue
+        fired_rules = _merge_fired_rules(current_pair, scored_pair)
+        if confidence > float(current_pair["confidence"]):
+            if fired_rules:
+                scored_pair["fired_blocking_rules"] = fired_rules
+            scored_pairs_by_pair[pair_key] = scored_pair
+        elif fired_rules:
+            current_pair["fired_blocking_rules"] = fired_rules
+
+    return list(scored_pairs_by_pair.values())
 
 
 def _selected_prediction_diagnostics(record: dict[str, Any]) -> dict[str, Any]:
@@ -195,6 +230,54 @@ def _selected_prediction_diagnostics(record: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _actual_run_attribution(
+    record: dict[str, Any],
+    *,
+    prepared_rows_by_id: dict[str, RowDict],
+    rule_metadata: list[dict[str, Any]],
+) -> ScoredPair:
+    required_fields = ("match_key", "match_weight")
+    missing_fields = [field for field in required_fields if field not in record]
+    comparison_levels = {
+        key.removeprefix("gamma_"): int(value)
+        for key, value in record.items()
+        if key.startswith("gamma_") and value is not None
+    }
+    if not comparison_levels:
+        missing_fields.append("gamma_*")
+    if missing_fields:
+        raise RuntimeError(f"Splink prediction missing attribution fields: {', '.join(missing_fields)}")
+
+    left_row_id, right_row_id = prediction_row_ids_from_record(record)
+    left_id = str(left_row_id)
+    right_id = str(right_row_id)
+    try:
+        left_row = prepared_rows_by_id[left_id]
+        right_row = prepared_rows_by_id[right_id]
+    except KeyError as exc:
+        raise RuntimeError(f"Splink prediction references unknown prepared row: {exc.args[0]}") from exc
+    fired_rules = fired_blocking_rules_for_pair(left_row, right_row, rule_metadata)
+    match_key = str(record["match_key"])
+    if match_key not in {str(rule["match_key"]) for rule in fired_rules}:
+        raise RuntimeError(f"Splink primary match_key {match_key!r} is not among the fired blocking rules")
+
+    return {
+        "match_key": match_key,
+        "fired_blocking_rules": fired_rules,
+        "comparison_levels": comparison_levels,
+        "match_weight": float(record["match_weight"]),
+    }
+
+
+def _merge_fired_rules(left_pair: ScoredPair, right_pair: ScoredPair) -> list[dict[str, Any]]:
+    merged: dict[tuple[str, str], dict[str, Any]] = {}
+    for pair in (left_pair, right_pair):
+        for rule in pair.get("fired_blocking_rules", []):
+            key = (str(rule["match_key"]), str(rule["blocking_rule"]))
+            merged[key] = rule
+    return list(merged.values())
+
+
 def score_rows(
     rows: list[RowDict],
     entity_type: str,
@@ -203,6 +286,7 @@ def score_rows(
     probabilistic_settings: Any | None = None,
     bounded_connection_factory: BoundedConnectionFactory | None = None,
     include_diagnostics: bool = False,
+    include_attribution: bool = False,
 ) -> list[ScoredPair]:
     """Score already-materialized ER rows through the standard deterministic/probabilistic pipeline.
 
@@ -221,6 +305,8 @@ def score_rows(
         scoring_options["bounded_connection_factory"] = bounded_connection_factory
     if include_diagnostics:
         scoring_options["include_diagnostics"] = True
+    if include_attribution:
+        scoring_options["include_attribution"] = True
     probabilistic_pairs = score_with_splink(
         unresolved_rows,
         entity_type,

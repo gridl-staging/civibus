@@ -358,12 +358,18 @@ def restore_entity_id_from_probabilistic_row(row_id: Any) -> Any:
     return _restore_uuid_string(prefix)
 
 
-def restore_entity_pair_from_prediction_record(record: RowDict) -> tuple[Any, Any]:
-    """Recover canonical entity IDs from a Splink prediction record."""
+def prediction_row_ids_from_record(record: RowDict) -> tuple[Any, Any]:
+    """Read the configured left/right row IDs from a Splink prediction record."""
     left_row_id = record.get("unique_id_l", record.get("id_l"))
     right_row_id = record.get("unique_id_r", record.get("id_r"))
     if left_row_id is None or right_row_id is None:
         raise RuntimeError("Splink prediction rows must include left/right entity IDs.")
+    return left_row_id, right_row_id
+
+
+def restore_entity_pair_from_prediction_record(record: RowDict) -> tuple[Any, Any]:
+    """Recover canonical entity IDs from a Splink prediction record."""
+    left_row_id, right_row_id = prediction_row_ids_from_record(record)
 
     return (
         restore_entity_id_from_probabilistic_row(left_row_id),
