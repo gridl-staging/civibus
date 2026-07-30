@@ -61,6 +61,7 @@ const PINNED_HIGH_VOLUME_COMMITTEE_PATH = "/committee/jon-ossoff-for-senate";
 const PERSON_OUTSIDE_SPENDING_HEADING = "Outside spending";
 const CONGRESS_MEMBER_PROFILE_LINK_TEST_ID = "congress-member-profile-link";
 const CONGRESS_MEMBER_ROW_0_TEST_ID = "congress-member-row-0";
+const COMMITTEE_ROUTE_HREF_PATTERN = /^\/committee\/[^/?#]+$/;
 const PERSON_ROUTE_HREF_PATTERN = /^\/person\/[^/?#]+$/;
 
 type DonorRecipientSelection = {
@@ -72,6 +73,18 @@ type DonorRecipientSelection = {
 
 function memberProfileLink(row: any): any {
   return row.getByTestId(CONGRESS_MEMBER_PROFILE_LINK_TEST_ID);
+}
+
+async function firstCommitteeDetailLink(page: any): Promise<any> {
+  const committeeLinks = await page.getByRole("heading", { level: 3 }).getByRole("link").all();
+  for (const committeeLink of committeeLinks) {
+    const href = await committeeLink.getAttribute("href");
+    if (href && COMMITTEE_ROUTE_HREF_PATTERN.test(href)) {
+      return committeeLink;
+    }
+  }
+
+  throw new Error("Expected at least one non-empty /committee/<id> link in production committee list");
 }
 
 function extractRouteId(href: string, routePrefix: "/person" | "/candidate"): string {
@@ -161,7 +174,7 @@ test.describe("production deployment smoke (read-only)", () => {
     expect(totalRaisedDollars).toBeLessThan(MONEY_PLAUSIBILITY_CEILING_DOLLARS);
     await memberLink.click();
 
-    await expect(page.getByRole("heading", { name: memberName })).toBeVisible();
+    await expect(page.getByRole("heading", { level: 2, name: memberName, exact: true })).toBeVisible();
     await expect(
       page.getByRole("heading", { name: PERSON_CAMPAIGN_FINANCE_HEADING })
     ).toBeVisible();
@@ -278,7 +291,7 @@ test.describe("production deployment smoke (read-only)", () => {
     // assertion resilient to production deploys that reseed IDs.
     await page.goto("/committees");
     await expect(page.getByRole("heading", { name: "Committees" })).toBeVisible();
-    const firstCommitteeLink = page.getByRole("heading", { level: 3 }).first().getByRole("link");
+    const firstCommitteeLink = await firstCommitteeDetailLink(page);
     await expect(firstCommitteeLink).toBeVisible();
     await firstCommitteeLink.click();
 
@@ -346,7 +359,9 @@ test.describe("production deployment smoke (read-only)", () => {
       },
       visibleContent: async () => {
         await expect(page).toHaveURL(/\/candidate\//, { timeout: PERF_BUDGET_MS });
-        await expect(page.getByRole("heading", { name: candidateName })).toBeVisible({
+        await expect(
+          page.getByRole("heading", { level: 2, name: candidateName, exact: true })
+        ).toBeVisible({
           timeout: PERF_BUDGET_MS
         });
         await expectCandidateKeyFinancialsReady(page, PERF_BUDGET_MS);

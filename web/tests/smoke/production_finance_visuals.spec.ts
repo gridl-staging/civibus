@@ -21,7 +21,7 @@ import {
 // no-data state) so it never breaks when production data drifts.
 const isProductionSmokeMode = (process.env.SMOKE_MODE ?? "local") === "production";
 
-const RELEASE_PERSON_ID = "d2944415-3ec6-47b0-b44f-2cd28ddfbc0b";
+const RELEASE_PERSON_ID = "4f9bb4e4-40de-4d40-89ed-4205f05f435b";
 const RELEASE_PERSON_PATH = `/person/${RELEASE_PERSON_ID}`;
 const SELECTED_CYCLE = "2024";
 const SELECTED_CYCLE_COPY = `${SELECTED_CYCLE} cycle`;
