@@ -95,12 +95,12 @@ def build_l8_regression_payload(
     produced_at: datetime,
     repo_sha: str,
     gate_command: str,
-    pair_results: list[dict[str, Any]],
+    regression_summary: dict[str, Any],
     false_positive_summary: dict[str, Any],
 ) -> dict[str, Any]:
     """Build the repo-owned L8 evidence payload from evaluated regression results."""
     serialized_pair_results = sorted(
-        (_serialize_l8_pair_result(row) for row in pair_results),
+        (_serialize_l8_pair_result(row) for row in regression_summary["pair_results"]),
         key=lambda row: row["case_id"],
     )
     must_match_violations = sum(
@@ -109,7 +109,21 @@ def build_l8_regression_payload(
     must_not_match_violations = sum(
         1 for row in serialized_pair_results if row["expected_relation"] == "must_not_match" and not row["passed"]
     )
-    status = "pass" if must_match_violations == 0 and must_not_match_violations == 0 else "fail"
+    has_vacuous_must_not_match = any(
+        row["expected_relation"] == "must_not_match"
+        and row["passed"]
+        and row["decided_by"] == "unscored_missing_settings"
+        for row in serialized_pair_results
+    )
+    has_vacuous_false_positive_result = (
+        int(false_positive_summary["decided_by_counts"].get("unscored_missing_settings", 0)) > 0
+    )
+    if must_match_violations or must_not_match_violations:
+        status = "fail"
+    elif has_vacuous_must_not_match or has_vacuous_false_positive_result:
+        status = "vacuous"
+    else:
+        status = "pass"
     return {
         "layer": "L8",
         "scope": scope,
@@ -121,12 +135,19 @@ def build_l8_regression_payload(
         "regression_pairs_checked": len(serialized_pair_results),
         "must_match_violations": must_match_violations,
         "must_not_match_violations": must_not_match_violations,
+        "regression_pair_decided_by_counts": {
+            str(decided_by): int(count) for decided_by, count in sorted(regression_summary["decided_by_counts"].items())
+        },
         "pair_results": serialized_pair_results,
         "false_positive_summary": {
             "cases_evaluated": int(false_positive_summary["cases_evaluated"]),
             "flagged_false_positives": int(false_positive_summary["flagged_false_positives"]),
             "flagged_case_ids": sorted(str(case_id) for case_id in false_positive_summary["flagged_case_ids"]),
             "false_positive_rate": float(false_positive_summary["false_positive_rate"]),
+            "decided_by_counts": {
+                str(decided_by): int(count)
+                for decided_by, count in sorted(false_positive_summary["decided_by_counts"].items())
+            },
         },
     }
 

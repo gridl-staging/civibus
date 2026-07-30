@@ -404,9 +404,14 @@ def _score_fixture_pair(
     except RuntimeError as exc:
         if "Splink settings are unavailable" not in str(exc):
             raise
-        # Regression fixtures should still prove "does not auto-merge" in
-        # lightweight environments that omit the probabilistic runtime.
-        scored_pairs = []
+        return {
+            "entity_id_a": ordered_pair[0],
+            "entity_id_b": ordered_pair[1],
+            "decision": "no_match",
+            "confidence": 0.0,
+            "decision_method": "unscored",
+            "decided_by": "unscored_missing_settings",
+        }
     classified_pairs = classify_scored_pairs(
         scored_pairs,
         auto_merge_threshold=auto_merge_threshold,
@@ -522,6 +527,8 @@ def score_false_positive_case(
         "case_id": case.corpus_id,
         "decision": pair_result["decision"],
         "confidence": pair_result["confidence"],
+        "decision_method": pair_result["decision_method"],
+        "decided_by": pair_result["decided_by"],
         "flagged_false_positive": pair_result["decision"] == "match",
     }
 
@@ -569,6 +576,22 @@ def _false_positive_summary(corpus_results: list[dict[str, Any]]) -> dict[str, A
         "flagged_false_positives": flagged_false_positives,
         "flagged_case_ids": flagged_case_ids,
         "false_positive_rate": 0.0 if cases_evaluated == 0 else flagged_false_positives / cases_evaluated,
+        "decided_by_counts": _count_decided_by(corpus_results),
+    }
+
+
+def _count_decided_by(results: list[dict[str, Any]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for result in results:
+        decided_by = str(result["decided_by"])
+        counts[decided_by] = counts.get(decided_by, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def _regression_summary(pair_results: list[dict[str, Any]]) -> dict[str, Any]:
+    return {
+        "pair_results": pair_results,
+        "decided_by_counts": _count_decided_by(pair_results),
     }
 
 
@@ -648,7 +671,7 @@ def run_l8_regression_gate(
         produced_at=resolved_produced_at,
         repo_sha=repo_sha,
         gate_command=gate_command,
-        pair_results=pair_results,
+        regression_summary=_regression_summary(pair_results),
         false_positive_summary=_false_positive_summary(corpus_results),
     )
     _validate_payload_schema(payload)
@@ -680,7 +703,7 @@ def main(argv: list[str] | None = None) -> int:
         auto_merge_threshold=args.auto_merge_threshold,
     )
     print(json.dumps(payload, indent=2, sort_keys=False))
-    return 0
+    return 0 if payload["status"] == "pass" else 1
 
 
 if __name__ == "__main__":

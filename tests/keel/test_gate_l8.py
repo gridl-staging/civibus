@@ -98,22 +98,25 @@ def _sample_l8_payload() -> dict[str, Any]:
         "produced_at_utc": "2026-04-24T18:30:00Z",
         "repo_sha": "4a64e348",
         "gate_command": "uv run --extra dev --extra entity-resolution pytest tests/keel/test_gate_l8.py -q",
-        "status": "fail",
-        "regression_pairs_checked": 2,
-        "must_match_violations": 1,
-        "must_not_match_violations": 1,
+        "status": "vacuous",
+        "regression_pairs_checked": 1,
+        "must_match_violations": 0,
+        "must_not_match_violations": 0,
+        "regression_pair_decided_by_counts": {
+            "unscored_missing_settings": 1,
+        },
         "pair_results": [
             {
                 "case_id": "person_same_name_cross_source",
-                "expected_relation": "must_match",
+                "expected_relation": "must_not_match",
                 "entity_type": "person",
                 "entity_id_a": "e6d9b7ad-0ca0-53d6-b0bb-2b43d4684d8a",
                 "entity_id_b": "f93cf402-fb9c-56dd-b4f4-54a3f3543ee2",
                 "decision": "no_match",
-                "confidence": 0.42,
-                "decision_method": "probabilistic",
-                "decided_by": "splink_v1",
-                "passed": False,
+                "confidence": 0.0,
+                "decision_method": "unscored",
+                "decided_by": "unscored_missing_settings",
+                "passed": True,
             }
         ],
         "false_positive_summary": {
@@ -121,12 +124,19 @@ def _sample_l8_payload() -> dict[str, Any]:
             "flagged_false_positives": 0,
             "flagged_case_ids": [],
             "false_positive_rate": 0.0,
+            "decided_by_counts": {
+                "unscored_missing_settings": 1,
+            },
         },
     }
 
 
 def _stable_entity_id(case_id: str, side: str) -> str:
     return str(uuid5(NAMESPACE_URL, f"l8-regression:{case_id}:{side}"))
+
+
+def _raise_missing_splink_settings(*args: Any, **kwargs: Any) -> list[dict[str, Any]]:
+    raise RuntimeError("Splink settings are unavailable in this lightweight environment")
 
 
 def _classify_case_with_confidence(
@@ -310,11 +320,18 @@ def test_l8_gate_fails_when_curated_must_match_pair_is_split(
     assert case.case_id in violating_case_ids
 
 
-def test_l8_regression_curated_exact_must_match_case_scores_as_match() -> None:
+def test_l8_regression_curated_exact_must_match_case_scores_as_match(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     module = _load_gate_module()
     regression_pairs = _load_regression_pairs_fixture()
     case = next(
         case for case in regression_pairs.must_match if case.case_id == "person_cross_source_exact_name_address"
+    )
+    monkeypatch.setattr(
+        module,
+        "score_rows",
+        lambda *args, **kwargs: pytest.fail("named exact-identity case must retain its fixture shortcut"),
     )
 
     result = module.score_regression_pair_case(
@@ -324,7 +341,76 @@ def test_l8_regression_curated_exact_must_match_case_scores_as_match() -> None:
 
     assert result["case_id"] == "person_cross_source_exact_name_address"
     assert result["decision"] == "match"
+    assert result["decided_by"] == "fixture_exact_identity"
     assert result["passed"] is True
+
+
+def test_l8_non_shortcut_pair_attributes_missing_settings_as_unscored(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_gate_module()
+    regression_pairs = _load_regression_pairs_fixture()
+    case = next(
+        case for case in regression_pairs.must_not_match if case.case_id == "person_same_name_different_middle_initial"
+    )
+    monkeypatch.setattr(module, "score_rows", _raise_missing_splink_settings)
+
+    result = module.score_regression_pair_case(
+        case=case,
+        expected_relation="must_not_match",
+    )
+
+    assert result["decision"] == "no_match"
+    assert result["confidence"] == 0.0
+    assert result["decided_by"] == "unscored_missing_settings"
+    assert result["passed"] is True
+
+
+def test_l8_gate_writes_vacuous_artifact_with_missing_settings_attribution(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_gate_module()
+    output_path = tmp_path / "missing_settings.json"
+    monkeypatch.setattr(module, "score_rows", _raise_missing_splink_settings)
+
+    payload = module.run_l8_regression_gate(
+        artifact_path=output_path,
+        produced_at=datetime(2026, 7, 30, 12, 0, tzinfo=UTC),
+        repo_sha="abc1234",
+    )
+
+    assert payload == json.loads(output_path.read_text(encoding="utf-8"))
+    assert payload["status"] == "vacuous"
+    assert payload["regression_pair_decided_by_counts"] == {
+        "fixture_exact_identity": 5,
+        "unscored_missing_settings": 5,
+    }
+    assert payload["false_positive_summary"]["decided_by_counts"] == {
+        "unscored_missing_settings": 2,
+    }
+
+
+def test_l8_main_writes_vacuous_artifact_and_exits_nonzero(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_gate_module()
+    output_path = tmp_path / "cli_missing_settings.json"
+    monkeypatch.setattr(module, "score_rows", _raise_missing_splink_settings)
+
+    exit_code = module.main(
+        [
+            "--artifact-path",
+            str(output_path),
+            "--repo-sha",
+            "abc1234",
+        ]
+    )
+
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert exit_code == 1
+    assert payload["status"] == "vacuous"
 
 
 @pytest.mark.parametrize(
@@ -484,6 +570,8 @@ def test_l8_gate_writes_evidence_summary(
             "case_id": case.corpus_id,
             "decision": "no_match",
             "confidence": 0.12,
+            "decision_method": "probabilistic",
+            "decided_by": "splink_v1",
             "flagged_false_positive": False,
         },
     )
@@ -503,6 +591,9 @@ def test_l8_gate_writes_evidence_summary(
     assert payload["regression_pairs_checked"] == len(regression_pairs.must_match) + len(
         regression_pairs.must_not_match
     )
+    assert payload["regression_pair_decided_by_counts"] == {
+        "splink_v1": len(regression_pairs.must_match) + len(regression_pairs.must_not_match)
+    }
     assert payload["false_positive_summary"]["cases_evaluated"] == len(false_positive_corpus.cases)
     assert _json_schema_errors(schema=_load_schema(L8_SCHEMA_PATH), payload=payload) == []
 
@@ -552,6 +643,8 @@ def test_l8_gate_records_pair_level_results(
             "case_id": case.corpus_id,
             "decision": "no_match",
             "confidence": 0.08,
+            "decision_method": "probabilistic",
+            "decided_by": "splink_v1",
             "flagged_false_positive": False,
         },
     )
@@ -593,6 +686,8 @@ def test_l8_gate_inversion_failure_surfaces_named_nc_case(
             "case_id": case.corpus_id,
             "decision": "no_match",
             "confidence": 0.11,
+            "decision_method": "probabilistic",
+            "decided_by": "splink_v1",
             "flagged_false_positive": False,
         },
     )
@@ -679,6 +774,8 @@ def test_l8_gate_false_positive_summary_is_stable(
             "case_id": case.corpus_id,
             "decision": "match" if case.corpus_id.startswith("person_") else "no_match",
             "confidence": 0.97 if case.corpus_id.startswith("person_") else 0.21,
+            "decision_method": "probabilistic",
+            "decided_by": "splink_v1",
             "flagged_false_positive": case.corpus_id.startswith("person_"),
         },
     )
@@ -706,6 +803,7 @@ def test_l8_gate_false_positive_summary_is_stable(
         "flagged_false_positives": 1,
         "flagged_case_ids": ["person_public_figure_name_collision"],
         "false_positive_rate": 0.5,
+        "decided_by_counts": {"splink_v1": 2},
     }
 
 
@@ -754,6 +852,8 @@ def test_l8_gate_resolves_threshold_override_once_and_threads_to_every_classific
                 "case_id": case.corpus_id,
                 "decision": "no_match",
                 "confidence": 0.11,
+                "decision_method": "probabilistic",
+                "decided_by": "splink_v1",
                 "flagged_false_positive": False,
             }
         ),
@@ -814,6 +914,8 @@ def test_l8_gate_threads_explicit_probabilistic_settings_only_to_person_cases(
                 "case_id": case.corpus_id,
                 "decision": "no_match",
                 "confidence": 0.11,
+                "decision_method": "probabilistic",
+                "decided_by": "splink_v1",
                 "flagged_false_positive": False,
             }
         ),

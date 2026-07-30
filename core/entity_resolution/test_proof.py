@@ -327,37 +327,44 @@ def test_build_l8_regression_payload_sorts_pair_results_and_flagged_case_ids() -
         produced_at=datetime(2026, 4, 24, 21, 45, tzinfo=UTC),
         repo_sha="abc1234",
         gate_command="uv run python -m core.keel_gate_l8",
-        pair_results=[
-            {
-                "case_id": "z_case",
-                "expected_relation": "must_not_match",
-                "entity_type": "person",
-                "entity_id_a": "a",
-                "entity_id_b": "b",
-                "decision": "match",
-                "confidence": 0.98,
-                "decision_method": "probabilistic",
-                "decided_by": "splink_v1",
-                "passed": False,
-            },
-            {
-                "case_id": "a_case",
-                "expected_relation": "must_match",
-                "entity_type": "person",
-                "entity_id_a": "c",
-                "entity_id_b": "d",
-                "decision": "match",
-                "confidence": 0.99,
-                "decision_method": "probabilistic",
-                "decided_by": "splink_v1",
-                "passed": True,
-            },
-        ],
+        regression_summary={
+            "pair_results": [
+                {
+                    "case_id": "z_case",
+                    "expected_relation": "must_not_match",
+                    "entity_type": "person",
+                    "entity_id_a": "a",
+                    "entity_id_b": "b",
+                    "decision": "match",
+                    "confidence": 0.98,
+                    "decision_method": "probabilistic",
+                    "decided_by": "splink_v1",
+                    "passed": False,
+                },
+                {
+                    "case_id": "a_case",
+                    "expected_relation": "must_match",
+                    "entity_type": "person",
+                    "entity_id_a": "c",
+                    "entity_id_b": "d",
+                    "decision": "match",
+                    "confidence": 0.99,
+                    "decision_method": "probabilistic",
+                    "decided_by": "splink_v1",
+                    "passed": True,
+                },
+            ],
+            "decided_by_counts": {"splink_v1": 2},
+        },
         false_positive_summary={
             "cases_evaluated": 3,
             "flagged_false_positives": 2,
             "flagged_case_ids": ["fp_z", "fp_a"],
             "false_positive_rate": 2 / 3,
+            "decided_by_counts": {
+                "unscored_missing_settings": 1,
+                "splink_v1": 2,
+            },
         },
     )
 
@@ -365,7 +372,59 @@ def test_build_l8_regression_payload_sorts_pair_results_and_flagged_case_ids() -
     assert payload["must_match_violations"] == 0
     assert payload["must_not_match_violations"] == 1
     assert payload["status"] == "fail"
+    assert payload["regression_pair_decided_by_counts"] == {"splink_v1": 2}
+    assert payload["false_positive_summary"]["decided_by_counts"] == {
+        "splink_v1": 2,
+        "unscored_missing_settings": 1,
+    }
     assert payload["false_positive_summary"]["flagged_case_ids"] == ["fp_a", "fp_z"]
+
+
+def test_build_l8_regression_payload_marks_false_positive_unscored_results_vacuous() -> None:
+    payload = build_l8_regression_payload(
+        scope="global",
+        produced_at=datetime(2026, 4, 24, 21, 45, tzinfo=UTC),
+        repo_sha="abc1234",
+        gate_command="uv run python -m core.keel_gate_l8",
+        regression_summary={
+            "pair_results": [
+                {
+                    "case_id": "clean_must_match",
+                    "expected_relation": "must_match",
+                    "entity_type": "person",
+                    "entity_id_a": "a",
+                    "entity_id_b": "b",
+                    "decision": "match",
+                    "confidence": 0.99,
+                    "decision_method": "probabilistic",
+                    "decided_by": "splink_v1",
+                    "passed": True,
+                },
+                {
+                    "case_id": "clean_must_not_match",
+                    "expected_relation": "must_not_match",
+                    "entity_type": "person",
+                    "entity_id_a": "c",
+                    "entity_id_b": "d",
+                    "decision": "no_match",
+                    "confidence": 0.2,
+                    "decision_method": "probabilistic",
+                    "decided_by": "splink_v1",
+                    "passed": True,
+                },
+            ],
+            "decided_by_counts": {"splink_v1": 2},
+        },
+        false_positive_summary={
+            "cases_evaluated": 1,
+            "flagged_false_positives": 0,
+            "flagged_case_ids": [],
+            "false_positive_rate": 0.0,
+            "decided_by_counts": {"unscored_missing_settings": 1},
+        },
+    )
+
+    assert payload["status"] == "vacuous"
 
 
 def test_write_l8_regression_artifact_writes_prepared_payload(tmp_path: Path) -> None:
@@ -380,12 +439,14 @@ def test_write_l8_regression_artifact_writes_prepared_payload(tmp_path: Path) ->
         "regression_pairs_checked": 0,
         "must_match_violations": 0,
         "must_not_match_violations": 0,
+        "regression_pair_decided_by_counts": {},
         "pair_results": [],
         "false_positive_summary": {
             "cases_evaluated": 0,
             "flagged_false_positives": 0,
             "flagged_case_ids": [],
             "false_positive_rate": 0.0,
+            "decided_by_counts": {},
         },
     }
     artifact_path = tmp_path / "evidence" / "L8" / "regression_run_2026-04-24.json"

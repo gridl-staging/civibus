@@ -14,6 +14,7 @@
     "regression_pairs_checked",
     "must_match_violations",
     "must_not_match_violations",
+    "regression_pair_decided_by_counts",
     "pair_results",
     "false_positive_summary"
   ],
@@ -55,6 +56,9 @@
     "must_not_match_violations": {
       "type": "integer",
       "minimum": 0
+    },
+    "regression_pair_decided_by_counts": {
+      "$ref": "#/$defs/decidedByCounts"
     },
     "pair_results": {
       "type": "array",
@@ -124,7 +128,8 @@
         "cases_evaluated",
         "flagged_false_positives",
         "flagged_case_ids",
-        "false_positive_rate"
+        "false_positive_rate",
+        "decided_by_counts"
       ],
       "properties": {
         "cases_evaluated": {
@@ -146,7 +151,22 @@
           "type": "number",
           "minimum": 0,
           "maximum": 1
+        },
+        "decided_by_counts": {
+          "$ref": "#/$defs/decidedByCounts"
         }
+      }
+    }
+  },
+  "$defs": {
+    "decidedByCounts": {
+      "type": "object",
+      "propertyNames": {
+        "minLength": 1
+      },
+      "additionalProperties": {
+        "type": "integer",
+        "minimum": 0
       }
     }
   }
