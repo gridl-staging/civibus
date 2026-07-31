@@ -99,7 +99,9 @@ def test_production_finance_smoke_requires_release_target_money_values() -> None
     assert "expectCongressReleaseTargetRendersMoney" in source
     assert "expectPersonReleaseTargetRendersMoney" in source
     assert "page.goto(`/congress?search=${encodeURIComponent(RELEASE_PERSON_NAME)}`)" in source
-    assert 'page.getByRole("region", { name: `Money summary for ${RELEASE_PERSON_NAME}` })' in source
+    # The congress directory money summary is a labeled <dl>, not a landmark region (one region
+    # per directory row would flood landmark navigation), so it is located by accessible name.
+    assert 'page.locator(`[aria-label="Money summary for ${RELEASE_PERSON_NAME}"]`)' in source
     assert "page.goto(`${RELEASE_PERSON_PATH}?cycle=${SELECTED_CYCLE}`)" in source
     assert 'page.getByRole("region", { name: MONEY_AT_GLANCE_REGION })' in source
     assert "expectNonzeroMoneyValue" in source
