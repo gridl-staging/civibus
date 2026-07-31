@@ -44,7 +44,7 @@ PUBLIC_PAGE_BODIES = {
     "/calendar": "Election calendar",
     "/coverage": "campaign_finance",
     "/data-sources": "campaign_finance",
-    "/sitemap.xml": "<urlset",
+    "/sitemap.xml": "<sitemapindex",
 }
 KNOWN_RED_PAGE_BODIES: dict[str, str] = {}
 DEFAULT_PAGE_BODIES = PUBLIC_PAGE_BODIES | KNOWN_RED_PAGE_BODIES

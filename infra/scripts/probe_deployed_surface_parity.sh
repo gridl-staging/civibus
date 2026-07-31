@@ -20,7 +20,7 @@ PUBLIC_PAGES=(
   "/calendar|Election calendar"
   "/coverage|campaign_finance"
   "/data-sources|campaign_finance"
-  "/sitemap.xml|<urlset"
+  "/sitemap.xml|<sitemapindex"
 )
 KNOWN_RED_PUBLIC_PAGES=()
 TMP_DIR="$(mktemp -d)"
