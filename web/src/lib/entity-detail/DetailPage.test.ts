@@ -770,6 +770,29 @@ describe("entity detail page rendering", () => {
     expect(rendered.body.split("<h3>Campaign finance</h3>").length - 1).toBe(1);
   });
 
+  it("keeps the outside-spending anchor unique across multiple candidacies", () => {
+    const rendered = render(DetailPage, {
+      props: {
+        data: buildPersonPageBundle({
+          personFinanceSections: asSettled([
+            buildPersonFinanceSection(),
+            buildPersonFinanceSection({
+              candidate: {
+                ...buildPersonFinanceSection().candidate,
+                id: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeee02",
+                name: "Candidate Two",
+                slug: "candidate-two"
+              }
+            })
+          ])
+        })
+      }
+    });
+
+    expect(rendered.body.match(/\sid="person-outside-spending"/g)).toHaveLength(1);
+    expect(rendered.body.match(/>Outside spending<\/h4>/g)).toHaveLength(2);
+  });
+
   it("keeps the fundraising detail heading unique while contribution insights stream", () => {
     const rendered = render(DetailPage, {
       props: {
@@ -1621,7 +1644,9 @@ describe("entity detail page rendering", () => {
     expect(personFinanceStart).toBeGreaterThan(-1);
 
     const personFinanceSlice = source.slice(personFinanceStart);
-    const outsideSpendingIndex = personFinanceSlice.indexOf('<h4 id="person-outside-spending">Outside spending</h4>');
+    const outsideSpendingIndex = personFinanceSlice.indexOf(
+      '<h4 id={candidateIndex === 0 ? "person-outside-spending" : undefined}>Outside spending</h4>'
+    );
     const combinedAwaitIndex = personFinanceSlice.indexOf(
       "{#await combineDeferredPair(section.ieSummary, section.ieTransactions)}",
       outsideSpendingIndex

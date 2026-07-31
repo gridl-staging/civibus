@@ -585,7 +585,7 @@
               {/if}
               {@render fundraisingDetail()}
 
-              {#each personFinanceSections as section (section.candidate.id)}
+              {#each personFinanceSections as section, candidateIndex (section.candidate.id)}
                 <article class="detail__committee-card">
                   <h4>
                     <a href={buildCandidateHref(section.candidate)}>
@@ -669,7 +669,7 @@
                     <p>Donor/vendor transactions are temporarily unavailable.</p>
                   {/await}
 
-                  <h4 id="person-outside-spending">Outside spending</h4>
+                  <h4 id={candidateIndex === 0 ? "person-outside-spending" : undefined}>Outside spending</h4>
                   {#await combineDeferredPair(section.ieSummary, section.ieTransactions)}
                     <SkeletonPanel label="Outside spending" lines={4} />
                   {:then [ieSummary, ieTransactions]}

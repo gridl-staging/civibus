@@ -90,14 +90,20 @@ def test_get_db_raises_503_when_pool_checkout_fails(monkeypatch: pytest.MonkeyPa
 
 
 @pytest.mark.parametrize(
-    ("path", "expected_timeout_ms"),
+    ("path", "expected_connection_settings"),
     [
-        ("/v1/donors/search", 10_000),
-        ("/public/v1/federal/export.json", 30_000),
-        ("/public/v1/federal/export.csv", 30_000),
+        (
+            "/v1/donors/search",
+            ["SET LOCAL statement_timeout = 10000", "SET LOCAL jit = off"],
+        ),
+        ("/public/v1/federal/export.json", ["SET LOCAL statement_timeout = 30000"]),
+        ("/public/v1/federal/export.csv", ["SET LOCAL statement_timeout = 30000"]),
     ],
 )
-def test_get_db_sets_path_specific_statement_timeout(path: str, expected_timeout_ms: int) -> None:
+def test_get_db_sets_path_specific_connection_settings(
+    path: str,
+    expected_connection_settings: list[str],
+) -> None:
     connection = MagicMock()
     pool_context_manager = _PoolConnectionContext(connection)
     pool = MagicMock()
@@ -109,7 +115,7 @@ def test_get_db_sets_path_specific_statement_timeout(path: str, expected_timeout
     with pytest.raises(StopIteration):
         next(dependency)
 
-    connection.execute.assert_called_once_with(f"SET LOCAL statement_timeout = {expected_timeout_ms}")
+    assert [call.args[0] for call in connection.execute.call_args_list] == expected_connection_settings
 
 
 def test_get_db_statement_timeout_env_overrides_are_positive(

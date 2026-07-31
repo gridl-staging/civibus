@@ -194,11 +194,11 @@ test.describe("production deployment smoke (read-only)", () => {
     await expectNoPartyCommitteeInLinkedCommittees(page);
     await expectRenderedFinanceChartsNotCollapsed(page);
     // The panel settled above (expectNoBackendFailureStates waits out the
-    // SkeletonPanel), so only the stable <h4>Outside spending</h4> remains;
-    // exact:true pins it to that heading and not the "Outside spending details"
-    // CTA link. The generous timeout covers cold-cache streamed SSR on the live DB.
+    // SkeletonPanel). exact:true excludes the "Outside spending details" CTA;
+    // first() selects the first linked candidacy when a person has more than one.
+    // The generous timeout covers cold-cache streamed SSR on the live DB.
     await expect(
-      page.getByRole("heading", { name: PERSON_OUTSIDE_SPENDING_HEADING, exact: true })
+      page.getByRole("heading", { name: PERSON_OUTSIDE_SPENDING_HEADING, exact: true }).first()
     ).toBeVisible({ timeout: 20_000 });
     await expect(page.getByRole("heading", { name: "Graph relationships" })).toHaveCount(0);
     await expect(page.getByRole("heading", { name: "Entity-resolution matches" })).toHaveCount(0);

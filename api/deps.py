@@ -12,6 +12,7 @@ _API_STATEMENT_TIMEOUT_MS_ENV_VAR = "CIVIBUS_API_STATEMENT_TIMEOUT_MS"
 _API_EXPORT_STATEMENT_TIMEOUT_MS_ENV_VAR = "CIVIBUS_API_EXPORT_STATEMENT_TIMEOUT_MS"
 _DEFAULT_API_STATEMENT_TIMEOUT_MS = 10_000
 _DEFAULT_API_EXPORT_STATEMENT_TIMEOUT_MS = 30_000
+_DONOR_SEARCH_PATH = "/v1/donors/search"
 _PUBLIC_EXPORT_PATHS = {"/public/v1/federal/export.json", "/public/v1/federal/export.csv"}
 
 
@@ -45,6 +46,9 @@ def get_db(request: Request) -> Generator[psycopg.Connection, None, None]:
         try:
             connection = stack.enter_context(request.app.state.db_pool.connection())
             connection.execute(f"SET LOCAL statement_timeout = {_statement_timeout_ms_for_request(request)}")
+            if request.url.path == _DONOR_SEARCH_PATH:
+                # Compilation dominates this one-shot high-cost query on the fully linked federal scope.
+                connection.execute("SET LOCAL jit = off")
         except (psycopg.Error, PoolTimeout) as exc:
             raise HTTPException(status_code=503, detail="Database unavailable") from exc
         try:
