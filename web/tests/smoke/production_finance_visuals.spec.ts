@@ -149,13 +149,20 @@ test.describe("production person finance visuals (read-only)", () => {
 
 async function expectCongressReleaseTargetRendersMoney(page: Page): Promise<void> {
   await page.goto(`/congress?search=${encodeURIComponent(RELEASE_PERSON_NAME)}`);
-  const releaseTargetMoney = page.getByRole("region", { name: `Money summary for ${RELEASE_PERSON_NAME}` });
+  // The congress directory labels each row's money summary with an aria-label rather than a
+  // landmark region: a directory can list up to 543 members, and one region landmark per row
+  // would flood assistive-tech landmark navigation. Locate by accessible name, not region role.
+  const releaseTargetMoney = page.locator(`[aria-label="Money summary for ${RELEASE_PERSON_NAME}"]`);
   await expect(releaseTargetMoney).toBeVisible({ timeout: 20_000 });
   await expectNonzeroMoneyValue(releaseTargetMoney);
 }
 
 async function expectPersonReleaseTargetRendersMoney(page: Page): Promise<void> {
-  await page.goto(`${RELEASE_PERSON_PATH}?cycle=${SELECTED_CYCLE}`);
+  // Use the person's default (latest-cycle) view for the nonzero-money assertion: a pinned
+  // release target may legitimately have no receipts in an arbitrary historical cycle (e.g. an
+  // appointed senator with only current-cycle federal money), which would make a cycle-pinned
+  // check flap on data drift. The explicit 2024-cycle scoping is covered by the cycle-scope test.
+  await page.goto(RELEASE_PERSON_PATH);
   await expect(page.getByRole("heading", { name: CAMPAIGN_FINANCE_HEADING })).toBeVisible({
     timeout: 20_000
   });
