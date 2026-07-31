@@ -252,6 +252,7 @@ export const SMOKE_COMMITTEE_CASH_TREND_LATEST_COPY =
   "Cash on hand is $250.50 at the latest filing period in the 2026 cycle.";
 export const SMOKE_COMMITTEE_CASH_TREND_MISSING_INTERVAL =
   "Missing source coverage before this filing period.";
+export const SMOKE_COMMITTEE_CASH_TREND_NO_MISSING_INTERVAL = "No explicit missing interval.";
 export const SMOKE_COMMITTEE_ORG_LINK_TEXT = `Organization record (${SMOKE_ORG_ID})`;
 export const SMOKE_COMMITTEE_CONTRIBUTOR_PERSON_LINK_TEXT = "View contributor person record";
 export const SMOKE_COMMITTEE_CONTRIBUTOR_ORG_LINK_TEXT = "View contributor organization record";
@@ -392,6 +393,7 @@ export const SMOKE_CONGRESS_SECOND_NAME = "Alex Money Senator";
 export const SMOKE_CONGRESS_NO_MONEY_PERSON_ID = "31111111-1111-4111-8111-111111111111";
 export const SMOKE_CONGRESS_NO_MONEY_NAME = "Maria No Money Delegate";
 export const SMOKE_CONGRESS_LEADER_TOTAL_RAISED = "$300.00";
+export const SMOKE_CONGRESS_LEADER_TOTAL_RAISED_COMPACT = "$300";
 export const SMOKE_CONGRESS_LEADER_OUTSIDE_SUPPORT = "$90.00";
 export const SMOKE_CONGRESS_LEADER_OUTSIDE_AGAINST = "$30.00";
 export const SMOKE_CONGRESS_LEADER_CASH_ON_HAND = "$60.00";
@@ -514,6 +516,109 @@ export const SMOKE_PERSON_GEOGRAPHY_SUMMARY =
   "Unknown is included in the visible geography denominator. Unknown is $0.00 with 0 reported transactions; visible denominator is $350.00.";
 export const SMOKE_PERSON_OUTSIDE_SPENDING_SUMMARY =
   "Outside spending reports $15,000.00 in support spending and $8,500.00 in oppose spending for the 2026 cycle.";
+const SMOKE_MONTH_NAMES = [
+  "January",
+  "February",
+  "March",
+  "April",
+  "May",
+  "June",
+  "July",
+  "August",
+  "September",
+  "October",
+  "November",
+  "December"
+] as const;
+const SMOKE_ZERO_MONTHLY_CONTRIBUTION = { dollars: "$0.00", transactions: "0" };
+const SMOKE_MONTHLY_CONTRIBUTIONS_BY_MONTH: Record<
+  string,
+  { dollars: string; transactions: string }
+> = {
+  "2026-01": { dollars: "$125.00", transactions: "1" },
+  "2026-02": { dollars: "$225.00", transactions: "1" }
+};
+export const SMOKE_CHART_DATA_ACCESS_MONTHLY_ROWS = Array.from({ length: 54 }, (_, index) => {
+  const year = 2022 + Math.floor(index / SMOKE_MONTH_NAMES.length);
+  const monthIndex = index % SMOKE_MONTH_NAMES.length;
+  const monthKey = `${year}-${String(monthIndex + 1).padStart(2, "0")}`;
+  const contribution =
+    SMOKE_MONTHLY_CONTRIBUTIONS_BY_MONTH[monthKey] ?? SMOKE_ZERO_MONTHLY_CONTRIBUTION;
+
+  return {
+    label: `${SMOKE_MONTH_NAMES[monthIndex]} ${year}`,
+    values: [
+      `Dollars: ${contribution.dollars}`,
+      `Transactions: ${contribution.transactions}`,
+      "Coverage: Covered"
+    ]
+  };
+});
+export const SMOKE_CHART_DATA_ACCESS_ROWS = {
+  receiptComposition: [
+    {
+      label: "Gross individual contributions",
+      values: ["Dollars: $125.00", "Share: 50%", "Denominator: $250.00"]
+    },
+    {
+      label: "PAC/other committee contributions",
+      values: ["Dollars: $125.00", "Share: 50%", "Denominator: $250.00"]
+    }
+  ],
+  monthlyContributions: SMOKE_CHART_DATA_ACCESS_MONTHLY_ROWS,
+  sizeBuckets: [
+    {
+      label: "$200 and under",
+      values: ["Dollars: $125.00", "Transactions: 1"]
+    },
+    {
+      label: "$200.01-$499.99",
+      values: ["Dollars: $225.00", "Transactions: 1"]
+    },
+    {
+      label: "$500-$999.99",
+      values: ["Dollars: $0.00", "Transactions: 0"]
+    },
+    {
+      label: "$1,000-$1,999.99",
+      values: ["Dollars: $0.00", "Transactions: 0"]
+    },
+    {
+      label: "$2,000 and over",
+      values: ["Dollars: $0.00", "Transactions: 0"]
+    }
+  ],
+  geographyShare: [
+    {
+      label: "In district",
+      values: ["Dollars: $125.00", "Transactions: 1", "Denominator: $350.00"]
+    },
+    {
+      label: "Out of district",
+      values: ["Dollars: $225.00", "Transactions: 1", "Denominator: $350.00"]
+    },
+    {
+      label: "Unknown",
+      values: ["Dollars: $0.00", "Transactions: 0", "Denominator: $350.00"]
+    }
+  ],
+  outsideSpending: [
+    {
+      label: "Support spending",
+      values: ["Dollars: $15,000.00", "Transactions: 12"]
+    },
+    {
+      label: "Oppose spending",
+      values: ["Dollars: $8,500.00", "Transactions: 5"]
+    },
+    {
+      label: `Top spender: ${SMOKE_IE_COMMITTEE_A_NAME}`,
+      // The top-spender row also discloses the spender's stance; a support
+      // spender renders "Support spending" (OutsideSpendingChart.svelte).
+      values: ["Dollars: $10,000.00", "Transactions: 8", "Stance: Support spending"]
+    }
+  ]
+} as const;
 export const SMOKE_PERSON_UNITEMIZED_DOLLARS = "150.00";
 export const SMOKE_PERSON_SMALL_ITEMIZED_DOLLARS = "125.00";
 export const SMOKE_PERSON_LARGE_ITEMIZED_DOLLARS = "225.00";

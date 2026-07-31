@@ -167,11 +167,16 @@ def test_deploy_workflow_uses_fly_token_secret_and_smoke_url_variable() -> None:
     assert deploy_env["PROD_SMOKE_BASE_URL"] == "${{ vars.PROD_SMOKE_BASE_URL }}"
 
 
-def test_deploy_workflow_uses_checkout_and_flyctl_setup_only() -> None:
+def test_deploy_workflow_uses_checkout_uv_and_flyctl_setup_only() -> None:
     workflow_text = _read_deploy_workflow()
+    setup_steps = [step for step in _deploy_steps() if "uses" in step]
 
     assert "actions/checkout@" in workflow_text
     assert "superfly/flyctl-actions/setup-flyctl" in workflow_text
+    assert {
+        "uses": "astral-sh/setup-uv@0c5e2b8115b80b4c7c5ddf6ffdd634974642d182",
+        "with": {"python-version": "3.12"},
+    } in setup_steps
     forbidden_fragments = (
         "docker/login-action",
         "docker/build-push-action",
@@ -285,6 +290,31 @@ def test_deploy_workflow_keeps_production_smoke_gate_after_all_deploys() -> None
     smoke_position = workflow_text.index("Run production smoke gate")
     last_deploy_position = max(workflow_text.index(deploy_command) for deploy_command in FLY_DEPLOY_COMMANDS)
     assert last_deploy_position < drift_position < install_position < smoke_position
+
+
+def test_deploy_workflow_runs_deployed_surface_parity_gate_before_smoke() -> None:
+    deploy_steps = _deploy_steps()
+    step_names = [step.get("name") for step in deploy_steps]
+    drift_position = step_names.index("Verify public deploy serves built dev SHA")
+    probe_position = step_names.index("Run deployed surface parity gate")
+    install_position = step_names.index("Install web smoke dependencies")
+    smoke_position = step_names.index("Run production smoke gate")
+    probe_step = deploy_steps[probe_position]
+    probe_script = probe_step["run"]
+
+    assert probe_position == drift_position + 1
+    assert probe_position < install_position < smoke_position
+    assert "continue-on-error" not in probe_step
+    assert probe_script.splitlines()[0] == "set -euo pipefail"
+    assert 'CIVIBUS_PUBLIC_BASE_URL="${PROD_SMOKE_BASE_URL}"' in probe_script
+    assert 'CIVIBUS_EXPECTED_SHA="${{ steps.provenance.outputs.dev_sha }}"' in probe_script
+    assert "CIVIBUS_PUBLIC_MONEY_VALUE_FATAL=0" in probe_script
+    assert "jul30_10pm_8" in probe_script
+    assert "CIVIBUS_PUBLIC_MONEY_VALUE_FATAL=1" in probe_script
+    assert probe_script.count("bash infra/scripts/probe_deployed_surface_parity.sh") == 1
+    assert probe_script.splitlines()[-1].strip() == "bash infra/scripts/probe_deployed_surface_parity.sh"
+    for forbidden_filter in (" | ", "grep ", "tee "):
+        assert forbidden_filter not in probe_script
 
 
 def test_deploy_workflow_does_not_duplicate_ci_integration_or_refresh_concerns() -> None:

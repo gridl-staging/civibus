@@ -114,6 +114,7 @@ def _make_senate_member_row(
     email: str = "senator@smith.senate.gov",
     website: str = "https://smith.senate.gov",
     address: str = "123 Hart Senate Office Building",
+    term_start: str = "",
 ) -> dict[str, str | None]:
     """Simulate a parsed Senate XML member row."""
     return {
@@ -128,6 +129,7 @@ def _make_senate_member_row(
         "email": email,
         "website": website,
         "address": address,
+        "term_start": term_start,
     }
 
 
@@ -150,6 +152,30 @@ def _house_officeholding_rows_by_bioguide(
         WHERE p.identifiers ->> 'bioguide_id' = ANY(%s)
         """,
         (bioguide_ids,),
+    ).fetchall()
+    return {row[0]: row[1:] for row in rows}
+
+
+def _senate_officeholding_rows_by_bioguide(
+    conn: psycopg.Connection,
+    bioguide_ids: list[str],
+) -> dict[str, tuple[UUID, str, date | None, date | None, bool, UUID | None]]:
+    rows = conn.execute(
+        """
+        SELECT
+            p.identifiers ->> 'bioguide_id',
+            p.id,
+            oh.holder_status,
+            lower(oh.valid_period),
+            upper(oh.valid_period),
+            upper_inf(oh.valid_period),
+            oh.electoral_division_id
+        FROM civic.officeholding oh
+        JOIN core.person p ON p.id = oh.person_id
+        WHERE p.identifiers ->> 'bioguide_id' = ANY(%s)
+          AND oh.office_id = %s
+        """,
+        (bioguide_ids, OFFICE_US_SENATE),
     ).fetchall()
     return {row[0]: row[1:] for row in rows}
 
@@ -305,6 +331,141 @@ class TestFederalSenateOfficeholderIngest:
         ).fetchone()
         assert cp is not None
         assert cp[0] == "office"
+
+    def test_senate_member_term_start_supersedes_same_class_successor(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from domains.campaign_finance.ingest import federal_officeholder_loader as loader
+
+        person_id = UUID("00000000-0000-4000-8000-000000000601")
+        division_id = UUID("00000000-0000-4000-8000-000000000602")
+        source_record_id = UUID("00000000-0000-4000-8000-000000000603")
+        supersede_calls: list[dict[str, object]] = []
+        officeholdings: list[object] = []
+
+        monkeypatch.setattr(
+            loader,
+            "run_officeholder_row",
+            lambda _conn, logger, failure_message, raw_row, operation: operation() or True,
+        )
+        monkeypatch.setattr(loader, "insert_officeholder_source_record", lambda *args, **kwargs: source_record_id)
+        monkeypatch.setattr(loader, "resolve_or_create_person_by_identifier", lambda *args, **kwargs: person_id)
+        monkeypatch.setattr(loader, "_resolve_senate_division", lambda _conn, _state: division_id)
+        monkeypatch.setattr(
+            loader,
+            "supersede_officeholdings_for_successor",
+            lambda *args, **kwargs: supersede_calls.append(kwargs) or 1,
+        )
+        monkeypatch.setattr(
+            loader,
+            "upsert_officeholding",
+            lambda _conn, officeholding: officeholdings.append(officeholding) or source_record_id,
+        )
+        monkeypatch.setattr(loader, "upsert_owned_contact_point", lambda *args, **kwargs: None)
+
+        result = loader.load_federal_senate_officeholders(
+            object(),
+            [
+                _make_senate_member_row(
+                    bioguide_id="S-SUCCESSOR-1",
+                    state="SC",
+                    class_num="2",
+                    term_start="2026-07-14",
+                )
+            ],
+            data_source_id=source_record_id,
+        )
+
+        assert result.errors == 0
+        assert result.inserted == 1
+        assert supersede_calls == [
+            {
+                "office_id": OFFICE_US_SENATE,
+                "electoral_division_id": division_id,
+                "successor_person_id": person_id,
+                "successor_start_date": date(2026, 7, 14),
+                "successor_source_filters": {"class": "2"},
+            }
+        ]
+        assert len(officeholdings) == 1
+        assert officeholdings[0].valid_period.start_date == date(2026, 7, 14)
+
+    def test_invalid_senate_term_start_is_rejected_before_persistence(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from domains.campaign_finance.ingest import federal_officeholder_loader as loader
+
+        def run_row(_conn: object, *, operation: object, **_kwargs: object) -> bool:
+            try:
+                operation()  # type: ignore[operator]
+            except ValueError:
+                return False
+            return True
+
+        monkeypatch.setattr(loader, "run_officeholder_row", run_row)
+        monkeypatch.setattr(
+            loader,
+            "insert_officeholder_source_record",
+            lambda *args, **kwargs: pytest.fail("invalid term_start reached persistence"),
+        )
+
+        result = loader.load_federal_senate_officeholders(
+            object(),
+            [_make_senate_member_row(term_start="not-an-iso-date")],
+            data_source_id=UUID("00000000-0000-4000-8000-000000000604"),
+        )
+
+        assert result.errors == 1
+        assert result.inserted == 0
+        assert result.skipped == 0
+
+    def test_senate_member_term_start_without_class_errors_without_retiring_other_seat(
+        self,
+        db_conn: psycopg.Connection,
+    ) -> None:
+        from domains.campaign_finance.ingest.federal_officeholder_loader import load_federal_senate_officeholders
+
+        ds = _make_data_source(db_conn)
+        incumbent_class_1 = _make_senate_member_row(
+            bioguide_id="S-CLASS1",
+            state="SC",
+            class_num="1",
+            term_start="2025-01-03",
+        )
+        incumbent_class_2 = _make_senate_member_row(
+            bioguide_id="S-CLASS2",
+            state="SC",
+            class_num="2",
+            term_start="2025-01-03",
+        )
+        malformed_successor = _make_senate_member_row(
+            bioguide_id="S-NO-CLASS",
+            state="SC",
+            class_num="",
+            term_start="2026-07-14",
+        )
+
+        load_federal_senate_officeholders(db_conn, [incumbent_class_1, incumbent_class_2], data_source_id=ds.id)
+        result = load_federal_senate_officeholders(db_conn, [malformed_successor], data_source_id=ds.id)
+
+        assert result.errors == 1
+        assert result.inserted == 0
+
+        rows = _senate_officeholding_rows_by_bioguide(db_conn, ["S-CLASS1", "S-CLASS2"])
+        assert rows["S-CLASS1"][1:] == ("elected", date(2025, 1, 3), None, True, rows["S-CLASS1"][5])
+        assert rows["S-CLASS2"][1:] == ("elected", date(2025, 1, 3), None, True, rows["S-CLASS2"][5])
+        missing_row = db_conn.execute(
+            """
+            SELECT 1
+            FROM civic.officeholding oh
+            JOIN core.person p ON p.id = oh.person_id
+            WHERE p.identifiers @> %s
+            """,
+            ('{"bioguide_id": "S-NO-CLASS"}',),
+        ).fetchone()
+        assert missing_row is None
 
 
 # ---------------------------------------------------------------------------
@@ -718,6 +879,48 @@ class TestFederalIncumbencyDerivation:
         assert derive(db_conn, former_row[0], OFFICE_US_HOUSE, current_division_id, as_of=date(2024, 11, 5)) == "I"
         assert derive(db_conn, former_row[0], OFFICE_US_HOUSE, current_division_id, as_of=date(2026, 11, 3)) is None
         assert derive(db_conn, current_row[0], OFFICE_US_HOUSE, current_division_id, as_of=date(2026, 11, 3)) == "I"
+
+    def test_senate_successor_supersedes_prior_holder_for_same_class(self, db_conn: psycopg.Connection) -> None:
+        from domains.campaign_finance.ingest.federal_officeholder_loader import load_federal_senate_officeholders
+        from domains.civics.ingest import derive_incumbent_challenge
+
+        ds = _make_data_source(db_conn)
+        initial_holder = _make_senate_member_row(
+            bioguide_id="INC-SEN-OLD",
+            first_name="Alex",
+            last_name="Former",
+            state="SC",
+            class_num="2",
+            term_start="2021-01-03",
+        )
+        successor = _make_senate_member_row(
+            bioguide_id="INC-SEN-NEW",
+            first_name="Blair",
+            last_name="Current",
+            state="SC",
+            class_num="2",
+            term_start="2026-07-14",
+        )
+
+        load_federal_senate_officeholders(db_conn, [initial_holder], data_source_id=ds.id)
+        load_federal_senate_officeholders(db_conn, [successor], data_source_id=ds.id)
+
+        rows = _senate_officeholding_rows_by_bioguide(
+            db_conn,
+            ["INC-SEN-OLD", "INC-SEN-NEW"],
+        )
+        assert len(rows) == 2
+
+        current_row = rows["INC-SEN-NEW"]
+        former_row = rows["INC-SEN-OLD"]
+        current_division_id = current_row[5]
+        assert current_row[1:] == ("elected", date(2026, 7, 14), None, True, current_division_id)
+        assert former_row[1:] == ("former", date(2021, 1, 3), date(2026, 7, 14), False, current_division_id)
+
+        derive = derive_incumbent_challenge
+        assert derive(db_conn, former_row[0], OFFICE_US_SENATE, current_division_id, as_of=date(2026, 7, 13)) == "I"
+        assert derive(db_conn, former_row[0], OFFICE_US_SENATE, current_division_id, as_of=date(2026, 7, 14)) is None
+        assert derive(db_conn, current_row[0], OFFICE_US_SENATE, current_division_id, as_of=date(2026, 7, 14)) == "I"
 
     def test_no_officeholding_returns_none(self, db_conn: psycopg.Connection) -> None:
         from domains.civics.ingest import derive_incumbent_challenge

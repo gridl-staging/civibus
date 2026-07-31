@@ -237,6 +237,7 @@ SENATE_ROW_KEYS = {
     "email",
     "website",
     "address",
+    "term_start",
     "fec_ids",
     "wikidata_id",
     "govtrack_id",
@@ -284,6 +285,7 @@ def test_adapt_senate_member_row_contract() -> None:
     assert row["phone"] == "202-224-3441"
     assert row["website"] == "https://www.cantwell.senate.gov"
     assert row["address"] == "511 Hart Senate Office Building Washington DC 20510"
+    assert row["term_start"] == "2025-01-03"
     assert row["fec_ids"] == ["S8WA00194", "H2WA01054"]
     assert row["wikidata_id"] == "Q22250"
     assert row["govtrack_id"] == "300018"

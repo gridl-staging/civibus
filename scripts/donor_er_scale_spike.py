@@ -30,11 +30,11 @@ _INTERPRETER_SITE_PACKAGES = sysconfig.get_paths().get("purelib")
 if _INTERPRETER_SITE_PACKAGES and _INTERPRETER_SITE_PACKAGES not in sys.path:
     sys.path.append(_INTERPRETER_SITE_PACKAGES)
 
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field, ValidationError, create_model, model_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 import core.entity_resolution.transaction_counterparty_resolver as transaction_counterparty_resolver
 from core.db import get_connection
-from core.entity_resolution.blocking import count_blocked_pairs, describe_blocking_rules
+from core.entity_resolution.blocking import count_blocked_pairs
 from core.entity_resolution.clustering import cluster_scored_pairs
 from core.entity_resolution.confidence import classify_scored_pairs
 from core.entity_resolution.extract import extract_donors_for_matching
@@ -44,7 +44,6 @@ from core.entity_resolution.splink_runtime import BoundedDuckDBConfig, open_boun
 from api.contribution_insights_contract import is_contribution_insights_mapped_row
 from domains.campaign_finance.ingest.bulk_parser import read_bulk_file
 from domains.campaign_finance.ingest.fec_bulk_files import fec_bulk_data_root
-from core.entity_resolution.splink_config import get_blocking_rule_sqls
 from domains.campaign_finance.ingest.field_mapper import map_contribution_fields
 from domains.campaign_finance.normalize.addresses import normalize_address
 from domains.campaign_finance.normalize.names import parse_name
@@ -60,11 +59,9 @@ _SCRUBBED_ENV_TOKENS = ("DATABASE", "POSTGRES", "PG", "FLY")
 _BENCHMARK_INVOCATION_ID_BYTES = 32
 _DONOR_PROXY_SCHEMA_VERSION = "donor_er_proxy_measurement.v1"
 _DONOR_PROXY_RECEIPT_FENCE_LANGUAGE = "donor_er_proxy_measurement_receipt"
-_DONOR_PAIR_ATTRIBUTION_SCHEMA_VERSION = "donor_er_pair_attribution.v1"
 _DONOR_PROXY_MODEL_ENTITY_TYPE = "person"
 _DONOR_IDENTITY_ENTITY_TYPE = "donor_identity"
 _WILSON_95_Z = 1.959963984540054
-_MATCH_PROBABILITY_FIELD = "match_" + "probability"
 
 ScaleVerdict = Literal["SCALE_NOW", "SCALE_WITH_CHANGES", "PRECISION_INSUFFICIENT", "BLOCKED_ON_NAMED_DEFECT"]
 
@@ -237,109 +234,18 @@ def _reject_repository_path_text(value: str) -> None:
         raise ValueError("validated receipt strings must not embed repository absolute paths")
 
 
-def _reject_attribution_value(value: object) -> None:
-    _reject_secret_bearing_receipt_text(value)
+def _reject_repository_path_tree(value: object) -> None:
     if isinstance(value, str):
         _reject_repository_path_text(value)
-    if isinstance(value, float) and not math.isfinite(value):
-        raise ValueError("numeric attribution values must be finite")
-
-
-def _reject_attribution_tree(value: object) -> None:
-    _reject_attribution_value(value)
+        return
     if isinstance(value, Mapping):
         for key, nested_value in value.items():
-            _reject_attribution_tree(key)
-            _reject_attribution_tree(nested_value)
+            _reject_repository_path_tree(key)
+            _reject_repository_path_tree(nested_value)
         return
     if isinstance(value, Sequence) and not isinstance(value, (bytes, bytearray, str)):
         for nested_value in value:
-            _reject_attribution_tree(nested_value)
-
-
-class _DonorPairComparisonFieldBase(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    @model_validator(mode="after")
-    def _validate_comparison_field(self) -> Any:
-        field_name = self.field_name
-        if not field_name.startswith(("gamma_", "bf_")):
-            raise ValueError("comparison field names must start with gamma_ or bf_")
-        _reject_attribution_tree(self.model_dump(mode="python"))
-        return self
-
-
-DonorPairComparisonField = create_model(
-    "DonorPairComparisonField",
-    __base__=_DonorPairComparisonFieldBase,
-    __module__=__name__,
-    field_name=(NonblankStr, ...),
-    value=(Any, ...),
-)
-
-
-class _DonorPairAttributionPairBase(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    @model_validator(mode="after")
-    def _validate_pair(self) -> Any:
-        dumped = self.model_dump(mode="python")
-        _reject_attribution_tree(dumped)
-        for field_name in ("match_weight", _MATCH_PROBABILITY_FIELD):
-            if not math.isfinite(float(dumped[field_name])):
-                raise ValueError(f"{field_name} must be finite")
-        comparison_field_names = [field.field_name for field in self.comparison_fields]
-        if not comparison_field_names:
-            raise ValueError("comparison evidence is required")
-        if not any(field_name.startswith("gamma_") for field_name in comparison_field_names):
-            raise ValueError("comparison evidence must include gamma_ fields")
-        if not any(field_name.startswith("bf_") for field_name in comparison_field_names):
-            raise ValueError("comparison evidence must include bf_ fields")
-        gamma_suffixes = {
-            field_name.removeprefix("gamma_")
-            for field_name in comparison_field_names
-            if field_name.startswith("gamma_")
-        }
-        bf_suffixes = {
-            field_name.removeprefix("bf_") for field_name in comparison_field_names if field_name.startswith("bf_")
-        }
-        if gamma_suffixes != bf_suffixes:
-            raise ValueError("comparison evidence must include paired gamma_ and bf_ fields")
-        return self
-
-
-DonorPairAttributionPair = create_model(
-    "DonorPairAttributionPair",
-    __base__=_DonorPairAttributionPairBase,
-    __module__=__name__,
-    **{
-        "entity_id_a": (NonblankStr, ...),
-        "entity_id_b": (NonblankStr, ...),
-        "match_key": (int | str, ...),
-        "blocking_rule_sql": (NonblankStr, ...),
-        "match_weight": (float, ...),
-        _MATCH_PROBABILITY_FIELD: (float, ...),
-        "comparison_fields": (list[DonorPairComparisonField], Field(min_length=1)),
-    },
-)
-
-
-class _DonorPairAttributionArtifactBase(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    @model_validator(mode="after")
-    def _validate_artifact(self) -> Any:
-        _reject_attribution_tree(self.model_dump(mode="python"))
-        return self
-
-
-DonorPairAttributionArtifact = create_model(
-    "DonorPairAttributionArtifact",
-    __base__=_DonorPairAttributionArtifactBase,
-    __module__=__name__,
-    schema_version=(Literal["donor_er_pair_attribution.v1"], _DONOR_PAIR_ATTRIBUTION_SCHEMA_VERSION),
-    pairs=(list[DonorPairAttributionPair], ...),
-)
+            _reject_repository_path_tree(nested_value)
 
 
 class TransactionWriteDefect(BaseModel):
@@ -408,11 +314,14 @@ class DonorErPairAttributionArtifact(BaseModel):
 
     @model_validator(mode="after")
     def validate_pair_frame(self) -> DonorErPairAttributionArtifact:
-        _reject_secret_bearing_receipt_text(self.model_dump(mode="python"))
+        dumped = self.model_dump(mode="python")
+        _reject_secret_bearing_receipt_text(dumped)
+        _reject_repository_path_tree(dumped)
         pair_keys = [_donor_pair_key(pair.entity_id_a, pair.entity_id_b) for pair in self.pair_attributions]
-        if len(set(pair_keys)) != len(pair_keys):
+        unique_pair_keys = set(pair_keys)
+        if len(unique_pair_keys) != len(pair_keys):
             raise ValueError("pair_attributions must identify unique entity pairs")
-        missing_attribution = set(self.sampled_false_pair_coverage.attributed_pair_keys) - set(pair_keys)
+        missing_attribution = set(self.sampled_false_pair_coverage.attributed_pair_keys) - unique_pair_keys
         if missing_attribution:
             raise ValueError("sampled coverage references a pair absent from pair_attributions")
         return self
@@ -790,7 +699,6 @@ def _add_execution_evidence_arguments(parser: argparse.ArgumentParser) -> None:
 
 def _add_donor_proxy_execution_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--output-path", required=True)
-    parser.add_argument("--attribution-output-path", default=None)
     parser.add_argument("--pair-attribution-output-path", default=None)
     parser.add_argument("--timeout-seconds", required=True, type=int)
     parser.add_argument("--memory-bytes", required=True, type=int)
@@ -860,90 +768,6 @@ def normalized_benchmark_row_from_signature(
         state=state,
         zip5=zip5,
     )
-
-
-def blocking_rule_metadata(entity_type: str) -> dict[str, list[Any]]:
-    return {
-        "descriptions": describe_blocking_rules(entity_type),
-        "sqls": get_blocking_rule_sqls(entity_type),
-    }
-
-
-def score_diagnostic_rows(rows: list[dict[str, Any]], entity_type: str, **scoring_options: Any) -> list[Any]:
-    return score_rows(rows, entity_type, include_diagnostics=True, **scoring_options)
-
-
-def build_donor_pair_attribution_artifact(
-    *,
-    scored_pairs: Sequence[Mapping[str, Any]],
-    sampled_member_ids: Set[str],
-    entity_type: str,
-) -> Any:
-    blocking_rules_by_key = _blocking_rules_by_match_key(entity_type)
-    artifact_pairs = [
-        _donor_pair_attribution_pair(pair, blocking_rules_by_key)
-        for pair in scored_pairs
-        if _scored_pair_is_in_sample(pair, sampled_member_ids)
-    ]
-    return DonorPairAttributionArtifact(
-        schema_version=_DONOR_PAIR_ATTRIBUTION_SCHEMA_VERSION,
-        pairs=artifact_pairs,
-    )
-
-
-def _scored_pair_is_in_sample(pair: Mapping[str, Any], sampled_member_ids: Set[str]) -> bool:
-    return str(pair.get("entity_id_a")) in sampled_member_ids and str(pair.get("entity_id_b")) in sampled_member_ids
-
-
-def _blocking_rules_by_match_key(entity_type: str) -> dict[int, str]:
-    metadata = blocking_rule_metadata(entity_type)
-    descriptions = metadata["descriptions"]
-    sqls = metadata["sqls"]
-    if len(descriptions) != len(sqls):
-        raise ValueError("blocking metadata must align with canonical blocking rules")
-    rules_by_key: dict[int, str] = {}
-    for expected_index, description in enumerate(descriptions):
-        if not isinstance(description, Mapping):
-            raise ValueError("blocking metadata descriptions must be mappings")
-        if description.get("rule_index") != expected_index:
-            raise ValueError("blocking metadata rule indexes must align with canonical blocking rules")
-        blocking_rule = description.get("blocking_rule")
-        if not isinstance(blocking_rule, str) or not blocking_rule.strip():
-            raise ValueError("blocking metadata must include nonblank blocking_rule text")
-        rules_by_key[expected_index] = blocking_rule
-    return rules_by_key
-
-
-def _donor_pair_attribution_pair(pair: Mapping[str, Any], blocking_rules_by_key: Mapping[int, str]) -> Any:
-    match_key = _match_key_index(pair.get("match_key"), blocking_rules_by_key)
-    comparison_fields = [
-        {"field_name": field_name, "value": value}
-        for field_name, value in pair.items()
-        if field_name.startswith(("gamma_", "bf_"))
-    ]
-    return DonorPairAttributionPair(
-        entity_id_a=str(pair.get("entity_id_a")),
-        entity_id_b=str(pair.get("entity_id_b")),
-        match_key=pair.get("match_key"),
-        blocking_rule_sql=blocking_rules_by_key[match_key],
-        match_weight=pair.get("match_weight"),
-        **{
-            _MATCH_PROBABILITY_FIELD: pair.get(_MATCH_PROBABILITY_FIELD),
-            "comparison_fields": comparison_fields,
-        },
-    )
-
-
-def _match_key_index(raw_match_key: Any, blocking_rules_by_key: Mapping[int, str]) -> int:
-    try:
-        match_key = int(raw_match_key)
-    except (TypeError, ValueError):
-        raise ValueError("match_key must identify a known blocking rule") from None
-    if str(raw_match_key) != str(match_key):
-        raise ValueError("match_key must identify a known blocking rule")
-    if match_key not in blocking_rules_by_key:
-        raise ValueError("match_key must identify a known blocking rule")
-    return match_key
 
 
 def select_deterministic_db_prefix(rows: Sequence[dict[str, Any]], *, seed: str, size: int) -> list[dict[str, Any]]:
@@ -1098,24 +922,6 @@ def _donor_proxy(args: argparse.Namespace) -> int:
         classified_pairs = classify_scored_pairs(scored_pairs)
         clustered = cluster_scored_pairs(classified_pairs, selected_person_model_rows)
         attribution_classified_pairs = [dict(pair) for pair in classified_pairs]
-        if paths.attribution_output_path is not None:
-            diagnostic_scored_pairs = score_diagnostic_rows(
-                selected_person_model_rows,
-                _DONOR_PROXY_MODEL_ENTITY_TYPE,
-                bounded_connection_factory=bounded_connection_factory,
-            )
-            sampled_clusters = select_donor_proxy_cluster_sample(
-                clustered,
-                seed=args.seed,
-                size=args.cluster_sample_size,
-            )
-            sampled_member_ids = {member_id for cluster in sampled_clusters for member_id in cluster["member_ids"]}
-            artifact = build_donor_pair_attribution_artifact(
-                scored_pairs=diagnostic_scored_pairs,
-                sampled_member_ids=sampled_member_ids,
-                entity_type=_DONOR_PROXY_MODEL_ENTITY_TYPE,
-            )
-            paths.attribution_output_path.write_text(artifact.model_dump_json(), encoding="utf-8")
         _strip_pair_attribution_fields(classified_pairs)
         decision_ids = persist_match_decisions(conn, classified_pairs, _DONOR_IDENTITY_ENTITY_TYPE)
         cluster_ids = persist_auto_merge_clusters(
@@ -1417,7 +1223,6 @@ class _DonorProxyPaths(BaseModel):
 
     temp_root: Path
     output_path: Path
-    attribution_output_path: Path | None = None
     pair_attribution_output_path: Path | None = None
 
 
@@ -1467,11 +1272,6 @@ def _resolve_donor_proxy_paths(args: argparse.Namespace) -> _DonorProxyPaths:
     _validate_positive_int(args.cluster_sample_size, "cluster-sample-size")
     temp_root = _resolve_temp_root(args.temp_root)
     output_path = _resolve_contained_output_path(args.output_path, temp_root)
-    attribution_output_path = None
-    if getattr(args, "attribution_output_path", None) is not None:
-        attribution_output_path = _resolve_contained_attribution_output_path(args.attribution_output_path, temp_root)
-        if attribution_output_path == output_path:
-            raise ValueError("attribution-output-path must differ from output-path")
     raw_pair_attribution_path = getattr(args, "pair_attribution_output_path", None)
     pair_attribution_output_path = (
         _resolve_contained_output_path(raw_pair_attribution_path, temp_root)
@@ -1483,7 +1283,6 @@ def _resolve_donor_proxy_paths(args: argparse.Namespace) -> _DonorProxyPaths:
     return _DonorProxyPaths(
         temp_root=temp_root,
         output_path=output_path,
-        attribution_output_path=attribution_output_path,
         pair_attribution_output_path=pair_attribution_output_path,
     )
 
@@ -1508,13 +1307,6 @@ def _resolve_temp_root(value: object) -> Path:
 def _resolve_contained_output_path(value: object, temp_root: Path) -> Path:
     output_path = _resolve_output_path(value, temp_root)
     _require_within(output_path, temp_root, "output-path must resolve inside temp-root")
-    _ensure_output_parent(output_path)
-    return output_path
-
-
-def _resolve_contained_attribution_output_path(value: object, temp_root: Path) -> Path:
-    output_path = _resolve_output_path(value, temp_root)
-    _require_within(output_path, temp_root, "attribution-output-path must resolve inside temp-root")
     _ensure_output_parent(output_path)
     return output_path
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 from uuid import uuid4
 
 import pandas as pd
@@ -728,91 +729,7 @@ def test_score_with_splink_default_output_omits_diagnostics(
     assert set(results[0]) == {"entity_id_a", "entity_id_b", "confidence", "decision_method", "decided_by"}
 
 
-def test_score_with_splink_can_include_selected_prediction_diagnostics(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    shared_id = uuid4()
-    other_id = uuid4()
-    rows: list[RowDict] = [
-        {"id": shared_id, "canonical_name": "Alpha", "identifier_key": "fec_id:FEC-123"},
-        {"id": shared_id, "canonical_name": "Alpha", "identifier_key": "voter_reg_id:VR-123"},
-        {"id": other_id, "canonical_name": "Beta", "identifier_key": None},
-    ]
-
-    class FakeDuckDBAPI:
-        pass
-
-    class FakePredictions:
-        def as_record_dict(self) -> list[dict[str, object]]:
-            return [
-                {
-                    "unique_id_l": f"{shared_id}__splink_row__1",
-                    "unique_id_r": str(other_id),
-                    "match_key": "0",
-                    "match_weight": 4.25,
-                    "match_probability": 0.87,
-                    "gamma_name": 1,
-                    "bf_name": 16.0,
-                },
-                {
-                    "unique_id_l": str(other_id),
-                    "unique_id_r": f"{shared_id}__splink_row__0",
-                    "match_key": "1",
-                    "match_weight": 8.5,
-                    "match_probability": 0.93,
-                    "gamma_name": 2,
-                    "bf_name": 64.0,
-                },
-            ]
-
-    class FakeTraining:
-        def estimate_u_using_random_sampling(self, *, max_pairs: int) -> None:
-            assert max_pairs == 1_000_000
-
-        def estimate_parameters_using_expectation_maximisation(self, blocking_rule: str) -> None:
-            assert blocking_rule == "l.last_name = r.last_name"
-
-    class FakeInference:
-        def predict(self) -> FakePredictions:
-            return FakePredictions()
-
-    class FakeLinker:
-        def __init__(self, input_rows: list[RowDict], settings: object, db_api: object) -> None:
-            self.training = FakeTraining()
-            self.inference = FakeInference()
-
-    monkeypatch.setattr(
-        "core.entity_resolution.scoring.get_probabilistic_settings",
-        lambda entity_type: object() if entity_type == "person" else None,
-    )
-    monkeypatch.setattr(
-        "core.entity_resolution.scoring.get_blocking_rule_sqls",
-        lambda entity_type: ["l.last_name = r.last_name"] if entity_type == "person" else [],
-    )
-    monkeypatch.setattr(
-        "core.entity_resolution.scoring.get_splink_runtime",
-        lambda: (FakeLinker, FakeDuckDBAPI),
-    )
-
-    results = score_with_splink(rows, "person", include_diagnostics=True)
-
-    assert results == [
-        {
-            "entity_id_a": min(shared_id, other_id),
-            "entity_id_b": max(shared_id, other_id),
-            "confidence": 0.93,
-            "decision_method": "probabilistic",
-            "decided_by": "splink_v1",
-            "match_key": "1",
-            "match_weight": 8.5,
-            "match_probability": 0.93,
-            "gamma_name": 2,
-            "bf_name": 64.0,
-        }
-    ]
-
-
-def test_score_rows_forwards_include_diagnostics_to_score_with_splink(
+def test_score_rows_forwards_include_attribution_to_score_with_splink(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     left_id = uuid4()
@@ -828,7 +745,7 @@ def test_score_rows_forwards_include_diagnostics_to_score_with_splink(
         entity_type: str,
         **kwargs: object,
     ) -> list[dict[str, object]]:
-        calls.append((forwarded_rows, entity_type, kwargs.get("include_diagnostics")))
+        calls.append((forwarded_rows, entity_type, kwargs.get("include_attribution")))
         return [
             {
                 "entity_id_a": min(left_id, right_id),
@@ -837,19 +754,31 @@ def test_score_rows_forwards_include_diagnostics_to_score_with_splink(
                 "decision_method": "probabilistic",
                 "decided_by": "splink_v1",
                 "match_key": "0",
+                "fired_blocking_rules": [{"match_key": "0", "blocking_rule": "l.last_name = r.last_name"}],
+                "comparison_levels": {"canonical_name": 2},
                 "match_weight": 5.5,
-                "match_probability": 0.91,
-                "gamma_name": 1,
-                "bf_name": 32.0,
             }
         ]
 
     monkeypatch.setattr("core.entity_resolution.scoring.score_with_splink", fake_score_with_splink)
 
-    results = score_rows(rows, "person", include_diagnostics=True)
+    results = score_rows(rows, "person", include_attribution=True)
 
     assert calls == [(rows, "person", True)]
-    assert results[0]["match_key"] == "0"
+    assert results[0]["fired_blocking_rules"] == [{"match_key": "0", "blocking_rule": "l.last_name = r.last_name"}]
+
+
+def test_scoring_api_has_one_pair_attribution_opt_in() -> None:
+    attribution_parameters = {
+        scoring_entrypoint.__name__: set(inspect.signature(scoring_entrypoint).parameters)
+        & {"include_attribution", "include_diagnostics"}
+        for scoring_entrypoint in (score_with_splink, score_rows)
+    }
+
+    assert attribution_parameters == {
+        "score_with_splink": {"include_attribution"},
+        "score_rows": {"include_attribution"},
+    }
 
 
 def test_score_with_splink_ignores_same_entity_synthetic_row_pairs(
@@ -932,10 +861,14 @@ def test_score_with_splink_uses_explicit_candidate_settings(
     left_id = uuid4()
     right_id = uuid4()
     rows: list[RowDict] = [
-        {"id": left_id, "canonical_name": "Alpha"},
-        {"id": right_id, "canonical_name": "Beta"},
+        {"id": left_id, "canonical_name": "Alpha", "state": "NC"},
+        {"id": right_id, "canonical_name": "Beta", "state": "NC"},
     ]
     candidate_settings = {"blocking_rules_to_generate_predictions": ["x"]}
+    observed_settings: dict[str, object | None] = {
+        "blocking_rules": None,
+        "rule_metadata": None,
+    }
 
     class FakeDuckDBAPI:
         pass
@@ -947,6 +880,9 @@ def test_score_with_splink_uses_explicit_candidate_settings(
                     "unique_id_l": str(left_id),
                     "unique_id_r": str(right_id),
                     "match_probability": 0.88,
+                    "match_key": "0",
+                    "match_weight": 3.25,
+                    "gamma_canonical_name": 2,
                 }
             ]
 
@@ -955,7 +891,7 @@ def test_score_with_splink_uses_explicit_candidate_settings(
             assert max_pairs == 1_000_000
 
         def estimate_parameters_using_expectation_maximisation(self, blocking_rule: str) -> None:
-            assert blocking_rule == "l.last_name = r.last_name"
+            assert blocking_rule == "l.state = r.state"
 
     class FakeInference:
         def predict(self) -> FakePredictions:
@@ -967,20 +903,43 @@ def test_score_with_splink_uses_explicit_candidate_settings(
             self.training = FakeTraining()
             self.inference = FakeInference()
 
+    def fake_blocking_rules(
+        entity_type: str,
+        probabilistic_settings: object | None = None,
+    ) -> list[str]:
+        observed_settings["blocking_rules"] = probabilistic_settings
+        return ["l.state = r.state"]
+
+    def fake_rule_metadata(
+        entity_type: str,
+        probabilistic_settings: object | None = None,
+    ) -> list[dict[str, object]]:
+        observed_settings["rule_metadata"] = probabilistic_settings
+        return [{"rule_index": 0, "blocking_rule": "l.state = r.state"}]
+
     monkeypatch.setattr(
         "core.entity_resolution.scoring.get_probabilistic_settings",
         lambda entity_type: pytest.fail("global settings lookup should be bypassed"),
     )
     monkeypatch.setattr(
         "core.entity_resolution.scoring.get_blocking_rule_sqls",
-        lambda entity_type, probabilistic_settings=None: ["l.last_name = r.last_name"],
+        fake_blocking_rules,
+    )
+    monkeypatch.setattr(
+        "core.entity_resolution.scoring.describe_blocking_rules",
+        fake_rule_metadata,
     )
     monkeypatch.setattr(
         "core.entity_resolution.scoring.get_splink_runtime",
         lambda: (FakeLinker, FakeDuckDBAPI),
     )
 
-    results = score_with_splink(rows, "person", probabilistic_settings=candidate_settings)
+    results = score_with_splink(
+        rows,
+        "person",
+        probabilistic_settings=candidate_settings,
+        include_attribution=True,
+    )
 
     assert results == [
         {
@@ -989,8 +948,16 @@ def test_score_with_splink_uses_explicit_candidate_settings(
             "confidence": 0.88,
             "decision_method": "probabilistic",
             "decided_by": "splink_v1",
+            "match_key": "0",
+            "fired_blocking_rules": [{"match_key": "0", "blocking_rule": "l.state = r.state"}],
+            "comparison_levels": {"canonical_name": 2},
+            "match_weight": 3.25,
         }
     ]
+    assert observed_settings == {
+        "blocking_rules": candidate_settings,
+        "rule_metadata": candidate_settings,
+    }
 
 
 @pytest.mark.parametrize("failure_phase", [None, "training", "prediction"])

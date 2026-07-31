@@ -16,9 +16,11 @@ from typing import Any
 
 try:
     import splink.comparison_library as cl
+    import splink.comparison_level_library as cll
     from splink import SettingsCreator, block_on
 except ModuleNotFoundError as import_error:
     cl = None
+    cll = None
     SettingsCreator = None
     block_on = None
     _SPLINK_IMPORT_ERROR = import_error
@@ -50,6 +52,8 @@ PERSON_TUNING_DEFAULTS: dict[str, list[float]] = {
     "employer": [0.92, 0.80],
     "occupation": [0.92],
 }
+PERSON_FIRST_NAME_DISAGREEMENT_M_PROBABILITY = 0.01
+PERSON_FIRST_NAME_DISAGREEMENT_U_PROBABILITY = 0.95
 
 
 def _resolved_person_tuning_overrides(overrides: dict[str, list[float]] | None) -> dict[str, list[float]]:
@@ -96,11 +100,7 @@ def _build_person_settings(
                 "canonical_name",
                 score_threshold_or_thresholds=tuning["canonical_name"],
             ).configure(term_frequency_adjustments=True),
-            # First name: handles nicknames, abbreviations
-            cl.JaroWinklerAtThresholds(
-                "first_name",
-                score_threshold_or_thresholds=tuning["first_name"],
-            ).configure(term_frequency_adjustments=True),
+            _first_name_comparison(tuning["first_name"]),
             # Last name: exact + fuzzy
             cl.JaroWinklerAtThresholds(
                 "last_name",
@@ -134,6 +134,33 @@ def _build_person_settings(
         ],
         retain_intermediate_calculation_columns=False,
         retain_matching_columns=True,
+    )
+
+
+def _first_name_comparison(thresholds: list[float]):
+    """Build the person first-name comparison with a fixed disagreement penalty."""
+    _require_splink()
+    assert cl is not None
+    assert cll is not None
+    levels = [
+        cll.NullLevel("first_name"),
+        cll.ExactMatchLevel("first_name", term_frequency_adjustments=True),
+        *[cll.JaroWinklerLevel("first_name", threshold) for threshold in thresholds],
+        # 2026-07-28 donor audit receipt: rule 0 block_on("last_name", "state")
+        # fired on 78/78 sampled false-merge edges, and
+        # comparison_levels["first_name"] == 0 on 77/78. Keep maximum
+        # first-name disagreement as a real model penalty, not a post-hoc filter.
+        cll.ElseLevel().configure(
+            m_probability=PERSON_FIRST_NAME_DISAGREEMENT_M_PROBABILITY,
+            u_probability=PERSON_FIRST_NAME_DISAGREEMENT_U_PROBABILITY,
+            fix_m_probability=True,
+            fix_u_probability=True,
+        ),
+    ]
+    return cl.CustomComparison(
+        levels,
+        output_column_name="first_name",
+        comparison_description="First name disagreement veto",
     )
 
 

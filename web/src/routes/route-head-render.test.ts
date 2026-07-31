@@ -329,9 +329,9 @@ describe("route head rendering", () => {
       /<footer[^>]*>[\s\S]*aria-label="Footer"[\s\S]*href="\/methodology"[\s\S]*>Methodology<\/a>/
     );
     expect(rendered.body).toContain("Report a data issue");
-    expect(rendered.body).toContain('role="progressbar"');
-    expect(rendered.body).toContain('aria-valuenow="0"');
-    expect(rendered.body).toContain('aria-busy="false"');
+    expect(rendered.body).toContain('aria-hidden="true"');
+    expect(rendered.body).not.toContain('role="progressbar"');
+    expect(rendered.body).not.toContain("aria-value");
     expect(rendered.body).toContain("<main");
     expect(rendered.body).toContain('aria-busy="false"');
   });
@@ -343,7 +343,9 @@ describe("route head rendering", () => {
     };
     const rendered = render(Layout);
     expect(rendered.body).toContain("navigation-progress--active");
-    expect(rendered.body).toContain('aria-valuenow="100"');
+    expect(rendered.body).toContain('aria-hidden="true"');
+    expect(rendered.body).not.toContain('role="progressbar"');
+    expect(rendered.body).not.toContain("aria-value");
     expect(rendered.body).toContain('aria-busy="true"');
   });
 
@@ -546,6 +548,7 @@ describe("route head rendering", () => {
     expect(rendered.body).toContain('href="/api/openapi.json">/api/openapi.json</a>');
     expect(rendered.body).toContain('href="/api/docs">/api/docs</a>');
     expect(rendered.body).toContain('href="/api/redoc">/api/redoc</a>');
+    expect(rendered.body.match(/<pre[^>]*tabindex="0"[^>]*>/g)).toHaveLength(8);
   });
 
   it("renders candidates list with shared canonical/OG/Twitter tags, filter controls, and unchanged pagination links", () => {

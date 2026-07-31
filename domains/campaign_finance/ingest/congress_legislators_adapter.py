@@ -218,6 +218,7 @@ def _build_senate_row(entry: dict[str, Any], term: dict[str, Any]) -> dict[str, 
         # YAML field is `url`; loader contract is `website`.
         "website": _string_or_empty(term.get("url")),
         "address": _string_or_empty(term.get("address")),
+        "term_start": _string_or_empty(term.get("start")),
         "fec_ids": _extract_fec_ids(entry),
         "wikidata_id": _wikidata_id(entry),
         "govtrack_id": _govtrack_id(entry),

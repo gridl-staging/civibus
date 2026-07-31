@@ -3,30 +3,31 @@ import { render } from "svelte/server";
 import NavigationProgress from "./NavigationProgress.svelte";
 
 describe("NavigationProgress", () => {
-  it("renders an accessible inactive progressbar state", () => {
+  it("keeps the inactive visual indicator out of the accessibility tree", () => {
     const rendered = render(NavigationProgress, {
       props: {
         isNavigating: false
       }
     });
 
-    expect(rendered.body).toContain('role="progressbar"');
-    expect(rendered.body).toContain('aria-valuemin="0"');
-    expect(rendered.body).toContain('aria-valuemax="100"');
-    expect(rendered.body).toContain('aria-valuenow="0"');
-    expect(rendered.body).toContain('aria-busy="false"');
+    expect(rendered.body).toContain('aria-hidden="true"');
+    expect(rendered.body).not.toContain('role="progressbar"');
+    expect(rendered.body).not.toContain("aria-value");
+    expect(rendered.body).not.toContain("aria-busy");
     expect(rendered.body).not.toContain("navigation-progress--active");
   });
 
-  it("renders an active progressbar state while navigating", () => {
+  it("keeps the active visual indicator out of the accessibility tree", () => {
     const rendered = render(NavigationProgress, {
       props: {
         isNavigating: true
       }
     });
 
-    expect(rendered.body).toContain('aria-busy="true"');
-    expect(rendered.body).toContain('aria-valuenow="100"');
+    expect(rendered.body).toContain('aria-hidden="true"');
+    expect(rendered.body).not.toContain('role="progressbar"');
+    expect(rendered.body).not.toContain("aria-value");
+    expect(rendered.body).not.toContain("aria-busy");
     expect(rendered.body).toContain("navigation-progress--active");
   });
 });

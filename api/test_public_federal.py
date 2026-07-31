@@ -46,6 +46,7 @@ from api.test_civics import (
     _seed_current_federal_members_mix,
 )
 from core.db import insert_entity_source
+from test_support.donor_search_fixture import seed_full_scope_skewed_donor_search_fixture
 
 pytestmark = pytest.mark.integration
 
@@ -375,6 +376,7 @@ def test_public_endpoints_return_cache_control_header(
 def test_public_endpoints_ip_rate_limited_without_api_key(
     db_conn: psycopg.Connection,
     monkeypatch: pytest.MonkeyPatch,
+    _without_persisted_full_scope_latency_fixture: None,
 ) -> None:
     monkeypatch.setenv("CIVIBUS_ENV", "production")
     monkeypatch.setenv("CIVIBUS_API_KEYS", "private-key-for-public-rate-test")
@@ -404,7 +406,11 @@ def test_public_endpoints_ip_rate_limited_without_api_key(
     assert limited_response.headers["Retry-After"] == "30"
 
 
-def test_public_officials_returns_directory_projection(api_client: TestClient, db_conn: psycopg.Connection) -> None:
+def test_public_officials_returns_directory_projection(
+    api_client: TestClient,
+    db_conn: psycopg.Connection,
+    _without_persisted_full_scope_latency_fixture: None,
+) -> None:
     expectations = _seed_current_federal_members_mix(db_conn)
 
     response = api_client.get("/public/v1/federal/officials")
@@ -416,6 +422,7 @@ def test_public_officials_returns_directory_projection(api_client: TestClient, d
 def test_public_officials_excludes_namesake_challenger(
     api_client: TestClient,
     db_conn: psycopg.Connection,
+    _without_persisted_full_scope_latency_fixture: None,
 ) -> None:
     expectations = _seed_current_federal_members_mix(db_conn)
     officeholder = _member_by_name(expectations, "Alice Representative")
@@ -432,7 +439,9 @@ def test_public_officials_excludes_namesake_challenger(
 
 
 def test_public_officials_chamber_filter_returns_only_senate(
-    api_client: TestClient, db_conn: psycopg.Connection
+    api_client: TestClient,
+    db_conn: psycopg.Connection,
+    _without_persisted_full_scope_latency_fixture: None,
 ) -> None:
     expectations = _seed_current_federal_members_mix(db_conn)
     expected_senate_names = sorted(
@@ -482,6 +491,38 @@ def test_public_member_money_returns_official_totals_and_ie(
     assert payload["ie_oppose_total"] == ie_payload["oppose_total"]
     assert payload["ie_support_count"] == ie_payload["support_count"]
     assert payload["ie_oppose_count"] == ie_payload["oppose_count"]
+
+
+def test_full_scope_latency_fixture_keeps_every_official_money_and_ie_linked(
+    api_client: TestClient,
+    db_conn: psycopg.Connection,
+) -> None:
+    fixture = seed_full_scope_skewed_donor_search_fixture(db_conn)
+
+    response = api_client.get("/public/v1/federal/export.json")
+
+    assert fixture.counts.current_federal_officeholders == 527
+    assert fixture.counts.linked_people == 527
+    assert fixture.counts.distinct_linked_committees == 527
+    assert fixture.counts.official_total_candidates == 527
+    assert fixture.counts.support_ie_candidates == 527
+    assert fixture.counts.oppose_ie_candidates == 527
+    assert response.status_code == 200
+    payload = response.json()
+    assert len(payload) == 527
+    representative = _public_money_row_for_person(payload, fixture.primary_recipient.person_id)
+    assert representative["person_name"] == "Full Scope Officeholder 000"
+    assert representative["candidate_id"] == str(fixture.primary_recipient.candidate_id)
+    assert representative["summary_source"] == "fec_weball"
+    assert representative["total_raised"] == "10000.00"
+    assert representative["total_spent"] == "2500.00"
+    assert representative["net"] == "7500.00"
+    assert representative["cash_on_hand"] == "7500.00"
+    assert representative["ie_support_total"] == "25.00"
+    assert representative["ie_oppose_total"] == "10.00"
+    assert representative["ie_support_count"] == 1
+    assert representative["ie_oppose_count"] == 1
+    assert [source["source_record_key"] for source in representative["sources"]] == ["donor-search-current"]
 
 
 def test_export_json_contains_seeded_member_with_money(api_client: TestClient, db_conn: psycopg.Connection) -> None:

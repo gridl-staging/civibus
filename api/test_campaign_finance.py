@@ -4590,6 +4590,7 @@ def test_get_candidate_summary_single_committee_common_case(
 def test_get_candidate_summary_returns_zero_totals_when_no_linked_committees(
     api_client: TestClient,
     db_conn: psycopg.Connection,
+    _without_persisted_full_scope_latency_fixture: None,
 ) -> None:
     candidate_id = UUID("b0000000-0000-0000-0000-000000000301")
     insert_candidate_row(
@@ -5863,6 +5864,7 @@ def test_candidate_money_routes_validate_backend_owned_coverage_contract(
 
 def test_get_state_summary_returns_all_states_with_ranked_totals_and_registry_flags(
     db_conn: psycopg.Connection,
+    _without_persisted_full_scope_latency_fixture: None,
 ) -> None:
     baseline_by_state = {
         row["state_code"]: row for row in campaign_finance_queries.fetch_state_campaign_finance_summaries(db_conn)
@@ -6113,6 +6115,7 @@ def test_state_summary_and_detail_return_null_ie_for_supported_state_without_ie_
 
 def test_get_state_detail_returns_aggregate_panels_and_validation_behavior(
     db_conn: psycopg.Connection,
+    _without_persisted_full_scope_latency_fixture: None,
 ) -> None:
     nc_baseline = campaign_finance_queries.fetch_state_campaign_finance_detail(db_conn, "NC")
     ca_baseline = campaign_finance_queries.fetch_state_campaign_finance_detail(db_conn, "CA")
@@ -6328,6 +6331,7 @@ def test_get_state_detail_returns_aggregate_panels_and_validation_behavior(
 
 def test_state_ie_aggregate_excludes_outlier_spenders_and_reports_count(
     db_conn: psycopg.Connection,
+    _without_persisted_full_scope_latency_fixture: None,
 ) -> None:
     normal_committee = seed_committee_for_summary(
         db_conn,
@@ -6738,6 +6742,7 @@ def test_list_transactions_filters_by_jurisdiction_via_source_record_chain(
 def test_list_transactions_includes_null_source_rows_when_unfiltered_but_excludes_them_when_jurisdiction_filtered(
     api_client: TestClient,
     db_conn: psycopg.Connection,
+    _without_persisted_full_scope_latency_fixture: None,
 ) -> None:
     fixture_ids = seed_transactions_for_filters(db_conn)
 
@@ -7362,6 +7367,7 @@ def test_summary_derives_jurisdiction_and_data_through_from_provenance_chain(
 
 def test_state_summary_derives_data_through_from_latest_qualifying_provenance_chain(
     db_conn: psycopg.Connection,
+    _without_persisted_full_scope_latency_fixture: None,
 ) -> None:
     committee_id = UUID("d6666666-6666-6666-6666-666666666666")
     old_pull = datetime(2026, 3, 20, 8, 0, tzinfo=timezone.utc)

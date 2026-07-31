@@ -1,5 +1,12 @@
 import { expect, test } from "playwright/test";
-import { SMOKE_CANDIDATE_NAME, SMOKE_CANDIDATE_SLUG } from "./fixtures";
+import {
+  SMOKE_CALENDAR_ROUTE_PATH,
+  SMOKE_CANDIDATE_NAME,
+  SMOKE_CANDIDATE_SLUG,
+  SMOKE_COVERAGE_ROUTE_PATH,
+  SMOKE_DATA_SOURCES_ROUTE_PATH,
+  SMOKE_ELECTION_ROUTE_PATH
+} from "./fixtures";
 
 function escapeRegex(value: string) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -19,21 +26,53 @@ function expectHtmlMetaContent(
   expect(html).toMatch(metaPattern);
 }
 
+function extractLocs(xml: string): string[] {
+  return [...xml.matchAll(/<loc>([^<]+)<\/loc>/g)].map((match) => match[1]!);
+}
+
+function locPaths(xml: string): string[] {
+  return extractLocs(xml).map((loc) => new URL(loc).pathname);
+}
+
 test.describe("launch hygiene", () => {
-  test("GET /sitemap.xml returns XML sitemap envelope with core URLs", async ({ page }: { page: any }) => {
+  test("GET /sitemap.xml returns XML sitemap index with a core static shard", async ({
+    page
+  }: {
+    page: any;
+  }) => {
     const response = (await page.goto("/sitemap.xml"))!;
 
     expect(response.status()).toBe(200);
     expect(response.headers()["content-type"]).toContain("xml");
+    expect(response.headers()["cache-control"]).toBe("public, max-age=900");
 
     const xml = await response.text();
 
-    expect(xml).toContain('<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">');
+    expect(xml).toContain('<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">');
     expect(xml).toMatch(/<loc>[^<]+<\/loc>/);
 
     const responseOrigin = new URL(response.url()).origin;
-    expect(xml).toContain(`<loc>${responseOrigin}/candidates</loc>`);
-    expect(xml).toContain(`<loc>${responseOrigin}/committees</loc>`);
+    const shardLocs = extractLocs(xml);
+    expect(shardLocs).toContain(`${responseOrigin}/sitemap-static.xml`);
+
+    const staticResponse = await page.request.get("/sitemap-static.xml");
+    expect(staticResponse.status()).toBe(200);
+    expect(staticResponse.headers()["content-type"]).toContain("xml");
+    expect(staticResponse.headers()["cache-control"]).toBe("public, max-age=900");
+    const staticXml = await staticResponse.text();
+    expect(staticXml).toContain('<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">');
+    expect(new Set(locPaths(staticXml))).toEqual(
+      new Set([
+        "/",
+        "/congress",
+        "/candidates",
+        "/committees",
+        SMOKE_COVERAGE_ROUTE_PATH,
+        SMOKE_CALENDAR_ROUTE_PATH,
+        SMOKE_DATA_SOURCES_ROUTE_PATH,
+        SMOKE_ELECTION_ROUTE_PATH
+      ])
+    );
   });
 
   test("candidate detail emits non-empty OG/Twitter meta with fixture-linked values", async ({

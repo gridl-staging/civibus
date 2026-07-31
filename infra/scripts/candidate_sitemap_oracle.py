@@ -7,19 +7,21 @@ import argparse
 import json
 import os
 import re
+import socket
 import sys
 from collections import Counter
 from pathlib import Path
 from typing import Any, Callable
 from urllib.error import HTTPError, URLError
 from urllib.parse import urljoin, urlparse
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 from xml.etree import ElementTree
 
 from pydantic import BaseModel, ConfigDict, StrictBool, ValidationError
 
 
 BATCH_LIMIT = 200
+HTTP_FETCH_TIMEOUT_SECONDS = 15
 PUBLIC_CANDIDATE_LIST_PATH = "/api/v1/candidates"
 REPO_SECRET_ENV_PATH = Path(__file__).resolve().parents[2] / ".secret" / "civibus-fly.env"
 BARE_UUID_CANDIDATE_PATH = re.compile(
@@ -58,6 +60,7 @@ class CandidateListPage(BaseModel):
 class CandidateSitemapReport(BaseModel):
     candidate_api_total: int
     canonical_eligible_count: int
+    sitemap_url_count: int
     sitemap_candidate_count: int
     bare_uuid_candidate_url_count: int
     duplicate_candidate_urls: list[str]
@@ -73,16 +76,30 @@ class CandidateSitemapReport(BaseModel):
             and not self.unexpected_candidate_urls
         )
 
+    @property
+    def verdict(self) -> str:
+        if not self.ok:
+            return "candidate_sitemap_oracle_failed"
+        if self.canonical_eligible_count == 0:
+            return "VACUOUS"
+        return "candidate_sitemap_oracle_ok"
+
+    @property
+    def exit_code(self) -> int:
+        return 0 if self.ok else 1
+
     def evidence(self) -> str:
         return "\n".join(
             [
                 f"candidate_api_total={self.candidate_api_total}",
                 f"canonical_eligible_count={self.canonical_eligible_count}",
+                f"sitemap_url_count={self.sitemap_url_count}",
                 f"sitemap_candidate_count={self.sitemap_candidate_count}",
                 f"bare_uuid_candidate_url_count={self.bare_uuid_candidate_url_count}",
                 f"duplicate_candidate_urls={_format_values(self.duplicate_candidate_urls)}",
                 f"missing_eligible_urls={_format_values(self.missing_eligible_urls)}",
                 f"unexpected_candidate_urls={_format_values(self.unexpected_candidate_urls)}",
+                f"verdict={self.verdict}",
             ]
         )
 
@@ -157,25 +174,68 @@ def _candidate_url(base_url: str, candidate: CandidateListItem) -> str:
     return _build_url(base_url, f"/candidate/{candidate.slug}")
 
 
-def _loc_texts(xml_body: str) -> list[str]:
+def _local_name(element: ElementTree.Element) -> str:
+    return element.tag.rsplit("}", 1)[-1]
+
+
+def _parse_sitemap_xml(xml_body: str) -> tuple[str, list[str]]:
     try:
         root = ElementTree.fromstring(xml_body)
     except ElementTree.ParseError as exc:
         raise OracleError(f"sitemap_xml_malformed {exc}") from exc
+    root_name = _local_name(root)
+    if root_name not in {"urlset", "sitemapindex"}:
+        raise OracleError(f"sitemap_xml_unexpected_root {root_name}")
     locs: list[str] = []
     for element in root.iter():
-        if element.tag.rsplit("}", 1)[-1] == "loc" and element.text:
+        if _local_name(element) == "loc" and element.text:
             locs.append(element.text.strip())
-    return locs
+    return root_name, locs
+
+
+def _loc_texts(xml_body: str) -> list[str]:
+    return _parse_sitemap_xml(xml_body)[1]
+
+
+def _sitemap_error_path(url: str) -> str:
+    parsed = urlparse(url)
+    path = parsed.path or "/"
+    return f"{path}?{parsed.query}" if parsed.query else path
+
+
+def _fetch_sitemap_xml(fetch_url: FetchUrl, url: str) -> str:
+    response = fetch_url(url)
+    if response.status_code != 200:
+        raise OracleError(f"sitemap_unexpected_http_status {response.status_code} path={_sitemap_error_path(url)}")
+    if not isinstance(response.body, str):
+        raise OracleError("sitemap_xml_malformed")
+    return response.body
+
+
+def _sitemap_loc_fetch_url(base_url: str, loc: str) -> str:
+    base = urlparse(base_url)
+    parsed = urlparse(loc)
+    if parsed.scheme or parsed.netloc:
+        if parsed.scheme != base.scheme or parsed.netloc != base.netloc:
+            raise OracleError(f"sitemap_shard_cross_origin {loc}")
+        return loc
+    return _build_url(base_url, loc)
 
 
 def _fetch_sitemap_locs(fetch_url: FetchUrl, base_url: str) -> list[str]:
-    response = fetch_url(_build_url(base_url, "/sitemap.xml"))
-    if response.status_code != 200:
-        raise OracleError(f"sitemap_unexpected_http_status {response.status_code} path=/sitemap.xml")
-    if not isinstance(response.body, str):
-        raise OracleError("sitemap_xml_malformed")
-    return _loc_texts(response.body)
+    root_body = _fetch_sitemap_xml(fetch_url, _build_url(base_url, "/sitemap.xml"))
+    root_kind, root_locs = _parse_sitemap_xml(root_body)
+    if root_kind == "urlset":
+        return root_locs
+
+    locs: list[str] = []
+    for shard_loc in root_locs:
+        shard_body = _fetch_sitemap_xml(fetch_url, _sitemap_loc_fetch_url(base_url, shard_loc))
+        shard_kind, shard_locs = _parse_sitemap_xml(shard_body)
+        if shard_kind != "urlset":
+            raise OracleError(f"sitemap_shard_unexpected_root {shard_kind} path={_sitemap_error_path(shard_loc)}")
+        locs.extend(shard_locs)
+    return locs
 
 
 def _is_candidate_url(value: str) -> bool:
@@ -194,7 +254,8 @@ def evaluate_candidate_sitemap(base_url: str, fetch_url: FetchUrl) -> CandidateS
         for item in candidates
         if has_canonical_candidate_slug(item) and item.has_official_total
     )
-    sitemap_candidate_urls = [loc for loc in _fetch_sitemap_locs(fetch_url, canonical_base) if _is_candidate_url(loc)]
+    sitemap_locs = _fetch_sitemap_locs(fetch_url, canonical_base)
+    sitemap_candidate_urls = [loc for loc in sitemap_locs if _is_candidate_url(loc)]
     sitemap_counts = Counter(sitemap_candidate_urls)
     duplicate_urls = sorted(url for url, count in sitemap_counts.items() if count > 1)
     unique_sitemap_urls = set(sitemap_candidate_urls)
@@ -202,6 +263,7 @@ def evaluate_candidate_sitemap(base_url: str, fetch_url: FetchUrl) -> CandidateS
     return CandidateSitemapReport(
         candidate_api_total=len(candidates),
         canonical_eligible_count=len(eligible_urls),
+        sitemap_url_count=len(sitemap_locs),
         sitemap_candidate_count=len(sitemap_candidate_urls),
         bare_uuid_candidate_url_count=sum(1 for url in sitemap_candidate_urls if _is_bare_uuid_candidate_url(url)),
         duplicate_candidate_urls=duplicate_urls,
@@ -233,13 +295,30 @@ def _candidate_api_key(environ: dict[str, str] | None = None, env_path: Path = R
 
 
 def _build_http_fetch_url(candidate_api_key: str) -> FetchUrl:
+    class FailClosedRedirectHandler(HTTPRedirectHandler):
+        def redirect_request(
+            self,
+            req: Request,
+            fp: Any,
+            code: int,
+            msg: str,
+            headers: Any,
+            newurl: str,
+        ) -> Request:
+            # urllib otherwise copies X-API-Key to redirected requests, including
+            # cross-origin targets. The oracle requires operators to supply the
+            # canonical public origin, so redirects are evidence failures.
+            raise HTTPError(req.full_url, code, "redirect_not_allowed", headers, fp)
+
+    opener = build_opener(FailClosedRedirectHandler())
+
     def fetch_url(url: str) -> HttpResponse:
         headers = {"User-Agent": "civibus-candidate-sitemap-oracle/1.0"}
         if candidate_api_key and urlparse(url).path.startswith(PUBLIC_CANDIDATE_LIST_PATH):
             headers["X-API-Key"] = candidate_api_key
         request = Request(url, headers=headers)
         try:
-            with urlopen(request, timeout=60) as response:
+            with opener.open(request, timeout=HTTP_FETCH_TIMEOUT_SECONDS) as response:
                 body = response.read().decode(response.headers.get_content_charset() or "utf-8")
                 return HttpResponse(status_code=response.status, body=body)
         except HTTPError as exc:
@@ -247,6 +326,10 @@ def _build_http_fetch_url(candidate_api_key: str) -> FetchUrl:
             return HttpResponse(status_code=exc.code, body=body)
         except URLError as exc:
             raise OracleError(f"http_request_failed {url} {exc.reason}") from exc
+        except TimeoutError as exc:
+            raise OracleError(f"http_request_failed {url} timed out") from exc
+        except socket.timeout as exc:
+            raise OracleError(f"http_request_failed {url} timed out") from exc
 
     return fetch_url
 
@@ -269,11 +352,11 @@ def main() -> int:
         return 2
     print(report.evidence())
     if report.ok:
-        print("candidate_sitemap_oracle_ok")
-        return 0
-    print("candidate_sitemap_oracle_failed", file=sys.stderr)
+        print(report.verdict)
+        return report.exit_code
+    print(report.verdict, file=sys.stderr)
     print(report.evidence(), file=sys.stderr)
-    return 1
+    return report.exit_code
 
 
 if __name__ == "__main__":

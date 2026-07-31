@@ -7,7 +7,7 @@ import psycopg
 import pytest
 
 from api.queries.campaign_finance import search_donors
-from test_support.donor_search_fixture import seed_donor_search_fixture
+from test_support.donor_search_fixture import seed_donor_search_fixture, seed_full_scope_skewed_donor_search_fixture
 
 pytestmark = pytest.mark.integration
 
@@ -120,3 +120,27 @@ def test_search_donors_zip_mode_and_page_two_continuation_preserve_exact_contrac
     assert page_two_payload["results"][0]["contributor_name"] == "JOHN SMITH"
     assert page_two_payload["results"][0]["total_amount"] == Decimal("425.00")
     assert page_two_payload["results"][0]["transaction_count"] == 1
+
+
+def test_search_donors_full_scope_bound_preserves_high_volume_donor_values(
+    db_conn: psycopg.Connection,
+) -> None:
+    fixture = seed_full_scope_skewed_donor_search_fixture(db_conn)
+
+    payload = search_donors(db_conn, q="williams", by="name", limit=20, offset=0)
+
+    assert payload["results"][0]["contributor_name"] == "FOCUSED WILLIAMS"
+    donor = payload["results"][0]
+    assert donor["total_amount"] == Decimal("3000.00")
+    assert donor["transaction_count"] == 30
+    assert [
+        (recipient["person_id"], recipient["total_amount"], recipient["transaction_count"])
+        for recipient in donor["recipients"]
+    ] == [
+        (fixture.primary_recipient.person_id, Decimal("2000.00"), 20),
+        (fixture.secondary_recipient.person_id, Decimal("1000.00"), 10),
+    ]
+    assert [source["source_record_key"] for source in donor["sources"]] == [
+        "donor-search-current",
+        "donor-search-secondary",
+    ]

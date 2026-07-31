@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+from types import MappingProxyType
 import unicodedata
 
 UNKNOWN_INDUSTRY = "UNKNOWN_INDUSTRY"
 JUNK_EMPLOYER_WEIGHT = 0.01
-# The staged employer mappings in the fixed random sample cover 370 known rows
-# out of 14,324; losing any counted mapping breaks the owner contract.
-INDUSTRY_BY_EMPLOYER_MIN_COVERAGE = 370 / 14_324
+# The fixed sample covers 837 known-or-derived rows out of 14,324: 370 from
+# employer mappings plus 467 from occupation fallback. The zero-row headroom
+# makes any loss from either rule family fail the owner contract.
+INDUSTRY_BY_EMPLOYER_MIN_COVERAGE = 837 / 14_324
 
 _JUNK_EMPLOYER_REASONS: dict[str, str] = {
     "DISABLED": "FEC filer supplied disability status instead of an employer.",
@@ -80,6 +82,24 @@ _EMPLOYER_INDUSTRIES: dict[str, str] = {
     "WALMART": "Retail",
 }
 
+OCCUPATION_INDUSTRIES = MappingProxyType(
+    {
+        "ATTORNEY": "Legal",
+        "PHYSICIAN": "Health Care",
+        "TEACHER": "Education",
+    }
+)
+
+_AMBIGUOUS_OCCUPATIONS = frozenset(
+    {
+        # These top-sample occupation strings describe role seniority or work mode,
+        # not an industry with enough precision for product classification.
+        "CONSULTANT",
+        "MANAGER",
+        "OWNER",
+    }
+)
+
 
 def canonicalize_employer(raw_employer: str | None) -> str | None:
     """Return a deterministic employer key, or None for junk/non-employer values."""
@@ -110,12 +130,20 @@ def employer_junk_weight(raw_employer: str | None) -> float:
     return 1.0
 
 
-def industry_for_employer(raw_employer: str | None) -> str:
-    """Return a curated industry for known employers, or the unknown sentinel."""
+def industry_for_employer(raw_employer: str | None, *, occupation: str | None = None) -> str:
+    """Return a curated employer industry, optional occupation fallback, or the unknown sentinel."""
     canonical_employer = canonicalize_employer(raw_employer)
-    if canonical_employer is None:
-        return UNKNOWN_INDUSTRY
-    return _EMPLOYER_INDUSTRIES.get(canonical_employer, UNKNOWN_INDUSTRY)
+    employer_industry = (
+        UNKNOWN_INDUSTRY
+        if canonical_employer is None
+        else _EMPLOYER_INDUSTRIES.get(canonical_employer, UNKNOWN_INDUSTRY)
+    )
+    if employer_industry != UNKNOWN_INDUSTRY:
+        return employer_industry
+
+    # Employer text is the primary evidence; occupation is only a fallback when
+    # the employer path cannot produce an industry.
+    return _industry_for_occupation(occupation)
 
 
 def _normalize_employer_text(raw_employer: str | None) -> str | None:
@@ -143,6 +171,13 @@ def _replace_punctuation_with_spaces(normalized_employer: str) -> str:
     return "".join(character if character.isalnum() else " " for character in normalized_employer)
 
 
+def _industry_for_occupation(raw_occupation: str | None) -> str:
+    canonical_occupation = canonicalize_employer(raw_occupation)
+    if canonical_occupation is None or canonical_occupation in _AMBIGUOUS_OCCUPATIONS:
+        return UNKNOWN_INDUSTRY
+    return OCCUPATION_INDUSTRIES.get(canonical_occupation, UNKNOWN_INDUSTRY)
+
+
 def _strip_legal_suffix(normalized_employer: str) -> str | None:
     employer_tokens = normalized_employer.split()
     if employer_tokens and employer_tokens[-1] in LEGAL_SUFFIXES:
@@ -156,6 +191,7 @@ __all__ = [
     "JUNK_EMPLOYER_WEIGHT",
     "JUNK_EMPLOYERS",
     "LEGAL_SUFFIXES",
+    "OCCUPATION_INDUSTRIES",
     "UNKNOWN_INDUSTRY",
     "canonicalize_employer",
     "employer_junk_weight",

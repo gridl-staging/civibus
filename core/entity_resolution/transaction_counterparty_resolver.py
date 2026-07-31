@@ -17,6 +17,7 @@ from core.entity_resolution.extract import (
 from core.entity_resolution.l8_regression import _normalize_address
 from core.entity_resolution.scoring import score_rows
 from domains.campaign_finance.ingest.filing_loader import update_transaction_contributor_identity_ids
+from domains.campaign_finance.normalize.names import parse_name
 
 _NC_JURISDICTION = "state/NC"
 _PERSON_ROLES = ("donor",)
@@ -53,20 +54,6 @@ def _normalize_text(value: Any) -> str | None:
         return None
     text = str(value).strip()
     return text or None
-
-
-# NC transaction matching preserves the original input-order split; see
-# test_transaction_name_splitter.py for the executable local contract.
-def _split_first_and_last_name(value: str | None) -> tuple[str | None, str | None]:
-    normalized = _normalize_text(value)
-    if normalized is None:
-        return None, None
-    parts = normalized.split()
-    if not parts:
-        return None, None
-    if len(parts) == 1:
-        return parts[0], None
-    return parts[0], parts[-1]
 
 
 def _zip5(value: str | None) -> str | None:
@@ -193,7 +180,9 @@ def _person_transaction_row(unresolved: _UnresolvedTransaction) -> dict[str, Any
     canonical_name = _normalize_text(unresolved.contributor_name_raw) or _normalize_text(
         unresolved.raw_fields.get(_NC_NAME_KEY)
     )
-    first_name, last_name = _split_first_and_last_name(canonical_name)
+    parsed_name = parse_name(canonical_name, first_last_only=True)
+    first_name = parsed_name.first
+    last_name = parsed_name.last
     raw_address = _source_address(unresolved.raw_fields, unresolved, entity_type="person")
     normalized_address = _normalize_address(raw_address)
     employer = _normalize_text(unresolved.contributor_employer) or _normalize_text(

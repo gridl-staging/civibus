@@ -71,15 +71,39 @@ def test_production_finance_release_person_has_one_shared_owner() -> None:
     source = _production_finance_spec()
     release_targets = json.loads(PRODUCTION_RELEASE_TARGETS.read_text(encoding="utf-8"))
     release_person_id = release_targets["finance_visual_person_id"]
+    release_person_path = release_targets["finance_visual_person_path"]
     smoke_spec_sources = "\n".join(path.read_text(encoding="utf-8") for path in _smoke_specs())
 
     assert re.fullmatch(
         r"[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}",
         release_person_id,
     )
+    assert release_targets["finance_visual_person_name"].strip()
+    assert release_person_path == f"/person/{release_person_id}"
+    assert release_targets["finance_visual_minimum_total_raised"] == "1.00"
+    assert release_targets["finance_visual_donor_query"] == "williams"
     assert 'import releaseTargets from "./production_release_targets.json"' in source
     assert "releaseTargets.finance_visual_person_id" in source
+    assert "releaseTargets.finance_visual_person_name" in source
+    assert "releaseTargets.finance_visual_person_path" in source
     assert release_person_id not in smoke_spec_sources
+    assert release_person_path not in smoke_spec_sources
+
+
+def test_production_finance_smoke_requires_release_target_money_values() -> None:
+    source = _production_finance_spec()
+    person_money_function = source.split("async function expectPersonReleaseTargetRendersMoney", maxsplit=1)[1].split(
+        "\n}\n", maxsplit=1
+    )[0]
+
+    assert "expectCongressReleaseTargetRendersMoney" in source
+    assert "expectPersonReleaseTargetRendersMoney" in source
+    assert "page.goto(`/congress?search=${encodeURIComponent(RELEASE_PERSON_NAME)}`)" in source
+    assert 'page.getByRole("region", { name: `Money summary for ${RELEASE_PERSON_NAME}` })' in source
+    assert "page.goto(`${RELEASE_PERSON_PATH}?cycle=${SELECTED_CYCLE}`)" in source
+    assert 'page.getByRole("region", { name: MONEY_AT_GLANCE_REGION })' in source
+    assert "expectNonzeroMoneyValue" in source
+    assert "TRUTHFUL_NO_DATA" not in person_money_function
 
 
 def test_production_finance_smoke_exercises_each_chart_disclosure() -> None:

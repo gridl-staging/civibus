@@ -56,6 +56,7 @@ from domains.campaign_finance.ingest.bulk_loader_ccl import (
 )
 from domains.campaign_finance.ingest.candidate_summary_loader import (
     update_candidate_summary as _update_candidate_summary,
+    update_candidate_person_link as _update_candidate_person_link,
 )
 from domains.campaign_finance.ingest.field_mapper import (
     map_candidate_fields,
@@ -357,7 +358,6 @@ def _upsert_candidate(
                 district = EXCLUDED.district,
                 incumbent_challenge = EXCLUDED.incumbent_challenge,
                 principal_committee_id = EXCLUDED.principal_committee_id,
-                person_id = EXCLUDED.person_id,
                 source_record_id = EXCLUDED.source_record_id
             """,
             (
@@ -373,6 +373,11 @@ def _upsert_candidate(
                 source_record_id,
             ),
         )
+    _update_candidate_person_link(
+        conn,
+        fec_candidate_id=str(mapped_fields["fec_candidate_id"]),
+        person_id=person_id,
+    )
 
 
 def load_candidates(

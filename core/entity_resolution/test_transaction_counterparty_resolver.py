@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import ast
 from decimal import Decimal
+import inspect
+import textwrap
 from uuid import UUID, uuid4
 
 import psycopg
@@ -46,6 +49,241 @@ _TEST_COMMITTEE_PREFIX = "Test NC Counterparty Resolver Committee "
 _TEST_FILING_PREFIX = "test-nc-counterparty-resolver-filing-"
 _TEST_DONOR_WRITEBACK_PREFIX = "Test Donor Writeback "
 _TEST_SUB_ID_BASE = 970_000_000_000_000_000
+_NAME_PROJECTION_FIELDS = (
+    "first_name",
+    "last_name",
+    "last_name_prefix5",
+    "last_name_prefix3",
+)
+
+
+_ExpressionBindings = dict[str, list[ast.expr]]
+
+
+def _expression_bindings(tree: ast.AST) -> _ExpressionBindings:
+    bindings: _ExpressionBindings = {}
+    for assignment in (node for node in ast.walk(tree) if isinstance(node, ast.Assign)):
+        for target in assignment.targets:
+            if isinstance(target, ast.Name):
+                bindings.setdefault(target.id, []).append(assignment.value)
+            elif isinstance(target, (ast.Tuple, ast.List)):
+                for element in target.elts:
+                    if isinstance(element, ast.Name):
+                        bindings.setdefault(element.id, []).append(assignment.value)
+    return bindings
+
+
+def _call_path(expression: ast.expr) -> str:
+    if isinstance(expression, ast.Call):
+        if isinstance(expression.func, ast.Name):
+            return expression.func.id
+        if isinstance(expression.func, ast.Attribute):
+            return expression.func.attr
+        return "<dynamic call>"
+    return f"<not a call: {type(expression).__name__}>"
+
+
+def _projection_owner_calls(
+    expression: ast.expr,
+    bindings: _ExpressionBindings,
+    seen_names: frozenset[str] = frozenset(),
+) -> list[ast.Call]:
+    if isinstance(expression, ast.Call):
+        return [expression]
+    if isinstance(expression, ast.Name):
+        if expression.id in seen_names:
+            return []
+        calls: list[ast.Call] = []
+        for bound_expression in bindings.get(expression.id, []):
+            calls.extend(
+                _projection_owner_calls(
+                    bound_expression,
+                    bindings,
+                    seen_names | {expression.id},
+                )
+            )
+        return calls
+    if isinstance(expression, (ast.Attribute, ast.Subscript)):
+        return _projection_owner_calls(expression.value, bindings, seen_names)
+    return []
+
+
+def _constant_name(expression: ast.expr, bindings: _ExpressionBindings) -> str | None:
+    if isinstance(expression, ast.Constant) and isinstance(expression.value, str):
+        return expression.value
+    if isinstance(expression, ast.Name) and expression.id == "_NC_NAME_KEY":
+        return "Name"
+    if isinstance(expression, ast.Name):
+        bound_expressions = bindings.get(expression.id, [])
+        if len(bound_expressions) == 1:
+            return _constant_name(bound_expressions[0], bindings)
+    return None
+
+
+def _uses_raw_transaction_name_source(
+    expression: ast.expr,
+    bindings: _ExpressionBindings,
+    seen_names: frozenset[str] = frozenset(),
+) -> bool:
+    if isinstance(expression, ast.Name):
+        if expression.id in seen_names:
+            return False
+        bound_expressions = bindings.get(expression.id)
+        if bound_expressions is None:
+            return expression.id == "_NC_NAME_KEY"
+        return bool(bound_expressions) and all(
+            _uses_raw_transaction_name_source(
+                bound_expression,
+                bindings,
+                seen_names | {expression.id},
+            )
+            for bound_expression in bound_expressions
+        )
+    if isinstance(expression, ast.BoolOp) and isinstance(expression.op, ast.Or):
+        return all(_uses_raw_transaction_name_source(value, bindings, seen_names) for value in expression.values)
+    if isinstance(expression, ast.Attribute):
+        return (
+            isinstance(expression.value, ast.Name)
+            and expression.value.id == "unresolved"
+            and expression.attr == "contributor_name_raw"
+        )
+    if not isinstance(expression, ast.Call):
+        return False
+    if _call_path(expression) == "_normalize_text" and len(expression.args) == 1 and not expression.keywords:
+        return _uses_raw_transaction_name_source(expression.args[0], bindings, seen_names)
+    if (
+        isinstance(expression.func, ast.Attribute)
+        and expression.func.attr == "get"
+        and isinstance(expression.func.value, ast.Attribute)
+        and expression.func.value.attr == "raw_fields"
+        and isinstance(expression.func.value.value, ast.Name)
+        and expression.func.value.value.id == "unresolved"
+        and len(expression.args) == 1
+        and _constant_name(expression.args[0], bindings) == "Name"
+    ):
+        return True
+    return False
+
+
+def _returned_fields(tree: ast.AST) -> dict[str, ast.expr]:
+    return_nodes = [node for node in ast.walk(tree) if isinstance(node, ast.Return)]
+    assert len(return_nodes) == 1
+    assert isinstance(return_nodes[0].value, ast.Dict)
+    return {
+        key.value: value
+        for key, value in zip(return_nodes[0].value.keys, return_nodes[0].value.values, strict=True)
+        if isinstance(key, ast.Constant) and isinstance(key.value, str)
+    }
+
+
+def _is_first_last_only_parse_name_call(call: ast.Call) -> bool:
+    if _call_path(call) != "parse_name":
+        return False
+    return any(
+        keyword.arg == "first_last_only" and isinstance(keyword.value, ast.Constant) and keyword.value.value is True
+        for keyword in call.keywords
+    )
+
+
+def _assert_transaction_counterparty_name_projection_is_owned(source: str) -> None:
+    person_row_tree = ast.parse(textwrap.dedent(source))
+    bindings = _expression_bindings(person_row_tree)
+    returned_fields = _returned_fields(person_row_tree)
+    projection_owner_calls = {
+        field: _projection_owner_calls(returned_fields[field], bindings) for field in ("first_name", "last_name")
+    }
+
+    assert len(projection_owner_calls["first_name"]) == 1
+    assert len(projection_owner_calls["last_name"]) == 1
+    first_owner = projection_owner_calls["first_name"][0]
+    last_owner = projection_owner_calls["last_name"][0]
+    assert first_owner is last_owner
+    assert _is_first_last_only_parse_name_call(first_owner)
+    assert len(first_owner.args) == 1
+    assert _uses_raw_transaction_name_source(first_owner.args[0], bindings)
+
+
+class TestDonorTransactionNameProjection:
+    @pytest.fixture(autouse=True)
+    def _cleanup_test_rows(self) -> None:
+        # These structural and row-projection contracts are pure functions. A
+        # class-local autouse fixture keeps the module's DB cleanup fixture from
+        # turning their red evidence into a PostgreSQL availability skip.
+        return
+
+    @pytest.mark.parametrize(
+        ("raw_name", "expected_projection"),
+        [
+            ("SMITH", (None, "SMITH", "SMITH", "SMI")),
+            ("John Smith", ("JOHN", "SMITH", "SMITH", "SMI")),
+            ("SMITH, JOHN", ("JOHN", "SMITH", "SMITH", "SMI")),
+            ("SMITH, JOHN JR", ("JOHN", "SMITH", "SMITH", "SMI")),
+            ("O'BRIEN, MARY", ("MARY", "O'BRIEN", "O'BRI", "O'B")),
+            ("DE LA CRUZ, MARIA", ("MARIA", "DE LA CRUZ", "DE LA", "DE ")),
+            ("John Quincy Smith", ("JOHN", "SMITH", "SMITH", "SMI")),
+        ],
+    )
+    def test_person_transaction_row_uses_canonical_name_projection(
+        self,
+        raw_name: str,
+        expected_projection: tuple[str | None, str, str, str],
+    ) -> None:
+        unresolved = resolver_module._UnresolvedTransaction(
+            transaction_id=uuid4(),
+            contributor_name_raw=raw_name,
+            contributor_employer=None,
+            contributor_occupation=None,
+            contributor_city=None,
+            contributor_state=None,
+            contributor_zip=None,
+            raw_fields={},
+            transaction_role="donor",
+            person_candidate_ids=set(),
+            organization_candidate_ids=set(),
+        )
+
+        transaction_row = resolver_module._person_transaction_row(unresolved)
+
+        actual_projection = tuple(transaction_row[field] for field in _NAME_PROJECTION_FIELDS)
+        assert actual_projection == expected_projection
+
+    def test_transaction_counterparty_seam_has_no_third_name_splitter(self) -> None:
+        _assert_transaction_counterparty_name_projection_is_owned(
+            inspect.getsource(resolver_module._person_transaction_row)
+        )
+
+    def test_transaction_counterparty_seam_rejects_upstream_name_helper(self) -> None:
+        upstream_helper_source = """
+        def _person_transaction_row(unresolved):
+            canonical_name = _normalize_text(unresolved.contributor_name_raw) or _normalize_text(
+                unresolved.raw_fields.get(_NC_NAME_KEY)
+            )
+            reparsed_name = _compact_person_tokens(canonical_name)
+            parsed_name = parse_name(reparsed_name, first_last_only=True)
+            return {
+                "first_name": parsed_name.first,
+                "last_name": parsed_name.last,
+            }
+        """
+
+        with pytest.raises(AssertionError):
+            _assert_transaction_counterparty_name_projection_is_owned(upstream_helper_source)
+
+    def test_transaction_counterparty_seam_rejects_missing_compatibility_option(self) -> None:
+        missing_compatibility_source = """
+        def _person_transaction_row(unresolved):
+            canonical_name = _normalize_text(unresolved.contributor_name_raw) or _normalize_text(
+                unresolved.raw_fields.get(_NC_NAME_KEY)
+            )
+            parsed_name = parse_name(canonical_name)
+            return {
+                "first_name": parsed_name.first,
+                "last_name": parsed_name.last,
+            }
+        """
+
+        with pytest.raises(AssertionError):
+            _assert_transaction_counterparty_name_projection_is_owned(missing_compatibility_source)
 
 
 @pytest.fixture(autouse=True)

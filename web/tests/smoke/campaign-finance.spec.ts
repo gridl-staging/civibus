@@ -62,12 +62,17 @@ import {
   SMOKE_COMMITTEES_FIRST_PAGE_LABEL,
   SMOKE_COMMITTEES_SECOND_PAGE_LABEL,
   SMOKE_COMMITTEES_TITLE,
+  SMOKE_CONGRESS_NO_MONEY_PERSON_ID,
+  SMOKE_CONGRESS_SECOND_PERSON_ID,
   SMOKE_CAMPAIGN_FINANCE_IN_PROVENANCE_SOURCE_NAME,
   SMOKE_CAMPAIGN_FINANCE_AL_PROVENANCE_SOURCE_NAME,
   SMOKE_CAMPAIGN_FINANCE_GA_PROVENANCE_SOURCE_NAME,
+  SMOKE_CALENDAR_ROUTE_PATH,
   SMOKE_GA_CANDIDATE_DESCRIPTION,
   SMOKE_GA_CANDIDATE_ID,
   SMOKE_GA_CANDIDATE_TITLE,
+  SMOKE_COVERAGE_ROUTE_PATH,
+  SMOKE_DATA_SOURCES_ROUTE_PATH,
   SMOKE_EMPTY_CANDIDATE_DESCRIPTION,
   SMOKE_EMPTY_CANDIDATE_ID,
   SMOKE_EMPTY_CANDIDATE_SLUG,
@@ -97,6 +102,7 @@ import {
   SMOKE_TRUST_ADVISORY,
   SMOKE_TRUST_EMPTY_MESSAGE,
   SMOKE_TRUST_LAST_PULLED_UNAVAILABLE,
+  SMOKE_ELECTION_ROUTE_PATH,
   SMOKE_USE_LIVE_API,
   SMOKE_COMMITTEE_REQUEST_COUNTER_KEYS,
   resetSmokeCommitteeRequestCounts,
@@ -119,6 +125,44 @@ import {
   assertSeoHead,
   expectNoBackendFailureStates
 } from "./smoke-helpers";
+
+function extractSitemapLocs(xml: string): string[] {
+  return [...xml.matchAll(/<loc>([^<]+)<\/loc>/g)].map((match) => match[1]!);
+}
+
+function pathSet(paths: Iterable<string>): Set<string> {
+  return new Set(paths);
+}
+
+async function fetchSitemapShardUnion(page: any): Promise<{ xmlByPath: Map<string, string>; locs: string[] }> {
+  const indexResponse = await page.request.get("/sitemap.xml");
+  expect(indexResponse.status()).toBe(200);
+  expect(indexResponse.headers()["content-type"]).toContain("xml");
+  expect(indexResponse.headers()["cache-control"]).toBe("public, max-age=900");
+  const indexXml = await indexResponse.text();
+  expect(indexXml).toContain('<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">');
+
+  const origin = new URL(indexResponse.url()).origin;
+  const shardPaths = extractSitemapLocs(indexXml).map((loc) => {
+    const url = new URL(loc);
+    expect(url.origin).toBe(origin);
+    return url.pathname;
+  });
+  const xmlByPath = new Map<string, string>();
+  const locs: string[] = [];
+  for (const shardPath of shardPaths) {
+    const response = await page.request.get(shardPath);
+    expect(response.status()).toBe(200);
+    expect(response.headers()["content-type"]).toContain("xml");
+    expect(response.headers()["cache-control"]).toBe("public, max-age=900");
+    const xml = await response.text();
+    expect(xml).toContain('<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">');
+    xmlByPath.set(shardPath, xml);
+    locs.push(...extractSitemapLocs(xml).map((loc) => new URL(loc).pathname));
+  }
+  expect(locs).toHaveLength(new Set(locs).size);
+  return { xmlByPath, locs };
+}
 
 test.describe("campaign finance smoke", () => {
   // Fixture-mode-only: tests below assert synthetic provenance, names, and
@@ -775,17 +819,40 @@ test.describe("sitemap.xml fixture detail URLs", () => {
   }: {
     page: any;
   }) => {
-    const response = (await page.goto("/sitemap.xml"))!;
-    const xml = await response.text();
+    const { xmlByPath, locs } = await fetchSitemapShardUnion(page);
+    const candidateXml = xmlByPath.get("/sitemap-candidate-0.xml") ?? "";
+    const committeeXml = xmlByPath.get("/sitemap-committee-0.xml") ?? "";
+    const personXml = xmlByPath.get("/sitemap-person-0.xml") ?? "";
+    const staticXml = xmlByPath.get("/sitemap-static.xml") ?? "";
+    const expectedPaths = [
+      "/",
+      "/congress",
+      "/candidates",
+      "/committees",
+      SMOKE_COVERAGE_ROUTE_PATH,
+      SMOKE_CALENDAR_ROUTE_PATH,
+      SMOKE_DATA_SOURCES_ROUTE_PATH,
+      SMOKE_ELECTION_ROUTE_PATH,
+      `/candidate/${SMOKE_CANDIDATE_SLUG}`,
+      `/candidate/${SMOKE_OUT_OF_CYCLE_CANDIDATE_SLUG}`,
+      `/committee/${SMOKE_COMMITTEE_SLUG}`,
+      `/committee/${SMOKE_EMPTY_COMMITTEE_ID}`,
+      `/person/${SMOKE_PERSON_ID}`,
+      `/person/${SMOKE_CONGRESS_SECOND_PERSON_ID}`,
+      `/person/${SMOKE_CONGRESS_NO_MONEY_PERSON_ID}`
+    ];
+    expect(pathSet(locs)).toEqual(pathSet(expectedPaths));
+    expect(locs).toHaveLength(expectedPaths.length);
 
     // Slug-based detail URL from fixture (pat-candidate has slug_is_unique: true).
-    expect(xml).toContain(`/candidate/${SMOKE_CANDIDATE_SLUG}</loc>`);
-    expect(xml).toContain(`/candidate/${SMOKE_OUT_OF_CYCLE_CANDIDATE_SLUG}</loc>`);
+    expect(locs).toContain(`/candidate/${SMOKE_CANDIDATE_SLUG}`);
+    expect(locs).toContain(`/candidate/${SMOKE_OUT_OF_CYCLE_CANDIDATE_SLUG}`);
 
-    expect(xml).not.toContain(`/candidate/${SMOKE_EMPTY_CANDIDATE_SLUG}</loc>`);
-    expect(xml).not.toContain(`/candidate/${SMOKE_LOADED_ZERO_CANDIDATE_SLUG}</loc>`);
-    expect(xml).not.toContain(`/candidate/${SMOKE_EMPTY_CANDIDATE_ID}</loc>`);
-    expect(xml).not.toContain(`/candidate/${SMOKE_LOADED_ZERO_CANDIDATE_ID}</loc>`);
+    expect(locs).not.toContain(`/candidate/${SMOKE_EMPTY_CANDIDATE_SLUG}`);
+    expect(locs).not.toContain(`/candidate/${SMOKE_LOADED_ZERO_CANDIDATE_SLUG}`);
+    expect(locs).not.toContain(`/candidate/${SMOKE_EMPTY_CANDIDATE_ID}`);
+    expect(locs).not.toContain(`/candidate/${SMOKE_LOADED_ZERO_CANDIDATE_ID}`);
+    expect(candidateXml).not.toMatch(/<loc>[^<]+\/candidate\/[0-9a-f-]{36}<\/loc>/i);
 
     const [notLoadedResponse, loadedZeroResponse] = await Promise.all([
       page.request.get(`/candidate/${SMOKE_EMPTY_CANDIDATE_SLUG}`),
@@ -795,10 +862,35 @@ test.describe("sitemap.xml fixture detail URLs", () => {
     expect(loadedZeroResponse.status()).toBe(200);
 
     // Committee slug-based detail URL.
-    expect(xml).toContain(`/committee/${SMOKE_COMMITTEE_SLUG}</loc>`);
+    expect(locs).toContain(`/committee/${SMOKE_COMMITTEE_SLUG}`);
 
     // Committee UUID-based detail URL (slug_is_unique: false).
-    expect(xml).toContain(`/committee/${SMOKE_EMPTY_COMMITTEE_ID}</loc>`);
+    expect(locs).toContain(`/committee/${SMOKE_EMPTY_COMMITTEE_ID}`);
+    expect(pathSet(extractSitemapLocs(candidateXml).map((loc) => new URL(loc).pathname))).toEqual(
+      pathSet([`/candidate/${SMOKE_CANDIDATE_SLUG}`, `/candidate/${SMOKE_OUT_OF_CYCLE_CANDIDATE_SLUG}`])
+    );
+    expect(pathSet(extractSitemapLocs(committeeXml).map((loc) => new URL(loc).pathname))).toEqual(
+      pathSet([`/committee/${SMOKE_COMMITTEE_SLUG}`, `/committee/${SMOKE_EMPTY_COMMITTEE_ID}`])
+    );
+    expect(pathSet(extractSitemapLocs(personXml).map((loc) => new URL(loc).pathname))).toEqual(
+      pathSet([
+        `/person/${SMOKE_PERSON_ID}`,
+        `/person/${SMOKE_CONGRESS_SECOND_PERSON_ID}`,
+        `/person/${SMOKE_CONGRESS_NO_MONEY_PERSON_ID}`
+      ])
+    );
+    expect(pathSet(extractSitemapLocs(staticXml).map((loc) => new URL(loc).pathname))).toEqual(
+      pathSet([
+        "/",
+        "/congress",
+        "/candidates",
+        "/committees",
+        SMOKE_COVERAGE_ROUTE_PATH,
+        SMOKE_CALENDAR_ROUTE_PATH,
+        SMOKE_DATA_SOURCES_ROUTE_PATH,
+        SMOKE_ELECTION_ROUTE_PATH
+      ])
+    );
   });
 });
 

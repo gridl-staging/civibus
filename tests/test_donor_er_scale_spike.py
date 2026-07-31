@@ -1,16 +1,17 @@
 from __future__ import annotations
 
+import argparse
+import ast
 import hashlib
 import importlib
 import inspect
-import argparse
+import json
 import os
 import socket
 import subprocess
 import sys
 import tomllib
 import zipfile
-import json
 from pathlib import Path
 from typing import Any, get_type_hints
 from uuid import UUID
@@ -1264,324 +1265,59 @@ def test_harness_exports_canonical_er_owner_import_references(monkeypatch: pytes
     names = importlib.import_module("domains.campaign_finance.normalize.names")
     addresses = importlib.import_module("domains.campaign_finance.normalize.addresses")
     field_mapper = importlib.import_module("domains.campaign_finance.ingest.field_mapper")
-    blocking = importlib.import_module("core.entity_resolution.blocking")
-    splink_config = importlib.import_module("core.entity_resolution.splink_config")
     scoring = importlib.import_module("core.entity_resolution.scoring")
 
     assert harness.parse_name is names.parse_name
     assert harness.normalize_address is addresses.normalize_address
     assert harness.map_contribution_fields is field_mapper.map_contribution_fields
-    assert harness.describe_blocking_rules is blocking.describe_blocking_rules
-    assert harness.get_blocking_rule_sqls is splink_config.get_blocking_rule_sqls
     assert harness.score_rows is scoring.score_rows
 
-    calls: list[tuple[str, str]] = []
-    monkeypatch.setattr(
-        harness, "describe_blocking_rules", lambda entity_type: calls.append(("describe", entity_type)) or []
-    )
-    monkeypatch.setattr(
-        harness, "get_blocking_rule_sqls", lambda entity_type: calls.append(("rules", entity_type)) or []
-    )
+    calls: list[tuple[str, str, dict[str, object]]] = []
     monkeypatch.setattr(
         harness,
         "score_rows",
         lambda rows, entity_type, **kwargs: calls.append(("score", entity_type, kwargs)) or [],
     )
 
-    assert harness.blocking_rule_metadata("person") == {"descriptions": [], "sqls": []}
-    assert harness.score_diagnostic_rows([], "person") == []
-    assert calls == [("describe", "person"), ("rules", "person"), ("score", "person", {"include_diagnostics": True})]
+    assert harness.score_rows([], "person", include_attribution=True) == []
+    assert calls == [("score", "person", {"include_attribution": True})]
 
 
-def _valid_pair_attribution_artifact_kwargs() -> dict[str, object]:
-    return {
-        "schema_version": "donor_er_pair_attribution.v1",
-        "pairs": [
-            {
-                "entity_id_a": "donor-001",
-                "entity_id_b": "donor-002",
-                "match_key": "0",
-                "blocking_rule_sql": "l.last_name = r.last_name",
-                "match_weight": 8.5,
-                "match_probability": 0.93,
-                "comparison_fields": [
-                    {"field_name": "gamma_name", "value": 2},
-                    {"field_name": "bf_name", "value": 64.0},
-                ],
-            }
-        ],
-    }
+def test_donor_pair_attribution_schema_has_one_pydantic_artifact_owner() -> None:
+    source_path = REPO_ROOT / "scripts" / "donor_er_scale_spike.py"
+    source_tree = ast.parse(source_path.read_text(encoding="utf-8"))
+    schema_version = "donor_er_pair_attribution.v1"
+    owners: list[str] = []
 
+    for node in source_tree.body:
+        owner_name: str | None = None
+        is_pydantic_model = False
+        if isinstance(node, ast.ClassDef):
+            owner_name = node.name
+            is_pydantic_model = any(isinstance(base, ast.Name) and base.id == "BaseModel" for base in node.bases)
+        elif (
+            isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and isinstance(node.value, ast.Call)
+            and isinstance(node.value.func, ast.Name)
+            and node.value.func.id == "create_model"
+        ):
+            owner_name = node.targets[0].id
+            is_pydantic_model = True
 
-def test_donor_pair_attribution_artifact_schema_is_closed_known_answer() -> None:
-    harness = _load_harness()
-
-    artifact = harness.DonorPairAttributionArtifact(**_valid_pair_attribution_artifact_kwargs())
-
-    assert artifact.model_dump(mode="python") == _valid_pair_attribution_artifact_kwargs()
-    assert harness.DonorPairAttributionArtifact.model_config["extra"] == "forbid"
-    assert harness.DonorPairAttributionPair.model_config["extra"] == "forbid"
-    assert harness.DonorPairComparisonField.model_config["extra"] == "forbid"
-    assert set(harness.DonorPairAttributionArtifact.model_fields) == {"schema_version", "pairs"}
-    assert set(harness.DonorPairAttributionPair.model_fields) == {
-        "entity_id_a",
-        "entity_id_b",
-        "match_key",
-        "blocking_rule_sql",
-        "match_weight",
-        "match_probability",
-        "comparison_fields",
-    }
-    assert set(harness.DonorPairComparisonField.model_fields) == {"field_name", "value"}
-
-
-@pytest.mark.parametrize(
-    ("case_name", "mutator", "match"),
-    [
-        (
-            "missing_pair_field",
-            lambda payload: payload["pairs"][0].pop("match_weight"),
-            "match_weight",
-        ),
-        (
-            "unknown_artifact_field",
-            lambda payload: payload.update({"extra_artifact": "forbidden"}),
-            "extra",
-        ),
-        (
-            "unknown_pair_field",
-            lambda payload: payload["pairs"][0].update({"extra_pair": "forbidden"}),
-            "extra",
-        ),
-        (
-            "unknown_comparison_field",
-            lambda payload: payload["pairs"][0]["comparison_fields"][0].update({"extra_comparison": "forbidden"}),
-            "extra",
-        ),
-        (
-            "empty_comparison_evidence",
-            lambda payload: payload["pairs"][0].update({"comparison_fields": []}),
-            "comparison",
-        ),
-        (
-            "invalid_comparison_prefix",
-            lambda payload: payload["pairs"][0]["comparison_fields"][0].update({"field_name": "name"}),
-            "gamma_",
-        ),
-        (
-            "missing_bf_prefix",
-            lambda payload: payload["pairs"][0].update(
-                {"comparison_fields": [{"field_name": "gamma_name", "value": 2}]}
-            ),
-            "bf_",
-        ),
-        (
-            "missing_gamma_prefix",
-            lambda payload: payload["pairs"][0].update(
-                {"comparison_fields": [{"field_name": "bf_name", "value": 64.0}]}
-            ),
-            "gamma_",
-        ),
-        (
-            "unpaired_comparison_evidence",
-            lambda payload: payload["pairs"][0].update(
-                {
-                    "comparison_fields": [
-                        {"field_name": "gamma_name", "value": 2},
-                        {"field_name": "bf_zip5", "value": 16.0},
-                    ]
-                }
-            ),
-            "paired",
-        ),
-        (
-            "non_finite_match_weight",
-            lambda payload: payload["pairs"][0].update({"match_weight": float("nan")}),
-            "finite",
-        ),
-        (
-            "worktree_absolute_path",
-            lambda payload: payload["pairs"][0].update({"blocking_rule_sql": str(REPO_ROOT / "secret.sql")}),
-            "repository",
-        ),
-        (
-            "environment_assignment",
-            lambda payload: payload["pairs"][0]["comparison_fields"][1].update({"value": "DATABASE_URL=postgres://x"}),
-            "environment",
-        ),
-        (
-            "secret_bearing_string",
-            lambda payload: payload["pairs"][0]["comparison_fields"][1].update(
-                {"value": "-----BEGIN PRIVATE KEY-----"}
-            ),
-            "file contents",
-        ),
-    ],
-)
-def test_donor_pair_attribution_artifact_rejects_invalid_inputs(
-    case_name: str,
-    mutator: object,
-    match: str,
-) -> None:
-    harness = _load_harness()
-    payload = _valid_pair_attribution_artifact_kwargs()
-    mutator(payload)
-
-    with pytest.raises(ValidationError) as error_info:
-        harness.DonorPairAttributionArtifact(**payload)
-
-    scrubbed = harness._scrubbed_validation_message(error_info.value)
-    assert match in scrubbed, case_name
-    assert "DATABASE_URL=postgres://x" not in scrubbed
-    assert "PRIVATE KEY" not in scrubbed
-
-
-def test_build_donor_pair_attribution_artifact_filters_sample_and_resolves_blocking_metadata(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    harness = _load_harness()
-    clusters = [
-        {"cluster_id": "cluster-a", "member_ids": ["donor-001", "donor-002"]},
-        {"cluster_id": "cluster-b", "member_ids": ["donor-003", "donor-004"]},
-    ]
-    sampled_member_ids = {
-        member_id
-        for cluster in harness.select_deterministic_cluster_sample(clusters, seed="artifact-seed", size=1)
-        for member_id in cluster["member_ids"]
-    }
-    scored_pairs = [
-        {
-            "entity_id_a": "donor-001",
-            "entity_id_b": "donor-002",
-            "confidence": 0.93,
-            "decision_method": "probabilistic",
-            "decided_by": "splink_v1",
-            "match_key": 0,
-            "match_weight": 8.5,
-            "match_probability": 0.93,
-            "gamma_name": 2,
-            "bf_name": 64.0,
-        },
-        {
-            "entity_id_a": "donor-003",
-            "entity_id_b": "donor-004",
-            "confidence": 0.91,
-            "decision_method": "probabilistic",
-            "decided_by": "splink_v1",
-            "match_key": 1,
-            "match_weight": 7.25,
-            "match_probability": 0.91,
-            "gamma_name": 1,
-            "bf_name": 16.0,
-        },
-    ]
-    monkeypatch.setattr(
-        harness,
-        "describe_blocking_rules",
-        lambda entity_type: [
-            {"rule_index": 0, "blocking_rule": "readable rule zero"},
-            {"rule_index": 1, "blocking_rule": "readable rule one"},
-        ],
-    )
-    monkeypatch.setattr(harness, "get_blocking_rule_sqls", lambda entity_type: [object(), object()])
-
-    artifact = harness.build_donor_pair_attribution_artifact(
-        scored_pairs=scored_pairs,
-        sampled_member_ids=sampled_member_ids,
-        entity_type="person",
-    )
-
-    assert artifact.model_dump(mode="python") == {
-        "schema_version": "donor_er_pair_attribution.v1",
-        "pairs": [
-            {
-                "entity_id_a": "donor-001",
-                "entity_id_b": "donor-002",
-                "match_key": 0,
-                "blocking_rule_sql": "readable rule zero",
-                "match_weight": 8.5,
-                "match_probability": 0.93,
-                "comparison_fields": [
-                    {"field_name": "gamma_name", "value": 2},
-                    {"field_name": "bf_name", "value": 64.0},
-                ],
-            }
-        ],
-    }
-    assert all(
-        pair_id in sampled_member_ids
-        for pair in artifact.model_dump(mode="python")["pairs"]
-        for pair_id in (pair["entity_id_a"], pair["entity_id_b"])
-    )
-
-    string_key_artifact = harness.build_donor_pair_attribution_artifact(
-        scored_pairs=[scored_pairs[0] | {"match_key": "0"}],
-        sampled_member_ids=sampled_member_ids,
-        entity_type="person",
-    )
-    assert string_key_artifact.pairs[0].blocking_rule_sql == "readable rule zero"
-
-
-@pytest.mark.parametrize("bad_match_key", ["x", "-1", "2"])
-def test_build_donor_pair_attribution_artifact_rejects_invalid_blocking_match_key(
-    monkeypatch: pytest.MonkeyPatch,
-    bad_match_key: str,
-) -> None:
-    harness = _load_harness()
-    payload = _valid_pair_attribution_artifact_kwargs()["pairs"][0]
-    payload["match_key"] = bad_match_key
-    monkeypatch.setattr(
-        harness, "describe_blocking_rules", lambda entity_type: [{"rule_index": 0, "blocking_rule": "r0"}]
-    )
-    monkeypatch.setattr(harness, "get_blocking_rule_sqls", lambda entity_type: [object()])
-
-    with pytest.raises(ValueError, match="match_key"):
-        harness.build_donor_pair_attribution_artifact(
-            scored_pairs=[payload],
-            sampled_member_ids={"donor-001", "donor-002"},
-            entity_type="person",
+        claims_schema = any(
+            isinstance(child, ast.Constant) and child.value == schema_version for child in ast.walk(node)
         )
+        if (
+            owner_name is not None
+            and owner_name.endswith("AttributionArtifact")
+            and is_pydantic_model
+            and claims_schema
+        ):
+            owners.append(owner_name)
 
-
-def test_build_donor_pair_attribution_artifact_rejects_mismatched_blocking_metadata(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    harness = _load_harness()
-    payload = _valid_pair_attribution_artifact_kwargs()["pairs"][0]
-    monkeypatch.setattr(
-        harness, "describe_blocking_rules", lambda entity_type: [{"rule_index": 0, "blocking_rule": "r0"}]
-    )
-    monkeypatch.setattr(harness, "get_blocking_rule_sqls", lambda entity_type: [object(), object()])
-
-    with pytest.raises(ValueError, match="blocking"):
-        harness.build_donor_pair_attribution_artifact(
-            scored_pairs=[payload],
-            sampled_member_ids={"donor-001", "donor-002"},
-            entity_type="person",
-        )
-
-
-def test_build_donor_pair_attribution_artifact_rejects_misaligned_blocking_rule_indexes(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    harness = _load_harness()
-    payload = _valid_pair_attribution_artifact_kwargs()["pairs"][0]
-    monkeypatch.setattr(
-        harness,
-        "describe_blocking_rules",
-        lambda entity_type: [
-            {"rule_index": 1, "blocking_rule": "misindexed r0"},
-            {"rule_index": 0, "blocking_rule": "misindexed r1"},
-        ],
-    )
-    monkeypatch.setattr(harness, "get_blocking_rule_sqls", lambda entity_type: [object(), object()])
-
-    with pytest.raises(ValueError, match="blocking"):
-        harness.build_donor_pair_attribution_artifact(
-            scored_pairs=[payload],
-            sampled_member_ids={"donor-001", "donor-002"},
-            entity_type="person",
-        )
+    assert owners == ["DonorErPairAttributionArtifact"]
 
 
 def test_harness_does_not_define_parallel_normalization_mapping_blocking_or_scoring_logic() -> None:
@@ -2705,7 +2441,14 @@ def test_donor_proxy_db_path_calls_existing_er_owners_in_order(
     receipt = harness.validate_donor_proxy_measurement_receipt_markdown(receipt_path.read_text(encoding="utf-8"))
     artifact = harness.DonorErPairAttributionArtifact.model_validate_json(artifact_path.read_text(encoding="utf-8"))
     assert receipt.pair_attribution_artifact is not None
-    assert receipt.pair_attribution_artifact.sha256 == _sha256_file(artifact_path)
+    artifact_reference = receipt.pair_attribution_artifact
+    assert artifact_reference.path == str(artifact_path)
+    assert artifact_reference.sha256 == _sha256_file(artifact_path)
+    assert artifact_reference.validator_command == harness._pair_attribution_validator_command(
+        receipt_path, artifact_path
+    )
+    assert artifact_reference.pair_count == 1
+    assert artifact_reference.sampled_pair_count == 1
     assert artifact.schema_version == "donor_er_pair_attribution.v1"
     assert artifact.pair_attributions[0].model_dump() == {
         "entity_id_a": "donor-001",
@@ -2781,177 +2524,118 @@ def test_pair_attribution_contract_fails_closed_on_incomplete_sample_coverage() 
         harness.DonorErPairAttributionArtifact.model_validate(payload)
 
 
-def test_donor_proxy_attribution_output_option_is_contained_in_temp_root(tmp_path: Path) -> None:
+def test_validate_pair_attribution_cli_accepts_clean_artifact_and_rejects_removed_pair(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     harness = _load_harness()
-    temp_root = tmp_path / "lane"
-    temp_root.mkdir()
-    parser = harness.build_argument_parser()
-    donor_proxy_arguments = _without_option(DONOR_PROXY_ARGUMENTS, "--temp-root") + ["--temp-root", str(temp_root)]
+    events: list[tuple[str, object]] = []
+    _patch_donor_proxy_owner_spies(monkeypatch, harness, events)
 
-    args = parser.parse_args(
-        donor_proxy_arguments
-        + [
-            "--attribution-output-path",
-            str(temp_root / "pair_attribution.json"),
-        ]
+    receipt_path = tmp_path / "lane" / "donor_proxy_receipt.md"
+    artifact_path = tmp_path / "lane" / "donor_pair_attribution.json"
+    assert harness._donor_proxy(_donor_proxy_args(tmp_path)) == 0
+    capsys.readouterr()
+    validation_args = [
+        "validate-pair-attribution",
+        "--receipt",
+        str(receipt_path),
+        "--artifact",
+        str(artifact_path),
+    ]
+
+    assert harness.main(validation_args) == 0
+    assert (
+        capsys.readouterr().out
+        == "validate-pair-attribution schema_version=donor_er_pair_attribution.v1 pairs=1 sampled_pairs=1\n"
     )
-    paths = harness._resolve_donor_proxy_paths(args)
 
-    assert paths.attribution_output_path == temp_root / "pair_attribution.json"
+    receipt = harness.validate_donor_proxy_measurement_receipt_markdown(receipt_path.read_text(encoding="utf-8"))
+    payload = json.loads(artifact_path.read_text(encoding="utf-8"))
+    payload["pair_attributions"] = []
+    artifact_path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+    tampered_reference = harness.PairAttributionArtifactReference(
+        path=str(artifact_path),
+        sha256=_sha256_file(artifact_path),
+        validator_command=harness._pair_attribution_validator_command(receipt_path, artifact_path),
+        pair_count=len(payload["pair_attributions"]),
+        sampled_pair_count=len(payload["sampled_false_pair_coverage"]["audit_pair_keys"]),
+    )
+    tampered_receipt = harness.DonorProxyMeasurementReceipt.model_validate(
+        {
+            **receipt.model_dump(mode="python"),
+            "pair_attribution_artifact": tampered_reference.model_dump(mode="python"),
+        }
+    )
+    receipt_path.write_text(harness.format_donor_proxy_measurement_receipt(tampered_receipt), encoding="utf-8")
+    reparsed_receipt = harness.validate_donor_proxy_measurement_receipt_markdown(
+        receipt_path.read_text(encoding="utf-8")
+    )
+    assert reparsed_receipt.pair_attribution_artifact == tampered_reference
 
-    with pytest.raises(ValueError, match="attribution-output-path"):
-        harness._resolve_donor_proxy_paths(
-            parser.parse_args(
-                donor_proxy_arguments
-                + [
-                    "--attribution-output-path",
-                    str(tmp_path / "outside.json"),
-                ]
-            )
+    assert harness.main(validation_args) == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "sampled coverage references a pair absent from pair_attributions" in captured.err
+
+
+def test_pair_attribution_contract_rejects_repository_absolute_paths() -> None:
+    harness = _load_harness()
+
+    with pytest.raises(ValidationError, match="repository"):
+        harness.DonorErPairAttributionArtifact(
+            schema_version="donor_er_pair_attribution.v1",
+            seed="known-answer",
+            chosen_slice_size=2,
+            pair_attributions=[
+                {
+                    "entity_id_a": "donor-a",
+                    "entity_id_b": "donor-b",
+                    "match_key": "0",
+                    "fired_blocking_rules": [
+                        {
+                            "match_key": "0",
+                            "blocking_rule": str(REPO_ROOT / "blocking.sql"),
+                        }
+                    ],
+                    "comparison_levels": {"canonical_name": 2},
+                    "match_weight": 3.5,
+                    "confidence": 0.9,
+                    "decision": "probable_match",
+                }
+            ],
+            sampled_false_pair_coverage={
+                "audit_pair_keys": ["donor-a|donor-b"],
+                "attributed_pair_keys": ["donor-a|donor-b"],
+                "coverage_ratio": 1.0,
+            },
         )
-    with pytest.raises(ValueError, match="differ from output-path"):
-        harness._resolve_donor_proxy_paths(
-            parser.parse_args(
-                donor_proxy_arguments
-                + [
-                    "--attribution-output-path",
-                    str(temp_root / "donor_proxy_receipt.md"),
-                ]
-            )
-        )
 
 
-def test_donor_proxy_attribution_output_writes_json_without_widening_persistence(
+def test_donor_proxy_cli_has_one_pair_attribution_output_owner() -> None:
+    parser = _load_harness().build_argument_parser()
+    subparsers_action = next(action for action in parser._actions if isinstance(action, argparse._SubParsersAction))
+    donor_proxy_parser = subparsers_action.choices["donor-proxy"]
+    option_strings = {option for action in donor_proxy_parser._actions for option in action.option_strings}
+
+    assert "--pair-attribution-output-path" in option_strings
+    assert "--attribution-output-path" not in option_strings
+
+
+def test_donor_proxy_attribution_run_has_one_scoring_owner(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     harness = _load_harness()
     events: list[tuple[str, object]] = []
-    fixtures = _patch_donor_proxy_owner_spies(monkeypatch, harness, events)
-    attribution_path = tmp_path / "lane" / "pair_attribution.json"
-    diagnostic_pairs = [
-        {
-            **fixtures["classified"][0],
-            "match_key": 0,
-            "match_weight": 8.5,
-            "match_" + "probability": 0.97,
-            "gamma_name": 2,
-            "bf_name": 64.0,
-        }
-    ]
+    _patch_donor_proxy_owner_spies(monkeypatch, harness, events)
 
-    def score_diagnostics(rows: list[dict[str, object]], entity_type: str, **kwargs: object) -> list[dict[str, object]]:
-        events.append(("diagnostic_score", (rows, entity_type, kwargs)))
-        return diagnostic_pairs
+    result = harness._donor_proxy(_donor_proxy_args(tmp_path))
 
-    monkeypatch.setattr(harness, "score_diagnostic_rows", score_diagnostics)
-    monkeypatch.setattr(
-        harness,
-        "describe_blocking_rules",
-        lambda entity_type: [{"rule_index": 0, "blocking_rule": "readable rule zero"}],
-    )
-    monkeypatch.setattr(harness, "get_blocking_rule_sqls", lambda entity_type: [object()])
-
-    result = harness._donor_proxy(
-        _donor_proxy_args(
-            tmp_path,
-            attribution_output_path=str(attribution_path),
-        )
-    )
-
+    scoring_events = [event_name for event_name, _payload in events if event_name == "score"]
     assert result == 0
-    assert attribution_path.exists()
-    assert json.loads(attribution_path.read_text(encoding="utf-8")) == {
-        "schema_version": "donor_er_pair_attribution.v1",
-        "pairs": [
-            {
-                "entity_id_a": "donor-001",
-                "entity_id_b": "donor-002",
-                "match_key": 0,
-                "blocking_rule_sql": "readable rule zero",
-                "match_weight": 8.5,
-                "match_" + "probability": 0.97,
-                "comparison_fields": [
-                    {"field_name": "gamma_name", "value": 2},
-                    {"field_name": "bf_name", "value": 64.0},
-                ],
-            }
-        ],
-    }
-    diagnostic_events = [event for event in events if event[0] == "diagnostic_score"]
-    assert len(diagnostic_events) == 1
-    assert callable(diagnostic_events[0][1][2]["bounded_connection_factory"])
-    persist_events = [event for event in events if event[0] == "persist_decisions"]
-    assert persist_events == [("persist_decisions", (fixtures["conn"], fixtures["classified"], "donor_identity"))]
-    assert set(persist_events[0][1][1][0]) == {
-        "entity_id_a",
-        "entity_id_b",
-        "confidence",
-        "decided_by",
-        "decision_method",
-        "decision",
-    }
-
-
-def test_donor_proxy_attribution_uses_receipt_cluster_sample(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    harness = _load_harness()
-    events: list[tuple[str, object]] = []
-    fixtures = _patch_donor_proxy_owner_spies(monkeypatch, harness, events)
-    fixtures["clustered"]["review_components"] = [
-        {
-            "member_ids": ["donor-003", "donor-004"],
-            "min_confidence": 0.82,
-            "min_decision": "possible_match",
-        }
-    ]
-    diagnostic_pairs = [
-        {
-            "entity_id_a": "donor-003",
-            "entity_id_b": "donor-004",
-            "confidence": 0.82,
-            "decided_by": "splink_v1",
-            "decision_method": "probabilistic",
-            "match_key": 0,
-            "match_weight": 5.25,
-            "match_" + "probability": 0.82,
-            "gamma_name": 1,
-            "bf_name": 12.5,
-        }
-    ]
-
-    monkeypatch.setattr(harness, "score_diagnostic_rows", lambda *_args, **_kwargs: diagnostic_pairs)
-    monkeypatch.setattr(
-        harness,
-        "describe_blocking_rules",
-        lambda entity_type: [{"rule_index": 0, "blocking_rule": "readable rule zero"}],
-    )
-    monkeypatch.setattr(harness, "get_blocking_rule_sqls", lambda entity_type: [object()])
-
-    result = harness._donor_proxy(
-        _donor_proxy_args(
-            tmp_path,
-            attribution_output_path=str(tmp_path / "lane" / "pair_attribution.json"),
-            cluster_sample_size=1,
-            seed="stage-2-seed",
-        )
-    )
-
-    assert result == 0
-    receipt = harness.validate_donor_proxy_measurement_receipt_markdown(
-        (tmp_path / "lane" / "donor_proxy_receipt.md").read_text(encoding="utf-8")
-    )
-    artifact = json.loads((tmp_path / "lane" / "pair_attribution.json").read_text(encoding="utf-8"))
-    assert receipt.deterministic_cluster_sample == [
-        {
-            "member_ids": ["donor-003", "donor-004"],
-            "min_confidence": 0.82,
-            "min_decision": "possible_match",
-        }
-    ]
-    assert [(pair["entity_id_a"], pair["entity_id_b"]) for pair in artifact["pairs"]] == [("donor-003", "donor-004")]
+    assert scoring_events == ["score"]
 
 
 def test_benchmark_path_never_opens_db_or_persists_while_donor_proxy_is_the_persistence_path(
@@ -2965,7 +2649,10 @@ def test_benchmark_path_never_opens_db_or_persists_while_donor_proxy_is_the_pers
     _write_normalized_jsonl(input_path, [])
     persistence_events: list[str] = []
 
-    monkeypatch.setattr(harness, "get_connection", lambda: (_ for _ in ()).throw(AssertionError("DB opened")))
+    def fail_if_database_opens() -> None:
+        raise AssertionError("DB opened")
+
+    monkeypatch.setattr(harness, "get_connection", fail_if_database_opens)
     monkeypatch.setattr(harness, "persist_match_decisions", lambda *args: persistence_events.append("decisions"))
     monkeypatch.setattr(harness, "persist_auto_merge_clusters", lambda *args: persistence_events.append("clusters"))
     monkeypatch.setattr(harness, "count_blocked_pairs", lambda *args, **kwargs: [])

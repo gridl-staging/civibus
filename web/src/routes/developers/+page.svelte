@@ -161,9 +161,12 @@ ${samplePersonId},Sample Official,true,${sampleCandidateId},125000.00,100000.00,
       <h4><code>{endpoint.label}</code></h4>
       <p>Parameters: {endpoint.parameters.join(", ")}.</p>
       <h5>Curl</h5>
-      <pre><code>{endpoint.curl}</code></pre>
+      <!-- The overflow is intentional; keyboard users need to focus the scrolling element. -->
+      <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+      <pre tabindex="0"><code>{endpoint.curl}</code></pre>
       <h5>{endpoint.sampleLabel}</h5>
-      <pre><code>{endpoint.sampleBody}</code></pre>
+      <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+      <pre tabindex="0"><code>{endpoint.sampleBody}</code></pre>
     </article>
   {/each}
 

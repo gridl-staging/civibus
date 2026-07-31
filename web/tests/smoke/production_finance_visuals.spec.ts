@@ -23,13 +23,15 @@ import {
 const isProductionSmokeMode = (process.env.SMOKE_MODE ?? "local") === "production";
 
 const RELEASE_PERSON_ID = releaseTargets.finance_visual_person_id;
-const RELEASE_PERSON_PATH = `/person/${RELEASE_PERSON_ID}`;
+const RELEASE_PERSON_NAME = releaseTargets.finance_visual_person_name;
+const RELEASE_PERSON_PATH = releaseTargets.finance_visual_person_path;
 const SELECTED_CYCLE = "2024";
 const SELECTED_CYCLE_COPY = `${SELECTED_CYCLE} cycle`;
 const PRIOR_CYCLE_COPY = "2026 cycle";
 const MONEY_AT_GLANCE_REGION = "Money at a glance";
 const CAMPAIGN_FINANCE_HEADING = "Campaign finance";
 const CURRENCY_FIGURE = /\$[\d,]+\.\d{2}/;
+const NONZERO_CURRENCY_FIGURE = /\$(?!0\.00)(?:\d{1,3}(?:,\d{3})+|[1-9]\d*)\.\d{2}/;
 const TRUTHFUL_NO_DATA = /not available|unavailable|not available yet|not loaded yet|no .* available/i;
 const CHART_FRAME_STATE_COPY =
   /not loaded|not available|unavailable|no .* loaded|no .* reported|do not reconcile|table-only|required before rendering/i;
@@ -68,6 +70,20 @@ const VIEWPORTS = [
 
 test.describe("production person finance visuals (read-only)", () => {
   test.skip(!isProductionSmokeMode, "production-mode only — set SMOKE_MODE=production and SMOKE_BASE_URL");
+
+  test("release target renders nonzero money values on Congress and person pages", async ({
+    page
+  }: {
+    page: Page;
+  }) => {
+    const pageLoadErrors = capturePageLoadErrors(page);
+
+    expect(RELEASE_PERSON_PATH).toBe(`/person/${RELEASE_PERSON_ID}`);
+    await expectCongressReleaseTargetRendersMoney(page);
+    await expectPersonReleaseTargetRendersMoney(page);
+
+    await pageLoadErrors.assertNoErrors();
+  });
 
   test("selecting the 2024 cycle scopes the money module and clears the prior-cycle copy", async ({
     page
@@ -130,6 +146,27 @@ test.describe("production person finance visuals (read-only)", () => {
     });
   }
 });
+
+async function expectCongressReleaseTargetRendersMoney(page: Page): Promise<void> {
+  await page.goto(`/congress?search=${encodeURIComponent(RELEASE_PERSON_NAME)}`);
+  const releaseTargetMoney = page.getByRole("region", { name: `Money summary for ${RELEASE_PERSON_NAME}` });
+  await expect(releaseTargetMoney).toBeVisible({ timeout: 20_000 });
+  await expectNonzeroMoneyValue(releaseTargetMoney);
+}
+
+async function expectPersonReleaseTargetRendersMoney(page: Page): Promise<void> {
+  await page.goto(`${RELEASE_PERSON_PATH}?cycle=${SELECTED_CYCLE}`);
+  await expect(page.getByRole("heading", { name: CAMPAIGN_FINANCE_HEADING })).toBeVisible({
+    timeout: 20_000
+  });
+  const moneyAtGlance = page.getByRole("region", { name: MONEY_AT_GLANCE_REGION });
+  await expect(moneyAtGlance).toBeVisible({ timeout: 20_000 });
+  await expectNonzeroMoneyValue(moneyAtGlance);
+}
+
+async function expectNonzeroMoneyValue(region: Locator): Promise<void> {
+  await expect(region.getByText(NONZERO_CURRENCY_FIGURE).first()).toBeVisible({ timeout: 20_000 });
+}
 
 async function expectSelectedCycleScope(page: Page): Promise<void> {
   const moneyAtGlance = page.getByRole("region", { name: MONEY_AT_GLANCE_REGION });

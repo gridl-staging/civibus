@@ -566,7 +566,7 @@ def merge_person_identifiers(
     conn: psycopg.Connection,
     *,
     person_id: UUID,
-    identifiers: dict[str, str],
+    identifiers: dict[str, object],
 ) -> None:
     """Merge new identifier key-value pairs into a person's JSONB identifiers column;
     keys present in both are taken from the new payload (right-side-wins semantics

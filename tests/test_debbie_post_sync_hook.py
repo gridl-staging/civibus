@@ -15,6 +15,9 @@ import pytest
 
 from tests.ci.public_mirror_contract import (
     DEV_REPO_ONLY_CLASSIFICATIONS_BY_NODE_ID,
+    MINIMUM_PUBLIC_ELIGIBLE_NODE_TOTAL,
+    MINIMUM_PUBLIC_NODE_PREFIX_TOTALS,
+    PROJECTED_PUBLIC_CONTRACT_NODE_ID,
     evaluate_public_node_expectations,
 )
 
@@ -179,6 +182,80 @@ def _failed_node_ids(stdout: str) -> set[str]:
     }
 
 
+def test_projected_public_contract_is_selected_only_by_named_target() -> None:
+    collect_commands = {
+        "default target": _pytest_collect_command_from_make_target(REPO_ROOT, "test"),
+        "named target": _pytest_collect_command_from_make_target(REPO_ROOT, "test-projected-public-contract"),
+        "direct hot file": [
+            "uv",
+            "run",
+            "--extra",
+            "dev",
+            "--extra",
+            "entity-resolution",
+            "pytest",
+            "--collect-only",
+            "-q",
+            "tests/test_debbie_post_sync_hook.py",
+        ],
+    }
+
+    collected_nodes_by_selection: dict[str, set[str]] = {}
+    for selection, command in collect_commands.items():
+        completed = subprocess.run(
+            command,
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            timeout=110,
+            check=False,
+        )
+        assert completed.returncode == 0, f"{selection}\n{_collection_diagnostics(completed)}"
+        collected_nodes_by_selection[selection] = _collected_node_ids(completed.stdout)
+
+    assert PROJECTED_PUBLIC_CONTRACT_NODE_ID not in collected_nodes_by_selection["default target"]
+    assert collected_nodes_by_selection["named target"] == {PROJECTED_PUBLIC_CONTRACT_NODE_ID}
+    assert PROJECTED_PUBLIC_CONTRACT_NODE_ID not in collected_nodes_by_selection["direct hot file"]
+
+
+def test_failed_node_ids_classifies_only_failed_summary_lines() -> None:
+    stdout = "\n".join(
+        [
+            "FAILED tests/test_debbie_post_sync_hook.py::test_failed_one - AssertionError: first",
+            "ERROR tests/test_debbie_post_sync_hook.py::test_error_one - fixture setup failed",
+            "    FAILED tests/test_debbie_post_sync_hook.py::test_indented_failed - not a summary line",
+            "FAILEDtests/test_debbie_post_sync_hook.py::test_missing_space - not a summary line",
+            "FAILED tests/test_debbie_post_sync_hook.py::test_failed_two",
+        ]
+    )
+
+    assert _failed_node_ids(stdout) == {
+        "tests/test_debbie_post_sync_hook.py::test_failed_one",
+        "tests/test_debbie_post_sync_hook.py::test_failed_two",
+    }
+
+
+def test_fixture_sensitive_nodes_must_reproduce_as_failed_not_error() -> None:
+    fixture_sensitive_nodes = {
+        "tests/test_debbie_post_sync_hook.py::test_projected_public_mirror_is_ruff_format_clean",
+        "tests/test_debbie_post_sync_hook.py::test_projected_public_mirror_post_sync_is_idempotent",
+        "tests/test_debbie_post_sync_hook.py::test_projected_public_mirror_make_lint_passes",
+        "tests/test_debbie_post_sync_hook.py::test_projected_public_gate_matches_canonical_public_eligible_nodes",
+    }
+    expected_failure_nodes = set(DEV_REPO_ONLY_CLASSIFICATIONS_BY_NODE_ID)
+    assert fixture_sensitive_nodes <= expected_failure_nodes
+
+    stdout = "\n".join(
+        f"{'ERROR' if node_id in fixture_sensitive_nodes else 'FAILED'} {node_id} - synthetic specimen"
+        for node_id in sorted(expected_failure_nodes)
+    )
+
+    observed_failure_nodes = _failed_node_ids(stdout)
+
+    assert expected_failure_nodes - observed_failure_nodes == fixture_sensitive_nodes
+    assert observed_failure_nodes == expected_failure_nodes - fixture_sensitive_nodes
+
+
 def _collection_diagnostics(completed: subprocess.CompletedProcess[str]) -> str:
     return "\n".join(
         [
@@ -237,6 +314,21 @@ def _command_diagnostics(completed: subprocess.CompletedProcess[str]) -> str:
             completed.stderr[-4000:],
         ]
     )
+
+
+def _public_node_headroom_diagnostic(canonical_nodes: set[str], projected_nodes: set[str]) -> str:
+    lines = [
+        "public mirror node headroom:",
+        (
+            f"total canonical={len(canonical_nodes)} projected={len(projected_nodes)} "
+            f"floor={MINIMUM_PUBLIC_ELIGIBLE_NODE_TOTAL}"
+        ),
+    ]
+    for prefix, minimum in sorted(MINIMUM_PUBLIC_NODE_PREFIX_TOTALS.items()):
+        canonical_count = sum(1 for node_id in canonical_nodes if node_id.startswith(prefix))
+        projected_count = sum(1 for node_id in projected_nodes if node_id.startswith(prefix))
+        lines.append(f"{prefix} canonical={canonical_count} projected={projected_count} floor={minimum}")
+    return "\n".join(lines)
 
 
 def _tracked_file_bytes(project_root: Path) -> dict[str, bytes]:
@@ -439,31 +531,6 @@ def test_post_sync_uses_repo_virtualenv_python_when_python3_fails(tmp_path: Path
 
 
 @pytest.mark.timeout(900)
-def test_projected_current_public_unit_selection_failures_are_classified(tmp_path: Path) -> None:
-    projected_mirror = project_debbie_public_mirror(tmp_path)
-    collect_command = _pytest_collect_command_from_make_target(projected_mirror.root, "test")
-    assert collect_command[:7] == ["uv", "run", "--extra", "dev", "--extra", "entity-resolution", "pytest"]
-    collected = _run_projected_pytest(projected_mirror, collect_command)
-    collected_node_ids = _collected_node_ids(collected.stdout)
-
-    assert collected.returncode == 0, _collection_diagnostics(collected)
-    assert collected_node_ids, _collection_diagnostics(collected)
-
-    run_command = [part for part in collect_command if part != "--collect-only"]
-    run_command.append("--tb=no")
-    completed = _run_projected_pytest(projected_mirror, run_command)
-    reproduced_failure_nodes = _failed_node_ids(completed.stdout)
-    expected_failure_nodes = set(DEV_REPO_ONLY_CLASSIFICATIONS_BY_NODE_ID)
-
-    assert completed.returncode != 0, _collection_diagnostics(completed)
-    assert reproduced_failure_nodes == expected_failure_nodes, (
-        f"missing={sorted(expected_failure_nodes - reproduced_failure_nodes)}\n"
-        f"extra={sorted(reproduced_failure_nodes - expected_failure_nodes)}\n"
-        f"{_collection_diagnostics(completed)}"
-    )
-
-
-@pytest.mark.timeout(900)
 def test_projected_public_gate_matches_canonical_public_eligible_nodes(tmp_path: Path) -> None:
     projected_mirror = project_debbie_public_mirror(tmp_path)
     canonical_command = _pytest_collect_command_from_make_target(REPO_ROOT, "test-public")
@@ -490,6 +557,8 @@ def test_projected_public_gate_matches_canonical_public_eligible_nodes(tmp_path:
     # this test's multi-minute double collection. See
     # `tests/ci/test_public_mirror_node_expectations.py`.
     violations = evaluate_public_node_expectations(canonical_nodes, projected_nodes)
+    headroom_diagnostic = _public_node_headroom_diagnostic(canonical_nodes, projected_nodes)
+    print(headroom_diagnostic)
 
     assert violations == (), (
         "\n".join(violations) + f"\ncanonical_total={len(canonical_nodes)} projected_total={len(projected_nodes)}"

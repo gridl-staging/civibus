@@ -248,9 +248,21 @@ def _ensure_candidates_data_source(conn: psycopg.Connection) -> UUID:
     )
 
 
+def _candidate_person_ids(
+    conn: psycopg.Connection,
+    fec_candidate_ids: tuple[str, ...],
+) -> dict[str, UUID]:
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT fec_candidate_id, person_id FROM cf.candidate WHERE fec_candidate_id = ANY(%s)",
+            (list(fec_candidate_ids),),
+        )
+        return dict(cur.fetchall())
+
+
 def _delete_test_rows(conn: psycopg.Connection) -> None:
     """Remove every row introduced by this test file, in FK-safe order."""
-    cn_source_record_keys = [f"cn:2024:{fec_id}" for fec_id in SEEDED_FEC_IDS]
+    cn_source_record_keys = [f"cn:{cycle}:{fec_id}" for cycle in (2024, 2026) for fec_id in SEEDED_FEC_IDS]
     spine_source_record_keys = [
         "house:" + HOUSE_BIO,
         "senate:" + SENATE_BIO,
@@ -789,6 +801,63 @@ def test_load_federal_spine_converges_candidate_money_onto_spine_person(
     assert post_idempotent_rows[HOUSE_FEC_B] == house_spine_person_id
     assert post_idempotent_rows[SENATE_FEC] == senate_spine_person_id
     assert post_idempotent_rows[DELEGATE_FEC] == delegate_spine_person_id
+
+
+def test_candidate_master_rerun_does_not_overwrite_spine_candidate_link(
+    spine_conn: psycopg.Connection,
+    tmp_path: Path,
+) -> None:
+    """A later candidate-master cycle must preserve spine-owned money links."""
+    cn_path = _write_cn_fixture(tmp_path)
+    candidates_ds_id = _ensure_candidates_data_source(spine_conn)
+    spine_conn.commit()
+
+    initial_result = load_candidates(
+        spine_conn,
+        cn_path,
+        cycle=2024,
+        data_source_id=candidates_ds_id,
+    )
+    assert (initial_result.inserted, initial_result.skipped, initial_result.errors) == (4, 0, 0)
+
+    house_fec_ids = (HOUSE_FEC_A, HOUSE_FEC_B)
+    pre_spine_person_ids = _candidate_person_ids(spine_conn, house_fec_ids)
+    assert set(pre_spine_person_ids) == set(house_fec_ids)
+    assert all(person_id is not None for person_id in pre_spine_person_ids.values())
+    assert len(set(pre_spine_person_ids.values())) == 2
+
+    spine_ds_id = ensure_federal_spine_data_source(spine_conn)
+    spine_conn.commit()
+    spine_result = load_federal_spine(
+        spine_conn,
+        _build_adapted_legislators(),
+        data_source_id=spine_ds_id,
+    )
+    spine_conn.commit()
+    assert spine_result.errors == 0
+
+    spine_person_id = find_person_by_identifier(spine_conn, "bioguide_id", HOUSE_BIO)
+    assert spine_person_id is not None
+    assert find_person_by_identifier(spine_conn, "fec_candidate_id", HOUSE_FEC_B) == spine_person_id
+    assert spine_person_id not in pre_spine_person_ids.values()
+    assert _candidate_person_ids(spine_conn, house_fec_ids) == {
+        HOUSE_FEC_A: spine_person_id,
+        HOUSE_FEC_B: spine_person_id,
+    }
+
+    rerun_result = load_candidates(
+        spine_conn,
+        cn_path,
+        cycle=2026,
+        data_source_id=candidates_ds_id,
+    )
+    assert (rerun_result.inserted, rerun_result.skipped, rerun_result.errors) == (4, 0, 0)
+    post_rerun_person_ids = _candidate_person_ids(spine_conn, house_fec_ids)
+    assert post_rerun_person_ids == {
+        HOUSE_FEC_A: spine_person_id,
+        HOUSE_FEC_B: spine_person_id,
+    }
+    assert set(post_rerun_person_ids.values()).isdisjoint(pre_spine_person_ids.values())
 
 
 def test_relink_policy_refresh_reapplies_source_linked_exception(

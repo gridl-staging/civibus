@@ -29,6 +29,10 @@ _NC_MUST_MATCH_CASE_IDS = (
     "nc_person_julia_c_howard_middle_initial_normalization",
 )
 _NC_MUST_NOT_MATCH_CASE_IDS = ("nc_person_julia_howard_vs_mitchell_setzer_distinct_legislators",)
+_DONOR_FALSE_MERGE_MUST_NOT_MATCH_CASE_IDS = (
+    "fec_person_cluster_030872d9_dennis_vs_stephanie_robinson",
+    "fec_person_cluster_81136b39_linda_vs_ryan_garcia",
+)
 
 
 class RegressionPairCase(BaseModel):
@@ -294,6 +298,15 @@ def test_l8_regression_fixture_includes_named_nc_cases() -> None:
     for case_id in _NC_MUST_MATCH_CASE_IDS:
         assert case_id in must_match_ids
     for case_id in _NC_MUST_NOT_MATCH_CASE_IDS:
+        assert case_id in must_not_match_ids
+
+
+def test_l8_regression_fixture_includes_named_donor_false_merge_cases() -> None:
+    regression_pairs = _load_regression_pairs_fixture()
+    must_not_match_ids = [case.case_id for case in regression_pairs.must_not_match]
+
+    assert must_not_match_ids == sorted(must_not_match_ids)
+    for case_id in _DONOR_FALSE_MERGE_MUST_NOT_MATCH_CASE_IDS:
         assert case_id in must_not_match_ids
 
 

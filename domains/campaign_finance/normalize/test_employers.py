@@ -73,6 +73,36 @@ def test_unmapped_non_junk_employer_returns_unknown_industry_sentinel() -> None:
     assert industry_for_employer("Small Town Workshop") == UNKNOWN_INDUSTRY
 
 
+@pytest.mark.parametrize(
+    "occupation, expected_industry",
+    [
+        ("ATTORNEY", "Legal"),
+        ("attorney.", "Legal"),
+        ("PHYSICIAN", "Health Care"),
+        ("TEACHER", "Education"),
+    ],
+)
+def test_stage_two_occupation_fallback_maps_measured_top_occupation_specimens(
+    occupation: str,
+    expected_industry: str,
+) -> None:
+    assert industry_for_employer("RETIRED", occupation=occupation) == expected_industry
+
+
+def test_stage_two_employer_mapping_takes_precedence_over_occupation_fallback() -> None:
+    assert industry_for_employer("Google LLC", occupation="ATTORNEY") == "Technology"
+
+
+@pytest.mark.parametrize("ambiguous_occupation", ["CONSULTANT", "MANAGER", "OWNER"])
+def test_stage_two_ambiguous_occupations_remain_unknown(ambiguous_occupation: str) -> None:
+    assert industry_for_employer("RETIRED", occupation=ambiguous_occupation) == UNKNOWN_INDUSTRY
+
+
+@pytest.mark.parametrize("occupation", ["", None, "RETIRED"])
+def test_stage_two_blank_and_junk_occupations_keep_unknown_bucket(occupation: str | None) -> None:
+    assert industry_for_employer("RETIRED", occupation=occupation) == UNKNOWN_INDUSTRY
+
+
 def test_canonicalize_employer_preserves_unicode_letters() -> None:
     assert canonicalize_employer("Café LLC") == "CAFÉ"
 
@@ -292,15 +322,26 @@ def test_random_sample_industry_coverage_meets_module_contract() -> None:
         "VERIZON": 4,
     }
     newly_junk_sample_counts = {"DISABLED": 7}
+    occupation_derived_sample_count = 467
+    occupation_rule_specimens = {
+        ("RETIRED", "ATTORNEY"): "Legal",
+        ("SELF EMPLOYED", "PHYSICIAN"): "Health Care",
+        ("NONE", "TEACHER"): "Education",
+    }
 
-    selected_known_count = sum(selected_known_sample_counts.values())
+    employer_known_count = sum(selected_known_sample_counts.values())
+    selected_known_count = employer_known_count + occupation_derived_sample_count
     newly_junk_count = sum(newly_junk_sample_counts.values())
     achieved_share = selected_known_count / sample_size
 
     assert newly_junk_count == 7
-    assert selected_known_count == 370
-    assert achieved_share == 370 / 14_324
+    assert employer_known_count == 370
+    assert occupation_derived_sample_count == 467
+    assert selected_known_count == 837
+    for (employer, occupation), expected_industry in occupation_rule_specimens.items():
+        assert industry_for_employer(employer, occupation=occupation) == expected_industry
+    assert achieved_share == 837 / 14_324
     assert hasattr(employers, "INDUSTRY_BY_EMPLOYER_MIN_COVERAGE")
     minimum_coverage = getattr(employers, "INDUSTRY_BY_EMPLOYER_MIN_COVERAGE", float("inf"))
-    assert minimum_coverage == 370 / 14_324
+    assert minimum_coverage == 837 / 14_324
     assert achieved_share >= minimum_coverage

@@ -1,18 +1,13 @@
 <script lang="ts">
   // The shell toggles this from SvelteKit's $navigating store so every route
   // transition gets lightweight global loading feedback.
+  // The animation is decorative because <main aria-busy> announces the same state.
   export let isNavigating = false;
-
-  $: progressValue = isNavigating ? 100 : 0;
 </script>
 
 <div
   class={`navigation-progress ${isNavigating ? "navigation-progress--active" : ""}`}
-  role="progressbar"
-  aria-valuemin="0"
-  aria-valuemax="100"
-  aria-valuenow={progressValue}
-  aria-busy={isNavigating ? "true" : "false"}
+  aria-hidden="true"
 >
   <span class="navigation-progress__bar"></span>
 </div>

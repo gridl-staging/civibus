@@ -81,10 +81,12 @@ def test_donor_search_statement_groups_by_active_donor_identity_cluster_or_fallb
         offset=0,
     )
 
-    fallback_key = campaign_finance_queries._donor_key_sql("t")
-    expected_grouping_key = f"COALESCE(active_cluster.canonical_entity_id::text, {fallback_key})"
+    expected_grouping_key = "COALESCE(active_cluster.canonical_entity_id::text, record.raw_donor_key)"
 
     assert expected_grouping_key in statement
     assert "active_cluster.entity_type = 'donor_identity'" in statement
     assert "active_member.entity_type = 'donor_identity'" in statement
+    assert statement.index("LEFT JOIN core.donor_identity identity_record") < statement.index(
+        "matching_donor_keys AS MATERIALIZED"
+    )
     assert "t.contributor_person_id" not in statement

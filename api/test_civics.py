@@ -883,7 +883,9 @@ def _seed_congress_member_with_money_and_ie(
 
 class TestCongressMembers:
     def test_current_federal_members_query_returns_ordered_current_federal_officeholders(
-        self, db_conn: psycopg.Connection
+        self,
+        db_conn: psycopg.Connection,
+        _without_persisted_full_scope_latency_fixture: None,
     ) -> None:
         from api.queries.civics import fetch_current_federal_members
 
@@ -892,7 +894,10 @@ class TestCongressMembers:
         assert fetch_current_federal_members(db_conn) == _expected_congress_query_rows(expectations)
 
     def test_congress_members_endpoint_returns_ordered_directory_contract(
-        self, api_client: TestClient, db_conn: psycopg.Connection
+        self,
+        api_client: TestClient,
+        db_conn: psycopg.Connection,
+        _without_persisted_full_scope_latency_fixture: None,
     ) -> None:
         expectations = _seed_current_federal_members_mix(db_conn)
 

@@ -770,6 +770,7 @@ def test_deploy_workflow_uses_fly_secret_and_public_smoke_variable():
 def test_deploy_workflow_has_guarded_fly_production_job():
     workflow_text, workflow_config = _load_deploy_workflow()
     deploy_env = workflow_config["jobs"]["deploy"].get("env", {})
+    deploy_steps = workflow_config["jobs"]["deploy"].get("steps", [])
 
     assert workflow_config["jobs"].keys() == {"deploy"}
     assert workflow_config["jobs"]["deploy"]["if"] == "github.repository == 'gridl-hq/civibus'"
@@ -777,6 +778,10 @@ def test_deploy_workflow_has_guarded_fly_production_job():
     assert deploy_env.get("FLY_API_TOKEN") == "${{ secrets.FLY_API_TOKEN }}"
     assert deploy_env.get("PROD_SMOKE_BASE_URL") == "${{ vars.PROD_SMOKE_BASE_URL }}"
     assert "superfly/flyctl-actions/setup-flyctl" in workflow_text
+    assert {
+        "uses": "astral-sh/setup-uv@0c5e2b8115b80b4c7c5ddf6ffdd634974642d182",
+        "with": {"python-version": "3.12"},
+    } in deploy_steps
 
 
 def test_deploy_workflow_has_workflow_dispatch_trigger():
@@ -792,6 +797,7 @@ def test_deploy_workflow_has_workflow_dispatch_trigger():
 def test_deploy_workflow_runs_production_smoke_against_actions_variable():
     workflow_text, workflow_config = _load_deploy_workflow()
     deploy_steps = workflow_config["jobs"]["deploy"].get("steps", [])
+    step_names = [step.get("name") for step in deploy_steps]
     smoke_steps = [step for step in deploy_steps if step.get("name") == "Run production smoke gate"]
     assert len(smoke_steps) == 1
     smoke_step = smoke_steps[0]
@@ -804,6 +810,11 @@ def test_deploy_workflow_runs_production_smoke_against_actions_variable():
     assert "tests/smoke/production_deploy.spec.ts" in smoke_run
     assert workflow_text.index("flyctl deploy -c infra/fly/caddy.fly.toml --remote-only") < workflow_text.index(
         "Run production smoke gate"
+    )
+    assert (
+        step_names.index("Verify public deploy serves built dev SHA")
+        < step_names.index("Run deployed surface parity gate")
+        < step_names.index("Run production smoke gate")
     )
 
 

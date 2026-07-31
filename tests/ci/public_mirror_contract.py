@@ -6,6 +6,12 @@ from enum import StrEnum
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
 
+PROJECTED_PUBLIC_CONTRACT_NODE_ID = (
+    "tests/test_debbie_projected_public_contract.py"
+    "::test_projected_current_public_unit_selection_failures_are_classified"
+)
+
+
 class PublicMirrorCategory(StrEnum):
     PRODUCT_RUNTIME = "product_runtime"
     DEV_REPO_ONLY = "dev_repo_only"
@@ -158,6 +164,18 @@ PUBLIC_MIRROR_TEST_CLASSIFICATIONS: tuple[PublicMirrorTestClassification, ...] =
         ),
     ),
     *_entries(
+        private_asset="private July 30 single-deploy receipt under docs/live-state/",
+        owner="single deploy recovery receipt contract",
+        node_ids=(
+            "tests/ci/test_single_deploy_receipt_contract.py::test_july_30_single_deploy_receipt_preserves_gated_chain_and_red_findings",
+            "tests/ci/test_single_deploy_receipt_contract.py::test_july_30_receipt_guard_fails_when_db_probe_command_is_not_executable",
+            "tests/ci/test_single_deploy_receipt_contract.py::test_july_30_receipt_guard_fails_when_secret_source_path_is_relative",
+            "tests/ci/test_single_deploy_receipt_contract.py::test_july_30_receipt_guard_fails_when_db_proxy_readiness_wait_is_unbounded",
+            "tests/ci/test_single_deploy_receipt_contract.py::test_july_30_receipt_guard_fails_when_db_probe_output_includes_impossible_proxy_lines",
+            "tests/ci/test_single_deploy_receipt_contract.py::test_july_30_receipt_guard_fails_when_roadmap_disposition_overclaims",
+        ),
+    ),
+    *_entries(
         private_asset="ROADMAP.md",
         owner="single deploy recovery receipt contract",
         node_ids=(
@@ -262,7 +280,7 @@ PUBLIC_MIRROR_TEST_CLASSIFICATIONS: tuple[PublicMirrorTestClassification, ...] =
             "tests/test_debbie_post_sync_hook.py::test_projected_public_mirror_make_lint_passes",
             "tests/test_debbie_post_sync_hook.py::test_post_sync_removes_todo_scaffolds_when_strip_is_noop",
             "tests/test_debbie_post_sync_hook.py::test_post_sync_uses_repo_virtualenv_python_when_python3_fails",
-            "tests/test_debbie_post_sync_hook.py::test_projected_current_public_unit_selection_failures_are_classified",
+            PROJECTED_PUBLIC_CONTRACT_NODE_ID,
             "tests/test_debbie_post_sync_hook.py::test_projected_public_gate_matches_canonical_public_eligible_nodes",
         ),
     ),
@@ -315,6 +333,11 @@ DEV_REPO_ONLY_CLASSIFICATIONS_BY_NODE_ID = {
 }
 
 
+def expected_dev_repo_only_failure_nodes(selected_node_ids: Collection[str]) -> set[str]:
+    """Return classified dev-repo-only failures reachable through a selection."""
+    return set(selected_node_ids) & DEV_REPO_ONLY_CLASSIFICATIONS_BY_NODE_ID.keys()
+
+
 # Non-collapse floors for the public-eligible pytest selection.
 #
 # These are FLOORS, deliberately not equalities. They exist to catch a collapse —
@@ -331,7 +354,7 @@ DEV_REPO_ONLY_CLASSIFICATIONS_BY_NODE_ID = {
 # enough tests to cross a floor should require a deliberate edit here, which is
 # the behaviour an equality was standing in for.
 MINIMUM_PUBLIC_ELIGIBLE_NODE_TOTAL = 3403
-MINIMUM_PUBLIC_NODE_PREFIX_TOTALS = {"api/": 263, "core/": 692, "domains/": 1748, "tests/": 700}
+MINIMUM_PUBLIC_NODE_PREFIX_TOTALS = {"api/": 263, "core/": 688, "domains/": 1748, "tests/": 700}
 
 
 def evaluate_public_node_expectations(

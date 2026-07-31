@@ -362,7 +362,7 @@ def test_search_donors_discloses_resolved_identity_and_keeps_possible_match_sepa
     seed_donor_search_fixture(db_conn)
     _seed_donor_identity_transparency_fixture(db_conn)
 
-    payload = campaign_finance_queries.search_donors(db_conn, q="transparent", by="name", limit=20, offset=0)
+    payload = campaign_finance_queries.search_donors(db_conn, q="transparent", by="name", limit=1, offset=0)
 
     resolved = payload["results"][0]
     assert resolved["donor_identity_id"] == str(_RESOLVED_DONOR_ID)

@@ -12,6 +12,9 @@ import {
   type CongressMemberSummary,
   type UpcomingElectionTimelineEntry
 } from "$lib/civic-detail/contract";
+import { buildEntityRouteHref } from "$lib/entity-detail/contract";
+import { CANDIDATE_ROUTE_INDEXABILITY } from "$lib/seo/candidate_indexability";
+import { PERSON_ROUTE_INDEXABILITY } from "$lib/seo/person_indexability";
 
 const personIndexabilityState = vi.hoisted(() => ({
   isIndexable: false
@@ -22,6 +25,13 @@ const civicDetailMockState = vi.hoisted(() => ({
 }));
 const STATIC_PATHS = ["/", "/congress", "/candidates", "/committees", "/coverage", "/calendar", "/data-sources"];
 const SITEMAP_PAGE_CONCURRENCY = 6;
+const SITEMAP_PROTOCOL_NAMESPACE = "http://www.sitemaps.org/schemas/sitemap/0.9";
+const PLANNED_CANDIDATE_SHARD_KIND = "candidate";
+const KNOWN_ANSWER_CANDIDATE_SHARD_PATH = `/sitemap-${PLANNED_CANDIDATE_SHARD_KIND}-0.xml`;
+const KNOWN_ANSWER_CANDIDATE_SHARD_URL = `https://civibus.org${KNOWN_ANSWER_CANDIDATE_SHARD_PATH}`;
+const PLANNED_CANDIDATE_SHARD_PATH = new RegExp(
+  `^/sitemap-${PLANNED_CANDIDATE_SHARD_KIND}-\\d+\\.xml$`
+);
 
 const CANDIDATE_PAGE_1: CandidateListResponse = {
   items: [
@@ -255,6 +265,8 @@ vi.mock("$lib/server/api/civic-detail", async (importOriginal) => {
 });
 
 const { GET } = await import("./+server");
+const { GET: GET_STATIC_SITEMAP } = await import("../sitemap-static.xml/+server");
+const { GET: GET_KIND_SITEMAP } = await import("../sitemap-[kind]-[page].xml/+server");
 
 afterEach(() => {
   personIndexabilityState.isIndexable = false;
@@ -262,9 +274,14 @@ afterEach(() => {
   civicDetailMockState.fetchUpcomingElectionTimeline = undefined;
 });
 
-function createRequestEvent(url: string, requestJson: ReturnType<typeof vi.fn>) {
+function createRequestEvent(
+  url: string,
+  requestJson: ReturnType<typeof vi.fn>,
+  params: Record<string, string> = {}
+) {
   return {
     url: new URL(url),
+    params,
     locals: {
       api: { requestJson }
     }
@@ -277,7 +294,12 @@ function createPaginatedListRequestJson() {
       return Promise.resolve(CANDIDATE_PAGE_2);
     }
     if (path.includes("/v1/candidates")) {
-      return Promise.resolve(CANDIDATE_PAGE_1);
+      const offset = extractOffset(path);
+      return Promise.resolve(
+        offset === 0
+          ? CANDIDATE_PAGE_1
+          : { items: [], has_next: false, offset, limit: 200 }
+      );
     }
     if (path.includes("/v1/committees")) {
       if (path.includes("offset=400")) {
@@ -286,7 +308,12 @@ function createPaginatedListRequestJson() {
       if (path.includes("offset=200")) {
         return Promise.resolve(COMMITTEE_PAGE_2);
       }
-      return Promise.resolve(COMMITTEE_PAGE_1);
+      const offset = extractOffset(path);
+      return Promise.resolve(
+        offset === 0
+          ? COMMITTEE_PAGE_1
+          : { items: [], has_next: false, offset, limit: 200 }
+      );
     }
     if (path.includes("/v1/elections/timeline/upcoming")) {
       return Promise.resolve(UPCOMING_TIMELINE);
@@ -321,6 +348,15 @@ function extractLocPaths(xml: string): string[] {
   return [...xml.matchAll(/<loc>https:\/\/civibus\.org([^<]*)<\/loc>/g)].map((match) => match[1]!);
 }
 
+function extractSitemapIndexLocUrls(xml: string): string[] {
+  if (!/<sitemapindex(?:\s|>)/.test(xml)) {
+    return [];
+  }
+  return [...xml.matchAll(/<sitemap\b[^>]*>[\s\S]*?<loc>([^<]+)<\/loc>[\s\S]*?<\/sitemap>/g)].map(
+    (match) => match[1]!
+  );
+}
+
 function extractPersonLocPaths(xml: string): string[] {
   return extractLocPaths(xml).filter((path) => path.startsWith("/person/"));
 }
@@ -331,6 +367,55 @@ function extractCandidateLocPaths(xml: string): string[] {
 
 function extractOffset(path: string): number {
   return Number(new URL(path, "https://civibus.org").searchParams.get("offset") ?? "0");
+}
+
+function requestedOffsets(requestJson: ReturnType<typeof vi.fn>, pathFragment: string): number[] {
+  return requestJson.mock.calls
+    .map((call) => String(call[0]))
+    .filter((path) => path.includes(pathFragment))
+    .map(extractOffset);
+}
+
+function expectSitemapProtocolRoot(xml: string, rootElement: "sitemapindex" | "urlset"): void {
+  const rootMatch = xml.match(new RegExp(`^(?:<\\?xml[^>]*>\\s*)?<${rootElement}\\b([^>]*)>`));
+
+  expect(rootMatch).not.toBeNull();
+  expect(rootMatch?.[1]).toMatch(
+    new RegExp(`\\sxmlns=(["'])${SITEMAP_PROTOCOL_NAMESPACE.replaceAll(".", "\\.")}\\1(?:\\s|$)`)
+  );
+}
+
+function assertBoundedSitemapIndex(params: {
+  indexXml: string;
+  shardXmlByUrl: ReadonlyMap<string, string>;
+  expectedLegacyPaths: ReadonlySet<string>;
+  maximumUrlCount: number;
+}): void {
+  const { indexXml, shardXmlByUrl, expectedLegacyPaths, maximumUrlCount } = params;
+  const shardUrls = extractSitemapIndexLocUrls(indexXml);
+
+  expectSitemapProtocolRoot(indexXml, "sitemapindex");
+  expect(indexXml).toMatch(/<\/sitemapindex>\s*$/);
+  expect(shardUrls).toHaveLength(new Set(shardUrls).size);
+  expect(new Set(shardUrls)).toEqual(new Set(shardXmlByUrl.keys()));
+
+  const allPaths: string[] = [];
+  for (const shardUrl of shardUrls) {
+    const shardXml = shardXmlByUrl.get(shardUrl);
+    expect(shardXml, `missing XML for declared shard ${shardUrl}`).toBeDefined();
+    expectSitemapProtocolRoot(shardXml!, "urlset");
+    expect(shardXml).toMatch(/<\/urlset>\s*$/);
+    expect(shardXml).not.toMatch(/<sitemapindex(?:\s|>)/);
+
+    const shardPaths = extractLocPaths(shardXml!);
+    expect(shardPaths).toHaveLength([...shardXml!.matchAll(/<url(?:\s|>)/g)].length);
+    expect(shardPaths.length).toBeLessThanOrEqual(maximumUrlCount);
+    expect(shardPaths).toHaveLength(new Set(shardPaths).size);
+    allPaths.push(...shardPaths);
+  }
+
+  expect(allPaths).toHaveLength(new Set(allPaths).size);
+  expect(new Set(allPaths)).toEqual(expectedLegacyPaths);
 }
 
 function createDeferredPromise<T>() {
@@ -352,224 +437,295 @@ async function waitForQueuedPromises(): Promise<void> {
   await Promise.resolve();
 }
 
-describe("GET /sitemap.xml", () => {
-  it("keeps committee page concurrency bounded while refilling the request window", async () => {
-    const deferredCommitteePages = new Map<
-      number,
-      ReturnType<typeof createDeferredPromise<CommitteeListResponse>>
-    >();
-    const activeCommitteeOffsets = new Set<number>();
-    let maxActiveCommitteeRequests = 0;
-    let autoResolveCommitteePages = false;
-    const firstRefillOffset = SITEMAP_PAGE_CONCURRENCY * 200;
+async function expectXmlResponse(response: Response): Promise<string> {
+  expect(response.status).toBe(200);
+  expect(response.headers.get("Content-Type")).toBe("application/xml");
+  expect(response.headers.get("Cache-Control")).toBe("public, max-age=900");
+  return response.text();
+}
 
-    const committeePageForOffset = (offset: number): CommitteeListResponse => ({
-      items: [],
-      has_next: offset < firstRefillOffset,
-      offset,
-      limit: 200
-    });
-    const resolveCommitteePage = (offset: number) => {
-      deferredCommitteePages.get(offset)?.resolve(committeePageForOffset(offset));
-    };
-    const requestJson = vi.fn((path: string) => {
-      if (path.includes("/v1/candidates")) {
-        const offset = extractOffset(path);
-        return Promise.resolve({ items: [], has_next: false, offset, limit: 200 });
-      }
-      if (path.includes("/v1/committees")) {
-        const offset = extractOffset(path);
-        const deferred = createDeferredPromise<CommitteeListResponse>();
-        deferredCommitteePages.set(offset, deferred);
-        activeCommitteeOffsets.add(offset);
-        maxActiveCommitteeRequests = Math.max(maxActiveCommitteeRequests, activeCommitteeOffsets.size);
-        if (autoResolveCommitteePages) {
-          queueMicrotask(() => resolveCommitteePage(offset));
-        }
-        return deferred.promise.finally(() => activeCommitteeOffsets.delete(offset));
-      }
-      if (path.includes("/v1/elections/timeline/upcoming")) {
-        return Promise.resolve([]);
-      }
-      throw new Error(`Unexpected API call: ${path}`);
-    });
-    const responsePromise = GET(createRequestEvent("https://civibus.org/sitemap.xml", requestJson));
+async function collectDeclaredShardXml(
+  indexXml: string,
+  requestJson: ReturnType<typeof vi.fn>
+): Promise<Map<string, string>> {
+  const shardXmlByUrl = new Map<string, string>();
+  for (const shardUrl of extractSitemapIndexLocUrls(indexXml)) {
+    const { pathname } = new URL(shardUrl);
+    const response =
+      pathname === "/sitemap-static.xml"
+        ? await GET_STATIC_SITEMAP(createRequestEvent(shardUrl, requestJson))
+        : await GET_KIND_SITEMAP(
+            createRequestEvent(shardUrl, requestJson, extractShardParams(pathname))
+          );
+    shardXmlByUrl.set(shardUrl, await expectXmlResponse(response));
+  }
+  return shardXmlByUrl;
+}
 
-    await waitForQueuedPromises();
+function extractShardParams(pathname: string): Record<string, string> {
+  const match = pathname.match(/^\/sitemap-([a-z]+)-(\d+)\.xml$/);
+  if (match === null) {
+    throw new Error(`Unexpected shard URL in test: ${pathname}`);
+  }
+  return { kind: match[1]!, page: match[2]! };
+}
 
-    try {
-      expect(activeCommitteeOffsets.size).toBe(SITEMAP_PAGE_CONCURRENCY);
-      expect([...activeCommitteeOffsets]).toEqual([0, 200, 400, 600, 800, 1000]);
+function expectedKnownAnswerPaths(includePeople: boolean): Set<string> {
+  const allCandidateItems = [...CANDIDATE_PAGE_1.items, ...CANDIDATE_PAGE_2.items];
+  const expectedCandidatePaths = allCandidateItems
+    .filter(
+      (item) =>
+        hasCanonicalCandidateSlug(item) && CANDIDATE_ROUTE_INDEXABILITY.isIndexable(item)
+    )
+    .map((item) => buildCandidateHref(item));
+  const expectedCommitteePaths = [
+    ...COMMITTEE_PAGE_1.items,
+    ...COMMITTEE_PAGE_2.items,
+    ...COMMITTEE_PAGE_3.items
+  ].map((item) => buildCommitteeHref(item));
+  const expectedElectionPaths = UPCOMING_TIMELINE.map((entry) =>
+    buildElectionDateRoutePath(entry.date)
+  );
+  const expectedPersonPaths = includePeople
+    ? CONGRESS_MEMBERS.flatMap((member) => {
+        const path = buildEntityRouteHref("person", member.person_id);
+        return path === null ? [] : [path];
+      })
+    : [];
+  return new Set([
+    ...STATIC_PATHS,
+    ...expectedCandidatePaths,
+    ...expectedCommitteePaths,
+    ...expectedElectionPaths,
+    ...expectedPersonPaths
+  ]);
+}
 
-      autoResolveCommitteePages = true;
-      for (const offset of deferredCommitteePages.keys()) {
-        resolveCommitteePage(offset);
-      }
-
-      await responsePromise;
-
-      expect(deferredCommitteePages.has(firstRefillOffset)).toBe(true);
-      expect(maxActiveCommitteeRequests).toBeLessThanOrEqual(SITEMAP_PAGE_CONCURRENCY);
-    } finally {
-      autoResolveCommitteePages = true;
-      for (const offset of deferredCommitteePages.keys()) {
-        resolveCommitteePage(offset);
-      }
-      await Promise.resolve(responsePromise).catch(() => undefined);
+function createShardDiscoveryRequestJson(maxCandidateOffset: number, maxCommitteeOffset: number) {
+  return vi.fn((path: string) => {
+    const offset = extractOffset(path);
+    if (path.includes("/v1/candidates")) {
+      return Promise.resolve({
+        items: offset <= maxCandidateOffset ? [CANDIDATE_PAGE_1.items[0]!] : [],
+        has_next: offset < maxCandidateOffset,
+        offset,
+        limit: 200
+      });
     }
-  });
-
-  it("walks paginated candidate and committee lists and emits valid sitemap XML", async () => {
-    const requestJson = createPaginatedListRequestJson();
-
-    const response = await GET(createRequestEvent("https://civibus.org/sitemap.xml", requestJson));
-
-    expect(response.headers.get("Content-Type")).toBe("application/xml");
-
-    const xml = await response.text();
-
-    expect(xml).toContain('<?xml version="1.0" encoding="UTF-8"?>');
-    expect(xml).toContain('<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">');
-    expect(xml).toContain("</urlset>");
-
-    const allCandidateItems = [...CANDIDATE_PAGE_1.items, ...CANDIDATE_PAGE_2.items];
-    const expectedCandidatePaths = allCandidateItems
-      .filter(
-        (candidate) =>
-          hasCanonicalCandidateSlug(candidate) && candidate.has_official_total
-      )
-      .map((candidate) => buildCandidateHref(candidate));
-    const expectedCommitteePaths = [
-      ...COMMITTEE_PAGE_1.items,
-      ...COMMITTEE_PAGE_2.items,
-      ...COMMITTEE_PAGE_3.items
-    ].map((committee) => buildCommitteeHref(committee));
-    const expectedElectionPaths = UPCOMING_TIMELINE.map((entry) =>
-      buildElectionDateRoutePath(entry.date)
-    );
-    const expectedLocPaths = [
-      ...STATIC_PATHS,
-      ...expectedCandidatePaths,
-      ...expectedCommitteePaths,
-      ...expectedElectionPaths
-    ];
-
-    expect(extractLocPaths(xml)).toEqual(expectedLocPaths);
-    expect(extractLocPaths(xml)).toHaveLength(14);
-    expect(expectedCandidatePaths).toEqual([
-      "/candidate/pat-candidate-2026",
-      "/candidate/solo-runner-2026"
-    ]);
-    expect(expectedCommitteePaths[0]).toBe("/committee/citizens-for-civibus-2026");
-    expect(expectedCommitteePaths.at(-1)).toBe("/committee/cccccccc-cccc-4ccc-8ccc-cccccccccccc");
-    expect(extractCandidateLocPaths(xml)).toHaveLength(expectedCandidatePaths.length);
-    expect(extractCandidateLocPaths(xml)).not.toContain(`/candidate/${CANDIDATE_PAGE_1.items[1]!.id}`);
-    expect(extractCandidateLocPaths(xml)).not.toContain(`/candidate/${CANDIDATE_PAGE_2.items[1]!.id}`);
-    expect(extractCandidateLocPaths(xml)).not.toContain(
-      buildCandidateHref(CANDIDATE_PAGE_2.items[2]!)
-    );
-    expect(extractCandidateLocPaths(xml)).not.toContain(
-      `/candidate/${CANDIDATE_PAGE_1.items[2]!.slug}`
-    );
-    expect(extractCandidateLocPaths(xml)).not.toContain("/candidate/");
-    expect(extractCandidateLocPaths(xml).some((path) => /\/candidate\/[0-9a-f-]{36}$/i.test(path))).toBe(
-      false
-    );
-
-    expect(extractPersonLocPaths(xml)).toEqual([]);
-  });
-
-  it("keeps sitemap URLs in offset order when committee pages finish out of order", async () => {
-    const committeePages = new Map([
-      [0, COMMITTEE_PAGE_1],
-      [200, COMMITTEE_PAGE_2],
-      [400, COMMITTEE_PAGE_3]
-    ]);
-    const deferredCommitteePages = new Map<
-      number,
-      ReturnType<typeof createDeferredPromise<CommitteeListResponse>>
-    >();
-    const requestJson = vi.fn((path: string) => {
-      if (path.includes("/v1/candidates") && path.includes("offset=200")) {
-        return Promise.resolve(CANDIDATE_PAGE_2);
-      }
-      if (path.includes("/v1/candidates")) {
-        return Promise.resolve(CANDIDATE_PAGE_1);
-      }
-      if (path.includes("/v1/committees")) {
-        const offset = extractOffset(path);
-        const deferred = createDeferredPromise<CommitteeListResponse>();
-        deferredCommitteePages.set(offset, deferred);
-        return deferred.promise;
-      }
-      if (path.includes("/v1/elections/timeline/upcoming")) {
-        return Promise.resolve(UPCOMING_TIMELINE);
-      }
-      throw new Error(`Unexpected API call: ${path}`);
-    });
-    const responsePromise = GET(createRequestEvent("https://civibus.org/sitemap.xml", requestJson));
-
-    await waitForQueuedPromises();
-
-    try {
-      expect([...deferredCommitteePages.keys()]).toContain(400);
-      deferredCommitteePages.get(400)?.resolve(COMMITTEE_PAGE_3);
-      deferredCommitteePages.get(200)?.resolve(COMMITTEE_PAGE_2);
-      deferredCommitteePages.get(0)?.resolve(COMMITTEE_PAGE_1);
-      for (const [offset, deferred] of deferredCommitteePages) {
-        if (offset > 400) {
-          deferred.resolve({
-            items: [],
-            has_next: false,
-            offset,
-            limit: 200
-          });
-        }
-      }
-
-      const response = await responsePromise;
-      const xml = await response.text();
-      expect(extractLocPaths(xml)).toEqual([
-        ...STATIC_PATHS,
-        buildCandidateHref(CANDIDATE_PAGE_1.items[0]!),
-        buildCandidateHref(CANDIDATE_PAGE_2.items[0]!),
-        buildCommitteeHref(COMMITTEE_PAGE_1.items[0]!),
-        buildCommitteeHref(COMMITTEE_PAGE_2.items[0]!),
-        buildCommitteeHref(COMMITTEE_PAGE_3.items[0]!),
-        ...UPCOMING_TIMELINE.map((entry) => buildElectionDateRoutePath(entry.date))
-      ]);
-    } finally {
-      for (const [offset, deferred] of deferredCommitteePages) {
-        deferred.resolve(
-          committeePages.get(offset) ?? {
-            items: [],
-            has_next: false,
-            offset,
-            limit: 200
-          }
-        );
-      }
-      await Promise.resolve(responsePromise).catch(() => undefined);
+    if (path.includes("/v1/committees")) {
+      return Promise.resolve({
+        items: offset <= maxCommitteeOffset ? [COMMITTEE_PAGE_1.items[0]!] : [],
+        has_next: offset < maxCommitteeOffset,
+        offset,
+        limit: 200
+      });
     }
+    if (path.includes("/v1/elections/timeline/upcoming")) {
+      return Promise.resolve(UPCOMING_TIMELINE);
+    }
+    throw new Error(`Unexpected API call: ${path}`);
   });
+}
 
-  it("emits every Congress member person path when person routes are indexable", async () => {
+describe("GET /sitemap.xml bounded sitemap index", () => {
+  it("serves a default-namespace sitemap index and exact bounded shard union", async () => {
     vi.resetModules();
     personIndexabilityState.isIndexable = true;
-    const fetchCongressMembers = vi.fn((api) => api.requestJson("/v1/congress/members"));
-    civicDetailMockState.fetchCongressMembers = fetchCongressMembers;
+    civicDetailMockState.fetchCongressMembers = vi.fn(() => Promise.resolve(CONGRESS_MEMBERS));
     const moduleUnderTest = await import("./+server");
-    const requestJson = createEmptyListRequestJson();
+    const requestJson = createPaginatedListRequestJson();
 
-    const response = await moduleUnderTest.GET(
+    const indexResponse = await moduleUnderTest.GET(
       createRequestEvent("https://civibus.org/sitemap.xml", requestJson)
     );
-    const xml = await response.text();
+    const indexXml = await expectXmlResponse(indexResponse);
+    const shardXmlByUrl = await collectDeclaredShardXml(indexXml, requestJson);
 
-    const expectedPersonPaths = CONGRESS_MEMBERS.map((member) => member.person_detail_path);
-    expect(fetchCongressMembers).toHaveBeenCalledTimes(1);
-    expect(extractPersonLocPaths(xml)).toHaveLength(expectedPersonPaths.length);
-    expect(extractPersonLocPaths(xml)).toEqual(expectedPersonPaths);
+    assertBoundedSitemapIndex({
+      indexXml,
+      shardXmlByUrl,
+      expectedLegacyPaths: expectedKnownAnswerPaths(true),
+      maximumUrlCount: 10_000
+    });
+    expect(extractSitemapIndexLocUrls(indexXml).map((loc) => new URL(loc).pathname)).toEqual([
+      "/sitemap-static.xml",
+      "/sitemap-candidate-0.xml",
+      "/sitemap-committee-0.xml",
+      "/sitemap-person-0.xml"
+    ]);
+  });
+
+  it("discovers candidate and committee shard ranges with bounded offset probes", async () => {
+    const requestJson = createShardDiscoveryRequestJson(20_000, 30_000);
+
+    const response = await GET(createRequestEvent("https://civibus.org/sitemap.xml", requestJson));
+    const xml = await expectXmlResponse(response);
+    const shardPaths = extractSitemapIndexLocUrls(xml).map((loc) => new URL(loc).pathname);
+    const candidateOffsets = requestedOffsets(requestJson, "/v1/candidates");
+    const committeeOffsets = requestedOffsets(requestJson, "/v1/committees");
+
+    expect(shardPaths.filter((path) => path.startsWith("/sitemap-candidate-"))).toEqual([
+      "/sitemap-candidate-0.xml",
+      "/sitemap-candidate-1.xml",
+      "/sitemap-candidate-2.xml"
+    ]);
+    expect(shardPaths.filter((path) => path.startsWith("/sitemap-committee-"))).toEqual([
+      "/sitemap-committee-0.xml",
+      "/sitemap-committee-1.xml",
+      "/sitemap-committee-2.xml",
+      "/sitemap-committee-3.xml"
+    ]);
+    expect(candidateOffsets.length).toBeLessThanOrEqual(6);
+    expect(committeeOffsets.length).toBeLessThanOrEqual(7);
+    expect(candidateOffsets).not.toContain(200);
+    expect(committeeOffsets).not.toContain(200);
+  });
+
+  it("fetches each candidate shard only inside its requested source window", async () => {
+    const requestJson = createShardDiscoveryRequestJson(30_000, 0);
+
+    const response = await GET_KIND_SITEMAP(
+      createRequestEvent("https://civibus.org/sitemap-candidate-1.xml", requestJson, {
+        kind: "candidate",
+        page: "1"
+      })
+    );
+
+    await expectXmlResponse(response);
+    const offsets = requestedOffsets(requestJson, "/v1/candidates");
+    expect(offsets).toHaveLength(50);
+    expect(Math.min(...offsets)).toBe(10_000);
+    expect(Math.max(...offsets)).toBe(19_800);
+  });
+
+  it("fetches each committee shard only inside its requested source window", async () => {
+    const requestJson = createShardDiscoveryRequestJson(0, 30_000);
+
+    const response = await GET_KIND_SITEMAP(
+      createRequestEvent("https://civibus.org/sitemap-committee-1.xml", requestJson, {
+        kind: "committee",
+        page: "1"
+      })
+    );
+
+    await expectXmlResponse(response);
+    const offsets = requestedOffsets(requestJson, "/v1/committees");
+    expect(offsets).toHaveLength(50);
+    expect(Math.min(...offsets)).toBe(10_000);
+    expect(Math.max(...offsets)).toBe(19_800);
+  });
+
+  it("keeps numbered shard URLs in deterministic offset order when pages finish out of order", async () => {
+    const deferred = new Map<number, ReturnType<typeof createDeferredPromise<CandidateListResponse>>>();
+    const requestJson = vi.fn((path: string) => {
+      if (path.includes("/v1/candidates")) {
+        const offset = extractOffset(path);
+        const page = createDeferredPromise<CandidateListResponse>();
+        deferred.set(offset, page);
+        return page.promise;
+      }
+      throw new Error(`Unexpected API call: ${path}`);
+    });
+    const responsePromise = GET_KIND_SITEMAP(
+      createRequestEvent("https://civibus.org/sitemap-candidate-0.xml", requestJson, {
+        kind: "candidate",
+        page: "0"
+      })
+    );
+
+    await waitForQueuedPromises();
+    deferred.get(200)?.resolve({ ...CANDIDATE_PAGE_2, has_next: false });
+    deferred.get(0)?.resolve(CANDIDATE_PAGE_1);
+    for (const [offset, page] of deferred) {
+      if (offset > 200) {
+        page.resolve({ items: [], has_next: false, offset, limit: 200 });
+      }
+    }
+
+    const response = await responsePromise;
+    const xml = await expectXmlResponse(response);
+    expect(extractCandidateLocPaths(xml)).toEqual([
+      buildCandidateHref(CANDIDATE_PAGE_1.items[0]!),
+      buildCandidateHref(CANDIDATE_PAGE_2.items[0]!)
+    ]);
+  });
+
+  it("rejects invalid shard params, overflowing single shards, and pagination drift", async () => {
+    const invalidKindResponse = await GET_KIND_SITEMAP(
+      createRequestEvent("https://civibus.org/sitemap-donor-0.xml", createEmptyListRequestJson(), {
+        kind: "donor",
+        page: "0"
+      })
+    );
+    const invalidPageResponse = await GET_KIND_SITEMAP(
+      createRequestEvent("https://civibus.org/sitemap-candidate-1.5.xml", createEmptyListRequestJson(), {
+        kind: "candidate",
+        page: "1.5"
+      })
+    );
+    expect(invalidKindResponse.status).toBe(404);
+    expect(invalidPageResponse.status).toBe(404);
+
+    civicDetailMockState.fetchCongressMembers = vi.fn(() =>
+      Promise.resolve(Array.from({ length: 10_001 }, (_, index) => ({
+        ...CONGRESS_MEMBERS[0],
+        person_id: `person-${index}`
+      })))
+    );
+    personIndexabilityState.isIndexable = true;
+    await expect(
+      GET_KIND_SITEMAP(
+        createRequestEvent("https://civibus.org/sitemap-person-0.xml", createEmptyListRequestJson(), {
+          kind: "person",
+          page: "0"
+        })
+      )
+    ).rejects.toThrow(/exceeds sitemap shard size/i);
+
+    const driftRequestJson = vi.fn((path: string) => {
+      const offset = extractOffset(path);
+      return Promise.resolve({ items: [], has_next: false, offset: offset + 1, limit: 199 });
+    });
+    await expect(
+      GET_KIND_SITEMAP(
+        createRequestEvent("https://civibus.org/sitemap-candidate-0.xml", driftRequestJson, {
+          kind: "candidate",
+          page: "0"
+        })
+      )
+    ).rejects.toThrow(/pagination/i);
+  });
+
+  it("rejects empty sitemap pages that still claim a next page", async () => {
+    const inconsistentRequestJson = vi.fn((path: string) => {
+      const offset = extractOffset(path);
+      return Promise.resolve({
+        items: [],
+        has_next: true,
+        offset,
+        limit: 200
+      });
+    });
+
+    await expect(
+      GET_KIND_SITEMAP(
+        createRequestEvent("https://civibus.org/sitemap-candidate-0.xml", inconsistentRequestJson, {
+          kind: "candidate",
+          page: "0"
+        })
+      )
+    ).rejects.toThrow(/cannot advertise additional pages after an empty result window/i);
+  });
+
+  it("rejects non-zero person sitemap shard pages", async () => {
+    const response = await GET_KIND_SITEMAP(
+      createRequestEvent("https://civibus.org/sitemap-person-1.xml", createEmptyListRequestJson(), {
+        kind: "person",
+        page: "1"
+      })
+    );
+
+    expect(response.status).toBe(404);
   });
 
   it("derives Congress member paths from encoded person ids instead of trusting upstream paths", async () => {
@@ -584,463 +740,46 @@ describe("GET /sitemap.xml", () => {
         }
       ])
     );
-    const moduleUnderTest = await import("./+server");
-    const requestJson = createEmptyListRequestJson();
+    const moduleUnderTest = await import("../sitemap-[kind]-[page].xml/+server");
 
     const response = await moduleUnderTest.GET(
-      createRequestEvent("https://civibus.org/sitemap.xml", requestJson)
+      createRequestEvent("https://civibus.org/sitemap-person-0.xml", createEmptyListRequestJson(), {
+        kind: "person",
+        page: "0"
+      })
     );
-    const xml = await response.text();
+    const xml = await expectXmlResponse(response);
 
     expect(extractPersonLocPaths(xml)).toEqual(["/person/person%2Fwith%3Fpath%23syntax"]);
     expect(xml).not.toContain("attacker.example");
     expect(xml).not.toContain("/injected");
   });
 
-  it("omits Congress member person paths while person routes are not indexable", async () => {
-    const requestJson = createPaginatedListRequestJson();
-
-    const response = await GET(createRequestEvent("https://civibus.org/sitemap.xml", requestJson));
-    const xml = await response.text();
-
-    const congressMemberCalls = requestJson.mock.calls.filter(
-      (call) => typeof call[0] === "string" && call[0].includes("/v1/congress/members")
-    );
-    expect(congressMemberCalls).toHaveLength(0);
-    expect(extractPersonLocPaths(xml)).toHaveLength(0);
-  });
-
-  it("paginates candidates across multiple API calls", async () => {
-    const requestJson = createPaginatedListRequestJson();
-
-    await GET(createRequestEvent("https://civibus.org/sitemap.xml", requestJson));
-
-    const candidateCalls = requestJson.mock.calls.filter(
-      (call) => typeof call[0] === "string" && call[0].includes("/v1/candidates")
-    );
-    const committeeCalls = requestJson.mock.calls.filter(
-      (call) => typeof call[0] === "string" && call[0].includes("/v1/committees")
-    );
-    const timelineCalls = requestJson.mock.calls.filter(
-      (call) => typeof call[0] === "string" && call[0].includes("/v1/elections/timeline/upcoming")
-    );
-
-    expect(candidateCalls.length).toBeGreaterThanOrEqual(2);
-    expect(committeeCalls.length).toBeGreaterThanOrEqual(3);
-    expect(timelineCalls).toHaveLength(1);
-
-    const firstCandidateCall = new URL(candidateCalls[0]?.[0] ?? "", "https://civibus.org");
-    const secondCandidateCall = new URL(candidateCalls[1]?.[0] ?? "", "https://civibus.org");
-    const firstCommitteeCall = new URL(committeeCalls[0]?.[0] ?? "", "https://civibus.org");
-    const secondCommitteeCall = new URL(committeeCalls[1]?.[0] ?? "", "https://civibus.org");
-    const thirdCommitteeCall = new URL(committeeCalls[2]?.[0] ?? "", "https://civibus.org");
-
-    expect(firstCandidateCall.searchParams.get("limit")).toBe("200");
-    expect(firstCandidateCall.searchParams.get("offset")).toBe("0");
-    expect(secondCandidateCall.searchParams.get("limit")).toBe("200");
-    expect(secondCandidateCall.searchParams.get("offset")).toBe("200");
-    expect(firstCommitteeCall.searchParams.get("limit")).toBe("200");
-    expect(firstCommitteeCall.searchParams.get("offset")).toBe("0");
-    expect(secondCommitteeCall.searchParams.get("limit")).toBe("200");
-    expect(secondCommitteeCall.searchParams.get("offset")).toBe("200");
-    expect(thirdCommitteeCall.searchParams.get("limit")).toBe("200");
-    expect(thirdCommitteeCall.searchParams.get("offset")).toBe("400");
-  });
-
-  it("falls back to event URL origin when PUBLIC_ORIGIN is absent", async () => {
+  it("falls back to the request origin when PUBLIC_ORIGIN is absent", async () => {
     vi.resetModules();
     vi.doMock("$env/dynamic/public", () => ({
       env: { PUBLIC_ORIGIN: "" }
     }));
-
-    const freshModule = await import("./+server");
-
-    const requestJson = createEmptyListRequestJson();
-
-    const response = await freshModule.GET(
-      createRequestEvent("https://dev.civibus.local/sitemap.xml", requestJson)
-    );
-
-    const xml = await response.text();
-
-    expect(xml).toContain("<loc>https://dev.civibus.local/</loc>");
-    expect(xml).not.toContain("civibus.org");
-  });
-
-  it("rejects when candidate or committee API pagination fails", async () => {
-    const upstreamError = new Error("upstream list API unavailable");
-    const requestJson = vi.fn((path: string) => {
-      if (path.includes("/v1/candidates") && path.includes("offset=200")) {
-        return Promise.reject(upstreamError);
-      }
-      if (path.includes("/v1/candidates")) {
-        return Promise.resolve(CANDIDATE_PAGE_1);
-      }
-      if (path.includes("/v1/committees")) {
-        return Promise.resolve(TERMINAL_COMMITTEE_PAGE);
-      }
-      if (path.includes("/v1/elections/timeline/upcoming")) {
-        return Promise.resolve([]);
-      }
-      throw new Error(`Unexpected API call: ${path}`);
-    });
-
-    await expect(GET(createRequestEvent("https://civibus.org/sitemap.xml", requestJson))).rejects.toThrow(
-      upstreamError
-    );
-  });
-
-  it("rejects when pagination returns a non-positive page size", async () => {
-    const requestJson = vi.fn((path: string) => {
-      if (path.includes("/v1/candidates")) {
-        return Promise.resolve({ items: [], has_next: true, offset: 0, limit: 0 });
-      }
-      if (path.includes("/v1/committees")) {
-        return Promise.resolve(TERMINAL_COMMITTEE_PAGE);
-      }
-      if (path.includes("/v1/elections/timeline/upcoming")) {
-        return Promise.resolve(UPCOMING_TIMELINE);
-      }
-      throw new Error(`Unexpected API call: ${path}`);
-    });
-
-    await expect(GET(createRequestEvent("https://civibus.org/sitemap.xml", requestJson))).rejects.toThrow(
-      "Sitemap pagination requires a positive integer page size."
-    );
-  });
-
-  it("rejects when pagination returns a clamped page size that would desynchronize offsets", async () => {
-    const requestJson = vi.fn((path: string) => {
-      if (path.includes("/v1/candidates")) {
-        return Promise.resolve({ items: [], has_next: true, offset: 0, limit: 100 });
-      }
-      if (path.includes("/v1/committees")) {
-        return Promise.resolve(TERMINAL_COMMITTEE_PAGE);
-      }
-      if (path.includes("/v1/elections/timeline/upcoming")) {
-        return Promise.resolve(UPCOMING_TIMELINE);
-      }
-      throw new Error(`Unexpected API call: ${path}`);
-    });
-
-    await expect(GET(createRequestEvent("https://civibus.org/sitemap.xml", requestJson))).rejects.toThrow(
-      "Sitemap pagination expected backend page size 200, got 100."
-    );
-  });
-
-  it("rejects when timeline fetch fails", async () => {
-    const timelineError = new Error("timeline unavailable");
-    const requestJson = vi.fn((path: string) => {
-      if (path.includes("/v1/candidates") && path.includes("offset=200")) {
-        return Promise.resolve(CANDIDATE_PAGE_2);
-      }
-      if (path.includes("/v1/candidates")) {
-        return Promise.resolve(CANDIDATE_PAGE_1);
-      }
-      if (path.includes("/v1/committees")) {
-        return Promise.resolve(TERMINAL_COMMITTEE_PAGE);
-      }
-      if (path.includes("/v1/elections/timeline/upcoming")) {
-        return Promise.reject(timelineError);
-      }
-      throw new Error(`Unexpected API call: ${path}`);
-    });
-
-    await expect(
-      GET(createRequestEvent("https://civibus.org/sitemap.xml", requestJson))
-    ).rejects.toThrow(timelineError);
-  });
-
-  it("starts timeline fetch before candidate pagination completes", async () => {
-    vi.resetModules();
-    const candidateSecondPage = createDeferredPromise<CandidateListResponse>();
-    const timelineResponse = createDeferredPromise<UpcomingElectionTimelineEntry[]>();
-
-    const requestJson = vi.fn((path: string) => {
-      if (path.includes("/v1/candidates") && path.includes("offset=200")) {
-        return candidateSecondPage.promise;
-      }
-      if (path.includes("/v1/candidates")) {
-        return Promise.resolve(CANDIDATE_PAGE_1);
-      }
-      if (path.includes("/v1/committees")) {
-        return Promise.resolve(TERMINAL_COMMITTEE_PAGE);
-      }
-      throw new Error(`Unexpected API call: ${path}`);
-    });
-
-    const fetchUpcomingElectionTimeline = vi.fn(() => timelineResponse.promise);
-    civicDetailMockState.fetchUpcomingElectionTimeline = fetchUpcomingElectionTimeline;
-    const moduleUnderTest = await import("./+server");
-    const responsePromise = moduleUnderTest.GET(
-      createRequestEvent("https://civibus.org/sitemap.xml", requestJson)
-    );
-
-    await Promise.resolve();
-
     try {
-      expect(fetchUpcomingElectionTimeline).toHaveBeenCalledTimes(1);
+      const indexModule = await import("./+server");
+      const staticModule = await import("../sitemap-static.xml/+server");
+      const requestJson = createEmptyListRequestJson();
+
+      const indexResponse = await indexModule.GET(
+        createRequestEvent("https://dev.civibus.local/sitemap.xml", requestJson)
+      );
+      const staticResponse = await staticModule.GET(
+        createRequestEvent("https://dev.civibus.local/sitemap-static.xml", requestJson)
+      );
+
+      const indexXml = await expectXmlResponse(indexResponse);
+      const staticXml = await expectXmlResponse(staticResponse);
+      expect(indexXml).toContain("<loc>https://dev.civibus.local/sitemap-static.xml</loc>");
+      expect(staticXml).toContain("<loc>https://dev.civibus.local/</loc>");
+      expect(`${indexXml}\n${staticXml}`).not.toContain("civibus.org");
     } finally {
-      candidateSecondPage.resolve(CANDIDATE_PAGE_2);
-      timelineResponse.resolve(UPCOMING_TIMELINE);
-      await responsePromise;
+      vi.doUnmock("$env/dynamic/public");
+      vi.resetModules();
     }
-  });
-
-  it("sources timeline entries through fetchUpcomingElectionTimeline", async () => {
-    const requestJson = vi.fn((path: string) => {
-      if (path.includes("/v1/candidates")) {
-        return Promise.resolve({ items: [], has_next: false, offset: 0, limit: 200 });
-      }
-      if (path.includes("/v1/committees")) {
-        return Promise.resolve({ items: [], has_next: false, offset: 0, limit: 200 });
-      }
-      throw new Error(`Unexpected API call: ${path}`);
-    });
-
-    const fetchUpcomingElectionTimeline = vi.fn(() => Promise.resolve(UPCOMING_TIMELINE));
-    vi.resetModules();
-    civicDetailMockState.fetchUpcomingElectionTimeline = fetchUpcomingElectionTimeline;
-    const moduleUnderTest = await import("./+server");
-
-    const response = await moduleUnderTest.GET(
-      createRequestEvent("https://civibus.org/sitemap.xml", requestJson)
-    );
-    const xml = await response.text();
-
-    expect(fetchUpcomingElectionTimeline).toHaveBeenCalledTimes(1);
-    expect(xml).toContain(
-      `<loc>https://civibus.org${buildElectionDateRoutePath(UPCOMING_TIMELINE[0]!.date)}</loc>`
-    );
-  });
-});
-
-describe("GET /sitemap.xml candidate-eligibility known answers (prod run 30159110547)", () => {
-  // The deployed sitemap proof (docs/live-state/2026_07_23_candidate_identity_deployed_proof.md,
-  // "Wrap-up proof 3") accepted the post-deploy candidate count with the equation
-  // `expected_candidates = PRE_CANDIDATES - PRE_BARE_UUID`, where PRE_BARE_UUID
-  // counts pre-deploy candidate `<loc>`s whose path is a bare UUID. That equation
-  // is REJECTED: the live sitemap filters candidates through the canonical
-  // predicate `hasCanonicalCandidateSlug`, which also excludes unsafe-identity
-  // candidates that carry a unique, non-empty slug (so their pre-deploy URL was a
-  // slug, NOT a bare UUID, and PRE_BARE_UUID never counted them). Prod run
-  // 30159110547 measured PRE_CANDIDATES=8249, PRE_BARE_UUID=1047, canonical=7183:
-  // 8249 - 1047 = 7202, off by exactly the 19 unsafe-identity unique-slug
-  // candidates. `hasCanonicalCandidateSlug` is the single route-policy owner; the
-  // old arithmetic is rejected proof logic, not expected production behavior.
-
-  // Bare-UUID path regex, identical to the deployed proof parser.
-  const BARE_UUID_CANDIDATE_PATH =
-    /^\/candidate\/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
-
-  // Five candidates, one per eligibility scenario. Exactly one is canonical.
-  const CANDIDATE_SAFE_UNIQUE_SLUG: CandidateListItem = {
-    id: "11111111-1111-4111-8111-111111111111",
-    fec_candidate_id: "H0NC01001",
-    name: "Alice Representative",
-    party: "DEM",
-    office: "H",
-    state: "NC",
-    district: "01",
-    slug: "alice-representative-2026",
-    slug_is_unique: true,
-    identity_is_safe: true,
-    has_official_total: true
-  };
-  const CANDIDATE_UNSAFE_UNIQUE_SLUG: CandidateListItem = {
-    // The 19-candidate gap: usable unique non-UUID slug, excluded only by identity.
-    id: "22222222-2222-4222-8222-222222222222",
-    fec_candidate_id: "H0TX05005",
-    name: "212 N HALF  W. JOHN, RODNEY HOWARD MR.",
-    party: "REP",
-    office: "H",
-    state: "TX",
-    district: "05",
-    slug: "212-n-half-w-john-rodney-howard-mr",
-    slug_is_unique: true,
-    identity_is_safe: false,
-    has_official_total: true
-  };
-  const CANDIDATE_SAFE_DUPLICATE_SLUG: CandidateListItem = {
-    id: "33333333-3333-4333-8333-333333333333",
-    fec_candidate_id: "S0GA02002",
-    name: "Duplicate Name",
-    party: "DEM",
-    office: "S",
-    state: "GA",
-    district: null,
-    slug: "shared-committee-slug",
-    slug_is_unique: false,
-    identity_is_safe: true,
-    has_official_total: true
-  };
-  const CANDIDATE_SAFE_EMPTY_SLUG: CandidateListItem = {
-    id: "44444444-4444-4444-8444-444444444444",
-    fec_candidate_id: "P0US00003",
-    name: "No Slug Runner",
-    party: "IND",
-    office: "P",
-    state: "US",
-    district: null,
-    slug: "",
-    slug_is_unique: true,
-    identity_is_safe: true,
-    has_official_total: true
-  };
-  const CANDIDATE_BARE_UUID_FALLBACK: CandidateListItem = {
-    // Slug is itself a bare UUID; kept unsafe so the canonical predicate excludes
-    // it and no bare-UUID URL reaches the sitemap.
-    id: "66666666-6666-4666-8666-666666666666",
-    fec_candidate_id: "H0NC06006",
-    name: "!!!",
-    party: "IND",
-    office: "H",
-    state: "NC",
-    district: "06",
-    slug: "55555555-5555-4555-8555-555555555555",
-    slug_is_unique: true,
-    identity_is_safe: false,
-    has_official_total: true
-  };
-
-  const KNOWN_ANSWER_CANDIDATES: CandidateListItem[] = [
-    CANDIDATE_SAFE_UNIQUE_SLUG,
-    CANDIDATE_UNSAFE_UNIQUE_SLUG,
-    CANDIDATE_SAFE_DUPLICATE_SLUG,
-    CANDIDATE_SAFE_EMPTY_SLUG,
-    CANDIDATE_BARE_UUID_FALLBACK
-  ];
-
-  const KNOWN_ANSWER_COMMITTEE = {
-    id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
-    fec_committee_id: "C00000001",
-    name: "Citizens for Civibus",
-    committee_type: "O",
-    party: "DEM",
-    state: "NC",
-    slug: "citizens-for-civibus-2026",
-    slug_is_unique: true
-  };
-  const KNOWN_ANSWER_TIMELINE: UpcomingElectionTimelineEntry[] = [{ date: "2026-11-03", contests: [] }];
-
-  // Old-deploy routing had no identity gate: routeId = usable slug else id.
-  function oldSlugOnlyCandidatePath(item: CandidateListItem): string {
-    const routeId = item.slug_is_unique && item.slug !== "" ? item.slug : item.id;
-    return `/candidate/${routeId}`;
-  }
-
-  // Reason a candidate is excluded from the canonical sitemap. Priority is chosen
-  // so each known-answer specimen lands in exactly one bucket; a UUID-shaped slug
-  // is flagged first because it would route to a bare UUID even when "unique".
-  function exclusionReason(
-    item: CandidateListItem
-  ): "unsafe_identity" | "duplicate_slug" | "empty_slug" | "bare_uuid_fallback" {
-    if (BARE_UUID_CANDIDATE_PATH.test(`/candidate/${item.slug}`)) return "bare_uuid_fallback";
-    if (!item.identity_is_safe) return "unsafe_identity";
-    if (item.slug === "") return "empty_slug";
-    return "duplicate_slug";
-  }
-
-  function knownAnswerRequestJson() {
-    return vi.fn((path: string) => {
-      if (path.includes("/v1/candidates")) {
-        return Promise.resolve({
-          items: KNOWN_ANSWER_CANDIDATES,
-          has_next: false,
-          offset: 0,
-          limit: 200
-        });
-      }
-      if (path.includes("/v1/committees")) {
-        return Promise.resolve({
-          items: [KNOWN_ANSWER_COMMITTEE],
-          has_next: false,
-          offset: 0,
-          limit: 200
-        });
-      }
-      if (path.includes("/v1/elections/timeline/upcoming")) {
-        return Promise.resolve(KNOWN_ANSWER_TIMELINE);
-      }
-      throw new Error(`Unexpected API call: ${path}`);
-    });
-  }
-
-  it("emits only canonical candidate URLs with hand-calculated per-reason exclusion counts", async () => {
-    const requestJson = knownAnswerRequestJson();
-    const response = await GET(createRequestEvent("https://civibus.org/sitemap.xml", requestJson));
-    const xml = await response.text();
-
-    // Route policy is derived through the canonical predicate — the sole owner.
-    const eligible = KNOWN_ANSWER_CANDIDATES.filter(hasCanonicalCandidateSlug);
-    const excluded = KNOWN_ANSWER_CANDIDATES.filter((item) => !hasCanonicalCandidateSlug(item));
-    expect(eligible).toHaveLength(1);
-    expect(eligible[0]).toBe(CANDIDATE_SAFE_UNIQUE_SLUG);
-
-    // Hand-calculated exclusion counts by reason.
-    const reasonCounts = excluded.reduce<Record<string, number>>((acc, item) => {
-      const reason = exclusionReason(item);
-      acc[reason] = (acc[reason] ?? 0) + 1;
-      return acc;
-    }, {});
-    expect(reasonCounts).toEqual({
-      unsafe_identity: 1,
-      duplicate_slug: 1,
-      empty_slug: 1,
-      bare_uuid_fallback: 1
-    });
-
-    // Exact sitemap contents.
-    const candidateLocs = extractCandidateLocPaths(xml);
-    expect(candidateLocs).toEqual([buildCandidateHref(CANDIDATE_SAFE_UNIQUE_SLUG)]);
-    expect(candidateLocs).toEqual(["/candidate/alice-representative-2026"]);
-    // Every eligible canonical candidate URL appears exactly once.
-    for (const item of eligible) {
-      expect(candidateLocs.filter((loc) => loc === buildCandidateHref(item))).toHaveLength(1);
-    }
-    // Zero bare-UUID candidate URLs.
-    expect(candidateLocs.filter((loc) => BARE_UUID_CANDIDATE_PATH.test(loc))).toHaveLength(0);
-
-    // Exact total <loc> count: 7 static + 1 candidate + 1 committee + 1 election.
-    expect(extractLocPaths(xml)).toHaveLength(STATIC_PATHS.length + 1 + 1 + 1);
-    expect(extractLocPaths(xml)).toHaveLength(10);
-  });
-
-  it("rejects the deployed PRE_CANDIDATES - PRE_BARE_UUID proof equation (unsafe-identity gap)", async () => {
-    const requestJson = knownAnswerRequestJson();
-    const response = await GET(createRequestEvent("https://civibus.org/sitemap.xml", requestJson));
-    const xml = await response.text();
-
-    // Reconstruct the deployed proof's fresh-baseline inputs from the fixture,
-    // exactly as its parser would measure them off a pre-deploy sitemap.
-    const PRE_CANDIDATES = KNOWN_ANSWER_CANDIDATES.length;
-    const PRE_BARE_UUID = KNOWN_ANSWER_CANDIDATES.map(oldSlugOnlyCandidatePath).filter((path) =>
-      BARE_UUID_CANDIDATE_PATH.test(path)
-    ).length;
-    expect(PRE_CANDIDATES).toBe(5);
-    expect(PRE_BARE_UUID).toBe(3);
-
-    // The rejected acceptance equation from the deployed proof.
-    const rejectedEquationCandidateCount = PRE_CANDIDATES - PRE_BARE_UUID;
-    expect(rejectedEquationCandidateCount).toBe(2);
-
-    // The canonical truth: only hasCanonicalCandidateSlug decides eligibility, and
-    // it equals the candidate `<loc>` count actually served.
-    const canonicalCandidateCount = KNOWN_ANSWER_CANDIDATES.filter(hasCanonicalCandidateSlug).length;
-    expect(canonicalCandidateCount).toBe(1);
-    expect(extractCandidateLocPaths(xml)).toHaveLength(canonicalCandidateCount);
-
-    // The equation is wrong: it over-counts by exactly the unsafe-identity
-    // candidates that still carry a unique, non-empty, non-UUID slug.
-    const unsafeUniqueSlugGap = KNOWN_ANSWER_CANDIDATES.filter(
-      (item) =>
-        !item.identity_is_safe &&
-        item.slug_is_unique &&
-        item.slug !== "" &&
-        !BARE_UUID_CANDIDATE_PATH.test(`/candidate/${item.slug}`)
-    ).length;
-    expect(unsafeUniqueSlugGap).toBe(1);
-    expect(rejectedEquationCandidateCount).not.toBe(canonicalCandidateCount);
-    expect(rejectedEquationCandidateCount - canonicalCandidateCount).toBe(unsafeUniqueSlugGap);
   });
 });

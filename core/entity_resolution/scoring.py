@@ -121,7 +121,6 @@ def score_with_splink(
     *,
     probabilistic_settings: Any | None = None,
     bounded_connection_factory: BoundedConnectionFactory | None = None,
-    include_diagnostics: bool = False,
     include_attribution: bool = False,
 ) -> list[ScoredPair]:
     """Run probabilistic matching with Splink and return Stage 3 scored-pair contract."""
@@ -134,14 +133,9 @@ def score_with_splink(
     if not prepared_rows:
         return []
 
-    if probabilistic_settings is None:
-        blocking_rules = get_blocking_rule_sqls(entity_type)
-        rule_metadata = describe_blocking_rules(entity_type) if include_attribution else None
-    else:
-        blocking_rules = get_blocking_rule_sqls(entity_type, probabilistic_settings=settings)
-        rule_metadata = (
-            describe_blocking_rules(entity_type, probabilistic_settings=settings) if include_attribution else None
-        )
+    blocking_options = {} if probabilistic_settings is None else {"probabilistic_settings": settings}
+    blocking_rules = get_blocking_rule_sqls(entity_type, **blocking_options)
+    rule_metadata = describe_blocking_rules(entity_type, **blocking_options) if include_attribution else None
     built_linker = build_splink_linker(
         prepared_rows,
         settings,
@@ -152,7 +146,6 @@ def score_with_splink(
         return _score_linker_predictions(
             built_linker,
             blocking_rules,
-            include_diagnostics=include_diagnostics,
             prepared_rows=prepared_rows,
             rule_metadata=rule_metadata,
         )
@@ -162,7 +155,6 @@ def score_with_splink(
         return _score_linker_predictions(
             built_linker.linker,
             blocking_rules,
-            include_diagnostics=include_diagnostics,
             prepared_rows=prepared_rows,
             rule_metadata=rule_metadata,
         )
@@ -174,7 +166,6 @@ def _score_linker_predictions(
     linker: Any,
     blocking_rules: list[Any],
     *,
-    include_diagnostics: bool = False,
     prepared_rows: list[RowDict],
     rule_metadata: list[dict[str, Any]] | None,
 ) -> list[ScoredPair]:
@@ -196,8 +187,6 @@ def _score_linker_predictions(
             "decision_method": "probabilistic",
             "decided_by": "splink_v1",
         }
-        if include_diagnostics:
-            scored_pair.update(_selected_prediction_diagnostics(record))
         if rule_metadata is not None:
             scored_pair.update(
                 _actual_run_attribution(
@@ -220,14 +209,6 @@ def _score_linker_predictions(
             current_pair["fired_blocking_rules"] = fired_rules
 
     return list(scored_pairs_by_pair.values())
-
-
-def _selected_prediction_diagnostics(record: dict[str, Any]) -> dict[str, Any]:
-    return {
-        key: value
-        for key, value in record.items()
-        if key in {"match_key", "match_weight", "match_probability"} or key.startswith(("gamma_", "bf_"))
-    }
 
 
 def _actual_run_attribution(
@@ -285,7 +266,6 @@ def score_rows(
     deterministic_pairs: list[ScoredPair] | None = None,
     probabilistic_settings: Any | None = None,
     bounded_connection_factory: BoundedConnectionFactory | None = None,
-    include_diagnostics: bool = False,
     include_attribution: bool = False,
 ) -> list[ScoredPair]:
     """Score already-materialized ER rows through the standard deterministic/probabilistic pipeline.
@@ -303,8 +283,6 @@ def score_rows(
         scoring_options["probabilistic_settings"] = probabilistic_settings
     if bounded_connection_factory is not None:
         scoring_options["bounded_connection_factory"] = bounded_connection_factory
-    if include_diagnostics:
-        scoring_options["include_diagnostics"] = True
     if include_attribution:
         scoring_options["include_attribution"] = True
     probabilistic_pairs = score_with_splink(

@@ -22,6 +22,10 @@ jobs:
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
+      - uses: astral-sh/setup-uv@0c5e2b8115b80b4c7c5ddf6ffdd634974642d182 # v5.4.1
+        with:
+          python-version: "3.12"
+
       - uses: superfly/flyctl-actions/setup-flyctl@master
 
       - name: Resolve dev build provenance
@@ -91,6 +95,17 @@ jobs:
           done
           echo "public_sha_drift expected=$expected_sha api=$api_sha web=$web_sha" >&2
           exit 1
+
+      - name: Run deployed surface parity gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Structural failures are fatal now. jul30_10pm_8 is the sole planned
+          # promotion point for CIVIBUS_PUBLIC_MONEY_VALUE_FATAL=1.
+          CIVIBUS_PUBLIC_BASE_URL="${PROD_SMOKE_BASE_URL}" \
+          CIVIBUS_EXPECTED_SHA="${{ steps.provenance.outputs.dev_sha }}" \
+          CIVIBUS_PUBLIC_MONEY_VALUE_FATAL=0 \
+            bash infra/scripts/probe_deployed_surface_parity.sh
 
       - name: Install web smoke dependencies
         shell: bash

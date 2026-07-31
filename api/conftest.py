@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 
 from api.deps import get_db
 from api.middleware import require_administrative_request, require_authorized_request
+from test_support.donor_search_fixture import cleanup_donor_search_fixture
 
 
 def _build_api_test_client(connection: psycopg.Connection) -> TestClient:
@@ -34,6 +35,12 @@ def api_client(db_conn: psycopg.Connection) -> TestClient:
             yield client
     finally:
         client.app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def _without_persisted_full_scope_latency_fixture(db_conn: psycopg.Connection) -> None:
+    """Hide the committed probe corpus from tests with isolated-value contracts."""
+    cleanup_donor_search_fixture(db_conn)
 
 
 @pytest.fixture

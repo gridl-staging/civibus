@@ -929,7 +929,10 @@ def test_any_date_official_candidate_total_signal_is_independent_of_selected_cyc
     )
 
 
-def test_populated_db_top_chamber_totals_match_openfec_golden(db_conn: psycopg.Connection) -> None:
+def test_populated_db_top_chamber_totals_match_openfec_golden(
+    db_conn: psycopg.Connection,
+    _without_persisted_full_scope_latency_fixture: None,
+) -> None:
     """L5 runs this read-only node against production with transaction read-only enforced."""
     with db_conn.cursor() as cursor:
         cursor.execute("SET TRANSACTION READ ONLY")

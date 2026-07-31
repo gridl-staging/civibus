@@ -38,6 +38,7 @@ from api.contribution_insights_contract import (
     contribution_insights_transaction_where_sql,
 )
 from api.queries.campaign_finance import resolve_selected_cycle
+from core.people.federal_officeholders import current_federal_officeholder_predicate
 from domains.campaign_finance.constants import (
     FEC_BULK_DATA_SOURCE_DOMAIN,
     FEC_BULK_DATA_SOURCE_JURISDICTION,
@@ -65,6 +66,8 @@ FEDERAL_FIRST_CONTENT_COUNTS: Mapping[str, int] = {
     "cf_transaction_contribution_insights_sentinel": 4_495,
     "cf_candidate_money_serving_coverage": 2_079,
     "cf_candidate_money_recent_summary_coverage": 1_799,
+    # Measured 527/540 current federal officeholder people on 2026-07-31.
+    "cf_federal_officeholder_money_coverage": 527,
 }
 
 # Current prod launch floors. These are 80% of the current Fly production
@@ -80,6 +83,9 @@ FEDERAL_FIRST_CONTENT_FLOORS: Mapping[str, int] = {
     "cf_transaction_contribution_insights_sentinel": 3_596,
     "cf_candidate_money_serving_coverage": 1_800,
     "cf_candidate_money_recent_summary_coverage": 1_440,
+    # The 500 P0 recovery threshold ships through repair-first deploy ordering;
+    # it must not be weakened to accommodate the broken production value of 13.
+    "cf_federal_officeholder_money_coverage": 500,
 }
 
 _DEFAULT_FLOORS: Mapping[str, int] = FEDERAL_FIRST_CONTENT_FLOORS
@@ -92,6 +98,7 @@ _FEC_BULK_FRESHNESS_CHECK = "campaign_finance_federal_fec_fresh"
 # deploy; its 1,440 floor preserves the content-health owner's 80% headroom.
 _CANDIDATE_MONEY_COVERAGE_CHECK = "cf_candidate_money_serving_coverage"
 _CANDIDATE_MONEY_RECENT_SUMMARY_COVERAGE_CHECK = "cf_candidate_money_recent_summary_coverage"
+_FEDERAL_OFFICEHOLDER_MONEY_COVERAGE_CHECK = "cf_federal_officeholder_money_coverage"
 _CANDIDATE_MONEY_RECENT_SUMMARY_MAX_AGE = timedelta(days=120)
 _FEC_BULK_FRESHNESS_MAX_AGE = timedelta(days=7)
 _FEC_BULK_FRESHNESS_INDETERMINATE_ACTUAL = 0
@@ -146,6 +153,14 @@ def _candidate_money_recent_summary_coverage_params(
     )
 
 
+def _federal_officeholder_money_coverage_params(
+    selected_cycle: _SelectedCycleWindow,
+    now: datetime,
+) -> tuple[date]:
+    del selected_cycle
+    return (now.date(),)
+
+
 _CANDIDATE_MONEY_OFFICIAL_TOTALS_PREDICATE = """
     (
         total_receipts IS NOT NULL
@@ -175,6 +190,32 @@ _CANDIDATE_MONEY_RECENT_SUMMARY_COVERAGE_QUERY = (
       AND summary_coverage_end_date BETWEEN %s AND %s
       AND summary_coverage_end_date >= %s
       AND summary_coverage_end_date <= %s
+    """
+)
+
+_FEDERAL_OFFICEHOLDER_MONEY_COVERAGE_QUERY = (
+    """
+    SELECT COUNT(DISTINCT person.id)
+    FROM core.person person
+    JOIN civic.officeholding officeholding
+      ON officeholding.person_id = person.id
+    JOIN civic.office office
+      ON office.id = officeholding.office_id
+    WHERE """
+    + current_federal_officeholder_predicate(
+        officeholding_alias="officeholding",
+        office_alias="office",
+        as_of_sql="%s::date",
+    )
+    + """
+      AND EXISTS (
+          SELECT 1
+          FROM cf.candidate candidate
+          WHERE candidate.person_id = person.id
+            AND """
+    + _CANDIDATE_MONEY_OFFICIAL_TOTALS_PREDICATE
+    + """
+      )
 """
 )
 
@@ -212,6 +253,10 @@ _CHECK_QUERIES: Mapping[str, _ContentCheckSpec] = {
     _CANDIDATE_MONEY_RECENT_SUMMARY_COVERAGE_CHECK: _ContentCheckSpec(
         _CANDIDATE_MONEY_RECENT_SUMMARY_COVERAGE_QUERY,
         params_resolver=_candidate_money_recent_summary_coverage_params,
+    ),
+    _FEDERAL_OFFICEHOLDER_MONEY_COVERAGE_CHECK: _ContentCheckSpec(
+        _FEDERAL_OFFICEHOLDER_MONEY_COVERAGE_QUERY,
+        params_resolver=_federal_officeholder_money_coverage_params,
     ),
 }
 

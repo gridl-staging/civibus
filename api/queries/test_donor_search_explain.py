@@ -7,7 +7,10 @@ import psycopg
 import pytest
 
 from api.queries.campaign_finance import _build_donor_search_statement
-from test_support.donor_search_fixture import seed_donor_search_fixture
+from test_support.donor_search_fixture import (
+    seed_donor_search_fixture,
+    seed_full_scope_skewed_donor_search_fixture,
+)
 
 pytestmark = pytest.mark.integration
 
@@ -31,6 +34,17 @@ def _explain_donor_search(
         # normally prefer sequential scans even when the Stage 1 indexes are usable.
         cursor.execute("SET LOCAL enable_seqscan = off")
         cursor.execute(f"EXPLAIN (FORMAT JSON) {sql}", params)
+        return cursor.fetchone()[0][0]["Plan"]
+
+
+def _explain_analyze_donor_search(
+    db_conn: psycopg.Connection,
+    *,
+    q: str,
+) -> dict[str, Any]:
+    sql, params = _build_donor_search_statement(q=q, by="name", limit=20, offset=0)
+    with db_conn.cursor() as cursor:
+        cursor.execute(f"EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) {sql}", params)
         return cursor.fetchone()[0][0]["Plan"]
 
 
@@ -80,6 +94,26 @@ def _transaction_access_index_names(nodes: list[dict[str, Any]]) -> set[str]:
     }
 
 
+def _cte_node(nodes: list[dict[str, Any]], cte_name: str) -> dict[str, Any]:
+    matches = [
+        node
+        for node in nodes
+        if node.get("CTE Name") == cte_name and node.get("Node Type") == "CTE Scan" and node.get("Alias") == cte_name
+    ]
+    assert len(matches) == 1, [node.get("CTE Name") for node in nodes if node.get("CTE Name")]
+    return matches[0]
+
+
+def _single_loop_cte_scan(nodes: list[dict[str, Any]], cte_name: str) -> dict[str, Any]:
+    matches = [
+        node
+        for node in nodes
+        if node.get("CTE Name") == cte_name and node.get("Node Type") == "CTE Scan" and node.get("Actual Loops") == 1
+    ]
+    assert matches, [node.get("CTE Name") for node in nodes if node.get("CTE Name")]
+    return max(matches, key=lambda node: node.get("Actual Rows", 0))
+
+
 def _cte_name_containing(ctes: dict[str, str], text: str) -> str:
     matches = [name for name, body in ctes.items() if text in body]
     assert len(matches) == 1
@@ -97,9 +131,17 @@ def _limited_donor_cte_names(ctes: dict[str, str]) -> set[str]:
 @pytest.mark.parametrize(
     ("by", "query", "expected_indexes"),
     [
-        # ZIP is an exact-equality mode, so its receipt index stays the most
-        # selective path even on the tiny fixture and can be asserted exactly.
-        ("zip", "27701-1234", {"idx_transaction_donor_search_zip5_receipt"}),
+        # Both ZIP expression indexes are valid exact-equality access paths.
+        # PostgreSQL chooses between them from mutable table statistics, so the
+        # deterministic contract is ZIP-indexed access without a sequential scan.
+        (
+            "zip",
+            "27701-1234",
+            {
+                "idx_transaction_donor_search_zip5_receipt",
+                "idx_transaction_contributor_zip5",
+            },
+        ),
     ],
 )
 def test_donor_search_plan_uses_indexed_transaction_access(
@@ -145,6 +187,28 @@ def test_donor_search_name_and_employer_reach_transaction_by_index(
     assert not any(node.get("Node Type") == "Seq Scan" and node.get("Relation Name") == "transaction" for node in nodes)
 
 
+def test_donor_search_full_scope_common_surname_bounds_qualifying_transactions(
+    db_conn: psycopg.Connection,
+) -> None:
+    fixture = seed_full_scope_skewed_donor_search_fixture(db_conn)
+
+    assert fixture.counts.current_federal_officeholders == 527
+    assert fixture.counts.linked_people == 527
+    assert fixture.counts.distinct_linked_committees == 527
+
+    plan = _explain_analyze_donor_search(db_conn, q="williams")
+    nodes = _plan_nodes(plan)
+    matching_node = _single_loop_cte_scan(nodes, "matching_transactions")
+    qualifying_node = _cte_node(nodes, "qualifying_transactions")
+
+    assert qualifying_node["Node Type"] == "CTE Scan"
+    assert qualifying_node["Alias"] == "qualifying_transactions"
+    assert qualifying_node["Actual Loops"] == 1
+    assert qualifying_node["Actual Rows"] <= 80
+    assert matching_node["Actual Rows"] >= 80
+    assert any(node.get("Relation Name") == "transaction" for node in nodes)
+
+
 def test_donor_search_match_cte_keeps_scope_and_receipt_filters_before_materialized_ids() -> None:
     sql, _params = _build_donor_search_statement(q="smith", by="name", limit=20, offset=0)
 
@@ -180,12 +244,13 @@ def test_donor_search_recipient_rollups_are_scoped_to_limited_donor_groups() -> 
     sql, _params = _build_donor_search_statement(q="smith", by="name", limit=5, offset=0)
 
     ctes = _cte_bodies(sql)
-    limited_donor_cte_names = _limited_donor_cte_names(ctes)
+    donor_page_transactions_cte = ctes["donor_page_transactions"]
     recipient_rollups_cte = ctes["recipient_rollups"]
     recipient_rollup_inputs = recipient_rollups_cte.split("GROUP BY", maxsplit=1)[0]
 
-    assert limited_donor_cte_names
-    assert any(re.search(rf"\b{name}\b", recipient_rollup_inputs) for name in limited_donor_cte_names)
+    assert "matching_donor_keys AS MATERIALIZED" in sql
+    assert "FROM donor_groups" in donor_page_transactions_cte
+    assert "FROM donor_page_transactions" in recipient_rollup_inputs
     assert "FROM qualifying_transactions" not in recipient_rollups_cte
 
 

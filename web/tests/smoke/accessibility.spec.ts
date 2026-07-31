@@ -126,6 +126,24 @@ function assertNoNewAccessibilityViolations(
   throw new Error(`New accessibility violations found:\n${newEntryLines}`);
 }
 
+function assertNoSeriousAccessibilityViolations(observedEntries: BaselineEntry[]): void {
+  // Forbidden unless demonstrably no worse than moderate. `serious` and `critical` (strictly
+  // worse than serious) both fail, and a null/indeterminate impact — which normalizeBaselineEntries
+  // can produce when axe supplies neither a node nor a rule impact — also fails, because defaulting
+  // an unknown severity to healthy would be a guard that cannot fail.
+  const forbiddenEntries = observedEntries.filter(
+    (entry) => entry.impact !== "moderate" && entry.impact !== "minor"
+  );
+  if (forbiddenEntries.length === 0) {
+    return;
+  }
+
+  const forbiddenLines = forbiddenEntries.map((entry) => `- ${entry.impact} ${entry.key}`).join("\n");
+  throw new Error(
+    `Serious or worse accessibility violations found (${forbiddenEntries.length}):\n${forbiddenLines}`
+  );
+}
+
 function baselineEntryForKey(key: string): BaselineEntry {
   return {
     key,
@@ -401,6 +419,59 @@ test.describe("accessibility smoke axe scan", () => {
     );
   });
 
+  test("serious assertion throws for a mixed serious and moderate list, naming each serious key and the count", () => {
+    const progressbarEntry = {
+      ...baselineEntryForKey('/::aria-progressbar-name::target:[".navigation-progress"]'),
+      ruleId: "aria-progressbar-name",
+      impact: "serious" as AxeImpact
+    };
+    const scrollableEntry = {
+      ...baselineEntryForKey('/developers::scrollable-region-focusable::target:["main > pre"]'),
+      ruleId: "scrollable-region-focusable",
+      impact: "serious" as AxeImpact
+    };
+    const moderateEntry = baselineEntryForKey('/developers::region::target:["main"]');
+
+    let thrown: Error | null = null;
+    try {
+      assertNoSeriousAccessibilityViolations([progressbarEntry, moderateEntry, scrollableEntry]);
+    } catch (error) {
+      thrown = error as Error;
+    }
+
+    expect(thrown).not.toBeNull();
+    const message = thrown?.message ?? "";
+    expect(message).toContain("Serious or worse accessibility violations found (2):");
+    expect(message).toContain(progressbarEntry.key);
+    expect(message).toContain(scrollableEntry.key);
+    expect(message).not.toContain(moderateEntry.key);
+  });
+
+  test("serious assertion does not throw for a moderate-only list", () => {
+    const regionEntry = baselineEntryForKey('/developers::region::target:["main"]');
+    const minorEntry = {
+      ...baselineEntryForKey('/developers::region::target:["aside"]'),
+      impact: "minor" as AxeImpact
+    };
+
+    expect(() => assertNoSeriousAccessibilityViolations([regionEntry, minorEntry])).not.toThrow();
+  });
+
+  test("serious assertion counts a critical entry and a null-impact entry", () => {
+    const criticalEntry = {
+      ...baselineEntryForKey('/developers::region::target:["main"]'),
+      impact: "critical" as AxeImpact
+    };
+    const nullImpactEntry = {
+      ...baselineEntryForKey('/developers::region::target:["aside"]'),
+      impact: null
+    };
+
+    expect(() => assertNoSeriousAccessibilityViolations([criticalEntry])).toThrow(/found \(1\)/);
+    expect(() => assertNoSeriousAccessibilityViolations([nullImpactEntry])).toThrow(/found \(1\)/);
+    expect(() => assertNoSeriousAccessibilityViolations([criticalEntry, nullImpactEntry])).toThrow(/found \(2\)/);
+  });
+
   test("baseline comparison passes for the same or fewer stable keys", () => {
     const firstEntry = baselineEntryForKey("/developers::region::target:[\"main\"]");
     const secondEntry = baselineEntryForKey("/developers::scrollable-region-focusable::target:[\"pre\"]");
@@ -420,6 +491,10 @@ test.describe("accessibility smoke axe scan", () => {
 
     expect(routeResults).toHaveLength(ACCESSIBILITY_SCAN_DESTINATIONS.length);
     updateAccessibilityArtifactsOrAssertBaseline(routeResults);
+    // Runs after the update call and unconditional with respect to UPDATE_ACCESSIBILITY_BASELINE:
+    // Stage 3 must still regenerate the artifacts (which the update branch writes before this throws),
+    // and a regenerated run must not be exempt from the serious floor or a green run would prove nothing.
+    assertNoSeriousAccessibilityViolations(normalizeBaselineEntries(routeResults));
   });
 
   test("application shell keyboard traversal reaches primary navigation links", async ({ page }: { page: Page }) => {

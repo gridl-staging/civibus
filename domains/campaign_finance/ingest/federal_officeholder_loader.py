@@ -204,15 +204,17 @@ def is_federal_officeholder_vacant(row: dict[str, str | None]) -> bool:
     return _is_vacant(row)
 
 
+def _open_term_window(start_date_str: str | None) -> ValidDateRange:
+    """Compute an open-ended active term anchored at a known start date."""
+    if not start_date_str:
+        return ValidDateRange()
+    start_date = date.fromisoformat(start_date_str)
+    return ValidDateRange(start_date=start_date)
+
+
 def _house_term_window(sworn_date_str: str | None) -> ValidDateRange:
     """Compute the open-ended active House term anchored at sworn_date."""
-    if not sworn_date_str:
-        return ValidDateRange()
-    try:
-        sworn = date.fromisoformat(sworn_date_str)
-    except ValueError:
-        return ValidDateRange()
-    return ValidDateRange(start_date=sworn)
+    return _open_term_window(sworn_date_str)
 
 
 def _resolve_house_division(
@@ -399,9 +401,15 @@ def load_federal_senate_officeholders(
             first_name = (raw_row.get("first_name") or "").strip()
             last_name = (raw_row.get("last_name") or "").strip()
             state = (raw_row.get("state") or "").strip()
+            senate_class = (raw_row.get("class") or "").strip()
             phone = (raw_row.get("phone") or "").strip()
             email = (raw_row.get("email") or "").strip()
+            term_start = (raw_row.get("term_start") or "").strip()
             is_appointed = (raw_row.get("appointed") or "").strip().lower() == "true"
+
+            if term_start and not senate_class:
+                raise ValueError("Senate officeholder rows with term_start require class")
+            term = _open_term_window(term_start)
 
             source_record_id = insert_officeholder_source_record(
                 conn,
@@ -420,6 +428,16 @@ def load_federal_senate_officeholders(
             )
             division_id = _resolve_senate_division(conn, state)
             holder_status = "appointed" if is_appointed else "elected"
+            if term.start_date is not None:
+                source_filters = {"class": senate_class} if senate_class else None
+                supersede_officeholdings_for_successor(
+                    conn,
+                    office_id=_OFFICE_US_SENATE,
+                    electoral_division_id=division_id,
+                    successor_person_id=person_id,
+                    successor_start_date=term.start_date,
+                    successor_source_filters=source_filters,
+                )
             oh_id = upsert_officeholding(
                 conn,
                 Officeholding(
@@ -427,8 +445,8 @@ def load_federal_senate_officeholders(
                     office_id=_OFFICE_US_SENATE,
                     electoral_division_id=division_id,
                     holder_status=holder_status,
-                    valid_period=ValidDateRange(),
-                    date_precision="year",
+                    valid_period=term,
+                    date_precision="day" if term.start_date else "year",
                     source_record_id=source_record_id,
                 ),
             )

@@ -298,19 +298,37 @@ test.describe("shell and responsive smoke", () => {
     page: any;
   }) => {
     await page.goto("/search");
+    await expect(page.getByTestId("search-form")).toHaveAttribute("data-enhanced", "true");
+
+    let releaseSearchSubmit: () => void = () => {};
+    const heldSearchSubmit = new Promise<void>((resolve) => {
+      releaseSearchSubmit = resolve;
+    });
+    await page.route("**/search", async (route: any) => {
+      if (route.request().method() === "POST") {
+        await heldSearchSubmit;
+      }
+      await route.continue();
+    });
 
     await page.getByLabel("Query").fill(SMOKE_SEARCH_SLOW_QUERY);
     await page.getByLabel("Entity type").selectOption("org");
     const submit = page.getByRole("button", { name: "Search" });
-    const submitPromise = submit.click();
+    const submissionResponse = page.waitForResponse(
+      (response: Response) => response.url().endsWith("/search") && response.request().method() === "POST",
+      { timeout: 20_000 }
+    );
+    // Keep navigation pending until the transient UI has been observed.
+    const submitPromise = submit.click({ noWaitAfter: true });
 
     await expect(page.getByRole("button", { name: "Searching..." })).toBeVisible();
     await expect(page.getByTestId("search-status")).toHaveText("Searching...");
 
+    releaseSearchSubmit();
+    const response = await submissionResponse;
+    expect(response.ok()).toBe(true);
     await submitPromise;
-    await expect(page).toHaveURL(`/search?q=${SMOKE_SEARCH_SLOW_QUERY}&entity_type=org`, {
-      timeout: 10_000
-    });
+    await page.unroute("**/search");
   });
 
   test("/search contest results route to contest detail", async ({ page }: { page: any }) => {

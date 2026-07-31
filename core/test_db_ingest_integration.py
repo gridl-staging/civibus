@@ -20,6 +20,7 @@ from core.db import (
     insert_entity_source,
     insert_organization,
     insert_person,
+    merge_person_identifiers,
     insert_source_record,
     try_insert_data_source,
     try_insert_source_record,
@@ -747,6 +748,35 @@ def test_find_person_by_identifier_returns_matching_row(db_conn: psycopg.Connect
 
     assert find_person_by_identifier(db_conn, "fec_candidate_id", "H9NC91001") == person.id
     assert find_person_by_identifier(db_conn, "fec_candidate_id", "H0NC99999") is None
+
+
+def test_find_person_by_identifier_matches_fec_candidate_id_array(db_conn: psycopg.Connection) -> None:
+    shadow_person = Person(
+        canonical_name="OFFICEHOLDER SHADOW",
+        first_name="ALICE",
+        last_name="JONES",
+        identifiers={"fec_candidate_id": "S9NC91001"},
+    )
+    insert_person(db_conn, shadow_person)
+
+    officeholder_person = Person(
+        canonical_name="OFFICEHOLDER",
+        first_name="ALICE",
+        last_name="JONES",
+        identifiers={
+            "bioguide_id": "TSTARRAY",
+            "fec_candidate_id": "H9NC91001",
+        },
+    )
+    insert_person(db_conn, officeholder_person)
+    merge_person_identifiers(
+        db_conn,
+        person_id=officeholder_person.id,
+        identifiers={"fec_candidate_ids": ["H9NC91001", "S9NC91001"]},
+    )
+
+    assert find_person_by_identifier(db_conn, "fec_candidate_id", "H9NC91001") == officeholder_person.id
+    assert find_person_by_identifier(db_conn, "fec_candidate_id", "S9NC91001") == officeholder_person.id
 
 
 def test_insert_entity_source_is_idempotent(db_conn: psycopg.Connection) -> None:

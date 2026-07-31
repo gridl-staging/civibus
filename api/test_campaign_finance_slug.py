@@ -15,7 +15,10 @@ from api.test_campaign_finance_support import (
     insert_committee_row,
 )
 
-pytestmark = pytest.mark.integration
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.usefixtures("_without_persisted_full_scope_latency_fixture"),
+]
 
 
 # ---------------------------------------------------------------------------

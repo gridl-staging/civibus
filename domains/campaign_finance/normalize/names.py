@@ -32,7 +32,23 @@ class ParsedName:
         return " ".join(parts)
 
 
-def parse_name(raw: str | None, *, surname_first: bool = False) -> ParsedName:
+def parse_name(
+    raw: str | None,
+    *,
+    surname_first: bool = False,
+    first_last_only: bool = False,
+) -> ParsedName:
+    """Parse a campaign-finance person name into canonical name fields.
+
+    ``first_last_only`` is the NC transaction resolver's natural-order two-field
+    projection: default behavior, comma-bearing FEC parsing, affix stripping,
+    and single-token handling remain unchanged, while natural multi-token names
+    keep only the first and last core tokens. It cannot be combined with
+    ``surname_first`` because the two modes declare conflicting token order.
+    """
+    if first_last_only and surname_first:
+        raise ValueError("first_last_only cannot be combined with surname_first")
+
     cleaned_name = _clean_name_input(raw)
     if cleaned_name is None:
         return ParsedName()
@@ -42,7 +58,7 @@ def parse_name(raw: str | None, *, surname_first: bool = False) -> ParsedName:
         # The FEC caller knows its source ordering. Sniffing order here would create
         # a second, corpus-dependent identity rule that could disagree between loads.
         return _parse_surname_first_format(cleaned_name)
-    return _parse_natural_format(cleaned_name)
+    return _parse_natural_format(cleaned_name, first_last_only=first_last_only)
 
 
 def _clean_name_input(raw: str | None) -> str | None:
@@ -55,7 +71,12 @@ def _clean_name_input(raw: str | None) -> str | None:
 def _parse_fec_format(raw_name: str) -> ParsedName:
     last_segment, _, trailing_segment = raw_name.partition(",")
     normalized_last = _normalize_text(last_segment)
-    prefix, core_tokens, suffix = _strip_known_affixes(_normalize_tokens(trailing_segment.split()))
+    # Only the first comma separates the surname from the given-name segment.
+    # Any further commas (e.g. "FLEMING, CPA, PLLC" or "SMITH, JOHN, JR") are
+    # token delimiters, not part of a token — treat them as whitespace so no
+    # token retains a trailing comma artifact like "CPA," or "JOHN,".
+    trailing_tokens = trailing_segment.replace(",", " ").split()
+    prefix, core_tokens, suffix = _strip_known_affixes(_normalize_tokens(trailing_tokens))
     first, middle = _extract_first_and_middle(core_tokens)
 
     return ParsedName(
@@ -67,14 +88,26 @@ def _parse_fec_format(raw_name: str) -> ParsedName:
     )
 
 
-def _parse_natural_format(raw_name: str) -> ParsedName:
+def _parse_natural_format(raw_name: str, *, first_last_only: bool = False) -> ParsedName:
     prefix, core_tokens, suffix = _strip_known_affixes(_normalize_tokens(raw_name.split()))
-    return _parsed_name_from_core_tokens(prefix, core_tokens, suffix, surname_first=False)
+    return _parsed_name_from_core_tokens(
+        prefix,
+        core_tokens,
+        suffix,
+        surname_first=False,
+        first_last_only=first_last_only,
+    )
 
 
 def _parse_surname_first_format(raw_name: str) -> ParsedName:
     prefix, core_tokens, suffix = _strip_known_affixes(_normalize_tokens(raw_name.split()))
-    return _parsed_name_from_core_tokens(prefix, core_tokens, suffix, surname_first=True)
+    return _parsed_name_from_core_tokens(
+        prefix,
+        core_tokens,
+        suffix,
+        surname_first=True,
+        first_last_only=False,
+    )
 
 
 def _parsed_name_from_core_tokens(
@@ -83,6 +116,7 @@ def _parsed_name_from_core_tokens(
     suffix: str | None,
     *,
     surname_first: bool,
+    first_last_only: bool,
 ) -> ParsedName:
     if not core_tokens:
         return ParsedName(prefix=prefix, suffix=suffix)
@@ -99,7 +133,7 @@ def _parsed_name_from_core_tokens(
 
     first = core_tokens[0]
     last = core_tokens[-1]
-    middle = _join_tokens(core_tokens[1:-1])
+    middle = None if first_last_only else _join_tokens(core_tokens[1:-1])
     return ParsedName(prefix=prefix, first=first, middle=middle, last=last, suffix=suffix)
 
 

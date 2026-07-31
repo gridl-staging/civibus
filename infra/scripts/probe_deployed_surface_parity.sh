@@ -4,6 +4,8 @@ set -euo pipefail
 BASE_URL="${CIVIBUS_PUBLIC_BASE_URL:-https://civibus-caddy.fly.dev}"
 EXPECTED_SHA="${CIVIBUS_EXPECTED_SHA:-}"
 FIXTURE_DIR="${CIVIBUS_DEPLOYED_SURFACE_FIXTURE_DIR:-}"
+CIVIBUS_PUBLIC_MONEY_VALUE_FATAL="${CIVIBUS_PUBLIC_MONEY_VALUE_FATAL:-0}"
+SITEMAP_LATENCY_BUDGET_SECONDS="30.000"
 PUBLIC_PAGES=(
   "/|Follow money around Congress and the White House."
   "/search?q=ossoff|data-testid=\"search-results-region\""
@@ -18,10 +20,9 @@ PUBLIC_PAGES=(
   "/calendar|Election calendar"
   "/coverage|campaign_finance"
   "/data-sources|campaign_finance"
+  "/sitemap.xml|<urlset"
 )
-KNOWN_RED_PUBLIC_PAGES=(
-  "/sitemap.xml|dynamic sitemap can depend on campaign-list data not yet promoted to fail-closed|surface-parity-stage-1"
-)
+KNOWN_RED_PUBLIC_PAGES=()
 TMP_DIR="$(mktemp -d)"
 DEPLOYED_OPENAPI_JSON="${TMP_DIR}/deployed_openapi.json"
 API_VERSION_JSON="${TMP_DIR}/api_health_version.json"
@@ -331,6 +332,22 @@ fixture_page_status() {
     "${FIXTURE_DIR}/page_statuses.tsv"
 }
 
+fixture_page_latency_seconds() {
+  local path="$1"
+  local latency_table="${FIXTURE_DIR}/page_latencies.tsv"
+
+  if [[ ! -f "${latency_table}" ]]; then
+    echo "page_fetch_error ${path} fixture_latency_table_missing" >&2
+    return 1
+  fi
+
+  awk -F '\t' -v expected_path="${path}" '$1 == expected_path {print $2; found = 1; exit} END {if (!found) exit 1}' \
+    "${latency_table}" || {
+      echo "page_fetch_error ${path} fixture_latency_missing" >&2
+      return 1
+    }
+}
+
 page_body_slug() {
   local path="$1"
 
@@ -358,6 +375,8 @@ copy_fixture_page_body() {
 fetch_public_page_body() {
   local path="$1"
   local body_path="$2"
+  local fetch_result
+  local latency_seconds
   local status
 
   if [[ -n "${FIXTURE_DIR}" ]]; then
@@ -370,16 +389,23 @@ fetch_public_page_body() {
       return 1
     }
     copy_fixture_page_body "${path}" "${body_path}" || return 1
+    if [[ "${path}" == "/sitemap.xml" ]]; then
+      latency_seconds="$(fixture_page_latency_seconds "${path}")" || return 1
+    else
+      latency_seconds="not_measured"
+    fi
   else
-    status="$(
-      curl --proto '=http,https' --max-time 25 -sS -o "${body_path}" -w "%{http_code}" "${BASE_URL%/}${path}"
+    fetch_result="$(
+      curl --proto '=http,https' --max-time 60 -sS -o "${body_path}" -w "%{http_code}\t%{time_total}" "${BASE_URL%/}${path}"
     )" || {
       echo "page_fetch_error ${path}" >&2
       return 1
     }
+    status="${fetch_result%%$'\t'*}"
+    latency_seconds="${fetch_result#*$'\t'}"
   fi
 
-  printf '%s\n' "${status}"
+  printf '%s\t%s\n' "${status}" "${latency_seconds}"
 }
 
 warm_up_public_page() {
@@ -412,6 +438,8 @@ probe_public_page() {
   local entry="$1"
   local path="${entry%%|*}"
   local marker="${entry#*|}"
+  local fetch_result
+  local latency_seconds
   local status
   local body_path="${TMP_DIR}/page_body_$(page_body_slug "${path}").html"
 
@@ -419,7 +447,9 @@ probe_public_page() {
     warm_up_public_page "${path}"
   fi
 
-  status="$(fetch_public_page_body "${path}" "${body_path}")" || return 1
+  fetch_result="$(fetch_public_page_body "${path}" "${body_path}")" || return 1
+  status="${fetch_result%%$'\t'*}"
+  latency_seconds="${fetch_result#*$'\t'}"
 
   if [[ "${status}" != "200" ]]; then
     if [[ "${status}" == "404" ]]; then
@@ -433,6 +463,19 @@ probe_public_page() {
   assert_public_page_body "${path}" "${marker}" "${body_path}" || return 1
 
   echo "page_status ${path} ${status} marker_ok"
+  if [[ "${path}" == "/sitemap.xml" ]]; then
+    echo "page_latency ${path} seconds=${latency_seconds} budget_seconds=${SITEMAP_LATENCY_BUDGET_SECONDS}"
+    if ! python3 - "${latency_seconds}" "${SITEMAP_LATENCY_BUDGET_SECONDS}" <<'PY'
+from decimal import Decimal
+import sys
+
+raise SystemExit(0 if Decimal(sys.argv[1]) <= Decimal(sys.argv[2]) else 1)
+PY
+    then
+      echo "page_latency_budget_exceeded ${path} seconds=${latency_seconds} budget_seconds=${SITEMAP_LATENCY_BUDGET_SECONDS}" >&2
+      return 1
+    fi
+  fi
 }
 
 probe_known_red_public_page() {
@@ -463,7 +506,8 @@ probe_public_surface() {
     fi
   done
 
-  for entry in "${KNOWN_RED_PUBLIC_PAGES[@]}"; do
+  # Bash 3.2 treats an empty array expansion as unbound under `set -u`.
+  for entry in "${KNOWN_RED_PUBLIC_PAGES[@]+"${KNOWN_RED_PUBLIC_PAGES[@]}"}"; do
     probe_known_red_public_page "${entry}"
   done
 
@@ -474,15 +518,54 @@ probe_public_surface() {
   fi
 }
 
-EXPECTED_SHA="$(resolve_expected_sha)" || exit 1
-if ! is_sha "${EXPECTED_SHA}"; then
+probe_public_money_value() {
+  local money_status=0
+  local command=(
+    uv run --extra api python infra/scripts/public_money_value_probe.py
+    --base-url "${BASE_URL}"
+  )
+
+  if [[ -n "${FIXTURE_DIR}" ]]; then
+    command+=(--fixture-dir "${FIXTURE_DIR}")
+  fi
+
+  "${command[@]}" || money_status=$?
+  if [[ "${money_status}" -eq 0 ]]; then
+    echo "money_value_probe_ok"
+    return 0
+  fi
+
+  if [[ "${CIVIBUS_PUBLIC_MONEY_VALUE_FATAL}" == "1" ]]; then
+    echo "money_value_failure_fatal exit_status=${money_status} fatal=1" >&2
+    return "${money_status}"
+  fi
+
+  echo "money_value_failure_nonfatal exit_status=${money_status} fatal=0"
+}
+
+structural_status=0
+money_status=0
+
+EXPECTED_SHA="$(resolve_expected_sha)" || structural_status=1
+if [[ "${structural_status}" -eq 0 ]] && ! is_sha "${EXPECTED_SHA}"; then
   echo "invalid_expected_sha ${EXPECTED_SHA}" >&2
-  exit 1
+  structural_status=1
 fi
 
-fetch_deployed_openapi
-compare_openapi_paths
-compare_deployed_shas "${EXPECTED_SHA}"
-probe_public_surface
+if fetch_deployed_openapi; then
+  compare_openapi_paths || structural_status=1
+else
+  structural_status=1
+fi
+if is_sha "${EXPECTED_SHA}"; then
+  compare_deployed_shas "${EXPECTED_SHA}" || structural_status=1
+fi
+probe_public_surface || structural_status=1
+probe_public_money_value || money_status=$?
+
+if [[ "${structural_status}" -ne 0 || "${money_status}" -ne 0 ]]; then
+  echo "deployed_surface_parity_failed structural_status=${structural_status} money_status=${money_status}" >&2
+  exit 1
+fi
 
 echo "surface_parity_ok"

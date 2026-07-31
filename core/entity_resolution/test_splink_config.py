@@ -9,17 +9,31 @@ from __future__ import annotations
 
 import uuid
 from datetime import date
+from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import pytest
+import yaml
 
+from core.entity_resolution.confidence import resolve_auto_merge_threshold
+from core.entity_resolution.l8_regression import _build_fixture_rows
 from core.entity_resolution.scoring import score_with_splink
-from core.entity_resolution.splink_config import build_person_probabilistic_settings
+from core.entity_resolution.splink_config import (
+    PERSON_FIRST_NAME_DISAGREEMENT_M_PROBABILITY,
+    PERSON_FIRST_NAME_DISAGREEMENT_U_PROBABILITY,
+    build_person_probabilistic_settings,
+)
 
 # Synthetic test data — realistic but entirely fictitious records
 # designed to test specific matching scenarios.
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+REGRESSION_PAIRS_PATH = REPO_ROOT / "tests" / "er_regression_pairs.yaml"
+DONOR_FALSE_MERGE_CASE_IDS = (
+    "fec_person_cluster_030872d9_dennis_vs_stephanie_robinson",
+    "fec_person_cluster_81136b39_linda_vs_ryan_garcia",
+)
 SYNTHETIC_PERSONS = [
     # --- Pair 1: Same person, slight name variation + same address ---
     {
@@ -180,6 +194,40 @@ def _name_rarity_row(
     return row
 
 
+def _fixture_must_not_match_cases_by_id() -> dict[str, dict[str, Any]]:
+    payload = cast(dict[str, Any], yaml.safe_load(REGRESSION_PAIRS_PATH.read_text(encoding="utf-8")))
+    return {case["case_id"]: case for case in payload["must_not_match"]}
+
+
+def _donor_fixture_rows(case: dict[str, Any]) -> tuple[list[dict[str, Any]], tuple[str, str]]:
+    rows, ordered_pair = _build_fixture_rows(
+        case_id=case["case_id"],
+        entity_type=case["entity_type"],
+        left_payload=case["left_entity"],
+        right_payload=case["right_entity"],
+    )
+    return rows, cast(tuple[str, str], ordered_pair)
+
+
+def _only_score_for_pair(
+    scores: list[dict[str, Any]],
+    ordered_pair: tuple[str, str],
+) -> dict[str, Any]:
+    matching_scores = [
+        score
+        for score in scores
+        if tuple(sorted((str(score["entity_id_a"]), str(score["entity_id_b"])))) == ordered_pair
+    ]
+    assert len(matching_scores) == 1
+    return matching_scores[0]
+
+
+def _shared_non_empty_value(rows: list[dict[str, Any]], key: str) -> bool:
+    left_value = rows[0].get(key)
+    right_value = rows[1].get(key)
+    return left_value is not None and left_value == right_value
+
+
 def _name_rarity_rows() -> list[dict[str, Any]]:
     rows = [
         _name_rarity_row(
@@ -285,6 +333,15 @@ def _term_frequency_adjusted_columns(person_settings: Any) -> set[str]:
         for level in comparison["comparison_levels"]
         if "tf_adjustment_column" in level
     }
+
+
+def _comparison_by_output_column(person_settings: Any, column_name: str) -> dict[str, Any]:
+    settings_metadata = person_settings.create_settings_dict("duckdb")
+    matches = [
+        comparison for comparison in settings_metadata["comparisons"] if comparison["output_column_name"] == column_name
+    ]
+    assert len(matches) == 1
+    return matches[0]
 
 
 # =============================================================================
@@ -456,6 +513,49 @@ def test_person_splink_scores_rare_exact_name_above_common_exact_name() -> None:
     assert rare_score > common_score, (
         f"expected rare-name confidence to exceed common-name confidence; rare={rare_score}, common={common_score}"
     )
+
+
+@pytest.mark.parametrize("case_id", DONOR_FALSE_MERGE_CASE_IDS)
+def test_person_splink_same_surname_state_first_name_disagreement_scores_below_auto_merge_threshold(
+    case_id: str,
+) -> None:
+    case = _fixture_must_not_match_cases_by_id()[case_id]
+    rows, ordered_pair = _donor_fixture_rows(case)
+
+    assert _shared_non_empty_value(rows, "last_name")
+    assert _shared_non_empty_value(rows, "state")
+    assert rows[0]["first_name"] != rows[1]["first_name"]
+    assert not _shared_non_empty_value(rows, "zip5")
+    assert not _shared_non_empty_value(rows, "street_number")
+    assert rows[0]["employer"] == "NOT EMPLOYED"
+    assert rows[0]["occupation"] == "NOT EMPLOYED"
+    assert rows[0]["identifier_key"] == case["left_entity"]["source_record_key"]
+    assert rows[1]["identifier_key"] == case["right_entity"]["source_record_key"]
+    assert all(row["normalized_address"] == row["normalized_address"].lower() for row in rows)
+    assert all(row["state"] == row["state"].upper() for row in rows)
+
+    person_settings = build_person_probabilistic_settings()
+    scores = score_with_splink(
+        rows,
+        "person",
+        probabilistic_settings=person_settings,
+        include_attribution=True,
+    )
+    score = _only_score_for_pair(scores, ordered_pair)
+
+    assert score["decision_method"] == "probabilistic"
+    assert score["decided_by"] == "splink_v1"
+    assert score["match_key"] == "0"
+    assert score["comparison_levels"]["first_name"] == 0
+    assert score["match_weight"] < 0
+    assert score["confidence"] < resolve_auto_merge_threshold(None)
+
+    first_name_disagreement_level = _comparison_by_output_column(person_settings, "first_name")["comparison_levels"][-1]
+    assert first_name_disagreement_level["sql_condition"] == "ELSE"
+    assert first_name_disagreement_level["m_probability"] == PERSON_FIRST_NAME_DISAGREEMENT_M_PROBABILITY
+    assert first_name_disagreement_level["u_probability"] == PERSON_FIRST_NAME_DISAGREEMENT_U_PROBABILITY
+    assert first_name_disagreement_level["fix_m_probability"] is True
+    assert first_name_disagreement_level["fix_u_probability"] is True
 
 
 def test_person_settings_term_frequency_adjustments_are_name_only() -> None:

@@ -157,7 +157,9 @@ def test_help_runs_clean() -> None:
         [str(SCRIPT_PATH), "--help"],
         capture_output=True,
         text=True,
-        timeout=5,
+        # Shared-host merge gates can take several seconds to schedule even
+        # though this help path performs no I/O beyond rendering usage text.
+        timeout=30,
     )
     assert result.returncode == 0
     assert "Usage:" in result.stdout

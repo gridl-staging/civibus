@@ -79,6 +79,19 @@ def _strip_null_bytes(value: object) -> object:
 
 _ORGANIZATION_IDENTIFIER_QUERY = "SELECT id FROM core.organization WHERE identifiers @> %s LIMIT 1"
 _PERSON_IDENTIFIER_QUERY = "SELECT id FROM core.person WHERE identifiers @> %s LIMIT 1"
+_PERSON_FEC_CANDIDATE_IDENTIFIER_QUERY = """
+    SELECT id
+    FROM core.person
+    WHERE identifiers @> %s
+       OR identifiers -> 'fec_candidate_ids' @> %s
+    ORDER BY
+        -- Spine-owned officeholders carry a stable civic identifier; prefer
+        -- them over older FEC-only shadow people when both share an FEC ID.
+        (identifiers ? 'bioguide_id') DESC,
+        created_at ASC,
+        id ASC
+    LIMIT 1
+"""
 _PERSON_BY_NAME_QUERY = """
     SELECT p.id
     FROM core.person p
@@ -147,6 +160,15 @@ def _find_identifier_match(
 ) -> UUID | None:
     with conn.cursor() as cursor:
         return _select_existing_id(cursor, select_query, (Jsonb({key: value}),))
+
+
+def _find_person_fec_candidate_identifier_match(conn: psycopg.Connection, value: str) -> UUID | None:
+    with conn.cursor() as cursor:
+        return _select_existing_id(
+            cursor,
+            _PERSON_FEC_CANDIDATE_IDENTIFIER_QUERY,
+            (Jsonb({"fec_candidate_id": value}), Jsonb([value])),
+        )
 
 
 def upsert_address(conn: psycopg.Connection, address: Address) -> UUID:
@@ -581,6 +603,8 @@ def find_organization_by_identifier(conn: psycopg.Connection, key: str, value: s
 
 
 def find_person_by_identifier(conn: psycopg.Connection, key: str, value: str) -> UUID | None:
+    if key == "fec_candidate_id":
+        return _find_person_fec_candidate_identifier_match(conn, value)
     return _find_identifier_match(conn, _PERSON_IDENTIFIER_QUERY, key, value)
 
 

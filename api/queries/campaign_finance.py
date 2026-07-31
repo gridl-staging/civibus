@@ -1084,54 +1084,92 @@ _DONOR_SEARCH_SQL_TEMPLATE = f"""
           AND t.contributor_name_raw IS NOT NULL
           AND BTRIM(t.contributor_name_raw) != ''
     ),
-    qualifying_transactions AS MATERIALIZED (
-        -- Materialized so the scoped mode scan runs exactly once:
-        -- donor_groups and donor_page_transactions both read this set, and an
-        -- inline CTE would otherwise recompute the scan-and-join for each. Keep
-        -- it narrow: candidate/committee labels are joined only after donor
-        -- pagination so the full common-term match does not carry nested-detail
-        -- columns through materialization and grouping.
+    matching_donor_records AS MATERIALIZED (
         SELECT
-            t.id,
-            t.committee_id,
-            t.amount,
-            t.transaction_date,
+            MIN(t.id::text)::uuid AS id,
+            t.contributor_name,
+            t.contributor_employer,
+            t.contributor_occupation,
+            t.contributor_city,
+            t.contributor_state,
+            t.normalized_zip5,
+            t.identity_name,
+            t.identity_employer,
+            t.identity_occupation,
+            t.identity_city,
+            t.identity_state,
+            t.identity_zip,
+            {_donor_key_sql("t")} AS raw_donor_key,
+            COALESCE(SUM(t.amount), 0) AS total_amount,
+            COUNT(*)::integer AS transaction_count,
+            MAX(t.transaction_date) AS latest_transaction_date
+        FROM matching_transactions t
+        GROUP BY
+            t.contributor_name,
+            t.contributor_employer,
+            t.contributor_occupation,
+            t.contributor_city,
+            t.contributor_state,
+            t.normalized_zip5,
+            t.identity_name,
+            t.identity_employer,
+            t.identity_occupation,
+            t.identity_city,
+            t.identity_state,
+            t.identity_zip,
+            raw_donor_key
+    ),
+    resolved_donor_records AS MATERIALIZED (
+        -- Resolve identity once per distinct raw donor record rather than once
+        -- per transaction. Pagination must happen after this step so two raw
+        -- records in one active cluster cannot be split across page boundaries.
+        SELECT
+            record.id,
             CASE
-                WHEN active_cluster.id IS NULL THEN t.contributor_name
+                WHEN active_cluster.id IS NULL THEN record.contributor_name
                 ELSE BTRIM(canonical_identity.contributor_name_raw)
             END AS contributor_name,
             CASE
-                WHEN active_cluster.id IS NULL THEN t.contributor_employer
+                WHEN active_cluster.id IS NULL THEN record.contributor_employer
                 ELSE NULLIF(BTRIM(canonical_identity.contributor_employer), '')
             END AS contributor_employer,
             CASE
-                WHEN active_cluster.id IS NULL THEN t.contributor_occupation
+                WHEN active_cluster.id IS NULL THEN record.contributor_occupation
                 ELSE NULLIF(BTRIM(canonical_identity.contributor_occupation), '')
             END AS contributor_occupation,
             CASE
-                WHEN active_cluster.id IS NULL THEN t.contributor_city
+                WHEN active_cluster.id IS NULL THEN record.contributor_city
                 ELSE NULLIF(BTRIM(canonical_identity.contributor_city), '')
             END AS contributor_city,
             CASE
-                WHEN active_cluster.id IS NULL THEN t.contributor_state
+                WHEN active_cluster.id IS NULL THEN record.contributor_state
                 ELSE NULLIF(BTRIM(canonical_identity.contributor_state), '')
             END AS contributor_state,
             CASE
-                WHEN active_cluster.id IS NULL THEN t.normalized_zip5
+                WHEN active_cluster.id IS NULL THEN record.normalized_zip5
                 ELSE canonical_identity.zip5
             END AS normalized_zip5,
+            record.identity_name,
+            record.identity_employer,
+            record.identity_occupation,
+            record.identity_city,
+            record.identity_state,
+            record.identity_zip,
+            record.raw_donor_key,
             identity_record.id AS donor_identity_record_id,
             active_cluster.canonical_entity_id AS resolved_donor_identity_id,
-            COALESCE(active_cluster.canonical_entity_id::text, {_donor_key_sql("t")}) AS donor_key,
-            t.source_record_id
-        FROM matching_transactions t
+            COALESCE(active_cluster.canonical_entity_id::text, record.raw_donor_key) AS donor_key,
+            record.total_amount,
+            record.transaction_count,
+            record.latest_transaction_date
+        FROM matching_donor_records record
         LEFT JOIN core.donor_identity identity_record
-          ON identity_record.contributor_name_raw = t.identity_name
-         AND identity_record.contributor_employer = t.identity_employer
-         AND identity_record.contributor_occupation = t.identity_occupation
-         AND identity_record.contributor_city = t.identity_city
-         AND identity_record.contributor_state = t.identity_state
-         AND identity_record.contributor_zip = t.identity_zip
+          ON identity_record.contributor_name_raw = record.identity_name
+         AND identity_record.contributor_employer = record.identity_employer
+         AND identity_record.contributor_occupation = record.identity_occupation
+         AND identity_record.contributor_city = record.identity_city
+         AND identity_record.contributor_state = record.identity_state
+         AND identity_record.contributor_zip = record.identity_zip
         LEFT JOIN core.cluster_member active_member
           ON active_member.entity_id = identity_record.id
          AND active_member.entity_type = 'donor_identity'
@@ -1141,6 +1179,68 @@ _DONOR_SEARCH_SQL_TEMPLATE = f"""
          AND active_cluster.entity_type = 'donor_identity'
         LEFT JOIN core.donor_identity canonical_identity
           ON canonical_identity.id = active_cluster.canonical_entity_id
+    ),
+    matching_donor_keys AS MATERIALIZED (
+        SELECT
+            MIN(record.id::text)::uuid AS id,
+            record.contributor_name,
+            record.contributor_employer,
+            record.contributor_occupation,
+            record.contributor_city,
+            record.contributor_state,
+            record.normalized_zip5,
+            record.resolved_donor_identity_id,
+            record.donor_key,
+            COALESCE(SUM(record.total_amount), 0) AS total_amount,
+            SUM(record.transaction_count)::integer AS transaction_count
+        FROM resolved_donor_records record
+        GROUP BY
+            record.contributor_name,
+            record.contributor_employer,
+            record.contributor_occupation,
+            record.contributor_city,
+            record.contributor_state,
+            record.normalized_zip5,
+            record.resolved_donor_identity_id,
+            record.donor_key
+        ORDER BY total_amount DESC, transaction_count DESC, contributor_name ASC, id ASC
+        LIMIT %s
+        OFFSET %s
+    ),
+    page_donor_records AS MATERIALIZED (
+        SELECT record.*
+        FROM resolved_donor_records record
+        JOIN matching_donor_keys page_key
+          ON page_key.donor_key = record.donor_key
+    ),
+    qualifying_transactions AS MATERIALIZED (
+        -- Materialized after the resolved donor-key page so transaction detail,
+        -- recipient, and source rollups only process complete donor identities
+        -- that can appear on this page.
+        SELECT
+            t.id,
+            t.committee_id,
+            t.amount,
+            t.transaction_date,
+            record.contributor_name,
+            record.contributor_employer,
+            record.contributor_occupation,
+            record.contributor_city,
+            record.contributor_state,
+            record.normalized_zip5,
+            record.donor_identity_record_id,
+            record.resolved_donor_identity_id,
+            record.donor_key,
+            t.source_record_id
+        FROM matching_transactions t
+        JOIN page_donor_records record
+          ON record.raw_donor_key = {_donor_key_sql("t")}
+         AND record.identity_name = t.identity_name
+         AND record.identity_employer = t.identity_employer
+         AND record.identity_occupation = t.identity_occupation
+         AND record.identity_city = t.identity_city
+         AND record.identity_state = t.identity_state
+         AND record.identity_zip = t.identity_zip
     ),
     donor_groups AS (
         SELECT
@@ -1171,8 +1271,6 @@ _DONOR_SEARCH_SQL_TEMPLATE = f"""
             resolved_donor_identity_id,
             donor_key
         ORDER BY total_amount DESC, transaction_count DESC, contributor_name ASC, id ASC
-        LIMIT %s
-        OFFSET %s
     ),
     donor_page_transactions AS MATERIALIZED (
         SELECT qt.*
@@ -2001,7 +2099,7 @@ _TRANSACTION_LIST_SQL_TEMPLATE = """
 """
 
 _CANDIDATE_LIST_SQL_TEMPLATE = f"""
-    WITH filtered_candidates AS MATERIALIZED (
+    WITH candidate_page AS MATERIALIZED (
         SELECT
             c.id,
             c.fec_candidate_id,
@@ -2012,14 +2110,35 @@ _CANDIDATE_LIST_SQL_TEMPLATE = f"""
             c.office,
             c.state,
             c.district,
-            {_SLUG_NAME_EXPR} AS slug,
-            {_CANDIDATE_IDENTITY_IS_SAFE_EXPR} AS identity_is_safe,
-            {_has_official_candidate_totals_sql("c")} AS has_official_total
+            c.total_receipts,
+            c.total_disbursements,
+            c.cash_on_hand
         FROM cf.candidate c
         WHERE {{where_sql}}
         ORDER BY c.name ASC, c.id ASC
         LIMIT %s + 1
         OFFSET %s
+    ),
+    filtered_candidates AS MATERIALIZED (
+        SELECT
+            page.id,
+            page.fec_candidate_id,
+            page.name,
+            page.person_id,
+            page.source_record_id,
+            page.party,
+            page.office,
+            page.state,
+            page.district,
+            {_SLUG_NORMALIZE_EXPR.format(value="page.name")} AS slug,
+            {
+    _candidate_identity_is_safe_expr(
+        name_sql="page.name",
+        slug_sql=_SLUG_NORMALIZE_EXPR.format(value="page.name"),
+    )
+} AS identity_is_safe,
+            {_has_official_candidate_totals_sql("page")} AS has_official_total
+        FROM candidate_page page
     ),
     page_slugs AS (
         SELECT DISTINCT slug
@@ -2080,20 +2199,30 @@ _CANDIDATES_FOR_PEOPLE_SQL = f"""
 """
 
 _COMMITTEE_LIST_SQL_TEMPLATE = f"""
-    WITH filtered_committees AS MATERIALIZED (
+    WITH committee_page AS MATERIALIZED (
         SELECT
             c.id,
             c.fec_committee_id,
             c.name,
             c.committee_type,
             c.party,
-            c.state,
-            {_SLUG_NAME_EXPR} AS slug
+            c.state
         FROM cf.committee c
         WHERE {{where_sql}}
         ORDER BY c.name ASC, c.id ASC
         LIMIT %s + 1
         OFFSET %s
+    ),
+    filtered_committees AS MATERIALIZED (
+        SELECT
+            page.id,
+            page.fec_committee_id,
+            page.name,
+            page.committee_type,
+            page.party,
+            page.state,
+            {_SLUG_NORMALIZE_EXPR.format(value="page.name")} AS slug
+        FROM committee_page page
     ),
     page_slugs AS (
         SELECT DISTINCT slug

@@ -24,7 +24,6 @@ from domains.civics.types.models import (
 _UNSET_ELECTORAL_DIVISION = object()
 _ELECTORAL_DIVISION_HAS_GEOMETRY: bool | None = None
 _OFFICE_HAS_ELECTORAL_DIVISION_COLUMN: bool | None = None
-_FEDERAL_HOUSE_OFFICE_ID = UUID("00000000-0000-4000-8000-000000000101")
 _NULL_UUID = UUID("00000000-0000-0000-0000-000000000000")
 
 OfficeNaturalKey = tuple[str, str, str, UUID]
@@ -245,11 +244,70 @@ def _find_existing_officeholding_id(
     return None if row is None else row[0]
 
 
+def _find_reboundable_open_officeholding_id(
+    cur: psycopg.Cursor[object],
+    *,
+    person_id: UUID,
+    office_id: UUID,
+    electoral_division_id: UUID | None,
+    valid_period: DateRange,
+) -> UUID | None:
+    """Find a legacy unbounded row that can adopt a newly learned current-term start."""
+    if valid_period.lower is None or valid_period.upper is not None:
+        return None
+    cur.execute(
+        """
+        SELECT id
+        FROM civic.officeholding
+        WHERE person_id = %s
+          AND office_id = %s
+          AND lower_inf(valid_period)
+          AND upper_inf(valid_period)
+          AND (
+            electoral_division_id IS NULL
+            OR electoral_division_id IS NOT DISTINCT FROM %s
+          )
+        LIMIT 1
+        """,
+        (person_id, office_id, electoral_division_id),
+    )
+    row = cur.fetchone()
+    return None if row is None else row[0]
+
+
+def _close_prior_seat_officeholding(
+    cur: psycopg.Cursor[object],
+    *,
+    person_id: UUID,
+    office_id: UUID,
+    electoral_division_id: UUID | None,
+    valid_period: DateRange,
+) -> None:
+    """Bound an unbounded prior-seat row before inserting a precise new seat term."""
+    if valid_period.lower is None or valid_period.upper is not None:
+        return
+    cur.execute(
+        """
+        UPDATE civic.officeholding
+        SET holder_status = 'former',
+            valid_period = daterange(NULL, %s, '[)'),
+            updated_at = NOW()
+        WHERE person_id = %s
+          AND office_id = %s
+          AND lower_inf(valid_period)
+          AND upper_inf(valid_period)
+          AND electoral_division_id IS DISTINCT FROM %s
+        """,
+        (valid_period.lower, person_id, office_id, electoral_division_id),
+    )
+
+
 def _update_existing_officeholding(
     cur: psycopg.Cursor[object],
     *,
     officeholding_id: UUID,
     officeholding: Officeholding,
+    valid_period: DateRange,
 ) -> UUID:
     """Update mutable officeholding fields on an already-matched row."""
     cur.execute(
@@ -257,6 +315,7 @@ def _update_existing_officeholding(
         UPDATE civic.officeholding
         SET electoral_division_id = COALESCE(%s, electoral_division_id),
             holder_status = %s,
+            valid_period = %s,
             date_precision = %s,
             source_record_id = COALESCE(%s, source_record_id),
             updated_at = NOW()
@@ -266,6 +325,7 @@ def _update_existing_officeholding(
         (
             officeholding.electoral_division_id,
             officeholding.holder_status,
+            valid_period,
             officeholding.date_precision,
             officeholding.source_record_id,
             officeholding_id,
@@ -319,31 +379,42 @@ def supersede_officeholdings_for_successor(
     electoral_division_id: UUID | None,
     successor_person_id: UUID,
     successor_start_date: date,
+    successor_source_filters: dict[str, str] | None = None,
 ) -> int:
     """Close active same-seat officeholdings when a successor starts."""
+    query = """
+        UPDATE civic.officeholding AS oh
+        SET holder_status = 'former',
+            valid_period = daterange(lower(oh.valid_period), %s, '[)'),
+            updated_at = NOW()
+        WHERE oh.office_id = %s
+          AND oh.electoral_division_id IS NOT DISTINCT FROM %s
+          AND oh.person_id <> %s
+          AND oh.holder_status IN ('elected', 'appointed', 'acting')
+          AND oh.valid_period @> %s::date
+          AND (lower_inf(oh.valid_period) OR lower(oh.valid_period) < %s::date)
+    """
+    params: list[object] = [
+        successor_start_date,
+        office_id,
+        electoral_division_id,
+        successor_person_id,
+        successor_start_date,
+        successor_start_date,
+    ]
+    if successor_source_filters:
+        query += """
+          AND EXISTS (
+              SELECT 1
+              FROM core.source_record AS sr
+              WHERE sr.id = oh.source_record_id
+                AND sr.raw_fields @> %s::jsonb
+          )
+        """
+        params.append(Jsonb(successor_source_filters))
+
     with conn.cursor() as cur:
-        cur.execute(
-            """
-            UPDATE civic.officeholding AS oh
-            SET holder_status = 'former',
-                valid_period = daterange(lower(oh.valid_period), %s, '[)'),
-                updated_at = NOW()
-            WHERE oh.office_id = %s
-              AND oh.electoral_division_id IS NOT DISTINCT FROM %s
-              AND oh.person_id <> %s
-              AND oh.holder_status IN ('elected', 'appointed', 'acting')
-              AND oh.valid_period @> %s::date
-              AND (lower_inf(oh.valid_period) OR lower(oh.valid_period) < %s::date)
-            """,
-            (
-                successor_start_date,
-                office_id,
-                electoral_division_id,
-                successor_person_id,
-                successor_start_date,
-                successor_start_date,
-            ),
-        )
+        cur.execute(query, params)
         return cur.rowcount
 
 
@@ -1080,47 +1151,71 @@ def upsert_officeholding(conn: psycopg.Connection, officeholding: Officeholding)
                 cur,
                 officeholding_id=existing_id,
                 officeholding=officeholding,
+                valid_period=valid_period,
             )
         else:
-            try:
-                with conn.transaction():
-                    cur.execute(
-                        """
-                        INSERT INTO civic.officeholding (
-                            id, person_id, office_id, electoral_division_id,
-                            holder_status, valid_period, date_precision, source_record_id
-                        )
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                        RETURNING id
-                        """,
-                        (
-                            officeholding.id,
-                            officeholding.person_id,
-                            officeholding.office_id,
-                            officeholding.electoral_division_id,
-                            officeholding.holder_status,
-                            valid_period,
-                            officeholding.date_precision,
-                            officeholding.source_record_id,
-                        ),
-                    )
-                    row_id = cur.fetchone()[0]
-            except (psycopg.errors.ExclusionViolation, psycopg.errors.UniqueViolation):
-                # Temporal uniqueness for officeholding is enforced by WITHOUT OVERLAPS,
-                # so exclusion conflicts are expected under races and retried as lookups.
-                existing_id = _find_existing_officeholding_id(
+            reboundable_id = _find_reboundable_open_officeholding_id(
+                cur,
+                person_id=officeholding.person_id,
+                office_id=officeholding.office_id,
+                electoral_division_id=officeholding.electoral_division_id,
+                valid_period=valid_period,
+            )
+            if reboundable_id is not None:
+                row_id = _update_existing_officeholding(
+                    cur,
+                    officeholding_id=reboundable_id,
+                    officeholding=officeholding,
+                    valid_period=valid_period,
+                )
+            else:
+                _close_prior_seat_officeholding(
                     cur,
                     person_id=officeholding.person_id,
                     office_id=officeholding.office_id,
+                    electoral_division_id=officeholding.electoral_division_id,
                     valid_period=valid_period,
                 )
-                if existing_id is None:
-                    raise
-                row_id = _update_existing_officeholding(
-                    cur,
-                    officeholding_id=existing_id,
-                    officeholding=officeholding,
-                )
+                try:
+                    with conn.transaction():
+                        cur.execute(
+                            """
+                            INSERT INTO civic.officeholding (
+                                id, person_id, office_id, electoral_division_id,
+                                holder_status, valid_period, date_precision, source_record_id
+                            )
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                            RETURNING id
+                            """,
+                            (
+                                officeholding.id,
+                                officeholding.person_id,
+                                officeholding.office_id,
+                                officeholding.electoral_division_id,
+                                officeholding.holder_status,
+                                valid_period,
+                                officeholding.date_precision,
+                                officeholding.source_record_id,
+                            ),
+                        )
+                        row_id = cur.fetchone()[0]
+                except (psycopg.errors.ExclusionViolation, psycopg.errors.UniqueViolation):
+                    # Temporal uniqueness for officeholding is enforced by WITHOUT OVERLAPS,
+                    # so exclusion conflicts are expected under races and retried as lookups.
+                    existing_id = _find_existing_officeholding_id(
+                        cur,
+                        person_id=officeholding.person_id,
+                        office_id=officeholding.office_id,
+                        valid_period=valid_period,
+                    )
+                    if existing_id is None:
+                        raise
+                    row_id = _update_existing_officeholding(
+                        cur,
+                        officeholding_id=existing_id,
+                        officeholding=officeholding,
+                        valid_period=valid_period,
+                    )
 
     if officeholding.source_record_id is not None:
         insert_entity_source(conn, "officeholding", row_id, officeholding.source_record_id, "officeholding")
@@ -1162,7 +1257,7 @@ def derive_incumbent_challenge(
     """Derive FEC-style incumbent/challenger code from canonical officeholding.
 
     Returns "I" if person_id holds the requested office as of `as_of`, None
-    otherwise. Same-seat House successor rows are stored as bounded former rows
+    otherwise. Same-seat successor rows are stored as bounded former rows
     and still count for pre-successor dates when the caller supplies the seat.
     Generic former rows do not derive incumbency.
     When callers pass an electoral_division_id, the match is seat-specific
@@ -1174,13 +1269,11 @@ def derive_incumbent_challenge(
     When `as_of` is None, defaults to today.
     """
     check_date = as_of or date.today()
-    include_bounded_house_former = (
-        office_id == _FEDERAL_HOUSE_OFFICE_ID
-        and electoral_division_id is not _UNSET_ELECTORAL_DIVISION
-        and electoral_division_id is not None
+    include_bounded_seat_former = (
+        electoral_division_id is not _UNSET_ELECTORAL_DIVISION and electoral_division_id is not None
     )
     holder_status_filter = "holder_status IN ('elected', 'appointed', 'acting')"
-    if include_bounded_house_former:
+    if include_bounded_seat_former:
         holder_status_filter = f"({holder_status_filter} OR (holder_status = 'former' AND NOT upper_inf(valid_period)))"
 
     query = f"""

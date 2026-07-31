@@ -1,5 +1,6 @@
 <script lang="ts">
   import { enhance } from '$app/forms';
+  import { onMount } from 'svelte';
   import type { SubmitFunction } from '@sveltejs/kit';
   import SkeletonPanel from '$lib/loading/SkeletonPanel.svelte';
   import { SEARCH_QUERY_MIN_LENGTH } from '$lib/search/contract';
@@ -14,7 +15,12 @@
   export let form: ActionData | null = null;
   export let isSubmitting = false;
 
+  let isEnhanced = false;
   let pendingForm: SearchPageFormState | null = null;
+
+  onMount(() => {
+    isEnhanced = true;
+  });
 
   function readFormValueAsString(formData: FormData, key: string): string {
     const rawValue = formData.get(key);
@@ -53,7 +59,13 @@
 
 <section class="card search" aria-label="Search records">
   <h2>Search</h2>
-  <form method="POST" class="search__form" use:enhance={enhanceSearchSubmit}>
+  <form
+    method="POST"
+    class="search__form"
+    data-testid="search-form"
+    data-enhanced={isEnhanced}
+    use:enhance={enhanceSearchSubmit}
+  >
     <label for="search-query">Query</label>
     <input
       id="search-query"

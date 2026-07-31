@@ -19,7 +19,11 @@ from __future__ import annotations
 
 import pytest
 
-from tests.ci.public_mirror_contract import evaluate_public_node_expectations
+from tests.ci.public_mirror_contract import (
+    PROJECTED_PUBLIC_CONTRACT_NODE_ID,
+    evaluate_public_node_expectations,
+    expected_dev_repo_only_failure_nodes,
+)
 
 
 def _nodes(prefix: str, count: int, *, offset: int = 0) -> set[str]:
@@ -34,6 +38,18 @@ TOTAL_FLOOR = 5
 def _at_floor() -> set[str]:
     """The smallest node set that satisfies every floor exactly."""
     return _nodes("api/", 2) | _nodes("core/", 3)
+
+
+def test_expected_dev_repo_only_failures_are_limited_to_selected_nodes() -> None:
+    selected_classified_node = (
+        "tests/test_debbie_post_sync_hook.py::test_projected_public_gate_matches_canonical_public_eligible_nodes"
+    )
+    selected_nodes = {selected_classified_node, "tests/public_runtime.py::test_public"}
+
+    expected_failure_nodes = expected_dev_repo_only_failure_nodes(selected_nodes)
+
+    assert expected_failure_nodes == {selected_classified_node}
+    assert PROJECTED_PUBLIC_CONTRACT_NODE_ID not in expected_failure_nodes
 
 
 def test_node_set_at_the_floor_reports_no_violations() -> None:

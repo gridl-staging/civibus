@@ -138,6 +138,87 @@ describe("charts/finance helpers", () => {
     ]);
   });
 
+  it("preserves every explicit gap across unsorted cash-on-hand inputs", () => {
+    const points: CashOnHandPoint[] = [
+      { periodEnd: "2026-12-31", amount: 2500, missingIntervalBefore: false },
+      { periodEnd: "2026-03-31", amount: 1300, missingIntervalBefore: true },
+      { periodEnd: "2026-09-30", amount: 2100, missingIntervalBefore: true },
+      { periodEnd: "2026-01-31", amount: 1000, missingIntervalBefore: false },
+      { periodEnd: "2026-06-30", amount: 1700, missingIntervalBefore: false }
+    ];
+
+    expect(buildCashOnHandSeries(points)).toEqual([
+      {
+        id: "cash_on_hand_segment_1",
+        label: "Cash on hand",
+        points: [
+          { x: new Date("2026-01-31T00:00:00.000Z"), y: 1000 },
+          { x: new Date("2026-02-01T00:00:00.000Z"), y: 1000 }
+        ]
+      },
+      {
+        id: "cash_on_hand_segment_2",
+        label: "Cash on hand",
+        points: [
+          { x: new Date("2026-03-31T00:00:00.000Z"), y: 1300 },
+          { x: new Date("2026-06-30T00:00:00.000Z"), y: 1700 }
+        ]
+      },
+      {
+        id: "cash_on_hand_segment_3",
+        label: "Cash on hand",
+        points: [
+          { x: new Date("2026-09-30T00:00:00.000Z"), y: 2100 },
+          { x: new Date("2026-12-31T00:00:00.000Z"), y: 2500 }
+        ]
+      }
+    ]);
+  });
+
+  it("does not create an empty segment when the first cash-on-hand point is marked", () => {
+    const points: CashOnHandPoint[] = [
+      { periodEnd: "2026-06-30", amount: 1600, missingIntervalBefore: false },
+      { periodEnd: "2026-03-31", amount: 1200, missingIntervalBefore: true }
+    ];
+
+    expect(buildCashOnHandSeries(points)).toEqual([
+      {
+        id: "cash_on_hand_segment_1",
+        label: "Cash on hand",
+        points: [
+          { x: new Date("2026-03-31T00:00:00.000Z"), y: 1200 },
+          { x: new Date("2026-06-30T00:00:00.000Z"), y: 1600 }
+        ]
+      }
+    ]);
+  });
+
+  it("starts a new singleton segment for each adjacent marked cash-on-hand point", () => {
+    const points: CashOnHandPoint[] = [
+      { periodEnd: "2026-03-31", amount: 1200, missingIntervalBefore: true },
+      { periodEnd: "2026-06-30", amount: 1600, missingIntervalBefore: true }
+    ];
+
+    expect(buildCashOnHandSeries(points)).toEqual([
+      {
+        id: "cash_on_hand_segment_1",
+        label: "Cash on hand",
+        points: [
+          { x: new Date("2026-03-31T00:00:00.000Z"), y: 1200 },
+          { x: new Date("2026-04-01T00:00:00.000Z"), y: 1200 }
+        ]
+      },
+      {
+        id: "cash_on_hand_segment_2",
+        label: "Cash on hand",
+        points: [
+          { x: new Date("2026-06-30T00:00:00.000Z"), y: 1600 },
+          { x: new Date("2026-07-01T00:00:00.000Z"), y: 1600 }
+        ]
+      }
+    ]);
+  });
+
   it("preserves the FEC size-bucket label order accepted by the screen spec", () => {
     expect(FEC_SIZE_BUCKET_LABELS).toEqual([
       "$200 and under",

@@ -124,6 +124,28 @@ The public `/api/health/content` route maps to the API container's
 `{"healthy":true}`, a missing current-data label, or a missing expected pull
 date is red.
 
+## Bounded officeholder relink
+
+The production execution and public disposition for the 2026-07-31 relink are
+recorded in
+`docs/live-state/2026_07_31_production_officeholder_relink.md`. Use that receipt
+for measured evidence; do not copy mutable counts into this runbook.
+
+For any separately authorized follow-up, reuse this runbook's existing
+lane-owned `flyctl proxy`, writer gate, and read-only probe discipline before
+execution. `core/refresh/job_builders.py::build_refresh_plan()` remains the job
+registry and plan owner, and `core/refresh/runner.py` remains the dry-run,
+filtering, force, status, and command owner. Generate and verify the selected
+plan from those owners rather than maintaining a documentation job list.
+
+The predecessor receipt's masters-first diagnostic guidance was superseded by
+the later registered batch/L7 scope, wave-order decision, and supervisor ruling.
+`federal-fec-masters` is the suspected destructive operation that could
+overwrite repaired person links, so it must not run before independent
+durability proof. Do not start, stop, restart, or exec Fly Machine
+`859e0da479e678`; do not deploy from the relink lane; and do not substitute a
+Machine lifecycle action or a duplicated job list for the command owners.
+
 ### Recovery and cutover boundary
 
 The third authorized recovery start was consumed on 2026-07-25 and reached

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 import re
+import subprocess
 
 from test_support.makefile_contract_helpers import parse_makefile_db_sql_files
 
@@ -175,7 +177,10 @@ def test_makefile_exports_and_targets_database_reset_command():
     assert "db-reset: require-postgres-password" in makefile
     assert "db-reset: require-postgres-password\n\t@set -e; if command -v psql >/dev/null 2>&1; then \\" in makefile
     assert "DROP SCHEMA IF EXISTS core CASCADE;" in makefile
-    assert 'test:\n\tuv run --extra dev --extra entity-resolution pytest -m "not integration and not e2e"' in makefile
+    assert (
+        "test:\n\tuv run --extra dev --extra entity-resolution pytest "
+        '-m "not integration and not e2e and not projected_public_contract"' in makefile
+    )
     assert "test-api:\n\tuv run --extra dev --extra api pytest api/" in makefile
     assert 'test-e2e:\n\tuv run --extra dev pytest -m "e2e" -v' in makefile
     assert (
@@ -458,3 +463,69 @@ def test_gitignore_includes_data_cache_and_egg_info():
     assert "data/" in gitignore_lines
     assert ".env" in gitignore_lines
     assert "*.egg-info/" in gitignore_lines
+
+
+def test_public_federal_probe_uses_configurable_isolated_worker_port() -> None:
+    probe_script = read_repo_text("infra/scripts/probe_public_federal_api.sh")
+
+    assert 'CIVIBUS_PROBE_PORT="${CIVIBUS_PROBE_PORT:-8077}"' in probe_script
+    assert '[[ "${CIVIBUS_PROBE_PORT}" =~ ^[1-9][0-9]{0,4}$ ]]' in probe_script
+    assert "CIVIBUS_PROBE_PORT > 65535" in probe_script
+    assert 'BASE_URL="http://127.0.0.1:${CIVIBUS_PROBE_PORT}"' in probe_script
+    assert 'PROBE_TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/civibus_public_probe.XXXXXX")"' in probe_script
+    assert 'SERVER_LOG="${PROBE_TMP_DIR}/uvicorn.log"' in probe_script
+    assert 'BODY_PATH="${PROBE_TMP_DIR}/body"' in probe_script
+    assert '--port "${CIVIBUS_PROBE_PORT}" > "${SERVER_LOG}" 2>&1 &' in probe_script
+    assert "/tmp/civibus_public_probe_uvicorn_" not in probe_script
+    assert "/tmp/civibus_public_probe_body" not in probe_script
+    assert "127.0.0.1:8077" not in probe_script
+
+
+def test_public_federal_probe_rejects_unsafe_ports_before_startup() -> None:
+    probe_path = REPO_ROOT / "infra/scripts/probe_public_federal_api.sh"
+
+    for invalid_port in ("../clobber", "0", "65536"):
+        result = subprocess.run(
+            ["bash", str(probe_path)],
+            cwd=REPO_ROOT,
+            env={"PATH": os.environ["PATH"], "CIVIBUS_PROBE_PORT": invalid_port},
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        assert result.returncode == 2
+        assert result.stderr == "CIVIBUS_PROBE_PORT must be an integer from 1 through 65535\n"
+
+
+def test_public_federal_probe_selected_surface_is_first_db_backed_request() -> None:
+    probe_script = read_repo_text("infra/scripts/probe_public_federal_api.sh")
+
+    readiness_index = probe_script.index('until curl -fsS "${BASE_URL}/health"')
+    selected_dispatch_index = probe_script.index('if [[ -n "${CIVIBUS_PROBE_SURFACE}" ]]; then')
+    default_first_request_index = probe_script.index('assert_status "/public/v1/federal/officials" "200"')
+
+    assert 'CIVIBUS_PROBE_SURFACE="${CIVIBUS_PROBE_SURFACE:-}"' in probe_script
+    assert readiness_index < selected_dispatch_index < default_first_request_index
+    assert 'run_selected_surface "${CIVIBUS_PROBE_SURFACE}"' in probe_script
+    assert "PROBE_API_KEY=\"$(od -An -N32 -tx1 /dev/urandom | tr -d ' \\n')\"" in probe_script
+    assert 'CIVIBUS_API_KEYS="${PROBE_API_KEY}"' in probe_script
+    assert "X-API-Key: ${PROBE_API_KEY}" in probe_script
+    assert "proof-key" not in probe_script
+
+
+def test_public_federal_probe_default_suite_retains_private_auth_gate() -> None:
+    probe_script = read_repo_text("infra/scripts/probe_public_federal_api.sh")
+
+    assert 'assert_status "/v1/candidates" "401"' in probe_script
+    assert "private_path_gated /v1/candidates 401" in probe_script
+
+
+def test_public_federal_probe_reports_database_and_congress_denominator_context() -> None:
+    probe_script = read_repo_text("infra/scripts/probe_public_federal_api.sh")
+
+    assert 'PROBE_DB_HOST="${POSTGRES_HOST:-localhost}"' in probe_script
+    assert 'PROBE_DB_PORT="${POSTGRES_PORT:-5433}"' in probe_script
+    assert 'PROBE_DB_NAME="${POSTGRES_DB:-civibus}"' in probe_script
+    assert "db_host=${PROBE_DB_HOST} db_port=${PROBE_DB_PORT} database=${PROBE_DB_NAME}" in probe_script
+    assert probe_script.count("linked_officials=${EXPECTED_LINKED_OFFICIALS}") >= 3

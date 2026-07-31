@@ -1308,6 +1308,90 @@ class TestUpsertOfficeholding:
         ).fetchone()
         assert row == (1, second_source_record.id)
 
+    def test_precise_open_term_reuses_existing_unbounded_row(self, db_conn: psycopg.Connection) -> None:
+        from domains.civics.ingest import upsert_officeholding
+
+        office_id = self._make_office(db_conn)
+        person_id = _make_person(db_conn, name=f"Officeholder {uuid4()}")
+
+        unbounded = Officeholding(
+            person_id=person_id,
+            office_id=office_id,
+            holder_status="elected",
+        )
+        precise = Officeholding(
+            id=uuid4(),
+            person_id=person_id,
+            office_id=office_id,
+            holder_status="elected",
+            valid_period={"start_date": date(2026, 7, 14)},
+            date_precision="day",
+        )
+
+        first_id = upsert_officeholding(db_conn, unbounded)
+        second_id = upsert_officeholding(db_conn, precise)
+        assert second_id == first_id
+
+        rows = db_conn.execute(
+            """
+            SELECT COUNT(*), lower(valid_period), upper_inf(valid_period), date_precision::text
+            FROM civic.officeholding
+            WHERE person_id = %s
+              AND office_id = %s
+            GROUP BY lower(valid_period), upper_inf(valid_period), date_precision
+            """,
+            (person_id, office_id),
+        ).fetchall()
+        assert rows == [(1, date(2026, 7, 14), True, "day")]
+
+    def test_precise_open_term_does_not_reuse_different_seat_division(self, db_conn: psycopg.Connection) -> None:
+        from domains.civics.ingest import upsert_electoral_division, upsert_officeholding
+
+        office_id = self._make_office(db_conn)
+        person_id = _make_person(db_conn, name=f"Officeholder {uuid4()}")
+        prior_division_id = upsert_electoral_division(
+            db_conn,
+            ElectoralDivision(name=f"wa_cd_01_{uuid4()}", division_type="congressional_district", state="WA"),
+        )
+        current_division_id = upsert_electoral_division(
+            db_conn,
+            ElectoralDivision(name=f"wa_cd_02_{uuid4()}", division_type="congressional_district", state="WA"),
+        )
+
+        unbounded = Officeholding(
+            person_id=person_id,
+            office_id=office_id,
+            electoral_division_id=prior_division_id,
+            holder_status="former",
+        )
+        precise = Officeholding(
+            person_id=person_id,
+            office_id=office_id,
+            electoral_division_id=current_division_id,
+            holder_status="elected",
+            valid_period={"start_date": date(2026, 7, 14)},
+            date_precision="day",
+        )
+
+        legacy_id = upsert_officeholding(db_conn, unbounded)
+        precise_id = upsert_officeholding(db_conn, precise)
+        assert precise_id != legacy_id
+
+        rows = db_conn.execute(
+            """
+            SELECT id, electoral_division_id, holder_status, lower(valid_period), upper_inf(valid_period)
+            FROM civic.officeholding
+            WHERE person_id = %s
+              AND office_id = %s
+            ORDER BY lower(valid_period) NULLS FIRST, id
+            """,
+            (person_id, office_id),
+        ).fetchall()
+        assert rows == [
+            (legacy_id, prior_division_id, "former", None, False),
+            (precise_id, current_division_id, "elected", date(2026, 7, 14), True),
+        ]
+
     def test_update_on_conflict_changes_status_keeps_uuid(self, db_conn: psycopg.Connection) -> None:
         from domains.civics.ingest import upsert_electoral_division, upsert_officeholding
 

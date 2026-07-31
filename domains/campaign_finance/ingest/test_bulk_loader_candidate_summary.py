@@ -4,13 +4,16 @@ from datetime import date
 from decimal import Decimal
 from itertools import count
 from threading import Event, Thread
+from uuid import UUID
 
 import pytest
 from psycopg import Connection
 from psycopg.rows import dict_row
 
-from core.db import get_connection
+from core.db import get_connection, insert_person
+from core.types.python.models import Person
 from domains.campaign_finance.ingest.bulk_loader import _update_candidate_summary
+from domains.campaign_finance.ingest.candidate_summary_loader import update_candidate_person_link
 
 
 pytestmark = pytest.mark.integration
@@ -27,6 +30,10 @@ _SUMMARY_COLUMNS = (
 _FEC_ID_ALPHABET = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 _FEC_ID_NUMERIC_SUFFIX_SPACE = 100_000
 _candidate_id_sequence = count()
+
+
+def _get_test_connection() -> Connection:
+    return get_connection()
 
 
 def _unique_fec_candidate_id() -> str:
@@ -106,6 +113,23 @@ def _fetch_candidate_summary(conn: Connection, fec_candidate_id: str) -> dict[st
         row = cursor.fetchone()
     assert row is not None
     return dict(row)
+
+
+def _insert_test_person(conn: Connection, canonical_name: str) -> UUID:
+    person = Person(canonical_name=canonical_name)
+    insert_person(conn, person)
+    return person.id
+
+
+def _fetch_candidate_person_id(conn: Connection, fec_candidate_id: str) -> UUID | None:
+    with conn.cursor() as cursor:
+        cursor.execute(
+            "SELECT person_id FROM cf.candidate WHERE fec_candidate_id = %s",
+            (fec_candidate_id,),
+        )
+        row = cursor.fetchone()
+    assert row is not None
+    return row[0]
 
 
 def _assert_stored_summary_matches(
@@ -234,8 +258,8 @@ def test_dated_stored_coverage_rejects_null_incoming_summary(db_conn: Connection
 
 
 def test_concurrent_older_summary_cannot_overwrite_newer_summary() -> None:
-    setup_conn = get_connection()
-    newer_conn = get_connection()
+    setup_conn = _get_test_connection()
+    newer_conn = _get_test_connection()
     older_update_started = Event()
     older_update_finished = Event()
     worker_error: list[BaseException] = []
@@ -253,7 +277,7 @@ def test_concurrent_older_summary_cannot_overwrite_newer_summary() -> None:
     )
 
     def _apply_older_summary() -> None:
-        older_conn = get_connection()
+        older_conn = _get_test_connection()
         try:
             older_conn.execute("BEGIN")
             older_update_started.set()
@@ -286,6 +310,142 @@ def test_concurrent_older_summary_cannot_overwrite_newer_summary() -> None:
         setup_conn.commit()
         newer_conn.close()
         setup_conn.close()
+
+
+def test_concurrent_stale_candidate_person_link_cannot_overwrite_spine_link() -> None:
+    setup_conn = _get_test_connection()
+    spine_conn = _get_test_connection()
+    stale_update_started = Event()
+    stale_update_finished = Event()
+    worker_error: list[BaseException] = []
+    fec_candidate_id = _insert_candidate(setup_conn)
+    spine_person_id = _insert_test_person(setup_conn, "SPINE OFFICEHOLDER")
+    stale_person_id = _insert_test_person(setup_conn, "FEC STALE CANDIDATE")
+    setup_conn.commit()
+
+    def _apply_stale_link() -> None:
+        stale_conn = _get_test_connection()
+        try:
+            stale_conn.execute("BEGIN")
+            stale_update_started.set()
+            update_candidate_person_link(
+                stale_conn,
+                fec_candidate_id=fec_candidate_id,
+                person_id=stale_person_id,
+            )
+            stale_conn.commit()
+        except BaseException as error:
+            worker_error.append(error)
+            stale_conn.rollback()
+        finally:
+            stale_conn.close()
+            stale_update_finished.set()
+
+    try:
+        spine_conn.execute("BEGIN")
+        update_candidate_person_link(
+            spine_conn,
+            fec_candidate_id=fec_candidate_id,
+            person_id=spine_person_id,
+        )
+        worker = Thread(target=_apply_stale_link, daemon=True)
+        worker.start()
+
+        assert stale_update_started.wait(timeout=1)
+        assert not stale_update_finished.wait(timeout=0.2)
+        spine_conn.commit()
+        worker.join(timeout=2)
+
+        assert stale_update_finished.is_set()
+        assert worker_error == []
+        assert _fetch_candidate_person_id(setup_conn, fec_candidate_id) == spine_person_id
+    finally:
+        spine_conn.rollback()
+        setup_conn.execute("DELETE FROM cf.candidate WHERE fec_candidate_id = %s", (fec_candidate_id,))
+        setup_conn.execute(
+            "DELETE FROM core.person WHERE id = ANY(%s)",
+            ([spine_person_id, stale_person_id],),
+        )
+        setup_conn.commit()
+        spine_conn.close()
+        setup_conn.close()
+
+
+# The pre-fix loader repointed the link with an unconditional assignment inside
+# `_upsert_candidate`'s `ON CONFLICT ... DO UPDATE`. Production ran a candidate-master
+# load on 2026-07-28 with the congressional spine skipped by the refresh cadence gate,
+# so that assignment stood with no repair owner behind it and 527 of 540 officeholders
+# lost their money link. This pins the counterfactual: the old shape must still be shown
+# to clobber, or the guard below is proving nothing.
+_UNGUARDED_LEGACY_PERSON_LINK_SQL = """
+    UPDATE cf.candidate
+    SET person_id = %s
+    WHERE fec_candidate_id = %s
+"""
+
+
+def test_masters_rerun_without_spine_repair_cannot_steal_an_established_link(
+    db_conn: Connection,
+) -> None:
+    """A masters-only refresh must not move a spine-owned link to an FEC shadow person.
+
+    Red half: the pre-fix unconditional assignment steals the link, which is the
+    production defect. Green half: the guarded owner leaves it on the spine person.
+    """
+    fec_candidate_id = _insert_candidate(db_conn)
+    spine_person_id = _insert_test_person(db_conn, "SPINE OFFICEHOLDER")
+    shadow_person_id = _insert_test_person(db_conn, "FEC SHADOW CANDIDATE")
+
+    update_candidate_person_link(
+        db_conn,
+        fec_candidate_id=fec_candidate_id,
+        person_id=spine_person_id,
+    )
+    assert _fetch_candidate_person_id(db_conn, fec_candidate_id) == spine_person_id
+
+    # Red: reproduce the deployed pre-fix behaviour and prove it breaks the link.
+    db_conn.execute(_UNGUARDED_LEGACY_PERSON_LINK_SQL, (shadow_person_id, fec_candidate_id))
+    assert _fetch_candidate_person_id(db_conn, fec_candidate_id) == shadow_person_id, (
+        "counterfactual failed to reproduce the production defect, so the green assertion below would pass vacuously"
+    )
+
+    # Restore the spine-owned link, then re-run the same steal through the guard.
+    db_conn.execute(_UNGUARDED_LEGACY_PERSON_LINK_SQL, (spine_person_id, fec_candidate_id))
+    update_candidate_person_link(
+        db_conn,
+        fec_candidate_id=fec_candidate_id,
+        person_id=shadow_person_id,
+    )
+
+    # Green: the established spine link survives a masters rerun with no spine job after it.
+    assert _fetch_candidate_person_id(db_conn, fec_candidate_id) == spine_person_id
+
+
+def test_masters_rerun_still_fills_an_empty_link(db_conn: Connection) -> None:
+    """The guard must block a steal without blocking first-time linkage."""
+    fec_candidate_id = _insert_candidate(db_conn)
+    person_id = _insert_test_person(db_conn, "FIRST LINK CANDIDATE")
+
+    assert _fetch_candidate_person_id(db_conn, fec_candidate_id) is None
+
+    update_candidate_person_link(
+        db_conn,
+        fec_candidate_id=fec_candidate_id,
+        person_id=person_id,
+    )
+
+    assert _fetch_candidate_person_id(db_conn, fec_candidate_id) == person_id
+
+
+def test_unknown_candidate_person_link_raises_runtime_error(db_conn: Connection) -> None:
+    person_id = _insert_test_person(db_conn, "UNMATCHED CANDIDATE")
+
+    with pytest.raises(RuntimeError, match="Expected one candidate person link update"):
+        update_candidate_person_link(
+            db_conn,
+            fec_candidate_id=_unique_fec_candidate_id(),
+            person_id=person_id,
+        )
 
 
 def test_unknown_candidate_id_raises_runtime_error(db_conn: Connection) -> None:

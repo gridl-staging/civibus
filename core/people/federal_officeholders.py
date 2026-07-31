@@ -7,8 +7,9 @@ def current_federal_officeholder_predicate(
     *,
     officeholding_alias: str = "oh",
     office_alias: str = "o",
+    as_of_sql: str = "CURRENT_DATE",
 ) -> str:
-    return f"{office_alias}.office_level = 'federal' AND upper_inf({officeholding_alias}.valid_period)"
+    return f"{office_alias}.office_level = 'federal' AND {officeholding_alias}.valid_period @> {as_of_sql}"
 
 
 def federal_officeholder_targets_sql() -> str:

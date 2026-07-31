@@ -17,9 +17,12 @@ import importlib
 import sys
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal
 from types import ModuleType
 from unittest.mock import MagicMock
+from uuid import UUID
 
+import psycopg
 import pytest
 from fastapi.testclient import TestClient
 
@@ -28,6 +31,24 @@ from api._federal_first_test_support import (
     FEDERAL_FIRST_FLOORS,
     FakeConnection,
     fresh_federal_fec_bulk_pull_row,
+)
+from api.test_campaign_finance_support import (
+    CandidateRowSeed,
+    insert_candidate_row,
+    insert_electoral_division_row,
+    insert_office_row,
+    insert_officeholding_row,
+)
+from core.db import insert_data_source, insert_person
+from core.people.federal_officeholders import (
+    current_federal_officeholder_predicate,
+    federal_officeholder_targets_sql,
+)
+from core.types.python.models import DataSource, Person
+from domains.campaign_finance.constants import (
+    FEC_BULK_DATA_SOURCE_DOMAIN,
+    FEC_BULK_DATA_SOURCE_JURISDICTION,
+    FEC_BULK_DATA_SOURCE_NAME,
 )
 
 FEC_FRESHNESS_CHECK = "campaign_finance_federal_fec_fresh"
@@ -44,6 +65,14 @@ CANDIDATE_MONEY_RECENT_SUMMARY_DEFAULT_FLOOR = 1_440
 CANDIDATE_MONEY_RECENT_SUMMARY_CUTOFF = date(2026, 3, 29)
 CANDIDATE_MONEY_RECENT_SUMMARY_EVALUATION_DATE = date(2026, 7, 27)
 CANDIDATE_MONEY_RECENT_SUMMARY_FRESH_FEC_ROW = (datetime(2026, 7, 27, 12, 0, tzinfo=timezone.utc),)
+FEDERAL_OFFICEHOLDER_MONEY_COVERAGE_CHECK = "cf_federal_officeholder_money_coverage"
+FEDERAL_OFFICEHOLDER_MONEY_PRODUCTION_OBSERVATION = 527
+FEDERAL_OFFICEHOLDER_MONEY_DEFAULT_FLOOR = 500
+FEDERAL_OFFICEHOLDER_MONEY_FIXTURE_FLOOR = 16
+STAGE_1_EVIDENCE_NOW = datetime(2026, 7, 31, 12, 0, tzinfo=timezone.utc)
+STAGE_1_OFFICEHOLDER_COUNT = 20
+STAGE_1_MONEY_LINKED_COUNT = 2
+STAGE_1_VALID_PERIOD = "[2000-01-01,2100-01-01)"
 
 EXPECTED_FEDERAL_FIRST_CHECKS = {
     "cf_transaction_total",
@@ -55,6 +84,7 @@ EXPECTED_FEDERAL_FIRST_CHECKS = {
     "cf_transaction_contribution_insights_sentinel",
     CANDIDATE_MONEY_COVERAGE_CHECK,
     CANDIDATE_MONEY_RECENT_SUMMARY_COVERAGE_CHECK,
+    FEDERAL_OFFICEHOLDER_MONEY_COVERAGE_CHECK,
 }
 
 
@@ -70,6 +100,157 @@ def _healthy_counts() -> list[int]:
 
 def _healthy_connection(*, freshness_result: tuple[object, ...] | None) -> FakeConnection:
     return FakeConnection(_healthy_counts(), freshness_result=freshness_result)
+
+
+def _stage_1_uuid(offset: int) -> UUID:
+    return UUID(f"55020000-0000-0000-0000-{offset:012d}")
+
+
+def _insert_federal_officeholder_money_specimen(
+    db_conn: psycopg.Connection,
+    *,
+    index: int,
+    valid_period: str,
+    include_money: bool,
+) -> Person:
+    person = Person(
+        id=_stage_1_uuid(100 + index),
+        canonical_name=f"Stage 1 Officeholder {index:02d}",
+    )
+    division_id = _stage_1_uuid(200 + index)
+    office_id = _stage_1_uuid(300 + index)
+    insert_person(db_conn, person)
+    insert_electoral_division_row(
+        db_conn,
+        division_id=division_id,
+        name=f"Stage 1 Congressional District {index:02d}",
+        division_type="congressional_district",
+        state="NC",
+        district_number=f"{index:02d}",
+    )
+    insert_office_row(
+        db_conn,
+        office_id=office_id,
+        name="us_house",
+        title="Representative",
+        state="NC",
+        electoral_division_id=division_id,
+    )
+    insert_officeholding_row(
+        db_conn,
+        officeholding_id=_stage_1_uuid(400 + index),
+        person_id=person.id,
+        office_id=office_id,
+        electoral_division_id=division_id,
+        valid_period=valid_period,
+    )
+    if include_money:
+        insert_candidate_row(
+            db_conn,
+            CandidateRowSeed(
+                id=_stage_1_uuid(500 + index),
+                fec_candidate_id=f"H6NC{index:05d}",
+                name=person.canonical_name,
+                office="H",
+                person_id=person.id,
+                state="NC",
+                district=f"{index:02d}",
+                total_receipts=Decimal(f"{index * 1000}.00"),
+                summary_coverage_end_date=STAGE_1_EVIDENCE_NOW.date(),
+            ),
+        )
+    return person
+
+
+def _seed_federal_officeholder_money_fixture(
+    db_conn: psycopg.Connection,
+    *,
+    money_linked_count: int,
+) -> tuple[int, int]:
+    """Compose either Stage 2 coverage state through the canonical row helpers."""
+    from api.health_content import _CANDIDATE_MONEY_OFFICIAL_TOTALS_PREDICATE
+
+    if not 1 <= money_linked_count <= STAGE_1_OFFICEHOLDER_COUNT:
+        raise ValueError("money_linked_count must identify at least one and at most every fixture officeholder")
+
+    insert_data_source(
+        db_conn,
+        DataSource(
+            id=_stage_1_uuid(1),
+            domain=FEC_BULK_DATA_SOURCE_DOMAIN,
+            jurisdiction=FEC_BULK_DATA_SOURCE_JURISDICTION,
+            name=FEC_BULK_DATA_SOURCE_NAME,
+            source_url="https://www.fec.gov/data/browse-data/?tab=bulk-data",
+            last_pull_at=STAGE_1_EVIDENCE_NOW,
+            last_pull_status="success",
+        ),
+    )
+
+    for index in range(1, STAGE_1_OFFICEHOLDER_COUNT + 1):
+        _insert_federal_officeholder_money_specimen(
+            db_conn,
+            index=index,
+            valid_period=STAGE_1_VALID_PERIOD,
+            include_money=index <= money_linked_count,
+        )
+
+    first_person_id = _stage_1_uuid(101)
+    insert_candidate_row(
+        db_conn,
+        CandidateRowSeed(
+            id=_stage_1_uuid(701),
+            fec_candidate_id="H6NC90001",
+            name="Stage 1 Officeholder 01 duplicate candidacy",
+            office="H",
+            person_id=first_person_id,
+            state="NC",
+            district="01",
+            total_receipts=Decimal("9999.00"),
+            summary_coverage_end_date=STAGE_1_EVIDENCE_NOW.date(),
+        ),
+    )
+    insert_officeholding_row(
+        db_conn,
+        officeholding_id=_stage_1_uuid(702),
+        person_id=first_person_id,
+        office_id=_stage_1_uuid(302),
+        electoral_division_id=_stage_1_uuid(202),
+        valid_period=STAGE_1_VALID_PERIOD,
+    )
+
+    with db_conn.cursor() as cursor:
+        cursor.execute(
+            """
+            WITH current_federal_officeholders AS (
+                SELECT DISTINCT officeholding.person_id
+                FROM civic.officeholding officeholding
+                JOIN civic.office office ON office.id = officeholding.office_id
+                WHERE """
+            + current_federal_officeholder_predicate(
+                officeholding_alias="officeholding",
+                office_alias="office",
+            )
+            + """
+            )
+            SELECT
+                COUNT(*),
+                COUNT(*) FILTER (
+                    WHERE EXISTS (
+                        SELECT 1
+                        FROM cf.candidate candidate
+                        WHERE candidate.person_id = current_federal_officeholders.person_id
+                          AND """
+            + _CANDIDATE_MONEY_OFFICIAL_TOTALS_PREDICATE
+            + """
+                    )
+                )
+            FROM current_federal_officeholders
+            """,
+        )
+        row = cursor.fetchone()
+
+    assert row is not None
+    return int(row[0]), int(row[1])
 
 
 def _is_transaction_confirm_query(query: str) -> bool:
@@ -151,6 +332,11 @@ def test_federal_first_owner_declares_expected_checks() -> None:
         FEDERAL_FIRST_FLOORS[CANDIDATE_MONEY_RECENT_SUMMARY_COVERAGE_CHECK]
         == CANDIDATE_MONEY_RECENT_SUMMARY_DEFAULT_FLOOR
     )
+    assert (
+        FEDERAL_FIRST_COUNTS[FEDERAL_OFFICEHOLDER_MONEY_COVERAGE_CHECK]
+        == FEDERAL_OFFICEHOLDER_MONEY_PRODUCTION_OBSERVATION
+    )
+    assert FEDERAL_FIRST_FLOORS[FEDERAL_OFFICEHOLDER_MONEY_COVERAGE_CHECK] == FEDERAL_OFFICEHOLDER_MONEY_DEFAULT_FLOOR
     # Keep the deploy-safe default below the 2026-07-27 production observation:
     # docs/live-state/2026_07_27_candidate_money_production_coverage.md
     # Follow-up: the tighter post-recovery bound is recorded in the receipt,
@@ -182,12 +368,14 @@ def test_floors_from_env_overrides_specific_keys() -> None:
             "CIVIBUS_HEALTH_CONTENT_FLOOR_CF_TRANSACTION_TOTAL": "42",
             "CIVIBUS_HEALTH_CONTENT_FLOOR_CF_CANDIDATE_MONEY_SERVING_COVERAGE": "43",
             "CIVIBUS_HEALTH_CONTENT_FLOOR_CF_CANDIDATE_MONEY_RECENT_SUMMARY_COVERAGE": "44",
+            "CIVIBUS_HEALTH_CONTENT_FLOOR_CF_FEDERAL_OFFICEHOLDER_MONEY_COVERAGE": "499",
         }
     )
 
     assert floors["cf_transaction_total"] == 42
     assert floors[CANDIDATE_MONEY_COVERAGE_CHECK] == 43
     assert floors[CANDIDATE_MONEY_RECENT_SUMMARY_COVERAGE_CHECK] == 44
+    assert floors[FEDERAL_OFFICEHOLDER_MONEY_COVERAGE_CHECK] == 499
     assert floors["cf_committee_summary_total"] == FEDERAL_FIRST_FLOORS["cf_committee_summary_total"]
     assert floors["cf_transaction_with_support_oppose"] == FEDERAL_FIRST_FLOORS["cf_transaction_with_support_oppose"]
     assert (
@@ -226,9 +414,10 @@ def test_evaluate_content_health_returns_empty_when_all_floors_met() -> None:
         "cf_transaction_contribution_insights_sentinel": 25,
         CANDIDATE_MONEY_COVERAGE_CHECK: 30,
         CANDIDATE_MONEY_RECENT_SUMMARY_COVERAGE_CHECK: 30,
+        FEDERAL_OFFICEHOLDER_MONEY_COVERAGE_CHECK: 20,
     }
     # Every count is at least the floor — this is a healthy DB.
-    counts = [100, 10, 5, 50, 20, 5, 25, 30, 30]
+    counts = [100, 10, 5, 50, 20, 5, 25, 30, 30, 20]
     failures = evaluate_content_health(
         FakeConnection(counts, freshness_result=fresh_federal_fec_bulk_pull_row()),
         floors=floors,
@@ -375,9 +564,10 @@ def test_evaluate_content_health_flags_table_below_floor() -> None:
         "cf_transaction_contribution_insights_sentinel": 1,
         CANDIDATE_MONEY_COVERAGE_CHECK: 1,
         CANDIDATE_MONEY_RECENT_SUMMARY_COVERAGE_CHECK: 1,
+        FEDERAL_OFFICEHOLDER_MONEY_COVERAGE_CHECK: 1,
     }
     # cf.transaction returning 0 is the literal Apr 30 failure mode.
-    counts = [0, 5_000, 500, 2_500, 32_404, 1, 1, 1, 1]
+    counts = [0, 5_000, 500, 2_500, 32_404, 1, 1, 1, 1, 1]
     failures = evaluate_content_health(
         FakeConnection(counts, freshness_result=fresh_federal_fec_bulk_pull_row()),
         floors=floors,
@@ -398,7 +588,10 @@ def test_evaluate_content_health_runs_expected_sql_queries() -> None:
     from api.queries.campaign_finance import resolve_selected_cycle
 
     selected = resolve_selected_cycle(None)
-    fake = FakeConnection([100, 10, 5, 50, 20, 5, 25, 30, 31], freshness_result=fresh_federal_fec_bulk_pull_row())
+    fake = FakeConnection(
+        [100, 10, 5, 50, 20, 5, 25, 30, 31, 20],
+        freshness_result=fresh_federal_fec_bulk_pull_row(),
+    )
     evaluate_content_health(
         fake,
         floors={
@@ -411,6 +604,7 @@ def test_evaluate_content_health_runs_expected_sql_queries() -> None:
             "cf_transaction_contribution_insights_sentinel": 1,
             CANDIDATE_MONEY_COVERAGE_CHECK: 1,
             CANDIDATE_MONEY_RECENT_SUMMARY_COVERAGE_CHECK: 1,
+            FEDERAL_OFFICEHOLDER_MONEY_COVERAGE_CHECK: 1,
         },
         now=datetime(2026, 7, 27, 12, 0, tzinfo=timezone.utc),
     )
@@ -465,6 +659,31 @@ def test_evaluate_content_health_runs_expected_sql_queries() -> None:
         CANDIDATE_MONEY_RECENT_SUMMARY_CUTOFF,
         CANDIDATE_MONEY_RECENT_SUMMARY_EVALUATION_DATE,
     )
+    officeholder_query_indices = [
+        index
+        for index, query in enumerate(executed)
+        if "COUNT(DISTINCT person.id)" in query and "civic.officeholding" in query
+    ]
+    assert len(officeholder_query_indices) == 1, executed
+    officeholder_query = _normalized_sql(executed[officeholder_query_indices[0]])
+    assert "FROM core.person person" in officeholder_query
+    assert "JOIN civic.officeholding officeholding ON officeholding.person_id = person.id" in officeholder_query
+    assert "JOIN civic.office office ON office.id = officeholding.office_id" in officeholder_query
+    expected_officeholder_scope = _normalized_sql(
+        current_federal_officeholder_predicate(
+            officeholding_alias="officeholding",
+            office_alias="office",
+            as_of_sql="%s::date",
+        )
+    )
+    assert expected_officeholder_scope in officeholder_query
+    assert "officeholding.valid_period @> %s::date" in officeholder_query
+    assert "EXISTS ( SELECT 1 FROM cf.candidate candidate" in officeholder_query
+    assert "candidate.person_id = person.id" in officeholder_query
+    assert (
+        "total_receipts IS NOT NULL OR total_disbursements IS NOT NULL OR cash_on_hand IS NOT NULL"
+    ) in officeholder_query
+    assert fake._cursor.executed_params[officeholder_query_indices[0]] == (date(2026, 7, 27),)
     freshness_query = executed[-1]
     freshness_params = fake._cursor.executed_params[-1]
     assert "MAX(last_pull_at)" in freshness_query
@@ -500,13 +719,109 @@ def test_candidate_money_serving_coverage_count() -> None:
     assert _candidate_money_query_params(fake) == (selected.coverage_start_date, selected.coverage_end_date)
 
 
+def test_evaluate_content_health_flags_underlinked_federal_officeholder_money_coverage(
+    db_conn: psycopg.Connection,
+) -> None:
+    from api.health_content import ContentHealthFailure
+    from api.health_content import evaluate_content_health
+
+    fixture_counts = _seed_federal_officeholder_money_fixture(
+        db_conn,
+        money_linked_count=STAGE_1_MONEY_LINKED_COUNT,
+    )
+    floors = {key: 0 for key in EXPECTED_FEDERAL_FIRST_CHECKS}
+    floors[FEDERAL_OFFICEHOLDER_MONEY_COVERAGE_CHECK] = FEDERAL_OFFICEHOLDER_MONEY_FIXTURE_FLOOR
+
+    failures = evaluate_content_health(
+        db_conn,
+        floors=floors,
+        now=STAGE_1_EVIDENCE_NOW,
+    )
+
+    assert fixture_counts == (STAGE_1_OFFICEHOLDER_COUNT, STAGE_1_MONEY_LINKED_COUNT)
+    assert failures == [
+        ContentHealthFailure(
+            check=FEDERAL_OFFICEHOLDER_MONEY_COVERAGE_CHECK,
+            actual=STAGE_1_MONEY_LINKED_COUNT,
+            floor=FEDERAL_OFFICEHOLDER_MONEY_FIXTURE_FLOOR,
+        )
+    ]
+
+
+def test_evaluate_content_health_accepts_fully_linked_federal_officeholder_money_coverage(
+    db_conn: psycopg.Connection,
+) -> None:
+    from api.health_content import evaluate_content_health
+
+    fixture_counts = _seed_federal_officeholder_money_fixture(
+        db_conn,
+        money_linked_count=STAGE_1_OFFICEHOLDER_COUNT,
+    )
+    floors = {key: 0 for key in EXPECTED_FEDERAL_FIRST_CHECKS}
+    floors[FEDERAL_OFFICEHOLDER_MONEY_COVERAGE_CHECK] = FEDERAL_OFFICEHOLDER_MONEY_FIXTURE_FLOOR
+
+    failures = evaluate_content_health(
+        db_conn,
+        floors=floors,
+        now=STAGE_1_EVIDENCE_NOW,
+    )
+
+    assert fixture_counts == (STAGE_1_OFFICEHOLDER_COUNT, STAGE_1_OFFICEHOLDER_COUNT)
+    assert failures == []
+
+
+@pytest.mark.parametrize(
+    ("valid_period", "expected_current"),
+    [
+        pytest.param("[2000-01-01,2100-01-01)", True, id="bounded_current_range"),
+        pytest.param("[2100-01-01,)", False, id="future_start_open_range"),
+        pytest.param("[2000-01-01,)", True, id="current_open_range"),
+    ],
+)
+def test_officeholder_money_health_uses_shared_federal_scope_for_range_classification(
+    db_conn: psycopg.Connection,
+    valid_period: str,
+    expected_current: bool,
+) -> None:
+    from api.health_content import _CHECK_QUERIES
+    from api.queries.campaign_finance import resolve_selected_cycle
+
+    def scope_snapshot() -> tuple[set[UUID], int]:
+        selected_cycle = resolve_selected_cycle(None)
+        coverage_spec = _CHECK_QUERIES[FEDERAL_OFFICEHOLDER_MONEY_COVERAGE_CHECK]
+        with db_conn.cursor() as cursor:
+            cursor.execute(federal_officeholder_targets_sql())
+            target_person_ids = {row[0] for row in cursor.fetchall()}
+            cursor.execute(
+                coverage_spec.query,
+                coverage_spec.params(selected_cycle=selected_cycle, now=STAGE_1_EVIDENCE_NOW),
+            )
+            coverage_row = cursor.fetchone()
+        assert coverage_row is not None
+        return target_person_ids, int(coverage_row[0])
+
+    target_person_ids_before, coverage_before = scope_snapshot()
+    person = _insert_federal_officeholder_money_specimen(
+        db_conn,
+        index=99,
+        valid_period=valid_period,
+        include_money=True,
+    )
+
+    target_person_ids_after, coverage_after = scope_snapshot()
+
+    assert person.id not in target_person_ids_before
+    assert (person.id in target_person_ids_after) is expected_current
+    assert coverage_after - coverage_before == int(expected_current)
+
+
 def test_evaluate_content_health_flags_candidate_money_coverage_below_floor() -> None:
     from api.health_content import ContentHealthFailure
     from api.health_content import evaluate_content_health
 
     floors = {key: 0 for key in EXPECTED_FEDERAL_FIRST_CHECKS}
     floors[CANDIDATE_MONEY_COVERAGE_CHECK] = CANDIDATE_MONEY_DEFAULT_FLOOR
-    counts = [100, 10, 5, 50, 20, 5, 25, CANDIDATE_MONEY_DEFAULT_FLOOR - 1, 30]
+    counts = [100, 10, 5, 50, 20, 5, 25, CANDIDATE_MONEY_DEFAULT_FLOOR - 1, 30, 20]
 
     failures = evaluate_content_health(
         FakeConnection(counts, freshness_result=fresh_federal_fec_bulk_pull_row()),
@@ -528,7 +843,18 @@ def test_evaluate_content_health_flags_candidate_money_recent_summary_below_floo
 
     floors = {key: 0 for key in EXPECTED_FEDERAL_FIRST_CHECKS}
     floors[CANDIDATE_MONEY_RECENT_SUMMARY_COVERAGE_CHECK] = CANDIDATE_MONEY_RECENT_SUMMARY_DEFAULT_FLOOR
-    counts = [100, 10, 5, 50, 20, 5, 25, 30, CANDIDATE_MONEY_RECENT_SUMMARY_DEFAULT_FLOOR - 1]
+    counts = [
+        100,
+        10,
+        5,
+        50,
+        20,
+        5,
+        25,
+        30,
+        CANDIDATE_MONEY_RECENT_SUMMARY_DEFAULT_FLOOR - 1,
+        20,
+    ]
 
     failures = evaluate_content_health(
         FakeConnection(counts, freshness_result=CANDIDATE_MONEY_RECENT_SUMMARY_FRESH_FEC_ROW),
@@ -550,7 +876,7 @@ def test_candidate_money_recent_summary_fixture_excludes_null_and_future_dates()
     from api.health_content import evaluate_content_health
 
     fake = FakeConnection(
-        [100, 10, 5, 50, 20, 5, 25],
+        [100, 10, 5, 50, 20, 5, 25, 20],
         freshness_result=CANDIDATE_MONEY_RECENT_SUMMARY_FRESH_FEC_ROW,
         candidate_money_rows=[
             {"summary_coverage_end_date": date(2026, 6, 30), "total_receipts": 1},
@@ -649,7 +975,7 @@ def test_evaluate_content_health_reports_contribution_insights_floor_values() ->
 
     floors = {key: 0 for key in EXPECTED_FEDERAL_FIRST_CHECKS}
     floors["cf_transaction_contribution_insights_sentinel"] = 42
-    counts = [100, 10, 5, 50, 20, 5, 41, 30, 30]
+    counts = [100, 10, 5, 50, 20, 5, 41, 30, 30, 20]
 
     failures = evaluate_content_health(
         FakeConnection(counts, freshness_result=fresh_federal_fec_bulk_pull_row()),

@@ -146,7 +146,8 @@ def test_makefile_owns_public_python_gate_selector() -> None:
         in makefile_text
     )
     assert (
-        'test:\n\tuv run --extra dev --extra entity-resolution pytest -m "not integration and not e2e"' in makefile_text
+        "test:\n\tuv run --extra dev --extra entity-resolution pytest "
+        '-m "not integration and not e2e and not projected_public_contract"' in makefile_text
     )
 
 
@@ -164,7 +165,7 @@ def test_public_mirror_classification_contract_is_valid_and_exact() -> None:
     entries = validate_public_mirror_classifications()
 
     assert len(entries) == len({entry.node_id for entry in entries})
-    assert len(entries) == 113
+    assert len(entries) == 119
     assert {entry.category for entry in entries} == {PublicMirrorCategory.DEV_REPO_ONLY}
     assert "tests/ci/test_api_dockerfile_contract.py::test_debbie_sync_includes_api_dockerfile_root_inputs" in (
         DEV_REPO_ONLY_CLASSIFICATIONS_BY_NODE_ID

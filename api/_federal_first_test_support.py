@@ -73,7 +73,11 @@ class FakeCursor:
         if "pg_stat_user_tables" in normalized_query and "relname = 'transaction'" in normalized_query:
             self._last_query_kind = "transaction_estimate"
             return
-        if self._candidate_money_rows is not None and "from cf.candidate" in normalized_query:
+        if (
+            self._candidate_money_rows is not None
+            and "from cf.candidate" in normalized_query
+            and "summary_coverage_end_date between %s and %s" in normalized_query
+        ):
             if "summary_coverage_end_date >= %s" in normalized_query:
                 self._last_query_kind = "candidate_money_recent_summary"
                 return

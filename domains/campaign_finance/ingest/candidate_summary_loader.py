@@ -2,7 +2,49 @@
 
 from __future__ import annotations
 
+from uuid import UUID
+
 import psycopg
+
+
+def update_candidate_person_link(
+    conn: psycopg.Connection,
+    *,
+    fec_candidate_id: str,
+    person_id: UUID,
+) -> None:
+    """Guard candidate-master person links behind the candidate row lock.
+
+    Candidate-master reruns may fill an empty link or confirm the existing link.
+    They may not replace an established link with a different person; federal
+    spine convergence is the officeholder-side owner for intentional relinks.
+    """
+    with conn.cursor() as cursor:
+        cursor.execute(
+            """
+            WITH matched_candidate AS (
+                SELECT id,
+                       person_id IS NULL OR person_id = %s AS person_link_is_fillable
+                FROM cf.candidate
+                WHERE fec_candidate_id = %s
+                FOR UPDATE
+            )
+            UPDATE cf.candidate AS candidate
+            SET person_id = CASE
+                    WHEN matched_candidate.person_link_is_fillable THEN %s
+                    ELSE candidate.person_id
+                END,
+                updated_at = CASE
+                    WHEN matched_candidate.person_link_is_fillable THEN NOW()
+                    ELSE candidate.updated_at
+                END
+            FROM matched_candidate
+            WHERE candidate.id = matched_candidate.id
+            """,
+            (person_id, fec_candidate_id, person_id),
+        )
+        if cursor.rowcount != 1:
+            raise RuntimeError(f"Expected one candidate person link update for {fec_candidate_id}")
 
 
 def update_candidate_summary(
