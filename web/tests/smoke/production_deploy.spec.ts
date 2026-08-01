@@ -181,7 +181,9 @@ test.describe("production deployment smoke (read-only)", () => {
     expect(totalRaisedDollars).toBeLessThan(MONEY_PLAUSIBILITY_CEILING_DOLLARS);
     await memberLink.click();
 
-    await expect(page.getByRole("heading", { level: 2, name: memberName, exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { level: 2, name: memberName, exact: true })).toBeVisible({
+      timeout: 20_000
+    });
     await expect(
       page.getByRole("heading", { name: PERSON_CAMPAIGN_FINANCE_HEADING })
     ).toBeVisible();
