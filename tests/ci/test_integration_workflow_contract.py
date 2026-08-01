@@ -75,6 +75,7 @@ def test_integration_workflow_exports_safe_db_environment() -> None:
 
     job_env = env_match.group("body")
     assert 'CIVIBUS_REQUIRE_DB: "1"' in job_env
+    assert "COMPOSE_PROJECT_NAME: civibus_integration_local" in job_env
     assert "POSTGRES_PASSWORD: ci-postgres-password" in job_env
     assert 'POSTGRES_PORT: "5475"' in job_env
     assert "POSTGRES_HOST" not in job_env
@@ -83,7 +84,7 @@ def test_integration_workflow_exports_safe_db_environment() -> None:
 def test_integration_workflow_waits_for_repo_db_container_before_reset() -> None:
     workflow_text = _read_integration_workflow()
 
-    assert "COMPOSE_PROJECT_NAME: civibus_${{ github.event.repository.name }}" in workflow_text
+    assert "COMPOSE_PROJECT_NAME: civibus_integration_local" in workflow_text
     assert 'container_id="$(docker compose -f infra/docker-compose.yml ps -q db)"' in workflow_text
     assert 'status="$(docker inspect -f \'{{.State.Health.Status}}\' "$container_id")"' in workflow_text
 

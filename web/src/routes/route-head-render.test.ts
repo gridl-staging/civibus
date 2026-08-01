@@ -547,15 +547,15 @@ describe("route head rendering", () => {
       '"sampled_coverage_percentage": "5.843340"',
       ",fec_weball,5000.00,0.00,2,0,",
       "OpenSecrets and ProPublica migration mapping",
-      "OpenSecrets candContrib",
-      "OpenSecrets candIndustry"
+      "OpenSecrets API candContrib",
+      "OpenSecrets API candIndustry"
     ]);
     expect(rendered.body).not.toContain('"ie_oppose_total": "0",');
     expect(rendered.body).not.toContain(",fec_weball,5000.00,0,2,0,");
     expect(rendered.body).toContain('href="/api/openapi.json">/api/openapi.json</a>');
     expect(rendered.body).toContain('href="/api/docs">/api/docs</a>');
     expect(rendered.body).toContain('href="/api/redoc">/api/redoc</a>');
-    expect(rendered.body.match(/<pre[^>]*tabindex="0"[^>]*>/g)).toHaveLength(12);
+    expect(rendered.body.match(/<pre[^>]*tabindex="0"[^>]*>/g)).toHaveLength(14);
   });
 
   it("renders candidates list with shared canonical/OG/Twitter tags, filter controls, and unchanged pagination links", () => {

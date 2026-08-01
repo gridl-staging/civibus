@@ -14,7 +14,7 @@ jobs:
     name: integration-tests
     runs-on: ubuntu-latest
     env:
-      COMPOSE_PROJECT_NAME: civibus_${{ github.event.repository.name }}
+      COMPOSE_PROJECT_NAME: civibus_integration_local
       CIVIBUS_REQUIRE_DB: "1"
       POSTGRES_PASSWORD: ci-postgres-password
       POSTGRES_PORT: "5475"
