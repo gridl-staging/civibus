@@ -1009,6 +1009,7 @@ def _build_fec_masters_job(parameters: RunnerParameters) -> RefreshJob:
         data_source_names=(FEC_BULK_DATA_SOURCE_NAME,),
         run_callable=_run_fec_masters_job,
         refresh_history_key="federal-fec-masters",
+        side_effects_repaired_by_job_key="federal-congress-spine",
     )
 
 

@@ -308,7 +308,7 @@ def test_deploy_workflow_runs_deployed_surface_parity_gate_before_smoke() -> Non
     assert probe_script.splitlines()[0] == "set -euo pipefail"
     assert 'CIVIBUS_PUBLIC_BASE_URL="${PROD_SMOKE_BASE_URL}"' in probe_script
     assert 'CIVIBUS_EXPECTED_SHA="${{ steps.provenance.outputs.dev_sha }}"' in probe_script
-    assert "CIVIBUS_PUBLIC_MONEY_VALUE_FATAL=0" in probe_script
+    assert "CIVIBUS_PUBLIC_MONEY_VALUE_FATAL=0" not in probe_script
     assert "jul30_10pm_8" in probe_script
     assert "CIVIBUS_PUBLIC_MONEY_VALUE_FATAL=1" in probe_script
     assert probe_script.count("bash infra/scripts/probe_deployed_surface_parity.sh") == 1

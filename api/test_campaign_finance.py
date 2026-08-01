@@ -1478,6 +1478,87 @@ def test_get_person_contribution_insights_keeps_unsupported_2022_cycle_itemized(
     }
 
 
+def test_get_person_contribution_insights_accepts_open_cycle_summary_as_of_coverage_end(
+    api_client: TestClient,
+    db_conn: psycopg.Connection,
+) -> None:
+    person_id, candidate_id = _seed_person_contribution_insights_fixture(db_conn)
+    committee_id = UUID("d1000000-0000-0000-0000-000000000004")
+    db_conn.execute(
+        """
+        UPDATE cf.committee_summary
+        SET individual_itemized_contributions = %s,
+            individual_unitemized_contributions = %s,
+            total_receipts = %s,
+            total_disbursements = %s,
+            coverage_end_date = %s
+        WHERE committee_id = %s AND cycle = 2026
+        """,
+        (
+            Decimal("5399.98"),
+            Decimal("150.00"),
+            Decimal("6000.00"),
+            Decimal("2000.00"),
+            date(2026, 6, 30),
+            committee_id,
+        ),
+    )
+
+    response = api_client.get(f"/v1/person/{person_id}/contribution-insights")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["metadata"] == {
+        "selected_cycle": 2026,
+        "coverage_start_date": "2025-01-01",
+        "coverage_end_date": "2026-12-31",
+        "available_cycles": [2022, 2024, 2026],
+        "cycles_included": [2026],
+        "committee_count": 1,
+        "approximate_geography": True,
+        "excluded_geography": None,
+        "caveats": [],
+    }
+    assert payload["monthly_totals"][-1] == {
+        "month": "2026-06",
+        "total_amount": "0.00",
+        "transaction_count": 0,
+    }
+    assert payload["monthly_totals"][-2] == {
+        "month": "2026-05",
+        "total_amount": "2999.99",
+        "transaction_count": 2,
+    }
+    assert payload["cycle_totals"] == [
+        {
+            "cycle": 2026,
+            "itemized_individual_contribution_amount": "5399.98",
+            "itemized_transaction_count": 7,
+            "unitemized_individual_contribution_amount": "150.00",
+            "total_individual_contribution_amount": "5549.98",
+            "source": "committee_summary",
+        },
+    ]
+    assert payload["career_totals"] == {
+        "itemized_individual_contribution_amount": "5399.98",
+        "itemized_transaction_count": 7,
+        "unitemized_individual_contribution_amount": "150.00",
+        "total_individual_contribution_amount": "5549.98",
+        "source": "committee_summary",
+    }
+    assert payload["small_dollar_share"] == {
+        "small_dollar_amount": "350.00",
+        "total_contribution_amount": "5549.98",
+        "share": "0.0631",
+        "available": True,
+    }
+
+    public_summary = fetch_candidate_public_money_summary(db_conn, candidate_id, "Insights House Candidate")
+    assert public_summary is not None
+    assert public_summary["summary_source"] == "fec_committee_summary"
+    assert "missing_committee_summary" not in payload["metadata"]["caveats"]
+
+
 def test_get_person_contribution_insights_cycle_totals_fall_back_when_summary_missing(
     api_client: TestClient,
     db_conn: psycopg.Connection,
@@ -1567,6 +1648,7 @@ def test_get_person_contribution_insights_gates_unitemized_facts_on_itemized_sum
     assert response.status_code == 200
     payload = response.json()
     assert payload["metadata"]["caveats"] == expected_caveats
+    assert "missing_committee_summary" not in payload["metadata"]["caveats"]
     assert payload["small_dollar_share"]["available"] is expected_available
     if expected_available:
         assert payload["dollars_by_size"][0] == {
@@ -1607,6 +1689,7 @@ def test_get_person_contribution_insights_marks_null_itemized_summary_unavailabl
         "itemized_summary_reconciliation_unavailable",
         "itemized_only_cycle_totals",
     ]
+    assert "missing_committee_summary" not in payload["metadata"]["caveats"]
     assert payload["dollars_by_size"][0] == {
         "label": "$200 and under itemized",
         "total_amount": "0.00",
@@ -1766,8 +1849,8 @@ def test_get_person_contribution_insights_cycle_totals_fall_back_when_summary_cy
             committee_id=secondary_committee_id,
             cycle=2026,
             individual_unitemized_contributions=Decimal("125.00"),
-            coverage_start_date=date(2025, 1, 1),
-            coverage_end_date=date(2026, 6, 30),
+            coverage_start_date=date(2024, 1, 1),
+            coverage_end_date=date(2024, 12, 31),
         ),
     )
 
@@ -1779,10 +1862,10 @@ def test_get_person_contribution_insights_cycle_totals_fall_back_when_summary_cy
     assert payload["metadata"]["coverage_end_date"] == "2026-12-31"
     assert payload["metadata"]["cycles_included"] == []
     assert payload["metadata"]["caveats"] == [
-        "missing_committee_summary",
         "itemized_summary_reconciliation_unavailable",
         "itemized_only_cycle_totals",
     ]
+    assert "missing_committee_summary" not in payload["metadata"]["caveats"]
     assert payload["cycle_totals"] == [
         {
             "cycle": 2026,
@@ -2461,6 +2544,42 @@ def test_get_person_top_donors_ranks_summed_donors_across_linked_committees(
         {"name": "Donor 0014", "total_amount": "100.00", "transaction_count": 1, "city": None, "state": "NC"},
         {"name": "Donor 0011", "total_amount": "50.00", "transaction_count": 1, "city": None, "state": "NC"},
     ]
+
+
+def test_fetch_person_top_donors_source_backed_arm_excludes_unsourced_receipts(
+    db_conn: psycopg.Connection,
+) -> None:
+    person_id, candidate_id = _seed_person_contribution_insights_fixture(db_conn)
+    _seed_person_top_donors_second_committee(db_conn, candidate_id=candidate_id)
+
+    private_rows = campaign_finance_query_module.fetch_person_top_donors(
+        db_conn,
+        person_id,
+        selected_cycle=2024,
+    )
+    source_backed_rows = campaign_finance_query_module.fetch_person_top_donors(
+        db_conn,
+        person_id,
+        selected_cycle=2024,
+        source_backed_only=True,
+    )
+
+    assert private_rows is not None
+    assert private_rows[0] == {
+        "name": "Donor 0012",
+        "total_amount": Decimal("500.00"),
+        "transaction_count": 2,
+        "city": None,
+        "state": "NC",
+    }
+    assert source_backed_rows is not None
+    assert next(row for row in source_backed_rows if row["name"] == "Donor 0012") == {
+        "name": "Donor 0012",
+        "total_amount": Decimal("200.00"),
+        "transaction_count": 1,
+        "city": None,
+        "state": "NC",
+    }
 
 
 def test_get_person_top_donors_honors_limit(

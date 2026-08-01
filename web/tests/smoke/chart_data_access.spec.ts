@@ -3,6 +3,8 @@ import type { Locator, Page } from "playwright";
 
 import {
   SMOKE_CHART_DATA_ACCESS_ROWS,
+  SMOKE_CHART_LIVE_DATA_ACCESS_ROWS,
+  SMOKE_CHART_LIVE_PERSON_ID,
   SMOKE_COMMITTEE_CASH_TREND_FIRST_BALANCE,
   SMOKE_COMMITTEE_CASH_TREND_FIRST_PERIOD,
   SMOKE_COMMITTEE_CASH_TREND_LATEST_BALANCE,
@@ -16,6 +18,15 @@ import {
   SMOKE_PERSON_ID,
   SMOKE_USE_LIVE_API
 } from "./fixtures";
+import {
+  buildCongressSmokeCleanupSql,
+  seedLiveCongressDirectorySmoke
+} from "./smoke-seed-sql";
+import {
+  BAR_SERIES_MARK_SELECTOR,
+  chartRegion,
+  expectRealChartRender
+} from "./smoke-helpers";
 
 type ExpectedRow = {
   label: string;
@@ -27,32 +38,47 @@ const CHART_DATA_ACCESS_CASES = [
   {
     owner: "ReceiptCompositionChart",
     route: "person",
+    paintLabel: "Receipt source composition by dollars",
     testId: "person-receipt-composition",
-    rows: SMOKE_CHART_DATA_ACCESS_ROWS.receiptComposition
+    rows: SMOKE_USE_LIVE_API
+      ? SMOKE_CHART_LIVE_DATA_ACCESS_ROWS.receiptComposition
+      : SMOKE_CHART_DATA_ACCESS_ROWS.receiptComposition
   },
   {
     owner: "MonthlyContributionsChart",
     route: "person",
+    paintLabel: "Monthly contribution columns",
     testId: "person-monthly-contributions",
-    rows: SMOKE_CHART_DATA_ACCESS_ROWS.monthlyContributions
+    rows: SMOKE_USE_LIVE_API
+      ? SMOKE_CHART_LIVE_DATA_ACCESS_ROWS.monthlyContributions
+      : SMOKE_CHART_DATA_ACCESS_ROWS.monthlyContributions
   },
   {
     owner: "HorizontalBarChart",
     route: "person",
+    paintLabel: "Itemized contribution-size buckets bar chart",
     testId: "person-size-buckets",
-    rows: SMOKE_CHART_DATA_ACCESS_ROWS.sizeBuckets
+    rows: SMOKE_USE_LIVE_API
+      ? SMOKE_CHART_LIVE_DATA_ACCESS_ROWS.sizeBuckets
+      : SMOKE_CHART_DATA_ACCESS_ROWS.sizeBuckets
   },
   {
     owner: "GeographyShareChart",
     route: "person",
+    paintLabel: "Geography dollar share by contributor location",
     testId: "person-geography-share",
-    rows: SMOKE_CHART_DATA_ACCESS_ROWS.geographyShare
+    rows: SMOKE_USE_LIVE_API
+      ? SMOKE_CHART_LIVE_DATA_ACCESS_ROWS.geographyShare
+      : SMOKE_CHART_DATA_ACCESS_ROWS.geographyShare
   },
   {
     owner: "OutsideSpendingChart",
     route: "person",
+    paintLabel: "Zero-centered support and oppose spending comparison",
     testId: "person-outside-spending",
-    rows: SMOKE_CHART_DATA_ACCESS_ROWS.outsideSpending
+    rows: SMOKE_USE_LIVE_API
+      ? SMOKE_CHART_LIVE_DATA_ACCESS_ROWS.outsideSpending
+      : SMOKE_CHART_DATA_ACCESS_ROWS.outsideSpending
   },
   {
     owner: "CashOnHandTrendChart",
@@ -82,6 +108,19 @@ const CHART_DATA_ACCESS_CASES = [
     rows: []
   }
 ] as const;
+type ChartDataAccessCase = (typeof CHART_DATA_ACCESS_CASES)[number];
+type PersonChartDataAccessCase = Extract<ChartDataAccessCase, { route: "person" }>;
+
+test("person-scenario cleanup preserves a shared office that is still referenced", () => {
+  const cleanupSql = buildCongressSmokeCleanupSql("charts");
+  const officeCleanup = cleanupSql.match(
+    /DELETE FROM civic\.office(?: AS office)?[\s\S]*?DELETE FROM civic\.electoral_division/
+  )?.[0];
+
+  expect(officeCleanup).toBeDefined();
+  expect(officeCleanup).toContain("NOT EXISTS");
+  expect(officeCleanup).toContain("FROM civic.officeholding");
+});
 
 // The `View chart data` table renders each fact as one accessible row whose name
 // is the row label followed by every value segment. Playwright joins the value
@@ -128,6 +167,12 @@ function chartCaseForRoute(route: "committee" | "congress") {
   return matches[0];
 }
 
+function personChartCases(): PersonChartDataAccessCase[] {
+  return CHART_DATA_ACCESS_CASES.filter(
+    (chartCase): chartCase is PersonChartDataAccessCase => chartCase.route === "person"
+  );
+}
+
 test.describe("fixture-backed chart data accessibility", () => {
   test.skip(
     SMOKE_USE_LIVE_API || IS_PRODUCTION_SMOKE_MODE,
@@ -150,7 +195,7 @@ test.describe("fixture-backed chart data accessibility", () => {
   test("person chart disclosures expose exact fixture facts", async ({ page }: { page: Page }) => {
     await page.goto(`/person/${SMOKE_PERSON_ID}`);
 
-    for (const chartCase of CHART_DATA_ACCESS_CASES.filter(({ route }) => route === "person")) {
+    for (const chartCase of personChartCases()) {
       await test.step(chartCase.owner, async () => {
         const chart = page.getByTestId(chartCase.testId);
         await expect(chart).toBeVisible();
@@ -205,5 +250,41 @@ test.describe("fixture-backed chart data accessibility", () => {
     await expect(
       comparison.getByTestId(`comparison-end-label-${SMOKE_CONGRESS_LEADER_PERSON_ID}`)
     ).toHaveText(SMOKE_CONGRESS_LEADER_TOTAL_RAISED_COMPACT);
+  });
+});
+
+test.describe.serial("live person chart data known-answer smoke", () => {
+  test.skip(!SMOKE_USE_LIVE_API, "live-mode only — set SMOKE_USE_LIVE_API=1");
+
+  let cleanupLiveChartSmoke: (() => Promise<void>) | undefined;
+
+  test.beforeAll(async () => {
+    cleanupLiveChartSmoke = await seedLiveCongressDirectorySmoke("charts");
+  });
+
+  test.afterAll(async () => {
+    await cleanupLiveChartSmoke?.();
+  });
+
+  test("person money charts paint and expose every exact known-answer row", async ({
+    page
+  }: {
+    page: Page;
+  }) => {
+    await page.goto(`/person/${SMOKE_CHART_LIVE_PERSON_ID}`);
+
+    for (const chartCase of personChartCases()) {
+      await test.step(chartCase.owner, async () => {
+        const chartFrame = page.getByTestId(chartCase.testId);
+        await expect(chartFrame).toBeVisible({ timeout: 15_000 });
+
+        const paintedChart = await chartRegion(page, chartCase.paintLabel);
+        await expect(paintedChart).toBeVisible();
+        await expectRealChartRender(paintedChart, BAR_SERIES_MARK_SELECTOR);
+
+        const snapshot = await openChartDataAndSnapshot(chartFrame);
+        expectExactAccessibleRows(snapshot, chartCase.rows);
+      });
+    }
   });
 });

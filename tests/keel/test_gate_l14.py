@@ -44,15 +44,58 @@ def _empty_federal_collection(
     )
 
 
-def _passing_officeholder_gate() -> "keel_gate_l14.FederalCoverageGate":
+def _passing_officeholder_gate(
+    *,
+    active_officeholders: int = 538,
+) -> "keel_gate_l14.FederalCoverageGate":
     return keel_gate_l14.FederalCoverageGate(
-        active_officeholders=538,
+        active_officeholders=active_officeholders,
         total_seats=543,
         portrait_coverage_pct=97.7,
         bio_coverage_pct=92.9,
         candidate_link_coverage_pct=97.5,
         ie_coverage_pct=61.1,
     )
+
+
+_PROPOSED_PORTRAIT_COVERAGE_FLOOR = 97.40
+_PROPOSED_BIO_COVERAGE_FLOOR = 53.80
+
+
+@pytest.mark.parametrize(
+    ("portrait_coverage_pct", "bio_coverage_pct", "expected_status"),
+    [
+        pytest.param(97.22, 92.9, "fail", id="portrait_one_official_below_floor"),
+        pytest.param(97.7, 53.62, "fail", id="bio_one_official_below_floor"),
+        pytest.param(97.40, 53.80, "pass", id="portrait_and_bio_exactly_at_floor"),
+    ],
+)
+def test_federal_portrait_and_bio_proposed_coverage_floors(
+    monkeypatch,
+    portrait_coverage_pct: float,
+    bio_coverage_pct: float,
+    expected_status: str,
+) -> None:
+    monkeypatch.setattr(
+        keel_gate_l14,
+        "_MIN_FEDERAL_PORTRAIT_COVERAGE_PERCENT",
+        _PROPOSED_PORTRAIT_COVERAGE_FLOOR,
+    )
+    monkeypatch.setattr(
+        keel_gate_l14,
+        "_MIN_FEDERAL_BIO_COVERAGE_PERCENT",
+        _PROPOSED_BIO_COVERAGE_FLOOR,
+    )
+    gate = _passing_officeholder_gate().model_copy(
+        update={
+            "portrait_coverage_pct": portrait_coverage_pct,
+            "bio_coverage_pct": bio_coverage_pct,
+        }
+    )
+    collection = _empty_federal_collection(monkeypatch, federal_gate=gate, federal_race_count=474)
+
+    assert keel_gate_l14._federal_gate_passes(gate) is (expected_status == "pass")
+    assert keel_gate_l14._evidence_status(collection) == expected_status
 
 
 def test_federal_row_denominator_comes_from_race_count_not_officeholder_seats(monkeypatch) -> None:
@@ -110,6 +153,26 @@ def test_federal_status_accepts_observed_loaded_contest_universe(monkeypatch) ->
     )
 
     assert keel_gate_l14._evidence_status(collection) == "pass"
+
+
+def test_federal_status_passes_with_vacancy_sensitive_active_officeholder_count(monkeypatch) -> None:
+    collection = _empty_federal_collection(
+        monkeypatch,
+        federal_gate=_passing_officeholder_gate(active_officeholders=539),
+        federal_race_count=474,
+    )
+
+    assert keel_gate_l14._evidence_status(collection) == "pass"
+
+
+def test_federal_status_fails_when_active_officeholder_count_exceeds_capacity(monkeypatch) -> None:
+    collection = _empty_federal_collection(
+        monkeypatch,
+        federal_gate=_passing_officeholder_gate(active_officeholders=544),
+        federal_race_count=474,
+    )
+
+    assert keel_gate_l14._evidence_status(collection) == "fail"
 
 
 def test_federal_status_fails_when_race_count_out_of_range(monkeypatch) -> None:

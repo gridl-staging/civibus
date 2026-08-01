@@ -18,6 +18,7 @@ LIVE_STATE_PATH = REPO_ROOT / "docs/live-state/2026_07_07_lane1_fly_probe.md"
 ROADMAP_PATH = REPO_ROOT / "ROADMAP.md"
 PROJECT_OVERVIEW_PATH = REPO_ROOT / "PROJECT_OVERVIEW.md"
 CAMPAIGN_FINANCE_REFRESH_RUNBOOK_PATH = REPO_ROOT / "docs/howto/operations/campaign-finance-refresh.md"
+REFRESH_MACHINE_IMAGE_RECEIPT_PATH = REPO_ROOT / "docs/live-state/2026_07_31_refresh_machine_image_deploy.md"
 SCHEDULER_BOUNDARY_RED_RECEIPT_PATH = REPO_ROOT / "docs/live-state/2026_07_28_refresh_scheduler_boundary.md"
 SCHEDULER_BOUNDARY_RECHECK_CHECKLIST_PATH = REPO_ROOT / "chats/icg/aug04_pm_1_refresh_scheduler_boundary_recheck.md"
 RUNNABLE_PASSWORD_DOC_PATHS = (
@@ -48,6 +49,7 @@ def _read_text(path: Path) -> str:
 
 def test_fly_runbook_documents_current_refresh_machine_model() -> None:
     runbook_text = _read_text(RUNBOOK_PATH)
+    refresh_runbook_text = _read_text(CAMPAIGN_FINANCE_REFRESH_RUNBOOK_PATH)
 
     required_fragments = (
         "civibus-refresh",
@@ -68,6 +70,16 @@ def test_fly_runbook_documents_current_refresh_machine_model() -> None:
     )
     for fragment in forbidden_fragments:
         assert fragment not in runbook_text
+
+    assert REFRESH_MACHINE_IMAGE_RECEIPT_PATH.is_file(), (
+        "docs/live-state/2026_07_31_refresh_machine_image_deploy.md must record the shipped refresh image"
+    )
+    for fragment in (
+        "### Stage 3 Fly Refresh Deployment Evidence",
+        "infra/scripts/deploy_refresh_machine.sh",
+        "docs/live-state/2026_07_31_refresh_machine_image_deploy.md",
+    ):
+        assert fragment in refresh_runbook_text
 
 
 def test_fly_runbook_documents_current_deploy_workflow_model() -> None:

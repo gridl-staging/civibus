@@ -499,10 +499,27 @@ class TestFECMastersJobContract:
         return jobs[0]
 
     def test_masters_job_metadata_keeps_weekly_history_key(self) -> None:
-        job = self._find_masters_job()
+        jobs = build_refresh_plan(
+            job_key_prefixes=("federal-fec-masters", "federal-congress-spine"),
+        )
+        jobs_by_key = {job.key: job for job in jobs}
+        masters_job = jobs_by_key["federal-fec-masters"]
+        spine_job = jobs_by_key["federal-congress-spine"]
 
-        assert job.key == "federal-fec-masters"
-        assert job.refresh_history_key == "federal-fec-masters"
+        assert masters_job.refresh_history_key == "federal-fec-masters"
+        assert masters_job.side_effects_repaired_by_job_key == "federal-congress-spine"
+        assert spine_job.side_effects_repaired_by_job_key is None
+
+    def test_filtered_masters_and_congress_spine_plan_preserves_prerequisite_order(self) -> None:
+        jobs = build_refresh_plan(
+            scope="all",
+            job_key_prefixes=("federal-fec-masters", "federal-congress-spine"),
+        )
+
+        assert tuple(job.key for job in jobs) == (
+            "federal-fec-masters",
+            "federal-congress-spine",
+        )
 
     def test_masters_run_callable_dispatches_recent_cycles_oldest_first(
         self,

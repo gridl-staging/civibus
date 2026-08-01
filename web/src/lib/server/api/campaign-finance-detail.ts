@@ -139,10 +139,12 @@ export type CandidateDetailBundle = {
 
 export type PersonCandidateFinanceSection = {
   candidate: CandidateDetailResponse;
-  summary: Promise<CandidateFundraisingSummary>;
-  ieTransactions: Promise<IndependentExpenditureResponse[]>;
+  summary: CandidateFundraisingSummary | Promise<CandidateFundraisingSummary>;
+  ieTransactions: IndependentExpenditureResponse[] | Promise<IndependentExpenditureResponse[]>;
   ieSummary: Promise<IndependentExpenditureSummary | null> | IndependentExpenditureSummary | null;
-  donorVendorTransactions: Promise<CampaignFinanceTransactionResponse[]>;
+  donorVendorTransactions:
+    | CampaignFinanceTransactionResponse[]
+    | Promise<CampaignFinanceTransactionResponse[]>;
 };
 
 export type PersonCandidateFinanceRequest = {

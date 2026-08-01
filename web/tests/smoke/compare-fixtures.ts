@@ -5,6 +5,7 @@ const fixtureConstants =
 
 const {
   SMOKE_CANDIDATE_ID,
+  SMOKE_COMPARE_UNAVAILABLE_VALUE,
   SMOKE_CONGRESS_LEADER_NAME,
   SMOKE_CONGRESS_LEADER_PERSON_ID,
   SMOKE_CONGRESS_SECOND_NAME,
@@ -14,7 +15,6 @@ const {
 const SELECTED_CYCLE = 2026;
 const COVERAGE_START_DATE = "2025-01-01";
 const COVERAGE_END_DATE = "2026-06-30";
-const NO_REPORTED_MONEY = "No reported/loaded money.";
 
 /**
  */
@@ -334,17 +334,17 @@ function buildOfficeholderFixture(config: FixtureConfig) {
       candidateSummaryStatus: config.candidateSummaryStatus ?? 200
     },
     expectedTotals: {
-      "total-raised": hasSummary && !moneyFails ? moneyLabel(config.totals.raised) : NO_REPORTED_MONEY,
-      "total-spent": hasSummary && !moneyFails ? moneyLabel(config.totals.spent) : NO_REPORTED_MONEY,
-      "cash-on-hand": hasSummary && !moneyFails ? moneyLabel(config.totals.cashOnHand) : NO_REPORTED_MONEY,
-      "ie-support": hasSummary && !moneyFails ? moneyLabel(config.charts.support) : NO_REPORTED_MONEY,
-      "ie-oppose": hasSummary && !moneyFails ? moneyLabel(config.charts.oppose) : NO_REPORTED_MONEY,
+      "total-raised": hasSummary && !moneyFails ? moneyLabel(config.totals.raised) : SMOKE_COMPARE_UNAVAILABLE_VALUE,
+      "total-spent": hasSummary && !moneyFails ? moneyLabel(config.totals.spent) : SMOKE_COMPARE_UNAVAILABLE_VALUE,
+      "cash-on-hand": hasSummary && !moneyFails ? moneyLabel(config.totals.cashOnHand) : SMOKE_COMPARE_UNAVAILABLE_VALUE,
+      "ie-support": hasSummary && !moneyFails ? moneyLabel(config.charts.support) : SMOKE_COMPARE_UNAVAILABLE_VALUE,
+      "ie-oppose": hasSummary && !moneyFails ? moneyLabel(config.charts.oppose) : SMOKE_COMPARE_UNAVAILABLE_VALUE,
       "small-dollar-share": hasItemizedData && !moneyFails
         ? percentLabel(config.totals.smallDollarShare)
-        : NO_REPORTED_MONEY,
+        : SMOKE_COMPARE_UNAVAILABLE_VALUE,
       "self-funded-share": hasSummary && !moneyFails
         ? percentLabel(String(Number(config.totals.netSelfFunding) / Number(config.totals.raised)))
-        : NO_REPORTED_MONEY
+        : SMOKE_COMPARE_UNAVAILABLE_VALUE
     },
     person: buildPersonDetail(config),
     contributionInsights: buildContributionInsights(config),

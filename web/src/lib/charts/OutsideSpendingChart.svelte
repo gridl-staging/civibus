@@ -127,7 +127,7 @@
 
     <section>
       <h4>Top spenders</h4>
-      {#each topSpenders as spender (spender.id)}
+      {#each topSpenders as spender (`${spender.id}-${spender.stance}`)}
         <p>
           {spender.label}: {formatCurrency(spender.amount)}; Transactions:
           {formatCount(spender.transactionCount)}

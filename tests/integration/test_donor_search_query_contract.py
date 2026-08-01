@@ -128,19 +128,83 @@ def test_search_donors_full_scope_bound_preserves_high_volume_donor_values(
     fixture = seed_full_scope_skewed_donor_search_fixture(db_conn)
 
     payload = search_donors(db_conn, q="williams", by="name", limit=20, offset=0)
+    page_two = search_donors(db_conn, q="williams", by="name", limit=2, offset=1)
 
+    assert payload["query"] == "williams"
+    assert payload["by"] == "name"
+    assert payload["limit"] == 20
+    assert payload["offset"] == 0
+    assert [result["contributor_name"] for result in payload["results"][:3]] == [
+        "FOCUSED WILLIAMS",
+        "WILLIAMS COMMON DONOR 000",
+        "WILLIAMS COMMON DONOR 001",
+    ]
+    assert [result["contributor_name"] for result in page_two["results"]] == [
+        "WILLIAMS COMMON DONOR 000",
+        "WILLIAMS COMMON DONOR 001",
+    ]
     assert payload["results"][0]["contributor_name"] == "FOCUSED WILLIAMS"
     donor = payload["results"][0]
+    assert donor["id"] == "72000000-0000-0009-8000-000000000001"
+    assert donor["contributor_employer"] == "Bound Fixture"
+    assert donor["contributor_occupation"] == "Engineer"
+    assert donor["contributor_city"] == "Durham"
+    assert donor["contributor_state"] == "NC"
+    assert donor["normalized_zip5"] == "27701"
     assert donor["total_amount"] == Decimal("3000.00")
     assert donor["transaction_count"] == 30
     assert [
-        (recipient["person_id"], recipient["total_amount"], recipient["transaction_count"])
+        (
+            recipient["person_id"],
+            recipient["candidate_id"],
+            recipient["fec_candidate_id"],
+            recipient["candidate_name"],
+            recipient["committee_id"],
+            recipient["fec_committee_id"],
+            recipient["committee_name"],
+            recipient["total_amount"],
+            recipient["transaction_count"],
+        )
         for recipient in donor["recipients"]
     ] == [
-        (fixture.primary_recipient.person_id, Decimal("2000.00"), 20),
-        (fixture.secondary_recipient.person_id, Decimal("1000.00"), 10),
+        (
+            fixture.primary_recipient.person_id,
+            fixture.primary_recipient.candidate_id,
+            "S6NC00000",
+            "Full Scope Officeholder 000",
+            fixture.primary_recipient.committee_id,
+            "C70200000",
+            "Full Scope Officeholder 000 Committee",
+            Decimal("2000.00"),
+            20,
+        ),
+        (
+            fixture.secondary_recipient.person_id,
+            fixture.secondary_recipient.candidate_id,
+            "S6NC00001",
+            "Full Scope Officeholder 001",
+            fixture.secondary_recipient.committee_id,
+            "C70200001",
+            "Full Scope Officeholder 001 Committee",
+            Decimal("1000.00"),
+            10,
+        ),
     ]
-    assert [source["source_record_key"] for source in donor["sources"]] == [
+    assert [
+        (source["source_record_key"], source["record_url"], source["pull_date"].isoformat())
+        for source in donor["sources"]
+    ] == [
+        (
+            "donor-search-current",
+            "https://example.org/fec/donor-search/current",
+            "2026-07-09T12:00:00+00:00",
+        ),
+        (
+            "donor-search-secondary",
+            "https://example.org/fec/donor-search/secondary",
+            "2026-07-09T11:00:00+00:00",
+        ),
+    ]
+    assert [source["source_record_key"] for source in page_two["results"][0]["sources"]] == [
         "donor-search-current",
-        "donor-search-secondary",
     ]

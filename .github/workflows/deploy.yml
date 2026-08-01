@@ -21,16 +21,22 @@ jobs:
       PROD_SMOKE_BASE_URL: ${{ vars.PROD_SMOKE_BASE_URL }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        env:
+          FLY_API_TOKEN: ""
 
       - uses: astral-sh/setup-uv@0c5e2b8115b80b4c7c5ddf6ffdd634974642d182 # v5.4.1
         with:
           python-version: "3.12"
 
-      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # v1.6
+        env:
+          FLY_API_TOKEN: ""
 
       - name: Resolve dev build provenance
         id: provenance
         shell: bash
+        env:
+          FLY_API_TOKEN: ""
         run: |
           set -euo pipefail
           # Stamp the DEV-repo commit SHA from the sync manifest (the workflow
@@ -72,6 +78,8 @@ jobs:
 
       - name: Verify public deploy serves built dev SHA
         shell: bash
+        env:
+          FLY_API_TOKEN: ""
         run: |
           set -euo pipefail
           if [[ -z "${PROD_SMOKE_BASE_URL}" ]]; then
@@ -98,18 +106,22 @@ jobs:
 
       - name: Run deployed surface parity gate
         shell: bash
+        env:
+          FLY_API_TOKEN: ""
         run: |
           set -euo pipefail
-          # Structural failures are fatal now. jul30_10pm_8 is the sole planned
-          # promotion point for CIVIBUS_PUBLIC_MONEY_VALUE_FATAL=1.
+          # jul30_10pm_8 promotes the money gate; PROMOTED_FATAL_ASSERTIONS in
+          # public_money_value_probe.py owns which assertions kill a deploy.
           CIVIBUS_PUBLIC_BASE_URL="${PROD_SMOKE_BASE_URL}" \
           CIVIBUS_EXPECTED_SHA="${{ steps.provenance.outputs.dev_sha }}" \
-          CIVIBUS_PUBLIC_MONEY_VALUE_FATAL=0 \
+          CIVIBUS_PUBLIC_MONEY_VALUE_FATAL=1 \
             bash infra/scripts/probe_deployed_surface_parity.sh
 
       - name: Install web smoke dependencies
         shell: bash
         working-directory: web
+        env:
+          FLY_API_TOKEN: ""
         run: |
           set -euo pipefail
           npm ci
@@ -117,6 +129,8 @@ jobs:
       - name: Run production smoke gate
         shell: bash
         working-directory: web
+        env:
+          FLY_API_TOKEN: ""
         run: |
           set -euo pipefail
           if [[ -z "${PROD_SMOKE_BASE_URL}" ]]; then

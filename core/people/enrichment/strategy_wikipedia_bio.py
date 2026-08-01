@@ -33,6 +33,8 @@ class WikipediaBioStrategy:
         summary_fetcher: Callable[[str], Mapping[str, object] | None] | None = None,
         timeout_seconds: float = 15.0,
     ) -> None:
+        self._prefetched_title_cache: Mapping[str, str] = {}
+        self._prefetched_summary_cache: Mapping[str, Mapping[str, object]] = {}
         self._title_fetcher = title_fetcher or (
             lambda qid: _fetch_wikipedia_title(qid, timeout_seconds=timeout_seconds)
         )
@@ -47,6 +49,8 @@ class WikipediaBioStrategy:
         summary_cache: Mapping[str, Mapping[str, object]],
     ) -> None:
         """Wrap the existing fetchers with cache lookups, falling back to live fetch on miss."""
+        self._prefetched_title_cache = title_cache
+        self._prefetched_summary_cache = summary_cache
         original_title_fetcher = self._title_fetcher
         original_summary_fetcher = self._summary_fetcher
 
@@ -64,6 +68,31 @@ class WikipediaBioStrategy:
 
         self._title_fetcher = title_fetcher
         self._summary_fetcher = summary_fetcher
+
+    def prefetched_record_for_target(self, target: CandidateEnrichmentTarget) -> CandidateEnrichmentRecord:
+        qid = _normalize_qid(target.wikidata_entity_id)
+        if qid is None:
+            return CandidateEnrichmentRecord()
+
+        title = self._prefetched_title_cache.get(qid)
+        if title is None:
+            return CandidateEnrichmentRecord()
+
+        summary = self._prefetched_summary_cache.get(title)
+        if summary is None:
+            return CandidateEnrichmentRecord()
+
+        extract = _extract_text(summary, "extract")
+        if not extract:
+            return CandidateEnrichmentRecord()
+
+        wikipedia_url = _extract_wikipedia_url(summary)
+        return CandidateEnrichmentRecord(
+            biography=extract,
+            bio_source_url=wikipedia_url,
+            bio_license="licensed",
+            wikipedia_url=wikipedia_url,
+        )
 
     def fetch(
         self,

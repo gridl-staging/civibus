@@ -78,6 +78,64 @@
       "record_url": "https://www.fec.gov/data/candidate/H4NC00000/",
       "pull_date": "2026-07-10T00:00:00Z"
     }
+      ]
+}`
+    },
+    {
+      label: "GET /api/public/v1/federal/officials/{person_id}/contributors",
+      parameters: ["none beyond person_id in the path"],
+      curl: `${shellBaseGuard} && curl "\${CIVIBUS_PUBLIC_API_BASE}/api/public/v1/federal/officials/${samplePersonId}/contributors"`,
+      sampleLabel: "Sample JSON",
+      sampleBody: `{
+  "person_id": "${samplePersonId}",
+  "contributors": [
+    {
+      "name": "Sample Contributor",
+      "total_amount": "5000.00",
+      "transaction_count": 3
+    }
+  ],
+  "sources": [
+    {
+      "domain": "campaign_finance",
+      "jurisdiction": "federal",
+      "data_source_name": "FEC itemized individual contributions",
+      "data_source_url": "https://www.fec.gov/data/receipts/individual-contributions/",
+      "source_record_key": "H4NC00000",
+      "record_url": "https://www.fec.gov/data/candidate/H4NC00000/",
+      "pull_date": "2026-07-10T00:00:00Z"
+    }
+  ]
+}`
+    },
+    {
+      label: "GET /api/public/v1/federal/officials/{person_id}/employers",
+      parameters: ["none beyond person_id in the path"],
+      curl: `${shellBaseGuard} && curl "\${CIVIBUS_PUBLIC_API_BASE}/api/public/v1/federal/officials/${samplePersonId}/employers"`,
+      sampleLabel: "Sample JSON",
+      sampleBody: `{
+  "person_id": "${samplePersonId}",
+  "employers": [
+    {
+      "employer": "Unclassified / not provided",
+      "total_amount": "29150.00",
+      "transaction_count": 85,
+      "industry": "UNKNOWN_INDUSTRY"
+    }
+  ],
+  "classified_count": 837,
+  "unknown_count": 13487,
+  "sampled_coverage_percentage": "5.843340",
+  "sources": [
+    {
+      "domain": "campaign_finance",
+      "jurisdiction": "federal",
+      "data_source_name": "FEC itemized individual contributions",
+      "data_source_url": "https://www.fec.gov/data/receipts/individual-contributions/",
+      "source_record_key": "H4NC00000",
+      "record_url": "https://www.fec.gov/data/candidate/H4NC00000/",
+      "pull_date": "2026-07-10T00:00:00Z"
+    }
   ]
 }`
     },
@@ -127,8 +185,10 @@ ${samplePersonId},Sample Official,true,${sampleCandidateId},125000.00,100000.00,
   const migrationMappings = [
     ["Federal official directory", endpointReferences[0].label],
     ["Current federal member money summary", endpointReferences[1].label],
-    ["Bulk federal money export", endpointReferences[2].label],
-    ["Spreadsheet-friendly federal money export", endpointReferences[3].label]
+    ["OpenSecrets candContrib", endpointReferences[2].label],
+    ["OpenSecrets candIndustry", endpointReferences[3].label],
+    ["Bulk federal money export", endpointReferences[4].label],
+    ["Spreadsheet-friendly federal money export", endpointReferences[5].label]
   ] as const;
   const referenceLinks = ["/api/openapi.json", "/api/docs", "/api/redoc"] as const;
 

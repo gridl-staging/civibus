@@ -3,18 +3,23 @@
 from __future__ import annotations
 
 from datetime import date
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
 
+from core.keel_gate_l1 import load_anchor_file
 from core.keel_gate_l14 import (
     FederalCoverageGate,
     L14CoverageCollection,
     L14CoverageRow,
     _EXPECTED_FEDERAL_RACES,
     _EXPECTED_FEDERAL_SEATS,
+    _MAX_FEDERAL_ACTIVE_OFFICEHOLDERS,
+    _MIN_FEDERAL_ACTIVE_OFFICEHOLDERS,
     _collect_federal_gate,
     _evidence_status,
+    _federal_gate_passes,
 )
 
 
@@ -125,6 +130,63 @@ class TestCollectFederalGateFixture:
 
 
 class TestFederalFirstStatus:
+    def test_active_officeholder_runtime_bounds_match_federal_anchor(self) -> None:
+        anchor = load_anchor_file(Path("docs/reference/anchors/FEDERAL.md"))
+        seated_metrics = [
+            metric for metric in anchor.aggregate_expectations if metric.metric == "seated_federal_officials"
+        ]
+
+        assert len(seated_metrics) == 1
+        seated_metric = seated_metrics[0]
+        assert int(seated_metric.expected_minimum) == _MIN_FEDERAL_ACTIVE_OFFICEHOLDERS
+        assert int(seated_metric.expected_maximum) == _MAX_FEDERAL_ACTIVE_OFFICEHOLDERS
+
+    @pytest.mark.parametrize(
+        ("active_officeholders", "expected"),
+        [
+            pytest.param(535, True, id="active_535_passes"),
+            pytest.param(539, True, id="active_539_passes"),
+            pytest.param(540, True, id="active_540_passes"),
+            pytest.param(543, True, id="active_543_passes"),
+            pytest.param(534, False, id="active_534_fails"),
+            pytest.param(544, False, id="active_544_fails"),
+        ],
+    )
+    def test_federal_gate_enforces_active_officeholder_range(
+        self,
+        active_officeholders: int,
+        expected: bool,
+    ) -> None:
+        gate = FederalCoverageGate(
+            active_officeholders=active_officeholders,
+            total_seats=_EXPECTED_FEDERAL_SEATS,
+            portrait_coverage_pct=97.7,
+            bio_coverage_pct=92.9,
+            candidate_link_coverage_pct=100.0,
+            ie_coverage_pct=1.0,
+        )
+
+        assert _federal_gate_passes(gate) is expected
+
+    @pytest.mark.parametrize(
+        "total_seats",
+        [
+            pytest.param(542, id="total_seats_542_fails"),
+            pytest.param(544, id="total_seats_544_fails"),
+        ],
+    )
+    def test_federal_gate_keeps_exact_total_seat_capacity(self, total_seats: int) -> None:
+        gate = FederalCoverageGate(
+            active_officeholders=539,
+            total_seats=total_seats,
+            portrait_coverage_pct=97.7,
+            bio_coverage_pct=92.9,
+            candidate_link_coverage_pct=100.0,
+            ie_coverage_pct=1.0,
+        )
+
+        assert _federal_gate_passes(gate) is False
+
     def test_federal_gate_passes_even_when_parked_nc_geometry_is_unloaded(self) -> None:
         nc_row = L14CoverageRow(
             jurisdiction_code="NC",

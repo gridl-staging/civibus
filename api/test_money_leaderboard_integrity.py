@@ -782,7 +782,7 @@ def test_relink_policy_preserves_source_linked_prior_district_candidate() -> Non
 
 def test_relink_policy_rejects_prior_office_fallback() -> None:
     official = _known_total_row("S2OH00436")
-    member = {"chamber": "Executive", "state": None, "district": None}
+    member = {"chamber": "House", "state": "NC", "district": "01"}
     candidates = [
         {
             "id": UUID("73000000-0000-0000-0000-000000000021"),

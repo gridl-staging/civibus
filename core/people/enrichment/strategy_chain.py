@@ -20,7 +20,10 @@ from core.people.enrichment.strategy_wikipedia_bio import WikipediaBioStrategy
 class StrategyChain:
     """Deterministic source-priority merge chain for candidate enrichment."""
 
-    def __init__(self, strategies: tuple[CandidateEnrichmentStrategy, ...]) -> None:
+    def __init__(
+        self,
+        strategies: tuple[CandidateEnrichmentStrategy, ...],
+    ) -> None:
         self._strategies = strategies
 
     @classmethod
@@ -38,17 +41,28 @@ class StrategyChain:
 
     @classmethod
     def federal(cls, *, conn: Any | None = None) -> StrategyChain:
+        official_roster_cache = OfficialRosterCacheStrategy(conn=conn)
+        official_bio = OfficialBioStrategy()
+        wikipedia_bio = WikipediaBioStrategy()
+        bioguide_portrait = BioguidePortraitStrategy()
         return cls(
             (
-                OfficialRosterCacheStrategy(conn=conn),
-                WikipediaBioStrategy(),
-                OfficialBioStrategy(),
-                BioguidePortraitStrategy(),
+                official_roster_cache,
+                official_bio,
+                wikipedia_bio,
+                bioguide_portrait,
             )
         )
 
     def enrich(self, target: CandidateEnrichmentTarget) -> CandidateEnrichmentRecord:
-        merged_record = CandidateEnrichmentRecord()
+        stored_biography = _stored_nonblank_biography(target.stored_biography)
+        merged_record = CandidateEnrichmentRecord(
+            biography=stored_biography,
+            bio_source_url=target.stored_bio_source_url if stored_biography is not None else None,
+            bio_license=target.stored_bio_license if stored_biography is not None else None,
+        )
+        if stored_biography is not None:
+            merged_record.field_provenance["biography"] = "stored_person"
 
         for strategy in self._strategies:
             missing_fields = self._requested_fields_for_strategy(merged_record, strategy=strategy)
@@ -79,3 +93,11 @@ class StrategyChain:
         ):
             return tuple(field_name for field_name in missing_fields if field_name != "portrait_image_url")
         return missing_fields
+
+
+def _stored_nonblank_biography(value: str | None) -> str | None:
+    if not isinstance(value, str):
+        return None
+    if value.strip() == "":
+        return None
+    return value

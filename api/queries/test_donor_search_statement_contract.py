@@ -90,3 +90,22 @@ def test_donor_search_statement_groups_by_active_donor_identity_cluster_or_fallb
         "matching_donor_keys AS MATERIALIZED"
     )
     assert "t.contributor_person_id" not in statement
+
+
+def test_donor_search_statement_drives_scope_from_current_officeholders() -> None:
+    statement, _parameters = campaign_finance_queries._build_donor_search_statement(
+        q="smith",
+        by="name",
+        limit=20,
+        offset=0,
+    )
+
+    assert "current_federal_officeholders AS MATERIALIZED" in statement
+    assert statement.index("current_federal_officeholders AS MATERIALIZED") < statement.index(
+        "current_federal_candidate_committees AS MATERIALIZED"
+    )
+    assert "FROM current_federal_officeholders current_officeholder" in statement
+    assert "candidate.person_id = current_officeholder.person_id" in statement
+    assert statement.index("matching_transactions AS MATERIALIZED") < statement.index(
+        "scoped_matching_transactions AS MATERIALIZED"
+    )

@@ -211,8 +211,8 @@ CAMPAIGN_FINANCE_CANDIDATE_DETAIL_SQL = f"""
 # candidate has no official FEC weball total covering the selected cycle. The
 # primary path uses the authoritative candidate total (see
 # _official_candidate_totals_cover_selected_cycle), which never includes
-# party/JFC/leadership money -- so for the ~553/557 officeholders with an
-# official total this filter does not even run.
+# party/JFC/leadership money. The federal anchor is 535-543 seated officials (539
+# observed 2026-07-31; 543 at zero vacancies); official totals bypass this filter.
 #
 # SSOT note -- read before "simplifying" this to match fec_lookup.py: the
 # acquisition side (domains/campaign_finance/ingest/fec_lookup.py,
@@ -517,6 +517,7 @@ _PERSON_CONTRIBUTION_INSIGHTS_QUALIFYING_CTE = f"""
             t.contributor_employer,
             t.contributor_city,
             t.contributor_state,
+            t.source_record_id,
             LEFT(regexp_replace(COALESCE(t.contributor_zip, ''), '[^0-9]', '', 'g'), 5) AS zcta5,
             LENGTH(regexp_replace(COALESCE(t.contributor_zip, ''), '[^0-9]', '', 'g')) >= 5 AS has_valid_zip
         FROM cf.transaction t
@@ -612,6 +613,7 @@ _PERSON_CONTRIBUTION_INSIGHTS_SUMMARY_SQL = """
     SELECT
         COALESCE(SUM(individual_unitemized_contributions), 0) AS unitemized_total,
         SUM(individual_itemized_contributions) AS itemized_total,
+        COUNT(individual_itemized_contributions)::integer AS itemized_basis_row_count,
         COUNT(*)::integer AS summary_row_count,
         COUNT(DISTINCT committee_id)::integer AS summary_committee_count,
         ARRAY_REMOVE(ARRAY_AGG(DISTINCT cycle ORDER BY cycle), NULL) AS cycles_included,
@@ -639,7 +641,10 @@ _PERSON_CONTRIBUTION_INSIGHTS_SUMMARY_COVERAGE_SQL = """
 """
 
 _PERSON_CONTRIBUTION_INSIGHTS_SUMMARY_ROLLUPS_SQL = """
-    WITH summary_rows AS MATERIALIZED (
+    WITH selected_cycle_bounds AS (
+        SELECT %s::date AS coverage_start_date, %s::date AS coverage_end_date
+    ),
+    summary_rows AS MATERIALIZED (
         SELECT *
         FROM cf.committee_summary
         WHERE committee_id = ANY(%s)
@@ -650,12 +655,18 @@ _PERSON_CONTRIBUTION_INSIGHTS_SUMMARY_ROLLUPS_SQL = """
             cycle,
             COUNT(DISTINCT committee_id)::integer AS committee_count,
             COUNT(DISTINCT committee_id) FILTER (
-                WHERE coverage_start_date <= %s
-                  AND coverage_end_date >= %s
+                WHERE summary_rows.coverage_start_date <= bounds.coverage_start_date
+                  AND summary_rows.coverage_end_date IS NOT NULL
+                  AND summary_rows.coverage_end_date <= bounds.coverage_end_date
+                  AND (
+                      bounds.coverage_end_date > CURRENT_DATE
+                      OR summary_rows.coverage_end_date >= bounds.coverage_end_date
+                  )
             )::integer AS complete_committee_count,
-            MIN(coverage_start_date) AS coverage_start_date,
-            MAX(coverage_end_date) AS coverage_end_date
+            MIN(summary_rows.coverage_start_date) AS coverage_start_date,
+            MAX(summary_rows.coverage_end_date) AS coverage_end_date
         FROM summary_rows
+        CROSS JOIN selected_cycle_bounds bounds
         GROUP BY cycle
     ),
     summary_cycle_rows AS (
@@ -669,10 +680,12 @@ _PERSON_CONTRIBUTION_INSIGHTS_SUMMARY_ROLLUPS_SQL = """
     SELECT
         COALESCE(SUM(individual_unitemized_contributions), 0) AS unitemized_total,
         SUM(individual_itemized_contributions) AS itemized_total,
+        COUNT(individual_itemized_contributions)::integer AS itemized_basis_row_count,
         COUNT(*)::integer AS summary_row_count,
         COUNT(DISTINCT committee_id)::integer AS summary_committee_count,
         ARRAY_REMOVE(ARRAY_AGG(DISTINCT cycle ORDER BY cycle), NULL) AS cycles_included,
         MAX(coverage_end_date) AS coverage_end_date,
+        MIN(coverage_end_date) AS summary_as_of_date,
         COALESCE((
             SELECT jsonb_agg(
                 jsonb_build_object(
@@ -1015,7 +1028,15 @@ def _donor_key_sql(alias: str) -> str:
 
 
 _DONOR_SEARCH_SQL_TEMPLATE = f"""
-    WITH current_federal_candidate_committees AS (
+    WITH current_federal_officeholders AS MATERIALIZED (
+        SELECT DISTINCT officeholding.person_id
+        FROM civic.officeholding officeholding
+        JOIN civic.office office
+          ON office.id = officeholding.office_id
+        WHERE officeholding.valid_period @> CURRENT_DATE
+          AND office.office_level = 'federal'
+    ),
+    current_federal_candidate_committees AS MATERIALIZED (
         SELECT DISTINCT ON (candidate.person_id, link.committee_id)
             candidate.person_id,
             candidate.id AS candidate_id,
@@ -1024,18 +1045,14 @@ _DONOR_SEARCH_SQL_TEMPLATE = f"""
             link.committee_id,
             committee.fec_committee_id,
             committee.name AS committee_name
-        FROM civic.officeholding officeholding
-        JOIN civic.office office
-          ON office.id = officeholding.office_id
+        FROM current_federal_officeholders current_officeholder
         JOIN cf.candidate candidate
-          ON candidate.person_id = officeholding.person_id
+          ON candidate.person_id = current_officeholder.person_id
         JOIN cf.candidate_committee_link link
           ON link.candidate_id = candidate.id
         JOIN cf.committee committee
           ON committee.id = link.committee_id
-        WHERE officeholding.valid_period @> CURRENT_DATE
-          AND office.office_level = 'federal'
-          AND candidate.person_id IS NOT NULL
+        WHERE candidate.person_id IS NOT NULL
           AND link.valid_period @> CURRENT_DATE
         ORDER BY
             candidate.person_id,
@@ -1043,20 +1060,19 @@ _DONOR_SEARCH_SQL_TEMPLATE = f"""
             candidate.name ASC,
             candidate.id ASC
     ),
-    current_federal_committee_scope AS (
+    current_federal_committee_scope AS MATERIALIZED (
         SELECT DISTINCT committee_id
         FROM current_federal_candidate_committees
     ),
     matching_transactions AS MATERIALIZED (
-        -- This is the first materialized transaction boundary: keeping the mode
-        -- predicate, receipt filters, date window, source-record validity, and
-        -- committee scope together lets the scoped donor-search index intersect
-        -- common-name matches with federal officeholder committees before heap
-        -- materialization. Do not cap matched rows here: donor LIMIT belongs
-        -- after GROUP BY so high-volume donors are counted completely before
-        -- pagination. Source validity uses an anti-superseded check here;
-        -- provenance details are fetched after donor rollup so the live path
-        -- does not do source-record lookups for every matched row.
+        -- This is the first materialized transaction boundary: the mode
+        -- predicate, receipt filters, date window, and source-record validity run
+        -- once for the search term before the federal committee scope is applied.
+        -- Do not cap matched rows here: donor LIMIT belongs after GROUP BY so
+        -- high-volume donors are counted completely before pagination. Source
+        -- validity uses an anti-superseded check here; provenance details are
+        -- fetched after donor rollup so the live path does not do source-record
+        -- lookups for every matched row.
         SELECT
             t.id,
             t.committee_id,
@@ -1076,13 +1092,17 @@ _DONOR_SEARCH_SQL_TEMPLATE = f"""
             COALESCE(t.contributor_zip, '') AS identity_zip,
             t.source_record_id
         FROM cf.transaction t
-{{scope_from_sql}}
         WHERE {{match_sql}}
-{{scope_where_sql}}
 {_DONOR_SEARCH_RECEIPT_TRANSACTION_WHERE_SQL}
 {NOT_SUPERSEDED_SOURCE_RECORD_WHERE_SQL}
           AND t.contributor_name_raw IS NOT NULL
           AND BTRIM(t.contributor_name_raw) != ''
+    ),
+    scoped_matching_transactions AS MATERIALIZED (
+        SELECT t.*
+        FROM matching_transactions t
+        JOIN current_federal_committee_scope scope_filter
+          ON scope_filter.committee_id = t.committee_id
     ),
     matching_donor_records AS MATERIALIZED (
         SELECT
@@ -1103,7 +1123,7 @@ _DONOR_SEARCH_SQL_TEMPLATE = f"""
             COALESCE(SUM(t.amount), 0) AS total_amount,
             COUNT(*)::integer AS transaction_count,
             MAX(t.transaction_date) AS latest_transaction_date
-        FROM matching_transactions t
+        FROM scoped_matching_transactions t
         GROUP BY
             t.contributor_name,
             t.contributor_employer,
@@ -1232,7 +1252,7 @@ _DONOR_SEARCH_SQL_TEMPLATE = f"""
             record.resolved_donor_identity_id,
             record.donor_key,
             t.source_record_id
-        FROM matching_transactions t
+        FROM scoped_matching_transactions t
         JOIN page_donor_records record
           ON record.raw_donor_key = {_donor_key_sql("t")}
          AND record.identity_name = t.identity_name
@@ -4513,22 +4533,27 @@ def _fetch_person_insights_itemized_rollups(
     committee_ids: list[UUID],
     selected_cycle: SelectedCycle,
     *,
-    complete_summary_coverage: bool,
+    summary_as_of_date: date | None = None,
+    complete_summary_coverage: bool | None = None,
     district_params: tuple[bool, str | None, str | None, str | None] = (False, None, None, None),
 ) -> dict[str, Any]:
     """Fetch itemized contribution rollups from one shared qualifying-transaction scan."""
     district_enabled, office_name, office_state, office_district = district_params
+    if complete_summary_coverage and summary_as_of_date is None:
+        summary_as_of_date = selected_cycle.coverage_end_date
+    has_summary_as_of_date = summary_as_of_date is not None
+    itemized_coverage_end_date = summary_as_of_date or selected_cycle.coverage_end_date
     with conn.cursor(row_factory=dict_row) as cursor:
         cursor.execute(
             _PERSON_CONTRIBUTION_INSIGHTS_ITEMIZED_ROLLUPS_SQL,
             (
                 committee_ids,
                 selected_cycle.coverage_start_date,
-                selected_cycle.coverage_end_date,
-                complete_summary_coverage,
+                itemized_coverage_end_date,
+                has_summary_as_of_date,
                 selected_cycle.coverage_start_date,
-                complete_summary_coverage,
-                selected_cycle.coverage_end_date,
+                has_summary_as_of_date,
+                itemized_coverage_end_date,
                 district_enabled,
                 office_name,
                 office_name,
@@ -4612,10 +4637,10 @@ def _fetch_person_insights_summary_rollups(
         cursor.execute(
             _PERSON_CONTRIBUTION_INSIGHTS_SUMMARY_ROLLUPS_SQL,
             (
-                committee_ids,
-                [selected_cycle.selected_cycle],
                 selected_cycle.coverage_start_date,
                 selected_cycle.coverage_end_date,
+                committee_ids,
+                [selected_cycle.selected_cycle],
             ),
         )
         summary_row = cursor.fetchone()
@@ -4703,6 +4728,20 @@ def _has_complete_person_insights_summary(
     )
 
 
+def _person_insights_summary_as_of_date(
+    summary_row: dict[str, Any],
+    selected_cycle: SelectedCycle,
+    *,
+    complete_summary_coverage: bool,
+) -> date | None:
+    if not complete_summary_coverage:
+        return None
+    summary_as_of_date = summary_row["summary_as_of_date"]
+    if not selected_cycle.coverage_start_date <= summary_as_of_date <= selected_cycle.coverage_end_date:
+        return None
+    return summary_as_of_date
+
+
 def _person_insights_itemized_summary_reconciles(
     summary_row: dict[str, Any],
     itemized_total: Decimal,
@@ -4714,7 +4753,7 @@ def _person_insights_itemized_summary_reconciles(
 
 
 def _person_insights_has_itemized_summary_basis(summary_row: dict[str, Any]) -> bool:
-    return summary_row["itemized_total"] is not None
+    return summary_row["itemized_basis_row_count"] == summary_row["summary_row_count"]
 
 
 def _build_person_insights_itemized_buckets(
@@ -5032,6 +5071,11 @@ def fetch_person_contribution_insights(
         len(committee_ids),
         cycle,
     )
+    summary_as_of_date = _person_insights_summary_as_of_date(
+        summary_row,
+        cycle,
+        complete_summary_coverage=complete_summary_coverage,
+    )
     office_row = _fetch_person_insights_office(conn, person_id)
     caveats: list[str] = []
     district_params, approximate_geography, excluded_geography, geography_mode = (
@@ -5043,7 +5087,9 @@ def fetch_person_contribution_insights(
         conn,
         committee_ids,
         cycle,
-        complete_summary_coverage=complete_summary_coverage,
+        # Reconciliation must compare against the least-current linked summary,
+        # so later itemized receipts stay out until every committee covers them.
+        summary_as_of_date=summary_as_of_date,
         district_params=district_params,
     )
     monthly_rows = itemized_rollups["monthly_rows"]
@@ -5053,7 +5099,7 @@ def fetch_person_contribution_insights(
     itemized_cycle_rows = itemized_rollups["itemized_cycle_rows"]
 
     itemized_total = totals_row["total_amount"]
-    has_reconciliation_basis = complete_summary_coverage and _person_insights_has_itemized_summary_basis(
+    has_reconciliation_basis = summary_as_of_date is not None and _person_insights_has_itemized_summary_basis(
         summary_row,
     )
     summary_available = has_reconciliation_basis and _person_insights_itemized_summary_reconciles(
@@ -5061,7 +5107,7 @@ def fetch_person_contribution_insights(
         itemized_total,
     )
     if not summary_available:
-        if not complete_summary_coverage:
+        if summary_row["summary_committee_count"] != len(committee_ids):
             caveats.append("missing_committee_summary")
             caveats.append("itemized_summary_reconciliation_unavailable")
         elif not has_reconciliation_basis:
@@ -5449,15 +5495,32 @@ def fetch_committee_ie_activity(
 
 _PERSON_TOP_DONORS_DEFAULT_LIMIT = 10
 
-_PERSON_TOP_DONORS_SQL = f"""
-    {_PERSON_CONTRIBUTION_INSIGHTS_QUALIFYING_CTE}
+
+def _person_contribution_breadth_sql(
+    select_sql: str,
+    *,
+    source_backed_only: bool,
+) -> str:
+    source_backed_filter = "WHERE source_record_id IS NOT NULL" if source_backed_only else ""
+    return f"""
+        {_PERSON_CONTRIBUTION_INSIGHTS_QUALIFYING_CTE}
+        , selected_transactions AS (
+            SELECT *
+            FROM qualifying_transactions
+            {source_backed_filter}
+        )
+        {select_sql}
+    """
+
+
+_PERSON_TOP_DONORS_SELECT_SQL = """
     SELECT
         BTRIM(contributor_name_raw) AS name,
         contributor_city AS city,
         contributor_state AS state,
         COALESCE(SUM(amount), 0) AS total_amount,
         COUNT(*)::integer AS transaction_count
-    FROM qualifying_transactions
+    FROM selected_transactions
     WHERE contributor_name_raw IS NOT NULL
       AND BTRIM(contributor_name_raw) != ''
     GROUP BY BTRIM(contributor_name_raw), contributor_city, contributor_state
@@ -5465,8 +5528,7 @@ _PERSON_TOP_DONORS_SQL = f"""
     LIMIT %s
 """
 
-_PERSON_TOP_EMPLOYERS_SQL = f"""
-    {_PERSON_CONTRIBUTION_INSIGHTS_QUALIFYING_CTE}
+_PERSON_TOP_EMPLOYERS_SELECT_SQL = """
     , normalized_employers AS (
         SELECT
             amount,
@@ -5497,7 +5559,7 @@ _PERSON_TOP_EMPLOYERS_SQL = f"""
                         'g'
                     )
                 ) AS normalized_employer
-            FROM qualifying_transactions
+            FROM selected_transactions
         ) normalized
     )
     SELECT
@@ -5512,6 +5574,33 @@ _PERSON_TOP_EMPLOYERS_SQL = f"""
 
 _PERSON_TOP_EMPLOYERS_UNCLASSIFIED_BUCKET = "Unclassified / not provided"
 
+_PERSON_CONTRIBUTION_SOURCES_SELECT_SQL = """
+    , source_ids AS (
+        SELECT DISTINCT source_record_id
+        FROM selected_transactions
+    )
+    SELECT
+        ds.domain AS domain,
+        ds.jurisdiction AS jurisdiction,
+        ds.name AS data_source_name,
+        ds.source_url AS data_source_url,
+        sr.source_record_key AS source_record_key,
+        sr.source_url AS record_url,
+        sr.pull_date AS pull_date
+    FROM source_ids ids
+    JOIN core.source_record sr
+      ON sr.id = ids.source_record_id
+     AND sr.superseded_by IS NULL
+    JOIN core.data_source ds
+      ON ds.id = sr.data_source_id
+    ORDER BY sr.pull_date DESC NULLS LAST, sr.source_record_key ASC NULLS LAST, sr.id ASC
+"""
+
+_PERSON_CONTRIBUTION_SOURCES_SQL = _person_contribution_breadth_sql(
+    _PERSON_CONTRIBUTION_SOURCES_SELECT_SQL,
+    source_backed_only=True,
+)
+
 
 def _is_industry_rollup_eligible(employer: str) -> bool:
     return employer != _PERSON_TOP_EMPLOYERS_UNCLASSIFIED_BUCKET and not is_junk_employer(employer)
@@ -5522,6 +5611,8 @@ def fetch_person_top_donors(
     person_id: UUID,
     limit: int = _PERSON_TOP_DONORS_DEFAULT_LIMIT,
     selected_cycle: SelectedCycle | int | None = None,
+    *,
+    source_backed_only: bool = False,
 ) -> list[dict[str, Any]] | None:
     """Return ranked top donors summed across a person's active linked committees.
 
@@ -5539,7 +5630,11 @@ def fetch_person_top_donors(
     if not committee_ids:
         return []
 
-    return _fetch_person_insights_rows(conn, _PERSON_TOP_DONORS_SQL, committee_ids, cycle, limit)
+    query = _person_contribution_breadth_sql(
+        _PERSON_TOP_DONORS_SELECT_SQL,
+        source_backed_only=source_backed_only,
+    )
+    return _fetch_person_insights_rows(conn, query, committee_ids, cycle, limit)
 
 
 def fetch_person_top_employers(
@@ -5547,6 +5642,8 @@ def fetch_person_top_employers(
     person_id: UUID,
     limit: int = _PERSON_TOP_DONORS_DEFAULT_LIMIT,
     selected_cycle: SelectedCycle | int | None = None,
+    *,
+    source_backed_only: bool = False,
 ) -> list[dict[str, Any]] | None:
     """Return ranked employer-name totals across a person's active linked committees."""
     with conn.cursor(row_factory=dict_row) as cursor:
@@ -5559,9 +5656,13 @@ def fetch_person_top_employers(
     if not committee_ids:
         return []
 
+    query = _person_contribution_breadth_sql(
+        _PERSON_TOP_EMPLOYERS_SELECT_SQL,
+        source_backed_only=source_backed_only,
+    )
     employer_rows = _fetch_person_insights_rows(
         conn,
-        _PERSON_TOP_EMPLOYERS_SQL,
+        query,
         committee_ids,
         cycle,
         limit,
@@ -5576,3 +5677,22 @@ def fetch_person_top_employers(
         }
         for row in employer_rows
     ]
+
+
+def fetch_person_contribution_sources(
+    conn: psycopg.Connection,
+    person_id: UUID,
+    selected_cycle: SelectedCycle | int | None = None,
+) -> list[dict[str, Any]] | None:
+    """Return transaction provenance for a person's qualifying contribution breadth."""
+    with conn.cursor(row_factory=dict_row) as cursor:
+        cursor.execute(_PERSON_EXISTS_SQL, (person_id,))
+        if cursor.fetchone() is None:
+            return None
+
+    cycle = _coerce_selected_cycle(selected_cycle)
+    committee_ids = _fetch_person_insights_linked_committee_ids(conn, person_id, cycle)
+    if not committee_ids:
+        return []
+
+    return _fetch_person_insights_rows(conn, _PERSON_CONTRIBUTION_SOURCES_SQL, committee_ids, cycle)

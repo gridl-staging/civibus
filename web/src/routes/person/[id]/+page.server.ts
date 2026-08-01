@@ -3,6 +3,7 @@ import {
 } from "$lib/server/api/entity-detail";
 import { withApiResponseErrorHandling } from "$lib/server/api/error";
 import { loadPersonMoneyBundle } from "$lib/server/api/person-money-bundle";
+import type { PersonCandidateFinanceSection } from "$lib/server/api/campaign-finance-detail";
 import { error } from "@sveltejs/kit";
 import type { PageServerLoad } from "./$types";
 
@@ -38,6 +39,31 @@ function fulfilledValueOrOriginal<T>(
   return outcome.status === "fulfilled" ? outcome.value : original;
 }
 
+async function resolvePersonFinanceSection(
+  section: PersonCandidateFinanceSection
+): Promise<PersonCandidateFinanceSection> {
+  const [summary, ieSummary, ieTransactions, donorVendorTransactions] = await Promise.all([
+    section.summary,
+    section.ieSummary,
+    section.ieTransactions,
+    section.donorVendorTransactions
+  ]);
+
+  return {
+    ...section,
+    summary,
+    ieSummary,
+    ieTransactions,
+    donorVendorTransactions
+  };
+}
+
+async function resolvePersonFinanceSections(
+  sections: Promise<PersonCandidateFinanceSection[]>
+): Promise<PersonCandidateFinanceSection[]> {
+  return Promise.all((await sections).map(resolvePersonFinanceSection));
+}
+
 /**
  */
 export const load: PageServerLoad = ({ params, locals, url }) =>
@@ -54,11 +80,15 @@ export const load: PageServerLoad = ({ params, locals, url }) =>
           })
         : await loadPersonMoneyBundle(locals.api, params.id, requestedCycle);
       const personMoneyHeadline = await moneyBundle.personMoneyHeadline;
+      const personFinanceSections = Promise.resolve(
+        await resolvePersonFinanceSections(moneyBundle.personFinanceSections)
+      );
       if (requestedCycle === undefined) {
         return {
           ...bundle,
           ...moneyBundle,
-          personMoneyHeadline
+          personMoneyHeadline,
+          personFinanceSections
         };
       }
 
@@ -73,6 +103,7 @@ export const load: PageServerLoad = ({ params, locals, url }) =>
         ...bundle,
         ...moneyBundle,
         personMoneyHeadline,
+        personFinanceSections,
         personContributionInsights: fulfilledValueOrOriginal(
           contributionInsightsOutcome,
           moneyBundle.personContributionInsights

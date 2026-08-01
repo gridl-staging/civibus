@@ -55,11 +55,13 @@ _CONTRIBUTION_INSIGHTS_TRANSACTION_WHERE_SQL = contribution_insights_transaction
 
 # Federal-first production counts verified during the July 2026 Fly load.
 # ``civic_officeholding_total`` is the unfiltered
-# ``SELECT COUNT(*) FROM civic.officeholding`` total.
+# ``SELECT COUNT(*) FROM civic.officeholding`` total, measured as 544 on
+# 2026-07-31. It includes closed vacancy-predecessor officeholding rows and is
+# not the vacancy-sensitive current seated-official count.
 FEDERAL_FIRST_CONTENT_COUNTS: Mapping[str, int] = {
     "cf_transaction_total": 16_050_580,
     "core_person_total": 8_705,
-    "civic_officeholding_total": 543,
+    "civic_officeholding_total": 544,
     "cf_transaction_with_resolved_person": 0,
     "cf_committee_summary_total": 32_404,
     "cf_transaction_with_support_oppose": 10_409,

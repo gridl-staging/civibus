@@ -113,7 +113,7 @@ def validate_temporal_range(start: date | None, end: date | None) -> None:
 
 
 DatePrecisionLiteral = Literal["day", "month", "quarter", "year", "approximate"]
-RefreshPullStatus = Literal["crashed", "empty", "degraded", "success"]
+RefreshPullStatus = Literal["crashed", "empty", "degraded", "failed", "success"]
 
 
 class ValidDateRange(BaseModel):

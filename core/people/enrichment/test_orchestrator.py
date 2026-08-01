@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from uuid import UUID, uuid4
 
@@ -39,6 +40,290 @@ class _FakeChain:
     def enrich(self, target: CandidateEnrichmentTarget) -> CandidateEnrichmentRecord:
         self.calls.append(target)
         return self._record_factory(target)
+
+
+@dataclass
+class _FederalResidualProbe:
+    person_id: UUID
+    run_source_record_id: UUID
+    run_data_source_id: UUID
+    official_bio_source_record_id: UUID
+    selected_target: ScopeTarget
+    selected_person: Person
+    official_bio_url: str
+    portrait_url: str
+    captured_bio_updates: list[dict[str, object]]
+    inserted_bio_source_records: list[SourceRecord]
+    provenance_calls: list[tuple[str, UUID, str, str, UUID]]
+    inserted_portraits: list[object]
+    wikipedia_calls: list[tuple[str, ...]]
+
+
+def _build_federal_residual_probe() -> _FederalResidualProbe:
+    person_id = uuid4()
+    official_bio_url = "https://bioguide.congress.gov/search/bio/F000001"
+    portrait_url = "https://unitedstates.github.io/images/congress/450x550/F000001.jpg"
+    return _FederalResidualProbe(
+        person_id=person_id,
+        run_source_record_id=uuid4(),
+        run_data_source_id=uuid4(),
+        official_bio_source_record_id=uuid4(),
+        selected_target=ScopeTarget(
+            person_id=person_id,
+            canonical_name="Federal Residual",
+            roster_bio_url=official_bio_url,
+            wikidata_entity_id="Q12345",
+            bioguide_id="F000001",
+        ),
+        selected_person=Person(id=person_id, canonical_name="Federal Residual"),
+        official_bio_url=official_bio_url,
+        portrait_url=portrait_url,
+        captured_bio_updates=[],
+        inserted_bio_source_records=[],
+        provenance_calls=[],
+        inserted_portraits=[],
+        wikipedia_calls=[],
+    )
+
+
+def _install_federal_residual_db_mocks(
+    monkeypatch: pytest.MonkeyPatch,
+    probe: _FederalResidualProbe,
+) -> None:
+    monkeypatch.setattr(
+        "core.people.enrichment.orchestrator.select_federal_scope_targets",
+        lambda _conn: ScopeSelectionResult(
+            targets=[probe.selected_target],
+            warnings=[],
+            candidacy_count=0,
+            officeholder_count=1,
+        ),
+    )
+    monkeypatch.setattr(
+        "core.people.enrichment.orchestrator.db.select_person",
+        lambda _conn, _person_id: probe.selected_person,
+    )
+    monkeypatch.setattr(
+        "core.people.enrichment.orchestrator.db.select_source_record",
+        lambda _conn, _source_record_id: SourceRecord(
+            id=probe.run_source_record_id,
+            data_source_id=probe.run_data_source_id,
+            source_record_key="people-enrichment:federal:federal-congress:all",
+            source_url=None,
+            raw_fields={"scope": "federal", "jurisdiction": "federal/congress"},
+            pull_date=datetime(2026, 7, 31, 12, 0, tzinfo=timezone.utc),
+            record_hash="run-hash",
+        ),
+    )
+    monkeypatch.setattr(
+        "core.people.enrichment.orchestrator.db.person_has_takedown_requested_portrait_source_image",
+        lambda _conn, *, person_id, source_image_url: False,
+    )
+
+    def _capture_bio_update(_conn: object, **kwargs: object) -> tuple[str, ...]:
+        probe.captured_bio_updates.append(kwargs)
+        return ("bio_text", "bio_source_url", "bio_license")
+
+    monkeypatch.setattr(
+        "core.people.enrichment.orchestrator.db.update_person_bio_fields_if_missing",
+        _capture_bio_update,
+    )
+
+
+def _install_federal_residual_provenance_mocks(
+    monkeypatch: pytest.MonkeyPatch,
+    probe: _FederalResidualProbe,
+) -> None:
+    def _capture_source_record_insert(_conn: object, source_record: SourceRecord) -> UUID:
+        probe.inserted_bio_source_records.append(source_record)
+        return probe.official_bio_source_record_id
+
+    monkeypatch.setattr(
+        "core.people.enrichment.orchestrator.db_ingest.try_insert_source_record",
+        _capture_source_record_insert,
+    )
+    monkeypatch.setattr(
+        "core.people.enrichment.orchestrator.db_ingest.insert_field_provenance",
+        lambda _conn, entity_type, entity_id, field_name, field_value, source_record_id: (
+            probe.provenance_calls.append((entity_type, entity_id, field_name, field_value, source_record_id))
+            or uuid4()
+        ),
+    )
+    monkeypatch.setattr(
+        "core.people.enrichment.orchestrator.db.insert_person_portrait",
+        lambda _conn, portrait: probe.inserted_portraits.append(portrait) or uuid4(),
+    )
+
+
+def _install_federal_residual_strategy_mocks(
+    monkeypatch: pytest.MonkeyPatch,
+    probe: _FederalResidualProbe,
+) -> None:
+    from core.people.enrichment.models import EnrichmentAttempt
+    from core.people.enrichment.strategy_bioguide_portrait import BioguidePortraitStrategy
+    from core.people.enrichment.strategy_official_bio import OfficialBioStrategy
+    from core.people.enrichment.strategy_official_roster_cache import OfficialRosterCacheStrategy
+    from core.people.enrichment.strategy_wikipedia_bio import WikipediaBioStrategy
+
+    monkeypatch.setattr(
+        "core.people.enrichment.orchestrator.batch_fetch_wikipedia_titles",
+        lambda _qids: {"Q12345": "Federal_Residual"},
+    )
+    monkeypatch.setattr(
+        "core.people.enrichment.orchestrator.batch_fetch_wikipedia_summaries",
+        lambda _titles: {},
+    )
+    monkeypatch.setattr(
+        OfficialRosterCacheStrategy,
+        "fetch",
+        lambda self, target, missing_fields: (
+            CandidateEnrichmentRecord(),
+            EnrichmentAttempt.no_data(source=self.source_name, requested_fields=missing_fields),
+        ),
+    )
+
+    def _capture_wikipedia_fetch(
+        self: WikipediaBioStrategy,
+        target: CandidateEnrichmentTarget,
+        missing_fields: tuple[str, ...],
+    ) -> tuple[CandidateEnrichmentRecord, EnrichmentAttempt]:
+        probe.wikipedia_calls.append(missing_fields)
+        return (
+            CandidateEnrichmentRecord(
+                biography="Wikipedia biography should remain a fallback.",
+                bio_source_url="https://en.wikipedia.org/wiki/Federal_Residual",
+                bio_license="licensed",
+                wikipedia_url="https://en.wikipedia.org/wiki/Federal_Residual",
+            ),
+            EnrichmentAttempt.success(
+                source=self.source_name,
+                requested_fields=missing_fields,
+                contributed_fields=("biography", "wikipedia_url"),
+            ),
+        )
+
+    monkeypatch.setattr(WikipediaBioStrategy, "fetch", _capture_wikipedia_fetch)
+    monkeypatch.setattr(
+        OfficialBioStrategy,
+        "fetch",
+        lambda self, target, missing_fields: (
+            CandidateEnrichmentRecord(
+                biography="Official federal biography.",
+                bio_source_url=probe.official_bio_url,
+                bio_license="public_domain",
+            ),
+            EnrichmentAttempt.success(
+                source=self.source_name,
+                requested_fields=missing_fields,
+                contributed_fields=("biography",),
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        BioguidePortraitStrategy,
+        "fetch",
+        lambda self, target, missing_fields: (
+            CandidateEnrichmentRecord(
+                portrait_image_url=probe.portrait_url,
+                portrait_metadata=PortraitBinaryMetadata(
+                    image_hash="b" * 64,
+                    mime_type="image/jpeg",
+                    width_px=450,
+                    height_px=550,
+                    source_image_url=probe.portrait_url,
+                    rights_status="public_domain",
+                ),
+            ),
+            EnrichmentAttempt.success(
+                source=self.source_name,
+                requested_fields=missing_fields,
+                contributed_fields=("portrait_image_url",),
+            ).model_copy(update={"portrait_status": "active"}),
+        ),
+    )
+
+
+def _install_federal_scope_targets(
+    monkeypatch: pytest.MonkeyPatch,
+    targets: list[ScopeTarget],
+) -> None:
+    monkeypatch.setattr(
+        "core.people.enrichment.orchestrator.select_federal_scope_targets",
+        lambda _conn: ScopeSelectionResult(
+            targets=targets,
+            warnings=[],
+            candidacy_count=0,
+            officeholder_count=len(targets),
+        ),
+    )
+
+
+def _install_person_lookup(
+    monkeypatch: pytest.MonkeyPatch,
+    person_by_id: dict[UUID, Person],
+) -> None:
+    monkeypatch.setattr(
+        "core.people.enrichment.orchestrator.db.select_person",
+        lambda _conn, person_id: person_by_id[person_id],
+    )
+
+
+def _install_bio_source_record_mocks(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "core.people.enrichment.orchestrator.db.select_source_record",
+        lambda _conn, _source_record_id: SourceRecord(
+            id=uuid4(),
+            data_source_id=uuid4(),
+            source_record_key="source",
+            source_url=None,
+            raw_fields={},
+            pull_date=datetime.now(timezone.utc),
+            record_hash="hash",
+        ),
+    )
+    monkeypatch.setattr(
+        "core.people.enrichment.orchestrator.db_ingest.try_insert_source_record",
+        lambda _conn, _source_record: uuid4(),
+    )
+
+
+def _install_empty_federal_roster_and_portrait_mocks(monkeypatch: pytest.MonkeyPatch) -> None:
+    from core.people.enrichment.models import EnrichmentAttempt
+    from core.people.enrichment.strategy_bioguide_portrait import BioguidePortraitStrategy
+    from core.people.enrichment.strategy_official_roster_cache import OfficialRosterCacheStrategy
+
+    monkeypatch.setattr(
+        OfficialRosterCacheStrategy,
+        "fetch",
+        lambda self, target, missing_fields: (
+            CandidateEnrichmentRecord(),
+            EnrichmentAttempt.no_data(source=self.source_name, requested_fields=missing_fields),
+        ),
+    )
+    monkeypatch.setattr(
+        BioguidePortraitStrategy,
+        "fetch",
+        lambda self, target, missing_fields: (
+            CandidateEnrichmentRecord(),
+            EnrichmentAttempt.no_data(source=self.source_name, requested_fields=missing_fields),
+        ),
+    )
+
+
+def _install_wikipedia_prefetch(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    title_cache: dict[str, str],
+    summary_cache: dict[str, dict[str, object]],
+) -> None:
+    monkeypatch.setattr(
+        "core.people.enrichment.orchestrator.batch_fetch_wikipedia_titles",
+        lambda _qids: title_cache,
+    )
+    monkeypatch.setattr(
+        "core.people.enrichment.orchestrator.batch_fetch_wikipedia_summaries",
+        lambda _titles: summary_cache,
+    )
 
 
 def test_build_enrichment_provenance_uses_canonical_urls() -> None:
@@ -1538,6 +1823,389 @@ def test_run_federal_enrichment_does_not_call_wikidata_after_wikipedia_bio(
     assert captured_bio_texts == ["Federal biography from Wikipedia."]
 
 
+def test_run_federal_enrichment_uses_prefetched_wikipedia_after_official_bio_no_data(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from core.people.enrichment.models import EnrichmentAttempt
+    from core.people.enrichment.strategy_official_bio import OfficialBioStrategy
+
+    targets = [
+        ScopeTarget(
+            person_id=uuid4(),
+            canonical_name="Has Prefetched Bio One",
+            wikidata_entity_id="Q100001",
+            bioguide_id="F000001",
+        ),
+        ScopeTarget(
+            person_id=uuid4(),
+            canonical_name="Needs Official Bio",
+            wikidata_entity_id="Q100002",
+            bioguide_id="F000002",
+        ),
+        ScopeTarget(
+            person_id=uuid4(),
+            canonical_name="Has Prefetched Bio Two",
+            wikidata_entity_id="Q100003",
+            bioguide_id="F000003",
+        ),
+    ]
+    person_by_id = {
+        target.person_id: Person(id=target.person_id, canonical_name=target.canonical_name) for target in targets
+    }
+    captured_bio_texts: list[str | None] = []
+    official_bio_names: list[str] = []
+
+    _install_federal_scope_targets(monkeypatch, targets)
+    _install_person_lookup(monkeypatch, person_by_id)
+    monkeypatch.setattr(
+        "core.people.enrichment.orchestrator.db.update_person_bio_fields_if_missing",
+        lambda _conn, **kwargs: captured_bio_texts.append(kwargs["bio_text"]) or ("bio_text",),
+    )
+    _install_bio_source_record_mocks(monkeypatch)
+    monkeypatch.setattr(
+        "core.people.enrichment.orchestrator.db_ingest.insert_field_provenance",
+        lambda *_args, **_kwargs: uuid4(),
+    )
+    _install_empty_federal_roster_and_portrait_mocks(monkeypatch)
+
+    def _official_bio_fetch(
+        self: OfficialBioStrategy,
+        target: CandidateEnrichmentTarget,
+        missing_fields: tuple[str, ...],
+    ) -> tuple[CandidateEnrichmentRecord, EnrichmentAttempt]:
+        assert "biography" in missing_fields
+        official_bio_names.append(target.canonical_name)
+        if target.canonical_name == "Needs Official Bio":
+            return (
+                CandidateEnrichmentRecord(
+                    biography="Official residual biography.",
+                    bio_source_url=target.roster_bio_url,
+                    bio_license="public_domain",
+                ),
+                EnrichmentAttempt.success(
+                    source=self.source_name,
+                    requested_fields=missing_fields,
+                    contributed_fields=("biography",),
+                ),
+            )
+        return CandidateEnrichmentRecord(), EnrichmentAttempt.no_data(
+            source=self.source_name,
+            requested_fields=missing_fields,
+        )
+
+    monkeypatch.setattr(OfficialBioStrategy, "fetch", _official_bio_fetch)
+    _install_wikipedia_prefetch(
+        monkeypatch,
+        title_cache={
+            "Q100001": "Has_Prefetched_Bio_One",
+            "Q100002": "Needs_Official_Bio",
+            "Q100003": "Has_Prefetched_Bio_Two",
+        },
+        summary_cache={
+            "Has_Prefetched_Bio_One": {
+                "extract": "Prefetched biography one.",
+                "content_urls": {"desktop": {"page": "https://en.wikipedia.org/wiki/Has_Prefetched_Bio_One"}},
+            },
+            "Has_Prefetched_Bio_Two": {
+                "extract": "Prefetched biography two.",
+                "content_urls": {"desktop": {"page": "https://en.wikipedia.org/wiki/Has_Prefetched_Bio_Two"}},
+            },
+        },
+    )
+
+    run_federal_enrichment(object(), source_record_id=uuid4())
+
+    assert official_bio_names == ["Has Prefetched Bio One", "Needs Official Bio", "Has Prefetched Bio Two"]
+    assert captured_bio_texts == [
+        "Prefetched biography one.",
+        "Official residual biography.",
+        "Prefetched biography two.",
+    ]
+
+
+def test_run_federal_enrichment_prefers_official_bio_over_prefetched_wikipedia(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from core.people.enrichment.models import EnrichmentAttempt
+    from core.people.enrichment.strategy_official_bio import OfficialBioStrategy
+
+    person_id = uuid4()
+    official_bio_url = "https://bioguide.congress.gov/search/bio/F000010"
+    captured_bio_updates: list[dict[str, object]] = []
+    provenance_calls: list[tuple[str, str, UUID]] = []
+    official_bio_requested_fields: list[tuple[str, ...]] = []
+    targets = [
+        ScopeTarget(
+            person_id=person_id,
+            canonical_name="Official Priority",
+            roster_bio_url=official_bio_url,
+            wikidata_entity_id="Q100010",
+            bioguide_id="F000010",
+        )
+    ]
+
+    _install_federal_scope_targets(monkeypatch, targets)
+    _install_person_lookup(monkeypatch, {person_id: Person(id=person_id, canonical_name="Official Priority")})
+
+    def _capture_bio_update(_conn: object, **kwargs: object) -> tuple[str, ...]:
+        captured_bio_updates.append(kwargs)
+        return ("bio_text", "bio_source_url", "bio_license")
+
+    monkeypatch.setattr(
+        "core.people.enrichment.orchestrator.db.update_person_bio_fields_if_missing",
+        _capture_bio_update,
+    )
+    _install_bio_source_record_mocks(monkeypatch)
+    monkeypatch.setattr(
+        "core.people.enrichment.orchestrator.db_ingest.insert_field_provenance",
+        lambda _conn, _entity_type, _entity_id, field_name, field_value, source_record_id: (
+            provenance_calls.append((field_name, field_value, source_record_id)) or uuid4()
+        ),
+    )
+    _install_empty_federal_roster_and_portrait_mocks(monkeypatch)
+
+    def _official_bio_fetch(
+        self: OfficialBioStrategy,
+        target: CandidateEnrichmentTarget,
+        missing_fields: tuple[str, ...],
+    ) -> tuple[CandidateEnrichmentRecord, EnrichmentAttempt]:
+        official_bio_requested_fields.append(missing_fields)
+        return (
+            CandidateEnrichmentRecord(
+                biography="Official biography wins.",
+                bio_source_url=target.roster_bio_url,
+                bio_license="public_domain",
+            ),
+            EnrichmentAttempt.success(
+                source=self.source_name,
+                requested_fields=missing_fields,
+                contributed_fields=("biography",),
+            ),
+        )
+
+    monkeypatch.setattr(OfficialBioStrategy, "fetch", _official_bio_fetch)
+    _install_wikipedia_prefetch(
+        monkeypatch,
+        title_cache={"Q100010": "Official_Priority"},
+        summary_cache={
+            "Official_Priority": {
+                "extract": "Wikipedia fallback should not win.",
+                "content_urls": {"desktop": {"page": "https://en.wikipedia.org/wiki/Official_Priority"}},
+            },
+        },
+    )
+
+    summary = run_federal_enrichment(object(), source_record_id=uuid4())
+
+    assert summary["processed"] == 1
+    assert official_bio_requested_fields == [
+        (
+            "occupation",
+            "education",
+            "biography",
+            "portrait_image_url",
+            "campaign_website_url",
+            "wikipedia_url",
+        )
+    ]
+    assert captured_bio_updates == [
+        {
+            "person_id": person_id,
+            "occupation": None,
+            "education": None,
+            "bio_text": "Official biography wins.",
+            "bio_source_url": official_bio_url,
+            "bio_license": "public_domain",
+        }
+    ]
+    assert [call[0:2] for call in provenance_calls] == [
+        ("bio_text", "Official biography wins."),
+        ("bio_license", "public_domain"),
+    ]
+
+
+def test_run_federal_enrichment_skips_official_bio_when_stored_bio_is_complete(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from core.people.enrichment.models import EnrichmentAttempt
+    from core.people.enrichment.strategy_official_bio import OfficialBioStrategy
+
+    stored_person_id = uuid4()
+    missing_person_id = uuid4()
+    targets = [
+        ScopeTarget(
+            person_id=stored_person_id,
+            canonical_name="Stored Complete",
+            roster_bio_url="https://bioguide.congress.gov/search/bio/F000020",
+            wikidata_entity_id="Q100020",
+            bioguide_id="F000020",
+        ),
+        ScopeTarget(
+            person_id=missing_person_id,
+            canonical_name="Stored Missing",
+            roster_bio_url="https://bioguide.congress.gov/search/bio/F000021",
+            wikidata_entity_id="Q100021",
+            bioguide_id="F000021",
+        ),
+    ]
+    person_by_id = {
+        stored_person_id: Person(
+            id=stored_person_id,
+            canonical_name="Stored Complete",
+            bio_text="Already stored biography.",
+            bio_source_url="https://bioguide.congress.gov/search/bio/F000020",
+            bio_license="public_domain",
+        ),
+        missing_person_id: Person(id=missing_person_id, canonical_name="Stored Missing"),
+    }
+    official_bio_names: list[str] = []
+    captured_bio_updates: list[dict[str, object]] = []
+
+    _install_federal_scope_targets(monkeypatch, targets)
+    _install_person_lookup(monkeypatch, person_by_id)
+    monkeypatch.setattr(
+        "core.people.enrichment.orchestrator.db.update_person_bio_fields_if_missing",
+        lambda _conn, **kwargs: captured_bio_updates.append(kwargs) or tuple(),
+    )
+    monkeypatch.setattr(
+        "core.people.enrichment.orchestrator.db_ingest.insert_field_provenance",
+        lambda *_args, **_kwargs: uuid4(),
+    )
+    _install_empty_federal_roster_and_portrait_mocks(monkeypatch)
+
+    def _official_bio_fetch(
+        self: OfficialBioStrategy,
+        target: CandidateEnrichmentTarget,
+        missing_fields: tuple[str, ...],
+    ) -> tuple[CandidateEnrichmentRecord, EnrichmentAttempt]:
+        if "biography" in missing_fields:
+            official_bio_names.append(target.canonical_name)
+        return (
+            CandidateEnrichmentRecord(
+                biography=f"Official biography for {target.canonical_name}.",
+                bio_source_url=target.roster_bio_url,
+                bio_license="public_domain",
+            ),
+            EnrichmentAttempt.success(source=self.source_name, requested_fields=missing_fields),
+        )
+
+    monkeypatch.setattr(OfficialBioStrategy, "fetch", _official_bio_fetch)
+    _install_wikipedia_prefetch(monkeypatch, title_cache={"Q100021": "Stored_Missing"}, summary_cache={})
+
+    summary = run_federal_enrichment(object(), source_record_id=uuid4())
+
+    assert summary["processed"] == 2
+    assert official_bio_names == ["Stored Missing"]
+    assert captured_bio_updates == [
+        {
+            "person_id": stored_person_id,
+            "occupation": None,
+            "education": None,
+            "bio_text": "Already stored biography.",
+            "bio_source_url": "https://bioguide.congress.gov/search/bio/F000020",
+            "bio_license": "public_domain",
+        },
+        {
+            "person_id": missing_person_id,
+            "occupation": None,
+            "education": None,
+            "bio_text": "Official biography for Stored Missing.",
+            "bio_source_url": "https://bioguide.congress.gov/search/bio/F000021",
+            "bio_license": "public_domain",
+        },
+    ]
+
+
+def test_run_federal_enrichment_requests_official_bio_when_stored_bio_is_whitespace(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from core.people.enrichment.models import EnrichmentAttempt
+    from core.people.enrichment.strategy_official_bio import OfficialBioStrategy
+
+    person_id = uuid4()
+    official_bio_url = "https://bioguide.congress.gov/search/bio/F000030"
+    targets = [
+        ScopeTarget(
+            person_id=person_id,
+            canonical_name="Whitespace Stored Bio",
+            roster_bio_url=official_bio_url,
+            wikidata_entity_id="Q100030",
+            bioguide_id="F000030",
+        )
+    ]
+    captured_bio_updates: list[dict[str, object]] = []
+    official_bio_requested_fields: list[tuple[str, ...]] = []
+
+    _install_federal_scope_targets(monkeypatch, targets)
+    _install_person_lookup(
+        monkeypatch,
+        {
+            person_id: Person(
+                id=person_id,
+                canonical_name="Whitespace Stored Bio",
+                bio_text="   ",
+            )
+        },
+    )
+    monkeypatch.setattr(
+        "core.people.enrichment.orchestrator.db.update_person_bio_fields_if_missing",
+        lambda _conn, **kwargs: captured_bio_updates.append(kwargs) or ("bio_text", "bio_source_url", "bio_license"),
+    )
+    _install_bio_source_record_mocks(monkeypatch)
+    monkeypatch.setattr(
+        "core.people.enrichment.orchestrator.db_ingest.insert_field_provenance",
+        lambda *_args, **_kwargs: uuid4(),
+    )
+    _install_empty_federal_roster_and_portrait_mocks(monkeypatch)
+
+    def _official_bio_fetch(
+        self: OfficialBioStrategy,
+        target: CandidateEnrichmentTarget,
+        missing_fields: tuple[str, ...],
+    ) -> tuple[CandidateEnrichmentRecord, EnrichmentAttempt]:
+        official_bio_requested_fields.append(missing_fields)
+        if "biography" not in missing_fields:
+            return CandidateEnrichmentRecord(), EnrichmentAttempt.no_data(
+                source=self.source_name,
+                requested_fields=missing_fields,
+            )
+        return (
+            CandidateEnrichmentRecord(
+                biography="Official biography for whitespace stored bio.",
+                bio_source_url=target.roster_bio_url,
+                bio_license="public_domain",
+            ),
+            EnrichmentAttempt.success(source=self.source_name, requested_fields=missing_fields),
+        )
+
+    monkeypatch.setattr(OfficialBioStrategy, "fetch", _official_bio_fetch)
+    _install_wikipedia_prefetch(monkeypatch, title_cache={"Q100030": "Whitespace_Stored_Bio"}, summary_cache={})
+
+    summary = run_federal_enrichment(object(), source_record_id=uuid4())
+
+    assert summary["processed"] == 1
+    assert official_bio_requested_fields == [
+        (
+            "occupation",
+            "education",
+            "biography",
+            "portrait_image_url",
+            "campaign_website_url",
+            "wikipedia_url",
+        )
+    ]
+    assert captured_bio_updates == [
+        {
+            "person_id": person_id,
+            "occupation": None,
+            "education": None,
+            "bio_text": "Official biography for whitespace stored bio.",
+            "bio_source_url": official_bio_url,
+            "bio_license": "public_domain",
+        }
+    ]
+
+
 def test_run_federal_enrichment_uses_federal_chain_builder_unless_chain_is_injected(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1633,6 +2301,61 @@ def test_run_federal_enrichment_uses_federal_chain_builder_unless_chain_is_injec
     assert [target.person_id for target in official_bio_targets] == [person_id]
     assert captured_bio_texts == ["Federal biography text.", None]
     assert len(injected_chain.calls) == 1
+
+
+def test_run_federal_enrichment_prefers_official_bio_for_residual_with_federal_identifiers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    probe = _build_federal_residual_probe()
+    _install_federal_residual_db_mocks(monkeypatch, probe)
+    _install_federal_residual_provenance_mocks(monkeypatch, probe)
+    _install_federal_residual_strategy_mocks(monkeypatch, probe)
+
+    summary = run_federal_enrichment(object(), source_record_id=probe.run_source_record_id)
+
+    assert summary["processed"] == 1
+    assert summary["portrait_writes"] == 1
+    assert summary["bio_updates"] == 3
+    assert summary["field_provenance_writes"] == 2
+    assert probe.captured_bio_updates == [
+        {
+            "person_id": probe.person_id,
+            "occupation": None,
+            "education": None,
+            "bio_text": "Official federal biography.",
+            "bio_source_url": probe.official_bio_url,
+            "bio_license": "public_domain",
+        }
+    ]
+    assert probe.wikipedia_calls == [
+        (
+            "occupation",
+            "education",
+            "portrait_image_url",
+            "campaign_website_url",
+            "wikipedia_url",
+        )
+    ]
+    assert len(probe.inserted_bio_source_records) == 1
+    assert probe.inserted_bio_source_records[0].data_source_id == probe.run_data_source_id
+    assert probe.inserted_bio_source_records[0].source_record_key == probe.official_bio_url
+    assert probe.inserted_bio_source_records[0].source_url == probe.official_bio_url
+    assert probe.inserted_bio_source_records[0].raw_fields == {
+        "person_id": str(probe.person_id),
+        "field": "bio_text",
+        "bio_source_url": probe.official_bio_url,
+        "bio_license": "public_domain",
+    }
+    assert probe.provenance_calls == [
+        ("person", probe.person_id, "bio_text", "Official federal biography.", probe.official_bio_source_record_id),
+        ("person", probe.person_id, "bio_license", "public_domain", probe.official_bio_source_record_id),
+    ]
+    assert len(probe.inserted_portraits) == 1
+    assert probe.inserted_portraits[0].person_id == probe.person_id
+    assert probe.inserted_portraits[0].source_record_id == probe.run_source_record_id
+    assert probe.inserted_portraits[0].status == "active"
+    assert probe.inserted_portraits[0].source_image_url == probe.portrait_url
+    assert probe.inserted_portraits[0].rights_status == "public_domain"
 
 
 def test_run_federal_enrichment_does_not_query_or_apply_sboe_candidate_data(

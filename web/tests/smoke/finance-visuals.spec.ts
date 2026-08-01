@@ -15,6 +15,10 @@ import {
   SMOKE_CANDIDATE_SUPPORT_TOTAL,
   SMOKE_CANDIDATE_TOTAL_RAISED,
   SMOKE_CANDIDATE_TOTAL_SPENT,
+  SMOKE_FINANCE_LIVE_PERSON_ID,
+  SMOKE_FINANCE_LIVE_TOP_DONOR_ROWS,
+  SMOKE_FINANCE_LIVE_TOP_EMPLOYER_ROWS,
+  SMOKE_FINANCE_LIVE_TOP_SPENDER_ROWS,
   SMOKE_COMMITTEE_CASH_TREND_COVERAGE_META,
   SMOKE_COMMITTEE_CASH_TREND_FIRST_BALANCE,
   SMOKE_COMMITTEE_CASH_TREND_FIRST_PERIOD,
@@ -55,16 +59,16 @@ import {
   SMOKE_PERSON_REPORTED_TRANSACTIONS_BY_SIZE_SUMMARY,
   SMOKE_PERSON_SELECTED_CYCLE,
   SMOKE_PERSON_CONTRIBUTION_CHART_COVERAGE_META,
-  SMOKE_PERSON_TOP_DONOR_ONE_TOTAL,
-  SMOKE_PERSON_TOP_DONOR_ONE_NAME,
-  SMOKE_PERSON_TOP_EMPLOYER_ONE_TOTAL,
-  SMOKE_PERSON_TOP_EMPLOYER_ONE_NAME,
+  SMOKE_PERSON_TOP_DONOR_ROWS,
+  SMOKE_PERSON_TOP_EMPLOYER_ROWS,
+  SMOKE_PERSON_TOP_SPENDER_ROWS,
   SMOKE_PERSON_SUMMARY_CHART_COVERAGE_META,
   SMOKE_PERSON_TOP_SPENDER_NAME,
   SMOKE_PERSON_TOP_SPENDER_TOTAL,
   SMOKE_PERSON_UNITEMIZED_EXCLUSION_NOTE,
   SMOKE_USE_LIVE_API
 } from "./fixtures";
+import { seedLiveCongressDirectorySmoke } from "./smoke-seed-sql";
 import {
   BAR_SERIES_MARK_SELECTOR,
   LINE_SERIES_MARK_SELECTOR,
@@ -75,7 +79,6 @@ import {
   expectNoHorizontalOverflow,
   expectNoMaterialNearBlackOverlay,
   expectNoOpaqueNearBlackPaints,
-  expectNonZeroChartBox,
   expectRealChartRender
 } from "./smoke-helpers";
 
@@ -91,6 +94,29 @@ const MOBILE_VIEWPORT = VIEWPORTS.find((viewport) => viewport.name === "mobile")
   height: 1100
 };
 const IS_PRODUCTION_SMOKE_MODE = process.env.SMOKE_MODE === "production";
+type RankingRowExpectation = {
+  name: string;
+  total: string;
+  transactions: string;
+  stance?: string;
+};
+
+type RankingTableExpectations = {
+  topDonors: readonly RankingRowExpectation[];
+  topEmployers: readonly RankingRowExpectation[];
+  topSpenders: readonly RankingRowExpectation[];
+};
+
+const FIXTURE_RANKING_TABLE_EXPECTATIONS: RankingTableExpectations = {
+  topDonors: SMOKE_PERSON_TOP_DONOR_ROWS,
+  topEmployers: SMOKE_PERSON_TOP_EMPLOYER_ROWS,
+  topSpenders: SMOKE_PERSON_TOP_SPENDER_ROWS
+};
+const LIVE_RANKING_TABLE_EXPECTATIONS: RankingTableExpectations = {
+  topDonors: SMOKE_FINANCE_LIVE_TOP_DONOR_ROWS,
+  topEmployers: SMOKE_FINANCE_LIVE_TOP_EMPLOYER_ROWS,
+  topSpenders: SMOKE_FINANCE_LIVE_TOP_SPENDER_ROWS
+};
 
 const CHARTS = [
   {
@@ -135,7 +161,6 @@ test.describe("fixture-backed finance visuals", () => {
         const region = await chartRegion(page, chart.label);
         chartRegions.push(region);
         await expect(region).toBeVisible();
-        await expectNonZeroChartBox(region, chart.markSelector);
         await expectRealChartRender(region, chart.markSelector);
       }
       await expectNoOpaqueNearBlackPaints(chartRegions);
@@ -168,7 +193,6 @@ test.describe("fixture-backed finance visuals", () => {
         "Zero-centered support and oppose spending comparison"
       );
       await expect(outsideSpendingRegion).toBeVisible();
-      await expectNonZeroChartBox(outsideSpendingRegion, BAR_SERIES_MARK_SELECTOR);
       await expectRealChartRender(outsideSpendingRegion, BAR_SERIES_MARK_SELECTOR);
       await expectNoOpaqueNearBlackPaints(outsideSpendingRegion);
       await expectNoHorizontalOverflow(page);
@@ -218,7 +242,6 @@ test.describe("fixture-backed finance visuals", () => {
 
       const cashTrendRegion = await chartRegion(page, "Cash on hand trend by filing period");
       await expect(cashTrendRegion).toBeVisible();
-      await expectNonZeroChartBox(cashTrendRegion, LINE_SERIES_MARK_SELECTOR);
       await expectRealChartRender(cashTrendRegion, LINE_SERIES_MARK_SELECTOR);
       await expectNoOpaqueNearBlackPaints(cashTrendRegion);
       await expectNoHorizontalOverflow(page);
@@ -257,13 +280,37 @@ test.describe("fixture-backed finance visuals", () => {
   });
 });
 
+test.describe.serial("live person finance rankings known-answer smoke", () => {
+  test.skip(!SMOKE_USE_LIVE_API, "live-mode only — set SMOKE_USE_LIVE_API=1");
+
+  let cleanupLiveFinanceSmoke: (() => Promise<void>) | undefined;
+
+  test.beforeAll(async () => {
+    cleanupLiveFinanceSmoke = await seedLiveCongressDirectorySmoke("finance");
+  });
+
+  test.afterAll(async () => {
+    await cleanupLiveFinanceSmoke?.();
+  });
+
+  test("person finance tables expose complete donor, employer, and outside-spender rankings", async ({
+    page
+  }: {
+    page: Page;
+  }) => {
+    await page.goto(`/person/${SMOKE_FINANCE_LIVE_PERSON_ID}`);
+    await expect(page.getByTestId("person-top-donors-scroll")).toBeVisible();
+    await expectRankingTables(page, LIVE_RANKING_TABLE_EXPECTATIONS);
+  });
+});
+
 async function expectPersonFinanceSemantics(page: Page): Promise<void> {
   await expectSelectedCycleState(page);
   await expectContributionTotalToggle(page);
   await expectSizeBucketToggle(page);
   await expectMoneyAtGlance(page);
   await expectChartSummariesAndTables(page);
-  await expectRankingTables(page);
+  await expectRankingTables(page, FIXTURE_RANKING_TABLE_EXPECTATIONS);
   await expectSourceLinks(page);
 }
 
@@ -507,23 +554,37 @@ async function expectDisclosureKeyboardFlow(chart: Locator): Promise<void> {
   await expect(disclosure).toHaveAttribute("open", "");
 }
 
-async function expectRankingTables(page: Page): Promise<void> {
+async function expectRankingTables(
+  page: Page,
+  expected: RankingTableExpectations
+): Promise<void> {
   await expect(
     page.getByRole("heading", { name: SMOKE_PERSON_OUTSIDE_SPENDING_HEADING, exact: true })
   ).toBeVisible();
   await expect(page.getByText(SMOKE_PERSON_UNITEMIZED_EXCLUSION_NOTE, { exact: true })).toBeVisible();
   await expect(page.getByText(SMOKE_PERSON_APPROXIMATE_GEOGRAPHY_NOTE, { exact: true })).toHaveCount(2);
-  const topDonorRow = page.getByTestId("person-top-donors-scroll").getByRole("row").nth(1);
-  await expect(topDonorRow).toContainText(SMOKE_PERSON_TOP_DONOR_ONE_NAME);
-  await expect(topDonorRow).toContainText(SMOKE_PERSON_TOP_DONOR_ONE_TOTAL);
-  const topEmployerRow = page.getByTestId("person-top-employers-scroll").getByRole("row").nth(1);
-  await expect(topEmployerRow).toContainText(SMOKE_PERSON_TOP_EMPLOYER_ONE_NAME);
-  await expect(topEmployerRow).toContainText(SMOKE_PERSON_TOP_EMPLOYER_ONE_TOTAL);
-  await expect(page.getByText(SMOKE_CANDIDATE_SUPPORT_TOTAL, { exact: true })).toHaveCount(2);
-  await expect(page.getByText(SMOKE_CANDIDATE_OPPOSE_TOTAL, { exact: true })).toHaveCount(2);
-  const topSpenderRow = page.getByTestId("person-ie-top-spenders-scroll").getByRole("row").nth(1);
-  await expect(topSpenderRow).toContainText(SMOKE_PERSON_TOP_SPENDER_NAME);
-  await expect(topSpenderRow).toContainText(SMOKE_PERSON_TOP_SPENDER_TOTAL);
+  const outsideSpendingChart = page.getByTestId("person-outside-spending");
+  await expect(outsideSpendingChart.getByText(SMOKE_CANDIDATE_SUPPORT_TOTAL, { exact: true }).first()).toBeVisible();
+  await expect(outsideSpendingChart.getByText(SMOKE_CANDIDATE_OPPOSE_TOTAL, { exact: true }).first()).toBeVisible();
+  await expectRankingRows(page.getByTestId("person-top-donors-scroll"), expected.topDonors);
+  await expectRankingRows(page.getByTestId("person-top-employers-scroll"), expected.topEmployers);
+  await expectRankingRows(page.getByTestId("person-ie-top-spenders-scroll"), expected.topSpenders);
+}
+
+async function expectRankingRows(
+  region: Locator,
+  expectedRows: readonly RankingRowExpectation[]
+): Promise<void> {
+  const rows = region.getByRole("row");
+  await expect(rows).toHaveCount(expectedRows.length + 1);
+
+  for (const [index, row] of expectedRows.entries()) {
+    await expect(rows.nth(index + 1)).toHaveAccessibleName(expectedRankingRowName(row));
+  }
+}
+
+function expectedRankingRowName(row: RankingRowExpectation): string {
+  return [row.name, row.stance, row.total, row.transactions].filter(Boolean).join(" ");
 }
 
 async function expectSourceLinks(page: Page): Promise<void> {

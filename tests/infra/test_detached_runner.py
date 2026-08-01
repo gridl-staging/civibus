@@ -295,7 +295,7 @@ def test_start_python_session_fallback_keeps_job_alive_after_launcher_exits(tmp_
 def test_wait_uses_child_identity_when_wrapper_identity_races(tmp_path: Path) -> None:
     job_root = tmp_path / "jobs"
     job_name = "child_identity_fallback"
-    start = _run_runner(job_root, "start", job_name, "--", *_fixture_command(exit_code=0, sleep_seconds="2.0"))
+    start = _run_runner(job_root, "start", job_name, "--", *_fixture_command(exit_code=0, sleep_seconds="5.0"))
     assert start.returncode == 0, start.stderr
 
     identity_path = job_root / job_name / "process_identity"

@@ -97,6 +97,7 @@ class RefreshJob:
     run_callable: Callable[[], object]
     refresh_history_key: str | None = None
     activity_denominator_result_field: str | None = None
+    side_effects_repaired_by_job_key: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -520,15 +521,96 @@ def _run_gated_job(
     connection: psycopg.Connection,
     job: RefreshJob,
     *,
-    force: bool,
+    last_pull_at: datetime | None,
     now: datetime,
 ) -> RefreshRunResult:
-    if not force:
-        latest_pull_at = _select_latest_pull_at(connection, job)
-        if not should_run_job(job, last_pull_at=latest_pull_at, now=now):
-            return _build_result(key=job.key, status="skipped", message="Skipped by cadence gate")
+    if not should_run_job(job, last_pull_at=last_pull_at, now=now):
+        return _build_result(key=job.key, status="skipped", message="Skipped by cadence gate")
 
     return run_job(connection, job, dry_run=False)
+
+
+def _record_repair_pair_alarm(
+    connection: psycopg.Connection,
+    disturbing_job: RefreshJob,
+    repair_job: RefreshJob,
+    *,
+    last_pull_at_by_key: Mapping[str, datetime | None],
+) -> RefreshRunResult:
+    disturbing_last_pull_at = last_pull_at_by_key[disturbing_job.key]
+    repair_last_pull_at = last_pull_at_by_key[repair_job.key]
+    message = (
+        f"Repair-pair partial run: disturbing_job={disturbing_job.key} "
+        f"last_pull_at={disturbing_last_pull_at.isoformat() if disturbing_last_pull_at else None}; "
+        f"repair_job={repair_job.key} "
+        f"last_pull_at={repair_last_pull_at.isoformat() if repair_last_pull_at else None}"
+    )
+    recorded_at = _utc_now()
+    try:
+        _record_refresh_run(
+            connection,
+            disturbing_job,
+            pull_status="failed",
+            counts=_zero_loader_counts(),
+            started_at=recorded_at,
+            completed_at=recorded_at,
+            metadata_updates=0,
+            message=message,
+            error=message,
+        )
+        connection.commit()
+    except Exception as error:  # noqa: BLE001
+        try:
+            connection.rollback()
+        except Exception:
+            pass
+        return _build_result(
+            key=disturbing_job.key,
+            status="failed",
+            message=message,
+            error=f"{message}; alarm ledger recording failed: {error}",
+        )
+    return _build_result(
+        key=disturbing_job.key,
+        status="failed",
+        message=message,
+        error=message,
+    )
+
+
+def _append_repair_pair_alarms(
+    connection: psycopg.Connection,
+    jobs: list[RefreshJob],
+    results: list[RefreshRunResult],
+    *,
+    last_pull_at_by_key: Mapping[str, datetime | None],
+    on_result: Callable[[RefreshRunResult], None] | None,
+) -> None:
+    jobs_by_key = {job.key: job for job in jobs}
+    results_by_key = {result.key: result for result in results}
+    for disturbing_job in jobs:
+        repair_job_key = disturbing_job.side_effects_repaired_by_job_key
+        repair_job = jobs_by_key.get(repair_job_key) if repair_job_key is not None else None
+        disturbing_result = results_by_key.get(disturbing_job.key)
+        repair_result = results_by_key.get(repair_job_key) if repair_job_key is not None else None
+        if (
+            repair_job is None
+            or disturbing_result is None
+            or repair_result is None
+            or disturbing_result.status != "success"
+            or repair_result.status != "skipped"
+        ):
+            continue
+
+        # A weekly trigger can run the clobbering job while manual recovery keeps
+        # its repair job inside the cadence freshness window.
+        alarm = _record_repair_pair_alarm(
+            connection,
+            disturbing_job,
+            repair_job,
+            last_pull_at_by_key=last_pull_at_by_key,
+        )
+        _record_result(results, alarm, on_result=on_result)
 
 
 def run_job(
@@ -618,6 +700,7 @@ def run_all_jobs(
         raise ValueError("run_all_jobs requires a database connection when dry_run=False")
 
     results: list[RefreshRunResult] = []
+    last_pull_at_by_key: dict[str, datetime | None] = {}
     resolved_now = _resolve_now(now)
     for job in jobs:
         if dry_run:
@@ -626,7 +709,14 @@ def run_all_jobs(
 
         assert connection is not None  # guarded above
         try:
-            result = _run_gated_job(connection, job, force=force, now=resolved_now)
+            last_pull_at = None if force else _select_latest_pull_at(connection, job)
+            last_pull_at_by_key[job.key] = last_pull_at
+            result = _run_gated_job(
+                connection,
+                job,
+                last_pull_at=last_pull_at,
+                now=resolved_now,
+            )
             _finalize_job_transaction(connection, result)
         except Exception as error:  # noqa: BLE001
             try:
@@ -642,6 +732,16 @@ def run_all_jobs(
         _record_result(results, result, on_result=on_result)
         if stop_on_failure and result.status in _FAILING_STATUSES:
             break
+
+    if not dry_run:
+        assert connection is not None  # guarded above
+        _append_repair_pair_alarms(
+            connection,
+            jobs,
+            results,
+            last_pull_at_by_key=last_pull_at_by_key,
+            on_result=on_result,
+        )
 
     return results
 
@@ -823,7 +923,7 @@ def main(argv: list[str] | None = None) -> int:
             if connection is not None:
                 connection.close()
 
-    return 1 if any(result.status in _FAILING_STATUSES for result in results) else 0
+    return int(any(result.status in _FAILING_STATUSES for result in results))
 
 
 if __name__ == "__main__":

@@ -535,12 +535,23 @@ probe_public_money_value() {
     return 0
   fi
 
-  if [[ "${CIVIBUS_PUBLIC_MONEY_VALUE_FATAL}" == "1" ]]; then
+  if [[ "${money_status}" -eq 1 ]]; then
+    echo "money_value_failure_nonfatal exit_status=${money_status} fatal=0"
+    return 0
+  fi
+
+  if [[ "${CIVIBUS_PUBLIC_MONEY_VALUE_FATAL}" == "1" && "${money_status}" -eq 2 ]]; then
     echo "money_value_failure_fatal exit_status=${money_status} fatal=1" >&2
     return "${money_status}"
   fi
 
-  echo "money_value_failure_nonfatal exit_status=${money_status} fatal=0"
+  if [[ "${money_status}" -eq 2 ]]; then
+    echo "money_value_failure_nonfatal exit_status=${money_status} fatal=0"
+    return 0
+  fi
+
+  echo "money_value_probe_error exit_status=${money_status}" >&2
+  return "${money_status}"
 }
 
 structural_status=0

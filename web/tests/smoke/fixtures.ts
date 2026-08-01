@@ -194,11 +194,23 @@ export const SMOKE_PUBLIC_API_HEADING = "Public API";
 export const SMOKE_PUBLIC_API_ENDPOINTS = [
   "GET /api/public/v1/federal/officials",
   "GET /api/public/v1/federal/officials/{person_id}/money",
+  "GET /api/public/v1/federal/officials/{person_id}/contributors",
+  "GET /api/public/v1/federal/officials/{person_id}/employers",
   "GET /api/public/v1/federal/export.json",
   "GET /api/public/v1/federal/export.csv"
 ] as const;
 export const SMOKE_PUBLIC_API_MIGRATION_HEADING = "OpenSecrets and ProPublica migration mapping";
 export const SMOKE_PUBLIC_API_SAMPLE_JSON_VALUE = '"office_name": "U.S. House NC-01"';
+export const SMOKE_PUBLIC_API_CONTRIBUTOR_CURL =
+  "/api/public/v1/federal/officials/11111111-1111-1111-1111-111111111111/contributors";
+export const SMOKE_PUBLIC_API_EMPLOYER_CURL =
+  "/api/public/v1/federal/officials/11111111-1111-1111-1111-111111111111/employers";
+export const SMOKE_PUBLIC_API_CONTRIBUTOR_SAMPLE_NAME = '"name": "Sample Contributor"';
+export const SMOKE_PUBLIC_API_CONTRIBUTOR_SAMPLE_AMOUNT = '"total_amount": "5000.00"';
+export const SMOKE_PUBLIC_API_EMPLOYER_UNKNOWN_BUCKET = '"industry": "UNKNOWN_INDUSTRY"';
+export const SMOKE_PUBLIC_API_EMPLOYER_COVERAGE_FIELD = '"sampled_coverage_percentage": "5.843340"';
+export const SMOKE_PUBLIC_API_CAND_CONTRIB_NEED = "OpenSecrets candContrib";
+export const SMOKE_PUBLIC_API_CAND_INDUSTRY_NEED = "OpenSecrets candIndustry";
 export const SMOKE_PUBLIC_API_CSV_HEADER =
   "person_id,person_name,has_fec_money,candidate_id,total_raised,total_spent,net,cash_on_hand,summary_source,ie_support_total,ie_oppose_total,ie_support_count,ie_oppose_count,source_urls";
 export const SMOKE_PUBLIC_API_REFERENCE_LINKS = ["/api/openapi.json", "/api/docs", "/api/redoc"] as const;
@@ -408,6 +420,74 @@ export const SMOKE_CONGRESS_CANDIDATE_ID = "90000000-0000-4000-8000-000000000412
 export const SMOKE_CONGRESS_PRINCIPAL_COMMITTEE_ID = "90000000-0000-4000-8000-000000000413";
 export const SMOKE_CONGRESS_IE_COMMITTEE_ID = "90000000-0000-4000-8000-000000000414";
 export const SMOKE_CONGRESS_FILING_ID = "90000000-0000-4000-8000-000000000415";
+export const SMOKE_CHART_LIVE_PERSON_ID = "94000000-0000-4000-8000-000000000411";
+export const SMOKE_FINANCE_LIVE_PERSON_ID = "95000000-0000-4000-8000-000000000411";
+// Live person-chart known-answer inputs. The charts-scenario 2026 committee summary
+// seeds these so the receipt-source composition reconciles: individual + PAC sum to the
+// total, and the total equals the candidate's official total_raised (the share
+// denominator), yielding an exact 50/50 split. Kept here so the seed builder and the
+// live row expectations read the same literals.
+export const SMOKE_CHART_LIVE_RECEIPT_TOTAL_DOLLARS = "250.00";
+export const SMOKE_CHART_LIVE_RECEIPT_INDIVIDUAL_DOLLARS = "125.00";
+export const SMOKE_CHART_LIVE_RECEIPT_PAC_DOLLARS = "125.00";
+export const SMOKE_CHART_LIVE_SUMMARY_COVERAGE_END = "2026-12-31";
+export const SMOKE_CHART_LIVE_ALPHA_SUPPORT_TOTAL = "$10,000.00";
+export const SMOKE_CHART_LIVE_ALPHA_OPPOSE_TOTAL = "$8,500.00";
+export const SMOKE_CHART_LIVE_BETA_SUPPORT_TOTAL = "$5,000.00";
+export const SMOKE_COMPARE_UNAVAILABLE_VALUE = "No reported/loaded money.";
+export const SMOKE_FINANCE_LIVE_IE_COMMITTEE_B_NAME = "Civibus Future PAC";
+export const SMOKE_COMPARE_LIVE_INPUTS = [
+  {
+    personId: "91000000-0000-4000-8000-000000000411",
+    candidateId: "91000000-0000-4000-8000-000000000412",
+    committeeId: "91000000-0000-4000-8000-000000000413",
+    linkId: "91000000-0000-4000-8000-000000000408",
+    fecCandidateId: "H0NC01991",
+    fecCommitteeId: "C91000001",
+    name: "Casey Exact Representative",
+    totalRaised: "250.00",
+    totalSpent: "80.00",
+    cashOnHand: "170.00",
+    candidateContrib: "50.00",
+    candidateLoans: "25.00",
+    candidateLoanRepay: "15.00",
+    expectedSelfFundedShare: "24.0%"
+  },
+  {
+    personId: "92000000-0000-4000-8000-000000000411",
+    candidateId: "92000000-0000-4000-8000-000000000412",
+    committeeId: "92000000-0000-4000-8000-000000000413",
+    linkId: "92000000-0000-4000-8000-000000000408",
+    fecCandidateId: "S0NC01992",
+    fecCommitteeId: "C92000001",
+    name: "Riley Exact Senator",
+    totalRaised: "100.00",
+    totalSpent: "20.00",
+    cashOnHand: null,
+    candidateContrib: "10.00",
+    candidateLoans: "5.00",
+    candidateLoanRepay: "0.00",
+    expectedSelfFundedShare: "15.0%"
+  }
+] as const;
+export const SMOKE_COMPARE_LIVE_OFFICEHOLDERS = SMOKE_COMPARE_LIVE_INPUTS.map((input) => {
+  return {
+    id: input.personId,
+    name: input.name,
+    expectedTotals: {
+      "total-raised": formatSmokeCurrency(input.totalRaised),
+      "total-spent": formatSmokeCurrency(input.totalSpent),
+      "cash-on-hand":
+        input.cashOnHand === null
+          ? SMOKE_COMPARE_UNAVAILABLE_VALUE
+          : formatSmokeCurrency(input.cashOnHand),
+      "ie-support": SMOKE_COMPARE_UNAVAILABLE_VALUE,
+      "ie-oppose": SMOKE_COMPARE_UNAVAILABLE_VALUE,
+      "small-dollar-share": SMOKE_COMPARE_UNAVAILABLE_VALUE,
+      "self-funded-share": input.expectedSelfFundedShare
+    }
+  };
+});
 // Live-mode /search smoke uses a fully independent officeholder fixture
 // (Zorktown Q. Testperson, U.S. House NC-02, DEM) plus a same-name committee.
 // The seed shape mirrors buildCongressSmokeSeedSql() but every id, FEC key,
@@ -538,22 +618,29 @@ const SMOKE_MONTHLY_CONTRIBUTIONS_BY_MONTH: Record<
   "2026-01": { dollars: "$125.00", transactions: "1" },
   "2026-02": { dollars: "$225.00", transactions: "1" }
 };
-export const SMOKE_CHART_DATA_ACCESS_MONTHLY_ROWS = Array.from({ length: 54 }, (_, index) => {
-  const year = 2022 + Math.floor(index / SMOKE_MONTH_NAMES.length);
-  const monthIndex = index % SMOKE_MONTH_NAMES.length;
-  const monthKey = `${year}-${String(monthIndex + 1).padStart(2, "0")}`;
-  const contribution =
-    SMOKE_MONTHLY_CONTRIBUTIONS_BY_MONTH[monthKey] ?? SMOKE_ZERO_MONTHLY_CONTRIBUTION;
+function buildSmokeMonthlyContributionRows(startYear: number, monthCount: number) {
+  return Array.from({ length: monthCount }, (_, index) => {
+    const year = startYear + Math.floor(index / SMOKE_MONTH_NAMES.length);
+    const monthIndex = index % SMOKE_MONTH_NAMES.length;
+    const monthKey = `${year}-${String(monthIndex + 1).padStart(2, "0")}`;
+    const contribution =
+      SMOKE_MONTHLY_CONTRIBUTIONS_BY_MONTH[monthKey] ?? SMOKE_ZERO_MONTHLY_CONTRIBUTION;
 
-  return {
-    label: `${SMOKE_MONTH_NAMES[monthIndex]} ${year}`,
-    values: [
-      `Dollars: ${contribution.dollars}`,
-      `Transactions: ${contribution.transactions}`,
-      "Coverage: Covered"
-    ]
-  };
-});
+    return {
+      label: `${SMOKE_MONTH_NAMES[monthIndex]} ${year}`,
+      values: [
+        `Dollars: ${contribution.dollars}`,
+        `Transactions: ${contribution.transactions}`,
+        "Coverage: Covered"
+      ]
+    };
+  });
+}
+export const SMOKE_CHART_DATA_ACCESS_MONTHLY_ROWS = buildSmokeMonthlyContributionRows(2022, 54);
+export const SMOKE_CHART_LIVE_DATA_ACCESS_MONTHLY_ROWS = buildSmokeMonthlyContributionRows(
+  2025,
+  24
+);
 export const SMOKE_CHART_DATA_ACCESS_ROWS = {
   receiptComposition: [
     {
@@ -619,6 +706,84 @@ export const SMOKE_CHART_DATA_ACCESS_ROWS = {
     }
   ]
 } as const;
+export const SMOKE_CHART_LIVE_DATA_ACCESS_ROWS = {
+  ...SMOKE_CHART_DATA_ACCESS_ROWS,
+  monthlyContributions: SMOKE_CHART_LIVE_DATA_ACCESS_MONTHLY_ROWS,
+  geographyShare: [
+    {
+      label: "In district",
+      values: ["Dollars: $125.00", "Transactions: 1", "Denominator: $350.00"]
+    },
+    {
+      label: "Elsewhere in state",
+      values: ["Dollars: $225.00", "Transactions: 1", "Denominator: $350.00"]
+    },
+    {
+      label: "Unknown",
+      values: ["Dollars: $0.00", "Transactions: 0", "Denominator: $350.00"]
+    }
+  ],
+  receiptComposition: [
+    {
+      label: "Individual contributions",
+      values: ["Dollars: $125.00", "Share: 50%", "Denominator: $250.00"]
+    },
+    {
+      label: "PAC/other committee contributions",
+      values: ["Dollars: $125.00", "Share: 50%", "Denominator: $250.00"]
+    },
+    {
+      label: "Party committee contributions",
+      values: ["Dollars: $0.00", "Share: 0%", "Denominator: $250.00"]
+    },
+    {
+      label: "Candidate funding",
+      values: ["Dollars: $0.00", "Share: 0%", "Denominator: $250.00"]
+    },
+    {
+      label: "Transfers from other authorized committees",
+      values: ["Dollars: $0.00", "Share: 0%", "Denominator: $250.00"]
+    },
+    {
+      label: "Other receipts",
+      values: ["Dollars: $0.00", "Share: 0%", "Denominator: $250.00"]
+    }
+  ],
+  outsideSpending: [
+    {
+      label: "Support spending",
+      values: ["Dollars: $15,000.00", "Transactions: 12"]
+    },
+    {
+      label: "Oppose spending",
+      values: ["Dollars: $8,500.00", "Transactions: 5"]
+    },
+    {
+      label: `Top spender: ${SMOKE_IE_COMMITTEE_A_NAME}`,
+      values: [
+        `Dollars: ${SMOKE_CHART_LIVE_ALPHA_SUPPORT_TOTAL}`,
+        "Transactions: 8",
+        "Stance: Support spending"
+      ]
+    },
+    {
+      label: `Top spender: ${SMOKE_IE_COMMITTEE_A_NAME}`,
+      values: [
+        `Dollars: ${SMOKE_CHART_LIVE_ALPHA_OPPOSE_TOTAL}`,
+        "Transactions: 5",
+        "Stance: Oppose spending"
+      ]
+    },
+    {
+      label: `Top spender: ${SMOKE_FINANCE_LIVE_IE_COMMITTEE_B_NAME}`,
+      values: [
+        `Dollars: ${SMOKE_CHART_LIVE_BETA_SUPPORT_TOTAL}`,
+        "Transactions: 4",
+        "Stance: Support spending"
+      ]
+    }
+  ]
+} as const;
 export const SMOKE_PERSON_UNITEMIZED_DOLLARS = "150.00";
 export const SMOKE_PERSON_SMALL_ITEMIZED_DOLLARS = "125.00";
 export const SMOKE_PERSON_LARGE_ITEMIZED_DOLLARS = "225.00";
@@ -656,7 +821,88 @@ export const SMOKE_PERSON_APPROXIMATE_GEOGRAPHY_NOTE =
   "District geography uses a Census 119th-Congress / 2020-ZCTA approximation.";
 export const SMOKE_PERSON_TOP_SPENDERS_HEADING = "Top spenders";
 export const SMOKE_PERSON_TOP_SPENDER_NAME = SMOKE_IE_COMMITTEE_A_NAME;
-export const SMOKE_PERSON_TOP_SPENDER_TOTAL = "$10,000.00";
+export const SMOKE_PERSON_TOP_SPENDER_TOTAL = SMOKE_CHART_LIVE_ALPHA_SUPPORT_TOTAL;
+export const SMOKE_PERSON_TOP_DONOR_ROWS = [
+  {
+    name: SMOKE_PERSON_TOP_DONOR_ONE_NAME,
+    total: SMOKE_PERSON_TOP_DONOR_ONE_TOTAL,
+    transactions: "1 transaction"
+  },
+  {
+    name: SMOKE_PERSON_TOP_DONOR_TWO_NAME,
+    total: SMOKE_PERSON_TOP_DONOR_TWO_TOTAL,
+    transactions: "1 transaction"
+  }
+] as const;
+export const SMOKE_PERSON_TOP_EMPLOYER_ROWS = [
+  {
+    name: SMOKE_PERSON_TOP_EMPLOYER_ONE_NAME,
+    total: SMOKE_PERSON_TOP_EMPLOYER_ONE_TOTAL,
+    transactions: "3 transactions"
+  },
+  {
+    name: SMOKE_PERSON_TOP_EMPLOYER_TWO_NAME,
+    total: SMOKE_PERSON_TOP_EMPLOYER_TWO_TOTAL,
+    transactions: "1 transaction"
+  },
+  {
+    name: SMOKE_PERSON_TOP_EMPLOYER_THREE_NAME,
+    total: SMOKE_PERSON_TOP_EMPLOYER_THREE_TOTAL,
+    transactions: "1 transaction"
+  }
+] as const;
+export const SMOKE_PERSON_TOP_SPENDER_ROWS = [
+  {
+    name: SMOKE_PERSON_TOP_SPENDER_NAME,
+    stance: "Support",
+    total: SMOKE_PERSON_TOP_SPENDER_TOTAL,
+    transactions: "8 expenditures"
+  }
+] as const;
+export const SMOKE_FINANCE_LIVE_TOP_DONOR_ROWS = [
+  { name: "Smoke Finance Donor One", total: "$225.00", transactions: "1 transaction" },
+  { name: "Smoke Finance Donor Two", total: "$200.00", transactions: "1 transaction" },
+  { name: "Smoke Finance Donor Three", total: "$175.00", transactions: "1 transaction" },
+  { name: "Smoke Finance Donor Four", total: "$150.00", transactions: "1 transaction" },
+  { name: "Smoke Finance Donor Five", total: "$25.00", transactions: "1 transaction" }
+] as const;
+export const SMOKE_FINANCE_LIVE_TOP_EMPLOYER_ROWS = [
+  {
+    name: SMOKE_PERSON_TOP_EMPLOYER_ONE_NAME,
+    total: SMOKE_PERSON_TOP_EMPLOYER_ONE_TOTAL,
+    transactions: "3 transactions"
+  },
+  {
+    name: SMOKE_PERSON_TOP_EMPLOYER_TWO_NAME,
+    total: SMOKE_PERSON_TOP_EMPLOYER_TWO_TOTAL,
+    transactions: "1 transaction"
+  },
+  {
+    name: SMOKE_PERSON_TOP_EMPLOYER_THREE_NAME,
+    total: SMOKE_PERSON_TOP_EMPLOYER_THREE_TOTAL,
+    transactions: "1 transaction"
+  }
+] as const;
+export const SMOKE_FINANCE_LIVE_TOP_SPENDER_ROWS = [
+  {
+    name: SMOKE_PERSON_TOP_SPENDER_NAME,
+    stance: "Support",
+    total: SMOKE_PERSON_TOP_SPENDER_TOTAL,
+    transactions: "8 expenditures"
+  },
+  {
+    name: SMOKE_PERSON_TOP_SPENDER_NAME,
+    stance: "Oppose",
+    total: SMOKE_CHART_LIVE_ALPHA_OPPOSE_TOTAL,
+    transactions: "5 expenditures"
+  },
+  {
+    name: SMOKE_FINANCE_LIVE_IE_COMMITTEE_B_NAME,
+    stance: "Support",
+    total: SMOKE_CHART_LIVE_BETA_SUPPORT_TOTAL,
+    transactions: "4 expenditures"
+  }
+] as const;
 export const SMOKE_PERSON_UNITEMIZED_BUCKET_LABEL = "Unitemized (<$200)";
 export const SMOKE_PERSON_UNITEMIZED_EXCLUSION_NOTE =
   "Unitemized contributions are excluded from count and geography charts.";

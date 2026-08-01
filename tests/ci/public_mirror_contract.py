@@ -244,6 +244,7 @@ PUBLIC_MIRROR_TEST_CLASSIFICATIONS: tuple[PublicMirrorTestClassification, ...] =
             "tests/keel/test_gate_l1.py::test_nc_anchor_keeps_ie_filing_index_non_primary_and_contribution_total_primary",
             "tests/keel/test_gate_l1.py::test_load_anchor_file_parses_committed_federal_anchor",
             "tests/keel/test_gate_l1.py::test_repo_audited_anchor_files_are_schema_valid",
+            "core/test_keel_gate_l14.py::TestFederalFirstStatus::test_active_officeholder_runtime_bounds_match_federal_anchor",
             "tests/keel/test_phase1_evidence_infrastructure.py::test_phase1_evidence_dir_exists",
             "tests/keel/test_sources_registry.py::test_sources_registry_evidence_refs_point_to_real_matching_artifacts",
         ),

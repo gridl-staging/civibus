@@ -699,6 +699,17 @@ def test_load_anchor_file_parses_committed_federal_anchor() -> None:
     assert race_metrics[0].unit == "count"
     assert race_metrics[0].expected_maximum >= Decimal("511")
 
+    # Seated-officeholder denominator is a RANGE, never an exact re-pin. The ceiling 543 is
+    # reachable only at zero vacancies; the floor is a cited/proxied concurrent-vacancy bound.
+    # See docs/reference/anchors/FEDERAL.md seated_federal_officials notes.
+    seated_metrics = [metric for metric in anchor.aggregate_expectations if metric.metric == "seated_federal_officials"]
+    assert len(seated_metrics) == 1
+    assert seated_metrics[0].unit == "count"
+    assert seated_metrics[0].expected_minimum == Decimal("535")
+    assert seated_metrics[0].expected_maximum == Decimal("543")
+    # Adding a second unit:count metric must not shift FEDERAL primary-metric selection.
+    assert keel_gate_l1.select_primary_metric(anchor).metric == "countable_federal_races"
+
 
 def test_repo_audited_anchor_files_are_schema_valid() -> None:
     anchors_root = Path(__file__).resolve().parents[2] / "docs" / "reference" / "anchors"

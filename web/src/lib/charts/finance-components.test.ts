@@ -108,6 +108,49 @@ describe("finance chart SSR components", () => {
     );
   });
 
+  it("drops unsafe disclosure and source links instead of rendering executable hrefs", () => {
+    const rendered = render(ChartFrame, {
+      props: {
+        ...baseFrame,
+        sources: [
+          { label: "Unsafe source", href: "javascript:alert(1)" },
+          { label: "Internal source", href: "/v1/filings/example-id" }
+        ],
+        testId: "chart-frame-unsafe-links",
+        title: "Outside spending",
+        unit: "dollars",
+        summary: {
+          sentence: "Outside spending reports $400.00 in support spending for the 2026 cycle."
+        },
+        exactRows: [
+          {
+            label: "Top spender: Example PAC",
+            values: [
+              {
+                label: "Unsafe filing",
+                value: "Unsafe filing",
+                href: "data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg=="
+              },
+              {
+                label: "Safe filing",
+                value: "Safe filing",
+                href: "/v1/filings/example-id"
+              }
+            ]
+          }
+        ],
+        state: { kind: "ready" }
+      }
+    });
+
+    expect(rendered.body).not.toContain('href="javascript:alert(1)"');
+    expect(rendered.body).not.toContain('href="data:text/html');
+    expect(rendered.body).toContain("<span>Unsafe source</span>");
+    expect(rendered.body).toContain("Unsafe filing");
+    expect(rendered.body).toContain('<a href="/v1/filings/example-id">Internal source</a>');
+    expect(rendered.body).toContain('<a href="/v1/filings/example-id">Safe filing</a>');
+  });
+
   it("renders receipt composition and suppresses proportional output when reconciliation fails", () => {
     const rows: ReceiptCompositionRow[] = [
       {
@@ -541,6 +584,52 @@ describe("finance chart SSR components", () => {
     expect(rendered.body).toContain(
       '<a href="https://www.fec.gov/data/filings/F456/">Source filing</a>'
     );
+  });
+
+  it("renders opposite-stance top spender rows for the same committee", () => {
+    const rows: OutsideSpendingRow[] = [
+      {
+        id: "support",
+        label: "Support spending",
+        stance: "support",
+        amount: 400,
+        transactionCount: 4
+      },
+      {
+        id: "oppose",
+        label: "Oppose spending",
+        stance: "oppose",
+        amount: 250,
+        transactionCount: 2
+      }
+    ];
+    const rendered = render(OutsideSpendingChart, {
+      props: {
+        ...baseFrame,
+        testId: "outside-spending-duplicate-spenders",
+        rows,
+        topSpenders: [
+          {
+            id: "same-committee",
+            label: "Example PAC",
+            stance: "support",
+            amount: 400,
+            transactionCount: 4
+          },
+          {
+            id: "same-committee",
+            label: "Example PAC",
+            stance: "oppose",
+            amount: 250,
+            transactionCount: 2
+          }
+        ]
+      }
+    });
+
+    expect(rendered.body.match(/Example PAC:/g)).toHaveLength(2);
+    expect(rendered.body).toContain("Support spending");
+    expect(rendered.body).toContain("Oppose spending");
   });
 
   it("binds outside spending row colors to stance instead of row position", () => {

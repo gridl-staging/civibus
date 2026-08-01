@@ -6,7 +6,6 @@ import {
   expectNoBackendFailureStates,
   expectNoChartFrameOverflow,
   expectNoHorizontalOverflow,
-  expectNonZeroChartBox,
   expectRealChartRender
 } from "./smoke-helpers";
 import {
@@ -18,7 +17,12 @@ import {
   compareOfficeholders,
   compareUnknownPersonId
 } from "./compare-fixtures";
-import { SMOKE_USE_LIVE_API } from "./fixtures";
+import {
+  seedLiveCongressDirectorySmoke,
+  SMOKE_COMPARE_LIVE_OFFICEHOLDERS,
+  SMOKE_COMPARE_UNAVAILABLE_VALUE,
+  SMOKE_USE_LIVE_API
+} from "./fixtures";
 
 const [delayedOfficeholder, nationalOfficeholder, noDataOfficeholder, errorOfficeholder] =
   compareOfficeholders;
@@ -242,6 +246,34 @@ test.describe("officeholder compare fixture smoke", () => {
   }
 });
 
+test.describe.serial("officeholder compare live known-answer smoke", () => {
+  test.skip(!SMOKE_USE_LIVE_API, "live-mode only — set SMOKE_USE_LIVE_API=1");
+
+  let cleanupLiveCompareSmoke: (() => Promise<void>) | null = null;
+
+  test.beforeAll(async () => {
+    cleanupLiveCompareSmoke = await seedLiveCongressDirectorySmoke("compare");
+  });
+
+  test.afterAll(async () => {
+    await cleanupLiveCompareSmoke?.();
+  });
+
+  test("renders all seven exact headline values for two isolated officeholders", async ({
+    page
+  }: {
+    page: Page;
+  }) => {
+    await page.goto(
+      `/compare?people=${SMOKE_COMPARE_LIVE_OFFICEHOLDERS.map(({ id }) => id).join(",")}`
+    );
+
+    await expectComparePage(page);
+    await expect(page.getByLabel("Headline totals", { exact: true })).toBeVisible();
+    await expectComparisonRows(page, SMOKE_COMPARE_LIVE_OFFICEHOLDERS);
+  });
+});
+
 async function expectComparePage(page: Page): Promise<void> {
   await expect(page.getByRole("heading", { name: "Compare officeholders", exact: true })).toBeVisible();
   await expect(page.getByLabel("Officeholder comparison", { exact: true })).toBeVisible();
@@ -287,7 +319,10 @@ async function expectVisibleFootnotes(page: Page): Promise<void> {
 
 async function expectComparisonRows(
   page: Page,
-  officeholders: readonly (typeof compareOfficeholders)[number][]
+  officeholders: readonly {
+    id: string;
+    expectedTotals: Record<(typeof compareMetricRows)[number]["id"], string>;
+  }[]
 ): Promise<void> {
   for (const [rowIndex, metric] of compareMetricRows.entries()) {
     await expect(page.getByRole("heading", { name: metric.label, exact: true })).toBeVisible();
@@ -300,12 +335,11 @@ async function expectComparisonRows(
       await expect(endLabel).toHaveText(officeholder.expectedTotals[metric.id]);
       await expectLocatorContained(row, endLabel);
 
-      const bars = page.getByTestId(`comparison-bar-${officeholder.id}`);
-      if (officeholder === noDataOfficeholder) {
-        await expect(bars).toHaveCount(0);
+      const bar = row.getByTestId(`comparison-bar-${officeholder.id}`);
+      if (officeholder.expectedTotals[metric.id] === SMOKE_COMPARE_UNAVAILABLE_VALUE) {
+        await expect(bar).toHaveCount(0);
         continue;
       }
-      const bar = bars.nth(rowIndex);
       await expect(bar).toBeVisible();
       await expectLocatorContained(row, bar);
     }
@@ -350,7 +384,6 @@ async function expectCompareCharts(
     for (const chartSuffix of ["monthly", "size", "geography", "outside-spending"]) {
       const chart = page.getByTestId(`compare-${officeholder.id}-${chartSuffix}`);
       await expect(chart).toBeVisible();
-      await expectNonZeroChartBox(chart, BAR_SERIES_MARK_SELECTOR);
       await expectRealChartRender(chart, BAR_SERIES_MARK_SELECTOR);
     }
   }

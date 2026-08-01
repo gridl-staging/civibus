@@ -333,8 +333,10 @@ export async function sampleVisibleRectPaints(region: Locator): Promise<SvgPaint
 
 export async function expectRealChartRender(region: Locator, markSelector: string): Promise<void> {
   // eslint-disable-next-line playwright/no-raw-locators -- the oracle must prove the chart package rendered an SVG.
-  expect(await region.locator("svg").count()).toBeGreaterThan(0);
-  expect(await region.locator(markSelector).count()).toBeGreaterThan(0);
+  await expect(region.locator("svg").first()).toBeVisible();
+  await expect
+    .poll(async () => (await sampleVisibleSvgPaints(region, markSelector)).length)
+    .toBeGreaterThan(0);
 }
 
 export async function expectNoOpaqueNearBlackPaints(regions: Locator | Locator[]): Promise<void> {
@@ -344,12 +346,6 @@ export async function expectNoOpaqueNearBlackPaints(regions: Locator | Locator[]
   ).flat();
   expect(samples.length).toBeGreaterThan(0);
   expect(samples.filter(isOpaqueNearBlack)).toEqual([]);
-}
-
-export async function expectNonZeroChartBox(region: Locator, markSelector: string): Promise<void> {
-  const box = await region.locator(markSelector).first().boundingBox();
-  expect(box?.width ?? 0).toBeGreaterThan(0);
-  expect(box?.height ?? 0).toBeGreaterThan(0);
 }
 
 export async function expectNoHorizontalOverflow(page: Page): Promise<void> {

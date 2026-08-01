@@ -53,8 +53,16 @@ def test_donor_search_bounds_resolved_donor_page_before_transaction_detail_rollu
     assert "resolved_donor_records AS MATERIALIZED" in sql
     assert "matching_donor_keys AS MATERIALIZED" in sql
     assert "page_donor_records AS MATERIALIZED" in sql
+    assert "scoped_matching_transactions AS MATERIALIZED" in sql
+    assert sql.index("matching_transactions AS MATERIALIZED") < sql.index(
+        "scoped_matching_transactions AS MATERIALIZED"
+    )
+    assert sql.index("scoped_matching_transactions AS MATERIALIZED") < sql.index(
+        "matching_donor_records AS MATERIALIZED"
+    )
     assert sql.index("LEFT JOIN core.donor_identity identity_record") < sql.index("matching_donor_keys AS MATERIALIZED")
     assert sql.index("matching_donor_keys AS MATERIALIZED") < sql.index("qualifying_transactions AS MATERIALIZED")
+    assert "FROM scoped_matching_transactions t" in sql
     assert "JOIN matching_donor_keys page_key" in sql
     assert "page_key.donor_key = record.donor_key" in sql
     assert "JOIN page_donor_records record" in sql

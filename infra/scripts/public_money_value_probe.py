@@ -20,6 +20,18 @@ STATUS_PASS = "PASS"
 STATUS_FAIL = "FAIL"
 STATUS_VACUOUS = "VACUOUS"
 EXPECTED_FEC_MONEY_ROWS = 540
+PROMOTED_FATAL_ASSERTIONS = frozenset(
+    {
+        "federal_export_http",
+        "specimen_total_raised",
+        "ie_support_nonzero",
+        "ie_oppose_nonzero",
+        "candidates_http",
+        "candidates_rows",
+        "committees_http",
+        "committees_rows",
+    }
+)
 MINIMUM_NONEMPTY_ROWS = 1
 HTTP_OK_STATUS = 200
 
@@ -355,11 +367,20 @@ def main() -> int:
         base_url = _normalized_base_url(args.base_url)
     except ValueError as error:
         print(f"money_value_probe_invalid_base_url {error}", file=sys.stderr)
-        return 1
+        return 3
     fixture_dir = Path(args.fixture_dir) if args.fixture_dir else None
-    report = evaluate_public_money_value(base_url, fixture_dir)
+    try:
+        report = evaluate_public_money_value(base_url, fixture_dir)
+    except Exception as error:  # noqa: BLE001 - probe must fail closed on unexpected runtime errors
+        print(f"money_value_probe_error {error.__class__.__name__}", file=sys.stderr)
+        return 3
     for assertion in report.assertions:
         print(assertion.format_line())
+    if any(
+        assertion.name in PROMOTED_FATAL_ASSERTIONS and assertion.status in {STATUS_FAIL, STATUS_VACUOUS}
+        for assertion in report.assertions
+    ):
+        return 2
     return 1 if report.failed else 0
 
 

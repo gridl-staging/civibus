@@ -216,16 +216,19 @@ def _collect_nc_geometry_summary() -> NcGeometrySummary | None:
 
 FEDERAL_OFFICE_NAMES = ("us_house", "us_senate", "us_house_delegate", "us_president", "us_vice_president")
 _EXPECTED_FEDERAL_SEATS = 543
-# The appended FEDERAL coverage row's denominator is now the countable federal-race universe
+# The appended FEDERAL coverage row's denominator is the countable federal-race universe
 # (civic.contest over federal offices) for the current cycle, not active officeholder seats.
 # 2026 universe: 435 US House + 33 Class-II Senate + 6 delegate seats = 474 regular races.
 # The 543 ceiling matches the federal-official v1 roster bound and admits the observed full
 # local race-spine load (511 contests) without widening beyond the federal launch slice.
-# See docs/reference/anchors/FEDERAL.md for the evidence-derived denominator.
+# The officeholder-quality gate separately checks active_officeholders, which is vacancy-
+# sensitive, against the seated_federal_officials range in docs/reference/anchors/FEDERAL.md.
+# total_seats remains exact federal office capacity and must not absorb vacancy slack.
 _FEDERAL_RACE_CYCLE = 2026
 _MIN_FEDERAL_RACES = 1
 _EXPECTED_FEDERAL_RACES = 543
 _MIN_FEDERAL_ACTIVE_OFFICEHOLDERS = 535
+_MAX_FEDERAL_ACTIVE_OFFICEHOLDERS = 543
 _MIN_FEDERAL_PORTRAIT_COVERAGE_PERCENT = 90.0
 _MIN_FEDERAL_BIO_COVERAGE_PERCENT = 80.0
 _MIN_FEDERAL_CANDIDATE_LINK_COVERAGE_PERCENT = 95.0
@@ -520,7 +523,7 @@ def _federal_race_count_in_range(loaded_races: int | None) -> bool:
 def _federal_gate_passes(gate: FederalCoverageGate) -> bool:
     return (
         gate.total_seats == _EXPECTED_FEDERAL_SEATS
-        and gate.active_officeholders >= _MIN_FEDERAL_ACTIVE_OFFICEHOLDERS
+        and _MIN_FEDERAL_ACTIVE_OFFICEHOLDERS <= gate.active_officeholders <= _MAX_FEDERAL_ACTIVE_OFFICEHOLDERS
         and gate.portrait_coverage_pct >= _MIN_FEDERAL_PORTRAIT_COVERAGE_PERCENT
         and gate.bio_coverage_pct >= _MIN_FEDERAL_BIO_COVERAGE_PERCENT
         and gate.candidate_link_coverage_pct >= _MIN_FEDERAL_CANDIDATE_LINK_COVERAGE_PERCENT

@@ -151,13 +151,27 @@ def test_partial_fec_money_coverage_reports_fail_with_denominator(tmp_path: Path
     ) in result.stdout
 
 
+def test_promoted_http_failure_exits_two(tmp_path: Path) -> None:
+    fixture_dir = tmp_path / "promoted-http-failure"
+    _write_helper_fixture(
+        fixture_dir,
+        export_payload=_export_rows(denominator=540, fec_rows=540),
+        statuses={"/candidates": 503},
+    )
+
+    result = _run_probe(fixture_dir)
+
+    assert result.returncode == 2
+    assert "money_value_assertion candidates_http FAIL numerator=503 denominator=200" in result.stdout
+
+
 def test_zero_export_rows_reports_vacuous_not_pass(tmp_path: Path) -> None:
     fixture_dir = tmp_path / "zero-export"
     _write_helper_fixture(fixture_dir, export_payload=[])
 
     result = _run_probe(fixture_dir)
 
-    assert result.returncode == 0, result.stderr
+    assert result.returncode == 2
     assert (
         "money_value_assertion fec_money_coverage VACUOUS numerator=0 denominator=0 "
         "diagnostic=0/0 public export rows available; cannot assert FEC money coverage"
@@ -172,11 +186,12 @@ def test_malformed_export_payload_reports_fail(tmp_path: Path) -> None:
 
     result = _run_probe(fixture_dir)
 
-    assert result.returncode == 1
+    assert result.returncode == 2
     assert (
         "money_value_assertion export_payload FAIL numerator=0 denominator=1 "
         "diagnostic=/api/public/v1/federal/export.json JSON payload must be a list"
     ) in result.stdout
+    assert "money_value_probe_error" not in result.stderr
 
 
 def test_fixture_backed_list_and_search_probes_report_non_empty_rows(tmp_path: Path) -> None:
@@ -294,7 +309,7 @@ def test_public_page_with_zero_rendered_rows_reports_fail(tmp_path: Path) -> Non
 
     result = _run_probe(fixture_dir)
 
-    assert result.returncode == 1
+    assert result.returncode == 2
     assert (
         "money_value_assertion candidates_rows FAIL numerator=0 denominator=1 "
         "diagnostic=/candidates rendered 0 result rows"

@@ -49,6 +49,9 @@ class CandidateEnrichmentTarget(BaseModel):
     bioguide_id: str | None = None
     verified_campaign_site_url: str | None = None
     roster_bio_url: str | None = None
+    stored_biography: str | None = None
+    stored_bio_source_url: str | None = None
+    stored_bio_license: str | None = None
 
 
 class EnrichmentAttempt(BaseModel):

@@ -28,7 +28,7 @@ export default defineConfig({
         test: {
           name: 'node',
           include: ['src/**/*.test.ts'],
-          exclude: ['src/lib/detail-trust/TrustSection.client.test.ts'],
+          exclude: ['src/**/*.client.test.ts'],
           environment: 'node'
         }
       },
@@ -44,7 +44,7 @@ export default defineConfig({
         },
         test: {
           name: 'client',
-          include: ['src/lib/detail-trust/TrustSection.client.test.ts'],
+          include: ['src/**/*.client.test.ts'],
           environment: 'jsdom',
           execArgv: ['--conditions=browser']
         }

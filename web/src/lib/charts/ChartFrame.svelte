@@ -15,6 +15,35 @@
   export let children: Snippet | undefined = undefined;
 
   $: coverageLabel = formatDate(coverageThrough);
+
+  function sanitizeHref(href: string | null | undefined): string | null {
+    if (typeof href !== "string") {
+      return null;
+    }
+
+    const trimmedHref = href.trim();
+    if (trimmedHref.length === 0) {
+      return null;
+    }
+
+    if (trimmedHref.startsWith("/") && !trimmedHref.startsWith("//")) {
+      return trimmedHref;
+    }
+
+    try {
+      const parsed = new URL(trimmedHref);
+      return parsed.protocol === "http:" || parsed.protocol === "https:" ? parsed.href : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function exactRowKey(row: ChartFrameProps["exactRows"][number], index: number): string {
+    const valueKey = row.values
+      .map((value) => `${value.label}:${value.value}:${value.href ?? ""}`)
+      .join("|");
+    return `${row.label}:${valueKey}:${index}`;
+  }
 </script>
 
 <figure class="finance-chart" data-testid={testId}>
@@ -41,8 +70,9 @@
     Sources:
     {#each sources as source, index (source.label)}
       {#if index > 0}, {/if}
-      {#if source.href}
-        <a href={source.href}>{source.label}</a>
+      {@const safeSourceHref = sanitizeHref(source.href)}
+      {#if safeSourceHref}
+        <a href={safeSourceHref}>{source.label}</a>
       {:else}
         <span>{source.label}</span>
       {/if}
@@ -59,14 +89,15 @@
         </tr>
       </thead>
       <tbody>
-        {#each exactRows as row (row.label)}
+        {#each exactRows as row, rowIndex (exactRowKey(row, rowIndex))}
           <tr>
             <th scope="row">{row.label}</th>
             <td>
               {#each row.values as value, index (value.label)}
                 {#if index > 0}; {/if}{value.label}:
-                {#if value.href}
-                  <a href={value.href}>{value.value}</a>
+                {@const safeValueHref = sanitizeHref(value.href)}
+                {#if safeValueHref}
+                  <a href={safeValueHref}>{value.value}</a>
                 {:else}
                   {value.value}
                 {/if}

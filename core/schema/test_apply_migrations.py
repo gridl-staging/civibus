@@ -3,7 +3,7 @@
 Recreates the old production zcta_district shape (single-column PK, no
 boundary_year) plus minimal dependency tables, then proves apply_migrations
 adopts the frozen baseline, skips the retro-edited 2026_07_07_zcta_district.sql,
-and applies only the three pending deltas.
+and applies only the explicitly enumerated pending deltas.
 """
 
 from __future__ import annotations
@@ -107,6 +107,11 @@ _MINIMAL_CORE_SQL = textwrap.dedent("""\
 
     CREATE TABLE IF NOT EXISTS core.source_record (
         id UUID PRIMARY KEY DEFAULT uuid_generate_v4()
+    );
+
+    CREATE TABLE IF NOT EXISTS core.refresh_run (
+        pull_status TEXT NOT NULL
+            CHECK (pull_status IN ('crashed', 'empty', 'degraded', 'success'))
     );
 
     CREATE TABLE IF NOT EXISTS core.entity_source (
@@ -328,6 +333,7 @@ _PENDING_FILENAMES = [
     "2026_07_24_donor_search_committee_scope_index.sql",
     "2026_07_28_donor_identity_er_contract.sql",
     "2026_07_28_donor_identity_person_mapping.sql",
+    "2026_07_31_refresh_run_failed_status.sql",
 ]
 
 _DONOR_IDENTITY_MIGRATION = "2026_07_28_donor_identity_er_contract.sql"
@@ -613,6 +619,24 @@ class TestApplyMigrations:
 
         expected = sorted(_BASELINE_ENTRIES + _PENDING_FILENAMES)
         assert ledger_rows == expected
+
+    def test_refresh_run_failed_status_migration_preserves_closed_status_set(
+        self, disposable_db: str, fixture_paths: dict[str, Path], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _run_main(disposable_db, fixture_paths, monkeypatch)
+        conn = _connect_to(disposable_db)
+        try:
+            with conn.cursor() as cur:
+                closed_statuses = ("crashed", "empty", "degraded", "success", "failed")
+                for status in closed_statuses:
+                    cur.execute("INSERT INTO core.refresh_run (pull_status) VALUES (%s)", (status,))
+                    conn.rollback()
+
+                with pytest.raises(psycopg.errors.CheckViolation):
+                    cur.execute("INSERT INTO core.refresh_run (pull_status) VALUES ('unknown')")
+                conn.rollback()
+        finally:
+            conn.close()
 
     def test_zcta_07_07_not_reexecuted(
         self, disposable_db: str, fixture_paths: dict[str, Path], monkeypatch: pytest.MonkeyPatch

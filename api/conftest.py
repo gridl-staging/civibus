@@ -9,6 +9,8 @@ from api.deps import get_db
 from api.middleware import require_administrative_request, require_authorized_request
 from test_support.donor_search_fixture import cleanup_donor_search_fixture
 
+_SMOKE_PERSON_CHARTS_OFFICEHOLDING_SOURCE_KEY = "smoke-person-charts-officeholding"
+
 
 def _build_api_test_client(connection: psycopg.Connection) -> TestClient:
     from api.main import create_app
@@ -41,6 +43,17 @@ def api_client(db_conn: psycopg.Connection) -> TestClient:
 def _without_persisted_full_scope_latency_fixture(db_conn: psycopg.Connection) -> None:
     """Hide the committed probe corpus from tests with isolated-value contracts."""
     cleanup_donor_search_fixture(db_conn)
+    db_conn.execute(
+        """
+        DELETE FROM civic.officeholding
+        WHERE source_record_id IN (
+            SELECT id
+            FROM core.source_record
+            WHERE source_record_key = %s
+        )
+        """,
+        (_SMOKE_PERSON_CHARTS_OFFICEHOLDING_SOURCE_KEY,),
+    )
 
 
 @pytest.fixture

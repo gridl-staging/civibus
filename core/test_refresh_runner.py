@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import zipfile
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from datetime import date
 from pathlib import Path
@@ -8,6 +9,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 from uuid import UUID, uuid4
 
+import psycopg
 import pytest
 
 from core.refresh import job_builders, runner
@@ -1363,6 +1365,292 @@ def test_should_run_job_honors_daily_cadence_window() -> None:
     assert runner.should_run_job(job, last_pull_at=now - timedelta(days=2), now=now) is True
 
 
+_PARTIAL_RUN_MANUAL_RECOVERY_AT = datetime(2026, 7, 25, 12, 0, tzinfo=timezone.utc)
+_PARTIAL_RUN_STALE_MASTERS_AT = datetime(2026, 7, 20, 12, 0, tzinfo=timezone.utc)
+_PARTIAL_RUN_SCHEDULED_AT = datetime(2026, 7, 28, 12, 0, tzinfo=timezone.utc)
+
+
+def _federal_masters_and_spine_jobs() -> tuple[runner.RefreshJob, runner.RefreshJob]:
+    jobs = job_builders.build_refresh_plan(
+        scope="all",
+        job_key_prefixes=("federal-fec-masters", "federal-congress-spine"),
+    )
+    assert tuple(job.key for job in jobs) == ("federal-fec-masters", "federal-congress-spine")
+    return jobs[0], jobs[1]
+
+
+def _weekly_pair_eligibility_by_key(
+    last_pull_by_key: dict[str, datetime | None],
+    *,
+    now: datetime = _PARTIAL_RUN_SCHEDULED_AT,
+) -> dict[str, bool]:
+    return {
+        job.key: runner.should_run_job(job, last_pull_at=last_pull_by_key[job.key], now=now)
+        for job in _federal_masters_and_spine_jobs()
+    }
+
+
+def _successful_loader_result() -> SimpleNamespace:
+    return SimpleNamespace(inserted=3, skipped=0, quarantined=0, superseded=0, errors=0)
+
+
+def _run_weekly_pair_main(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    last_pull_by_key: dict[str, datetime | None],
+) -> tuple[int, list[runner.RefreshRunResult], dict[str, MagicMock]]:
+    callables_by_key: dict[str, MagicMock] = {}
+    jobs = []
+    for job in _federal_masters_and_spine_jobs():
+        run_callable = MagicMock(return_value=_successful_loader_result())
+        callables_by_key[job.key] = run_callable
+        jobs.append(replace(job, run_callable=run_callable))
+
+    streamed_results: list[runner.RefreshRunResult] = []
+    original_format_result_line = runner._format_result_line
+
+    class _Connection:
+        def commit(self) -> None:
+            return None
+
+        def rollback(self) -> None:
+            return None
+
+        def close(self) -> None:
+            return None
+
+    def _capture_result_line(result: runner.RefreshRunResult) -> str:
+        streamed_results.append(result)
+        return original_format_result_line(result)
+
+    monkeypatch.setattr(job_builders, "build_refresh_plan", lambda **kwargs: jobs)
+    monkeypatch.setattr(runner, "get_connection", lambda: _Connection())
+    monkeypatch.setattr(runner, "_utc_now", lambda: _PARTIAL_RUN_SCHEDULED_AT)
+    monkeypatch.setattr(runner, "_select_latest_pull_at", lambda connection, job: last_pull_by_key[job.key])
+    monkeypatch.setattr(runner, "_recent_nonempty_activity_counts", lambda *args, **kwargs: [])
+    monkeypatch.setattr(runner, "_select_data_source_id", lambda *args, **kwargs: None)
+    monkeypatch.setattr(runner, "_record_refresh_run", lambda *args, **kwargs: None)
+    monkeypatch.setattr(runner, "_format_result_line", _capture_result_line)
+
+    exit_code = runner.main(
+        [
+            "--no-lock",
+            "--job-key-prefix",
+            "federal-fec-masters",
+            "--job-key-prefix",
+            "federal-congress-spine",
+        ]
+    )
+
+    return exit_code, streamed_results, callables_by_key
+
+
+def test_main_flags_weekly_federal_partial_run_when_masters_runs_without_congress_spine(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    last_pull_by_key = {
+        "federal-fec-masters": _PARTIAL_RUN_STALE_MASTERS_AT,
+        "federal-congress-spine": _PARTIAL_RUN_MANUAL_RECOVERY_AT,
+    }
+
+    assert _weekly_pair_eligibility_by_key(last_pull_by_key) == {
+        "federal-fec-masters": True,
+        "federal-congress-spine": False,
+    }
+
+    exit_code, results, callables_by_key = _run_weekly_pair_main(
+        monkeypatch,
+        last_pull_by_key=last_pull_by_key,
+    )
+
+    assert [(result.key, result.status) for result in results] == [
+        ("federal-fec-masters", "success"),
+        ("federal-congress-spine", "skipped"),
+        ("federal-fec-masters", "failed"),
+    ]
+    callables_by_key["federal-fec-masters"].assert_called_once_with()
+    callables_by_key["federal-congress-spine"].assert_not_called()
+    assert exit_code == 1, (
+        "runner.main() must fail the federal result family when weekly federal prerequisites split: "
+        "federal-fec-masters ran but federal-congress-spine stayed inside the 2026-07-25 recovery freshness window"
+    )
+
+
+def test_weekly_federal_partial_run_alarm_names_jobs_and_cadence_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    last_pull_by_key = {
+        "federal-fec-masters": _PARTIAL_RUN_STALE_MASTERS_AT,
+        "federal-congress-spine": _PARTIAL_RUN_MANUAL_RECOVERY_AT,
+    }
+
+    _, results, _ = _run_weekly_pair_main(
+        monkeypatch,
+        last_pull_by_key=last_pull_by_key,
+    )
+
+    alarm = results[-1]
+    assert alarm.status == "failed"
+    assert "federal-fec-masters" in alarm.message
+    assert "federal-congress-spine" in alarm.message
+    assert _PARTIAL_RUN_STALE_MASTERS_AT.isoformat() in alarm.message
+    assert _PARTIAL_RUN_MANUAL_RECOVERY_AT.isoformat() in alarm.message
+    assert alarm.error == alarm.message
+
+
+def test_weekly_federal_partial_run_alarm_records_failed_zero_activity_ledger_row(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    jobs = [
+        replace(job, run_callable=MagicMock(return_value=_successful_loader_result()))
+        for job in _federal_masters_and_spine_jobs()
+    ]
+    connection = MagicMock()
+    insert_refresh_run = MagicMock()
+    last_pull_by_key = {
+        "federal-fec-masters": _PARTIAL_RUN_STALE_MASTERS_AT,
+        "federal-congress-spine": _PARTIAL_RUN_MANUAL_RECOVERY_AT,
+    }
+    monkeypatch.setattr(runner, "_utc_now", lambda: _PARTIAL_RUN_SCHEDULED_AT)
+    monkeypatch.setattr(runner, "_select_latest_pull_at", lambda connection, job: last_pull_by_key[job.key])
+    monkeypatch.setattr(runner, "_recent_nonempty_activity_counts", lambda *args, **kwargs: [])
+    monkeypatch.setattr(runner, "_select_data_source_id", lambda *args, **kwargs: None)
+    monkeypatch.setattr(runner, "insert_refresh_run", insert_refresh_run)
+
+    results = runner.run_all_jobs(
+        connection,
+        jobs,
+        now=_PARTIAL_RUN_SCHEDULED_AT,
+    )
+
+    alarm = results[-1]
+    alarm_run = insert_refresh_run.call_args_list[-1].args[1]
+    assert alarm.status == "failed"
+    assert alarm_run.job_key == "federal-fec-masters"
+    assert alarm_run.domain == jobs[0].domain
+    assert alarm_run.jurisdiction == jobs[0].jurisdiction
+    assert alarm_run.data_source_names == list(jobs[0].data_source_names)
+    assert alarm_run.pull_status == "failed"
+    assert alarm_run.inserted_count == 0
+    assert alarm_run.skipped_count == 0
+    assert alarm_run.quarantined_count == 0
+    assert alarm_run.superseded_count == 0
+    assert alarm_run.error_count == 0
+    assert alarm_run.metadata_updates == 0
+    assert alarm_run.message == alarm.message
+    assert alarm_run.error == alarm.error == alarm.message
+
+
+@pytest.mark.integration
+def test_weekly_federal_partial_run_alarm_persists_to_real_refresh_run_table(
+    monkeypatch: pytest.MonkeyPatch,
+    db_conn: psycopg.Connection,
+) -> None:
+    alarm_at = datetime(2099, 1, 10, 12, 0, tzinfo=timezone.utc)
+    last_pull_by_key = {
+        "federal-fec-masters": datetime(2099, 1, 1, 12, 0, tzinfo=timezone.utc),
+        "federal-congress-spine": datetime(2099, 1, 9, 12, 0, tzinfo=timezone.utc),
+    }
+    jobs = [
+        replace(job, run_callable=MagicMock(return_value=_successful_loader_result()))
+        for job in _federal_masters_and_spine_jobs()
+    ]
+    monkeypatch.setattr(runner, "_utc_now", lambda: alarm_at)
+    monkeypatch.setattr(runner, "_select_latest_pull_at", lambda connection, job: last_pull_by_key[job.key])
+    monkeypatch.setattr(runner, "_recent_nonempty_activity_counts", lambda *args, **kwargs: [])
+    monkeypatch.setattr(runner, "_select_data_source_id", lambda *args, **kwargs: None)
+
+    try:
+        results = runner.run_all_jobs(db_conn, jobs, now=alarm_at)
+
+        with db_conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT pull_status, inserted_count, skipped_count,
+                       quarantined_count, superseded_count, error_count,
+                       metadata_updates, message, error
+                FROM core.refresh_run
+                WHERE job_key = 'federal-fec-masters'
+                  AND started_at = %s
+                  AND pull_status = 'failed'
+                """,
+                (alarm_at,),
+            )
+            alarm_row = cursor.fetchone()
+
+        assert alarm_row == (
+            "failed",
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            results[-1].message,
+            results[-1].message,
+        )
+    finally:
+        db_conn.execute(
+            "DELETE FROM core.refresh_run WHERE job_key = ANY(%s) AND started_at = %s",
+            (["federal-fec-masters", "federal-congress-spine"], alarm_at),
+        )
+        db_conn.commit()
+
+
+def test_main_allows_weekly_federal_pair_when_both_jobs_execute(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    last_pull_by_key = {
+        "federal-fec-masters": None,
+        "federal-congress-spine": None,
+    }
+
+    assert _weekly_pair_eligibility_by_key(last_pull_by_key) == {
+        "federal-fec-masters": True,
+        "federal-congress-spine": True,
+    }
+
+    exit_code, results, callables_by_key = _run_weekly_pair_main(
+        monkeypatch,
+        last_pull_by_key=last_pull_by_key,
+    )
+
+    assert [(result.key, result.status) for result in results] == [
+        ("federal-fec-masters", "success"),
+        ("federal-congress-spine", "success"),
+    ]
+    callables_by_key["federal-fec-masters"].assert_called_once_with()
+    callables_by_key["federal-congress-spine"].assert_called_once_with()
+    assert exit_code == 0
+
+
+def test_main_allows_weekly_federal_pair_when_both_jobs_skip(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    last_pull_by_key = {
+        "federal-fec-masters": _PARTIAL_RUN_MANUAL_RECOVERY_AT,
+        "federal-congress-spine": _PARTIAL_RUN_MANUAL_RECOVERY_AT,
+    }
+
+    assert _weekly_pair_eligibility_by_key(last_pull_by_key) == {
+        "federal-fec-masters": False,
+        "federal-congress-spine": False,
+    }
+
+    exit_code, results, callables_by_key = _run_weekly_pair_main(
+        monkeypatch,
+        last_pull_by_key=last_pull_by_key,
+    )
+
+    assert [(result.key, result.status) for result in results] == [
+        ("federal-fec-masters", "skipped"),
+        ("federal-congress-spine", "skipped"),
+    ]
+    callables_by_key["federal-fec-masters"].assert_not_called()
+    callables_by_key["federal-congress-spine"].assert_not_called()
+    assert exit_code == 0
+
+
 def test_run_job_dry_run_skips_callable_and_metadata_sync(monkeypatch: pytest.MonkeyPatch) -> None:
     connection = MagicMock()
     run_callable = MagicMock()
@@ -1421,18 +1709,26 @@ def test_civic_roster_job_cadence_gate_and_metadata_sync(monkeypatch: pytest.Mon
     data_source_id = UUID("89ce5ea6-6cff-45f8-8bdb-ac840a4d3b6a")
     sync_data_source_metadata = MagicMock()
 
-    monkeypatch.setattr(runner, "_select_latest_pull_at", MagicMock(return_value=now - timedelta(days=1)))
     monkeypatch.setattr(runner, "_record_refresh_run", MagicMock())
     monkeypatch.setattr(runner, "_select_data_source_id", MagicMock(return_value=data_source_id))
     monkeypatch.setattr(runner, "sync_data_source_metadata", sync_data_source_metadata)
 
-    skipped_result = runner._run_gated_job(connection, hydrated_job, force=False, now=now)
+    skipped_result = runner._run_gated_job(
+        connection,
+        hydrated_job,
+        last_pull_at=now - timedelta(days=1),
+        now=now,
+    )
     assert skipped_result.status == "skipped"
     run_callable.assert_not_called()
     sync_data_source_metadata.assert_not_called()
 
-    runner._select_latest_pull_at.return_value = now - timedelta(days=8)
-    run_result = runner._run_gated_job(connection, hydrated_job, force=False, now=now)
+    run_result = runner._run_gated_job(
+        connection,
+        hydrated_job,
+        last_pull_at=now - timedelta(days=8),
+        now=now,
+    )
     assert run_result.status == "success"
     run_callable.assert_called_once_with()
     runner._select_data_source_id.assert_called_with(

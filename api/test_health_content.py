@@ -62,6 +62,7 @@ CANDIDATE_MONEY_PRODUCTION_OBSERVATION = 2_079
 CANDIDATE_MONEY_DEFAULT_FLOOR = 1_800
 CANDIDATE_MONEY_RECENT_SUMMARY_PRODUCTION_OBSERVATION = 1_799
 CANDIDATE_MONEY_RECENT_SUMMARY_DEFAULT_FLOOR = 1_440
+CIVIC_OFFICEHOLDING_PRODUCTION_OBSERVATION = 544
 CANDIDATE_MONEY_RECENT_SUMMARY_CUTOFF = date(2026, 3, 29)
 CANDIDATE_MONEY_RECENT_SUMMARY_EVALUATION_DATE = date(2026, 7, 27)
 CANDIDATE_MONEY_RECENT_SUMMARY_FRESH_FEC_ROW = (datetime(2026, 7, 27, 12, 0, tzinfo=timezone.utc),)
@@ -332,6 +333,7 @@ def test_federal_first_owner_declares_expected_checks() -> None:
         FEDERAL_FIRST_FLOORS[CANDIDATE_MONEY_RECENT_SUMMARY_COVERAGE_CHECK]
         == CANDIDATE_MONEY_RECENT_SUMMARY_DEFAULT_FLOOR
     )
+    assert FEDERAL_FIRST_COUNTS["civic_officeholding_total"] == CIVIC_OFFICEHOLDING_PRODUCTION_OBSERVATION
     assert (
         FEDERAL_FIRST_COUNTS[FEDERAL_OFFICEHOLDER_MONEY_COVERAGE_CHECK]
         == FEDERAL_OFFICEHOLDER_MONEY_PRODUCTION_OBSERVATION
@@ -616,7 +618,12 @@ def test_evaluate_content_health_runs_expected_sql_queries() -> None:
     assert "relname = 'transaction'" in transaction_total_query
     assert "COUNT(*) FROM cf.transaction" not in transaction_total_query
     assert any("core.person" in q for q in executed), executed
-    assert any("civic.officeholding" in q for q in executed), executed
+    officeholding_total_queries = [
+        query
+        for query in executed
+        if "SELECT COUNT(*) FROM civic.officeholding" in query and "WHERE" not in query.upper()
+    ]
+    assert len(officeholding_total_queries) == 1, executed
     assert any("cf.committee_summary" in q and "WHERE" not in q.upper() for q in executed), executed
     assert any("cf.transaction" in q and "contributor_person_id IS NOT NULL" in q for q in executed), executed
     assert any("cf.transaction" in q and "support_oppose IS NOT NULL" in q for q in executed), executed

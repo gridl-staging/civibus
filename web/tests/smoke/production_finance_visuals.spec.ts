@@ -3,6 +3,7 @@ import type { Locator, Page } from "playwright";
 
 import releaseTargets from "./production_release_targets.json" with { type: "json" };
 import {
+  BAR_SERIES_MARK_SELECTOR,
   capturePageLoadErrors,
   chartRegion,
   escapeRegExp,
@@ -12,6 +13,7 @@ import {
   expectNoHorizontalOverflow,
   expectNoMaterialNearBlackOverlay,
   expectNoOpaqueNearBlackPaints,
+  expectRealChartRender,
   sampleVisibleRectPaints
 } from "./smoke-helpers";
 
@@ -260,6 +262,7 @@ async function expectOutsideSpendingLabelsWhenPresent(page: Page): Promise<void>
   await expect(outsideRegion).toBeVisible({ timeout: 20_000 });
   await expect(outsideFrame).toBeVisible({ timeout: 20_000 });
 
+  await expectRealChartRender(outsideRegion, BAR_SERIES_MARK_SELECTOR);
   const outsidePaints = await sampleVisibleRectPaints(outsideRegion);
   expect(outsidePaints.length).toBeGreaterThan(0);
 
@@ -321,9 +324,8 @@ async function collectRenderedFinanceCharts(
     if ((await figureRegion.count()) === 0 || !(await figureRegion.isVisible())) {
       continue;
     }
-    if ((await sampleVisibleRectPaints(chart)).length > 0) {
-      regions.push({ frame: figureRegion, chart });
-    }
+    await expectRealChartRender(chart, BAR_SERIES_MARK_SELECTOR);
+    regions.push({ frame: figureRegion, chart });
   }
   return regions;
 }

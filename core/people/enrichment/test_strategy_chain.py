@@ -222,14 +222,14 @@ def test_federal_chain_uses_launch_gate_sources_and_excludes_name_derived_source
 
     assert [strategy.source_name for strategy in chain._strategies] == [
         "official_roster_cache",
-        "wikipedia_bio",
         "official_bio",
+        "wikipedia_bio",
         "unitedstates/images",
     ]
     assert constructed == [
         ("official_roster_cache", conn_marker, {}),
-        ("wikipedia_bio", None, {}),
         ("official_bio", None, {}),
+        ("wikipedia_bio", None, {}),
         ("unitedstates/images", None, {}),
     ]
 

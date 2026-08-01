@@ -723,23 +723,8 @@ class CommitteeFilingBreakdown(BaseModel):
 CommitteeResponse.model_rebuild()
 
 
-# ---------------------------------------------------------------------------
-# Public API (`/public/v1`) contract models
-#
-# These are the frozen, authless public-API DTOs. They are deliberately a
-# separate owner from the internal ``CongressMemberSummary`` (api/models/civics.py)
-# and ``CandidateFundraisingSummary`` above: the public contract must be able to
-# evolve independently of the internal query models, so it does not import or
-# subclass them. Populated by ``api/routes/public_federal.py`` — no new SQL.
-# ---------------------------------------------------------------------------
-
-
 class PublicFederalOfficial(BaseModel):
-    """Public directory row for a current federal official.
-
-    Field-for-field mirror of ``fetch_current_federal_members`` output plus the
-    route-built ``person_detail_path`` (the query does not return it).
-    """
+    """Public directory row for a current federal official."""
 
     person_id: UUID
     person_name: str
@@ -756,12 +741,7 @@ class PublicFederalOfficial(BaseModel):
 
 
 class PublicMemberMoneySummary(BaseModel):
-    """Public money + independent-expenditure summary for one federal member.
-
-    ``has_fec_money`` is False when the member has no linked ``cf.candidate`` row;
-    in that case the money and IE fields carry zeroes and ``candidate_id`` /
-    ``summary_source`` are None.
-    """
+    """Public money and independent-expenditure summary for one federal member."""
 
     person_id: UUID
     person_name: str
@@ -772,8 +752,40 @@ class PublicMemberMoneySummary(BaseModel):
     net: Decimal
     cash_on_hand: Decimal | None = None
     summary_source: str | None = None
+    fundraising_coverage: CandidateFundraisingCoverage | None = Field(None, exclude_if=lambda value: value is None)
+    out_of_cycle_official_total: CandidateOutOfCycleOfficialTotal | None = Field(
+        None, exclude_if=lambda value: value is None
+    )
     ie_support_total: Decimal
     ie_oppose_total: Decimal
     ie_support_count: int
     ie_oppose_count: int
+    sources: list[SourceInfo]
+
+
+class PublicContributorRow(BaseModel):
+    name: str
+    total_amount: Decimal
+    transaction_count: int
+
+
+class PublicEmployerRow(BaseModel):
+    employer: str
+    total_amount: Decimal
+    transaction_count: int
+    industry: str
+
+
+class PublicContributorsResponse(BaseModel):
+    person_id: UUID
+    contributors: list[PublicContributorRow]
+    sources: list[SourceInfo]
+
+
+class PublicEmployersResponse(BaseModel):
+    person_id: UUID
+    employers: list[PublicEmployerRow]
+    classified_count: int = Field(ge=0)
+    unknown_count: int = Field(ge=0)
+    sampled_coverage_percentage: Decimal = Field(ge=0, le=100)
     sources: list[SourceInfo]

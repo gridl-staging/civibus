@@ -52,7 +52,10 @@ class DonorSearchFixtureIds:
 class DonorSearchFullScopeCounts:
     current_federal_officeholders: int
     linked_people: int
+    candidate_scope_rows: int
     distinct_linked_committees: int
+    unrelated_candidate_rows: int
+    common_surname_transactions: int
     official_total_candidates: int
     support_ie_candidates: int
     oppose_ie_candidates: int
@@ -123,7 +126,9 @@ class ExistingRecipientCandidateLinkSpec:
 _PULL_DATE = datetime(2026, 7, 9, 12, 0, tzinfo=timezone.utc)
 _SOURCE_URL = "https://example.org/fec/donor-search"
 _DATA_SOURCE_NAME = "Campaign Finance API Source donor-search-fixture"
-_FULL_SCOPE_LINKED_OFFICEHOLDER_COUNT = 527
+_FULL_SCOPE_LINKED_OFFICEHOLDER_COUNT = 518
+_FULL_SCOPE_EXTRA_CURRENT_CANDIDATE_ROWS = 8
+_FULL_SCOPE_UNRELATED_CANDIDATE_ROWS = 300
 _FULL_SCOPE_HIGH_FREQUENCY_DONOR_COUNT = 220
 _FULL_SCOPE_WILLIAMS_TRANSACTION_COUNT = 30
 DONOR_SEARCH_ALPHA_PERSON_ID = UUID("72000000-0000-4000-8000-000000000001")
@@ -181,27 +186,31 @@ def seed_full_scope_skewed_donor_search_fixture(
 ) -> FullScopeDonorSearchFixtureIds:
     cleanup_donor_search_fixture(conn)
     source_records = _seed_source_records(conn)
-    recipients = _seed_full_current_recipient_scope(conn, source_record_id=source_records.current)
-    inactive = _seed_inactive_recipient(conn, source_record_id=source_records.current)
-    inactive_filing_id = _seed_filing(
-        conn,
-        filing_id=UUID("72000000-0000-0000-0000-000000000043"),
-        committee_id=inactive.committee_id,
-        source_record_id=source_records.current,
-    )
-    unscoped_committee_id, unscoped_filing_id = _seed_unscoped_committee_control(conn, source_records.current)
-    filings = _seed_full_scope_filings(conn, recipients, source_records.current)
+    with conn.pipeline():
+        recipients = _seed_full_current_recipient_scope(conn, source_record_id=source_records.current)
+        _seed_extra_current_candidate_links(conn, recipients=recipients, source_record_id=source_records.current)
+        _seed_unrelated_candidate_rows(conn, source_record_id=source_records.current)
+        inactive = _seed_inactive_recipient(conn, source_record_id=source_records.current)
+        inactive_filing_id = _seed_filing(
+            conn,
+            filing_id=UUID("72000000-0000-0000-0000-000000000043"),
+            committee_id=inactive.committee_id,
+            source_record_id=source_records.current,
+        )
+        unscoped_committee_id, unscoped_filing_id = _seed_unscoped_committee_control(conn, source_records.current)
+        filings = _seed_full_scope_filings(conn, recipients, source_records.current)
 
-    _seed_skewed_full_scope_transactions(
-        conn,
-        recipients=recipients,
-        filings=filings,
-        source_records=source_records,
-        inactive=inactive,
-        inactive_filing_id=inactive_filing_id,
-        unscoped_committee_id=unscoped_committee_id,
-        unscoped_filing_id=unscoped_filing_id,
-    )
+        _seed_skewed_full_scope_transactions(
+            conn,
+            recipients=recipients,
+            filings=filings,
+            source_records=source_records,
+            inactive=inactive,
+            inactive_filing_id=inactive_filing_id,
+            unscoped_committee_id=unscoped_committee_id,
+            unscoped_filing_id=unscoped_filing_id,
+        )
+    _refresh_full_scope_planner_statistics(conn)
     counts = fetch_full_scope_donor_search_counts(conn)
     return FullScopeDonorSearchFixtureIds(
         counts=counts,
@@ -249,7 +258,26 @@ def fetch_full_scope_donor_search_counts(conn: psycopg.Connection) -> DonorSearc
                       AND office.office_level = 'federal'
                 )::integer AS current_federal_officeholders,
                 COUNT(DISTINCT person_id)::integer AS linked_people,
+                COUNT(*)::integer AS candidate_scope_rows,
                 COUNT(DISTINCT committee_id)::integer AS distinct_linked_committees,
+                (
+                    SELECT COUNT(*)
+                    FROM cf.candidate candidate
+                    WHERE candidate.id::text LIKE '72000000-0000-000f-8000-%'
+                )::integer AS unrelated_candidate_rows,
+                (
+                    SELECT COUNT(*)
+                    FROM cf.transaction transaction
+                    JOIN (
+                        SELECT DISTINCT committee_id
+                        FROM current_federal_candidate_committees
+                    ) scope ON scope.committee_id = transaction.committee_id
+                    WHERE transaction.contributor_name_raw ILIKE '%williams%'
+                      AND transaction.transaction_type LIKE '1%'
+                      AND transaction.contributor_entity_type = 'IND'
+                      AND transaction.is_memo = FALSE
+                      AND transaction.amendment_indicator != 'T'
+                )::integer AS common_surname_transactions,
                 COUNT(DISTINCT candidate_id) FILTER (
                     WHERE candidate_id IN (
                         SELECT candidate.id
@@ -292,10 +320,13 @@ def fetch_full_scope_donor_search_counts(conn: psycopg.Connection) -> DonorSearc
     return DonorSearchFullScopeCounts(
         current_federal_officeholders=row[0],
         linked_people=row[1],
-        distinct_linked_committees=row[2],
-        official_total_candidates=row[3],
-        support_ie_candidates=row[4],
-        oppose_ie_candidates=row[5],
+        candidate_scope_rows=row[2],
+        distinct_linked_committees=row[3],
+        unrelated_candidate_rows=row[4],
+        common_surname_transactions=row[5],
+        official_total_candidates=row[6],
+        support_ie_candidates=row[7],
+        oppose_ie_candidates=row[8],
     )
 
 
@@ -782,6 +813,112 @@ def _seed_current_federal_recipient_link(
         ),
     )
     return DonorSearchRecipientIds(person_id=person_id, candidate_id=candidate_id, committee_id=committee_id)
+
+
+def _seed_extra_current_candidate_links(
+    conn: psycopg.Connection,
+    *,
+    recipients: list[DonorSearchRecipientIds],
+    source_record_id: UUID,
+) -> None:
+    """Add live-shape duplicate scope rows without increasing committee scope.
+
+    Stage 1 measured about 526 current candidate-scope rows but 518 distinct
+    committees. These rows model that gap by linking already-current people to
+    already-scoped committees that do not receive the focused known-answer donor.
+    """
+    for index in range(_FULL_SCOPE_EXTRA_CURRENT_CANDIDATE_ROWS):
+        person = recipients[100 + index]
+        committee = recipients[200 + index]
+        candidate_id = _full_scope_uuid(18, index)
+        insert_candidate_row(
+            conn,
+            CandidateRowSeed(
+                id=candidate_id,
+                fec_candidate_id=f"S6NC9{index:04d}",
+                name=f"Full Scope Alternate Current {index:03d}",
+                office="S",
+                person_id=person.person_id,
+                principal_committee_id=committee.committee_id,
+                source_record_id=source_record_id,
+                state="NC",
+                district=None,
+                total_receipts=Decimal("9000.00") + index,
+                total_disbursements=Decimal("2000.00") + index,
+                cash_on_hand=Decimal("7000.00"),
+                summary_coverage_end_date=date(2026, 6, 30),
+            ),
+        )
+        insert_candidate_committee_link_row(
+            conn,
+            CandidateCommitteeLinkSeed(
+                id=_full_scope_uuid(19, index),
+                candidate_id=candidate_id,
+                committee_id=committee.committee_id,
+                valid_period="[2024-01-01,2100-01-01)",
+                designation="J",
+                source_record_id=source_record_id,
+            ),
+        )
+
+
+def _seed_unrelated_candidate_rows(conn: psycopg.Connection, *, source_record_id: UUID) -> None:
+    for index in range(_FULL_SCOPE_UNRELATED_CANDIDATE_ROWS):
+        person_name = f"Unrelated Candidate Person {index:04d}"
+        person_id = _seed_person(conn, person_id=_full_scope_uuid(14, index), name=person_name)
+        committee_id = _full_scope_uuid(16, index)
+        candidate_id = _full_scope_uuid(15, index)
+        insert_committee_row(
+            conn,
+            CommitteeRowSeed(
+                id=committee_id,
+                fec_committee_id=f"C8{index + 300000:07d}",
+                name=f"{person_name} Committee",
+                source_record_id=source_record_id,
+                state="NC",
+            ),
+        )
+        insert_candidate_row(
+            conn,
+            CandidateRowSeed(
+                id=candidate_id,
+                fec_candidate_id=f"H8NC{index:05d}",
+                name=person_name,
+                office="H",
+                person_id=person_id,
+                principal_committee_id=committee_id,
+                source_record_id=source_record_id,
+                state="NC",
+                district=f"{index % 99 + 1:02d}",
+                total_receipts=Decimal("100.00") + index,
+                summary_coverage_end_date=date(2026, 6, 30),
+            ),
+        )
+        insert_candidate_committee_link_row(
+            conn,
+            CandidateCommitteeLinkSeed(
+                id=_full_scope_uuid(17, index),
+                candidate_id=candidate_id,
+                committee_id=committee_id,
+                valid_period="[2024-01-01,2100-01-01)",
+                designation="P",
+                source_record_id=source_record_id,
+            ),
+        )
+
+
+def _refresh_full_scope_planner_statistics(conn: psycopg.Connection) -> None:
+    for table in (
+        "civic.officeholding",
+        "civic.office",
+        "core.person",
+        "cf.candidate",
+        "cf.candidate_committee_link",
+        "cf.committee",
+        "cf.filing",
+        "cf.transaction",
+    ):
+        conn.execute(f"ANALYZE {table}")
 
 
 def _seed_full_scope_filings(

@@ -53,7 +53,7 @@ CREATE TABLE core.refresh_run (
     domain           TEXT NOT NULL,
     jurisdiction     TEXT NOT NULL,
     data_source_names TEXT[] NOT NULL DEFAULT '{}',
-    pull_status      TEXT NOT NULL CHECK (pull_status IN ('crashed', 'empty', 'degraded', 'success')),
+    pull_status      TEXT NOT NULL CHECK (pull_status IN ('crashed', 'empty', 'degraded', 'failed', 'success')),
     started_at       TIMESTAMPTZ NOT NULL,
     completed_at     TIMESTAMPTZ NOT NULL,
     inserted_count   INTEGER NOT NULL DEFAULT 0,

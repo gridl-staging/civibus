@@ -536,19 +536,26 @@ describe("route head rendering", () => {
     expectMarkers(rendered.body, [
       "GET /api/public/v1/federal/officials",
       "GET /api/public/v1/federal/officials/{person_id}/money",
+      "GET /api/public/v1/federal/officials/{person_id}/contributors",
+      "GET /api/public/v1/federal/officials/{person_id}/employers",
       "GET /api/public/v1/federal/export.json",
       "GET /api/public/v1/federal/export.csv",
       "ie_support_total",
       '"ie_oppose_total": "0.00"',
+      '"name": "Sample Contributor"',
+      '"industry": "UNKNOWN_INDUSTRY"',
+      '"sampled_coverage_percentage": "5.843340"',
       ",fec_weball,5000.00,0.00,2,0,",
-      "OpenSecrets and ProPublica migration mapping"
+      "OpenSecrets and ProPublica migration mapping",
+      "OpenSecrets candContrib",
+      "OpenSecrets candIndustry"
     ]);
     expect(rendered.body).not.toContain('"ie_oppose_total": "0",');
     expect(rendered.body).not.toContain(",fec_weball,5000.00,0,2,0,");
     expect(rendered.body).toContain('href="/api/openapi.json">/api/openapi.json</a>');
     expect(rendered.body).toContain('href="/api/docs">/api/docs</a>');
     expect(rendered.body).toContain('href="/api/redoc">/api/redoc</a>');
-    expect(rendered.body.match(/<pre[^>]*tabindex="0"[^>]*>/g)).toHaveLength(8);
+    expect(rendered.body.match(/<pre[^>]*tabindex="0"[^>]*>/g)).toHaveLength(12);
   });
 
   it("renders candidates list with shared canonical/OG/Twitter tags, filter controls, and unchanged pagination links", () => {

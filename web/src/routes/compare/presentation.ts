@@ -170,9 +170,31 @@ function buildPersonHref(personId: string): string {
   return `/person/${encodeURIComponent(personId)}`;
 }
 
+function sanitizeHref(href: string | null | undefined): string | null {
+  if (typeof href !== "string") {
+    return null;
+  }
+
+  const trimmedHref = href.trim();
+  if (trimmedHref.length === 0) {
+    return null;
+  }
+
+  if (trimmedHref.startsWith("/") && !trimmedHref.startsWith("//")) {
+    return trimmedHref;
+  }
+
+  try {
+    const parsed = new URL(trimmedHref);
+    return parsed.protocol === "http:" || parsed.protocol === "https:" ? parsed.href : null;
+  } catch {
+    return null;
+  }
+}
+
 function buildProvenanceLinks(sources: SourceInfo[]): CompareProvenanceLink[] {
   return sources.flatMap((source) => {
-    const href = source.record_url ?? source.data_source_url;
+    const href = sanitizeHref(source.record_url ?? source.data_source_url);
     if (href === null) {
       return [];
     }
@@ -223,7 +245,7 @@ function getLatestOutsideSpendingSummary(
 }
 
 async function resolveCandidateSummary(
-  summary: Promise<CandidateFundraisingSummary>
+  summary: CandidateFundraisingSummary | Promise<CandidateFundraisingSummary>
 ): Promise<CandidateFundraisingSummary | null> {
   const value = await summary;
   return value ?? null;

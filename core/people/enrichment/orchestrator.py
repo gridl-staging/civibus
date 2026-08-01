@@ -222,7 +222,12 @@ def select_federal_scope_targets(conn: psycopg.Connection) -> ScopeSelectionResu
     )
 
 
-def _build_enrichment_target(target: ScopeTarget, *, state: str | None) -> CandidateEnrichmentTarget:
+def _build_enrichment_target(
+    target: ScopeTarget,
+    *,
+    state: str | None,
+    selected_person: Any | None = None,
+) -> CandidateEnrichmentTarget:
     roster_bio_url = target.roster_bio_url
     if state is None and (roster_bio_url is None or roster_bio_url.strip() == "") and target.bioguide_id is not None:
         normalized_bioguide_id = target.bioguide_id.strip().upper()
@@ -236,6 +241,9 @@ def _build_enrichment_target(target: ScopeTarget, *, state: str | None) -> Candi
         roster_bio_url=roster_bio_url,
         wikidata_entity_id=target.wikidata_entity_id,
         bioguide_id=target.bioguide_id,
+        stored_biography=getattr(selected_person, "bio_text", None),
+        stored_bio_source_url=getattr(selected_person, "bio_source_url", None),
+        stored_bio_license=getattr(selected_person, "bio_license", None),
     )
 
 
@@ -408,12 +416,11 @@ def _apply_enrichment_for_targets(
     run_source_data_source_id: UUID | None = None
 
     for scope_target in scope_targets:
-        enrichment_target = _build_enrichment_target(scope_target, state=state)
-        record = strategy_chain.enrich(enrichment_target)
-
         selected_person = db.select_person(conn, scope_target.person_id)
         if selected_person is None:
             continue
+        enrichment_target = _build_enrichment_target(scope_target, state=state, selected_person=selected_person)
+        record = strategy_chain.enrich(enrichment_target)
 
         updated_fields = db.update_person_bio_fields_if_missing(
             conn,

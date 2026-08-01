@@ -2,8 +2,16 @@ import { expect, test } from "playwright/test";
 import type { Page, Request } from "playwright";
 
 import {
+  SMOKE_PUBLIC_API_CAND_CONTRIB_NEED,
+  SMOKE_PUBLIC_API_CAND_INDUSTRY_NEED,
+  SMOKE_PUBLIC_API_CONTRIBUTOR_CURL,
+  SMOKE_PUBLIC_API_CONTRIBUTOR_SAMPLE_AMOUNT,
+  SMOKE_PUBLIC_API_CONTRIBUTOR_SAMPLE_NAME,
   SMOKE_PUBLIC_API_CSV_HEADER,
   SMOKE_PUBLIC_API_ENDPOINTS,
+  SMOKE_PUBLIC_API_EMPLOYER_COVERAGE_FIELD,
+  SMOKE_PUBLIC_API_EMPLOYER_CURL,
+  SMOKE_PUBLIC_API_EMPLOYER_UNKNOWN_BUCKET,
   SMOKE_PUBLIC_API_FOOTER_LINK,
   SMOKE_PUBLIC_API_HEADING,
   SMOKE_PUBLIC_API_MIGRATION_HEADING,
@@ -32,8 +40,27 @@ test.describe("public API smoke", () => {
     }
 
     await expect(main.getByRole("heading", { name: SMOKE_PUBLIC_API_MIGRATION_HEADING })).toBeVisible();
+    await expect(main.getByRole("heading", { name: SMOKE_PUBLIC_API_MIGRATION_HEADING })).toHaveCount(1);
     await expect(main.getByText(SMOKE_PUBLIC_API_SAMPLE_JSON_VALUE)).toBeVisible();
+    await expect(main.getByText(SMOKE_PUBLIC_API_CONTRIBUTOR_CURL)).toBeVisible();
+    await expect(main.getByText(SMOKE_PUBLIC_API_EMPLOYER_CURL)).toBeVisible();
+    await expect(main.getByText(SMOKE_PUBLIC_API_CONTRIBUTOR_SAMPLE_NAME)).toBeVisible();
+    await expect(main.getByText(SMOKE_PUBLIC_API_CONTRIBUTOR_SAMPLE_AMOUNT)).toBeVisible();
+    await expect(main.getByText(SMOKE_PUBLIC_API_EMPLOYER_UNKNOWN_BUCKET)).toBeVisible();
+    await expect(main.getByText(SMOKE_PUBLIC_API_EMPLOYER_COVERAGE_FIELD)).toBeVisible();
     await expect(main.getByText(SMOKE_PUBLIC_API_CSV_HEADER)).toBeVisible();
+    await expect(
+      main
+        .getByRole("row")
+        .filter({ hasText: SMOKE_PUBLIC_API_CAND_CONTRIB_NEED })
+        .filter({ hasText: "GET /api/public/v1/federal/officials/{person_id}/contributors" })
+    ).toBeVisible();
+    await expect(
+      main
+        .getByRole("row")
+        .filter({ hasText: SMOKE_PUBLIC_API_CAND_INDUSTRY_NEED })
+        .filter({ hasText: "GET /api/public/v1/federal/officials/{person_id}/employers" })
+    ).toBeVisible();
 
     for (const referenceLink of SMOKE_PUBLIC_API_REFERENCE_LINKS) {
       await expect(main.getByRole("link", { name: referenceLink })).toHaveAttribute("href", referenceLink);

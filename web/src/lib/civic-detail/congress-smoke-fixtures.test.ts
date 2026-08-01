@@ -35,6 +35,13 @@ describe("Congress smoke fixture cleanup", () => {
     expect(seedSql).not.toContain(SMOKE_COMMITTEE_ID);
   });
 
+  it("upserts ZCTA fixtures against the current composite primary key", () => {
+    const seedSql = buildCongressSmokeSeedSql();
+
+    expect(seedSql).toContain("INSERT INTO civic.zcta_district (zcta5, boundary_year,");
+    expect(seedSql).toContain("ON CONFLICT (zcta5, boundary_year) DO UPDATE");
+  });
+
   it("materializes and cleans up the Stage 4 person graph node", () => {
     const seedSql = buildCongressSmokeSeedSql();
     const cleanupSql = buildCongressSmokeCleanupSql();

@@ -23,6 +23,19 @@ The runtime job registry and federal ordering remain code-owned by
 `core/refresh/job_builders.py::build_refresh_plan()`; do not copy a job list
 into this runbook.
 
+### Stage 3 Fly Refresh Deployment Evidence
+
+Refresh-app image deploys are owned by
+`infra/scripts/deploy_refresh_machine.sh`. Use that script when a registered
+stage explicitly authorizes a refresh Machine image update, and keep the
+script as the source of truth for build arguments, image proof, and Machine
+update behavior.
+
+The 2026-07-31 image shipment is recorded in
+`docs/live-state/2026_07_31_refresh_machine_image_deploy.md`. Use that receipt
+for historical proof and read-only verification output; do not rerun its
+historical `MUTATING — not re-run` commands from Stage 3.
+
 ### Automatic scheduler observation
 
 A scheduler watch is read-only and must use the creation-anchored window recorded

@@ -473,8 +473,10 @@ def test_deployed_surface_parity_probe_renders_money_helper_failures_nonfatally(
     assert "surface_parity_ok" in result.stdout
 
 
-def test_deployed_surface_parity_probe_promotes_money_helper_failures_when_flip_is_on(tmp_path: Path) -> None:
-    fixture_dir = tmp_path / "money-helper-fatal"
+def test_deployed_surface_parity_probe_keeps_unpromoted_money_failures_nonfatal_when_flip_is_on(
+    tmp_path: Path,
+) -> None:
+    fixture_dir = tmp_path / "money-helper-unpromoted"
     _write_fixture(
         fixture_dir,
         repo_paths={"/health"},
@@ -484,9 +486,35 @@ def test_deployed_surface_parity_probe_promotes_money_helper_failures_when_flip_
 
     result = _run_probe(fixture_dir, extra_env={"CIVIBUS_PUBLIC_MONEY_VALUE_FATAL": "1"})
 
-    assert result.returncode != 0
+    assert result.returncode == 0, result.stderr
     assert "money_value_assertion fec_money_coverage FAIL numerator=13 denominator=540" in result.stdout
-    assert "money_value_failure_fatal exit_status=1 fatal=1" in result.stderr
+    assert "money_value_failure_nonfatal exit_status=1 fatal=0" in result.stdout
+
+
+def test_deployed_surface_parity_probe_promotes_selected_money_failures_when_flip_is_on(tmp_path: Path) -> None:
+    fixture_dir = tmp_path / "money-helper-fatal"
+    _write_fixture(
+        fixture_dir,
+        repo_paths={"/health"},
+        deployed_paths={"/health"},
+        helper_statuses={"/candidates": 503},
+    )
+
+    result = _run_probe(fixture_dir, extra_env={"CIVIBUS_PUBLIC_MONEY_VALUE_FATAL": "1"})
+
+    assert result.returncode != 0
+    assert "money_value_assertion candidates_http FAIL numerator=503 denominator=200" in result.stdout
+    assert "money_value_failure_fatal exit_status=2 fatal=1" in result.stderr
+
+    helper_candidates_path = fixture_dir / "helper_http_bodies" / f"{_fixture_body_slug('/candidates')}.txt"
+    helper_candidates_path.write_bytes(b"\xff")
+
+    crashed_result = _run_probe(fixture_dir, extra_env={"CIVIBUS_PUBLIC_MONEY_VALUE_FATAL": "1"})
+
+    assert crashed_result.returncode != 0
+    assert "money_value_probe_error UnicodeDecodeError" in crashed_result.stderr
+    assert "money_value_probe_error exit_status=3" in crashed_result.stderr
+    assert "surface_parity_ok" not in crashed_result.stdout
 
 
 @pytest.mark.dev_repo_only(
