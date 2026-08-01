@@ -204,6 +204,7 @@ import json
 import sys
 
 from api.health_version import build_version_payload
+from core.refresh import runner as refresh_runner
 from domains.campaign_finance.ingest.candidate_summary_loader import update_candidate_person_link
 
 expected_sha = sys.argv[1]
@@ -214,7 +215,25 @@ if payload != {"git_sha": expected_sha, "built_at": expected_built_at}:
 source = inspect.getsource(update_candidate_person_link)
 if "person_link_is_fillable" not in source:
     raise SystemExit("person_link_is_fillable guard missing")
-print(json.dumps({"build_version": payload, "person_link_is_fillable": True}, sort_keys=True))
+# The 2026-08-01 image carried the durability guard but NOT the repair-pair
+# alarm, because this script was written before the alarm merged. Without this
+# assertion the deploy whose entire purpose is to ship the alarm cannot prove it
+# did. A guard that cannot fail is not a guard.
+for alarm_symbol in ("_record_repair_pair_alarm", "_append_repair_pair_alarms"):
+    if not hasattr(refresh_runner, alarm_symbol):
+        raise SystemExit(f"partial-run alarm missing: core.refresh.runner.{alarm_symbol}")
+if not hasattr(refresh_runner.RefreshJob, "side_effects_repaired_by_job_key"):
+    raise SystemExit("partial-run alarm missing: RefreshJob.side_effects_repaired_by_job_key")
+print(
+    json.dumps(
+        {
+            "build_version": payload,
+            "person_link_is_fillable": True,
+            "repair_pair_alarm": True,
+        },
+        sort_keys=True,
+    )
+)
 ' "$head_sha" "$built_at" >"$evidence_dir/image_proof.txt" \
     || fail "pushed image provenance/guard proof failed"
 }

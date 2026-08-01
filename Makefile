@@ -41,7 +41,26 @@ RETIRED_ALLOWLIST := \
 require-postgres-password:
 	@test -n "$${POSTGRES_PASSWORD:-}" || { echo "POSTGRES_PASSWORD must be set in the environment" >&2; exit 1; }
 
-db-up: require-postgres-password
+# Port 5475 is reserved for test-integration-local, which pins it below and
+# refuses to run when the port is already bound. A lane database started on 5475
+# under any other COMPOSE_PROJECT_NAME therefore disables the DB-backed
+# merged-union gate for every concurrent worker on this host, and the symptom
+# surfaces at merge time as "Port 5475 is already bound by a likely concurrent
+# integration run" rather than at the point of the mistake. Observed 2026-08-01:
+# civibus_l13-db-1 held 127.0.0.1:5475 while its batch's own integration gate was
+# still owed. Batch port allocations are prose; this is the enforcement.
+INTEGRATION_RESERVED_PORT := 5475
+INTEGRATION_RESERVED_PROJECT := civibus_integration_local
+
+.PHONY: reject-reserved-integration-port
+reject-reserved-integration-port:
+	@if [ "$(POSTGRES_PORT)" = "$(INTEGRATION_RESERVED_PORT)" ] && \
+		[ "$(COMPOSE_PROJECT_NAME)" != "$(INTEGRATION_RESERVED_PROJECT)" ]; then \
+		echo "POSTGRES_PORT=$(INTEGRATION_RESERVED_PORT) is reserved for test-integration-local; COMPOSE_PROJECT_NAME=$(COMPOSE_PROJECT_NAME) may not bind it. Use the port your batch allocated." >&2; \
+		exit 1; \
+	fi
+
+db-up: require-postgres-password reject-reserved-integration-port
 	docker compose -f infra/docker-compose.yml up -d
 
 db-down: require-postgres-password

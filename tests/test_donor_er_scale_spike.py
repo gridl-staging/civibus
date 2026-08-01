@@ -2791,6 +2791,51 @@ def test_wilson_interval_and_verdict_precedence_are_known_answers() -> None:
     )
 
 
+def test_slice_projection_and_growth_vacuity_are_known_answers() -> None:
+    harness = _load_harness()
+
+    assert (
+        harness.project_required_slice_size(
+            target_clusters=190,
+            measured_clusters=89,
+            measured_slice_size=10000,
+        )
+        == 21349
+    )
+    assert (
+        harness.classify_frame_growth(
+            prior_clusters=89,
+            prior_slice_size=10000,
+            grown_clusters=89,
+            grown_slice_size=25000,
+        )
+        == "VACUOUS"
+    )
+    assert (
+        harness.classify_frame_growth(
+            prior_clusters=90,
+            prior_slice_size=10000,
+            grown_clusters=339,
+            grown_slice_size=21112,
+        )
+        == "GROWN"
+    )
+
+    with pytest.raises(ValueError, match="measured cluster yield must be positive"):
+        harness.project_required_slice_size(
+            target_clusters=190,
+            measured_clusters=0,
+            measured_slice_size=10000,
+        )
+    with pytest.raises(ValueError, match="grown_slice_size must exceed prior_slice_size"):
+        harness.classify_frame_growth(
+            prior_clusters=90,
+            prior_slice_size=10000,
+            grown_clusters=339,
+            grown_slice_size=10000,
+        )
+
+
 def test_transaction_write_defect_tracks_resolver_owner(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

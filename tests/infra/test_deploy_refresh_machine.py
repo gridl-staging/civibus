@@ -165,6 +165,7 @@ elif command == "docker":
         print(json.dumps({
             "build_version": {"git_sha": args[-2], "built_at": args[-1]},
             "person_link_is_fillable": True,
+            "repair_pair_alarm": True,
         }, sort_keys=True))
     else:
         sys.exit(98)
@@ -317,11 +318,21 @@ def test_deploy_uses_exact_build_probe_update_and_verifier_contract(tmp_path: Pa
     probe_text = " ".join(image_probes[0])
     assert "build_version_payload" in probe_text
     assert "person_link_is_fillable" in probe_text
+    # The 2026-08-01 image shipped the durability guard but not the repair-pair
+    # alarm, because this script predates the alarm's merge. The proof must
+    # assert the alarm too, or a redeploy performed to ship it cannot show it did.
+    for alarm_symbol in (
+        "_record_repair_pair_alarm",
+        "_append_repair_pair_alarms",
+        "side_effects_repaired_by_job_key",
+    ):
+        assert alarm_symbol in probe_text, f"image proof must assert {alarm_symbol}"
     assert (evidence_dir / "pushed_image.txt").read_text() == f"{IMAGE_TAG}\n"
     assert (evidence_dir / "image_digest.txt").read_text() == f"{IMAGE_DIGEST}\n"
     image_proof = (evidence_dir / "image_proof.txt").read_text()
     assert f'"git_sha": "{GIT_SHA}"' in image_proof
     assert '"person_link_is_fillable": true' in image_proof
+    assert '"repair_pair_alarm": true' in image_proof
 
     assert [argv for argv in invocations if argv[:3] == ["docker", "image", "inspect"]] == [
         ["docker", "image", "inspect", IMAGE_TAG, "--format", "{{json .RepoDigests}}"]

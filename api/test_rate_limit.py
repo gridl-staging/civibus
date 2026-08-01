@@ -289,3 +289,50 @@ def test_same_key_requests_are_serialized_within_a_window(
 
     assert sorted(results) == [200, 429]
     assert coordinated_bucket._request_count == 2
+
+
+def test_public_rate_limit_policy_accessor_matches_configured_state_and_enforcement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The public accessor and enforcement read the same app-state numbers.
+
+    Non-default values (7 requests / 13 seconds) prove the accessor returns the
+    configured policy rather than the 100/60 test defaults, and that the cap the
+    fixed-window enforcer applies agrees with what the accessor reports.
+    """
+    monkeypatch.setattr(access_middleware, "_current_epoch_seconds", lambda: 100)
+    client = _build_rate_limited_client(monkeypatch, max_requests=7, window_seconds=13)
+
+    assert access_middleware.public_rate_limit_policy(client.app.state) == (7, 13)
+
+    statuses = [
+        client.get(f"/v1{_PROBE_ROUTE_PATH}", headers={"X-API-Key": _VALID_API_KEY}).status_code for _ in range(8)
+    ]
+
+    assert statuses == [200, 200, 200, 200, 200, 200, 200, 429]
+
+
+def test_public_rate_limit_policy_rejects_unconfigured_state() -> None:
+    class _EmptyState:
+        pass
+
+    class _App:
+        def __init__(self, state: object) -> None:
+            self.state = state
+
+    with pytest.raises(RuntimeError):
+        access_middleware.public_rate_limit_policy(_EmptyState())
+
+    invalid_lock_state = _EmptyState()
+    access_middleware.initialize_rate_limiter_state(
+        invalid_lock_state,
+        max_requests=1,
+        window_seconds=1,
+    )
+    invalid_lock_state.rate_limit_lock = object()
+    invalid_lock_request = Request(
+        {"type": "http", "app": _App(invalid_lock_state), "method": "GET", "path": _PROBE_ROUTE_PATH}
+    )
+
+    with pytest.raises(RuntimeError, match="invalid state lock"):
+        access_middleware._rate_limit_state_for_request(invalid_lock_request)

@@ -5574,6 +5574,31 @@ _PERSON_TOP_EMPLOYERS_SELECT_SQL = """
 
 _PERSON_TOP_EMPLOYERS_UNCLASSIFIED_BUCKET = "Unclassified / not provided"
 
+# The public top-donors surface (``_PERSON_TOP_DONORS_SELECT_SQL``) groups
+# contributions by raw contributor name/city/state; it does NOT apply the
+# resolved donor-identity cluster key used by ``resolved_donor_records`` in the
+# donor-search grouping seam. The honest public disclosure is therefore that
+# surfaced donor identities remain unresolved — not that resolution is absent.
+_PUBLIC_TOP_DONORS_IDENTITY_RESOLUTION = "unresolved"
+_RESOLVED_DONOR_IDENTITY_MARKER = "resolved_donor_identity_id"
+
+
+def public_top_donors_identity_resolution_status() -> str:
+    """Report the donor-identity resolution status of the public top-donors query.
+
+    Returns ``"unresolved"`` only while ``_PERSON_TOP_DONORS_SELECT_SQL`` groups
+    by raw contributor identity. Raises if that query starts applying the
+    resolved donor-identity cluster key, so the public metadata disclosure can
+    never keep claiming ``"unresolved"`` after the grouping seam changes.
+    """
+    if _RESOLVED_DONOR_IDENTITY_MARKER in _PERSON_TOP_DONORS_SELECT_SQL:
+        raise RuntimeError(
+            "Public top-donors query now applies donor-identity resolution; the "
+            "public metadata disclosure must stop claiming 'unresolved'."
+        )
+    return _PUBLIC_TOP_DONORS_IDENTITY_RESOLUTION
+
+
 _PERSON_CONTRIBUTION_SOURCES_SELECT_SQL = """
     , source_ids AS (
         SELECT DISTINCT source_record_id

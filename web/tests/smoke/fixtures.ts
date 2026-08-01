@@ -197,9 +197,57 @@ export const SMOKE_PUBLIC_API_ENDPOINTS = [
   "GET /api/public/v1/federal/officials/{person_id}/contributors",
   "GET /api/public/v1/federal/officials/{person_id}/employers",
   "GET /api/public/v1/federal/export.json",
-  "GET /api/public/v1/federal/export.csv"
+  "GET /api/public/v1/federal/export.csv",
+  "GET /api/public/v1/federal/metadata"
 ] as const;
 export const SMOKE_PUBLIC_API_MIGRATION_HEADING = "OpenSecrets and ProPublica migration mapping";
+export const SMOKE_PUBLIC_API_MIGRATION_COLUMNS = [
+  "Source API and endpoint/product",
+  "Civibus equivalent",
+  "Honest delta"
+] as const;
+export const SMOKE_PUBLIC_API_MIGRATION_ROWS = [
+  {
+    source: "ProPublica Congress API members",
+    civibusEquivalent: SMOKE_PUBLIC_API_ENDPOINTS[0],
+    delta: "Current federal officeholders only; no historical membership or legislative activity."
+  },
+  {
+    source: "OpenSecrets API candSummary",
+    civibusEquivalent: SMOKE_PUBLIC_API_ENDPOINTS[1],
+    delta: "FEC summary totals and Schedule E support or opposition, keyed by Civibus person_id."
+  },
+  {
+    source: "OpenSecrets API candContrib",
+    civibusEquivalent: SMOKE_PUBLIC_API_ENDPOINTS[2],
+    delta: "Aggregated contributor names from itemized FEC receipts; donor identities remain unresolved."
+  },
+  {
+    source: "OpenSecrets API candIndustry",
+    civibusEquivalent: SMOKE_PUBLIC_API_ENDPOINTS[3],
+    delta: "Employer rollups disclose sparse industry classification and do not reproduce OpenSecrets categories."
+  },
+  {
+    source: "OpenSecrets bulk candidate summaries (JSON)",
+    civibusEquivalent: SMOKE_PUBLIC_API_ENDPOINTS[4],
+    delta: "Current federal officeholders with FEC summaries and Schedule E totals; not a full OpenSecrets bulk mirror."
+  },
+  {
+    source: "OpenSecrets bulk candidate summaries (CSV)",
+    civibusEquivalent: SMOKE_PUBLIC_API_ENDPOINTS[5],
+    delta: "The same bounded Civibus export in spreadsheet form with source URLs."
+  },
+  {
+    source: "ProPublica Congress API roll-call votes",
+    civibusEquivalent: "No Civibus equivalent yet",
+    delta: "Civibus does not currently publish roll-call votes or voting positions."
+  }
+] as const;
+export const SMOKE_PUBLIC_API_STABILITY_HEADING = "Stability, freshness, and limits";
+export const SMOKE_PUBLIC_API_STABILITY_COPY =
+  "Endpoint schemas are the stable client contract. Read the metadata endpoint for live source freshness, coverage qualifications, and the effective rate-limit policy.";
+export const SMOKE_PUBLIC_API_METADATA_REFERENCE = SMOKE_PUBLIC_API_ENDPOINTS[6];
+export const SMOKE_PUBLIC_API_CACHE_CONTRACT = "Cache-Control: public, max-age=900";
 export const SMOKE_PUBLIC_API_SAMPLE_JSON_VALUE = '"office_name": "U.S. House NC-01"';
 export const SMOKE_PUBLIC_API_CONTRIBUTOR_CURL =
   "/api/public/v1/federal/officials/11111111-1111-1111-1111-111111111111/contributors";
@@ -209,8 +257,6 @@ export const SMOKE_PUBLIC_API_CONTRIBUTOR_SAMPLE_NAME = '"name": "Sample Contrib
 export const SMOKE_PUBLIC_API_CONTRIBUTOR_SAMPLE_AMOUNT = '"total_amount": "5000.00"';
 export const SMOKE_PUBLIC_API_EMPLOYER_UNKNOWN_BUCKET = '"industry": "UNKNOWN_INDUSTRY"';
 export const SMOKE_PUBLIC_API_EMPLOYER_COVERAGE_FIELD = '"sampled_coverage_percentage": "5.843340"';
-export const SMOKE_PUBLIC_API_CAND_CONTRIB_NEED = "OpenSecrets candContrib";
-export const SMOKE_PUBLIC_API_CAND_INDUSTRY_NEED = "OpenSecrets candIndustry";
 export const SMOKE_PUBLIC_API_CSV_HEADER =
   "person_id,person_name,has_fec_money,candidate_id,total_raised,total_spent,net,cash_on_hand,summary_source,ie_support_total,ie_oppose_total,ie_support_count,ie_oppose_count,source_urls";
 export const SMOKE_PUBLIC_API_REFERENCE_LINKS = ["/api/openapi.json", "/api/docs", "/api/redoc"] as const;

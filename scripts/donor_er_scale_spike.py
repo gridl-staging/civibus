@@ -804,6 +804,26 @@ def wilson_95_interval(*, successes: int, denominator: int) -> tuple[float, floa
     return (round(max(0.0, center - margin), 6), round(min(1.0, center + margin), 6))
 
 
+def project_required_slice_size(*, target_clusters: int, measured_clusters: int, measured_slice_size: int) -> int:
+    if target_clusters <= 0:
+        raise ValueError("target_clusters must be positive")
+    if measured_clusters <= 0 or measured_slice_size <= 0:
+        raise ValueError("measured cluster yield must be positive")
+    return math.ceil(target_clusters * measured_slice_size / measured_clusters)
+
+
+def classify_frame_growth(
+    *, prior_clusters: int, prior_slice_size: int, grown_clusters: int, grown_slice_size: int
+) -> str:
+    if min(prior_clusters, prior_slice_size, grown_clusters, grown_slice_size) < 0:
+        raise ValueError("cluster and slice counts must be non-negative")
+    if grown_slice_size <= prior_slice_size:
+        raise ValueError("grown_slice_size must exceed prior_slice_size")
+    if grown_clusters <= prior_clusters:
+        return "VACUOUS"
+    return "GROWN"
+
+
 def choose_scale_verdict(
     *,
     named_transaction_write_defect: Mapping[str, Any] | TransactionWriteDefect | None,

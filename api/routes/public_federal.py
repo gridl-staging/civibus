@@ -15,17 +15,22 @@ from typing import Any
 from uuid import UUID
 
 import psycopg
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 
 from api.deps import get_db
-from api.middleware.access import enforce_public_ip_rate_limit
+from api.middleware.access import enforce_public_ip_rate_limit, public_rate_limit_policy
 from api.models import (
+    DataSourceMetadataResponse,
     PublicContributorRow,
     PublicContributorsResponse,
+    PublicEmployerIndustryCoverage,
     PublicEmployerRow,
     PublicEmployersResponse,
+    PublicFederalCoverage,
+    PublicFederalMetadataResponse,
     PublicFederalOfficial,
     PublicMemberMoneySummary,
+    PublicRateLimitPolicy,
 )
 from api.queries import (
     fetch_campaign_finance_provenance,
@@ -39,15 +44,28 @@ from api.queries import (
     fetch_person_contribution_sources,
     fetch_person_top_donors,
     fetch_person_top_employers,
+    fetch_public_federal_data_sources,
+    public_top_donors_identity_resolution_status,
 )
 from api.queries.civics import fetch_current_federal_members
 
-router = APIRouter(prefix="/public/v1", dependencies=[Depends(enforce_public_ip_rate_limit)])
+# Every operation on this router shares one OpenAPI tag so generated clients
+# group the public federal surface into a single namespace.
+PUBLIC_FEDERAL_OPENAPI_TAG = "public-federal"
+
+router = APIRouter(
+    prefix="/public/v1",
+    tags=[PUBLIC_FEDERAL_OPENAPI_TAG],
+    dependencies=[Depends(enforce_public_ip_rate_limit)],
+)
 
 _ZERO_MONEY = Decimal("0")
+# Fixed 14,324-row industry-classification benchmark: 837 classified /
+# 13,487 unknown. Both the employer endpoint and the metadata payload derive the
+# coverage percentage from these two counts, so the ratio can never drift.
 _PUBLIC_EMPLOYER_INDUSTRY_CLASSIFIED_COUNT = 837
 _PUBLIC_EMPLOYER_INDUSTRY_UNKNOWN_COUNT = 13487
-_PUBLIC_EMPLOYER_INDUSTRY_SAMPLED_COVERAGE_PERCENTAGE = Decimal("5.843340")
+_SAMPLED_COVERAGE_PERCENTAGE_QUANTUM = Decimal("0.000001")
 PUBLIC_CACHE_MAX_AGE_SECONDS = 900
 # Match the request size of the private candidate-list endpoint's upper bound so a
 # member with several linked candidate rows is never silently truncated.
@@ -75,8 +93,52 @@ PUBLIC_FEDERAL_EXPORT_CSV_COLUMNS = [
 ]
 
 
+class CsvResponse(Response):
+    """``text/csv`` response owner for the public CSV export.
+
+    Declared as the export route's ``response_class`` so the generated OpenAPI
+    document advertises a ``text/csv`` string body instead of FastAPI's default
+    ``application/json`` — a generated client must not JSON-decode the export.
+    """
+
+    media_type = "text/csv"
+
+
+# Shared 404 contract for the routes that resolve one officeholder by path
+# parameter, so the three declarations cannot drift apart.
+_FEDERAL_OFFICIAL_NOT_FOUND_DETAIL = "Federal official not found"
+_FEDERAL_OFFICIAL_NOT_FOUND_OPENAPI_RESPONSE = {
+    404: {
+        "description": "No current federal officeholder matches `person_id`.",
+        "content": {
+            "application/json": {
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "detail": {
+                            "type": "string",
+                            "const": _FEDERAL_OFFICIAL_NOT_FOUND_DETAIL,
+                        }
+                    },
+                    "required": ["detail"],
+                    "additionalProperties": False,
+                }
+            }
+        },
+    }
+}
+
+
 def _public_cache_control_value() -> str:
     return f"public, max-age={PUBLIC_CACHE_MAX_AGE_SECONDS}"
+
+
+# Access terms shared by every public operation description, sourced from the
+# same cache-header owner the responses actually use.
+_PUBLIC_ACCESS_NOTE = (
+    f"No API key is required. Responses carry `Cache-Control: {_public_cache_control_value()}` "
+    "and are rate limited per client IP."
+)
 
 
 def _public_cache_headers() -> dict[str, str]:
@@ -90,8 +152,26 @@ def _apply_public_cache_headers(response: Response) -> None:
 def _federal_official_not_found() -> HTTPException:
     return HTTPException(
         status_code=404,
-        detail="Federal official not found",
+        detail=_FEDERAL_OFFICIAL_NOT_FOUND_DETAIL,
         headers=_public_cache_headers(),
+    )
+
+
+def _employer_industry_benchmark() -> PublicEmployerIndustryCoverage:
+    """Return the fixed industry-classification benchmark with a derived ratio.
+
+    ``sampled_coverage_percentage`` is computed from the two counts rather than
+    stored as an independent constant, so it cannot disagree with them.
+    """
+    classified = _PUBLIC_EMPLOYER_INDUSTRY_CLASSIFIED_COUNT
+    unknown = _PUBLIC_EMPLOYER_INDUSTRY_UNKNOWN_COUNT
+    sampled_coverage_percentage = (Decimal(classified) / Decimal(classified + unknown) * Decimal(100)).quantize(
+        _SAMPLED_COVERAGE_PERCENTAGE_QUANTUM
+    )
+    return PublicEmployerIndustryCoverage(
+        classified_count=classified,
+        unknown_count=unknown,
+        sampled_coverage_percentage=sampled_coverage_percentage,
     )
 
 
@@ -109,12 +189,34 @@ def _matches_filters(
     )
 
 
-@router.get("/federal/officials", response_model=list[PublicFederalOfficial])
+@router.get(
+    "/federal/officials",
+    response_model=list[PublicFederalOfficial],
+    operation_id="list_public_federal_officials",
+    summary="List current federal officials",
+    description=(
+        "Return the directory of federal officials who currently hold office, with party, "
+        "state, district or Senate class, portrait URL, and the Civibus person detail path. "
+        "Candidates who do not hold the office are excluded, so a challenger who shares an "
+        "officeholder's name never appears. The optional `chamber`, `state`, and `party` "
+        "filters narrow the directory; omitting all three returns every current officeholder. "
+        f"{_PUBLIC_ACCESS_NOTE}"
+    ),
+)
 def list_federal_officials(
     response: Response,
-    chamber: str | None = Query(default=None),
-    state: str | None = Query(default=None),
-    party: str | None = Query(default=None),
+    chamber: str | None = Query(
+        default=None,
+        description='Exact-match filter on the chamber label, e.g. "House", "Senate", or "Executive".',
+    ),
+    state: str | None = Query(
+        default=None,
+        description='Exact-match filter on the two-letter state or territory postal code, e.g. "NC".',
+    ),
+    party: str | None = Query(
+        default=None,
+        description='Exact-match filter on the party label exactly as this endpoint returns it, e.g. "Independent".',
+    ),
     conn: psycopg.Connection = Depends(get_db),
 ) -> list[PublicFederalOfficial]:
     """Return the current federal-official directory, optionally filtered.
@@ -475,13 +577,34 @@ def _public_money_row_for_person(conn: psycopg.Connection, person_id: UUID) -> P
     )
 
 
-@router.get("/federal/export.json", response_model=list[PublicMemberMoneySummary])
+@router.get(
+    "/federal/export.json",
+    response_model=list[PublicMemberMoneySummary],
+    operation_id="export_public_federal_money_json",
+    summary="Export every official's money summary as JSON",
+    description=(
+        "Return the FEC money and Schedule E independent-expenditure summary for every "
+        "current federal official in one JSON array — the bulk counterpart to the "
+        "per-official money endpoint, with identical per-row fields. Officials with no "
+        "linked FEC candidate are included with `has_fec_money` false and zeroed totals. "
+        f"{_PUBLIC_ACCESS_NOTE}"
+    ),
+)
 def export_federal_money_json(
     response: Response,
     conn: psycopg.Connection = Depends(get_db),
 ) -> list[PublicMemberMoneySummary]:
+    """Return the bulk money + IE export for every current federal official."""
     _apply_public_cache_headers(response)
     return build_public_federal_money_rows(conn)
+
+
+_DANGEROUS_CSV_FORMULA_PREFIXES = frozenset({"=", "+", "-", "@"})
+
+
+def _requires_csv_formula_escaping(value: str) -> bool:
+    stripped_value = value.lstrip(" \t\r\n")
+    return bool(stripped_value) and stripped_value[0] in _DANGEROUS_CSV_FORMULA_PREFIXES
 
 
 def _csv_cell(value: object) -> str:
@@ -489,6 +612,8 @@ def _csv_cell(value: object) -> str:
         return ""
     if isinstance(value, bool):
         return str(value).lower()
+    if isinstance(value, str):
+        return f"'{value}" if _requires_csv_formula_escaping(value) else value
     return str(value)
 
 
@@ -516,20 +641,46 @@ def _public_federal_export_csv_row(row: PublicMemberMoneySummary) -> dict[str, s
     }
 
 
-@router.get("/federal/export.csv")
+@router.get(
+    "/federal/export.csv",
+    response_class=CsvResponse,
+    operation_id="export_public_federal_money_csv",
+    summary="Export every official's money summary as CSV",
+    description=(
+        "Return the same rows as the JSON export as a `text/csv` document with a header "
+        "row. Columns, in order: "
+        f"{', '.join(f'`{column}`' for column in PUBLIC_FEDERAL_EXPORT_CSV_COLUMNS)}. "
+        "`source_urls` is a semicolon-separated list of the filing URLs backing the row. "
+        f"{_PUBLIC_ACCESS_NOTE}"
+    ),
+)
 def export_federal_money_csv(
     conn: psycopg.Connection = Depends(get_db),
 ) -> Response:
+    """Return the bulk money + IE export as a CSV document."""
     output = io.StringIO()
     writer = csv.DictWriter(output, fieldnames=PUBLIC_FEDERAL_EXPORT_CSV_COLUMNS)
     writer.writeheader()
     writer.writerows(_public_federal_export_csv_row(row) for row in build_public_federal_money_rows(conn))
-    response = Response(content=output.getvalue(), media_type="text/csv")
+    response = CsvResponse(content=output.getvalue())
     _apply_public_cache_headers(response)
     return response
 
 
-@router.get("/federal/officials/{person_id}/money", response_model=PublicMemberMoneySummary)
+@router.get(
+    "/federal/officials/{person_id}/money",
+    response_model=PublicMemberMoneySummary,
+    operation_id="get_public_federal_official_money",
+    summary="Get one official's FEC money and outside-spending summary",
+    description=(
+        "Return total raised, total spent, net, cash on hand, and the Schedule E "
+        "independent expenditures made for and against one current federal official, with "
+        "a source link for every figure. A known official with no linked FEC candidate "
+        "returns 200 with `has_fec_money` false and zeroed totals rather than invented "
+        f"money; 404 means `person_id` is not a current federal officeholder. {_PUBLIC_ACCESS_NOTE}"
+    ),
+    responses=_FEDERAL_OFFICIAL_NOT_FOUND_OPENAPI_RESPONSE,
+)
 def get_federal_official_money(
     person_id: UUID,
     response: Response,
@@ -547,12 +698,26 @@ def get_federal_official_money(
     return row
 
 
-@router.get("/federal/officials/{person_id}/contributors", response_model=PublicContributorsResponse)
+@router.get(
+    "/federal/officials/{person_id}/contributors",
+    response_model=PublicContributorsResponse,
+    operation_id="get_public_federal_official_contributors",
+    summary="Get one official's top contributors",
+    description=(
+        "Return the top contributors to one current federal official, each with the total "
+        "amount contributed and the number of itemized transactions behind it. Only "
+        "source-backed contributions are included, and `sources` links the filings they "
+        "come from. 404 means `person_id` is not a current federal officeholder. "
+        f"{_PUBLIC_ACCESS_NOTE}"
+    ),
+    responses=_FEDERAL_OFFICIAL_NOT_FOUND_OPENAPI_RESPONSE,
+)
 def get_federal_official_contributors(
     person_id: UUID,
     response: Response,
     conn: psycopg.Connection = Depends(get_db),
 ) -> PublicContributorsResponse:
+    """Return the top source-backed contributors for one current federal official."""
     _apply_public_cache_headers(response)
     if _current_federal_member_for_person(conn, person_id) is None:
         raise _federal_official_not_found()
@@ -566,26 +731,83 @@ def get_federal_official_contributors(
     )
 
 
-@router.get("/federal/officials/{person_id}/employers", response_model=PublicEmployersResponse)
+@router.get(
+    "/federal/officials/{person_id}/employers",
+    response_model=PublicEmployersResponse,
+    operation_id="get_public_federal_official_employers",
+    summary="Get one official's top contributor employers",
+    description=(
+        "Return the top employers reported by contributors to one current federal "
+        "official, each with the total contributed, the itemized transaction count, and an "
+        "industry label that is `UNKNOWN_INDUSTRY` where classification is unavailable. "
+        "`classified_count`, `unknown_count`, and `sampled_coverage_percentage` state how "
+        "sparse that industry coverage is, so the labels are never read as complete. 404 "
+        f"means `person_id` is not a current federal officeholder. {_PUBLIC_ACCESS_NOTE}"
+    ),
+    responses=_FEDERAL_OFFICIAL_NOT_FOUND_OPENAPI_RESPONSE,
+)
 def get_federal_official_employers(
     person_id: UUID,
     response: Response,
     conn: psycopg.Connection = Depends(get_db),
 ) -> PublicEmployersResponse:
+    """Return the top source-backed contributor employers for one current federal official."""
     _apply_public_cache_headers(response)
     if _current_federal_member_for_person(conn, person_id) is None:
         raise _federal_official_not_found()
 
     employers = fetch_person_top_employers(conn, person_id, source_backed_only=True) or []
     sources = fetch_person_contribution_sources(conn, person_id) or []
+    # Sparse industry coverage stays explicit beside the UNKNOWN_INDUSTRY bucket,
+    # sourced from the same benchmark the metadata payload publishes.
+    industry_benchmark = _employer_industry_benchmark()
     return PublicEmployersResponse(
         person_id=person_id,
         employers=[PublicEmployerRow.model_validate(row) for row in employers],
-        # Fixed 14,324-row benchmark: 837 classified / 13,487 unknown. The
-        # 5.843340% ceiling requires external data, so sparse industry coverage
-        # stays explicit beside the UNKNOWN_INDUSTRY bucket.
-        classified_count=_PUBLIC_EMPLOYER_INDUSTRY_CLASSIFIED_COUNT,
-        unknown_count=_PUBLIC_EMPLOYER_INDUSTRY_UNKNOWN_COUNT,
-        sampled_coverage_percentage=_PUBLIC_EMPLOYER_INDUSTRY_SAMPLED_COVERAGE_PERCENTAGE,
+        classified_count=industry_benchmark.classified_count,
+        unknown_count=industry_benchmark.unknown_count,
+        sampled_coverage_percentage=industry_benchmark.sampled_coverage_percentage,
         sources=sources,
+    )
+
+
+@router.get(
+    "/federal/metadata",
+    response_model=PublicFederalMetadataResponse,
+    operation_id="get_public_federal_metadata",
+    summary="Get federal-first data freshness, request limits, and coverage qualifications",
+    description=(
+        "Return a machine-readable contract describing the federal-first data behind this API: "
+        "the source freshness (`last_pull_at`, `last_pull_status`, `record_count`) of the FEC and "
+        "federal officeholder data sources, the effective per-client request limit, and honest "
+        "coverage qualifications — the current officeholder count (never a fixed denominator), the "
+        "fixed industry-classification benchmark, and the unresolved state of surfaced donor "
+        f"identities. {_PUBLIC_ACCESS_NOTE}"
+    ),
+)
+def get_public_federal_metadata(
+    request: Request,
+    response: Response,
+    conn: psycopg.Connection = Depends(get_db),
+) -> PublicFederalMetadataResponse:
+    """Assemble the federal-first freshness, request-limit, and coverage contract.
+
+    Every fact stays owned by its existing seam: source freshness from the
+    bounded metadata snapshot query, the request limit from the access
+    middleware policy accessor, the officeholder denominator from the current
+    roster owner, and the donor-resolution disclosure from the campaign-finance
+    grouping seam.
+    """
+    _apply_public_cache_headers(response)
+    max_requests, window_seconds = public_rate_limit_policy(request.app.state)
+    data_sources = fetch_public_federal_data_sources(conn)
+    return PublicFederalMetadataResponse(
+        data_sources=[DataSourceMetadataResponse.model_validate(row) for row in data_sources],
+        rate_limit=PublicRateLimitPolicy(max_requests=max_requests, window_seconds=window_seconds),
+        coverage=PublicFederalCoverage(
+            current_officeholder_count=len(fetch_current_federal_members(conn)),
+            officeholder_denominator_is_fixed=False,
+            employer_industry=_employer_industry_benchmark(),
+            donor_identity_resolution=public_top_donors_identity_resolution_status(),
+        ),
     )

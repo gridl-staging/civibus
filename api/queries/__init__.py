@@ -40,6 +40,7 @@ from api.queries.campaign_finance import (
     fetch_person_contribution_insights,
     fetch_person_top_donors,
     fetch_person_top_employers,
+    public_top_donors_identity_resolution_status,
     fetch_state_campaign_finance_detail,
     fetch_state_campaign_finance_summaries,
     fetch_persons_by_slug,
@@ -70,7 +71,11 @@ from api.queries.civics import (
     fetch_offices_by_jurisdiction,
 )
 from api.queries.search import fetch_search_results
-from api.queries.metadata import fetch_data_sources_metadata, fetch_runtime_coverage_registry
+from api.queries.metadata import (
+    fetch_data_sources_metadata,
+    fetch_public_federal_data_sources,
+    fetch_runtime_coverage_registry,
+)
 
 __all__ = [
     "CAMPAIGN_FINANCE_CANDIDATE_DETAIL_SQL",
@@ -130,7 +135,9 @@ __all__ = [
     "fetch_person_top_employers",
     "fetch_persons_by_slug",
     "fetch_data_sources_metadata",
+    "fetch_public_federal_data_sources",
     "fetch_runtime_coverage_registry",
+    "public_top_donors_identity_resolution_status",
     "fetch_search_results",
     "fetch_transaction_list",
     "resolve_selected_cycle",

@@ -12,13 +12,14 @@ import io
 import re
 from datetime import date, datetime, timezone
 from decimal import Decimal
+from functools import lru_cache
 from pathlib import Path
+from typing import Any, NamedTuple
 from uuid import UUID, uuid4
 
 import psycopg
 import pytest
 from fastapi.testclient import TestClient
-from fastapi.routing import APIRoute
 from pydantic import ValidationError
 
 from api.deps import get_db
@@ -57,6 +58,69 @@ from core.db import insert_entity_source
 from test_support.donor_search_fixture import seed_full_scope_skewed_donor_search_fixture
 
 pytestmark = pytest.mark.integration
+
+_PUBLIC_FEDERAL_OPENAPI_PATH_PREFIX = "/public/v1/"
+_DEVELOPERS_PAGE_PROXY_PREFIX = "/api"
+_OPENAPI_OPERATION_KEYS = frozenset({"get", "put", "post", "delete", "options", "head", "patch", "trace"})
+
+# The published client-generation contract for the six authless federal routes.
+# Values are asserted literally rather than read back from the route module: a
+# contract test that imports the value it checks cannot detect a renamed
+# operation, and every rename here breaks already-generated clients.
+_PUBLIC_FEDERAL_OPENAPI_TAG = "public-federal"
+_PUBLIC_FEDERAL_OFFICIALS_PATH = "/public/v1/federal/officials"
+_PUBLIC_FEDERAL_MONEY_PATH = "/public/v1/federal/officials/{person_id}/money"
+_PUBLIC_FEDERAL_CONTRIBUTORS_PATH = "/public/v1/federal/officials/{person_id}/contributors"
+_PUBLIC_FEDERAL_EMPLOYERS_PATH = "/public/v1/federal/officials/{person_id}/employers"
+_PUBLIC_FEDERAL_EXPORT_JSON_PATH = "/public/v1/federal/export.json"
+_PUBLIC_FEDERAL_EXPORT_CSV_PATH = "/public/v1/federal/export.csv"
+_PUBLIC_FEDERAL_METADATA_PATH = "/public/v1/federal/metadata"
+
+_EXPECTED_PUBLIC_FEDERAL_OPERATION_IDS = {
+    _PUBLIC_FEDERAL_OFFICIALS_PATH: "list_public_federal_officials",
+    _PUBLIC_FEDERAL_MONEY_PATH: "get_public_federal_official_money",
+    _PUBLIC_FEDERAL_CONTRIBUTORS_PATH: "get_public_federal_official_contributors",
+    _PUBLIC_FEDERAL_EMPLOYERS_PATH: "get_public_federal_official_employers",
+    _PUBLIC_FEDERAL_EXPORT_JSON_PATH: "export_public_federal_money_json",
+    _PUBLIC_FEDERAL_EXPORT_CSV_PATH: "export_public_federal_money_csv",
+    _PUBLIC_FEDERAL_METADATA_PATH: "get_public_federal_metadata",
+}
+
+# Routes that resolve one officeholder by path parameter, and therefore own the
+# 404 contract for an unknown ``person_id``.
+_PUBLIC_FEDERAL_PER_OFFICIAL_PATHS = (
+    _PUBLIC_FEDERAL_MONEY_PATH,
+    _PUBLIC_FEDERAL_CONTRIBUTORS_PATH,
+    _PUBLIC_FEDERAL_EMPLOYERS_PATH,
+)
+
+
+class _ExpectedJsonSuccessSchema(NamedTuple):
+    model_name: str
+    is_array: bool
+
+
+_EXPECTED_PUBLIC_FEDERAL_SUCCESS_JSON_SCHEMAS = {
+    _PUBLIC_FEDERAL_OFFICIALS_PATH: _ExpectedJsonSuccessSchema("PublicFederalOfficial", is_array=True),
+    _PUBLIC_FEDERAL_MONEY_PATH: _ExpectedJsonSuccessSchema("PublicMemberMoneySummary", is_array=False),
+    _PUBLIC_FEDERAL_CONTRIBUTORS_PATH: _ExpectedJsonSuccessSchema("PublicContributorsResponse", is_array=False),
+    _PUBLIC_FEDERAL_EMPLOYERS_PATH: _ExpectedJsonSuccessSchema("PublicEmployersResponse", is_array=False),
+    _PUBLIC_FEDERAL_EXPORT_JSON_PATH: _ExpectedJsonSuccessSchema("PublicMemberMoneySummary", is_array=True),
+    _PUBLIC_FEDERAL_METADATA_PATH: _ExpectedJsonSuccessSchema("PublicFederalMetadataResponse", is_array=False),
+}
+
+_EXPECTED_PUBLIC_FEDERAL_OFFICIALS_FILTERS = ("chamber", "state", "party")
+_EXPECTED_FEDERAL_OFFICIAL_NOT_FOUND_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "detail": {
+            "type": "string",
+            "const": "Federal official not found",
+        }
+    },
+    "required": ["detail"],
+    "additionalProperties": False,
+}
 
 
 def _public_contract_source() -> SourceInfo:
@@ -217,8 +281,51 @@ def _public_cache_control_header() -> str:
     return "public, max-age=900"
 
 
-def _public_federal_get_paths() -> list[str]:
-    return [f"/api{route.path}" for route in router.routes if isinstance(route, APIRoute) and "GET" in route.methods]
+@lru_cache(maxsize=1)
+def _generated_openapi_document() -> dict[str, Any]:
+    """Return the OpenAPI document FastAPI generates for the assembled app.
+
+    Schema generation reads route metadata only, so this deliberately bypasses
+    the ``api_client`` fixture and ``api/conftest.py:_build_api_test_client``:
+    both open a real connection pool, and routing these contract assertions
+    through them would make the whole public-API drift guard skip whenever
+    Postgres is unreachable. Cached because every assertion below shares one
+    document — ``create_app()`` is never re-invoked per test.
+    """
+    from api.main import create_app
+
+    return create_app().openapi()
+
+
+def _public_federal_openapi_path_items() -> dict[str, dict[str, Any]]:
+    """Return the generated ``/public/v1`` path items, keyed by OpenAPI path."""
+    return {
+        path: path_item
+        for path, path_item in _generated_openapi_document()["paths"].items()
+        if path.startswith(_PUBLIC_FEDERAL_OPENAPI_PATH_PREFIX)
+    }
+
+
+def _public_federal_openapi_get_operation(path: str) -> dict[str, Any]:
+    path_item = _public_federal_openapi_path_items()[path]
+    assert "get" in path_item, f"{path} no longer publishes a GET operation"
+    return path_item["get"]
+
+
+def _expected_success_json_schema(expected: _ExpectedJsonSuccessSchema) -> dict[str, Any]:
+    model_ref = {"$ref": f"#/components/schemas/{expected.model_name}"}
+    if expected.is_array:
+        return {"type": "array", "items": model_ref}
+    return model_ref
+
+
+def _developers_page_label_for_openapi_path(path: str) -> str:
+    """Map a published OpenAPI path to the label the developers page documents.
+
+    OpenAPI owns the app-native ``/public/v1/...`` paths; only the developers
+    page prepends the ``/api`` reverse-proxy prefix the deployment serves.
+    """
+    return f"{_DEVELOPERS_PAGE_PROXY_PREFIX}{path}"
 
 
 def _developers_page_public_api_endpoint_labels(source: str) -> list[str]:
@@ -232,17 +339,138 @@ def _developers_page_csv_columns(source: str) -> list[str]:
     return re.findall(r'"([^"]+)"', match.group("body"))
 
 
+def test_public_federal_openapi_publishes_exactly_the_shipped_public_routes() -> None:
+    """The generated document is the client-generation contract for ``/public/v1``.
+
+    Goes red if a public route is deleted, renamed, or added without being
+    added to this contract, and if a public path grows a non-GET operation.
+    """
+    path_items = _public_federal_openapi_path_items()
+
+    assert set(path_items) == set(_EXPECTED_PUBLIC_FEDERAL_OPERATION_IDS)
+    for path, path_item in path_items.items():
+        assert set(path_item) & _OPENAPI_OPERATION_KEYS == {"get"}, f"{path} publishes non-GET operations"
+
+
+@pytest.mark.parametrize("path", sorted(_EXPECTED_PUBLIC_FEDERAL_OPERATION_IDS))
+def test_public_federal_openapi_operation_carries_client_generation_metadata(path: str) -> None:
+    operation = _public_federal_openapi_get_operation(path)
+
+    assert operation["operationId"] == _EXPECTED_PUBLIC_FEDERAL_OPERATION_IDS[path]
+    assert operation["tags"] == [_PUBLIC_FEDERAL_OPENAPI_TAG]
+    assert operation["summary"].strip()
+    assert operation["description"].strip()
+
+
+def test_public_federal_openapi_operation_ids_are_unique_across_the_document() -> None:
+    """A generated client collides on ANY duplicate, not just a public-subset one."""
+    operation_ids = [
+        operation["operationId"]
+        for path_item in _generated_openapi_document()["paths"].values()
+        for operation_key, operation in path_item.items()
+        if operation_key in _OPENAPI_OPERATION_KEYS
+    ]
+
+    assert len(operation_ids) == len(set(operation_ids))
+
+
+def test_public_federal_openapi_officials_declares_documented_filter_parameters() -> None:
+    operation = _public_federal_openapi_get_operation(_PUBLIC_FEDERAL_OFFICIALS_PATH)
+
+    parameters_by_name = {parameter["name"]: parameter for parameter in operation["parameters"]}
+
+    assert tuple(parameters_by_name) == _EXPECTED_PUBLIC_FEDERAL_OFFICIALS_FILTERS
+    for parameter in parameters_by_name.values():
+        assert parameter["in"] == "query"
+        assert parameter["required"] is False
+        assert parameter["description"].strip()
+        assert parameter["schema"]["anyOf"] == [{"type": "string"}, {"type": "null"}]
+
+
+@pytest.mark.parametrize("path", _PUBLIC_FEDERAL_PER_OFFICIAL_PATHS)
+def test_public_federal_openapi_per_official_route_declares_uuid_lookup_contract(path: str) -> None:
+    operation = _public_federal_openapi_get_operation(path)
+
+    assert len(operation["parameters"]) == 1
+    person_id_parameter = operation["parameters"][0]
+    assert person_id_parameter["name"] == "person_id"
+    assert person_id_parameter["in"] == "path"
+    assert person_id_parameter["required"] is True
+    assert person_id_parameter["schema"]["type"] == "string"
+    assert person_id_parameter["schema"]["format"] == "uuid"
+    not_found_response = operation["responses"]["404"]
+    assert not_found_response["description"].strip()
+    assert set(not_found_response["content"]) == {"application/json"}
+    assert not_found_response["content"]["application/json"]["schema"] == (_EXPECTED_FEDERAL_OFFICIAL_NOT_FOUND_SCHEMA)
+
+
+@pytest.mark.parametrize("path", sorted(_EXPECTED_PUBLIC_FEDERAL_SUCCESS_JSON_SCHEMAS))
+def test_public_federal_openapi_success_response_references_its_response_model(path: str) -> None:
+    operation = _public_federal_openapi_get_operation(path)
+
+    success_content = operation["responses"]["200"]["content"]
+    assert set(success_content) == {"application/json"}
+    published_schema = success_content["application/json"]["schema"]
+    # FastAPI appends an auto-derived ``title`` to composed (array) response
+    # schemas; the client-relevant contract is the model reference and shape.
+    assert {key: value for key, value in published_schema.items() if key != "title"} == _expected_success_json_schema(
+        _EXPECTED_PUBLIC_FEDERAL_SUCCESS_JSON_SCHEMAS[path]
+    )
+
+
+def test_public_federal_openapi_csv_export_publishes_only_a_text_csv_body() -> None:
+    """``application/json`` here would make generated clients JSON-decode CSV."""
+    operation = _public_federal_openapi_get_operation(_PUBLIC_FEDERAL_EXPORT_CSV_PATH)
+
+    success_content = operation["responses"]["200"]["content"]
+
+    assert set(success_content) == {"text/csv"}
+    assert success_content["text/csv"]["schema"] == {"type": "string"}
+
+
+@pytest.mark.parametrize("path", sorted(_EXPECTED_PUBLIC_FEDERAL_OPERATION_IDS))
+def test_public_federal_openapi_operation_declares_no_authentication_requirement(path: str) -> None:
+    """The authless surface must never publish a security requirement."""
+    operation = _public_federal_openapi_get_operation(path)
+
+    assert operation.get("security", []) == []
+
+
+def test_public_federal_metadata_operation_references_metadata_response_model() -> None:
+    operation = _public_federal_openapi_get_operation(_PUBLIC_FEDERAL_METADATA_PATH)
+
+    success_schema = operation["responses"]["200"]["content"]["application/json"]["schema"]
+    assert success_schema == {"$ref": "#/components/schemas/PublicFederalMetadataResponse"}
+    assert operation["operationId"] == "get_public_federal_metadata"
+
+
+def test_public_top_donors_disclosure_is_unresolved_while_query_skips_resolution() -> None:
+    """The public donor list groups by raw contributor identity, not resolved clusters.
+
+    Goes red if the public top-donors query starts applying donor-identity
+    resolution while the disclosure still claims ``"unresolved"``.
+    """
+    from api.queries.campaign_finance import (
+        _PERSON_TOP_DONORS_SELECT_SQL,
+        public_top_donors_identity_resolution_status,
+    )
+
+    assert "resolved_donor_identity_id" not in _PERSON_TOP_DONORS_SELECT_SQL
+    assert public_top_donors_identity_resolution_status() == "unresolved"
+
+
 def test_developers_page_public_api_reference_matches_router_contract() -> None:
     developers_page_source = Path("web/src/routes/developers/+page.svelte").read_text()
 
-    public_paths = _public_federal_get_paths()
+    published_public_paths = {
+        _developers_page_label_for_openapi_path(path) for path in _public_federal_openapi_path_items()
+    }
     documented_public_paths = _developers_page_public_api_endpoint_labels(developers_page_source)
     documented_csv_columns = _developers_page_csv_columns(developers_page_source)
 
     assert f"<code>{router.prefix}</code>" in developers_page_source
-    assert len(public_paths) == 6
     assert len(documented_public_paths) == len(set(documented_public_paths))
-    assert set(documented_public_paths) == set(public_paths)
+    assert set(documented_public_paths) == published_public_paths
     assert documented_csv_columns == PUBLIC_FEDERAL_EXPORT_CSV_COLUMNS
 
 
@@ -1113,6 +1341,21 @@ def test_export_csv_header_and_known_row(api_client: TestClient, db_conn: psycop
         "ie_oppose_count": "1",
         "source_urls": "",
     }
+
+
+@pytest.mark.parametrize(
+    ("raw_value", "expected_csv_value"),
+    [
+        ("=SUM(1,1)", "'=SUM(1,1)"),
+        ("+cmd", "'+cmd"),
+        ("-2+3", "'-2+3"),
+        ("@hidden", "'@hidden"),
+        (" \t=with-leading-space", "' \t=with-leading-space"),
+        ("plain text", "plain text"),
+    ],
+)
+def test_export_csv_escapes_formula_like_string_cells(raw_value: str, expected_csv_value: str) -> None:
+    assert public_federal_route_module._csv_cell(raw_value) == expected_csv_value
 
 
 def test_export_row_carries_source_url(api_client: TestClient, db_conn: psycopg.Connection) -> None:

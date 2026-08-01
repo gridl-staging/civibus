@@ -11,7 +11,7 @@ import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Literal
 from uuid import UUID
 
 import psycopg
@@ -161,6 +161,10 @@ def should_run_job(job: RefreshJob, *, last_pull_at: datetime | None, now: datet
     return resolved_now - resolved_last_pull_at >= interval
 
 
+def cadence_last_pull_owner(job: RefreshJob) -> Literal["refresh_history", "data_source"]:
+    return "refresh_history" if job.refresh_history_key is not None else "data_source"
+
+
 def _select_data_source_id(
     connection: psycopg.Connection,
     *,
@@ -187,7 +191,7 @@ def _select_data_source_id(
 
 
 def _select_latest_pull_at(connection: psycopg.Connection, job: RefreshJob) -> datetime | None:
-    if job.refresh_history_key is not None:
+    if cadence_last_pull_owner(job) == "refresh_history":
         with connection.cursor() as cursor:
             cursor.execute(
                 """

@@ -8,7 +8,12 @@ import psycopg
 import pytest
 from fastapi.testclient import TestClient
 
-from api.queries.metadata import _COVERAGE_REGISTRY_SQL, _DATA_SOURCES_METADATA_SQL
+from api.queries.civics import fetch_current_federal_members
+from api.queries.metadata import (
+    _COVERAGE_REGISTRY_SQL,
+    _DATA_SOURCES_METADATA_SQL,
+    _PUBLIC_FEDERAL_DATA_SOURCES_SQL,
+)
 from api.test_campaign_finance_support import (
     CommitteeRowSeed,
     FilingRowSeed,
@@ -19,7 +24,8 @@ from api.test_campaign_finance_support import (
     insert_source_record_for_test,
     insert_transaction_row,
 )
-from core.db import insert_entity_source
+from core.db import insert_data_source, insert_entity_source
+from core.types.python.models import DataSource
 
 pytestmark = pytest.mark.integration
 
@@ -72,6 +78,37 @@ def test_coverage_registry_sql_reads_bounded_data_source_snapshot() -> None:
     assert "core.source_record" not in normalized_sql
     assert "cf.transaction" not in normalized_sql
     assert "cf.filing" not in normalized_sql
+
+
+def test_public_federal_data_sources_sql_scopes_to_federal_first_sources() -> None:
+    normalized_sql = _normalize_sql(_PUBLIC_FEDERAL_DATA_SOURCES_SQL)
+
+    # Reuses the bounded data_source snapshot — no source_record fan-out.
+    assert "from core.data_source ds" in normalized_sql
+    assert "core.source_record" not in normalized_sql
+    assert "left join lateral" not in normalized_sql
+    # Scope: campaign-finance federal/fec plus civics federal/officeholder/%.
+    assert "ds.domain = 'campaign_finance'" in normalized_sql
+    assert "ds.jurisdiction = 'federal/fec'" in normalized_sql
+    assert "ds.domain = 'civics'" in normalized_sql
+    assert "ds.jurisdiction like 'federal/officeholder/%'" in normalized_sql
+
+
+def _insert_civics_officeholder_data_source_for_test(
+    db_conn: psycopg.Connection,
+    *,
+    jurisdiction: str,
+    name_suffix: str,
+    source_url: str,
+) -> DataSource:
+    data_source = DataSource(
+        domain="civics",
+        jurisdiction=jurisdiction,
+        name=f"Civics officeholder source {name_suffix}",
+        source_url=source_url,
+    )
+    insert_data_source(db_conn, data_source)
+    return data_source
 
 
 class TestMetadataEndpoints:
@@ -543,3 +580,192 @@ class TestMetadataEndpoints:
             0,
             tzinfo=timezone.utc,
         )
+
+
+class TestPublicFederalMetadata:
+    """Assembled ``GET /public/v1/federal/metadata`` contract (Stage 2)."""
+
+    def _seed_federal_and_unrelated_sources(
+        self,
+        db_conn: psycopg.Connection,
+    ) -> dict[str, DataSource]:
+        federal_fec = insert_data_source_for_test(
+            db_conn,
+            jurisdiction="federal/fec",
+            name_suffix=f"fec-{uuid4()}",
+        )
+        _sync_data_source_metadata_for_test(
+            db_conn,
+            data_source_id=federal_fec.id,
+            record_count=42,
+            last_pull_at=datetime(2026, 7, 20, 9, 0, tzinfo=timezone.utc),
+            last_pull_status="success",
+        )
+        # A federal source whose freshness is unknown must stay visibly null,
+        # never be silently treated as fresh.
+        federal_fec_stale = insert_data_source_for_test(
+            db_conn,
+            jurisdiction="federal/fec",
+            name_suffix=f"fec-null-{uuid4()}",
+        )
+        _sync_data_source_metadata_for_test(
+            db_conn,
+            data_source_id=federal_fec_stale.id,
+            record_count=None,
+            last_pull_at=None,
+            last_pull_status=None,
+        )
+        federal_officeholder = _insert_civics_officeholder_data_source_for_test(
+            db_conn,
+            jurisdiction="federal/officeholder/house",
+            name_suffix=f"house-{uuid4()}",
+            source_url="https://example.org/civics-officeholder-house",
+        )
+        _sync_data_source_metadata_for_test(
+            db_conn,
+            data_source_id=federal_officeholder.id,
+            record_count=435,
+            last_pull_at=datetime(2026, 7, 21, 6, 30, tzinfo=timezone.utc),
+            last_pull_status="success",
+        )
+        # Unrelated non-federal sources that must be excluded from the payload.
+        state_campaign_finance = insert_data_source_for_test(
+            db_conn,
+            jurisdiction=f"state/co-{uuid4()}",
+            name_suffix=f"state-{uuid4()}",
+        )
+        _sync_data_source_metadata_for_test(
+            db_conn,
+            data_source_id=state_campaign_finance.id,
+            record_count=7,
+            last_pull_at=datetime(2026, 7, 19, 9, 0, tzinfo=timezone.utc),
+            last_pull_status="success",
+        )
+        state_officeholder = _insert_civics_officeholder_data_source_for_test(
+            db_conn,
+            jurisdiction=f"state/ca/officeholder-{uuid4()}",
+            name_suffix=f"state-oh-{uuid4()}",
+            source_url="https://example.org/civics-officeholder-state",
+        )
+        _sync_data_source_metadata_for_test(
+            db_conn,
+            data_source_id=state_officeholder.id,
+            record_count=5,
+            last_pull_at=datetime(2026, 7, 18, 9, 0, tzinfo=timezone.utc),
+            last_pull_status="success",
+        )
+        return {
+            "federal_fec": federal_fec,
+            "federal_fec_stale": federal_fec_stale,
+            "federal_officeholder": federal_officeholder,
+            "state_campaign_finance": state_campaign_finance,
+            "state_officeholder": state_officeholder,
+        }
+
+    def test_metadata_data_sources_include_only_federal_first_sources(
+        self,
+        api_client: TestClient,
+        db_conn: psycopg.Connection,
+    ) -> None:
+        seeded = self._seed_federal_and_unrelated_sources(db_conn)
+
+        response = api_client.get("/public/v1/federal/metadata")
+
+        assert response.status_code == 200
+        payload = response.json()
+        by_source_id = {row["data_source_id"]: row for row in payload["data_sources"]}
+
+        # Every published row is in scope: federal FEC or a federal officeholder source.
+        for row in payload["data_sources"]:
+            in_scope = (row["domain"] == "campaign_finance" and row["jurisdiction"] == "federal/fec") or (
+                row["domain"] == "civics" and row["jurisdiction"].startswith("federal/officeholder/")
+            )
+            assert in_scope, row
+
+        # Unrelated sources are excluded.
+        assert str(seeded["state_campaign_finance"].id) not in by_source_id
+        assert str(seeded["state_officeholder"].id) not in by_source_id
+
+        # Exact freshness/record facts for the seeded federal FEC source.
+        fec_row = by_source_id[str(seeded["federal_fec"].id)]
+        assert fec_row["record_count"] == 42
+        assert fec_row["last_pull_status"] == "success"
+        assert _parse_iso_datetime(fec_row["last_pull_at"]) == datetime(2026, 7, 20, 9, 0, tzinfo=timezone.utc)
+        assert fec_row["source_url"] == "https://example.org/campaign-finance-source"
+
+        officeholder_row = by_source_id[str(seeded["federal_officeholder"].id)]
+        assert officeholder_row["record_count"] == 435
+        assert officeholder_row["last_pull_status"] == "success"
+        assert officeholder_row["source_url"] == "https://example.org/civics-officeholder-house"
+
+    def test_metadata_keeps_null_freshness_visible(
+        self,
+        api_client: TestClient,
+        db_conn: psycopg.Connection,
+    ) -> None:
+        seeded = self._seed_federal_and_unrelated_sources(db_conn)
+
+        payload = api_client.get("/public/v1/federal/metadata").json()
+        by_source_id = {row["data_source_id"]: row for row in payload["data_sources"]}
+
+        stale_row = by_source_id[str(seeded["federal_fec_stale"].id)]
+        assert stale_row["last_pull_at"] is None
+        assert stale_row["last_pull_status"] is None
+        assert stale_row["record_count"] is None
+
+    def test_metadata_officeholder_count_matches_current_roster_query(
+        self,
+        api_client: TestClient,
+        db_conn: psycopg.Connection,
+    ) -> None:
+        self._seed_federal_and_unrelated_sources(db_conn)
+        expected_count = len(fetch_current_federal_members(db_conn))
+
+        payload = api_client.get("/public/v1/federal/metadata").json()
+
+        coverage = payload["coverage"]
+        assert coverage["current_officeholder_count"] == expected_count
+        assert coverage["officeholder_denominator_is_fixed"] is False
+
+    def test_metadata_reports_fixed_industry_benchmark(
+        self,
+        api_client: TestClient,
+        db_conn: psycopg.Connection,
+    ) -> None:
+        self._seed_federal_and_unrelated_sources(db_conn)
+
+        payload = api_client.get("/public/v1/federal/metadata").json()
+
+        employer_industry = payload["coverage"]["employer_industry"]
+        assert employer_industry["classified_count"] == 837
+        assert employer_industry["unknown_count"] == 13487
+        # Hand-calculated: 837 / (837 + 13487) * 100 == 5.843340 (six decimals).
+        assert employer_industry["sampled_coverage_percentage"] == "5.843340"
+
+    def test_metadata_reports_unresolved_donor_identity(
+        self,
+        api_client: TestClient,
+        db_conn: psycopg.Connection,
+    ) -> None:
+        self._seed_federal_and_unrelated_sources(db_conn)
+
+        payload = api_client.get("/public/v1/federal/metadata").json()
+
+        assert payload["coverage"]["donor_identity_resolution"] == "unresolved"
+
+    def test_metadata_publishes_configured_rate_limit_policy(
+        self,
+        api_client: TestClient,
+        db_conn: psycopg.Connection,
+    ) -> None:
+        import os
+
+        self._seed_federal_and_unrelated_sources(db_conn)
+
+        payload = api_client.get("/public/v1/federal/metadata").json()
+
+        rate_limit = payload["rate_limit"]
+        assert rate_limit["max_requests"] == int(os.environ["CIVIBUS_RATE_LIMIT_REQUESTS"])
+        assert rate_limit["window_seconds"] == int(os.environ["CIVIBUS_RATE_LIMIT_WINDOW_SECONDS"])
+        assert rate_limit["max_requests"] > 0
+        assert rate_limit["window_seconds"] > 0

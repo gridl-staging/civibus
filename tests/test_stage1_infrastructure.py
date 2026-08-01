@@ -164,9 +164,18 @@ def test_makefile_exports_and_targets_database_reset_command():
     assert re.search(r"^export POSTGRES_PORT$", makefile, re.M)
     assert re.search(r"^export COMPOSE_PROJECT_NAME$", makefile, re.M)
     assert "POSTGRES_PASSWORD must be set in the environment" in makefile
+    # `db-up` must keep the password prerequisite first and the exact recipe, but
+    # additional prerequisites are allowed and one is now required: pinning the
+    # prerequisite list exactly made adding the reserved-integration-port guard a
+    # red test rather than a repair, which is the prose-pinning failure mode this
+    # repo keeps paying for. The guard's own contract lives in
+    # tests/ci/test_reserved_integration_port_guard.py.
     assert re.search(
-        r"^db-up: require-postgres-password\n^\tdocker compose -f infra/docker-compose.yml up -d", makefile, re.M
+        r"^db-up: require-postgres-password(?: [\w-]+)*\n^\tdocker compose -f infra/docker-compose.yml up -d",
+        makefile,
+        re.M,
     )
+    assert re.search(r"^db-up:[^\n]*\breject-reserved-integration-port\b", makefile, re.M)
     assert re.search(
         r"^db-down: require-postgres-password\n^\tdocker compose -f infra/docker-compose.yml down", makefile, re.M
     )

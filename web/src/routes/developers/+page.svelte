@@ -180,15 +180,83 @@
       sampleLabel: "Sample CSV",
       sampleBody: `${csvColumns.join(",")}
 ${samplePersonId},Sample Official,true,${sampleCandidateId},125000.00,100000.00,25000.00,45000.00,fec_weball,5000.00,0.00,2,0,https://www.fec.gov/data/candidate/H4NC00000/`
+    },
+    {
+      label: "GET /api/public/v1/federal/metadata",
+      parameters: ["none"],
+      curl: `${shellBaseGuard} && curl "\${CIVIBUS_PUBLIC_API_BASE}/api/public/v1/federal/metadata"`,
+      sampleLabel: "Sample JSON",
+      sampleBody: `{
+  "data_sources": [
+    {
+      "data_source_id": "55555555-5555-5555-5555-555555555555",
+      "domain": "campaign_finance",
+      "jurisdiction": "federal/fec",
+      "name": "FEC bulk data",
+      "source_url": "https://www.fec.gov/data/browse-data/",
+      "update_frequency": "weekly",
+      "last_pull_at": "2026-07-20T09:00:00Z",
+      "last_pull_status": "success",
+      "record_count": 542,
+      "latest_source_record_id": null,
+      "latest_source_record_key": null,
+      "latest_source_record_url": null,
+      "latest_source_pull_date": "2026-07-20T09:00:00Z"
+    }
+  ],
+  "rate_limit": {
+    "max_requests": 100,
+    "window_seconds": 60
+  },
+  "coverage": {
+    "current_officeholder_count": 543,
+    "officeholder_denominator_is_fixed": false,
+    "employer_industry": {
+      "classified_count": 837,
+      "unknown_count": 13487,
+      "sampled_coverage_percentage": "5.843340"
+    },
+    "donor_identity_resolution": "unresolved"
+  }
+}`
     }
   ] as const;
   const migrationMappings = [
-    ["Federal official directory", endpointReferences[0].label],
-    ["Current federal member money summary", endpointReferences[1].label],
-    ["OpenSecrets candContrib", endpointReferences[2].label],
-    ["OpenSecrets candIndustry", endpointReferences[3].label],
-    ["Bulk federal money export", endpointReferences[4].label],
-    ["Spreadsheet-friendly federal money export", endpointReferences[5].label]
+    {
+      source: "ProPublica Congress API members",
+      civibusEquivalent: endpointReferences[0].label,
+      delta: "Current federal officeholders only; no historical membership or legislative activity."
+    },
+    {
+      source: "OpenSecrets API candSummary",
+      civibusEquivalent: endpointReferences[1].label,
+      delta: "FEC summary totals and Schedule E support or opposition, keyed by Civibus person_id."
+    },
+    {
+      source: "OpenSecrets API candContrib",
+      civibusEquivalent: endpointReferences[2].label,
+      delta: "Aggregated contributor names from itemized FEC receipts; donor identities remain unresolved."
+    },
+    {
+      source: "OpenSecrets API candIndustry",
+      civibusEquivalent: endpointReferences[3].label,
+      delta: "Employer rollups disclose sparse industry classification and do not reproduce OpenSecrets categories."
+    },
+    {
+      source: "OpenSecrets bulk candidate summaries (JSON)",
+      civibusEquivalent: endpointReferences[4].label,
+      delta: "Current federal officeholders with FEC summaries and Schedule E totals; not a full OpenSecrets bulk mirror."
+    },
+    {
+      source: "OpenSecrets bulk candidate summaries (CSV)",
+      civibusEquivalent: endpointReferences[5].label,
+      delta: "The same bounded Civibus export in spreadsheet form with source URLs."
+    },
+    {
+      source: "ProPublica Congress API roll-call votes",
+      civibusEquivalent: "No Civibus equivalent yet",
+      delta: "Civibus does not currently publish roll-call votes or voting positions."
+    }
   ] as const;
   const referenceLinks = ["/api/openapi.json", "/api/docs", "/api/redoc"] as const;
 
@@ -241,15 +309,17 @@ ${samplePersonId},Sample Official,true,${sampleCandidateId},125000.00,100000.00,
   <table>
     <thead>
       <tr>
-        <th scope="col">Need</th>
-        <th scope="col">Civibus endpoint</th>
+        <th scope="col">Source API and endpoint/product</th>
+        <th scope="col">Civibus equivalent</th>
+        <th scope="col">Honest delta</th>
       </tr>
     </thead>
     <tbody>
-      {#each migrationMappings as [need, endpoint]}
+      {#each migrationMappings as mapping}
         <tr>
-          <td>{need}</td>
-          <td><code>{endpoint}</code></td>
+          <td>{mapping.source}</td>
+          <td><code>{mapping.civibusEquivalent}</code></td>
+          <td>{mapping.delta}</td>
         </tr>
       {/each}
     </tbody>
@@ -262,11 +332,21 @@ ${samplePersonId},Sample Official,true,${sampleCandidateId},125000.00,100000.00,
     {/each}
   </ul>
 
-  <h3>Rate limits and cache</h3>
-  <p>
-    Public API requests are rate limited. Public responses use
-    <code>Cache-Control: public, max-age=900</code>.
-  </p>
+  <section aria-labelledby="public-api-stability-heading">
+    <h3 id="public-api-stability-heading">Stability, freshness, and limits</h3>
+    <p>
+      Endpoint schemas are the stable client contract. Read the metadata endpoint for live source
+      freshness, coverage qualifications, and the effective rate-limit policy.
+    </p>
+    <p>
+      Metadata endpoint:
+      <a href="/api/public/v1/federal/metadata">GET /api/public/v1/federal/metadata</a>.
+    </p>
+    <p>
+      Public API requests are rate limited. Public responses use
+      <code>Cache-Control: public, max-age=900</code>.
+    </p>
+  </section>
 
   <p>
     <a href={APP_SHELL.reportingLink.href}>{APP_SHELL.reportingLink.label}</a>

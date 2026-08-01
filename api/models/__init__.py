@@ -81,7 +81,14 @@ from api.models.graph import (
     GraphNeighbor,
 )
 from api.models.investigate import DonorsWithPropertyParams, DonorsWithPropertyResult
-from api.models.metadata import CoverageRegistryResponse, DataSourceMetadataResponse
+from api.models.metadata import (
+    CoverageRegistryResponse,
+    DataSourceMetadataResponse,
+    PublicEmployerIndustryCoverage,
+    PublicFederalCoverage,
+    PublicFederalMetadataResponse,
+    PublicRateLimitPolicy,
+)
 from api.models.property import (
     ParcelDetailResponse,
     ParcelListParams,
@@ -158,6 +165,10 @@ __all__ = [
     "DonorsWithPropertyResult",
     "CoverageRegistryResponse",
     "DataSourceMetadataResponse",
+    "PublicEmployerIndustryCoverage",
+    "PublicFederalCoverage",
+    "PublicFederalMetadataResponse",
+    "PublicRateLimitPolicy",
     "GRAPH_ENTITY_TYPE_TO_AGE_LABEL",
     "GRAPH_ENTITY_TYPE_TO_RELATIONAL_ENTITY_TYPE",
     "GRAPH_ENTITY_TYPE_SPECS",

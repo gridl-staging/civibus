@@ -77,21 +77,35 @@ def _current_epoch_seconds() -> int:
     return int(time.time())
 
 
-def _rate_limit_state_for_request(
-    request: Request,
-) -> tuple[int, int, dict[str, _FixedWindowBucket], threading.Lock]:
-    max_requests = getattr(request.app.state, _RATE_LIMIT_REQUESTS_STATE_KEY, None)
-    window_seconds = getattr(request.app.state, _RATE_LIMIT_WINDOW_SECONDS_STATE_KEY, None)
-    buckets = getattr(request.app.state, _RATE_LIMIT_BUCKETS_STATE_KEY, None)
-    lock = getattr(request.app.state, _RATE_LIMIT_LOCK_STATE_KEY, None)
+def public_rate_limit_policy(app_state: object) -> tuple[int, int]:
+    """Return the validated ``(max_requests, window_seconds)`` rate-limit policy.
+
+    Reads the same app-state values ``_enforce_fixed_window_rate_limit_for_key``
+    consumes, so environment configuration stays the sole numeric owner and the
+    published policy cannot drift from what enforcement applies.
+    """
+    max_requests = getattr(app_state, _RATE_LIMIT_REQUESTS_STATE_KEY, None)
+    window_seconds = getattr(app_state, _RATE_LIMIT_WINDOW_SECONDS_STATE_KEY, None)
     if not isinstance(max_requests, int) or max_requests <= 0:
         raise RuntimeError("Rate limiter is not configured: invalid max requests state")
     if not isinstance(window_seconds, int) or window_seconds <= 0:
         raise RuntimeError("Rate limiter is not configured: invalid window seconds state")
+    return max_requests, window_seconds
+
+
+def _rate_limit_state_for_request(
+    request: Request,
+) -> tuple[int, int, dict[str, _FixedWindowBucket], threading.Lock]:
+    """Read the validated per-request rate-limit state from app state."""
+    max_requests, window_seconds = public_rate_limit_policy(request.app.state)
+    buckets = getattr(request.app.state, _RATE_LIMIT_BUCKETS_STATE_KEY, None)
+    lock = getattr(request.app.state, _RATE_LIMIT_LOCK_STATE_KEY, None)
     if not isinstance(buckets, dict):
         raise RuntimeError("Rate limiter is not configured: invalid buckets state")
     if lock is None:
         raise RuntimeError("Rate limiter is not configured: missing state lock")
+    if not hasattr(lock, "acquire") or not hasattr(lock, "release"):
+        raise RuntimeError("Rate limiter is not configured: invalid state lock")
     return max_requests, window_seconds, buckets, lock
 
 

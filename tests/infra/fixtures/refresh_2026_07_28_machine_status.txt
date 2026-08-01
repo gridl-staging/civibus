@@ -1,0 +1,10 @@
+Machine ID: 859e0da479e678
+Instance ID: 01K1B3WZJQCBJTD0NY6EAEZKWJ
+State: stopped
+
+Events
+STATE   │ EVENT │ SOURCE │ TIMESTAMP                        │ INFO
+stopped │ exit  │ flyd   │ 2026-07-28T15:20:08.066-04:00   │ exit_code=0,oom_killed=false,requested_stop=false
+started │ start │ flyd   │ 2026-07-28T14:53:01.519-04:00   │
+stopped │ exit  │ flyd   │ 2026-07-25T04:47:35.920-04:00   │ exit_code=0,oom_killed=false,requested_stop=false
+started │ start │ flyd   │ 2026-07-25T03:22:57.219-04:00   │
