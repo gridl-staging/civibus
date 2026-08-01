@@ -9,6 +9,8 @@ import {
   SMOKE_COMMITTEE_ID,
   SMOKE_PERSON_ID
 } from "../../../tests/smoke/fixtures";
+import { congressPersonSmokeFixture } from "../../../tests/smoke/smoke-seed-congress-fixture";
+import { buildCongressPersonGraphMergeSql } from "../../../tests/smoke/smoke-seed-congress-person";
 
 describe("Congress smoke fixture cleanup", () => {
   it("does not target shared live-mode smoke IDs during Stage 4 cleanup", () => {
@@ -43,11 +45,13 @@ describe("Congress smoke fixture cleanup", () => {
   });
 
   it("materializes and cleans up the Stage 4 person graph node", () => {
-    const seedSql = buildCongressSmokeSeedSql();
+    const graphMergeSql = buildCongressPersonGraphMergeSql(
+      congressPersonSmokeFixture("directory")
+    );
     const cleanupSql = buildCongressSmokeCleanupSql();
 
-    expect(seedSql).toContain("MERGE (n:Person");
-    expect(seedSql).toContain("SET n.canonical_name");
+    expect(graphMergeSql).toContain("MERGE (n:Person");
+    expect(graphMergeSql).toContain("SET n.canonical_name");
     expect(cleanupSql).toContain("SELECT ag_catalog.create_graph('civibus')");
     expect(cleanupSql).toContain("DETACH DELETE n");
   });

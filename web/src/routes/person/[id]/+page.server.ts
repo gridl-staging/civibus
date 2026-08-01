@@ -42,7 +42,7 @@ function fulfilledValueOrOriginal<T>(
 async function resolvePersonFinanceSection(
   section: PersonCandidateFinanceSection
 ): Promise<PersonCandidateFinanceSection> {
-  const [summary, ieSummary, ieTransactions, donorVendorTransactions] = await Promise.all([
+  const [summary, ieSummary, ieTransactions, donorVendorTransactions] = await Promise.allSettled([
     section.summary,
     section.ieSummary,
     section.ieTransactions,
@@ -51,10 +51,13 @@ async function resolvePersonFinanceSection(
 
   return {
     ...section,
-    summary,
-    ieSummary,
-    ieTransactions,
-    donorVendorTransactions
+    summary: fulfilledValueOrOriginal(summary, section.summary),
+    ieSummary: fulfilledValueOrOriginal(ieSummary, section.ieSummary),
+    ieTransactions: fulfilledValueOrOriginal(ieTransactions, section.ieTransactions),
+    donorVendorTransactions: fulfilledValueOrOriginal(
+      donorVendorTransactions,
+      section.donorVendorTransactions
+    )
   };
 }
 
@@ -80,9 +83,12 @@ export const load: PageServerLoad = ({ params, locals, url }) =>
           })
         : await loadPersonMoneyBundle(locals.api, params.id, requestedCycle);
       const personMoneyHeadline = await moneyBundle.personMoneyHeadline;
-      const personFinanceSections = Promise.resolve(
-        await resolvePersonFinanceSections(moneyBundle.personFinanceSections)
-      );
+      const [personFinanceSectionsOutcome] = await Promise.allSettled([
+        resolvePersonFinanceSections(moneyBundle.personFinanceSections)
+      ]);
+      const personFinanceSections = personFinanceSectionsOutcome.status === "fulfilled"
+        ? Promise.resolve(personFinanceSectionsOutcome.value)
+        : moneyBundle.personFinanceSections;
       if (requestedCycle === undefined) {
         return {
           ...bundle,
