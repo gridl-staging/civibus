@@ -38,6 +38,14 @@ _EXPECTED_STAGE5_JUDICIAL_NAMES = {
     "nc_supreme_court": {"Paul Newby", "Anita Earls", "Philip Berger Jr", "Tamara Barringer"},
     "nc_court_of_appeals": {"John Tyson", "John Arrowood", "Chris Dillon", "Donna Stroud"},
 }
+_NORMALIZED_ROSTER_ROW_CONTRACT_KEYS = (
+    "bio_url",
+    "bioguide_id",
+    "district_number",
+    "member_name",
+    "portrait_url",
+    "role_label",
+)
 
 
 def _read_fixture(name: str) -> str:
@@ -84,9 +92,7 @@ def test_parse_durham_member_cards_to_shared_row_contract() -> None:
     )
 
     assert len(rows) == 3
-    assert {tuple(sorted(asdict(row).keys())) for row in rows} == {
-        ("bio_url", "district_number", "member_name", "portrait_url", "role_label")
-    }
+    assert {tuple(sorted(asdict(row).keys())) for row in rows} == {_NORMALIZED_ROSTER_ROW_CONTRACT_KEYS}
     assert rows[0].member_name == "Leonardo Williams"
     assert rows[0].role_label == "Mayor"
     assert rows[0].bio_url == "https://www.durhamnc.gov/1329/About-the-Mayor"
@@ -126,9 +132,7 @@ def test_parse_nc_house_rows_to_shared_row_contract_with_district() -> None:
     )
 
     assert len(rows) == 3
-    assert {tuple(sorted(asdict(row).keys())) for row in rows} == {
-        ("bio_url", "district_number", "member_name", "portrait_url", "role_label")
-    }
+    assert {tuple(sorted(asdict(row).keys())) for row in rows} == {_NORMALIZED_ROSTER_ROW_CONTRACT_KEYS}
     assert rows[0].member_name == "Julia C. Howard"
     assert rows[0].role_label == "State Representative District 77"
     assert rows[0].district_number == "77"
@@ -164,9 +168,7 @@ def test_parse_nc_sheriffs_rows_to_shared_row_contract_with_county_carried_in_di
     )
 
     assert len(rows) >= 3
-    assert {tuple(sorted(asdict(row).keys())) for row in rows} == {
-        ("bio_url", "district_number", "member_name", "portrait_url", "role_label")
-    }
+    assert {tuple(sorted(asdict(row).keys())) for row in rows} == {_NORMALIZED_ROSTER_ROW_CONTRACT_KEYS}
     assert rows[0].member_name == "Terry S. Johnson"
     assert rows[0].role_label == "Sheriff"
     assert rows[0].district_number == "Alamance"
@@ -228,9 +230,7 @@ def test_parse_stage2_county_commissioner_rows_from_three_counties() -> None:
         )
 
         assert len(rows) == source["member_count"]
-        assert {tuple(sorted(asdict(row).keys())) for row in rows} == {
-            ("bio_url", "district_number", "member_name", "portrait_url", "role_label")
-        }
+        assert {tuple(sorted(asdict(row).keys())) for row in rows} == {_NORMALIZED_ROSTER_ROW_CONTRACT_KEYS}
         assert all(row.role_label == "County Commissioner" for row in rows)
         assert all(row.district_number == county_name for row in rows)
 
@@ -463,3 +463,158 @@ def test_parse_stage5_statewide_sources_match_expected_member_counts(
         parsed_names = {row.member_name for row in rows}
         assert _EXPECTED_STAGE5_JUDICIAL_NAMES[source_id] <= parsed_names
     assert all(row.member_name.strip(".,;:") == row.member_name for row in rows)
+
+
+# ----- federal roster parsing against REAL upstream XML structure --------------
+# Stage 2 repair: the House Clerk and Senate contact feeds wrap members under
+# <members> and encode the senate class as "Class II"/"Class III". These fixtures
+# mirror the live upstream shape (not the synthetic snapshot shape) so the parser
+# is verified against real external behavior rather than a hand-built stand-in.
+
+_US_HOUSE_SOURCE_URL = "https://clerk.house.gov/xml/lists/MemberData.xml"
+_US_SENATE_SOURCE_URL = "https://www.senate.gov/general/contact_information/senators_cfm.xml"
+
+_REAL_HOUSE_MEMBER_DATA_XML = """<?xml version="1.0" encoding="UTF-8"?>
+<MemberData>
+  <members>
+    <member>
+      <statedistrict>NC01</statedistrict>
+      <member-info>
+        <bioguideID>D000230</bioguideID>
+        <firstname>Donald</firstname>
+        <lastname>Davis</lastname>
+        <state postal-code="NC"><state-fullname>North Carolina</state-fullname></state>
+        <district>1st</district>
+      </member-info>
+    </member>
+    <member>
+      <statedistrict>NC02</statedistrict>
+      <member-info>
+        <bioguideID>R000305</bioguideID>
+        <firstname>Deborah</firstname>
+        <lastname>Ross</lastname>
+        <state postal-code="NC"><state-fullname>North Carolina</state-fullname></state>
+        <district>2nd</district>
+      </member-info>
+    </member>
+    <member>
+      <statedistrict>VA01</statedistrict>
+      <member-info>
+        <bioguideID>W000825</bioguideID>
+        <firstname>Robert</firstname>
+        <lastname>Wittman</lastname>
+        <state postal-code="VA"><state-fullname>Virginia</state-fullname></state>
+        <district>1st</district>
+      </member-info>
+    </member>
+  </members>
+</MemberData>
+"""
+
+_REAL_SENATE_CONTACT_XML = """<?xml version="1.0" encoding="UTF-8"?>
+<contact_information>
+  <member>
+    <member_full>Tillis (R-NC)</member_full>
+    <last_name>Tillis</last_name>
+    <first_name>Thom</first_name>
+    <party>R</party>
+    <state>NC</state>
+    <website>https://tillis.senate.gov</website>
+    <class>Class II</class>
+    <bioguide_id>T000476</bioguide_id>
+  </member>
+  <member>
+    <member_full>Budd (R-NC)</member_full>
+    <last_name>Budd</last_name>
+    <first_name>Ted</first_name>
+    <party>R</party>
+    <state>NC</state>
+    <website>https://budd.senate.gov</website>
+    <class>Class III</class>
+    <bioguide_id>B001305</bioguide_id>
+  </member>
+  <member>
+    <member_full>Warner (D-VA)</member_full>
+    <last_name>Warner</last_name>
+    <first_name>Mark</first_name>
+    <party>D</party>
+    <state>VA</state>
+    <website>https://warner.senate.gov</website>
+    <class>Class II</class>
+    <bioguide_id>W000805</bioguide_id>
+  </member>
+</contact_information>
+"""
+
+
+def test_parse_us_house_nc_rows_from_real_members_wrapper_structure() -> None:
+    rows = parse_roster_rows(
+        body_key="us_house_nc",
+        source_url=_US_HOUSE_SOURCE_URL,
+        html=_REAL_HOUSE_MEMBER_DATA_XML,
+    )
+
+    assert [(row.member_name, row.district_number, row.role_label, row.bioguide_id) for row in rows] == [
+        ("Donald Davis", "1", "United States Representative District 1", "D000230"),
+        ("Deborah Ross", "2", "United States Representative District 2", "R000305"),
+    ]
+
+
+def test_parse_us_senate_class_ii_row_from_real_class_label_structure() -> None:
+    rows = parse_roster_rows(
+        body_key="us_senate_nc_class_ii",
+        source_url=_US_SENATE_SOURCE_URL,
+        html=_REAL_SENATE_CONTACT_XML,
+    )
+
+    assert [(row.member_name, row.role_label, row.district_number, row.bioguide_id) for row in rows] == [
+        ("Thom Tillis", "United States Senator", "Class 2", "T000476"),
+    ]
+    assert rows[0].bio_url == "https://tillis.senate.gov"
+
+    unsafe_rows = parse_roster_rows(
+        body_key="us_senate_nc_class_ii",
+        source_url=_US_SENATE_SOURCE_URL,
+        html=_REAL_SENATE_CONTACT_XML.replace("https://tillis.senate.gov", "javascript:alert(document.domain)"),
+    )
+    assert unsafe_rows[0].bio_url is None
+
+
+def test_parse_us_senate_class_iii_row_from_real_class_label_structure() -> None:
+    rows = parse_roster_rows(
+        body_key="us_senate_nc_class_iii",
+        source_url=_US_SENATE_SOURCE_URL,
+        html=_REAL_SENATE_CONTACT_XML,
+    )
+
+    assert [(row.member_name, row.role_label, row.district_number, row.bioguide_id) for row in rows] == [
+        ("Ted Budd", "United States Senator", "Class 3", "B001305"),
+    ]
+
+
+# ----- JS render-error shell rejection -----------------------------------------
+# Some roster pages (Finalsite/Wix-style) are JS-rendered and return a 200 error
+# shell to the static fetch path: "A required part of this site couldn't load...".
+# The generic HTML parsers must not scrape that error paragraph as an officeholder,
+# which previously manufactured a fake person and caused a name-only false merge
+# across unrelated sources.
+
+_DPS_RENDER_ERROR_SHELL_HTML = """
+<html><body>
+  <div class="card-content-container">
+    <div class="card-heading">
+      <h3>A required part of this site couldn’t load. This may be due to a browser extension, network issues, or browser settings.</h3>
+    </div>
+    <div class="card-text">School Board Member network issues</div>
+  </div>
+</body></html>
+"""
+
+
+def test_parse_school_board_rows_drop_js_render_error_shell_rows() -> None:
+    rows = parse_roster_rows(
+        body_key="nc_school_board",
+        source_url="https://www.dpsnc.net/domain/71",
+        html=_DPS_RENDER_ERROR_SHELL_HTML,
+    )
+    assert rows == []

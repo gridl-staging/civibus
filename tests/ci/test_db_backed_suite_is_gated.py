@@ -27,6 +27,7 @@ DB_BACKED_TARGET_PATHS = (
 STAGE_1_SCHEMA_TARGET_PATHS = (
     "core/schema/test_provenance_schema.py",
     "core/schema/test_apply_migrations.py",
+    "domains/campaign_finance/tests/test_tables_schema.py",
     "domains/civics/tests/test_tables_schema.py",
     "domains/property/tests/test_tables_schema.py",
 )

@@ -4,9 +4,14 @@ from dataclasses import dataclass
 import re
 from typing import Callable, Final
 from urllib.parse import ParseResult, urljoin, urlparse
-from xml.etree import ElementTree
 
 from bs4 import BeautifulSoup
+
+from domains.campaign_finance.ingest.federal_officeholder_loader import (
+    is_federal_officeholder_vacant,
+    normalize_house_xml_rows,
+    normalize_senate_xml_rows,
+)
 
 
 _DURHAM_BODY_KEY: Final[str] = "durham_city_council"
@@ -44,6 +49,7 @@ class NormalizedRosterRow:
     district_number: str | None
     bio_url: str | None
     portrait_url: str | None
+    bioguide_id: str | None = None
 
 
 def _normalize_whitespace(value: str) -> str:
@@ -170,58 +176,89 @@ def _parse_nc_house_rows(*, source_url: str, html: str) -> list[NormalizedRoster
 
 
 def _parse_us_house_nc_rows(*, source_url: str, html: str) -> list[NormalizedRosterRow]:
-    root = ElementTree.fromstring(html)
+    """Emit NC US House roster rows from the canonical federal XML owner.
+
+    Delegates XML shape handling to normalize_house_xml_rows() so the roster spine
+    reuses the single owner that already tolerates both the historical <member> and
+    the current <members><member> House Clerk layouts, then applies the NC filter
+    and roster-row mapping this loader needs.
+    """
+    del source_url
     rows: list[NormalizedRosterRow] = []
-    for member in root.findall("./member"):
-        state = _normalize_whitespace(member.findtext("state", default=""))
-        if state != "NC":
+    for row in normalize_house_xml_rows(html):
+        if (row.get("state") or "").strip() != "NC":
             continue
-        district = _normalize_whitespace(member.findtext("district", default=""))
-        if district == "":
+        if is_federal_officeholder_vacant(row):
             continue
-        raw_name = _normalize_whitespace(member.findtext("member_name", default=""))
-        if raw_name == "" or raw_name.upper() == "VACANT":
+        district_number = _extract_leading_district_number(row.get("district"))
+        if district_number is None:
             continue
-        if "," in raw_name:
-            last_name, first_name = [part.strip() for part in raw_name.split(",", maxsplit=1)]
-            member_name = f"{first_name} {last_name}".strip()
-        else:
-            member_name = raw_name
+        member_name = (row.get("member_name") or "").strip()
         if member_name == "":
             continue
-        normalized_district = district.lstrip("0") or "0"
         rows.append(
             NormalizedRosterRow(
                 member_name=member_name,
-                role_label=f"United States Representative District {normalized_district}",
-                district_number=normalized_district,
+                role_label=f"United States Representative District {district_number}",
+                district_number=district_number,
                 bio_url=None,
                 portrait_url=None,
+                bioguide_id=row.get("bioguide_id"),
             )
         )
     return rows
 
 
+def _extract_leading_district_number(raw_district: str | None) -> str | None:
+    """Reduce an upstream district label ("1st", "01", "14") to its bare number."""
+    digits = re.sub(r"\D", "", raw_district or "").lstrip("0")
+    return digits or None
+
+
 def _parse_us_senate_nc_rows(*, source_url: str, html: str, senate_class: str) -> list[NormalizedRosterRow]:
+    """Emit one NC US Senate roster row from the canonical federal XML owner.
+
+    Delegates XML shape and senate-class normalization to normalize_senate_xml_rows()
+    so "Class II"/"Class III" labels resolve to the same "1"/"2"/"3" values the loader
+    filters on, avoiding a second divergent XML parser for the same feed.
+    """
     del source_url
-    root = ElementTree.fromstring(html)
     rows: list[NormalizedRosterRow] = []
-    for member in root.findall("./member"):
-        state = _normalize_whitespace(member.findtext("state", default=""))
-        class_number = _normalize_whitespace(member.findtext("class", default=""))
-        if state != "NC" or class_number != senate_class:
+    for row in normalize_senate_xml_rows(html):
+        if (row.get("state") or "").strip() != "NC":
             continue
-        member_name = _normalize_whitespace(member.findtext("member_full", default=""))
-        if member_name == "" or member_name.upper() == "VACANT":
+        if (row.get("class") or "").strip() != senate_class:
             continue
-        website = _normalize_whitespace(member.findtext("website", default=""))
+        if is_federal_officeholder_vacant(row):
+            continue
+        member_name = (row.get("member_full") or "").strip()
+        if member_name == "":
+            continue
+        website = (row.get("website") or "").strip()
+        bio_url = None
+        if website != "":
+            try:
+                parsed_website = urlparse(website)
+                website_hostname = (parsed_website.hostname or "").casefold().rstrip(".")
+                if (
+                    parsed_website.scheme.casefold() == "https"
+                    and parsed_website.username is None
+                    and parsed_website.password is None
+                    and _effective_port(parsed_website) == 443
+                    and (website_hostname == "senate.gov" or website_hostname.endswith(".senate.gov"))
+                ):
+                    bio_url = website
+            except ValueError:
+                # Malformed external URLs are omitted from persisted roster data.
+                pass
         rows.append(
             NormalizedRosterRow(
                 member_name=member_name,
                 role_label="United States Senator",
                 district_number=f"Class {senate_class}",
-                bio_url=website if website != "" else None,
+                bio_url=bio_url,
                 portrait_url=None,
+                bioguide_id=row.get("bioguide_id"),
             )
         )
     return rows
@@ -1203,8 +1240,22 @@ PARSER_REGISTRY: dict[str, Callable[..., list[NormalizedRosterRow]]] = {
 }
 
 
-def parse_roster_rows(*, body_key: str, source_url: str, html: str) -> list[NormalizedRosterRow]:
-    """Parse one roster page into shared normalized rows based on notes.body_key."""
+# Substrings that identify a JS-rendered error shell served with a 200 status to
+# the static fetch path (Finalsite/Wix-style "couldn't load" pages). A member name
+# containing one of these is a scraped error message, never a real officeholder.
+_RENDER_ERROR_NAME_MARKERS: Final[tuple[str, ...]] = (
+    "required part of this site",
+    "couldn't load",
+    "couldn’t load",
+)
+
+
+def _is_render_error_row(row: NormalizedRosterRow) -> bool:
+    name = row.member_name.casefold()
+    return any(marker.casefold() in name for marker in _RENDER_ERROR_NAME_MARKERS)
+
+
+def _dispatch_roster_rows(*, body_key: str, source_url: str, html: str) -> list[NormalizedRosterRow]:
     registry_parser = PARSER_REGISTRY.get(body_key)
     if registry_parser is not None:
         return registry_parser(source_url=source_url, html=html)
@@ -1221,3 +1272,14 @@ def parse_roster_rows(*, body_key: str, source_url: str, html: str) -> list[Norm
     if body_key == _NC_SCHOOL_BOARD_BODY_KEY:
         return _parse_nc_school_board_rows(source_url=source_url, html=html)
     raise ValueError(f"Unsupported body_key for official roster parsing: {body_key}")
+
+
+def parse_roster_rows(*, body_key: str, source_url: str, html: str) -> list[NormalizedRosterRow]:
+    """Parse one roster page into shared normalized rows based on notes.body_key.
+
+    Rows scraped from a JS render-error shell are dropped here so no parser can
+    manufacture a fake officeholder (and a downstream name-only false merge) from
+    a "couldn't load" placeholder page.
+    """
+    rows = _dispatch_roster_rows(body_key=body_key, source_url=source_url, html=html)
+    return [row for row in rows if not _is_render_error_row(row)]

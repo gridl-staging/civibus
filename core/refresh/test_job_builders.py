@@ -73,6 +73,7 @@ _EXPECTED_CAMPAIGN_FINANCE_KEYS = (
     "city-phl-expenditures",
     "city-sf-transactions",
     "federal-congress-spine",
+    "federal-donor-search-rollup",
     "federal-fec-committee-summary",
     "federal-fec-masters",
     "federal-fec-schedule-a",
@@ -274,12 +275,80 @@ class TestFederalEnrichmentJobContract:
         connection.close.assert_called_once_with()
 
 
+@pytest.mark.unit
+class TestDonorSearchRollupRefreshJobContract:
+    def _find_donor_rollup_job(self) -> RefreshJob:
+        jobs = build_refresh_plan(job_key_prefixes=("federal-donor-search-rollup",))
+        assert len(jobs) == 1
+        return jobs[0]
+
+    def test_federal_scope_places_donor_rollup_after_congress_spine_and_fec_races(self) -> None:
+        job_keys = tuple(job.key for job in build_refresh_plan(scope="federal"))
+
+        assert "federal-donor-search-rollup" in job_keys
+        assert job_keys.index("federal-congress-spine") < job_keys.index("federal-fec-races")
+        assert job_keys.index("federal-fec-races") + 1 == job_keys.index("federal-donor-search-rollup")
+
+    def test_donor_rollup_job_metadata_matches_refresh_history_owned_aggregate(self) -> None:
+        job = self._find_donor_rollup_job()
+
+        assert job.key == "federal-donor-search-rollup"
+        assert job.domain == "campaign_finance"
+        assert job.jurisdiction == "federal/fec"
+        assert job.cadence == "weekly"
+        assert job.data_source_names == ("civibus-donor-search-rollup",)
+        assert job.refresh_history_key == "federal-donor-search-rollup"
+
+    def test_donor_rollup_run_callable_commits_and_closes_on_success(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        connection = MagicMock()
+        build_result = MagicMock()
+        get_connection = MagicMock(return_value=connection)
+        rebuild_rollup = MagicMock(return_value=build_result)
+        monkeypatch.setattr(job_builders, "get_connection", get_connection)
+        monkeypatch.setattr(job_builders.donor_rollup, "rebuild_donor_search_rollup", rebuild_rollup)
+        job = self._find_donor_rollup_job()
+
+        result = job.run_callable()
+
+        assert result is build_result
+        get_connection.assert_called_once_with()
+        rebuild_rollup.assert_called_once_with(connection)
+        connection.commit.assert_called_once_with()
+        connection.rollback.assert_not_called()
+        connection.close.assert_called_once_with()
+
+    def test_donor_rollup_run_callable_rolls_back_closes_and_reraises_on_failure(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        connection = MagicMock()
+        error = RuntimeError("rollup failed")
+        get_connection = MagicMock(return_value=connection)
+        rebuild_rollup = MagicMock(side_effect=error)
+        monkeypatch.setattr(job_builders, "get_connection", get_connection)
+        monkeypatch.setattr(job_builders.donor_rollup, "rebuild_donor_search_rollup", rebuild_rollup)
+        job = self._find_donor_rollup_job()
+
+        with pytest.raises(RuntimeError, match="rollup failed"):
+            job.run_callable()
+
+        get_connection.assert_called_once_with()
+        rebuild_rollup.assert_called_once_with(connection)
+        connection.commit.assert_not_called()
+        connection.rollback.assert_called_once_with()
+        connection.close.assert_called_once_with()
+
+
 _EXPECTED_FEDERAL_JOB_KEYS = (
     "federal-fec-masters",
     "federal-fec-schedule-a",
     "federal-fec-committee-summary",
     "federal-congress-spine",
     "federal-fec-races",
+    "federal-donor-search-rollup",
     "federal-fec-schedule-b",
     "federal-fec-schedule-e",
     "federal-enrichment",

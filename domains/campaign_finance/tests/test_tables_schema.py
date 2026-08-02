@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import os
+import uuid
+from collections.abc import Iterator
 from pathlib import Path
 
+import psycopg
 import pytest
+from psycopg import sql
 
 from conftest import _skip_or_fail_for_postgres_unavailable
 from core.schema_sql_runner import (
@@ -15,6 +19,8 @@ from core.schema_sql_runner import (
 )
 from domains.campaign_finance.ingest.bulk_stage4_loader import STAGE4_RESUME_IDENTITY_COLUMNS
 
+
+pytestmark = pytest.mark.integration
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SCHEMA_FILE = REPO_ROOT / "domains" / "campaign_finance" / "schema" / "tables.sql"
@@ -97,6 +103,9 @@ def test_build_base_psql_command_uses_resolved_compose_db_container(monkeypatch:
 
 def test_build_base_psql_command_falls_back_to_local_psql_when_no_compose_db(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("CF_SCHEMA_PSQL_CMD", raising=False)
+    monkeypatch.setenv("POSTGRES_HOST", "127.0.0.1")
+    monkeypatch.setenv("POSTGRES_PORT", "5531")
+    monkeypatch.setenv("POSTGRES_USER", "civibus")
 
     def fake_which(command: str) -> str | None:
         if command == "docker":
@@ -111,7 +120,17 @@ def test_build_base_psql_command_falls_back_to_local_psql_when_no_compose_db(mon
         lambda service_name, *, repo_root: None,
     )
 
-    assert _build_base_psql_command("civibus_test") == ["psql", "-d", "civibus_test"]
+    assert _build_base_psql_command("civibus_test") == [
+        "psql",
+        "-h",
+        "127.0.0.1",
+        "-p",
+        "5531",
+        "-U",
+        "civibus",
+        "-d",
+        "civibus_test",
+    ]
 
 
 def _run_psql_command(database: str, sql: str, *, expect_tuples: bool = True) -> list[str] | str:
@@ -289,29 +308,121 @@ def _skip_if_no_database_access() -> None:
 # target DB is one of these names; opt in to destructive setup by setting
 # CF_SCHEMA_TEST_DATABASE to a dedicated test DB.
 _PROTECTED_DATABASE_NAMES = frozenset({"civibus", "civibus_prod", "civibus_staging"})
+_SAFE_LOCAL_HOSTS = frozenset({None, "", "localhost", "127.0.0.1"})
+
+
+def _admin_connection() -> psycopg.Connection:
+    raw_host = os.getenv("POSTGRES_HOST")
+    if raw_host not in _SAFE_LOCAL_HOSTS:
+        pytest.fail(f"Refusing destructive schema setup against non-local POSTGRES_HOST={raw_host!r}")
+    return psycopg.connect(
+        dbname="postgres",
+        host=raw_host or "localhost",
+        port=int(os.getenv("POSTGRES_PORT", "5433")),
+        user=os.getenv("POSTGRES_USER", "civibus"),
+        password=os.getenv("POSTGRES_PASSWORD", "civibus_dev"),
+        autocommit=True,
+    )
+
+
+def _create_disposable_database() -> str:
+    database_name = f"civibus_cf_schema_{uuid.uuid4().hex[:12]}"
+    with _admin_connection() as connection:
+        connection.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(database_name)))
+    return database_name
+
+
+def _drop_disposable_database(database_name: str) -> None:
+    with _admin_connection() as connection:
+        connection.execute(
+            "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = %s AND pid <> pg_backend_pid()",
+            (database_name,),
+        )
+        connection.execute(sql.SQL("DROP DATABASE IF EXISTS {}").format(sql.Identifier(database_name)))
 
 
 @pytest.fixture(scope="session", autouse=True)
-def _prepared_schema() -> None:
-    _skip_if_no_database_access()
-    if TEST_DATABASE in _PROTECTED_DATABASE_NAMES:
-        pytest.skip(
-            f"Refusing to DROP SCHEMA cf CASCADE against protected production database "
-            f"{TEST_DATABASE!r}. Set CF_SCHEMA_TEST_DATABASE to a dedicated test "
-            f"database to run schema-prep tests."
-        )
-    try:
-        _load_core_if_needed(TEST_DATABASE)
-    except Exception as exc:
-        pytest.skip(f"Core schema is required but could not be prepared: {exc}")
+def _prepared_schema() -> Iterator[None]:
+    global TEST_DATABASE
 
-    _run_psql_command(TEST_DATABASE, "DROP SCHEMA IF EXISTS cf CASCADE;")
-    _run_psql_file(TEST_DATABASE, SCHEMA_FILE)
+    configured_database = TEST_DATABASE
+    disposable_database: str | None = None
+    if TEST_DATABASE in _PROTECTED_DATABASE_NAMES:
+        if os.getenv("CIVIBUS_REQUIRE_DB") != "1":
+            pytest.skip(
+                f"Refusing to DROP SCHEMA cf CASCADE against protected production database "
+                f"{TEST_DATABASE!r}. Set CF_SCHEMA_TEST_DATABASE to a dedicated test "
+                f"database to run schema-prep tests."
+            )
+        disposable_database = _create_disposable_database()
+        TEST_DATABASE = disposable_database
+
+    try:
+        _skip_if_no_database_access()
+        try:
+            _load_core_if_needed(TEST_DATABASE)
+        except Exception as exc:
+            _skip_or_fail_for_postgres_unavailable(
+                f"Core schema is required but could not be prepared: {exc}",
+                cause=exc,
+            )
+
+        _run_psql_command(TEST_DATABASE, "DROP SCHEMA IF EXISTS cf CASCADE;")
+        _run_psql_file(TEST_DATABASE, SCHEMA_FILE)
+        yield
+    finally:
+        TEST_DATABASE = configured_database
+        if disposable_database is not None:
+            _drop_disposable_database(disposable_database)
 
 
 def test_cf_schema_tables_created():
     for table in CF_TABLES:
         assert _table_exists(TEST_DATABASE, table), f"Missing cf.{table} table"
+
+
+def test_donor_search_rollup_storage_contract() -> None:
+    expected_rollup_columns = {
+        "donor_key": "text|NO",
+        "contributor_name": "text|NO",
+        "contributor_employer": "text|YES",
+        "contributor_occupation": "text|YES",
+        "contributor_city": "text|YES",
+        "contributor_state": "text|YES",
+        "normalized_zip5": "text|YES",
+        "jurisdiction": "text|YES",
+        "search_text": "text|NO",
+        "total_amount": "numeric|NO",
+        "transaction_count": "integer|NO",
+        "latest_transaction_date": "date|NO",
+    }
+    expected_provenance_columns = {
+        "singleton": "boolean|NO",
+        "donor_key_fingerprint": "text|NO",
+        "row_count": "bigint|NO",
+        "build_duration_milliseconds": "bigint|NO",
+        "completed_at": "timestamp with time zone|NO",
+    }
+
+    for table_name, expected_columns in (
+        ("donor_search_rollup", expected_rollup_columns),
+        ("donor_search_rollup_provenance", expected_provenance_columns),
+    ):
+        actual_columns = _run_psql_command(
+            TEST_DATABASE,
+            f"""
+            SELECT column_name || '|' || data_type || '|' || is_nullable
+            FROM information_schema.columns
+            WHERE table_schema = 'cf'
+              AND table_name = '{table_name}'
+            ORDER BY ordinal_position;
+            """,
+        )
+        assert actual_columns == [
+            f"{column_name}|{column_contract}" for column_name, column_contract in expected_columns.items()
+        ]
+
+    assert _index_exists(TEST_DATABASE, "idx_donor_search_rollup_search_text_trgm")
 
 
 def test_cf_schema_relationships_and_generated_columns():

@@ -33,6 +33,7 @@ import pytest
 
 
 SCRIPT_PATH = Path(__file__).resolve().parents[2] / "infra" / "scripts" / "recover_apr30_volume.sh"
+_SCRIPT_INVOCATION_TIMEOUT_SECONDS = 30
 
 
 @pytest.fixture(scope="module")
@@ -180,12 +181,13 @@ def test_help_runs_without_state_change() -> None:
     and emits text to stdout. No SSH, no docker, no state change.
     """
     # `--help` is a strict subset of `--diagnose`: it should exit before any
-    # SSH calls. We assert it completes within 5 seconds and produces output.
+    # SSH calls. Keep a bounded hang guard with enough scheduling margin for
+    # the shared-host projected-public suite.
     result = subprocess.run(
         [str(SCRIPT_PATH), "--help"],
         capture_output=True,
         text=True,
-        timeout=5,
+        timeout=_SCRIPT_INVOCATION_TIMEOUT_SECONDS,
     )
     # Help output should appear on stdout and the exit code should be 0
     # (POSIX convention for explicit --help).
@@ -203,7 +205,7 @@ def test_default_invocation_is_safe() -> None:
         [str(SCRIPT_PATH)],
         capture_output=True,
         text=True,
-        timeout=5,
+        timeout=_SCRIPT_INVOCATION_TIMEOUT_SECONDS,
     )
     # Non-zero is correct — "you must pass --diagnose, --plan, or --confirm"
     assert result.returncode != 0, "no-flag invocation must exit non-zero so a missing-mode mistake fails fast"

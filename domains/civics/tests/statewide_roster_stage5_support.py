@@ -8,7 +8,7 @@ from typing import Any
 import psycopg
 from bs4 import BeautifulSoup
 
-from domains.civics.loaders.official_rosters.loader import harvest_official_roster
+from domains.civics.loaders.official_rosters.loader import OfficialRosterHarvestResult, harvest_official_roster
 from domains.civics.loaders.official_rosters.parsers import parse_roster_rows
 from domains.civics.loaders.official_rosters.source_templates import roster_source_templates
 from scripts.register_roster_pilot_sources import register_roster_pilot_sources
@@ -108,12 +108,14 @@ def write_senate_fixture(path: Path, *, senate_class: str, member_name: str) -> 
     members = root.findall("./member")
     assert len(members) == 2
     first = members[0]
+    first.find("bioguide_id").text = f"SNC{int(senate_class):03d}"
     first.find("member_full").text = member_name
     name_parts = member_name.split(" ", 1)
     first.find("first_name").text = name_parts[0]
     first.find("last_name").text = name_parts[1]
     first.find("state").text = "NC"
     first.find("class").text = senate_class
+    first.find("website").text = f"https://class-{senate_class}.senate.gov"
     path.write_text(ElementTree.tostring(root, encoding="unicode"), encoding="utf-8")
 
 
@@ -157,6 +159,7 @@ def write_us_house_fixture(path: Path) -> None:
 
     for district_number in range(1, 15):
         member = ElementTree.fromstring(ElementTree.tostring(template, encoding="unicode"))
+        member.find("bioguide_id").text = f"HNC{district_number:03d}"
         member.find("state").text = "NC"
         member.find("district").text = str(district_number)
         member.find("party").text = "R" if district_number % 2 == 0 else "D"
@@ -168,7 +171,7 @@ def write_us_house_fixture(path: Path) -> None:
     path.write_text(ElementTree.tostring(root, encoding="unicode"), encoding="utf-8")
 
 
-def write_nc_senate_fixture(path: Path) -> None:
+def write_nc_senate_fixture(path: Path, *, include_live_duplicate_districts: bool = False) -> None:
     soup = BeautifulSoup(fixture_path("nc_general_assembly_senate.html").read_text(encoding="utf-8"), "html.parser")
     row_root = soup.select_one("div.row.ncga-row-no-gutters.d-print-block")
     cards = soup.select("div.member-col")
@@ -199,6 +202,31 @@ def write_nc_senate_fixture(path: Path) -> None:
         district_link["href"] = f"/Redistricting/DistrictPlanMap/S2023E/{district_number}"
         image["src"] = f"/Members/MemberImage/S/{500 + district_number}/Low"
         row_root.append(card)
+
+    if include_live_duplicate_districts:
+        for district_number, member_name, member_id in (
+            (18, "Haseeb Fatmi", 555),
+            (23, "Graig Meyer", 428),
+            (34, "Paul Newton", 405),
+        ):
+            card = BeautifulSoup(template_html, "html.parser").select_one("div.member-col")
+            assert card is not None
+            bio_link = card.select_one('.member-info-col a[href*="/Members/Biography/S/"]')
+            district_link = card.select_one('.member-info-col a[href*="/Redistricting/DistrictPlanMap/"]')
+            image = card.select_one(".member-image-col img")
+            bio_anchor = card.select_one('.member-image-col a[href*="/Members/Biography/S/"]')
+            assert bio_link is not None
+            assert district_link is not None
+            assert image is not None
+            assert bio_anchor is not None
+            bio_href = f"/Members/Biography/S/{member_id}"
+            bio_link.string = member_name
+            bio_link["href"] = bio_href
+            bio_anchor["href"] = bio_href
+            district_link.string = f"District {district_number}"
+            district_link["href"] = f"/Redistricting/DistrictPlanMap/S2023E/{district_number}"
+            image["src"] = f"/Members/MemberImage/S/{member_id}/Low"
+            row_root.append(card)
 
     path.write_text(str(soup), encoding="utf-8")
 
@@ -252,6 +280,23 @@ def seed_persons_for_sources(connection: psycopg.Connection, tmp_path: Path) -> 
     seed_person_names(connection, sorted(set(names)))
 
 
+def harvest_source_from_fixture(
+    connection: psycopg.Connection,
+    *,
+    source_id: str,
+    fixture_path: Path,
+    dry_run: bool,
+) -> OfficialRosterHarvestResult:
+    fixture_bytes = fixture_path.read_bytes()
+    return harvest_official_roster(
+        connection,
+        source_id=source_id,
+        fixture_path=None,
+        dry_run=dry_run,
+        fetch_bytes=lambda url, *, timeout_seconds: fixture_bytes,
+    )
+
+
 def build_stage5_local_proof_payload(
     db_conn: psycopg.Connection,
     tmp_path: Path,
@@ -270,12 +315,11 @@ def build_stage5_local_proof_payload(
     first_officeholding_counts = {}
     for source_id, expected_count in EXPECTED_OFFICEHOLDING_COUNTS_BY_SOURCE.items():
         before_snapshot_count, _, before_officeholding_count = select_counts_for_source(db_conn, source_id)
-        result = harvest_official_roster(
+        result = harvest_source_from_fixture(
             db_conn,
             source_id=source_id,
             fixture_path=fixture_for_source_id(source_id, tmp_path),
             dry_run=False,
-            fetch_bytes=lambda url, *, timeout_seconds: None,
         )
         after_snapshot_count, _, after_officeholding_count = select_counts_for_source(db_conn, source_id)
         assert result.officeholding_upserts == expected_count
@@ -298,12 +342,11 @@ def build_stage5_local_proof_payload(
     second_results = {}
     for source_id in EXPECTED_OFFICEHOLDING_COUNTS_BY_SOURCE:
         first = first_results[source_id]
-        second = harvest_official_roster(
+        second = harvest_source_from_fixture(
             db_conn,
             source_id=source_id,
             fixture_path=fixture_for_source_id(source_id, tmp_path),
             dry_run=False,
-            fetch_bytes=lambda url, *, timeout_seconds: None,
         )
         assert second.source_record_inserted is False
         assert second.source_record_key == first.source_record_key

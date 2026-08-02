@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from __future__ import annotations
-
 import inspect
 import json
 from dataclasses import dataclass
@@ -11,7 +9,7 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Callable
 from urllib.parse import urlparse
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import psycopg
 
@@ -32,6 +30,12 @@ from core.types.python.models import (
     compute_record_hash,
 )
 from domains.civics.ingest import upsert_electoral_division, upsert_office, upsert_officeholding
+from domains.campaign_finance.ingest.federal_officeholder_loader import (
+    _DIVISION_US_CONGRESSIONAL_DISTRICTS,
+    _DIVISION_US_STATEWIDE,
+    _OFFICE_US_HOUSE,
+    _OFFICE_US_SENATE,
+)
 from domains.civics.loaders.official_rosters.parsers import NormalizedRosterRow, parse_roster_rows
 from domains.civics.types import ElectoralDivision, Office, Officeholding
 
@@ -51,6 +55,21 @@ _MANIFEST_COUNT_BODY_KEYS: set[str] = {
     "nc_soil_water_supervisors",
     "nc_municipal_council",
     "nc_school_board",
+}
+_SINGLE_MEMBER_DISTRICT_TYPES = frozenset(
+    {
+        "congressional_district",
+        "state_legislative_lower",
+        "state_legislative_upper",
+    }
+)
+# Canonical federal offices span the whole nation (435 House / 100 Senate seats), so an
+# office-wide seat count cannot bound an NC-only roster source. These limits declare how
+# many current holders each NC source may legitimately yield.
+_ROSTER_SOURCE_SEAT_LIMIT_BY_BODY_KEY: dict[str, int] = {
+    "us_house_nc": 14,
+    "us_senate_nc_class_ii": 1,
+    "us_senate_nc_class_iii": 1,
 }
 
 
@@ -400,6 +419,12 @@ def _manifest_division_names() -> dict[tuple[str, str], str]:
 
 
 def _find_existing_person_id(conn: psycopg.Connection, row: NormalizedRosterRow) -> UUID | None:
+    bioguide_id = _normalize_bioguide_id(row.bioguide_id)
+    if bioguide_id is not None:
+        existing = find_person_by_identifier(conn, "bioguide_id", bioguide_id)
+        if existing is not None:
+            return existing
+
     if row.bio_url is not None:
         existing = find_person_by_identifier(conn, "roster_bio_url", row.bio_url)
         if existing is not None:
@@ -418,12 +443,22 @@ def _find_existing_person_id(conn: psycopg.Connection, row: NormalizedRosterRow)
 
 def _build_roster_identifiers(row: NormalizedRosterRow) -> dict[str, str]:
     identifiers: dict[str, str] = {}
+    bioguide_id = _normalize_bioguide_id(row.bioguide_id)
+    if bioguide_id is not None:
+        identifiers["bioguide_id"] = bioguide_id
     if row.bio_url is not None:
         identifiers["roster_bio_url"] = row.bio_url
         member_code = _extract_ncleg_member_code(row.bio_url)
         if member_code is not None:
             identifiers["ncleg_member_code"] = member_code
     return identifiers
+
+
+def _normalize_bioguide_id(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = value.strip().upper()
+    return normalized or None
 
 
 def _resolve_person_id(conn: psycopg.Connection, row: NormalizedRosterRow) -> UUID | None:
@@ -516,9 +551,135 @@ def _resolve_nc_house_target(
     return _ResolvedTarget(office=office, electoral_division=electoral_division)
 
 
+def _resolve_us_house_nc_target(
+    row: NormalizedRosterRow,
+    source_record_id: UUID,
+) -> _ResolvedTarget | None:
+    district_number = row.district_number
+    if district_number is None or district_number.strip() == "":
+        return None
+
+    normalized_district = district_number.strip().zfill(2)
+    electoral_division = ElectoralDivision(
+        name=f"nc_cd_{normalized_district}",
+        division_type="congressional_district",
+        state="NC",
+        district_number=normalized_district,
+        parent_id=_DIVISION_US_CONGRESSIONAL_DISTRICTS,
+        source_record_id=source_record_id,
+    )
+    return _ResolvedTarget(office=None, office_id=_OFFICE_US_HOUSE, electoral_division=electoral_division)
+
+
+def _resolve_nc_senate_target(
+    row: NormalizedRosterRow,
+    source_record_id: UUID,
+) -> _ResolvedTarget | None:
+    district_number = row.district_number
+    if district_number is None or district_number.strip() == "":
+        return None
+
+    normalized_district = district_number.strip()
+    office = Office(
+        name="nc_senate_member",
+        office_level="state",
+        title="State Senator",
+        state="NC",
+        number_of_seats=50,
+        source_record_id=source_record_id,
+    )
+    electoral_division = ElectoralDivision(
+        name=f"nc_senate_district_{normalized_district}",
+        division_type="state_legislative_upper",
+        state="NC",
+        district_number=normalized_district,
+        source_record_id=source_record_id,
+    )
+    return _ResolvedTarget(office=office, electoral_division=electoral_division)
+
+
+_StatewideOfficeSpec = tuple[str, str, str, int]
+
+_STATEWIDE_OFFICE_SPEC_BY_BODY_KEY: dict[str, _StatewideOfficeSpec] = {
+    "nc_gov": ("nc_governor", "state", "Governor", 1),
+    "nc_lt_gov": ("nc_lieutenant_governor", "state", "Lieutenant Governor", 1),
+    "nc_attorney_general": ("nc_attorney_general", "state", "Attorney General", 1),
+    "nc_sec_of_state": ("nc_secretary_of_state", "state", "Secretary of State", 1),
+    "nc_treasurer": ("nc_treasurer", "state", "State Treasurer", 1),
+    "nc_auditor": ("nc_auditor", "state", "State Auditor", 1),
+    "nc_supt_pub_instr": (
+        "nc_superintendent_public_instruction",
+        "state",
+        "State Superintendent of Public Instruction",
+        1,
+    ),
+    "nc_ag_commissioner": ("nc_agriculture_commissioner", "state", "Commissioner of Agriculture", 1),
+    "nc_ins_commissioner": ("nc_insurance_commissioner", "state", "Commissioner of Insurance", 1),
+    "nc_labor_commissioner": ("nc_labor_commissioner", "state", "Commissioner of Labor", 1),
+    "nc_supreme_court": ("nc_supreme_court_justice", "state", "Justice", 7),
+    "nc_court_of_appeals": ("nc_court_of_appeals_judge", "state", "Judge", 15),
+}
+
+
+def _resolve_us_senate_nc_target(
+    row: NormalizedRosterRow,
+    source_record_id: UUID,
+) -> _ResolvedTarget:
+    del row
+    electoral_division = ElectoralDivision(
+        name="nc",
+        division_type="statewide",
+        state="NC",
+        parent_id=_DIVISION_US_STATEWIDE,
+        source_record_id=source_record_id,
+    )
+    return _ResolvedTarget(office=None, office_id=_OFFICE_US_SENATE, electoral_division=electoral_division)
+
+
+def _resolve_statewide_target(
+    row: NormalizedRosterRow,
+    source_record_id: UUID,
+    office_spec: _StatewideOfficeSpec,
+) -> _ResolvedTarget:
+    del row
+    office_name, office_level, title, number_of_seats = office_spec
+    office = Office(
+        name=office_name,
+        office_level=office_level,
+        title=title,
+        state="NC",
+        number_of_seats=number_of_seats,
+        source_record_id=source_record_id,
+    )
+    electoral_division = ElectoralDivision(
+        name="nc_statewide",
+        division_type="statewide",
+        state="NC",
+        source_record_id=source_record_id,
+    )
+    return _ResolvedTarget(office=office, electoral_division=electoral_division)
+
+
+def _build_statewide_target_resolver(
+    office_spec: _StatewideOfficeSpec,
+) -> Callable[[NormalizedRosterRow, UUID], _ResolvedTarget]:
+    def resolve(row: NormalizedRosterRow, source_record_id: UUID) -> _ResolvedTarget:
+        return _resolve_statewide_target(row, source_record_id, office_spec)
+
+    return resolve
+
+
 TARGET_RESOLVER_REGISTRY: dict[str, Callable[[NormalizedRosterRow, UUID], _ResolvedTarget | None]] = {
     "durham_city_council": _resolve_durham_city_council_target,
     "nc_house": _resolve_nc_house_target,
+    "us_house_nc": _resolve_us_house_nc_target,
+    "us_senate_nc_class_ii": _resolve_us_senate_nc_target,
+    "us_senate_nc_class_iii": _resolve_us_senate_nc_target,
+    "nc_senate": _resolve_nc_senate_target,
+    **{
+        body_key: _build_statewide_target_resolver(office_spec)
+        for body_key, office_spec in _STATEWIDE_OFFICE_SPEC_BY_BODY_KEY.items()
+    },
 }
 
 
@@ -691,6 +852,97 @@ def _resolve_target(body_key: str, row: NormalizedRosterRow, source_record_id: U
     raise ValueError(f"Unsupported body_key target mapping: {body_key}")
 
 
+def _roster_seat_capacity(body_key: str, target: _ResolvedTarget) -> int:
+    """Seats this roster source may fill, preferring the source-scoped limit."""
+    source_seat_limit = _ROSTER_SOURCE_SEAT_LIMIT_BY_BODY_KEY.get(body_key)
+    if source_seat_limit is not None:
+        return source_seat_limit
+    if target.office is not None:
+        return target.office.number_of_seats
+    raise ValueError(f"{body_key} target reuses a canonical office and must declare a source seat limit")
+
+
+def _reject_duplicate_single_member_districts(body_key: str, targets: list[_ResolvedTarget]) -> None:
+    district_counts: dict[str, int] = {}
+    seat_capacities: set[int] = set()
+
+    for target in targets:
+        if target.electoral_division.division_type not in _SINGLE_MEMBER_DISTRICT_TYPES:
+            continue
+        seat_capacities.add(_roster_seat_capacity(body_key, target))
+        district_number = target.electoral_division.district_number
+        if district_number is None:
+            raise ValueError(f"{body_key} single-member district target is missing district_number")
+        district_counts[district_number] = district_counts.get(district_number, 0) + 1
+
+    if not district_counts:
+        return
+    if len(seat_capacities) != 1:
+        raise ValueError(f"{body_key} roster resolved inconsistent office seat counts: {sorted(seat_capacities)}")
+
+    duplicate_districts = [district for district, count in district_counts.items() if count > 1]
+    if duplicate_districts:
+        raise ValueError(
+            f"{body_key} roster has multiple current members for districts: {', '.join(duplicate_districts)}"
+        )
+
+    seat_capacity = next(iter(seat_capacities))
+    if len(district_counts) > seat_capacity:
+        raise ValueError(
+            f"{body_key} roster resolved {len(district_counts)} districts for an office with {seat_capacity} seats"
+        )
+
+
+def _reject_excess_source_holders(body_key: str, targets: list[_ResolvedTarget]) -> None:
+    """Bound sources whose division is shared by every row, such as a Senate class."""
+    source_seat_limit = _ROSTER_SOURCE_SEAT_LIMIT_BY_BODY_KEY.get(body_key)
+    if source_seat_limit is not None:
+        if len(targets) <= source_seat_limit:
+            return
+        raise ValueError(
+            f"{body_key} roster resolved {len(targets)} current holders for a source seat limit of {source_seat_limit}"
+        )
+
+    holder_counts: dict[tuple[str, str], int] = {}
+    seat_capacities: dict[tuple[str, str], int] = {}
+    for target in targets:
+        if target.office is None:
+            continue
+        target_key = (target.office.name, target.electoral_division.name)
+        seat_capacity = _roster_seat_capacity(body_key, target)
+        previous_capacity = seat_capacities.setdefault(target_key, seat_capacity)
+        if previous_capacity != seat_capacity:
+            raise ValueError(f"{body_key} roster resolved inconsistent office seat counts")
+        holder_counts[target_key] = holder_counts.get(target_key, 0) + 1
+
+    excess_holder_count, seat_capacity = next(
+        (
+            (holder_count, seat_capacities[target_key])
+            for target_key, holder_count in holder_counts.items()
+            if holder_count > seat_capacities[target_key]
+        ),
+        (None, None),
+    )
+    if excess_holder_count is None:
+        return
+    raise ValueError(
+        f"{body_key} roster resolved {excess_holder_count} current holders for an office with {seat_capacity} seats"
+    )
+
+
+def _validate_roster_target_capacity(body_key: str, rows: list[NormalizedRosterRow]) -> None:
+    """Reject roster shapes that would persist more current holders than the offices permit."""
+    provisional_source_record_id = uuid4()
+    resolved_targets = [
+        target
+        for target in (_resolve_target(body_key, row, provisional_source_record_id) for row in rows)
+        if target is not None
+    ]
+
+    _reject_duplicate_single_member_districts(body_key, resolved_targets)
+    _reject_excess_source_holders(body_key, resolved_targets)
+
+
 def _insert_portrait_if_present(
     conn: psycopg.Connection,
     *,
@@ -808,6 +1060,7 @@ def harvest_official_roster(
         fetch_bytes=fetcher,
     )
     rows = parse_roster_rows(body_key=source.body_key, source_url=source.source_url, html=html)
+    _validate_roster_target_capacity(source.body_key, rows)
     reported_member_count = _reported_member_count(source=source, parsed_row_count=len(rows))
 
     if dry_run:

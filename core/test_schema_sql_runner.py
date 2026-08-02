@@ -94,6 +94,9 @@ def test_build_base_psql_command_uses_compose_container_when_available(monkeypat
 
 def test_build_base_psql_command_falls_back_to_local_psql(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("TEST_SCHEMA_PSQL_CMD", raising=False)
+    monkeypatch.setenv("POSTGRES_HOST", "127.0.0.1")
+    monkeypatch.setenv("POSTGRES_PORT", "5531")
+    monkeypatch.setenv("POSTGRES_USER", "civibus")
 
     def fake_which(command: str) -> str | None:
         return "/usr/bin/psql" if command == "psql" else None
@@ -107,7 +110,17 @@ def test_build_base_psql_command_falls_back_to_local_psql(monkeypatch: pytest.Mo
         "civibus_test",
         command_env_var="TEST_SCHEMA_PSQL_CMD",
         repo_root=Path("/tmp/repo"),
-    ) == ["psql", "-d", "civibus_test"]
+    ) == [
+        "psql",
+        "-h",
+        "127.0.0.1",
+        "-p",
+        "5531",
+        "-U",
+        "civibus",
+        "-d",
+        "civibus_test",
+    ]
 
 
 def test_run_psql_command_uses_psycopg_fallback_when_no_cli_path(monkeypatch: pytest.MonkeyPatch) -> None:

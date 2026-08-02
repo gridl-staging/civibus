@@ -29,7 +29,7 @@ _POSTGRES_USER = os.environ.get("POSTGRES_USER", "civibus")
 _POSTGRES_PASSWORD = os.environ.get("POSTGRES_PASSWORD", "civibus_dev")
 _DB_NAME_PREFIX = "test_migrations_"
 _SAFE_HOSTS = {None, "", "localhost", "127.0.0.1"}
-_SAFE_PORTS = {5475, 5477}
+_SAFE_PORTS = {5475, 5477, 5531}
 
 
 def _skip_or_fail(message: str) -> None:
@@ -334,6 +334,7 @@ _PENDING_FILENAMES = [
     "2026_07_28_donor_identity_er_contract.sql",
     "2026_07_28_donor_identity_person_mapping.sql",
     "2026_07_31_refresh_run_failed_status.sql",
+    "2026_08_01_donor_search_rollup.sql",
 ]
 
 _DONOR_IDENTITY_MIGRATION = "2026_07_28_donor_identity_er_contract.sql"

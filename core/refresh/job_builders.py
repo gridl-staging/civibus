@@ -16,6 +16,7 @@ from urllib.request import urlretrieve
 
 from core.db import get_connection
 from core.people.enrichment.orchestrator import FEDERAL_ENRICHMENT_DATA_SOURCE_NAME, run_federal_enrichment
+from core.refresh import donor_rollup
 from core.refresh.runner import (
     _CITY_JURISDICTION_TYPE,
     _REPO_ROOT,
@@ -1753,6 +1754,30 @@ def _build_federal_enrichment_job() -> RefreshJob:
     )
 
 
+def _build_donor_search_rollup_job() -> RefreshJob:
+    def _run_donor_search_rollup_job() -> donor_rollup.DonorRollupBuildResult:
+        connection = get_connection()
+        try:
+            result = donor_rollup.rebuild_donor_search_rollup(connection)
+            connection.commit()
+            return result
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    return RefreshJob(
+        key="federal-donor-search-rollup",
+        domain="campaign_finance",
+        jurisdiction="federal/fec",
+        cadence="weekly",
+        data_source_names=("civibus-donor-search-rollup",),
+        run_callable=_run_donor_search_rollup_job,
+        refresh_history_key="federal-donor-search-rollup",
+    )
+
+
 def _build_irs_527_job() -> RefreshJob:
     def _run_irs_527_job() -> object:
         with _temporary_refresh_directory(prefix="refresh-irs-527-") as temp_dir:
@@ -1940,6 +1965,9 @@ def build_refresh_plan(
     # federal-fec-races reads the cn candidate master rows loaded by
     # federal-fec-masters and populates the civic.election/contest/candidacy spine.
     jobs.append(_build_federal_fec_races_job(resolved_parameters))
+    # The rollup requires the current federal roster/races plus committee-summary
+    # derived jurisdiction before serving can switch away from transaction scans.
+    jobs.append(_build_donor_search_rollup_job())
     # federal-enrichment joins on people, FEC transaction, and Schedule E rows
     # produced by the preceding federal jobs.
     jobs.append(_build_fec_schedule_b_job(resolved_parameters))

@@ -75,6 +75,31 @@ def _entries(
 
 PUBLIC_MIRROR_TEST_CLASSIFICATIONS: tuple[PublicMirrorTestClassification, ...] = (
     *_entries(
+        private_asset="docs/live-state/2026_08_02_nc_roster_spine_dispositions.json",
+        owner="NC roster disposition contract",
+        node_ids=(
+            "domains/civics/loaders/official_rosters/test_stage2_dispositions.py::test_at_least_40_entries_have_non_null_http_status",
+            "domains/civics/loaders/official_rosters/test_stage2_dispositions.py::test_disposition_keys_equal_the_live_43_refresh_job_keys",
+            "domains/civics/loaders/official_rosters/test_stage2_dispositions.py::test_every_entry_declares_required_fields_and_allowed_disposition",
+            "domains/civics/loaders/official_rosters/test_stage2_dispositions.py::test_every_probe_timestamp_is_after_the_stage1_receipt",
+            "domains/civics/loaders/official_rosters/test_stage2_dispositions.py::test_guard_goes_red_when_a_non_working_entry_blanks_required_evidence[conditional_decision]",
+            "domains/civics/loaders/official_rosters/test_stage2_dispositions.py::test_guard_goes_red_when_a_non_working_entry_blanks_required_evidence[gap_spec]",
+            "domains/civics/loaders/official_rosters/test_stage2_dispositions.py::test_guard_goes_red_when_a_non_working_entry_blanks_required_evidence[proxy_or_tolerance]",
+            "domains/civics/loaders/official_rosters/test_stage2_dispositions.py::test_guard_goes_red_when_a_non_working_entry_blanks_required_evidence[reason]",
+            "domains/civics/loaders/official_rosters/test_stage2_dispositions.py::test_guard_goes_red_when_a_non_working_entry_blanks_required_evidence[smallest_unblock]",
+            "domains/civics/loaders/official_rosters/test_stage2_dispositions.py::test_guard_goes_red_when_a_non_working_entry_drops_required_evidence[conditional_decision]",
+            "domains/civics/loaders/official_rosters/test_stage2_dispositions.py::test_guard_goes_red_when_a_non_working_entry_drops_required_evidence[gap_spec]",
+            "domains/civics/loaders/official_rosters/test_stage2_dispositions.py::test_guard_goes_red_when_a_non_working_entry_drops_required_evidence[proxy_or_tolerance]",
+            "domains/civics/loaders/official_rosters/test_stage2_dispositions.py::test_guard_goes_red_when_a_non_working_entry_drops_required_evidence[reason]",
+            "domains/civics/loaders/official_rosters/test_stage2_dispositions.py::test_guard_goes_red_when_a_non_working_entry_drops_required_evidence[smallest_unblock]",
+            "domains/civics/loaders/official_rosters/test_stage2_dispositions.py::test_guard_goes_red_when_a_working_entry_is_mutated_to_http_202",
+            "domains/civics/loaders/official_rosters/test_stage2_dispositions.py::test_guard_goes_red_when_a_working_entry_is_mutated_to_zero_rows",
+            "domains/civics/loaders/official_rosters/test_stage2_dispositions.py::test_legislative_duplicate_district_sources_are_not_classified_as_working",
+            "domains/civics/loaders/official_rosters/test_stage2_dispositions.py::test_non_working_entries_record_reason_and_disposition_evidence",
+            "domains/civics/loaders/official_rosters/test_stage2_dispositions.py::test_working_and_repaired_entries_record_live_200_with_parsed_rows",
+        ),
+    ),
+    *_entries(
         private_asset="private rendered coverage research artifacts under docs/reference/research/",
         owner="coverage research snapshot contracts",
         node_ids=(

@@ -29,6 +29,7 @@ from tests.ci.public_mirror_contract import (  # noqa: E402
 CI_WORKFLOW_PATH = REPO_ROOT / ".github/workflows/ci.yml"
 MAKEFILE_PATH = REPO_ROOT / "Makefile"
 WEB_PACKAGE_PATH = REPO_ROOT / "web/package.json"
+STAGE2_DISPOSITIONS_TEST_PATH = Path("domains/civics/loaders/official_rosters/test_stage2_dispositions.py")
 CHECKOUT_SHA = "11bd71901bbe5b1630ceea73d27597364c9af683"
 SETUP_NODE_SHA = "820762786026740c76f36085b0efc47a31fe5020"
 SETUP_UV_SHA = "0c5e2b8115b80b4c7c5ddf6ffdd634974642d182"
@@ -165,7 +166,7 @@ def test_public_mirror_classification_contract_is_valid_and_exact() -> None:
     entries = validate_public_mirror_classifications()
 
     assert len(entries) == len({entry.node_id for entry in entries})
-    assert len(entries) == 120
+    assert len(entries) == 139
     assert {entry.category for entry in entries} == {PublicMirrorCategory.DEV_REPO_ONLY}
     assert "tests/ci/test_api_dockerfile_contract.py::test_debbie_sync_includes_api_dockerfile_root_inputs" in (
         DEV_REPO_ONLY_CLASSIFICATIONS_BY_NODE_ID
@@ -179,6 +180,16 @@ def test_dev_repo_only_marker_selection_matches_public_mirror_contract() -> None
     assert collected_node_ids == expected_node_ids, _node_delta_message(
         expected_node_ids=expected_node_ids,
         actual_node_ids=collected_node_ids,
+    )
+
+
+def test_stage2_disposition_nodes_are_all_classified_dev_repo_only() -> None:
+    collected_node_ids = _collect_node_ids(STAGE2_DISPOSITIONS_TEST_PATH.as_posix())
+    classified_node_ids = set(DEV_REPO_ONLY_CLASSIFICATIONS_BY_NODE_ID)
+
+    assert collected_node_ids <= classified_node_ids, _node_delta_message(
+        expected_node_ids=collected_node_ids,
+        actual_node_ids=classified_node_ids,
     )
 
 
@@ -288,12 +299,14 @@ def _static_dev_repo_only_markers() -> list[_StaticMarkerUse]:
         ]
         if module_marker is not None:
             for function in test_functions:
-                marker_uses.append(_marker_use(path=path, function_name=function.name, marker=module_marker))
+                marker_uses.extend(
+                    _marker_uses_for_function(path=path, function_name=function.name, marker=module_marker)
+                )
         for function in test_functions:
             for decorator in function.decorator_list:
                 marker = _dev_repo_only_marker_kwargs(decorator)
                 if marker is not None:
-                    marker_uses.append(_marker_use(path=path, function_name=function.name, marker=marker))
+                    marker_uses.extend(_marker_uses_for_function(path=path, function_name=function.name, marker=marker))
     return marker_uses
 
 
@@ -326,8 +339,19 @@ def _constant_string(node: ast.AST) -> str | None:
     return None
 
 
-def _marker_use(*, path: Path, function_name: str, marker: dict[str, str | None]) -> _StaticMarkerUse:
-    node_id = f"{path.relative_to(REPO_ROOT).as_posix()}::{function_name}"
+def _marker_uses_for_function(
+    *, path: Path, function_name: str, marker: dict[str, str | None]
+) -> list[_StaticMarkerUse]:
+    base_node_id = f"{path.relative_to(REPO_ROOT).as_posix()}::{function_name}"
+    classified_node_ids = sorted(
+        node_id
+        for node_id in DEV_REPO_ONLY_CLASSIFICATIONS_BY_NODE_ID
+        if node_id == base_node_id or node_id.startswith(f"{base_node_id}[")
+    )
+    return [_marker_use(node_id=node_id, marker=marker) for node_id in (classified_node_ids or [base_node_id])]
+
+
+def _marker_use(*, node_id: str, marker: dict[str, str | None]) -> _StaticMarkerUse:
     _validate_marker_metadata(
         node_id=node_id,
         private_asset=marker["private_asset"],

@@ -9,6 +9,7 @@ from uuid import uuid4
 
 import pytest
 
+from domains.campaign_finance.ingest.federal_officeholder_loader import _OFFICE_US_HOUSE, _OFFICE_US_SENATE
 from domains.civics.loaders.official_rosters._test_fixtures import read_fixture
 from domains.civics.loaders.official_rosters.loader import _ROSTER_ARTIFACT_DIR, _resolve_target
 from domains.civics.loaders.official_rosters.parsers import (
@@ -26,6 +27,147 @@ _HOUSE_SOURCE_URL = "https://www.ncleg.gov/Members/MemberList/H"
 _APEX_SOURCE_URL = "https://www.apexnc.org/780/Meet-Your-Town-Council"
 _WCPSS_SOURCE_URL = "https://www.wcpss.net/fs/pages/571"
 _STAGE2_ARTIFACT_DIR = _ROSTER_ARTIFACT_DIR
+
+_STAGE2_STATEWIDE_TARGET_CASES = (
+    (
+        "us_house_nc",
+        "14",
+        "us_house",
+        "federal",
+        "Representative",
+        435,
+        "congressional_district",
+        "nc_cd_14",
+    ),
+    (
+        "us_senate_nc_class_ii",
+        "Class 2",
+        "us_senate",
+        "federal",
+        "Senator",
+        100,
+        "statewide",
+        "nc",
+    ),
+    (
+        "us_senate_nc_class_iii",
+        "Class 3",
+        "us_senate",
+        "federal",
+        "Senator",
+        100,
+        "statewide",
+        "nc",
+    ),
+    (
+        "nc_senate",
+        "50",
+        "nc_senate_member",
+        "state",
+        "State Senator",
+        50,
+        "state_legislative_upper",
+        "nc_senate_district_50",
+    ),
+    ("nc_gov", "North Carolina", "nc_governor", "state", "Governor", 1, "statewide", "nc_statewide"),
+    (
+        "nc_lt_gov",
+        "North Carolina",
+        "nc_lieutenant_governor",
+        "state",
+        "Lieutenant Governor",
+        1,
+        "statewide",
+        "nc_statewide",
+    ),
+    (
+        "nc_attorney_general",
+        "North Carolina",
+        "nc_attorney_general",
+        "state",
+        "Attorney General",
+        1,
+        "statewide",
+        "nc_statewide",
+    ),
+    (
+        "nc_sec_of_state",
+        "North Carolina",
+        "nc_secretary_of_state",
+        "state",
+        "Secretary of State",
+        1,
+        "statewide",
+        "nc_statewide",
+    ),
+    ("nc_treasurer", "North Carolina", "nc_treasurer", "state", "State Treasurer", 1, "statewide", "nc_statewide"),
+    ("nc_auditor", "North Carolina", "nc_auditor", "state", "State Auditor", 1, "statewide", "nc_statewide"),
+    (
+        "nc_supt_pub_instr",
+        "North Carolina",
+        "nc_superintendent_public_instruction",
+        "state",
+        "State Superintendent of Public Instruction",
+        1,
+        "statewide",
+        "nc_statewide",
+    ),
+    (
+        "nc_ag_commissioner",
+        "North Carolina",
+        "nc_agriculture_commissioner",
+        "state",
+        "Commissioner of Agriculture",
+        1,
+        "statewide",
+        "nc_statewide",
+    ),
+    (
+        "nc_ins_commissioner",
+        "North Carolina",
+        "nc_insurance_commissioner",
+        "state",
+        "Commissioner of Insurance",
+        1,
+        "statewide",
+        "nc_statewide",
+    ),
+    (
+        "nc_labor_commissioner",
+        "North Carolina",
+        "nc_labor_commissioner",
+        "state",
+        "Commissioner of Labor",
+        1,
+        "statewide",
+        "nc_statewide",
+    ),
+    (
+        "nc_supreme_court",
+        "North Carolina",
+        "nc_supreme_court_justice",
+        "state",
+        "Justice",
+        7,
+        "statewide",
+        "nc_statewide",
+    ),
+    (
+        "nc_court_of_appeals",
+        "North Carolina",
+        "nc_court_of_appeals_judge",
+        "state",
+        "Judge",
+        15,
+        "statewide",
+        "nc_statewide",
+    ),
+)
+_CANONICAL_FEDERAL_OFFICE_ID_BY_BODY_KEY = {
+    "us_house_nc": _OFFICE_US_HOUSE,
+    "us_senate_nc_class_ii": _OFFICE_US_SENATE,
+    "us_senate_nc_class_iii": _OFFICE_US_SENATE,
+}
 
 
 def _read_stage2_artifact(name: str) -> str:
@@ -367,6 +509,85 @@ def test_resolve_target_nc_school_board_wcpss_source_specific_outcome() -> None:
     assert target.electoral_division.division_type == "school_district"
     assert target.electoral_division.state == "NC"
     assert target.electoral_division.district_number == "Wake County Public School System"
+
+
+@pytest.mark.parametrize(
+    (
+        "body_key",
+        "district_number",
+        "expected_office_name",
+        "expected_office_level",
+        "expected_title",
+        "expected_seats",
+        "expected_division_type",
+        "expected_division_name",
+    ),
+    _STAGE2_STATEWIDE_TARGET_CASES,
+)
+def test_resolve_target_stage2_statewide_and_federal_body_keys(
+    body_key: str,
+    district_number: str,
+    expected_office_name: str,
+    expected_office_level: str,
+    expected_title: str,
+    expected_seats: int,
+    expected_division_type: str,
+    expected_division_name: str,
+) -> None:
+    source_record_id = uuid4()
+    row = NormalizedRosterRow(
+        member_name="Fixture Official",
+        role_label=expected_title,
+        district_number=district_number,
+        bio_url=None,
+        portrait_url=None,
+    )
+
+    target = _resolve_target(body_key, row, source_record_id)
+
+    assert target is not None
+    canonical_office_id = _CANONICAL_FEDERAL_OFFICE_ID_BY_BODY_KEY.get(body_key)
+    if canonical_office_id is None:
+        assert target.office is not None
+        assert target.office.name == expected_office_name
+        assert target.office.office_level == expected_office_level
+        assert target.office.title == expected_title
+        assert target.office.number_of_seats == expected_seats
+        assert target.office.source_record_id == source_record_id
+    else:
+        assert target.office is None
+        assert target.office_id == canonical_office_id
+    assert target.electoral_division.name == expected_division_name
+    assert target.electoral_division.division_type == expected_division_type
+    assert target.electoral_division.state == "NC"
+    expected_district_number = None if expected_division_type == "statewide" else district_number.zfill(2)
+    assert target.electoral_division.district_number == expected_district_number
+    assert target.electoral_division.source_record_id == source_record_id
+
+
+def test_resolve_target_statewide_office_does_not_require_a_district_label() -> None:
+    from domains.civics.loaders.official_rosters import loader as roster_loader
+
+    source_record_id = uuid4()
+    row = NormalizedRosterRow(
+        member_name="Fixture Governor",
+        role_label="Governor",
+        district_number=None,
+        bio_url=None,
+        portrait_url=None,
+    )
+
+    target = _resolve_target("nc_gov", row, source_record_id)
+
+    assert target is not None
+    assert target.electoral_division.name == "nc_statewide"
+    assert target.electoral_division.district_number is None
+
+    with pytest.raises(
+        ValueError,
+        match=r"nc_gov roster resolved 2 current holders for an office with 1 seats",
+    ):
+        roster_loader._validate_roster_target_capacity("nc_gov", [row, row])
 
 
 # ----- target resolution: failure path ---------------------------------------

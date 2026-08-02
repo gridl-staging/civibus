@@ -14,12 +14,14 @@ from domains.civics.ingest import upsert_electoral_division, upsert_office, upse
 from domains.civics.loaders.official_rosters.loader import harvest_official_roster
 from domains.civics.loaders.official_rosters import loader as roster_loader
 from domains.civics.loaders.official_rosters.parsers import parse_roster_rows
+from domains.civics.tests.statewide_roster_stage5_support import select_counts_for_source as _select_counts_for_source
 from domains.civics.types import ElectoralDivision, Office, Officeholding
 
 
 pytestmark = pytest.mark.integration
 
 _FIXTURE_DIR = Path(__file__).resolve().parents[4] / "tests" / "fixtures" / "roster"
+_REPO_ROOT = Path(__file__).resolve().parents[4]
 _STAGE2_ARTIFACT_DIR = roster_loader._ROSTER_ARTIFACT_DIR
 _MANIFEST_PATH = _STAGE2_ARTIFACT_DIR / "canonical_seat_manifest.json"
 _STAGE3_RESOLUTION_EXPECTATIONS_PATH = _STAGE2_ARTIFACT_DIR / "stage3_resolution_subset.json"
@@ -35,7 +37,17 @@ def _manifest_sources() -> dict[str, dict[str, object]]:
 
 
 def _manifest_artifact_path(source: dict[str, object]) -> Path:
-    return Path(__file__).resolve().parents[4] / Path(str(source["artifact_path"]))
+    return _REPO_ROOT / Path(str(source["artifact_path"]))
+
+
+def test_manifest_artifact_paths_resolve_from_the_repo_root() -> None:
+    missing_paths = [
+        str(source["artifact_path"])
+        for source in _manifest_sources().values()
+        if not _manifest_artifact_path(source).is_file()
+    ]
+
+    assert missing_paths == []
 
 
 def _stage3_resolution_expectations() -> dict[str, list[str]]:
@@ -89,33 +101,6 @@ def _manifest_target_cases() -> list[tuple[str, str, str, str, int, str, str]]:
             )
         )
     return cases
-
-
-def _select_counts_for_source(connection: psycopg.Connection, source_id: str) -> tuple[int, int, int]:
-    with connection.cursor() as cursor:
-        cursor.execute(
-            """
-            SELECT
-                (SELECT COUNT(*)
-                 FROM core.source_record sr
-                 JOIN core.data_source ds ON ds.id = sr.data_source_id
-                 WHERE ds.notes::jsonb->>'registry_source_id' = %s),
-                (SELECT COUNT(*)
-                 FROM core.person_portrait pp
-                 JOIN core.source_record sr ON sr.id = pp.source_record_id
-                 JOIN core.data_source ds ON ds.id = sr.data_source_id
-                 WHERE ds.notes::jsonb->>'registry_source_id' = %s),
-                (SELECT COUNT(*)
-                 FROM civic.officeholding oh
-                 JOIN core.source_record sr ON sr.id = oh.source_record_id
-                 JOIN core.data_source ds ON ds.id = sr.data_source_id
-                 WHERE ds.notes::jsonb->>'registry_source_id' = %s)
-            """,
-            (source_id, source_id, source_id),
-        )
-        row = cursor.fetchone()
-    assert row is not None
-    return row[0], row[1], row[2]
 
 
 def _seed_people_for_manifest_source_fixture(connection: psycopg.Connection, source: dict[str, object]) -> None:
@@ -1131,6 +1116,52 @@ def test_existing_person_matched_by_name_gets_identifiers_persisted(
     assert identifiers.get("ncleg_member_code") is not None, (
         f"Expected ncleg_member_code in identifiers for pre-existing person, got: {identifiers}"
     )
+
+
+def test_build_roster_identifiers_preserves_normalized_bioguide_id() -> None:
+    row = roster_loader.NormalizedRosterRow(
+        member_name="Donald Davis",
+        role_label="United States Representative District 1",
+        district_number="1",
+        bio_url=None,
+        portrait_url=None,
+        bioguide_id=" d000230 ",
+    )
+
+    assert roster_loader._build_roster_identifiers(row) == {"bioguide_id": "D000230"}
+
+
+def test_find_existing_person_id_reuses_bioguide_id_before_name_matching(
+    db_conn: psycopg.Connection,
+) -> None:
+    register_roster_pilot_sources(db_conn)
+
+    with db_conn.cursor() as cursor:
+        cursor.execute(
+            """
+            INSERT INTO core.person (id, canonical_name, first_name, last_name, identifiers)
+            VALUES (
+                gen_random_uuid(),
+                'Donald Davis',
+                'Donald',
+                'Davis',
+                '{"bioguide_id": "D000230"}'::jsonb
+            )
+            RETURNING id
+            """
+        )
+        person_id = cursor.fetchone()[0]
+
+    row = roster_loader.NormalizedRosterRow(
+        member_name="Wrong Name",
+        role_label="United States Representative District 1",
+        district_number="1",
+        bio_url=None,
+        portrait_url=None,
+        bioguide_id="D000230",
+    )
+
+    assert roster_loader._find_existing_person_id(db_conn, row) == person_id
 
 
 def test_find_existing_person_id_reuses_ncleg_member_code_for_sampled_house_rows(

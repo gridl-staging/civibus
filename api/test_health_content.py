@@ -379,6 +379,15 @@ def test_federal_first_owner_declares_expected_checks() -> None:
     assert FEDERAL_FIRST_FLOORS["cf_transaction_contribution_insights_sentinel"] > 0
 
 
+def test_donor_rollup_has_no_default_content_floor_until_lane_2() -> None:
+    from api.health_content import _CHECK_QUERIES
+
+    forbidden_fragments = ("donor_search_rollup", "donor_rollup")
+    default_content_health_keys = set(FEDERAL_FIRST_COUNTS) | set(FEDERAL_FIRST_FLOORS) | set(_CHECK_QUERIES)
+
+    assert not {key for key in default_content_health_keys if any(fragment in key for fragment in forbidden_fragments)}
+
+
 def test_floors_from_env_returns_defaults_when_unset() -> None:
     from api.health_content import floors_from_env
 

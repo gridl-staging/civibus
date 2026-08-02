@@ -41,6 +41,20 @@ def _docker_exec_psql_command(container_name: str, database: str) -> list[str]:
     return ["docker", "exec", container_name, "psql", "-U", "civibus", "-d", database]
 
 
+def _local_psql_command(database: str) -> list[str]:
+    return [
+        "psql",
+        "-h",
+        os.getenv("POSTGRES_HOST", "localhost"),
+        "-p",
+        os.getenv("POSTGRES_PORT", "5433"),
+        "-U",
+        os.getenv("POSTGRES_USER", "civibus"),
+        "-d",
+        database,
+    ]
+
+
 def _is_docker_exec_option_with_value(token: str) -> bool:
     return any(token == option or token.startswith(f"{option}=") for option in _DOCKER_EXEC_OPTIONS_WITH_VALUE)
 
@@ -158,13 +172,16 @@ def build_base_psql_command(database: str, *, command_env_var: str, repo_root: P
             return _docker_exec_psql_command(container_name, database)
 
     if shutil.which("psql") is not None:
-        return ["psql", "-d", database]
+        return _local_psql_command(database)
 
     return []
 
 
 def _run_command(command: list[str]) -> str:
-    result = subprocess.run(command, text=True, capture_output=True, check=False)
+    command_environment = os.environ.copy()
+    if "PGPASSWORD" not in command_environment and "POSTGRES_PASSWORD" in command_environment:
+        command_environment["PGPASSWORD"] = command_environment["POSTGRES_PASSWORD"]
+    result = subprocess.run(command, text=True, capture_output=True, check=False, env=command_environment)
     if result.returncode != 0:
         raise RuntimeError(result.stderr.strip() or result.stdout.strip())
     return result.stdout.strip()
