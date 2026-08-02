@@ -80,8 +80,11 @@ def _helper_money_row(index: int, *, has_fec_money: bool = True) -> dict[str, ob
     }
 
 
-def _helper_export_rows(*, fec_rows: int = 540) -> list[dict[str, object]]:
-    return [_helper_money_row(index, has_fec_money=index < fec_rows) for index in range(540)]
+def _helper_export_rows(*, denominator: int = 540, fec_rows: int = 540) -> list[dict[str, object]]:
+    # denominator defaults to an in-range [535, 543] value so the default helper
+    # surface is a post-repair PASS specimen; range-shaped specimens pass a
+    # denominator inside or outside the range explicitly.
+    return [_helper_money_row(index, has_fec_money=index < fec_rows) for index in range(denominator)]
 
 
 def _write_helper_http_fixture(
@@ -89,6 +92,7 @@ def _write_helper_http_fixture(
     *,
     helper_export_payload: object | None,
     helper_statuses: dict[str, int] | None,
+    helper_donor_body: str | None = None,
 ) -> None:
     targets = _release_targets()
     donor_query = targets["finance_visual_donor_query"]
@@ -98,7 +102,11 @@ def _write_helper_http_fixture(
         ),
         "/candidates": '<li data-testid="candidate-result-row">Candidate</li>',
         "/committees": '<li data-testid="committee-result-row">Committee</li>',
-        f"/donors?q={donor_query}&by=name": '<tr data-testid="donor-result-row"><td>Williams</td></tr>',
+        f"/donors?q={donor_query}&by=name": (
+            helper_donor_body
+            if helper_donor_body is not None
+            else '<tr data-testid="donor-result-row"><td>Williams</td></tr>'
+        ),
     }
     body_dir = fixture_dir / "helper_http_bodies"
     body_dir.mkdir()
@@ -125,6 +133,7 @@ def _write_fixture(
     web_version_status: int = 200,
     helper_export_payload: object | None = None,
     helper_statuses: dict[str, int] | None = None,
+    helper_donor_body: str | None = None,
 ) -> None:
     fixture_dir.mkdir()
     (fixture_dir / "repo_openapi_paths.json").write_text(
@@ -168,6 +177,7 @@ def _write_fixture(
         fixture_dir,
         helper_export_payload=helper_export_payload,
         helper_statuses=helper_statuses,
+        helper_donor_body=helper_donor_body,
     )
 
 
@@ -198,6 +208,9 @@ def test_deployed_surface_parity_probe_accepts_matching_fixture_surface(tmp_path
         fixture_dir,
         repo_paths={"/health", "/public/v1/federal/officials", "/v1/candidates"},
         deployed_paths={"/health", "/public/v1/federal/officials", "/v1/candidates"},
+        # 537/539 is a range-shaped in-[535, 543] PASS specimen; Stage 1 pins the
+        # post-repair PASS line so Stage 2 makes it green.
+        helper_export_payload=_helper_export_rows(denominator=539, fec_rows=537),
     )
 
     result = _run_probe(fixture_dir)
@@ -211,7 +224,8 @@ def test_deployed_surface_parity_probe_accepts_matching_fixture_surface(tmp_path
     assert "page_latency /sitemap.xml seconds=30.000 budget_seconds=30.000" in result.stdout
     assert "WARN known_red_page /sitemap.xml" not in result.stdout
     assert "surfaces_probed=14 failed=0" in result.stdout
-    assert "money_value_assertion fec_money_coverage PASS numerator=540 denominator=540" in result.stdout
+    assert "money_value_assertion fec_money_coverage PASS numerator=537 denominator=539" in result.stdout
+    assert "money_value_probe_ok" in result.stdout
     assert (
         "money_value_assertion candidates_http PASS numerator=200 denominator=200 diagnostic=/candidates returned HTTP 200"
         in result.stdout
@@ -395,7 +409,10 @@ def test_deployed_surface_parity_probe_runs_money_assertions_after_structural_fa
             **{path: 200 for path in DEFAULT_PAGE_BODIES},
             "/search?q=ossoff": 500,
         },
-        helper_export_payload=_helper_export_rows(fec_rows=13),
+        # 534/539: sub-floor numerator inside a range denominator. After Stage 2
+        # promotes fec_money_coverage, the probe exits 2, but the flip stays off,
+        # so the wrapper still renders it nonfatal — now at exit_status=2.
+        helper_export_payload=_helper_export_rows(denominator=539, fec_rows=534),
     )
 
     result = _run_probe(fixture_dir)
@@ -403,8 +420,8 @@ def test_deployed_surface_parity_probe_runs_money_assertions_after_structural_fa
     assert result.returncode != 0
     assert "page_unexpected_http_status /search?q=ossoff 500" in result.stderr
     assert "surface_parity_failed failed=1" in result.stderr
-    assert "money_value_assertion fec_money_coverage FAIL numerator=13 denominator=540" in result.stdout
-    assert "money_value_failure_nonfatal exit_status=1 fatal=0" in result.stdout
+    assert "money_value_assertion fec_money_coverage FAIL numerator=534 denominator=539" in result.stdout
+    assert "money_value_failure_nonfatal exit_status=2 fatal=0" in result.stdout
     assert "surface_parity_ok" not in result.stdout
 
 
@@ -462,14 +479,16 @@ def test_deployed_surface_parity_probe_renders_money_helper_failures_nonfatally(
         fixture_dir,
         repo_paths={"/health"},
         deployed_paths={"/health"},
-        helper_export_payload=_helper_export_rows(fec_rows=13),
+        # 534/539 sub-floor specimen: promoted-fatal probe exit 2 stays nonfatal in
+        # the wrapper because the flip is off.
+        helper_export_payload=_helper_export_rows(denominator=539, fec_rows=534),
     )
 
     result = _run_probe(fixture_dir)
 
     assert result.returncode == 0, result.stderr
-    assert "money_value_assertion fec_money_coverage FAIL numerator=13 denominator=540" in result.stdout
-    assert "money_value_failure_nonfatal exit_status=1 fatal=0" in result.stdout
+    assert "money_value_assertion fec_money_coverage FAIL numerator=534 denominator=539" in result.stdout
+    assert "money_value_failure_nonfatal exit_status=2 fatal=0" in result.stdout
     assert "surface_parity_ok" in result.stdout
 
 
@@ -477,17 +496,26 @@ def test_deployed_surface_parity_probe_keeps_unpromoted_money_failures_nonfatal_
     tmp_path: Path,
 ) -> None:
     fixture_dir = tmp_path / "money-helper-unpromoted"
+    # donor_search_rows is NOT in PROMOTED_FATAL_ASSERTIONS and Stage 2 does not add
+    # it, so it stays unpromoted after the flip. The export payload defaults to an
+    # in-range full-coverage PASS specimen so fec_money_coverage does not interfere;
+    # the failure comes solely from an empty donor search body.
     _write_fixture(
         fixture_dir,
         repo_paths={"/health"},
         deployed_paths={"/health"},
-        helper_export_payload=_helper_export_rows(fec_rows=13),
+        helper_donor_body="<html><body>No donors loaded.</body></html>",
     )
 
     result = _run_probe(fixture_dir, extra_env={"CIVIBUS_PUBLIC_MONEY_VALUE_FATAL": "1"})
 
+    donor_query = _release_targets()["finance_visual_donor_query"]
     assert result.returncode == 0, result.stderr
-    assert "money_value_assertion fec_money_coverage FAIL numerator=13 denominator=540" in result.stdout
+    assert (
+        "money_value_assertion donor_search_rows FAIL numerator=0 denominator=1 "
+        f"diagnostic=/donors?q={donor_query}&by=name rendered 0 result rows"
+    ) in result.stdout
+    assert "money_value_assertion fec_money_coverage PASS numerator=540 denominator=540" in result.stdout
     assert "money_value_failure_nonfatal exit_status=1 fatal=0" in result.stdout
 
 

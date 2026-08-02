@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import socket
+from urllib.error import HTTPError
+from urllib.request import Request
+
 import pytest
 
 import infra.scripts.candidate_sitemap_oracle as oracle_module
@@ -11,6 +15,7 @@ from infra.scripts.candidate_sitemap_oracle import (
     PUBLIC_CANDIDATE_LIST_PATH,
     _build_http_fetch_url,
     _candidate_api_key,
+    _candidate_api_key_source,
     evaluate_candidate_sitemap,
 )
 
@@ -169,6 +174,7 @@ def test_candidate_sitemap_oracle_accepts_canonical_official_total_sitemap() -> 
     assert EXPECTED_CANONICAL_OFFICIAL_TOTAL_URLS == [SAFE_URL]
     assert EXPECTED_EXCLUDED_CANONICAL_URLS == [CANONICAL_NO_OFFICIAL_TOTAL_URL]
     assert report.verdict == "candidate_sitemap_oracle_ok"
+    assert report.exit_code == 0
     assert report.evidence() == "\n".join(
         [
             "candidate_api_total=6",
@@ -296,7 +302,10 @@ def test_candidate_sitemap_oracle_fails_closed_on_sitemap_index_shard_http_statu
         assert response.status_code == 302
 
 
-def test_candidate_sitemap_oracle_renders_vacuous_for_empty_index_union() -> None:
+def test_candidate_sitemap_oracle_renders_vacuous_for_empty_index_union(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     surface = FixtureSurface(
         candidate_pages=[
             {
@@ -321,7 +330,21 @@ def test_candidate_sitemap_oracle_renders_vacuous_for_empty_index_union() -> Non
     assert report.sitemap_url_count == 0
     assert report.sitemap_candidate_count == 0
     assert report.verdict == "VACUOUS"
+    assert report.exit_code == 1
     assert report.evidence().endswith("verdict=VACUOUS")
+
+    monkeypatch.setattr(oracle_module, "_candidate_api_key", lambda: None)
+    monkeypatch.setattr(oracle_module, "evaluate_candidate_sitemap", lambda *_args: report)
+    monkeypatch.setattr(
+        oracle_module.sys,
+        "argv",
+        ["candidate_sitemap_oracle.py", "--base-url", BASE_URL],
+    )
+
+    assert oracle_module.main() == 1
+    captured = capsys.readouterr()
+    assert captured.out.endswith("verdict=VACUOUS\n")
+    assert captured.err.startswith("VACUOUS\n")
 
 
 @pytest.mark.parametrize(
@@ -372,6 +395,7 @@ def test_candidate_sitemap_oracle_fails_closed_on_candidate_url_drift(
     report = evaluate_candidate_sitemap(BASE_URL, surface.fetch)
 
     assert report.ok is False
+    assert report.exit_code == 1
     assert expected_evidence in report.evidence()
 
 
@@ -438,12 +462,33 @@ def test_candidate_sitemap_oracle_fails_closed_on_candidate_page_contract_drift(
         evaluate_candidate_sitemap(BASE_URL, surface.fetch)
 
 
+def test_candidate_sitemap_oracle_fails_closed_when_pagination_cannot_advance() -> None:
+    surface = FixtureSurface(
+        candidate_pages=[
+            {
+                "items": [],
+                "has_next": True,
+                "offset": 0,
+                "limit": 200,
+            }
+        ],
+        sitemap_xml=_sitemap([]),
+    )
+
+    with pytest.raises(OracleError, match="candidate_api_empty_page_with_next offset=0"):
+        evaluate_candidate_sitemap(BASE_URL, surface.fetch)
+
+    assert surface.requested_paths == [f"{PUBLIC_CANDIDATE_LIST_PATH}?limit=200&offset=0"]
+
+
 def test_candidate_sitemap_oracle_reads_api_key_from_environment(tmp_path) -> None:
     env_path = tmp_path / "civibus-fly.env"
     env_path.write_text("CIVIBUS_API_KEY=file-key\nCIVIBUS_API_KEYS=file-list-key,second\n")
 
     assert _candidate_api_key({"CIVIBUS_API_KEY": "env-key"}, env_path) == "env-key"
     assert _candidate_api_key({"CIVIBUS_API_KEYS": "env-list-key,second"}, env_path) == "env-list-key"
+    assert _candidate_api_key_source({"CIVIBUS_API_KEY": "env-key"}, env_path) == "environment"
+    assert _candidate_api_key_source({"CIVIBUS_API_KEYS": "env-list-key,second"}, env_path) == "environment"
 
 
 def test_candidate_sitemap_oracle_reads_api_key_from_repo_secret_env_file(tmp_path) -> None:
@@ -451,3 +496,152 @@ def test_candidate_sitemap_oracle_reads_api_key_from_repo_secret_env_file(tmp_pa
     env_path.write_text("# local deploy proof secrets\nCIVIBUS_API_KEYS=file-list-key,second\n")
 
     assert _candidate_api_key({}, env_path) == "file-list-key"
+    assert _candidate_api_key_source({}, env_path) == "repo_env_file"
+
+
+class _StubHttpResponse:
+    """Minimal context-manager response for the spy opener seam."""
+
+    def __init__(self, *, status: int = 200, body: bytes = b"{}", charset: str | None = "utf-8") -> None:
+        self.status = status
+        self._body = body
+        self._charset = charset
+
+    def __enter__(self) -> "_StubHttpResponse":
+        return self
+
+    def __exit__(self, *_args: object) -> bool:
+        return False
+
+    def read(self) -> bytes:
+        return self._body
+
+    @property
+    def headers(self) -> object:
+        charset = self._charset
+
+        class _Headers:
+            def get_content_charset(self) -> str | None:
+                return charset
+
+        return _Headers()
+
+
+class _SpyOpener:
+    """Records the timeout and requests reaching opener.open for the fetch seam."""
+
+    def __init__(self) -> None:
+        self.redirect_handler: object | None = None
+        self.captured_timeouts: list[object] = []
+        self.captured_requests: list[Request] = []
+        self.raise_exc: BaseException | None = None
+
+    def open(self, request: Request, timeout: object) -> object:
+        self.captured_timeouts.append(timeout)
+        self.captured_requests.append(request)
+        if self.raise_exc is not None:
+            raise self.raise_exc
+        return _StubHttpResponse()
+
+
+def _install_spy_opener(monkeypatch: pytest.MonkeyPatch, spy: _SpyOpener) -> None:
+    def _factory(redirect_handler: object) -> _SpyOpener:
+        spy.redirect_handler = redirect_handler
+        return spy
+
+    monkeypatch.setattr(oracle_module, "build_opener", _factory)
+
+
+def test_candidate_sitemap_oracle_widens_http_fetch_timeout_budget(monkeypatch: pytest.MonkeyPatch) -> None:
+    spy = _SpyOpener()
+    _install_spy_opener(monkeypatch, spy)
+
+    response = _build_http_fetch_url("deploy-secret")(f"{BASE_URL}{PUBLIC_CANDIDATE_LIST_PATH}?limit=200&offset=0")
+
+    assert response.status_code == 200
+    assert spy.captured_timeouts, "opener.open was never called"
+    # Post-repair budget must be at least 30s; red against HTTP_FETCH_TIMEOUT_SECONDS = 15.
+    assert spy.captured_timeouts[0] >= 30
+
+
+@pytest.mark.parametrize("timeout_exc", [TimeoutError("read timed out"), socket.timeout("read timed out")])
+def test_candidate_sitemap_oracle_fails_closed_on_fetch_timeout(
+    monkeypatch: pytest.MonkeyPatch, timeout_exc: BaseException
+) -> None:
+    spy = _SpyOpener()
+    spy.raise_exc = timeout_exc
+    _install_spy_opener(monkeypatch, spy)
+
+    fetch_url = _build_http_fetch_url("deploy-secret")
+    with pytest.raises(OracleError, match=r"http_request_failed .* timed out"):
+        fetch_url(f"{BASE_URL}{PUBLIC_CANDIDATE_LIST_PATH}?limit=200&offset=0")
+
+
+def test_candidate_sitemap_oracle_fetch_preserves_security_invariants(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    spy = _SpyOpener()
+    _install_spy_opener(monkeypatch, spy)
+
+    fetch_url = _build_http_fetch_url("deploy-secret")
+    with pytest.raises(OracleError, match="candidate_api_key_requires_https"):
+        fetch_url(f"http://civibus.example{PUBLIC_CANDIDATE_LIST_PATH}?limit=200&offset=0")
+
+    fetch_url(f"{BASE_URL}{PUBLIC_CANDIDATE_LIST_PATH}?limit=200&offset=0")
+    fetch_url(f"{BASE_URL}/sitemap.xml")
+
+    candidate_request, sitemap_request = spy.captured_requests
+    # X-API-Key stays scoped to the candidate-list path; widening the budget must
+    # not begin attaching it to other origins/paths.
+    assert candidate_request.get_header("X-api-key") == "deploy-secret"
+    assert sitemap_request.get_header("X-api-key") is None
+
+    # Redirects are rejected fail-closed so the key can never follow a
+    # non-same-origin 3xx to an attacker-controlled target.
+    assert isinstance(spy.redirect_handler, oracle_module.HTTPRedirectHandler)
+    with pytest.raises(HTTPError):
+        spy.redirect_handler.redirect_request(
+            Request(f"{BASE_URL}/candidate/x"),
+            None,
+            302,
+            "Found",
+            {},
+            "https://attacker.example/capture",
+        )
+
+    monkeypatch.setattr(oracle_module, "_candidate_api_key", lambda: "deploy-secret")
+    monkeypatch.setattr(oracle_module, "_candidate_api_key_source", lambda: "repo_env_file")
+    monkeypatch.setattr(
+        oracle_module,
+        "evaluate_candidate_sitemap",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("unexpected evaluation")),
+    )
+    monkeypatch.setattr(
+        oracle_module.sys,
+        "argv",
+        ["candidate_sitemap_oracle.py", "--base-url", "https://attacker.example"],
+    )
+
+    assert oracle_module.main() == 2
+    assert "candidate_sitemap_oracle_error base_url_untrusted_for_repo_api_key" in capsys.readouterr().err
+
+
+def test_candidate_sitemap_oracle_rejects_repo_secret_key_for_localhost(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(oracle_module, "_candidate_api_key", lambda: "deploy-secret")
+    monkeypatch.setattr(oracle_module, "_candidate_api_key_source", lambda: "repo_env_file")
+    monkeypatch.setattr(
+        oracle_module,
+        "evaluate_candidate_sitemap",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("unexpected evaluation")),
+    )
+    monkeypatch.setattr(
+        oracle_module.sys,
+        "argv",
+        ["candidate_sitemap_oracle.py", "--base-url", "http://127.0.0.1:8080"],
+    )
+
+    assert oracle_module.main() == 2
+    assert "candidate_sitemap_oracle_error base_url_untrusted_for_repo_api_key" in capsys.readouterr().err

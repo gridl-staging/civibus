@@ -39,7 +39,7 @@ from api.test_campaign_finance_support import (
     insert_office_row,
     insert_officeholding_row,
 )
-from core.db import insert_data_source, insert_person
+from core.db import insert_person, try_insert_data_source
 from core.people.federal_officeholders import (
     current_federal_officeholder_predicate,
     federal_officeholder_targets_sql,
@@ -167,25 +167,39 @@ def _seed_federal_officeholder_money_fixture(
     db_conn: psycopg.Connection,
     *,
     money_linked_count: int,
-) -> tuple[int, int]:
+) -> tuple[int, int, int]:
     """Compose either Stage 2 coverage state through the canonical row helpers."""
-    from api.health_content import _CANDIDATE_MONEY_OFFICIAL_TOTALS_PREDICATE
-
     if not 1 <= money_linked_count <= STAGE_1_OFFICEHOLDER_COUNT:
         raise ValueError("money_linked_count must identify at least one and at most every fixture officeholder")
 
-    insert_data_source(
-        db_conn,
-        DataSource(
-            id=_stage_1_uuid(1),
-            domain=FEC_BULK_DATA_SOURCE_DOMAIN,
-            jurisdiction=FEC_BULK_DATA_SOURCE_JURISDICTION,
-            name=FEC_BULK_DATA_SOURCE_NAME,
-            source_url="https://www.fec.gov/data/browse-data/?tab=bulk-data",
-            last_pull_at=STAGE_1_EVIDENCE_NOW,
-            last_pull_status="success",
-        ),
+    baseline_officeholders, baseline_money_linked = _federal_officeholder_money_counts(db_conn)
+    data_source = DataSource(
+        id=_stage_1_uuid(1),
+        domain=FEC_BULK_DATA_SOURCE_DOMAIN,
+        jurisdiction=FEC_BULK_DATA_SOURCE_JURISDICTION,
+        name=FEC_BULK_DATA_SOURCE_NAME,
+        source_url="https://www.fec.gov/data/browse-data/?tab=bulk-data",
+        last_pull_at=STAGE_1_EVIDENCE_NOW,
+        last_pull_status="success",
     )
+    try_insert_data_source(db_conn, data_source)
+    with db_conn.cursor() as cursor:
+        cursor.execute(
+            """
+            UPDATE core.data_source
+            SET source_url = %s, last_pull_at = %s, last_pull_status = %s
+            WHERE domain = %s AND jurisdiction = %s AND name = %s
+            """,
+            (
+                data_source.source_url,
+                data_source.last_pull_at,
+                data_source.last_pull_status,
+                data_source.domain,
+                data_source.jurisdiction,
+                data_source.name,
+            ),
+        )
+        assert cursor.rowcount == 1
 
     for index in range(1, STAGE_1_OFFICEHOLDER_COUNT + 1):
         _insert_federal_officeholder_money_specimen(
@@ -218,6 +232,17 @@ def _seed_federal_officeholder_money_fixture(
         electoral_division_id=_stage_1_uuid(202),
         valid_period=STAGE_1_VALID_PERIOD,
     )
+
+    officeholders, money_linked = _federal_officeholder_money_counts(db_conn)
+    return (
+        officeholders - baseline_officeholders,
+        money_linked - baseline_money_linked,
+        baseline_money_linked,
+    )
+
+
+def _federal_officeholder_money_counts(db_conn: psycopg.Connection) -> tuple[int, int]:
+    from api.health_content import _CANDIDATE_MONEY_OFFICIAL_TOTALS_PREDICATE
 
     with db_conn.cursor() as cursor:
         cursor.execute(
@@ -732,12 +757,13 @@ def test_evaluate_content_health_flags_underlinked_federal_officeholder_money_co
     from api.health_content import ContentHealthFailure
     from api.health_content import evaluate_content_health
 
-    fixture_counts = _seed_federal_officeholder_money_fixture(
+    fixture_officeholders, fixture_money_linked, baseline_money_linked = _seed_federal_officeholder_money_fixture(
         db_conn,
         money_linked_count=STAGE_1_MONEY_LINKED_COUNT,
     )
     floors = {key: 0 for key in EXPECTED_FEDERAL_FIRST_CHECKS}
-    floors[FEDERAL_OFFICEHOLDER_MONEY_COVERAGE_CHECK] = FEDERAL_OFFICEHOLDER_MONEY_FIXTURE_FLOOR
+    money_floor = baseline_money_linked + FEDERAL_OFFICEHOLDER_MONEY_FIXTURE_FLOOR
+    floors[FEDERAL_OFFICEHOLDER_MONEY_COVERAGE_CHECK] = money_floor
 
     failures = evaluate_content_health(
         db_conn,
@@ -745,12 +771,15 @@ def test_evaluate_content_health_flags_underlinked_federal_officeholder_money_co
         now=STAGE_1_EVIDENCE_NOW,
     )
 
-    assert fixture_counts == (STAGE_1_OFFICEHOLDER_COUNT, STAGE_1_MONEY_LINKED_COUNT)
+    assert (fixture_officeholders, fixture_money_linked) == (
+        STAGE_1_OFFICEHOLDER_COUNT,
+        STAGE_1_MONEY_LINKED_COUNT,
+    )
     assert failures == [
         ContentHealthFailure(
             check=FEDERAL_OFFICEHOLDER_MONEY_COVERAGE_CHECK,
-            actual=STAGE_1_MONEY_LINKED_COUNT,
-            floor=FEDERAL_OFFICEHOLDER_MONEY_FIXTURE_FLOOR,
+            actual=baseline_money_linked + STAGE_1_MONEY_LINKED_COUNT,
+            floor=money_floor,
         )
     ]
 
@@ -760,12 +789,12 @@ def test_evaluate_content_health_accepts_fully_linked_federal_officeholder_money
 ) -> None:
     from api.health_content import evaluate_content_health
 
-    fixture_counts = _seed_federal_officeholder_money_fixture(
+    fixture_officeholders, fixture_money_linked, baseline_money_linked = _seed_federal_officeholder_money_fixture(
         db_conn,
         money_linked_count=STAGE_1_OFFICEHOLDER_COUNT,
     )
     floors = {key: 0 for key in EXPECTED_FEDERAL_FIRST_CHECKS}
-    floors[FEDERAL_OFFICEHOLDER_MONEY_COVERAGE_CHECK] = FEDERAL_OFFICEHOLDER_MONEY_FIXTURE_FLOOR
+    floors[FEDERAL_OFFICEHOLDER_MONEY_COVERAGE_CHECK] = baseline_money_linked + FEDERAL_OFFICEHOLDER_MONEY_FIXTURE_FLOOR
 
     failures = evaluate_content_health(
         db_conn,
@@ -773,7 +802,10 @@ def test_evaluate_content_health_accepts_fully_linked_federal_officeholder_money
         now=STAGE_1_EVIDENCE_NOW,
     )
 
-    assert fixture_counts == (STAGE_1_OFFICEHOLDER_COUNT, STAGE_1_OFFICEHOLDER_COUNT)
+    assert (fixture_officeholders, fixture_money_linked) == (
+        STAGE_1_OFFICEHOLDER_COUNT,
+        STAGE_1_OFFICEHOLDER_COUNT,
+    )
     assert failures == []
 
 

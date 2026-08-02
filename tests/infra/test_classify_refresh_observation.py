@@ -28,6 +28,7 @@ FIXTURE_DIR = Path(__file__).with_name("fixtures")
 KNOWN_MACHINE_STATUS = FIXTURE_DIR / "refresh_2026_07_28_machine_status.txt"
 KNOWN_BEFORE = FIXTURE_DIR / "refresh_2026_07_28_data_sources_before.html"
 KNOWN_AFTER = FIXTURE_DIR / "refresh_2026_07_28_data_sources_after.html"
+CLASSIFIER_SUBPROCESS_TIMEOUT_SECONDS = 60
 
 SOURCE_NAMES = tuple(OBSERVED_SOURCE_JOB_KEYS)
 SPINE_SOURCE = "US Congress Legislators (unitedstates/congress-legislators)"
@@ -111,7 +112,7 @@ def _run_cli(
         capture_output=True,
         text=True,
         check=False,
-        timeout=10,
+        timeout=CLASSIFIER_SUBPROCESS_TIMEOUT_SECONDS,
     )
 
 

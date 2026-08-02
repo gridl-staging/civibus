@@ -17,7 +17,11 @@ from pydantic import BaseModel
 from core.db import get_connection
 from core.keel_gate_l1 import count_federal_contests
 from core.keel_gate_l3 import _load_registry as load_sources_registry
-from core.people.federal_officeholders import current_federal_officeholder_predicate
+from core.people.federal_officeholders import (
+    SEATED_FEDERAL_OFFICIALS_MAX as _MAX_FEDERAL_ACTIVE_OFFICEHOLDERS,
+    SEATED_FEDERAL_OFFICIALS_MIN as _MIN_FEDERAL_ACTIVE_OFFICEHOLDERS,
+    current_federal_officeholder_predicate,
+)
 from domains.campaign_finance.coverage import lifecycle as coverage_lifecycle
 from domains.campaign_finance.coverage import registry as coverage_registry
 from domains.civics.loaders.official_rosters.loader import manifest_member_counts_by_source_id
@@ -227,8 +231,6 @@ _EXPECTED_FEDERAL_SEATS = 543
 _FEDERAL_RACE_CYCLE = 2026
 _MIN_FEDERAL_RACES = 1
 _EXPECTED_FEDERAL_RACES = 543
-_MIN_FEDERAL_ACTIVE_OFFICEHOLDERS = 535
-_MAX_FEDERAL_ACTIVE_OFFICEHOLDERS = 543
 _MIN_FEDERAL_PORTRAIT_COVERAGE_PERCENT = 90.0
 _MIN_FEDERAL_BIO_COVERAGE_PERCENT = 80.0
 _MIN_FEDERAL_CANDIDATE_LINK_COVERAGE_PERCENT = 95.0

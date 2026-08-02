@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import ast
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
+from pathlib import Path
+from typing import NamedTuple
 from uuid import UUID, uuid4
 
 import psycopg
@@ -213,6 +216,147 @@ def _upsert_canonical_congress_office(
         (office_id, name, title),
     )
     return office_id
+
+
+class _UpcomingElectionDates(NamedTuple):
+    """Deterministic future election dates ordered relative to the database clock."""
+
+    primary: date
+    general: date
+
+
+def _database_current_date(conn: psycopg.Connection) -> date:
+    """Return ``CURRENT_DATE`` as the database sees it.
+
+    Single clock seam for fixtures feeding endpoints whose SQL compares
+    ``c.election_date`` against ``CURRENT_DATE``. Those fixtures must be derived from
+    this clock rather than absolute literals, which silently age across the filter
+    boundary and flip the assertion they were written to prove.
+    """
+    return conn.execute("SELECT CURRENT_DATE").fetchone()[0]
+
+
+def _future_upcoming_election_dates(conn: psycopg.Connection) -> _UpcomingElectionDates:
+    """Return ordered future election dates derived from the database clock.
+
+    The upcoming-timeline endpoint filters with ``WHERE c.election_date >= CURRENT_DATE``,
+    so both fixture dates come from a single clock read. ``primary`` precedes ``general``
+    so ordering assertions stay stable.
+    """
+    current_date = _database_current_date(conn)
+    return _UpcomingElectionDates(
+        primary=current_date + timedelta(days=30),
+        general=current_date + timedelta(days=120),
+    )
+
+
+_CLOCK_FILTERED_ELECTION_TEST_NAMES = {
+    "test_elections_timeline_upcoming_returns_ordered_dates_without_cross_jurisdiction_collapsing",
+    "test_elections_timeline_upcoming_excludes_database_past_contests",
+    "test_returns_timeline_recent_contests_and_map_context_for_office",
+}
+
+
+def _absolute_date_literal(node: ast.expr) -> date | None:
+    """Return the calendar date represented by a supported literal expression."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        try:
+            return date.fromisoformat(node.value)
+        except ValueError:
+            return None
+    if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)):
+        return None
+    if node.func.id not in {"date", "datetime"}:
+        return None
+    if node.func.id == "date" and len(node.args) + len(node.keywords) != 3:
+        return None
+
+    calendar_components = dict(zip(("year", "month", "day"), node.args[:3], strict=False))
+    for keyword in node.keywords:
+        if keyword.arg not in {"year", "month", "day"}:
+            continue
+        if keyword.arg in calendar_components:
+            return None
+        calendar_components[keyword.arg] = keyword.value
+    if set(calendar_components) != {"year", "month", "day"}:
+        return None
+    if not all(
+        isinstance(component, ast.Constant) and isinstance(component.value, int)
+        for component in calendar_components.values()
+    ):
+        return None
+    year, month, day = (calendar_components[name].value for name in ("year", "month", "day"))
+    return date(year, month, day)
+
+
+def _assigned_value_before_call(
+    test_node: ast.FunctionDef,
+    variable_name: str,
+    call_line: int,
+) -> ast.expr | None:
+    """Return the latest simple local assignment before an election fixture call."""
+    assignments: list[ast.Assign | ast.AnnAssign] = []
+    for node in ast.walk(test_node):
+        if isinstance(node, ast.Assign):
+            assigned_names = [target.id for target in node.targets if isinstance(target, ast.Name)]
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            assigned_names = [node.target.id]
+        else:
+            continue
+        if variable_name in assigned_names and node.lineno < call_line:
+            assignments.append(node)
+    if not assignments:
+        return None
+    return max(assignments, key=lambda assignment: assignment.lineno).value
+
+
+def _election_date_fuse_for_call(
+    test_node: ast.FunctionDef,
+    call: ast.Call,
+    database_current_date: date,
+) -> str | None:
+    election_date = next((keyword.value for keyword in call.keywords if keyword.arg == "election_date"), None)
+    is_insert_contest = isinstance(call.func, ast.Name) and call.func.id == "_insert_contest"
+    if election_date is None:
+        if not is_insert_contest:
+            return None
+        return (
+            f"{test_node.name}:line {call.lineno}: _insert_contest omits election_date "
+            "and inherits the absolute module default"
+        )
+
+    literal_expression = election_date
+    if isinstance(election_date, ast.Name):
+        assigned_value = _assigned_value_before_call(test_node, election_date.id, call.lineno)
+        if assigned_value is not None:
+            literal_expression = assigned_value
+    literal = _absolute_date_literal(literal_expression)
+    if literal is None or literal < database_current_date:
+        return None
+
+    source = (
+        f"election_date variable {election_date.id} is assigned literal"
+        if isinstance(election_date, ast.Name)
+        else "election_date literal"
+    )
+    return (
+        f"{test_node.name}:line {literal_expression.lineno}: {source} {literal} is on the future side of CURRENT_DATE"
+    )
+
+
+def _clock_filtered_election_fixture_fuses(module_path: Path, database_current_date: date) -> list[str]:
+    module_tree = ast.parse(module_path.read_text(encoding="utf-8"))
+    fixtures_with_fuses: list[str] = []
+    for test_node in ast.walk(module_tree):
+        if not isinstance(test_node, ast.FunctionDef) or test_node.name not in _CLOCK_FILTERED_ELECTION_TEST_NAMES:
+            continue
+        for call in ast.walk(test_node):
+            if not isinstance(call, ast.Call):
+                continue
+            fuse = _election_date_fuse_for_call(test_node, call, database_current_date)
+            if fuse is not None:
+                fixtures_with_fuses.append(fuse)
+    return fixtures_with_fuses
 
 
 def _insert_contest(conn: psycopg.Connection, **kwargs) -> UUID:
@@ -1176,22 +1320,28 @@ class TestOfficeDetail:
             date_precision="day",
         )
 
+        # `no_active_contest` is driven by `fetch_office_active_contest_count`, whose SQL
+        # filters `c.election_date >= CURRENT_DATE`, so this contest's date is derived from
+        # the database clock rather than pinned to a literal that would age into the past.
+        active_contest_date = _database_current_date(db_conn) + timedelta(days=90)
         _insert_contest(
             db_conn,
             id=UUID("00000000-0000-0000-0000-200000000010"),
-            name="Governor 2026 General",
+            name="Governor Upcoming General",
             office_id=office_id,
-            election_date=date(2026, 11, 3),
+            election_date=active_contest_date,
             election_type="general",
             electoral_division_id=division_id,
-            filing_deadline=date(2026, 9, 1),
+            filing_deadline=active_contest_date - timedelta(days=60),
             is_partisan=True,
             candidate_list_incomplete=False,
         )
+        # Permanently past: this literal cannot cross the CURRENT_DATE boundary, and the
+        # ordering assertion below needs it strictly older than the upcoming contest.
         _insert_contest(
             db_conn,
             id=UUID("00000000-0000-0000-0000-200000000011"),
-            name="Governor 2024 General",
+            name="Governor Past General",
             office_id=office_id,
             election_date=date(2024, 11, 5),
             election_type="general",
@@ -1214,9 +1364,10 @@ class TestOfficeDetail:
             "2020-01-01",
         ]
         assert [contest["contest_name"] for contest in payload["recent_contests"]] == [
-            "Governor 2026 General",
-            "Governor 2024 General",
+            "Governor Upcoming General",
+            "Governor Past General",
         ]
+        assert payload["recent_contests"][0]["election_date"] == active_contest_date.isoformat()
         assert payload["recent_contests"][0]["electoral_division_type"] == "county"
         assert payload["recent_contests"][0]["electoral_division_state"] == "NC"
         assert payload["selected_electoral_division_id"] == str(division_id)
@@ -1667,25 +1818,27 @@ class TestElectionContracts:
         office_or = _insert_office(db_conn, name="test_attorney_general_or", office_level="state", state="OR")
         office_ca = _insert_office(db_conn, name="test_attorney_general_ca", office_level="state", state="CA")
 
+        election_dates = _future_upcoming_election_dates(db_conn)
+
         _insert_contest(
             db_conn,
             name="test_wa_primary",
             office_id=office_wa,
-            election_date=date(2026, 8, 1),
+            election_date=election_dates.primary,
             election_type="primary",
         )
         _insert_contest(
             db_conn,
             name="test_or_primary",
             office_id=office_or,
-            election_date=date(2026, 8, 1),
+            election_date=election_dates.primary,
             election_type="primary",
         )
         _insert_contest(
             db_conn,
             name="test_ca_general",
             office_id=office_ca,
-            election_date=date(2026, 11, 3),
+            election_date=election_dates.general,
             election_type="general",
         )
 
@@ -1693,10 +1846,141 @@ class TestElectionContracts:
 
         assert response.status_code == 200
         payload = response.json()
-        assert [entry["date"] for entry in payload] == ["2026-08-01", "2026-11-03"]
+        assert [entry["date"] for entry in payload] == [
+            election_dates.primary.isoformat(),
+            election_dates.general.isoformat(),
+        ]
         assert len(payload[0]["contests"]) == 2
         assert {contest["state"] for contest in payload[0]["contests"]} == {"WA", "OR"}
         assert payload[1]["contests"][0]["state"] == "CA"
+
+    def test_elections_timeline_upcoming_excludes_database_past_contests(
+        self, api_client: TestClient, db_conn: psycopg.Connection
+    ) -> None:
+        current_date = _database_current_date(db_conn)
+        past_date = current_date - timedelta(days=1)
+        future_date = current_date + timedelta(days=1)
+
+        office_past = _insert_office(
+            db_conn,
+            name="test_database_clock_past_office",
+            office_level="state",
+            state="TX",
+        )
+        office_future = _insert_office(
+            db_conn,
+            name="test_database_clock_future_office",
+            office_level="state",
+            state="NM",
+        )
+        _insert_contest(
+            db_conn,
+            name="test_database_clock_past_contest",
+            office_id=office_past,
+            election_date=past_date,
+            election_type="primary",
+        )
+        future_contest = _insert_contest(
+            db_conn,
+            name="test_database_clock_future_contest",
+            office_id=office_future,
+            election_date=future_date,
+            election_type="general",
+        )
+
+        response = api_client.get("/v1/elections/timeline/upcoming")
+
+        assert response.status_code == 200
+        contests_by_name = {
+            contest["name"]: contest
+            for entry in response.json()
+            for contest in entry["contests"]
+            if contest["name"].startswith("test_database_clock_")
+        }
+        assert "test_database_clock_past_contest" not in contests_by_name
+        assert contests_by_name == {
+            "test_database_clock_future_contest": {
+                "contest_id": str(future_contest),
+                "office_id": str(office_future),
+                "name": "test_database_clock_future_contest",
+                "election_type": "general",
+                "office_name": "test_database_clock_future_office",
+                "office_level": "state",
+                "state": "NM",
+                "jurisdiction_id": None,
+                "electoral_division_id": None,
+                "candidate_count": 0,
+                "result_status": None,
+                "winning_person_name": None,
+            }
+        }
+
+    def test_current_date_filtered_election_tests_do_not_use_absolute_date_literals(
+        self, db_conn: psycopg.Connection
+    ) -> None:
+        """Clock-filtered tests must derive their contest `election_date` from the database clock.
+
+        Among the columns these tests populate, `api/queries/civics.py` compares
+        `c.election_date` against `CURRENT_DATE` (`_UPCOMING_ELECTION_CONTESTS_SQL` and
+        `_OFFICE_ACTIVE_CONTEST_COUNT_SQL`), so an absolute `election_date` on the future
+        side of that boundary is a date bomb: it crosses to the past side unattended and
+        flips the assertion it was written to prove. Three literal forms carry the fuse and
+        all reach the date column — a `date(...)` call, a `datetime(...)` call, and an ISO
+        `"YYYY-MM-DD"` string (psycopg binds it untyped and Postgres casts it) — passed
+        directly or through a local variable, as does a `_insert_contest` call that omits
+        `election_date` and inherits the module default literal. Literals already in the past
+        cannot cross back, and columns the SQL never compares to the clock (for example
+        `filing_deadline`) are not part of this defect class, so both stay allowed.
+
+        `oh.valid_period @> CURRENT_DATE` is the same clock-comparison shape for
+        officeholding (`api/queries/civics.py:55`, `:71`, `:74`, `:185`), but every
+        officeholding fixture in this file uses a `2100-01-01` upper bound or an
+        already-closed range — decades outside any practical fuse window — so those
+        columns are deliberately left out of this guard's scope.
+
+        The boundary is read from the database clock (`_database_current_date`), the same
+        seam the fixtures derive from, rather than the Python host clock, so classification
+        and the SQL predicate cannot disagree on the boundary day across timezones.
+        """
+        database_current_date = _database_current_date(db_conn)
+        future_year = database_current_date.year + 10
+        future_date = date(future_year, 11, 2)
+        literal_sources = (
+            f"date({future_year}, 11, 2)",
+            f"datetime({future_year}, 11, 2, 12, 30)",
+            repr(future_date.isoformat()),
+            f"date(year={future_year}, month=11, day=2)",
+        )
+        assert [_absolute_date_literal(ast.parse(source, mode="eval").body) for source in literal_sources] == [
+            future_date
+        ] * len(literal_sources)
+
+        assigned_date_source = (
+            f"def test_fixture():\n    fixture_date = date({future_year}, 11, 2)\n"
+            "    _insert_contest(election_date=fixture_date)"
+        )
+        assigned_date_test = ast.parse(assigned_date_source).body[0]
+        assert isinstance(assigned_date_test, ast.FunctionDef)
+        assigned_date_call = assigned_date_test.body[1].value
+        assert isinstance(assigned_date_call, ast.Call)
+        assert _election_date_fuse_for_call(assigned_date_test, assigned_date_call, database_current_date) == (
+            f"test_fixture:line 2: election_date variable fixture_date is assigned literal {future_date} "
+            "is on the future side of CURRENT_DATE"
+        )
+
+        omitted_date_test = ast.parse("def test_fixture():\n    _insert_contest()").body[0]
+        assert isinstance(omitted_date_test, ast.FunctionDef)
+        omitted_date_call = omitted_date_test.body[0].value
+        assert isinstance(omitted_date_call, ast.Call)
+        assert _election_date_fuse_for_call(omitted_date_test, omitted_date_call, database_current_date) == (
+            "test_fixture:line 2: _insert_contest omits election_date and inherits the absolute module default"
+        )
+
+        fixtures_with_fuses = _clock_filtered_election_fixture_fuses(Path(__file__), database_current_date)
+        assert not fixtures_with_fuses, (
+            "CURRENT_DATE-filtered election endpoint tests must derive election dates from the database "
+            f"clock via _database_current_date(); found: {fixtures_with_fuses}"
+        )
 
 
 class TestContactEndpoint:

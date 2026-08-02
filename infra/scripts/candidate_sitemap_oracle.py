@@ -21,9 +21,12 @@ from pydantic import BaseModel, ConfigDict, StrictBool, ValidationError
 
 
 BATCH_LIMIT = 200
-HTTP_FETCH_TIMEOUT_SECONDS = 15
+HTTP_FETCH_TIMEOUT_SECONDS = 30
 PUBLIC_CANDIDATE_LIST_PATH = "/api/v1/candidates"
 REPO_SECRET_ENV_PATH = Path(__file__).resolve().parents[2] / ".secret" / "civibus-fly.env"
+_TRUSTED_API_KEY_HOSTS = frozenset(
+    {"civibus.shareborough.com", "civibus-caddy.fly.dev", "localhost", "127.0.0.1", "::1"}
+)
 BARE_UUID_CANDIDATE_PATH = re.compile(
     r"^/candidate/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
     r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
@@ -86,7 +89,7 @@ class CandidateSitemapReport(BaseModel):
 
     @property
     def exit_code(self) -> int:
-        return 0 if self.ok else 1
+        return 0 if self.verdict == "candidate_sitemap_oracle_ok" else 1
 
     def evidence(self) -> str:
         return "\n".join(
@@ -121,6 +124,12 @@ def _canonical_base_url(base_url: str) -> str:
 
 def _build_url(base_url: str, path: str) -> str:
     return urljoin(f"{base_url}/", path.lstrip("/"))
+
+
+def _allows_repo_api_key_base_url(base_url: str) -> bool:
+    parsed = urlparse(base_url)
+    hostname = parsed.hostname or ""
+    return parsed.scheme == "https" and hostname in _TRUSTED_API_KEY_HOSTS
 
 
 def _decode_json_body(response: HttpResponse, *, label: str) -> dict[str, Any]:
@@ -162,6 +171,8 @@ def _collect_candidates(fetch_url: FetchUrl, base_url: str) -> list[CandidateLis
         candidates.extend(page.items)
         if not page.has_next:
             return candidates
+        if not page.items:
+            raise OracleError(f"candidate_api_empty_page_with_next offset={offset}")
         offset += BATCH_LIMIT
 
 
@@ -285,13 +296,21 @@ def _read_env_file_api_key(path: Path) -> str:
     return values.get("CIVIBUS_API_KEY", "") or values.get("CIVIBUS_API_KEYS", "").split(",", 1)[0].strip()
 
 
-def _candidate_api_key(environ: dict[str, str] | None = None, env_path: Path = REPO_SECRET_ENV_PATH) -> str:
+def _environment_api_key(environ: dict[str, str] | None = None) -> str:
     source = os.environ if environ is None else environ
-    return (
-        source.get("CIVIBUS_API_KEY", "")
-        or source.get("CIVIBUS_API_KEYS", "").split(",", 1)[0].strip()
-        or _read_env_file_api_key(env_path)
-    )
+    return source.get("CIVIBUS_API_KEY", "") or source.get("CIVIBUS_API_KEYS", "").split(",", 1)[0].strip()
+
+
+def _candidate_api_key(environ: dict[str, str] | None = None, env_path: Path = REPO_SECRET_ENV_PATH) -> str:
+    return _environment_api_key(environ) or _read_env_file_api_key(env_path)
+
+
+def _candidate_api_key_source(environ: dict[str, str] | None = None, env_path: Path = REPO_SECRET_ENV_PATH) -> str:
+    if _environment_api_key(environ):
+        return "environment"
+    if _read_env_file_api_key(env_path):
+        return "repo_env_file"
+    return "none"
 
 
 def _build_http_fetch_url(candidate_api_key: str) -> FetchUrl:
@@ -313,8 +332,11 @@ def _build_http_fetch_url(candidate_api_key: str) -> FetchUrl:
     opener = build_opener(FailClosedRedirectHandler())
 
     def fetch_url(url: str) -> HttpResponse:
+        parsed = urlparse(url)
         headers = {"User-Agent": "civibus-candidate-sitemap-oracle/1.0"}
-        if candidate_api_key and urlparse(url).path.startswith(PUBLIC_CANDIDATE_LIST_PATH):
+        if candidate_api_key and parsed.path.startswith(PUBLIC_CANDIDATE_LIST_PATH):
+            if parsed.scheme != "https" and parsed.hostname not in {"localhost", "127.0.0.1", "::1"}:
+                raise OracleError("candidate_api_key_requires_https")
             headers["X-API-Key"] = candidate_api_key
         request = Request(url, headers=headers)
         try:
@@ -346,12 +368,17 @@ def main() -> int:
     parser = _build_parser()
     args = parser.parse_args()
     try:
-        report = evaluate_candidate_sitemap(args.base_url, _build_http_fetch_url(_candidate_api_key()))
+        canonical_base_url = _canonical_base_url(args.base_url)
+        candidate_api_key = _candidate_api_key()
+        candidate_api_key_source = _candidate_api_key_source()
+        if candidate_api_key_source == "repo_env_file" and not _allows_repo_api_key_base_url(canonical_base_url):
+            raise OracleError("base_url_untrusted_for_repo_api_key")
+        report = evaluate_candidate_sitemap(canonical_base_url, _build_http_fetch_url(candidate_api_key))
     except OracleError as exc:
         print(f"candidate_sitemap_oracle_error {exc}", file=sys.stderr)
         return 2
     print(report.evidence())
-    if report.ok:
+    if report.exit_code == 0:
         print(report.verdict)
         return report.exit_code
     print(report.verdict, file=sys.stderr)

@@ -15,13 +15,19 @@ from urllib.request import Request, urlopen
 
 from pydantic import BaseModel, ConfigDict
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from core.people.federal_officeholders import (  # noqa: E402
+    SEATED_FEDERAL_OFFICIALS_MAX,
+    SEATED_FEDERAL_OFFICIALS_MIN,
+)
+
 
 STATUS_PASS = "PASS"
 STATUS_FAIL = "FAIL"
 STATUS_VACUOUS = "VACUOUS"
-EXPECTED_FEC_MONEY_ROWS = 540
 PROMOTED_FATAL_ASSERTIONS = frozenset(
     {
+        "fec_money_coverage",
         "federal_export_http",
         "specimen_total_raised",
         "ie_support_nonzero",
@@ -215,11 +221,19 @@ def _coverage_assertion(rows: list[FederalExportMoneyRow]) -> PublicMoneyAsserti
             diagnostic="0/0 public export rows available; cannot assert FEC money coverage",
         )
     status = (
-        STATUS_PASS if numerator == EXPECTED_FEC_MONEY_ROWS and denominator == EXPECTED_FEC_MONEY_ROWS else STATUS_FAIL
+        STATUS_PASS
+        if (
+            SEATED_FEDERAL_OFFICIALS_MIN <= numerator <= SEATED_FEDERAL_OFFICIALS_MAX
+            and SEATED_FEDERAL_OFFICIALS_MIN <= denominator <= SEATED_FEDERAL_OFFICIALS_MAX
+        )
+        else STATUS_FAIL
     )
     diagnostic = f"{numerator}/{denominator} public export rows have FEC money"
     if status == STATUS_FAIL:
-        diagnostic = f"{diagnostic}; expected {EXPECTED_FEC_MONEY_ROWS}"
+        diagnostic = (
+            f"{diagnostic}; expected numerator and denominator within "
+            f"[{SEATED_FEDERAL_OFFICIALS_MIN}, {SEATED_FEDERAL_OFFICIALS_MAX}]"
+        )
     return PublicMoneyAssertion(
         name="fec_money_coverage",
         status=status,

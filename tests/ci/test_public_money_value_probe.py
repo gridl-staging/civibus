@@ -16,6 +16,18 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 PROBE_PATH = REPO_ROOT / "infra/scripts/public_money_value_probe.py"
 RELEASE_TARGETS_PATH = REPO_ROOT / "web/tests/smoke/production_release_targets.json"
 
+# Stage 1 owns the post-repair `fec_money_coverage` diagnostic wording so Stage 2
+# implements to exactly this string and the probe + parity suites cannot drift to
+# different wordings. Post-repair rule (Stage 2 wires it to the single denominator
+# owner in core/people/federal_officeholders.py): PASS iff BOTH numerator and denominator fall
+# inside the canonical federal-officeholder range [535, 543]; otherwise FAIL; 0/0
+# stays VACUOUS. The sub-floor / out-of-range FAIL case must name the [535, 543]
+# bounds. Chosen wording:
+#   PASS diagnostic: "<n>/<d> public export rows have FEC money"
+#   FAIL diagnostic: "<n>/<d> public export rows have FEC money; "
+#                    "expected numerator and denominator within [535, 543]"
+COVERAGE_BOUNDS_DIAGNOSTIC_SUFFIX = "expected numerator and denominator within [535, 543]"
+
 
 def _probe_module():
     spec = importlib.util.spec_from_file_location("public_money_value_probe", PROBE_PATH)
@@ -127,28 +139,49 @@ def _run_probe(fixture_dir: Path) -> subprocess.CompletedProcess[str]:
 
 def test_full_fec_money_coverage_reports_pass_with_denominator(tmp_path: Path) -> None:
     fixture_dir = tmp_path / "full-coverage"
-    _write_helper_fixture(fixture_dir, export_payload=_export_rows(denominator=540, fec_rows=540))
+    # 537 and 539 both sit inside the canonical [535, 543] range, so the
+    # post-repair rule must report PASS even though numerator != denominator.
+    _write_helper_fixture(fixture_dir, export_payload=_export_rows(denominator=539, fec_rows=537))
 
     result = _run_probe(fixture_dir)
 
     assert result.returncode == 0, result.stderr
     assert (
-        "money_value_assertion fec_money_coverage PASS numerator=540 denominator=540 "
-        "diagnostic=540/540 public export rows have FEC money"
+        "money_value_assertion fec_money_coverage PASS numerator=537 denominator=539 "
+        "diagnostic=537/539 public export rows have FEC money"
     ) in result.stdout
 
 
 def test_partial_fec_money_coverage_reports_fail_with_denominator(tmp_path: Path) -> None:
     fixture_dir = tmp_path / "partial-coverage"
-    _write_helper_fixture(fixture_dir, export_payload=_export_rows(denominator=540, fec_rows=13))
+    # 534 is below the [535, 543] floor while 539 is in range: sub-floor numerator
+    # must FAIL and, once fec_money_coverage joins PROMOTED_FATAL_ASSERTIONS in
+    # Stage 2, must leave through the promoted-fatal exit path with code 2.
+    _write_helper_fixture(fixture_dir, export_payload=_export_rows(denominator=539, fec_rows=534))
 
     result = _run_probe(fixture_dir)
 
-    assert result.returncode == 1
+    assert result.returncode == 2
     assert (
-        "money_value_assertion fec_money_coverage FAIL numerator=13 denominator=540 "
-        "diagnostic=13/540 public export rows have FEC money; expected 540"
+        "money_value_assertion fec_money_coverage FAIL numerator=534 denominator=539 "
+        f"diagnostic=534/539 public export rows have FEC money; {COVERAGE_BOUNDS_DIAGNOSTIC_SUFFIX}"
     ) in result.stdout
+
+
+def test_out_of_range_denominator_fails_even_at_full_coverage(tmp_path: Path) -> None:
+    fixture_dir = tmp_path / "out-of-range-denominator"
+    # 544/544 is full coverage but the denominator is above the [535, 543]
+    # ceiling, so the rule must FAIL (not PASS) and promote to fatal exit 2.
+    _write_helper_fixture(fixture_dir, export_payload=_export_rows(denominator=544, fec_rows=544))
+
+    result = _run_probe(fixture_dir)
+
+    assert result.returncode == 2
+    assert (
+        "money_value_assertion fec_money_coverage FAIL numerator=544 denominator=544 "
+        f"diagnostic=544/544 public export rows have FEC money; {COVERAGE_BOUNDS_DIAGNOSTIC_SUFFIX}"
+    ) in result.stdout
+    assert "money_value_assertion fec_money_coverage PASS" not in result.stdout
 
 
 def test_promoted_http_failure_exits_two(tmp_path: Path) -> None:
