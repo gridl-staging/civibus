@@ -123,6 +123,82 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           echo "Probe result: healthy=${HEALTHY} status=${STATUS}"
 
+      # Every production surface is probed BEFORE the issue flow so that all of
+      # them can open an incident. Until 2026-08-03 these two ran after issue
+      # filing and were wired to nothing: the donor-surface check failed ten
+      # consecutive scheduled runs while donor search served zero rows, and no
+      # issue was ever opened. A probe that cannot page is not an alarm.
+      # `continue-on-error` keeps a red surface from aborting the job before the
+      # issue flow runs; `steps.<id>.outcome` is the result BEFORE that
+      # suppression, so the final gate still sees the failure.
+      - name: Check donor search surface
+        id: donor
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          TARGET="${PROBE_BASE_URL%/}/donors?q=smith&by=name"
+          BODY_FILE="$(mktemp)"
+          trap 'rm -f "$BODY_FILE"' EXIT
+
+          set +e
+          STATUS=$(curl -sS "$TARGET" \
+            --max-time 30 \
+            --write-out '%{http_code}' \
+            --output "$BODY_FILE")
+          CURL_EXIT=$?
+          set -e
+
+          if [ "$CURL_EXIT" -ne 0 ]; then
+            echo "::error::donor surface probe curl_error target=${TARGET} exit=${CURL_EXIT}"
+            exit 1
+          fi
+
+          if [ "$STATUS" != "200" ]; then
+            BODY_EXCERPT=$(head -c 500 "$BODY_FILE" 2>/dev/null || true)
+            echo "::error::donor surface probe http_status target=${TARGET} status=${STATUS} body=${BODY_EXCERPT}"
+            exit 1
+          fi
+
+          if grep -q 'data-testid="donor-result-row"' "$BODY_FILE"; then
+            echo "donor_surface_ok target=${TARGET} status=200 marker=data-testid=\"donor-result-row\""
+            exit 0
+          fi
+
+          BODY_EXCERPT=$(head -c 500 "$BODY_FILE" 2>/dev/null || true)
+          echo "::error::donor surface probe missing_marker target=${TARGET} status=${STATUS} marker=data-testid=\"donor-result-row\" body=${BODY_EXCERPT}"
+          exit 1
+
+      - name: Check public deploy drift
+        id: drift
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # This fatal mirror-side check detects deploy lag (public host not
+          # serving the latest synced mirror commit) but cannot detect sync lag
+          # (gridl-dev/civibus_dev main ahead of the mirror); the dev-repo
+          # parity probe owns that limitation.
+          manifest_json="$(
+            gh api repos/${{ github.repository }}/contents/.debbie/sync_manifest.json --jq '.content' | base64 -d
+          )"
+          expected_sha="$(printf '%s' "$manifest_json" | jq -r '.dev_sha // empty')"
+          api_sha="$(curl -fsS "${PROBE_BASE_URL%/}/api/health/version" | jq -r '.git_sha // "unknown"' || true)"
+          web_sha="$(curl -fsS "${PROBE_BASE_URL%/}/version.json" | jq -r '.git_sha // "unknown"' || true)"
+
+          if [[ ! "$expected_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::deploy lag check could not read a valid dev_sha from the mirror sync manifest"
+            exit 1
+          fi
+
+          if [[ "$api_sha" == "$expected_sha" && "$web_sha" == "$expected_sha" ]]; then
+            echo "deploy_drift_ok expected=$expected_sha api=$api_sha web=$web_sha"
+            exit 0
+          fi
+
+          echo "::error::deploy lag detected for ${PROBE_BASE_URL}: expected=$expected_sha api=$api_sha web=$web_sha. This mirror-side warning cannot detect sync lag; the dev-repo parity probe owns that."
+          exit 1
+
       - name: Find existing open uptime-incident issue
         id: find
         env:
@@ -139,7 +215,7 @@ jobs:
           echo "Existing open uptime-incident issue: ${NUMBER:-none}"
 
       - name: Close existing issue (endpoint recovered)
-        if: steps.probe.outputs.healthy == 'true' && steps.find.outputs.number != ''
+        if: steps.probe.outputs.healthy == 'true' && steps.donor.outcome == 'success' && steps.drift.outcome == 'success' && steps.find.outputs.number != ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -151,7 +227,7 @@ jobs:
             --repo "${{ github.repository }}"
 
       - name: Comment on existing issue (endpoint still failing)
-        if: steps.probe.outputs.healthy == 'false' && steps.find.outputs.number != ''
+        if: (steps.probe.outputs.healthy == 'false' || steps.donor.outcome == 'failure' || steps.drift.outcome == 'failure') && steps.find.outputs.number != ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PROBE_DETAIL: ${{ steps.probe.outputs.detail }}
@@ -166,7 +242,7 @@ jobs:
             --body "Probe at ${NOW} — still failing. Status: ${STATUS}. Detail: ${DETAIL}. Run: ${RUN_URL}"
 
       - name: Open new uptime-incident issue (endpoint failing, no existing issue)
-        if: steps.probe.outputs.healthy == 'false' && steps.find.outputs.number == ''
+        if: (steps.probe.outputs.healthy == 'false' || steps.donor.outcome == 'failure' || steps.drift.outcome == 'failure') && steps.find.outputs.number == ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PROBE_DETAIL: ${{ steps.probe.outputs.detail }}
@@ -209,68 +285,25 @@ jobs:
             --title "[uptime] /api/health/content returned ${STATUS} at ${NOW}" \
             --body "${BODY}"
 
-      # Content-health issue management intentionally runs before the fatal
-      # donor-surface and deploy-drift gates.
-      - name: Check donor search surface
-        run: |
-          set -euo pipefail
-          TARGET="${PROBE_BASE_URL%/}/donors?q=smith&by=name"
-          BODY_FILE="$(mktemp)"
-          trap 'rm -f "$BODY_FILE"' EXIT
-
-          set +e
-          STATUS=$(curl -sS "$TARGET" \
-            --max-time 30 \
-            --write-out '%{http_code}' \
-            --output "$BODY_FILE")
-          CURL_EXIT=$?
-          set -e
-
-          if [ "$CURL_EXIT" -ne 0 ]; then
-            echo "::error::donor surface probe curl_error target=${TARGET} exit=${CURL_EXIT}"
-            exit 1
-          fi
-
-          if [ "$STATUS" != "200" ]; then
-            BODY_EXCERPT=$(head -c 500 "$BODY_FILE" 2>/dev/null || true)
-            echo "::error::donor surface probe http_status target=${TARGET} status=${STATUS} body=${BODY_EXCERPT}"
-            exit 1
-          fi
-
-          if grep -q 'data-testid="donor-result-row"' "$BODY_FILE"; then
-            echo "donor_surface_ok target=${TARGET} status=200 marker=data-testid=\"donor-result-row\""
-            exit 0
-          fi
-
-          BODY_EXCERPT=$(head -c 500 "$BODY_FILE" 2>/dev/null || true)
-          echo "::error::donor surface probe missing_marker target=${TARGET} status=${STATUS} marker=data-testid=\"donor-result-row\" body=${BODY_EXCERPT}"
-          exit 1
-
-      - name: Check public deploy drift
+      - name: Fail the run when any production surface probe was red
+        if: ${{ always() }}
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Trusted enum values produced by Actions itself ('success' /
+          # 'failure' / 'skipped'), never response bodies -- safe to expand into
+          # shell, unlike the probe detail which stays env-passed above.
+          DONOR_OUTCOME: ${{ steps.donor.outcome }}
+          DRIFT_OUTCOME: ${{ steps.drift.outcome }}
         run: |
           set -euo pipefail
-          # This fatal mirror-side check detects deploy lag (public host not
-          # serving the latest synced mirror commit) but cannot detect sync lag
-          # (gridl-dev/civibus_dev main ahead of the mirror); the dev-repo
-          # parity probe owns that limitation.
-          manifest_json="$(
-            gh api repos/${{ github.repository }}/contents/.debbie/sync_manifest.json --jq '.content' | base64 -d
-          )"
-          expected_sha="$(printf '%s' "$manifest_json" | jq -r '.dev_sha // empty')"
-          api_sha="$(curl -fsS "${PROBE_BASE_URL%/}/api/health/version" | jq -r '.git_sha // "unknown"' || true)"
-          web_sha="$(curl -fsS "${PROBE_BASE_URL%/}/version.json" | jq -r '.git_sha // "unknown"' || true)"
-
-          if [[ ! "$expected_sha" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "::error::deploy lag check could not read a valid dev_sha from the mirror sync manifest"
+          # The surface probes suppress their own abort so the issue flow can
+          # run. This step re-imposes the failure, so a red surface still turns
+          # the run red. Without it the probes would be advisory and the run
+          # would go green while production was broken.
+          red=""
+          [ "${DONOR_OUTCOME}" = "failure" ] && red="${red} donor_search_surface"
+          [ "${DRIFT_OUTCOME}" = "failure" ] && red="${red} public_deploy_drift"
+          if [ -n "${red}" ]; then
+            echo "::error::production surface probe red:${red}"
             exit 1
           fi
-
-          if [[ "$api_sha" == "$expected_sha" && "$web_sha" == "$expected_sha" ]]; then
-            echo "deploy_drift_ok expected=$expected_sha api=$api_sha web=$web_sha"
-            exit 0
-          fi
-
-          echo "::error::deploy lag detected for ${PROBE_BASE_URL}: expected=$expected_sha api=$api_sha web=$web_sha. This mirror-side warning cannot detect sync lag; the dev-repo parity probe owns that."
-          exit 1
+          echo "all_production_surface_probes_green"

@@ -32,6 +32,12 @@ from api._federal_first_test_support import (
     FakeConnection,
     fresh_federal_fec_bulk_pull_row,
 )
+from api.health_content import (
+    CANDIDATE_MONEY_SERVING_COVERAGE_MEASUREMENT_CYCLE,
+    CONTENT_FLOOR_HEADROOM_RATIO,
+    content_floor_with_headroom,
+)
+from api.queries.campaign_finance import SUPPORTED_COMMITTEE_SUMMARY_CYCLES
 from api.test_campaign_finance_support import (
     CandidateCommitteeLinkSeed,
     CandidateRowSeed,
@@ -68,13 +74,13 @@ FEC_FRESHNESS_CUTOFF_EPOCH = 1_784_289_600
 FEC_FRESHNESS_STALE_EPOCH = 1_784_289_599
 CANDIDATE_MONEY_COVERAGE_CHECK = "cf_candidate_money_serving_coverage"
 CANDIDATE_MONEY_RECENT_SUMMARY_COVERAGE_CHECK = "cf_candidate_money_recent_summary_coverage"
-# Repaired serving coverage now counts every promoted official total (in-window
-# plus out-of-cycle promotions); the proven local proxy pins both the count and
-# the floor at 7_743 = 4_268 + 3_475.
-CANDIDATE_MONEY_PRODUCTION_OBSERVATION = 7_743
-CANDIDATE_MONEY_DEFAULT_FLOOR = 7_743
+# Repaired serving coverage counts every promoted official total (in-window
+# plus out-of-cycle promotions). The default floor keeps standard headroom under the
+# 2026-08-03 production read-only measurement.
+CANDIDATE_MONEY_PRODUCTION_OBSERVATION = 7_021
+CANDIDATE_MONEY_DEFAULT_FLOOR = 5_616
 CANDIDATE_MONEY_RECENT_SUMMARY_PRODUCTION_OBSERVATION = 1_799
-CANDIDATE_MONEY_RECENT_SUMMARY_DEFAULT_FLOOR = 1_440
+CANDIDATE_MONEY_RECENT_SUMMARY_DEFAULT_FLOOR = 1_439
 CIVIC_OFFICEHOLDING_PRODUCTION_OBSERVATION = 544
 CANDIDATE_MONEY_RECENT_SUMMARY_CUTOFF = date(2026, 3, 29)
 CANDIDATE_MONEY_RECENT_SUMMARY_EVALUATION_DATE = date(2026, 7, 27)
@@ -88,7 +94,6 @@ STAGE_1_OFFICEHOLDER_COUNT = 20
 STAGE_1_MONEY_LINKED_COUNT = 2
 STAGE_1_VALID_PERIOD = "[2000-01-01,2100-01-01)"
 OUT_OF_CYCLE_OFFICIAL_TOTAL_BUCKET = "out_of_cycle_official_total_promoted_uncounted_by_health_predicate"
-OUT_OF_CYCLE_OFFICIAL_TOTAL_REPAIRED_LOCAL_COUNT = 7_743
 
 EXPECTED_FEDERAL_FIRST_CHECKS = {
     "cf_transaction_total",
@@ -517,6 +522,7 @@ def _load_api_main(monkeypatch: pytest.MonkeyPatch) -> ModuleType:
 
 
 def test_federal_first_owner_declares_expected_checks() -> None:
+    assert CONTENT_FLOOR_HEADROOM_RATIO == 0.8
     assert set(FEDERAL_FIRST_COUNTS) == EXPECTED_FEDERAL_FIRST_CHECKS
     assert set(FEDERAL_FIRST_FLOORS) == EXPECTED_FEDERAL_FIRST_CHECKS
     assert FEDERAL_FIRST_COUNTS[CANDIDATE_MONEY_COVERAGE_CHECK] == CANDIDATE_MONEY_PRODUCTION_OBSERVATION
@@ -535,10 +541,9 @@ def test_federal_first_owner_declares_expected_checks() -> None:
         == FEDERAL_OFFICEHOLDER_MONEY_PRODUCTION_OBSERVATION
     )
     assert FEDERAL_FIRST_FLOORS[FEDERAL_OFFICEHOLDER_MONEY_COVERAGE_CHECK] == FEDERAL_OFFICEHOLDER_MONEY_DEFAULT_FLOOR
-    # The serving floor is pinned to the proven local proxy count so it tracks
-    # the full promoted serving surface (in-window + out-of-cycle) exactly;
-    # Lane 10 owns any deployed-origin headroom adjustment.
-    assert FEDERAL_FIRST_FLOORS[CANDIDATE_MONEY_COVERAGE_CHECK] == CANDIDATE_MONEY_PRODUCTION_OBSERVATION
+    assert FEDERAL_FIRST_FLOORS[CANDIDATE_MONEY_COVERAGE_CHECK] == content_floor_with_headroom(
+        CANDIDATE_MONEY_PRODUCTION_OBSERVATION
+    )
     assert (
         FEDERAL_FIRST_FLOORS[CANDIDATE_MONEY_RECENT_SUMMARY_COVERAGE_CHECK]
         < CANDIDATE_MONEY_RECENT_SUMMARY_PRODUCTION_OBSERVATION
@@ -547,6 +552,33 @@ def test_federal_first_owner_declares_expected_checks() -> None:
     assert FEDERAL_FIRST_FLOORS["cf_transaction_with_support_oppose"] > 0
     assert FEDERAL_FIRST_COUNTS["cf_transaction_contribution_insights_sentinel"] > 0
     assert FEDERAL_FIRST_FLOORS["cf_transaction_contribution_insights_sentinel"] > 0
+
+
+def test_candidate_money_serving_floor_is_pinned_to_measured_cycle() -> None:
+    assert CANDIDATE_MONEY_SERVING_COVERAGE_MEASUREMENT_CYCLE == 2026
+    assert max(SUPPORTED_COMMITTEE_SUMMARY_CYCLES) == CANDIDATE_MONEY_SERVING_COVERAGE_MEASUREMENT_CYCLE, (
+        "Re-measure cf_candidate_money_serving_coverage in production before changing the default selected cycle"
+    )
+
+
+def test_federal_first_content_floors_keep_headroom() -> None:
+    exempt_floor_keys = {
+        # Content-health owner exemption: the 500 P0 recovery threshold is
+        # intentionally above the standard headroom floor until it is
+        # re-derived from a fresh production officeholder-money read.
+        FEDERAL_OFFICEHOLDER_MONEY_COVERAGE_CHECK
+    }
+
+    for exempt_key in exempt_floor_keys:
+        assert exempt_key in FEDERAL_FIRST_FLOORS
+        assert FEDERAL_FIRST_FLOORS[exempt_key] == FEDERAL_OFFICEHOLDER_MONEY_DEFAULT_FLOOR
+        assert FEDERAL_FIRST_FLOORS[exempt_key] > content_floor_with_headroom(FEDERAL_FIRST_COUNTS[exempt_key])
+
+    for key, count in FEDERAL_FIRST_COUNTS.items():
+        if count <= 0 or key in exempt_floor_keys:
+            continue
+        headroom_floor = content_floor_with_headroom(count)
+        assert FEDERAL_FIRST_FLOORS[key] <= headroom_floor, f"{key}: {FEDERAL_FIRST_FLOORS[key]} > {headroom_floor}"
 
 
 def test_donor_rollup_content_health_key_has_zero_default_floor() -> None:
@@ -1011,9 +1043,6 @@ def test_out_of_cycle_official_total_promoted_uncounted_by_health_predicate_cont
     assert OUT_OF_CYCLE_OFFICIAL_TOTAL_BUCKET not in FEDERAL_FIRST_FLOORS
     assert CANDIDATE_MONEY_COVERAGE_CHECK in _CHECK_QUERIES
     assert CANDIDATE_MONEY_COVERAGE_CHECK in FEDERAL_FIRST_FLOORS
-    assert FEDERAL_FIRST_FLOORS[CANDIDATE_MONEY_COVERAGE_CHECK] == OUT_OF_CYCLE_OFFICIAL_TOTAL_REPAIRED_LOCAL_COUNT, (
-        "repaired local proxy count must be exactly 7743 = 4268 + 3475"
-    )
 
 
 def test_out_of_cycle_official_total_promoted_uncounted_by_health_predicate_db_count(
@@ -1330,14 +1359,14 @@ def test_evaluate_content_health_flags_candidate_money_coverage_below_floor() ->
     assert failures == [
         ContentHealthFailure(
             check=CANDIDATE_MONEY_COVERAGE_CHECK,
-            actual=7_742,
-            floor=7_743,
+            actual=CANDIDATE_MONEY_DEFAULT_FLOOR - 1,
+            floor=CANDIDATE_MONEY_DEFAULT_FLOOR,
         )
     ]
 
 
 def test_evaluate_content_health_candidate_money_coverage_passes_at_default_floor() -> None:
-    """At exactly the pinned 7_743 proxy the serving coverage floor passes."""
+    """At exactly the default floor the serving coverage check passes."""
     from api.health_content import evaluate_content_health
 
     floors = {key: 0 for key in EXPECTED_FEDERAL_FIRST_CHECKS}
@@ -1380,8 +1409,8 @@ def test_evaluate_content_health_flags_candidate_money_recent_summary_below_floo
     assert failures == [
         ContentHealthFailure(
             check=CANDIDATE_MONEY_RECENT_SUMMARY_COVERAGE_CHECK,
-            actual=1_439,
-            floor=1_440,
+            actual=CANDIDATE_MONEY_RECENT_SUMMARY_DEFAULT_FLOOR - 1,
+            floor=CANDIDATE_MONEY_RECENT_SUMMARY_DEFAULT_FLOOR,
         )
     ]
 

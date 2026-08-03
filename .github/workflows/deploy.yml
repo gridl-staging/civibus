@@ -57,13 +57,27 @@ jobs:
           echo "dev_sha=$dev_sha" >> "$GITHUB_OUTPUT"
           echo "built_at=$built_at" >> "$GITHUB_OUTPUT"
 
+      - name: Capture pre-deploy serving images
+        id: pre_deploy
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Records what each serving app is running BEFORE anything is deployed
+          # over it, so a failed production verification has a concrete rollback
+          # target. No `continue-on-error`: a deploy with no safety net must not
+          # proceed. Owner of the app list and image lookup is the delegated
+          # script, keeping app names out of this workflow entirely.
+          bash infra/scripts/rollback_serving_apps.sh capture "$RUNNER_TEMP/pre_deploy_images.txt"
+
       - name: Deploy API to Fly
+        id: deploy_api
         shell: bash
         run: |
           set -euo pipefail
           flyctl deploy -c infra/fly/api.fly.toml --remote-only --build-arg CIVIBUS_GIT_SHA=${{ steps.provenance.outputs.dev_sha }} --build-arg CIVIBUS_BUILT_AT=${{ steps.provenance.outputs.built_at }}
 
       - name: Deploy web to Fly
+        id: deploy_web
         shell: bash
         run: |
           set -euo pipefail
@@ -71,31 +85,14 @@ jobs:
           flyctl deploy web -c "$GITHUB_WORKSPACE/infra/fly/web.fly.toml" --remote-only --build-arg CIVIBUS_GIT_SHA=${{ steps.provenance.outputs.dev_sha }} --build-arg CIVIBUS_BUILT_AT=${{ steps.provenance.outputs.built_at }}
 
       - name: Deploy Caddy to Fly
+        id: deploy_caddy
         shell: bash
         run: |
           set -euo pipefail
           flyctl deploy -c infra/fly/caddy.fly.toml --remote-only
 
-      - name: Deploy refresh machine
-        shell: bash
-        run: |
-          set -euo pipefail
-          evidence="$RUNNER_TEMP/refresh_deploy_evidence"
-          mkdir -p "$evidence"
-          bash infra/scripts/deploy_refresh_machine.sh --evidence-dir "$evidence" --dev-sha "${{ steps.provenance.outputs.dev_sha }}"
-
-      - name: Persist refresh deploy evidence
-        if: ${{ always() }}
-        env:
-          FLY_API_TOKEN: ""
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: refresh_deploy_evidence
-          path: ${{ runner.temp }}/refresh_deploy_evidence
-          if-no-files-found: error
-          retention-days: 14
-
       - name: Verify public deploy serves built dev SHA
+        id: verify_sha
         shell: bash
         env:
           FLY_API_TOKEN: ""
@@ -124,6 +121,7 @@ jobs:
           exit 1
 
       - name: Run deployed surface parity gate
+        id: parity_gate
         shell: bash
         env:
           FLY_API_TOKEN: ""
@@ -137,6 +135,7 @@ jobs:
             bash infra/scripts/probe_deployed_surface_parity.sh
 
       - name: Install web smoke dependencies
+        id: smoke_deps
         shell: bash
         working-directory: web
         env:
@@ -146,6 +145,7 @@ jobs:
           npm ci
 
       - name: Run production smoke gate
+        id: smoke_gate
         shell: bash
         working-directory: web
         env:
@@ -158,3 +158,40 @@ jobs:
           fi
           SMOKE_MODE=production SMOKE_BASE_URL="${PROD_SMOKE_BASE_URL}" \
             bash ./tests/smoke/run-playwright.sh -- tests/smoke/production_deploy.spec.ts tests/smoke/production_finance_visuals.spec.ts tests/smoke/primary_nav_nonempty.spec.ts --reporter=line
+
+      - name: Roll back serving apps on failed production verification
+        id: rollback
+        if: ${{ always() && steps.pre_deploy.outcome == 'success' && (steps.deploy_api.outcome == 'failure' || steps.deploy_web.outcome == 'failure' || steps.deploy_caddy.outcome == 'failure' || steps.verify_sha.outcome == 'failure' || steps.parity_gate.outcome == 'failure' || steps.smoke_gate.outcome == 'failure') }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Production is serving something that failed verification. Put every
+          # serving app back on the image captured at the top of this run.
+          #
+          # The condition above names serving and verification outcomes one by
+          # one instead of using a bare failure(). `steps.deploy_refresh` is
+          # deliberately absent: the refresh machine carries no user traffic, and
+          # rolling production back because it failed would undo a healthy
+          # deploy. `steps.smoke_deps` is absent for the same reason -- an npm
+          # install failure is a tooling problem, not evidence about production.
+          bash infra/scripts/rollback_serving_apps.sh restore "$RUNNER_TEMP/pre_deploy_images.txt"
+
+      - name: Deploy refresh machine
+        id: deploy_refresh
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/refresh_deploy_evidence"
+          mkdir -p "$evidence"
+          bash infra/scripts/deploy_refresh_machine.sh --evidence-dir "$evidence" --dev-sha "${{ steps.provenance.outputs.dev_sha }}"
+
+      - name: Persist refresh deploy evidence
+        if: ${{ always() && steps.deploy_refresh.outcome != 'skipped' }}
+        env:
+          FLY_API_TOKEN: ""
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: refresh_deploy_evidence
+          path: ${{ runner.temp }}/refresh_deploy_evidence
+          if-no-files-found: error
+          retention-days: 14

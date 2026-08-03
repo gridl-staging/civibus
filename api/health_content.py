@@ -55,6 +55,13 @@ _CONTRIBUTION_INSIGHTS_TRANSACTION_WHERE_SQL = contribution_insights_transaction
     min_date_sql=_CONTRIBUTION_INSIGHTS_MIN_DATE_SQL
 )
 
+CONTENT_FLOOR_HEADROOM_RATIO = 0.8
+CANDIDATE_MONEY_SERVING_COVERAGE_MEASUREMENT_CYCLE = 2026
+
+
+def content_floor_with_headroom(count: int) -> int:
+    return int(CONTENT_FLOOR_HEADROOM_RATIO * count)
+
 
 # Federal-first production counts verified during the July 2026 Fly load.
 # ``civic_officeholding_total`` is the unfiltered
@@ -72,18 +79,18 @@ FEDERAL_FIRST_CONTENT_COUNTS: Mapping[str, int] = {
     # Serving coverage counts the official totals the public federal route
     # actually promotes: in-window totals PLUS prior-cycle totals promoted
     # out-of-cycle when no selected-cycle committee activity suppresses them
-    # (mirrors _build_out_of_cycle_official_total). Proven local proxy
-    # 7_743 = 4_268 in-window + 3_475 out-of-cycle promoted.
-    "cf_candidate_money_serving_coverage": 7_743,
+    # (mirrors _build_out_of_cycle_official_total). Production read-only
+    # measurement 2026-08-03: docs/live-state/2026_08_04_content_floor_headroom_repair.md.
+    "cf_candidate_money_serving_coverage": 7_021,
     "cf_candidate_money_recent_summary_coverage": 1_799,
     # Measured 527/540 current federal officeholder people on 2026-07-31.
     "cf_federal_officeholder_money_coverage": 527,
     "cf_donor_search_rollup_total": 0,
 }
 
-# Current prod launch floors. These are 80% of the current Fly production
-# counts where populated. Unresolved optional links stay pinned to zero until
-# those refresh paths are populated.
+# Current prod launch floors. Populated defaults must stay below the standard
+# headroom floor owned by ``CONTENT_FLOOR_HEADROOM_RATIO``. Unresolved optional
+# links stay pinned to zero until those refresh paths are populated.
 FEDERAL_FIRST_CONTENT_FLOORS: Mapping[str, int] = {
     "cf_transaction_total": 12_840_464,
     "core_person_total": 6_964,
@@ -92,10 +99,10 @@ FEDERAL_FIRST_CONTENT_FLOORS: Mapping[str, int] = {
     "cf_committee_summary_total": 25_923,
     "cf_transaction_with_support_oppose": 8_327,
     "cf_transaction_contribution_insights_sentinel": 3_596,
-    # Pinned to the proven local proxy count so the floor tracks the promoted
-    # serving surface exactly; Lane 10 owns the deployed-origin floor.
-    "cf_candidate_money_serving_coverage": 7_743,
-    "cf_candidate_money_recent_summary_coverage": 1_440,
+    # 2026-cycle production read-only measurement; see
+    # docs/live-state/2026_08_04_content_floor_headroom_repair.md.
+    "cf_candidate_money_serving_coverage": 5_616,
+    "cf_candidate_money_recent_summary_coverage": 1_439,
     # The 500 P0 recovery threshold ships through repair-first deploy ordering;
     # it must not be weakened to accommodate the broken production value of 13.
     "cf_federal_officeholder_money_coverage": 500,
@@ -108,9 +115,9 @@ _FLOOR_ENV_VAR_PREFIX = "CIVIBUS_HEALTH_CONTENT_FLOOR_"
 
 _FEC_BULK_FRESHNESS_CHECK = "campaign_finance_federal_fec_fresh"
 # Serving coverage counts every promoted official total (in-window plus
-# out-of-cycle promotions), pinned locally at 7,743. The narrower 120-day
-# freshness subset measured 1,799 during the 2026-07-28 deploy; its 1,440 floor
-# preserves the content-health owner's 80% headroom.
+# out-of-cycle promotions). The narrower 120-day freshness subset measured
+# 1,799 during the 2026-07-28 deploy; its 1,439 floor preserves the
+# standard content floor headroom.
 _CANDIDATE_MONEY_COVERAGE_CHECK = "cf_candidate_money_serving_coverage"
 _CANDIDATE_MONEY_RECENT_SUMMARY_COVERAGE_CHECK = "cf_candidate_money_recent_summary_coverage"
 _FEDERAL_OFFICEHOLDER_MONEY_COVERAGE_CHECK = "cf_federal_officeholder_money_coverage"

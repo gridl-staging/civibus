@@ -84,6 +84,33 @@ def _run_scripts() -> list[str]:
 
 
 REFRESH_MACHINE_STEP_NAME = "Deploy refresh machine"
+PRE_DEPLOY_CAPTURE_STEP_NAME = "Capture pre-deploy serving images"
+ROLLBACK_STEP_NAME = "Roll back serving apps on failed production verification"
+ROLLBACK_SCRIPT = "infra/scripts/rollback_serving_apps.sh"
+SERVING_DEPLOY_STEP_NAMES = (
+    "Deploy API to Fly",
+    "Deploy web to Fly",
+    "Deploy Caddy to Fly",
+)
+# The steps that decide whether production is actually serving what we just
+# built. A failure in any of them means users are looking at a broken site.
+PRODUCTION_VERIFICATION_STEP_NAMES = (
+    "Verify public deploy serves built dev SHA",
+    "Run deployed surface parity gate",
+    "Run production smoke gate",
+)
+# Step ids the rollback condition must consult. `smoke_deps` (npm ci) is
+# deliberately absent: a tooling failure while installing Playwright says
+# nothing about production health, and rolling back on it would undo a deploy
+# that already passed SHA and parity verification.
+ROLLBACK_TRIGGER_STEP_IDS = (
+    "deploy_api",
+    "deploy_web",
+    "deploy_caddy",
+    "verify_sha",
+    "parity_gate",
+    "smoke_gate",
+)
 REFRESH_DEPLOY_INVOCATION = (
     'bash infra/scripts/deploy_refresh_machine.sh --evidence-dir "$evidence" '
     '--dev-sha "${{ steps.provenance.outputs.dev_sha }}"'
@@ -120,6 +147,60 @@ def _assert_refresh_deploy_uses_manifest_dev_sha(steps: list[dict]) -> None:
     assert refresh_script.count(REFRESH_DEPLOY_INVOCATION) == 1, (
         "refresh deploy must receive the validated manifest dev SHA"
     )
+
+
+def _assert_production_verification_precedes_refresh_machine(steps: list[dict]) -> None:
+    """Production verification must not be reachable only through the refresh-machine step.
+
+    GitHub Actions skips every following step once one fails, so ordering *is*
+    the gate here — no `if:` is involved. On 2026-08-03 the refresh-machine
+    deploy failed in run 30823303168 and took `Verify public deploy serves built
+    dev SHA`, `Run deployed surface parity gate`, and `Run production smoke
+    gate` down with it as `skipped`. API, web, and caddy had already shipped, so
+    the pipeline published a crash-looping API and then skipped every check that
+    would have noticed.
+
+    `civibus-refresh` serves no user traffic. It is the least important thing in
+    this workflow and it must therefore be deployed last, after the surfaces
+    that users actually load have been proven healthy.
+    """
+    step_names = [step.get("name") for step in steps]
+    assert REFRESH_MACHINE_STEP_NAME in step_names, "refresh-machine deploy step is required"
+    refresh_position = step_names.index(REFRESH_MACHINE_STEP_NAME)
+
+    for verification_step_name in PRODUCTION_VERIFICATION_STEP_NAMES:
+        assert verification_step_name in step_names, f"missing verification step {verification_step_name!r}"
+        assert step_names.index(verification_step_name) < refresh_position, (
+            f"{verification_step_name!r} runs after {REFRESH_MACHINE_STEP_NAME!r}, so a refresh-machine "
+            "failure silently skips production verification"
+        )
+
+
+def _assert_rollback_is_gated_on_serving_outcomes(steps: list[dict]) -> None:
+    """The rollback must fire for serving failures and only for serving failures.
+
+    A bare `if: ${{ failure() }}` is wrong in both directions: it would roll
+    production back when the refresh machine fails (undoing a healthy deploy),
+    and it reads as if every failure is a production failure. The condition must
+    name the serving and verification step outcomes explicitly.
+    """
+    step_names = [step.get("name") for step in steps]
+    assert ROLLBACK_STEP_NAME in step_names, "a rollback step is required for failed production verification"
+    rollback_step = steps[step_names.index(ROLLBACK_STEP_NAME)]
+    condition = rollback_step.get("if", "")
+
+    assert condition, "rollback step must carry an explicit `if:` condition"
+    assert condition.strip() not in {"${{ failure() }}", "failure()"}, (
+        "a bare failure() condition would roll production back when the refresh machine fails"
+    )
+    assert REFRESH_MACHINE_STEP_NAME not in condition
+    assert "steps.deploy_refresh" not in condition, (
+        "the refresh machine serves no user traffic; its outcome must not trigger a production rollback"
+    )
+    for step_id in ROLLBACK_TRIGGER_STEP_IDS:
+        assert f"steps.{step_id}.outcome" in condition, f"rollback condition must consult steps.{step_id}.outcome"
+    # The rollback is only meaningful if we actually captured a target.
+    assert "steps.pre_deploy.outcome == 'success'" in condition
 
 
 def _fly_deploy_commands() -> list[str]:
@@ -316,18 +397,98 @@ def test_deploy_workflow_delegates_refresh_machine_deploy_after_serving_deploys(
         assert delegated_owner_literal not in refresh_script
 
     refresh_position = step_names.index("Deploy refresh machine")
-    for serving_step_name in (
-        "Deploy API to Fly",
-        "Deploy web to Fly",
-        "Deploy Caddy to Fly",
-    ):
+    for serving_step_name in SERVING_DEPLOY_STEP_NAMES:
         assert step_names.index(serving_step_name) < refresh_position
-    assert refresh_position < step_names.index("Verify public deploy serves built dev SHA")
+    # Inverted 2026-08-03. This assertion previously required the refresh-machine
+    # deploy to run BEFORE production verification, which is the ordering that
+    # caused the outage: the refresh step failed and every verification step was
+    # skipped behind it. The refresh machine is now last, and
+    # `_assert_production_verification_precedes_refresh_machine` owns that rule.
+    assert refresh_position > step_names.index("Verify public deploy serves built dev SHA")
 
 
 def test_deploy_workflow_delegates_refresh_deploy_exactly_once_workflow_wide() -> None:
     _assert_single_delegated_refresh_deploy(_deploy_steps())
     _assert_refresh_deploy_uses_manifest_dev_sha(_deploy_steps())
+
+
+def test_production_verification_runs_before_the_refresh_machine_deploy() -> None:
+    _assert_production_verification_precedes_refresh_machine(_deploy_steps())
+
+
+def test_refresh_machine_before_verification_fails_the_ordering_contract() -> None:
+    """Self-check: the ordering guard must reject the exact layout that caused the outage."""
+    steps = [dict(step) for step in _deploy_steps()]
+    refresh_step = next(step for step in steps if step.get("name") == REFRESH_MACHINE_STEP_NAME)
+    steps.remove(refresh_step)
+    verification_position = min(
+        index for index, step in enumerate(steps) if step.get("name") in PRODUCTION_VERIFICATION_STEP_NAMES
+    )
+    steps.insert(verification_position, refresh_step)
+
+    with pytest.raises(AssertionError, match="silently skips production verification"):
+        _assert_production_verification_precedes_refresh_machine(steps)
+
+
+def test_deploy_workflow_captures_a_rollback_target_before_the_first_deploy() -> None:
+    steps = _deploy_steps()
+    step_names = [step.get("name") for step in steps]
+    capture_step = _find_step(PRE_DEPLOY_CAPTURE_STEP_NAME)
+
+    assert capture_step.get("id") == "pre_deploy", "capture step must expose an id the rollback condition can read"
+    capture_position = step_names.index(PRE_DEPLOY_CAPTURE_STEP_NAME)
+    for serving_step_name in SERVING_DEPLOY_STEP_NAMES:
+        assert capture_position < step_names.index(serving_step_name), (
+            "the rollback target must be captured before anything is deployed over it"
+        )
+    # Delegated to the rollback owner so the workflow YAML holds no app or image
+    # plumbing of its own, matching how the refresh-machine deploy is delegated.
+    assert f"bash {ROLLBACK_SCRIPT} capture" in capture_step["run"]
+
+
+def test_deploy_workflow_rolls_back_serving_apps_on_failed_production_verification() -> None:
+    _assert_rollback_is_gated_on_serving_outcomes(_deploy_steps())
+
+    steps = _deploy_steps()
+    step_names = [step.get("name") for step in steps]
+    rollback_step = _find_step(ROLLBACK_STEP_NAME)
+
+    assert f"bash {ROLLBACK_SCRIPT} restore" in rollback_step["run"]
+    # Rollback must precede the refresh-machine deploy: once production has been
+    # put back on its previous image, shipping a new refresh machine built from
+    # the rejected commit is incoherent.
+    assert step_names.index(ROLLBACK_STEP_NAME) < step_names.index(REFRESH_MACHINE_STEP_NAME)
+    for verification_step_name in PRODUCTION_VERIFICATION_STEP_NAMES:
+        assert step_names.index(verification_step_name) < step_names.index(ROLLBACK_STEP_NAME)
+
+
+def test_bare_failure_condition_fails_the_rollback_gating_contract() -> None:
+    """Self-check: `if: failure()` must be rejected — it rolls back on refresh-machine failures too."""
+    steps = [dict(step) for step in _deploy_steps()]
+    rollback_step = next(step for step in steps if step.get("name") == ROLLBACK_STEP_NAME)
+    rollback_step["if"] = "${{ failure() }}"
+
+    with pytest.raises(AssertionError, match="bare failure\\(\\) condition"):
+        _assert_rollback_is_gated_on_serving_outcomes(steps)
+
+
+def test_rollback_triggered_by_the_refresh_machine_fails_the_gating_contract() -> None:
+    """Self-check: wiring the refresh machine into the rollback condition must be rejected."""
+    steps = [dict(step) for step in _deploy_steps()]
+    rollback_step = next(step for step in steps if step.get("name") == ROLLBACK_STEP_NAME)
+    rollback_step["if"] = rollback_step["if"].replace(
+        "steps.deploy_api.outcome", "steps.deploy_refresh.outcome || steps.deploy_api.outcome"
+    )
+
+    with pytest.raises(AssertionError, match="serves no user traffic"):
+        _assert_rollback_is_gated_on_serving_outcomes(steps)
+
+
+def test_serving_and_verification_steps_expose_the_ids_the_rollback_reads() -> None:
+    """The rollback condition is only as good as the ids it names."""
+    named_ids = {step.get("id") for step in _deploy_steps()}
+    for step_id in ROLLBACK_TRIGGER_STEP_IDS:
+        assert step_id in named_ids, f"step id {step_id!r} is referenced by the rollback condition but never defined"
 
 
 def test_mirror_sha_substitution_fails_refresh_provenance_contract() -> None:
@@ -360,7 +521,11 @@ def test_deploy_workflow_persists_successful_refresh_digest_evidence() -> None:
 
     assert artifact_step == {
         "name": REFRESH_EVIDENCE_ARTIFACT_STEP_NAME,
-        "if": "${{ always() }}",
+        # Scoped 2026-08-03 from a bare `always()`. The refresh-machine step is
+        # now last and is skipped when a rollback fires, and `always()` plus
+        # `if-no-files-found: error` would then fail the run on a missing
+        # evidence directory that was never supposed to exist.
+        "if": "${{ always() && steps.deploy_refresh.outcome != 'skipped' }}",
         "env": {"FLY_API_TOKEN": ""},
         "uses": REFRESH_EVIDENCE_ARTIFACT_ACTION,
         "with": {
@@ -371,7 +536,9 @@ def test_deploy_workflow_persists_successful_refresh_digest_evidence() -> None:
         },
     }
     assert step_names.index(REFRESH_MACHINE_STEP_NAME) < step_names.index(REFRESH_EVIDENCE_ARTIFACT_STEP_NAME)
-    assert step_names.index(REFRESH_EVIDENCE_ARTIFACT_STEP_NAME) < step_names.index(
+    # Inverted 2026-08-03 with the refresh-machine move: evidence upload now
+    # trails the verification it used to precede.
+    assert step_names.index(REFRESH_EVIDENCE_ARTIFACT_STEP_NAME) > step_names.index(
         "Verify public deploy serves built dev SHA"
     )
 
