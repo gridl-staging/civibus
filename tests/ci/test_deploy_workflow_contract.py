@@ -203,6 +203,60 @@ def _assert_rollback_is_gated_on_serving_outcomes(steps: list[dict]) -> None:
     assert "steps.pre_deploy.outcome == 'success'" in condition
 
 
+API_DEPLOY_STEP_NAME = "Deploy API to Fly"
+# The content-health probe compares against this byte-for-byte. api/main.py
+# serves JSONResponse(content={"healthy": True}), which encodes with compact
+# separators as exactly this string; a byte-exact match refuses to be satisfied
+# by a differently whitespaced or reordered body.
+API_HEALTHY_CONTENT_LITERAL = '{"healthy":true}'
+
+
+def _assert_step_probes_api_public_readiness(step: dict) -> None:
+    """A serving-deploy step must prove public API readiness after its own ``flyctl deploy``.
+
+    ``flyctl deploy`` returns once the Fly release is ``started`` — before
+    ``api/canary_check.py`` has finished proving the API healthy — so the deploy
+    step must observe the public API itself: the built dev SHA at
+    ``/api/health/version`` and byte-exact ``{"healthy":true}`` at
+    ``/api/health/content`` in the SAME retry attempt, before web/caddy deploy
+    and the later whole-surface gates proceed.
+    """
+    script = step.get("run", "")
+    lines = script.splitlines()
+    deploy_indexes = [index for index, line in enumerate(lines) if line.strip().startswith("flyctl deploy")]
+    assert deploy_indexes, f"{step.get('name')!r} must run `flyctl deploy`"
+    probe_after = "\n".join(lines[deploy_indexes[-1] + 1 :])
+
+    assert 'if [[ -z "${PROD_SMOKE_BASE_URL}" ]]' in probe_after, (
+        "the post-deploy probe must guard on an empty PROD_SMOKE_BASE_URL, matching the drift gate"
+    )
+    assert 'expected_sha="${{ steps.provenance.outputs.dev_sha }}"' in probe_after, (
+        "the probe must pin the built dev SHA from the validated provenance output"
+    )
+    assert "${PROD_SMOKE_BASE_URL%/}/api/health/version" in probe_after, (
+        "the probe must read the public /api/health/version endpoint with normalized base URL"
+    )
+    assert "${PROD_SMOKE_BASE_URL%/}/api/health/content" in probe_after, (
+        "the probe must read the public /api/health/content endpoint with normalized base URL"
+    )
+    assert "seq 1 18" in probe_after, "the probe must reuse the seq 1 18 retry shape"
+    assert "sleep 5" in probe_after, "the probe must reuse the sleep 5 retry cadence"
+    assert "curl -fsS" in probe_after, "the probe must fail closed on non-2xx responses with curl -fsS"
+    assert "exit 1" in probe_after, "the probe must fail the step when readiness is never observed"
+
+    # The version-SHA match and the byte-exact content-health body must gate the
+    # SAME retry-loop success branch; two independent checks could each pass on a
+    # different attempt and wave through an API that was never healthy at once.
+    success_branch = next(
+        (line for line in probe_after.splitlines() if API_HEALTHY_CONTENT_LITERAL in line and "$expected_sha" in line),
+        None,
+    )
+    assert success_branch is not None, (
+        "one retry-loop success branch must require BOTH the built dev SHA and a byte-exact "
+        f"{API_HEALTHY_CONTENT_LITERAL} content-health body in the same attempt"
+    )
+
+
 def _fly_deploy_commands() -> list[str]:
     return [
         line.strip()
@@ -482,6 +536,32 @@ def test_rollback_triggered_by_the_refresh_machine_fails_the_gating_contract() -
 
     with pytest.raises(AssertionError, match="serves no user traffic"):
         _assert_rollback_is_gated_on_serving_outcomes(steps)
+
+
+def test_api_deploy_step_probes_public_api_readiness() -> None:
+    step = _find_step(API_DEPLOY_STEP_NAME)
+    _assert_step_probes_api_public_readiness(step)
+    # The step still runs `flyctl deploy`, so blanking its FLY_API_TOKEN (as the
+    # curl-only verification steps do) would break the deploy itself.
+    assert step.get("env", {}).get("FLY_API_TOKEN") != "", (
+        "Deploy API step still runs flyctl deploy and must keep its FLY_API_TOKEN"
+    )
+    # The step owns its own readiness gate and must stay in the rollback trigger
+    # set so a failed public probe restores the pre-deploy image.
+    assert "deploy_api" in ROLLBACK_TRIGGER_STEP_IDS
+
+
+def test_api_deploy_without_public_probe_fails_the_readiness_contract() -> None:
+    """Self-check: an API deploy step that only runs flyctl deploy — the exact missing-canary
+    layout that lets `flyctl` return at `started` before the API is healthy — must be rejected."""
+    step = dict(_find_step(API_DEPLOY_STEP_NAME))
+    lines = step["run"].splitlines()
+    deploy_index = next(index for index, line in enumerate(lines) if line.strip().startswith("flyctl deploy"))
+    # Strip the post-deploy public probe, leaving `flyctl deploy` intact.
+    step["run"] = "\n".join(lines[: deploy_index + 1])
+
+    with pytest.raises(AssertionError):
+        _assert_step_probes_api_public_readiness(step)
 
 
 def test_serving_and_verification_steps_expose_the_ids_the_rollback_reads() -> None:

@@ -132,6 +132,9 @@ _FULL_SCOPE_EXTRA_CURRENT_CANDIDATE_ROWS = 8
 _FULL_SCOPE_UNRELATED_CANDIDATE_ROWS = 300
 _FULL_SCOPE_HIGH_FREQUENCY_DONOR_COUNT = 220
 _FULL_SCOPE_WILLIAMS_TRANSACTION_COUNT = 30
+_FULL_SCOPE_CURRENT_FEC_AREA_CODE = "T0"
+_FULL_SCOPE_EXTRA_FEC_AREA_CODE = "T9"
+_FULL_SCOPE_UNRELATED_FEC_AREA_CODE = "T8"
 DONOR_SEARCH_ALPHA_PERSON_ID = UUID("72000000-0000-4000-8000-000000000001")
 DONOR_SEARCH_BETA_PERSON_ID = UUID("72000000-0000-4000-8000-000000000002")
 DONOR_SEARCH_INACTIVE_PERSON_ID = UUID("72000000-0000-4000-8000-000000000003")
@@ -333,25 +336,123 @@ def fetch_full_scope_donor_search_counts(conn: psycopg.Connection) -> DonorSearc
     )
 
 
+# source_record_key values are unique only within a data source, so fixture
+# ownership must be anchored to the fixture's own core.data_source identity.
+# Matching source_record_key alone would let cleanup delete an unrelated data
+# source's committee/summary/source_record that happens to reuse a
+# `donor-search-%` key. `%%` escapes the LIKE wildcard because every statement
+# below carries the data-source-name parameter.
+_FIXTURE_DATA_SOURCE_IDS_SQL = """
+    SELECT id FROM core.data_source
+    WHERE domain = 'campaign_finance'
+      AND jurisdiction = 'federal/fec'
+      AND name = %s
+"""
+_FIXTURE_SOURCE_RECORD_IDS_SQL = f"""
+    SELECT id FROM core.source_record
+    WHERE source_record_key LIKE 'donor-search-%%'
+      AND data_source_id IN ({_FIXTURE_DATA_SOURCE_IDS_SQL})
+"""
+
+
 def cleanup_donor_search_fixture(conn: psycopg.Connection) -> None:
     """Remove deterministic donor-search fixture rows before reseeding."""
+    fixture_person_ids, fixture_office_ids, fixture_division_ids = conn.execute(
+        f"""
+        WITH fixture_source_records AS (
+            {_FIXTURE_SOURCE_RECORD_IDS_SQL}
+        ), fixture_people AS (
+            SELECT DISTINCT person_id
+            FROM cf.candidate
+            WHERE source_record_id IN (SELECT id FROM fixture_source_records)
+              AND person_id IS NOT NULL
+        ), fixture_officeholdings AS (
+            SELECT office_id, electoral_division_id
+            FROM civic.officeholding
+            WHERE person_id IN (SELECT person_id FROM fixture_people)
+              AND (source_record_id IS NULL
+                   OR source_record_id IN (SELECT id FROM fixture_source_records))
+        )
+        SELECT
+            ARRAY(SELECT person_id FROM fixture_people),
+            ARRAY(SELECT DISTINCT office_id FROM fixture_officeholdings),
+            ARRAY(SELECT DISTINCT electoral_division_id FROM fixture_officeholdings
+                  WHERE electoral_division_id IS NOT NULL)
+        """,
+        (_DATA_SOURCE_NAME,),
+    ).fetchone()
     delete_statements = [
-        "DELETE FROM cf.transaction WHERE transaction_identifier LIKE 'donor-search-%'",
-        "DELETE FROM cf.filing WHERE id::text LIKE '72000000-%'",
-        "DELETE FROM cf.candidate_committee_link WHERE id::text LIKE '72000000-%'",
-        "DELETE FROM civic.officeholding WHERE id::text LIKE '72000000-%'",
-        "DELETE FROM cf.candidate WHERE id::text LIKE '72000000-%'",
-        "DELETE FROM cf.committee WHERE id::text LIKE '72000000-%'",
-        "DELETE FROM civic.office WHERE id::text LIKE '72000000-%'",
-        "DELETE FROM civic.electoral_division WHERE id::text LIKE '72000000-%'",
-        "DELETE FROM core.person WHERE id::text LIKE '72000000-%'",
-        "UPDATE core.source_record SET superseded_by = NULL WHERE source_record_key LIKE 'donor-search-%'",
-        "DELETE FROM core.source_record WHERE source_record_key LIKE 'donor-search-%'",
+        f"""
+        DELETE FROM cf.transaction
+        WHERE source_record_id IN ({_FIXTURE_SOURCE_RECORD_IDS_SQL})
+        """,
+        f"""
+        DELETE FROM cf.filing
+        WHERE source_record_id IN ({_FIXTURE_SOURCE_RECORD_IDS_SQL})
+        """,
+        f"""
+        DELETE FROM cf.candidate_committee_link
+        WHERE source_record_id IN ({_FIXTURE_SOURCE_RECORD_IDS_SQL})
+        """,
+        f"""
+        DELETE FROM civic.officeholding officeholding
+        WHERE EXISTS (
+            SELECT 1
+            FROM cf.candidate candidate
+            WHERE candidate.person_id = officeholding.person_id
+              AND candidate.source_record_id IN ({_FIXTURE_SOURCE_RECORD_IDS_SQL})
+        )
+          AND (officeholding.source_record_id IS NULL
+               OR officeholding.source_record_id IN ({_FIXTURE_SOURCE_RECORD_IDS_SQL}))
+        """,
+        f"""
+        DELETE FROM cf.candidate
+        WHERE source_record_id IN ({_FIXTURE_SOURCE_RECORD_IDS_SQL})
+        """,
+        f"""
+        DELETE FROM cf.committee_summary
+        WHERE committee_id IN (
+            SELECT committee.id
+            FROM cf.committee committee
+            WHERE committee.source_record_id IN ({_FIXTURE_SOURCE_RECORD_IDS_SQL})
+        )
+        """,
+        f"""
+        DELETE FROM cf.committee
+        WHERE source_record_id IN ({_FIXTURE_SOURCE_RECORD_IDS_SQL})
+        """,
+        f"""
+        UPDATE core.source_record SET superseded_by = NULL
+        WHERE source_record_key LIKE 'donor-search-%%'
+          AND data_source_id IN ({_FIXTURE_DATA_SOURCE_IDS_SQL})
+        """,
+        f"""
+        DELETE FROM core.source_record
+        WHERE source_record_key LIKE 'donor-search-%%'
+          AND data_source_id IN ({_FIXTURE_DATA_SOURCE_IDS_SQL})
+        """,
         "DELETE FROM core.data_source WHERE domain = 'campaign_finance' AND jurisdiction = 'federal/fec' AND name = %s",
     ]
     for statement in delete_statements:
-        params = (_DATA_SOURCE_NAME,) if "%s" in statement else None
+        params = (_DATA_SOURCE_NAME,) * statement.count("%s") or None
         conn.execute(statement, params)
+    conn.execute(
+        "DELETE FROM civic.office office WHERE id = ANY(%s) "
+        "AND NOT EXISTS (SELECT 1 FROM civic.officeholding WHERE office_id = office.id)",
+        (fixture_office_ids,),
+    )
+    conn.execute(
+        "DELETE FROM civic.electoral_division division WHERE id = ANY(%s) "
+        "AND NOT EXISTS (SELECT 1 FROM civic.office WHERE electoral_division_id = division.id) "
+        "AND NOT EXISTS (SELECT 1 FROM civic.officeholding WHERE electoral_division_id = division.id)",
+        (fixture_division_ids,),
+    )
+    conn.execute(
+        "DELETE FROM core.person person WHERE id = ANY(%s) "
+        "AND NOT EXISTS (SELECT 1 FROM civic.officeholding WHERE person_id = person.id) "
+        "AND NOT EXISTS (SELECT 1 FROM cf.candidate WHERE person_id = person.id)",
+        (fixture_person_ids,),
+    )
 
 
 def _seed_source_records(conn: psycopg.Connection) -> DonorSearchSourceRecordIds:
@@ -720,6 +821,10 @@ def _full_scope_uuid(kind: int, index: int) -> UUID:
     return UUID(f"72000000-0000-{kind:04x}-8000-{index + 1:012d}")
 
 
+def _full_scope_fec_candidate_id(*, office: str, cycle: int, area_code: str, index: int) -> str:
+    return f"{office}{cycle}{area_code}{index:05d}"
+
+
 def _seed_full_current_recipient_scope(
     conn: psycopg.Connection,
     *,
@@ -790,7 +895,12 @@ def _seed_current_federal_recipient_link(
         conn,
         CandidateRowSeed(
             id=candidate_id,
-            fec_candidate_id=f"S6NC{index:05d}",
+            fec_candidate_id=_full_scope_fec_candidate_id(
+                office="S",
+                cycle=6,
+                area_code=_FULL_SCOPE_CURRENT_FEC_AREA_CODE,
+                index=index,
+            ),
             name=person_name,
             office="S",
             person_id=person_id,
@@ -838,7 +948,12 @@ def _seed_extra_current_candidate_links(
             conn,
             CandidateRowSeed(
                 id=candidate_id,
-                fec_candidate_id=f"S6NC9{index:04d}",
+                fec_candidate_id=_full_scope_fec_candidate_id(
+                    office="S",
+                    cycle=6,
+                    area_code=_FULL_SCOPE_EXTRA_FEC_AREA_CODE,
+                    index=index,
+                ),
                 name=f"Full Scope Alternate Current {index:03d}",
                 office="S",
                 person_id=person.person_id,
@@ -885,7 +1000,12 @@ def _seed_unrelated_candidate_rows(conn: psycopg.Connection, *, source_record_id
             conn,
             CandidateRowSeed(
                 id=candidate_id,
-                fec_candidate_id=f"H8NC{index:05d}",
+                fec_candidate_id=_full_scope_fec_candidate_id(
+                    office="H",
+                    cycle=8,
+                    area_code=_FULL_SCOPE_UNRELATED_FEC_AREA_CODE,
+                    index=index,
+                ),
                 name=person_name,
                 office="H",
                 person_id=person_id,

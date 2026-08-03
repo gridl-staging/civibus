@@ -4,6 +4,7 @@ import json
 from datetime import UTC, date, datetime
 from pathlib import Path
 
+import psycopg
 import pytest
 
 import core.keel_gate_l14 as keel_gate_l14
@@ -508,6 +509,128 @@ def test_collect_coverage_matrix_includes_roster_source_rows_with_loaded_expecte
     assert roster_rows[0].expected_count == 5
     assert roster_rows[1].loaded_count == 8
     assert roster_rows[1].expected_count == 9
+
+
+_STAGE1_PLAIN_TEXT_ROSTER_SOURCE_ID = "stage1_plain_text_roster"
+
+
+def _seed_plain_text_and_structured_roster_sources(db_conn: psycopg.Connection) -> None:
+    db_conn.execute(
+        """
+        INSERT INTO core.data_source (id, domain, jurisdiction, name, source_url, notes)
+        VALUES
+            (
+                '73000000-0000-4000-8000-000000000001',
+                'civics',
+                'stage1/plain-text-control',
+                'Stage 1 plain-text roster control',
+                'https://example.org/stage1/plain-text-control',
+                '{legacy roster notes that are not JSON'
+            ),
+            (
+                '73000000-0000-4000-8000-000000000002',
+                'civics',
+                'stage1/structured-roster',
+                'Stage 1 structured roster source',
+                'https://example.org/stage1/structured-roster',
+                %s
+            )
+        """,
+        (json.dumps({"registry_source_id": _STAGE1_PLAIN_TEXT_ROSTER_SOURCE_ID}),),
+    )
+    db_conn.execute(
+        """
+        INSERT INTO core.source_record (
+            id, data_source_id, source_record_key, source_url, raw_fields, pull_date
+        )
+        VALUES
+            (
+                '73000000-0000-4000-8000-000000000011',
+                '73000000-0000-4000-8000-000000000001',
+                'stage1-plain-text-control',
+                'https://example.org/stage1/plain-text-control/record',
+                '{}'::jsonb,
+                '2026-08-03T12:00:00Z'
+            ),
+            (
+                '73000000-0000-4000-8000-000000000012',
+                '73000000-0000-4000-8000-000000000002',
+                'stage1-structured-roster',
+                'https://example.org/stage1/structured-roster/record',
+                '{}'::jsonb,
+                '2026-08-03T12:00:00Z'
+            )
+        """
+    )
+
+
+def _seed_roster_count_officeholdings(db_conn: psycopg.Connection) -> None:
+    db_conn.execute(
+        """
+        INSERT INTO core.person (id, canonical_name)
+        VALUES
+            ('73000000-0000-4000-8000-000000000021', 'Stage 1 Plain Text Control Person'),
+            ('73000000-0000-4000-8000-000000000022', 'Stage 1 Structured Roster Person')
+        """
+    )
+    db_conn.execute(
+        """
+        INSERT INTO civic.electoral_division (id, name, division_type, state)
+        VALUES (
+            '73000000-0000-4000-8000-000000000031',
+            'Stage 1 roster count division',
+            'county',
+            'NC'
+        )
+        """
+    )
+    db_conn.execute(
+        """
+        INSERT INTO civic.office (id, name, office_level, title, state, electoral_division_id)
+        VALUES (
+            '73000000-0000-4000-8000-000000000041',
+            'stage1_roster_count_office',
+            'county',
+            'Commissioner',
+            'NC',
+            '73000000-0000-4000-8000-000000000031'
+        )
+        """
+    )
+    db_conn.execute(
+        """
+        INSERT INTO civic.officeholding (
+            id, person_id, office_id, electoral_division_id, source_record_id
+        )
+        VALUES
+            (
+                '73000000-0000-4000-8000-000000000051',
+                '73000000-0000-4000-8000-000000000021',
+                '73000000-0000-4000-8000-000000000041',
+                '73000000-0000-4000-8000-000000000031',
+                '73000000-0000-4000-8000-000000000011'
+            ),
+            (
+                '73000000-0000-4000-8000-000000000052',
+                '73000000-0000-4000-8000-000000000022',
+                '73000000-0000-4000-8000-000000000041',
+                '73000000-0000-4000-8000-000000000031',
+                '73000000-0000-4000-8000-000000000012'
+            )
+        """
+    )
+
+
+@pytest.mark.integration
+def test_load_roster_loaded_counts_ignores_plain_text_data_source_notes(
+    db_conn: psycopg.Connection,
+) -> None:
+    _seed_plain_text_and_structured_roster_sources(db_conn)
+    _seed_roster_count_officeholdings(db_conn)
+
+    assert keel_gate_l14._load_roster_loaded_counts(db_conn, [_STAGE1_PLAIN_TEXT_ROSTER_SOURCE_ID]) == {
+        _STAGE1_PLAIN_TEXT_ROSTER_SOURCE_ID: 1
+    }
 
 
 def test_collect_coverage_matrix_nc_geometry_summary_detects_off_by_one(monkeypatch) -> None:

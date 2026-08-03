@@ -75,6 +75,34 @@ jobs:
         run: |
           set -euo pipefail
           flyctl deploy -c infra/fly/api.fly.toml --remote-only --build-arg CIVIBUS_GIT_SHA=${{ steps.provenance.outputs.dev_sha }} --build-arg CIVIBUS_BUILT_AT=${{ steps.provenance.outputs.built_at }}
+          # `flyctl deploy` returns once the Fly release is `started`, which can be
+          # before api/canary_check.py has finished proving the API healthy. This
+          # step must therefore observe public API readiness itself before web/caddy
+          # deploy and the later whole-surface gates proceed: the built dev SHA at
+          # /api/health/version AND byte-exact {"healthy":true} at /api/health/content
+          # in the same retry attempt. FLY_API_TOKEN is intentionally NOT blanked here
+          # (unlike the curl-only verification steps) because flyctl deploy above needs it.
+          if [[ -z "${PROD_SMOKE_BASE_URL}" ]]; then
+            echo "Deploy API step requires PROD_SMOKE_BASE_URL Actions variable for public API readiness verification" >&2
+            exit 1
+          fi
+          expected_sha="${{ steps.provenance.outputs.dev_sha }}"
+          version_url="${PROD_SMOKE_BASE_URL%/}/api/health/version"
+          content_url="${PROD_SMOKE_BASE_URL%/}/api/health/content"
+          api_sha="unknown"
+          content_body="unknown"
+          for attempt in $(seq 1 18); do
+            api_sha="$(curl -fsS "$version_url" | jq -r '.git_sha // "unknown"' || true)"
+            content_body="$(curl -fsS "$content_url" || true)"
+            if [[ "$api_sha" == "$expected_sha" && "$content_body" == '{"healthy":true}' ]]; then
+              echo "api_public_ready expected=$expected_sha api=$api_sha content=$content_body"
+              exit 0
+            fi
+            echo "waiting_for_api_public_ready attempt=$attempt expected=$expected_sha api=$api_sha content=$content_body"
+            sleep 5
+          done
+          echo "api_public_not_ready expected=$expected_sha api=$api_sha content=$content_body" >&2
+          exit 1
 
       - name: Deploy web to Fly
         id: deploy_web

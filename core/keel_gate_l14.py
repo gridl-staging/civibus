@@ -178,12 +178,21 @@ def _load_roster_loaded_counts(conn: Any, source_ids: list[str]) -> dict[str, in
     with conn.cursor() as cursor:
         cursor.execute(
             """
-            SELECT ds.notes::jsonb->>'registry_source_id' AS source_id, COUNT(*)::int AS loaded_count
+            WITH structured_roster_sources AS (
+                SELECT
+                    id,
+                    CASE
+                        WHEN pg_input_is_valid(notes, 'jsonb')
+                        THEN notes::jsonb->>'registry_source_id'
+                    END AS registry_source_id
+                FROM core.data_source
+            )
+            SELECT ds.registry_source_id AS source_id, COUNT(*)::int AS loaded_count
             FROM civic.officeholding oh
             JOIN core.source_record sr ON sr.id = oh.source_record_id
-            JOIN core.data_source ds ON ds.id = sr.data_source_id
-            WHERE ds.notes::jsonb->>'registry_source_id' = ANY(%s)
-            GROUP BY ds.notes::jsonb->>'registry_source_id'
+            JOIN structured_roster_sources ds ON ds.id = sr.data_source_id
+            WHERE ds.registry_source_id = ANY(%s)
+            GROUP BY ds.registry_source_id
             """,
             (source_ids,),
         )

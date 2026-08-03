@@ -55,7 +55,12 @@ from api.test_civics import (
     _seed_current_federal_members_mix,
 )
 from core.db import insert_entity_source
-from test_support.donor_search_fixture import seed_full_scope_skewed_donor_search_fixture
+from test_support.donor_search_fixture import (
+    DonorSearchFullScopeCounts,
+    cleanup_donor_search_fixture,
+    seed_donor_search_fixture,
+    seed_full_scope_skewed_donor_search_fixture,
+)
 
 pytestmark = pytest.mark.integration
 
@@ -1199,6 +1204,324 @@ def test_full_scope_latency_fixture_keeps_every_official_money_and_ie_linked(
     assert representative["ie_support_count"] == 1
     assert representative["ie_oppose_count"] == 1
     assert [source["source_record_key"] for source in representative["sources"]] == ["donor-search-current"]
+
+
+def test_full_scope_fixture_candidate_ids_do_not_collide_with_real_fec_candidate_id(
+    db_conn: psycopg.Connection,
+) -> None:
+    real_candidate_id = UUID("71000000-0000-4000-8000-000000000324")
+    insert_candidate_row(
+        db_conn,
+        CandidateRowSeed(
+            id=real_candidate_id,
+            fec_candidate_id="S6NC00324",
+            name="Real FEC Candidate S6NC00324",
+            office="S",
+            state="NC",
+        ),
+    )
+
+    fixture = seed_full_scope_skewed_donor_search_fixture(db_conn)
+
+    real_candidate = db_conn.execute(
+        "SELECT id, name FROM cf.candidate WHERE fec_candidate_id = 'S6NC00324'"
+    ).fetchone()
+    fixture_candidates_using_real_fec_id = db_conn.execute(
+        """
+        SELECT COUNT(*)::integer
+        FROM cf.candidate
+        WHERE id::text LIKE '72000000-%'
+          AND fec_candidate_id = 'S6NC00324'
+        """
+    ).fetchone()
+    assert real_candidate == (real_candidate_id, "Real FEC Candidate S6NC00324")
+    assert fixture_candidates_using_real_fec_id == (0,)
+    assert fixture.counts.linked_people == 518
+    assert fixture.counts.candidate_scope_rows == 526
+    assert fixture.counts.unrelated_candidate_rows == 300
+
+
+def test_donor_search_fixture_cleanup_preserves_non_fixture_committee_summary(
+    db_conn: psycopg.Connection,
+) -> None:
+    committee_id = UUID("72000000-ffff-4fff-8fff-ffffffffffff")
+    person_id = UUID("72000000-ffff-4fff-8fff-fffffffffff0")
+    db_conn.execute(
+        "INSERT INTO core.person (id, canonical_name) VALUES (%s, %s)",
+        (person_id, "Legitimate Person With Fixture-Like UUID"),
+    )
+    insert_committee_row(
+        db_conn,
+        CommitteeRowSeed(
+            id=committee_id,
+            fec_committee_id="C99999998",
+            name="Legitimate Committee With Fixture-Like UUID",
+            state="NC",
+        ),
+    )
+    insert_committee_summary_row(
+        db_conn,
+        CommitteeSummaryRowSeed(
+            committee_id=committee_id,
+            cycle=2026,
+            total_receipts=Decimal("123.45"),
+        ),
+    )
+
+    cleanup_donor_search_fixture(db_conn)
+
+    preserved_rows = db_conn.execute(
+        """
+        SELECT committee.name, summary.cycle, summary.total_receipts
+        FROM cf.committee committee
+        JOIN cf.committee_summary summary ON summary.committee_id = committee.id
+        WHERE committee.id = %s
+        """,
+        (committee_id,),
+    ).fetchall()
+    preserved_person = db_conn.execute(
+        "SELECT canonical_name FROM core.person WHERE id = %s",
+        (person_id,),
+    ).fetchone()
+    assert preserved_rows == [("Legitimate Committee With Fixture-Like UUID", 2026, Decimal("123.45"))]
+    assert preserved_person == ("Legitimate Person With Fixture-Like UUID",)
+
+
+def test_donor_search_fixture_cleanup_preserves_other_data_source_with_same_source_record_key(
+    db_conn: psycopg.Connection,
+) -> None:
+    # source_record_key is unique only within a data source, so an unrelated data
+    # source may legitimately reuse the key "donor-search-current". Cleanup must
+    # scope by the fixture data source and leave that unrelated committee/summary,
+    # source record, and officeholding intact.
+    fixture = seed_donor_search_fixture(db_conn)
+    unrelated_source = insert_data_source_for_test(
+        db_conn,
+        jurisdiction="state/nc",
+        name_suffix="unrelated-donor-search",
+    )
+    unrelated_source_record = insert_source_record_for_test(
+        db_conn,
+        source_record_id=UUID("73000000-0000-4000-8000-000000000001"),
+        data_source_id=unrelated_source.id,
+        source_record_key="donor-search-current",
+        source_url="https://example.org/unrelated/donor-search-current",
+        pull_date=datetime(2026, 7, 9, 12, 0, tzinfo=timezone.utc),
+    )
+    committee_id = UUID("73000000-0000-4000-8000-000000000002")
+    insert_committee_row(
+        db_conn,
+        CommitteeRowSeed(
+            id=committee_id,
+            fec_committee_id="C88888887",
+            name="Unrelated Data Source Committee",
+            source_record_id=unrelated_source_record.id,
+            state="NC",
+        ),
+    )
+    insert_committee_summary_row(
+        db_conn,
+        CommitteeSummaryRowSeed(
+            committee_id=committee_id,
+            cycle=2026,
+            total_receipts=Decimal("456.78"),
+        ),
+    )
+    unrelated_officeholding_id = UUID("73000000-0000-4000-8000-000000000005")
+    db_conn.execute(
+        """
+        WITH inserted_division AS (
+            INSERT INTO civic.electoral_division (id, name, division_type, state)
+            VALUES ('73000000-0000-4000-8000-000000000003', 'Unrelated division', 'statewide', 'NC')
+            RETURNING id
+        ), inserted_office AS (
+            INSERT INTO civic.office (id, name, office_level, title, state, electoral_division_id)
+            SELECT
+                '73000000-0000-4000-8000-000000000004',
+                'unrelated_office',
+                'state',
+                'Unrelated official',
+                'NC',
+                id
+            FROM inserted_division
+            RETURNING id, electoral_division_id
+        )
+        INSERT INTO civic.officeholding (
+            id, person_id, office_id, electoral_division_id, valid_period, source_record_id
+        )
+        SELECT %s, %s, id, electoral_division_id, '[2010-01-01,2011-01-01)', %s
+        FROM inserted_office
+        """,
+        (unrelated_officeholding_id, fixture.alpha.person_id, unrelated_source_record.id),
+    )
+
+    cleanup_donor_search_fixture(db_conn)
+
+    preserved_rows = db_conn.execute(
+        """
+        SELECT committee.name, summary.cycle, summary.total_receipts
+        FROM cf.committee committee
+        JOIN cf.committee_summary summary ON summary.committee_id = committee.id
+        WHERE committee.id = %s
+        """,
+        (committee_id,),
+    ).fetchall()
+    preserved_source_record = db_conn.execute(
+        "SELECT source_record_key FROM core.source_record WHERE id = %s",
+        (unrelated_source_record.id,),
+    ).fetchone()
+    preserved_officeholding = db_conn.execute(
+        "SELECT person_id, source_record_id FROM civic.officeholding WHERE id = %s",
+        (unrelated_officeholding_id,),
+    ).fetchone()
+    assert preserved_rows == [("Unrelated Data Source Committee", 2026, Decimal("456.78"))]
+    assert preserved_source_record == ("donor-search-current",)
+    assert preserved_officeholding == (fixture.alpha.person_id, unrelated_source_record.id)
+
+
+def test_donor_search_fixture_can_be_seeded_twice_with_exact_counts(
+    db_conn: psycopg.Connection,
+) -> None:
+    first_fixture = seed_donor_search_fixture(db_conn)
+
+    second_fixture = seed_donor_search_fixture(db_conn)
+
+    fixture_counts = db_conn.execute(
+        """
+        WITH fixture_source_records AS (
+            SELECT source_record.id
+            FROM core.source_record source_record
+            JOIN core.data_source data_source ON data_source.id = source_record.data_source_id
+            WHERE data_source.domain = 'campaign_finance'
+              AND data_source.jurisdiction = 'federal/fec'
+              AND data_source.name = 'Campaign Finance API Source donor-search-fixture'
+        )
+        SELECT
+            (SELECT COUNT(*) FROM fixture_source_records)::integer,
+            (
+                SELECT COUNT(*)
+                FROM civic.officeholding officeholding
+                WHERE EXISTS (
+                    SELECT 1
+                    FROM cf.candidate candidate
+                    WHERE candidate.person_id = officeholding.person_id
+                      AND candidate.source_record_id IN (SELECT id FROM fixture_source_records)
+                )
+            )::integer,
+            (
+                SELECT COUNT(*) FROM cf.candidate
+                WHERE source_record_id IN (SELECT id FROM fixture_source_records)
+            )::integer,
+            (
+                SELECT COUNT(*) FROM cf.committee
+                WHERE source_record_id IN (SELECT id FROM fixture_source_records)
+            )::integer,
+            (
+                SELECT COUNT(*) FROM cf.filing
+                WHERE source_record_id IN (SELECT id FROM fixture_source_records)
+            )::integer,
+            (
+                SELECT COUNT(*) FROM cf.transaction
+                WHERE source_record_id IN (SELECT id FROM fixture_source_records)
+            )::integer
+        """
+    ).fetchone()
+    assert first_fixture == second_fixture
+    assert fixture_counts == (4, 3, 5, 4, 4, 12)
+
+
+def test_full_scope_donor_search_fixture_can_be_seeded_twice_with_exact_counts(
+    db_conn: psycopg.Connection,
+) -> None:
+    first_fixture = seed_full_scope_skewed_donor_search_fixture(db_conn)
+
+    second_fixture = seed_full_scope_skewed_donor_search_fixture(db_conn)
+
+    expected_counts = DonorSearchFullScopeCounts(
+        current_federal_officeholders=518,
+        linked_people=518,
+        candidate_scope_rows=526,
+        distinct_linked_committees=518,
+        unrelated_candidate_rows=300,
+        common_surname_transactions=250,
+        official_total_candidates=526,
+        support_ie_candidates=518,
+        oppose_ie_candidates=518,
+    )
+    assert first_fixture.counts == expected_counts
+    assert second_fixture.counts == expected_counts
+    assert first_fixture.primary_recipient == second_fixture.primary_recipient
+    assert first_fixture.secondary_recipient == second_fixture.secondary_recipient
+
+
+def test_donor_search_fixture_cleanup_preserves_prefixed_transaction_from_other_data_source(
+    db_conn: psycopg.Connection,
+) -> None:
+    unrelated_source = insert_data_source_for_test(
+        db_conn,
+        jurisdiction="state/nc",
+        name_suffix="unrelated-prefixed-transaction",
+    )
+    unrelated_source_record = insert_source_record_for_test(
+        db_conn,
+        source_record_id=UUID("73000000-0000-4000-8000-000000000011"),
+        data_source_id=unrelated_source.id,
+        source_record_key="unrelated-prefixed-transaction",
+        source_url="https://example.org/unrelated/prefixed-transaction",
+        pull_date=datetime(2026, 7, 9, 12, 0, tzinfo=timezone.utc),
+    )
+    committee_id = UUID("73000000-0000-4000-8000-000000000012")
+    filing_id = UUID("73000000-0000-4000-8000-000000000013")
+    transaction_id = UUID("73000000-0000-4000-8000-000000000014")
+    insert_committee_row(
+        db_conn,
+        CommitteeRowSeed(
+            id=committee_id,
+            fec_committee_id="C88888886",
+            name="Unrelated Prefixed Transaction Committee",
+            source_record_id=unrelated_source_record.id,
+            state="NC",
+        ),
+    )
+    insert_filing_row(
+        db_conn,
+        FilingRowSeed(
+            id=filing_id,
+            filing_fec_id="unrelated-prefixed-transaction-filing",
+            committee_id=committee_id,
+            source_record_id=unrelated_source_record.id,
+        ),
+    )
+    insert_transaction_row(
+        db_conn,
+        TransactionRowSeed(
+            id=transaction_id,
+            filing_id=filing_id,
+            committee_id=committee_id,
+            transaction_type="15",
+            amount=Decimal("789.01"),
+            amendment_indicator="N",
+            source_record_id=unrelated_source_record.id,
+            transaction_identifier="donor-search-unrelated-source",
+        ),
+    )
+
+    cleanup_donor_search_fixture(db_conn)
+
+    preserved_transaction = db_conn.execute(
+        """
+        SELECT id, transaction_identifier, source_record_id, amount
+        FROM cf.transaction
+        WHERE id = %s
+        """,
+        (transaction_id,),
+    ).fetchone()
+    assert preserved_transaction == (
+        transaction_id,
+        "donor-search-unrelated-source",
+        unrelated_source_record.id,
+        Decimal("789.01"),
+    )
 
 
 def test_export_json_contains_seeded_member_with_money(api_client: TestClient, db_conn: psycopg.Connection) -> None:
