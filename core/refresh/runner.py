@@ -61,6 +61,7 @@ _CADENCE_INTERVALS = {
     "annual": timedelta(days=365),
 }
 _REFRESH_HISTORY_CADENCE_PULL_STATUSES = ("success",)
+# main() exits non-zero when any emitted result uses one of these process statuses.
 _FAILING_STATUSES = frozenset({"crashed", "degraded", "empty", "failed"})
 
 
@@ -576,7 +577,7 @@ def _record_repair_pair_alarm(
         )
     return _build_result(
         key=disturbing_job.key,
-        status="failed",
+        status="failed",  # Repair-pair alarms must fail the process instead of silently succeeding.
         message=message,
         error=message,
     )

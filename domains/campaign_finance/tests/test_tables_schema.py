@@ -384,6 +384,7 @@ def test_cf_schema_tables_created():
 def test_donor_search_rollup_storage_contract() -> None:
     expected_rollup_columns = {
         "donor_key": "text|NO",
+        "representative_transaction_id": "uuid|NO",
         "contributor_name": "text|NO",
         "contributor_employer": "text|YES",
         "contributor_occupation": "text|YES",

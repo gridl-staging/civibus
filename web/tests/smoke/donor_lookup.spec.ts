@@ -1,7 +1,6 @@
 import { expect, test } from "playwright/test";
 
 import {
-  seedLiveDonorLookupSmoke,
   SMOKE_DONOR_LOOKUP_HEADING,
   SMOKE_DONOR_LOOKUP_QUERY,
   SMOKE_DONOR_LOOKUP_RECIPIENT_NAME,
@@ -25,7 +24,9 @@ import {
   SMOKE_DONOR_LOOKUP_NOT_COMBINED_CONTRIBUTOR,
   SMOKE_DONOR_LOOKUP_PAGINATION_EDIT_QUERY,
   SMOKE_DONOR_LOOKUP_SECOND_CONTRIBUTOR_NAME,
-  SMOKE_DONOR_LOOKUP_SECOND_PAGE_RESULT_COUNT
+  SMOKE_DONOR_LOOKUP_SECOND_PAGE_RESULT_COUNT,
+  makeLiveDonorLookupFingerprintIncompatible,
+  seedLiveDonorLookupSmoke
 } from "./donor_lookup_fixture";
 import { capturePageLoadErrors } from "./smoke-helpers";
 
@@ -175,6 +176,7 @@ test.describe("donor lookup smoke (live mode)", () => {
       expect(currentUrl.searchParams.get("by")).toBe("name");
 
       await expect(page.getByTestId("donor-result-count")).toHaveText(SMOKE_DONOR_LOOKUP_RESULT_COUNT);
+      await expect(page.getByTestId("donor-freshness-stamp")).toBeVisible();
       const resultRow = page.getByTestId("donor-result-row").filter({
         hasText: SMOKE_DONOR_LOOKUP_SEED_CONTRIBUTOR_NAME
       });
@@ -189,6 +191,21 @@ test.describe("donor lookup smoke (live mode)", () => {
       await expect(
         page.getByRole("heading", { level: 2, name: SMOKE_DONOR_LOOKUP_RECIPIENT_NAME, exact: true })
       ).toBeVisible();
+
+      await makeLiveDonorLookupFingerprintIncompatible();
+      await page.goto("/donors?q=williams&by=name");
+
+      await expect(page.getByTestId("donor-search-status")).toHaveText(
+        "Donor search is temporarily unavailable while contribution data is refreshed."
+      );
+      await expect(page.getByTestId("donor-result-row")).toHaveCount(0);
+      await expect(page.getByText("No donors match this search.")).toHaveCount(0);
+      await expect(page.getByTestId("donor-freshness-stamp")).toHaveCount(0);
+
+      await cleanup();
+      await page.reload();
+      await expect(page.getByText("Donor search is temporarily unavailable while contribution data is refreshed.")).toHaveCount(0);
+      await expect(page.getByTestId("donor-freshness-stamp")).toBeVisible();
       await pageLoadErrors.assertNoErrors();
     } finally {
       await cleanup();

@@ -1474,7 +1474,7 @@ def _seed_executive_out_of_cycle_public_money_fixture(
     _insert_candidate_with_official_totals(
         db_conn,
         candidate_id=candidate_ids["president"],
-        fec_candidate_id="P0US00231",
+        fec_candidate_id="P80001571",
         name="President Prior Cycle",
         person_id=members["president"].person_id,
         office="P",
@@ -1551,6 +1551,41 @@ def _assert_vice_president_out_of_cycle_money_row(row: dict[str, object], candid
     assert row["ie_support_total"] == "0.00"
     assert row["ie_oppose_total"] == "0.00"
     assert row["sources"] == []
+
+
+def test_president_default_cycle_promotes_out_of_cycle_official_total(
+    api_client: TestClient,
+    db_conn: psycopg.Connection,
+) -> None:
+    from api.queries.campaign_finance import resolve_selected_cycle
+
+    members, candidate_ids = _seed_executive_out_of_cycle_public_money_fixture(db_conn)
+    selected_cycle = resolve_selected_cycle(None)
+    with db_conn.cursor() as cursor:
+        cursor.execute(
+            "SELECT fec_candidate_id FROM cf.candidate WHERE id = %s",
+            (candidate_ids["president"],),
+        )
+        candidate_row = cursor.fetchone()
+
+    response = api_client.get(f"/public/v1/federal/officials/{members['president'].person_id}/money")
+
+    assert selected_cycle.selected_cycle == 2026
+    assert candidate_row == ("P80001571",)
+    assert response.status_code == 200
+    president_row = response.json()
+    _assert_president_out_of_cycle_money_row(president_row, candidate_ids["president"])
+    assert president_row["total_raised"] == "29133.95"
+    assert president_row["summary_source"] == "fec_weball"
+    assert president_row["out_of_cycle_official_total"] == {
+        "coverage_start_date": "2023-01-01",
+        "coverage_end_date": "2024-08-08",
+        "total_raised": "29133.95",
+        "total_spent": "29133.95",
+        "net": "0.00",
+        "cash_on_hand": "0.00",
+        "summary_source": "fec_weball",
+    }
 
 
 def test_export_enriches_only_executive_out_of_cycle_official_totals(

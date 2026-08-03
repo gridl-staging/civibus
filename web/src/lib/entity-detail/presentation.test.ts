@@ -58,6 +58,7 @@ const PERSON_DETAIL = {
   primary_address_id: null,
   er_cluster_id: null,
   er_confidence: 0.93,
+  current_office: null,
   sources: SOURCES
 };
 

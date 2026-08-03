@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import json
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, cast
@@ -12,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 import pytest
 import yaml
 
+from domains.campaign_finance.normalize.employers import canonicalize_employer
 from core.entity_resolution.confidence import classify_scored_pairs
 from core.entity_resolution.scoring import score_entities
 
@@ -40,6 +42,7 @@ class RegressionPairCase(BaseModel):
 
     case_id: str = Field(min_length=1)
     entity_type: Literal["person", "organization"]
+    name_place_count: int | None = Field(default=None, ge=1)
     left_entity: dict[str, Any] = Field(min_length=1)
     right_entity: dict[str, Any] = Field(min_length=1)
     rationale: str = Field(min_length=1)
@@ -137,6 +140,52 @@ def _sample_l8_payload() -> dict[str, Any]:
 
 def _stable_entity_id(case_id: str, side: str) -> str:
     return str(uuid5(NAMESPACE_URL, f"l8-regression:{case_id}:{side}"))
+
+
+def _last_name(entity: dict[str, Any]) -> str | None:
+    canonical_name = str(entity.get("canonical_name", "")).strip()
+    if not canonical_name:
+        return None
+    return canonical_name.lower().split()[-1]
+
+
+def _canonical_employer(entity: dict[str, Any]) -> str | None:
+    employer = entity.get("employer")
+    if employer is None:
+        return None
+    return canonicalize_employer(str(employer))
+
+
+def _has_observable_different_locality(case: RegressionPairCase) -> bool:
+    left_address = case.left_entity.get("primary_address")
+    right_address = case.right_entity.get("primary_address")
+    return (
+        left_address is not None
+        and right_address is not None
+        and str(left_address).strip().lower() != str(right_address).strip().lower()
+    )
+
+
+def _is_stage2_rule_shaped_case(case: RegressionPairCase) -> bool:
+    left_employer = _canonical_employer(case.left_entity)
+    right_employer = _canonical_employer(case.right_entity)
+    return (
+        case.entity_type == "person"
+        and _last_name(case.left_entity) == _last_name(case.right_entity)
+        and left_employer is not None
+        and left_employer == right_employer
+        and _has_observable_different_locality(case)
+    )
+
+
+def _canonical_names_match_for_scoring(
+    left_entity: dict[str, Any],
+    right_entity: dict[str, Any],
+) -> bool:
+    module = _load_gate_module()
+    left_name = module._person_row(entity_id="name-context-left", payload=left_entity)["canonical_name"]
+    right_name = module._person_row(entity_id="name-context-right", payload=right_entity)["canonical_name"]
+    return left_name is not None and left_name == right_name
 
 
 def _raise_missing_splink_settings(*args: Any, **kwargs: Any) -> list[dict[str, Any]]:
@@ -310,6 +359,134 @@ def test_l8_regression_fixture_includes_named_donor_false_merge_cases() -> None:
         assert case_id in must_not_match_ids
 
 
+def test_l8_regression_fixture_includes_stage2_rule_shaped_person_cases() -> None:
+    regression_pairs = _load_regression_pairs_fixture()
+    must_match_cases = [case for case in regression_pairs.must_match if _is_stage2_rule_shaped_case(case)]
+    must_not_match_cases = [case for case in regression_pairs.must_not_match if _is_stage2_rule_shaped_case(case)]
+
+    assert [case.case_id for case in must_match_cases] == [
+        "fec_person_pritish_narayanan_same_employer_sunnyvale_san_jose"
+    ]
+    assert [case.case_id for case in must_not_match_cases] == [
+        "fec_person_domnitz_same_employer_false_merge_mequon_milwaukee"
+    ]
+    assert len(must_not_match_cases) >= len(must_match_cases)
+
+
+def test_l8_regression_stage2_rule_shaped_cases_use_fec_filing_record_keys() -> None:
+    regression_pairs = _load_regression_pairs_fixture()
+    rule_shaped_cases = [
+        case
+        for case in [*regression_pairs.must_match, *regression_pairs.must_not_match]
+        if _is_stage2_rule_shaped_case(case)
+    ]
+    record_key_pattern = re.compile(r"^fec-filing-1891326:SA11AI:\d+$")
+
+    assert {case.case_id for case in rule_shaped_cases} == {
+        "fec_person_pritish_narayanan_same_employer_sunnyvale_san_jose",
+        "fec_person_domnitz_same_employer_false_merge_mequon_milwaukee",
+    }
+    for case in rule_shaped_cases:
+        assert record_key_pattern.fullmatch(str(case.left_entity["source_record_key"]))
+        assert record_key_pattern.fullmatch(str(case.right_entity["source_record_key"]))
+        assert case.source_notes == ["https://docquery.fec.gov/dcdev/posted/1891326.fec"]
+
+
+def test_l8_regression_name_place_count_is_exact_name_context() -> None:
+    regression_pairs = _load_regression_pairs_fixture()
+    cases = [*regression_pairs.must_match, *regression_pairs.must_not_match]
+    counted_cases = [case for case in cases if case.name_place_count is not None]
+
+    assert counted_cases
+    for case in counted_cases:
+        assert _canonical_names_match_for_scoring(case.left_entity, case.right_entity), case.case_id
+
+
+@pytest.mark.parametrize(
+    ("left_name", "right_name", "expected_match"),
+    [
+        ("  Boundary   Rare  ", "Boundary Rare", True),
+        ("Boundary Rare", "Different Rare", False),
+    ],
+)
+def test_name_place_count_guard_uses_scoring_name_normalization(
+    left_name: str,
+    right_name: str,
+    expected_match: bool,
+) -> None:
+    assert (
+        _canonical_names_match_for_scoring(
+            {"canonical_name": left_name},
+            {"canonical_name": right_name},
+        )
+        is expected_match
+    )
+
+
+@pytest.mark.parametrize(
+    ("name_place_count", "left_address", "right_address"),
+    [
+        (1, "100 Main St, Boise, ID 83702", "200 Elm St, Boise, ID 83703"),
+        (1, "100 Main St", "200 Elm St"),
+        (2, "100 Main St, Context City 0, ID 83702", "200 Elm St, Context City 0, ID 83703"),
+        (3, "100 Main St, Boise, ID 83702", "200 Main St, Meridian, ID 83642"),
+        (4, "100 Main St, Boise, ID 83702", "200 Main St, Meridian, ID 83642"),
+    ],
+)
+def test_l8_regression_name_place_count_context_matches_declared_places(
+    name_place_count: int,
+    left_address: str,
+    right_address: str,
+) -> None:
+    module = _load_gate_module()
+    rows, _ = module._build_fixture_rows(
+        case_id=f"name_place_count_boundary_{name_place_count}",
+        entity_type="person",
+        left_payload={
+            "canonical_name": "Boundary Rare",
+            "primary_address": left_address,
+            "employer": "Acme Research",
+            "jurisdiction": "state/id",
+            "source_record_key": "left",
+        },
+        right_payload={
+            "canonical_name": "Boundary Rare",
+            "primary_address": right_address,
+            "employer": "Acme Research",
+            "jurisdiction": "state/id",
+            "source_record_key": "right",
+        },
+        name_place_count=name_place_count,
+    )
+    target_places = {
+        (row["city"], row["state"])
+        for row in rows
+        if row["canonical_name"] == "Boundary Rare" and row["city"] is not None and row["state"] is not None
+    }
+
+    assert len(target_places) == name_place_count
+
+
+def test_l8_rarity_bands_share_one_fitted_population_and_cannot_reverse(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_gate_module()
+    score_rows_calls: list[int] = []
+    real_score_rows = module.score_rows
+
+    def _record_population(rows: list[dict[str, Any]], *args: Any, **kwargs: Any) -> list[dict[str, Any]]:
+        score_rows_calls.append(len(rows))
+        return real_score_rows(rows, *args, **kwargs)
+
+    monkeypatch.setattr(module, "score_rows", _record_population)
+
+    scores_by_place_count = module.score_person_rarity_bands(place_counts=(1, 3, 4))
+
+    assert score_rows_calls == [23]
+    assert list(scores_by_place_count) == [1, 3, 4]
+    assert scores_by_place_count[1] >= scores_by_place_count[3] >= scores_by_place_count[4]
+
+
 def test_l8_gate_fails_when_curated_must_match_pair_is_split(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -358,6 +535,26 @@ def test_l8_regression_curated_exact_must_match_case_scores_as_match(
     assert result["passed"] is True
 
 
+def test_l8_regression_stage2_rule_shaped_must_match_case_scores_as_match() -> None:
+    module = _load_gate_module()
+    regression_pairs = _load_regression_pairs_fixture()
+    case = next(
+        case
+        for case in regression_pairs.must_match
+        if case.case_id == "fec_person_pritish_narayanan_same_employer_sunnyvale_san_jose"
+    )
+
+    result = module.score_regression_pair_case(
+        case=case,
+        expected_relation="must_match",
+    )
+
+    assert result["decision"] == "match"
+    assert result["confidence"] >= 0.95
+    assert result["decided_by"] == "splink_v1"
+    assert result["passed"] is True
+
+
 def test_l8_non_shortcut_pair_attributes_missing_settings_as_unscored(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -379,7 +576,27 @@ def test_l8_non_shortcut_pair_attributes_missing_settings_as_unscored(
     assert result["passed"] is True
 
 
-def test_l8_gate_writes_vacuous_artifact_with_missing_settings_attribution(
+def test_l8_false_positive_case_without_rarity_context_attributes_missing_settings_as_unscored(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_gate_module()
+    false_positive_corpus = _load_false_positive_corpus_fixture()
+    case = next(case for case in false_positive_corpus.cases if case.entity_type == "person")
+    monkeypatch.setattr(module, "score_rows", _raise_missing_splink_settings)
+
+    result = module.score_false_positive_case(case=case)
+
+    assert result == {
+        "case_id": case.corpus_id,
+        "decision": "no_match",
+        "confidence": 0.0,
+        "decision_method": "unscored",
+        "decided_by": "unscored_missing_settings",
+        "flagged_false_positive": False,
+    }
+
+
+def test_l8_gate_writes_failed_artifact_with_missing_settings_attribution(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -394,17 +611,22 @@ def test_l8_gate_writes_vacuous_artifact_with_missing_settings_attribution(
     )
 
     assert payload == json.loads(output_path.read_text(encoding="utf-8"))
-    assert payload["status"] == "vacuous"
+    assert payload["status"] == "fail"
+    assert payload["must_match_violations"] == 1
+    assert payload["must_not_match_violations"] == 0
     assert payload["regression_pair_decided_by_counts"] == {
         "fixture_exact_identity": 5,
-        "unscored_missing_settings": 5,
+        "unscored_missing_settings": 7,
     }
+    violating_result = next(result for result in payload["pair_results"] if not result["passed"])
+    assert violating_result["case_id"] == "fec_person_pritish_narayanan_same_employer_sunnyvale_san_jose"
+    assert violating_result["decided_by"] == "unscored_missing_settings"
     assert payload["false_positive_summary"]["decided_by_counts"] == {
         "unscored_missing_settings": 2,
     }
 
 
-def test_l8_main_writes_vacuous_artifact_and_exits_nonzero(
+def test_l8_main_writes_failed_artifact_and_exits_nonzero(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -423,7 +645,8 @@ def test_l8_main_writes_vacuous_artifact_and_exits_nonzero(
 
     payload = json.loads(output_path.read_text(encoding="utf-8"))
     assert exit_code == 1
-    assert payload["status"] == "vacuous"
+    assert payload["status"] == "fail"
+    assert payload["must_match_violations"] == 1
 
 
 @pytest.mark.parametrize(

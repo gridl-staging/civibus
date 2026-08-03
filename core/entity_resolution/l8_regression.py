@@ -49,6 +49,14 @@ class RegressionPairCase(BaseModel):
 
     case_id: str = Field(min_length=1)
     entity_type: Literal["person", "organization"]
+    # Number of distinct places represented for this canonical name across the
+    # case's own cited source records — a verified LOWER BOUND, not a five-year
+    # corpus rarity measurement. It drives a controlled rarity-context scoring
+    # scenario (the name occupies exactly this many places in the synthetic
+    # scoring population), which is the rarest-possible assumption and therefore
+    # optimistic relative to an unmeasured true corpus place count. It supplies
+    # no labelled precision on its own; see docs/live-state/2026_08_03_donor_er_narrow_rule.md.
+    name_place_count: int | None = Field(default=None, ge=1)
     left_entity: dict[str, Any] = Field(min_length=1)
     right_entity: dict[str, Any] = Field(min_length=1)
     rationale: str = Field(min_length=1)
@@ -234,6 +242,16 @@ def _address_state(address: str | None, fallback_scope: Any) -> str | None:
     return _registered_state_from_scope(fallback_scope)
 
 
+def _address_city(address: str | None) -> str | None:
+    """Return the city component from the fixture's comma-delimited address."""
+    if address is None:
+        return None
+    address_parts = [part.strip() for part in address.split(",") if part.strip()]
+    if len(address_parts) < 2:
+        return None
+    return address_parts[-2].casefold()
+
+
 def _identifier_key(payload: dict[str, Any]) -> str | None:
     for key in ("identifier_key", "source_record_key"):
         value = _normalize_text(payload.get(key))
@@ -275,6 +293,7 @@ def _person_row(*, entity_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         "normalized_address": _normalize_address(primary_address),
         "street_number": _extract_street_number(primary_address),
         "zip5": _extract_zip5(primary_address),
+        "city": _address_city(primary_address),
         "state": _address_state(primary_address, payload.get("jurisdiction")),
         "employer": _normalize_text(payload.get("employer")),
         "occupation": _normalize_text(payload.get("occupation")),
@@ -306,6 +325,7 @@ def _build_fixture_rows(
     entity_type: str,
     left_payload: dict[str, Any],
     right_payload: dict[str, Any],
+    name_place_count: int | None = None,
 ) -> tuple[list[dict[str, Any]], tuple[str, str]]:
     entity_id_a = _stable_entity_id(case_id, "left")
     entity_id_b = _stable_entity_id(case_id, "right")
@@ -314,7 +334,191 @@ def _build_fixture_rows(
         row_builder(entity_id=entity_id_a, payload=left_payload),
         row_builder(entity_id=entity_id_b, payload=right_payload),
     ]
+    if entity_type == "person" and name_place_count is not None:
+        rows.extend(
+            _person_rarity_context_rows(
+                case_id=case_id,
+                name_place_count=name_place_count,
+                target_rows=rows,
+            )
+        )
     return rows, (min(entity_id_a, entity_id_b), max(entity_id_a, entity_id_b))
+
+
+def _person_place_key(row: dict[str, Any]) -> tuple[str | None, str | None]:
+    return (
+        _normalize_text(row.get("city")),
+        _normalize_text(row.get("state")),
+    )
+
+
+def _person_rarity_context_rows(
+    *,
+    case_id: str,
+    name_place_count: int,
+    target_rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    # Models the controlled assumption that the target name occupies exactly
+    # `name_place_count` places in the scoring population. Because that count is
+    # a verified lower bound (see RegressionPairCase.name_place_count), a true
+    # corpus count could only be higher, which would make the name more common
+    # and lower confidence — so this scenario is the rarest-case upper bound on
+    # the rule's evidence, not a labelled corpus measurement.
+    seed_row = target_rows[0]
+    state = _normalize_text(seed_row.get("state")) or "ZZ"
+    target_name = seed_row.get("canonical_name")
+    represented_places = {
+        _person_place_key(row)
+        for row in target_rows
+        if row.get("canonical_name") == target_name and all(_person_place_key(row))
+    }
+    if len(represented_places) > name_place_count:
+        raise ValueError(
+            f"name_place_count={name_place_count} is smaller than the pair's "
+            f"{len(represented_places)} represented target-name places"
+        )
+    context_place_count = name_place_count - len(represented_places)
+    rows: list[dict[str, Any]] = []
+    index = 0
+    while len(rows) < context_place_count:
+        context_city = f"Context City {index}"
+        context_place = (context_city.casefold(), state)
+        if context_place in represented_places:
+            index += 1
+            continue
+        rows.append(
+            _person_row(
+                entity_id=_stable_entity_id(case_id, f"same-name-place-{index}"),
+                payload={
+                    "canonical_name": seed_row.get("canonical_name"),
+                    "primary_address": f"{700 + index} Place Count Rd, {context_city}, {state} {88000 + index}",
+                    "employer": f"Place Count Employer {index}",
+                    "occupation": f"Place Count Occupation {index}",
+                    "jurisdiction": f"state/{state.lower()}",
+                    "source_record_key": f"{case_id}-same-name-place-{index}",
+                },
+            )
+        )
+        represented_places.add(context_place)
+        index += 1
+    for index in range(12):
+        rows.append(
+            _person_row(
+                entity_id=_stable_entity_id(case_id, f"common-name-context-{index}"),
+                payload={
+                    "canonical_name": "James Smith",
+                    "primary_address": f"{900 + index} Frequency Filler Rd, Context City, {state} {89000 + index}",
+                    "employer": f"Frequency Employer {index}",
+                    "occupation": f"Frequency Occupation {index}",
+                    "jurisdiction": f"state/{state.lower()}",
+                    "source_record_key": f"{case_id}-common-name-context-{index}",
+                },
+            )
+        )
+    return rows
+
+
+def _person_rarity_probe_target_rows(
+    place_count: int,
+) -> tuple[list[dict[str, Any]], tuple[str, str]]:
+    rows: list[dict[str, Any]] = []
+    case_id = f"rarity-band-{place_count}"
+    canonical_name = f"Boundary Rarity{place_count}"
+    target_ids = (
+        _stable_entity_id(case_id, "left"),
+        _stable_entity_id(case_id, "right"),
+    )
+    for side, entity_id in zip(("left", "right"), target_ids, strict=True):
+        rows.append(
+            _person_row(
+                entity_id=entity_id,
+                payload={
+                    "canonical_name": canonical_name,
+                    "primary_address": "100 Boundary Rd, Reference City, ZZ 88000",
+                    "employer": "Acme Research",
+                    "occupation": "Analyst",
+                    "jurisdiction": "state/zz",
+                    "source_record_key": f"{case_id}-{side}",
+                },
+            )
+        )
+    for index in range(place_count - 1):
+        rows.append(
+            _person_row(
+                entity_id=_stable_entity_id(case_id, f"context-place-{index}"),
+                payload={
+                    "canonical_name": canonical_name,
+                    "primary_address": f"{700 + index} Context Rd, Context City {index}, ZZ {88100 + index}",
+                    "employer": f"Context Employer {place_count} {index}",
+                    "occupation": f"Context Occupation {place_count} {index}",
+                    "jurisdiction": "state/zz",
+                    "source_record_key": f"{case_id}-context-place-{index}",
+                },
+            )
+        )
+    return rows, tuple(sorted(target_ids))
+
+
+def _person_rarity_reference_rows() -> list[dict[str, Any]]:
+    reference_case_id = "rarity-band-reference"
+    return [
+        _person_row(
+            entity_id=_stable_entity_id(reference_case_id, f"common-name-{index}"),
+            payload={
+                "canonical_name": "James Smith",
+                "primary_address": f"{900 + index} Reference Rd, Reference City, ZZ {89000 + index}",
+                "employer": f"Reference Employer {index}",
+                "occupation": f"Reference Occupation {index}",
+                "jurisdiction": "state/zz",
+                "source_record_key": f"{reference_case_id}-{index}",
+            },
+        )
+        for index in range(12)
+    ]
+
+
+def _build_person_rarity_probe_rows(
+    place_counts: tuple[int, ...],
+) -> tuple[list[dict[str, Any]], dict[int, tuple[str, str]]]:
+    if not place_counts or any(count < 1 for count in place_counts):
+        raise ValueError("place_counts must contain positive integers")
+    if tuple(sorted(set(place_counts))) != place_counts:
+        raise ValueError("place_counts must be unique and increasing")
+
+    rows: list[dict[str, Any]] = []
+    target_pairs: dict[int, tuple[str, str]] = {}
+    for place_count in place_counts:
+        target_rows, target_pair = _person_rarity_probe_target_rows(place_count)
+        rows.extend(target_rows)
+        target_pairs[place_count] = target_pair
+    rows.extend(_person_rarity_reference_rows())
+    return rows, target_pairs
+
+
+def score_person_rarity_bands(
+    *,
+    place_counts: tuple[int, ...],
+    probabilistic_settings: Any | None = None,
+) -> dict[int, float]:
+    """Score controlled rarity bands through one fitted reference population."""
+    rows, target_pairs = _build_person_rarity_probe_rows(place_counts)
+    scoring_options = {} if probabilistic_settings is None else {"probabilistic_settings": probabilistic_settings}
+    scored_pairs = score_rows(
+        rows,
+        "person",
+        deterministic_pairs=[],
+        **scoring_options,
+    )
+    confidence_by_pair = {
+        tuple(sorted((str(pair["entity_id_a"]), str(pair["entity_id_b"])))): float(pair["confidence"])
+        for pair in scored_pairs
+    }
+    missing_counts = [
+        place_count for place_count, target_pair in target_pairs.items() if target_pair not in confidence_by_pair
+    ]
+    if missing_counts:
+        raise RuntimeError(f"rarity probe did not score place counts: {missing_counts}")
+    return {place_count: confidence_by_pair[target_pair] for place_count, target_pair in target_pairs.items()}
 
 
 def _has_shared_non_empty_value(left_row: dict[str, Any], right_row: dict[str, Any], keys: tuple[str, ...]) -> bool:
@@ -368,6 +572,7 @@ def _score_fixture_pair(
     entity_type: str,
     left_payload: dict[str, Any],
     right_payload: dict[str, Any],
+    name_place_count: int | None,
     auto_merge_threshold: float | None,
     probabilistic_settings: Any | None = None,
 ) -> dict[str, Any]:
@@ -376,6 +581,7 @@ def _score_fixture_pair(
         entity_type=entity_type,
         left_payload=left_payload,
         right_payload=right_payload,
+        name_place_count=name_place_count,
     )
     if _is_curated_exact_identity_match(
         entity_type=entity_type,
@@ -449,6 +655,7 @@ def score_regression_pair_case(
         entity_type=case.entity_type,
         left_payload=case.left_entity,
         right_payload=case.right_entity,
+        name_place_count=case.name_place_count,
         auto_merge_threshold=auto_merge_threshold,
         probabilistic_settings=probabilistic_settings,
     )
@@ -520,6 +727,7 @@ def score_false_positive_case(
         entity_type=case.entity_type,
         left_payload=left_payload,
         right_payload=right_payload,
+        name_place_count=None,
         auto_merge_threshold=auto_merge_threshold,
         probabilistic_settings=probabilistic_settings,
     )

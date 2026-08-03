@@ -62,6 +62,7 @@ export type DonorSearchResponse = {
   by: DonorSearchByMode;
   limit: number;
   offset: number;
+  rollup_completed_at: string;
   results: DonorSearchResult[];
 };
 
@@ -272,6 +273,7 @@ export function assertDonorSearchResponse(
   }
   assertInteger(response.limit, 'limit');
   assertInteger(response.offset, 'offset');
+  assertString(response.rollup_completed_at, 'rollup_completed_at');
   readArray(response.results, 'results').forEach((result, index) =>
     assertDonorSearchResult(result, `results[${index}]`)
   );

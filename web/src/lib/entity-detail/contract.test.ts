@@ -47,6 +47,7 @@ describe("entity detail contract", () => {
       primary_address_id: null,
       er_cluster_id: null,
       er_confidence: null,
+      current_office: null,
       portrait: null,
       sources: []
     };
@@ -91,6 +92,28 @@ describe("entity detail contract", () => {
 
     expect(() => assertPersonPayloadHasRequiredBioKeys(malformedBioPayload)).toThrow(
       /bio keys must be string or null/i
+    );
+  });
+
+  it("rejects malformed current-office context before page consumption", () => {
+    const malformedCurrentOfficePayload = {
+      id: PERSON_ID,
+      canonical_name: "Jane Doe",
+      bio_text: null,
+      bio_source_url: null,
+      bio_license: null,
+      bio_pulled_at: null,
+      current_office: {
+        officeholding_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        office_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        office_name: null,
+        office_level: "municipal",
+        state: "NC"
+      }
+    };
+
+    expect(() => assertPersonPayloadHasRequiredBioKeys(malformedCurrentOfficePayload)).toThrow(
+      /current_office\.office_name must be a string/i
     );
   });
 });

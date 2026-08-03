@@ -164,6 +164,23 @@ def test_makefile_exports_and_targets_database_reset_command():
     assert re.search(r"^export POSTGRES_PORT$", makefile, re.M)
     assert re.search(r"^export COMPOSE_PROJECT_NAME$", makefile, re.M)
     assert "POSTGRES_PASSWORD must be set in the environment" in makefile
+    default_env = {
+        key: value for key, value in os.environ.items() if key not in {"POSTGRES_PORT", "COMPOSE_PROJECT_NAME"}
+    }
+    default_result = subprocess.run(
+        ["make", "--no-print-directory", "reject-unallocated-lane-port"],
+        cwd=REPO_ROOT,
+        env=default_env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    expected_workspace_slug = "".join(
+        character if character.isascii() and character.isalnum() else "_" for character in REPO_ROOT.parent.name.lower()
+    )
+    assert default_result.returncode != 0
+    assert f"COMPOSE_PROJECT_NAME=civibus_{expected_workspace_slug}" in default_result.stderr
     # `db-up` must keep the password prerequisite first and the exact recipe, but
     # additional prerequisites are allowed and one is now required: pinning the
     # prerequisite list exactly made adding the reserved-integration-port guard a
@@ -178,6 +195,15 @@ def test_makefile_exports_and_targets_database_reset_command():
     assert re.search(r"^db-up:[^\n]*\breject-reserved-integration-port\b", makefile, re.M)
     assert re.search(
         r"^db-down: require-postgres-password\n^\tdocker compose -f infra/docker-compose.yml down", makefile, re.M
+    )
+    # db-teardown is the destructive counterpart; db-down above stays on the
+    # non-destructive `down` recipe (no --volumes). Full behavioral contract
+    # lives in tests/ci/test_integration_contract_owner.py.
+    assert re.search(
+        r"^db-teardown: require-postgres-password\n"
+        r"^\tdocker compose -f infra/docker-compose.yml down --volumes --remove-orphans",
+        makefile,
+        re.M,
     )
     db_sql_files_lines = re.findall(r"^override DB_SQL_FILES := .+$", makefile, re.M)
     assert len(db_sql_files_lines) == 1

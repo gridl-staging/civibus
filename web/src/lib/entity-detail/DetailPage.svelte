@@ -525,6 +525,16 @@
       <section class="detail__panel">
         <h3>Core attributes</h3>
         <dl class="detail__rows">
+          {#if personDetail?.current_office}
+            <div class="detail__row">
+              <dt>Current office</dt>
+              <dd>{personDetail.current_office.office_name}</dd>
+            </div>
+            <div class="detail__row">
+              <dt>Office level</dt>
+              <dd>{personDetail.current_office.office_level}</dd>
+            </div>
+          {/if}
           {#each shellViewModel.coreFactRows as row (row.label)}
             <div class="detail__row">
               <dt>{row.label}</dt>

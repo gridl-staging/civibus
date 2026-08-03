@@ -95,6 +95,10 @@ def _transaction_access_index_names(nodes: list[dict[str, Any]]) -> set[str]:
     }
 
 
+def _rollup_access_index_names(nodes: list[dict[str, Any]]) -> set[str]:
+    return {node["Index Name"] for node in nodes if node.get("Index Name", "").startswith("idx_donor_search_rollup_")}
+
+
 def _cte_node(nodes: list[dict[str, Any]], cte_name: str) -> dict[str, Any]:
     matches = [
         node
@@ -117,6 +121,12 @@ def _single_loop_cte_scan(nodes: list[dict[str, Any]], cte_name: str) -> dict[st
     ]
     assert matches, [node.get("CTE Name") for node in nodes if node.get("CTE Name")]
     return max(matches, key=lambda node: node.get("Actual Rows", 0))
+
+
+def _cte_producer_node(nodes: list[dict[str, Any]], cte_name: str) -> dict[str, Any]:
+    matches = [node for node in nodes if node.get("Subplan Name") == f"CTE {cte_name}"]
+    assert len(matches) == 1, [node.get("Subplan Name") for node in nodes if node.get("Subplan Name")]
+    return matches[0]
 
 
 def _transaction_access_loop_counts(nodes: list[dict[str, Any]]) -> list[int]:
@@ -144,20 +154,16 @@ def _limited_donor_cte_names(ctes: dict[str, str]) -> set[str]:
 @pytest.mark.parametrize(
     ("by", "query", "expected_indexes"),
     [
-        # Both ZIP expression indexes are valid exact-equality access paths.
-        # PostgreSQL chooses between them from mutable table statistics, so the
-        # deterministic contract is ZIP-indexed access without a sequential scan.
         (
             "zip",
             "27701-1234",
             {
-                "idx_transaction_donor_search_zip5_receipt",
-                "idx_transaction_contributor_zip5",
+                "idx_donor_search_rollup_normalized_zip5",
             },
         ),
     ],
 )
-def test_donor_search_plan_uses_indexed_transaction_access(
+def test_donor_search_plan_uses_indexed_rollup_access(
     db_conn: psycopg.Connection,
     by: str,
     query: str,
@@ -168,46 +174,69 @@ def test_donor_search_plan_uses_indexed_transaction_access(
     plan = _explain_donor_search(db_conn, q=query, by=by)
     nodes = _plan_nodes(plan)
 
-    assert _transaction_access_index_names(nodes) & expected_indexes
-    assert not any(node.get("Node Type") == "Seq Scan" and node.get("Relation Name") == "transaction" for node in nodes)
+    assert _rollup_access_index_names(nodes) & expected_indexes
+    assert not any(
+        node.get("Node Type") == "Seq Scan" and node.get("Relation Name") == "donor_search_rollup" for node in nodes
+    )
 
 
 @pytest.mark.parametrize(("by", "query"), [("name", "smith"), ("employer", "technical services")])
-def test_donor_search_name_and_employer_reach_transaction_by_index(
+def test_donor_search_name_and_employer_reach_rollup_by_index(
     db_conn: psycopg.Connection,
     by: str,
     query: str,
 ) -> None:
-    """Name/employer donor search must reach transactions through an index, never a seq scan.
-
-    The mode scan no longer carries committee scope (that would re-scan the mode
-    bitmap once per federal committee — ~508 loops, ~12s on q=smith), so on the
-    deliberately tiny fixture the planner prefers the generic recent-date index
-    over the trigram index: with ~17 rows the date range is cheaper than a GIN
-    trigram bitmap. That is a fixture-scale artifact. At production scale the
-    trigram index is provably selected — see the live EXPLAIN captured in
-    docs/live-state/2026_07_12_public_launch_cutover.md, where
-    idx_transaction_donor_search_name_receipt_trgm scans the ~132k 'smith'
-    matches exactly once. The fixture-stable invariant we can assert here is that
-    transactions are always reached by an index, never a full sequential scan.
-    """
+    """Name/employer donor discovery must reach the refresh rollup by index."""
     seed_donor_search_fixture(db_conn)
 
     plan = _explain_donor_search(db_conn, q=query, by=by)
     nodes = _plan_nodes(plan)
 
-    assert _transaction_access_index_names(nodes), "donor search must reach transactions via an index"
-    assert not any(node.get("Node Type") == "Seq Scan" and node.get("Relation Name") == "transaction" for node in nodes)
+    assert "idx_donor_search_rollup_search_text_trgm" in _rollup_access_index_names(nodes)
+    assert not any(
+        node.get("Node Type") == "Seq Scan" and node.get("Relation Name") == "donor_search_rollup" for node in nodes
+    )
+
+
+def test_donor_search_detail_uses_page_driven_name_index_probes(
+    db_conn: psycopg.Connection,
+) -> None:
+    """Transaction detail must be fetched from page donors, not a full-table scan."""
+    seed_full_scope_skewed_donor_search_fixture(db_conn)
+
+    plan = _explain_donor_search(db_conn, q="williams", by="name")
+    nodes = _plan_nodes(plan)
+
+    name_probe_indexes = {
+        "idx_transaction_donor_search_name_receipt_trgm",
+        "idx_transaction_contributor_name_lower_trgm",
+    }
+    assert _transaction_access_index_names(nodes) & name_probe_indexes
+    assert not any(
+        node.get("Node Type") == "Seq Scan"
+        and node.get("Relation Name") == "transaction"
+        and node.get("Alias") == "transaction_row"
+        for node in nodes
+    )
 
 
 def test_donor_search_full_scope_common_surname_bounds_qualifying_transactions(
     db_conn: psycopg.Connection,
 ) -> None:
+    baseline_officeholder_count = db_conn.execute(
+        """
+        SELECT COUNT(*)::integer
+        FROM civic.officeholding officeholding
+        JOIN civic.office office ON office.id = officeholding.office_id
+        WHERE officeholding.valid_period @> CURRENT_DATE
+          AND office.office_level = 'federal'
+        """
+    ).fetchone()[0]
     fixture = seed_full_scope_skewed_donor_search_fixture(db_conn)
 
     # Deterministic Stage 1 live-shape proxy: 518 scoped committees with eight
     # extra current candidate-scope rows, plus unrelated candidate fan-out.
-    assert fixture.counts.current_federal_officeholders == 518
+    assert fixture.counts.current_federal_officeholders - baseline_officeholder_count == 518
     assert fixture.counts.linked_people == 518
     assert fixture.counts.candidate_scope_rows == 526
     assert fixture.counts.distinct_linked_committees == 518
@@ -219,9 +248,8 @@ def test_donor_search_full_scope_common_surname_bounds_qualifying_transactions(
     elapsed_seconds = perf_counter() - started_at
     nodes = _plan_nodes(plan)
     officeholder_node = _single_loop_cte_scan(nodes, "current_federal_officeholders")
-    matching_node = _single_loop_cte_scan(nodes, "matching_transactions")
-    scoped_matching_node = _single_loop_cte_scan(nodes, "scoped_matching_transactions")
-    qualifying_node = _cte_node(nodes, "qualifying_transactions")
+    matching_node = _single_loop_cte_scan(nodes, "matching_donor_records")
+    qualifying_node = _cte_producer_node(nodes, "qualifying_transactions")
     transaction_loops = _transaction_access_loop_counts(nodes)
 
     assert elapsed_seconds < 5, (
@@ -230,13 +258,12 @@ def test_donor_search_full_scope_common_surname_bounds_qualifying_transactions(
     assert officeholder_node["Actual Loops"] == 1
     assert int(officeholder_node["Actual Rows"]) == fixture.counts.current_federal_officeholders
     assert transaction_loops
-    assert max(transaction_loops) == 1
-    assert qualifying_node["Node Type"] == "CTE Scan"
-    assert qualifying_node["Alias"] == "qualifying_transactions"
+    assert 0 < max(transaction_loops) <= 20
+    assert max(transaction_loops) < int(matching_node["Actual Rows"])
     assert qualifying_node["Actual Loops"] == 1
     assert qualifying_node["Actual Rows"] <= 80
-    assert matching_node["Actual Rows"] >= fixture.counts.common_surname_transactions
-    assert scoped_matching_node["Actual Rows"] == fixture.counts.common_surname_transactions
+    assert matching_node["Actual Rows"] > 0
+    assert matching_node["Actual Rows"] < fixture.counts.common_surname_transactions
     assert any(node.get("Relation Name") == "transaction" for node in nodes)
 
 
@@ -246,8 +273,7 @@ def test_donor_search_match_cte_keeps_scope_and_receipt_filters_before_materiali
     ctes = _cte_bodies(sql)
     officeholder_cte = ctes["current_federal_officeholders"]
     candidate_scope_cte = ctes["current_federal_candidate_committees"]
-    match_cte = _cte_sql(sql, name="matching_transactions", next_name="qualifying_transactions")
-    scoped_match_cte = ctes["scoped_matching_transactions"]
+    match_cte = _cte_sql(sql, name="matching_donor_records", next_name="qualifying_transactions")
 
     assert sql.index("current_federal_officeholders AS MATERIALIZED") < sql.index(
         "current_federal_candidate_committees AS MATERIALIZED"
@@ -259,25 +285,27 @@ def test_donor_search_match_cte_keeps_scope_and_receipt_filters_before_materiali
     assert "search_matched_transactions AS MATERIALIZED" not in sql
     assert "search_matched_transaction_ids AS MATERIALIZED" not in sql
     assert "matching_transaction_ids AS MATERIALIZED" not in sql
-    assert "FROM cf.transaction t" in match_cte
-    assert "JOIN current_federal_committee_scope" not in match_cte
-    assert "EXISTS (" not in match_cte
-    assert "LEFT JOIN core.source_record sr" not in match_cte
-    assert "t.transaction_type LIKE '1%%'" in match_cte
-    assert "t.contributor_entity_type = 'IND'" in match_cte
-    assert "t.is_memo = FALSE" in match_cte
-    assert "t.amendment_indicator != 'T'" in match_cte
-    assert "t.transaction_date >= %s" in match_cte
-    assert "t.source_record_id IS NULL" in match_cte
-    assert "OR t.source_record_id NOT IN" in match_cte
-    assert "superseded.superseded_by IS NOT NULL" in match_cte
-    assert "FROM matching_transactions t" in scoped_match_cte
-    assert "JOIN current_federal_committee_scope scope_filter" in scoped_match_cte
-    assert "scope_filter.committee_id = t.committee_id" in scoped_match_cte
+    assert "FROM cf.donor_search_rollup rollup" in match_cte
+    assert "rollup.search_text LIKE" in match_cte
+    assert "cf.transaction" not in match_cte
 
     qualifying_cte = _cte_sql(sql, name="qualifying_transactions", next_name="donor_groups")
+    assert "FROM cf.transaction transaction_row" in qualifying_cte
+    assert "FROM page_donor_records record" in qualifying_cte
+    assert "CROSS JOIN LATERAL" in qualifying_cte
+    assert "LOWER(transaction_row.contributor_name_raw)" in qualifying_cte
+    assert "LIKE '%%' || LOWER(record.identity_name) || '%%'" in qualifying_cte
+    assert "OFFSET 0" in qualifying_cte
     assert "JOIN current_federal_candidate_committees" not in qualifying_cte
-    assert "JOIN current_federal_committee_scope" not in qualifying_cte
+    assert "JOIN current_federal_committee_scope scope_filter" in qualifying_cte
+    assert "transaction_row.transaction_type LIKE '1%%'" in qualifying_cte
+    assert "transaction_row.contributor_entity_type = 'IND'" in qualifying_cte
+    assert "transaction_row.is_memo = FALSE" in qualifying_cte
+    assert "transaction_row.amendment_indicator != 'T'" in qualifying_cte
+    assert "transaction_row.transaction_date >= %s" in qualifying_cte
+    assert "transaction_row.source_record_id IS NULL" in qualifying_cte
+    assert "OR transaction_row.source_record_id NOT IN" in qualifying_cte
+    assert "superseded.superseded_by IS NOT NULL" in qualifying_cte
 
 
 def test_donor_search_recipient_rollups_are_scoped_to_limited_donor_groups() -> None:
@@ -297,7 +325,10 @@ def test_donor_search_recipient_rollups_are_scoped_to_limited_donor_groups() -> 
 def test_donor_search_donor_groups_use_scalar_id_aggregate() -> None:
     sql, _params = _build_donor_search_statement(q="smith", by="name", limit=5, offset=0)
 
-    donor_groups_cte = _cte_bodies(sql)["donor_groups"]
+    ctes = _cte_bodies(sql)
+    matching_donor_keys_cte = ctes["matching_donor_keys"]
+    donor_groups_cte = ctes["donor_groups"]
 
-    assert "MIN(id::text)::uuid AS id" in donor_groups_cte
+    assert "MIN(record.id::text)::uuid AS id" in matching_donor_keys_cte
+    assert "page_key.id" in donor_groups_cte
     assert "ARRAY_AGG(id ORDER BY id ASC)" not in donor_groups_cte

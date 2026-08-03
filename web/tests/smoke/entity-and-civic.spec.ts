@@ -114,6 +114,8 @@ const LIVE_PERSON_ID = process.env.SMOKE_PERSON_ID === undefined ? SMOKE_CONGRES
 const SHOULD_SEED_LIVE_PERSON_SMOKE = process.env.SMOKE_PERSON_ID === undefined;
 const SHOULD_RUN_LIVE_CONTEST_SMOKE = process.env.SMOKE_CONTEST_ID !== undefined;
 const SHOULD_RUN_LIVE_OFFICE_SMOKE = process.env.SMOKE_OFFICE_ID !== undefined;
+const LIVE_API_BASE_URL = process.env.SMOKE_LIVE_API_BASE_URL ?? "http://127.0.0.1:8000";
+const LIVE_DURHAM_PERSON_NAME = "Carl Rist";
 
 async function expectFinanceChartHasStableHeight(page: any, chartName: string | RegExp): Promise<void> {
   const chartRegion = page.getByLabel(chartName).first();
@@ -571,6 +573,7 @@ test.describe.serial("entity and civic detail smoke (live mode)", () => {
   });
 
   test("/person/[id] renders public profile sections against live data", async ({ page }: { page: any }) => {
+    test.skip(!SHOULD_SEED_LIVE_PERSON_SMOKE, "federal finance smoke uses its dedicated live seed");
     const pageLoadErrors = capturePageLoadErrors(page);
 
     await page.goto(`/person/${LIVE_PERSON_ID}`);
@@ -615,6 +618,43 @@ test.describe.serial("entity and civic detail smoke (live mode)", () => {
     await expect(page.getByRole("group", { name: "Entity internals" })).toHaveCount(0);
     await assertBreadcrumbNav(page);
     await pageLoadErrors.assertNoErrors();
+  });
+
+  test("Durham officeholder renders on person detail and search against live data", async ({
+    page,
+    request
+  }: {
+    page: any;
+    request: any;
+  }) => {
+    test.skip(SHOULD_SEED_LIVE_PERSON_SMOKE, "Durham live smoke requires SMOKE_PERSON_ID");
+    const pageLoadErrors = capturePageLoadErrors(page);
+
+    const personResponse = await page.goto(`/person/${LIVE_PERSON_ID}`);
+
+    expect(personResponse?.ok()).toBe(true);
+    await expect(page.getByRole("heading", { name: LIVE_DURHAM_PERSON_NAME })).toBeVisible();
+    await expect(page.getByText("City Council Member", { exact: true })).toBeVisible();
+    await expect(page.getByText("municipal", { exact: true })).toBeVisible();
+    await pageLoadErrors.assertNoErrors();
+
+    const searchUrl = new URL("/v1/search", LIVE_API_BASE_URL);
+    searchUrl.searchParams.set("q", LIVE_DURHAM_PERSON_NAME);
+    searchUrl.searchParams.set("entity_type", "person");
+    const searchResponse = await request.get(searchUrl.toString());
+    expect(searchResponse.ok()).toBe(true);
+    const results = await searchResponse.json();
+    const result = results.find((row: { entity_id: string }) => row.entity_id === LIVE_PERSON_ID);
+    expect(result).toEqual({
+      entity_type: "person",
+      entity_id: LIVE_PERSON_ID,
+      name: LIVE_DURHAM_PERSON_NAME,
+      state: "NC",
+      party: null,
+      office_name: "City Council Member",
+      committee_type: null,
+      total_raised: null
+    });
   });
 
   test("/contest/[id] renders Stage 3 completed sections against live data", async ({ page }: { page: any }) => {

@@ -16,9 +16,11 @@ import type {
 import DonorPage from './+page.svelte';
 
 let currentPageUrl = new URL('https://civibus.test/');
-type DonorPageRenderData = DonorSearchResponse & {
+type DonorPageRenderData = Omit<DonorSearchResponse, 'rollup_completed_at'> & {
+  rollup_completed_at: string | null;
   shortQueryGuidance?: boolean;
   validationMessage?: string;
+  rollupUnavailable?: boolean;
 };
 type SourceFixture = DonorSearchUnderlyingRecord['sources'][number];
 
@@ -150,6 +152,7 @@ function donorResponse(overrides: Partial<DonorPageRenderData> = {}): DonorPageR
     by: 'name',
     limit: 20,
     offset: 0,
+    rollup_completed_at: '2026-07-17T12:00:00Z',
     results: [unresolvedResult()],
     ...overrides
   };
@@ -161,7 +164,43 @@ function countOccurrences(value: string, needle: string): number {
 
 describe('/donors route rendering', () => {
   beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-07-18T12:00:00Z'));
     currentPageUrl = new URL('https://preview.internal:5173/donors?q=Jane&by=name');
+  });
+
+  it('renders the current rollup build time without claiming live data', () => {
+    const rendered = render(DonorPage, { props: { data: donorResponse() } });
+
+    expect(rendered.body).toContain('data-testid="donor-freshness-stamp"');
+    expect(rendered.body).toContain('Donor totals built 1 day ago (2026-07-17)');
+    expect(rendered.body.toLowerCase()).not.toContain('live data');
+    expect(rendered.body.toLowerCase()).not.toContain('real time');
+  });
+
+  it('renders rollup unavailability distinctly from zero results and retains the form values', () => {
+    const rendered = render(DonorPage, {
+      props: {
+        data: donorResponse({
+          query: 'Williams',
+          by: 'employer',
+          limit: 10,
+          offset: 20,
+          rollup_completed_at: null,
+          results: [],
+          rollupUnavailable: true
+        })
+      }
+    });
+
+    expect(rendered.body).toContain(
+      'Donor search is temporarily unavailable while contribution data is refreshed.'
+    );
+    expect(rendered.body).toContain('value="Williams"');
+    expect(rendered.body).toContain('<option value="employer" selected="">employer</option>');
+    expect(rendered.body).not.toContain('No donors match this search.');
+    expect(rendered.body).not.toContain('data-testid="donor-result-row"');
+    expect(rendered.body).not.toContain('data-testid="donor-freshness-stamp"');
   });
 
   it('renders populated donor rows with money, recipient links, and seed fields', () => {
@@ -369,6 +408,7 @@ describe('/donors route rendering', () => {
     });
 
     expect(rendered.body).toContain('No donors match this search.');
+    expect(rendered.body).toContain('data-testid="donor-freshness-stamp"');
     expect(rendered.body).not.toContain('<table');
   });
 

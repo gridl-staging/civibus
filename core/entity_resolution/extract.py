@@ -14,6 +14,7 @@ from core.entity_resolution.splink_config import (
     PERSON_PREPROCESSING_SQL,
 )
 from domains.campaign_finance.entity_extractors.extract import _normalize_zip_parts
+from domains.campaign_finance.normalize.employers import canonicalize_employer
 from domains.campaign_finance.normalize.names import parse_name
 
 RowDict = dict[str, Any]
@@ -391,6 +392,8 @@ def prepare_rows_for_probabilistic_scoring(rows: list[RowDict]) -> list[RowDict]
     prepared_rows: list[RowDict] = []
     for row in rows:
         prepared_row = dict(row)
+        if "employer" in prepared_row:
+            prepared_row["employer"] = canonicalize_employer(prepared_row.get("employer"))
         entity_id = prepared_row["id"]
         row_index = row_index_by_entity_id[entity_id]
         row_index_by_entity_id[entity_id] += 1

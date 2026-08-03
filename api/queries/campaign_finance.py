@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from functools import lru_cache
 import json
@@ -423,6 +423,7 @@ DONOR_SEARCH_MAX_LIMIT = 50
 _DONOR_SEARCH_NESTED_DETAIL_LIMIT = 5
 _DONOR_SEARCH_SUPPORTED_MODES = frozenset({"name", "employer", "zip"})
 _ZIP5_SEARCH_RE = re.compile(r"^\s*(\d{5})(?:-?\d{4})?\s*$")
+_DONOR_SEARCH_ROLLUP_MAX_AGE = timedelta(days=8)
 
 # FEC comparison buckets use absolute amount for membership while signed amounts
 # remain authoritative for totals, so correction-like rows reduce dollars.
@@ -1064,80 +1065,99 @@ _DONOR_SEARCH_SQL_TEMPLATE = f"""
         SELECT DISTINCT committee_id
         FROM current_federal_candidate_committees
     ),
-    matching_transactions AS MATERIALIZED (
-        -- This is the first materialized transaction boundary: the mode
-        -- predicate, receipt filters, date window, and source-record validity run
-        -- once for the search term before the federal committee scope is applied.
-        -- Do not cap matched rows here: donor LIMIT belongs after GROUP BY so
-        -- high-volume donors are counted completely before pagination. Source
-        -- validity uses an anti-superseded check here; provenance details are
-        -- fetched after donor rollup so the live path does not do source-record
-        -- lookups for every matched row.
-        SELECT
-            t.id,
-            t.committee_id,
-            t.amount,
-            t.transaction_date,
-            BTRIM(t.contributor_name_raw) AS contributor_name,
-            NULLIF(BTRIM(t.contributor_employer), '') AS contributor_employer,
-            NULLIF(BTRIM(t.contributor_occupation), '') AS contributor_occupation,
-            NULLIF(BTRIM(t.contributor_city), '') AS contributor_city,
-            NULLIF(BTRIM(t.contributor_state), '') AS contributor_state,
-            NULLIF(LEFT(t.contributor_zip, 5), '') AS normalized_zip5,
-            t.contributor_name_raw AS identity_name,
-            COALESCE(t.contributor_employer, '') AS identity_employer,
-            COALESCE(t.contributor_occupation, '') AS identity_occupation,
-            COALESCE(t.contributor_city, '') AS identity_city,
-            COALESCE(t.contributor_state, '') AS identity_state,
-            COALESCE(t.contributor_zip, '') AS identity_zip,
-            t.source_record_id
-        FROM cf.transaction t
-        WHERE {{match_sql}}
-{_DONOR_SEARCH_RECEIPT_TRANSACTION_WHERE_SQL}
-{NOT_SUPERSEDED_SOURCE_RECORD_WHERE_SQL}
-          AND t.contributor_name_raw IS NOT NULL
-          AND BTRIM(t.contributor_name_raw) != ''
-    ),
-    scoped_matching_transactions AS MATERIALIZED (
-        SELECT t.*
-        FROM matching_transactions t
-        JOIN current_federal_committee_scope scope_filter
-          ON scope_filter.committee_id = t.committee_id
-    ),
     matching_donor_records AS MATERIALIZED (
         SELECT
-            MIN(t.id::text)::uuid AS id,
-            t.contributor_name,
-            t.contributor_employer,
-            t.contributor_occupation,
-            t.contributor_city,
-            t.contributor_state,
-            t.normalized_zip5,
-            t.identity_name,
-            t.identity_employer,
-            t.identity_occupation,
-            t.identity_city,
-            t.identity_state,
-            t.identity_zip,
-            {_donor_key_sql("t")} AS raw_donor_key,
-            COALESCE(SUM(t.amount), 0) AS total_amount,
-            COUNT(*)::integer AS transaction_count,
-            MAX(t.transaction_date) AS latest_transaction_date
-        FROM scoped_matching_transactions t
+            rollup.representative_transaction_id AS id,
+            rollup.contributor_name,
+            rollup.contributor_employer,
+            rollup.contributor_occupation,
+            rollup.contributor_city,
+            rollup.contributor_state,
+            rollup.normalized_zip5,
+            rollup.contributor_name AS identity_name,
+            COALESCE(rollup.contributor_employer, '') AS identity_employer,
+            COALESCE(rollup.contributor_occupation, '') AS identity_occupation,
+            COALESCE(rollup.contributor_city, '') AS identity_city,
+            COALESCE(rollup.contributor_state, '') AS identity_state,
+            COALESCE(rollup.normalized_zip5, '') AS identity_zip,
+            rollup.donor_key AS raw_donor_key,
+            rollup.total_amount,
+            rollup.transaction_count,
+            rollup.latest_transaction_date
+        FROM cf.donor_search_rollup rollup
+        WHERE {{match_sql}}
+    ),
+    resolved_identity_variants AS MATERIALIZED (
+        SELECT
+            record.raw_donor_key,
+            variant.contributor_name_raw AS identity_name_raw,
+            variant.contributor_employer AS identity_employer,
+            variant.contributor_occupation AS identity_occupation,
+            variant.contributor_city AS identity_city,
+            variant.contributor_state AS identity_state,
+            variant.contributor_zip AS identity_zip,
+            identity_record.id AS donor_identity_record_id,
+            active_canonical_identity.id AS resolved_donor_identity_id
+        FROM matching_donor_records record
+        JOIN cf.donor_search_rollup_identity_variant variant
+          ON variant.donor_key = record.raw_donor_key
+        LEFT JOIN core.donor_identity identity_record
+          ON identity_record.contributor_name_raw = variant.contributor_name_raw
+         AND COALESCE(identity_record.contributor_employer, '') = variant.contributor_employer
+         AND COALESCE(identity_record.contributor_occupation, '') = variant.contributor_occupation
+         AND COALESCE(identity_record.contributor_city, '') = variant.contributor_city
+         AND COALESCE(identity_record.contributor_state, '') = variant.contributor_state
+         AND COALESCE(identity_record.contributor_zip, '') = variant.contributor_zip
+        LEFT JOIN core.cluster_member active_member
+          ON active_member.entity_id = identity_record.id
+         AND active_member.entity_type = 'donor_identity'
+         AND active_member.split_at IS NULL
+        LEFT JOIN core.entity_cluster active_cluster
+          ON active_cluster.id = active_member.cluster_id
+         AND active_cluster.entity_type = 'donor_identity'
+        LEFT JOIN core.cluster_member active_canonical_member
+          ON active_canonical_member.cluster_id = active_cluster.id
+         AND active_canonical_member.entity_type = 'donor_identity'
+         AND active_canonical_member.entity_id = active_cluster.canonical_entity_id
+         AND active_canonical_member.is_canonical
+         AND active_canonical_member.split_at IS NULL
+        LEFT JOIN core.donor_identity active_canonical_identity
+          ON active_canonical_identity.id = active_canonical_member.entity_id
+    ),
+    variant_resolution_counts AS MATERIALIZED (
+        SELECT
+            variant.raw_donor_key,
+            variant.identity_name_raw,
+            variant.identity_employer,
+            variant.identity_occupation,
+            variant.identity_city,
+            variant.identity_state,
+            variant.identity_zip,
+            COUNT(DISTINCT variant.resolved_donor_identity_id) AS canonical_identity_count,
+            MIN(variant.resolved_donor_identity_id::text)::uuid AS resolved_donor_identity_id
+        FROM resolved_identity_variants variant
         GROUP BY
-            t.contributor_name,
-            t.contributor_employer,
-            t.contributor_occupation,
-            t.contributor_city,
-            t.contributor_state,
-            t.normalized_zip5,
-            t.identity_name,
-            t.identity_employer,
-            t.identity_occupation,
-            t.identity_city,
-            t.identity_state,
-            t.identity_zip,
-            raw_donor_key
+            variant.raw_donor_key,
+            variant.identity_name_raw,
+            variant.identity_employer,
+            variant.identity_occupation,
+            variant.identity_city,
+            variant.identity_state,
+            variant.identity_zip
+    ),
+    donor_resolution AS MATERIALIZED (
+        SELECT
+            record.raw_donor_key,
+            CASE
+                WHEN COUNT(*) = COUNT(*) FILTER (WHERE variant.canonical_identity_count = 1)
+                 AND COUNT(DISTINCT variant.resolved_donor_identity_id) = 1
+                THEN MIN(variant.resolved_donor_identity_id::text)::uuid
+                ELSE NULL
+            END AS resolved_donor_identity_id
+        FROM matching_donor_records record
+        LEFT JOIN variant_resolution_counts variant
+          ON variant.raw_donor_key = record.raw_donor_key
+        GROUP BY record.raw_donor_key
     ),
     resolved_donor_records AS MATERIALIZED (
         -- Resolve identity once per distinct raw donor record rather than once
@@ -1146,27 +1166,27 @@ _DONOR_SEARCH_SQL_TEMPLATE = f"""
         SELECT
             record.id,
             CASE
-                WHEN active_cluster.id IS NULL THEN record.contributor_name
+                WHEN resolution.resolved_donor_identity_id IS NULL THEN record.contributor_name
                 ELSE BTRIM(canonical_identity.contributor_name_raw)
             END AS contributor_name,
             CASE
-                WHEN active_cluster.id IS NULL THEN record.contributor_employer
+                WHEN resolution.resolved_donor_identity_id IS NULL THEN record.contributor_employer
                 ELSE NULLIF(BTRIM(canonical_identity.contributor_employer), '')
             END AS contributor_employer,
             CASE
-                WHEN active_cluster.id IS NULL THEN record.contributor_occupation
+                WHEN resolution.resolved_donor_identity_id IS NULL THEN record.contributor_occupation
                 ELSE NULLIF(BTRIM(canonical_identity.contributor_occupation), '')
             END AS contributor_occupation,
             CASE
-                WHEN active_cluster.id IS NULL THEN record.contributor_city
+                WHEN resolution.resolved_donor_identity_id IS NULL THEN record.contributor_city
                 ELSE NULLIF(BTRIM(canonical_identity.contributor_city), '')
             END AS contributor_city,
             CASE
-                WHEN active_cluster.id IS NULL THEN record.contributor_state
+                WHEN resolution.resolved_donor_identity_id IS NULL THEN record.contributor_state
                 ELSE NULLIF(BTRIM(canonical_identity.contributor_state), '')
             END AS contributor_state,
             CASE
-                WHEN active_cluster.id IS NULL THEN record.normalized_zip5
+                WHEN resolution.resolved_donor_identity_id IS NULL THEN record.normalized_zip5
                 ELSE canonical_identity.zip5
             END AS normalized_zip5,
             record.identity_name,
@@ -1176,29 +1196,16 @@ _DONOR_SEARCH_SQL_TEMPLATE = f"""
             record.identity_state,
             record.identity_zip,
             record.raw_donor_key,
-            identity_record.id AS donor_identity_record_id,
-            active_cluster.canonical_entity_id AS resolved_donor_identity_id,
-            COALESCE(active_cluster.canonical_entity_id::text, record.raw_donor_key) AS donor_key,
+            resolution.resolved_donor_identity_id,
+            COALESCE(resolution.resolved_donor_identity_id::text, record.raw_donor_key) AS donor_key,
             record.total_amount,
             record.transaction_count,
             record.latest_transaction_date
         FROM matching_donor_records record
-        LEFT JOIN core.donor_identity identity_record
-          ON identity_record.contributor_name_raw = record.identity_name
-         AND identity_record.contributor_employer = record.identity_employer
-         AND identity_record.contributor_occupation = record.identity_occupation
-         AND identity_record.contributor_city = record.identity_city
-         AND identity_record.contributor_state = record.identity_state
-         AND identity_record.contributor_zip = record.identity_zip
-        LEFT JOIN core.cluster_member active_member
-          ON active_member.entity_id = identity_record.id
-         AND active_member.entity_type = 'donor_identity'
-         AND active_member.split_at IS NULL
-        LEFT JOIN core.entity_cluster active_cluster
-          ON active_cluster.id = active_member.cluster_id
-         AND active_cluster.entity_type = 'donor_identity'
+        JOIN donor_resolution resolution
+          ON resolution.raw_donor_key = record.raw_donor_key
         LEFT JOIN core.donor_identity canonical_identity
-          ON canonical_identity.id = active_cluster.canonical_entity_id
+          ON canonical_identity.id = resolution.resolved_donor_identity_id
     ),
     matching_donor_keys AS MATERIALIZED (
         SELECT
@@ -1248,49 +1255,96 @@ _DONOR_SEARCH_SQL_TEMPLATE = f"""
             record.contributor_city,
             record.contributor_state,
             record.normalized_zip5,
-            record.donor_identity_record_id,
+            identity_variant.donor_identity_record_id,
             record.resolved_donor_identity_id,
             record.donor_key,
             t.source_record_id
-        FROM scoped_matching_transactions t
-        JOIN page_donor_records record
-          ON record.raw_donor_key = {_donor_key_sql("t")}
-         AND record.identity_name = t.identity_name
-         AND record.identity_employer = t.identity_employer
-         AND record.identity_occupation = t.identity_occupation
-         AND record.identity_city = t.identity_city
-         AND record.identity_state = t.identity_state
-         AND record.identity_zip = t.identity_zip
+        FROM page_donor_records record
+        CROSS JOIN LATERAL (
+            SELECT transaction_detail.*
+            FROM (
+                SELECT
+                    transaction_row.id,
+                    transaction_row.committee_id,
+                    transaction_row.amount,
+                    transaction_row.transaction_date,
+                    transaction_row.contributor_name_raw AS identity_name_raw,
+                    COALESCE(transaction_row.contributor_employer, '') AS identity_employer,
+                    COALESCE(transaction_row.contributor_occupation, '') AS identity_occupation,
+                    COALESCE(transaction_row.contributor_city, '') AS identity_city,
+                    COALESCE(transaction_row.contributor_state, '') AS identity_state,
+                    COALESCE(transaction_row.contributor_zip, '') AS identity_zip,
+                    BTRIM(transaction_row.contributor_name_raw) AS contributor_name,
+                    NULLIF(BTRIM(transaction_row.contributor_employer), '') AS contributor_employer,
+                    NULLIF(BTRIM(transaction_row.contributor_occupation), '') AS contributor_occupation,
+                    NULLIF(BTRIM(transaction_row.contributor_city), '') AS contributor_city,
+                    NULLIF(BTRIM(transaction_row.contributor_state), '') AS contributor_state,
+                    NULLIF(LEFT(transaction_row.contributor_zip, 5), '') AS normalized_zip5,
+                    transaction_row.source_record_id
+                FROM cf.transaction transaction_row
+                JOIN current_federal_committee_scope scope_filter
+                  ON scope_filter.committee_id = transaction_row.committee_id
+                WHERE transaction_row.contributor_name_raw IS NOT NULL
+                  AND BTRIM(transaction_row.contributor_name_raw) != ''
+                  AND LOWER(transaction_row.contributor_name_raw)
+                      LIKE '%%' || LOWER(record.identity_name) || '%%'
+{_DONOR_SEARCH_RECEIPT_TRANSACTION_WHERE_SQL.replace("t.", "transaction_row.")}
+{NOT_SUPERSEDED_SOURCE_RECORD_WHERE_SQL.replace("t.", "transaction_row.")}
+            ) transaction_detail
+            WHERE record.raw_donor_key = {_donor_key_sql("transaction_detail")}
+            -- Keep the page-key dependency lateral so PostgreSQL performs one
+            -- indexed name probe per displayed donor instead of flattening the
+            -- join into a scan of every qualifying transaction.
+            OFFSET 0
+        ) t
+        LEFT JOIN resolved_identity_variants identity_variant
+          ON identity_variant.raw_donor_key = record.raw_donor_key
+         AND identity_variant.identity_name_raw = t.identity_name_raw
+         AND identity_variant.identity_employer = t.identity_employer
+         AND identity_variant.identity_occupation = t.identity_occupation
+         AND identity_variant.identity_city = t.identity_city
+         AND identity_variant.identity_state = t.identity_state
+         AND identity_variant.identity_zip = t.identity_zip
+         AND identity_variant.resolved_donor_identity_id = record.resolved_donor_identity_id
     ),
     donor_groups AS (
         SELECT
-            MIN(id::text)::uuid AS id,
-            contributor_name,
-            contributor_employer,
-            contributor_occupation,
-            contributor_city,
-            contributor_state,
-            normalized_zip5,
-            resolved_donor_identity_id,
-            donor_key,
-            COALESCE(SUM(amount), 0) AS total_amount,
-            COUNT(*)::integer AS transaction_count,
+            page_key.id,
+            page_key.contributor_name,
+            page_key.contributor_employer,
+            page_key.contributor_occupation,
+            page_key.contributor_city,
+            page_key.contributor_state,
+            page_key.normalized_zip5,
+            page_key.resolved_donor_identity_id,
+            page_key.donor_key,
+            page_key.total_amount,
+            page_key.transaction_count,
             CASE
-                WHEN resolved_donor_identity_id IS NULL THEN 1
-                ELSE COUNT(DISTINCT donor_identity_record_id)::integer
+                WHEN page_key.resolved_donor_identity_id IS NULL THEN 1
+                ELSE COUNT(DISTINCT detail.donor_identity_record_id)::integer
             END AS combined_record_count,
-            MAX(transaction_date) AS latest_transaction_date
-        FROM qualifying_transactions
+            MAX(detail.transaction_date) AS latest_transaction_date
+        FROM matching_donor_keys page_key
+        JOIN qualifying_transactions detail
+          ON detail.donor_key = page_key.donor_key
         GROUP BY
-            contributor_name,
-            contributor_employer,
-            contributor_occupation,
-            contributor_city,
-            contributor_state,
-            normalized_zip5,
-            resolved_donor_identity_id,
-            donor_key
-        ORDER BY total_amount DESC, transaction_count DESC, contributor_name ASC, id ASC
+            page_key.id,
+            page_key.contributor_name,
+            page_key.contributor_employer,
+            page_key.contributor_occupation,
+            page_key.contributor_city,
+            page_key.contributor_state,
+            page_key.normalized_zip5,
+            page_key.resolved_donor_identity_id,
+            page_key.donor_key,
+            page_key.total_amount,
+            page_key.transaction_count
+        ORDER BY
+            page_key.total_amount DESC,
+            page_key.transaction_count DESC,
+            page_key.contributor_name ASC,
+            page_key.id ASC
     ),
     donor_page_transactions AS MATERIALIZED (
         SELECT qt.*
@@ -1626,6 +1680,14 @@ class UnknownCountySlugError(ValueError):
         self.state = state
         self.county_slug = county_slug
         super().__init__(f"Unknown county slug for state: {state}/{county_slug}")
+
+
+class DonorSearchRollupUnavailableError(RuntimeError):
+    """Raised when donor search cannot safely serve the refresh-built rollup."""
+
+    def __init__(self, reason: str) -> None:
+        self.reason = reason
+        super().__init__(f"Donor search rollup unavailable: {reason}")
 
 
 def _qualifying_transactions_cte(
@@ -2492,31 +2554,25 @@ def _normalize_donor_search_input(*, q: str, by: str, limit: int, offset: int) -
     return normalized_query, normalized_by, clamped_limit, clamped_offset
 
 
-def _donor_search_match_sql(by: str) -> str:
+def _donor_search_match_sql(by: str, query: str) -> tuple[str, tuple[str, ...]]:
+    escaped_query = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
     if by == "name":
-        return "t.contributor_name_raw IS NOT NULL AND LOWER(t.contributor_name_raw) LIKE '%%' || LOWER(%s) || '%%'"
-    if by == "employer":
-        return "t.contributor_employer IS NOT NULL AND LOWER(t.contributor_employer) LIKE '%%' || LOWER(%s) || '%%'"
-    if by == "zip":
-        return "t.contributor_zip IS NOT NULL AND LEFT(t.contributor_zip, 5) = %s"
-    raise ValueError(f"Unsupported donor search mode: {by}")
-
-
-def _donor_search_scope_sql(by: str) -> tuple[str, str]:
-    if by == "zip":
         return (
-            "",
-            "          AND EXISTS (\n"
-            "              SELECT 1\n"
-            "              FROM current_federal_committee_scope scope_filter\n"
-            "              WHERE scope_filter.committee_id = t.committee_id\n"
-            "          )",
+            "rollup.search_text LIKE '%%' || LOWER(%s) || '%%' "
+            "ESCAPE '\\' "
+            "AND LOWER(rollup.contributor_name) LIKE '%%' || LOWER(%s) || '%%' ESCAPE '\\'",
+            (escaped_query, escaped_query),
         )
-    return (
-        "        JOIN current_federal_committee_scope scope_filter\n"
-        "          ON scope_filter.committee_id = t.committee_id",
-        "",
-    )
+    if by == "employer":
+        return (
+            "rollup.search_text LIKE '%%' || LOWER(%s) || '%%' "
+            "ESCAPE '\\' "
+            "AND LOWER(rollup.contributor_employer) LIKE '%%' || LOWER(%s) || '%%' ESCAPE '\\'",
+            (escaped_query, escaped_query),
+        )
+    if by == "zip":
+        return "rollup.normalized_zip5 = %s", (query,)
+    raise ValueError(f"Unsupported donor search mode: {by}")
 
 
 def _build_donor_search_statement(
@@ -2528,9 +2584,9 @@ def _build_donor_search_statement(
 ) -> tuple[str, tuple[object, ...]]:
     """Build the donor-search SQL string and ordered DB parameters.
 
-    The selected search mode controls only the match predicate interpolated into
-    the shared SQL template; the returned parameters carry the normalized query,
-    contribution start date, clamped limit, and clamped offset.
+    The selected search mode controls the match predicate interpolated into the
+    shared SQL template. The returned parameters carry one or two normalized
+    query binds, clamped pagination, then the contribution start date.
     """
     normalized_query, normalized_by, clamped_limit, clamped_offset = _normalize_donor_search_input(
         q=q,
@@ -2538,14 +2594,12 @@ def _build_donor_search_statement(
         limit=limit,
         offset=offset,
     )
-    scope_from_sql, scope_where_sql = _donor_search_scope_sql(normalized_by)
+    match_sql, match_parameters = _donor_search_match_sql(normalized_by, normalized_query)
     return (
         _DONOR_SEARCH_SQL_TEMPLATE.format(
-            match_sql=_donor_search_match_sql(normalized_by),
-            scope_from_sql=scope_from_sql,
-            scope_where_sql=scope_where_sql,
+            match_sql=match_sql,
         ),
-        (normalized_query, CONTRIBUTION_INSIGHTS_MIN_DATE, clamped_limit, clamped_offset),
+        (*match_parameters, clamped_limit, clamped_offset, CONTRIBUTION_INSIGHTS_MIN_DATE),
     )
 
 
@@ -2698,6 +2752,54 @@ def _shape_donor_search_results(rows: list[dict[str, Any]]) -> list[dict[str, An
     return donors
 
 
+def _coerce_rollup_completed_at(value: Any) -> datetime:
+    if isinstance(value, datetime):
+        completed_at = value
+    elif isinstance(value, str):
+        try:
+            completed_at = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise DonorSearchRollupUnavailableError("malformed_provenance_timestamp") from exc
+    else:
+        raise DonorSearchRollupUnavailableError("malformed_provenance_timestamp")
+
+    if completed_at.tzinfo is None:
+        return completed_at.replace(tzinfo=timezone.utc)
+    return completed_at.astimezone(timezone.utc)
+
+
+def _require_current_donor_search_rollup(conn: psycopg.Connection, *, now: datetime | None = None) -> datetime:
+    # Keep this import at call time: the refresh builder consumes the API-owned
+    # donor-key contract, while serving must call its canonical fingerprint owner.
+    from core.refresh import donor_rollup
+
+    current_time = now or datetime.now(timezone.utc)
+    current_time = current_time if current_time.tzinfo is not None else current_time.replace(tzinfo=timezone.utc)
+
+    with conn.cursor(row_factory=dict_row) as cursor:
+        cursor.execute(
+            """
+            SELECT donor_key_fingerprint, completed_at
+            FROM cf.donor_search_rollup_provenance
+            WHERE singleton IS TRUE
+            """
+        )
+        provenance = cursor.fetchone()
+
+    if provenance is None:
+        raise DonorSearchRollupUnavailableError("missing_provenance")
+
+    completed_at = _coerce_rollup_completed_at(provenance["completed_at"])
+    if completed_at > current_time:
+        raise DonorSearchRollupUnavailableError("future_provenance_timestamp")
+    if current_time - completed_at > _DONOR_SEARCH_ROLLUP_MAX_AGE:
+        raise DonorSearchRollupUnavailableError("stale_provenance")
+    if provenance["donor_key_fingerprint"] != donor_rollup.donor_key_fingerprint():
+        raise DonorSearchRollupUnavailableError("donor_key_fingerprint_mismatch")
+
+    return completed_at
+
+
 def search_donors(
     conn: psycopg.Connection,
     *,
@@ -2719,6 +2821,7 @@ def search_donors(
         limit=limit,
         offset=offset,
     )
+    rollup_completed_at = _require_current_donor_search_rollup(conn)
     sql, params = _build_donor_search_statement(
         q=normalized_query,
         by=normalized_by,
@@ -2731,13 +2834,16 @@ def search_donors(
         rows = list(cursor.fetchall())
 
     if not rows:
-        return _empty_donor_search_payload(q=q, by=normalized_by, limit=clamped_limit, offset=clamped_offset)
+        payload = _empty_donor_search_payload(q=q, by=normalized_by, limit=clamped_limit, offset=clamped_offset)
+        payload["rollup_completed_at"] = rollup_completed_at
+        return payload
 
     return {
         "query": q,
         "by": normalized_by,
         "limit": clamped_limit,
         "offset": clamped_offset,
+        "rollup_completed_at": rollup_completed_at,
         "results": _shape_donor_search_results(rows),
     }
 

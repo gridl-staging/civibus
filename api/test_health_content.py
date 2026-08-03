@@ -33,11 +33,21 @@ from api._federal_first_test_support import (
     fresh_federal_fec_bulk_pull_row,
 )
 from api.test_campaign_finance_support import (
+    CandidateCommitteeLinkSeed,
     CandidateRowSeed,
+    CommitteeRowSeed,
+    CommitteeSummaryRowSeed,
+    FilingRowSeed,
+    TransactionRowSeed,
+    insert_candidate_committee_link_row,
     insert_candidate_row,
+    insert_committee_row,
+    insert_committee_summary_row,
     insert_electoral_division_row,
+    insert_filing_row,
     insert_office_row,
     insert_officeholding_row,
+    insert_transaction_row,
 )
 from core.db import insert_person, try_insert_data_source
 from core.people.federal_officeholders import (
@@ -58,8 +68,11 @@ FEC_FRESHNESS_CUTOFF_EPOCH = 1_784_289_600
 FEC_FRESHNESS_STALE_EPOCH = 1_784_289_599
 CANDIDATE_MONEY_COVERAGE_CHECK = "cf_candidate_money_serving_coverage"
 CANDIDATE_MONEY_RECENT_SUMMARY_COVERAGE_CHECK = "cf_candidate_money_recent_summary_coverage"
-CANDIDATE_MONEY_PRODUCTION_OBSERVATION = 2_079
-CANDIDATE_MONEY_DEFAULT_FLOOR = 1_800
+# Repaired serving coverage now counts every promoted official total (in-window
+# plus out-of-cycle promotions); the proven local proxy pins both the count and
+# the floor at 7_743 = 4_268 + 3_475.
+CANDIDATE_MONEY_PRODUCTION_OBSERVATION = 7_743
+CANDIDATE_MONEY_DEFAULT_FLOOR = 7_743
 CANDIDATE_MONEY_RECENT_SUMMARY_PRODUCTION_OBSERVATION = 1_799
 CANDIDATE_MONEY_RECENT_SUMMARY_DEFAULT_FLOOR = 1_440
 CIVIC_OFFICEHOLDING_PRODUCTION_OBSERVATION = 544
@@ -74,6 +87,8 @@ STAGE_1_EVIDENCE_NOW = datetime(2026, 7, 31, 12, 0, tzinfo=timezone.utc)
 STAGE_1_OFFICEHOLDER_COUNT = 20
 STAGE_1_MONEY_LINKED_COUNT = 2
 STAGE_1_VALID_PERIOD = "[2000-01-01,2100-01-01)"
+OUT_OF_CYCLE_OFFICIAL_TOTAL_BUCKET = "out_of_cycle_official_total_promoted_uncounted_by_health_predicate"
+OUT_OF_CYCLE_OFFICIAL_TOTAL_REPAIRED_LOCAL_COUNT = 7_743
 
 EXPECTED_FEDERAL_FIRST_CHECKS = {
     "cf_transaction_total",
@@ -86,11 +101,13 @@ EXPECTED_FEDERAL_FIRST_CHECKS = {
     CANDIDATE_MONEY_COVERAGE_CHECK,
     CANDIDATE_MONEY_RECENT_SUMMARY_COVERAGE_CHECK,
     FEDERAL_OFFICEHOLDER_MONEY_COVERAGE_CHECK,
+    "cf_donor_search_rollup_total",
 }
 
 
 @dataclass(frozen=True)
 class _SyntheticSelectedCycle:
+    selected_cycle: int
     coverage_start_date: date
     coverage_end_date: date
 
@@ -105,6 +122,164 @@ def _healthy_connection(*, freshness_result: tuple[object, ...] | None) -> FakeC
 
 def _stage_1_uuid(offset: int) -> UUID:
     return UUID(f"55020000-0000-0000-0000-{offset:012d}")
+
+
+def _official_total_health_uuid(offset: int) -> UUID:
+    return UUID(f"55030000-0000-0000-0000-{offset:012d}")
+
+
+def _insert_official_total_health_candidate(
+    db_conn: psycopg.Connection,
+    *,
+    index: int,
+    coverage_end_date: date,
+    selected_cycle_activity: bool = False,
+    selected_cycle_transaction_activity: bool = False,
+) -> tuple[UUID, str]:
+    if selected_cycle_activity and selected_cycle_transaction_activity:
+        raise ValueError("select one selected-cycle activity shape")
+
+    candidate_id = _official_total_health_uuid(100 + index)
+    candidate_name = f"Official Total Health Candidate {index}"
+    insert_candidate_row(
+        db_conn,
+        CandidateRowSeed(
+            id=candidate_id,
+            fec_candidate_id=f"H6NC9{index:04d}",
+            name=candidate_name,
+            office="H",
+            state="NC",
+            district="09",
+            total_receipts=Decimal(f"{index}00.00"),
+            total_disbursements=Decimal(f"{index}0.00"),
+            cash_on_hand=Decimal(f"{index}0.00"),
+            summary_coverage_end_date=coverage_end_date,
+        ),
+    )
+    if not selected_cycle_activity and not selected_cycle_transaction_activity:
+        return candidate_id, candidate_name
+
+    committee_id = _insert_selected_cycle_health_committee(db_conn, index=index, candidate_id=candidate_id)
+    if selected_cycle_activity:
+        insert_committee_summary_row(
+            db_conn,
+            CommitteeSummaryRowSeed(
+                committee_id=committee_id,
+                cycle=2026,
+                total_receipts=Decimal("500.00"),
+                total_disbursements=Decimal("125.00"),
+                cash_on_hand=Decimal("375.00"),
+                coverage_start_date=date(2025, 1, 1),
+                coverage_end_date=date(2026, 6, 30),
+            ),
+        )
+    if selected_cycle_transaction_activity:
+        _insert_selected_cycle_health_transaction(db_conn, index=index, committee_id=committee_id)
+    return candidate_id, candidate_name
+
+
+def _insert_selected_cycle_health_committee(
+    db_conn: psycopg.Connection,
+    *,
+    index: int,
+    candidate_id: UUID,
+    committee_designation: str = "P",
+) -> UUID:
+    """Seed one selected-cycle-linked committee for the candidate.
+
+    ``committee_designation`` defaults to the authorized ``P`` shape; pass a
+    denylisted value (``J``/``D``) to exercise ``_AUTHORIZED_CANDIDATE_COMMITTEE_FILTER``.
+    """
+    committee_id = _official_total_health_uuid(200 + index)
+    insert_committee_row(
+        db_conn,
+        CommitteeRowSeed(
+            id=committee_id,
+            fec_committee_id=f"C9900{index:04d}",
+            name=f"Official Total Health Committee {index}",
+            committee_type="H",
+            committee_designation=committee_designation,
+        ),
+    )
+    insert_candidate_committee_link_row(
+        db_conn,
+        CandidateCommitteeLinkSeed(
+            id=_official_total_health_uuid(300 + index),
+            candidate_id=candidate_id,
+            committee_id=committee_id,
+            valid_period="[2025-01-01,2027-01-01)",
+            designation="P",
+            candidate_election_year=2026,
+            fec_election_year=2026,
+        ),
+    )
+    return committee_id
+
+
+def _insert_selected_cycle_health_transaction(
+    db_conn: psycopg.Connection,
+    *,
+    index: int,
+    committee_id: UUID,
+) -> None:
+    filing_id = _official_total_health_uuid(400 + index)
+    insert_filing_row(
+        db_conn,
+        FilingRowSeed(
+            id=filing_id,
+            filing_fec_id=f"official-total-health-filing-{index}",
+            committee_id=committee_id,
+        ),
+    )
+    insert_transaction_row(
+        db_conn,
+        TransactionRowSeed(
+            id=_official_total_health_uuid(500 + index),
+            filing_id=filing_id,
+            committee_id=committee_id,
+            transaction_type="15",
+            amount=Decimal("500.00"),
+            amendment_indicator="N",
+            transaction_identifier=f"official-total-health-txn-{index}",
+            transaction_date=date(2026, 6, 30),
+        ),
+    )
+
+
+def _insert_official_total_health_candidate_with_precomputed_count(
+    db_conn: psycopg.Connection,
+    *,
+    index: int,
+    derived_transaction_count: int,
+    include_raw_transaction: bool,
+) -> tuple[UUID, str]:
+    candidate_id, candidate_name = _insert_official_total_health_candidate(
+        db_conn,
+        index=index,
+        coverage_end_date=date(2024, 8, 8),
+    )
+    committee_id = _insert_selected_cycle_health_committee(db_conn, index=index, candidate_id=candidate_id)
+    insert_committee_summary_row(
+        db_conn,
+        CommitteeSummaryRowSeed(
+            committee_id=committee_id,
+            cycle=2026,
+            coverage_start_date=date(2025, 1, 1),
+            coverage_end_date=date(2026, 6, 30),
+        ),
+    )
+    db_conn.execute(
+        """
+        UPDATE cf.committee_summary
+        SET derived_transaction_count = %s
+        WHERE committee_id = %s
+          AND cycle = 2026
+        """,
+        (derived_transaction_count, committee_id),
+    )
+    if include_raw_transaction:
+        _insert_selected_cycle_health_transaction(db_conn, index=index, committee_id=committee_id)
+    return candidate_id, candidate_name
 
 
 def _insert_federal_officeholder_money_specimen(
@@ -292,11 +467,7 @@ def _candidate_money_serving_query_indices(fake: FakeConnection) -> list[int]:
     return [
         index
         for index, query in enumerate(fake._cursor.executed)
-        if (
-            "FROM cf.candidate" in query
-            and "summary_coverage_end_date BETWEEN %s AND %s" in query
-            and "summary_coverage_end_date >= %s" not in query
-        )
+        if ("FROM cf.candidate" in query and "selected_cycle_window" in query)
     ]
 
 
@@ -364,11 +535,10 @@ def test_federal_first_owner_declares_expected_checks() -> None:
         == FEDERAL_OFFICEHOLDER_MONEY_PRODUCTION_OBSERVATION
     )
     assert FEDERAL_FIRST_FLOORS[FEDERAL_OFFICEHOLDER_MONEY_COVERAGE_CHECK] == FEDERAL_OFFICEHOLDER_MONEY_DEFAULT_FLOOR
-    # Keep the deploy-safe default below the 2026-07-27 production observation:
-    # docs/live-state/2026_07_27_candidate_money_production_coverage.md
-    # Follow-up: the tighter post-recovery bound is recorded in the receipt,
-    # not shipped as the default floor while production is still at 2,079.
-    assert FEDERAL_FIRST_FLOORS[CANDIDATE_MONEY_COVERAGE_CHECK] < CANDIDATE_MONEY_PRODUCTION_OBSERVATION
+    # The serving floor is pinned to the proven local proxy count so it tracks
+    # the full promoted serving surface (in-window + out-of-cycle) exactly;
+    # Lane 10 owns any deployed-origin headroom adjustment.
+    assert FEDERAL_FIRST_FLOORS[CANDIDATE_MONEY_COVERAGE_CHECK] == CANDIDATE_MONEY_PRODUCTION_OBSERVATION
     assert (
         FEDERAL_FIRST_FLOORS[CANDIDATE_MONEY_RECENT_SUMMARY_COVERAGE_CHECK]
         < CANDIDATE_MONEY_RECENT_SUMMARY_PRODUCTION_OBSERVATION
@@ -379,13 +549,57 @@ def test_federal_first_owner_declares_expected_checks() -> None:
     assert FEDERAL_FIRST_FLOORS["cf_transaction_contribution_insights_sentinel"] > 0
 
 
-def test_donor_rollup_has_no_default_content_floor_until_lane_2() -> None:
+def test_donor_rollup_content_health_key_has_zero_default_floor() -> None:
     from api.health_content import _CHECK_QUERIES
 
-    forbidden_fragments = ("donor_search_rollup", "donor_rollup")
-    default_content_health_keys = set(FEDERAL_FIRST_COUNTS) | set(FEDERAL_FIRST_FLOORS) | set(_CHECK_QUERIES)
+    key = "cf_donor_search_rollup_total"
 
-    assert not {key for key in default_content_health_keys if any(fragment in key for fragment in forbidden_fragments)}
+    assert key in _CHECK_QUERIES
+    assert key in FEDERAL_FIRST_FLOORS
+    assert FEDERAL_FIRST_FLOORS[key] == 0
+    assert _CHECK_QUERIES[key].query == "SELECT COUNT(*) FROM cf.donor_search_rollup"
+
+
+def test_floors_from_env_overrides_donor_rollup_floor() -> None:
+    from api.health_content import floors_from_env
+
+    floors = floors_from_env(env={"CIVIBUS_HEALTH_CONTENT_FLOOR_CF_DONOR_SEARCH_ROLLUP_TOTAL": "1"})
+
+    assert floors["cf_donor_search_rollup_total"] == 1
+
+
+def test_donor_rollup_empty_table_is_healthy_at_default_floor() -> None:
+    from api.health_content import evaluate_content_health
+
+    floors = dict(FEDERAL_FIRST_FLOORS)
+    counts = list(FEDERAL_FIRST_COUNTS.values())
+    donor_rollup_index = list(FEDERAL_FIRST_COUNTS).index("cf_donor_search_rollup_total")
+    counts[donor_rollup_index] = 0
+
+    failures = evaluate_content_health(
+        FakeConnection(counts, freshness_result=fresh_federal_fec_bulk_pull_row()),
+        floors=floors,
+    )
+
+    assert failures == []
+
+
+def test_donor_rollup_explicit_nonzero_floor_flags_empty_table() -> None:
+    from api.health_content import ContentHealthFailure
+    from api.health_content import evaluate_content_health
+
+    floors = dict(FEDERAL_FIRST_FLOORS)
+    floors["cf_donor_search_rollup_total"] = 1
+    counts = list(FEDERAL_FIRST_COUNTS.values())
+    donor_rollup_index = list(FEDERAL_FIRST_COUNTS).index("cf_donor_search_rollup_total")
+    counts[donor_rollup_index] = 0
+
+    failures = evaluate_content_health(
+        FakeConnection(counts, freshness_result=fresh_federal_fec_bulk_pull_row()),
+        floors=floors,
+    )
+
+    assert ContentHealthFailure(check="cf_donor_search_rollup_total", actual=0, floor=1) in failures
 
 
 def test_floors_from_env_returns_defaults_when_unset() -> None:
@@ -685,8 +899,31 @@ def test_evaluate_content_health_runs_expected_sql_queries() -> None:
     assert (
         "total_receipts IS NOT NULL OR total_disbursements IS NOT NULL OR cash_on_hand IS NOT NULL"
     ) in candidate_query
-    assert "summary_coverage_end_date BETWEEN %s AND %s" in candidate_query
-    assert _candidate_money_query_params(fake) == (selected.coverage_start_date, selected.coverage_end_date)
+    # In-window branch (a) plus the out-of-cycle promotion branch (b), scoped by
+    # the selected-cycle window CTE; branch (b) suppresses when selected-cycle
+    # authorized committee summary or transaction-derived activity exists.
+    assert (
+        "candidate.summary_coverage_end_date BETWEEN selected_cycle_window.window_start "
+        "AND selected_cycle_window.window_end"
+    ) in candidate_query
+    assert "candidate.summary_coverage_end_date < selected_cycle_window.window_start" in candidate_query
+    assert "AND NOT EXISTS ( SELECT 1 FROM cf.candidate_committee_link link" in candidate_query
+    assert "cs.cycle = selected_cycle_window.selected_cycle" in candidate_query
+    assert "BOOL_OR(cs.derived_transaction_count IS NOT NULL) AS has_precomputed_aggregate" in candidate_query
+    assert "WHEN COALESCE(selected_cycle_summary.has_precomputed_aggregate, FALSE)" in candidate_query
+    assert "THEN selected_cycle_summary.transaction_count > 0 ELSE EXISTS" in candidate_query
+    assert "FROM cf.transaction t" in candidate_query
+    assert "t.transaction_date >= selected_cycle_window.window_start" in candidate_query
+    assert "t.transaction_date <= selected_cycle_window.window_end" in candidate_query
+    assert "t.is_memo = FALSE" in candidate_query
+    assert "t.amendment_indicator != 'T'" in candidate_query
+    assert "t.source_record_id IS NULL" in candidate_query
+    assert "OR t.source_record_id NOT IN" in candidate_query
+    assert _candidate_money_query_params(fake) == (
+        selected.coverage_start_date,
+        selected.coverage_end_date,
+        selected.coverage_end_date.year,
+    )
     recent_summary_query = _normalized_sql(_single_query(fake, _candidate_money_recent_summary_query_indices(fake)))
     assert (
         "total_receipts IS NOT NULL OR total_disbursements IS NOT NULL OR cash_on_hand IS NOT NULL"
@@ -756,8 +993,222 @@ def test_candidate_money_serving_coverage_count() -> None:
     assert (
         "total_receipts IS NOT NULL OR total_disbursements IS NOT NULL OR cash_on_hand IS NOT NULL"
     ) in normalized_sql
-    assert "summary_coverage_end_date BETWEEN %s AND %s" in normalized_sql
-    assert _candidate_money_query_params(fake) == (selected.coverage_start_date, selected.coverage_end_date)
+    assert (
+        "candidate.summary_coverage_end_date BETWEEN selected_cycle_window.window_start "
+        "AND selected_cycle_window.window_end"
+    ) in normalized_sql
+    assert _candidate_money_query_params(fake) == (
+        selected.coverage_start_date,
+        selected.coverage_end_date,
+        selected.coverage_end_date.year,
+    )
+
+
+def test_out_of_cycle_official_total_promoted_uncounted_by_health_predicate_contract() -> None:
+    from api.health_content import _CHECK_QUERIES
+
+    assert OUT_OF_CYCLE_OFFICIAL_TOTAL_BUCKET not in _CHECK_QUERIES
+    assert OUT_OF_CYCLE_OFFICIAL_TOTAL_BUCKET not in FEDERAL_FIRST_FLOORS
+    assert CANDIDATE_MONEY_COVERAGE_CHECK in _CHECK_QUERIES
+    assert CANDIDATE_MONEY_COVERAGE_CHECK in FEDERAL_FIRST_FLOORS
+    assert FEDERAL_FIRST_FLOORS[CANDIDATE_MONEY_COVERAGE_CHECK] == OUT_OF_CYCLE_OFFICIAL_TOTAL_REPAIRED_LOCAL_COUNT, (
+        "repaired local proxy count must be exactly 7743 = 4268 + 3475"
+    )
+
+
+def test_out_of_cycle_official_total_promoted_uncounted_by_health_predicate_db_count(
+    db_conn: psycopg.Connection,
+) -> None:
+    from api.health_content import _CANDIDATE_MONEY_OFFICIAL_TOTALS_PREDICATE
+    from api.health_content import candidate_money_serving_coverage_count
+    from api.queries.campaign_finance import fetch_candidate_summary, resolve_selected_cycle
+    from api.routes.public_federal import _public_money_totals
+
+    selected_cycle = resolve_selected_cycle(None)
+    baseline = candidate_money_serving_coverage_count(db_conn, cycle=selected_cycle.selected_cycle)
+    in_window_id, _ = _insert_official_total_health_candidate(
+        db_conn,
+        index=1,
+        coverage_end_date=date(2026, 6, 30),
+    )
+    promoted_id, promoted_name = _insert_official_total_health_candidate(
+        db_conn,
+        index=2,
+        coverage_end_date=date(2024, 8, 8),
+    )
+    suppressed_id, suppressed_name = _insert_official_total_health_candidate(
+        db_conn,
+        index=3,
+        coverage_end_date=date(2024, 8, 8),
+        selected_cycle_activity=True,
+    )
+
+    with db_conn.cursor() as cursor:
+        cursor.execute(
+            "SELECT id FROM cf.candidate WHERE id = ANY(%s) AND "
+            + _CANDIDATE_MONEY_OFFICIAL_TOTALS_PREDICATE
+            + " ORDER BY id",
+            ([in_window_id, promoted_id, suppressed_id],),
+        )
+        official_total_candidate_ids = [row[0] for row in cursor.fetchall()]
+
+    promoted_summary = fetch_candidate_summary(db_conn, promoted_id, promoted_name, selected_cycle)
+    suppressed_summary = fetch_candidate_summary(db_conn, suppressed_id, suppressed_name, selected_cycle)
+    assert promoted_summary is not None
+    assert suppressed_summary is not None
+    promoted_public_totals = _public_money_totals(promoted_summary)
+    suppressed_public_totals = _public_money_totals(suppressed_summary)
+    repaired_count = candidate_money_serving_coverage_count(db_conn, cycle=selected_cycle.selected_cycle)
+
+    assert selected_cycle.selected_cycle == 2026
+    assert official_total_candidate_ids == sorted([in_window_id, promoted_id, suppressed_id])
+    assert promoted_summary["coverage"]["activity_state"] == "out_of_cycle_official_total"
+    assert promoted_public_totals["total_raised"] == Decimal("200.00")
+    assert promoted_public_totals["summary_source"] == "fec_weball"
+    assert promoted_public_totals["out_of_cycle_official_total"]["coverage_end_date"] == date(2024, 8, 8)
+    assert suppressed_summary["out_of_cycle_official_total"] is None
+    assert suppressed_public_totals["total_raised"] == Decimal("500.00")
+    assert suppressed_public_totals["summary_source"] == "derived"
+    assert repaired_count == baseline + 2
+
+
+def test_out_of_cycle_official_total_suppressed_by_transaction_derived_activity(
+    db_conn: psycopg.Connection,
+) -> None:
+    from api.health_content import candidate_money_serving_coverage_count
+    from api.queries.campaign_finance import fetch_candidate_summary, resolve_selected_cycle
+    from api.routes.public_federal import _public_money_totals
+
+    selected_cycle = resolve_selected_cycle(None)
+    baseline = candidate_money_serving_coverage_count(db_conn, cycle=selected_cycle.selected_cycle)
+    suppressed_id, suppressed_name = _insert_official_total_health_candidate(
+        db_conn,
+        index=4,
+        coverage_end_date=date(2024, 8, 8),
+        selected_cycle_transaction_activity=True,
+    )
+
+    suppressed_summary = fetch_candidate_summary(db_conn, suppressed_id, suppressed_name, selected_cycle)
+    assert suppressed_summary is not None
+    suppressed_public_totals = _public_money_totals(suppressed_summary)
+    repaired_count = candidate_money_serving_coverage_count(db_conn, cycle=selected_cycle.selected_cycle)
+
+    assert selected_cycle.selected_cycle == 2026
+    assert suppressed_summary["out_of_cycle_official_total"] is None
+    assert suppressed_summary["transaction_count"] == 1
+    assert suppressed_summary["coverage"]["basis"] == "qualifying_transactions"
+    assert suppressed_public_totals["total_raised"] == Decimal("500.00")
+    assert suppressed_public_totals["summary_source"] == "derived"
+    assert repaired_count == baseline
+
+
+def test_out_of_cycle_official_total_suppressed_by_positive_precomputed_transaction_count(
+    db_conn: psycopg.Connection,
+) -> None:
+    from api.health_content import candidate_money_serving_coverage_count
+    from api.queries.campaign_finance import fetch_candidate_summary, resolve_selected_cycle
+    from api.routes.public_federal import _public_money_totals
+
+    selected_cycle = resolve_selected_cycle(None)
+    baseline = candidate_money_serving_coverage_count(db_conn, cycle=selected_cycle.selected_cycle)
+    candidate_id, candidate_name = _insert_official_total_health_candidate_with_precomputed_count(
+        db_conn,
+        index=5,
+        derived_transaction_count=1,
+        include_raw_transaction=False,
+    )
+
+    summary = fetch_candidate_summary(db_conn, candidate_id, candidate_name, selected_cycle)
+    assert summary is not None
+    public_totals = _public_money_totals(summary)
+    repaired_count = candidate_money_serving_coverage_count(db_conn, cycle=selected_cycle.selected_cycle)
+
+    assert summary["transaction_count"] == 1
+    assert summary["out_of_cycle_official_total"] is None
+    assert public_totals["total_raised"] == Decimal("0.00")
+    assert public_totals["summary_source"] == "derived"
+    assert repaired_count == baseline
+
+
+def test_out_of_cycle_official_total_promoted_by_zero_precomputed_transaction_count(
+    db_conn: psycopg.Connection,
+) -> None:
+    from api.health_content import candidate_money_serving_coverage_count
+    from api.queries.campaign_finance import fetch_candidate_summary, resolve_selected_cycle
+    from api.routes.public_federal import _public_money_totals
+
+    selected_cycle = resolve_selected_cycle(None)
+    baseline = candidate_money_serving_coverage_count(db_conn, cycle=selected_cycle.selected_cycle)
+    candidate_id, candidate_name = _insert_official_total_health_candidate_with_precomputed_count(
+        db_conn,
+        index=6,
+        derived_transaction_count=0,
+        include_raw_transaction=True,
+    )
+
+    summary = fetch_candidate_summary(db_conn, candidate_id, candidate_name, selected_cycle)
+    assert summary is not None
+    public_totals = _public_money_totals(summary)
+    repaired_count = candidate_money_serving_coverage_count(db_conn, cycle=selected_cycle.selected_cycle)
+
+    assert summary["transaction_count"] == 0
+    assert summary["coverage"]["activity_state"] == "out_of_cycle_official_total"
+    assert public_totals["total_raised"] == Decimal("600.00")
+    assert public_totals["summary_source"] == "fec_weball"
+    assert repaired_count == baseline + 1
+
+
+def test_out_of_cycle_official_total_promoted_despite_denylisted_committee_activity(
+    db_conn: psycopg.Connection,
+) -> None:
+    """Denylisted-committee dollars must not suppress the out-of-cycle promotion.
+
+    ``_fetch_cycle_linked_candidate_committee_ids`` drops a ``J``-designated
+    joint-fundraising committee, so serving never sees its $900K and still
+    promotes the prior-cycle official total. The health predicate reuses the same
+    ``_AUTHORIZED_CANDIDATE_COMMITTEE_FILTER``; without it this candidate would be
+    suppressed in health while the public route promotes it.
+    """
+    from api.health_content import candidate_money_serving_coverage_count
+    from api.queries.campaign_finance import fetch_candidate_summary, resolve_selected_cycle
+    from api.routes.public_federal import _public_money_totals
+
+    selected_cycle = resolve_selected_cycle(None)
+    baseline = candidate_money_serving_coverage_count(db_conn, cycle=selected_cycle.selected_cycle)
+    candidate_id, candidate_name = _insert_official_total_health_candidate(
+        db_conn,
+        index=7,
+        coverage_end_date=date(2024, 8, 8),
+    )
+    denylisted_committee_id = _insert_selected_cycle_health_committee(
+        db_conn,
+        index=7,
+        candidate_id=candidate_id,
+        committee_designation="J",
+    )
+    insert_committee_summary_row(
+        db_conn,
+        CommitteeSummaryRowSeed(
+            committee_id=denylisted_committee_id,
+            cycle=2026,
+            total_receipts=Decimal("900000.00"),
+            total_disbursements=Decimal("100.00"),
+            cash_on_hand=Decimal("0.00"),
+            coverage_start_date=date(2025, 1, 1),
+            coverage_end_date=date(2026, 6, 30),
+        ),
+    )
+
+    summary = fetch_candidate_summary(db_conn, candidate_id, candidate_name, selected_cycle)
+    assert summary is not None
+    public_totals = _public_money_totals(summary)
+    repaired_count = candidate_money_serving_coverage_count(db_conn, cycle=selected_cycle.selected_cycle)
+
+    assert summary["committees"] == []
+    assert summary["coverage"]["activity_state"] == "out_of_cycle_official_total"
+    assert public_totals["total_raised"] == Decimal("700.00")
+    assert public_totals["summary_source"] == "fec_weball"
+    assert repaired_count == baseline + 1
 
 
 def test_evaluate_content_health_flags_underlinked_federal_officeholder_money_coverage(
@@ -879,10 +1330,26 @@ def test_evaluate_content_health_flags_candidate_money_coverage_below_floor() ->
     assert failures == [
         ContentHealthFailure(
             check=CANDIDATE_MONEY_COVERAGE_CHECK,
-            actual=1_799,
-            floor=1_800,
+            actual=7_742,
+            floor=7_743,
         )
     ]
+
+
+def test_evaluate_content_health_candidate_money_coverage_passes_at_default_floor() -> None:
+    """At exactly the pinned 7_743 proxy the serving coverage floor passes."""
+    from api.health_content import evaluate_content_health
+
+    floors = {key: 0 for key in EXPECTED_FEDERAL_FIRST_CHECKS}
+    floors[CANDIDATE_MONEY_COVERAGE_CHECK] = CANDIDATE_MONEY_DEFAULT_FLOOR
+    counts = [100, 10, 5, 50, 20, 5, 25, CANDIDATE_MONEY_DEFAULT_FLOOR, 30, 20]
+
+    failures = evaluate_content_health(
+        FakeConnection(counts, freshness_result=fresh_federal_fec_bulk_pull_row()),
+        floors=floors,
+    )
+
+    assert failures == []
 
 
 def test_evaluate_content_health_flags_candidate_money_recent_summary_below_floor() -> None:
@@ -960,6 +1427,53 @@ def test_candidate_money_recent_summary_fixture_excludes_null_and_future_dates()
     )
 
 
+def test_candidate_money_serving_fixture_counts_unsuppressed_out_of_cycle_totals() -> None:
+    """Serving coverage counts both branches; recent-summary counts only in-window.
+
+    Row-by-row: in-window (served + recent), prior-cycle unsuppressed (served
+    only), prior-cycle suppressed by selected-cycle activity (neither),
+    future-dated (neither), and no populated totals (neither). Serving is
+    therefore 2 and recent-summary 1, which is the exact divergence the repaired
+    predicate introduced.
+    """
+    from api.health_content import ContentHealthFailure
+    from api.health_content import evaluate_content_health
+
+    fake = FakeConnection(
+        [100, 10, 5, 50, 20, 5, 25, 20],
+        freshness_result=CANDIDATE_MONEY_RECENT_SUMMARY_FRESH_FEC_ROW,
+        candidate_money_rows=[
+            {"summary_coverage_end_date": date(2026, 6, 30), "total_receipts": 1},
+            {"summary_coverage_end_date": date(2024, 8, 8), "total_receipts": 1},
+            {
+                "summary_coverage_end_date": date(2024, 8, 8),
+                "total_receipts": 1,
+                "selected_cycle_activity": True,
+            },
+            {"summary_coverage_end_date": date(2027, 6, 30), "total_receipts": 1},
+            {"summary_coverage_end_date": date(2024, 8, 8)},
+        ],
+    )
+
+    failures = evaluate_content_health(
+        fake,
+        floors={
+            **{key: 0 for key in EXPECTED_FEDERAL_FIRST_CHECKS},
+            CANDIDATE_MONEY_COVERAGE_CHECK: 3,
+            CANDIDATE_MONEY_RECENT_SUMMARY_COVERAGE_CHECK: 1,
+        },
+        now=datetime(2026, 7, 27, 12, 0, tzinfo=timezone.utc),
+    )
+
+    assert failures == [
+        ContentHealthFailure(
+            check=CANDIDATE_MONEY_COVERAGE_CHECK,
+            actual=2,
+            floor=3,
+        )
+    ]
+
+
 def test_evaluate_content_health_resolves_candidate_money_window_each_evaluation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -967,8 +1481,8 @@ def test_evaluate_content_health_resolves_candidate_money_window_each_evaluation
 
     calls: list[int | None] = []
     windows = [
-        _SyntheticSelectedCycle(date(2025, 1, 1), date(2026, 12, 31)),
-        _SyntheticSelectedCycle(date(2027, 1, 1), date(2028, 12, 31)),
+        _SyntheticSelectedCycle(2026, date(2025, 1, 1), date(2026, 12, 31)),
+        _SyntheticSelectedCycle(2028, date(2027, 1, 1), date(2028, 12, 31)),
     ]
 
     def fake_resolve_selected_cycle(cycle: int | None) -> _SyntheticSelectedCycle:
@@ -1001,8 +1515,8 @@ def test_evaluate_content_health_resolves_candidate_money_window_each_evaluation
     )
 
     assert calls == [None, None]
-    assert _candidate_money_query_params(first) == (date(2025, 1, 1), date(2026, 12, 31))
-    assert _candidate_money_query_params(second) == (date(2027, 1, 1), date(2028, 12, 31))
+    assert _candidate_money_query_params(first) == (date(2025, 1, 1), date(2026, 12, 31), 2026)
+    assert _candidate_money_query_params(second) == (date(2027, 1, 1), date(2028, 12, 31), 2028)
     assert _single_query_params(first, _candidate_money_recent_summary_query_indices(first)) == (
         date(2025, 1, 1),
         date(2026, 12, 31),

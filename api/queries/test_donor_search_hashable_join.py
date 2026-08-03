@@ -30,7 +30,7 @@ def test_donor_rollup_joins_use_hashable_key_not_is_not_distinct_from() -> None:
     assert "source.donor_key = dg.donor_key" in sql
     assert "qt.donor_key = dg.donor_key" in sql
     assert sql.count("qt.donor_key = dg.donor_key") >= 2
-    assert sql.count(_donor_key_sql("t")) == 2
+    assert sql.count(_donor_key_sql("transaction_detail")) == 1
 
 
 def test_donor_search_nested_details_are_bounded_before_final_join() -> None:
@@ -53,19 +53,15 @@ def test_donor_search_bounds_resolved_donor_page_before_transaction_detail_rollu
     assert "resolved_donor_records AS MATERIALIZED" in sql
     assert "matching_donor_keys AS MATERIALIZED" in sql
     assert "page_donor_records AS MATERIALIZED" in sql
-    assert "scoped_matching_transactions AS MATERIALIZED" in sql
-    assert sql.index("matching_transactions AS MATERIALIZED") < sql.index(
-        "scoped_matching_transactions AS MATERIALIZED"
-    )
-    assert sql.index("scoped_matching_transactions AS MATERIALIZED") < sql.index(
-        "matching_donor_records AS MATERIALIZED"
-    )
+    assert "FROM cf.donor_search_rollup rollup" in sql
+    assert sql.index("matching_donor_records AS MATERIALIZED") < sql.index("FROM cf.donor_search_rollup rollup")
     assert sql.index("LEFT JOIN core.donor_identity identity_record") < sql.index("matching_donor_keys AS MATERIALIZED")
     assert sql.index("matching_donor_keys AS MATERIALIZED") < sql.index("qualifying_transactions AS MATERIALIZED")
-    assert "FROM scoped_matching_transactions t" in sql
+    assert "FROM cf.transaction transaction_row" in sql
     assert "JOIN matching_donor_keys page_key" in sql
     assert "page_key.donor_key = record.donor_key" in sql
-    assert "JOIN page_donor_records record" in sql
+    assert "FROM page_donor_records record" in sql
+    assert "CROSS JOIN LATERAL" in sql
     assert "record.raw_donor_key = " in sql
     assert "ORDER BY total_amount DESC, transaction_count DESC, contributor_name ASC, id ASC" in sql
 

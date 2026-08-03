@@ -36,4 +36,12 @@ describe('/donors page Svelte contract', () => {
     expect(donorPageSource).toContain('href={personHref(recipient.person_id)}');
     expect(donorPageSource).not.toContain('href={`/person/${recipient.person_id}`}');
   });
+
+  it('renders freshness through the shared presentation owner with the exact stamp hook', () => {
+    expect(donorPageSource).toContain(
+      "import { buildTimestampFreshnessPresentation } from '$lib/detail-trust/presentation';"
+    );
+    expect(donorPageSource).toContain('data-testid="donor-freshness-stamp"');
+    expect(donorPageSource).not.toContain('DonorFreshnessBanner');
+  });
 });

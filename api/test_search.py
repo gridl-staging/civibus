@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import psycopg
 import pytest
 from fastapi.testclient import TestClient
 
 from api.test_campaign_finance_support import CommitteeRowSeed, insert_committee_row
+from api.test_entities import _ensure_durham_officeholder
 from api.test_civics import (
     _insert_candidacy,
     _insert_contest,
@@ -17,8 +18,60 @@ from api.test_civics import (
 )
 from core.db import insert_organization, insert_person
 from core.types.python.models import Organization, Person
+from test_support.donor_search_fixture import seed_donor_search_fixture
 
 pytestmark = pytest.mark.integration
+
+
+def test_search_returns_durham_municipal_office_context(
+    api_client: TestClient,
+    db_conn: psycopg.Connection,
+) -> None:
+    person_id = _ensure_durham_officeholder(db_conn)
+
+    response = api_client.get(
+        "/v1/search",
+        params={"q": "Carl Rist", "entity_type": "person"},
+    )
+
+    assert response.status_code == 200
+    result = next(row for row in response.json() if row["entity_id"] == str(person_id))
+    assert result == {
+        "entity_type": "person",
+        "entity_id": str(person_id),
+        "name": "Carl Rist",
+        "state": "NC",
+        "party": None,
+        "office_name": "City Council Member",
+        "committee_type": None,
+        "total_raised": None,
+    }
+
+
+def test_federal_counts_unchanged_after_nc_load(
+    api_client: TestClient,
+    db_conn: psycopg.Connection,
+) -> None:
+    seed_donor_search_fixture(db_conn)
+    before = api_client.get("/v1/congress/members")
+    assert before.status_code == 200
+    before_member_ids = {row["person_id"] for row in before.json()}
+    assert before_member_ids
+
+    person_id = _ensure_durham_officeholder(db_conn)
+    extra_municipal_office_id = _insert_office(
+        db_conn,
+        name=f"durham_nc_city_council_at_large_{uuid4().hex}",
+        title="City Council Member",
+        office_level="municipal",
+        state="NC",
+    )
+    _insert_officeholding(db_conn, person_id=person_id, office_id=extra_municipal_office_id)
+
+    after = api_client.get("/v1/congress/members")
+    assert after.status_code == 200
+    assert after.content == before.content
+    assert {row["person_id"] for row in after.json()} == before_member_ids
 
 
 @pytest.mark.parametrize(

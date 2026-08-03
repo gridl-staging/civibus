@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import hashlib
+from decimal import Decimal
+from uuid import UUID
 
 import psycopg
 import pytest
@@ -69,6 +71,7 @@ def test_rollup_populates_name_employer_and_zip_search_attributes(db_conn: psyco
     searchable_rows = db_conn.execute(
         """
         SELECT
+            representative_transaction_id::text,
             contributor_name,
             contributor_employer,
             normalized_zip5,
@@ -99,6 +102,7 @@ def test_rollup_populates_name_employer_and_zip_search_attributes(db_conn: psyco
 
     assert searchable_rows == [
         (
+            "72000000-0000-0000-0000-000000000101",
             "JANE SMITH",
             "Civibus Labs",
             "27701",
@@ -116,6 +120,68 @@ def test_rollup_populates_name_employer_and_zip_search_attributes(db_conn: psyco
     ]
 
 
+def test_rollup_preserves_exact_identity_variants_without_changing_aggregate(
+    db_conn: psycopg.Connection,
+) -> None:
+    seed_donor_search_fixture(db_conn)
+    db_conn.execute(
+        """
+        UPDATE cf.transaction
+        SET contributor_name_raw = ' JANE SMITH ',
+            contributor_employer = ' Civibus Labs ',
+            contributor_occupation = '',
+            contributor_city = ' Durham ',
+            contributor_zip = '27701-9999'
+        WHERE id = '72000000-0000-0000-0000-000000000102'
+        """
+    )
+    db_conn.execute(
+        """
+        UPDATE cf.transaction
+        SET contributor_occupation = ''
+        WHERE id IN (
+            '72000000-0000-0000-0000-000000000101',
+            '72000000-0000-0000-0000-000000000112'
+        )
+        """
+    )
+
+    donor_rollup.rebuild_donor_search_rollup(db_conn)
+    variants = db_conn.execute(
+        """
+        SELECT
+            contributor_name_raw,
+            contributor_employer,
+            contributor_occupation,
+            contributor_city,
+            contributor_state,
+            contributor_zip
+        FROM cf.donor_search_rollup_identity_variant
+        WHERE donor_key = (
+            SELECT donor_key
+            FROM cf.donor_search_rollup
+            WHERE representative_transaction_id = %s
+        )
+        ORDER BY contributor_zip
+        """,
+        (UUID("72000000-0000-0000-0000-000000000101"),),
+    ).fetchall()
+    aggregate = db_conn.execute(
+        """
+        SELECT total_amount, transaction_count
+        FROM cf.donor_search_rollup
+        WHERE representative_transaction_id = %s
+        """,
+        (UUID("72000000-0000-0000-0000-000000000101"),),
+    ).fetchone()
+
+    assert variants == [
+        ("JANE SMITH", "Civibus Labs", "", "Durham", "NC", "27701-1234"),
+        (" JANE SMITH ", " Civibus Labs ", "", " Durham ", "NC", "27701-9999"),
+    ]
+    assert aggregate == (Decimal("500.00"), 3)
+
+
 def test_failed_rebuild_never_exposes_half_built_rollup(
     db_conn: psycopg.Connection,
     monkeypatch: pytest.MonkeyPatch,
@@ -125,11 +191,18 @@ def test_failed_rebuild_never_exposes_half_built_rollup(
     before_failure = db_conn.execute(
         "SELECT donor_key, total_amount, transaction_count FROM cf.donor_search_rollup ORDER BY donor_key"
     ).fetchall()
+    variants_before_failure = db_conn.execute(
+        """
+        SELECT donor_key, contributor_name_raw, contributor_zip
+        FROM cf.donor_search_rollup_identity_variant
+        ORDER BY donor_key, contributor_name_raw, contributor_zip
+        """
+    ).fetchall()
 
     monkeypatch.setattr(
-        campaign_finance_queries,
-        "_donor_key_sql",
-        lambda alias: f"missing_rollup_function({alias}.contributor_name)",
+        donor_rollup,
+        "_identity_variant_select_sql",
+        lambda: "SELECT missing_rollup_function(%s)",
     )
     with pytest.raises(psycopg.errors.UndefinedFunction):
         donor_rollup.rebuild_donor_search_rollup(db_conn)
@@ -137,9 +210,17 @@ def test_failed_rebuild_never_exposes_half_built_rollup(
     after_failure = db_conn.execute(
         "SELECT donor_key, total_amount, transaction_count FROM cf.donor_search_rollup ORDER BY donor_key"
     ).fetchall()
+    variants_after_failure = db_conn.execute(
+        """
+        SELECT donor_key, contributor_name_raw, contributor_zip
+        FROM cf.donor_search_rollup_identity_variant
+        ORDER BY donor_key, contributor_name_raw, contributor_zip
+        """
+    ).fetchall()
     provenance = db_conn.execute(
         "SELECT row_count, donor_key_fingerprint FROM cf.donor_search_rollup_provenance WHERE singleton"
     ).fetchone()
 
     assert after_failure == before_failure
+    assert variants_after_failure == variants_before_failure
     assert provenance == (first_build.row_count, first_build.donor_key_fingerprint)

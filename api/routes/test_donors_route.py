@@ -7,9 +7,12 @@ from uuid import UUID
 import psycopg
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 
 from api.deps import get_db
 from api.main import create_app
+from api.models import DonorSearchResponse
+from api.queries.campaign_finance import DonorSearchRollupUnavailableError
 from test_support.donor_search_fixture import DONOR_SEARCH_ALPHA_PERSON_ID, seed_donor_search_fixture
 
 pytestmark = pytest.mark.integration
@@ -160,6 +163,7 @@ def test_donor_search_route_serializes_identity_transparency_payload_exactly(
         "by": "name",
         "limit": 20,
         "offset": 0,
+        "rollup_completed_at": "2026-07-17T12:00:00Z",
         "results": [resolved, unresolved],
     }
     monkeypatch.setattr("api.routes.donors.search_donors", lambda *_args, **_kwargs: query_payload)
@@ -181,6 +185,19 @@ def test_donor_search_route_serializes_identity_transparency_payload_exactly(
     }
 
 
+def test_donor_search_response_rejects_success_without_rollup_timestamp() -> None:
+    query_payload = {
+        "query": "identity",
+        "by": "name",
+        "limit": 20,
+        "offset": 0,
+        "rollup_completed_at": None,
+        "results": [],
+    }
+    with pytest.raises(ValidationError, match="rollup_completed_at"):
+        DonorSearchResponse.model_validate(query_payload)
+
+
 def test_donor_search_route_returns_seeded_name_payload(
     api_client: TestClient,
     db_conn: psycopg.Connection,
@@ -195,6 +212,7 @@ def test_donor_search_route_returns_seeded_name_payload(
     assert payload["by"] == "name"
     assert payload["limit"] == 5
     assert payload["offset"] == 0
+    assert payload["rollup_completed_at"] is not None
     assert len(payload["results"]) == 1
 
     jane = payload["results"][0]
@@ -259,6 +277,36 @@ def test_donor_search_route_returns_seeded_name_payload(
         ],
         "underlying_records": [],
         "not_combined_candidates": [],
+    }
+
+
+@pytest.mark.parametrize(
+    "reason",
+    [
+        "missing_provenance",
+        "stale_provenance",
+        "future_provenance_timestamp",
+        "malformed_provenance_timestamp",
+        "donor_key_fingerprint_mismatch",
+    ],
+)
+def test_donor_search_route_translates_rollup_unavailable_to_service_response(
+    api_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    reason: str,
+) -> None:
+    def raise_unavailable(*_args: object, **_kwargs: object) -> None:
+        raise DonorSearchRollupUnavailableError(reason)
+
+    monkeypatch.setattr("api.routes.donors.search_donors", raise_unavailable)
+
+    response = api_client.get("/v1/donors/search", params={"q": "smith", "by": "name"})
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "detail": {
+            "code": "donor_search_rollup_unavailable",
+        }
     }
 
 

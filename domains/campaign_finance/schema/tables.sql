@@ -19,6 +19,7 @@
 --   - cf.candidate_committee_link
 --   - cf.nc_committee_registry
 --   - cf.donor_search_rollup
+--   - cf.donor_search_rollup_identity_variant
 --   - cf.donor_search_rollup_provenance
 --
 -- Shared conventions for this stage
@@ -195,6 +196,7 @@ CREATE INDEX idx_committee_summary_source_record_id
 
 CREATE TABLE cf.donor_search_rollup (
     donor_key                  TEXT PRIMARY KEY,
+    representative_transaction_id UUID NOT NULL,
     contributor_name          TEXT NOT NULL,
     contributor_employer      TEXT,
     contributor_occupation    TEXT,
@@ -212,6 +214,35 @@ CREATE INDEX idx_donor_search_rollup_search_text_trgm
     ON cf.donor_search_rollup USING GIN (search_text gin_trgm_ops);
 CREATE INDEX idx_donor_search_rollup_normalized_zip5
     ON cf.donor_search_rollup (normalized_zip5);
+
+CREATE TABLE cf.donor_search_rollup_identity_variant (
+    donor_key               TEXT NOT NULL,
+    contributor_name_raw    TEXT NOT NULL,
+    contributor_employer    TEXT NOT NULL,
+    contributor_occupation  TEXT NOT NULL,
+    contributor_city        TEXT NOT NULL,
+    contributor_state       TEXT NOT NULL,
+    contributor_zip         TEXT NOT NULL,
+    CONSTRAINT donor_search_rollup_identity_variant_unique UNIQUE (
+        donor_key,
+        contributor_name_raw,
+        contributor_employer,
+        contributor_occupation,
+        contributor_city,
+        contributor_state,
+        contributor_zip
+    )
+);
+
+CREATE INDEX idx_donor_search_rollup_identity_variant_identity_tuple
+    ON cf.donor_search_rollup_identity_variant (
+        contributor_name_raw,
+        contributor_employer,
+        contributor_occupation,
+        contributor_city,
+        contributor_state,
+        contributor_zip
+    );
 
 CREATE TABLE cf.donor_search_rollup_provenance (
     singleton                     BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (singleton),

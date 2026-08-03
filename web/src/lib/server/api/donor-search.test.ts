@@ -9,6 +9,7 @@ describe('fetchDonorSearch', () => {
       by: 'name',
       limit: 20,
       offset: 0,
+      rollup_completed_at: '2026-07-17T12:00:00Z',
       results: []
     };
     const requestJson = vi.fn().mockResolvedValue(response);

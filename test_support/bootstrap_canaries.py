@@ -43,6 +43,8 @@ BOOTSTRAP_CANARIES = (
     "core.field_provenance.entity_type.election",
     "cf.donor_search_rollup",
     "cf.donor_search_rollup_provenance",
+    "cf.donor_search_rollup.representative_transaction_id",
+    "cf.donor_search_rollup_identity_variant",
 )
 
 _COMMITTEE_SUMMARY_DERIVED_COLUMNS = (
@@ -311,6 +313,14 @@ def _stage1_canary_checks() -> tuple[tuple[str, Callable[[psycopg.Connection], b
         (
             "cf.donor_search_rollup_provenance",
             lambda conn: _relation_exists(conn, "cf", "donor_search_rollup_provenance"),
+        ),
+        (
+            "cf.donor_search_rollup.representative_transaction_id",
+            lambda conn: _column_exists(conn, "cf", "donor_search_rollup", "representative_transaction_id"),
+        ),
+        (
+            "cf.donor_search_rollup_identity_variant",
+            lambda conn: _relation_exists(conn, "cf", "donor_search_rollup_identity_variant"),
         ),
     )
 

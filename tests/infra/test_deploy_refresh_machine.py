@@ -14,7 +14,8 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 DEPLOY_SCRIPT = REPO_ROOT / "infra/scripts/deploy_refresh_machine.sh"
 MACHINE_ID = "859e0da479e678"
 APP_NAME = "civibus-refresh"
-GIT_SHA = "0123456789abcdef0123456789abcdef01234567"
+MIRROR_SHA = "0123456789abcdef0123456789abcdef01234567"
+DEV_SHA = "89abcdef0123456789abcdef0123456789abcdef"
 IMAGE_TAG = f"registry.fly.io/{APP_NAME}:deployment-stage2"
 IMAGE_DIGEST = f"registry.fly.io/{APP_NAME}@sha256:{'a' * 64}"
 
@@ -203,14 +204,21 @@ def _run_deploy(
             "PATH": f"{stub_bin}:/usr/bin:/bin",
             "COMMAND_LOG": str(command_log),
             "REPO_ROOT": str(REPO_ROOT),
-            "STUB_GIT_SHA": GIT_SHA,
+            "STUB_GIT_SHA": MIRROR_SHA,
             "STUB_FAILURE": failure,
             "STUB_PUSHED_REFS": pushed_refs,
             "STUB_DIGESTS": digests,
         }
     )
     result = subprocess.run(
-        ["/bin/bash", str(DEPLOY_SCRIPT), "--evidence-dir", str(evidence_dir)],
+        [
+            "/bin/bash",
+            str(DEPLOY_SCRIPT),
+            "--evidence-dir",
+            str(evidence_dir),
+            "--dev-sha",
+            DEV_SHA,
+        ],
         cwd=REPO_ROOT,
         env=environment,
         capture_output=True,
@@ -234,7 +242,8 @@ def test_deploy_uses_exact_build_probe_update_and_verifier_contract(tmp_path: Pa
     assert result.returncode == 0, result.stderr
     build_timestamp = (evidence_dir / "built_at.txt").read_text().strip()
     assert re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", build_timestamp)
-    assert (evidence_dir / "head_sha.txt").read_text() == f"{GIT_SHA}\n"
+    assert (evidence_dir / "checkout_head_sha.txt").read_text() == f"{MIRROR_SHA}\n"
+    assert (evidence_dir / "dev_sha.txt").read_text() == f"{DEV_SHA}\n"
     assert [
         "flyctl",
         "deploy",
@@ -243,7 +252,7 @@ def test_deploy_uses_exact_build_probe_update_and_verifier_contract(tmp_path: Pa
         "-c",
         "infra/fly/refresh.fly.toml",
         "--build-arg",
-        f"CIVIBUS_GIT_SHA={GIT_SHA}",
+        f"CIVIBUS_GIT_SHA={DEV_SHA}",
         "--build-arg",
         f"CIVIBUS_BUILT_AT={build_timestamp}",
     ] in invocations
@@ -330,7 +339,7 @@ def test_deploy_uses_exact_build_probe_update_and_verifier_contract(tmp_path: Pa
     assert (evidence_dir / "pushed_image.txt").read_text() == f"{IMAGE_TAG}\n"
     assert (evidence_dir / "image_digest.txt").read_text() == f"{IMAGE_DIGEST}\n"
     image_proof = (evidence_dir / "image_proof.txt").read_text()
-    assert f'"git_sha": "{GIT_SHA}"' in image_proof
+    assert f'"git_sha": "{DEV_SHA}"' in image_proof
     assert '"person_link_is_fillable": true' in image_proof
     assert '"repair_pair_alarm": true' in image_proof
 
@@ -456,7 +465,14 @@ def test_deploy_preserves_an_existing_nonempty_evidence_directory(tmp_path: Path
     environment = os.environ.copy()
     environment["PATH"] = f"{stub_bin}:/usr/bin:/bin"
     result = subprocess.run(
-        ["/bin/bash", str(DEPLOY_SCRIPT), "--evidence-dir", str(evidence_dir)],
+        [
+            "/bin/bash",
+            str(DEPLOY_SCRIPT),
+            "--evidence-dir",
+            str(evidence_dir),
+            "--dev-sha",
+            DEV_SHA,
+        ],
         cwd=REPO_ROOT,
         env=environment,
         capture_output=True,
@@ -468,3 +484,33 @@ def test_deploy_preserves_an_existing_nonempty_evidence_directory(tmp_path: Path
     assert result.returncode != 0
     assert "empty" in result.stderr
     assert existing_file.read_text(encoding="utf-8") == "preserve me"
+
+
+@pytest.mark.parametrize("dev_sha", ["", "abc123", "A" * 40, "g" * 40])
+def test_deploy_rejects_missing_or_invalid_dev_sha_before_external_calls(
+    tmp_path: Path,
+    dev_sha: str,
+) -> None:
+    evidence_dir = tmp_path / "evidence"
+    evidence_dir.mkdir()
+    command = [
+        "/bin/bash",
+        str(DEPLOY_SCRIPT),
+        "--evidence-dir",
+        str(evidence_dir),
+    ]
+    if dev_sha:
+        command.extend(["--dev-sha", dev_sha])
+
+    result = subprocess.run(
+        command,
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=10,
+    )
+
+    assert result.returncode != 0
+    assert "--dev-sha" in result.stderr
+    assert list(evidence_dir.iterdir()) == []

@@ -8,6 +8,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from api.test_campaign_finance_support import insert_data_source_for_test, insert_source_record_for_test
+from api.test_civics import _insert_office, _insert_officeholding
+from api.queries.civics import fetch_current_office_for_person
 from core.db import (
     insert_data_source,
     insert_entity_source,
@@ -23,6 +25,43 @@ pytestmark = pytest.mark.integration
 
 _SOURCE_RECORD_PULL_AT = datetime(2026, 7, 10, 9, 20, 44, tzinfo=timezone.utc)
 _LATER_DATA_SOURCE_PULL_AT = datetime(2026, 7, 25, 7, 35, 34, tzinfo=timezone.utc)
+
+
+def _ensure_durham_officeholder(db_conn: psycopg.Connection) -> UUID:
+    person_row = db_conn.execute(
+        "SELECT id FROM core.person WHERE canonical_name = %s ORDER BY id LIMIT 1",
+        ("Carl Rist",),
+    ).fetchone()
+    if person_row is None:
+        person = Person(canonical_name="Carl Rist", first_name="Carl", last_name="Rist")
+        insert_person(db_conn, person)
+        person_id = person.id
+    else:
+        person_id = person_row[0]
+
+    current_office_row = db_conn.execute(
+        """
+        SELECT oh.id
+        FROM civic.officeholding oh
+        JOIN civic.office o ON o.id = oh.office_id
+        WHERE oh.person_id = %s
+          AND oh.valid_period @> CURRENT_DATE
+          AND o.title = 'City Council Member'
+          AND o.office_level = 'municipal'
+        LIMIT 1
+        """,
+        (person_id,),
+    ).fetchone()
+    if current_office_row is None:
+        office_id = _insert_office(
+            db_conn,
+            name=f"durham_nc_city_council_member_{uuid4().hex}",
+            title="City Council Member",
+            office_level="municipal",
+            state="NC",
+        )
+        _insert_officeholding(db_conn, person_id=person_id, office_id=office_id)
+    return person_id
 
 
 def _get_person_sources_with_data_source_pull_state(
@@ -175,6 +214,107 @@ def test_get_person_returns_person_response_with_provenance(
     assert missing_bio_payload["bio_source_url"] is None
     assert missing_bio_payload["bio_license"] is None
     assert missing_bio_payload["bio_pulled_at"] is None
+
+
+def test_get_person_returns_durham_current_office(
+    api_client: TestClient,
+    db_conn: psycopg.Connection,
+) -> None:
+    person_id = _ensure_durham_officeholder(db_conn)
+
+    response = api_client.get(f"/v1/person/{person_id}")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["id"] == str(person_id)
+    assert payload["canonical_name"] == "Carl Rist"
+    assert payload["current_office"]["office_name"] == "City Council Member"
+    assert payload["current_office"]["office_level"] == "municipal"
+
+
+@pytest.mark.parametrize(
+    ("higher_level", "lower_level"),
+    [
+        ("federal", "state"),
+        ("state", "county"),
+        ("county", "municipal"),
+        ("municipal", "judicial"),
+        ("judicial", "school_board"),
+        ("school_board", "special_district"),
+    ],
+)
+def test_current_office_uses_canonical_level_order(
+    db_conn: psycopg.Connection,
+    higher_level: str,
+    lower_level: str,
+) -> None:
+    person = Person(canonical_name=f"Office Priority {higher_level}")
+    insert_person(db_conn, person)
+    lower_office_id = _insert_office(
+        db_conn,
+        name=f"priority_lower_{uuid4().hex}",
+        title=f"{lower_level} office",
+        office_level=lower_level,
+    )
+    higher_office_id = _insert_office(
+        db_conn,
+        name=f"priority_higher_{uuid4().hex}",
+        title=f"{higher_level} office",
+        office_level=higher_level,
+    )
+    _insert_officeholding(db_conn, person_id=person.id, office_id=lower_office_id)
+    _insert_officeholding(db_conn, person_id=person.id, office_id=higher_office_id)
+
+    current_office = fetch_current_office_for_person(db_conn, person.id)
+
+    assert current_office is not None
+    assert current_office["office_name"] == f"{higher_level} office"
+    assert current_office["office_level"] == higher_level
+
+
+def test_current_office_breaks_level_ties_by_period_then_officeholding_id(
+    db_conn: psycopg.Connection,
+) -> None:
+    person = Person(canonical_name="Office Period Priority")
+    insert_person(db_conn, person)
+    office_ids = [
+        _insert_office(
+            db_conn,
+            name=f"period_priority_{uuid4().hex}",
+            title="City Council Member",
+            office_level="municipal",
+        )
+        for _ in range(3)
+    ]
+    older_id = UUID("10000000-0000-4000-8000-000000000001")
+    higher_recent_id = UUID("10000000-0000-4000-8000-000000000003")
+    lower_recent_id = UUID("10000000-0000-4000-8000-000000000002")
+    _insert_officeholding(
+        db_conn,
+        id=older_id,
+        person_id=person.id,
+        office_id=office_ids[0],
+        valid_period="[2024-01-01,)",
+    )
+    _insert_officeholding(
+        db_conn,
+        id=higher_recent_id,
+        person_id=person.id,
+        office_id=office_ids[1],
+        valid_period="[2025-01-01,)",
+    )
+    _insert_officeholding(
+        db_conn,
+        id=lower_recent_id,
+        person_id=person.id,
+        office_id=office_ids[2],
+        valid_period="[2025-01-01,)",
+    )
+
+    current_office = fetch_current_office_for_person(db_conn, person.id)
+
+    assert current_office is not None
+    assert current_office["officeholding_id"] == lower_recent_id
 
 
 def test_get_person_uses_latest_successful_data_source_pull_for_effective_freshness(

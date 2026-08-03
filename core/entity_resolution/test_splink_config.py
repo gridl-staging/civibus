@@ -317,6 +317,63 @@ def _name_rarity_rows() -> list[dict[str, Any]]:
     return rows
 
 
+def _rare_same_employer_different_locality_rows() -> list[dict[str, Any]]:
+    rows = [
+        _name_rarity_row(
+            RARE_NAME_PAIR[0],
+            {
+                "canonical_name": "Aurelia Voss",
+                "first_name": "Aurelia",
+                "last_name": "Voss",
+                "date_of_birth": None,
+                "normalized_address": "boise id 83702",
+                "street_number": None,
+                "zip5": "83702",
+                "state": "ID",
+                "employer": "Northwest Biologics",
+                "occupation": "Physician",
+                "identifier_key": "rare_employer_target_left",
+            },
+        ),
+        _name_rarity_row(
+            RARE_NAME_PAIR[1],
+            {
+                "canonical_name": "Aurelia Voss",
+                "first_name": "Aurelia",
+                "last_name": "Voss",
+                "date_of_birth": None,
+                "normalized_address": "meridian id 83642",
+                "street_number": None,
+                "zip5": "83642",
+                "state": "ID",
+                "employer": "Northwest Biologics",
+                "occupation": "Physician",
+                "identifier_key": "rare_employer_target_right",
+            },
+        ),
+    ]
+    for index in range(12):
+        rows.append(
+            _name_rarity_row(
+                uuid.UUID(f"00000000-0000-0000-0006-{index + 1:012d}"),
+                {
+                    "canonical_name": "James Smith",
+                    "first_name": "James",
+                    "last_name": "Smith",
+                    "date_of_birth": date(1960 + index, 1, 1),
+                    "normalized_address": f"{900 + index} employer filler rd",
+                    "street_number": str(900 + index),
+                    "zip5": f"40{index:03d}",
+                    "state": "ID",
+                    "employer": f"Frequency Employer {index}",
+                    "occupation": f"Frequency Occupation {index}",
+                    "identifier_key": f"rare_employer_filler_{index}",
+                },
+            )
+        )
+    return rows
+
+
 def _score_map_by_pair(
     rows: list[dict[str, Any]],
 ) -> dict[tuple[uuid.UUID, uuid.UUID], float]:
@@ -513,6 +570,75 @@ def test_person_splink_scores_rare_exact_name_above_common_exact_name() -> None:
     assert rare_score > common_score, (
         f"expected rare-name confidence to exceed common-name confidence; rare={rare_score}, common={common_score}"
     )
+
+
+def test_person_splink_rare_exact_name_same_employer_different_locality_scores_above_auto_merge() -> None:
+    rare_name_pair = tuple(str(entity_id) for entity_id in RARE_NAME_PAIR)
+    person_settings = build_person_probabilistic_settings()
+    scores = score_with_splink(
+        _rare_same_employer_different_locality_rows(),
+        "person",
+        probabilistic_settings=person_settings,
+        include_attribution=True,
+    )
+    score = _only_score_for_pair(scores, rare_name_pair)
+
+    assert score["comparison_levels"]["canonical_name"] >= 3
+    assert score["comparison_levels"]["last_name"] >= 2
+    assert score["comparison_levels"]["employer"] >= 3
+    assert score["comparison_levels"]["normalized_address"] == 0
+    assert score["comparison_levels"]["zip5"] == 0
+    assert score["confidence"] >= resolve_auto_merge_threshold(None)
+
+
+def test_person_splink_canonical_employer_variants_receive_exact_evidence() -> None:
+    rare_name_pair = tuple(str(entity_id) for entity_id in RARE_NAME_PAIR)
+    rows = _rare_same_employer_different_locality_rows()
+    rows[0]["employer"] = "Northwest Biologics LLC"
+    rows[1]["employer"] = "Northwest Biologics"
+    person_settings = build_person_probabilistic_settings()
+
+    scores = score_with_splink(
+        rows,
+        "person",
+        probabilistic_settings=person_settings,
+        include_attribution=True,
+    )
+    score = _only_score_for_pair(scores, rare_name_pair)
+
+    assert score["comparison_levels"]["employer"] == 3
+    assert score["confidence"] >= resolve_auto_merge_threshold(None)
+
+
+def test_person_splink_junk_employer_exact_match_receives_no_employer_evidence() -> None:
+    rare_name_pair = tuple(str(entity_id) for entity_id in RARE_NAME_PAIR)
+    rows = _rare_same_employer_different_locality_rows()
+    rows[0]["employer"] = "RETIRED"
+    rows[1]["employer"] = "RETIRED"
+    person_settings = build_person_probabilistic_settings()
+
+    scores = score_with_splink(
+        rows,
+        "person",
+        probabilistic_settings=person_settings,
+        include_attribution=True,
+    )
+    score = _only_score_for_pair(scores, rare_name_pair)
+
+    assert score["comparison_levels"]["employer"] == -1
+    assert score["confidence"] < resolve_auto_merge_threshold(None)
+
+
+def test_person_settings_exact_employer_agreement_remains_trainable() -> None:
+    person_settings = build_person_probabilistic_settings()
+    employer_comparison = _comparison_by_output_column(person_settings, "employer")
+    exact_level = employer_comparison["comparison_levels"][1]
+
+    assert exact_level["sql_condition"] == '"employer_l" = "employer_r"'
+    assert "m_probability" not in exact_level
+    assert "u_probability" not in exact_level
+    assert exact_level["fix_m_probability"] is False
+    assert exact_level["fix_u_probability"] is False
 
 
 @pytest.mark.parametrize("case_id", DONOR_FALSE_MERGE_CASE_IDS)

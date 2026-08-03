@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildTrustSection,
+  buildTimestampFreshnessPresentation,
   buildDonorVendorEmptyStateBanner,
   buildLinkedCommitteeEmptyStateBanner,
   PHL_FRESHNESS_NOTE,
@@ -28,6 +29,30 @@ describe("detail trust presentation helper", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it("builds reusable relative and absolute timestamp copy at the eight-day boundary", () => {
+    const presentation = buildTimestampFreshnessPresentation(
+      "2026-03-13T12:00:00Z",
+      {
+        summaryPrefix: "Donor totals built",
+        staleAfterDays: 8
+      }
+    );
+
+    expect(presentation).toEqual({
+      summary: "Donor totals built 8 days ago (2026-03-13)",
+      freshnessSeverity: "fresh"
+    });
+  });
+
+  it("marks timestamps beyond a requested freshness window as stale", () => {
+    expect(
+      buildTimestampFreshnessPresentation("2026-03-13T11:59:59Z", {
+        summaryPrefix: "Donor totals built",
+        staleAfterDays: 8
+      }).freshnessSeverity
+    ).toBe("stale");
   });
 
   it("derives trust rows and latest pull summary from source payloads", () => {

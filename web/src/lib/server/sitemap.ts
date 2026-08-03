@@ -27,7 +27,7 @@ export const SITEMAP_SHARD_SIZE = 10_000;
 export const SITEMAP_CACHE_CONTROL = "public, max-age=900";
 export const SITEMAP_PROTOCOL_NAMESPACE = "http://www.sitemaps.org/schemas/sitemap/0.9";
 
-const PAGINATION_CONCURRENCY = 6;
+const PAGINATION_CONCURRENCY = 10;
 
 export const STATIC_PATHS = [
   "/",

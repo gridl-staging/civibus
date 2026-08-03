@@ -1,6 +1,9 @@
 """Contract tests for the Fly operations SSOT and open-work ledger."""
 
+import json
 import re
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -21,6 +24,7 @@ CAMPAIGN_FINANCE_REFRESH_RUNBOOK_PATH = REPO_ROOT / "docs/howto/operations/campa
 REFRESH_MACHINE_IMAGE_RECEIPT_PATH = REPO_ROOT / "docs/live-state/2026_07_31_refresh_machine_image_deploy.md"
 SCHEDULER_BOUNDARY_RED_RECEIPT_PATH = REPO_ROOT / "docs/live-state/2026_07_28_refresh_scheduler_boundary.md"
 SCHEDULER_BOUNDARY_RECHECK_CHECKLIST_PATH = REPO_ROOT / "chats/icg/aug04_pm_1_refresh_scheduler_boundary_recheck.md"
+REFRESH_RELIABILITY_RECEIPT_PATH = REPO_ROOT / "docs/live-state/2026_08_03_refresh_partial_run_reliability.md"
 RUNNABLE_PASSWORD_DOC_PATHS = (
     REPO_ROOT / "docs/live-state/2026_07_07_lane6_schedule_a_sizing.md",
     REPO_ROOT / "docs/live-state/2026_07_07_lane7_local_load.md",
@@ -45,6 +49,55 @@ RUNNABLE_POSTGRES_PASSWORD_PLACEHOLDER_RE = re.compile(r"POSTGRES_PASSWORD=<[^>\
 
 def _read_text(path: Path) -> str:
     return path.read_text(encoding="utf-8")
+
+
+def _lane10_digest_proof_script() -> str:
+    receipt_text = _read_text(REFRESH_RELIABILITY_RECEIPT_PATH)
+    start_marker = "# lane10_refresh_digest_proof_start"
+    end_marker = "# lane10_refresh_digest_proof_end"
+    assert receipt_text.count(start_marker) == 1
+    assert receipt_text.count(end_marker) == 1
+    return receipt_text.split(start_marker, 1)[1].split(end_marker, 1)[0].strip()
+
+
+def _run_lane10_digest_proof(
+    tmp_path: Path,
+    *,
+    expected_digest: str,
+    live_digest: str,
+) -> subprocess.CompletedProcess[str]:
+    evidence_dir = tmp_path / "refresh_deploy_evidence"
+    evidence_dir.mkdir()
+    dev_sha = "0123456789abcdef0123456789abcdef01234567"
+    (evidence_dir / "dev_sha.txt").write_text(f"{dev_sha}\n", encoding="utf-8")
+    (evidence_dir / "image_digest.txt").write_text(f"{expected_digest}\n", encoding="utf-8")
+    machines_path = tmp_path / "machines.json"
+    repository, digest = live_digest.rsplit("@", 1)
+    registry, repository_name = repository.split("/", 1)
+    machines_path.write_text(
+        json.dumps(
+            [
+                {
+                    "id": "859e0da479e678",
+                    "updated_at": "2099-01-01T00:00:00Z",
+                    "image_ref": {
+                        "registry": registry,
+                        "repository": repository_name,
+                        "digest": digest,
+                    },
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    return subprocess.run(
+        [sys.executable, "-", str(evidence_dir), str(machines_path), dev_sha],
+        input=_lane10_digest_proof_script(),
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=10,
+    )
 
 
 def test_fly_runbook_documents_current_refresh_machine_model() -> None:
@@ -104,6 +157,35 @@ def test_fly_runbook_documents_current_deploy_workflow_model() -> None:
     )
     for fragment in forbidden_fragments:
         assert fragment not in runbook_text
+
+
+def test_lane10_refresh_digest_proof_accepts_the_deployed_workflow_image(tmp_path: Path) -> None:
+    digest = f"registry.fly.io/civibus-refresh@sha256:{'a' * 64}"
+
+    result = _run_lane10_digest_proof(
+        tmp_path,
+        expected_digest=digest,
+        live_digest=digest,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "refresh_machine_digest_match" in result.stdout
+
+
+def test_lane10_refresh_digest_proof_rejects_old_image_after_unrelated_machine_update(
+    tmp_path: Path,
+) -> None:
+    expected_digest = f"registry.fly.io/civibus-refresh@sha256:{'a' * 64}"
+    stale_digest = f"registry.fly.io/civibus-refresh@sha256:{'b' * 64}"
+
+    result = _run_lane10_digest_proof(
+        tmp_path,
+        expected_digest=expected_digest,
+        live_digest=stale_digest,
+    )
+
+    assert result.returncode != 0
+    assert "does not match workflow-proven digest" in result.stderr
 
 
 def test_fly_runbook_password_guidance_points_to_pgpass_owners() -> None:

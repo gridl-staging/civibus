@@ -26,6 +26,7 @@ const PERSON_DETAIL = {
   primary_address_id: null,
   er_cluster_id: null,
   er_confidence: null,
+  current_office: null,
   portrait: {
     status: "active",
     rights_status: "licensed",

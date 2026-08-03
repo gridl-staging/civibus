@@ -60,6 +60,13 @@ function buildPersonDetail() {
     er_cluster_id: null,
     er_confidence: null,
     portrait: null,
+    current_office: {
+      officeholding_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      office_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      office_name: "City Council Member",
+      office_level: "municipal",
+      state: "NC"
+    },
     sources: []
   };
 }
@@ -257,6 +264,13 @@ describe("/person/[id] +page.server load", () => {
 
     expect(data.entityType).toBe("person");
     expect(data.detail).toBe(personDetail);
+    if (!("current_office" in data.detail)) {
+      throw new Error("Expected person detail response.");
+    }
+    expect(data.detail.current_office).toMatchObject({
+      office_name: "City Council Member",
+      office_level: "municipal"
+    });
     expect("matches" in data).toBe(false);
     expect("relationships" in data).toBe(false);
     expect("personCivicHistory" in data).toBe(false);

@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from api.deps import get_db
 from api.models import DonorSearchResponse
-from api.queries import search_donors
+from api.queries import DonorSearchRollupUnavailableError, search_donors
 
 router = APIRouter()
 
@@ -20,6 +20,13 @@ def donor_search(
 ) -> DonorSearchResponse:
     try:
         payload = search_donors(conn, q=q, by=by, limit=limit, offset=offset)
+    except DonorSearchRollupUnavailableError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "donor_search_rollup_unavailable",
+            },
+        ) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return DonorSearchResponse.model_validate(payload)

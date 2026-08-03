@@ -25,6 +25,7 @@ from api.test_campaign_finance_support import (
     insert_transaction_row,
 )
 from core.db import get_connection, insert_person
+from core.refresh.donor_rollup import rebuild_donor_search_rollup
 from core.types.python.models import Person
 
 
@@ -167,6 +168,7 @@ def seed_donor_search_fixture(
             filing_alpha=filings.alpha,
             source_record_id=source_records.current,
         )
+    rebuild_donor_search_rollup(conn)
 
     return DonorSearchFixtureIds(
         alpha=recipients.alpha,
@@ -211,6 +213,7 @@ def seed_full_scope_skewed_donor_search_fixture(
             unscoped_filing_id=unscoped_filing_id,
         )
     _refresh_full_scope_planner_statistics(conn)
+    rebuild_donor_search_rollup(conn)
     counts = fetch_full_scope_donor_search_counts(conn)
     return FullScopeDonorSearchFixtureIds(
         counts=counts,

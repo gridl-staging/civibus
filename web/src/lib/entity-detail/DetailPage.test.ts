@@ -359,6 +359,13 @@ function buildPersonPageBundle(
       primary_address_id: null,
       er_cluster_id: null,
       er_confidence: null,
+      current_office: {
+        officeholding_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        office_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        office_name: "City Council Member",
+        office_level: "municipal",
+        state: "NC"
+      },
       portrait: {
         status: "active",
         rights_status: "licensed",
@@ -385,6 +392,10 @@ describe("entity detail page rendering", () => {
 
     expect(rendered.body).toContain("Portrait of Jane Doe");
     expect(rendered.body).toContain("<h3>Core attributes</h3>");
+    expect(rendered.body).toContain("<dt>Current office</dt>");
+    expect(rendered.body).toContain("<dd>City Council Member</dd>");
+    expect(rendered.body).toContain("<dt>Office level</dt>");
+    expect(rendered.body).toContain("<dd>municipal</dd>");
     expect(rendered.body).toContain("<dt>Identifiers</dt>");
     expect(rendered.body).toContain("<dd>1</dd>");
     expect(rendered.body).toContain('data-testid="entity-metric-identifiers"');
@@ -1518,6 +1529,7 @@ describe("entity detail page rendering", () => {
         primary_address_id: null,
         er_cluster_id: null,
         er_confidence: null,
+        current_office: null,
         portrait: null,
         sources: []
       },

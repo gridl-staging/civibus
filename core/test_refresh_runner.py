@@ -14,9 +14,15 @@ import pytest
 
 from core.refresh import job_builders, runner
 from core.refresh.test_job_builders import _EXPECTED_WEEKLY_FEDERAL_SCOPE_JOB_KEYS
+from domains.campaign_finance.ingest.candidate_summary_loader import update_candidate_person_link
 from domains.campaign_finance.ingest.federal_spine_loader import SpineLoadResult
 from domains.civics.loaders.ncsbe_results import NcsbeResultsLoadSummary
 from domains.civics.loaders.official_rosters.source_registry import list_nc_roster_source_metadata
+from test_support.donor_search_fixture import (
+    cleanup_donor_search_fixture,
+    fetch_full_scope_donor_search_counts,
+    seed_full_scope_skewed_donor_search_fixture,
+)
 
 
 def _job_for_tests(
@@ -1369,6 +1375,97 @@ def test_should_run_job_honors_daily_cadence_window() -> None:
 _PARTIAL_RUN_MANUAL_RECOVERY_AT = datetime(2026, 7, 25, 12, 0, tzinfo=timezone.utc)
 _PARTIAL_RUN_STALE_MASTERS_AT = datetime(2026, 7, 20, 12, 0, tzinfo=timezone.utc)
 _PARTIAL_RUN_SCHEDULED_AT = datetime(2026, 7, 28, 12, 0, tzinfo=timezone.utc)
+_FULL_SCOPE_OFFICEHOLDER_MONEY_COVERAGE = 518
+
+
+def _cleanup_refresh_runner_partial_run_fixture(
+    connection: psycopg.Connection,
+    *,
+    job_keys: list[str],
+    started_at: datetime,
+) -> None:
+    connection.execute(
+        "DELETE FROM core.refresh_run WHERE job_key = ANY(%s) AND started_at = %s",
+        (job_keys, started_at),
+    )
+
+
+def _successful_single_update_loader_result() -> SimpleNamespace:
+    return SimpleNamespace(inserted=1, skipped=0, quarantined=0, superseded=0, errors=0)
+
+
+def _build_real_plan_with_inert_callables(
+    *,
+    masters_run_callable: MagicMock,
+) -> tuple[list[runner.RefreshJob], dict[str, MagicMock]]:
+    jobs = job_builders.build_refresh_plan(scope="federal")
+    assert tuple(job.key for job in jobs) == _EXPECTED_WEEKLY_FEDERAL_SCOPE_JOB_KEYS
+
+    callables_by_key: dict[str, MagicMock] = {}
+    replaced_jobs: list[runner.RefreshJob] = []
+    for job in jobs:
+        run_callable = (
+            masters_run_callable
+            if job.key == "federal-fec-masters"
+            else MagicMock(name=job.key, return_value=_successful_loader_result())
+        )
+        callables_by_key[job.key] = run_callable
+        replaced_jobs.append(replace(job, run_callable=run_callable))
+    return replaced_jobs, callables_by_key
+
+
+def _partial_run_last_pull_by_key(
+    jobs: list[runner.RefreshJob],
+    *,
+    now: datetime,
+) -> dict[str, datetime]:
+    return {
+        job.key: now - timedelta(days=8) if job.key == "federal-fec-masters" else now - timedelta(days=1)
+        for job in jobs
+    }
+
+
+def _expected_masters_partial_run_eligibility(jobs: list[runner.RefreshJob]) -> dict[str, bool]:
+    return {job.key: job.key == "federal-fec-masters" or job.cadence == "continuous" for job in jobs}
+
+
+def _assert_real_plan_call_counts(
+    jobs: list[runner.RefreshJob],
+    callables_by_key: dict[str, MagicMock],
+) -> None:
+    callables_by_key["federal-fec-masters"].assert_called_once_with()
+    for job in jobs:
+        run_callable = callables_by_key[job.key]
+        if job.key == "federal-fec-masters":
+            continue
+        if job.cadence == "continuous":
+            run_callable.assert_called_once_with()
+        else:
+            run_callable.assert_not_called()
+
+
+def _assert_masters_partial_run_results(results: list[runner.RefreshRunResult]) -> None:
+    assert [(result.key, result.status) for result in results] == [
+        ("federal-fec-masters", "success"),
+        ("federal-fec-schedule-a", "success"),
+        ("federal-fec-committee-summary", "skipped"),
+        ("federal-congress-spine", "skipped"),
+        ("federal-fec-races", "skipped"),
+        ("federal-donor-search-rollup", "skipped"),
+        ("federal-fec-schedule-b", "success"),
+        ("federal-fec-schedule-e", "success"),
+        ("federal-enrichment", "skipped"),
+        ("federal-geometry-probe", "skipped"),
+        ("federal-fec-masters", "failed"),
+    ]
+    spine_result = results[3]
+    alarm = results[-1]
+    assert spine_result.key == "federal-congress-spine"
+    assert spine_result.status == "skipped"
+    assert alarm.status == "failed"
+    assert "federal-fec-masters" in alarm.message
+    assert "federal-congress-spine" in alarm.message
+    assert int(any(result.status in runner._FAILING_STATUSES for result in results)) == 1
 
 
 def _federal_masters_and_spine_jobs() -> tuple[runner.RefreshJob, runner.RefreshJob]:
@@ -1446,6 +1543,71 @@ def _run_weekly_pair_main(
     return exit_code, streamed_results, callables_by_key
 
 
+@pytest.mark.integration
+def test_masters_with_spine_skipped_preserves_officeholder_money_coverage(
+    monkeypatch: pytest.MonkeyPatch,
+    committing_db_conn: psycopg.Connection,
+) -> None:
+    fixed_run_at = datetime(2099, 1, 11, 12, 0, tzinfo=timezone.utc)
+    fixture_ids = None
+    plan_job_keys = list(_EXPECTED_WEEKLY_FEDERAL_SCOPE_JOB_KEYS)
+
+    try:
+        committing_db_conn.rollback()
+        cleanup_donor_search_fixture(committing_db_conn)
+        _cleanup_refresh_runner_partial_run_fixture(
+            committing_db_conn,
+            job_keys=plan_job_keys,
+            started_at=fixed_run_at,
+        )
+        committing_db_conn.commit()
+
+        fixture_ids = seed_full_scope_skewed_donor_search_fixture(committing_db_conn)
+        officeholder_money_coverage = fetch_full_scope_donor_search_counts(committing_db_conn).linked_people
+        assert fixture_ids.counts.linked_people == _FULL_SCOPE_OFFICEHOLDER_MONEY_COVERAGE
+        assert officeholder_money_coverage == _FULL_SCOPE_OFFICEHOLDER_MONEY_COVERAGE
+        assert officeholder_money_coverage > 0
+        committing_db_conn.commit()
+
+        def _run_masters_link_update() -> SimpleNamespace:
+            assert fixture_ids is not None
+            update_candidate_person_link(
+                committing_db_conn,
+                fec_candidate_id="S6NC00000",
+                person_id=fixture_ids.secondary_recipient.person_id,
+            )
+            return _successful_single_update_loader_result()
+
+        masters_run_callable = MagicMock(side_effect=_run_masters_link_update)
+        jobs, callables_by_key = _build_real_plan_with_inert_callables(
+            masters_run_callable=masters_run_callable,
+        )
+        last_pull_by_key = _partial_run_last_pull_by_key(jobs, now=fixed_run_at)
+
+        assert {
+            job.key: runner.should_run_job(job, last_pull_at=last_pull_by_key[job.key], now=fixed_run_at)
+            for job in jobs
+        } == _expected_masters_partial_run_eligibility(jobs)
+
+        monkeypatch.setattr(runner, "_utc_now", lambda: fixed_run_at)
+        monkeypatch.setattr(runner, "_select_latest_pull_at", lambda connection, job: last_pull_by_key[job.key])
+        results = runner.run_all_jobs(committing_db_conn, jobs, now=fixed_run_at)
+
+        officeholder_money_coverage = fetch_full_scope_donor_search_counts(committing_db_conn).linked_people
+        assert officeholder_money_coverage == _FULL_SCOPE_OFFICEHOLDER_MONEY_COVERAGE
+        _assert_masters_partial_run_results(results)
+        _assert_real_plan_call_counts(jobs, callables_by_key)
+    finally:
+        committing_db_conn.rollback()
+        cleanup_donor_search_fixture(committing_db_conn)
+        _cleanup_refresh_runner_partial_run_fixture(
+            committing_db_conn,
+            job_keys=plan_job_keys,
+            started_at=fixed_run_at,
+        )
+        committing_db_conn.commit()
+
+
 def test_main_flags_weekly_federal_partial_run_when_masters_runs_without_congress_spine(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1497,6 +1659,54 @@ def test_weekly_federal_partial_run_alarm_names_jobs_and_cadence_evidence(
     assert _PARTIAL_RUN_STALE_MASTERS_AT.isoformat() in alarm.message
     assert _PARTIAL_RUN_MANUAL_RECOVERY_AT.isoformat() in alarm.message
     assert alarm.error == alarm.message
+
+
+def test_weekly_federal_partial_run_alarm_status_drives_main_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert runner._FAILING_STATUSES == frozenset({"crashed", "degraded", "empty", "failed"})
+
+    jobs = [
+        replace(job, run_callable=MagicMock(return_value=_successful_loader_result()))
+        for job in _federal_masters_and_spine_jobs()
+    ]
+    connection = MagicMock()
+    record_refresh_run = MagicMock()
+    last_pull_by_key = {
+        "federal-fec-masters": _PARTIAL_RUN_STALE_MASTERS_AT,
+        "federal-congress-spine": _PARTIAL_RUN_MANUAL_RECOVERY_AT,
+    }
+    monkeypatch.setattr(runner, "_utc_now", lambda: _PARTIAL_RUN_SCHEDULED_AT)
+    monkeypatch.setattr(runner, "_record_refresh_run", record_refresh_run)
+
+    alarm = runner._record_repair_pair_alarm(
+        connection,
+        jobs[0],
+        jobs[1],
+        last_pull_at_by_key=last_pull_by_key,
+    )
+
+    assert alarm.status == "failed"
+    assert alarm.status in runner._FAILING_STATUSES
+    record_refresh_run.assert_called_once()
+    connection.commit.assert_called_once_with()
+    connection.rollback.assert_not_called()
+
+    failing_connection = MagicMock()
+    monkeypatch.setattr(runner, "_record_refresh_run", MagicMock(side_effect=RuntimeError("ledger write boom")))
+
+    failed_alarm = runner._record_repair_pair_alarm(
+        failing_connection,
+        jobs[0],
+        jobs[1],
+        last_pull_at_by_key=last_pull_by_key,
+    )
+
+    assert failed_alarm.status == "failed"
+    assert failed_alarm.status in runner._FAILING_STATUSES
+    assert "alarm ledger recording failed: ledger write boom" in failed_alarm.error
+    failing_connection.commit.assert_not_called()
+    failing_connection.rollback.assert_called_once_with()
 
 
 def test_weekly_federal_partial_run_alarm_records_failed_zero_activity_ledger_row(

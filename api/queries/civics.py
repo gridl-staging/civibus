@@ -140,6 +140,51 @@ def fetch_office_active_contest_count(conn: psycopg.Connection, office_id: UUID)
 
 
 # ---------------------------------------------------------------------------
+# Person current office
+# ---------------------------------------------------------------------------
+
+_CURRENT_OFFICE_LEVEL_ORDER_SQL = """
+    CASE o.office_level
+        WHEN 'federal' THEN 1
+        WHEN 'state' THEN 2
+        WHEN 'county' THEN 3
+        WHEN 'municipal' THEN 4
+        WHEN 'judicial' THEN 5
+        WHEN 'school_board' THEN 6
+        WHEN 'special_district' THEN 7
+        ELSE 8
+    END
+"""
+
+
+def _current_office_selection_sql(person_id_expression: str) -> str:
+    """Build the canonical current-office selection for an internal person-id expression."""
+    return f"""
+        SELECT
+            oh.id AS officeholding_id,
+            o.id AS office_id,
+            COALESCE(NULLIF(btrim(o.title), ''), o.name) AS office_name,
+            o.office_level,
+            o.state
+        FROM civic.officeholding oh
+        JOIN civic.office o ON o.id = oh.office_id
+        WHERE oh.person_id = {person_id_expression}
+          AND oh.valid_period @> CURRENT_DATE
+        ORDER BY
+            {_CURRENT_OFFICE_LEVEL_ORDER_SQL},
+            lower(oh.valid_period) DESC NULLS LAST,
+            oh.id ASC
+        LIMIT 1
+    """
+
+
+def fetch_current_office_for_person(conn: psycopg.Connection, person_id: UUID) -> dict[str, Any] | None:
+    with conn.cursor(row_factory=dict_row) as cursor:
+        cursor.execute(_current_office_selection_sql("%s"), (person_id,))
+        return cursor.fetchone()
+
+
+# ---------------------------------------------------------------------------
 # Congress directory
 # ---------------------------------------------------------------------------
 

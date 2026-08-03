@@ -24,14 +24,7 @@ const civicDetailMockState = vi.hoisted(() => ({
   fetchUpcomingElectionTimeline: undefined as ((api: any) => Promise<any>) | undefined
 }));
 const STATIC_PATHS = ["/", "/congress", "/candidates", "/committees", "/coverage", "/calendar", "/data-sources"];
-const SITEMAP_PAGE_CONCURRENCY = 6;
 const SITEMAP_PROTOCOL_NAMESPACE = "http://www.sitemaps.org/schemas/sitemap/0.9";
-const PLANNED_CANDIDATE_SHARD_KIND = "candidate";
-const KNOWN_ANSWER_CANDIDATE_SHARD_PATH = `/sitemap-${PLANNED_CANDIDATE_SHARD_KIND}-0.xml`;
-const KNOWN_ANSWER_CANDIDATE_SHARD_URL = `https://civibus.org${KNOWN_ANSWER_CANDIDATE_SHARD_PATH}`;
-const PLANNED_CANDIDATE_SHARD_PATH = new RegExp(
-  `^/sitemap-${PLANNED_CANDIDATE_SHARD_KIND}-\\d+\\.xml$`
-);
 
 const CANDIDATE_PAGE_1: CandidateListResponse = {
   items: [
@@ -598,16 +591,34 @@ describe("GET /sitemap.xml bounded sitemap index", () => {
     expect(Math.max(...offsets)).toBe(19_800);
   });
 
-  it("fetches each committee shard only inside its requested source window", async () => {
-    const requestJson = createShardDiscoveryRequestJson(0, 30_000);
+  it("fetches each committee shard inside its requested source window with bounded latency waves", async () => {
+    const deferred = new Map<number, ReturnType<typeof createDeferredPromise<CommitteeListResponse>>>();
+    const resolvedOffsets = new Set<number>();
+    const requestJson = vi.fn((path: string) => {
+      if (!path.includes("/v1/committees")) throw new Error(`Unexpected API call: ${path}`);
+      const offset = extractOffset(path);
+      const page = createDeferredPromise<CommitteeListResponse>();
+      deferred.set(offset, page);
+      return page.promise;
+    });
 
-    const response = await GET_KIND_SITEMAP(
-      createRequestEvent("https://civibus.org/sitemap-committee-1.xml", requestJson, {
-        kind: "committee",
-        page: "1"
-      })
+    const responsePromise = GET_KIND_SITEMAP(
+      createRequestEvent("https://civibus.org/sitemap-committee-1.xml", requestJson, { kind: "committee", page: "1" })
     );
 
+    for (let expectedRequestCount = 10; expectedRequestCount <= 50; expectedRequestCount += 10) {
+      await vi.waitFor(() => expect(deferred.size).toBe(expectedRequestCount), {
+        interval: 1,
+        timeout: 1_000
+      });
+      for (const [offset, page] of deferred) {
+        if (resolvedOffsets.has(offset)) continue;
+        resolvedOffsets.add(offset);
+        page.resolve({ items: [COMMITTEE_PAGE_1.items[0]!], has_next: offset < 19_800, offset, limit: 200 });
+      }
+    }
+
+    const response = await responsePromise;
     await expectXmlResponse(response);
     const offsets = requestedOffsets(requestJson, "/v1/committees");
     expect(offsets).toHaveLength(50);

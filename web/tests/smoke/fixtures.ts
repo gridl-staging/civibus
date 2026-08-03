@@ -6,8 +6,6 @@ import { APP_SHELL } from "../../src/lib/config/app.ts";
 import { DONOR_LOOKUP_SEED_CONTRIBUTOR_NAME, DONOR_LOOKUP_SEED_EMPLOYER, DONOR_LOOKUP_SEED_PERSON_ID, DONOR_LOOKUP_SEED_TOTAL_AMOUNT, DONOR_LOOKUP_SEED_ZIP5 } from "../../src/lib/donors/fixture.ts";
 // @ts-expect-error Smoke fixtures run under Node ESM and import the TS module directly.
 import { COMMITTEE_SUMMARY_SOURCE_LABELS, buildCommitteeItemizedCoverageNote } from "../../src/lib/campaign-finance-detail/summary-source.ts";
-// @ts-expect-error Smoke fixtures run under Node ESM and import the TS module directly.
-import { runSmokeSeedCommand, type SmokeSeedCleanupCallback } from "./smoke_seed_helpers.ts";
 
 export const SMOKE_API_HOST = "127.0.0.1";
 export const SMOKE_API_PORT = resolveSmokeApiPort(process.env);
@@ -959,20 +957,6 @@ export const SMOKE_COMMITTEE_EMPTY_STATE = "No recent committee transactions fou
 export const SMOKE_PROPERTY_EMPTY_OWNERSHIP_STATE = "No ownership history is available yet. Check back after the next county refresh.";
 export const SMOKE_PROPERTY_EMPTY_ASSESSMENT_STATE = "No assessment history is available yet. Check back after the next county refresh.";
 export const SMOKE_OFFICEHOLDER_EMPTY_STATE = "No current officeholders are linked yet. Check back after the next records refresh.";
-
-export async function seedLiveDonorLookupSmoke(): Promise<SmokeSeedCleanupCallback> {
-  await runSmokeSeedCommand("uv", [
-    "run",
-    "--directory",
-    "..",
-    "--extra",
-    "dev",
-    "python",
-    "-m",
-    "test_support.donor_search_fixture"
-  ]);
-  return async () => {};
-}
 
 // SQL builders + live-mode seed wrappers moved to ./smoke-seed-sql so this file
 // stays under the 800-line hard limit and single-owner rule applies:

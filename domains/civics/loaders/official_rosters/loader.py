@@ -16,9 +16,9 @@ import psycopg
 from core.db import (
     find_person_by_identifier,
     find_person_by_name_and_zip,
+    insert_person,
     insert_person_portrait,
     merge_person_identifiers,
-    resolve_person_by_name_and_zip,
     select_active_source_record_by_key,
     try_insert_source_record,
 )
@@ -71,6 +71,7 @@ _ROSTER_SOURCE_SEAT_LIMIT_BY_BODY_KEY: dict[str, int] = {
     "us_senate_nc_class_ii": 1,
     "us_senate_nc_class_iii": 1,
 }
+_ROSTER_IDENTITY_KEYS = frozenset({"bioguide_id", "ncleg_member_code", "roster_bio_url"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -438,7 +439,21 @@ def _find_existing_person_id(conn: psycopg.Connection, row: NormalizedRosterRow)
     first_name, last_name = _split_name(row.member_name)
     if first_name is None or last_name is None:
         return None
-    return find_person_by_name_and_zip(conn, last_name, first_name, None)
+
+    existing = find_person_by_name_and_zip(conn, last_name, first_name, None)
+    if existing is None:
+        return None
+
+    with conn.cursor() as cursor:
+        cursor.execute("SELECT identifiers FROM core.person WHERE id = %s", (existing,))
+        person_row = cursor.fetchone()
+    if person_row is None:
+        return None
+
+    existing_identifiers = person_row[0]
+    if _ROSTER_IDENTITY_KEYS.isdisjoint(existing_identifiers):
+        return existing
+    return None
 
 
 def _build_roster_identifiers(row: NormalizedRosterRow) -> dict[str, str]:
@@ -475,7 +490,7 @@ def _resolve_person_id(conn: psycopg.Connection, row: NormalizedRosterRow) -> UU
 
     identifiers = _build_roster_identifiers(row)
 
-    return resolve_person_by_name_and_zip(
+    return insert_person(
         conn,
         Person(
             canonical_name=row.member_name,
@@ -483,7 +498,6 @@ def _resolve_person_id(conn: psycopg.Connection, row: NormalizedRosterRow) -> UU
             last_name=last_name,
             identifiers=identifiers,
         ),
-        None,
     )
 
 

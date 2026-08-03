@@ -4,6 +4,7 @@ from pathlib import Path
 import shlex
 import tomllib
 
+import pytest
 import yaml
 
 import core.keel_gate_l13 as keel_gate_l13
@@ -80,6 +81,45 @@ def _find_step(step_name: str) -> dict:
 
 def _run_scripts() -> list[str]:
     return [step.get("run", "") for step in _deploy_steps() if "run" in step]
+
+
+REFRESH_MACHINE_STEP_NAME = "Deploy refresh machine"
+REFRESH_DEPLOY_INVOCATION = (
+    'bash infra/scripts/deploy_refresh_machine.sh --evidence-dir "$evidence" '
+    '--dev-sha "${{ steps.provenance.outputs.dev_sha }}"'
+)
+REFRESH_VERIFIER_SCRIPT = "infra/scripts/verify_refresh_machine.sh"
+REFRESH_EVIDENCE_ARTIFACT_STEP_NAME = "Persist refresh deploy evidence"
+REFRESH_EVIDENCE_ARTIFACT_ACTION = "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02"
+
+
+def _assert_single_delegated_refresh_deploy(steps: list[dict]) -> None:
+    """Whole-workflow single-delegation contract for the refresh machine deploy.
+
+    Scoped to the entire parsed step list, not just the first matching step, so a
+    duplicated destructive deploy step or a stray workflow-wide verifier call is caught.
+    """
+    step_names = [step.get("name") for step in steps]
+    all_scripts = "\n".join(step.get("run", "") for step in steps if "run" in step)
+
+    assert step_names.count(REFRESH_MACHINE_STEP_NAME) == 1, (
+        "exactly one refresh-machine deploy step is allowed across the whole workflow"
+    )
+    assert all_scripts.count(REFRESH_DEPLOY_INVOCATION) == 1, (
+        "exactly one workflow-wide deploy_refresh_machine.sh invocation is allowed"
+    )
+    assert REFRESH_VERIFIER_SCRIPT not in all_scripts, (
+        "verify_refresh_machine.sh is owned by the deploy script, not workflow YAML"
+    )
+
+
+def _assert_refresh_deploy_uses_manifest_dev_sha(steps: list[dict]) -> None:
+    refresh_steps = [step for step in steps if step.get("name") == REFRESH_MACHINE_STEP_NAME]
+    assert len(refresh_steps) == 1
+    refresh_script = refresh_steps[0]["run"]
+    assert refresh_script.count(REFRESH_DEPLOY_INVOCATION) == 1, (
+        "refresh deploy must receive the validated manifest dev SHA"
+    )
 
 
 def _fly_deploy_commands() -> list[str]:
@@ -249,10 +289,91 @@ def test_deploy_workflow_passes_dev_provenance_build_args_to_api_and_web() -> No
 
 
 def test_deploy_workflow_never_deploys_db_or_refresh_apps() -> None:
+    """Keep target details in the delegated refresh deploy owner, not workflow YAML."""
     workflow_text = _read_deploy_workflow()
 
     for forbidden_target in FORBIDDEN_DEPLOY_TARGETS:
         assert forbidden_target not in workflow_text
+
+
+def test_deploy_workflow_delegates_refresh_machine_deploy_after_serving_deploys() -> None:
+    deploy_steps = _deploy_steps()
+    step_names = [step.get("name") for step in deploy_steps]
+    refresh_step = _find_step("Deploy refresh machine")
+    refresh_script = refresh_step["run"]
+
+    assert refresh_step["name"] == "Deploy refresh machine"
+    assert refresh_step["shell"] == "bash"
+    assert refresh_script.splitlines()[0] == "set -euo pipefail"
+    assert 'evidence="$RUNNER_TEMP/refresh_deploy_evidence"' in refresh_script
+    assert 'mkdir -p "$evidence"' in refresh_script
+    assert refresh_script.count(REFRESH_DEPLOY_INVOCATION) == 1
+    for delegated_owner_literal in (
+        "infra/scripts/verify_refresh_machine.sh",
+        "civibus-refresh",
+        "infra/fly/refresh.fly.toml",
+    ):
+        assert delegated_owner_literal not in refresh_script
+
+    refresh_position = step_names.index("Deploy refresh machine")
+    for serving_step_name in (
+        "Deploy API to Fly",
+        "Deploy web to Fly",
+        "Deploy Caddy to Fly",
+    ):
+        assert step_names.index(serving_step_name) < refresh_position
+    assert refresh_position < step_names.index("Verify public deploy serves built dev SHA")
+
+
+def test_deploy_workflow_delegates_refresh_deploy_exactly_once_workflow_wide() -> None:
+    _assert_single_delegated_refresh_deploy(_deploy_steps())
+    _assert_refresh_deploy_uses_manifest_dev_sha(_deploy_steps())
+
+
+def test_mirror_sha_substitution_fails_refresh_provenance_contract() -> None:
+    steps = [dict(step) for step in _deploy_steps()]
+    refresh_step = next(step for step in steps if step.get("name") == REFRESH_MACHINE_STEP_NAME)
+    refresh_step["run"] = refresh_step["run"].replace("${{ steps.provenance.outputs.dev_sha }}", "$GITHUB_SHA")
+
+    with pytest.raises(AssertionError, match="validated manifest dev SHA"):
+        _assert_refresh_deploy_uses_manifest_dev_sha(steps)
+
+
+def test_duplicated_refresh_step_fails_single_delegation_contract() -> None:
+    steps = _deploy_steps()
+    duplicated = steps + [dict(_find_step(REFRESH_MACHINE_STEP_NAME))]
+    with pytest.raises(AssertionError):
+        _assert_single_delegated_refresh_deploy(duplicated)
+
+
+def test_inlined_refresh_verifier_fails_single_delegation_contract() -> None:
+    steps = _deploy_steps()
+    with_verifier = steps + [{"name": "Verify refresh", "run": f"bash {REFRESH_VERIFIER_SCRIPT}"}]
+    with pytest.raises(AssertionError):
+        _assert_single_delegated_refresh_deploy(with_verifier)
+
+
+def test_deploy_workflow_persists_successful_refresh_digest_evidence() -> None:
+    steps = _deploy_steps()
+    step_names = [step.get("name") for step in steps]
+    artifact_step = _find_step(REFRESH_EVIDENCE_ARTIFACT_STEP_NAME)
+
+    assert artifact_step == {
+        "name": REFRESH_EVIDENCE_ARTIFACT_STEP_NAME,
+        "if": "${{ always() }}",
+        "env": {"FLY_API_TOKEN": ""},
+        "uses": REFRESH_EVIDENCE_ARTIFACT_ACTION,
+        "with": {
+            "name": "refresh_deploy_evidence",
+            "path": "${{ runner.temp }}/refresh_deploy_evidence",
+            "if-no-files-found": "error",
+            "retention-days": 14,
+        },
+    }
+    assert step_names.index(REFRESH_MACHINE_STEP_NAME) < step_names.index(REFRESH_EVIDENCE_ARTIFACT_STEP_NAME)
+    assert step_names.index(REFRESH_EVIDENCE_ARTIFACT_STEP_NAME) < step_names.index(
+        "Verify public deploy serves built dev SHA"
+    )
 
 
 def test_deploy_workflow_keeps_production_smoke_gate_after_all_deploys() -> None:

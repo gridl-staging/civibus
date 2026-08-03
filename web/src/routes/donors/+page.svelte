@@ -1,6 +1,7 @@
 <script lang="ts">
   import { navigating } from '$app/stores';
   import { formatDisplayValue } from '$lib/detail-format';
+  import { buildTimestampFreshnessPresentation } from '$lib/detail-trust/presentation';
   import { buildDonorPagePath, DONOR_SEARCH_BY_MODES, DONOR_SEARCH_PAGE_PATH } from '$lib/donors/contract';
   import IdentityEvidence from '$lib/entity-detail/IdentityEvidence.svelte';
   import SkeletonPanel from '$lib/loading/SkeletonPanel.svelte';
@@ -21,6 +22,8 @@
   const LANDING_MESSAGE = 'Enter a donor name, employer, or 5-digit ZIP to search itemized federal contributions.';
   const SHORT_QUERY_MESSAGE = 'Enter at least 3 characters to search by name or employer.';
   const ZERO_RESULTS_MESSAGE = 'No donors match this search.';
+  const ROLLUP_UNAVAILABLE_MESSAGE =
+    'Donor search is temporarily unavailable while contribution data is refreshed.';
 
   $: donorStateKey = getDonorStateKey(data);
   $: if (donorStateKey !== renderedDonorStateKey) {
@@ -30,10 +33,17 @@
   $: isLoading = isSubmitting || $navigating !== null;
   $: hasSubmittedQuery = data.query.trim() !== '';
   $: hasResults = data.results.length > 0;
+  $: rollupFreshness = data.rollup_completed_at
+    ? buildTimestampFreshnessPresentation(data.rollup_completed_at, {
+        summaryPrefix: 'Donor totals built',
+        staleAfterDays: 8
+      })
+    : null;
   $: statusMessage = getStatusMessage({
     isLoading,
     validationMessage: data.validationMessage,
     shortQueryGuidance: data.shortQueryGuidance,
+    rollupUnavailable: data.rollupUnavailable,
     hasSubmittedQuery,
     hasResults,
     offset: data.offset,
@@ -56,6 +66,7 @@
     isLoading: boolean;
     validationMessage?: string;
     shortQueryGuidance?: boolean;
+    rollupUnavailable?: boolean;
     hasSubmittedQuery: boolean;
     hasResults: boolean;
     offset: number;
@@ -71,6 +82,10 @@
 
     if (state.shortQueryGuidance) {
       return SHORT_QUERY_MESSAGE;
+    }
+
+    if (state.rollupUnavailable) {
+      return ROLLUP_UNAVAILABLE_MESSAGE;
     }
 
     if (!state.hasSubmittedQuery) {
@@ -161,6 +176,12 @@
   >
     {statusMessage}
   </p>
+
+  {#if hasSubmittedQuery && !isLoading && !data.rollupUnavailable && rollupFreshness}
+    <p class="donor-lookup__freshness" data-testid="donor-freshness-stamp">
+      {rollupFreshness.summary}
+    </p>
+  {/if}
 
   {#if hasResults && !isLoading}
     <p class="donor-lookup__count" data-testid="donor-result-count">{statusMessage}</p>
@@ -271,7 +292,8 @@
 
   .donor-lookup__scope,
   .donor-lookup__status,
-  .donor-lookup__count {
+  .donor-lookup__count,
+  .donor-lookup__freshness {
     margin: 0;
   }
 

@@ -1,9 +1,19 @@
 POSTGRES_USER ?= civibus
 POSTGRES_DB ?= civibus
 POSTGRES_PORT ?= 5433
-INTEGRATION_POSTGRES_PORT_OVERRIDE_INVALID := $(if $(filter environment command line,$(origin POSTGRES_PORT)),1)
+POSTGRES_PORT_ORIGIN := $(origin POSTGRES_PORT)
+POSTGRES_PORT_CALLER_SUPPLIED := $(if $(filter environment command line,$(POSTGRES_PORT_ORIGIN)),1)
+# Freeze caller values without recursively expanding embedded Make syntax. These
+# values also enter shell recipes, where they must be read from the environment.
+override POSTGRES_PORT := $(value POSTGRES_PORT)
 WORKSPACE_SLUG := $(shell basename "$$(dirname "$(CURDIR)")" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9' '_' | sed 's/_$$//')
+COMPOSE_PROJECT_NAME_ORIGIN := $(origin COMPOSE_PROJECT_NAME)
 COMPOSE_PROJECT_NAME ?= civibus_$(WORKSPACE_SLUG)
+ifneq ($(filter environment command line,$(COMPOSE_PROJECT_NAME_ORIGIN)),)
+override COMPOSE_PROJECT_NAME := $(value COMPOSE_PROJECT_NAME)
+else
+override COMPOSE_PROJECT_NAME := civibus_$(WORKSPACE_SLUG)
+endif
 
 export POSTGRES_USER
 export POSTGRES_PASSWORD
@@ -36,7 +46,7 @@ RETIRED_ALLOWLIST := \
 	Makefile
 
 
-.PHONY: db-up db-down db-reset test test-public test-projected-public-contract test-api test-e2e lint check-retired-symbols ingest-fec-sample ingest-fec-bulk-sample ingest-fec-bulk ingest-fec-federal ingest-fec-ie-sample download-fec-bulk download-fec-weball download-fec-schedule-e download-fec-committee-summary ingest-fec-schedule-e download-irs-527 ingest-irs-527-sample ingest-irs-527 validate-configs validate-registry render-coverage-views render-region-lifecycle ingest-co-sample ingest-durham-sample require-postgres-password ingest-nc-sample ingest-nc-ie-sample ingest-ga-sample ingest-ca-sample ingest-mn-sample ingest-wa-sample ingest-tx-sample ingest-pa-sample ingest-oh-sample ingest-in-sample ingest-il-sample ingest-nj-sample ingest-va-sample ingest-sf-sample ingest-la-city-sample ingest-nyc-sample ingest-nc-past-results-2022-2024 download-ga quality-check quality-freshness entity-resolve entity-resolve-dry api-dev graph-load load-test refresh-cf-data refresh-cf-priority gate-L1 gate-L3 gate-L5 gate-L6 gate-L6-pilot gate-L7 gate-L10 gate-L14 keel-status keel-summary keel-current keel-reviews-status evidence-rotate
+.PHONY: db-up db-down db-teardown db-reset test test-public test-projected-public-contract test-api test-e2e lint check-retired-symbols ingest-fec-sample ingest-fec-bulk-sample ingest-fec-bulk ingest-fec-federal ingest-fec-ie-sample download-fec-bulk download-fec-weball download-fec-schedule-e download-fec-committee-summary ingest-fec-schedule-e download-irs-527 ingest-irs-527-sample ingest-irs-527 validate-configs validate-registry render-coverage-views render-region-lifecycle ingest-co-sample ingest-durham-sample require-postgres-password ingest-nc-sample ingest-nc-ie-sample ingest-ga-sample ingest-ca-sample ingest-mn-sample ingest-wa-sample ingest-tx-sample ingest-pa-sample ingest-oh-sample ingest-in-sample ingest-il-sample ingest-nj-sample ingest-va-sample ingest-sf-sample ingest-la-city-sample ingest-nyc-sample ingest-nc-past-results-2022-2024 download-ga quality-check quality-freshness entity-resolve entity-resolve-dry api-dev graph-load load-test refresh-cf-data refresh-cf-priority gate-L1 gate-L3 gate-L5 gate-L6 gate-L6-pilot gate-L7 gate-L10 gate-L14 keel-status keel-summary keel-current keel-reviews-status evidence-rotate
 
 require-postgres-password:
 	@test -n "$${POSTGRES_PASSWORD:-}" || { echo "POSTGRES_PASSWORD must be set in the environment" >&2; exit 1; }
@@ -52,19 +62,54 @@ require-postgres-password:
 INTEGRATION_RESERVED_PORT := 5475
 INTEGRATION_RESERVED_PROJECT := civibus_integration_local
 
-.PHONY: reject-reserved-integration-port
+.PHONY: reject-reserved-integration-port reject-unallocated-lane-port
 reject-reserved-integration-port:
-	@if [ "$(POSTGRES_PORT)" = "$(INTEGRATION_RESERVED_PORT)" ] && \
-		[ "$(COMPOSE_PROJECT_NAME)" != "$(INTEGRATION_RESERVED_PROJECT)" ]; then \
-		echo "POSTGRES_PORT=$(INTEGRATION_RESERVED_PORT) is reserved for test-integration-local; COMPOSE_PROJECT_NAME=$(COMPOSE_PROJECT_NAME) may not bind it. Use the port your batch allocated." >&2; \
+	@port="$${POSTGRES_PORT}"; \
+	case "$$port" in \
+		''|0*|*[!0-9]*|??????*) \
+			printf 'POSTGRES_PORT=%s must be a canonical decimal port from 1 through 65535\n' "$$port" >&2; \
+			exit 1 ;; \
+	esac; \
+	if [ "$$port" -gt 65535 ]; then \
+		printf 'POSTGRES_PORT=%s must be a canonical decimal port from 1 through 65535\n' "$$port" >&2; \
+		exit 1; \
+	fi; \
+	if [ "$$port" = "$(INTEGRATION_RESERVED_PORT)" ] && \
+		[ "$${COMPOSE_PROJECT_NAME}" != "$(INTEGRATION_RESERVED_PROJECT)" ]; then \
+		printf '%s\n' "POSTGRES_PORT=$(INTEGRATION_RESERVED_PORT) is reserved for test-integration-local; COMPOSE_PROJECT_NAME=$${COMPOSE_PROJECT_NAME} may not bind it. Use the port your batch allocated." >&2; \
 		exit 1; \
 	fi
 
-db-up: require-postgres-password reject-reserved-integration-port
+reject-unallocated-lane-port:
+	@if [ -z "$(POSTGRES_PORT_CALLER_SUPPLIED)" ] || [ -z "$${POSTGRES_PORT}" ]; then \
+		printf '%s\n' "A non-empty POSTGRES_PORT must be supplied by environment or command line for COMPOSE_PROJECT_NAME=$${COMPOSE_PROJECT_NAME}; implicit default POSTGRES_PORT=$${POSTGRES_PORT} is not an allocated lane port." >&2; \
+		exit 1; \
+	fi
+
+db-up: require-postgres-password reject-reserved-integration-port reject-unallocated-lane-port
 	docker compose -f infra/docker-compose.yml up -d
 
 db-down: require-postgres-password
 	docker compose -f infra/docker-compose.yml down
+
+# Destructive counterpart to db-down: db-down leaves the lane volume in place,
+# so honest per-lane cleanup needs an explicit path that removes the volume and
+# removes orphaned services in the same Compose project, then proves the
+# compose-owned volume `$(COMPOSE_PROJECT_NAME)_civibus_db_data` is actually
+# gone. The check is anchored and literal (grep -Fqx) so civibus_c1 cannot false-match
+# civibus_c10.
+db-teardown: require-postgres-password
+	docker compose -f infra/docker-compose.yml down --volumes --remove-orphans
+	@volume_names="$$(docker volume ls --format '{{.Name}}')"; volume_ls_status=$$?; \
+	if [ "$$volume_ls_status" -ne 0 ]; then \
+		echo "TEARDOWN FAILED: unable to inspect Docker volumes" >&2; \
+		exit "$$volume_ls_status"; \
+	fi; \
+	if printf '%s\n' "$$volume_names" | grep -Fqx "$${COMPOSE_PROJECT_NAME}_civibus_db_data"; then \
+		printf 'TEARDOWN FAILED: %s volume survives\n' "$${COMPOSE_PROJECT_NAME}" >&2; \
+		exit 1; \
+	fi; \
+	printf 'TEARDOWN CLEAN: docker volume ls contains no %s volume\n' "$${COMPOSE_PROJECT_NAME}"
 
 db-reset: require-postgres-password
 	@set -e; if command -v psql >/dev/null 2>&1; then \
@@ -114,7 +159,7 @@ test-integration-local: override POSTGRES_PORT := 5475
 test-integration-local: override COMPOSE_PROJECT_NAME := civibus_integration_local
 test-integration-local:
 	@set -eu; \
-	if [ -n "$(INTEGRATION_POSTGRES_PORT_OVERRIDE_INVALID)" ]; then \
+	if [ -n "$(POSTGRES_PORT_CALLER_SUPPLIED)" ]; then \
 		echo "test-integration-local pins POSTGRES_PORT=5475 internally; do not provide a POSTGRES_PORT override" >&2; \
 		exit 1; \
 	fi; \

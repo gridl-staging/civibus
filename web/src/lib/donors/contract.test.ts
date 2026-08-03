@@ -98,6 +98,7 @@ function responseWithResult(result: unknown): unknown {
     by: 'name',
     limit: 20,
     offset: 0,
+    rollup_completed_at: '2026-07-17T12:00:00Z',
     results: [result]
   };
 }
@@ -155,6 +156,24 @@ describe('donor search contract', () => {
     const payload = responseWithResult(result);
 
     expect(() => assertDonorSearchResponse(payload)).not.toThrow();
+  });
+
+  it('rejects a response that omits the rollup build timestamp contract', () => {
+    const payload = responseWithResult(unresolvedResult) as Record<string, unknown>;
+    delete payload.rollup_completed_at;
+
+    expect(() => assertDonorSearchResponse(payload)).toThrow(
+      'rollup_completed_at must be a string.'
+    );
+  });
+
+  it('rejects a successful response with a null rollup build timestamp', () => {
+    const payload = responseWithResult(unresolvedResult) as Record<string, unknown>;
+    payload.rollup_completed_at = null;
+
+    expect(() => assertDonorSearchResponse(payload)).toThrow(
+      'rollup_completed_at must be a string.'
+    );
   });
 
   it('rejects a result when a required nullable identity field is omitted', () => {

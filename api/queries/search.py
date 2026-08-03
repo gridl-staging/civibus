@@ -10,7 +10,7 @@ from psycopg.rows import dict_row
 
 from api.models.search import SearchParams
 from api.queries._common import _build_ilike_contains_pattern
-from api.queries.civics import _current_federal_officeholder_search_rows_sql
+from api.queries.civics import _current_federal_officeholder_search_rows_sql, _current_office_selection_sql
 
 _SEARCH_TRIGRAM_MIN_SIMILARITY = 0.3
 
@@ -93,15 +93,16 @@ def _build_search_sql(entity_rows_sql: str) -> str:
 
 
 _CURRENT_FEDERAL_OFFICEHOLDER_SEARCH_ROWS_SQL = _current_federal_officeholder_search_rows_sql()
+_CURRENT_OFFICE_SEARCH_SQL = _current_office_selection_sql("p.id")
 
 _SEARCH_PERSON_ROWS_SQL = f"""
     SELECT
         'person'::text AS entity_type,
         p.id AS entity_id,
         p.canonical_name AS name,
-        officeholder.search_geography_token AS state,
+        COALESCE(officeholder.search_geography_token, current_office.state) AS state,
         officeholder.party AS party,
-        officeholder.short_office_label AS office_name,
+        COALESCE(officeholder.short_office_label, current_office.office_name) AS office_name,
         NULL::text AS committee_type,
         NULL::numeric AS total_raised,
         (officeholder.person_id IS NOT NULL) AS is_current_federal_officeholder,
@@ -111,6 +112,9 @@ _SEARCH_PERSON_ROWS_SQL = f"""
     LEFT JOIN (
         {_CURRENT_FEDERAL_OFFICEHOLDER_SEARCH_ROWS_SQL}
     ) officeholder ON officeholder.person_id = p.id
+    LEFT JOIN LATERAL (
+        {_CURRENT_OFFICE_SEARCH_SQL}
+    ) current_office ON TRUE
     CROSS JOIN search_params params
     WHERE (
         p.canonical_name ILIKE params.like_pattern ESCAPE '\\'

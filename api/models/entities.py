@@ -21,6 +21,14 @@ class PersonPortraitResponse(BaseModel):
     height_px: int | None = None
 
 
+class CurrentOfficeResponse(BaseModel):
+    officeholding_id: UUID
+    office_id: UUID
+    office_name: str
+    office_level: str
+    state: str | None = None
+
+
 class PersonResponse(BaseModel):
     id: UUID
     canonical_name: str
@@ -42,6 +50,7 @@ class PersonResponse(BaseModel):
     er_cluster_id: UUID | None = None
     er_confidence: float | None = None
     portrait: PersonPortraitResponse | None = None
+    current_office: CurrentOfficeResponse | None = None
     sources: list[SourceInfo]
 
 

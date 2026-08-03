@@ -21,6 +21,7 @@ from core.keel_gate_l14 import (
     _evidence_status,
     _federal_gate_passes,
 )
+from core.people.federal_officeholders import current_federal_officeholder_predicate
 
 
 class TestFederalCoverageGateModel:
@@ -127,6 +128,12 @@ class TestCollectFederalGateFixture:
         assert gate.ie_coverage_pct == pytest.approx(38.46, abs=0.01)
         assert "core.person_portrait" in captured_sql[2]
         assert "p.portrait_url" not in captured_sql[2]
+        ie_sql = captured_sql[5]
+        assert "t.support_oppose IS NOT NULL" in ie_sql
+        assert "t.transaction_type = 'Independent Expenditure'" not in ie_sql
+        assert "COUNT(DISTINCT oh.person_id)::int" in ie_sql
+        assert current_federal_officeholder_predicate() in ie_sql
+        assert gate.ie_coverage_pct == pytest.approx(round((200 / 520) * 100, 2), abs=0.01)
 
 
 class TestFederalFirstStatus:

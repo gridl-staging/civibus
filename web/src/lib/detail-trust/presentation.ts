@@ -30,6 +30,16 @@ export type BuildTrustSectionOptions = {
   includeJurisdictionFreshnessNote?: boolean;
 };
 
+export type TimestampFreshnessPresentation = {
+  summary: string;
+  freshnessSeverity: FreshnessSeverity;
+};
+
+export type TimestampFreshnessOptions = {
+  summaryPrefix: string;
+  staleAfterDays: number;
+};
+
 export const TRUST_SECTION_EMPTY_MESSAGE = "No source records are available for this detail yet.";
 export const TRUST_SECTION_ADVISORY_MESSAGE = "Review source records before publication.";
 export const TRUST_SECTION_LAST_PULLED_UNAVAILABLE = "Last pulled: unavailable";
@@ -76,9 +86,8 @@ function parsePullDateTimestamp(value: string): number | null {
   return timestamp;
 }
 
-// Freshness heuristic: data pulled within 7 days is "fresh", older is "stale",
-// and unparseable/missing dates are "unknown". These thresholds are presentation-only
-// and do not reflect any backend refresh schedule promise.
+// Detail-source pull dates use a seven-day presentation window. Other consumers
+// pass their own backend-owned availability window through the shared helper.
 const FRESHNESS_THRESHOLD_DAYS = 7;
 const MILLISECONDS_PER_DAY = 86_400_000;
 
@@ -98,14 +107,35 @@ function findFreshestPullDate(rows: TrustSectionRow[]): FreshestPullDate | null 
   return freshest;
 }
 
+export function buildTimestampFreshnessPresentation(
+  timestamp: string,
+  options: TimestampFreshnessOptions
+): TimestampFreshnessPresentation {
+  const parsedTimestamp = parsePullDateTimestamp(timestamp);
+  if (parsedTimestamp === null) {
+    return {
+      summary: `${options.summaryPrefix}: unavailable`,
+      freshnessSeverity: "unknown"
+    };
+  }
+
+  const elapsedMilliseconds = Date.now() - parsedTimestamp;
+  return {
+    summary: `${options.summaryPrefix} ${formatRelativePullDate(timestamp)} (${formatAbsolutePullDate(timestamp)})`,
+    freshnessSeverity:
+      elapsedMilliseconds > options.staleAfterDays * MILLISECONDS_PER_DAY ? "stale" : "fresh"
+  };
+}
+
 function buildLastPulledSummary(freshest: FreshestPullDate | null): string {
   if (freshest === null) {
     return TRUST_SECTION_LAST_PULLED_UNAVAILABLE;
   }
 
-  const relative = formatRelativePullDate(freshest.pullDate);
-  const absolute = formatAbsolutePullDate(freshest.pullDate);
-  return `Last pulled: ${relative} (${absolute})`;
+  return buildTimestampFreshnessPresentation(freshest.pullDate, {
+    summaryPrefix: "Last pulled:",
+    staleAfterDays: FRESHNESS_THRESHOLD_DAYS
+  }).summary;
 }
 
 function deriveFreshnessSeverity(freshest: FreshestPullDate | null): FreshnessSeverity {
@@ -113,8 +143,10 @@ function deriveFreshnessSeverity(freshest: FreshestPullDate | null): FreshnessSe
     return "unknown";
   }
 
-  const daysSincePull = Math.floor((Date.now() - freshest.timestamp) / MILLISECONDS_PER_DAY);
-  return daysSincePull > FRESHNESS_THRESHOLD_DAYS ? "stale" : "fresh";
+  return buildTimestampFreshnessPresentation(freshest.pullDate, {
+    summaryPrefix: "Last pulled:",
+    staleAfterDays: FRESHNESS_THRESHOLD_DAYS
+  }).freshnessSeverity;
 }
 
 function buildTrustRows(sources: SourceInfo[]): TrustSectionRow[] {

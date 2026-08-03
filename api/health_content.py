@@ -37,7 +37,10 @@ from api.contribution_insights_contract import (
     NOT_SUPERSEDED_SOURCE_RECORD_WHERE_SQL,
     contribution_insights_transaction_where_sql,
 )
-from api.queries.campaign_finance import resolve_selected_cycle
+from api.queries.campaign_finance import (
+    _AUTHORIZED_CANDIDATE_COMMITTEE_FILTER,
+    resolve_selected_cycle,
+)
 from core.people.federal_officeholders import current_federal_officeholder_predicate
 from domains.campaign_finance.constants import (
     FEC_BULK_DATA_SOURCE_DOMAIN,
@@ -66,10 +69,16 @@ FEDERAL_FIRST_CONTENT_COUNTS: Mapping[str, int] = {
     "cf_committee_summary_total": 32_404,
     "cf_transaction_with_support_oppose": 10_409,
     "cf_transaction_contribution_insights_sentinel": 4_495,
-    "cf_candidate_money_serving_coverage": 2_079,
+    # Serving coverage counts the official totals the public federal route
+    # actually promotes: in-window totals PLUS prior-cycle totals promoted
+    # out-of-cycle when no selected-cycle committee activity suppresses them
+    # (mirrors _build_out_of_cycle_official_total). Proven local proxy
+    # 7_743 = 4_268 in-window + 3_475 out-of-cycle promoted.
+    "cf_candidate_money_serving_coverage": 7_743,
     "cf_candidate_money_recent_summary_coverage": 1_799,
     # Measured 527/540 current federal officeholder people on 2026-07-31.
     "cf_federal_officeholder_money_coverage": 527,
+    "cf_donor_search_rollup_total": 0,
 }
 
 # Current prod launch floors. These are 80% of the current Fly production
@@ -83,11 +92,14 @@ FEDERAL_FIRST_CONTENT_FLOORS: Mapping[str, int] = {
     "cf_committee_summary_total": 25_923,
     "cf_transaction_with_support_oppose": 8_327,
     "cf_transaction_contribution_insights_sentinel": 3_596,
-    "cf_candidate_money_serving_coverage": 1_800,
+    # Pinned to the proven local proxy count so the floor tracks the promoted
+    # serving surface exactly; Lane 10 owns the deployed-origin floor.
+    "cf_candidate_money_serving_coverage": 7_743,
     "cf_candidate_money_recent_summary_coverage": 1_440,
     # The 500 P0 recovery threshold ships through repair-first deploy ordering;
     # it must not be weakened to accommodate the broken production value of 13.
     "cf_federal_officeholder_money_coverage": 500,
+    "cf_donor_search_rollup_total": 0,
 }
 
 _DEFAULT_FLOORS: Mapping[str, int] = FEDERAL_FIRST_CONTENT_FLOORS
@@ -95,9 +107,10 @@ _DEFAULT_FLOORS: Mapping[str, int] = FEDERAL_FIRST_CONTENT_FLOORS
 _FLOOR_ENV_VAR_PREFIX = "CIVIBUS_HEALTH_CONTENT_FLOOR_"
 
 _FEC_BULK_FRESHNESS_CHECK = "campaign_finance_federal_fec_fresh"
-# Serving-window official totals measured 2,079 in production on 2026-07-27.
-# The narrower 120-day freshness subset measured 1,799 during the 2026-07-28
-# deploy; its 1,440 floor preserves the content-health owner's 80% headroom.
+# Serving coverage counts every promoted official total (in-window plus
+# out-of-cycle promotions), pinned locally at 7,743. The narrower 120-day
+# freshness subset measured 1,799 during the 2026-07-28 deploy; its 1,440 floor
+# preserves the content-health owner's 80% headroom.
 _CANDIDATE_MONEY_COVERAGE_CHECK = "cf_candidate_money_serving_coverage"
 _CANDIDATE_MONEY_RECENT_SUMMARY_COVERAGE_CHECK = "cf_candidate_money_recent_summary_coverage"
 _FEDERAL_OFFICEHOLDER_MONEY_COVERAGE_CHECK = "cf_federal_officeholder_money_coverage"
@@ -114,6 +127,7 @@ _RESET_LOCAL_STATEMENT_TIMEOUT_SQL = "SET LOCAL statement_timeout = DEFAULT"
 
 
 class _SelectedCycleWindow(Protocol):
+    selected_cycle: int
     coverage_start_date: date
     coverage_end_date: date
 
@@ -136,9 +150,18 @@ class _ContentCheckSpec:
 def _candidate_money_serving_coverage_params(
     selected_cycle: _SelectedCycleWindow,
     now: datetime,
-) -> tuple[object, object]:
+) -> tuple[object, object, object]:
     del now
-    return (selected_cycle.coverage_start_date, selected_cycle.coverage_end_date)
+    # The cycle integer scopes the out-of-cycle suppression subquery to the
+    # selected cycle's cf.committee_summary rows. Read it from the cycle owner's
+    # own field rather than re-deriving it from the window end date, so the
+    # "window end year IS the cycle" invariant stays owned by
+    # resolve_selected_cycle().
+    return (
+        selected_cycle.coverage_start_date,
+        selected_cycle.coverage_end_date,
+        selected_cycle.selected_cycle,
+    )
 
 
 def _candidate_money_recent_summary_coverage_params(
@@ -171,14 +194,96 @@ _CANDIDATE_MONEY_OFFICIAL_TOTALS_PREDICATE = """
     )
 """
 
+# Suppression signal for the out-of-cycle promotion branch. Mirrors
+# fetch_candidate_summary's arbitration: a prior-cycle official total is only
+# promoted when the candidate has NO selected-cycle fundraising activity. That
+# activity can come from selected-cycle committee-summary dollars or from the
+# ``transaction_count`` produced by fetch_committee_fundraising_summary. A
+# populated derived_transaction_count is authoritative even when it is zero;
+# qualifying raw transactions are counted only when no stored aggregate exists.
+# The authorized-committee filter is imported from the query owner so both
+# paths share one denylist definition. ``candidate`` and
+# ``selected_cycle_window`` are correlated from the outer serving query below.
+_CANDIDATE_MONEY_SELECTED_CYCLE_ACTIVITY_EXISTS = (
+    """EXISTS (
+            SELECT 1
+            FROM cf.candidate_committee_link link
+            JOIN cf.committee cm ON cm.id = link.committee_id
+            JOIN LATERAL (
+                SELECT
+                    COALESCE(SUM(cs.total_receipts), 0) AS total_receipts,
+                    COALESCE(SUM(cs.total_disbursements), 0) AS total_disbursements,
+                    COALESCE(SUM(cs.derived_transaction_count), 0)::integer AS transaction_count,
+                    BOOL_OR(cs.derived_transaction_count IS NOT NULL) AS has_precomputed_aggregate
+                FROM cf.committee_summary cs
+                WHERE cs.committee_id = cm.id
+                  AND cs.cycle = selected_cycle_window.selected_cycle
+            ) selected_cycle_summary ON TRUE
+            WHERE link.candidate_id = candidate.id
+              AND link.valid_period && daterange(
+                  selected_cycle_window.window_start,
+                  selected_cycle_window.window_end,
+                  '[]'
+              )
+              AND """
+    + _AUTHORIZED_CANDIDATE_COMMITTEE_FILTER
+    + """
+              AND (
+                  selected_cycle_summary.total_receipts <> 0
+                  OR selected_cycle_summary.total_disbursements <> 0
+                  OR CASE
+                      WHEN COALESCE(selected_cycle_summary.has_precomputed_aggregate, FALSE)
+                      THEN selected_cycle_summary.transaction_count > 0
+                      ELSE EXISTS (
+                          SELECT 1
+                          FROM cf.transaction t
+                          WHERE t.committee_id = cm.id
+                            AND t.transaction_date >= selected_cycle_window.window_start
+                            AND t.transaction_date <= selected_cycle_window.window_end
+                            AND t.is_memo = FALSE
+                            AND t.amendment_indicator != 'T'
+"""
+    + NOT_SUPERSEDED_SOURCE_RECORD_WHERE_SQL
+    + """
+                      )
+                  END
+              )
+        )"""
+)
+
+# Content-health serving coverage counts the official totals the public federal
+# route actually promotes, matching the campaign-finance arbitration:
+#   (a) populated official totals whose coverage-end falls inside the selected
+#       cycle window (the primary serving path), plus
+#   (b) older populated official totals promoted out-of-cycle because no
+#       selected-cycle committee activity suppresses them.
+# Future-dated totals (coverage-end after the window) are excluded from both
+# branches: (a) fails the BETWEEN upper bound and (b) requires coverage-end
+# strictly before the window start.
 _CANDIDATE_MONEY_SERVING_COVERAGE_QUERY = (
     """
+    WITH selected_cycle_window AS (
+        SELECT
+            %s::date AS window_start,
+            %s::date AS window_end,
+            %s::int AS selected_cycle
+    )
     SELECT COUNT(*)
-    FROM cf.candidate
+    FROM cf.candidate AS candidate, selected_cycle_window
     WHERE """
     + _CANDIDATE_MONEY_OFFICIAL_TOTALS_PREDICATE
     + """
-      AND summary_coverage_end_date BETWEEN %s AND %s
+      AND candidate.summary_coverage_end_date IS NOT NULL
+      AND (
+          candidate.summary_coverage_end_date
+              BETWEEN selected_cycle_window.window_start AND selected_cycle_window.window_end
+          OR (
+              candidate.summary_coverage_end_date < selected_cycle_window.window_start
+              AND NOT """
+    + _CANDIDATE_MONEY_SELECTED_CYCLE_ACTIVITY_EXISTS
+    + """
+          )
+      )
 """
 )
 
@@ -260,6 +365,7 @@ _CHECK_QUERIES: Mapping[str, _ContentCheckSpec] = {
         _FEDERAL_OFFICEHOLDER_MONEY_COVERAGE_QUERY,
         params_resolver=_federal_officeholder_money_coverage_params,
     ),
+    "cf_donor_search_rollup_total": _ContentCheckSpec("SELECT COUNT(*) FROM cf.donor_search_rollup"),
 }
 
 _FEC_BULK_FRESHNESS_QUERY = """
@@ -306,9 +412,13 @@ def candidate_money_serving_coverage_count(
 ) -> int:
     """Count candidates whose official totals are served for the selected cycle.
 
-    This aggregate mirrors ``_official_candidate_totals_cover_selected_cycle()``
-    and ``_has_official_candidate_totals()``. The health owner needs aggregate
-    SQL, while ``resolve_selected_cycle()`` remains the cycle-window owner.
+    This aggregate mirrors the full serving arbitration:
+    ``_has_official_candidate_totals()`` plus
+    ``_official_candidate_totals_cover_selected_cycle()`` for the in-window
+    branch, and ``_build_out_of_cycle_official_total()`` gated by
+    ``_has_selected_cycle_fundraising_activity()`` for the prior-cycle totals the
+    public route promotes. The health owner needs aggregate SQL, while
+    ``resolve_selected_cycle()`` remains the cycle-window owner.
     """
     spec = _CHECK_QUERIES[_CANDIDATE_MONEY_COVERAGE_CHECK]
     selected_cycle = resolve_selected_cycle(cycle)

@@ -121,11 +121,7 @@ def _build_person_settings(
             cl.ExactMatch("zip5"),
             # State: exact match
             cl.ExactMatch("state"),
-            # Employer: when available, strong signal
-            cl.JaroWinklerAtThresholds(
-                "employer",
-                score_threshold_or_thresholds=tuning["employer"],
-            ),
+            _employer_comparison(tuning["employer"]),
             # Occupation: when available, supporting signal
             cl.JaroWinklerAtThresholds(
                 "occupation",
@@ -161,6 +157,24 @@ def _first_name_comparison(thresholds: list[float]):
         levels,
         output_column_name="first_name",
         comparison_description="First name disagreement veto",
+    )
+
+
+def _employer_comparison(thresholds: list[float]):
+    """Build the trainable person employer comparison."""
+    _require_splink()
+    assert cl is not None
+    assert cll is not None
+    levels = [
+        cll.NullLevel("employer"),
+        cll.ExactMatchLevel("employer"),
+        *[cll.JaroWinklerLevel("employer", threshold) for threshold in thresholds],
+        cll.ElseLevel(),
+    ]
+    return cl.CustomComparison(
+        levels,
+        output_column_name="employer",
+        comparison_description="Employer agreement",
     )
 
 

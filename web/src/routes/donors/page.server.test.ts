@@ -20,6 +20,7 @@ function emptyResponse(params: Partial<DonorSearchResponse> = {}): DonorSearchRe
     by: 'name',
     limit: 20,
     offset: 0,
+    rollup_completed_at: '2026-07-17T12:00:00Z',
     results: [],
     ...params
   };
@@ -44,6 +45,7 @@ describe('/donors +page.server load', () => {
       by: 'name',
       limit: 20,
       offset: 0,
+      rollup_completed_at: null,
       results: []
     });
     expect(requestJson).not.toHaveBeenCalled();
@@ -59,6 +61,7 @@ describe('/donors +page.server load', () => {
       by: 'name',
       limit: 20,
       offset: 0,
+      rollup_completed_at: null,
       results: []
     });
     expect(requestJson).not.toHaveBeenCalled();
@@ -74,6 +77,7 @@ describe('/donors +page.server load', () => {
       by: 'name',
       limit: 20,
       offset: 0,
+      rollup_completed_at: null,
       results: [],
       shortQueryGuidance: true
     });
@@ -144,6 +148,7 @@ describe('/donors +page.server load', () => {
       by: 'name',
       limit: 20,
       offset: 0,
+      rollup_completed_at: '2026-07-17T12:00:00Z',
       results: [
         {
           id: '72000000-0000-0000-0000-000000000101',
@@ -182,6 +187,7 @@ describe('/donors +page.server load', () => {
       by: 'bogus',
       limit: 20,
       offset: 0,
+      rollup_completed_at: null,
       results: [],
       validationMessage
     });
@@ -195,6 +201,38 @@ describe('/donors +page.server load', () => {
     ).rejects.toMatchObject({
       status: 503,
       body: { message: 'Backend unavailable' }
+    });
+  });
+
+  it.each([
+    'missing_provenance',
+    'stale_provenance',
+    'donor_key_fingerprint_mismatch'
+  ])('renders named rollup 503 reason %s inline while preserving form state', async (reason) => {
+    const requestJson = vi.fn().mockRejectedValue(
+      new ApiResponseError(503, {
+        detail: {
+          code: 'donor_search_rollup_unavailable',
+          reason
+        }
+      })
+    );
+
+    await expect(
+      load(
+        createLoadEvent(
+          'https://web.civibus.local/donors?q=Williams&by=name&limit=10&offset=20',
+          requestJson
+        )
+      )
+    ).resolves.toEqual({
+      query: 'Williams',
+      by: 'name',
+      limit: 10,
+      offset: 20,
+      rollup_completed_at: null,
+      results: [],
+      rollupUnavailable: true
     });
   });
 });

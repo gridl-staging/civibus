@@ -23,6 +23,7 @@ from api.test_campaign_finance_support import (
     insert_transaction_row,
 )
 from core.db import insert_person
+from core.refresh.donor_rollup import rebuild_donor_search_rollup
 from core.types.python.models import Person
 from test_support.donor_search_fixture import seed_donor_search_fixture
 
@@ -361,6 +362,7 @@ def test_search_donors_discloses_resolved_identity_and_keeps_possible_match_sepa
 ) -> None:
     seed_donor_search_fixture(db_conn)
     _seed_donor_identity_transparency_fixture(db_conn)
+    rebuild_donor_search_rollup(db_conn)
 
     payload = campaign_finance_queries.search_donors(db_conn, q="transparent", by="name", limit=1, offset=0)
 
@@ -551,6 +553,7 @@ def test_search_donors_counts_shared_committee_transactions_once(db_conn: psycop
         committee_id=fixture.alpha.committee_id,
         source_record_id=fixture.source_record_current,
     )
+    rebuild_donor_search_rollup(db_conn)
 
     payload = campaign_finance_queries.search_donors(db_conn, q="joint smith", by="name", limit=20, offset=0)
 
@@ -648,3 +651,19 @@ def test_search_donors_ordering_tie_breaks_are_deterministic(db_conn: psycopg.Co
         ("ORDER SMITH STABLE", Decimal("40.00"), 1, "72000000-0000-0000-0000-000000000125"),
         ("ORDER SMITH STABLE", Decimal("40.00"), 1, "72000000-0000-0000-0000-000000000126"),
     ]
+
+
+def test_search_donors_preserves_transaction_id_tie_break_across_page_boundary(
+    db_conn: psycopg.Connection,
+) -> None:
+    seed_donor_search_fixture(db_conn, include_ordering_tie_rows=True)
+
+    payload = campaign_finance_queries.search_donors(
+        db_conn,
+        q="order smith",
+        by="name",
+        limit=1,
+        offset=3,
+    )
+
+    assert [row["id"] for row in payload["results"]] == ["72000000-0000-0000-0000-000000000125"]

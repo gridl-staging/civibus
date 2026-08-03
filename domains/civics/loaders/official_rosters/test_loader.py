@@ -1135,6 +1135,7 @@ def test_find_existing_person_id_reuses_bioguide_id_before_name_matching(
     db_conn: psycopg.Connection,
 ) -> None:
     register_roster_pilot_sources(db_conn)
+    synthetic_bioguide_id = "X999999"
 
     with db_conn.cursor() as cursor:
         cursor.execute(
@@ -1145,10 +1146,11 @@ def test_find_existing_person_id_reuses_bioguide_id_before_name_matching(
                 'Donald Davis',
                 'Donald',
                 'Davis',
-                '{"bioguide_id": "D000230"}'::jsonb
+                jsonb_build_object('bioguide_id', %s::text)
             )
             RETURNING id
-            """
+            """,
+            (synthetic_bioguide_id,),
         )
         person_id = cursor.fetchone()[0]
 
@@ -1158,10 +1160,63 @@ def test_find_existing_person_id_reuses_bioguide_id_before_name_matching(
         district_number="1",
         bio_url=None,
         portrait_url=None,
-        bioguide_id="D000230",
+        bioguide_id=synthetic_bioguide_id,
     )
 
     assert roster_loader._find_existing_person_id(db_conn, row) == person_id
+
+
+def test_nc_roster_load_never_rebinds_federal_person(
+    db_conn: psycopg.Connection,
+) -> None:
+    federal_bio_url = "https://www.congress.gov/member/FEDERAL"
+    municipal_bio_url = "https://www.durhamnc.gov/council/david-price"
+    member_name = "David Price"
+    first_name, last_name = roster_loader._split_name(member_name)
+    assert first_name == "David"
+    assert last_name == "Price"
+
+    with db_conn.cursor() as cursor:
+        cursor.execute(
+            """
+            INSERT INTO core.person (id, canonical_name, first_name, last_name, identifiers)
+            VALUES (gen_random_uuid(), %s, %s, %s, jsonb_build_object('roster_bio_url', %s::text))
+            RETURNING id
+            """,
+            (member_name, first_name, last_name, federal_bio_url),
+        )
+        federal_person_id = cursor.fetchone()[0]
+        cursor.execute(
+            "SELECT count(*) FROM core.person WHERE first_name = %s AND last_name = %s",
+            (first_name, last_name),
+        )
+        count_before = cursor.fetchone()[0]
+
+    roster_loader._resolve_person_id(
+        db_conn,
+        roster_loader.NormalizedRosterRow(
+            member_name=member_name,
+            role_label="City Council Member",
+            district_number=None,
+            bio_url=municipal_bio_url,
+            portrait_url=None,
+        ),
+    )
+
+    with db_conn.cursor() as cursor:
+        cursor.execute(
+            "SELECT count(*) FROM core.person WHERE first_name = %s AND last_name = %s",
+            (first_name, last_name),
+        )
+        count_after = cursor.fetchone()[0]
+        cursor.execute(
+            "SELECT identifiers->>'roster_bio_url' FROM core.person WHERE id = %s",
+            (federal_person_id,),
+        )
+        persisted_federal_bio_url = cursor.fetchone()[0]
+
+    assert (count_before, count_after) == (1, 2)
+    assert persisted_federal_bio_url == federal_bio_url
 
 
 def test_find_existing_person_id_reuses_ncleg_member_code_for_sampled_house_rows(
@@ -1188,7 +1243,6 @@ def test_find_existing_person_id_reuses_ncleg_member_code_for_sampled_house_rows
         return None
 
     monkeypatch.setattr(roster_loader, "find_person_by_identifier", _fake_find_person_by_identifier)
-    monkeypatch.setattr(roster_loader, "find_person_by_name_and_zip", lambda *_args, **_kwargs: None)
 
     found = [roster_loader._find_existing_person_id(object(), row) for row in sampled_rows]
 

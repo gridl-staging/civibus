@@ -13,6 +13,7 @@ from api.deps import get_db
 from api.models import OrgResponse, PersonResponse, PersonSlugResult
 from api.portrait_policy import suppress_non_reusable_portrait_url
 from api.queries import fetch_entity_provenance, fetch_one_row, fetch_persons_by_slug
+from api.queries.civics import fetch_current_office_for_person
 
 router = APIRouter()
 
@@ -111,6 +112,7 @@ def _build_entity_response(
             portrait_payload.get("rights_status"),
         )
         entity_row["portrait"] = portrait_payload if portrait_status is not None else None
+        entity_row["current_office"] = fetch_current_office_for_person(conn, entity_id)
     entity_row["sources"] = fetch_entity_provenance(conn, entity_type, entity_id)
     return response_model.model_validate(entity_row)
 

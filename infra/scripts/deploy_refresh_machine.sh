@@ -34,12 +34,18 @@ require_external_evidence_dir() {
 }
 
 parse_args() {
-  local evidence_dir=""
+  EVIDENCE_DIR=""
+  DEV_SHA=""
   while (( $# > 0 )); do
     case "$1" in
       --evidence-dir)
         (( $# >= 2 )) || fail "--evidence-dir requires a path"
-        evidence_dir="$2"
+        EVIDENCE_DIR="$2"
+        shift 2
+        ;;
+      --dev-sha)
+        (( $# >= 2 )) || fail "--dev-sha requires a value"
+        DEV_SHA="$2"
         shift 2
         ;;
       *)
@@ -47,8 +53,9 @@ parse_args() {
         ;;
     esac
   done
-  [[ -n "$evidence_dir" ]] || fail "--evidence-dir is required"
-  printf '%s\n' "$evidence_dir"
+  [[ -n "$EVIDENCE_DIR" ]] || fail "--evidence-dir is required"
+  [[ "$DEV_SHA" =~ ^[0-9a-f]{40}$ ]] \
+    || fail "--dev-sha must be a 40-character lowercase hexadecimal commit SHA"
 }
 
 require_clean_worktree() {
@@ -279,19 +286,21 @@ PY
 }
 
 main() {
-  local evidence_dir
-  evidence_dir="$(parse_args "$@")"
+  parse_args "$@"
+  local evidence_dir="$EVIDENCE_DIR"
+  local dev_sha="$DEV_SHA"
 
   require_empty_evidence_dir "$evidence_dir"
   evidence_dir="$(cd "$evidence_dir" && pwd -P)"
   require_external_evidence_dir "$evidence_dir"
   require_clean_worktree
 
-  local head_sha
+  local checkout_head_sha
   local built_at
-  head_sha="$(git rev-parse --verify HEAD)" || fail "cannot resolve HEAD"
+  checkout_head_sha="$(git rev-parse --verify HEAD)" || fail "cannot resolve HEAD"
   built_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
-  printf '%s\n' "$head_sha" >"$evidence_dir/head_sha.txt"
+  printf '%s\n' "$checkout_head_sha" >"$evidence_dir/checkout_head_sha.txt"
+  printf '%s\n' "$dev_sha" >"$evidence_dir/dev_sha.txt"
   printf '%s\n' "$built_at" >"$evidence_dir/built_at.txt"
 
   flyctl auth whoami >"$evidence_dir/fly_auth_whoami.txt" \
@@ -301,9 +310,9 @@ main() {
   verify_refresh_state "pre" "$evidence_dir" \
     || fail "pre-update refresh Machine contract verification failed"
 
-  require_recorded_clean_head "$head_sha"
+  require_recorded_clean_head "$checkout_head_sha"
   flyctl deploy --build-only --push -c "$FLY_CONFIG" \
-    --build-arg "CIVIBUS_GIT_SHA=$head_sha" \
+    --build-arg "CIVIBUS_GIT_SHA=$dev_sha" \
     --build-arg "CIVIBUS_BUILT_AT=$built_at" \
     >"$evidence_dir/fly_deploy_build_push.txt" 2>&1 \
     || fail "flyctl build/push failed"
@@ -322,7 +331,7 @@ main() {
     || fail "pushed image digest was missing or ambiguous"
   printf '%s\n' "$digest_ref" >"$evidence_dir/image_digest.txt"
 
-  prove_image_contents "$digest_ref" "$head_sha" "$built_at" "$evidence_dir"
+  prove_image_contents "$digest_ref" "$dev_sha" "$built_at" "$evidence_dir"
 
   # flyctl resolves the tag to its digest; passing an @sha256 reference makes
   # flyctl append that digest again and the Machines API rejects the result.

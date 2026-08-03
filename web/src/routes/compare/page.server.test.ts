@@ -35,6 +35,7 @@ function buildPersonDetail(id: string): EntityDetailResponse {
     primary_address_id: null,
     er_cluster_id: null,
     er_confidence: null,
+    current_office: null,
     portrait: null,
     sources: []
   };

@@ -18,10 +18,12 @@ const DONOR_ZIP_QUERY_MESSAGE = 'Enter a 5-digit ZIP or ZIP+4 to search by ZIP.'
 const DONOR_VALIDATION_FALLBACK_MESSAGE =
   'The donor search request could not be validated. Review your query and try again.';
 
-type DonorPageData = Omit<DonorSearchResponse, 'by'> & {
+type DonorPageData = Omit<DonorSearchResponse, 'by' | 'rollup_completed_at'> & {
   by: string;
+  rollup_completed_at: string | null;
   validationMessage?: string;
   shortQueryGuidance?: boolean;
+  rollupUnavailable?: boolean;
 };
 
 function readIntegerParam(searchParams: URLSearchParams, key: string, fallback: number): number {
@@ -45,10 +47,11 @@ function readDonorRouteParams(url: URL): Pick<DonorPageData, 'query' | 'by' | 'l
 
 function emptyDonorPageData(
   params: Pick<DonorPageData, 'query' | 'by' | 'limit' | 'offset'>,
-  extra: Pick<DonorPageData, 'validationMessage' | 'shortQueryGuidance'> = {}
+  extra: Pick<DonorPageData, 'validationMessage' | 'shortQueryGuidance' | 'rollupUnavailable'> = {}
 ): DonorPageData {
   return {
     ...params,
+    rollup_completed_at: null,
     results: [],
     ...extra
   };
@@ -61,6 +64,19 @@ function readFastApiDetail(errorBody: unknown): string | null {
 
   const detail = (errorBody as { detail: unknown }).detail;
   return typeof detail === 'string' ? detail : null;
+}
+
+function isDonorRollupUnavailable(error: ApiResponseError): boolean {
+  if (error.status !== 503 || error.body === null || typeof error.body !== 'object') {
+    return false;
+  }
+
+  const detail = (error.body as { detail?: unknown }).detail;
+  return (
+    detail !== null &&
+    typeof detail === 'object' &&
+    (detail as { code?: unknown }).code === 'donor_search_rollup_unavailable'
+  );
 }
 
 /**
@@ -113,6 +129,10 @@ export const load = (async ({ url, locals }): Promise<DonorPageData> => {
       return emptyDonorPageData(params, {
         validationMessage: getDonorValidationMessage(cause.body)
       });
+    }
+
+    if (cause instanceof ApiResponseError && isDonorRollupUnavailable(cause)) {
+      return emptyDonorPageData(params, { rollupUnavailable: true });
     }
 
     if (cause instanceof ApiResponseError) {

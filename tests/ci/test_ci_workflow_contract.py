@@ -141,7 +141,7 @@ def test_ci_workflow_does_not_copy_make_owned_python_gate_commands() -> None:
 def test_makefile_owns_public_python_gate_selector() -> None:
     makefile_text = MAKEFILE_PATH.read_text(encoding="utf-8")
 
-    assert ".PHONY: db-up db-down db-reset test test-public" in makefile_text
+    assert ".PHONY: db-up db-down db-teardown db-reset test test-public" in makefile_text
     assert (
         'test-public:\n\tuv run --extra dev --extra entity-resolution pytest -m "not integration and not e2e and not dev_repo_only"'
         in makefile_text
@@ -166,7 +166,7 @@ def test_public_mirror_classification_contract_is_valid_and_exact() -> None:
     entries = validate_public_mirror_classifications()
 
     assert len(entries) == len({entry.node_id for entry in entries})
-    assert len(entries) == 139
+    assert len(entries) == 141
     assert {entry.category for entry in entries} == {PublicMirrorCategory.DEV_REPO_ONLY}
     assert "tests/ci/test_api_dockerfile_contract.py::test_debbie_sync_includes_api_dockerfile_root_inputs" in (
         DEV_REPO_ONLY_CLASSIFICATIONS_BY_NODE_ID

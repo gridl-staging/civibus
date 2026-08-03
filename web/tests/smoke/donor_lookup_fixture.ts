@@ -1,3 +1,6 @@
+// @ts-expect-error Smoke fixtures run under Node ESM and import the TS module directly.
+import { runSmokeSeedCommand, runSmokeSeedSql, type SmokeSeedCleanupCallback } from "./smoke_seed_helpers.ts";
+
 const fixtureConstants =
   (await import(new URL("./fixtures.ts", import.meta.url).href)) as typeof import("./fixtures");
 
@@ -21,6 +24,50 @@ export const SMOKE_DONOR_LOOKUP_COMBINED_EMPLOYER_A = "Civibus Labs";
 export const SMOKE_DONOR_LOOKUP_COMBINED_CITY_A = "Durham";
 export const SMOKE_DONOR_LOOKUP_COMBINED_CITY_B = "Raleigh";
 export const SMOKE_DONOR_LOOKUP_NOT_COMBINED_CONTRIBUTOR = "JANET SMYTHE NOT COMBINED";
+
+const RESTORE_DONOR_ROLLUP_FINGERPRINT_SCRIPT = [
+  "from core.db import get_connection",
+  "from core.refresh.donor_rollup import donor_key_fingerprint",
+  "connection = get_connection()",
+  "connection.execute('UPDATE cf.donor_search_rollup_provenance SET donor_key_fingerprint = %s WHERE singleton', (donor_key_fingerprint(),))",
+  "connection.commit()",
+  "connection.close()"
+].join("; ");
+
+async function restoreLiveDonorLookupFingerprint(): Promise<void> {
+  await runSmokeSeedCommand("uv", [
+    "run",
+    "--directory",
+    "..",
+    "--extra",
+    "dev",
+    "python",
+    "-c",
+    RESTORE_DONOR_ROLLUP_FINGERPRINT_SCRIPT
+  ]);
+}
+
+export async function seedLiveDonorLookupSmoke(): Promise<SmokeSeedCleanupCallback> {
+  await runSmokeSeedCommand("uv", [
+    "run",
+    "--directory",
+    "..",
+    "--extra",
+    "dev",
+    "python",
+    "-m",
+    "test_support.donor_search_fixture"
+  ]);
+  return restoreLiveDonorLookupFingerprint;
+}
+
+export async function makeLiveDonorLookupFingerprintIncompatible(): Promise<void> {
+  await runSmokeSeedSql(`
+    UPDATE cf.donor_search_rollup_provenance
+    SET donor_key_fingerprint = donor_key_fingerprint || '.smoke_mismatch'
+    WHERE singleton;
+  `);
+}
 
 function parseOptionalNonNegativeInt(value: string | null): number | null {
   if (value === null) {
@@ -239,6 +286,7 @@ export function buildDonorSearchResponse(url: URL): unknown | null {
     by,
     limit,
     offset,
+    rollup_completed_at: "2026-07-17T12:00:00Z",
     results: allResults.slice(offset, offset + limit)
   };
 }

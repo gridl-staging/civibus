@@ -58,10 +58,6 @@ def _passing_officeholder_gate(
     )
 
 
-_PROPOSED_PORTRAIT_COVERAGE_FLOOR = 97.40
-_PROPOSED_BIO_COVERAGE_FLOOR = 53.80
-
-
 @pytest.mark.parametrize(
     ("portrait_coverage_pct", "bio_coverage_pct", "expected_status"),
     [
@@ -70,22 +66,17 @@ _PROPOSED_BIO_COVERAGE_FLOOR = 53.80
         pytest.param(97.40, 53.80, "pass", id="portrait_and_bio_exactly_at_floor"),
     ],
 )
-def test_federal_portrait_and_bio_proposed_coverage_floors(
+def test_federal_portrait_and_bio_coverage_floors(
     monkeypatch,
     portrait_coverage_pct: float,
     bio_coverage_pct: float,
     expected_status: str,
 ) -> None:
-    monkeypatch.setattr(
-        keel_gate_l14,
-        "_MIN_FEDERAL_PORTRAIT_COVERAGE_PERCENT",
-        _PROPOSED_PORTRAIT_COVERAGE_FLOOR,
-    )
-    monkeypatch.setattr(
-        keel_gate_l14,
-        "_MIN_FEDERAL_BIO_COVERAGE_PERCENT",
-        _PROPOSED_BIO_COVERAGE_FLOOR,
-    )
+    # Literals are the measured federal baseline, not derivations of the module constants:
+    # 525/539 portraits = 97.40 and 290/539 stored bios = 53.80, with 97.22 / 53.62 the
+    # one-official-below values. Re-deriving them from the constants would stay green for any
+    # floor, so the pin is two-sided and behavioural instead — lowering a floor reds the
+    # below-floor case, raising one reds the exact-at-floor case.
     gate = _passing_officeholder_gate().model_copy(
         update={
             "portrait_coverage_pct": portrait_coverage_pct,

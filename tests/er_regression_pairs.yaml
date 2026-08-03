@@ -19,6 +19,30 @@ must_match:
     rationale: The same 2024 FEC donor appears at the same Norfolk ZIP9 address while the filer-supplied employer status varies between RETIRED and NOT EMPLOYED.
     source_notes:
       - https://www.fec.gov/data/receipts/individual-contributions/?contributor_name=Douglas%20Throp&contributor_zip=23518
+  - case_id: fec_person_pritish_narayanan_same_employer_sunnyvale_san_jose
+    entity_type: person
+    # Distinct places represented for this name in cited filing 1891326
+    # (Sunnyvale + San Jose) — a VERIFIED LOWER BOUND, not a five-year corpus
+    # rarity measurement. Drives controlled rarest-case scoring only; supplies
+    # no labelled precision. See docs/live-state/2026_08_03_donor_er_narrow_rule.md.
+    name_place_count: 2
+    left_entity:
+      canonical_name: Pritish Narayanan
+      primary_address: Sunnyvale, CA 94085-4126
+      employer: IBM
+      occupation: Researcher
+      jurisdiction: state/ca
+      source_record_key: fec-filing-1891326:SA11AI:14903062
+    right_entity:
+      canonical_name: Pritish Narayanan
+      primary_address: San Jose, CA 95119-1505
+      employer: IBM
+      occupation: Researcher
+      jurisdiction: state/ca
+      source_record_key: fec-filing-1891326:SA11AI:20784996
+    rationale: The same exact full-name donor, employer, and occupation appears in two Bay Area cities in FEC filing 1891326; labelled as one donor with changed locality evidence.
+    source_notes:
+      - https://docquery.fec.gov/dcdev/posted/1891326.fec
   - case_id: nc_organization_adams_for_nc_house_suffix_normalization
     entity_type: organization
     left_entity:
@@ -115,6 +139,25 @@ must_not_match:
     source_notes:
       - https://www.fec.gov/data/filings/1817925/
       - https://www.fec.gov/data/filings/1891326/
+  - case_id: fec_person_domnitz_same_employer_false_merge_mequon_milwaukee
+    entity_type: person
+    left_entity:
+      canonical_name: Noah Domnitz
+      primary_address: Mequon, WI 53092-6173
+      employer: Domnitz & Domnitz, SC
+      occupation: Attorney
+      jurisdiction: state/wi
+      source_record_key: fec-filing-1891326:SA11AI:21561497
+    right_entity:
+      canonical_name: Merrick Domnitz
+      primary_address: Milwaukee, WI 53217-5380
+      employer: Domnitz & Domnitz SC
+      occupation: Trial Lawyer
+      jurisdiction: state/wi
+      source_record_key: fec-filing-1891326:SA11AI:23096828
+    rationale: Same rare surname, same canonical employer, same state, and nearby but different Wisconsin localities are insufficient when given names identify distinct people.
+    source_notes:
+      - https://docquery.fec.gov/dcdev/posted/1891326.fec
   - case_id: nc_person_julia_howard_vs_mitchell_setzer_distinct_legislators
     entity_type: person
     left_entity:

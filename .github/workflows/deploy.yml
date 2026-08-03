@@ -76,6 +76,25 @@ jobs:
           set -euo pipefail
           flyctl deploy -c infra/fly/caddy.fly.toml --remote-only
 
+      - name: Deploy refresh machine
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/refresh_deploy_evidence"
+          mkdir -p "$evidence"
+          bash infra/scripts/deploy_refresh_machine.sh --evidence-dir "$evidence" --dev-sha "${{ steps.provenance.outputs.dev_sha }}"
+
+      - name: Persist refresh deploy evidence
+        if: ${{ always() }}
+        env:
+          FLY_API_TOKEN: ""
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: refresh_deploy_evidence
+          path: ${{ runner.temp }}/refresh_deploy_evidence
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Verify public deploy serves built dev SHA
         shell: bash
         env:

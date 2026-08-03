@@ -176,6 +176,7 @@ class DonorSearchResponse(BaseModel):
     by: Literal["name", "employer", "zip"]
     limit: int
     offset: int
+    rollup_completed_at: datetime
     results: list[DonorSearchResult] = Field(default_factory=list)
 
 

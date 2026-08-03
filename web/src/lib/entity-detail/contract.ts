@@ -60,6 +60,7 @@ export type PersonDetailResponse = BaseDetailResponse & {
   bio_license: string | null;
   bio_pulled_at: string | null;
   portrait?: PersonPortraitResponse | null;
+  current_office: CurrentOfficeResponse | null;
 };
 
 export type OrgDetailResponse = BaseDetailResponse & {
@@ -76,6 +77,14 @@ export type PersonPortraitResponse = {
   mime_type: string | null;
   width_px: number | null;
   height_px: number | null;
+};
+
+export type CurrentOfficeResponse = {
+  officeholding_id: string;
+  office_id: string;
+  office_name: string;
+  office_level: string;
+  state: string | null;
 };
 
 export type EntityDetailResponse = PersonDetailResponse | OrgDetailResponse;
@@ -107,6 +116,28 @@ export function assertPersonPayloadHasRequiredBioKeys(
     throw new Error(
       `Person payload bio keys must be string or null: ${invalidValueKeys.join(", ")}`
     );
+  }
+
+  if (!("current_office" in personPayload)) {
+    throw new Error("Person payload missing required current_office key.");
+  }
+
+  const currentOffice = personPayload.current_office;
+  if (currentOffice === null) {
+    return;
+  }
+  if (typeof currentOffice !== "object" || Array.isArray(currentOffice)) {
+    throw new Error("Person payload current_office must be an object or null.");
+  }
+
+  const currentOfficePayload = currentOffice as Record<string, unknown>;
+  for (const key of ["officeholding_id", "office_id", "office_name", "office_level"] as const) {
+    if (typeof currentOfficePayload[key] !== "string") {
+      throw new Error(`Person payload current_office.${key} must be a string.`);
+    }
+  }
+  if (currentOfficePayload.state !== null && typeof currentOfficePayload.state !== "string") {
+    throw new Error("Person payload current_office.state must be a string or null.");
   }
 }
 

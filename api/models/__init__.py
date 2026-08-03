@@ -61,7 +61,13 @@ from api.models.civics import (
     OfficeholderSummary,
     OfficeResponse,
 )
-from api.models.entities import OrgResponse, PersonPortraitResponse, PersonResponse, PersonSlugResult
+from api.models.entities import (
+    CurrentOfficeResponse,
+    OrgResponse,
+    PersonPortraitResponse,
+    PersonResponse,
+    PersonSlugResult,
+)
 from api.models.entity_resolution import (
     ClusterMemberResponse,
     ERClusterDetailResponse,
@@ -164,6 +170,7 @@ __all__ = [
     "DonorsWithPropertyParams",
     "DonorsWithPropertyResult",
     "CoverageRegistryResponse",
+    "CurrentOfficeResponse",
     "DataSourceMetadataResponse",
     "PublicEmployerIndustryCoverage",
     "PublicFederalCoverage",
