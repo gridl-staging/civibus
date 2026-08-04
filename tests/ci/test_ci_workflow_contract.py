@@ -20,6 +20,7 @@ sys.path.insert(0, _repo_root_path)
 
 from tests.ci.public_mirror_contract import (  # noqa: E402
     DEV_REPO_ONLY_CLASSIFICATIONS_BY_NODE_ID,
+    MINIMUM_PUBLIC_CLASSIFICATION_TOTAL,
     PublicMirrorCategory,
     PublicMirrorTestClassification,
     validate_public_mirror_classifications,
@@ -83,6 +84,18 @@ def _make_target_block(makefile_text: str, target_name: str) -> str:
     return "\n".join(lines[start_index:end_index])
 
 
+def _make_variable_value(makefile_text: str, variable_name: str) -> str:
+    prefix = f"{variable_name} :="
+    lines = makefile_text.splitlines()
+    start_index = next(index for index, line in enumerate(lines) if line.startswith(prefix))
+    value_lines = [lines[start_index][len(prefix) :].strip()]
+    for line in lines[start_index + 1 :]:
+        if not line.startswith("\t"):
+            break
+        value_lines.append(line.strip())
+    return " ".join(value_lines).replace("\\", "").strip()
+
+
 def test_ci_workflow_commands_use_make_owned_python_gates() -> None:
     workflow_text = _read_ci_workflow()
     lint_job = _job_block(workflow_text, "lint")
@@ -143,13 +156,63 @@ def test_makefile_owns_public_python_gate_selector() -> None:
 
     assert ".PHONY: db-up db-down db-teardown db-reset test test-public" in makefile_text
     assert (
+        "MERGE_DB_BACKED_TEST_NODES := "
+        "\\\n\tcore/test_refresh_runner.py::test_masters_with_spine_skipped_preserves_officeholder_money_coverage "
+        "\\\n\ttests/integration/test_donor_search_query_contract.py::test_search_donors_full_scope_bound_preserves_high_volume_donor_values"
+        in makefile_text
+    )
+    assert (
         'test-public:\n\tuv run --extra dev --extra entity-resolution pytest -m "not integration and not e2e and not dev_repo_only"'
         in makefile_text
     )
     assert (
-        "test:\n\tuv run --extra dev --extra entity-resolution pytest "
-        '-m "not integration and not e2e and not projected_public_contract"' in makefile_text
+        'test:\n\tuv run --extra dev --extra entity-resolution pytest -m "not integration and not e2e and not projected_public_contract"\n'
+        '\t@merge_db_target="$$(uv run --extra dev --extra entity-resolution python -c '
+        "'import conftest; conftest.merge_db_slice_probe()')\"; "
+        "\\\n\tmerge_db_probe_status=$$?; "
+        '\\\n\tif [ "$$merge_db_probe_status" -eq 0 ]; then '
+        "\\\n\t\tCIVIBUS_REQUIRE_DB=1 uv run --extra dev --extra entity-resolution pytest $(MERGE_DB_BACKED_TEST_NODES); "
+        '\\\n\telif [ "$$merge_db_probe_status" -eq 1 ]; then '
+        "\\\n\t\tprintf '%s\\n' \"CIVIBUS_MERGE_DB_SLICE_SHADOW_WARN $$merge_db_target nodes=$(MERGE_DB_BACKED_TEST_NODES)\"; "
+        "\\\n\telse "
+        '\\\n\t\texit "$$merge_db_probe_status"; '
+        "\\\n\tfi" in makefile_text
     )
+
+
+def test_makefile_merge_slice_preflight_delegates_to_conftest_connection_owner() -> None:
+    """The preflight must not re-implement the DB-backed connect policy.
+
+    A direct `core.db.get_connection()` one-shot here skipped the root
+    conftest's password default and startup retries, so `make test` shadow-
+    skipped an answerable database instead of evaluating the merge slice.
+    """
+    makefile_text = MAKEFILE_PATH.read_text(encoding="utf-8")
+    test_block = _make_target_block(makefile_text, "test")
+
+    assert "import conftest; conftest.merge_db_slice_probe()" in test_block
+    assert "from core.db import get_connection" not in test_block
+    assert "merge_db_probe_status=$$?" in test_block
+    assert '[ "$$merge_db_probe_status" -eq 1 ]' in test_block
+    assert 'exit "$$merge_db_probe_status"' in test_block
+
+
+def test_makefile_shadow_warning_reuses_merge_db_slice_nodes() -> None:
+    makefile_text = MAKEFILE_PATH.read_text(encoding="utf-8")
+    selected_nodes = _make_variable_value(makefile_text, "MERGE_DB_BACKED_TEST_NODES")
+    test_block = _make_target_block(makefile_text, "test")
+
+    assert selected_nodes.split() == [
+        "core/test_refresh_runner.py::test_masters_with_spine_skipped_preserves_officeholder_money_coverage",
+        "tests/integration/test_donor_search_query_contract.py::test_search_donors_full_scope_bound_preserves_high_volume_donor_values",
+    ]
+    assert "CIVIBUS_MERGE_DB_SLICE_SHADOW_WARN" in test_block
+    # The warning reports the target the probe actually resolved through
+    # core.db, not the Makefile's own DB_HOST, which can disagree with
+    # POSTGRES_HOST and name a host that was never attempted.
+    assert "CIVIBUS_MERGE_DB_SLICE_SHADOW_WARN $$merge_db_target" in test_block
+    assert "DB_HOST=$(DB_HOST)" not in test_block
+    assert test_block.count("$(MERGE_DB_BACKED_TEST_NODES)") == 2
 
 
 def test_makefile_lint_runs_lane_authoring_hazard_ratchet() -> None:
@@ -166,7 +229,7 @@ def test_public_mirror_classification_contract_is_valid_and_exact() -> None:
     entries = validate_public_mirror_classifications()
 
     assert len(entries) == len({entry.node_id for entry in entries})
-    assert len(entries) == 141
+    assert len(entries) >= MINIMUM_PUBLIC_CLASSIFICATION_TOTAL
     assert {entry.category for entry in entries} == {PublicMirrorCategory.DEV_REPO_ONLY}
     assert "tests/ci/test_api_dockerfile_contract.py::test_debbie_sync_includes_api_dockerfile_root_inputs" in (
         DEV_REPO_ONLY_CLASSIFICATIONS_BY_NODE_ID

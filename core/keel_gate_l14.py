@@ -240,13 +240,16 @@ _EXPECTED_FEDERAL_SEATS = 543
 _FEDERAL_RACE_CYCLE = 2026
 _MIN_FEDERAL_RACES = 1
 _EXPECTED_FEDERAL_RACES = 543
-# Measured federal coverage floors over the 539 active federal officeholders observed at
-# baseline: 525 public reusable portraits = 97.40% and 290 stored nonblank biographies =
-# 53.80%. Set at exactly the measured values with zero headroom, so losing one portrait or
-# one biography reds `make gate-L14`. Provenance and the rationale for not adding headroom:
+# Measured federal coverage floors over the 539 active federal officeholders observed after
+# the 2026-08-04 federal people-enrichment run: 525 public reusable portraits = 97.40% and
+# 497 stored nonblank biographies = 92.21%. Portraits held flat at 525/539; the run moved
+# biographies from 290/539 = 53.80% to 497/539, leaving a 54-official residual with digest
+# 0c108d2c3ad4e5abef2f13b7a49b1c0d97af8eeb7c3b64769379ff2ef2fa0517. Set at exactly the
+# measured values with zero headroom, so losing one portrait or one biography reds
+# `make gate-L14`. Prior-baseline provenance and the rationale for not adding headroom:
 # docs/live-state/2026_08_03_federal_gate_floor_truth.md.
 _MIN_FEDERAL_PORTRAIT_COVERAGE_PERCENT = 97.40
-_MIN_FEDERAL_BIO_COVERAGE_PERCENT = 53.80
+_MIN_FEDERAL_BIO_COVERAGE_PERCENT = 92.21
 _MIN_FEDERAL_CANDIDATE_LINK_COVERAGE_PERCENT = 95.0
 _MIN_FEDERAL_IE_COVERAGE_PERCENT = 1.0
 

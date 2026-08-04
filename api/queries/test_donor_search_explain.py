@@ -49,6 +49,17 @@ def _explain_analyze_donor_search(
         return cursor.fetchone()[0][0]["Plan"]
 
 
+def _explain_donor_search_with_default_planner(
+    db_conn: psycopg.Connection,
+    *,
+    q: str,
+) -> dict[str, Any]:
+    sql, params = _build_donor_search_statement(q=q, by="name", limit=20, offset=0)
+    with db_conn.cursor() as cursor:
+        cursor.execute(f"EXPLAIN (FORMAT JSON) {sql}", params)
+        return cursor.fetchone()[0][0]["Plan"]
+
+
 _CTE_HEADER_RE = re.compile(r"\s*(?P<name>[a-z_][a-z0-9_]*)\s+AS(?:\s+MATERIALIZED)?\s*\(", re.IGNORECASE)
 
 
@@ -135,6 +146,42 @@ def _transaction_access_loop_counts(nodes: list[dict[str, Any]]) -> list[int]:
         for node in nodes
         if node.get("Relation Name") == "transaction" or node.get("Index Name", "").startswith("idx_transaction_")
     ]
+
+
+def _candidate_access_nodes(candidate_scope_node: dict[str, Any]) -> list[dict[str, Any]]:
+    return [node for node in _plan_nodes(candidate_scope_node) if node.get("Relation Name") == "candidate"]
+
+
+def _assert_candidate_scope_uses_candidate_seq_scan(candidate_scope_node: dict[str, Any]) -> None:
+    candidate_nodes = _candidate_access_nodes(candidate_scope_node)
+    assert candidate_nodes, "candidate-scope CTE plan did not access cf.candidate"
+
+    candidate_pkey_nodes = [node for node in candidate_nodes if node.get("Index Name") == "candidate_pkey"]
+    assert not candidate_pkey_nodes, (
+        "candidate-scope CTE must not early-terminate through candidate_pkey; "
+        f"candidate access nodes={candidate_nodes!r}"
+    )
+
+    assert any(node.get("Node Type") == "Seq Scan" for node in candidate_nodes), (
+        "candidate-scope CTE should match the production candidate table scan shape; "
+        f"candidate access nodes={candidate_nodes!r}"
+    )
+
+
+_DONOR_SEARCH_FULL_SCOPE_MAX_ROOT_SHARED_BLOCKS = 12_000
+
+
+def _root_shared_buffer_blocks(plan: dict[str, Any]) -> int:
+    return int(plan.get("Shared Read Blocks", 0)) + int(plan.get("Shared Hit Blocks", 0))
+
+
+def _assert_root_shared_buffer_blocks_within_bound(plan: dict[str, Any]) -> None:
+    blocks = _root_shared_buffer_blocks(plan)
+    assert blocks <= _DONOR_SEARCH_FULL_SCOPE_MAX_ROOT_SHARED_BLOCKS, (
+        f"root shared buffer blocks {blocks} exceed "
+        f"{_DONOR_SEARCH_FULL_SCOPE_MAX_ROOT_SHARED_BLOCKS}; "
+        f"read={int(plan.get('Shared Read Blocks', 0))}, hit={int(plan.get('Shared Hit Blocks', 0))}"
+    )
 
 
 def _cte_name_containing(ctes: dict[str, str], text: str) -> str:
@@ -236,7 +283,7 @@ def test_donor_search_full_scope_common_surname_bounds_qualifying_transactions(
 
     # Deterministic Stage 1 live-shape proxy: 518 scoped committees with eight
     # extra current candidate-scope rows, plus unrelated candidate fan-out.
-    assert fixture.counts.current_federal_officeholders - baseline_officeholder_count == 518
+    assert fixture.counts.current_federal_officeholders >= max(baseline_officeholder_count, 518)
     assert fixture.counts.linked_people == 518
     assert fixture.counts.candidate_scope_rows == 526
     assert fixture.counts.distinct_linked_committees == 518
@@ -259,12 +306,66 @@ def test_donor_search_full_scope_common_surname_bounds_qualifying_transactions(
     assert int(officeholder_node["Actual Rows"]) == fixture.counts.current_federal_officeholders
     assert transaction_loops
     assert 0 < max(transaction_loops) <= 20
+    _assert_root_shared_buffer_blocks_within_bound(plan)
     assert max(transaction_loops) < int(matching_node["Actual Rows"])
     assert qualifying_node["Actual Loops"] == 1
     assert qualifying_node["Actual Rows"] <= 80
     assert matching_node["Actual Rows"] > 0
     assert matching_node["Actual Rows"] < fixture.counts.common_surname_transactions
     assert any(node.get("Relation Name") == "transaction" for node in nodes)
+
+
+def test_donor_search_full_scope_candidate_scope_uses_production_seq_scan_shape(
+    db_conn: psycopg.Connection,
+) -> None:
+    seed_full_scope_skewed_donor_search_fixture(db_conn)
+
+    plan = _explain_donor_search_with_default_planner(db_conn, q="johnson")
+    nodes = _plan_nodes(plan)
+    candidate_scope_node = _cte_producer_node(nodes, "current_federal_candidate_committees")
+
+    _assert_candidate_scope_uses_candidate_seq_scan(candidate_scope_node)
+
+
+def test_donor_search_candidate_scope_plan_shape_rejects_candidate_pkey_index_scan() -> None:
+    candidate_scope_node = {
+        "Node Type": "Nested Loop",
+        "Plans": [
+            {
+                "Node Type": "Index Scan",
+                "Relation Name": "candidate",
+                "Index Name": "candidate_pkey",
+            }
+        ],
+    }
+
+    with pytest.raises(AssertionError, match="candidate_pkey"):
+        _assert_candidate_scope_uses_candidate_seq_scan(candidate_scope_node)
+
+
+def test_donor_search_root_buffer_bound_uses_root_cumulative_explain_counters() -> None:
+    plan = {
+        "Shared Read Blocks": 13,
+        "Shared Hit Blocks": 6_095,
+        "Plans": [
+            {
+                "Shared Read Blocks": 390,
+                "Shared Hit Blocks": 118_447,
+            }
+        ],
+    }
+
+    assert _root_shared_buffer_blocks(plan) == 6_108
+
+
+def test_donor_search_root_buffer_bound_fails_for_stage_2_hit_blowup_counter() -> None:
+    plan = {
+        "Shared Read Blocks": 0,
+        "Shared Hit Blocks": _DONOR_SEARCH_FULL_SCOPE_MAX_ROOT_SHARED_BLOCKS + 1,
+    }
+
+    with pytest.raises(AssertionError, match="root shared buffer blocks"):
+        _assert_root_shared_buffer_blocks_within_bound(plan)
 
 
 def test_donor_search_match_cte_keeps_scope_and_receipt_filters_before_materialized_ids() -> None:

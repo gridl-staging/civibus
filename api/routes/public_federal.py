@@ -305,6 +305,11 @@ def _money_summary_for_candidate(
 def _public_money_totals(summary: dict[str, Any]) -> dict[str, Any]:
     out_of_cycle_total = summary.get("out_of_cycle_official_total")
     coverage = summary.get("coverage")
+    public_coverage_payload = (
+        {"fundraising_coverage": coverage}
+        if isinstance(coverage, dict) and coverage.get("activity_state") != "populated"
+        else {}
+    )
     if (
         isinstance(coverage, dict)
         and coverage.get("activity_state") == "out_of_cycle_official_total"
@@ -325,6 +330,7 @@ def _public_money_totals(summary: dict[str, Any]) -> dict[str, Any]:
         "net": summary["net"],
         "cash_on_hand": summary["cash_on_hand"],
         "summary_source": summary["summary_source"],
+        **public_coverage_payload,
     }
 
 

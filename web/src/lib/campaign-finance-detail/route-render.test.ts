@@ -1417,8 +1417,12 @@ describe("DetailPage route presentation", () => {
     expect(fundraisingSummary).toContain(earlierCycleOfficialTotal);
     expect(earlierCycleOfficialTotal).toContain("Earlier-cycle official total");
     expect(earlierCycleOfficialTotal).toContain(
-      "Official FEC total from 2023-01-01 to 2024-12-31; not part of the 2026 selected-cycle totals."
+      "Official FEC total from 2023-01-01 to 2024-12-31; shown because selected-cycle activity is absent. These values are not part of the 2026 selected-cycle totals."
     );
+    expect(earlierCycleOfficialTotal).toContain("Official FEC candidate summary");
+    expect(earlierCycleOfficialTotal).toContain("fec_weball");
+    expect(earlierCycleOfficialTotal).not.toContain("career total");
+    expect(earlierCycleOfficialTotal).not.toContain("full campaign total");
     expect(earlierCycleOfficialTotal).toContain("$1,234.56");
     expect(earlierCycleOfficialTotal).toContain("$234.56");
     expect(earlierCycleOfficialTotal).toContain("$1,000.00");

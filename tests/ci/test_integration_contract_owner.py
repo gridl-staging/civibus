@@ -157,14 +157,13 @@ TEARDOWN_VOLUME_PROOF = 'grep -Fqx "$${COMPOSE_PROJECT_NAME}_civibus_db_data"'
 TEARDOWN_CLEAN_RECEIPT = "TEARDOWN CLEAN: docker volume ls contains no civibus_c3 volume"
 
 
-def _run_db_teardown_with_stub_docker(
+def _run_db_target_with_stub_docker(
     tmp_path: Path,
-    volume_ls_output: str,
-    volume_ls_exit_code: int = 0,
-    project_name: str = "civibus_c3",
+    target_name: str,
+    env_overrides: dict[str, str | None] | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], Path]:
     stub_dir = tmp_path / "stub_bin"
-    stub_dir.mkdir()
+    stub_dir.mkdir(parents=True)
     call_log = tmp_path / "docker_calls.log"
     stub_path = stub_dir / "docker"
     # Record every invocation, no-op the destructive compose command, and let the
@@ -187,13 +186,19 @@ def _run_db_teardown_with_stub_docker(
     env = dict(os.environ)
     env["PATH"] = f"{stub_dir}:{env['PATH']}"
     env["POSTGRES_PASSWORD"] = "civibus_dev"
-    env["COMPOSE_PROJECT_NAME"] = project_name
+    env["COMPOSE_PROJECT_NAME"] = "civibus_c3"
+    env["DOCKER_STUB_VOLUME_LS"] = "unrelated_volume"
+    env["DOCKER_STUB_VOLUME_LS_EXIT_CODE"] = "0"
     env["DOCKER_STUB_LOG"] = str(call_log)
-    env["DOCKER_STUB_VOLUME_LS"] = volume_ls_output
-    env["DOCKER_STUB_VOLUME_LS_EXIT_CODE"] = str(volume_ls_exit_code)
+    env.pop("POSTGRES_PORT", None)
+    for key, value in (env_overrides or {}).items():
+        if value is None:
+            env.pop(key, None)
+        else:
+            env[key] = value
 
     completed = subprocess.run(
-        ["make", "--no-print-directory", "db-teardown"],
+        ["make", "--no-print-directory", target_name],
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,
@@ -202,6 +207,38 @@ def _run_db_teardown_with_stub_docker(
         check=False,
     )
     return completed, call_log
+
+
+def _run_db_teardown_with_stub_docker(
+    tmp_path: Path,
+    volume_ls_output: str,
+    volume_ls_exit_code: int = 0,
+    project_name: str = "civibus_c3",
+) -> tuple[subprocess.CompletedProcess[str], Path]:
+    return _run_db_target_with_stub_docker(
+        tmp_path,
+        "db-teardown",
+        {
+            "COMPOSE_PROJECT_NAME": project_name,
+            "DOCKER_STUB_VOLUME_LS": volume_ls_output,
+            "DOCKER_STUB_VOLUME_LS_EXIT_CODE": str(volume_ls_exit_code),
+            "POSTGRES_PORT": "5543",
+        },
+    )
+
+
+def test_db_lifecycle_targets_reject_unallocated_lane_port_before_docker(tmp_path: Path) -> None:
+    for target_name in ("db-down", "db-teardown"):
+        completed, call_log = _run_db_target_with_stub_docker(
+            tmp_path / target_name,
+            target_name,
+            {"COMPOSE_PROJECT_NAME": "civibus_a10"},
+        )
+
+        assert completed.returncode != 0
+        assert "A non-empty POSTGRES_PORT must be supplied by environment or command line" in completed.stderr
+        assert "COMPOSE_PROJECT_NAME=civibus_a10" in completed.stderr
+        assert not call_log.exists() or call_log.read_text(encoding="utf-8") == ""
 
 
 def test_db_teardown_target_owns_destructive_compose_and_volume_proof() -> None:

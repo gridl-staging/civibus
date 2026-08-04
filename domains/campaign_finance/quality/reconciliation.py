@@ -160,7 +160,7 @@ def count_graph_edges_by_family(
                 "RETURN e "
                 "$$) AS edge(v agtype) "
                 "JOIN core.source_record sr "
-                "ON ((edge.v->>'source_record_id')::uuid) = sr.id "
+                "ON ((edge.v->>'\"source_record_id\"')::uuid) = sr.id "
                 f"WHERE {sr_scope}"
             )
             cur.execute(sql, (data_source_id,))

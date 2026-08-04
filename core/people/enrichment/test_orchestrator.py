@@ -6,6 +6,7 @@ from datetime import date, datetime, timezone
 from uuid import UUID, uuid4
 
 import pytest
+import psycopg
 
 from core import db as core_db
 from core.people.enrichment.models import CandidateEnrichmentRecord, CandidateEnrichmentTarget, PortraitBinaryMetadata
@@ -13,6 +14,7 @@ from core.people.enrichment.orchestrator import (
     ScopeSelectionResult,
     ScopeTarget,
     _apply_enrichment_for_targets,
+    _bootstrap_enrichment_source_record,
     _build_enrichment_data_source,
     _build_enrichment_source_record,
     _build_enrichment_target,
@@ -27,7 +29,12 @@ from core.people.enrichment.orchestrator import (
 )
 from core.people.enrichment.strategy_chain import StrategyChain
 from core.people.enrichment.strategy_sboe import SboeEnrichmentStrategy
-from core.types.python.models import Person, SourceRecord, ValidDateRange
+from core.types.python.models import (
+    Person,
+    PersonPortrait,
+    SourceRecord,
+    ValidDateRange,
+)
 from domains.civics.ingest import upsert_office, upsert_officeholding
 from domains.civics.types.models import Office, Officeholding
 
@@ -2356,6 +2363,106 @@ def test_run_federal_enrichment_prefers_official_bio_for_residual_with_federal_i
     assert probe.inserted_portraits[0].status == "active"
     assert probe.inserted_portraits[0].source_image_url == probe.portrait_url
     assert probe.inserted_portraits[0].rights_status == "public_domain"
+
+
+def test_run_federal_enrichment_reuses_people_enrichment_portrait_for_real_residual(
+    db_conn: psycopg.Connection,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from core.people.enrichment.models import EnrichmentAttempt
+    from core.people.enrichment.strategy_bioguide_portrait import BioguidePortraitStrategy
+    from core.people.enrichment.strategy_official_bio import OfficialBioStrategy
+    from core.people.enrichment.strategy_wikipedia_bio import WikipediaBioStrategy
+
+    person_id = UUID("1e933608-fabb-4eb4-ab7d-9b95e9b22a20")
+    portrait_url = "https://unitedstates.github.io/images/congress/450x550/B001321.jpg"
+    person = Person(id=person_id, canonical_name="Barrett, Tom", identifiers={"bioguide_id": "B001321"})
+    if core_db.select_person(db_conn, person_id) is None:
+        core_db.insert_person(db_conn, person)
+    data_source_id, first_run_source_record_id = _bootstrap_enrichment_source_record(
+        db_conn,
+        scope="federal",
+        cycle=None,
+    )
+    core_db.insert_person_portrait(
+        db_conn,
+        PersonPortrait(
+            person_id=person_id,
+            source_record_id=first_run_source_record_id,
+            status="active",
+            rights_status="public_domain",
+            image_hash="4" * 64,
+            mime_type="image/jpeg",
+            width_px=450,
+            height_px=550,
+            source_image_url=portrait_url,
+        ),
+    )
+    second_data_source_id, second_run_source_record_id = _bootstrap_enrichment_source_record(
+        db_conn,
+        scope="federal",
+        cycle=None,
+    )
+
+    first_run_source_record = core_db.select_source_record(db_conn, first_run_source_record_id)
+    assert first_run_source_record is not None
+    assert first_run_source_record.superseded_by == second_run_source_record_id
+    assert second_data_source_id == data_source_id
+    assert second_run_source_record_id != first_run_source_record_id
+
+    _install_federal_scope_targets(
+        monkeypatch,
+        [
+            ScopeTarget(
+                person_id=person_id,
+                canonical_name="Barrett, Tom",
+                bioguide_id="B001321",
+            )
+        ],
+    )
+    monkeypatch.setattr(
+        "core.people.enrichment.orchestrator.batch_fetch_wikipedia_titles",
+        lambda _qids: {},
+    )
+    monkeypatch.setattr(
+        "core.people.enrichment.orchestrator.batch_fetch_wikipedia_summaries",
+        lambda _titles: {},
+    )
+    monkeypatch.setattr(
+        "core.people.enrichment.orchestrator.db.insert_person_portrait",
+        lambda *_args, **_kwargs: pytest.fail("cached people-enrichment portrait should not be reinserted"),
+    )
+
+    def _no_data(
+        self: OfficialBioStrategy | WikipediaBioStrategy,
+        target: CandidateEnrichmentTarget,
+        missing_fields: tuple[str, ...],
+    ) -> tuple[CandidateEnrichmentRecord, EnrichmentAttempt]:
+        return CandidateEnrichmentRecord(), EnrichmentAttempt.no_data(
+            source=self.source_name,
+            requested_fields=missing_fields,
+        )
+
+    def _bioguide_fetch(
+        self: BioguidePortraitStrategy,
+        target: CandidateEnrichmentTarget,
+        missing_fields: tuple[str, ...],
+    ) -> tuple[CandidateEnrichmentRecord, EnrichmentAttempt]:
+        assert "portrait_image_url" not in missing_fields
+        return CandidateEnrichmentRecord(), EnrichmentAttempt.no_data(
+            source=self.source_name,
+            requested_fields=missing_fields,
+        )
+
+    monkeypatch.setattr(OfficialBioStrategy, "fetch", _no_data)
+    monkeypatch.setattr(WikipediaBioStrategy, "fetch", _no_data)
+    monkeypatch.setattr(BioguidePortraitStrategy, "fetch", _bioguide_fetch)
+
+    summary = run_federal_enrichment(db_conn, source_record_id=second_run_source_record_id)
+
+    assert summary["processed"] == 1
+    assert summary["portrait_writes"] == 0
+    assert summary["bio_updates"] == 0
 
 
 def test_run_federal_enrichment_does_not_query_or_apply_sboe_candidate_data(

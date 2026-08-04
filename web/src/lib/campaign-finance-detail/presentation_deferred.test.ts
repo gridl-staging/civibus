@@ -447,7 +447,9 @@ describe("campaign finance deferred detail presentation", () => {
         earlierCycleOfficialTotal: {
           label: "Earlier-cycle official total",
           period:
-            "Official FEC total from 2023-01-01 to 2024-12-31; not part of the 2026 selected-cycle totals.",
+            "Official FEC total from 2023-01-01 to 2024-12-31; shown because selected-cycle activity is absent. These values are not part of the 2026 selected-cycle totals.",
+          sourceToken: "fec_weball",
+          sourceLabel: "Official FEC candidate summary",
           factRows: [
             { label: "Total receipts", value: "$1,234.56" },
             { label: "Total disbursements", value: "$234.56" },

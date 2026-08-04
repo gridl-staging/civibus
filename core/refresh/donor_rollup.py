@@ -6,7 +6,7 @@ import hashlib
 import re
 import time
 from datetime import datetime, timezone
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import psycopg
 from psycopg import sql
@@ -18,6 +18,8 @@ from api.contribution_insights_contract import (
     contribution_insights_transaction_where_sql,
 )
 from api.queries import campaign_finance as campaign_finance_queries
+from core.types.python.models import DataSource
+from domains.campaign_finance.jurisdictions.states.load_utils import ensure_data_source
 
 
 # Lane 2 calls donor_key_fingerprint(), so this alias is part of the cross-lane
@@ -27,6 +29,7 @@ _ROLLUP_RELATION = "donor_search_rollup"
 _IDENTITY_VARIANT_RELATION = "donor_search_rollup_identity_variant"
 _PROVENANCE_RELATION = "donor_search_rollup_provenance"
 _ROLLUP_LOCK_NAME = "cf.donor_search_rollup.rebuild"
+DONOR_SEARCH_ROLLUP_DATA_SOURCE_NAME = "civibus-donor-search-rollup"
 
 _SAFE_COLUMN_NAME = re.compile(r"^[a-z][a-z0-9_]*$")
 
@@ -36,6 +39,26 @@ class DonorRollupBuildResult(BaseModel):
     build_duration_milliseconds: int
     completed_at: datetime
     donor_key_fingerprint: str
+
+
+def donor_search_rollup_data_source() -> DataSource:
+    return DataSource(
+        domain="campaign_finance",
+        jurisdiction="federal/fec",
+        name=DONOR_SEARCH_ROLLUP_DATA_SOURCE_NAME,
+        source_url="internal://civibus/cf/donor_search_rollup",
+        source_format="postgres_aggregate",
+        license="public_domain",
+        update_frequency="weekly",
+        notes=(
+            "Internally built donor-search aggregate over recent federal FEC Schedule A "
+            "transactions scoped to current federal officeholders."
+        ),
+    )
+
+
+def ensure_donor_search_rollup_data_source(conn: psycopg.Connection) -> UUID:
+    return ensure_data_source(conn, donor_search_rollup_data_source())
 
 
 def _source_expression_for_key_column(column_name: str) -> str:

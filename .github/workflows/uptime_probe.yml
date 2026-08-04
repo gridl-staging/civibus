@@ -1,8 +1,12 @@
 name: Uptime probe — /api/health/content
 
-# External-infrastructure verifier. Hits ${{ env.PROBE_BASE_URL }}/api/health/content
-# every 5 minutes and opens / comments-on / closes a GitHub issue with
-# the `uptime-incident` label based on the response.
+# External-infrastructure verifier. It requests a four-hour GitHub scheduled uptime probe
+# of ${{ env.PROBE_BASE_URL }}/api/health/content and opens / comments-on / closes a
+# GitHub issue with the `uptime-incident` label based on the response. GitHub scheduled
+# workflows are best-effort, not a delivery SLA. Under the repo's previous five-minute
+# request, the recent observed sample was n=11 scheduled gaps at 64-216 minutes. This
+# historical sample is not a guaranteed delivery interval for this cron. There is no
+# five-minute SLA or detection guarantee.
 #
 # Anchored postmortem: docs/howto/operations/postmortems/2026_04_30_prod_data_link_severed.md
 # Apr 30 incident hid for 16h because every observer ran on or near the
@@ -16,7 +20,7 @@ name: Uptime probe — /api/health/content
 
 on:
   schedule:
-    - cron: '*/5 * * * *'
+    - cron: '0 */4 * * *'
   workflow_dispatch:
     inputs:
       probe_url_override:
@@ -232,14 +236,53 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PROBE_DETAIL: ${{ steps.probe.outputs.detail }}
           PROBE_STATUS: ${{ steps.probe.outputs.status }}
+          PROBE_TARGET: ${{ steps.probe.outputs.target }}
         run: |
           NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           DETAIL="${PROBE_DETAIL}"
           STATUS="${PROBE_STATUS}"
+          TARGET="${PROBE_TARGET}"
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          RED_TOKENS=()
+          RED_BLOCKS=""
+
+          # Intentionally parallel with the Open step: Actions steps are
+          # isolated shells and the contract harness executes this script alone.
+          if [ "${{ steps.probe.outputs.healthy }}" = "false" ]; then
+            RED_TOKENS+=("/api/health/content returned ${STATUS}")
+            RED_BLOCKS="${RED_BLOCKS}
+
+          content_health_probe
+          - Endpoint: ${TARGET}
+          - Owner: api/health_content.py + api/main.py:186
+          - Status: ${STATUS}
+          - Detail: ${DETAIL}"
+          fi
+          if [ "${{ steps.donor.outcome }}" = "failure" ]; then
+            RED_TOKENS+=("donor_search_surface")
+            RED_BLOCKS="${RED_BLOCKS}
+
+          donor_search_surface
+          - Endpoint: ${PROBE_BASE_URL%/}/donors?q=smith&by=name
+          - Owners: web/src/routes/donors/+page.server.ts, api/routes/donors.py, api/queries/campaign_finance.py"
+          fi
+          if [ "${{ steps.drift.outcome }}" = "failure" ]; then
+            RED_TOKENS+=("public_deploy_drift")
+            RED_BLOCKS="${RED_BLOCKS}
+
+          public_deploy_drift
+          - Backend endpoint: ${PROBE_BASE_URL%/}/api/health/version
+          - Public endpoint: ${PROBE_BASE_URL%/}/version.json
+          - Owner: .github/workflows/deploy.yml
+          - Condition: observed public deploy version drift"
+          fi
+
+          RED_SUMMARY=$(IFS=", "; echo "${RED_TOKENS[*]}")
           gh issue comment "${{ steps.find.outputs.number }}" \
             --repo "${{ github.repository }}" \
-            --body "Probe at ${NOW} — still failing. Status: ${STATUS}. Detail: ${DETAIL}. Run: ${RUN_URL}"
+            --body "Probe at ${NOW} — still failing. Red probes now: ${RED_SUMMARY}.
+
+          Run: ${RUN_URL}${RED_BLOCKS}"
 
       - name: Open new uptime-incident issue (endpoint failing, no existing issue)
         if: (steps.probe.outputs.healthy == 'false' || steps.donor.outcome == 'failure' || steps.drift.outcome == 'failure') && steps.find.outputs.number == ''
@@ -262,27 +305,68 @@ jobs:
           DETAIL="${PROBE_DETAIL}"
           TARGET="${PROBE_TARGET}"
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          RED_TOKENS=()
+          RED_BLOCKS=""
 
-          BODY="The ${{ env.PROBE_BASE_URL }} content health probe failed.
+          # Intentionally parallel with the Comment step: Actions steps are
+          # isolated shells and the contract harness executes this script alone.
+          if [ "${{ steps.probe.outputs.healthy }}" = "false" ]; then
+            RED_TOKENS+=("/api/health/content returned ${STATUS}")
+            RED_BLOCKS="${RED_BLOCKS}
+
+          The ${{ env.PROBE_BASE_URL }} content health probe failed.
 
           **Status:** ${STATUS}
           **Detail:** ${DETAIL}
           **Probe time:** ${NOW}
           **Workflow run:** ${RUN_URL}
 
+          - Endpoint: ${TARGET}
+          - Owner: api/health_content.py + api/main.py:186"
+          fi
+          if [ "${{ steps.donor.outcome }}" = "failure" ]; then
+            RED_TOKENS+=("donor_search_surface")
+            RED_BLOCKS="${RED_BLOCKS}
+
+          donor_search_surface failed.
+
+          **Probe time:** ${NOW}
+          **Workflow run:** ${RUN_URL}
+
+          - Endpoint: ${PROBE_BASE_URL%/}/donors?q=smith&by=name
+          - Owners: web/src/routes/donors/+page.server.ts, api/routes/donors.py, api/queries/campaign_finance.py"
+          fi
+          if [ "${{ steps.drift.outcome }}" = "failure" ]; then
+            RED_TOKENS+=("public_deploy_drift")
+            RED_BLOCKS="${RED_BLOCKS}
+
+          public_deploy_drift failed.
+
+          **Probe time:** ${NOW}
+          **Workflow run:** ${RUN_URL}
+
+          - Backend endpoint: ${PROBE_BASE_URL%/}/api/health/version
+          - Public endpoint: ${PROBE_BASE_URL%/}/version.json
+          - Owner: .github/workflows/deploy.yml
+          - Condition: observed public deploy version drift"
+          fi
+
+          RED_SUMMARY=$(IFS=", "; echo "${RED_TOKENS[*]}")
+
+          BODY="The ${{ env.PROBE_BASE_URL }} production uptime probe detected red surface(s): ${RED_SUMMARY}.
+          ${RED_BLOCKS}
+
           This issue was auto-created by .github/workflows/uptime_probe.yml.
           Subsequent failures will comment here (not open new issues). The
-          workflow will auto-close this issue when the endpoint returns 200
-          healthy again.
+          workflow will auto-close this issue when every production surface
+          probe is green.
 
-          - Endpoint: ${TARGET}
-          - Owner: api/health_content.py + api/main.py:186
           - Anchored postmortem: docs/howto/operations/postmortems/2026_04_30_prod_data_link_severed.md"
 
           gh issue create \
             --repo "${{ github.repository }}" \
             --label uptime-incident \
-            --title "[uptime] /api/health/content returned ${STATUS} at ${NOW}" \
+            --title "[uptime] production surface red: ${RED_SUMMARY} at ${NOW}" \
             --body "${BODY}"
 
       - name: Fail the run when any production surface probe was red

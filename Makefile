@@ -45,6 +45,10 @@ RETIRED_ALLOWLIST := \
 	.matt/projects/** \
 	Makefile
 
+MERGE_DB_BACKED_TEST_NODES := \
+	core/test_refresh_runner.py::test_masters_with_spine_skipped_preserves_officeholder_money_coverage \
+	tests/integration/test_donor_search_query_contract.py::test_search_donors_full_scope_bound_preserves_high_volume_donor_values
+
 
 .PHONY: db-up db-down db-teardown db-reset test test-public test-projected-public-contract test-api test-e2e lint check-retired-symbols ingest-fec-sample ingest-fec-bulk-sample ingest-fec-bulk ingest-fec-federal ingest-fec-ie-sample download-fec-bulk download-fec-weball download-fec-schedule-e download-fec-committee-summary ingest-fec-schedule-e download-irs-527 ingest-irs-527-sample ingest-irs-527 validate-configs validate-registry render-coverage-views render-region-lifecycle ingest-co-sample ingest-durham-sample require-postgres-password ingest-nc-sample ingest-nc-ie-sample ingest-ga-sample ingest-ca-sample ingest-mn-sample ingest-wa-sample ingest-tx-sample ingest-pa-sample ingest-oh-sample ingest-in-sample ingest-il-sample ingest-nj-sample ingest-va-sample ingest-sf-sample ingest-la-city-sample ingest-nyc-sample ingest-nc-past-results-2022-2024 download-ga quality-check quality-freshness entity-resolve entity-resolve-dry api-dev graph-load load-test refresh-cf-data refresh-cf-priority gate-L1 gate-L3 gate-L5 gate-L6 gate-L6-pilot gate-L7 gate-L10 gate-L14 keel-status keel-summary keel-current keel-reviews-status evidence-rotate
 
@@ -89,7 +93,7 @@ reject-unallocated-lane-port:
 db-up: require-postgres-password reject-reserved-integration-port reject-unallocated-lane-port
 	docker compose -f infra/docker-compose.yml up -d
 
-db-down: require-postgres-password
+db-down: require-postgres-password reject-unallocated-lane-port
 	docker compose -f infra/docker-compose.yml down
 
 # Destructive counterpart to db-down: db-down leaves the lane volume in place,
@@ -98,7 +102,7 @@ db-down: require-postgres-password
 # compose-owned volume `$(COMPOSE_PROJECT_NAME)_civibus_db_data` is actually
 # gone. The check is anchored and literal (grep -Fqx) so civibus_c1 cannot false-match
 # civibus_c10.
-db-teardown: require-postgres-password
+db-teardown: require-postgres-password reject-unallocated-lane-port
 	docker compose -f infra/docker-compose.yml down --volumes --remove-orphans
 	@volume_names="$$(docker volume ls --format '{{.Name}}')"; volume_ls_status=$$?; \
 	if [ "$$volume_ls_status" -ne 0 ]; then \
@@ -111,7 +115,7 @@ db-teardown: require-postgres-password
 	fi; \
 	printf 'TEARDOWN CLEAN: docker volume ls contains no %s volume\n' "$${COMPOSE_PROJECT_NAME}"
 
-db-reset: require-postgres-password
+db-reset: require-postgres-password reject-reserved-integration-port reject-unallocated-lane-port
 	@set -e; if command -v psql >/dev/null 2>&1; then \
 		for attempt in $$(seq 1 60); do \
 			if PGPASSWORD="$(POSTGRES_PASSWORD)" psql -v ON_ERROR_STOP=1 -h "$(DB_HOST)" -p "$(POSTGRES_PORT)" -U "$(POSTGRES_USER)" "$(POSTGRES_DB)" -c "SELECT 1" >/dev/null 2>&1; then \
@@ -143,8 +147,25 @@ conn.autocommit=False;\
 conn.commit(); conn.close()"; \
 	fi
 
+# The merge-slice preflight delegates to conftest.merge_db_slice_probe() rather
+# than connecting itself. A hand-rolled `get_connection()` one-shot here got the
+# shadow/run decision wrong: it skipped the password default and startup retries
+# the DB-backed nodes get from the root conftest, so with POSTGRES_PASSWORD unset
+# it printed the shadow warning against a database the tests could have reached.
+# The probe also echoes the target core.db actually resolved, which is not
+# necessarily this Makefile's DB_HOST. Only its canonical-unavailability status
+# takes the shadow branch; unexpected probe failures remain fatal.
 test:
 	uv run --extra dev --extra entity-resolution pytest -m "not integration and not e2e and not projected_public_contract"
+	@merge_db_target="$$(uv run --extra dev --extra entity-resolution python -c 'import conftest; conftest.merge_db_slice_probe()')"; \
+	merge_db_probe_status=$$?; \
+	if [ "$$merge_db_probe_status" -eq 0 ]; then \
+		CIVIBUS_REQUIRE_DB=1 uv run --extra dev --extra entity-resolution pytest $(MERGE_DB_BACKED_TEST_NODES); \
+	elif [ "$$merge_db_probe_status" -eq 1 ]; then \
+		printf '%s\n' "CIVIBUS_MERGE_DB_SLICE_SHADOW_WARN $$merge_db_target nodes=$(MERGE_DB_BACKED_TEST_NODES)"; \
+	else \
+		exit "$$merge_db_probe_status"; \
+	fi
 
 test-public:
 	uv run --extra dev --extra entity-resolution pytest -m "not integration and not e2e and not dev_repo_only"

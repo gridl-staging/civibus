@@ -1758,6 +1758,7 @@ def _build_donor_search_rollup_job() -> RefreshJob:
     def _run_donor_search_rollup_job() -> donor_rollup.DonorRollupBuildResult:
         connection = get_connection()
         try:
+            donor_rollup.ensure_donor_search_rollup_data_source(connection)
             result = donor_rollup.rebuild_donor_search_rollup(connection)
             connection.commit()
             return result

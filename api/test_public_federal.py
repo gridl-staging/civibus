@@ -2143,6 +2143,44 @@ def test_public_member_money_uses_committee_summary_when_candidate_official_tota
     assert payload["cash_on_hand"] == "750.00"
 
 
+def test_public_member_money_preserves_not_loaded_coverage_for_selected_zero_candidate(
+    api_client: TestClient, db_conn: psycopg.Connection
+) -> None:
+    expectations = _seed_current_federal_members_mix(db_conn)
+    member = _member_by_name(expectations, "Alice Representative")
+    candidate_id = UUID("bb000000-0000-0000-0000-000000000224")
+
+    _insert_candidate_with_official_totals(
+        db_conn,
+        candidate_id=candidate_id,
+        fec_candidate_id="H4NC01224",
+        name="Alice Prior Cycle Candidate",
+        person_id=member.person_id,
+        office="H",
+        state="NC",
+        district="01",
+        total_receipts=Decimal("31077805.53"),
+        total_disbursements=Decimal("31027960.15"),
+        cash_on_hand=Decimal("49845.38"),
+        summary_coverage_end_date=date(2024, 12, 31),
+    )
+
+    response = api_client.get(f"/public/v1/federal/officials/{member.person_id}/money")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["has_fec_money"] is True
+    assert payload["candidate_id"] == str(candidate_id)
+    assert payload["total_raised"] == "0.00"
+    assert payload["summary_source"] == "derived"
+    assert payload["fundraising_coverage"] == {
+        "activity_state": "not_loaded",
+        "basis": "no_authoritative_load_evidence",
+        "completeness": "unknown",
+    }
+    assert "out_of_cycle_official_total" not in payload
+
+
 def test_public_member_money_includes_chosen_candidate_direct_source(
     api_client: TestClient, db_conn: psycopg.Connection
 ) -> None:

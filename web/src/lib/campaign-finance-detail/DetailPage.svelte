@@ -771,6 +771,9 @@
               >
                 <h4>{earlierCycleOfficialTotal.label}</h4>
                 <p class="detail__summary">{earlierCycleOfficialTotal.period}</p>
+                <p class="detail__summary">
+                  Source: {earlierCycleOfficialTotal.sourceLabel} ({earlierCycleOfficialTotal.sourceToken})
+                </p>
                 <FactRows rows={earlierCycleOfficialTotal.factRows} />
               </div>
             {/if}

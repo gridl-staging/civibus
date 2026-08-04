@@ -289,7 +289,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
 
 
 # Module-level imports for patchability in tests/test_conftest_db_fixtures.py.
-from core.db import get_connection  # noqa: E402
+from core.db import build_connection_parameters, get_connection  # noqa: E402
 from core.graph import age_post_connect, ensure_graph  # noqa: E402
 from test_support.bootstrap_canaries import _collect_missing_stage1_canaries  # noqa: E402
 
@@ -316,18 +316,21 @@ def _require_postgres_password() -> None:
         os.environ["POSTGRES_PASSWORD"] = "civibus_dev"
 
 
-def _connection_or_skip(*, post_connect=None) -> psycopg.Connection:
-    """Try to connect with retries; skip or fail if PostgreSQL is unavailable."""
-    global _postgres_unavailable_error_message
-    if _postgres_unavailable_error_message is not None and os.environ.get("CIVIBUS_REQUIRE_DB") != "1":
-        _skip_or_fail_for_postgres_unavailable(_postgres_unavailable_error_message)
+def _connect_with_startup_retries(*, post_connect=None) -> psycopg.Connection:
+    """Connect under the canonical DB-backed-test policy: password default plus startup retries.
+
+    Single owner of "can this database answer a DB-backed test?". Anything that
+    decides whether to run DB-backed nodes — the pytest fixtures below and the
+    `Makefile::test` merge-slice preflight — must route through here. A second
+    implementation drifts, and a preflight that connects differently than the
+    tests do makes the wrong shadow/run decision.
+    """
+    _require_postgres_password()
 
     last_connection_error: RuntimeError | None = None
     for attempt_index in range(_DB_CONNECTION_STARTUP_RETRY_ATTEMPTS):
         try:
-            connection = get_connection(post_connect=post_connect)
-            _postgres_unavailable_error_message = None
-            return connection
+            return get_connection(post_connect=post_connect)
         except RuntimeError as error:
             if not str(error).startswith(_POSTGRES_UNAVAILABLE_PREFIX):
                 raise
@@ -337,8 +340,47 @@ def _connection_or_skip(*, post_connect=None) -> psycopg.Connection:
             time.sleep(_DB_CONNECTION_STARTUP_RETRY_DELAY_SECONDS)
 
     assert last_connection_error is not None
-    _postgres_unavailable_error_message = str(last_connection_error)
-    _skip_or_fail_for_postgres_unavailable(_postgres_unavailable_error_message, cause=last_connection_error)
+    raise last_connection_error
+
+
+def merge_db_slice_probe() -> None:
+    """Preflight for the `Makefile::test` DB-backed merge slice.
+
+    Prints the canonically resolved target (`core.db` resolves the host, which
+    is not necessarily the Makefile's `DB_HOST`). Exit 1 is reserved for
+    canonical database unavailability so the Makefile can shadow only that
+    condition; unexpected probe/configuration failures exit 2 and remain fatal.
+    Called as `python -c 'import conftest; conftest.merge_db_slice_probe()'`.
+    """
+    try:
+        _require_postgres_password()
+        connection_parameters = build_connection_parameters()
+        print(f"DB_HOST={connection_parameters['host']} POSTGRES_PORT={connection_parameters['port']}")
+        _connect_with_startup_retries().close()
+    except Exception as error:
+        if isinstance(error, RuntimeError) and str(error).startswith(_POSTGRES_UNAVAILABLE_PREFIX):
+            raise SystemExit(1) from error
+        print(f"Unexpected merge DB slice probe failure: {error}", file=sys.stderr)
+        raise SystemExit(2) from error
+
+
+def _connection_or_skip(*, post_connect=None) -> psycopg.Connection:
+    """Try to connect with retries; skip or fail if PostgreSQL is unavailable."""
+    global _postgres_unavailable_error_message
+    if _postgres_unavailable_error_message is not None and os.environ.get("CIVIBUS_REQUIRE_DB") != "1":
+        _skip_or_fail_for_postgres_unavailable(_postgres_unavailable_error_message)
+
+    try:
+        connection = _connect_with_startup_retries(post_connect=post_connect)
+    except RuntimeError as error:
+        if not str(error).startswith(_POSTGRES_UNAVAILABLE_PREFIX):
+            raise
+        _postgres_unavailable_error_message = str(error)
+        _skip_or_fail_for_postgres_unavailable(_postgres_unavailable_error_message, cause=error)
+        raise  # unreachable: _skip_or_fail_for_postgres_unavailable always raises
+
+    _postgres_unavailable_error_message = None
+    return connection
 
 
 def _skip_or_fail_for_postgres_unavailable(message: str, *, cause: BaseException | None = None) -> None:

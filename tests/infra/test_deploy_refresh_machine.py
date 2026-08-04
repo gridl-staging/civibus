@@ -5,6 +5,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -20,8 +21,7 @@ IMAGE_TAG = f"registry.fly.io/{APP_NAME}:deployment-stage2"
 IMAGE_DIGEST = f"registry.fly.io/{APP_NAME}@sha256:{'a' * 64}"
 
 
-STUB_PROGRAM = r"""#!/usr/bin/env python3
-import json
+STUB_PROGRAM = r"""import json
 import os
 import pathlib
 import sys
@@ -163,10 +163,18 @@ elif command == "docker":
         if failure in {"image_version", "image_guard"}:
             print(failure, file=sys.stderr)
             sys.exit(97)
+        from core.refresh.job_builders import build_refresh_plan
+        image_plan_keys = sorted(job.key for job in build_refresh_plan(scope="federal"))
+        if failure == "image_plan_mismatch":
+            image_plan_keys = [
+                key for key in image_plan_keys if key != "federal-donor-search-rollup"
+            ]
+            image_plan_keys.append("federal-unexpected-image-job")
         print(json.dumps({
             "build_version": {"git_sha": args[-2], "built_at": args[-1]},
             "person_link_is_fillable": True,
             "repair_pair_alarm": True,
+            "refresh_plan_job_keys": image_plan_keys,
         }, sort_keys=True))
     else:
         sys.exit(98)
@@ -179,9 +187,13 @@ def _write_command_stubs(tmp_path: Path) -> tuple[Path, Path]:
     stub_bin = tmp_path / "stub_bin"
     stub_bin.mkdir()
     command_log = tmp_path / "commands.jsonl"
+    stub_program = STUB_PROGRAM.replace(
+        '"CIVIBUS_STARTUP_CANARY": "skip",\n    },',
+        '"CIVIBUS_STARTUP_CANARY": "skip",\n        "UNEXPECTED_SECRET": "top-secret",\n    },',
+    )
     for command in ("bash", "git", "flyctl", "curl", "sleep", "docker"):
         stub = stub_bin / command
-        stub.write_text(STUB_PROGRAM, encoding="utf-8")
+        stub.write_text(f"#!{sys.executable}\n{stub_program}", encoding="utf-8")
         stub.chmod(0o755)
     return stub_bin, command_log
 
@@ -208,6 +220,8 @@ def _run_deploy(
             "STUB_FAILURE": failure,
             "STUB_PUSHED_REFS": pushed_refs,
             "STUB_DIGESTS": digests,
+            "PYTHON_BIN": sys.executable,
+            "PYTHONPATH": str(REPO_ROOT),
         }
     )
     result = subprocess.run(
@@ -289,6 +303,14 @@ def test_deploy_uses_exact_build_probe_update_and_verifier_contract(tmp_path: Pa
         [
             "bash",
             verifier_path,
+            "--expected-plan-json",
+            str(evidence_dir / "expected_refresh_plan.txt"),
+            "--image-proof-json",
+            str(evidence_dir / "image_proof.txt"),
+        ],
+        [
+            "bash",
+            verifier_path,
             "--machines-json",
             str(evidence_dir / "post_machines.json"),
             "--machine-config-json",
@@ -299,6 +321,19 @@ def test_deploy_uses_exact_build_probe_update_and_verifier_contract(tmp_path: Pa
             str(evidence_dir / "post_version.json"),
         ],
     ]
+    expected_sanitized_env = {
+        "CIVIBUS_ENV": "production",
+        "POSTGRES_HOST": "civibus-db.internal",
+        "POSTGRES_PORT": "5432",
+        "POSTGRES_USER": "civibus",
+        "POSTGRES_DB": "civibus",
+        "CIVIBUS_REFRESH_DATA_DIR": "/data",
+        "CIVIBUS_STARTUP_CANARY": "skip",
+    }
+    for phase in ("pre", "post"):
+        machine_config = json.loads((evidence_dir / f"{phase}_machine_config.json").read_text())
+        assert machine_config["env"] == expected_sanitized_env
+        assert "UNEXPECTED_SECRET" not in machine_config["env"]
 
     image_probes = [argv for argv in invocations if argv[:2] == ["docker", "run"]]
     assert len(image_probes) == 1
@@ -336,12 +371,20 @@ def test_deploy_uses_exact_build_probe_update_and_verifier_contract(tmp_path: Pa
         "side_effects_repaired_by_job_key",
     ):
         assert alarm_symbol in probe_text, f"image proof must assert {alarm_symbol}"
+    assert "core.refresh.job_builders" in probe_text
+    assert "build_refresh_plan" in probe_text
+    assert 'scope="federal"' in probe_text
+    assert "refresh_plan_job_keys" in probe_text
     assert (evidence_dir / "pushed_image.txt").read_text() == f"{IMAGE_TAG}\n"
     assert (evidence_dir / "image_digest.txt").read_text() == f"{IMAGE_DIGEST}\n"
     image_proof = (evidence_dir / "image_proof.txt").read_text()
     assert f'"git_sha": "{DEV_SHA}"' in image_proof
     assert '"person_link_is_fillable": true' in image_proof
     assert '"repair_pair_alarm": true' in image_proof
+    assert '"refresh_plan_job_keys": [' in image_proof
+    expected_plan_proof = (evidence_dir / "expected_refresh_plan.txt").read_text()
+    assert '"refresh_plan_job_keys": [' in expected_plan_proof
+    assert '"federal-donor-search-rollup"' in expected_plan_proof
 
     assert [argv for argv in invocations if argv[:3] == ["docker", "image", "inspect"]] == [
         ["docker", "image", "inspect", IMAGE_TAG, "--format", "{{json .RepoDigests}}"]
@@ -383,6 +426,7 @@ def test_deploy_uses_exact_build_probe_update_and_verifier_contract(tmp_path: Pa
         ("", "default", "malformed"),
         ("image_version", "default", "default"),
         ("image_guard", "default", "default"),
+        ("image_plan_mismatch", "default", "default"),
     ],
 )
 def test_deploy_never_writes_machine_when_a_prewrite_gate_fails(
@@ -400,6 +444,14 @@ def test_deploy_never_writes_machine_when_a_prewrite_gate_fails(
 
     assert result.returncode != 0
     assert _machine_updates(invocations) == []
+
+
+def test_deploy_checks_image_plan_before_machine_update(tmp_path: Path) -> None:
+    result, invocations, _ = _run_deploy(tmp_path, failure="image_plan_mismatch")
+
+    assert result.returncode != 0
+    assert _machine_updates(invocations) == []
+    assert "refresh plan job key mismatch" in result.stderr
 
 
 def test_deploy_does_not_retry_or_fallback_after_machine_update_failure(tmp_path: Path) -> None:

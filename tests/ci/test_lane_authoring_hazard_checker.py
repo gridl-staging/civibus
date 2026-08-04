@@ -483,6 +483,21 @@ def test_zero_changed_files_path_still_checks_the_baseline(tmp_path: Path) -> No
     private_asset="chats/icg/ and scripts/lane_authoring_hazard_checker.py",
     owner="Lane-authoring hazard checker corpus",
 )
+def test_direct_mode_baselines_cover_current_real_corpus() -> None:
+    checker = _load_checker()
+    report = checker.scan_paths(sorted(checker.CHECKLIST_DIR.glob("*.md")))
+
+    assert {label: checker.BASELINE_COUNTS[label] for label in ("anti-stop-outside-slice", "preamble-loss")} == {
+        "anti-stop-outside-slice": report.counts["anti-stop-outside-slice"],
+        "preamble-loss": report.counts["preamble-loss"],
+    }
+
+
+@pytest.mark.unit
+@pytest.mark.dev_repo_only(
+    private_asset="chats/icg/ and scripts/lane_authoring_hazard_checker.py",
+    owner="Lane-authoring hazard checker corpus",
+)
 def test_changed_checklist_paths_include_untracked_scratch_lanes(monkeypatch: pytest.MonkeyPatch) -> None:
     checker = _load_checker()
 

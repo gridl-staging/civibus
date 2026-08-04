@@ -67,6 +67,24 @@ def _valid_payloads() -> dict[str, Any]:
             "git_sha": "0123456789abcdef0123456789abcdef01234567",
             "built_at": "2026-07-31T12:00:00Z",
         },
+        "expected_plan": {
+            "refresh_plan_job_keys": [
+                "federal-congress-spine",
+                "federal-donor-search-rollup",
+            ],
+        },
+        "image_proof": {
+            "build_version": {
+                "git_sha": "0123456789abcdef0123456789abcdef01234567",
+                "built_at": "2026-07-31T12:00:00Z",
+            },
+            "person_link_is_fillable": True,
+            "repair_pair_alarm": True,
+            "refresh_plan_job_keys": [
+                "federal-congress-spine",
+                "federal-donor-search-rollup",
+            ],
+        },
     }
 
 
@@ -83,13 +101,13 @@ def _write_external_command_stubs(tmp_path: Path) -> Path:
     return stub_bin
 
 
-def _run_verifier(
+def _write_fixture_paths(
     tmp_path: Path,
     payloads: dict[str, Any],
     *,
     omit_payload: str | None = None,
     invalid_payload: str | None = None,
-) -> subprocess.CompletedProcess[str]:
+) -> dict[str, Path]:
     fixture_paths: dict[str, Path] = {}
     for payload_name, payload in payloads.items():
         fixture_path = tmp_path / f"{payload_name}.json"
@@ -99,23 +117,53 @@ def _run_verifier(
                 encoding="utf-8",
             )
         fixture_paths[payload_name] = fixture_path
+    return fixture_paths
+
+
+def _run_verifier(
+    tmp_path: Path,
+    payloads: dict[str, Any],
+    *,
+    omit_payload: str | None = None,
+    invalid_payload: str | None = None,
+    include_plan_proof: bool = False,
+    include_machine_fixtures: bool = True,
+) -> subprocess.CompletedProcess[str]:
+    fixture_paths = _write_fixture_paths(
+        tmp_path,
+        payloads,
+        omit_payload=omit_payload,
+        invalid_payload=invalid_payload,
+    )
 
     stub_bin = _write_external_command_stubs(tmp_path)
     environment = os.environ.copy()
     environment["PATH"] = f"{stub_bin}:/usr/bin:/bin"
+    command = ["bash", str(VERIFIER_PATH)]
+    if include_machine_fixtures:
+        command.extend(
+            [
+                "--machines-json",
+                str(fixture_paths["machines"]),
+                "--machine-config-json",
+                str(fixture_paths["machine_config"]),
+                "--volumes-json",
+                str(fixture_paths["volumes"]),
+                "--version-json",
+                str(fixture_paths["version"]),
+            ]
+        )
+    if include_plan_proof:
+        command.extend(
+            [
+                "--expected-plan-json",
+                str(fixture_paths["expected_plan"]),
+                "--image-proof-json",
+                str(fixture_paths["image_proof"]),
+            ]
+        )
     return subprocess.run(
-        [
-            "bash",
-            str(VERIFIER_PATH),
-            "--machines-json",
-            str(fixture_paths["machines"]),
-            "--machine-config-json",
-            str(fixture_paths["machine_config"]),
-            "--volumes-json",
-            str(fixture_paths["volumes"]),
-            "--version-json",
-            str(fixture_paths["version"]),
-        ],
+        command,
         cwd=REPO_ROOT,
         env=environment,
         capture_output=True,
@@ -172,6 +220,87 @@ def test_verifier_accepts_complete_fixture_contract_without_external_reads(
     assert result.returncode == 0, result.stderr
     assert result.stdout == "PASS: refresh Machine contract verified\n"
     assert result.stderr == ""
+
+
+def test_verifier_accepts_matching_refresh_plan_proof_inputs(tmp_path: Path) -> None:
+    result = _run_verifier(tmp_path, _valid_payloads(), include_plan_proof=True)
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "PASS: refresh Machine contract verified\n"
+    assert result.stderr == ""
+
+
+def test_verifier_accepts_plan_proof_without_live_machine_probes(tmp_path: Path) -> None:
+    result = _run_verifier(
+        tmp_path,
+        _valid_payloads(),
+        include_plan_proof=True,
+        include_machine_fixtures=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "PASS: refresh Machine contract verified\n"
+    assert result.stderr == ""
+
+
+@pytest.mark.parametrize(
+    ("image_plan_keys", "expected_errors"),
+    [
+        (
+            ["federal-congress-spine", "federal-unexpected-image-job"],
+            (
+                "refresh plan job key mismatch",
+                "missing from image: ['federal-donor-search-rollup']",
+                "extra in image: ['federal-unexpected-image-job']",
+            ),
+        ),
+        (
+            ["federal-congress-spine", "federal-congress-spine", "federal-donor-search-rollup"],
+            ("image-proof refresh_plan_job_keys contains duplicate keys: ['federal-congress-spine']",),
+        ),
+    ],
+    ids=("missing_and_extra", "duplicate"),
+)
+def test_verifier_rejects_refresh_plan_mismatch_with_missing_and_extra_keys(
+    tmp_path: Path,
+    image_plan_keys: list[str],
+    expected_errors: tuple[str, ...],
+) -> None:
+    payloads = _valid_payloads()
+    payloads["image_proof"]["refresh_plan_job_keys"] = image_plan_keys
+
+    result = _run_verifier(tmp_path, payloads, include_plan_proof=True)
+
+    assert result.returncode == 1
+    assert result.stdout == ""
+    for expected_error in expected_errors:
+        assert expected_error in result.stderr
+
+
+def test_verifier_requires_plan_proof_paths_as_an_all_or_none_pair(tmp_path: Path) -> None:
+    payloads = _valid_payloads()
+    fixture_paths = _write_fixture_paths(tmp_path, payloads)
+    stub_bin = _write_external_command_stubs(tmp_path)
+    environment = os.environ.copy()
+    environment["PATH"] = f"{stub_bin}:/usr/bin:/bin"
+
+    result = subprocess.run(
+        [
+            "bash",
+            str(VERIFIER_PATH),
+            "--expected-plan-json",
+            str(fixture_paths["expected_plan"]),
+        ],
+        cwd=REPO_ROOT,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=10,
+    )
+
+    assert result.returncode == 1
+    assert "plan-proof mode requires both JSON paths" in result.stderr
 
 
 @pytest.mark.parametrize(

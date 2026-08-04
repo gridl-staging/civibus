@@ -10,10 +10,56 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 VERIFIER="$REPO_ROOT/infra/scripts/verify_refresh_machine.sh"
 VERSION_URL="https://civibus.shareborough.com/api/health/version"
+PYTHON_BIN="${PYTHON_BIN:-python3}"
 
 fail() {
   printf 'FAIL: refresh Machine deploy: %s\n' "$1" >&2
   exit 1
+}
+
+sanitize_machine_config() {
+  local config_path="$1"
+  local sanitized_path
+  sanitized_path="${config_path}.sanitized"
+
+  # The verifier only needs this fixed-shape, non-secret subset. Persisting the
+  # raw display-config would risk uploading any future secret env additions in
+  # the evidence artifact.
+  PYTHONDONTWRITEBYTECODE=1 "$PYTHON_BIN" - "$config_path" <<'PY' >"$sanitized_path"
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+payload = json.loads(path.read_text(encoding="utf-8"))
+if not isinstance(payload, dict):
+    raise SystemExit("machine display-config payload must be a JSON object")
+
+environment = payload.get("env", {})
+if not isinstance(environment, dict):
+    raise SystemExit("machine display-config env must be a JSON object")
+
+allowed_env = (
+    "CIVIBUS_ENV",
+    "POSTGRES_HOST",
+    "POSTGRES_PORT",
+    "POSTGRES_USER",
+    "POSTGRES_DB",
+    "CIVIBUS_REFRESH_DATA_DIR",
+    "CIVIBUS_STARTUP_CANARY",
+)
+sanitized = {
+    "init": payload.get("init"),
+    "env": {key: environment[key] for key in allowed_env if key in environment},
+    "mounts": payload.get("mounts"),
+    "restart": payload.get("restart"),
+}
+print(json.dumps(sanitized, sort_keys=True))
+PY
+  mv "$sanitized_path" "$config_path" \
+    || fail "cannot replace sanitized machine config evidence"
 }
 
 require_empty_evidence_dir() {
@@ -83,6 +129,8 @@ capture_refresh_state() {
   flyctl machine status "$MACHINE_ID" -a "$APP_NAME" --display-config \
     >"$evidence_dir/${phase}_machine_config.json" \
     || fail "$phase machine display-config probe failed"
+  sanitize_machine_config "$evidence_dir/${phase}_machine_config.json" \
+    || fail "$phase machine display-config sanitization failed"
   flyctl machine status "$MACHINE_ID" -a "$APP_NAME" \
     >"$evidence_dir/${phase}_event_log.txt" \
     || fail "$phase machine event-log probe failed"
@@ -105,9 +153,43 @@ verify_refresh_state() {
     >"$evidence_dir/${phase}_verify_refresh_machine.txt"
 }
 
+write_expected_refresh_plan() {
+  local evidence_dir="$1"
+
+  PYTHONDONTWRITEBYTECODE=1 "$PYTHON_BIN" - "$REPO_ROOT" <<'PY' >"$evidence_dir/expected_refresh_plan.txt"
+from __future__ import annotations
+
+import json
+import sys
+
+sys.path.insert(0, sys.argv[1])
+from core.refresh.job_builders import build_refresh_plan
+
+print(
+    json.dumps(
+        {
+            "refresh_plan_job_keys": sorted(
+                job.key for job in build_refresh_plan(scope="federal")
+            ),
+        },
+        sort_keys=True,
+    )
+)
+PY
+}
+
+verify_image_refresh_plan() {
+  local evidence_dir="$1"
+
+  bash "$VERIFIER" \
+    --expected-plan-json "$evidence_dir/expected_refresh_plan.txt" \
+    --image-proof-json "$evidence_dir/image_proof.txt" \
+    >"$evidence_dir/image_plan_verify_refresh_machine.txt"
+}
+
 extract_single_pushed_image() {
   local deploy_output_path="$1"
-  python3 - "$deploy_output_path" <<'PY'
+  "$PYTHON_BIN" - "$deploy_output_path" <<'PY'
 from __future__ import annotations
 
 import re
@@ -132,7 +214,7 @@ PY
 
 resolve_single_digest_ref() {
   local image_tag="$1"
-  python3 - "$APP_NAME" "$image_tag" <<'PY'
+  "$PYTHON_BIN" - "$APP_NAME" "$image_tag" <<'PY'
 from __future__ import annotations
 
 import json
@@ -211,6 +293,7 @@ import json
 import sys
 
 from api.health_version import build_version_payload
+from core.refresh.job_builders import build_refresh_plan
 from core.refresh import runner as refresh_runner
 from domains.campaign_finance.ingest.candidate_summary_loader import update_candidate_person_link
 
@@ -237,6 +320,9 @@ print(
             "build_version": payload,
             "person_link_is_fillable": True,
             "repair_pair_alarm": True,
+            "refresh_plan_job_keys": sorted(
+                job.key for job in build_refresh_plan(scope="federal")
+            ),
         },
         sort_keys=True,
     )
@@ -249,7 +335,7 @@ verify_post_image_digest() {
   local machines_json="$1"
   local proven_digest_ref="$2"
 
-  python3 - "$machines_json" "$proven_digest_ref" <<'PY'
+  "$PYTHON_BIN" - "$machines_json" "$proven_digest_ref" <<'PY'
 from __future__ import annotations
 
 import json
@@ -302,6 +388,8 @@ main() {
   printf '%s\n' "$checkout_head_sha" >"$evidence_dir/checkout_head_sha.txt"
   printf '%s\n' "$dev_sha" >"$evidence_dir/dev_sha.txt"
   printf '%s\n' "$built_at" >"$evidence_dir/built_at.txt"
+  write_expected_refresh_plan "$evidence_dir" \
+    || fail "repository refresh plan proof failed"
 
   flyctl auth whoami >"$evidence_dir/fly_auth_whoami.txt" \
     || fail "flyctl authentication failed"
@@ -332,6 +420,8 @@ main() {
   printf '%s\n' "$digest_ref" >"$evidence_dir/image_digest.txt"
 
   prove_image_contents "$digest_ref" "$dev_sha" "$built_at" "$evidence_dir"
+  verify_image_refresh_plan "$evidence_dir" \
+    || fail "pushed image refresh plan verification failed"
 
   # flyctl resolves the tag to its digest; passing an @sha256 reference makes
   # flyctl append that digest again and the Machines API rejects the result.

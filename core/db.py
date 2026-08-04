@@ -840,7 +840,7 @@ def select_active_roster_portrait_for_person(
     *,
     person_id: UUID,
 ) -> PersonPortrait | None:
-    """Return the newest active portrait whose provenance points at a registered roster source."""
+    """Return the newest active roster portrait or federal people-enrichment portrait."""
     with conn.cursor() as cursor:
         cursor.execute(
             """
@@ -850,13 +850,21 @@ def select_active_roster_portrait_for_person(
             JOIN core.data_source AS ds ON ds.id = sr.data_source_id
             WHERE pp.person_id = %s
               AND pp.status = 'active'
-              AND sr.superseded_by IS NULL
-              AND ds.domain = 'civics'
-              AND CASE
-                    WHEN ds.notes ~ '^\\s*\\{'
-                    THEN COALESCE(ds.notes::jsonb->>'roster_source', 'false') = 'true'
-                    ELSE FALSE
-                  END
+              AND (
+                    (
+                        ds.domain = 'people_enrichment'
+                        AND ds.jurisdiction = 'federal/congress'
+                    )
+                    OR (
+                        sr.superseded_by IS NULL
+                        AND ds.domain = 'civics'
+                        AND CASE
+                              WHEN ds.notes ~ '^\\s*\\{'
+                              THEN COALESCE(ds.notes::jsonb->>'roster_source', 'false') = 'true'
+                              ELSE FALSE
+                            END
+                    )
+                  )
             ORDER BY pp.updated_at DESC, pp.created_at DESC, pp.id DESC
             LIMIT 1
             """,

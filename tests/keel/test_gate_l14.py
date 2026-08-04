@@ -63,8 +63,8 @@ def _passing_officeholder_gate(
     ("portrait_coverage_pct", "bio_coverage_pct", "expected_status"),
     [
         pytest.param(97.22, 92.9, "fail", id="portrait_one_official_below_floor"),
-        pytest.param(97.7, 53.62, "fail", id="bio_one_official_below_floor"),
-        pytest.param(97.40, 53.80, "pass", id="portrait_and_bio_exactly_at_floor"),
+        pytest.param(97.7, 92.02, "fail", id="bio_one_official_below_floor"),
+        pytest.param(97.40, 92.21, "pass", id="portrait_and_bio_exactly_at_floor"),
     ],
 )
 def test_federal_portrait_and_bio_coverage_floors(
@@ -74,7 +74,7 @@ def test_federal_portrait_and_bio_coverage_floors(
     expected_status: str,
 ) -> None:
     # Literals are the measured federal baseline, not derivations of the module constants:
-    # 525/539 portraits = 97.40 and 290/539 stored bios = 53.80, with 97.22 / 53.62 the
+    # 525/539 portraits = 97.40 and 497/539 stored bios = 92.21, with 97.22 / 92.02 the
     # one-official-below values. Re-deriving them from the constants would stay green for any
     # floor, so the pin is two-sided and behavioural instead — lowering a floor reds the
     # below-floor case, raising one reds the exact-at-floor case.

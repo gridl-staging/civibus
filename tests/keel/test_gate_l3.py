@@ -148,6 +148,7 @@ def test_repo_sources_registry_registers_federal_chartered_sources(tmp_path: Pat
         "census_tiger_congressional_district_listing",
         "openfec_election_dates_api",
         "fec_bulk_cn_ccl_races",
+        "civibus_donor_search_rollup",
     ]
     assert {source.current_state for source in federal_entry.sources} == {"prototyped"}
 
@@ -163,6 +164,7 @@ def test_repo_sources_registry_registers_federal_chartered_sources(tmp_path: Pat
         "census_tiger_congressional_district_listing",
         "openfec_election_dates_api",
         "fec_bulk_cn_ccl_races",
+        "civibus_donor_search_rollup",
     ]
     assert {source_result.status for source_result in result.source_results} == {"pass"}
 

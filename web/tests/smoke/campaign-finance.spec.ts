@@ -123,6 +123,7 @@ import {
   assertBreadcrumbNav,
   assertRobotsHead,
   assertSeoHead,
+  expectEarlierCycleOfficialTotalCaveat,
   expectNoBackendFailureStates
 } from "./smoke-helpers";
 
@@ -379,13 +380,13 @@ test.describe("campaign finance smoke", () => {
     await expect(page).toHaveTitle(SMOKE_OUT_OF_CYCLE_CANDIDATE_TITLE);
     await assertRobotsHead(page, null);
     await expect(page.getByRole("heading", { name: SMOKE_OUT_OF_CYCLE_CANDIDATE_NAME })).toBeVisible();
-    await expect(page.getByText("Earlier-cycle official total")).toBeVisible();
-    await expect(page.getByText("$1,234.56")).toBeVisible();
-    await expect(
-      page.getByText(
-        "Official FEC total from 2023-01-01 to 2024-12-31; not part of the 2026 selected-cycle totals."
-      )
-    ).toBeVisible();
+    const caveat = page.getByTestId("candidate-earlier-cycle-official-total");
+    await expectEarlierCycleOfficialTotalCaveat(caveat, {
+      coverageStartDate: "2023-01-01",
+      coverageEndDate: "2024-12-31",
+      expectCompleteSpecCopy: true
+    });
+    await expect(caveat).toContainText("$1,234.56");
   });
 
   test("/committee/[id] filing table paginates client-side without refetching the detail bundle", async ({

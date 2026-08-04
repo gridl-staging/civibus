@@ -132,6 +132,8 @@ _FULL_SCOPE_EXTRA_CURRENT_CANDIDATE_ROWS = 8
 _FULL_SCOPE_UNRELATED_CANDIDATE_ROWS = 300
 _FULL_SCOPE_HIGH_FREQUENCY_DONOR_COUNT = 220
 _FULL_SCOPE_WILLIAMS_TRANSACTION_COUNT = 30
+_FULL_SCOPE_FOCUSED_RECIPIENT_COUNT = 2
+_FULL_SCOPE_FOCUSED_FEC_AREA_CODE = "NC"
 _FULL_SCOPE_CURRENT_FEC_AREA_CODE = "T0"
 _FULL_SCOPE_EXTRA_FEC_AREA_CODE = "T9"
 _FULL_SCOPE_UNRELATED_FEC_AREA_CODE = "T8"
@@ -898,7 +900,11 @@ def _seed_current_federal_recipient_link(
             fec_candidate_id=_full_scope_fec_candidate_id(
                 office="S",
                 cycle=6,
-                area_code=_FULL_SCOPE_CURRENT_FEC_AREA_CODE,
+                area_code=(
+                    _FULL_SCOPE_FOCUSED_FEC_AREA_CODE
+                    if index < _FULL_SCOPE_FOCUSED_RECIPIENT_COUNT
+                    else _FULL_SCOPE_CURRENT_FEC_AREA_CODE
+                ),
                 index=index,
             ),
             name=person_name,

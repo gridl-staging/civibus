@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import psycopg
 import pytest
@@ -36,6 +36,7 @@ from core.types.python.models import (
     SourceRecord,
     compute_record_hash,
 )
+from domains.campaign_finance.jurisdictions.states.load_utils import ensure_data_source
 
 
 pytestmark = pytest.mark.integration
@@ -1378,3 +1379,135 @@ def test_select_active_roster_portrait_for_person_prefers_roster_sourced_active_
     assert selected is not None
     assert selected.id == roster_portrait_id
     assert selected.source_image_url == "https://example.org/roster.jpg"
+
+    with db_conn.cursor() as cursor:
+        cursor.execute(
+            "UPDATE core.source_record SET superseded_by = %s WHERE id = %s",
+            (legacy_civics_record.id, roster_record.id),
+        )
+
+    assert select_active_roster_portrait_for_person(db_conn, person_id=person.id) is None
+
+
+def test_select_active_roster_portrait_for_person_reuses_people_enrichment_portrait(
+    db_conn: psycopg.Connection,
+) -> None:
+    person = Person(
+        id=UUID("1e933608-fabb-4eb4-ab7d-9b95e9b22a20"),
+        canonical_name="Barrett, Tom",
+    )
+    if select_person(db_conn, person.id) is None:
+        insert_person(db_conn, person)
+
+    data_source = DataSource(
+        domain="people_enrichment",
+        jurisdiction="federal/congress",
+        name="people-enrichment-federal-congress",
+        source_url="https://civibus.shareborough.com/provenance/people-enrichment",
+    )
+    data_source_id = ensure_data_source(db_conn, data_source)
+    source_record_key = f"people-enrichment:federal:federal-congress:test-{uuid4()}"
+    source_record = SourceRecord(
+        data_source_id=data_source_id,
+        source_record_key=source_record_key,
+        source_url=None,
+        raw_fields={
+            "scope": "federal",
+            "jurisdiction": "federal/congress",
+            "person_id": str(person.id),
+        },
+        pull_date=datetime(2026, 7, 31, 12, 0, tzinfo=timezone.utc),
+        record_hash=compute_record_hash(
+            {
+                "scope": "federal",
+                "jurisdiction": "federal/congress",
+                "person_id": str(person.id),
+            }
+        ),
+    )
+    insert_source_record(db_conn, source_record)
+    portrait_id = insert_person_portrait(
+        db_conn,
+        PersonPortrait(
+            person_id=person.id,
+            source_record_id=source_record.id,
+            status="active",
+            rights_status="public_domain",
+            image_hash="3" * 64,
+            mime_type="image/jpeg",
+            width_px=450,
+            height_px=550,
+            source_image_url="https://unitedstates.github.io/images/congress/450x550/B001321.jpg",
+        ),
+    )
+
+    selected = select_active_roster_portrait_for_person(db_conn, person_id=person.id)
+
+    assert selected is not None
+    assert selected.id == portrait_id
+    assert selected.person_id == person.id
+    assert selected.source_record_id == source_record.id
+    assert selected.source_image_url == "https://unitedstates.github.io/images/congress/450x550/B001321.jpg"
+
+    with db_conn.cursor() as cursor:
+        cursor.execute(
+            "UPDATE core.person_portrait SET status = 'takedown_requested' WHERE id = %s",
+            (portrait_id,),
+        )
+
+    assert select_active_roster_portrait_for_person(db_conn, person_id=person.id) is None
+
+
+def test_select_active_roster_portrait_for_person_ignores_state_people_enrichment_portrait(
+    db_conn: psycopg.Connection,
+) -> None:
+    person = Person(
+        id=UUID("1e933608-fabb-4eb4-ab7d-9b95e9b22a20"),
+        canonical_name="Barrett, Tom",
+    )
+    if select_person(db_conn, person.id) is None:
+        insert_person(db_conn, person)
+
+    data_source = DataSource(
+        domain="people_enrichment",
+        jurisdiction="state/NC",
+        name="people-enrichment-nc-NC",
+        source_url="https://civibus.shareborough.com/provenance/people-enrichment",
+    )
+    data_source_id = ensure_data_source(db_conn, data_source)
+    source_record_key = f"people-enrichment:nc:NC:test-{uuid4()}"
+    source_record = SourceRecord(
+        data_source_id=data_source_id,
+        source_record_key=source_record_key,
+        source_url=None,
+        raw_fields={
+            "scope": "nc",
+            "state": "NC",
+            "person_id": str(person.id),
+        },
+        pull_date=datetime(2026, 8, 4, 12, 0, tzinfo=timezone.utc),
+        record_hash=compute_record_hash(
+            {
+                "scope": "nc",
+                "state": "NC",
+                "person_id": str(person.id),
+            }
+        ),
+    )
+    insert_source_record(db_conn, source_record)
+    insert_person_portrait(
+        db_conn,
+        PersonPortrait(
+            person_id=person.id,
+            source_record_id=source_record.id,
+            status="active",
+            rights_status="public_domain",
+            image_hash="5" * 64,
+            mime_type="image/jpeg",
+            width_px=450,
+            height_px=550,
+            source_image_url="https://images.example.org/nc-candidate.jpg",
+        ),
+    )
+
+    assert select_active_roster_portrait_for_person(db_conn, person_id=person.id) is None

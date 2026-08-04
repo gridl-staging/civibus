@@ -23,7 +23,7 @@ import { fetchCongressMembers, fetchUpcomingElectionTimeline } from "$lib/server
 import type { ApiClient } from "$lib/server/api/client";
 
 export const SITEMAP_API_PAGE_LIMIT = 200;
-export const SITEMAP_SHARD_SIZE = 10_000;
+export const SITEMAP_SHARD_SIZE = 7_000;
 export const SITEMAP_CACHE_CONTROL = "public, max-age=900";
 export const SITEMAP_PROTOCOL_NAMESPACE = "http://www.sitemaps.org/schemas/sitemap/0.9";
 

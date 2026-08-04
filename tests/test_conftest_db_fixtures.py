@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -739,3 +740,69 @@ def test_stage1_preflight_rolls_back_after_canary_collection_before_repairs(
     monkeypatch.setattr(root_conftest, "_bootstrap_missing_stage1_canaries", _assert_rollback_precedes_repairs)
 
     root_conftest._fail_if_stage1_bootstrap_drift_detected(mocked_connection)
+
+
+def test_merge_db_slice_probe_uses_canonical_password_default(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The `make test` preflight must connect the way DB-backed nodes connect.
+
+    Regression: the preflight used to call `core.db.get_connection()` directly,
+    so an answerable database with POSTGRES_PASSWORD unset was reported as
+    absent and the merge slice was shadow-skipped.
+    """
+    monkeypatch.delenv("POSTGRES_PASSWORD", raising=False)
+    monkeypatch.setenv("POSTGRES_HOST", "localhost")
+    monkeypatch.setenv("POSTGRES_PORT", "5599")
+    recorded_passwords: list[object] = []
+
+    def _record_and_connect(*, post_connect: object = None) -> MagicMock:
+        recorded_passwords.append(os.environ.get("POSTGRES_PASSWORD"))
+        return MagicMock()
+
+    monkeypatch.setattr(root_conftest, "get_connection", _record_and_connect)
+
+    root_conftest.merge_db_slice_probe()
+
+    assert recorded_passwords == ["civibus_dev"]
+    assert capsys.readouterr().out == "DB_HOST=localhost POSTGRES_PORT=5599\n"
+
+
+def test_merge_db_slice_probe_exits_non_zero_when_postgres_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Only canonical unavailability may take the Makefile's shadow branch."""
+    monkeypatch.setenv("POSTGRES_HOST", "localhost")
+    monkeypatch.setenv("POSTGRES_PORT", "5599")
+    get_connection = MagicMock(side_effect=RuntimeError(_POSTGRES_UNAVAILABLE))
+    monkeypatch.setattr(root_conftest, "get_connection", get_connection)
+    monkeypatch.setattr(root_conftest.time, "sleep", lambda _delay: None)
+
+    with pytest.raises(SystemExit) as excinfo:
+        root_conftest.merge_db_slice_probe()
+
+    assert excinfo.value.code == 1
+    assert get_connection.call_count == root_conftest._DB_CONNECTION_STARTUP_RETRY_ATTEMPTS
+    # The shadow marker is still greppable: the target reaches stdout before the
+    # probe gives up, so the warning names the nodes' actual connection target.
+    captured = capsys.readouterr()
+    assert captured.out == "DB_HOST=localhost POSTGRES_PORT=5599\n"
+
+    get_connection.reset_mock(side_effect=True)
+    get_connection.side_effect = RuntimeError("unexpected probe failure")
+    with pytest.raises(SystemExit) as excinfo:
+        root_conftest.merge_db_slice_probe()
+    assert excinfo.value.code == 2
+    assert "unexpected probe failure" in capsys.readouterr().err
+
+    monkeypatch.setattr(
+        root_conftest,
+        "build_connection_parameters",
+        MagicMock(side_effect=ValueError("invalid database configuration")),
+    )
+    with pytest.raises(SystemExit) as excinfo:
+        root_conftest.merge_db_slice_probe()
+    assert excinfo.value.code == 2
+    assert "invalid database configuration" in capsys.readouterr().err

@@ -149,7 +149,7 @@ def test_schema_sql_helper_uses_shared_compose_db_resolver():
     assert '"civibus_db"' not in schema_test
 
 
-def test_makefile_exports_and_targets_database_reset_command():
+def test_makefile_exports_and_targets_database_reset_command(tmp_path: Path):
     makefile = read_repo_text("Makefile")
 
     assert "POSTGRES_USER ?= civibus" in makefile
@@ -181,6 +181,51 @@ def test_makefile_exports_and_targets_database_reset_command():
     )
     assert default_result.returncode != 0
     assert f"COMPOSE_PROJECT_NAME=civibus_{expected_workspace_slug}" in default_result.stderr
+    psql_stub_dir = tmp_path / "stub_bin"
+    psql_stub_dir.mkdir()
+    psql_log = tmp_path / "psql_calls.log"
+    psql_stub = psql_stub_dir / "psql"
+    psql_stub.write_text(
+        '#!/bin/sh\nprintf "POSTGRES_PORT=%s ARGS=%s\\n" "$POSTGRES_PORT" "$*" >> "$PSQL_STUB_LOG"\nexit 0\n',
+        encoding="utf-8",
+    )
+    psql_stub.chmod(0o755)
+    db_reset_env = dict(default_env)
+    db_reset_env.update(
+        {
+            "PATH": f"{psql_stub_dir}:{db_reset_env['PATH']}",
+            "POSTGRES_PASSWORD": "civibus_dev",
+            "PSQL_STUB_LOG": str(psql_log),
+        }
+    )
+    default_reset_result = subprocess.run(
+        ["make", "--no-print-directory", "db-reset"],
+        cwd=REPO_ROOT,
+        env=db_reset_env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert default_reset_result.returncode != 0
+    assert "A non-empty POSTGRES_PORT must be supplied by environment or command line" in default_reset_result.stderr
+    assert f"COMPOSE_PROJECT_NAME=civibus_{expected_workspace_slug}" in default_reset_result.stderr
+    assert not psql_log.exists() or psql_log.read_text(encoding="utf-8") == ""
+    reserved_reset_env = dict(db_reset_env)
+    reserved_reset_env.update({"POSTGRES_PORT": "5475", "COMPOSE_PROJECT_NAME": "civibus_a10"})
+    reserved_reset_result = subprocess.run(
+        ["make", "--no-print-directory", "db-reset"],
+        cwd=REPO_ROOT,
+        env=reserved_reset_env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert reserved_reset_result.returncode != 0
+    assert "POSTGRES_PORT=5475 is reserved for test-integration-local" in reserved_reset_result.stderr
+    assert "COMPOSE_PROJECT_NAME=civibus_a10 may not bind it" in reserved_reset_result.stderr
+    assert not psql_log.exists() or psql_log.read_text(encoding="utf-8") == ""
     # `db-up` must keep the password prerequisite first and the exact recipe, but
     # additional prerequisites are allowed and one is now required: pinning the
     # prerequisite list exactly made adding the reserved-integration-port guard a
@@ -194,23 +239,36 @@ def test_makefile_exports_and_targets_database_reset_command():
     )
     assert re.search(r"^db-up:[^\n]*\breject-reserved-integration-port\b", makefile, re.M)
     assert re.search(
-        r"^db-down: require-postgres-password\n^\tdocker compose -f infra/docker-compose.yml down", makefile, re.M
+        r"^db-down: require-postgres-password(?: [\w-]+)*\n"
+        r"^\tdocker compose -f infra/docker-compose.yml down$",
+        makefile,
+        re.M,
     )
+    assert re.search(r"^db-down:[^\n]*\breject-unallocated-lane-port\b", makefile, re.M)
+    assert re.search(
+        r"^db-reset: require-postgres-password(?: [\w-]+)*\n"
+        r"^\t@set -e; if command -v psql >/dev/null 2>&1; then \\$",
+        makefile,
+        re.M,
+    )
+    assert re.search(r"^db-reset:[^\n]*\breject-unallocated-lane-port\b", makefile, re.M)
+    assert re.search(r"^db-reset:[^\n]*\breject-reserved-integration-port\b", makefile, re.M)
     # db-teardown is the destructive counterpart; db-down above stays on the
     # non-destructive `down` recipe (no --volumes). Full behavioral contract
     # lives in tests/ci/test_integration_contract_owner.py.
     assert re.search(
-        r"^db-teardown: require-postgres-password\n"
+        r"^db-teardown: require-postgres-password(?: [\w-]+)*\n"
         r"^\tdocker compose -f infra/docker-compose.yml down --volumes --remove-orphans",
         makefile,
         re.M,
     )
+    assert re.search(r"^db-teardown:[^\n]*\breject-unallocated-lane-port\b", makefile, re.M)
     db_sql_files_lines = re.findall(r"^override DB_SQL_FILES := .+$", makefile, re.M)
     assert len(db_sql_files_lines) == 1
     assert "domains/campaign_finance/schema/tables.sql" in db_sql_files_lines[0]
     assert "# shell and Python recipe bodies, so command-line overrides would become code execution." in makefile
-    assert "db-reset: require-postgres-password" in makefile
-    assert "db-reset: require-postgres-password\n\t@set -e; if command -v psql >/dev/null 2>&1; then \\" in makefile
+    assert re.search(r"^db-reset: require-postgres-password(?: [\w-]+)*$", makefile, re.M)
+    assert re.search(r"^db-reset:[^\n]*\n\t@set -e; if command -v psql >/dev/null 2>&1; then \\", makefile, re.M)
     assert "DROP SCHEMA IF EXISTS core CASCADE;" in makefile
     assert (
         "test:\n\tuv run --extra dev --extra entity-resolution pytest "

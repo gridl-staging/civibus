@@ -1177,3 +1177,19 @@ jurisdictions:
       - layer: docs
         scope: FEDERAL_fec_bulk_data
         path: docs/reference/research/fec-bulk-data.md
+  - source_id: civibus_donor_search_rollup
+    current_state: prototyped
+    coverage_boundary: Civibus-built donor-search aggregate over recent federal FEC
+      Schedule A transactions scoped to current federal officeholders; freshness is
+      represented by cf.donor_search_rollup_provenance.completed_at and the producer
+      donor-key fingerprint.
+    transitions:
+    - to_state: prototyped
+      recorded_on: 2026-08-04
+      rationale: Stage 4 registered the internally built donor-search rollup so refresh
+        metadata can observe aggregate freshness through core.data_source without a
+        production rebuild or manual production insert.
+      evidence_refs:
+      - layer: docs
+        scope: FEDERAL_donor_search_production_restore_2026_08_04
+        path: docs/live-state/2026_08_04_donor_search_production_restore.md

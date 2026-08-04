@@ -20,6 +20,7 @@ import {
   type KeyMetric,
   type OutsideSpendingPresentation
 } from "$lib/campaign-finance-detail/presentation";
+import { CANDIDATE_SUMMARY_SOURCE_LABELS } from "$lib/campaign-finance-detail/summary-source";
 
 type CandidateMoneyRegionState = CandidateMoneyActivityState | "backend_failure";
 type CandidateFundraisingRegionState = CandidateFundraisingActivityState | "backend_failure";
@@ -27,6 +28,8 @@ type CandidateFundraisingRegionState = CandidateFundraisingActivityState | "back
 export type CandidateEarlierCycleOfficialTotalPresentation = {
   label: string;
   period: string;
+  sourceToken: string;
+  sourceLabel: string;
   factRows: KeyMetric[];
 };
 
@@ -132,7 +135,9 @@ function buildEarlierCycleOfficialTotalRegions(
           ? null
           : {
               label: "Earlier-cycle official total",
-              period: `Official FEC total from ${officialTotal.coverage_start_date} to ${officialTotal.coverage_end_date}; not part of the ${summary.selected_cycle} selected-cycle totals.`,
+              period: `Official FEC total from ${officialTotal.coverage_start_date} to ${officialTotal.coverage_end_date}; shown because selected-cycle activity is absent. These values are not part of the ${summary.selected_cycle} selected-cycle totals.`,
+              sourceToken: officialTotal.summary_source,
+              sourceLabel: CANDIDATE_SUMMARY_SOURCE_LABELS[officialTotal.summary_source],
               factRows: [
                 { label: "Total receipts", value: formatCurrency(officialTotal.total_raised) },
                 {

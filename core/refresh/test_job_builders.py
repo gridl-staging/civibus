@@ -30,8 +30,11 @@ from api.test_campaign_finance_support import (
     seed_bulk_filing_breakdown_fixture,
 )
 from core.refresh import job_builders
+from core.refresh import donor_rollup
 from core.refresh.job_builders import build_refresh_plan
 from core.refresh.runner import RefreshJob, RunnerParameters, build_argument_parser
+from core.keel_gate_l3 import _load_registry
+from core.types.python.models import DataSource
 from domains.civics.loaders.ncsbe_candidate_listing import _NCSBE_DATA_SOURCE_NAME
 from domains.civics.loaders.ncsbe_results import collect_ncsbe_refresh_raw_csv_paths
 from domains.civics.loaders.official_rosters.source_templates import (
@@ -291,6 +294,7 @@ class TestDonorSearchRollupRefreshJobContract:
 
     def test_donor_rollup_job_metadata_matches_refresh_history_owned_aggregate(self) -> None:
         job = self._find_donor_rollup_job()
+        runtime_data_source = donor_rollup.donor_search_rollup_data_source()
 
         assert job.key == "federal-donor-search-rollup"
         assert job.domain == "campaign_finance"
@@ -298,6 +302,29 @@ class TestDonorSearchRollupRefreshJobContract:
         assert job.cadence == "weekly"
         assert job.data_source_names == ("civibus-donor-search-rollup",)
         assert job.refresh_history_key == "federal-donor-search-rollup"
+        assert isinstance(runtime_data_source, DataSource)
+        assert (
+            runtime_data_source.domain,
+            runtime_data_source.jurisdiction,
+            runtime_data_source.name,
+        ) == (
+            job.domain,
+            job.jurisdiction,
+            job.data_source_names[0],
+        )
+
+    def test_donor_rollup_source_is_declared_once_in_federal_l3_registry(self) -> None:
+        repo_root = Path(__file__).resolve().parents[2]
+        registry = _load_registry(repo_root / "sources.yaml")
+        federal_entries = [entry for entry in registry.jurisdictions if entry.scope == "FEDERAL"]
+        matching_sources = [
+            source
+            for entry in federal_entries
+            for source in entry.sources
+            if source.source_id == "civibus_donor_search_rollup"
+        ]
+
+        assert len(matching_sources) == 1
 
     def test_donor_rollup_run_callable_commits_and_closes_on_success(
         self,
@@ -305,17 +332,29 @@ class TestDonorSearchRollupRefreshJobContract:
     ) -> None:
         connection = MagicMock()
         build_result = MagicMock()
+        call_order: list[str] = []
         get_connection = MagicMock(return_value=connection)
-        rebuild_rollup = MagicMock(return_value=build_result)
+
+        def ensure_data_source(conn: object) -> UUID:
+            call_order.append("ensure")
+            assert conn is connection
+            return UUID("bb800000-0000-0000-0000-000000000001")
+
+        def rebuild_rollup(conn: object) -> object:
+            call_order.append("rebuild")
+            assert conn is connection
+            return build_result
+
         monkeypatch.setattr(job_builders, "get_connection", get_connection)
+        monkeypatch.setattr(job_builders.donor_rollup, "ensure_donor_search_rollup_data_source", ensure_data_source)
         monkeypatch.setattr(job_builders.donor_rollup, "rebuild_donor_search_rollup", rebuild_rollup)
         job = self._find_donor_rollup_job()
 
         result = job.run_callable()
 
         assert result is build_result
+        assert call_order == ["ensure", "rebuild"]
         get_connection.assert_called_once_with()
-        rebuild_rollup.assert_called_once_with(connection)
         connection.commit.assert_called_once_with()
         connection.rollback.assert_not_called()
         connection.close.assert_called_once_with()
@@ -329,6 +368,11 @@ class TestDonorSearchRollupRefreshJobContract:
         get_connection = MagicMock(return_value=connection)
         rebuild_rollup = MagicMock(side_effect=error)
         monkeypatch.setattr(job_builders, "get_connection", get_connection)
+        monkeypatch.setattr(
+            job_builders.donor_rollup,
+            "ensure_donor_search_rollup_data_source",
+            MagicMock(return_value=UUID("bb800000-0000-0000-0000-000000000001")),
+        )
         monkeypatch.setattr(job_builders.donor_rollup, "rebuild_donor_search_rollup", rebuild_rollup)
         job = self._find_donor_rollup_job()
 
@@ -336,7 +380,36 @@ class TestDonorSearchRollupRefreshJobContract:
             job.run_callable()
 
         get_connection.assert_called_once_with()
+        job_builders.donor_rollup.ensure_donor_search_rollup_data_source.assert_called_once_with(connection)
         rebuild_rollup.assert_called_once_with(connection)
+        connection.commit.assert_not_called()
+        connection.rollback.assert_called_once_with()
+        connection.close.assert_called_once_with()
+
+    def test_donor_rollup_run_callable_rolls_back_closes_and_reraises_when_data_source_ensure_fails(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        connection = MagicMock()
+        error = RuntimeError("ensure failed")
+        get_connection = MagicMock(return_value=connection)
+        ensure_data_source = MagicMock(side_effect=error)
+        rebuild_rollup = MagicMock()
+        monkeypatch.setattr(job_builders, "get_connection", get_connection)
+        monkeypatch.setattr(
+            job_builders.donor_rollup,
+            "ensure_donor_search_rollup_data_source",
+            ensure_data_source,
+        )
+        monkeypatch.setattr(job_builders.donor_rollup, "rebuild_donor_search_rollup", rebuild_rollup)
+        job = self._find_donor_rollup_job()
+
+        with pytest.raises(RuntimeError, match="ensure failed"):
+            job.run_callable()
+
+        get_connection.assert_called_once_with()
+        ensure_data_source.assert_called_once_with(connection)
+        rebuild_rollup.assert_not_called()
         connection.commit.assert_not_called()
         connection.rollback.assert_called_once_with()
         connection.close.assert_called_once_with()

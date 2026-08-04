@@ -6,6 +6,7 @@ import {
   expectActionToVisibleContentWithinBudget,
   expectCampaignFinanceKeyMetricsReady,
   expectCandidateKeyFinancialsReady,
+  expectEarlierCycleOfficialTotalCaveat,
   expectNoBackendFailureStates,
   expectNoPartyCommitteeInLinkedCommittees,
   parseRenderedMoneyLabel
@@ -69,6 +70,21 @@ type DonorRecipientSelection = {
   recipientLink: any;
   recipientName: string;
   resultRow: any;
+};
+
+type PublicFederalOfficial = {
+  office_name: string;
+  person_detail_path: string;
+  person_id: string;
+};
+
+type PublicFederalMoney = {
+  candidate_id: string;
+  fundraising_coverage?: { activity_state?: string };
+  out_of_cycle_official_total?: {
+    coverage_start_date?: string;
+    coverage_end_date?: string;
+  };
 };
 
 function memberProfileLink(row: any): any {
@@ -138,8 +154,52 @@ async function donorResultWithPersonRecipient(page: any): Promise<DonorRecipient
   throw new Error("Expected at least one donor result row with a /person/<id> recipient link");
 }
 
+async function discoverCurrentPresident(page: any): Promise<PublicFederalOfficial> {
+  const response = await page.request.get("/api/public/v1/federal/officials?chamber=Executive");
+  expect(response.ok()).toBe(true);
+  const officials = (await response.json()) as PublicFederalOfficial[];
+  const presidents = officials.filter(
+    (official) => official.office_name === "President of the United States"
+  );
+  expect(presidents).toHaveLength(1);
+  return presidents[0]!;
+}
+
 test.describe("production deployment smoke (read-only)", () => {
   test.skip(!isProductionSmokeMode, "production-mode only — set SMOKE_MODE=production and SMOKE_BASE_URL");
+
+  test("current President page identifies the earlier-cycle official-total window", async ({
+    page
+  }: {
+    page: any;
+  }) => {
+    const pageLoadErrors = capturePageLoadErrors(page);
+    const president = await discoverCurrentPresident(page);
+    const moneyResponse = await page.request.get(
+      `/api/public/v1/federal/officials/${encodeURIComponent(president.person_id)}/money`
+    );
+    expect(moneyResponse.ok()).toBe(true);
+    const money = (await moneyResponse.json()) as PublicFederalMoney;
+    expect(money.fundraising_coverage?.activity_state).toBe("out_of_cycle_official_total");
+    const officialTotal = money.out_of_cycle_official_total;
+    expect(officialTotal?.coverage_start_date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(officialTotal?.coverage_end_date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+
+    // Arrange navigation with the API-discovered current officeholder; no person name or ID is pinned.
+    const personPageResponse = await page.goto(`/candidate/${money.candidate_id}`);
+    expect(personPageResponse?.status()).toBe(200);
+
+    // Act/assert the already-deployed clauses. The source attribution ships in L11's second deploy.
+    await expectEarlierCycleOfficialTotalCaveat(
+      page.getByTestId("candidate-earlier-cycle-official-total"),
+      {
+        coverageStartDate: officialTotal!.coverage_start_date!,
+        coverageEndDate: officialTotal!.coverage_end_date!,
+        expectCompleteSpecCopy: false
+      }
+    );
+    await pageLoadErrors.assertNoErrors();
+  });
 
   test("congress directory renders real members and links to a person page with finance panels", async ({
     page

@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import sys
 from datetime import datetime, timezone
 from html.parser import HTMLParser
 from pathlib import Path
@@ -14,8 +15,11 @@ from typing import Literal, NoReturn
 
 from pydantic import BaseModel, ConfigDict
 
-from core.refresh.job_builders import build_refresh_plan
-from core.refresh.runner import RefreshJob, cadence_last_pull_owner, should_run_job
+REPO_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO_ROOT))
+
+from core.refresh.job_builders import build_refresh_plan  # noqa: E402
+from core.refresh.runner import RefreshJob, cadence_last_pull_owner, should_run_job  # noqa: E402
 
 
 Verdict = Literal["FULL", "PARTIAL", "NO_OP", "FAILED"]

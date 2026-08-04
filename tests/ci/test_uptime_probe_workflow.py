@@ -6,10 +6,10 @@ target endpoint, content-health issue handling, and fatal donor/deploy surface
 gates — so a future edit that silently loosens any of those gets caught at PR
 time.
 
-The workflow's *runtime* behavior cannot be exercised here (would require
-GitHub Actions infra), so these tests are deliberately limited to file-shape
-assertions. The failure mode they catch is "someone refactored the workflow
-and broke its dedup/cadence contract".
+The workflow's GitHub Actions runtime cannot be exercised here. Structural
+contracts inspect its parsed steps, while rendered-incident contracts execute
+only the extracted filing scripts with fake external commands. Together they
+catch workflow refactors that break issue identity, deduplication, or cadence.
 
 Restructured 2026-08-03: EVERY surface probe -- content health, donor search,
 and public deploy drift -- now feeds one issue-filing decision and one job
@@ -20,7 +20,10 @@ anything being filed. See `ROADMAP.md` `row_id: uptime-alarm-mute`.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
+import re
+import subprocess
 
 import pytest
 import yaml
@@ -63,6 +66,292 @@ def _step_by_name(steps: list[dict], name: str) -> dict:
         if step.get("name") == name:
             return step
     raise AssertionError(f"missing required step {name!r}")
+
+
+OPEN_ISSUE_STEP_NAME = "Open new uptime-incident issue (endpoint failing, no existing issue)"
+COMMENT_ISSUE_STEP_NAME = "Comment on existing issue (endpoint still failing)"
+_ACTIONS_EXPRESSION = re.compile(r"\$\{\{\s*([^}]+?)\s*\}\}")
+
+# Distinctive sentinels, so "the incident text carried the green content probe's
+# reading" fails loudly instead of hiding behind a value that could plausibly
+# come from another surface. Only the content probe exports `detail`, so the
+# green detail string can reach rendered issue text by exactly one route.
+CONTENT_RED_STATUS = "503"
+CONTENT_GREEN_STATUS = "200"
+CONTENT_RED_DETAIL = "content probe reported red"
+CONTENT_GREEN_DETAIL = "content_probe_green_detail_must_not_be_rendered"
+# Every shape the workflow renders `steps.probe.outputs.status` in: the title
+# (`returned ${STATUS} at`), the open body (`**Status:** ${STATUS}`), and the
+# comment (`Status: ${STATUS}`). No other surface probe exports a status output,
+# so any of these literals in a non-content incident is stale content-health
+# text, not the red surface's own reading.
+GREEN_CONTENT_STATUS_RENDERINGS = (
+    f"returned {CONTENT_GREEN_STATUS}",
+    f"**Status:** {CONTENT_GREEN_STATUS}",
+    f"Status: {CONTENT_GREEN_STATUS}",
+)
+# Every way the workflow currently names the content-health surface: the probed
+# path, the prose that opens the body, and the owner reference.
+CONTENT_HEALTH_IDENTITY_TERMS = (
+    "/api/health/content",
+    "content health probe",
+    "api/health_content.py",
+)
+DONOR_IDENTITY_TERMS = (
+    "donor_search_surface",
+    "web/src/routes/donors/+page.server.ts",
+    "api/routes/donors.py",
+    "api/queries/campaign_finance.py",
+)
+DRIFT_IDENTITY_TERMS = (
+    "public_deploy_drift",
+    ".github/workflows/deploy.yml",
+)
+DRIFT_TARGET_URLS = (
+    "https://probe.example/api/health/version",
+    "https://probe.example/version.json",
+)
+
+
+def _probe_run_context(*, content_red: bool, donor_red: bool, drift_red: bool) -> dict[str, str]:
+    base_url = "https://probe.example"
+    return {
+        "env.PROBE_BASE_URL": base_url,
+        "github.repository": "example/civibus",
+        "github.run_id": "4242",
+        "github.server_url": "https://github.example",
+        "secrets.GITHUB_TOKEN": "fake-token",
+        "steps.donor.outcome": "failure" if donor_red else "success",
+        "steps.drift.outcome": "failure" if drift_red else "success",
+        "steps.find.outputs.number": "17",
+        "steps.probe.outputs.detail": CONTENT_RED_DETAIL if content_red else CONTENT_GREEN_DETAIL,
+        "steps.probe.outputs.healthy": "false" if content_red else "true",
+        "steps.probe.outputs.status": CONTENT_RED_STATUS if content_red else CONTENT_GREEN_STATUS,
+        "steps.probe.outputs.target": f"{base_url}/api/health/content",
+    }
+
+
+def _assert_no_green_content_output(rendered_text: str, field: str) -> None:
+    """A non-content incident may carry no content-health identity, status, or detail.
+
+    The defect this pins is a partial fix: adding the red surface's identifiers
+    while still rendering the healthy content probe's title, status line, and
+    detail. That output tells an operator the content endpoint is the incident.
+    """
+    for term in CONTENT_HEALTH_IDENTITY_TERMS:
+        assert term not in rendered_text, (
+            f"{field} names the green content-health probe via {term!r}: {rendered_text!r}"
+        )
+    assert CONTENT_GREEN_DETAIL not in rendered_text, (
+        f"{field} carries the healthy content probe's detail: {rendered_text!r}"
+    )
+    for rendering in GREEN_CONTENT_STATUS_RENDERINGS:
+        assert rendering not in rendered_text, (
+            f"{field} carries the healthy content probe's status as {rendering!r}: {rendered_text!r}"
+        )
+
+
+def _resolve_actions_expressions(value: str, context: dict[str, str]) -> str:
+    def replace(match: re.Match[str]) -> str:
+        expression = match.group(1).strip()
+        assert expression in context, f"test harness needs a value for Actions expression {expression!r}"
+        return context[expression]
+
+    return _ACTIONS_EXPRESSION.sub(replace, value)
+
+
+def _write_fake_commands(bin_dir: Path) -> None:
+    bin_dir.mkdir()
+    gh_path = bin_dir / "gh"
+    gh_path.write_text(
+        "#!/bin/sh\n"
+        "{\n"
+        '  for argument in "$@"; do\n'
+        "    printf '%s\\000' \"$argument\"\n"
+        "  done\n"
+        "  printf '\\000'\n"
+        '} >> "$GH_CAPTURE_PATH"\n',
+        encoding="utf-8",
+    )
+    gh_path.chmod(0o755)
+
+    date_path = bin_dir / "date"
+    date_path.write_text("#!/bin/sh\nprintf '%s\\n' '2026-08-03T20:00:00Z'\n", encoding="utf-8")
+    date_path.chmod(0o755)
+
+
+def _execute_issue_step(
+    workflow_steps: list[dict],
+    tmp_path: Path,
+    step_name: str,
+    context: dict[str, str],
+) -> list[str]:
+    """Execute only an issue text-rendering script with all external commands faked."""
+    step = _step_by_name(workflow_steps, step_name)
+    run_dir = tmp_path / step_name.split()[0].lower()
+    fake_bin = run_dir / "bin"
+    run_dir.mkdir()
+    _write_fake_commands(fake_bin)
+    capture_path = run_dir / "gh_calls.nul"
+
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "GH_CAPTURE_PATH": str(capture_path),
+            "PATH": f"{fake_bin}{os.pathsep}{environment['PATH']}",
+            "PROBE_BASE_URL": context["env.PROBE_BASE_URL"],
+        }
+    )
+    for name, value in step.get("env", {}).items():
+        environment[name] = _resolve_actions_expressions(str(value), context)
+
+    script = _resolve_actions_expressions(step["run"], context)
+    completed = subprocess.run(
+        ["bash", "-euo", "pipefail", "-c", script],
+        cwd=run_dir,
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert completed.returncode == 0, (
+        f"extracted script for {step_name!r} failed in the hermetic harness:\n"
+        f"stdout={completed.stdout}\nstderr={completed.stderr}"
+    )
+
+    calls = [
+        [argument.decode("utf-8") for argument in call.split(b"\0")]
+        for call in capture_path.read_bytes().split(b"\0\0")
+        if call
+    ]
+    issue_action = "create" if step_name == OPEN_ISSUE_STEP_NAME else "comment"
+    matching_calls = [args for args in calls if args[:2] == ["issue", issue_action]]
+    assert len(matching_calls) == 1, f"expected one `gh issue {issue_action}` call, got {calls}"
+    return matching_calls[0]
+
+
+def _option_value(arguments: list[str], option: str) -> str:
+    option_index = arguments.index(option)
+    return arguments[option_index + 1]
+
+
+def _render_incident_texts(
+    workflow_steps: list[dict],
+    tmp_path: Path,
+    *,
+    content_red: bool,
+    donor_red: bool,
+    drift_red: bool,
+) -> tuple[str, str, str]:
+    context = _probe_run_context(content_red=content_red, donor_red=donor_red, drift_red=drift_red)
+    open_arguments = _execute_issue_step(workflow_steps, tmp_path, OPEN_ISSUE_STEP_NAME, context)
+    comment_arguments = _execute_issue_step(workflow_steps, tmp_path, COMMENT_ISSUE_STEP_NAME, context)
+    return (
+        _option_value(open_arguments, "--title"),
+        _option_value(open_arguments, "--body"),
+        _option_value(comment_arguments, "--body"),
+    )
+
+
+def test_donor_only_incident_rendering_names_donor_surface(workflow_steps: list[dict], tmp_path: Path) -> None:
+    """A donor-only outage must not be rendered as a content-health outage."""
+    title, open_body, comment_body = _render_incident_texts(
+        workflow_steps,
+        tmp_path,
+        content_red=False,
+        donor_red=True,
+        drift_red=False,
+    )
+
+    for field, rendered_text in (
+        ("title", title),
+        ("open body", open_body),
+        ("comment body", comment_body),
+    ):
+        assert "donor_search_surface" in rendered_text, f"{field} does not name the red donor surface"
+        _assert_no_green_content_output(rendered_text, field)
+        for term in DRIFT_IDENTITY_TERMS:
+            assert term not in rendered_text, f"{field} names the green drift probe via {term!r}"
+    assert "https://probe.example/donors?q=smith&by=name" in open_body
+    for owner in DONOR_IDENTITY_TERMS[1:]:
+        assert owner in open_body
+    assert "https://github.example/example/civibus/actions/runs/4242" in comment_body
+
+
+def test_drift_only_incident_rendering_names_deploy_drift_surface(workflow_steps: list[dict], tmp_path: Path) -> None:
+    """A drift-only outage must not be rendered as a content-health outage."""
+    title, open_body, comment_body = _render_incident_texts(
+        workflow_steps,
+        tmp_path,
+        content_red=False,
+        donor_red=False,
+        drift_red=True,
+    )
+
+    for field, rendered_text in (
+        ("title", title),
+        ("open body", open_body),
+        ("comment body", comment_body),
+    ):
+        assert "public_deploy_drift" in rendered_text, f"{field} does not name the red drift surface"
+        _assert_no_green_content_output(rendered_text, field)
+        for term in DONOR_IDENTITY_TERMS:
+            assert term not in rendered_text, f"{field} names the green donor probe via {term!r}"
+    assert ".github/workflows/deploy.yml" in open_body
+    for target_url in DRIFT_TARGET_URLS:
+        assert target_url in open_body
+        assert target_url in comment_body
+    assert "https://github.example/example/civibus/actions/runs/4242" in comment_body
+
+
+def test_content_only_incident_rendering_preserves_content_health_details(
+    workflow_steps: list[dict], tmp_path: Path
+) -> None:
+    """Preserve the useful existing content-health incident details."""
+    context = _probe_run_context(content_red=True, donor_red=False, drift_red=False)
+    open_arguments = _execute_issue_step(workflow_steps, tmp_path, OPEN_ISSUE_STEP_NAME, context)
+    title = _option_value(open_arguments, "--title")
+    body = _option_value(open_arguments, "--body")
+
+    assert "/api/health/content" in title
+    assert CONTENT_RED_STATUS in title
+    assert "content health probe" in body
+    assert "https://probe.example/api/health/content" in body
+    assert "api/health_content.py + api/main.py:186" in body
+    assert f"**Status:** {CONTENT_RED_STATUS}" in body
+    # The detail output does reach the rendered body, which is what makes the
+    # green-detail exclusion in `_assert_no_green_content_output` a live guard
+    # rather than an assertion about a string the workflow never renders.
+    assert CONTENT_RED_DETAIL in body
+    for green_probe in DONOR_IDENTITY_TERMS + DRIFT_IDENTITY_TERMS:
+        assert green_probe not in title, f"title names the green {green_probe!r}"
+        assert green_probe not in body, f"body names the green {green_probe!r}"
+
+
+def test_two_red_surface_incident_rendering_names_only_current_failures(
+    workflow_steps: list[dict], tmp_path: Path
+) -> None:
+    title, open_body, comment_body = _render_incident_texts(
+        workflow_steps,
+        tmp_path,
+        content_red=False,
+        donor_red=True,
+        drift_red=True,
+    )
+
+    for field, rendered_text in (
+        ("title", title),
+        ("open body", open_body),
+        ("comment body", comment_body),
+    ):
+        assert "donor_search_surface" in rendered_text, f"{field} does not name the red donor surface"
+        assert "public_deploy_drift" in rendered_text, f"{field} does not name the red drift surface"
+        _assert_no_green_content_output(rendered_text, field)
+    for owner in DONOR_IDENTITY_TERMS[1:]:
+        assert owner in open_body
+    assert ".github/workflows/deploy.yml" in open_body
+    assert "https://github.example/example/civibus/actions/runs/4242" in comment_body
 
 
 def test_workflow_file_exists() -> None:
@@ -140,12 +429,19 @@ def test_surface_probes_are_non_fatal_only_where_the_gate_covers_them(workflow_s
         )
 
 
-def test_workflow_runs_on_5_minute_cron(workflow_parsed: dict) -> None:
+def test_workflow_declares_best_effort_four_hour_cadence(workflow_parsed: dict, workflow_text: str) -> None:
     # PyYAML parses bare `on:` as Python True. Use both forms to be safe.
     on_block = workflow_parsed.get("on") or workflow_parsed.get(True)
     assert on_block is not None, "workflow has no `on:` trigger block"
-    schedules = on_block["schedule"]
-    assert any(s["cron"] == "*/5 * * * *" for s in schedules), f"expected '*/5 * * * *' cron, found {schedules}"
+    assert on_block["schedule"] == [{"cron": "0 */4 * * *"}]
+
+    header = " ".join(line.removeprefix("#").strip() for line in workflow_text.split("on:", maxsplit=1)[0].splitlines())
+    assert "requests a four-hour GitHub scheduled uptime probe" in header
+    assert "GitHub scheduled workflows are best-effort" in header
+    assert "n=11" in header
+    assert "64-216 minutes" in header
+    assert "not a guaranteed delivery interval" in header
+    assert "no five-minute SLA or detection guarantee" in header
 
 
 def test_workflow_uses_probe_base_url_as_single_source_of_truth(workflow_parsed: dict, workflow_text: str) -> None:

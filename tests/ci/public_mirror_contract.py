@@ -138,6 +138,7 @@ PUBLIC_MIRROR_TEST_CLASSIFICATIONS: tuple[PublicMirrorTestClassification, ...] =
             "tests/ci/test_lane_authoring_hazard_checker.py::test_newly_introduced_hazard_reds_the_ratchet",
             "tests/ci/test_lane_authoring_hazard_checker.py::test_modified_grandfathered_file_with_unchanged_findings_stays_green",
             "tests/ci/test_lane_authoring_hazard_checker.py::test_zero_changed_files_path_still_checks_the_baseline",
+            "tests/ci/test_lane_authoring_hazard_checker.py::test_direct_mode_baselines_cover_current_real_corpus",
             "tests/ci/test_lane_authoring_hazard_checker.py::test_changed_checklist_paths_include_untracked_scratch_lanes",
             "tests/ci/test_lane_authoring_hazard_checker.py::test_file_without_a_stages_heading_is_not_a_direct_mode_hit",
             "tests/ci/test_lane_authoring_hazard_checker.py::test_slice_boundary_matches_direct_mode_semantics",
@@ -359,6 +360,11 @@ DEV_REPO_ONLY_CLASSIFICATIONS_BY_NODE_ID = {
     for entry in validate_public_mirror_classifications()
     if entry.category == PublicMirrorCategory.DEV_REPO_ONLY
 }
+
+# Non-collapse floor for dev-repo-only/public-mirror classification metadata.
+# This guards accidental registry truncation without making every added private
+# contract test require a literal bump in the consumer.
+MINIMUM_PUBLIC_CLASSIFICATION_TOTAL = 141
 
 
 def expected_dev_repo_only_failure_nodes(selected_node_ids: Collection[str]) -> set[str]:

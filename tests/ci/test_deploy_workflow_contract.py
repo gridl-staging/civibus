@@ -1,6 +1,7 @@
 """Deploy workflow contract tests for the Fly production deploy lane."""
 
 from pathlib import Path
+import re
 import shlex
 import tomllib
 
@@ -87,30 +88,44 @@ REFRESH_MACHINE_STEP_NAME = "Deploy refresh machine"
 PRE_DEPLOY_CAPTURE_STEP_NAME = "Capture pre-deploy serving images"
 ROLLBACK_STEP_NAME = "Roll back serving apps on failed production verification"
 ROLLBACK_SCRIPT = "infra/scripts/rollback_serving_apps.sh"
-SERVING_DEPLOY_STEP_NAMES = (
-    "Deploy API to Fly",
-    "Deploy web to Fly",
-    "Deploy Caddy to Fly",
-)
-# The steps that decide whether production is actually serving what we just
-# built. A failure in any of them means users are looking at a broken site.
+SERVING_DEPLOY_STEP_NAMES = ("Deploy API to Fly", "Deploy web to Fly", "Deploy Caddy to Fly")
 PRODUCTION_VERIFICATION_STEP_NAMES = (
     "Verify public deploy serves built dev SHA",
     "Run deployed surface parity gate",
     "Run production smoke gate",
 )
-# Step ids the rollback condition must consult. `smoke_deps` (npm ci) is
-# deliberately absent: a tooling failure while installing Playwright says
-# nothing about production health, and rolling back on it would undo a deploy
-# that already passed SHA and parity verification.
-ROLLBACK_TRIGGER_STEP_IDS = (
-    "deploy_api",
-    "deploy_web",
-    "deploy_caddy",
-    "verify_sha",
-    "parity_gate",
-    "smoke_gate",
+REFRESH_BUILD_IDENTITY_STEP_IDS = ("deploy_api", "deploy_web", "deploy_caddy", "verify_sha")
+REFRESH_CONTENT_EVIDENCE_STEP_IDS = ("parity_gate", "smoke_gate")
+# The rollback consults both refresh owner sets; derive it so the six ids keep one home (line ~546 pins it).
+ROLLBACK_TRIGGER_STEP_IDS = (*REFRESH_BUILD_IDENTITY_STEP_IDS, *REFRESH_CONTENT_EVIDENCE_STEP_IDS)
+ROLLBACK_STEP_ID = "rollback"
+REFRESH_OPTIONAL_GUARD_STEP_IDS = ("pre_deploy",)
+REFRESH_GATE_MODELED_STEP_IDS = (*ROLLBACK_TRIGGER_STEP_IDS, *REFRESH_OPTIONAL_GUARD_STEP_IDS, ROLLBACK_STEP_ID)
+# Either lead keeps GitHub's implicit success() from skipping the step after a red content probe.
+# `!cancelled()` is the stricter of the two because it also stops a cancelled run from deploying.
+REFRESH_GATE_STATUS_FUNCTION_LEADS = ("always()", "!cancelled()")
+REFRESH_BARE_STATUS_CONDITIONS = frozenset(
+    {f"${{{{ {lead} }}}}" for lead in REFRESH_GATE_STATUS_FUNCTION_LEADS} | set(REFRESH_GATE_STATUS_FUNCTION_LEADS)
 )
+
+
+def _refresh_gate_condition(
+    lead: str = "always()", *, step_ids: tuple[str, ...] = REFRESH_BUILD_IDENTITY_STEP_IDS
+) -> str:
+    """Build a workflow-shaped refresh gate condition for checker self-checks."""
+    predicates = " && ".join(f"steps.{step_id}.outcome == 'success'" for step_id in step_ids)
+    return f"${{{{ {lead} && {predicates} }}}}"
+
+
+REFRESH_GATE_TEST_CONDITION = _refresh_gate_condition()
+# Every rejected shape the checker must red on, keyed by the message fragment that names the defect.
+_REJECTED_REFRESH_CONDITIONS = {
+    "must lead with one of": _refresh_gate_condition("success()"),
+    "unsupported syntax": REFRESH_GATE_TEST_CONDITION.replace(" }}", " && true }}"),
+    "misordered parentheses": REFRESH_GATE_TEST_CONDITION.replace(" && steps.deploy_web", ") && (steps.deploy_web", 1),
+    "unbalanced parentheses": REFRESH_GATE_TEST_CONDITION.replace("always() && ", "always() && (", 1),
+    "does not model": _refresh_gate_condition(step_ids=(*REFRESH_BUILD_IDENTITY_STEP_IDS, "install_smoke_deps")),
+}
 REFRESH_DEPLOY_INVOCATION = (
     'bash infra/scripts/deploy_refresh_machine.sh --evidence-dir "$evidence" '
     '--dev-sha "${{ steps.provenance.outputs.dev_sha }}"'
@@ -121,140 +136,131 @@ REFRESH_EVIDENCE_ARTIFACT_ACTION = "actions/upload-artifact@ea165f8d65b6e75b5404
 
 
 def _assert_single_delegated_refresh_deploy(steps: list[dict]) -> None:
-    """Whole-workflow single-delegation contract for the refresh machine deploy.
-
-    Scoped to the entire parsed step list, not just the first matching step, so a
-    duplicated destructive deploy step or a stray workflow-wide verifier call is caught.
-    """
     step_names = [step.get("name") for step in steps]
     all_scripts = "\n".join(step.get("run", "") for step in steps if "run" in step)
-
-    assert step_names.count(REFRESH_MACHINE_STEP_NAME) == 1, (
-        "exactly one refresh-machine deploy step is allowed across the whole workflow"
-    )
-    assert all_scripts.count(REFRESH_DEPLOY_INVOCATION) == 1, (
-        "exactly one workflow-wide deploy_refresh_machine.sh invocation is allowed"
-    )
-    assert REFRESH_VERIFIER_SCRIPT not in all_scripts, (
-        "verify_refresh_machine.sh is owned by the deploy script, not workflow YAML"
-    )
+    assert step_names.count(REFRESH_MACHINE_STEP_NAME) == 1, "exactly one refresh-machine deploy step is allowed"
+    duplicate_deploy_error = "exactly one deploy_refresh_machine.sh invocation is allowed"
+    assert all_scripts.count(REFRESH_DEPLOY_INVOCATION) == 1, duplicate_deploy_error
+    verifier_owner_error = "verify_refresh_machine.sh is owned by the deploy script, not YAML"
+    assert REFRESH_VERIFIER_SCRIPT not in all_scripts, verifier_owner_error
 
 
 def _assert_refresh_deploy_uses_manifest_dev_sha(steps: list[dict]) -> None:
     refresh_steps = [step for step in steps if step.get("name") == REFRESH_MACHINE_STEP_NAME]
     assert len(refresh_steps) == 1
-    refresh_script = refresh_steps[0]["run"]
-    assert refresh_script.count(REFRESH_DEPLOY_INVOCATION) == 1, (
-        "refresh deploy must receive the validated manifest dev SHA"
-    )
+    manifest_sha_error = "refresh deploy must receive the validated manifest dev SHA"
+    assert refresh_steps[0]["run"].count(REFRESH_DEPLOY_INVOCATION) == 1, manifest_sha_error
 
 
 def _assert_production_verification_precedes_refresh_machine(steps: list[dict]) -> None:
-    """Production verification must not be reachable only through the refresh-machine step.
-
-    GitHub Actions skips every following step once one fails, so ordering *is*
-    the gate here — no `if:` is involved. On 2026-08-03 the refresh-machine
-    deploy failed in run 30823303168 and took `Verify public deploy serves built
-    dev SHA`, `Run deployed surface parity gate`, and `Run production smoke
-    gate` down with it as `skipped`. API, web, and caddy had already shipped, so
-    the pipeline published a crash-looping API and then skipped every check that
-    would have noticed.
-
-    `civibus-refresh` serves no user traffic. It is the least important thing in
-    this workflow and it must therefore be deployed last, after the surfaces
-    that users actually load have been proven healthy.
-    """
     step_names = [step.get("name") for step in steps]
     assert REFRESH_MACHINE_STEP_NAME in step_names, "refresh-machine deploy step is required"
     refresh_position = step_names.index(REFRESH_MACHINE_STEP_NAME)
-
     for verification_step_name in PRODUCTION_VERIFICATION_STEP_NAMES:
         assert verification_step_name in step_names, f"missing verification step {verification_step_name!r}"
-        assert step_names.index(verification_step_name) < refresh_position, (
-            f"{verification_step_name!r} runs after {REFRESH_MACHINE_STEP_NAME!r}, so a refresh-machine "
-            "failure silently skips production verification"
-        )
+        ordering_error = f"{verification_step_name!r} after refresh silently skips production verification"
+        assert step_names.index(verification_step_name) < refresh_position, ordering_error
 
 
 def _assert_rollback_is_gated_on_serving_outcomes(steps: list[dict]) -> None:
-    """The rollback must fire for serving failures and only for serving failures.
-
-    A bare `if: ${{ failure() }}` is wrong in both directions: it would roll
-    production back when the refresh machine fails (undoing a healthy deploy),
-    and it reads as if every failure is a production failure. The condition must
-    name the serving and verification step outcomes explicitly.
-    """
     step_names = [step.get("name") for step in steps]
     assert ROLLBACK_STEP_NAME in step_names, "a rollback step is required for failed production verification"
-    rollback_step = steps[step_names.index(ROLLBACK_STEP_NAME)]
-    condition = rollback_step.get("if", "")
-
+    condition = steps[step_names.index(ROLLBACK_STEP_NAME)].get("if", "")
     assert condition, "rollback step must carry an explicit `if:` condition"
-    assert condition.strip() not in {"${{ failure() }}", "failure()"}, (
-        "a bare failure() condition would roll production back when the refresh machine fails"
-    )
+    bare_failure_error = "bare failure() condition would roll back on refresh failure"
+    assert condition.strip() not in {"${{ failure() }}", "failure()"}, bare_failure_error
     assert REFRESH_MACHINE_STEP_NAME not in condition
-    assert "steps.deploy_refresh" not in condition, (
-        "the refresh machine serves no user traffic; its outcome must not trigger a production rollback"
-    )
+    refresh_rollback_error = "the refresh machine serves no user traffic; must not trigger rollback"
+    assert "steps.deploy_refresh" not in condition, refresh_rollback_error
     for step_id in ROLLBACK_TRIGGER_STEP_IDS:
         assert f"steps.{step_id}.outcome" in condition, f"rollback condition must consult steps.{step_id}.outcome"
     # The rollback is only meaningful if we actually captured a target.
     assert "steps.pre_deploy.outcome == 'success'" in condition
 
 
+_REFRESH_OUTCOME_PREDICATE = re.compile(
+    r"steps\.([a-z_][a-z0-9_]*)\.outcome\s*==\s*'(success|failure|cancelled|skipped)'"
+)
+
+
+def _refresh_condition_matches_outcomes(condition: str, outcomes: dict[str, str]) -> bool:
+    """Evaluate only the conjunction grammar accepted for the refresh gate."""
+    expression = condition.strip()
+    if expression.startswith("${{") and expression.endswith("}}"):
+        expression = expression[3:-2].strip()
+    lead = next((fn for fn in REFRESH_GATE_STATUS_FUNCTION_LEADS if expression.startswith(fn)), None)
+    # A leading status function keeps content failures from implying success().
+    assert lead is not None, f"refresh condition must lead with one of {REFRESH_GATE_STATUS_FUNCTION_LEADS}"
+    predicate_values: list[bool] = []
+
+    def replace_predicate(match: re.Match[str]) -> str:
+        step_id, expected_outcome = match.groups()
+        # A step this contract does not model is a fixture gap, not a broken workflow condition.
+        fixture_gap_error = f"refresh condition names step {step_id!r} the contract does not model; add to fixture"
+        assert step_id in outcomes, fixture_gap_error
+        predicate_values.append(outcomes[step_id] == expected_outcome)
+        return "PREDICATE"
+
+    remainder = _REFRESH_OUTCOME_PREDICATE.sub(replace_predicate, expression[len(lead) :])
+    assert predicate_values, "refresh deploy condition must compare named step outcomes"
+    syntax_error = f"unsupported syntax after {REFRESH_GATE_STATUS_FUNCTION_LEADS}; use && and parens"
+    assert re.fullmatch(r"(?:\s*&&\s*\(*\s*PREDICATE\s*\)*)+", remainder), syntax_error
+    parenthesis_depth = 0
+    for character in remainder:
+        if character == "(":
+            parenthesis_depth += 1
+        elif character == ")":
+            parenthesis_depth -= 1
+        assert parenthesis_depth >= 0, "refresh deploy condition has misordered parentheses"
+    assert parenthesis_depth == 0, "refresh deploy condition has unbalanced parentheses"
+    return all(predicate_values)
+
+
+def _assert_refresh_deploy_is_gated_on_build_identity_not_content_outcomes(
+    steps: list[dict], outcomes: dict[str, str], *, expected: bool
+) -> None:
+    step_names = [step.get("name") for step in steps]
+    assert REFRESH_MACHINE_STEP_NAME in step_names, "refresh-machine deploy step is required"
+    condition = steps[step_names.index(REFRESH_MACHINE_STEP_NAME)].get("if", "")
+    assert condition, "refresh deploy step must carry an explicit if condition"
+    stripped_condition = condition.strip()
+    bare_status_error = "bare always()/!cancelled() condition ignores broken serving identity"
+    assert stripped_condition not in REFRESH_BARE_STATUS_CONDITIONS, bare_status_error
+    assert stripped_condition not in {"${{ success() }}", "success()"}, "bare success() skips refresh after content red"
+    for step_id in REFRESH_BUILD_IDENTITY_STEP_IDS:
+        assert f"steps.{step_id}.outcome" in condition, f"refresh gate must consult steps.{step_id}.outcome directly"
+    # Explicit Stage-1 decision: the rollback fires on the content-red parity/smoke failures the
+    # refresh writer must survive, so its outcome must not consult the gate.
+    rollback_gate_error = "refresh gate must not consult the rollback outcome (content-red)"
+    assert f"steps.{ROLLBACK_STEP_ID}" not in condition, rollback_gate_error
+    actual = _refresh_condition_matches_outcomes(condition, outcomes)
+    assert actual is expected, f"refresh condition evaluated {actual} for {outcomes}; expected {expected}"
+
+
 API_DEPLOY_STEP_NAME = "Deploy API to Fly"
-# The content-health probe compares against this byte-for-byte. api/main.py
-# serves JSONResponse(content={"healthy": True}), which encodes with compact
-# separators as exactly this string; a byte-exact match refuses to be satisfied
-# by a differently whitespaced or reordered body.
 API_HEALTHY_CONTENT_LITERAL = '{"healthy":true}'
 
 
 def _assert_step_probes_api_public_readiness(step: dict) -> None:
-    """A serving-deploy step must prove public API readiness after its own ``flyctl deploy``.
-
-    ``flyctl deploy`` returns once the Fly release is ``started`` — before
-    ``api/canary_check.py`` has finished proving the API healthy — so the deploy
-    step must observe the public API itself: the built dev SHA at
-    ``/api/health/version`` and byte-exact ``{"healthy":true}`` at
-    ``/api/health/content`` in the SAME retry attempt, before web/caddy deploy
-    and the later whole-surface gates proceed.
-    """
     script = step.get("run", "")
     lines = script.splitlines()
     deploy_indexes = [index for index, line in enumerate(lines) if line.strip().startswith("flyctl deploy")]
     assert deploy_indexes, f"{step.get('name')!r} must run `flyctl deploy`"
     probe_after = "\n".join(lines[deploy_indexes[-1] + 1 :])
-
-    assert 'if [[ -z "${PROD_SMOKE_BASE_URL}" ]]' in probe_after, (
-        "the post-deploy probe must guard on an empty PROD_SMOKE_BASE_URL, matching the drift gate"
-    )
-    assert 'expected_sha="${{ steps.provenance.outputs.dev_sha }}"' in probe_after, (
-        "the probe must pin the built dev SHA from the validated provenance output"
-    )
-    assert "${PROD_SMOKE_BASE_URL%/}/api/health/version" in probe_after, (
-        "the probe must read the public /api/health/version endpoint with normalized base URL"
-    )
-    assert "${PROD_SMOKE_BASE_URL%/}/api/health/content" in probe_after, (
-        "the probe must read the public /api/health/content endpoint with normalized base URL"
-    )
+    assert 'if [[ -z "${PROD_SMOKE_BASE_URL}" ]]' in probe_after, "probe must guard on empty PROD_SMOKE_BASE_URL"
+    assert 'expected_sha="${{ steps.provenance.outputs.dev_sha }}"' in probe_after, "probe must pin the built dev SHA"
+    assert "${PROD_SMOKE_BASE_URL%/}/api/health/version" in probe_after, "probe must read public /api/health/version"
+    assert "${PROD_SMOKE_BASE_URL%/}/api/health/content" in probe_after, "probe must read public /api/health/content"
     assert "seq 1 18" in probe_after, "the probe must reuse the seq 1 18 retry shape"
     assert "sleep 5" in probe_after, "the probe must reuse the sleep 5 retry cadence"
     assert "curl -fsS" in probe_after, "the probe must fail closed on non-2xx responses with curl -fsS"
     assert "exit 1" in probe_after, "the probe must fail the step when readiness is never observed"
-
-    # The version-SHA match and the byte-exact content-health body must gate the
-    # SAME retry-loop success branch; two independent checks could each pass on a
-    # different attempt and wave through an API that was never healthy at once.
     success_branch = next(
         (line for line in probe_after.splitlines() if API_HEALTHY_CONTENT_LITERAL in line and "$expected_sha" in line),
         None,
     )
-    assert success_branch is not None, (
-        "one retry-loop success branch must require BOTH the built dev SHA and a byte-exact "
-        f"{API_HEALTHY_CONTENT_LITERAL} content-health body in the same attempt"
-    )
+    success_error = f"one success branch must require BOTH dev SHA and byte-exact {API_HEALTHY_CONTENT_LITERAL}"
+    assert success_branch is not None, success_error
 
 
 def _fly_deploy_commands() -> list[str]:
@@ -345,13 +351,19 @@ def test_deploy_workflow_uses_fly_token_secret_and_smoke_url_variable() -> None:
 def test_deploy_workflow_uses_checkout_uv_and_flyctl_setup_only() -> None:
     workflow_text = _read_deploy_workflow()
     setup_steps = [step for step in _deploy_steps() if "uses" in step]
-
+    refresh_script = _find_step(REFRESH_MACHINE_STEP_NAME)["run"]
     assert "actions/checkout@" in workflow_text
     assert "superfly/flyctl-actions/setup-flyctl" in workflow_text
     assert {
         "uses": "astral-sh/setup-uv@0c5e2b8115b80b4c7c5ddf6ffdd634974642d182",
         "with": {"python-version": "3.12"},
     } in setup_steps
+    expected_refresh_setup = (
+        'uv sync --frozen\nPYTHON_BIN="$GITHUB_WORKSPACE/.venv/bin/python" ' + REFRESH_DEPLOY_INVOCATION
+    )
+    assert expected_refresh_setup in refresh_script, (
+        "refresh deploy must use the locked project interpreter immediately after dependency sync"
+    )
     forbidden_fragments = (
         "docker/login-action",
         "docker/build-push-action",
@@ -373,11 +385,9 @@ def test_deploy_workflow_uses_checkout_uv_and_flyctl_setup_only() -> None:
 def test_deploy_workflow_runs_exactly_three_serving_fly_deploys() -> None:
     deploy_scripts = [script for script in _run_scripts() if "flyctl deploy" in script]
     workflow_text = _read_deploy_workflow()
-
     assert len(deploy_scripts) == len(FLY_DEPLOY_COMMANDS)
     for deploy_command in FLY_DEPLOY_COMMANDS:
         assert workflow_text.count(deploy_command) == 1
-
     deploy_positions = [workflow_text.index(deploy_command) for deploy_command in FLY_DEPLOY_COMMANDS]
     assert deploy_positions == sorted(deploy_positions)
 
@@ -386,7 +396,6 @@ def test_positional_fly_deploy_workdirs_use_workspace_anchored_config_paths() ->
     for command in _fly_deploy_commands():
         if not _fly_deploy_command_has_positional_workdir_before_config(command):
             continue
-
         config_path = _fly_deploy_config_path(command)
         assert _deploy_config_path_is_workspace_anchored(config_path), (
             f"{command!r} has a positional deploy workdir before -c, so the config path must be absolute "
@@ -397,17 +406,13 @@ def test_positional_fly_deploy_workdirs_use_workspace_anchored_config_paths() ->
 def test_deploy_workflow_resolves_dev_sha_from_sync_manifest() -> None:
     provenance_step = _find_step("Resolve dev build provenance")
     script = provenance_step["run"]
-
     assert provenance_step.get("id") == "provenance", "provenance step must expose an id for step outputs"
     # Reads the dev SHA from the prod-mirror sync manifest, NOT ${{ github.sha }}.
     assert ".debbie/sync_manifest.json" in script
     assert "github.sha" not in script
     assert ".dev_sha" in script
-    # Fails loud on a missing manifest or a non-40-char-hex SHA — never degrades
-    # to stamping "unknown".
     assert "^[0-9a-f]{40}$" in script
     assert "exit 1" in script
-    # Both provenance values are exported for the deploy steps to consume.
     assert "dev_sha=" in script
     assert "built_at=" in script
     assert "$GITHUB_OUTPUT" in script
@@ -424,7 +429,6 @@ def test_deploy_workflow_passes_dev_provenance_build_args_to_api_and_web() -> No
 
 
 def test_deploy_workflow_never_deploys_db_or_refresh_apps() -> None:
-    """Keep target details in the delegated refresh deploy owner, not workflow YAML."""
     workflow_text = _read_deploy_workflow()
 
     for forbidden_target in FORBIDDEN_DEPLOY_TARGETS:
@@ -436,29 +440,20 @@ def test_deploy_workflow_delegates_refresh_machine_deploy_after_serving_deploys(
     step_names = [step.get("name") for step in deploy_steps]
     refresh_step = _find_step("Deploy refresh machine")
     refresh_script = refresh_step["run"]
-
-    assert refresh_step["name"] == "Deploy refresh machine"
     assert refresh_step["shell"] == "bash"
     assert refresh_script.splitlines()[0] == "set -euo pipefail"
     assert 'evidence="$RUNNER_TEMP/refresh_deploy_evidence"' in refresh_script
     assert 'mkdir -p "$evidence"' in refresh_script
-    assert refresh_script.count(REFRESH_DEPLOY_INVOCATION) == 1
     for delegated_owner_literal in (
         "infra/scripts/verify_refresh_machine.sh",
         "civibus-refresh",
         "infra/fly/refresh.fly.toml",
     ):
         assert delegated_owner_literal not in refresh_script
-
+    # Verification-step ordering is owned by _assert_production_verification_precedes_refresh_machine.
     refresh_position = step_names.index("Deploy refresh machine")
     for serving_step_name in SERVING_DEPLOY_STEP_NAMES:
         assert step_names.index(serving_step_name) < refresh_position
-    # Inverted 2026-08-03. This assertion previously required the refresh-machine
-    # deploy to run BEFORE production verification, which is the ordering that
-    # caused the outage: the refresh step failed and every verification step was
-    # skipped behind it. The refresh machine is now last, and
-    # `_assert_production_verification_precedes_refresh_machine` owns that rule.
-    assert refresh_position > step_names.index("Verify public deploy serves built dev SHA")
 
 
 def test_deploy_workflow_delegates_refresh_deploy_exactly_once_workflow_wide() -> None:
@@ -466,12 +461,135 @@ def test_deploy_workflow_delegates_refresh_deploy_exactly_once_workflow_wide() -
     _assert_refresh_deploy_uses_manifest_dev_sha(_deploy_steps())
 
 
+def _successful_refresh_gate_outcomes() -> dict[str, str]:
+    outcomes = {step_id: "success" for step_id in REFRESH_GATE_MODELED_STEP_IDS}
+    outcomes[ROLLBACK_STEP_ID] = _rollback_outcome(outcomes)
+    return outcomes
+
+
+def _rollback_outcome(outcomes: dict[str, str]) -> str:
+    if outcomes["pre_deploy"] != "success":
+        return "skipped"
+    return "success" if any(outcomes[step_id] == "failure" for step_id in ROLLBACK_TRIGGER_STEP_IDS) else "skipped"
+
+
+def _refresh_gate_outcomes_with(**updates: str) -> dict[str, str]:
+    outcomes = _successful_refresh_gate_outcomes()
+    outcomes.update(updates)
+    outcomes[ROLLBACK_STEP_ID] = _rollback_outcome(outcomes)
+    return outcomes
+
+
+def _copy_steps_with_refresh_condition(condition: str | None) -> list[dict]:
+    steps = [dict(step) for step in _deploy_steps()]
+    refresh_step = next(step for step in steps if step.get("name") == REFRESH_MACHINE_STEP_NAME)
+    if condition is None:
+        refresh_step.pop("if", None)
+    else:
+        refresh_step["if"] = condition
+    return steps
+
+
+@pytest.mark.parametrize("failed_content_step_id", REFRESH_CONTENT_EVIDENCE_STEP_IDS)
+def test_refresh_deploy_still_runs_when_content_evidence_is_red(failed_content_step_id: str) -> None:
+    outcomes = _refresh_gate_outcomes_with(**{failed_content_step_id: "failure"})
+
+    _assert_refresh_deploy_is_gated_on_build_identity_not_content_outcomes(_deploy_steps(), outcomes, expected=True)
+
+
+@pytest.mark.parametrize("failed_step_id", REFRESH_BUILD_IDENTITY_STEP_IDS)
+def test_refresh_deploy_does_not_run_when_build_or_identity_evidence_is_red(failed_step_id: str) -> None:
+    outcomes = _refresh_gate_outcomes_with(**{failed_step_id: "failure"}, parity_gate="failure")
+    _assert_refresh_deploy_is_gated_on_build_identity_not_content_outcomes(_deploy_steps(), outcomes, expected=False)
+
+
+@pytest.mark.parametrize("lead", REFRESH_GATE_STATUS_FUNCTION_LEADS)
+def test_a_lead_gated_build_identity_condition_satisfies_the_whole_refresh_contract(lead: str) -> None:
+    steps = _copy_steps_with_refresh_condition(_refresh_gate_condition(lead))
+    outcomes = _refresh_gate_outcomes_with(smoke_gate="failure")
+    _assert_refresh_deploy_is_gated_on_build_identity_not_content_outcomes(steps, outcomes, expected=True)
+    outcomes = _refresh_gate_outcomes_with(smoke_gate="failure", verify_sha="failure")
+    _assert_refresh_deploy_is_gated_on_build_identity_not_content_outcomes(steps, outcomes, expected=False)
+
+
+def test_refresh_and_rollback_gate_owner_sets_remain_explicit_and_distinct() -> None:
+    assert REFRESH_BUILD_IDENTITY_STEP_IDS == ("deploy_api", "deploy_web", "deploy_caddy", "verify_sha")
+    assert REFRESH_CONTENT_EVIDENCE_STEP_IDS == ("parity_gate", "smoke_gate")
+    assert REFRESH_OPTIONAL_GUARD_STEP_IDS == ("pre_deploy",)
+    assert ROLLBACK_STEP_ID == "rollback"
+    assert REFRESH_GATE_MODELED_STEP_IDS == (*ROLLBACK_TRIGGER_STEP_IDS, "pre_deploy", "rollback")
+    assert REFRESH_GATE_STATUS_FUNCTION_LEADS == ("always()", "!cancelled()")
+    # The rollback consults both owner sets; the six-id literal lives here (module derives it), so a
+    # bad derivation still reds. The composition is asserted alongside the literal.
+    literal_rollback_owner_ids = ("deploy_api", "deploy_web", "deploy_caddy", "verify_sha", "parity_gate", "smoke_gate")
+    assert ROLLBACK_TRIGGER_STEP_IDS == literal_rollback_owner_ids
+    assert ROLLBACK_TRIGGER_STEP_IDS == (*REFRESH_BUILD_IDENTITY_STEP_IDS, *REFRESH_CONTENT_EVIDENCE_STEP_IDS)
+    _assert_rollback_is_gated_on_serving_outcomes(_deploy_steps())
+    rollback_condition = _find_step(ROLLBACK_STEP_NAME)["if"]
+    assert "steps.deploy_refresh" not in rollback_condition
+    assert "smoke_deps" not in rollback_condition
+
+
+def test_refresh_gate_deliberately_excludes_the_content_red_rollback_outcome() -> None:
+    """Stage-1 decision: steps.rollback must NOT gate refresh. The rollback fires on the
+    content-red parity/smoke failures the refresh writer must survive, so a
+    rollback == 'skipped' predicate would re-block refresh on exactly those runs."""
+    outcomes = _successful_refresh_gate_outcomes()
+    assert outcomes[ROLLBACK_STEP_ID] == "skipped"  # all owners green -> no rollback
+    outcomes = _refresh_gate_outcomes_with(parity_gate="failure")
+    assert outcomes[ROLLBACK_STEP_ID] == "success"
+    assert _refresh_gate_outcomes_with(deploy_api="failure")[ROLLBACK_STEP_ID] == "success"
+    assert _refresh_gate_outcomes_with(pre_deploy="failure", smoke_gate="failure")[ROLLBACK_STEP_ID] == "skipped"
+    assert _refresh_condition_matches_outcomes(_refresh_gate_condition(), outcomes) is True
+    coupled = _refresh_gate_condition().replace(" }}", " && steps.rollback.outcome == 'skipped' }}")
+    assert _refresh_condition_matches_outcomes(coupled, outcomes) is False
+    with pytest.raises(AssertionError, match="must not consult the rollback outcome"):
+        _assert_refresh_deploy_is_gated_on_build_identity_not_content_outcomes(
+            _copy_steps_with_refresh_condition(coupled), outcomes, expected=False
+        )
+
+
+@pytest.mark.parametrize(("expected_error", "condition"), sorted(_REJECTED_REFRESH_CONDITIONS.items()))
+def test_refresh_condition_checker_fails_closed_on_rejected_conditions(expected_error: str, condition: str) -> None:
+    with pytest.raises(AssertionError, match=expected_error):
+        _refresh_condition_matches_outcomes(condition, _successful_refresh_gate_outcomes())
+
+
+@pytest.mark.parametrize("lead", REFRESH_GATE_STATUS_FUNCTION_LEADS)
+def test_refresh_condition_checker_accepts_status_leads_and_the_pre_deploy_guard(lead: str) -> None:
+    outcomes = _refresh_gate_outcomes_with(parity_gate="failure")
+    guard_ids = (*REFRESH_OPTIONAL_GUARD_STEP_IDS, *REFRESH_BUILD_IDENTITY_STEP_IDS)
+    guarded_condition = _refresh_gate_condition(lead, step_ids=guard_ids)
+    # A red content probe never blocks either lead, with or without the extra capture guard.
+    assert _refresh_condition_matches_outcomes(_refresh_gate_condition(lead), outcomes) is True
+    assert _refresh_condition_matches_outcomes(guarded_condition, outcomes) is True
+    outcomes = _refresh_gate_outcomes_with(parity_gate="failure", pre_deploy="failure")
+    assert _refresh_condition_matches_outcomes(guarded_condition, outcomes) is False
+    outcomes = _refresh_gate_outcomes_with(parity_gate="failure", deploy_caddy="failure")
+    assert _refresh_condition_matches_outcomes(_refresh_gate_condition(lead), outcomes) is False
+
+
+@pytest.mark.parametrize("bare_condition", sorted(REFRESH_BARE_STATUS_CONDITIONS))
+def test_bare_status_function_condition_fails_the_refresh_build_gating_contract(bare_condition: str) -> None:
+    steps = _copy_steps_with_refresh_condition(bare_condition)
+    outcomes = _refresh_gate_outcomes_with(deploy_api="failure")
+    with pytest.raises(AssertionError, match=r"bare always\(\)/!cancelled\(\) condition"):
+        _assert_refresh_deploy_is_gated_on_build_identity_not_content_outcomes(steps, outcomes, expected=False)
+
+
+@pytest.mark.parametrize("failed_content_step_id", REFRESH_CONTENT_EVIDENCE_STEP_IDS)
+def test_missing_refresh_condition_fails_the_content_red_positive_contract(failed_content_step_id: str) -> None:
+    steps = _copy_steps_with_refresh_condition(None)
+    outcomes = _refresh_gate_outcomes_with(**{failed_content_step_id: "failure"})
+    with pytest.raises(AssertionError, match="refresh deploy step must carry an explicit if condition"):
+        _assert_refresh_deploy_is_gated_on_build_identity_not_content_outcomes(steps, outcomes, expected=True)
+
+
 def test_production_verification_runs_before_the_refresh_machine_deploy() -> None:
     _assert_production_verification_precedes_refresh_machine(_deploy_steps())
 
 
 def test_refresh_machine_before_verification_fails_the_ordering_contract() -> None:
-    """Self-check: the ordering guard must reject the exact layout that caused the outage."""
     steps = [dict(step) for step in _deploy_steps()]
     refresh_step = next(step for step in steps if step.get("name") == REFRESH_MACHINE_STEP_NAME)
     steps.remove(refresh_step)
@@ -479,7 +597,6 @@ def test_refresh_machine_before_verification_fails_the_ordering_contract() -> No
         index for index, step in enumerate(steps) if step.get("name") in PRODUCTION_VERIFICATION_STEP_NAMES
     )
     steps.insert(verification_position, refresh_step)
-
     with pytest.raises(AssertionError, match="silently skips production verification"):
         _assert_production_verification_precedes_refresh_machine(steps)
 
@@ -488,36 +605,27 @@ def test_deploy_workflow_captures_a_rollback_target_before_the_first_deploy() ->
     steps = _deploy_steps()
     step_names = [step.get("name") for step in steps]
     capture_step = _find_step(PRE_DEPLOY_CAPTURE_STEP_NAME)
-
     assert capture_step.get("id") == "pre_deploy", "capture step must expose an id the rollback condition can read"
     capture_position = step_names.index(PRE_DEPLOY_CAPTURE_STEP_NAME)
     for serving_step_name in SERVING_DEPLOY_STEP_NAMES:
         assert capture_position < step_names.index(serving_step_name), (
             "the rollback target must be captured before anything is deployed over it"
         )
-    # Delegated to the rollback owner so the workflow YAML holds no app or image
-    # plumbing of its own, matching how the refresh-machine deploy is delegated.
     assert f"bash {ROLLBACK_SCRIPT} capture" in capture_step["run"]
 
 
 def test_deploy_workflow_rolls_back_serving_apps_on_failed_production_verification() -> None:
     _assert_rollback_is_gated_on_serving_outcomes(_deploy_steps())
-
     steps = _deploy_steps()
     step_names = [step.get("name") for step in steps]
     rollback_step = _find_step(ROLLBACK_STEP_NAME)
-
     assert f"bash {ROLLBACK_SCRIPT} restore" in rollback_step["run"]
-    # Rollback must precede the refresh-machine deploy: once production has been
-    # put back on its previous image, shipping a new refresh machine built from
-    # the rejected commit is incoherent.
     assert step_names.index(ROLLBACK_STEP_NAME) < step_names.index(REFRESH_MACHINE_STEP_NAME)
     for verification_step_name in PRODUCTION_VERIFICATION_STEP_NAMES:
         assert step_names.index(verification_step_name) < step_names.index(ROLLBACK_STEP_NAME)
 
 
 def test_bare_failure_condition_fails_the_rollback_gating_contract() -> None:
-    """Self-check: `if: failure()` must be rejected — it rolls back on refresh-machine failures too."""
     steps = [dict(step) for step in _deploy_steps()]
     rollback_step = next(step for step in steps if step.get("name") == ROLLBACK_STEP_NAME)
     rollback_step["if"] = "${{ failure() }}"
@@ -527,13 +635,11 @@ def test_bare_failure_condition_fails_the_rollback_gating_contract() -> None:
 
 
 def test_rollback_triggered_by_the_refresh_machine_fails_the_gating_contract() -> None:
-    """Self-check: wiring the refresh machine into the rollback condition must be rejected."""
     steps = [dict(step) for step in _deploy_steps()]
     rollback_step = next(step for step in steps if step.get("name") == ROLLBACK_STEP_NAME)
     rollback_step["if"] = rollback_step["if"].replace(
         "steps.deploy_api.outcome", "steps.deploy_refresh.outcome || steps.deploy_api.outcome"
     )
-
     with pytest.raises(AssertionError, match="serves no user traffic"):
         _assert_rollback_is_gated_on_serving_outcomes(steps)
 
@@ -541,31 +647,21 @@ def test_rollback_triggered_by_the_refresh_machine_fails_the_gating_contract() -
 def test_api_deploy_step_probes_public_api_readiness() -> None:
     step = _find_step(API_DEPLOY_STEP_NAME)
     _assert_step_probes_api_public_readiness(step)
-    # The step still runs `flyctl deploy`, so blanking its FLY_API_TOKEN (as the
-    # curl-only verification steps do) would break the deploy itself.
     assert step.get("env", {}).get("FLY_API_TOKEN") != "", (
         "Deploy API step still runs flyctl deploy and must keep its FLY_API_TOKEN"
     )
-    # The step owns its own readiness gate and must stay in the rollback trigger
-    # set so a failed public probe restores the pre-deploy image.
-    assert "deploy_api" in ROLLBACK_TRIGGER_STEP_IDS
 
 
 def test_api_deploy_without_public_probe_fails_the_readiness_contract() -> None:
-    """Self-check: an API deploy step that only runs flyctl deploy — the exact missing-canary
-    layout that lets `flyctl` return at `started` before the API is healthy — must be rejected."""
     step = dict(_find_step(API_DEPLOY_STEP_NAME))
     lines = step["run"].splitlines()
     deploy_index = next(index for index, line in enumerate(lines) if line.strip().startswith("flyctl deploy"))
-    # Strip the post-deploy public probe, leaving `flyctl deploy` intact.
     step["run"] = "\n".join(lines[: deploy_index + 1])
-
     with pytest.raises(AssertionError):
         _assert_step_probes_api_public_readiness(step)
 
 
 def test_serving_and_verification_steps_expose_the_ids_the_rollback_reads() -> None:
-    """The rollback condition is only as good as the ids it names."""
     named_ids = {step.get("id") for step in _deploy_steps()}
     for step_id in ROLLBACK_TRIGGER_STEP_IDS:
         assert step_id in named_ids, f"step id {step_id!r} is referenced by the rollback condition but never defined"
@@ -580,18 +676,17 @@ def test_mirror_sha_substitution_fails_refresh_provenance_contract() -> None:
         _assert_refresh_deploy_uses_manifest_dev_sha(steps)
 
 
-def test_duplicated_refresh_step_fails_single_delegation_contract() -> None:
-    steps = _deploy_steps()
-    duplicated = steps + [dict(_find_step(REFRESH_MACHINE_STEP_NAME))]
+@pytest.mark.parametrize(
+    "extra_step",
+    [
+        {"name": REFRESH_MACHINE_STEP_NAME, "run": REFRESH_DEPLOY_INVOCATION},
+        {"name": "Verify refresh", "run": f"bash {REFRESH_VERIFIER_SCRIPT}"},
+    ],
+    ids=("duplicated_refresh_step", "inlined_refresh_verifier"),
+)
+def test_extra_refresh_steps_fail_the_single_delegation_contract(extra_step: dict) -> None:
     with pytest.raises(AssertionError):
-        _assert_single_delegated_refresh_deploy(duplicated)
-
-
-def test_inlined_refresh_verifier_fails_single_delegation_contract() -> None:
-    steps = _deploy_steps()
-    with_verifier = steps + [{"name": "Verify refresh", "run": f"bash {REFRESH_VERIFIER_SCRIPT}"}]
-    with pytest.raises(AssertionError):
-        _assert_single_delegated_refresh_deploy(with_verifier)
+        _assert_single_delegated_refresh_deploy(_deploy_steps() + [extra_step])
 
 
 def test_deploy_workflow_persists_successful_refresh_digest_evidence() -> None:
@@ -601,10 +696,6 @@ def test_deploy_workflow_persists_successful_refresh_digest_evidence() -> None:
 
     assert artifact_step == {
         "name": REFRESH_EVIDENCE_ARTIFACT_STEP_NAME,
-        # Scoped 2026-08-03 from a bare `always()`. The refresh-machine step is
-        # now last and is skipped when a rollback fires, and `always()` plus
-        # `if-no-files-found: error` would then fail the run on a missing
-        # evidence directory that was never supposed to exist.
         "if": "${{ always() && steps.deploy_refresh.outcome != 'skipped' }}",
         "env": {"FLY_API_TOKEN": ""},
         "uses": REFRESH_EVIDENCE_ARTIFACT_ACTION,
@@ -616,8 +707,6 @@ def test_deploy_workflow_persists_successful_refresh_digest_evidence() -> None:
         },
     }
     assert step_names.index(REFRESH_MACHINE_STEP_NAME) < step_names.index(REFRESH_EVIDENCE_ARTIFACT_STEP_NAME)
-    # Inverted 2026-08-03 with the refresh-machine move: evidence upload now
-    # trails the verification it used to precede.
     assert step_names.index(REFRESH_EVIDENCE_ARTIFACT_STEP_NAME) > step_names.index(
         "Verify public deploy serves built dev SHA"
     )
@@ -669,7 +758,6 @@ def test_deploy_workflow_runs_deployed_surface_parity_gate_before_smoke() -> Non
     smoke_position = step_names.index("Run production smoke gate")
     probe_step = deploy_steps[probe_position]
     probe_script = probe_step["run"]
-
     assert probe_position == drift_position + 1
     assert probe_position < install_position < smoke_position
     assert "continue-on-error" not in probe_step

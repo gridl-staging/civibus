@@ -79,6 +79,26 @@ export async function expectNoBackendFailureStates(page: Page): Promise<void> {
   await expect(page.getByText(BACKEND_FAILURE_STATE_COPY)).toHaveCount(0);
 }
 
+export async function expectEarlierCycleOfficialTotalCaveat(
+  caveat: Locator,
+  options: {
+    coverageStartDate: string;
+    coverageEndDate: string;
+    expectCompleteSpecCopy: boolean;
+  }
+): Promise<void> {
+  await expect(caveat).toBeVisible({ timeout: 20_000 });
+  await expect(caveat).toContainText(options.coverageStartDate);
+  await expect(caveat).toContainText(options.coverageEndDate);
+  await expect(caveat).toContainText(/not part of the \d{4} selected-cycle totals/i);
+  await expect(caveat).not.toContainText(/career total|full campaign total/i);
+  if (options.expectCompleteSpecCopy) {
+    await expect(caveat).toContainText(/shown because selected-cycle activity is absent/i);
+    await expect(caveat).toContainText("Official FEC candidate summary");
+    await expect(caveat).toContainText("fec_weball");
+  }
+}
+
 export async function expectCampaignFinanceKeyMetricsReady(
   page: Page,
   timeoutMs: number

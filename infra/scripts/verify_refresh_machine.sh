@@ -12,6 +12,8 @@ machines_json=""
 machine_config_json=""
 volumes_json=""
 version_json=""
+expected_plan_json=""
+image_proof_json=""
 
 while (( $# > 0 )); do
   if (( $# < 2 )); then
@@ -30,6 +32,12 @@ while (( $# > 0 )); do
     --version-json)
       version_json="$2"
       ;;
+    --expected-plan-json)
+      expected_plan_json="$2"
+      ;;
+    --image-proof-json)
+      image_proof_json="$2"
+      ;;
     *)
       fail_shell "unknown option: $1"
       ;;
@@ -44,11 +52,22 @@ for fixture_path in "$machines_json" "$machine_config_json" "$volumes_json" "$ve
   fi
 done
 
+plan_proof_count=0
+for plan_proof_path in "$expected_plan_json" "$image_proof_json"; do
+  if [[ -n "$plan_proof_path" ]]; then
+    plan_proof_count=$((plan_proof_count + 1))
+  fi
+done
+
 if (( fixture_count != 0 && fixture_count != 4 )); then
   fail_shell "fixture mode requires all four JSON paths"
 fi
 
-if (( fixture_count == 0 )); then
+if (( plan_proof_count != 0 && plan_proof_count != 2 )); then
+  fail_shell "plan-proof mode requires both JSON paths"
+fi
+
+if (( fixture_count == 0 && plan_proof_count == 0 )); then
   probe_dir="$(mktemp -d)" || fail_shell "cannot create probe directory"
   trap 'rm -rf -- "$probe_dir"' EXIT
   machines_json="$probe_dir/machines.json"
@@ -67,11 +86,18 @@ if (( fixture_count == 0 )); then
     || fail_shell "version probe failed"
 fi
 
-python3 - "$machines_json" "$machine_config_json" "$volumes_json" "$version_json" <<'PY'
+python3 - \
+  "$machines_json" \
+  "$machine_config_json" \
+  "$volumes_json" \
+  "$version_json" \
+  "$expected_plan_json" \
+  "$image_proof_json" <<'PY'
 from __future__ import annotations
 
 import json
 import sys
+from collections import Counter
 from pathlib import Path
 from typing import Any, NoReturn
 
@@ -195,10 +221,38 @@ def validate_version(payload: Any) -> None:
     require_string(version.get("built_at"), "version built_at")
 
 
-machines_path, config_path, volumes_path, version_path = sys.argv[1:]
-validate_machine_list(read_json(machines_path, "machines-list"))
-validate_machine_config(read_json(config_path, "machine-config"))
-validate_volumes(read_json(volumes_path, "volumes-list"))
-validate_version(read_json(version_path, "version"))
+def read_refresh_plan_job_keys(path_text: str, label: str) -> list[str]:
+    payload = require_mapping(read_json(path_text, label), label)
+    keys = require_list(payload.get("refresh_plan_job_keys"), f"{label} refresh_plan_job_keys")
+    invalid_keys = [key for key in keys if not isinstance(key, str)]
+    if invalid_keys:
+        fail(f"{label} refresh_plan_job_keys must contain only strings")
+    duplicate_keys = sorted(key for key, count in Counter(keys).items() if count > 1)
+    if duplicate_keys:
+        fail(f"{label} refresh_plan_job_keys contains duplicate keys: {duplicate_keys!r}")
+    return sorted(keys)
+
+
+def validate_refresh_plan_proof(expected_plan_path: str, image_proof_path: str) -> None:
+    expected_keys = read_refresh_plan_job_keys(expected_plan_path, "expected-plan")
+    image_keys = read_refresh_plan_job_keys(image_proof_path, "image-proof")
+    missing_from_image = sorted(set(expected_keys) - set(image_keys))
+    extra_in_image = sorted(set(image_keys) - set(expected_keys))
+    if missing_from_image or extra_in_image:
+        fail(
+            "refresh plan job key mismatch; "
+            f"missing from image: {missing_from_image!r}; "
+            f"extra in image: {extra_in_image!r}"
+        )
+
+
+machines_path, config_path, volumes_path, version_path, expected_plan_path, image_proof_path = sys.argv[1:]
+if all((machines_path, config_path, volumes_path, version_path)):
+    validate_machine_list(read_json(machines_path, "machines-list"))
+    validate_machine_config(read_json(config_path, "machine-config"))
+    validate_volumes(read_json(volumes_path, "volumes-list"))
+    validate_version(read_json(version_path, "version"))
+if expected_plan_path and image_proof_path:
+    validate_refresh_plan_proof(expected_plan_path, image_proof_path)
 print("PASS: refresh Machine contract verified")
 PY

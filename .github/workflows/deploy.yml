@@ -206,12 +206,15 @@ jobs:
 
       - name: Deploy refresh machine
         id: deploy_refresh
+        # parity_gate and smoke_gate are content evidence; serving deploy or built-SHA identity failures still block refresh.
+        if: ${{ !cancelled() && steps.deploy_api.outcome == 'success' && steps.deploy_web.outcome == 'success' && steps.deploy_caddy.outcome == 'success' && steps.verify_sha.outcome == 'success' }}
         shell: bash
         run: |
           set -euo pipefail
           evidence="$RUNNER_TEMP/refresh_deploy_evidence"
           mkdir -p "$evidence"
-          bash infra/scripts/deploy_refresh_machine.sh --evidence-dir "$evidence" --dev-sha "${{ steps.provenance.outputs.dev_sha }}"
+          uv sync --frozen
+          PYTHON_BIN="$GITHUB_WORKSPACE/.venv/bin/python" bash infra/scripts/deploy_refresh_machine.sh --evidence-dir "$evidence" --dev-sha "${{ steps.provenance.outputs.dev_sha }}"
 
       - name: Persist refresh deploy evidence
         if: ${{ always() && steps.deploy_refresh.outcome != 'skipped' }}

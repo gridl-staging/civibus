@@ -147,6 +147,19 @@ def test_db_up_requires_the_guard_as_a_prerequisite() -> None:
         )
 
 
+def test_lifecycle_targets_require_the_unallocated_port_guard() -> None:
+    makefile_lines = MAKEFILE_PATH.read_text(encoding="utf-8").splitlines()
+
+    for target_name in ("db-up", "db-down", "db-teardown"):
+        target_headers = [line for line in makefile_lines if line.startswith(f"{target_name}:")]
+
+        assert len(target_headers) == 1, f"Makefile must declare exactly one {target_name} target"
+        assert UNALLOCATED_PORT_GUARD_TARGET in target_headers[0], (
+            f"{target_name} must list {UNALLOCATED_PORT_GUARD_TARGET} as a prerequisite so an "
+            f"unallocated lane cannot reach Docker; got {target_headers[0]!r}"
+        )
+
+
 def test_integration_local_still_pins_the_reserved_port_and_project() -> None:
     """If either pin moves, the guard's exemption silently stops matching."""
     makefile_text = MAKEFILE_PATH.read_text(encoding="utf-8")
