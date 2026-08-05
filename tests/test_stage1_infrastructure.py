@@ -114,17 +114,42 @@ def test_bio_migration_bootstrap_manifest_sync() -> None:
 
 
 def test_db_dockerfile_installs_postgis_and_age_for_postgres_18():
+    """The db image must provide PostGIS + AGE on Postgres 18, and only 18.
+
+    Re-pointed 2026-08-05: the apt layer moved out of the Dockerfile into
+    infra/db/install_postgres_extensions.sh so its retry behaviour could be
+    executed against a stub apt-get. The fact this test owns did not change --
+    which extensions the image installs, and that no Postgres 17 remnant
+    survives -- but its subject did, so the assertions follow it to the new
+    owner. The Dockerfile half now pins the delegation seam, so deleting the
+    COPY/RUN and silently reintroducing an inline apt-get still fails here.
+    """
     dockerfile = read_repo_text("infra/db/Dockerfile")
+    install_script = read_repo_text("infra/db/install_postgres_extensions.sh")
+
+    # Comments are stripped before the "no inline apt-get" check: the Dockerfile
+    # comment legitimately says "do not add a second apt-get here", and matching
+    # that would be a false positive that fires on correct code.
+    dockerfile_instructions = "\n".join(line for line in dockerfile.splitlines() if not line.lstrip().startswith("#"))
 
     assert "FROM postgres:18-bookworm" in dockerfile
-    assert "postgresql-18-postgis-3" in dockerfile
-    assert "postgresql-18-postgis-3-scripts" in dockerfile
-    assert "postgresql-18-age" in dockerfile
-    assert "FROM postgres:17-bookworm" not in dockerfile
-    assert "postgresql-17-postgis-3" not in dockerfile
-    assert "postgresql-17-postgis-3-scripts" not in dockerfile
-    assert "postgresql-17-age" not in dockerfile
-    assert "postgresql-contrib" not in dockerfile
+    # The delegation itself is part of the contract: one owner for the install.
+    assert "install_postgres_extensions.sh" in dockerfile
+    assert "apt-get" not in dockerfile_instructions, "the apt layer has a single owner; do not reintroduce it inline"
+
+    assert "postgresql-18-postgis-3" in install_script
+    assert "postgresql-18-postgis-3-scripts" in install_script
+    assert "postgresql-18-age" in install_script
+
+    for stale in (
+        "FROM postgres:17-bookworm",
+        "postgresql-17-postgis-3",
+        "postgresql-17-postgis-3-scripts",
+        "postgresql-17-age",
+        "postgresql-contrib",
+    ):
+        assert stale not in dockerfile
+        assert stale not in install_script
 
 
 def test_graph_eval_script_targets_current_database_container():
