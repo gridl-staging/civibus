@@ -121,8 +121,19 @@ def _healthy_counts() -> list[int]:
     return list(FEDERAL_FIRST_COUNTS.values())
 
 
-def _healthy_connection(*, freshness_result: tuple[object, ...] | None) -> FakeConnection:
-    return FakeConnection(_healthy_counts(), freshness_result=freshness_result)
+def _healthy_connection(
+    *,
+    freshness_result: tuple[object, ...] | None,
+    donor_rollup_provenance_result: tuple[object, ...] | None = (FIXED_NOW,),
+) -> FakeConnection:
+    # The donor-rollup provenance row is pinned to FIXED_NOW, not to wall-clock
+    # now: these tests evaluate health at FIXED_NOW, and a real-now row would be
+    # a future timestamp there and fail closed for the wrong reason.
+    return FakeConnection(
+        _healthy_counts(),
+        freshness_result=freshness_result,
+        donor_rollup_provenance_result=donor_rollup_provenance_result,
+    )
 
 
 def _stage_1_uuid(offset: int) -> UUID:
@@ -994,8 +1005,13 @@ def test_evaluate_content_health_runs_expected_sql_queries() -> None:
         "total_receipts IS NOT NULL OR total_disbursements IS NOT NULL OR cash_on_hand IS NOT NULL"
     ) in officeholder_query
     assert fake._cursor.executed_params[officeholder_query_indices[0]] == (date(2026, 7, 27),)
-    freshness_query = executed[-1]
-    freshness_params = fake._cursor.executed_params[-1]
+    # Located by content, not by executed[-1]: this module runs more than one
+    # trailing freshness check, and pinning this assertion to "the last query"
+    # made it break whenever another one was appended.
+    freshness_indices = [index for index, query in enumerate(executed) if "MAX(last_pull_at)" in query]
+    assert len(freshness_indices) == 1, executed
+    freshness_query = executed[freshness_indices[0]]
+    freshness_params = fake._cursor.executed_params[freshness_indices[0]]
     assert "MAX(last_pull_at)" in freshness_query
     assert "FROM core.data_source" in freshness_query
     assert "last_pull_status = %s" in freshness_query
@@ -1401,7 +1417,11 @@ def test_evaluate_content_health_flags_candidate_money_recent_summary_below_floo
     ]
 
     failures = evaluate_content_health(
-        FakeConnection(counts, freshness_result=CANDIDATE_MONEY_RECENT_SUMMARY_FRESH_FEC_ROW),
+        FakeConnection(
+            counts,
+            freshness_result=CANDIDATE_MONEY_RECENT_SUMMARY_FRESH_FEC_ROW,
+            donor_rollup_provenance_result=CANDIDATE_MONEY_RECENT_SUMMARY_FRESH_FEC_ROW,
+        ),
         floors=floors,
         now=datetime(2026, 7, 27, 12, 0, tzinfo=timezone.utc),
     )
@@ -1422,6 +1442,7 @@ def test_candidate_money_recent_summary_fixture_excludes_null_and_future_dates()
     fake = FakeConnection(
         [100, 10, 5, 50, 20, 5, 25, 20],
         freshness_result=CANDIDATE_MONEY_RECENT_SUMMARY_FRESH_FEC_ROW,
+        donor_rollup_provenance_result=CANDIDATE_MONEY_RECENT_SUMMARY_FRESH_FEC_ROW,
         candidate_money_rows=[
             {"summary_coverage_end_date": date(2026, 6, 30), "total_receipts": 1},
             {"summary_coverage_end_date": None, "total_receipts": 1},
@@ -1471,6 +1492,7 @@ def test_candidate_money_serving_fixture_counts_unsuppressed_out_of_cycle_totals
     fake = FakeConnection(
         [100, 10, 5, 50, 20, 5, 25, 20],
         freshness_result=CANDIDATE_MONEY_RECENT_SUMMARY_FRESH_FEC_ROW,
+        donor_rollup_provenance_result=CANDIDATE_MONEY_RECENT_SUMMARY_FRESH_FEC_ROW,
         candidate_money_rows=[
             {"summary_coverage_end_date": date(2026, 6, 30), "total_receipts": 1},
             {"summary_coverage_end_date": date(2024, 8, 8), "total_receipts": 1},
@@ -1520,10 +1542,15 @@ def test_evaluate_content_health_resolves_candidate_money_window_each_evaluation
 
     monkeypatch.setattr(health_content, "resolve_selected_cycle", fake_resolve_selected_cycle)
 
-    first = FakeConnection(_healthy_counts(), freshness_result=CANDIDATE_MONEY_RECENT_SUMMARY_FRESH_FEC_ROW)
+    first = FakeConnection(
+        _healthy_counts(),
+        freshness_result=CANDIDATE_MONEY_RECENT_SUMMARY_FRESH_FEC_ROW,
+        donor_rollup_provenance_result=CANDIDATE_MONEY_RECENT_SUMMARY_FRESH_FEC_ROW,
+    )
     second = FakeConnection(
         _healthy_counts(),
         freshness_result=(datetime(2026, 7, 28, 12, 0, tzinfo=timezone.utc),),
+        donor_rollup_provenance_result=(datetime(2026, 7, 28, 12, 0, tzinfo=timezone.utc),),
     )
 
     assert (
@@ -1776,3 +1803,137 @@ def test_content_health_endpoint_does_not_require_api_key(monkeypatch: pytest.Mo
         response = client.get("/health/content")
 
     assert response.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# Donor-search rollup provenance freshness
+#
+# Production donor search fails closed when the rollup provenance row ages past
+# _DONOR_SEARCH_ROLLUP_MAX_AGE in api/queries/campaign_finance.py. Before this
+# guard existed, that transition was invisible: /api/health/content counts rows
+# and cannot observe a timestamp predicate, so the first signal was users
+# getting the 503 arm. These tests pin a guard that fires BEFORE serving breaks.
+# ---------------------------------------------------------------------------
+
+DONOR_ROLLUP_FRESHNESS_CHECK = "cf_donor_search_rollup_fresh"
+
+
+def test_donor_rollup_health_bound_fires_strictly_before_the_serving_bound() -> None:
+    """The health guard must predict the outage, not announce it.
+
+    This is the anti-vacuity assertion for the whole check: if the health bound
+    were >= the serving bound, /api/health/content would still be green at the
+    instant donor search started returning 503, which is exactly the failure
+    mode observed on 2026-08-03 and again on 2026-08-12's schedule.
+    """
+    from api.health_content import _DONOR_ROLLUP_FRESHNESS_MAX_AGE
+    from api.queries.campaign_finance import _DONOR_SEARCH_ROLLUP_MAX_AGE
+
+    assert _DONOR_ROLLUP_FRESHNESS_MAX_AGE < _DONOR_SEARCH_ROLLUP_MAX_AGE
+    # The warning must be actionable, not a rounding error before the outage.
+    assert _DONOR_SEARCH_ROLLUP_MAX_AGE - _DONOR_ROLLUP_FRESHNESS_MAX_AGE >= timedelta(hours=12)
+
+
+def test_donor_rollup_freshness_reds_while_serving_is_still_green() -> None:
+    """The real 2026-08-04 provenance, at a real instant inside the warning window.
+
+    Hand-calculated from the production write recorded in
+    docs/live-state/2026_08_04_donor_search_production_restore.md:359 —
+    completed_at 2026-08-04T01:52:38Z, so serving fails at 2026-08-12T01:52:38Z.
+    At 2026-08-11T12:00Z the rollup is 7d10h old: past the health bound (7d6h)
+    and still inside the serving bound (8d). Health must be RED and serving
+    must still be GREEN, which is the entire point of the lead time.
+    """
+    from api.health_content import _donor_rollup_freshness_failure
+    from api.queries.campaign_finance import _DONOR_SEARCH_ROLLUP_MAX_AGE
+
+    completed_at = datetime(2026, 8, 4, 1, 52, 38, tzinfo=timezone.utc)
+    now = datetime(2026, 8, 11, 12, 0, tzinfo=timezone.utc)
+
+    failure = _donor_rollup_freshness_failure(completed_at, now=now)
+    assert failure is not None
+    assert failure.check == DONOR_ROLLUP_FRESHNESS_CHECK
+    assert failure.actual == int(completed_at.timestamp())
+    # Serving is provably still up at this instant, so the guard genuinely warns.
+    assert now - completed_at < _DONOR_SEARCH_ROLLUP_MAX_AGE
+
+
+def test_donor_rollup_freshness_green_on_a_healthy_weekly_rebuild() -> None:
+    """A weekly refresh that lands on time must not flap the gate.
+
+    The rebuild cadence is weekly, so a 7d0h-old rollup is the normal steady
+    state; a bound that reddened here would page on every healthy cycle.
+    """
+    from api.health_content import _donor_rollup_freshness_failure
+
+    completed_at = datetime(2026, 8, 4, 1, 52, 38, tzinfo=timezone.utc)
+    now = completed_at + timedelta(days=7)
+
+    assert _donor_rollup_freshness_failure(completed_at, now=now) is None
+
+
+def test_donor_rollup_freshness_fails_closed_when_provenance_is_missing() -> None:
+    """Absent provenance is the exact state that made /donors dark on 2026-08-03.
+
+    A missing singleton row means serving already raises missing_provenance, so
+    health must never read "no timestamp" as "fresh".
+    """
+    from api.health_content import _donor_rollup_freshness_failure
+
+    now = datetime(2026, 8, 5, 12, 0, tzinfo=timezone.utc)
+    failure = _donor_rollup_freshness_failure(None, now=now)
+    assert failure is not None
+    assert failure.check == DONOR_ROLLUP_FRESHNESS_CHECK
+    assert failure.actual == 0
+
+
+def test_donor_rollup_freshness_fails_closed_on_a_future_timestamp() -> None:
+    """A future completed_at is corruption or clock skew, and serving rejects it too."""
+    from api.health_content import _donor_rollup_freshness_failure
+
+    now = datetime(2026, 8, 5, 12, 0, tzinfo=timezone.utc)
+    completed_at = now + timedelta(hours=1)
+    failure = _donor_rollup_freshness_failure(completed_at, now=now)
+    assert failure is not None
+    assert failure.actual == 0
+
+
+def test_donor_rollup_freshness_fails_closed_on_a_naive_timestamp() -> None:
+    """A tz-naive value cannot be compared safely, so it must not read as fresh."""
+    from api.health_content import _donor_rollup_freshness_failure
+
+    now = datetime(2026, 8, 5, 12, 0, tzinfo=timezone.utc)
+    failure = _donor_rollup_freshness_failure(datetime(2026, 8, 5, 11, 0), now=now)
+    assert failure is not None
+    assert failure.actual == 0
+
+
+def test_evaluate_content_health_reads_the_donor_rollup_provenance_singleton() -> None:
+    """Wiring proof: the check must actually issue its query against the singleton row."""
+    from api.health_content import evaluate_content_health
+
+    fake = _healthy_connection(freshness_result=fresh_federal_fec_bulk_pull_row())
+    evaluate_content_health(fake, floors=FEDERAL_FIRST_FLOORS, now=FIXED_NOW)
+
+    provenance_queries = [query for query in fake._cursor.executed if "cf.donor_search_rollup_provenance" in query]
+    assert len(provenance_queries) == 1, fake._cursor.executed
+    provenance_query = _normalized_sql(provenance_queries[0])
+    assert "SELECT completed_at" in provenance_query
+    assert "singleton IS TRUE" in provenance_query
+
+
+def test_evaluate_content_health_surfaces_a_stale_donor_rollup_as_a_failure() -> None:
+    """End-to-end: a stale singleton must redden /api/health/content, not just a helper."""
+    from api.health_content import evaluate_content_health
+
+    stale_completed_at = FIXED_NOW - timedelta(days=7, hours=12)
+    fake = FakeConnection(
+        _healthy_counts(),
+        freshness_result=fresh_federal_fec_bulk_pull_row(),
+        donor_rollup_provenance_result=(stale_completed_at,),
+    )
+    failures = evaluate_content_health(fake, floors=FEDERAL_FIRST_FLOORS, now=FIXED_NOW)
+
+    stale = [failure for failure in failures if failure.check == DONOR_ROLLUP_FRESHNESS_CHECK]
+    assert len(stale) == 1, failures
+    assert stale[0].actual == int(stale_completed_at.timestamp())

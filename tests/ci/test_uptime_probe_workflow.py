@@ -50,6 +50,7 @@ def workflow_steps(workflow_parsed: dict) -> list[dict]:
 SURFACE_PROBE_STEPS = {
     "donor": "Check donor search surface",
     "drift": "Check public deploy drift",
+    "person": "Check person detail surface",
 }
 JOB_FAILURE_GATE_STEP_NAME = "Fail the run when any production surface probe was red"
 # Any one of these being red means production is not serving correctly, so all
@@ -58,6 +59,7 @@ UNHEALTHY_CONDITION_TERMS = (
     "steps.probe.outputs.healthy == 'false'",
     "steps.donor.outcome == 'failure'",
     "steps.drift.outcome == 'failure'",
+    "steps.person.outcome == 'failure'",
 )
 
 
@@ -113,7 +115,9 @@ DRIFT_TARGET_URLS = (
 )
 
 
-def _probe_run_context(*, content_red: bool, donor_red: bool, drift_red: bool) -> dict[str, str]:
+def _probe_run_context(
+    *, content_red: bool, donor_red: bool, drift_red: bool, person_red: bool = False
+) -> dict[str, str]:
     base_url = "https://probe.example"
     return {
         "env.PROBE_BASE_URL": base_url,
@@ -123,6 +127,7 @@ def _probe_run_context(*, content_red: bool, donor_red: bool, drift_red: bool) -
         "secrets.GITHUB_TOKEN": "fake-token",
         "steps.donor.outcome": "failure" if donor_red else "success",
         "steps.drift.outcome": "failure" if drift_red else "success",
+        "steps.person.outcome": "failure" if person_red else "success",
         "steps.find.outputs.number": "17",
         "steps.probe.outputs.detail": CONTENT_RED_DETAIL if content_red else CONTENT_GREEN_DETAIL,
         "steps.probe.outputs.healthy": "false" if content_red else "true",
@@ -243,8 +248,11 @@ def _render_incident_texts(
     content_red: bool,
     donor_red: bool,
     drift_red: bool,
+    person_red: bool = False,
 ) -> tuple[str, str, str]:
-    context = _probe_run_context(content_red=content_red, donor_red=donor_red, drift_red=drift_red)
+    context = _probe_run_context(
+        content_red=content_red, donor_red=donor_red, drift_red=drift_red, person_red=person_red
+    )
     open_arguments = _execute_issue_step(workflow_steps, tmp_path, OPEN_ISSUE_STEP_NAME, context)
     comment_arguments = _execute_issue_step(workflow_steps, tmp_path, COMMENT_ISSUE_STEP_NAME, context)
     return (
@@ -381,6 +389,7 @@ def test_every_surface_probe_can_open_an_incident_issue(workflow_steps: list[dic
     assert "steps.probe.outputs.healthy == 'true'" in close_step["if"]
     assert "steps.donor.outcome == 'success'" in close_step["if"]
     assert "steps.drift.outcome == 'success'" in close_step["if"]
+    assert "steps.person.outcome == 'success'" in close_step["if"]
 
 
 def test_surface_probes_run_before_issue_filing(workflow_steps: list[dict]) -> None:
@@ -668,10 +677,11 @@ def test_workflow_preserves_content_health_issue_flow_before_fatal_gates(
     # test_every_surface_probe_can_open_an_incident_issue owns that rule.
     unhealthy = (
         "(steps.probe.outputs.healthy == 'false' || steps.donor.outcome == 'failure' "
-        "|| steps.drift.outcome == 'failure')"
+        "|| steps.drift.outcome == 'failure' || steps.person.outcome == 'failure')"
     )
     healthy = (
-        "steps.probe.outputs.healthy == 'true' && steps.donor.outcome == 'success' && steps.drift.outcome == 'success'"
+        "steps.probe.outputs.healthy == 'true' && steps.donor.outcome == 'success' "
+        "&& steps.drift.outcome == 'success' && steps.person.outcome == 'success'"
     )
     assert close_step["if"] == f"{healthy} && steps.find.outputs.number != ''"
     assert comment_step["if"] == f"{unhealthy} && steps.find.outputs.number != ''"
@@ -683,3 +693,84 @@ def test_workflow_preserves_content_health_issue_flow_before_fatal_gates(
     assert "WARN-only shadow mode" not in workflow_text
     assert "Promote this check to fail-closed only after" not in workflow_text
     assert "The job ALWAYS exits 0" not in workflow_text
+
+
+def test_workflow_probes_a_person_detail_page_from_the_live_sitemap(workflow_steps: list[dict]) -> None:
+    """Person detail is the flagship surface and nothing watched it.
+
+    `/person/<id>` returned HTTP 500 route-wide from 2026-08-03T14:34:16Z for
+    over 48 hours. Three checkers existed and none opened a person page: this
+    probe's 3 checks, the deploy-time parity list's 14 surfaces, and
+    /api/health/content -- which counts rows and cannot observe a render. The
+    generalisation is the useful part: every LIST page was probed and no DETAIL
+    page reached from a list was ever followed, so a /congress that renders 539
+    links to broken pages passed every check.
+
+    The specimen is resolved from the published sitemap rather than hardcoded,
+    because a pinned UUID rots on the next reload and would then fail for a
+    reason that has nothing to do with the surface being down.
+    """
+    person_step = _step_by_name(workflow_steps, "Check person detail surface")
+    script = person_step["run"]
+
+    # Non-fatal like its siblings so it reaches issue filing; the final job gate
+    # re-imposes the failure (test_red_surface_probe_still_fails_the_job).
+    assert person_step["continue-on-error"] is True
+
+    # Specimen resolution: read the person sitemap shard, take a real path.
+    assert "sitemap-person-0.xml" in script
+    assert "/person/" in script
+    # An unresolvable specimen must fail closed -- an empty person sitemap is
+    # itself a defect and must never read as "nothing to check, so healthy".
+    assert "person surface probe no_specimen" in script
+
+    assert "--max-time 30" in script
+    assert "set +e" in script
+    assert "CURL_EXIT=$?" in script
+    assert "set -e" in script
+    assert 'if [ "$CURL_EXIT" -ne 0 ]; then' in script
+    assert "person surface probe curl_error" in script
+    assert 'if [ "$STATUS" != "200" ]; then' in script
+    assert "person surface probe http_status" in script
+
+    # Marker validated against live production on 2026-08-05 in BOTH directions:
+    # count=0 on the HTTP 500 person page, count=1 on /committee/... which
+    # renders the same Breadcrumb component. A status-only check would pass on a
+    # 200 that rendered an error body.
+    assert 'aria-label="Breadcrumb"' in script
+    assert "person surface probe missing_marker" in script
+
+    # Probes never file issues themselves; that is the issue-flow steps' job.
+    assert "gh issue" not in script
+    assert "GH_TOKEN" not in script
+
+
+def test_person_only_incident_rendering_names_person_detail_surface(workflow_steps: list[dict], tmp_path: Path) -> None:
+    """A person-only outage must file an incident that names the person surface.
+
+    This is the rendering half of the 2026-08-03 lesson recorded on
+    `row_id: uptime-alarm-mute`: issue #3 was titled
+    "[uptime] /api/health/content returned 200" while the content probe was
+    green and neither red probe was named anywhere. An operator sent to
+    api/health_content.py finds {"healthy":true} and learns to distrust the
+    alarm. So the incident must name person_detail_surface and must carry no
+    content-health identity when content health is green.
+    """
+    title, open_body, comment_body = _render_incident_texts(
+        workflow_steps,
+        tmp_path,
+        content_red=False,
+        donor_red=False,
+        drift_red=False,
+        person_red=True,
+    )
+
+    assert "person_detail_surface" in title
+    for body in (open_body, comment_body):
+        assert "person_detail_surface" in body
+        assert "sitemap-person-0.xml" in body
+        assert "web/src/lib/entity-detail/contract.ts" in body
+        # Surfaces that are green must not appear as failures.
+        assert "donor_search_surface" not in body
+        assert "public_deploy_drift" not in body
+        _assert_no_green_content_output(body, "person-only incident body")

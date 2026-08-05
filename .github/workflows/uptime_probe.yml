@@ -203,6 +203,84 @@ jobs:
           echo "::error::deploy lag detected for ${PROBE_BASE_URL}: expected=$expected_sha api=$api_sha web=$web_sha. This mirror-side warning cannot detect sync lag; the dev-repo parity probe owns that."
           exit 1
 
+      - name: Check person detail surface
+        id: person
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          # Person detail is the flagship surface and until 2026-08-05 nothing
+          # watched it: /person/<id> was HTTP 500 route-wide for 48+ hours while
+          # this probe reported only content health, donor search, and drift,
+          # and /api/health/content stayed {"healthy":true} throughout because it
+          # counts rows and cannot observe a render.
+          #
+          # The specimen is resolved from the published sitemap, not hardcoded.
+          # Person URLs are UUIDs that change on reload, so a pinned id would
+          # eventually fail for a reason unrelated to the surface being down --
+          # and a probe that cries wolf gets muted, which is how we got here.
+          SITEMAP="${PROBE_BASE_URL%/}/sitemap-person-0.xml"
+          SITEMAP_FILE="$(mktemp)"
+          BODY_FILE="$(mktemp)"
+          trap 'rm -f "$SITEMAP_FILE" "$BODY_FILE"' EXIT
+
+          set +e
+          SITEMAP_STATUS=$(curl -sS "$SITEMAP" \
+            --max-time 30 \
+            --write-out '%{http_code}' \
+            --output "$SITEMAP_FILE")
+          SITEMAP_EXIT=$?
+          set -e
+
+          if [ "$SITEMAP_EXIT" -ne 0 ] || [ "$SITEMAP_STATUS" != "200" ]; then
+            echo "::error::person surface probe no_specimen sitemap=${SITEMAP} status=${SITEMAP_STATUS} exit=${SITEMAP_EXIT}"
+            exit 1
+          fi
+
+          # First <loc> that is a person detail URL. Fail closed when there is
+          # none: an empty person sitemap is itself a defect and must never read
+          # as "nothing to check, therefore healthy".
+          TARGET=$(grep -o 'https\?://[^<]*/person/[^<]*' "$SITEMAP_FILE" | head -n 1 || true)
+          if [ -z "$TARGET" ]; then
+            echo "::error::person surface probe no_specimen sitemap=${SITEMAP} reason=no /person/ loc entries"
+            exit 1
+          fi
+
+          set +e
+          STATUS=$(curl -sS "$TARGET" \
+            --max-time 30 \
+            --write-out '%{http_code}' \
+            --output "$BODY_FILE")
+          CURL_EXIT=$?
+          set -e
+
+          if [ "$CURL_EXIT" -ne 0 ]; then
+            echo "::error::person surface probe curl_error target=${TARGET} exit=${CURL_EXIT}"
+            exit 1
+          fi
+
+          if [ "$STATUS" != "200" ]; then
+            BODY_EXCERPT=$(head -c 500 "$BODY_FILE" 2>/dev/null || true)
+            echo "::error::person surface probe http_status target=${TARGET} status=${STATUS} body=${BODY_EXCERPT}"
+            exit 1
+          fi
+
+          # Status alone would pass on a 200 that rendered an error body. This
+          # marker was validated against live production on 2026-08-05 in both
+          # directions: absent (count=0) on the HTTP 500 person page, present
+          # (count=1) on /committee/jon-ossoff-for-senate, which renders the same
+          # Breadcrumb component. It is unconditional on the person route
+          # (web/src/routes/person/[id]/+page.svelte renders <Breadcrumb> outside
+          # any money-dependent branch), so an officeholder with no FEC money
+          # still satisfies it.
+          if grep -q 'aria-label="Breadcrumb"' "$BODY_FILE"; then
+            echo "person_surface_ok target=${TARGET} status=200 marker=aria-label=\"Breadcrumb\""
+            exit 0
+          fi
+
+          BODY_EXCERPT=$(head -c 500 "$BODY_FILE" 2>/dev/null || true)
+          echo "::error::person surface probe missing_marker target=${TARGET} status=${STATUS} marker=aria-label=\"Breadcrumb\" body=${BODY_EXCERPT}"
+          exit 1
+
       - name: Find existing open uptime-incident issue
         id: find
         env:
@@ -219,7 +297,7 @@ jobs:
           echo "Existing open uptime-incident issue: ${NUMBER:-none}"
 
       - name: Close existing issue (endpoint recovered)
-        if: steps.probe.outputs.healthy == 'true' && steps.donor.outcome == 'success' && steps.drift.outcome == 'success' && steps.find.outputs.number != ''
+        if: steps.probe.outputs.healthy == 'true' && steps.donor.outcome == 'success' && steps.drift.outcome == 'success' && steps.person.outcome == 'success' && steps.find.outputs.number != ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -231,7 +309,7 @@ jobs:
             --repo "${{ github.repository }}"
 
       - name: Comment on existing issue (endpoint still failing)
-        if: (steps.probe.outputs.healthy == 'false' || steps.donor.outcome == 'failure' || steps.drift.outcome == 'failure') && steps.find.outputs.number != ''
+        if: (steps.probe.outputs.healthy == 'false' || steps.donor.outcome == 'failure' || steps.drift.outcome == 'failure' || steps.person.outcome == 'failure') && steps.find.outputs.number != ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PROBE_DETAIL: ${{ steps.probe.outputs.detail }}
@@ -276,6 +354,14 @@ jobs:
           - Owner: .github/workflows/deploy.yml
           - Condition: observed public deploy version drift"
           fi
+          if [ "${{ steps.person.outcome }}" = "failure" ]; then
+            RED_TOKENS+=("person_detail_surface")
+            RED_BLOCKS="${RED_BLOCKS}
+
+          person_detail_surface
+          - Specimen: first /person/<id> in ${PROBE_BASE_URL%/}/sitemap-person-0.xml
+          - Owners: web/src/routes/person/[id]/+page.server.ts, web/src/lib/entity-detail/contract.ts, api/routes/civics.py"
+          fi
 
           RED_SUMMARY=$(IFS=", "; echo "${RED_TOKENS[*]}")
           gh issue comment "${{ steps.find.outputs.number }}" \
@@ -285,7 +371,7 @@ jobs:
           Run: ${RUN_URL}${RED_BLOCKS}"
 
       - name: Open new uptime-incident issue (endpoint failing, no existing issue)
-        if: (steps.probe.outputs.healthy == 'false' || steps.donor.outcome == 'failure' || steps.drift.outcome == 'failure') && steps.find.outputs.number == ''
+        if: (steps.probe.outputs.healthy == 'false' || steps.donor.outcome == 'failure' || steps.drift.outcome == 'failure' || steps.person.outcome == 'failure') && steps.find.outputs.number == ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PROBE_DETAIL: ${{ steps.probe.outputs.detail }}
@@ -350,6 +436,14 @@ jobs:
           - Owner: .github/workflows/deploy.yml
           - Condition: observed public deploy version drift"
           fi
+          if [ "${{ steps.person.outcome }}" = "failure" ]; then
+            RED_TOKENS+=("person_detail_surface")
+            RED_BLOCKS="${RED_BLOCKS}
+
+          person_detail_surface
+          - Specimen: first /person/<id> in ${PROBE_BASE_URL%/}/sitemap-person-0.xml
+          - Owners: web/src/routes/person/[id]/+page.server.ts, web/src/lib/entity-detail/contract.ts, api/routes/civics.py"
+          fi
 
           RED_SUMMARY=$(IFS=", "; echo "${RED_TOKENS[*]}")
 
@@ -377,6 +471,7 @@ jobs:
           # shell, unlike the probe detail which stays env-passed above.
           DONOR_OUTCOME: ${{ steps.donor.outcome }}
           DRIFT_OUTCOME: ${{ steps.drift.outcome }}
+          PERSON_OUTCOME: ${{ steps.person.outcome }}
         run: |
           set -euo pipefail
           # The surface probes suppress their own abort so the issue flow can
@@ -386,6 +481,7 @@ jobs:
           red=""
           [ "${DONOR_OUTCOME}" = "failure" ] && red="${red} donor_search_surface"
           [ "${DRIFT_OUTCOME}" = "failure" ] && red="${red} public_deploy_drift"
+          [ "${PERSON_OUTCOME}" = "failure" ] && red="${red} person_detail_surface"
           if [ -n "${red}" ]; then
             echo "::error::production surface probe red:${red}"
             exit 1

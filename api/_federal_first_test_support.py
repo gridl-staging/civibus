@@ -19,10 +19,22 @@ from api import health_content
 FEDERAL_FIRST_COUNTS = health_content.FEDERAL_FIRST_CONTENT_COUNTS
 FEDERAL_FIRST_FLOORS = health_content.FEDERAL_FIRST_CONTENT_FLOORS
 _DEFAULT_TRANSACTION_CONFIRM_COUNT = object()
+_DEFAULT_DONOR_ROLLUP_PROVENANCE = object()
 
 
 def fresh_federal_fec_bulk_pull_row() -> tuple[datetime]:
     """Return explicit successful FEC bulk freshness evidence for direct health tests."""
+    return (datetime.now(timezone.utc),)
+
+
+def fresh_donor_search_rollup_provenance_row() -> tuple[datetime]:
+    """Return a just-rebuilt donor-search rollup provenance row.
+
+    This is the fake's default so existing content-health tests keep asserting
+    what they were written to assert. The stale / missing / future arms of the
+    guard are proven by dedicated tests that pass those values explicitly, so
+    the default cannot make the check vacuous.
+    """
     return (datetime.now(timezone.utc),)
 
 
@@ -41,9 +53,11 @@ class FakeCursor:
         present_schema_columns: set[tuple[str, str, str]] | None = None,
         transaction_confirm_count: object = _DEFAULT_TRANSACTION_CONFIRM_COUNT,
         candidate_money_rows: list[dict[str, object]] | None = None,
+        donor_rollup_provenance_result: object = _DEFAULT_DONOR_ROLLUP_PROVENANCE,
     ) -> None:
         self._counts = list(counts)
         self._freshness_result = freshness_result
+        self._donor_rollup_provenance_result = donor_rollup_provenance_result
         self._present_schema_columns = present_schema_columns
         self._transaction_confirm_count = transaction_confirm_count
         self._candidate_money_rows = candidate_money_rows
@@ -73,6 +87,11 @@ class FakeCursor:
         if "pg_stat_user_tables" in normalized_query and "relname = 'transaction'" in normalized_query:
             self._last_query_kind = "transaction_estimate"
             return
+        if "from cf.donor_search_rollup_provenance" in normalized_query:
+            # Trailing freshness read, not a count — dispatched before the
+            # rollup-count branch because both mention donor_search_rollup.
+            self._last_query_kind = "donor_rollup_provenance"
+            return
         if "select count(*) from cf.donor_search_rollup" in normalized_query:
             self._last_query_kind = "donor_search_rollup"
             return
@@ -100,6 +119,12 @@ class FakeCursor:
         self._schema_rows = sorted(required_columns - present_columns)
 
     def fetchone(self) -> tuple[object, ...] | None:
+        if self._last_query_kind == "donor_rollup_provenance":
+            if self._donor_rollup_provenance_result is _DEFAULT_DONOR_ROLLUP_PROVENANCE:
+                return fresh_donor_search_rollup_provenance_row()
+            result = self._donor_rollup_provenance_result
+            assert result is None or isinstance(result, tuple)
+            return result
         if self._last_query_kind == "transaction_confirm":
             if isinstance(self._transaction_confirm_count, BaseException):
                 raise self._transaction_confirm_count
@@ -189,6 +214,7 @@ class FakeConnection:
         present_schema_columns: set[tuple[str, str, str]] | None = None,
         transaction_confirm_count: object = _DEFAULT_TRANSACTION_CONFIRM_COUNT,
         candidate_money_rows: list[dict[str, object]] | None = None,
+        donor_rollup_provenance_result: object = _DEFAULT_DONOR_ROLLUP_PROVENANCE,
     ) -> None:
         self._cursor = FakeCursor(
             counts,
@@ -196,6 +222,7 @@ class FakeConnection:
             present_schema_columns=present_schema_columns,
             transaction_confirm_count=transaction_confirm_count,
             candidate_money_rows=candidate_money_rows,
+            donor_rollup_provenance_result=donor_rollup_provenance_result,
         )
         self.closed = False
 

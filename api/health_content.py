@@ -125,6 +125,23 @@ _CANDIDATE_MONEY_RECENT_SUMMARY_MAX_AGE = timedelta(days=120)
 _FEC_BULK_FRESHNESS_MAX_AGE = timedelta(days=7)
 _FEC_BULK_FRESHNESS_INDETERMINATE_ACTUAL = 0
 _FEC_BULK_FRESHNESS_SUCCESS_STATUS = "success"
+
+_DONOR_ROLLUP_FRESHNESS_CHECK = "cf_donor_search_rollup_fresh"
+# Donor search fails CLOSED once the rollup provenance row is older than
+# _DONOR_SEARCH_ROLLUP_MAX_AGE (api/queries/campaign_finance.py) — the page
+# renders its 503 arm with no code change, no deploy, and no data change, purely
+# on elapsed time. /api/health/content counts rows, so it cannot observe that
+# transition; before this check, the first signal was users hitting the 503.
+#
+# This bound is deliberately TIGHTER than the serving bound so the guard predicts
+# the outage instead of announcing it. Sizing, both directions:
+#   - the rebuild cadence is weekly, so a healthy rollup reaches ~7d0h before the
+#     next refresh replaces it; a bound at or under 7d would flap every cycle.
+#   - the serving bound is 8d, so 7d6h leaves ~18h of warning — enough for a
+#     scheduled run to be observed missing and a manual rebuild (~142s) to run.
+# test_donor_rollup_health_bound_fires_strictly_before_the_serving_bound pins the
+# ordering and a 12h minimum margin so neither constant can drift into vacuity.
+_DONOR_ROLLUP_FRESHNESS_MAX_AGE = timedelta(days=7, hours=6)
 _CF_TRANSACTION_TOTAL_CHECK = "cf_transaction_total"
 _CF_TRANSACTION_TOTAL_CONFIRM_QUERY = "SELECT count(*) FROM cf.transaction"
 _CF_TRANSACTION_TOTAL_CONFIRM_TIMEOUT_MS = 5_000
@@ -384,6 +401,14 @@ _FEC_BULK_FRESHNESS_QUERY = """
       AND last_pull_status = %s
 """
 
+# The serving guard reads this exact singleton row; health must read the same one
+# or the two can disagree about whether donor search is about to fail.
+_DONOR_ROLLUP_FRESHNESS_QUERY = """
+    SELECT completed_at
+    FROM cf.donor_search_rollup_provenance
+    WHERE singleton IS TRUE
+"""
+
 _FEC_BULK_FRESHNESS_PARAMS = (
     FEC_BULK_DATA_SOURCE_DOMAIN,
     FEC_BULK_DATA_SOURCE_JURISDICTION,
@@ -469,27 +494,61 @@ def _resolve_health_now(now: datetime | None) -> datetime:
     return now.astimezone(timezone.utc)
 
 
+def _stale_timestamp_failure(
+    value: object,
+    *,
+    now: datetime,
+    check: str,
+    max_age: timedelta,
+) -> ContentHealthFailure | None:
+    """Single owner for every timestamp-based content-health check.
+
+    Fails CLOSED on indeterminate input: an absent, tz-naive, or future
+    timestamp reports the indeterminate sentinel rather than passing. "No
+    freshness evidence" must never mean "fresh" — a guard that reads a missing
+    timestamp as healthy cannot fail for the defect it exists to catch.
+
+    Both bounds are reported as epoch seconds so ``actual`` / ``floor`` stay
+    integers and serialise identically to the count-based checks.
+    """
+    cutoff_epoch = int((now - max_age).timestamp())
+    now_epoch = int(now.timestamp())
+    source_epoch = _to_utc_epoch_seconds(value)
+    if source_epoch is None or source_epoch > now_epoch:
+        return ContentHealthFailure(
+            check=check,
+            actual=_FEC_BULK_FRESHNESS_INDETERMINATE_ACTUAL,
+            floor=cutoff_epoch,
+        )
+    if source_epoch < cutoff_epoch:
+        return ContentHealthFailure(check=check, actual=source_epoch, floor=cutoff_epoch)
+    return None
+
+
 def _fec_bulk_freshness_failure(
     last_pull_at: object,
     *,
     now: datetime,
 ) -> ContentHealthFailure | None:
-    cutoff_epoch = int((now - _FEC_BULK_FRESHNESS_MAX_AGE).timestamp())
-    now_epoch = int(now.timestamp())
-    source_epoch = _to_utc_epoch_seconds(last_pull_at)
-    if source_epoch is None or source_epoch > now_epoch:
-        return ContentHealthFailure(
-            check=_FEC_BULK_FRESHNESS_CHECK,
-            actual=_FEC_BULK_FRESHNESS_INDETERMINATE_ACTUAL,
-            floor=cutoff_epoch,
-        )
-    if source_epoch < cutoff_epoch:
-        return ContentHealthFailure(
-            check=_FEC_BULK_FRESHNESS_CHECK,
-            actual=source_epoch,
-            floor=cutoff_epoch,
-        )
-    return None
+    return _stale_timestamp_failure(
+        last_pull_at,
+        now=now,
+        check=_FEC_BULK_FRESHNESS_CHECK,
+        max_age=_FEC_BULK_FRESHNESS_MAX_AGE,
+    )
+
+
+def _donor_rollup_freshness_failure(
+    completed_at: object,
+    *,
+    now: datetime,
+) -> ContentHealthFailure | None:
+    return _stale_timestamp_failure(
+        completed_at,
+        now=now,
+        check=_DONOR_ROLLUP_FRESHNESS_CHECK,
+        max_age=_DONOR_ROLLUP_FRESHNESS_MAX_AGE,
+    )
 
 
 def floors_from_env(env: Mapping[str, str] | None = None) -> dict[str, int]:
@@ -562,4 +621,13 @@ def evaluate_content_health(
         freshness_failure = _fec_bulk_freshness_failure(last_pull_at, now=resolved_now)
         if freshness_failure is not None:
             failures.append(freshness_failure)
+        # Donor-search rollup provenance: a timestamp predicate, not a count, so
+        # no _CHECK_QUERIES floor can express it. Runs last and reads the same
+        # singleton row the serving guard reads.
+        cursor.execute(SQL(_DONOR_ROLLUP_FRESHNESS_QUERY))
+        provenance_row = cursor.fetchone()
+        rollup_completed_at = provenance_row[0] if provenance_row is not None else None
+        rollup_failure = _donor_rollup_freshness_failure(rollup_completed_at, now=resolved_now)
+        if rollup_failure is not None:
+            failures.append(rollup_failure)
     return failures
