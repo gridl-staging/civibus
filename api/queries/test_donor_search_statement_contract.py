@@ -32,15 +32,18 @@ from api.queries import campaign_finance as campaign_finance_queries
 # prefix — and consumes no parameter. Matching ``%s`` that is NOT preceded by
 # another ``%`` therefore reproduces psycopg's own arity rule exactly.
 _PLACEHOLDER_PATTERN = re.compile(r"(?<!%)%s")
-_CTE_HEADER_RE = re.compile(r"\s*(?P<name>[a-z_][a-z0-9_]*)\s+AS(?:\s+MATERIALIZED)?\s*\(", re.IGNORECASE)
+_CTE_HEADER_RE = re.compile(
+    r"\s*(?P<name>[a-z_][a-z0-9_]*)(?:\s*\([^)]*\))?\s+AS(?:\s+MATERIALIZED)?\s*\(",
+    re.IGNORECASE,
+)
 
 # One parameter per placeholder, in textual bind order: the mode-specific
-# rollup search terms, LIMIT/OFFSET for the rollup donor page, then the
-# CONTRIBUTION_INSIGHTS_MIN_DATE lower bound for bounded transaction details.
+# rollup search terms, identity search term, one canonical LIMIT/OFFSET pair,
+# then the contribution lower bound for bounded transaction details.
 # Donor search has no upper date bound (see the screen spec at
 # docs/reference/screen_specs/donor_lookup.md, which scopes results by
 # officeholder currency and itemization, never by a date ceiling).
-_EXPECTED_DONOR_SEARCH_PARAMETER_COUNTS = {"name": 5, "employer": 5, "zip": 4}
+_EXPECTED_DONOR_SEARCH_PARAMETER_COUNTS = {"name": 6, "employer": 6, "zip": 5}
 
 
 def _matching_close_paren(sql: str, open_paren: int) -> int:
@@ -57,6 +60,8 @@ def _matching_close_paren(sql: str, open_paren: int) -> int:
 
 def _cte_bodies(sql: str) -> dict[str, str]:
     with_start = sql.upper().index("WITH") + len("WITH")
+    if sql[with_start:].lstrip().upper().startswith("RECURSIVE"):
+        with_start = sql.upper().index("RECURSIVE", with_start) + len("RECURSIVE")
     ctes: dict[str, str] = {}
     cursor = with_start
     while match := _CTE_HEADER_RE.match(sql, cursor):
@@ -122,8 +127,8 @@ def test_donor_search_statement_escapes_like_wildcards_for_text_modes(
         offset=0,
     )
 
-    assert parameters[:2] == (expected_escaped_query, expected_escaped_query)
-    assert statement.count("ESCAPE '\\'") == 2
+    assert parameters[:3] == (expected_escaped_query, expected_escaped_query, expected_escaped_query)
+    assert statement.count("ESCAPE '\\'") == 3
 
 
 def test_donor_search_statement_groups_by_active_donor_identity_cluster_or_fallback() -> None:
@@ -145,7 +150,7 @@ def test_donor_search_statement_groups_by_active_donor_identity_cluster_or_fallb
     assert "t.contributor_person_id" not in statement
 
 
-def test_donor_search_statement_resolves_identity_from_raw_variants_before_pagination() -> None:
+def test_donor_search_statement_resolves_identity_before_canonical_page_selection() -> None:
     statement, _parameters = campaign_finance_queries._build_donor_search_statement(
         q="smith",
         by="name",
@@ -157,7 +162,10 @@ def test_donor_search_statement_resolves_identity_from_raw_variants_before_pagin
     variant_count_sql = ctes["variant_resolution_counts"]
     donor_resolution_sql = ctes["donor_resolution"]
     detail_sql = ctes["qualifying_transactions"]
+    identity_key_sql = ctes["identity_variant_donor_keys"]
 
+    assert "LOWER(COALESCE(identity_record.contributor_name_raw, ''))" in identity_key_sql
+    assert "LIKE '%%' || LOWER(%s) || '%%' ESCAPE '\\'" in identity_key_sql
     assert "JOIN cf.donor_search_rollup_identity_variant variant" in variant_sql
     assert "identity_record.contributor_name_raw = variant.contributor_name_raw" in variant_sql
     assert "COALESCE(identity_record.contributor_zip, '') = variant.contributor_zip" in variant_sql
@@ -168,17 +176,65 @@ def test_donor_search_statement_resolves_identity_from_raw_variants_before_pagin
     assert "normalized_zip5" not in variant_sql
     assert "COUNT(DISTINCT variant.resolved_donor_identity_id) AS canonical_identity_count" in variant_count_sql
     assert "COUNT(*) = COUNT(*) FILTER (WHERE variant.canonical_identity_count = 1)" in donor_resolution_sql
-    assert statement.index("resolved_identity_variants AS MATERIALIZED") < statement.index(
-        "matching_donor_keys AS MATERIALIZED"
+    assert statement.index("identity_candidate_records AS MATERIALIZED") < statement.index(
+        "resolved_identity_variants AS"
     )
+    assert statement.index("resolved_identity_variants AS") < statement.index("matching_donor_keys AS MATERIALIZED")
     assert "LEFT JOIN resolved_identity_variants identity_variant" in detail_sql
     assert "COALESCE(transaction_row.contributor_zip, '') AS identity_zip" in detail_sql
+    assert "LEFT(nonnull_zip_transaction.contributor_zip, 5) = record.identity_zip" in detail_sql
+    assert "record.identity_zip <> ''" in detail_sql
+    assert "record.identity_zip = ''" in detail_sql
+    assert "null_zip_transaction.contributor_zip IS NULL" in detail_sql
     assert "identity_record.contributor_zip = record.identity_zip" not in statement
     donor_group_sql = ctes["donor_groups"]
     assert "page_key.total_amount" in donor_group_sql
     assert "page_key.transaction_count" in donor_group_sql
     assert "SUM(amount)" not in donor_group_sql
     assert "COUNT(*)" not in donor_group_sql
+
+
+def test_donor_search_statement_resolves_identity_variants_before_canonical_pagination() -> None:
+    statement, _parameters = campaign_finance_queries._build_donor_search_statement(
+        q="smith",
+        by="name",
+        limit=20,
+        offset=0,
+    )
+    ctes = _cte_bodies(statement)
+    variant_sql = ctes["resolved_identity_variants"]
+    variant_count_sql = ctes["variant_resolution_counts"]
+    donor_resolution_sql = ctes["donor_resolution"]
+
+    assert statement.index("identity_candidate_records AS MATERIALIZED") < statement.index(
+        "resolved_identity_variants AS"
+    )
+    assert statement.index("matching_donor_keys AS MATERIALIZED") < statement.index(
+        "qualifying_transactions AS MATERIALIZED"
+    )
+    assert "FROM identity_candidate_records record" in variant_sql
+    assert "FROM matching_donor_records record" not in variant_sql
+    assert "FROM resolved_identity_variants variant" in variant_count_sql
+    assert "FROM identity_candidate_records record" in donor_resolution_sql
+    assert "FROM matching_donor_records record" not in donor_resolution_sql
+
+
+def test_donor_search_statement_deep_pages_do_not_accumulate_offset_sized_arrays() -> None:
+    statement, parameters = campaign_finance_queries._build_donor_search_statement(
+        q="smith",
+        by="name",
+        limit=1,
+        offset=1_000_000,
+    )
+    ctes = _cte_bodies(statement)
+    page_sql = ctes["matching_donor_keys"]
+
+    assert "identity_page_scan" not in ctes
+    assert "ARRAY_APPEND" not in statement
+    assert "seen_donor_keys" not in statement
+    assert page_sql.count("LIMIT %s") == 1
+    assert page_sql.count("OFFSET %s") == 1
+    assert parameters[-3:-1] == (1, 1_000_000)
 
 
 def test_donor_search_statement_drives_scope_from_current_officeholders() -> None:
@@ -249,7 +305,7 @@ def test_donor_search_statement_pushes_committee_scope_into_transaction_detail_p
         "qualifying_transactions AS MATERIALIZED"
     )
     assert transaction_detail_sql.count(scoped_committee_join) == 1
-    transaction_probe_start = transaction_detail_sql.index("FROM cf.transaction transaction_row")
+    transaction_probe_start = transaction_detail_sql.index("FROM cf.transaction nonnull_zip_transaction")
     transaction_probe_end = transaction_detail_sql.index(") transaction_detail")
     assert transaction_probe_start < transaction_detail_sql.index(scoped_committee_join) < transaction_probe_end
     assert transaction_detail_sql.index(scoped_committee_join) < transaction_detail_sql.index(
@@ -269,10 +325,12 @@ def test_donor_search_statement_keeps_only_bounded_transaction_detail_sites() ->
         offset=0,
     )
 
-    # Remaining transaction site 1: post-pagination transaction detail and
-    # provenance access for only the selected rollup donor keys.
-    assert "FROM cf.transaction transaction_row" in _cte_bodies(statement)["qualifying_transactions"]
+    # Remaining transaction site 1: three mutually exclusive ZIP branches for
+    # post-pagination transaction detail and provenance access.
+    transaction_detail_sql = _cte_bodies(statement)["qualifying_transactions"]
+    assert "FROM cf.transaction nonnull_zip_transaction" in transaction_detail_sql
+    assert "FROM cf.transaction null_zip_transaction" in transaction_detail_sql
     # Remaining transaction site 2: possible-match evidence access for identity
     # transparency candidates that are not part of the combined donor cluster.
     assert "JOIN cf.transaction t" in _cte_bodies(statement)["not_combined_candidate_rollups"]
-    assert statement.count("cf.transaction") == 2
+    assert statement.count("cf.transaction") == 4

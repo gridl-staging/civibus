@@ -60,7 +60,10 @@ def _explain_donor_search_with_default_planner(
         return cursor.fetchone()[0][0]["Plan"]
 
 
-_CTE_HEADER_RE = re.compile(r"\s*(?P<name>[a-z_][a-z0-9_]*)\s+AS(?:\s+MATERIALIZED)?\s*\(", re.IGNORECASE)
+_CTE_HEADER_RE = re.compile(
+    r"\s*(?P<name>[a-z_][a-z0-9_]*)(?:\s*\([^)]*\))?\s+AS(?:\s+MATERIALIZED)?\s*\(",
+    re.IGNORECASE,
+)
 
 
 def _matching_close_paren(sql: str, open_paren: int) -> int:
@@ -77,6 +80,8 @@ def _matching_close_paren(sql: str, open_paren: int) -> int:
 
 def _cte_bodies(sql: str) -> dict[str, str]:
     with_start = sql.upper().index("WITH") + len("WITH")
+    if sql[with_start:].lstrip().upper().startswith("RECURSIVE"):
+        with_start = sql.upper().index("RECURSIVE", with_start) + len("RECURSIVE")
     ctes: dict[str, str] = {}
     cursor = with_start
     while match := _CTE_HEADER_RE.match(sql, cursor):
@@ -148,6 +153,26 @@ def _transaction_access_loop_counts(nodes: list[dict[str, Any]]) -> list[int]:
     ]
 
 
+def _relation_access_loop_count(nodes: list[dict[str, Any]], relation_name: str) -> int:
+    return sum(int(node.get("Actual Loops", 0)) for node in nodes if node.get("Relation Name") == relation_name)
+
+
+def _relation_access_row_count(nodes: list[dict[str, Any]], relation_name: str) -> int:
+    return sum(
+        int(node.get("Actual Rows", 0)) * int(node.get("Actual Loops", 0))
+        for node in nodes
+        if node.get("Relation Name") == relation_name
+    )
+
+
+def _relation_shared_buffer_blocks(nodes: list[dict[str, Any]], relation_name: str) -> int:
+    return sum(
+        int(node.get("Shared Read Blocks", 0)) + int(node.get("Shared Hit Blocks", 0))
+        for node in nodes
+        if node.get("Relation Name") == relation_name
+    )
+
+
 def _candidate_access_nodes(candidate_scope_node: dict[str, Any]) -> list[dict[str, Any]]:
     return [node for node in _plan_nodes(candidate_scope_node) if node.get("Relation Name") == "candidate"]
 
@@ -169,6 +194,7 @@ def _assert_candidate_scope_uses_candidate_seq_scan(candidate_scope_node: dict[s
 
 
 _DONOR_SEARCH_FULL_SCOPE_MAX_ROOT_SHARED_BLOCKS = 12_000
+_DOCUMENTED_DONOR_IDENTITY_SCALE = 116_345
 
 
 def _root_shared_buffer_blocks(plan: dict[str, Any]) -> int:
@@ -245,7 +271,7 @@ def test_donor_search_name_and_employer_reach_rollup_by_index(
     )
 
 
-def test_donor_search_detail_uses_page_driven_name_index_probes(
+def test_donor_search_detail_uses_page_driven_index_probes(
     db_conn: psycopg.Connection,
 ) -> None:
     """Transaction detail must be fetched from page donors, not a full-table scan."""
@@ -254,11 +280,13 @@ def test_donor_search_detail_uses_page_driven_name_index_probes(
     plan = _explain_donor_search(db_conn, q="williams", by="name")
     nodes = _plan_nodes(plan)
 
-    name_probe_indexes = {
+    page_probe_indexes = {
         "idx_transaction_donor_search_name_receipt_trgm",
         "idx_transaction_contributor_name_lower_trgm",
+        "idx_transaction_contributor_zip5",
+        "idx_transaction_donor_search_zip5_receipt",
     }
-    assert _transaction_access_index_names(nodes) & name_probe_indexes
+    assert _transaction_access_index_names(nodes) & page_probe_indexes
     assert not any(
         node.get("Node Type") == "Seq Scan"
         and node.get("Relation Name") == "transaction"
@@ -313,6 +341,118 @@ def test_donor_search_full_scope_common_surname_bounds_qualifying_transactions(
     assert matching_node["Actual Rows"] > 0
     assert matching_node["Actual Rows"] < fixture.counts.common_surname_transactions
     assert any(node.get("Relation Name") == "transaction" for node in nodes)
+
+
+def test_donor_search_skips_identity_variant_rollup_when_no_identities_exist(
+    db_conn: psycopg.Connection,
+) -> None:
+    fixture = seed_full_scope_skewed_donor_search_fixture(db_conn)
+    donor_identity_rows = db_conn.execute("SELECT COUNT(*)::integer FROM core.donor_identity").fetchone()[0]
+    assert donor_identity_rows == 0
+
+    plan = _explain_analyze_donor_search(db_conn, q="williams")
+    nodes = _plan_nodes(plan)
+    variant_loops = _relation_access_loop_count(nodes, "donor_search_rollup_identity_variant")
+    variant_blocks = _relation_shared_buffer_blocks(nodes, "donor_search_rollup_identity_variant")
+
+    assert fixture.counts.common_surname_transactions == 250
+    assert variant_loops == 0, (
+        "donor search must not probe identity-variant rollups when core.donor_identity is empty; "
+        f"loops={variant_loops}, blocks={variant_blocks}"
+    )
+    assert variant_blocks == 0, (
+        "donor search must not spend shared buffers on identity-variant rollups when no identity rows can resolve; "
+        f"loops={variant_loops}, blocks={variant_blocks}"
+    )
+
+
+def test_donor_search_bounds_identity_variant_work_when_unrelated_identity_exists(
+    db_conn: psycopg.Connection,
+) -> None:
+    fixture = seed_full_scope_skewed_donor_search_fixture(db_conn)
+    db_conn.execute(
+        """
+        INSERT INTO core.donor_identity (
+            id,
+            canonical_name,
+            contributor_name_raw,
+            transaction_count
+        )
+        VALUES (
+            '72f00000-0000-0000-0000-000000000001',
+            'UNRELATED IDENTITY',
+            'UNRELATED IDENTITY',
+            1
+        )
+        """
+    )
+
+    plan = _explain_analyze_donor_search(db_conn, q="williams")
+    nodes = _plan_nodes(plan)
+    matching_rows = int(_single_loop_cte_scan(nodes, "matching_donor_records")["Actual Rows"])
+    variant_loops = _relation_access_loop_count(nodes, "donor_search_rollup_identity_variant")
+    variant_rows = _relation_access_row_count(nodes, "donor_search_rollup_identity_variant")
+    variant_blocks = _relation_shared_buffer_blocks(nodes, "donor_search_rollup_identity_variant")
+
+    assert matching_rows > 20
+    assert fixture.counts.common_surname_transactions == 250
+    assert variant_loops <= 40, (
+        "an unrelated donor identity must not resolve every matching rollup row before pagination; "
+        f"matching_rows={matching_rows}, identity_variant_loops={variant_loops}"
+    )
+    assert variant_rows <= 40, (
+        "identity-variant row access must stay page-scaled even when one plan node scans in one loop; "
+        f"matching_rows={matching_rows}, identity_variant_rows={variant_rows}, blocks={variant_blocks}"
+    )
+    assert variant_blocks <= 120, (
+        "identity-variant buffer work must stay page-scaled when the only identity is unrelated; "
+        f"matching_rows={matching_rows}, identity_variant_rows={variant_rows}, blocks={variant_blocks}"
+    )
+
+
+def test_donor_search_bounds_identity_variant_work_at_documented_identity_scale(
+    db_conn: psycopg.Connection,
+) -> None:
+    fixture = seed_full_scope_skewed_donor_search_fixture(db_conn)
+    db_conn.execute(
+        """
+        INSERT INTO core.donor_identity (
+            id,
+            canonical_name,
+            contributor_name_raw,
+            transaction_count
+        )
+        SELECT
+            md5('donor-search-unrelated-identity-' || series.identity_number)::uuid,
+            'UNRELATED IDENTITY ' || series.identity_number,
+            'UNRELATED IDENTITY ' || series.identity_number,
+            1
+        FROM generate_series(1, %s) AS series(identity_number)
+        """,
+        (_DOCUMENTED_DONOR_IDENTITY_SCALE,),
+    )
+
+    donor_identity_rows = db_conn.execute("SELECT COUNT(*)::integer FROM core.donor_identity").fetchone()[0]
+    plan = _explain_analyze_donor_search(db_conn, q="williams")
+    nodes = _plan_nodes(plan)
+    variant_loops = _relation_access_loop_count(nodes, "donor_search_rollup_identity_variant")
+    variant_rows = _relation_access_row_count(nodes, "donor_search_rollup_identity_variant")
+    variant_blocks = _relation_shared_buffer_blocks(nodes, "donor_search_rollup_identity_variant")
+
+    assert donor_identity_rows == _DOCUMENTED_DONOR_IDENTITY_SCALE
+    assert fixture.counts.common_surname_transactions == 250
+    assert variant_loops <= 40, (
+        "donor search must not perform one identity-variant probe per populated donor identity; "
+        f"identity_rows={donor_identity_rows}, identity_variant_loops={variant_loops}"
+    )
+    assert variant_rows <= 40, (
+        "identity-variant row access must stay page-scaled at documented donor-identity scale; "
+        f"identity_rows={donor_identity_rows}, identity_variant_rows={variant_rows}, blocks={variant_blocks}"
+    )
+    assert variant_blocks <= 120, (
+        "identity-variant buffer work must stay page-scaled at documented donor-identity scale; "
+        f"identity_rows={donor_identity_rows}, identity_variant_rows={variant_rows}, blocks={variant_blocks}"
+    )
 
 
 def test_donor_search_full_scope_candidate_scope_uses_production_seq_scan_shape(
@@ -391,11 +531,19 @@ def test_donor_search_match_cte_keeps_scope_and_receipt_filters_before_materiali
     assert "cf.transaction" not in match_cte
 
     qualifying_cte = _cte_sql(sql, name="qualifying_transactions", next_name="donor_groups")
-    assert "FROM cf.transaction transaction_row" in qualifying_cte
-    assert "FROM page_donor_records record" in qualifying_cte
+    assert "FROM cf.transaction nonnull_zip_transaction" in qualifying_cte
+    assert "FROM cf.transaction null_zip_transaction" in qualifying_cte
+    assert "FROM cf.transaction blank_zip_transaction" in qualifying_cte
+    assert "FROM matching_donor_keys page_key" in qualifying_cte
+    assert "JOIN resolved_donor_records record" in qualifying_cte
+    assert "ON record.donor_key = page_key.donor_key" in qualifying_cte
     assert "CROSS JOIN LATERAL" in qualifying_cte
     assert "LOWER(transaction_row.contributor_name_raw)" in qualifying_cte
     assert "LIKE '%%' || LOWER(record.identity_name) || '%%'" in qualifying_cte
+    assert "LEFT(nonnull_zip_transaction.contributor_zip, 5) = record.identity_zip" in qualifying_cte
+    assert "null_zip_transaction.contributor_zip IS NULL" in qualifying_cte
+    assert "blank_zip_transaction.contributor_zip = ''" in qualifying_cte
+    assert "record.raw_donor_key = md5(" in qualifying_cte
     assert "OFFSET 0" in qualifying_cte
     assert "JOIN current_federal_candidate_committees" not in qualifying_cte
     assert "JOIN current_federal_committee_scope scope_filter" in qualifying_cte
@@ -427,9 +575,9 @@ def test_donor_search_donor_groups_use_scalar_id_aggregate() -> None:
     sql, _params = _build_donor_search_statement(q="smith", by="name", limit=5, offset=0)
 
     ctes = _cte_bodies(sql)
-    matching_donor_keys_cte = ctes["matching_donor_keys"]
+    candidate_donor_keys_cte = ctes["candidate_donor_keys"]
     donor_groups_cte = ctes["donor_groups"]
 
-    assert "MIN(record.id::text)::uuid AS id" in matching_donor_keys_cte
+    assert "MIN(record.id::text)::uuid AS id" in candidate_donor_keys_cte
     assert "page_key.id" in donor_groups_cte
     assert "ARRAY_AGG(id ORDER BY id ASC)" not in donor_groups_cte

@@ -60,7 +60,7 @@ export type PersonDetailResponse = BaseDetailResponse & {
   bio_license: string | null;
   bio_pulled_at: string | null;
   portrait?: PersonPortraitResponse | null;
-  current_office: CurrentOfficeResponse | null;
+  current_office?: CurrentOfficeResponse | null;
 };
 
 export type OrgDetailResponse = BaseDetailResponse & {
@@ -119,7 +119,7 @@ export function assertPersonPayloadHasRequiredBioKeys(
   }
 
   if (!("current_office" in personPayload)) {
-    throw new Error("Person payload missing required current_office key.");
+    return;
   }
 
   const currentOffice = personPayload.current_office;

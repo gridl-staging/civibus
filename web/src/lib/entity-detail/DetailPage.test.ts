@@ -384,6 +384,17 @@ function buildPersonPageBundle(
   };
 }
 
+function buildPersonPageBundleWithoutCurrentOffice(): EntityDetailPageBundle {
+  const data = buildPersonPageBundle();
+  if (data.entityType !== "person" || !("current_office" in data.detail)) {
+    throw new Error("Expected a person detail bundle with current-office context.");
+  }
+
+  const { current_office: _currentOffice, ...detail } = data.detail;
+
+  return buildPersonPageBundle({ detail });
+}
+
 describe("entity detail page rendering", () => {
   it("renders public person detail with identifier metrics and no ER/graph/civic internals", () => {
     const rendered = render(DetailPage, {
@@ -404,6 +415,23 @@ describe("entity detail page rendering", () => {
     expect(rendered.body).not.toContain("Civic Record");
     expect(rendered.body).not.toContain("Officeholding timeline");
     expect(rendered.body).not.toContain("Entity internals");
+  });
+
+  it("renders canonical person facts without current-office rows when current office is omitted", () => {
+    const rendered = render(DetailPage, {
+      props: {
+        data: buildPersonPageBundleWithoutCurrentOffice()
+      }
+    });
+
+    expect(rendered.body).toContain("Jane Doe");
+    expect(rendered.body).toContain("<h3>Core attributes</h3>");
+    expect(rendered.body).toContain("<dt>Year of birth</dt>");
+    expect(rendered.body).toContain("<dd>1985</dd>");
+    expect(rendered.body).toContain("<dt>Identifiers</dt>");
+    expect(rendered.body).toContain("<dd>1</dd>");
+    expect(rendered.body).not.toContain("<dt>Current office</dt>");
+    expect(rendered.body).not.toContain("<dt>Office level</dt>");
   });
 
   it("renders a route-owned compare entry point when a person compare href is provided", () => {

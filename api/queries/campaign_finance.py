@@ -1087,7 +1087,37 @@ _DONOR_SEARCH_SQL_TEMPLATE = f"""
         FROM cf.donor_search_rollup rollup
         WHERE {{match_sql}}
     ),
-    resolved_identity_variants AS MATERIALIZED (
+    donor_identity_presence AS MATERIALIZED (
+        SELECT EXISTS (SELECT 1 FROM core.donor_identity) AS has_donor_identities
+    ),
+    identity_variant_donor_keys AS MATERIALIZED (
+        SELECT DISTINCT identity_variant.donor_key
+        FROM donor_identity_presence identity_presence
+        JOIN core.donor_identity identity_record
+          ON identity_presence.has_donor_identities
+         AND {{identity_match_sql}}
+        CROSS JOIN LATERAL (
+            SELECT identity_variant.donor_key
+            FROM cf.donor_search_rollup_identity_variant identity_variant
+            WHERE identity_variant.contributor_name_raw = identity_record.contributor_name_raw
+              AND identity_variant.contributor_employer = COALESCE(identity_record.contributor_employer, '')
+              AND identity_variant.contributor_occupation = COALESCE(identity_record.contributor_occupation, '')
+              AND identity_variant.contributor_city = COALESCE(identity_record.contributor_city, '')
+              AND identity_variant.contributor_state = COALESCE(identity_record.contributor_state, '')
+              AND identity_variant.contributor_zip = COALESCE(identity_record.contributor_zip, '')
+            -- Preserve one tuple-index probe per identity instead of allowing a
+            -- full variant-table hash scan for a sparse identity population.
+            LIMIT 2147483647
+            OFFSET 0
+        ) identity_variant
+    ),
+    identity_candidate_records AS MATERIALIZED (
+        SELECT record.*
+        FROM identity_variant_donor_keys identity_key
+        JOIN matching_donor_records record
+          ON record.raw_donor_key = identity_key.donor_key
+    ),
+    resolved_identity_variants AS (
         SELECT
             record.raw_donor_key,
             variant.contributor_name_raw AS identity_name_raw,
@@ -1098,7 +1128,7 @@ _DONOR_SEARCH_SQL_TEMPLATE = f"""
             variant.contributor_zip AS identity_zip,
             identity_record.id AS donor_identity_record_id,
             active_canonical_identity.id AS resolved_donor_identity_id
-        FROM matching_donor_records record
+        FROM identity_candidate_records record
         JOIN cf.donor_search_rollup_identity_variant variant
           ON variant.donor_key = record.raw_donor_key
         LEFT JOIN core.donor_identity identity_record
@@ -1123,8 +1153,9 @@ _DONOR_SEARCH_SQL_TEMPLATE = f"""
          AND active_canonical_member.split_at IS NULL
         LEFT JOIN core.donor_identity active_canonical_identity
           ON active_canonical_identity.id = active_canonical_member.entity_id
+        WHERE (SELECT has_donor_identities FROM donor_identity_presence)
     ),
-    variant_resolution_counts AS MATERIALIZED (
+    variant_resolution_counts AS (
         SELECT
             variant.raw_donor_key,
             variant.identity_name_raw,
@@ -1145,7 +1176,7 @@ _DONOR_SEARCH_SQL_TEMPLATE = f"""
             variant.identity_state,
             variant.identity_zip
     ),
-    donor_resolution AS MATERIALIZED (
+    donor_resolution AS (
         SELECT
             record.raw_donor_key,
             CASE
@@ -1154,15 +1185,40 @@ _DONOR_SEARCH_SQL_TEMPLATE = f"""
                 THEN MIN(variant.resolved_donor_identity_id::text)::uuid
                 ELSE NULL
             END AS resolved_donor_identity_id
-        FROM matching_donor_records record
+        FROM identity_candidate_records record
         LEFT JOIN variant_resolution_counts variant
           ON variant.raw_donor_key = record.raw_donor_key
         GROUP BY record.raw_donor_key
     ),
-    resolved_donor_records AS MATERIALIZED (
-        -- Resolve identity once per distinct raw donor record rather than once
-        -- per transaction. Pagination must happen after this step so two raw
-        -- records in one active cluster cannot be split across page boundaries.
+    raw_resolved_donor_records AS (
+        SELECT
+            record.id,
+            record.contributor_name,
+            record.contributor_employer,
+            record.contributor_occupation,
+            record.contributor_city,
+            record.contributor_state,
+            record.normalized_zip5,
+            record.identity_name,
+            record.identity_employer,
+            record.identity_occupation,
+            record.identity_city,
+            record.identity_state,
+            record.identity_zip,
+            record.raw_donor_key,
+            NULL::uuid AS resolved_donor_identity_id,
+            record.raw_donor_key AS donor_key,
+            record.total_amount,
+            record.transaction_count,
+            record.latest_transaction_date
+        FROM matching_donor_records record
+        WHERE NOT EXISTS (
+            SELECT 1
+            FROM identity_candidate_records identity_candidate
+            WHERE identity_candidate.raw_donor_key = record.raw_donor_key
+        )
+    ),
+    identity_resolved_donor_records AS (
         SELECT
             record.id,
             CASE
@@ -1201,13 +1257,13 @@ _DONOR_SEARCH_SQL_TEMPLATE = f"""
             record.total_amount,
             record.transaction_count,
             record.latest_transaction_date
-        FROM matching_donor_records record
+        FROM identity_candidate_records record
         JOIN donor_resolution resolution
           ON resolution.raw_donor_key = record.raw_donor_key
         LEFT JOIN core.donor_identity canonical_identity
           ON canonical_identity.id = resolution.resolved_donor_identity_id
     ),
-    matching_donor_keys AS MATERIALIZED (
+    candidate_donor_keys AS (
         SELECT
             MIN(record.id::text)::uuid AS id,
             record.contributor_name,
@@ -1220,7 +1276,7 @@ _DONOR_SEARCH_SQL_TEMPLATE = f"""
             record.donor_key,
             COALESCE(SUM(record.total_amount), 0) AS total_amount,
             SUM(record.transaction_count)::integer AS transaction_count
-        FROM resolved_donor_records record
+        FROM identity_resolved_donor_records record
         GROUP BY
             record.contributor_name,
             record.contributor_employer,
@@ -1231,12 +1287,47 @@ _DONOR_SEARCH_SQL_TEMPLATE = f"""
             record.resolved_donor_identity_id,
             record.donor_key
         ORDER BY total_amount DESC, transaction_count DESC, contributor_name ASC, id ASC
+    ),
+    matching_donor_keys AS MATERIALIZED (
+        SELECT
+            keys.id,
+            keys.contributor_name,
+            keys.contributor_employer,
+            keys.contributor_occupation,
+            keys.contributor_city,
+            keys.contributor_state,
+            keys.normalized_zip5,
+            keys.resolved_donor_identity_id,
+            keys.donor_key,
+            keys.total_amount,
+            keys.transaction_count
+        FROM raw_resolved_donor_records keys
+        UNION ALL
+        SELECT
+            keys.id,
+            keys.contributor_name,
+            keys.contributor_employer,
+            keys.contributor_occupation,
+            keys.contributor_city,
+            keys.contributor_state,
+            keys.normalized_zip5,
+            keys.resolved_donor_identity_id,
+            keys.donor_key,
+            keys.total_amount,
+            keys.transaction_count
+        FROM candidate_donor_keys keys
+        ORDER BY total_amount DESC, transaction_count DESC, contributor_name ASC, id ASC
         LIMIT %s
         OFFSET %s
     ),
-    page_donor_records AS MATERIALIZED (
+    resolved_donor_records AS MATERIALIZED (
         SELECT record.*
-        FROM resolved_donor_records record
+        FROM raw_resolved_donor_records record
+        JOIN matching_donor_keys page_key
+          ON page_key.donor_key = record.donor_key
+        UNION ALL
+        SELECT record.*
+        FROM identity_resolved_donor_records record
         JOIN matching_donor_keys page_key
           ON page_key.donor_key = record.donor_key
     ),
@@ -1259,7 +1350,9 @@ _DONOR_SEARCH_SQL_TEMPLATE = f"""
             record.resolved_donor_identity_id,
             record.donor_key,
             t.source_record_id
-        FROM page_donor_records record
+        FROM matching_donor_keys page_key
+        JOIN resolved_donor_records record
+          ON record.donor_key = page_key.donor_key
         CROSS JOIN LATERAL (
             SELECT transaction_detail.*
             FROM (
@@ -1281,7 +1374,26 @@ _DONOR_SEARCH_SQL_TEMPLATE = f"""
                     NULLIF(BTRIM(transaction_row.contributor_state), '') AS contributor_state,
                     NULLIF(LEFT(transaction_row.contributor_zip, 5), '') AS normalized_zip5,
                     transaction_row.source_record_id
-                FROM cf.transaction transaction_row
+                FROM (
+                    SELECT nonnull_zip_transaction.*
+                    FROM cf.transaction nonnull_zip_transaction
+                    WHERE record.identity_zip <> ''
+                      AND LEFT(nonnull_zip_transaction.contributor_zip, 5) = record.identity_zip
+
+                    UNION ALL
+
+                    SELECT null_zip_transaction.*
+                    FROM cf.transaction null_zip_transaction
+                    WHERE record.identity_zip = ''
+                      AND null_zip_transaction.contributor_zip IS NULL
+
+                    UNION ALL
+
+                    SELECT blank_zip_transaction.*
+                    FROM cf.transaction blank_zip_transaction
+                    WHERE record.identity_zip = ''
+                      AND blank_zip_transaction.contributor_zip = ''
+                ) transaction_row
                 JOIN current_federal_committee_scope scope_filter
                   ON scope_filter.committee_id = transaction_row.committee_id
                 WHERE transaction_row.contributor_name_raw IS NOT NULL
@@ -1295,6 +1407,7 @@ _DONOR_SEARCH_SQL_TEMPLATE = f"""
             -- Keep the page-key dependency lateral so PostgreSQL performs one
             -- indexed name probe per displayed donor instead of flattening the
             -- join into a scan of every qualifying transaction.
+            LIMIT CASE WHEN record.raw_donor_key IS NULL THEN 0 ELSE 2147483647 END
             OFFSET 0
         ) t
         LEFT JOIN resolved_identity_variants identity_variant
@@ -2554,8 +2667,12 @@ def _normalize_donor_search_input(*, q: str, by: str, limit: int, offset: int) -
     return normalized_query, normalized_by, clamped_limit, clamped_offset
 
 
+def _escape_like_query(query: str) -> str:
+    return query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 def _donor_search_match_sql(by: str, query: str) -> tuple[str, tuple[str, ...]]:
-    escaped_query = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    escaped_query = _escape_like_query(query)
     if by == "name":
         return (
             "rollup.search_text LIKE '%%' || LOWER(%s) || '%%' "
@@ -2572,6 +2689,23 @@ def _donor_search_match_sql(by: str, query: str) -> tuple[str, tuple[str, ...]]:
         )
     if by == "zip":
         return "rollup.normalized_zip5 = %s", (query,)
+    raise ValueError(f"Unsupported donor search mode: {by}")
+
+
+def _donor_identity_match_sql(by: str, query: str) -> tuple[str, tuple[str, ...]]:
+    escaped_query = _escape_like_query(query)
+    if by == "name":
+        return (
+            "LOWER(COALESCE(identity_record.contributor_name_raw, '')) LIKE '%%' || LOWER(%s) || '%%' ESCAPE '\\'",
+            (escaped_query,),
+        )
+    if by == "employer":
+        return (
+            "LOWER(COALESCE(identity_record.contributor_employer, '')) LIKE '%%' || LOWER(%s) || '%%' ESCAPE '\\'",
+            (escaped_query,),
+        )
+    if by == "zip":
+        return "identity_record.zip5 = %s", (query,)
     raise ValueError(f"Unsupported donor search mode: {by}")
 
 
@@ -2595,11 +2729,19 @@ def _build_donor_search_statement(
         offset=offset,
     )
     match_sql, match_parameters = _donor_search_match_sql(normalized_by, normalized_query)
+    identity_match_sql, identity_match_parameters = _donor_identity_match_sql(normalized_by, normalized_query)
     return (
         _DONOR_SEARCH_SQL_TEMPLATE.format(
             match_sql=match_sql,
+            identity_match_sql=identity_match_sql,
         ),
-        (*match_parameters, clamped_limit, clamped_offset, CONTRIBUTION_INSIGHTS_MIN_DATE),
+        (
+            *match_parameters,
+            *identity_match_parameters,
+            clamped_limit,
+            clamped_offset,
+            CONTRIBUTION_INSIGHTS_MIN_DATE,
+        ),
     )
 
 
@@ -2830,6 +2972,7 @@ def search_donors(
     )
 
     with conn.cursor(row_factory=dict_row) as cursor:
+        cursor.execute("SET LOCAL jit = off")
         cursor.execute(sql, params)
         rows = list(cursor.fetchall())
 

@@ -95,6 +95,32 @@ describe("entity detail contract", () => {
     );
   });
 
+  it("allows older person payloads to omit current-office context", () => {
+    const personPayloadWithoutCurrentOffice = {
+      id: PERSON_ID,
+      canonical_name: "Jane Doe",
+      name_variants: [],
+      first_name: "Jane",
+      middle_name: null,
+      last_name: "Doe",
+      suffix: null,
+      date_of_birth: null,
+      year_of_birth: 1980,
+      identifiers: {},
+      primary_address_id: null,
+      er_cluster_id: null,
+      er_confidence: null,
+      portrait: null,
+      sources: [],
+      bio_text: null,
+      bio_source_url: null,
+      bio_license: null,
+      bio_pulled_at: null
+    };
+
+    expect(() => assertPersonPayloadHasRequiredBioKeys(personPayloadWithoutCurrentOffice)).not.toThrow();
+  });
+
   it("rejects malformed current-office context before page consumption", () => {
     const malformedCurrentOfficePayload = {
       id: PERSON_ID,

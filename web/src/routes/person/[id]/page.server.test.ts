@@ -71,6 +71,12 @@ function buildPersonDetail() {
   };
 }
 
+function buildPersonDetailWithoutCurrentOffice() {
+  const { current_office: _currentOffice, ...personDetail } = buildPersonDetail();
+
+  return personDetail;
+}
+
 function createPersonRouteApi(cycle?: number) {
   const personDetail = buildPersonDetail();
   const selectedCycle = cycle ?? SELECTED_CYCLE_FIELDS.selected_cycle;
@@ -314,6 +320,91 @@ describe("/person/[id] +page.server load", () => {
     expect(requestJson.mock.calls.map(([path]) => path)).not.toContain(
       `/v1/graph/person/${PERSON_ID}/relationships`
     );
+  });
+
+  it("loads canonical person detail when older payloads omit current-office context", async () => {
+    const requestJson = vi.fn(async (path: string): Promise<unknown> => {
+      if (path === `/v1/person/${PERSON_ID}`) {
+        return buildPersonDetailWithoutCurrentOffice();
+      }
+
+      if (path === `/v1/candidates?person_id=${PERSON_ID}&limit=10&offset=0`) {
+        return { items: [], has_next: false, offset: 0, limit: 10 };
+      }
+
+      if (path === `/v1/person/${PERSON_ID}/contribution-insights`) {
+        return {
+          person_id: PERSON_ID,
+          has_data: false,
+          metadata: {
+            ...SELECTED_CYCLE_FIELDS,
+            coverage_start_date: "2022-01-01",
+            coverage_end_date: "2026-12-31",
+            cycles_included: [2022, 2024, 2026],
+            committee_count: 0,
+            approximate_geography: false,
+            excluded_geography: "no_linked_candidate",
+            caveats: []
+          },
+          monthly_totals: [],
+          itemized_size_buckets: [],
+          dollars_by_size: [],
+          cycle_totals: [],
+          career_totals: {
+            itemized_individual_contribution_amount: "0.00",
+            itemized_transaction_count: 0,
+            unitemized_individual_contribution_amount: "0.00",
+            total_individual_contribution_amount: "0.00",
+            source: "none"
+          },
+          geography: {
+            by_state: [],
+            by_district: [],
+            district_share: {
+              in_district_amount: null,
+              out_of_district_amount: null,
+              unknown_district_amount: null,
+              share: null,
+              available: false
+            }
+          },
+          small_dollar_share: {
+            small_dollar_amount: null,
+            total_contribution_amount: null,
+            share: null,
+            available: false
+          }
+        };
+      }
+
+      if (path === `/v1/person/${PERSON_ID}/top-donors?cycle=2026`) {
+        return [];
+      }
+
+      if (path === `/v1/person/${PERSON_ID}/top-employers?cycle=2026`) {
+        return [];
+      }
+
+      throw new Error(`unexpected path: ${path}`);
+    });
+
+    const data = (await load(createLoadEvent(requestJson))) as EntityDetailPageBundle;
+
+    expect(data.entityType).toBe("person");
+    expect(data.detail).toMatchObject({
+      id: PERSON_ID,
+      canonical_name: "Jane Doe",
+      bio_text: null,
+      bio_source_url: null,
+      bio_license: null,
+      bio_pulled_at: null
+    });
+    expect("current_office" in data.detail).toBe(false);
+    expect(data.personMoneyHeadline).toEqual({
+      kind: "no_linked_candidate",
+      message: "No campaign-finance candidacies are linked yet."
+    });
+    await expect(data.personFinanceSections).resolves.toEqual([]);
   });
 
   it("resolves no-linked-candidacy as the SSR headline state while detail streams", async () => {

@@ -23,8 +23,10 @@ PROJECT_OVERVIEW_PATH = REPO_ROOT / "PROJECT_OVERVIEW.md"
 CAMPAIGN_FINANCE_REFRESH_RUNBOOK_PATH = REPO_ROOT / "docs/howto/operations/campaign-finance-refresh.md"
 REFRESH_MACHINE_IMAGE_RECEIPT_PATH = REPO_ROOT / "docs/live-state/2026_07_31_refresh_machine_image_deploy.md"
 SCHEDULER_BOUNDARY_RED_RECEIPT_PATH = REPO_ROOT / "docs/live-state/2026_07_28_refresh_scheduler_boundary.md"
+SCHEDULER_BOUNDARY_NO_START_RECEIPT_PATH = REPO_ROOT / "docs/live-state/2026_08_04_refresh_scheduler_boundary.md"
 SCHEDULER_BOUNDARY_RECHECK_CHECKLIST_PATH = REPO_ROOT / "chats/icg/aug04_pm_1_refresh_scheduler_boundary_recheck.md"
 REFRESH_RELIABILITY_RECEIPT_PATH = REPO_ROOT / "docs/live-state/2026_08_03_refresh_partial_run_reliability.md"
+FEATURE_MATRIX_PATH = REPO_ROOT / "implemented/2026_07_18_federal_first_v1_landed_history_jul13_jul17.md"
 RUNNABLE_PASSWORD_DOC_PATHS = (
     REPO_ROOT / "docs/live-state/2026_07_07_lane6_schedule_a_sizing.md",
     REPO_ROOT / "docs/live-state/2026_07_07_lane7_local_load.md",
@@ -49,6 +51,32 @@ RUNNABLE_POSTGRES_PASSWORD_PLACEHOLDER_RE = re.compile(r"POSTGRES_PASSWORD=<[^>\
 
 def _read_text(path: Path) -> str:
     return path.read_text(encoding="utf-8")
+
+
+def _single_line_starting_with(text: str, prefix: str) -> str:
+    rows = [line for line in text.splitlines() if line.startswith(prefix)]
+    assert len(rows) == 1
+    return rows[0]
+
+
+def _split_markdown_row(row: str) -> list[str]:
+    cells: list[str] = []
+    current: list[str] = []
+    escaped = False
+    for character in row.strip().strip("|"):
+        if escaped:
+            current.append(character)
+            escaped = False
+        elif character == "\\":
+            current.append(character)
+            escaped = True
+        elif character == "|":
+            cells.append("".join(current).strip())
+            current = []
+        else:
+            current.append(character)
+    cells.append("".join(current).strip())
+    return cells
 
 
 def _lane10_digest_proof_script() -> str:
@@ -261,24 +289,22 @@ def test_roadmap_tracks_only_unresolved_stage4_and_rotation_work() -> None:
 
 def test_scheduler_boundary_red_keeps_weekly_refresh_recheck_open() -> None:
     receipt_text = _read_text(SCHEDULER_BOUNDARY_RED_RECEIPT_PATH)
+    no_start_receipt_text = _read_text(SCHEDULER_BOUNDARY_NO_START_RECEIPT_PATH)
     roadmap_text = _read_text(ROADMAP_PATH)
     runbook_text = _read_text(CAMPAIGN_FINANCE_REFRESH_RUNBOOK_PATH)
     successor_text = _read_text(SCHEDULER_BOUNDARY_RECHECK_CHECKLIST_PATH)
-    history_text = _read_text(REPO_ROOT / "implemented/2026_07_18_federal_first_v1_landed_history_jul13_jul17.md")
+    matrix_text = _read_text(FEATURE_MATRIX_PATH)
     normalized_receipt_text = re.sub(r"\s+", " ", receipt_text)
+    normalized_no_start_receipt_text = re.sub(r"\s+", " ", no_start_receipt_text)
     normalized_runbook_text = re.sub(r"\s+", " ", runbook_text)
 
     assert receipt_text.rstrip().endswith("AUTOMATIC_REFRESH_RED")
-    assert "The first failed condition was the required no-other-running-Civibus-lane attribution gate." in (
-        normalized_receipt_text
+    assert (
+        "The first failed condition was the required no-other-running-Civibus-lane attribution gate."
+        in normalized_receipt_text
     )
     assert "`2026-08-04T18:53:21Z` through `2026-08-04T19:23:21Z`" in normalized_receipt_text
-
-    weekly_refresh_rows = [
-        line for line in roadmap_text.splitlines() if line.startswith("| P0 | Weekly federal refresh")
-    ]
-    assert len(weekly_refresh_rows) == 1
-    weekly_refresh_row = weekly_refresh_rows[0]
+    weekly_refresh_row = _single_line_starting_with(roadmap_text, "| P0 | Weekly federal refresh")
     assert "**CLOSED" not in weekly_refresh_row
     for fragment in (
         "2026-07-28 attribution RED",
@@ -288,8 +314,7 @@ def test_scheduler_boundary_red_keeps_weekly_refresh_recheck_open() -> None:
         "core.refresh_run",
     ):
         assert fragment in weekly_refresh_row
-
-    for owner_text in (roadmap_text, runbook_text, history_text):
+    for owner_text in (roadmap_text, runbook_text):
         assert "docs/live-state/2026_07_28_refresh_scheduler_boundary.md" in owner_text
         assert "2026-08-04T18:53:21Z" in owner_text
         assert "2026-08-04T19:23:21Z" in owner_text
@@ -303,7 +328,6 @@ def test_scheduler_boundary_red_keeps_weekly_refresh_recheck_open() -> None:
         "first failed condition",
     ):
         assert fragment in normalized_runbook_text
-
     for fragment in (
         "target `main` through Batman with `MATT_DIRECT=1`",
         "zero other running Civibus lanes",
@@ -316,8 +340,51 @@ def test_scheduler_boundary_red_keeps_weekly_refresh_recheck_open() -> None:
         "core.refresh_run",
     ):
         assert fragment in successor_text
-
     assert "zero running Civibus lanes" not in successor_text
+    assert no_start_receipt_text.rstrip().endswith("AUTOMATIC_START_NOT_OBSERVED")
+    first_failed_condition = "The first failed condition was the absence of a scheduler start event for Machine `859e0da479e678` by the `2026-08-04T19:23:21Z` deadline."
+    next_recheck = "The next smallest read-only recheck is a Fly-only inspection of the same app and Machine event log to confirm whether Fly records a late scheduler start after the deadline."
+    assert first_failed_condition in normalized_no_start_receipt_text
+    assert next_recheck in normalized_no_start_receipt_text
+    assert "**CLOSED" not in weekly_refresh_row
+    for fragment in (
+        "AUTOMATIC_START_NOT_OBSERVED",
+        "docs/live-state/2026_08_04_refresh_scheduler_boundary.md",
+        first_failed_condition,
+        next_recheck,
+        "docs/howto/operations/campaign-finance-refresh.md",
+        "core/refresh/job_builders.py::build_refresh_plan()",
+        "core.refresh_run",
+        "infra/scripts/deploy_refresh_machine.sh",
+        "infra/scripts/verify_refresh_machine.sh",
+        "Exit **(2)**, the local masters-with-spine-skipped red test, remains unrun",
+        "A second structural exit is added",
+        "Superseded pre-deploy account",
+    ):
+        assert fragment in weekly_refresh_row
+    for fragment in (
+        "The next scheduled fire is **`2026-08-04T18:53:21Z`**",
+        "automatic scheduler acceptance is still owed by the bounded",
+        "Scheduled-fire observation stays owned by `chats/icg/jul31_2pm_12_observed_refresh_completion.md`",
+        "Resolve to a single owner before 2026-08-04",
+        "downstream database and public probes failed",
+        "The two Wave-1 lanes did their jobs and the wrap-up step that connects them did not run.",
+    ):
+        assert fragment not in weekly_refresh_row
+    matrix_row = _single_line_starting_with(matrix_text, "| Weekly auto-refresh (`civibus-refresh`, `--scope federal`)")
+    matrix_cells = _split_markdown_row(matrix_row)
+    assert len(matrix_cells) == 6
+    assert matrix_cells[3] == "◐ — no scheduler start observed by the August 4 deadline"
+    for fragment in (
+        "AUTOMATIC_START_NOT_OBSERVED",
+        "docs/live-state/2026_08_04_refresh_scheduler_boundary.md",
+        first_failed_condition,
+        "Live` remains `◐`",
+        "no SQL or public-surface probe was eligible",
+    ):
+        assert fragment in matrix_row
+    assert "scheduled fire unobserved" not in matrix_row
+    assert "automatic scheduler acceptance is still owed by the bounded" not in matrix_row
 
 
 def test_project_overview_current_scope_matches_implemented_fly_refresh_model() -> None:

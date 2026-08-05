@@ -37,7 +37,7 @@ class IdentityVariantSeed:
     contributor_occupation: str
     contributor_city: str
     contributor_state: str
-    contributor_zip: str
+    contributor_zip: str | None
 
 
 _LIVE_TRANSACTION_ORACLE_SQL = f"""
@@ -200,6 +200,16 @@ def test_search_donors_uses_refresh_owner_for_donor_key_fingerprint(
     assert calls == 1
     assert payload["rollup_completed_at"] is not None
     assert len(payload["results"]) == 1
+
+
+def test_search_donors_disables_jit_for_served_statement(
+    db_conn: psycopg.Connection,
+) -> None:
+    seed_donor_search_fixture(db_conn)
+
+    search_donors(db_conn, q="smith", by="name", limit=1, offset=0)
+
+    assert db_conn.execute("SHOW jit").fetchone()[0] == "off"
 
 
 def _insert_identity_variant_transaction_row(
@@ -370,6 +380,171 @@ def test_search_donors_resolves_raw_identity_variants_without_rollup_fanout(
     assert collision_results[0]["donor_identity_id"] is None
     assert collision_results[0]["total_amount"] == Decimal("70.00")
     assert collision_results[0]["transaction_count"] == 2
+
+
+def test_search_donors_keeps_identity_cluster_atomic_across_limit_boundary(
+    db_conn: psycopg.Connection,
+) -> None:
+    fixture = seed_donor_search_fixture(db_conn)
+    canonical_seed = IdentityVariantSeed(
+        transaction_id=UUID("72200000-0000-0000-0000-000000000701"),
+        amount=Decimal("100.00"),
+        contributor_name_raw="TAYLOR BOUNDARY",
+        contributor_employer="Civic Works",
+        contributor_occupation="Engineer",
+        contributor_city="Durham",
+        contributor_state="NC",
+        contributor_zip="27701-1111",
+    )
+    variant_seed = IdentityVariantSeed(
+        transaction_id=UUID("72200000-0000-0000-0000-000000000702"),
+        amount=Decimal("90.00"),
+        contributor_name_raw=" TAYLOR BOUNDARY ",
+        contributor_employer=" Civic Works ",
+        contributor_occupation="Engineer",
+        contributor_city="Durham",
+        contributor_state="NC",
+        contributor_zip="27702-2222",
+    )
+    adjacent_seed = IdentityVariantSeed(
+        transaction_id=UUID("72200000-0000-0000-0000-000000000703"),
+        amount=Decimal("150.00"),
+        contributor_name_raw="TAYLOR BOUNDARY ADJACENT",
+        contributor_employer="Civic Works",
+        contributor_occupation="Engineer",
+        contributor_city="Durham",
+        contributor_state="NC",
+        contributor_zip="27703-3333",
+    )
+    canonical_identity_id = _insert_identity_variant_transaction(db_conn, fixture=fixture, seed=canonical_seed)
+    variant_identity_id = _insert_identity_variant_transaction(db_conn, fixture=fixture, seed=variant_seed)
+    adjacent_identity_id = _insert_identity_variant_transaction(db_conn, fixture=fixture, seed=adjacent_seed)
+    _insert_active_identity_cluster(
+        db_conn,
+        cluster_id=UUID("72200000-0000-0000-0000-000000000801"),
+        member_ids=[canonical_identity_id, variant_identity_id],
+    )
+    _insert_active_identity_cluster(
+        db_conn,
+        cluster_id=UUID("72200000-0000-0000-0000-000000000901"),
+        member_ids=[adjacent_identity_id],
+    )
+
+    donor_rollup.rebuild_donor_search_rollup(db_conn)
+    full_results = search_donors(db_conn, q="taylor boundary", by="name", limit=20, offset=0)["results"]
+    first_page = search_donors(db_conn, q="taylor boundary", by="name", limit=1, offset=0)["results"]
+    second_page = search_donors(db_conn, q="taylor boundary", by="name", limit=1, offset=1)["results"]
+
+    assert [result["donor_identity_id"] for result in full_results] == [
+        str(canonical_identity_id),
+        str(adjacent_identity_id),
+    ]
+    assert len(first_page) == 1
+    assert first_page[0]["donor_identity_id"] == str(canonical_identity_id)
+    assert first_page[0]["combined_record_count"] == 2
+    assert first_page[0]["total_amount"] == Decimal("190.00")
+    assert first_page[0]["transaction_count"] == 2
+    assert len(second_page) == 1
+    assert second_page[0]["donor_identity_id"] == str(adjacent_identity_id)
+    assert second_page[0]["total_amount"] == Decimal("150.00")
+    assert {first_page[0]["donor_identity_id"], second_page[0]["donor_identity_id"]} == {
+        str(canonical_identity_id),
+        str(adjacent_identity_id),
+    }
+
+
+def _assert_search_donors_preserves_missing_zip_donor_details(
+    db_conn: psycopg.Connection,
+    *,
+    transaction_id: UUID,
+    amount: Decimal,
+    contributor_name_raw: str,
+    contributor_employer: str,
+    contributor_zip: str | None,
+    by: str,
+    query: str,
+) -> None:
+    fixture = seed_donor_search_fixture(db_conn)
+    _insert_identity_variant_transaction_without_identity(
+        db_conn,
+        fixture=fixture,
+        seed=IdentityVariantSeed(
+            transaction_id=transaction_id,
+            amount=amount,
+            contributor_name_raw=contributor_name_raw,
+            contributor_employer=contributor_employer,
+            contributor_occupation="Engineer",
+            contributor_city="Durham",
+            contributor_state="NC",
+            contributor_zip=contributor_zip,
+        ),
+    )
+    donor_rollup.rebuild_donor_search_rollup(db_conn)
+
+    results = search_donors(db_conn, q=query, by=by, limit=20, offset=0)["results"]
+
+    assert len(results) == 1
+    donor = results[0]
+    assert donor["contributor_name"] == contributor_name_raw
+    assert donor["contributor_employer"] == contributor_employer
+    assert donor["normalized_zip5"] is None
+    assert donor["total_amount"] == amount
+    assert donor["transaction_count"] == 1
+    assert donor["recipients"] == [
+        {
+            "person_id": fixture.alpha.person_id,
+            "candidate_id": fixture.alpha.candidate_id,
+            "fec_candidate_id": "H9NC72001",
+            "candidate_name": "Alpha Officeholder",
+            "committee_id": fixture.alpha.committee_id,
+            "fec_committee_id": "C72000001",
+            "committee_name": "Alpha Officeholder Committee",
+            "total_amount": amount,
+            "transaction_count": 1,
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    ("by", "query"),
+    [("name", "null zip donor"), ("employer", "null zip employer")],
+)
+def test_search_donors_preserves_null_zip_donor_details(
+    db_conn: psycopg.Connection,
+    by: str,
+    query: str,
+) -> None:
+    _assert_search_donors_preserves_missing_zip_donor_details(
+        db_conn,
+        transaction_id=UUID("72200000-0000-0000-0000-000000000704"),
+        amount=Decimal("45.00"),
+        contributor_name_raw="NULL ZIP DONOR",
+        contributor_employer="NULL ZIP EMPLOYER",
+        contributor_zip=None,
+        by=by,
+        query=query,
+    )
+
+
+@pytest.mark.parametrize(
+    ("by", "query"),
+    [("name", "blank zip donor"), ("employer", "blank zip employer")],
+)
+def test_search_donors_preserves_blank_zip_donor_details(
+    db_conn: psycopg.Connection,
+    by: str,
+    query: str,
+) -> None:
+    _assert_search_donors_preserves_missing_zip_donor_details(
+        db_conn,
+        transaction_id=UUID("72200000-0000-0000-0000-000000000705"),
+        amount=Decimal("52.00"),
+        contributor_name_raw="BLANK ZIP DONOR",
+        contributor_employer="BLANK ZIP EMPLOYER",
+        contributor_zip="",
+        by=by,
+        query=query,
+    )
 
 
 def test_search_donors_leaves_partially_unresolved_identity_variants_unattributed(
