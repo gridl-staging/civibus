@@ -387,6 +387,32 @@ def test_scheduler_boundary_red_keeps_weekly_refresh_recheck_open() -> None:
     assert "automatic scheduler acceptance is still owed by the bounded" not in matrix_row
 
 
+def test_aug03_batch_stage2_roadmap_reconciliation_is_falsifiable() -> None:
+    roadmap_text = _read_text(ROADMAP_PATH)
+    required_fragments = (
+        "### `aug03_8pm` Stage 2 ledger reconciliation — 2026-08-05",
+        "git merge-base --is-ancestor 5cb2b02da origin/main exit=0",
+        "git merge-base --is-ancestor abf1557ecd309342355ef9511e049efe11c02a0e origin/main exit=0",
+        "Ship disposition: not-shipping — staging Integration run 30972647556 failed",
+        "Deploy refresh machine run `30943871526` failed its post-update digest assertion",
+        "weekly scheduled refresh did not fire at `2026-08-04T18:53:21Z`",
+        "`row_id: donor-search-identity-resolution-regression`: EXTERNALLY OWNED INPUT",
+        "`row_id: undeployed delta`: OPEN; residual controlled by `aug05_1030pm_1`",
+        "`row_id: candidate-money coverage`: RESOLVED 2026-08-04",
+        "`row_id: unbounded-serving-queries`: CLASS OPEN",
+        "`row_id: refresh-partial-run`: OPEN",
+    )
+
+    for fragment in required_fragments:
+        assert fragment in roadmap_text
+
+    donor_identity_line = next(
+        line for line in roadmap_text.splitlines() if "`row_id: donor-search-identity-resolution-regression`" in line
+    )
+    assert "EXTERNALLY OWNED INPUT" in donor_identity_line
+    assert "CLOSED" not in donor_identity_line
+
+
 def test_project_overview_current_scope_matches_implemented_fly_refresh_model() -> None:
     overview_text = _read_text(PROJECT_OVERVIEW_PATH)
 

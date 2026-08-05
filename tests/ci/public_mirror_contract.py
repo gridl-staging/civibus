@@ -179,6 +179,7 @@ PUBLIC_MIRROR_TEST_CLASSIFICATIONS: tuple[PublicMirrorTestClassification, ...] =
             "tests/ci/test_fly_ops_docs_contract.py::test_stage_owned_runnable_docs_do_not_publish_password_prefix_commands",
             "tests/ci/test_fly_ops_docs_contract.py::test_roadmap_tracks_only_unresolved_stage4_and_rotation_work",
             "tests/ci/test_fly_ops_docs_contract.py::test_scheduler_boundary_red_keeps_weekly_refresh_recheck_open",
+            "tests/ci/test_fly_ops_docs_contract.py::test_aug03_batch_stage2_roadmap_reconciliation_is_falsifiable",
             "tests/ci/test_fly_ops_docs_contract.py::test_project_overview_current_scope_matches_implemented_fly_refresh_model",
             "tests/ci/test_fly_ops_docs_contract.py::test_lane10_refresh_digest_proof_accepts_the_deployed_workflow_image",
             "tests/ci/test_fly_ops_docs_contract.py::test_lane10_refresh_digest_proof_rejects_old_image_after_unrelated_machine_update",
