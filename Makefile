@@ -67,7 +67,7 @@ QA_FAST_PRODUCT_TEST_PATHS := \
 QA_FAST_PRODUCT_MARKER_EXPRESSION := not integration and not e2e and not projected_public_contract and not dev_repo_only
 
 
-.PHONY: db-up db-wait db-down db-teardown db-reset test qa-fast qa-fast-public coverage-public test-public test-projected-public-contract test-api test-e2e lint check-retired-symbols ingest-fec-sample ingest-fec-bulk-sample ingest-fec-bulk ingest-fec-federal ingest-fec-ie-sample download-fec-bulk download-fec-weball download-fec-schedule-e download-fec-committee-summary ingest-fec-schedule-e download-irs-527 ingest-irs-527-sample ingest-irs-527 validate-configs validate-registry render-coverage-views render-region-lifecycle ingest-co-sample ingest-durham-sample require-postgres-password ingest-nc-sample ingest-nc-ie-sample ingest-ga-sample ingest-ca-sample ingest-mn-sample ingest-wa-sample ingest-tx-sample ingest-pa-sample ingest-oh-sample ingest-in-sample ingest-il-sample ingest-nj-sample ingest-va-sample ingest-sf-sample ingest-la-city-sample ingest-nyc-sample ingest-nc-past-results-2022-2024 download-ga quality-check quality-freshness entity-resolve entity-resolve-dry api-dev graph-load load-test refresh-cf-data refresh-cf-priority gate-L1 gate-L3 gate-L5 gate-L6 gate-L6-pilot gate-L7 gate-L10 gate-L14 keel-status keel-summary keel-current keel-reviews-status evidence-rotate
+.PHONY: db-up db-wait db-down db-teardown db-reset test qa-fast qa-fast-public coverage-public test-public test-e2e-smoke test-projected-public-contract test-api test-e2e lint check-retired-symbols ingest-fec-sample ingest-fec-bulk-sample ingest-fec-bulk ingest-fec-federal ingest-fec-ie-sample download-fec-bulk download-fec-weball download-fec-schedule-e download-fec-committee-summary ingest-fec-schedule-e download-irs-527 ingest-irs-527-sample ingest-irs-527 validate-configs validate-registry render-coverage-views render-region-lifecycle ingest-co-sample ingest-durham-sample require-postgres-password ingest-nc-sample ingest-nc-ie-sample ingest-ga-sample ingest-ca-sample ingest-mn-sample ingest-wa-sample ingest-tx-sample ingest-pa-sample ingest-oh-sample ingest-in-sample ingest-il-sample ingest-nj-sample ingest-va-sample ingest-sf-sample ingest-la-city-sample ingest-nyc-sample ingest-nc-past-results-2022-2024 download-ga quality-check quality-freshness entity-resolve entity-resolve-dry api-dev graph-load load-test refresh-cf-data refresh-cf-priority gate-L1 gate-L3 gate-L5 gate-L6 gate-L6-pilot gate-L7 gate-L10 gate-L14 keel-status keel-summary keel-current keel-reviews-status evidence-rotate
 
 require-postgres-password:
 	@test -n "$${POSTGRES_PASSWORD:-}" || { echo "POSTGRES_PASSWORD must be set in the environment" >&2; exit 1; }
@@ -313,6 +313,15 @@ test-api:
 
 test-e2e:
 	uv run --extra dev pytest -m "e2e" -v
+
+# Scheduled home (nightly e2e job) for the two e2e-only smoke modules that no
+# merge-time or coverage selection executes. Deliberately narrower than the
+# dev-side full test-e2e sweep above: quarantine-aware (the enrichment e2e
+# module carries nodes registered as failing even against the canonical seed)
+# and scoped to modules that self-seed from local fixtures, so scheduled proof
+# cannot go red on known-quarantined or unseeded expectations.
+test-e2e-smoke:
+	uv run --extra dev --extra entity-resolution pytest tests/test_e2e_smoke.py tests/test_state_sample_ingest_smoke.py -m "e2e and not quarantined" -v
 
 api-dev: require-postgres-password
 	uv run --extra dev --extra api uvicorn api.main:app --host 127.0.0.1 --port 8000 --reload

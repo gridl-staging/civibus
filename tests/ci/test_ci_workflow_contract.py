@@ -186,7 +186,7 @@ def test_makefile_owns_public_python_gate_selector() -> None:
     makefile_text = MAKEFILE_PATH.read_text(encoding="utf-8")
 
     assert (
-        ".PHONY: db-up db-wait db-down db-teardown db-reset test qa-fast qa-fast-public coverage-public test-public test-projected-public-contract"
+        ".PHONY: db-up db-wait db-down db-teardown db-reset test qa-fast qa-fast-public coverage-public test-public test-e2e-smoke test-projected-public-contract"
     ) in makefile_text
     assert (
         "MERGE_DB_BACKED_TEST_NODES := "
@@ -436,9 +436,16 @@ def test_nightly_workflow_owns_exhaustive_scheduled_proof() -> None:
         "make db-up",
         "make db-wait",
         "make db-reset",
-        "make test-e2e",
+        "make test-e2e-smoke",
     ):
         assert f"        run: {command}" in e2e_job.splitlines()
+    # The full dev-side sweep would drag registry-quarantined nodes and
+    # live-key requirements into scheduled proof; the scoped target may not
+    # silently widen back.
+    assert "run: make test-e2e\n" not in e2e_job + "\n"
+    # DEMO_KEY keeps the live-ingest fixture off its missing-key hard-fail
+    # path; rate limiting engages the fixture-fallback the test documents.
+    assert "      FEC_API_KEY: DEMO_KEY" in e2e_job.splitlines()
     assert "- name: Stop DB\n        if: always()\n        run: make db-down" in e2e_job
 
     browser_job = _job_block(workflow_text, "browser-smoke")
