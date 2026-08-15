@@ -43,12 +43,17 @@ def test_branch_protection_runbook_reflects_pr_vs_push_check_split() -> None:
     ci_checks = _extract_job_names(ci_workflow_text)
     integration_checks = _extract_job_names(integration_workflow_text)
 
-    assert ci_checks == ["lint", "unit-tests", "web"]
+    assert ci_checks == ["fast", "build"]
     assert integration_checks == ["integration-tests"]
 
-    required_pr_line = "Current PR-required checks from `.github/workflows/ci.yml`: " + ", ".join(
-        f"`{check}`" for check in ci_checks
-    )
+    # Exactly one blocking gate: `fast`. `build` runs on every PR but stays
+    # advisory, and the runbook must carry the rename migration step so the
+    # retired lint/unit-tests/web contexts cannot strand mirror PRs.
+    required_pr_line = "Current PR-required checks from `.github/workflows/ci.yml`: `fast`."
+    assert "deliberately not required" in runbook_text
+    assert "Migration note (2026-08-15 rename)" in runbook_text
+    for retired_context in ("`lint`", "`unit-tests`", "`web`"):
+        assert retired_context in runbook_text
     pr_capable_line = "PR-capable checks from `.github/workflows/integration.yml`: " + ", ".join(
         f"`{check}`" for check in integration_checks
     )

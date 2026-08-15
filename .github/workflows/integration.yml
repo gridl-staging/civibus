@@ -1,10 +1,43 @@
 name: Integration
 
+# DB-backed proof runs for database-risk changes, on a daily schedule, and on
+# demand — not on every ordinary push. The path filters name every tree the
+# DB-backed suite selects from; web-only and docs-only changes are exactly
+# what they exempt. The schedule is the safety net: even if a filter gap ever
+# skipped a risky change, the exhaustive daily run still owns it.
 on:
   pull_request:
     branches: [main]
+    paths:
+      - "api/**"
+      - "core/**"
+      - "domains/**"
+      - "infra/**"
+      - "tests/**"
+      - "conftest.py"
+      - "Makefile"
+      - "pyproject.toml"
+      - "uv.lock"
+      - "sources.yaml"
+      - ".github/workflows/integration.yml"
   push:
     branches: [main]
+    paths:
+      - "api/**"
+      - "core/**"
+      - "domains/**"
+      - "infra/**"
+      - "tests/**"
+      - "conftest.py"
+      - "Makefile"
+      - "pyproject.toml"
+      - "uv.lock"
+      - "sources.yaml"
+      - ".github/workflows/integration.yml"
+  schedule:
+    # Daily, offset from nightly.yml so the two heavy runs never overlap.
+    - cron: '30 7 * * *'
+  workflow_dispatch:
 
 permissions:
   contents: read

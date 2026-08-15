@@ -1,6 +1,6 @@
 """Contract tests for database-port guards on lane projects.
 
-`make test-integration-local` pins `POSTGRES_PORT=5475` and refuses to run when
+`make qa-integration` pins `POSTGRES_PORT=5475` and refuses to run when
 that port is already bound. Batch orchestrations allocate a distinct port per
 lane, but that allocation is prose: on 2026-08-01 a lane database
 (`civibus_l13-db-1`) held `127.0.0.1:5475` while its own batch still owed the
@@ -76,12 +76,11 @@ def test_lane_project_may_not_bind_the_reserved_port() -> None:
         assert "must be a canonical decimal port" in invalid_result.stderr
 
 
-def test_integration_local_project_may_bind_the_reserved_port() -> None:
+def test_qa_integration_project_may_bind_the_reserved_port() -> None:
     result = _run_guard(RESERVED_PORT_GUARD_TARGET, RESERVED_PROJECT, RESERVED_PORT)
 
     assert result.returncode == 0, (
-        "test-integration-local owns the reserved port and must not be blocked "
-        f"by its own guard; stderr={result.stderr!r}"
+        f"qa-integration owns the reserved port and must not be blocked by its own guard; stderr={result.stderr!r}"
     )
 
 
@@ -124,13 +123,13 @@ def test_lane_project_may_use_its_explicitly_allocated_port() -> None:
     assert result.returncode == 0, f"an explicitly allocated lane port must be allowed; stderr={result.stderr!r}"
 
 
-def test_integration_local_project_may_use_its_pinned_default_port() -> None:
+def test_qa_integration_project_may_use_its_pinned_default_port() -> None:
     unpinned_result = _run_guard(UNALLOCATED_PORT_GUARD_TARGET, RESERVED_PROJECT)
     pinned_result = _run_guard(UNALLOCATED_PORT_GUARD_TARGET, RESERVED_PROJECT, RESERVED_PORT)
 
     assert unpinned_result.returncode != 0, "the project name alone must not bypass allocation enforcement"
     assert pinned_result.returncode == 0, (
-        f"test-integration-local exports its target-pinned port to db-up; stderr={pinned_result.stderr!r}"
+        f"qa-integration exports its target-pinned port to db-up; stderr={pinned_result.stderr!r}"
     )
 
 
@@ -160,9 +159,14 @@ def test_lifecycle_targets_require_the_unallocated_port_guard() -> None:
         )
 
 
-def test_integration_local_still_pins_the_reserved_port_and_project() -> None:
+def test_qa_integration_pins_the_reserved_runtime_and_owns_the_compatibility_alias() -> None:
     """If either pin moves, the guard's exemption silently stops matching."""
     makefile_text = MAKEFILE_PATH.read_text(encoding="utf-8")
 
-    assert f"test-integration-local: override POSTGRES_PORT := {RESERVED_PORT}" in makefile_text
-    assert f"test-integration-local: override COMPOSE_PROJECT_NAME := {RESERVED_PROJECT}" in makefile_text
+    assert f"qa-integration: override POSTGRES_PORT := {RESERVED_PORT}" in makefile_text
+    assert f"qa-integration: override COMPOSE_PROJECT_NAME := {RESERVED_PROJECT}" in makefile_text
+    assert "POSTGRES_PORT=$(INTEGRATION_RESERVED_PORT) is reserved for qa-integration" in makefile_text
+    assert "POSTGRES_PORT=$(INTEGRATION_RESERVED_PORT) is reserved for test-integration-local" not in makefile_text
+    assert [line for line in makefile_text.splitlines() if line.startswith("test-integration-local:")] == [
+        "test-integration-local: qa-integration"
+    ]

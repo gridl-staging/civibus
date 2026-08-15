@@ -248,7 +248,7 @@ def test_makefile_exports_and_targets_database_reset_command(tmp_path: Path):
         check=False,
     )
     assert reserved_reset_result.returncode != 0
-    assert "POSTGRES_PORT=5475 is reserved for test-integration-local" in reserved_reset_result.stderr
+    assert "POSTGRES_PORT=5475 is reserved for qa-integration" in reserved_reset_result.stderr
     assert "COMPOSE_PROJECT_NAME=civibus_a10 may not bind it" in reserved_reset_result.stderr
     assert not psql_log.exists() or psql_log.read_text(encoding="utf-8") == ""
     # `db-up` must keep the password prerequisite first and the exact recipe, but

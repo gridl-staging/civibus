@@ -60,6 +60,7 @@ from core.people.federal_officeholders import (
     current_federal_officeholder_predicate,
     federal_officeholder_targets_sql,
 )
+from core.refresh import donor_rollup
 from core.types.python.models import DataSource, Person
 from domains.campaign_finance.constants import (
     FEC_BULK_DATA_SOURCE_DOMAIN,
@@ -142,6 +143,27 @@ def _stage_1_uuid(offset: int) -> UUID:
 
 def _official_total_health_uuid(offset: int) -> UUID:
     return UUID(f"55030000-0000-0000-0000-{offset:012d}")
+
+
+def _insert_fresh_donor_rollup_provenance(db_conn: psycopg.Connection, completed_at: datetime) -> None:
+    db_conn.execute(
+        """
+        INSERT INTO cf.donor_search_rollup_provenance (
+            singleton,
+            donor_key_fingerprint,
+            row_count,
+            build_duration_milliseconds,
+            completed_at
+        )
+        VALUES (TRUE, %s, 1, 1, %s)
+        ON CONFLICT (singleton) DO UPDATE
+        SET donor_key_fingerprint = EXCLUDED.donor_key_fingerprint,
+            row_count = EXCLUDED.row_count,
+            build_duration_milliseconds = EXCLUDED.build_duration_milliseconds,
+            completed_at = EXCLUDED.completed_at
+        """,
+        (donor_rollup.donor_key_fingerprint(), completed_at),
+    )
 
 
 def _insert_official_total_health_candidate(
@@ -1266,6 +1288,7 @@ def test_evaluate_content_health_flags_underlinked_federal_officeholder_money_co
         db_conn,
         money_linked_count=STAGE_1_MONEY_LINKED_COUNT,
     )
+    _insert_fresh_donor_rollup_provenance(db_conn, STAGE_1_EVIDENCE_NOW)
     floors = {key: 0 for key in EXPECTED_FEDERAL_FIRST_CHECKS}
     money_floor = baseline_money_linked + FEDERAL_OFFICEHOLDER_MONEY_FIXTURE_FLOOR
     floors[FEDERAL_OFFICEHOLDER_MONEY_COVERAGE_CHECK] = money_floor
@@ -1298,6 +1321,7 @@ def test_evaluate_content_health_accepts_fully_linked_federal_officeholder_money
         db_conn,
         money_linked_count=STAGE_1_OFFICEHOLDER_COUNT,
     )
+    _insert_fresh_donor_rollup_provenance(db_conn, STAGE_1_EVIDENCE_NOW)
     floors = {key: 0 for key in EXPECTED_FEDERAL_FIRST_CHECKS}
     floors[FEDERAL_OFFICEHOLDER_MONEY_COVERAGE_CHECK] = baseline_money_linked + FEDERAL_OFFICEHOLDER_MONEY_FIXTURE_FLOOR
 

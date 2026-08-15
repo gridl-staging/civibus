@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-import socket
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -202,29 +201,34 @@ def test_merged_lane_with_uncommitted_work_is_refused(tmp_path: Path) -> None:
     assert not any(" rm " in f" {call} " for call in calls)
 
 
-def test_project_with_responding_published_port_is_refused(tmp_path: Path) -> None:
-    with socket.socket() as listener:
-        listener.bind(("127.0.0.1", 0))
-        listener.listen()
-        port = listener.getsockname()[1]
-        scenario = CollectorScenario(
-            containers=(
-                _container(
-                    "civibus_finished-db-1",
-                    "civibus_finished",
-                    ports=f"127.0.0.1:{port}->5432/tcp",
-                    working_dir=str(tmp_path / "missing_workspace"),
-                ),
-            ),
-            active_projects=("civibus_active_lane",),
-            apply=True,
-        )
+def test_project_with_responding_published_port_is_refused(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from contextlib import nullcontext
 
-        completed, calls = _run_collector(tmp_path / "collector", scenario)
+    import infra.scripts.collect_lane_resources as collector
 
-    assert completed.returncode == 0, completed.stderr
-    assert f"civibus_finished-db-1\tlive\tpublished port 127.0.0.1:{port} responds" in completed.stdout
-    assert not any(" rm " in f" {call} " for call in calls)
+    port = 15432
+    container = _container(
+        "civibus_finished-db-1",
+        "civibus_finished",
+        ports=f"127.0.0.1:{port}->5432/tcp",
+        working_dir=str(tmp_path / "missing_workspace"),
+    )
+    connection_attempts: list[tuple[tuple[str, int], float]] = []
+
+    def responding_connection(address: tuple[str, int], timeout: float):
+        connection_attempts.append((address, timeout))
+        return nullcontext()
+
+    monkeypatch.setattr(collector.socket, "create_connection", responding_connection)
+    classification = collector.classify_project(
+        "civibus_finished",
+        (collector.DockerObject(**container),),
+        frozenset({"civibus_active_lane"}),
+    )
+
+    assert classification.status == "live"
+    assert classification.reason == f"published port 127.0.0.1:{port} responds"
+    assert connection_attempts == [(("127.0.0.1", port), 0.2)]
 
 
 @pytest.mark.parametrize(

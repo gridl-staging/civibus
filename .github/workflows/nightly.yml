@@ -1,0 +1,112 @@
+name: Nightly
+
+# Exhaustive scheduled proof: the tiers deliberately kept OUT of the per-push
+# fast loop. backend-full owns the complete public unit suite plus coverage,
+# web-full owns the complete web gate set, and browser-smoke owns the
+# Playwright journeys against a seeded database. The DB-backed integration
+# suite is NOT duplicated here — integration.yml carries its own daily
+# schedule (offset by 30 minutes so the two heavy runs never contend).
+on:
+  schedule:
+    - cron: '0 7 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  backend-full:
+    name: backend-full
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@0c5e2b8115b80b4c7c5ddf6ffdd634974642d182 # v5.4.1
+        with:
+          python-version: "3.12"
+      - name: Sync dependencies
+        run: uv sync --locked --extra dev --extra entity-resolution
+      # coverage-public runs the complete public unit selection (any test
+      # failure fails it), so a separate plain run would only double runtime.
+      - name: Full public unit suite with coverage floor
+        run: make coverage-public
+
+  web-full:
+    name: web-full
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: web/package.json
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Install web dependencies
+        working-directory: web
+        run: npm ci
+      - name: Web unit tests
+        working-directory: web
+        run: npm test
+      - name: Web type check
+        working-directory: web
+        run: npm run check
+      - name: Web production build
+        working-directory: web
+        run: npm run build
+
+  browser-smoke:
+    name: browser-smoke
+    runs-on: ubuntu-latest
+    env:
+      COMPOSE_PROJECT_NAME: civibus_integration_local
+      CIVIBUS_REQUIRE_DB: "1"
+      POSTGRES_PASSWORD: ci-postgres-password
+      POSTGRES_PORT: "5475"
+      # Without live mode the Playwright runner boots its Node fixture backend
+      # and skips every DB-touching journey, leaving the seeded database dead
+      # weight. Live mode makes the runner start uvicorn against it.
+      SMOKE_USE_LIVE_API: "1"
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@0c5e2b8115b80b4c7c5ddf6ffdd634974642d182 # v5.4.1
+        with:
+          python-version: "3.12"
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: web/package.json
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Sync dependencies
+        run: uv sync --locked --extra dev --extra entity-resolution
+      - name: Install web dependencies
+        working-directory: web
+        run: npm ci
+      - name: Install Playwright browsers
+        working-directory: web
+        run: npx playwright install --with-deps chromium
+      - name: Start DB
+        run: make db-up
+      - name: Wait for DB health
+        run: make db-wait
+      - name: Reset DB schema
+        run: make db-reset
+      - name: Seed FEC bulk data
+        run: make ingest-fec-bulk-sample
+      - name: Load graph
+        run: make graph-load
+      - name: Browser smoke journeys
+        working-directory: web
+        run: npm run test:smoke
+      - name: Stop DB
+        if: always()
+        run: make db-down

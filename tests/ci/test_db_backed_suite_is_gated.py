@@ -120,7 +120,7 @@ def test_unquarantined_node_ids_excludes_exact_canonical_quarantines(monkeypatch
     quarantine_entry = root_conftest._DbBackedQuarantineEntry(
         node_id=exact_node_id,
         reason="Unrepaired DB-backed schema assertion",
-        owner="ROADMAP.md schema guard follow-up",
+        owner="DB-backed schema gate owner",
     )
     monkeypatch.setattr(root_conftest, "_load_db_backed_quarantine", lambda: (quarantine_entry,))
 

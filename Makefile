@@ -48,14 +48,31 @@ RETIRED_ALLOWLIST := \
 MERGE_DB_BACKED_TEST_NODES := \
 	core/test_refresh_runner.py::test_masters_with_spine_skipped_preserves_officeholder_money_coverage \
 	tests/integration/test_donor_search_query_contract.py::test_search_donors_full_scope_bound_preserves_high_volume_donor_values
+QA_FAST_STRUCTURAL_TEST_PATHS := \
+	tests/ci \
+	tests/test_beads_adoption_contract.py
+QA_FAST_STRUCTURAL_MARKER_EXPRESSION := not integration and not e2e and not projected_public_contract
+QA_FAST_PRODUCT_TEST_PATHS := \
+	api/ \
+	core/people/enrichment \
+	core/entity_resolution \
+	domains/campaign_finance/entity_extractors \
+	domains/campaign_finance/normalize \
+	domains/campaign_finance/tests \
+	domains/civics/loaders/test_federal_fec_races.py \
+	tests/test_stage1_fec_committee_summary_format_outputs.py \
+	tests/test_stage1_fec_schedule_b_source_contract.py \
+	tests/test_stage1_fec_schedule_e_format_outputs.py \
+	tests/test_schedule_e_test_support.py
+QA_FAST_PRODUCT_MARKER_EXPRESSION := not integration and not e2e and not projected_public_contract and not dev_repo_only
 
 
-.PHONY: db-up db-down db-teardown db-reset test test-public test-projected-public-contract test-api test-e2e lint check-retired-symbols ingest-fec-sample ingest-fec-bulk-sample ingest-fec-bulk ingest-fec-federal ingest-fec-ie-sample download-fec-bulk download-fec-weball download-fec-schedule-e download-fec-committee-summary ingest-fec-schedule-e download-irs-527 ingest-irs-527-sample ingest-irs-527 validate-configs validate-registry render-coverage-views render-region-lifecycle ingest-co-sample ingest-durham-sample require-postgres-password ingest-nc-sample ingest-nc-ie-sample ingest-ga-sample ingest-ca-sample ingest-mn-sample ingest-wa-sample ingest-tx-sample ingest-pa-sample ingest-oh-sample ingest-in-sample ingest-il-sample ingest-nj-sample ingest-va-sample ingest-sf-sample ingest-la-city-sample ingest-nyc-sample ingest-nc-past-results-2022-2024 download-ga quality-check quality-freshness entity-resolve entity-resolve-dry api-dev graph-load load-test refresh-cf-data refresh-cf-priority gate-L1 gate-L3 gate-L5 gate-L6 gate-L6-pilot gate-L7 gate-L10 gate-L14 keel-status keel-summary keel-current keel-reviews-status evidence-rotate
+.PHONY: db-up db-wait db-down db-teardown db-reset test qa-fast qa-fast-public coverage-public test-public test-projected-public-contract test-api test-e2e lint check-retired-symbols ingest-fec-sample ingest-fec-bulk-sample ingest-fec-bulk ingest-fec-federal ingest-fec-ie-sample download-fec-bulk download-fec-weball download-fec-schedule-e download-fec-committee-summary ingest-fec-schedule-e download-irs-527 ingest-irs-527-sample ingest-irs-527 validate-configs validate-registry render-coverage-views render-region-lifecycle ingest-co-sample ingest-durham-sample require-postgres-password ingest-nc-sample ingest-nc-ie-sample ingest-ga-sample ingest-ca-sample ingest-mn-sample ingest-wa-sample ingest-tx-sample ingest-pa-sample ingest-oh-sample ingest-in-sample ingest-il-sample ingest-nj-sample ingest-va-sample ingest-sf-sample ingest-la-city-sample ingest-nyc-sample ingest-nc-past-results-2022-2024 download-ga quality-check quality-freshness entity-resolve entity-resolve-dry api-dev graph-load load-test refresh-cf-data refresh-cf-priority gate-L1 gate-L3 gate-L5 gate-L6 gate-L6-pilot gate-L7 gate-L10 gate-L14 keel-status keel-summary keel-current keel-reviews-status evidence-rotate
 
 require-postgres-password:
 	@test -n "$${POSTGRES_PASSWORD:-}" || { echo "POSTGRES_PASSWORD must be set in the environment" >&2; exit 1; }
 
-# Port 5475 is reserved for test-integration-local, which pins it below and
+# Port 5475 is reserved for qa-integration, which pins it below and
 # refuses to run when the port is already bound. A lane database started on 5475
 # under any other COMPOSE_PROJECT_NAME therefore disables the DB-backed
 # merged-union gate for every concurrent worker on this host, and the symptom
@@ -80,7 +97,7 @@ reject-reserved-integration-port:
 	fi; \
 	if [ "$$port" = "$(INTEGRATION_RESERVED_PORT)" ] && \
 		[ "$${COMPOSE_PROJECT_NAME}" != "$(INTEGRATION_RESERVED_PROJECT)" ]; then \
-		printf '%s\n' "POSTGRES_PORT=$(INTEGRATION_RESERVED_PORT) is reserved for test-integration-local; COMPOSE_PROJECT_NAME=$${COMPOSE_PROJECT_NAME} may not bind it. Use the port your batch allocated." >&2; \
+		printf '%s\n' "POSTGRES_PORT=$(INTEGRATION_RESERVED_PORT) is reserved for qa-integration; COMPOSE_PROJECT_NAME=$${COMPOSE_PROJECT_NAME} may not bind it. Use the port your batch allocated." >&2; \
 		exit 1; \
 	fi
 
@@ -92,6 +109,25 @@ reject-unallocated-lane-port:
 
 db-up: require-postgres-password reject-reserved-integration-port reject-unallocated-lane-port
 	docker compose -f infra/docker-compose.yml up -d
+
+# Blocks until the compose-owned db container reports healthy. One owner for
+# every workflow that seeds after db-up; integration.yml predates this target
+# and keeps its own pinned inline copy by contract.
+db-wait: require-postgres-password reject-unallocated-lane-port
+	@container_id="$$(docker compose -f infra/docker-compose.yml ps -q db)"; \
+	if [ -z "$$container_id" ]; then \
+		echo "Database container ID not found" >&2; \
+		exit 1; \
+	fi; \
+	for attempt in $$(seq 1 60); do \
+		status="$$(docker inspect -f '{{.State.Health.Status}}' "$$container_id" 2>/dev/null || true)"; \
+		if [ "$$status" = "healthy" ]; then \
+			exit 0; \
+		fi; \
+		sleep 2; \
+	done; \
+	echo "Database did not become healthy in time" >&2; \
+	exit 1
 
 db-down: require-postgres-password reject-unallocated-lane-port
 	docker compose -f infra/docker-compose.yml down
@@ -167,32 +203,58 @@ test:
 		exit "$$merge_db_probe_status"; \
 	fi
 
+# Baseline sections 5/8: web test is 5.3-6.1s, check is 3.9s, and a warm install is 2.0s.
+# This tier retains web/node_modules while web test caches may be warm or clean; the former broad
+# candidate's 218.4s p50/219.4s p95 exceeded 120s in Python, so the inexpensive web check stays.
+qa-fast:
+	@test -d web/node_modules || { printf '%s\n' 'qa-fast requires web/node_modules; run npm --prefix web ci' >&2; exit 1; }
+	$(MAKE) lint
+	npm --prefix web test
+	npm --prefix web run check
+	uv run --extra dev --extra entity-resolution pytest $(QA_FAST_STRUCTURAL_TEST_PATHS) -m "$(QA_FAST_STRUCTURAL_MARKER_EXPRESSION)"
+	uv run --extra dev --extra entity-resolution pytest $(QA_FAST_PRODUCT_TEST_PATHS) -m "$(QA_FAST_PRODUCT_MARKER_EXPRESSION)"
+
+# qa-fast viewed from the public mirror: identical composition, with
+# dev_repo_only nodes deselected because their private assets (.beads/, the
+# frozen ROADMAP.md, dev-host CLIs) are intentionally absent there. The product
+# expression already excludes dev_repo_only in both localities, so only the
+# structural expression needs the append. No recipe lines here on purpose —
+# any would fork the composition away from its single qa-fast owner.
+qa-fast-public: QA_FAST_STRUCTURAL_MARKER_EXPRESSION += and not dev_repo_only
+qa-fast-public: qa-fast
+
+# Nightly-owned coverage over the public unit selection. Kept in the Makefile
+# so workflows invoke it by name instead of inlining pytest flags that drift.
+coverage-public:
+	uv run --extra dev --extra entity-resolution pytest -m "not integration and not e2e and not dev_repo_only" --cov=api --cov=core --cov=domains --cov-fail-under=70
+
 test-public:
 	uv run --extra dev --extra entity-resolution pytest -m "not integration and not e2e and not dev_repo_only"
 
 test-projected-public-contract:
 	uv run --extra dev --extra entity-resolution pytest -m "projected_public_contract" tests/test_debbie_projected_public_contract.py::test_projected_current_public_unit_selection_failures_are_classified
 
-# .github/workflows/integration.yml is the source of truth; change this local
-# mirror whenever its DB-backed product suite changes.
-.PHONY: test-integration-local
-test-integration-local: override POSTGRES_PORT := 5475
-test-integration-local: override COMPOSE_PROJECT_NAME := civibus_integration_local
-test-integration-local:
+# .github/workflows/integration.yml is the source of truth for the product
+# selection; change this local lifecycle owner whenever that suite changes.
+.PHONY: qa-integration test-integration-local
+qa-integration: override POSTGRES_PORT := 5475
+qa-integration: override COMPOSE_PROJECT_NAME := civibus_integration_local
+qa-integration:
 	@set -eu; \
 	if [ -n "$(POSTGRES_PORT_CALLER_SUPPLIED)" ]; then \
-		echo "test-integration-local pins POSTGRES_PORT=5475 internally; do not provide a POSTGRES_PORT override" >&2; \
+		echo "qa-integration pins POSTGRES_PORT=5475 internally; do not provide a POSTGRES_PORT override" >&2; \
 		exit 1; \
 	fi; \
 	if ! POSTGRES_PORT=5475 python3 -c 'import os, socket; probe = socket.socket(); probe.bind(("127.0.0.1", int(os.environ["POSTGRES_PORT"])))'; then \
 		echo "Port 5475 is already bound by a likely concurrent integration run; wait for it to finish, then retry" >&2; \
 		exit 1; \
 	fi; \
-	started_db=0; \
+	docker info >/dev/null 2>&1 || { echo "qa-integration requires Docker-backed PostgreSQL, but the Docker daemon is unavailable" >&2; exit 1; }; \
+	cleanup_required=0; \
 	cleanup() { \
 		target_status=$$?; \
 		trap - EXIT; \
-		if [ "$$started_db" -eq 1 ]; then \
+		if [ "$$cleanup_required" -eq 1 ]; then \
 			docker compose -f infra/docker-compose.yml down --volumes --remove-orphans || target_status=$$?; \
 		fi; \
 		exit "$$target_status"; \
@@ -201,9 +263,9 @@ test-integration-local:
 	trap 'exit 129' HUP; \
 	trap 'exit 130' INT; \
 	trap 'exit 143' TERM; \
+	cleanup_required=1; \
 	docker compose -f infra/docker-compose.yml down --volumes --remove-orphans; \
-	make db-up; \
-	started_db=1; \
+	$(MAKE) db-up; \
 	container_id="$$(docker compose -f infra/docker-compose.yml ps -q db)"; \
 	if [ -z "$$container_id" ]; then \
 		echo "Database container ID not found" >&2; \
@@ -220,9 +282,9 @@ test-integration-local:
 		fi; \
 		sleep 2; \
 	done; \
-	make db-reset; \
-	make ingest-fec-bulk-sample; \
-	make graph-load; \
+	$(MAKE) db-reset; \
+	$(MAKE) ingest-fec-bulk-sample; \
+	$(MAKE) graph-load; \
 	CIVIBUS_REQUIRE_DB=1 uv run --extra dev --extra entity-resolution pytest -m "integration and not quarantined" \
 		api/ \
 		core/ \
@@ -231,7 +293,10 @@ test-integration-local:
 		tests/e2e/ \
 		tests/test_db_integration.py \
 		tests/test_graph_queries.py \
-		tests/test_relational_queries.py
+		tests/test_relational_queries.py; \
+	CIVIBUS_REQUIRE_DB=1 uv run --extra dev --extra entity-resolution pytest $(MERGE_DB_BACKED_TEST_NODES)
+
+test-integration-local: qa-integration
 
 # Parked state/city pipeline suite (frozen for federal-first v1; excluded from
 # `make test` and CI by the conftest.py quarantine). Run before touching shared

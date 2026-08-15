@@ -75,6 +75,23 @@ def _copy_debbie_projection(target_root: Path) -> None:
         )
 
 
+@pytest.mark.dev_repo_only(
+    private_asset="private Beads ledger (.beads/), frozen ROADMAP.md, and BEADS_QA_TRANSITION.md",
+    owner="Debbie projection contract",
+)
+def test_debbie_projection_excludes_private_ledger_and_planning_docs_from_physical_tree(tmp_path: Path) -> None:
+    target_root = tmp_path / "public-mirror"
+    target_root.mkdir()
+
+    _copy_debbie_projection(target_root)
+
+    assert not (target_root / ".beads").exists(), "Debbie projection leaked private path .beads/"
+    assert not (target_root / "ROADMAP.md").exists(), "Debbie projection leaked private path ROADMAP.md"
+    assert not (target_root / "BEADS_QA_TRANSITION.md").exists(), (
+        "Debbie projection leaked private path BEADS_QA_TRANSITION.md"
+    )
+
+
 def _copy_project_toolchain(target_root: Path) -> None:
     for relative_path in ("pyproject.toml", "uv.lock"):
         _copy_path(REPO_ROOT / relative_path, target_root / relative_path, excludes=())
@@ -198,6 +215,26 @@ def test_projected_public_contract_is_selected_only_by_named_target() -> None:
             "-q",
             "tests/test_debbie_post_sync_hook.py",
         ],
+        # Batman merge validation runs its own directory-level selection with
+        # only the integration/e2e markers excluded. On 2026-08-15 that pulled
+        # the ~10-minute projected contract into a merge gate and tripped the
+        # 300-second no-output watchdog, refusing a green canary merge. The
+        # exclusion must therefore live at the collection layer, not only in
+        # the Makefile's -m expression.
+        "bare tests directory": [
+            "uv",
+            "run",
+            "--extra",
+            "dev",
+            "--extra",
+            "entity-resolution",
+            "pytest",
+            "--collect-only",
+            "-q",
+            "tests/",
+            "-m",
+            "not integration and not e2e",
+        ],
     }
 
     collected_nodes_by_selection: dict[str, set[str]] = {}
@@ -216,6 +253,7 @@ def test_projected_public_contract_is_selected_only_by_named_target() -> None:
     assert PROJECTED_PUBLIC_CONTRACT_NODE_ID not in collected_nodes_by_selection["default target"]
     assert collected_nodes_by_selection["named target"] == {PROJECTED_PUBLIC_CONTRACT_NODE_ID}
     assert PROJECTED_PUBLIC_CONTRACT_NODE_ID not in collected_nodes_by_selection["direct hot file"]
+    assert PROJECTED_PUBLIC_CONTRACT_NODE_ID not in collected_nodes_by_selection["bare tests directory"]
 
 
 def test_failed_node_ids_classifies_only_failed_summary_lines() -> None:

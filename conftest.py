@@ -7,8 +7,9 @@ import subprocess
 import sys
 import time
 import types
+from collections.abc import Iterator
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from _pytest.capture import CaptureManager
 
@@ -54,6 +55,10 @@ def _run_pytest_under_project_python_and_exit_if_needed() -> None:
 _run_pytest_under_project_python_and_exit_if_needed()
 
 # These imports must remain below the dependency-free interpreter bootstrap.
+# LiteralString requires Python 3.11+, and everything above the bootstrap must
+# still import under the old system interpreter that triggers the re-exec.
+from typing import LiteralString  # noqa: E402
+
 import psycopg  # noqa: E402
 import pytest  # noqa: E402
 from pydantic import BaseModel, ConfigDict, ValidationError, field_validator  # noqa: E402
@@ -215,10 +220,18 @@ _PARKED_JURISDICTION_PARENTS = (
     _REPO_ROOT / "domains" / "campaign_finance" / "jurisdictions" / "cities",
 )
 _DB_BACKED_QUARANTINE_PATH = _REPO_ROOT / "tests" / "ci" / "db_backed_quarantine.md"
+
+
+def _parked_jurisdiction_child_dirs(
+    parents: tuple[Path, ...] | None = None,
+) -> tuple[Path, ...]:
+    if parents is None:
+        parents = _PARKED_JURISDICTION_PARENTS
+    return tuple(child for parent in parents for child in sorted(parent.iterdir()) if child.is_dir())
+
+
 if not os.environ.get("CIVIBUS_INCLUDE_PARKED"):
-    collect_ignore = [
-        str(child) for parent in _PARKED_JURISDICTION_PARENTS for child in sorted(parent.iterdir()) if child.is_dir()
-    ]
+    collect_ignore = [str(child) for child in _parked_jurisdiction_child_dirs()]
 
 
 class _DbBackedQuarantineEntry(BaseModel):
@@ -233,6 +246,13 @@ class _DbBackedQuarantineEntry(BaseModel):
     def _require_non_blank_value(cls, value: str) -> str:
         if not value.strip():
             raise ValueError("must not be blank")
+        return value
+
+    @field_validator("owner")
+    @classmethod
+    def _reject_frozen_roadmap_owner(cls, value: str) -> str:
+        if "roadmap.md" in value.casefold():
+            raise ValueError("must not reference ROADMAP.md")
         return value
 
 
@@ -270,8 +290,23 @@ def _load_db_backed_quarantine(
     return tuple(entries)
 
 
+# The projected-public contract builds a full Debbie projection and runs the
+# entire public selection inside it (~10 minutes, mostly silent). Its home is
+# the named target `make test-projected-public-contract`; any directory-level
+# selection must never pick it up implicitly. The Makefile's `-m` exclusion is
+# not enough: Batman merge validation runs its own `pytest tests/` with only
+# integration/e2e excluded, and on 2026-08-15 the silent inner run tripped the
+# merge watchdog's 300s no-output ceiling and refused a green canary merge.
+_PROJECTED_PUBLIC_CONTRACT_BASENAME = "test_debbie_projected_public_contract"
+
+
+def _projected_public_contract_explicitly_named(config: pytest.Config) -> bool:
+    """True only when the invocation names the contract file or node itself."""
+    return any(_PROJECTED_PUBLIC_CONTRACT_BASENAME in str(argument) for argument in config.invocation_params.args)
+
+
 @pytest.hookimpl(tryfirst=True)
-def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
     """Mark exact canonical quarantine matches before built-in marker deselection."""
     entries_by_node_id = {entry.node_id: entry for entry in _load_db_backed_quarantine()}
     for item in items:
@@ -286,6 +321,18 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     owner=dev_repo_entry.owner,
                 )
             )
+
+    if not _projected_public_contract_explicitly_named(config):
+        selected_items: list[pytest.Item] = []
+        deselected_items: list[pytest.Item] = []
+        for item in items:
+            if item.get_closest_marker("projected_public_contract") is None:
+                selected_items.append(item)
+            else:
+                deselected_items.append(item)
+        if deselected_items:
+            config.hook.pytest_deselected(items=deselected_items)
+            items[:] = selected_items
 
 
 # Module-level imports for patchability in tests/test_conftest_db_fixtures.py.
@@ -475,9 +522,15 @@ def _match_decision_bootstrap_sql() -> str:
 def _bootstrap_missing_contest_result_from_canonical_schema(connection: psycopg.Connection) -> None:
     with connection.cursor() as cursor:
         cursor.execute("SELECT to_regclass('civic.contest_result') IS NOT NULL")
-        relation_exists = bool(cursor.fetchone()[0])
+        existence_row = cursor.fetchone()
+        # A SELECT of one scalar always yields exactly one row; None here means
+        # the driver contract itself broke, which should fail loudly.
+        assert existence_row is not None
+        relation_exists = bool(existence_row[0])
         if not relation_exists:
-            cursor.execute(_contest_result_bootstrap_sql())
+            # Bootstrap SQL is assembled from repo-owned schema files, not user
+            # input; the cast mirrors core/schema_sql_fallback.py's precedent.
+            cursor.execute(cast(LiteralString, _contest_result_bootstrap_sql()))
             return
 
         cursor.execute(
@@ -504,12 +557,14 @@ def _bootstrap_missing_contest_result_from_canonical_schema(connection: psycopg.
                 )
             """
         )
-        has_party_column, has_canonical_constraint, has_legacy_ballot_column = cursor.fetchone()
+        shape_row = cursor.fetchone()
+        assert shape_row is not None
+        has_party_column, has_canonical_constraint, has_legacy_ballot_column = shape_row
         if has_party_column and has_canonical_constraint and not has_legacy_ballot_column:
             return
 
         cursor.execute("DROP TABLE IF EXISTS civic.contest_result CASCADE")
-        cursor.execute(_contest_result_bootstrap_sql())
+        cursor.execute(cast(LiteralString, _contest_result_bootstrap_sql()))
 
 
 def _relation_exists(connection: psycopg.Connection, relation_name: str) -> bool:
@@ -582,7 +637,9 @@ def _execute_stage1_canary_repair(
     try:
         cursor.execute("SAVEPOINT stage1_canary_repair")
         try:
-            cursor.execute(repair_sql)
+            # Repair SQL comes from the repo-owned canary catalog, not user
+            # input; the cast mirrors core/schema_sql_fallback.py's precedent.
+            cursor.execute(cast(LiteralString, repair_sql))
         except psycopg.Error:
             cursor.execute("ROLLBACK TO SAVEPOINT stage1_canary_repair")
         finally:
@@ -701,7 +758,7 @@ def _fail_if_stage1_bootstrap_drift_detected(connection: psycopg.Connection) -> 
 
 
 @pytest.fixture
-def db_conn() -> psycopg.Connection:
+def db_conn() -> Iterator[psycopg.Connection]:
     _require_postgres_password()
     connection = _connection_or_skip()
     try:
@@ -718,7 +775,7 @@ def db_conn() -> psycopg.Connection:
 
 
 @pytest.fixture
-def graph_conn() -> psycopg.Connection:
+def graph_conn() -> Iterator[psycopg.Connection]:
     """Provide a graph-enabled DB connection with AGE bootstrap and drift preflight."""
     _require_postgres_password()
     connection = _connection_or_skip(post_connect=age_post_connect)
@@ -736,7 +793,7 @@ def graph_conn() -> psycopg.Connection:
 
 
 @pytest.fixture
-def committing_db_conn() -> psycopg.Connection:
+def committing_db_conn() -> Iterator[psycopg.Connection]:
     """Provide a DB connection for integration tests that commit real work."""
     _require_postgres_password()
     connection = _connection_or_skip()

@@ -32,3 +32,11 @@ docs/reference/research/artifacts/*/downloads/**/*.zip
 
 
 .matt/
+
+# Beads / Dolt files (added by bd init)
+.dolt/
+*.db
+.beads-credential-key
+.beads/proxieddb/
+*.gate.lock*
+/.beads.gate.lock*

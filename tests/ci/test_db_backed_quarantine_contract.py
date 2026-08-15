@@ -7,6 +7,7 @@ import subprocess
 import sys
 from collections import Counter
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -37,7 +38,7 @@ def _entry(node_id: str) -> root_conftest._DbBackedQuarantineEntry:
     return root_conftest._DbBackedQuarantineEntry(
         node_id=node_id,
         reason="Seeded database exposes unresolved fixture isolation",
-        owner="ROADMAP.md federal-first assembly",
+        owner="Federal people-spine assembly owner",
     )
 
 
@@ -59,6 +60,24 @@ def test_quarantine_loader_rejects_malformed_entries(tmp_path: Path, entry_line:
         root_conftest._load_db_backed_quarantine(quarantine_path)
 
 
+@pytest.mark.parametrize(
+    "owner_value",
+    [
+        pytest.param("Federal ROADMAP.md follow-up", id="canonical-casing"),
+        pytest.param("federal roadmap.md follow-up", id="lowercase-casing"),
+    ],
+)
+def test_quarantine_loader_rejects_roadmap_owner(tmp_path: Path, owner_value: str) -> None:
+    entry_line = f'{{"node_id": "api/test_example.py::test_case", "reason": "seed gap", "owner": "{owner_value}"}}'
+    quarantine_path = _write_quarantine(tmp_path / "quarantine.md", entry_line)
+
+    with pytest.raises(
+        pytest.UsageError,
+        match=r"Invalid DB-backed quarantine entry at .*quarantine\.md:1",
+    ):
+        root_conftest._load_db_backed_quarantine(quarantine_path)
+
+
 def test_quarantine_loader_rejects_duplicate_node_ids(tmp_path: Path) -> None:
     entry_line = '{"node_id": "api/test_example.py::test_case", "reason": "seed gap", "owner": "L2"}'
     quarantine_path = _write_quarantine(tmp_path / "quarantine.md", entry_line, entry_line)
@@ -72,7 +91,7 @@ def test_quarantine_loader_rejects_blank_required_fields(tmp_path: Path, field_n
     fields = {
         "node_id": "api/test_example.py::test_case",
         "reason": "Seed is incomplete",
-        "owner": "ROADMAP.md row",
+        "owner": "Federal people-spine assembly owner",
     }
     fields[field_name] = "   "
     entry_line = f'{{"node_id": "{fields["node_id"]}", "reason": "{fields["reason"]}", "owner": "{fields["owner"]}"}}'
@@ -122,6 +141,20 @@ class _FakeItem:
     def add_marker(self, marker: pytest.MarkDecorator) -> None:
         self.marker_names.append(marker.name)
 
+    def get_closest_marker(self, name: str) -> None:
+        # The hook consults the projected-public-contract marker during its
+        # deselection pass; fake items carry no markers of their own.
+        return None
+
+
+class _FakeConfig:
+    """Just the config surface the collection hook touches."""
+
+    def __init__(self, invocation_args: tuple[str, ...] = ()) -> None:
+        self.invocation_params = SimpleNamespace(args=tuple(invocation_args))
+        self.deselected_items: list[object] = []
+        self.hook = SimpleNamespace(pytest_deselected=lambda items: self.deselected_items.extend(items))
+
 
 def test_collection_hook_marks_only_exact_node_id_matches(monkeypatch: pytest.MonkeyPatch) -> None:
     exact_node_id = "api/test_example.py::test_case[param]"
@@ -130,7 +163,7 @@ def test_collection_hook_marks_only_exact_node_id_matches(monkeypatch: pytest.Mo
     prefix_item = _FakeItem("api/test_example.py::test_case")
     longer_item = _FakeItem(f"{exact_node_id}extra")
 
-    root_conftest.pytest_collection_modifyitems(items=[exact_item, prefix_item, longer_item])
+    root_conftest.pytest_collection_modifyitems(config=_FakeConfig(), items=[exact_item, prefix_item, longer_item])
 
     assert exact_item.marker_names == ["quarantined"]
     assert prefix_item.marker_names == []

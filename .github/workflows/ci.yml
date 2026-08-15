@@ -9,9 +9,15 @@ on:
 permissions:
   contents: read
 
+# One required fast job answers every push and PR with the qa-fast composition
+# (lint, web unit tests + typecheck, and the profiled DB-free Python
+# selection) through its Makefile owner. The build job keeps the production
+# web build as parallel, non-blocking signal. Exhaustive proof deliberately
+# lives elsewhere: nightly.yml owns the full suites on a schedule, and
+# integration.yml owns DB-backed proof for database-risk changes.
 jobs:
-  lint:
-    name: lint
+  fast:
+    name: fast
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -21,29 +27,22 @@ jobs:
       - uses: astral-sh/setup-uv@0c5e2b8115b80b4c7c5ddf6ffdd634974642d182 # v5.4.1
         with:
           python-version: "3.12"
-      - name: Sync dependencies
-        run: uv sync --locked --extra dev
-      - name: Lint
-        run: make lint
-
-  unit-tests:
-    name: unit-tests
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          fetch-depth: 2
-          persist-credentials: false
-      - uses: astral-sh/setup-uv@0c5e2b8115b80b4c7c5ddf6ffdd634974642d182 # v5.4.1
-        with:
-          python-version: "3.12"
+          node-version-file: web/package.json
+          cache: npm
+          cache-dependency-path: web/package-lock.json
       - name: Sync dependencies
         run: uv sync --locked --extra dev --extra entity-resolution
-      - name: Unit tests
-        run: make test-public
+      - name: Install web dependencies
+        working-directory: web
+        run: npm ci
+      - name: qa-fast (public locality)
+        run: make qa-fast-public
 
-  web:
-    name: web
+  build:
+    name: build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -59,12 +58,6 @@ jobs:
       - name: Install web dependencies
         working-directory: web
         run: npm ci
-      - name: Web unit tests
-        working-directory: web
-        run: npm test
-      - name: Web type check
-        working-directory: web
-        run: npm run check
       - name: Web production build
         working-directory: web
         run: npm run build

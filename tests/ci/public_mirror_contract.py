@@ -155,6 +155,13 @@ PUBLIC_MIRROR_TEST_CLASSIFICATIONS: tuple[PublicMirrorTestClassification, ...] =
         ),
     ),
     *_entries(
+        private_asset="private Beads ledger (.beads/), frozen ROADMAP.md, and BEADS_QA_TRANSITION.md",
+        owner="Debbie projection contract",
+        node_ids=(
+            "tests/test_debbie_post_sync_hook.py::test_debbie_projection_excludes_private_ledger_and_planning_docs_from_physical_tree",
+        ),
+    ),
+    *_entries(
         private_asset="docs/howto/operations/db-backup-runbook.md and Fly backup baseline evidence",
         owner="Fly backup and restore operations docs",
         node_ids=(
@@ -179,6 +186,11 @@ PUBLIC_MIRROR_TEST_CLASSIFICATIONS: tuple[PublicMirrorTestClassification, ...] =
             "tests/ci/test_fly_ops_docs_contract.py::test_stage_owned_runnable_docs_do_not_publish_password_prefix_commands",
             "tests/ci/test_fly_ops_docs_contract.py::test_roadmap_tracks_only_unresolved_stage4_and_rotation_work",
             "tests/ci/test_fly_ops_docs_contract.py::test_scheduler_boundary_red_keeps_weekly_refresh_recheck_open",
+            "tests/ci/test_fly_ops_docs_contract.py::test_end_the_person_outage_receipt_is_falsifiable",
+            (
+                "tests/ci/test_fly_ops_docs_contract.py::"
+                "test_active_table_stage6_owned_rows_are_single_line_and_unique_active_table"
+            ),
             "tests/ci/test_fly_ops_docs_contract.py::test_aug03_batch_stage2_roadmap_reconciliation_is_falsifiable",
             "tests/ci/test_fly_ops_docs_contract.py::test_project_overview_current_scope_matches_implemented_fly_refresh_model",
             "tests/ci/test_fly_ops_docs_contract.py::test_lane10_refresh_digest_proof_accepts_the_deployed_workflow_image",
@@ -342,6 +354,52 @@ PUBLIC_MIRROR_TEST_CLASSIFICATIONS: tuple[PublicMirrorTestClassification, ...] =
         private_asset="parked state/city pipeline test trees",
         owner="parked-jurisdiction quarantine contract",
         node_ids=("tests/test_parked_suite_exclusion.py::test_escape_hatch_restores_parked_collection",),
+    ),
+    *_entries(
+        # .batman.toml and the merge-gate wrapper are dev-repo orchestration
+        # config; neither is whitelisted for public sync.
+        private_asset=".batman.toml and scripts/qa_fast_gate.sh",
+        owner="Batman merge-validation gate contract",
+        node_ids=(
+            "tests/ci/test_ci_workflow_contract.py::test_batman_config_declares_qa_fast_merge_gate",
+            "tests/ci/test_ci_workflow_contract.py::test_shadow_warning_is_executable_only_in_optional_make_test",
+        ),
+    ),
+    *_entries(
+        # Parked-inclusive collection imports NC office-class tests whose
+        # module-level fixture inventory reads this private research doc.
+        private_asset="docs/reference/research/nc_office_universe_2026_04_24.md",
+        owner="parked-jurisdiction quarantine contract",
+        node_ids=(
+            "tests/ci/test_pytest_tier_classifier_contract.py::test_non_parked_collections_ignore_inherited_parked_escape_hatch",
+        ),
+    ),
+    *_entries(
+        # The private Beads ledger identity files, the bootstrap wrapper, the
+        # frozen roadmap archive, and the dev-host bd/batman CLIs are all
+        # intentionally absent from public mirrors, so the structural adoption
+        # contract can only run in the dev repository.
+        private_asset=(
+            "private Beads ledger (.beads/), scripts/bootstrap_beads.sh, "
+            "frozen ROADMAP.md, .debbie.toml, and the pinned bd/batman CLIs"
+        ),
+        owner="Beads adoption contract",
+        node_ids=(
+            "tests/test_beads_adoption_contract.py::test_pinned_bd_cli_version_is_exact",
+            "tests/test_beads_adoption_contract.py::test_beads_tracked_and_ignored_boundary",
+            "tests/test_beads_adoption_contract.py::test_beads_marker_is_physical_directory",
+            "tests/test_beads_adoption_contract.py::test_beads_metadata_pins_embedded_dolt_database",
+            "tests/test_beads_adoption_contract.py::test_beads_runtime_ignore_rules_cover_clone_local_state",
+            "tests/test_beads_adoption_contract.py::test_beads_readme_documents_recovery_and_pin",
+            "tests/test_beads_adoption_contract.py::test_bootstrap_wrapper_issues_exact_hardened_sequence",
+            "tests/test_beads_adoption_contract.py::test_bootstrap_wrapper_refuses_symlinked_beads_directory",
+            "tests/test_beads_adoption_contract.py::test_bootstrap_wrapper_fails_closed_on_config_set_failure",
+            "tests/test_beads_adoption_contract.py::test_bootstrap_wrapper_refuses_symlinked_runtime_config",
+            "tests/test_beads_adoption_contract.py::test_debbie_projection_excludes_ledger_and_planning_docs",
+            "tests/test_beads_adoption_contract.py::test_roadmap_is_frozen_read_only_archive",
+            "tests/test_beads_adoption_contract.py::test_current_work_authority_routes_to_beads",
+            "tests/test_beads_adoption_contract.py::test_batman_roadmap_mutation_refuses_adopted_repo",
+        ),
     ),
 )
 

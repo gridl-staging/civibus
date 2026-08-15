@@ -20,7 +20,7 @@ It keeps merge-gate settings aligned with workflow source-of-truth files instead
   - `tests/ci/test_ci_workflow_contract.py`
   - `tests/ci/test_integration_workflow_contract.py`
 
-Current PR-required checks from `.github/workflows/ci.yml`: `lint`, `unit-tests`, `web`
+Current PR-required checks from `.github/workflows/ci.yml`: `fast`. The `build` check runs on every PR as advisory signal and is deliberately not required, keeping exactly one blocking gate.
 PR-capable checks from `.github/workflows/integration.yml`: `integration-tests`
 
 `integration-tests` must not be declared required until a mirror PR run establishes its real check context and Stage 4 probes branch protection.
@@ -31,7 +31,8 @@ Set these in GitHub Settings -> Branches -> `main`:
 
 1. Require a pull request before merging: enabled.
 2. Require status checks to pass before merging: enabled.
-3. Required status checks: select the current checks from `.github/workflows/ci.yml` (`lint`, `unit-tests`, `web`).
+3. Required status checks: select `fast` from `.github/workflows/ci.yml` — the qa-fast composition and the single blocking gate. Leave `build` (web production build) unrequired advisory signal.
+   Migration note (2026-08-15 rename): the previous required contexts `lint`, `unit-tests`, and `web` no longer report after this workflow shape syncs. Remove them from the required list in the same sitting that adds `fast`, or every PR on that mirror strands on checks that will never arrive.
 4. Require branches to be up to date before merging: enabled.
 5. Require conversation resolution before merging: enabled.
 6. Allow force pushes: disabled unless there is an explicit repository exception.

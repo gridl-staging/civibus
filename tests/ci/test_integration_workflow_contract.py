@@ -15,10 +15,39 @@ def _read_integration_workflow() -> str:
 
 
 def test_integration_workflow_uses_push_main_and_python_312() -> None:
+    """Integration runs for database-risk changes, on a schedule, on demand.
+
+    Before 2026-08-15 every push and PR waited ~4-5 minutes on this workflow.
+    Path filters scope it to trees that can actually change DB-backed
+    behavior; the daily schedule keeps a recurring exhaustive owner so a gap
+    in the filter list cannot silently retire the suite; workflow_dispatch
+    keeps campaign closeouts able to demand a run.
+    """
     workflow_text = _read_integration_workflow()
 
-    assert "push:\n    branches: [main]" in workflow_text
-    assert "pull_request:\n    branches: [main]" in workflow_text
+    assert "push:\n    branches: [main]\n    paths:" in workflow_text
+    assert "pull_request:\n    branches: [main]\n    paths:" in workflow_text
+    assert "schedule:" in workflow_text
+    assert "workflow_dispatch:" in workflow_text
+    # Web-only and docs-only changes are exactly what the filters exist to
+    # exempt; every tree the DB-backed suite selects from must be present.
+    for risk_path in (
+        '"api/**"',
+        '"core/**"',
+        '"domains/**"',
+        '"infra/**"',
+        '"tests/**"',
+        '"conftest.py"',
+        '"Makefile"',
+        '"pyproject.toml"',
+        '"uv.lock"',
+        '"sources.yaml"',
+        '".github/workflows/integration.yml"',
+    ):
+        # Both trigger blocks carry the identical list.
+        assert workflow_text.count(f"      - {risk_path}") == 2, risk_path
+    assert '"web/**"' not in workflow_text
+
     assert "permissions:\n  contents: read" in workflow_text
     assert "name: integration-tests" in workflow_text
     assert f"uses: actions/checkout@{CHECKOUT_SHA}" in workflow_text
