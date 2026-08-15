@@ -14,7 +14,19 @@ from domains.campaign_finance.jurisdictions.states.NC.scraper.load import (
 )
 from domains.campaign_finance.jurisdictions.states.NC.scraper.parse import parse_committee_docs
 from test_office_class_fixture_inventory import PER_OFFICE_CLASS_DIR, _in_scope_rows
-from test_office_universe_inventory import EVIDENCE_TOKEN_BY_FIXTURE_SLUG
+from test_office_universe_inventory import EVIDENCE_TOKEN_BY_FIXTURE_SLUG, UNIVERSE_DOC_PATH
+
+# The parametrize below reads the private NC office-universe research doc at
+# COLLECTION time. That doc is intentionally absent from the public mirrors,
+# and parked-inclusive collection (CIVIBUS_INCLUDE_PARKED=1, used by the tier
+# classifier contract) reaches this module there — an import-time crash then
+# breaks collection for the entire selection. The dev repository always
+# carries the doc, so this module-level skip can only ever fire on a mirror.
+if not UNIVERSE_DOC_PATH.exists():
+    pytest.skip(
+        "private NC office-universe research doc absent (public mirror)",
+        allow_module_level=True,
+    )
 
 pytestmark = pytest.mark.integration
 

@@ -351,11 +351,6 @@ PUBLIC_MIRROR_TEST_CLASSIFICATIONS: tuple[PublicMirrorTestClassification, ...] =
         node_ids=("tests/test_stage1_infrastructure.py::test_graph_eval_script_targets_current_database_container",),
     ),
     *_entries(
-        private_asset="parked state/city pipeline test trees",
-        owner="parked-jurisdiction quarantine contract",
-        node_ids=("tests/test_parked_suite_exclusion.py::test_escape_hatch_restores_parked_collection",),
-    ),
-    *_entries(
         # .batman.toml and the merge-gate wrapper are dev-repo orchestration
         # config; neither is whitelisted for public sync.
         private_asset=".batman.toml and scripts/qa_fast_gate.sh",
@@ -363,15 +358,6 @@ PUBLIC_MIRROR_TEST_CLASSIFICATIONS: tuple[PublicMirrorTestClassification, ...] =
         node_ids=(
             "tests/ci/test_ci_workflow_contract.py::test_batman_config_declares_qa_fast_merge_gate",
             "tests/ci/test_ci_workflow_contract.py::test_shadow_warning_is_executable_only_in_optional_make_test",
-        ),
-    ),
-    *_entries(
-        # Parked-inclusive collection imports NC office-class tests whose
-        # module-level fixture inventory reads this private research doc.
-        private_asset="docs/reference/research/nc_office_universe_2026_04_24.md",
-        owner="parked-jurisdiction quarantine contract",
-        node_ids=(
-            "tests/ci/test_pytest_tier_classifier_contract.py::test_non_parked_collections_ignore_inherited_parked_escape_hatch",
         ),
     ),
     *_entries(

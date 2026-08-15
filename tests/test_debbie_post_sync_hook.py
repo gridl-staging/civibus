@@ -194,8 +194,17 @@ def _collected_node_ids(stdout: str) -> set[str]:
 
 
 def _failed_node_ids(stdout: str) -> set[str]:
+    """FAILED and ERROR summary lines both count as projection failures.
+
+    ERROR lines cover fixture-setup and module-collection breakage; leaving
+    them out let a red public selection pass the local projected proof on
+    2026-08-15. Module-level collection errors yield a bare file path rather
+    than a node id — deliberately kept, so they surface as unexpected entries
+    in the registered-vs-reproduced comparison instead of vanishing.
+    """
+    summary_prefixes = ("FAILED ", "ERROR ")
     return {
-        line.removeprefix("FAILED ").split(" - ", 1)[0] for line in stdout.splitlines() if line.startswith("FAILED ")
+        line.split(" ", 1)[1].split(" - ", 1)[0] for line in stdout.splitlines() if line.startswith(summary_prefixes)
     }
 
 
@@ -256,24 +265,45 @@ def test_projected_public_contract_is_selected_only_by_named_target() -> None:
     assert PROJECTED_PUBLIC_CONTRACT_NODE_ID not in collected_nodes_by_selection["bare tests directory"]
 
 
-def test_failed_node_ids_classifies_only_failed_summary_lines() -> None:
+def test_failed_node_ids_classifies_failed_and_error_summary_lines() -> None:
+    """Setup/collection ERRORs are projection failures and must be visible.
+
+    On 2026-08-15 the projected-contract proof passed locally while the
+    staging mirror's fast job was red: parked-inclusive collection ERRORed at
+    fixture setup, and ERROR summary lines were invisible to this classifier,
+    so registered-vs-reproduced comparison never saw them. An error that
+    reaches the public selection is exactly as red as a FAILED line.
+    """
     stdout = "\n".join(
         [
             "FAILED tests/test_debbie_post_sync_hook.py::test_failed_one - AssertionError: first",
             "ERROR tests/test_debbie_post_sync_hook.py::test_error_one - fixture setup failed",
+            "ERROR domains/example/test_module.py - AssertionError: required file missing",
             "    FAILED tests/test_debbie_post_sync_hook.py::test_indented_failed - not a summary line",
             "FAILEDtests/test_debbie_post_sync_hook.py::test_missing_space - not a summary line",
+            "ERRORtests/test_debbie_post_sync_hook.py::test_missing_space_error - not a summary line",
             "FAILED tests/test_debbie_post_sync_hook.py::test_failed_two",
         ]
     )
 
     assert _failed_node_ids(stdout) == {
         "tests/test_debbie_post_sync_hook.py::test_failed_one",
+        "tests/test_debbie_post_sync_hook.py::test_error_one",
+        "domains/example/test_module.py",
         "tests/test_debbie_post_sync_hook.py::test_failed_two",
     }
 
 
-def test_fixture_sensitive_nodes_must_reproduce_as_failed_not_error() -> None:
+def test_fixture_sensitive_nodes_reproduce_as_visible_failures() -> None:
+    """Registered nodes that ERROR at fixture setup are observed failures.
+
+    This test used to pin the OPPOSITE: ERROR summary lines were invisible to
+    the classifier, and the invisibility was asserted as correct. On
+    2026-08-15 that blessed a red staging mirror (parked-inclusive collection
+    ERRORed at setup and the projected proof saw nothing), so the contract
+    inverted: however a registered node breaks in the projection — FAILED or
+    ERROR — the comparison must see it.
+    """
     fixture_sensitive_nodes = {
         "tests/test_debbie_post_sync_hook.py::test_projected_public_mirror_is_ruff_format_clean",
         "tests/test_debbie_post_sync_hook.py::test_projected_public_mirror_post_sync_is_idempotent",
@@ -290,8 +320,7 @@ def test_fixture_sensitive_nodes_must_reproduce_as_failed_not_error() -> None:
 
     observed_failure_nodes = _failed_node_ids(stdout)
 
-    assert expected_failure_nodes - observed_failure_nodes == fixture_sensitive_nodes
-    assert observed_failure_nodes == expected_failure_nodes - fixture_sensitive_nodes
+    assert observed_failure_nodes == expected_failure_nodes
 
 
 def _collection_diagnostics(completed: subprocess.CompletedProcess[str]) -> str:
