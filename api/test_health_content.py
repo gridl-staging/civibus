@@ -1083,6 +1083,10 @@ def test_out_of_cycle_official_total_promoted_uncounted_by_health_predicate_cont
     assert CANDIDATE_MONEY_COVERAGE_CHECK in FEDERAL_FIRST_FLOORS
 
 
+# Real-PostgreSQL specimen test: unmarked, it silently skipped in every
+# automated locality (fast tiers run DB-less; DB-provisioned selections
+# take only integration-marked nodes). The integration tier is its home.
+@pytest.mark.integration
 def test_out_of_cycle_official_total_promoted_uncounted_by_health_predicate_db_count(
     db_conn: psycopg.Connection,
 ) -> None:
@@ -1139,6 +1143,10 @@ def test_out_of_cycle_official_total_promoted_uncounted_by_health_predicate_db_c
     assert repaired_count == baseline + 2
 
 
+# Real-PostgreSQL specimen test: unmarked, it silently skipped in every
+# automated locality (fast tiers run DB-less; DB-provisioned selections
+# take only integration-marked nodes). The integration tier is its home.
+@pytest.mark.integration
 def test_out_of_cycle_official_total_suppressed_by_transaction_derived_activity(
     db_conn: psycopg.Connection,
 ) -> None:
@@ -1169,6 +1177,10 @@ def test_out_of_cycle_official_total_suppressed_by_transaction_derived_activity(
     assert repaired_count == baseline
 
 
+# Real-PostgreSQL specimen test: unmarked, it silently skipped in every
+# automated locality (fast tiers run DB-less; DB-provisioned selections
+# take only integration-marked nodes). The integration tier is its home.
+@pytest.mark.integration
 def test_out_of_cycle_official_total_suppressed_by_positive_precomputed_transaction_count(
     db_conn: psycopg.Connection,
 ) -> None:
@@ -1197,6 +1209,10 @@ def test_out_of_cycle_official_total_suppressed_by_positive_precomputed_transact
     assert repaired_count == baseline
 
 
+# Real-PostgreSQL specimen test: unmarked, it silently skipped in every
+# automated locality (fast tiers run DB-less; DB-provisioned selections
+# take only integration-marked nodes). The integration tier is its home.
+@pytest.mark.integration
 def test_out_of_cycle_official_total_promoted_by_zero_precomputed_transaction_count(
     db_conn: psycopg.Connection,
 ) -> None:
@@ -1225,6 +1241,10 @@ def test_out_of_cycle_official_total_promoted_by_zero_precomputed_transaction_co
     assert repaired_count == baseline + 1
 
 
+# Real-PostgreSQL specimen test: unmarked, it silently skipped in every
+# automated locality (fast tiers run DB-less; DB-provisioned selections
+# take only integration-marked nodes). The integration tier is its home.
+@pytest.mark.integration
 def test_out_of_cycle_official_total_promoted_despite_denylisted_committee_activity(
     db_conn: psycopg.Connection,
 ) -> None:
@@ -1278,6 +1298,10 @@ def test_out_of_cycle_official_total_promoted_despite_denylisted_committee_activ
     assert repaired_count == baseline + 1
 
 
+# Real-PostgreSQL specimen test: unmarked, it silently skipped in every
+# automated locality (fast tiers run DB-less; DB-provisioned selections
+# take only integration-marked nodes). The integration tier is its home.
+@pytest.mark.integration
 def test_evaluate_content_health_flags_underlinked_federal_officeholder_money_coverage(
     db_conn: psycopg.Connection,
 ) -> None:
@@ -1312,6 +1336,10 @@ def test_evaluate_content_health_flags_underlinked_federal_officeholder_money_co
     ]
 
 
+# Real-PostgreSQL specimen test: unmarked, it silently skipped in every
+# automated locality (fast tiers run DB-less; DB-provisioned selections
+# take only integration-marked nodes). The integration tier is its home.
+@pytest.mark.integration
 def test_evaluate_content_health_accepts_fully_linked_federal_officeholder_money_coverage(
     db_conn: psycopg.Connection,
 ) -> None:
@@ -1346,6 +1374,10 @@ def test_evaluate_content_health_accepts_fully_linked_federal_officeholder_money
         pytest.param("[2000-01-01,)", True, id="current_open_range"),
     ],
 )
+# Real-PostgreSQL specimen test: unmarked, it silently skipped in every
+# automated locality (fast tiers run DB-less; DB-provisioned selections
+# take only integration-marked nodes). The integration tier is its home.
+@pytest.mark.integration
 def test_officeholder_money_health_uses_shared_federal_scope_for_range_classification(
     db_conn: psycopg.Connection,
     valid_period: str,

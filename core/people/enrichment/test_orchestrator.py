@@ -473,6 +473,10 @@ def _insert_officeholder_scope_row(
     )
 
 
+# Real-PostgreSQL specimen test: unmarked, it silently skipped in every
+# automated locality (fast tiers run DB-less; DB-provisioned selections
+# take only integration-marked nodes). The integration tier is its home.
+@pytest.mark.integration
 def test_select_federal_scope_targets_returns_only_active_federal_officeholders(db_conn) -> None:
     baseline_selected = select_federal_scope_targets(db_conn)
     baseline_ids = {target.person_id for target in baseline_selected.targets}
@@ -510,6 +514,10 @@ def test_select_federal_scope_targets_returns_only_active_federal_officeholders(
     assert selected.officeholder_count == baseline_selected.officeholder_count + 1
 
 
+# Real-PostgreSQL specimen test: unmarked, it silently skipped in every
+# automated locality (fast tiers run DB-less; DB-provisioned selections
+# take only integration-marked nodes). The integration tier is its home.
+@pytest.mark.integration
 def test_select_federal_scope_targets_hydrates_identifiers_and_orders_deterministically(db_conn) -> None:
     baseline_selected = select_federal_scope_targets(db_conn)
     first_person = Person(
@@ -2365,6 +2373,10 @@ def test_run_federal_enrichment_prefers_official_bio_for_residual_with_federal_i
     assert probe.inserted_portraits[0].rights_status == "public_domain"
 
 
+# Real-PostgreSQL specimen test: unmarked, it silently skipped in every
+# automated locality (fast tiers run DB-less; DB-provisioned selections
+# take only integration-marked nodes). The integration tier is its home.
+@pytest.mark.integration
 def test_run_federal_enrichment_reuses_people_enrichment_portrait_for_real_residual(
     db_conn: psycopg.Connection,
     monkeypatch: pytest.MonkeyPatch,

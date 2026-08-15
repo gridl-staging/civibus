@@ -60,6 +60,41 @@ jobs:
         working-directory: web
         run: npm run build
 
+  e2e:
+    name: e2e
+    runs-on: ubuntu-latest
+    env:
+      COMPOSE_PROJECT_NAME: civibus_integration_local
+      CIVIBUS_REQUIRE_DB: "1"
+      POSTGRES_PASSWORD: ci-postgres-password
+      POSTGRES_PORT: "5475"
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@0c5e2b8115b80b4c7c5ddf6ffdd634974642d182 # v5.4.1
+        with:
+          python-version: "3.12"
+      - name: Sync dependencies
+        run: uv sync --locked --extra dev --extra entity-resolution
+      - name: Start DB
+        run: make db-up
+      - name: Wait for DB health
+        run: make db-wait
+      - name: Reset DB schema
+        run: make db-reset
+      # make test-e2e runs every e2e-marked node, including the two smoke
+      # modules no merge-time or coverage selection executes (they are
+      # e2e-only by marker). The state sample module resets and re-seeds the
+      # database itself, which is why this job owns a disposable DB of its
+      # own instead of sharing browser-smoke's federal seed.
+      - name: End-to-end suite
+        run: make test-e2e
+      - name: Stop DB
+        if: always()
+        run: make db-down
+
   browser-smoke:
     name: browser-smoke
     runs-on: ubuntu-latest

@@ -298,7 +298,7 @@ def test_debbie_projection_excludes_ledger_and_planning_docs() -> None:
     synced_files = payload["sync"]["files"]
     synced_dirs = [entry["path"].rstrip("/") for entry in payload["sync"]["dirs"]]
 
-    for private_path in ("ROADMAP.md", "BEADS_QA_TRANSITION.md", ".beads"):
+    for private_path in ("ROADMAP.md", "BEADS_QA_TRANSITION.md", "CAPABILITIES.md", ".beads"):
         for synced_file in synced_files:
             # Equality alone is evadable at file granularity: whitelisting
             # ".beads/issues.jsonl" would publish ledger content with every

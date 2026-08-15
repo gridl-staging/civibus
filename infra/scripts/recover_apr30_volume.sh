@@ -360,7 +360,7 @@ The canonical volume may not be the one we expected. Halting before bringing up 
     echo "===>   - replay loader work that wrote into the empty volume during"
     echo "===>     the ~16 hour window (apr29_pm_2, apr29_pm_9)"
     echo "===>   - take fresh B2 backup of recovered state"
-    echo "===>   - update ROADMAP.md / postmortem with recovery timestamp"
+    echo "===>   - record the recovery timestamp in a fresh Bead and the postmortem"
 }
 
 # ---------- Dispatch ----------

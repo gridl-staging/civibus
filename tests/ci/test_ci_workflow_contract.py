@@ -426,6 +426,21 @@ def test_nightly_workflow_owns_exhaustive_scheduled_proof() -> None:
     for command in ("npm ci", "npm test", "npm run check", "npm run build"):
         assert f"        run: {command}" in web_job.splitlines()
 
+    # The e2e smoke modules are marked e2e-only, so no merge-time or
+    # coverage selection ever executes them; this job is their scheduled
+    # home. It owns a disposable DB lifecycle of its own because the state
+    # sample module resets and re-seeds the database, which would destroy
+    # the federal seed browser-smoke depends on if the two shared one.
+    e2e_job = _job_block(workflow_text, "e2e")
+    for command in (
+        "make db-up",
+        "make db-wait",
+        "make db-reset",
+        "make test-e2e",
+    ):
+        assert f"        run: {command}" in e2e_job.splitlines()
+    assert "- name: Stop DB\n        if: always()\n        run: make db-down" in e2e_job
+
     browser_job = _job_block(workflow_text, "browser-smoke")
     for command in (
         "make db-up",
