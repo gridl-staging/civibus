@@ -376,6 +376,28 @@ def _extract_action_objects(*, actions_array_text: str, owner_file: str) -> list
     return action_objects
 
 
+def _extract_string_array(*, array_text: str, owner_file: str) -> list[str]:
+    """Extract string literals from an array that contains only strings."""
+    values = [
+        match.group("value").strip()
+        for match in re.finditer(
+            r"([\"'])(?P<value>(?:\\.|(?!\1).)*)\1",
+            array_text,
+            flags=re.DOTALL,
+        )
+    ]
+    if not values:
+        raise ValueError(f"string array is empty in {owner_file}")
+    return values
+
+
+def _extract_optional_action_objects(*, actions_array_text: str, owner_file: str) -> list[str]:
+    """Extract object literals while allowing an explicitly empty array."""
+    if actions_array_text[1:-1].strip() == "":
+        return []
+    return _extract_action_objects(actions_array_text=actions_array_text, owner_file=owner_file)
+
+
 def _append_landing_action_rows(
     *, app_shell_copy_rows: list[tuple[str, str]], action_objects: list[str], app_owner: str
 ) -> None:
@@ -425,12 +447,38 @@ def _append_methodology_rows(
                 _extract_string_property(source_text=section_object, owner_file=app_owner, property_name="heading"),
             )
         )
-        app_shell_copy_rows.append(
-            (
-                f"app-shell-methodology-section-{section_index:03d}-body",
-                _extract_string_property(source_text=section_object, owner_file=app_owner, property_name="body"),
-            )
+        paragraphs_array = _extract_property_literal(
+            source_text=section_object,
+            owner_file=app_owner,
+            property_name="paragraphs",
+            opening_char="[",
+            closing_char="]",
         )
+        for paragraph_index, paragraph in enumerate(
+            _extract_string_array(array_text=paragraphs_array, owner_file=app_owner), start=1
+        ):
+            app_shell_copy_rows.append(
+                (
+                    f"app-shell-methodology-section-{section_index:03d}-paragraph-{paragraph_index:03d}",
+                    paragraph,
+                )
+            )
+        links_array = _extract_property_literal(
+            source_text=section_object,
+            owner_file=app_owner,
+            property_name="links",
+            opening_char="[",
+            closing_char="]",
+        )
+        for link_index, link_object in enumerate(
+            _extract_optional_action_objects(actions_array_text=links_array, owner_file=app_owner), start=1
+        ):
+            app_shell_copy_rows.append(
+                (
+                    f"app-shell-methodology-section-{section_index:03d}-link-{link_index:03d}-label",
+                    _extract_string_property(source_text=link_object, owner_file=app_owner, property_name="label"),
+                )
+            )
     app_shell_copy_rows.append(
         (
             "app-shell-methodology-confidence-heading",

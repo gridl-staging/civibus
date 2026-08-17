@@ -7,6 +7,8 @@ type SmokeWebServerConfig = {
 };
 
 type SmokePlaywrightConfig = {
+  workers?: number;
+  retries?: number;
   expect?: {
     toHaveScreenshot?: {
       pathTemplate?: string;
@@ -51,6 +53,13 @@ afterEach(() => {
 });
 
 describe("playwright smoke web port wiring", () => {
+  it("serializes local live-API smoke to isolate test-owned database seeds", async () => {
+    const config = await loadPlaywrightConfig({ SMOKE_USE_LIVE_API: "1" });
+
+    expect(config.workers).toBe(1);
+    expect(config.retries).toBe(0);
+  });
+
   it("stores screenshot baselines in a platform-independent project path", async () => {
     const config = await loadPlaywrightConfig({});
 

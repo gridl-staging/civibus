@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import logging
 from datetime import date
+from enum import StrEnum
 from pathlib import Path
 from uuid import UUID
 
 import psycopg
+from pydantic import BaseModel, ConfigDict
 
 from core.db import insert_person
 from core.db_ingest import find_person_by_identifier, insert_entity_source, try_insert_source_record
@@ -117,6 +119,30 @@ def _try_insert_source_record(
     return try_insert_source_record(conn, sr)
 
 
+class CandidateRowRejectionReason(StrEnum):
+    """Closed set of reasons a FEC candidate row cannot be materialized."""
+
+    MISSING_CANDIDATE_ID = "missing_candidate_id"
+    MISSING_CANDIDATE_NAME = "missing_candidate_name"
+    MISSING_OFFICE_CODE = "missing_office_code"
+    UNKNOWN_OFFICE_CODE = "unknown_office_code"
+    MISSING_ELECTION_YEAR = "missing_election_year"
+    INVALID_ELECTION_YEAR = "invalid_election_year"
+
+
+class CandidateRowRejection(BaseModel):
+    """Structured invalid-row verdict shared by every candidate-row consumer."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    reasons: frozenset[CandidateRowRejectionReason]
+
+
+def is_quarantinable_candidate_rejection(rejection: CandidateRowRejection) -> bool:
+    """Return whether candidate name is the row's only validation failure."""
+    return rejection.reasons == frozenset({CandidateRowRejectionReason.MISSING_CANDIDATE_NAME})
+
+
 class ValidatedRow:
     """Intermediate representation after field extraction and validation."""
 
@@ -150,38 +176,57 @@ class ValidatedRow:
         self.mapped = mapped
 
 
-def validate_candidate_row(raw_row: dict[str, str | None]) -> ValidatedRow | None:
+def validate_candidate_row(raw_row: dict[str, str | None]) -> ValidatedRow | CandidateRowRejection:
     """Extract and validate required fields from a raw FEC candidate row.
 
-    Returns a ValidatedRow on success, or None if the row should be skipped.
-    Shared by the canonical loader and the federal races loader so both apply
-    identical office resolution and election-year validation.
+    Returns a validated row on success or a structured rejection containing
+    every failure class found. Shared consumers therefore apply identical field,
+    office, and election-year validation without reconstructing the verdict.
     """
     mapped = map_candidate_fields(raw_row)
 
     fec_candidate_id = normalize_optional_text(mapped.get("fec_candidate_id"))
     candidate_name = normalize_optional_text(mapped.get("name"))
     office_code = normalize_optional_text(mapped.get("office"))
+    rejection_reasons: set[CandidateRowRejectionReason] = set()
+    if fec_candidate_id is None:
+        rejection_reasons.add(CandidateRowRejectionReason.MISSING_CANDIDATE_ID)
+    if candidate_name is None:
+        rejection_reasons.add(CandidateRowRejectionReason.MISSING_CANDIDATE_NAME)
+    if office_code is None:
+        rejection_reasons.add(CandidateRowRejectionReason.MISSING_OFFICE_CODE)
+        office_id = None
+    else:
+        office_id = _FEC_OFFICE_MAP.get(office_code)
+        if office_id is None:
+            rejection_reasons.add(CandidateRowRejectionReason.UNKNOWN_OFFICE_CODE)
 
-    if fec_candidate_id is None or candidate_name is None or office_code is None:
-        LOGGER.warning("Skipping row with missing required fields: %s", raw_row)
-        return None
-
-    office_id = _FEC_OFFICE_MAP.get(office_code)
-    if office_id is None:
-        LOGGER.warning("Unknown CAND_OFFICE code %r for %s", office_code, fec_candidate_id)
-        return None
-
+    election_year: int | None = None
     election_year_raw = normalize_optional_text(raw_row.get("CAND_ELECTION_YR"))
     if election_year_raw is None:
-        LOGGER.warning("Missing CAND_ELECTION_YR for %s", fec_candidate_id)
-        return None
+        rejection_reasons.add(CandidateRowRejectionReason.MISSING_ELECTION_YEAR)
+    else:
+        try:
+            election_year = int(election_year_raw)
+        except ValueError:
+            rejection_reasons.add(CandidateRowRejectionReason.INVALID_ELECTION_YEAR)
 
-    try:
-        election_year = int(election_year_raw)
-    except ValueError:
-        LOGGER.warning("Invalid CAND_ELECTION_YR %r for %s", election_year_raw, fec_candidate_id)
-        return None
+    if rejection_reasons:
+        rejection = CandidateRowRejection(reasons=frozenset(rejection_reasons))
+        LOGGER.warning(
+            "Skipping invalid candidate row candidate_id=%r office=%r election_year=%r reasons=%s",
+            fec_candidate_id,
+            office_code,
+            election_year_raw,
+            sorted(reason.value for reason in rejection.reasons),
+        )
+        return rejection
+
+    assert fec_candidate_id is not None
+    assert candidate_name is not None
+    assert office_id is not None
+    assert office_code is not None
+    assert election_year is not None
 
     return ValidatedRow(
         fec_candidate_id=fec_candidate_id,
@@ -326,10 +371,11 @@ def load_fec_candidates_canonical(
     processed_since_commit = 0
 
     for raw_row in read_bulk_file(path, "cn", limit=limit):
-        validated = validate_candidate_row(raw_row)
-        if validated is None:
+        validation = validate_candidate_row(raw_row)
+        if isinstance(validation, CandidateRowRejection):
             result.errors += 1
             continue
+        validated = validation
 
         source_record_key = f"cn_canonical:{cycle_key}:{validated.fec_candidate_id}:{validated.election_year}"
         source_record_id = _try_insert_source_record(

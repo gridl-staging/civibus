@@ -358,7 +358,7 @@ def _derive_configured_denominator_pull_status(
         return (
             "degraded",
             counts,
-            _format_loader_counts("Refresh job completed with loader errors: ", counts),
+            _format_loader_counts("Refresh job with configured denominator completed with loader errors: ", counts),
         )
     if activity_count < max(1, int(activity_denominator * _DEGRADED_VOLUME_RATIO_THRESHOLD)):
         return (

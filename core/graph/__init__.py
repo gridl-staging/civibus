@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Iterable
 from typing import Any
+from uuid import UUID
 
 import psycopg
 from psycopg import sql
@@ -79,6 +81,20 @@ def _execute_formatted_cypher(
         leading_query_sql=leading_query_sql,
     )
     conn.execute(statement)
+
+
+def delete_entity_nodes(conn: psycopg.Connection, entity_ids: Iterable[UUID]) -> None:
+    """Delete graph nodes and their edges for the supplied canonical entity IDs."""
+    for entity_id in entity_ids:
+        safe_id = _escape_cypher_literal(str(entity_id))
+        _execute_formatted_cypher(
+            conn,
+            """
+                MATCH (n {id: "%s"})
+                DETACH DELETE n
+            """,
+            safe_id,
+        )
 
 
 def age_post_connect(conn: psycopg.Connection) -> None:

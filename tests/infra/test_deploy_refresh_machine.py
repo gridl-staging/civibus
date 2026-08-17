@@ -55,6 +55,7 @@ machine = {
     },
 }
 if machine_was_updated:
+    machine["state"] = "started"
     machine["config"]["image"] = (
         "registry.fly.io/civibus-refresh:deployment-stage2@" + post_digest
     )
@@ -251,6 +252,13 @@ def _machine_updates(invocations: list[list[str]]) -> list[list[str]]:
 
 
 def test_deploy_uses_exact_build_probe_update_and_verifier_contract(tmp_path: Path) -> None:
+    """Prevent recurrence of the live unarmed scheduled-Machine deployment.
+
+    Machine 859e0da479e678 was updated on July 31/August 1 with
+    ``--skip-start`` and had no subsequent start event, producing
+    ``AUTOMATIC_START_NOT_OBSERVED`` for the August 4 and August 11, 2026
+    windows.
+    """
     result, invocations, evidence_dir = _run_deploy(tmp_path)
 
     assert result.returncode == 0, result.stderr
@@ -270,7 +278,10 @@ def test_deploy_uses_exact_build_probe_update_and_verifier_contract(tmp_path: Pa
         "--build-arg",
         f"CIVIBUS_BUILT_AT={build_timestamp}",
     ] in invocations
-    assert _machine_updates(invocations) == [
+    machine_updates = _machine_updates(invocations)
+    assert len(machine_updates) == 1
+    assert "--skip-start" not in machine_updates[0]
+    assert machine_updates == [
         [
             "flyctl",
             "machine",
@@ -280,7 +291,6 @@ def test_deploy_uses_exact_build_probe_update_and_verifier_contract(tmp_path: Pa
             APP_NAME,
             "--image",
             IMAGE_TAG,
-            "--skip-start",
             "--yes",
         ]
     ]
@@ -308,19 +318,10 @@ def test_deploy_uses_exact_build_probe_update_and_verifier_contract(tmp_path: Pa
             "--image-proof-json",
             str(evidence_dir / "image_proof.txt"),
         ],
-        [
-            "bash",
-            verifier_path,
-            "--machines-json",
-            str(evidence_dir / "post_machines.json"),
-            "--machine-config-json",
-            str(evidence_dir / "post_machine_config.json"),
-            "--volumes-json",
-            str(evidence_dir / "post_volumes.json"),
-            "--version-json",
-            str(evidence_dir / "post_version.json"),
-        ],
     ]
+    post_machine = json.loads((evidence_dir / "post_machines.json").read_text())[0]
+    assert post_machine["state"] == "started"
+    assert not (evidence_dir / "post_verify_refresh_machine.txt").exists()
     expected_sanitized_env = {
         "CIVIBUS_ENV": "production",
         "POSTGRES_HOST": "civibus-db.internal",

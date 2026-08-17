@@ -28,6 +28,27 @@ SCHEDULER_BOUNDARY_RECHECK_CHECKLIST_PATH = REPO_ROOT / "chats/icg/aug04_pm_1_re
 REFRESH_RELIABILITY_RECEIPT_PATH = REPO_ROOT / "docs/live-state/2026_08_03_refresh_partial_run_reliability.md"
 END_PERSON_OUTAGE_RECEIPT_PATH = REPO_ROOT / "docs/live-state/2026_08_05_end_the_person_outage.md"
 FEATURE_MATRIX_PATH = REPO_ROOT / "implemented/2026_07_18_federal_first_v1_landed_history_jul13_jul17.md"
+FEATURE_MATRIX_JUL13_JUL17_DETAIL_PATH = (
+    REPO_ROOT / "implemented/2026_07_18_federal_first_v1_landed_history_jul13_jul17_detail.md"
+)
+FEATURE_MATRIX_RECONCILIATIONS_JUL27_AUG03_PATH = (
+    REPO_ROOT
+    / "implemented/2026_07_18_federal_first_v1_landed_history_jul13_jul17_matrix_reconciliations_jul27_aug03_detail.md"
+)
+FEATURE_MATRIX_RECONCILIATIONS_AUG03_AUG05_PATH = (
+    REPO_ROOT
+    / "implemented/2026_07_18_federal_first_v1_landed_history_jul13_jul17_matrix_reconciliations_aug03_aug05_detail.md"
+)
+FEATURE_MATRIX_JUL19_JUL23_NARRATIVE_PATH = (
+    REPO_ROOT / "implemented/2026_07_18_federal_first_v1_landed_history_jul13_jul17_narrative_jul19_jul23_detail.md"
+)
+FEATURE_MATRIX_ARCHIVE_PATHS = (
+    FEATURE_MATRIX_PATH,
+    FEATURE_MATRIX_JUL13_JUL17_DETAIL_PATH,
+    FEATURE_MATRIX_RECONCILIATIONS_JUL27_AUG03_PATH,
+    FEATURE_MATRIX_RECONCILIATIONS_AUG03_AUG05_PATH,
+    FEATURE_MATRIX_JUL19_JUL23_NARRATIVE_PATH,
+)
 RUNNABLE_PASSWORD_DOC_PATHS = (
     REPO_ROOT / "docs/live-state/2026_07_07_lane6_schedule_a_sizing.md",
     REPO_ROOT / "docs/live-state/2026_07_07_lane7_local_load.md",
@@ -404,6 +425,50 @@ def test_scheduler_boundary_red_keeps_weekly_refresh_recheck_open() -> None:
         assert fragment in matrix_row
     assert "scheduled fire unobserved" not in matrix_row
     assert "automatic scheduler acceptance is still owed by the bounded" not in matrix_row
+
+
+def test_feature_matrix_history_split_preserves_owner_contract_and_continuations() -> None:
+    archive_text_by_path = {path: _read_text(path) for path in FEATURE_MATRIX_ARCHIVE_PATHS}
+    owner_text = archive_text_by_path[FEATURE_MATRIX_PATH]
+
+    archive_section_marker_re = re.compile(
+        r"^(?:## |\*\*(?:Reconciled|Re-reconciled|Corrected|Terminal|The lesson|Operator review))"
+    )
+    section_owner_by_marker: dict[str, Path] = {}
+    for path, text in archive_text_by_path.items():
+        for line in text.splitlines():
+            if not archive_section_marker_re.match(line):
+                continue
+            assert line not in section_owner_by_marker, (
+                f"archive section marker duplicated between {section_owner_by_marker[line].relative_to(REPO_ROOT)} "
+                f"and {path.relative_to(REPO_ROOT)}: {line}"
+            )
+            section_owner_by_marker[line] = path
+
+    expected_owner_links = (
+        FEATURE_MATRIX_JUL13_JUL17_DETAIL_PATH.name,
+        FEATURE_MATRIX_RECONCILIATIONS_JUL27_AUG03_PATH.name,
+        FEATURE_MATRIX_RECONCILIATIONS_AUG03_AUG05_PATH.name,
+        FEATURE_MATRIX_JUL19_JUL23_NARRATIVE_PATH.name,
+    )
+    for file_name in expected_owner_links:
+        assert f"({file_name})" in owner_text
+
+    moved_section_owners = {
+        "## Jul13_3pm — Person money visualization system": FEATURE_MATRIX_JUL13_JUL17_DETAIL_PATH,
+        "**Reconciled 2026-07-27 across the `jul25_pm` / `jul26_am` / `jul26_1pm` / `jul26_4pm` window.**": FEATURE_MATRIX_RECONCILIATIONS_JUL27_AUG03_PATH,
+        "**Re-reconciled 2026-08-05 across the `aug03_8pm` batch closeout-after-donor-fix": FEATURE_MATRIX_RECONCILIATIONS_AUG03_AUG05_PATH,
+        "## Jul22_9pm — Public-surface truth (8 lanes)": FEATURE_MATRIX_JUL19_JUL23_NARRATIVE_PATH,
+        "## Jul23_pm — Sitemap recovery chain (R1–R3)": FEATURE_MATRIX_JUL19_JUL23_NARRATIVE_PATH,
+    }
+    for fragment, expected_path in moved_section_owners.items():
+        assert fragment not in owner_text
+        assert fragment in archive_text_by_path[expected_path]
+
+    for path, text in archive_text_by_path.items():
+        assert len(text.splitlines()) < 300, f"{path.relative_to(REPO_ROOT)} must stay below the 300-line cap"
+        if path != FEATURE_MATRIX_PATH:
+            assert f"`{FEATURE_MATRIX_PATH.name}`" in text
 
 
 def test_end_the_person_outage_receipt_is_falsifiable() -> None:

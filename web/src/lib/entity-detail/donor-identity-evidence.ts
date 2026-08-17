@@ -1,8 +1,8 @@
-import { APP_SHELL } from "$lib/config/app";
+import { DONOR_RESOLVED_CONFIDENCE_BANDS } from "$lib/donors/contract";
 import { sanitizeExternalUrl } from "$lib/url/sanitize-external-url";
 import type { SourceInfo } from "./contract";
 
-export type IdentityConfidenceBand = "match" | "probable_match";
+export type IdentityConfidenceBand = (typeof DONOR_RESOLVED_CONFIDENCE_BANDS)[number];
 export type NotCombinedConfidenceBand = "possible_match";
 
 export type IdentityEvidenceRecord = {
@@ -40,11 +40,7 @@ export const IDENTITY_EVIDENCE_UNAVAILABLE_MESSAGE =
 export function getPublishedConfidenceLabel(
   confidenceBand: IdentityConfidenceBand | NotCombinedConfidenceBand
 ): string {
-  return (
-    APP_SHELL.methodology.confidenceLabels.find((confidenceLabel) => {
-      return confidenceLabel.label === confidenceBand;
-    })?.label ?? confidenceBand
-  );
+  return confidenceBand;
 }
 
 export function formatCombinedRecordCount(recordCount: number): string {

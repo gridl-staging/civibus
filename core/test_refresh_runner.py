@@ -2465,6 +2465,61 @@ def test_run_all_jobs_stops_after_failure_when_requested(monkeypatch: pytest.Mon
     connection.commit.assert_called_once_with()
 
 
+def test_run_all_jobs_continues_after_quarantined_activity_when_stop_on_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    connection = MagicMock()
+    quarantined_callable = MagicMock(
+        return_value=SimpleNamespace(inserted=0, skipped=0, quarantined=1, superseded=0, errors=0)
+    )
+    next_callable = MagicMock(
+        return_value=SimpleNamespace(inserted=1, skipped=0, quarantined=0, superseded=0, errors=0)
+    )
+    jobs = [
+        _job_for_tests(key="quarantined", run_callable=quarantined_callable),
+        _job_for_tests(key="next", run_callable=next_callable),
+    ]
+
+    monkeypatch.setattr(runner, "_select_data_source_id", MagicMock(return_value=None))
+    monkeypatch.setattr(runner, "_recent_nonempty_activity_counts", MagicMock(return_value=[]))
+    monkeypatch.setattr(runner, "sync_data_source_metadata", MagicMock())
+    monkeypatch.setattr(runner, "insert_refresh_run", MagicMock())
+
+    results = runner.run_all_jobs(connection, jobs, force=True, stop_on_failure=True)
+
+    assert [result.status for result in results] == ["success", "success"]
+    assert results[0].message == "Refresh job succeeded: inserted=0 skipped=0 quarantined=1 superseded=0 errors=0"
+    quarantined_callable.assert_called_once_with()
+    next_callable.assert_called_once_with()
+
+
+def test_run_all_jobs_stops_after_loader_errors_when_stop_on_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    connection = MagicMock()
+    error_callable = MagicMock(
+        return_value=SimpleNamespace(inserted=0, skipped=0, quarantined=0, superseded=0, errors=1)
+    )
+    next_callable = MagicMock(
+        return_value=SimpleNamespace(inserted=1, skipped=0, quarantined=0, superseded=0, errors=0)
+    )
+    jobs = [
+        _job_for_tests(key="loader-error", run_callable=error_callable),
+        _job_for_tests(key="next", run_callable=next_callable),
+    ]
+
+    monkeypatch.setattr(runner, "_select_data_source_id", MagicMock(return_value=None))
+    monkeypatch.setattr(runner, "sync_data_source_metadata", MagicMock())
+    monkeypatch.setattr(runner, "insert_refresh_run", MagicMock())
+
+    results = runner.run_all_jobs(connection, jobs, force=True, stop_on_failure=True)
+
+    assert [result.status for result in results] == ["degraded"]
+    assert results[0].message == (
+        "Refresh job completed with loader errors: inserted=0 skipped=0 quarantined=0 superseded=0 errors=1"
+    )
+    error_callable.assert_called_once_with()
+    next_callable.assert_not_called()
+
+
 def test_run_all_jobs_commits_after_successful_job(monkeypatch: pytest.MonkeyPatch) -> None:
     connection = MagicMock()
     job = _job_for_tests(key="commit-check")

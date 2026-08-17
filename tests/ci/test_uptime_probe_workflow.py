@@ -1,35 +1,62 @@
-"""Structural tests for the uptime-probe GitHub Actions workflow.
+"""Structural and hermetic contracts for the uptime-probe Actions workflow.
 
-The workflow itself runs on staging/prod (debbie syncs it from this dev repo).
-These tests assert the dev-repo file's structural contract — cron cadence,
-target endpoint, content-health issue handling, and fatal donor/deploy surface
-gates — so a future edit that silently loosens any of those gets caught at PR
-time.
+The tests inspect parsed steps and execute extracted scripts with fake external
+commands to catch breaks in issue identity, dedup, cadence, and fatal gates.
 
-The workflow's GitHub Actions runtime cannot be exercised here. Structural
-contracts inspect its parsed steps, while rendered-incident contracts execute
-only the extracted filing scripts with fake external commands. Together they
-catch workflow refactors that break issue identity, deduplication, or cadence.
+Restructured 2026-08-03 (`ROADMAP.md` `row_id: uptime-alarm-mute`): every
+surface probe now feeds one issue-filing decision and one job failure gate,
+after donor search served zero rows for 18+ hours with no incident filed.
 
-Restructured 2026-08-03: EVERY surface probe -- content health, donor search,
-and public deploy drift -- now feeds one issue-filing decision and one job
-failure gate. Previously only content health could open an incident, so donor
-search served zero rows for 18+ hours across ten consecutive red runs without
-anything being filed. See `ROADMAP.md` `row_id: uptime-alarm-mute`.
+Reusable helpers live in `tests.ci.uptime_probe_workflow_harness`; contracts
+stay in this owner.
 """
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
-import re
-import subprocess
 
 import pytest
 import yaml
 
-
-WORKFLOW_PATH = Path(__file__).resolve().parents[2] / ".github" / "workflows" / "uptime_probe.yml"
+from tests.ci.uptime_probe_workflow_harness import (
+    ARBITRARY_MANIFEST_ROW,
+    ARBITRARY_SURFACE_ID,
+    ARBITRARY_SURFACE_MARKER,
+    ARBITRARY_SURFACE_PATH,
+    CONTENT_RED_DETAIL,
+    CONTENT_RED_STATUS,
+    DONOR_IDENTITY_TERMS,
+    DONOR_MANIFEST_ROW,
+    DRIFT_IDENTITY_TERMS,
+    DRIFT_TARGET_URLS,
+    FAKE_CURL_FAIL_MODE_CASES,
+    JOB_FAILURE_GATE_STEP_NAME,
+    OPEN_ISSUE_STEP_NAME,
+    PARITY_ONLY_MANIFEST_ROW,
+    PERSON_MANIFEST_ROW,
+    PUBLIC_SURFACE_FAILURE_BODY,
+    PUBLIC_SURFACE_MANIFEST_ERROR,
+    PUBLIC_SURFACE_MANIFEST_FETCH,
+    PUBLIC_SURFACE_MANIFEST_HEADER,
+    PUBLIC_SURFACE_MANIFEST_PATH,
+    ProbeRunState,
+    PublicSurfaceFailureCase,
+    PublicSurfaceFixture,
+    SURFACE_PROBE_STEPS,
+    UNHEALTHY_CONDITION_TERMS,
+    WORKFLOW_PATH,
+    _assert_no_green_content_output,
+    _execute_issue_step,
+    _execute_public_surfaces_step,
+    _incident_fields,
+    _option_value,
+    _probe_run_context,
+    _render_incident_texts,
+    _resolve_actions_expressions,
+    _run_final_gate,
+    _run_public_surface_fake_curl_channels,
+    _step_by_name,
+)
 
 
 @pytest.fixture(scope="module")
@@ -47,243 +74,19 @@ def workflow_steps(workflow_parsed: dict) -> list[dict]:
     return workflow_parsed["jobs"]["probe"]["steps"]
 
 
-SURFACE_PROBE_STEPS = {
-    "donor": "Check donor search surface",
-    "drift": "Check public deploy drift",
-    "person": "Check person detail surface",
-}
-JOB_FAILURE_GATE_STEP_NAME = "Fail the run when any production surface probe was red"
-# Any one of these being red means production is not serving correctly, so all
-# three must be able to reach the issue-filing decision.
-UNHEALTHY_CONDITION_TERMS = (
-    "steps.probe.outputs.healthy == 'false'",
-    "steps.donor.outcome == 'failure'",
-    "steps.drift.outcome == 'failure'",
-    "steps.person.outcome == 'failure'",
-)
-
-
-def _step_by_name(steps: list[dict], name: str) -> dict:
-    for step in steps:
-        if step.get("name") == name:
-            return step
-    raise AssertionError(f"missing required step {name!r}")
-
-
-OPEN_ISSUE_STEP_NAME = "Open new uptime-incident issue (endpoint failing, no existing issue)"
-COMMENT_ISSUE_STEP_NAME = "Comment on existing issue (endpoint still failing)"
-_ACTIONS_EXPRESSION = re.compile(r"\$\{\{\s*([^}]+?)\s*\}\}")
-
-# Distinctive sentinels, so "the incident text carried the green content probe's
-# reading" fails loudly instead of hiding behind a value that could plausibly
-# come from another surface. Only the content probe exports `detail`, so the
-# green detail string can reach rendered issue text by exactly one route.
-CONTENT_RED_STATUS = "503"
-CONTENT_GREEN_STATUS = "200"
-CONTENT_RED_DETAIL = "content probe reported red"
-CONTENT_GREEN_DETAIL = "content_probe_green_detail_must_not_be_rendered"
-# Every shape the workflow renders `steps.probe.outputs.status` in: the title
-# (`returned ${STATUS} at`), the open body (`**Status:** ${STATUS}`), and the
-# comment (`Status: ${STATUS}`). No other surface probe exports a status output,
-# so any of these literals in a non-content incident is stale content-health
-# text, not the red surface's own reading.
-GREEN_CONTENT_STATUS_RENDERINGS = (
-    f"returned {CONTENT_GREEN_STATUS}",
-    f"**Status:** {CONTENT_GREEN_STATUS}",
-    f"Status: {CONTENT_GREEN_STATUS}",
-)
-# Every way the workflow currently names the content-health surface: the probed
-# path, the prose that opens the body, and the owner reference.
-CONTENT_HEALTH_IDENTITY_TERMS = (
-    "/api/health/content",
-    "content health probe",
-    "api/health_content.py",
-)
-DONOR_IDENTITY_TERMS = (
-    "donor_search_surface",
-    "web/src/routes/donors/+page.server.ts",
-    "api/routes/donors.py",
-    "api/queries/campaign_finance.py",
-)
-DRIFT_IDENTITY_TERMS = (
-    "public_deploy_drift",
-    ".github/workflows/deploy.yml",
-)
-DRIFT_TARGET_URLS = (
-    "https://probe.example/api/health/version",
-    "https://probe.example/version.json",
-)
-
-
-def _probe_run_context(
-    *, content_red: bool, donor_red: bool, drift_red: bool, person_red: bool = False
-) -> dict[str, str]:
-    base_url = "https://probe.example"
-    return {
-        "env.PROBE_BASE_URL": base_url,
-        "github.repository": "example/civibus",
-        "github.run_id": "4242",
-        "github.server_url": "https://github.example",
-        "secrets.GITHUB_TOKEN": "fake-token",
-        "steps.donor.outcome": "failure" if donor_red else "success",
-        "steps.drift.outcome": "failure" if drift_red else "success",
-        "steps.person.outcome": "failure" if person_red else "success",
-        "steps.find.outputs.number": "17",
-        "steps.probe.outputs.detail": CONTENT_RED_DETAIL if content_red else CONTENT_GREEN_DETAIL,
-        "steps.probe.outputs.healthy": "false" if content_red else "true",
-        "steps.probe.outputs.status": CONTENT_RED_STATUS if content_red else CONTENT_GREEN_STATUS,
-        "steps.probe.outputs.target": f"{base_url}/api/health/content",
-    }
-
-
-def _assert_no_green_content_output(rendered_text: str, field: str) -> None:
-    """A non-content incident may carry no content-health identity, status, or detail.
-
-    The defect this pins is a partial fix: adding the red surface's identifiers
-    while still rendering the healthy content probe's title, status line, and
-    detail. That output tells an operator the content endpoint is the incident.
-    """
-    for term in CONTENT_HEALTH_IDENTITY_TERMS:
-        assert term not in rendered_text, (
-            f"{field} names the green content-health probe via {term!r}: {rendered_text!r}"
-        )
-    assert CONTENT_GREEN_DETAIL not in rendered_text, (
-        f"{field} carries the healthy content probe's detail: {rendered_text!r}"
-    )
-    for rendering in GREEN_CONTENT_STATUS_RENDERINGS:
-        assert rendering not in rendered_text, (
-            f"{field} carries the healthy content probe's status as {rendering!r}: {rendered_text!r}"
-        )
-
-
-def _resolve_actions_expressions(value: str, context: dict[str, str]) -> str:
-    def replace(match: re.Match[str]) -> str:
-        expression = match.group(1).strip()
-        assert expression in context, f"test harness needs a value for Actions expression {expression!r}"
-        return context[expression]
-
-    return _ACTIONS_EXPRESSION.sub(replace, value)
-
-
-def _write_fake_commands(bin_dir: Path) -> None:
-    bin_dir.mkdir()
-    gh_path = bin_dir / "gh"
-    gh_path.write_text(
-        "#!/bin/sh\n"
-        "{\n"
-        '  for argument in "$@"; do\n'
-        "    printf '%s\\000' \"$argument\"\n"
-        "  done\n"
-        "  printf '\\000'\n"
-        '} >> "$GH_CAPTURE_PATH"\n',
-        encoding="utf-8",
-    )
-    gh_path.chmod(0o755)
-
-    date_path = bin_dir / "date"
-    date_path.write_text("#!/bin/sh\nprintf '%s\\n' '2026-08-03T20:00:00Z'\n", encoding="utf-8")
-    date_path.chmod(0o755)
-
-
-def _execute_issue_step(
-    workflow_steps: list[dict],
-    tmp_path: Path,
-    step_name: str,
-    context: dict[str, str],
-) -> list[str]:
-    """Execute only an issue text-rendering script with all external commands faked."""
-    step = _step_by_name(workflow_steps, step_name)
-    run_dir = tmp_path / step_name.split()[0].lower()
-    fake_bin = run_dir / "bin"
-    run_dir.mkdir()
-    _write_fake_commands(fake_bin)
-    capture_path = run_dir / "gh_calls.nul"
-
-    environment = os.environ.copy()
-    environment.update(
-        {
-            "GH_CAPTURE_PATH": str(capture_path),
-            "PATH": f"{fake_bin}{os.pathsep}{environment['PATH']}",
-            "PROBE_BASE_URL": context["env.PROBE_BASE_URL"],
-        }
-    )
-    for name, value in step.get("env", {}).items():
-        environment[name] = _resolve_actions_expressions(str(value), context)
-
-    script = _resolve_actions_expressions(step["run"], context)
-    completed = subprocess.run(
-        ["bash", "-euo", "pipefail", "-c", script],
-        cwd=run_dir,
-        env=environment,
-        capture_output=True,
-        text=True,
-        timeout=30,
-        check=False,
-    )
-    assert completed.returncode == 0, (
-        f"extracted script for {step_name!r} failed in the hermetic harness:\n"
-        f"stdout={completed.stdout}\nstderr={completed.stderr}"
-    )
-
-    calls = [
-        [argument.decode("utf-8") for argument in call.split(b"\0")]
-        for call in capture_path.read_bytes().split(b"\0\0")
-        if call
-    ]
-    issue_action = "create" if step_name == OPEN_ISSUE_STEP_NAME else "comment"
-    matching_calls = [args for args in calls if args[:2] == ["issue", issue_action]]
-    assert len(matching_calls) == 1, f"expected one `gh issue {issue_action}` call, got {calls}"
-    return matching_calls[0]
-
-
-def _option_value(arguments: list[str], option: str) -> str:
-    option_index = arguments.index(option)
-    return arguments[option_index + 1]
-
-
-def _render_incident_texts(
-    workflow_steps: list[dict],
-    tmp_path: Path,
-    *,
-    content_red: bool,
-    donor_red: bool,
-    drift_red: bool,
-    person_red: bool = False,
-) -> tuple[str, str, str]:
-    context = _probe_run_context(
-        content_red=content_red, donor_red=donor_red, drift_red=drift_red, person_red=person_red
-    )
-    open_arguments = _execute_issue_step(workflow_steps, tmp_path, OPEN_ISSUE_STEP_NAME, context)
-    comment_arguments = _execute_issue_step(workflow_steps, tmp_path, COMMENT_ISSUE_STEP_NAME, context)
-    return (
-        _option_value(open_arguments, "--title"),
-        _option_value(open_arguments, "--body"),
-        _option_value(comment_arguments, "--body"),
-    )
-
-
 def test_donor_only_incident_rendering_names_donor_surface(workflow_steps: list[dict], tmp_path: Path) -> None:
     """A donor-only outage must not be rendered as a content-health outage."""
     title, open_body, comment_body = _render_incident_texts(
         workflow_steps,
         tmp_path,
-        content_red=False,
-        donor_red=True,
-        drift_red=False,
+        ProbeRunState.public_surface_failure("donor_search_surface"),
     )
 
-    for field, rendered_text in (
-        ("title", title),
-        ("open body", open_body),
-        ("comment body", comment_body),
-    ):
+    for field, rendered_text in _incident_fields(title, open_body, comment_body):
         assert "donor_search_surface" in rendered_text, f"{field} does not name the red donor surface"
         _assert_no_green_content_output(rendered_text, field)
         for term in DRIFT_IDENTITY_TERMS:
             assert term not in rendered_text, f"{field} names the green drift probe via {term!r}"
-    assert "https://probe.example/donors?q=smith&by=name" in open_body
-    for owner in DONOR_IDENTITY_TERMS[1:]:
-        assert owner in open_body
     assert "https://github.example/example/civibus/actions/runs/4242" in comment_body
 
 
@@ -292,16 +95,10 @@ def test_drift_only_incident_rendering_names_deploy_drift_surface(workflow_steps
     title, open_body, comment_body = _render_incident_texts(
         workflow_steps,
         tmp_path,
-        content_red=False,
-        donor_red=False,
-        drift_red=True,
+        ProbeRunState.drift_failure(),
     )
 
-    for field, rendered_text in (
-        ("title", title),
-        ("open body", open_body),
-        ("comment body", comment_body),
-    ):
+    for field, rendered_text in _incident_fields(title, open_body, comment_body):
         assert "public_deploy_drift" in rendered_text, f"{field} does not name the red drift surface"
         _assert_no_green_content_output(rendered_text, field)
         for term in DONOR_IDENTITY_TERMS:
@@ -317,7 +114,7 @@ def test_content_only_incident_rendering_preserves_content_health_details(
     workflow_steps: list[dict], tmp_path: Path
 ) -> None:
     """Preserve the useful existing content-health incident details."""
-    context = _probe_run_context(content_red=True, donor_red=False, drift_red=False)
+    context = _probe_run_context(ProbeRunState.content_failure())
     open_arguments = _execute_issue_step(workflow_steps, tmp_path, OPEN_ISSUE_STEP_NAME, context)
     title = _option_value(open_arguments, "--title")
     body = _option_value(open_arguments, "--body")
@@ -328,10 +125,7 @@ def test_content_only_incident_rendering_preserves_content_health_details(
     assert "https://probe.example/api/health/content" in body
     assert "api/health_content.py + api/main.py:186" in body
     assert f"**Status:** {CONTENT_RED_STATUS}" in body
-    # The detail output does reach the rendered body, which is what makes the
-    # green-detail exclusion in `_assert_no_green_content_output` a live guard
-    # rather than an assertion about a string the workflow never renders.
-    assert CONTENT_RED_DETAIL in body
+    assert CONTENT_RED_DETAIL in body  # keeps the green-detail exclusion a live guard
     for green_probe in DONOR_IDENTITY_TERMS + DRIFT_IDENTITY_TERMS:
         assert green_probe not in title, f"title names the green {green_probe!r}"
         assert green_probe not in body, f"body names the green {green_probe!r}"
@@ -343,23 +137,116 @@ def test_two_red_surface_incident_rendering_names_only_current_failures(
     title, open_body, comment_body = _render_incident_texts(
         workflow_steps,
         tmp_path,
-        content_red=False,
-        donor_red=True,
-        drift_red=True,
+        ProbeRunState.public_surface_failure("donor_search_surface", drift_red=True),
     )
 
-    for field, rendered_text in (
-        ("title", title),
-        ("open body", open_body),
-        ("comment body", comment_body),
-    ):
+    for field, rendered_text in _incident_fields(title, open_body, comment_body):
         assert "donor_search_surface" in rendered_text, f"{field} does not name the red donor surface"
         assert "public_deploy_drift" in rendered_text, f"{field} does not name the red drift surface"
         _assert_no_green_content_output(rendered_text, field)
-    for owner in DONOR_IDENTITY_TERMS[1:]:
-        assert owner in open_body
     assert ".github/workflows/deploy.yml" in open_body
     assert "https://github.example/example/civibus/actions/runs/4242" in comment_body
+
+
+@pytest.mark.parametrize(
+    ("manifest_text", "manifest_fetch_exit"),
+    (
+        pytest.param(
+            f"{PUBLIC_SURFACE_MANIFEST_HEADER}\n{PERSON_MANIFEST_ROW}\nmalformed\trow\n",
+            0,
+            id="malformed-manifest",
+        ),
+        pytest.param(
+            f"{PUBLIC_SURFACE_MANIFEST_HEADER}\n{DONOR_MANIFEST_ROW}\n",
+            19,
+            id="manifest-fetch-failure",
+        ),
+    ),
+)
+def test_public_surface_manifest_errors_fail_closed_and_name_manifest_error(
+    workflow_steps: list[dict],
+    tmp_path: Path,
+    manifest_text: str,
+    manifest_fetch_exit: int,
+) -> None:
+    """Manifest acquisition/parse failures must page with a stable identity."""
+    probe_result, outputs, _ = _execute_public_surfaces_step(
+        workflow_steps,
+        tmp_path,
+        manifest_text,
+        fixture=PublicSurfaceFixture(manifest_fetch_exit=manifest_fetch_exit),
+    )
+    assert probe_result.returncode != 0 or outputs.get("healthy") != "true", (
+        "manifest failure was reported healthy:\n"
+        f"stdout={probe_result.stdout}\nstderr={probe_result.stderr}\noutputs={outputs}"
+    )
+
+    title, open_body, comment_body = _render_incident_texts(
+        workflow_steps,
+        tmp_path,
+        ProbeRunState(
+            content_red=False,
+            drift_red=False,
+            public_surfaces_detail=outputs.get("detail", ""),
+            public_surfaces_healthy=outputs.get("healthy", ""),
+            public_surfaces_outcome="failure" if probe_result.returncode else "success",
+        ),
+    )
+    for field, rendered_text in _incident_fields(title, open_body, comment_body):
+        assert PUBLIC_SURFACE_MANIFEST_ERROR in rendered_text, (
+            f"{field} lacks the stable manifest-error identity after fetch/parse failure: {rendered_text!r}"
+        )
+        _assert_no_green_content_output(rendered_text, field)
+
+    # Harder shape: the step died before writing GITHUB_OUTPUT at all, so both
+    # outputs are absent rather than empty. The incident must still name the
+    # manifest error instead of rendering a blank surface identity.
+    absent_outputs_dir = tmp_path / "absent_public_surface_outputs"
+    absent_outputs_dir.mkdir()
+    for field, rendered_text in zip(
+        ("title", "open body", "comment body"),
+        _render_incident_texts(
+            workflow_steps,
+            absent_outputs_dir,
+            ProbeRunState.missing_public_surface_outputs(outcome="failure"),
+        ),
+        strict=True,
+    ):
+        assert PUBLIC_SURFACE_MANIFEST_ERROR in rendered_text, (
+            f"{field} lacks the manifest-error identity when the step wrote no outputs: {rendered_text!r}"
+        )
+        _assert_no_green_content_output(rendered_text, field)
+
+
+def test_actions_expression_harness_evaluates_output_fallbacks() -> None:
+    """The harness must evaluate `||` the way Actions does, or it rejects correct workflows.
+
+    A fail-closed step names a manifest abort via
+    `${{ steps.public_surfaces.outputs.detail || 'public_surface_manifest_error' }}`;
+    resolving that as one literal lookup key would render an empty identity, so
+    the rendering specimens above are only trustworthy if this holds.
+    """
+    template = "${{ steps.public_surfaces.outputs.detail || 'public_surface_manifest_error' }}"
+    context = _probe_run_context(ProbeRunState.public_surface_failure("donor_search_surface"))
+    assert _resolve_actions_expressions(template, context) == "donor_search_surface"
+    assert context["steps.public_surfaces.outcome"] == "failure"
+
+    # Absent and empty are both falsy for a string operand, so both fall through.
+    del context["steps.public_surfaces.outputs.detail"]
+    assert _resolve_actions_expressions(template, context) == PUBLIC_SURFACE_MANIFEST_ERROR
+    context["steps.public_surfaces.outputs.detail"] = ""
+    assert _resolve_actions_expressions(template, context) == PUBLIC_SURFACE_MANIFEST_ERROR
+
+    # Actions casts any non-empty string to true, so `healthy=false` is truthy
+    # and must win over its fallback -- resolving it to 'true' would silently
+    # convert a red surface into a green one.
+    context["steps.public_surfaces.outputs.healthy"] = "false"
+    assert _resolve_actions_expressions("${{ steps.public_surfaces.outputs.healthy || 'true' }}", context) == "false"
+
+    # Operators this harness does not model must fail loudly, not resolve to
+    # something plausible.
+    with pytest.raises(AssertionError):
+        _resolve_actions_expressions("${{ steps.probe.outputs.healthy == 'true' || 'x' }}", context)
 
 
 def test_workflow_file_exists() -> None:
@@ -369,11 +256,9 @@ def test_workflow_file_exists() -> None:
 def test_every_surface_probe_can_open_an_incident_issue(workflow_steps: list[dict]) -> None:
     """A probe that cannot file an issue is not an alarm.
 
-    2026-08-03: the donor-surface check failed ten consecutive scheduled runs
-    (`30764126828` through `30820555844`) reporting HTTP 200 with zero
-    `data-testid="donor-result-row"` markers, and no incident issue was ever
-    opened -- because issue filing consulted only the content-health probe.
-    Donor search was dead for 18+ hours and the alarm stayed silent.
+    2026-08-03: the donor-surface check failed ten consecutive runs reporting
+    HTTP 200 with zero donor markers, yet no incident issue opened -- filing
+    consulted only the content-health probe. See `row_id: uptime-alarm-mute`.
     """
     open_step = _step_by_name(workflow_steps, "Open new uptime-incident issue (endpoint failing, no existing issue)")
     comment_step = _step_by_name(workflow_steps, "Comment on existing issue (endpoint still failing)")
@@ -387,9 +272,9 @@ def test_every_surface_probe_can_open_an_incident_issue(workflow_steps: list[dic
     # green, otherwise a content-health recovery would close an issue that donor
     # search is still failing.
     assert "steps.probe.outputs.healthy == 'true'" in close_step["if"]
-    assert "steps.donor.outcome == 'success'" in close_step["if"]
+    assert "steps.public_surfaces.outcome == 'success'" in close_step["if"]
+    assert "steps.public_surfaces.outputs.healthy == 'true'" in close_step["if"]
     assert "steps.drift.outcome == 'success'" in close_step["if"]
-    assert "steps.person.outcome == 'success'" in close_step["if"]
 
 
 def test_surface_probes_run_before_issue_filing(workflow_steps: list[dict]) -> None:
@@ -398,19 +283,23 @@ def test_surface_probes_run_before_issue_filing(workflow_steps: list[dict]) -> N
     find_position = step_names.index("Find existing open uptime-incident issue")
 
     for step_id, step_name in SURFACE_PROBE_STEPS.items():
-        step = _step_by_name(workflow_steps, step_name)
-        assert step.get("id") == step_id, f"{step_name!r} must expose id {step_id!r} for its outcome to be readable"
-        assert step_names.index(step_name) < find_position, (
-            f"{step_name!r} runs after issue filing, so its result cannot open an incident"
+        step = _step_by_name(workflow_steps, step_name, step_id=step_id)
+        assert step.get("id") == step_id, (
+            f"{step.get('name')!r} must expose id {step_id!r} for its outcome to be readable"
+        )
+        assert step.get("continue-on-error") is True, (
+            f"{step.get('name')!r} must preserve issue filing after a red probe"
+        )
+        assert step_names.index(step.get("name")) < find_position, (
+            f"{step.get('name')!r} runs after issue filing, so its result cannot open an incident"
         )
 
 
 def test_red_surface_probe_still_fails_the_job(workflow_steps: list[dict]) -> None:
     """`continue-on-error` is only acceptable because a job-level gate re-imposes the failure.
 
-    Without this step the probes would become advisory: the run would go green
-    while production was broken, which is strictly worse than the silent-alarm
-    state it replaced.
+    Without this gate the probes are advisory: the run goes green while
+    production is broken -- strictly worse than the silent-alarm state it replaced.
     """
     gate_step = _step_by_name(workflow_steps, JOB_FAILURE_GATE_STEP_NAME)
     script = gate_step["run"]
@@ -418,17 +307,71 @@ def test_red_surface_probe_still_fails_the_job(workflow_steps: list[dict]) -> No
 
     assert gate_step["if"] == "${{ always() }}", "the gate must evaluate even when an earlier step already failed"
     assert step_names.index(JOB_FAILURE_GATE_STEP_NAME) == len(step_names) - 1, "the gate must be the final step"
-    for step_id in SURFACE_PROBE_STEPS:
-        assert f"steps.{step_id}.outcome" in gate_step.get("env", {}).get(f"{step_id.upper()}_OUTCOME", ""), (
-            f"gate must read steps.{step_id}.outcome"
-        )
+    gate_env = gate_step.get("env", {})
+    assert "steps.public_surfaces.outcome" in gate_env.get("PUBLIC_SURFACES_OUTCOME", "")
+    assert "steps.public_surfaces.outputs.healthy" in gate_env.get("PUBLIC_SURFACES_HEALTHY", "")
+    assert "steps.drift.outcome" in gate_env.get("DRIFT_OUTCOME", "")
+    assert "PUBLIC_SURFACES_OUTCOME" in script
+    assert "PUBLIC_SURFACES_HEALTHY" in script
+    assert "DRIFT_OUTCOME" in script
     assert "exit 1" in script
+
+
+def test_final_gate_fails_closed_on_unhealthy_public_surface(workflow_steps: list[dict], tmp_path: Path) -> None:
+    """Execute the gate script: a structural mention of the var is not fail-closed behavior.
+
+    `test_red_surface_probe_still_fails_the_job` only proves the gate *names*
+    `PUBLIC_SURFACES_HEALTHY` and contains an `exit 1`; a gate that logs the var
+    next to an unreachable `exit 1` would satisfy it while a red surface stayed
+    green. This runs the extracted gate under four inputs and asserts the exit
+    code the job would take; the green control (exit 0) keeps the reds honest.
+    """
+    # Green control: a live specimen that must exit 0.
+    green = _run_final_gate(
+        workflow_steps,
+        tmp_path,
+        "green",
+        ProbeRunState.all_green(),
+    )
+    assert green.returncode == 0, f"all-green gate should pass:\nstdout={green.stdout}\nstderr={green.stderr}"
+
+    red_cases = (
+        (
+            "healthy_false",
+            ProbeRunState.public_surface_failure(outcome="success"),
+        ),
+        (
+            "healthy_missing",
+            ProbeRunState.missing_public_surface_outputs(),
+        ),
+        (
+            "outcome_failure",
+            ProbeRunState.public_surface_outcome_failure(),
+        ),
+    )
+    for case_name, state in red_cases:
+        red = _run_final_gate(workflow_steps, tmp_path, case_name, state)
+        assert red.returncode != 0, f"gate treated {case_name!r} as green:\n{red.stdout}\n{red.stderr}"
+
+
+@pytest.mark.parametrize(("fail_flag", "expected_returncode", "keeps_body"), FAKE_CURL_FAIL_MODE_CASES)
+def test_fake_curl_models_only_http_fail_mode_flags(
+    tmp_path: Path, fail_flag: str, expected_returncode: int, keeps_body: bool
+) -> None:
+    # Real curl discards the HTTP error body under `-f`/`--fail`; only `--fail-with-body` hands it back.
+    streamed, saved_body = _run_public_surface_fake_curl_channels(tmp_path, fail_flag, "-sS")
+    assert streamed.returncode == expected_returncode, f"{fail_flag}: {streamed.stdout}\n{streamed.stderr}"
+    for channel, text in (("stdout", streamed.stdout), ("--output", saved_body)):
+        assert (PUBLIC_SURFACE_FAILURE_BODY in text) is keeps_body, f"{fail_flag} {channel} body={text!r}"
 
 
 def test_surface_probes_are_non_fatal_only_where_the_gate_covers_them(workflow_steps: list[dict]) -> None:
     """Every `continue-on-error` step must be one the final gate re-checks."""
     gate_step = _step_by_name(workflow_steps, JOB_FAILURE_GATE_STEP_NAME)
-    covered_ids = {step_id for step_id in SURFACE_PROBE_STEPS if f"{step_id.upper()}_OUTCOME" in gate_step["env"]}
+    covered_ids = {
+        "public_surfaces" if "PUBLIC_SURFACES_OUTCOME" in gate_step["env"] else "",
+        "drift" if "DRIFT_OUTCOME" in gate_step["env"] else "",
+    }
 
     for step in workflow_steps:
         if step.get("continue-on-error") is not True:
@@ -525,18 +468,12 @@ def test_workflow_grants_issues_write_permission(workflow_parsed: dict) -> None:
 
 
 def test_workflow_checks_http_status_code_explicitly(workflow_text: str) -> None:
-    """A workflow that opens issues without a status check is a false-positive factory."""
-    # The `--write-out '%{http_code}'` is how curl reports the status code.
-    # If a future edit drops it, the bash logic would silently always-pass
-    # or always-fail.
+    """`--write-out '%{http_code}'` is the status check; dropping it always-passes."""
     assert "%{http_code}" in workflow_text
 
 
 def test_workflow_uses_jq_for_body_healthy_check(workflow_text: str) -> None:
-    """Body parse must check `.healthy == true` explicitly, not just HTTP 200."""
-    # Apr 30 incident: /health returned 200 the whole time; only a content-aware
-    # check would have caught the empty DB. The probe's contract is that 200 is
-    # necessary but not sufficient — body.healthy must also be true.
+    """Body parse must check `.healthy == true` (Apr 30: 200 the whole time, empty DB)."""
     assert ".healthy == true" in workflow_text
 
 
@@ -556,6 +493,103 @@ def test_issue_commands_include_explicit_repository_context(workflow_text: str) 
             f'`{command}` must include `--repo "${{{{ github.repository }}}}"` '
             "to avoid git-checkout-dependent repository discovery"
         )
+
+
+def test_public_surface_manifest_fetches_exact_revision_without_checkout(
+    workflow_text: str, workflow_steps: list[dict], tmp_path: Path
+) -> None:
+    """The executed step reads the manifest at the run's exact revision, with no checkout.
+
+    The structural literal can survive in a comment or dead branch, so this
+    closes on the argv the step actually hands `gh`: exactly one read, of this
+    path, at `github.sha`, whose decoded body is what the step then parsed.
+    """
+    public_surfaces_step = _step_by_name(workflow_steps, None, step_id="public_surfaces")
+    assert PUBLIC_SURFACE_MANIFEST_FETCH in public_surfaces_step["run"]
+    assert "actions/checkout@" not in workflow_text
+    assert "uv sync" not in workflow_text
+
+    manifest_run = _execute_public_surfaces_step(
+        workflow_steps,
+        tmp_path,
+        "\n".join((PUBLIC_SURFACE_MANIFEST_HEADER, DONOR_MANIFEST_ROW, PERSON_MANIFEST_ROW, "")),
+    )
+    context = _probe_run_context(ProbeRunState.all_green())
+    expected_endpoint = (
+        f"repos/{context['github.repository']}/contents/{PUBLIC_SURFACE_MANIFEST_PATH}?ref={context['github.sha']}"
+    )
+    api_calls = [call for call in manifest_run.gh_calls if call[:1] == ["api"]]
+    assert len(api_calls) == 1, f"expected exactly one manifest `gh api` read, got {manifest_run.gh_calls}"
+    arguments = api_calls[0]
+    expected_arguments = ["api", expected_endpoint, "--jq", ".content"]
+    assert arguments == expected_arguments, (
+        "the executed manifest fetch did not use the required exact argv: "
+        f"expected={expected_arguments!r} actual={arguments!r}"
+    )
+    # Proves the fetched bytes are the manifest the step parsed, so a step that
+    # read the right URL and then ignored the response still fails here.
+    assert manifest_run.outputs.get("healthy") == "true", (
+        f"stdout={manifest_run.result.stdout}\nstderr={manifest_run.result.stderr}\noutputs={manifest_run.outputs}"
+    )
+    assert "donor_search_surface" in manifest_run.result.stdout
+
+
+def test_public_surface_membership_is_manifest_driven_not_hardcoded(workflow_steps: list[dict], tmp_path: Path) -> None:
+    """An arbitrary fatal row -- id/path/marker embedded nowhere else -- must drive execution.
+
+    A workflow that fetches then ignores the manifest could fool fixed donor
+    and person specimens. This arbitrary row proves its id, path, and marker
+    determine the target, verdict, and exported failure identity.
+    """
+    manifest_text = "\n".join((PUBLIC_SURFACE_MANIFEST_HEADER, ARBITRARY_MANIFEST_ROW, PERSON_MANIFEST_ROW, ""))
+    expected_target = f"fixture_curl_target=https://probe.example{ARBITRARY_SURFACE_PATH}"
+
+    # Marker present in the body -> the manifest-declared marker check passes.
+    healthy_dir = tmp_path / "arbitrary_healthy"
+    healthy_dir.mkdir()
+    healthy_run = _execute_public_surfaces_step(
+        workflow_steps,
+        healthy_dir,
+        manifest_text,
+        fixture=PublicSurfaceFixture(
+            arbitrary_path=ARBITRARY_SURFACE_PATH,
+            arbitrary_body=f"<html><body>{ARBITRARY_SURFACE_MARKER}</body></html>",
+        ),
+    )
+    assert expected_target in healthy_run.result.stderr, (
+        f"the step never fetched the manifest-declared path:\nstderr={healthy_run.result.stderr}"
+    )
+    assert healthy_run.outputs.get("healthy") == "true", (
+        f"arbitrary row with a matching marker was not green:\n"
+        f"stdout={healthy_run.result.stdout}\nstderr={healthy_run.result.stderr}\noutputs={healthy_run.outputs}"
+    )
+    assert ARBITRARY_SURFACE_ID in healthy_run.result.stdout, (
+        f"the step did not act on the manifest surface id:\nstdout={healthy_run.result.stdout}"
+    )
+
+    # Same path, but the marker the manifest declared is absent from the body ->
+    # the verdict flips and the exported identity is the manifest's surface id.
+    red_dir = tmp_path / "arbitrary_red"
+    red_dir.mkdir()
+    red_run = _execute_public_surfaces_step(
+        workflow_steps,
+        red_dir,
+        manifest_text,
+        fixture=PublicSurfaceFixture(
+            arbitrary_path=ARBITRARY_SURFACE_PATH,
+            arbitrary_body="<html><body>marker absent from this body</body></html>",
+        ),
+    )
+    assert expected_target in red_run.result.stderr, (
+        f"the red arm never fetched the manifest-declared path:\nstderr={red_run.result.stderr}"
+    )
+    assert red_run.outputs.get("healthy") == "false", (
+        f"a missing manifest marker did not turn the surface red:\n"
+        f"stdout={red_run.result.stdout}\nstderr={red_run.result.stderr}\noutputs={red_run.outputs}"
+    )
+    assert ARBITRARY_SURFACE_ID in red_run.outputs.get("detail", ""), (
+        f"the exported failure identity was not the manifest surface id: {red_run.outputs!r}"
+    )
 
 
 def test_label_create_command_includes_explicit_repository_context(workflow_text: str) -> None:
@@ -598,58 +632,103 @@ def test_workflow_fails_on_public_deploy_drift(workflow_text: str, workflow_step
     assert "cannot detect sync lag" in workflow_text
 
 
-def test_workflow_fails_on_donor_search_surface(workflow_steps: list[dict]) -> None:
-    donor_step = next(step for step in workflow_steps if step.get("name") == "Check donor search surface")
-    script = donor_step["run"]
-
-    # Reordered 2026-08-03: all three surface probes now run BEFORE the issue
-    # flow. Under the old order the donor and drift checks came last and could
-    # only redden a workflow nobody reads.
-    ordered_step_names = (
-        "Probe content health endpoint",
-        "Check donor search surface",
-        "Check public deploy drift",
-        "Find existing open uptime-incident issue",
-        "Close existing issue (endpoint recovered)",
-        "Comment on existing issue (endpoint still failing)",
-        "Open new uptime-incident issue (endpoint failing, no existing issue)",
+def test_manifest_public_surface_scope_runs_only_fatal_uptime_rows(workflow_steps: list[dict], tmp_path: Path) -> None:
+    """Donor/person are fatal uptime rows; parity-only rows do not affect outputs."""
+    manifest_text = "\n".join(
+        (
+            PUBLIC_SURFACE_MANIFEST_HEADER,
+            DONOR_MANIFEST_ROW,
+            PERSON_MANIFEST_ROW,
+            PARITY_ONLY_MANIFEST_ROW,
+            "",
+        )
     )
-    ordered_step_indexes = [
-        next(index for index, step in enumerate(workflow_steps) if step.get("name") == name)
-        for name in ordered_step_names
-    ]
+    result, outputs, _ = _execute_public_surfaces_step(workflow_steps, tmp_path, manifest_text)
 
-    assert ordered_step_indexes == sorted(ordered_step_indexes)
-    # Changed 2026-08-03 for the same reason as the drift step above: a probe
-    # that aborts the job before issue filing can never open an incident.
-    assert donor_step["continue-on-error"] is True
-    assert 'TARGET="${PROBE_BASE_URL%/}/donors?q=smith&by=name"' in script
-    assert "--max-time 30" in script
-    assert "set +e" in script
-    assert "CURL_EXIT=$?" in script
-    assert "set -e" in script
-    assert 'if [ "$CURL_EXIT" -ne 0 ]; then' in script
-    assert ('echo "::error::donor surface probe curl_error target=${TARGET} exit=${CURL_EXIT}"\n  exit 1') in script
-    assert 'if [ "$STATUS" != "200" ]; then' in script
-    assert (
-        'echo "::error::donor surface probe http_status target=${TARGET} status=${STATUS} '
-        'body=${BODY_EXCERPT}"\n'
-        "  exit 1"
-    ) in script
-    assert 'if grep -q \'data-testid="donor-result-row"\' "$BODY_FILE"; then' in script
-    assert 'donor_surface_ok target=${TARGET} status=200 marker=data-testid=\\"donor-result-row\\"' in script
-    assert (
-        'echo "::error::donor surface probe missing_marker target=${TARGET} status=${STATUS} '
-        'marker=data-testid=\\"donor-result-row\\" body=${BODY_EXCERPT}"\n'
-        "exit 1"
-    ) in script
-    assert "$GITHUB_OUTPUT" not in script
-    assert 'echo "healthy=' not in script
-    assert 'echo "status=' not in script
-    assert 'echo "target=' not in script
-    assert "gh issue" not in script
-    assert "gh label" not in script
-    assert "GH_TOKEN" not in script
+    assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
+    assert outputs.get("healthy") == "true", outputs
+    assert "donor_search_surface" in result.stdout
+    assert "person_detail_surface" in result.stdout
+    fetched_targets = result.stderr.splitlines()
+    for expected_target in (
+        "fixture_curl_target=https://probe.example/donors?q=smith&by=name",
+        "fixture_curl_target=https://probe.example/sitemap-person-0.xml",
+        "fixture_curl_target=https://probe.example/person/fixture-person",
+    ):
+        assert fetched_targets.count(expected_target) == 1, (
+            f"fatal manifest target was not fetched exactly once: {expected_target!r}\nstderr={result.stderr}"
+        )
+    combined_evidence = "\n".join((result.stdout, result.stderr, outputs.get("detail", "")))
+    assert "parity_only_surface" not in combined_evidence
+    assert "/parity-only" not in combined_evidence
+
+
+@pytest.mark.parametrize(
+    "failure_case",
+    (
+        pytest.param(
+            PublicSurfaceFailureCase(
+                "/donors?q=smith&by=name",
+                "donor_search_surface",
+                "person_detail_surface",
+            ),
+            id="donor-page-failure",
+        ),
+        pytest.param(
+            PublicSurfaceFailureCase(
+                "/person/fixture-person",
+                "person_detail_surface",
+                "donor_search_surface",
+            ),
+            id="person-detail-failure",
+        ),
+    ),
+)
+def test_public_surface_red_rows_emit_unhealthy_output_and_incident_identity(
+    workflow_steps: list[dict],
+    tmp_path: Path,
+    failure_case: PublicSurfaceFailureCase,
+) -> None:
+    """A real donor/person probe failure must drive the exported alarm identity."""
+    failure_path, failing_surface_id, green_surface_id = failure_case
+    manifest_text = "\n".join(
+        (
+            PUBLIC_SURFACE_MANIFEST_HEADER,
+            DONOR_MANIFEST_ROW,
+            PERSON_MANIFEST_ROW,
+            "",
+        )
+    )
+    probe_result, outputs, _ = _execute_public_surfaces_step(
+        workflow_steps,
+        tmp_path,
+        manifest_text,
+        fixture=PublicSurfaceFixture(failure_path=failure_path),
+    )
+
+    assert outputs.get("healthy") == "false", (
+        f"red {failing_surface_id} specimen did not export healthy=false:\n"
+        f"stdout={probe_result.stdout}\nstderr={probe_result.stderr}\noutputs={outputs}"
+    )
+    assert failing_surface_id in outputs.get("detail", ""), outputs
+    assert green_surface_id not in outputs.get("detail", ""), outputs
+
+    title, open_body, comment_body = _render_incident_texts(
+        workflow_steps,
+        tmp_path,
+        ProbeRunState.public_surface_failure(
+            outputs["detail"],
+            outcome="failure" if probe_result.returncode else "success",
+        ),
+    )
+    for field, rendered_text in _incident_fields(title, open_body, comment_body):
+        assert failing_surface_id in rendered_text, (
+            f"{field} lost the step-exported red surface identity: {rendered_text!r}"
+        )
+        assert green_surface_id not in rendered_text, (
+            f"{field} incorrectly names green surface {green_surface_id!r}: {rendered_text!r}"
+        )
+        _assert_no_green_content_output(rendered_text, field)
 
 
 def test_workflow_preserves_content_health_issue_flow_before_fatal_gates(
@@ -672,16 +751,16 @@ def test_workflow_preserves_content_health_issue_flow_before_fatal_gates(
     assert "if" not in find_step
     assert find_step["run"].strip().startswith("NUMBER=$(gh issue list")
     # Widened 2026-08-03 from content-health-only to every production surface.
-    # Recovery is the conjunction (close only when all three are green) and
+    # Recovery is the conjunction (close only when all owners are green) and
     # failure is the disjunction (any one red files an incident);
     # test_every_surface_probe_can_open_an_incident_issue owns that rule.
     unhealthy = (
-        "(steps.probe.outputs.healthy == 'false' || steps.donor.outcome == 'failure' "
-        "|| steps.drift.outcome == 'failure' || steps.person.outcome == 'failure')"
+        "(steps.probe.outputs.healthy == 'false' || steps.public_surfaces.outcome == 'failure' "
+        "|| steps.public_surfaces.outputs.healthy != 'true' || steps.drift.outcome == 'failure')"
     )
     healthy = (
-        "steps.probe.outputs.healthy == 'true' && steps.donor.outcome == 'success' "
-        "&& steps.drift.outcome == 'success' && steps.person.outcome == 'success'"
+        "steps.probe.outputs.healthy == 'true' && steps.public_surfaces.outcome == 'success' "
+        "&& steps.public_surfaces.outputs.healthy == 'true' && steps.drift.outcome == 'success'"
     )
     assert close_step["if"] == f"{healthy} && steps.find.outputs.number != ''"
     assert comment_step["if"] == f"{unhealthy} && steps.find.outputs.number != ''"
@@ -695,81 +774,24 @@ def test_workflow_preserves_content_health_issue_flow_before_fatal_gates(
     assert "The job ALWAYS exits 0" not in workflow_text
 
 
-def test_workflow_probes_a_person_detail_page_from_the_live_sitemap(workflow_steps: list[dict]) -> None:
-    """Person detail is the flagship surface and nothing watched it.
-
-    `/person/<id>` returned HTTP 500 route-wide from 2026-08-03T14:34:16Z for
-    over 48 hours. Three checkers existed and none opened a person page: this
-    probe's 3 checks, the deploy-time parity list's 14 surfaces, and
-    /api/health/content -- which counts rows and cannot observe a render. The
-    generalisation is the useful part: every LIST page was probed and no DETAIL
-    page reached from a list was ever followed, so a /congress that renders 539
-    links to broken pages passed every check.
-
-    The specimen is resolved from the published sitemap rather than hardcoded,
-    because a pinned UUID rots on the next reload and would then fail for a
-    reason that has nothing to do with the surface being down.
-    """
-    person_step = _step_by_name(workflow_steps, "Check person detail surface")
-    script = person_step["run"]
-
-    # Non-fatal like its siblings so it reaches issue filing; the final job gate
-    # re-imposes the failure (test_red_surface_probe_still_fails_the_job).
-    assert person_step["continue-on-error"] is True
-
-    # Specimen resolution: read the person sitemap shard, take a real path.
-    assert "sitemap-person-0.xml" in script
-    assert "/person/" in script
-    # An unresolvable specimen must fail closed -- an empty person sitemap is
-    # itself a defect and must never read as "nothing to check, so healthy".
-    assert "person surface probe no_specimen" in script
-
-    assert "--max-time 30" in script
-    assert "set +e" in script
-    assert "CURL_EXIT=$?" in script
-    assert "set -e" in script
-    assert 'if [ "$CURL_EXIT" -ne 0 ]; then' in script
-    assert "person surface probe curl_error" in script
-    assert 'if [ "$STATUS" != "200" ]; then' in script
-    assert "person surface probe http_status" in script
-
-    # Marker validated against live production on 2026-08-05 in BOTH directions:
-    # count=0 on the HTTP 500 person page, count=1 on /committee/... which
-    # renders the same Breadcrumb component. A status-only check would pass on a
-    # 200 that rendered an error body.
-    assert 'aria-label="Breadcrumb"' in script
-    assert "person surface probe missing_marker" in script
-
-    # Probes never file issues themselves; that is the issue-flow steps' job.
-    assert "gh issue" not in script
-    assert "GH_TOKEN" not in script
-
-
 def test_person_only_incident_rendering_names_person_detail_surface(workflow_steps: list[dict], tmp_path: Path) -> None:
     """A person-only outage must file an incident that names the person surface.
 
-    This is the rendering half of the 2026-08-03 lesson recorded on
-    `row_id: uptime-alarm-mute`: issue #3 was titled
-    "[uptime] /api/health/content returned 200" while the content probe was
-    green and neither red probe was named anywhere. An operator sent to
-    api/health_content.py finds {"healthy":true} and learns to distrust the
-    alarm. So the incident must name person_detail_surface and must carry no
-    content-health identity when content health is green.
+    Rendering half of the 2026-08-03 lesson (`row_id: uptime-alarm-mute`): an
+    incident titled for green `/api/health/content` while neither red probe was
+    named teaches operators to distrust the alarm. So the incident must name
+    person_detail_surface and carry no content-health identity when content is
+    green.
     """
     title, open_body, comment_body = _render_incident_texts(
         workflow_steps,
         tmp_path,
-        content_red=False,
-        donor_red=False,
-        drift_red=False,
-        person_red=True,
+        ProbeRunState.public_surface_failure("person_detail_surface"),
     )
 
     assert "person_detail_surface" in title
     for body in (open_body, comment_body):
         assert "person_detail_surface" in body
-        assert "sitemap-person-0.xml" in body
-        assert "web/src/lib/entity-detail/contract.ts" in body
         # Surfaces that are green must not appear as failures.
         assert "donor_search_surface" not in body
         assert "public_deploy_drift" not in body

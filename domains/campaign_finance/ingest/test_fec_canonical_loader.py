@@ -867,6 +867,69 @@ class TestDerivedIncumbencyFromOfficeholding:
 class TestLoadResult:
     """Load result tracking."""
 
+    def test_rejections_remain_errors_in_canonical_ingest(
+        self,
+        db_conn: psycopg.Connection,
+        tmp_path: Path,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        from domains.campaign_finance.ingest import fec_canonical_loader
+
+        logged_rejection_row = {
+            **_house_row(cand_id="H4NC09990", name=""),
+            "CAND_PCC": "PCC\nFORGE",
+        }
+        with caplog.at_level("WARNING", logger=fec_canonical_loader.LOGGER.name):
+            name_only_rejection = fec_canonical_loader.validate_candidate_row(logged_rejection_row)
+
+        ordinary_rejection = fec_canonical_loader.validate_candidate_row(
+            {**_house_row(cand_id="H4NC09991"), "CAND_OFFICE": "X"}
+        )
+        combined_rejection = fec_canonical_loader.validate_candidate_row(
+            {**_house_row(cand_id="H4NC09992", name=""), "CAND_OFFICE": "X"}
+        )
+
+        assert "candidate_id='H4NC09990'" in caplog.text
+        assert "reasons=['missing_candidate_name']" in caplog.text
+        assert "CAND_PCC" not in caplog.text
+        assert "PCC\\nFORGE" not in caplog.text
+        assert name_only_rejection.reasons == frozenset({"missing_candidate_name"})
+        assert fec_canonical_loader.is_quarantinable_candidate_rejection(name_only_rejection) is True
+        assert ordinary_rejection.reasons == frozenset({"unknown_office_code"})
+        assert fec_canonical_loader.is_quarantinable_candidate_rejection(ordinary_rejection) is False
+        assert combined_rejection.reasons == frozenset({"missing_candidate_name", "unknown_office_code"})
+        assert fec_canonical_loader.is_quarantinable_candidate_rejection(combined_rejection) is False
+
+        remaining_reason_cases = [
+            (_house_row(cand_id=""), "missing_candidate_id"),
+            ({**_house_row(), "CAND_OFFICE": ""}, "missing_office_code"),
+            (_house_row(year=""), "missing_election_year"),
+            (_house_row(year="not-a-year"), "invalid_election_year"),
+        ]
+        for raw_row, expected_reason in remaining_reason_cases:
+            rejection = fec_canonical_loader.validate_candidate_row(raw_row)
+            assert rejection.reasons == frozenset({expected_reason})
+            assert fec_canonical_loader.is_quarantinable_candidate_rejection(rejection) is False
+
+        ds = _make_data_source(db_conn)
+        filepath = _write_cn_file(
+            tmp_path,
+            [
+                _house_row(name=""),
+                {**_house_row(cand_id="H4NC09991"), "CAND_OFFICE": "X"},
+            ],
+        )
+        result = fec_canonical_loader.load_fec_candidates_canonical(
+            db_conn,
+            filepath,
+            cycle=2024,
+            data_source_id=ds.id,
+        )
+
+        assert result.inserted == 0
+        assert result.quarantined == 0
+        assert result.errors == 2
+
     def test_returns_load_result_with_counts(self, db_conn: psycopg.Connection, tmp_path: Path) -> None:
         from domains.campaign_finance.ingest.fec_canonical_loader import load_fec_candidates_canonical
 

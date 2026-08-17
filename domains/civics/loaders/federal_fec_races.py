@@ -34,8 +34,10 @@ from core.types.python.models import (
 from domains.campaign_finance.ingest.bulk_stage4_loader import LoadResult
 from core.db_ingest import find_person_by_identifier
 from domains.campaign_finance.ingest.fec_canonical_loader import (
+    CandidateRowRejection,
     federal_general_election_date,
     ingest_candidate_civic_rows,
+    is_quarantinable_candidate_rejection,
     resolve_candidate_division,
     validate_candidate_row,
 )
@@ -354,10 +356,14 @@ def load_federal_fec_races(
     processed_since_commit = 0
 
     for raw_row in iter_cn_source_records(conn, cn_data_source_id):
-        validated = validate_candidate_row(raw_row)
-        if validated is None:
-            result.errors += 1
+        validation = validate_candidate_row(raw_row)
+        if isinstance(validation, CandidateRowRejection):
+            if is_quarantinable_candidate_rejection(validation):
+                result.quarantined += 1
+            else:
+                result.errors += 1
             continue
+        validated = validation
         if validated.election_year < min_election_year:
             continue
 

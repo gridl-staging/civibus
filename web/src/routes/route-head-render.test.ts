@@ -159,6 +159,79 @@ function getPrimaryNavigationLinks(body: string): Array<{ href: string; label: s
   );
 }
 
+const METHODOLOGY_DISCLOSURES = [
+  { marker: "methodology-schedule-a-scope", label: "Schedule A scope" },
+  { marker: "methodology-donor-grouping", label: "Donor grouping" },
+  { marker: "methodology-coverage", label: "Coverage" },
+  { marker: "methodology-freshness", label: "Freshness" }
+] as const;
+
+function methodologyTextContent(html: string): string {
+  return html.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function expectRegionTextValues(html: string, expectedValues: readonly string[]): void {
+  const regionText = methodologyTextContent(html);
+  const missingValues = expectedValues.filter((value) => !regionText.includes(value));
+  expect(missingValues).toEqual([]);
+}
+
+function expectRegionTextTokens(html: string, expectedTokens: readonly string[]): void {
+  const regionText = methodologyTextContent(html);
+  const missingTokens = expectedTokens.filter(
+    (token) => !new RegExp(`(^|[^A-Za-z0-9_])${escapeRegExp(token)}($|[^A-Za-z0-9_])`).test(regionText)
+  );
+  expect(missingTokens).toEqual([]);
+}
+
+function expectRegionNumberTokens(html: string, expectedNumbers: readonly string[]): void {
+  const normalizedRegionText = methodologyTextContent(html).replaceAll(",", "");
+  const missingNumbers = expectedNumbers.filter(
+    (number) => !new RegExp(`(^|[^0-9])${escapeRegExp(number)}($|[^0-9])`).test(normalizedRegionText)
+  );
+  expect(missingNumbers).toEqual([]);
+}
+
+function contributorIdentifiers(text: string): string[] {
+  const identifierPattern =
+    /\b(?:contributor_name_raw|contributor_name|contributor_employer|contributor_occupation|contributor_city|contributor_state|normalized_zip5)\b/g;
+  return [...new Set(text.match(identifierPattern) ?? [])];
+}
+
+function extractMethodologyDisclosureRegions(body: string): string[] {
+  expect(
+    METHODOLOGY_DISCLOSURES.map(
+      ({ marker }) => body.match(new RegExp(`data-testid="${marker}"`, "g"))?.length ?? 0
+    )
+  ).toEqual([1, 1, 1, 1]);
+  const disclosureOffsets = METHODOLOGY_DISCLOSURES.map(({ marker }) => body.indexOf(marker));
+  expect(disclosureOffsets).toEqual([...disclosureOffsets].sort((left, right) => left - right));
+
+  const regions = METHODOLOGY_DISCLOSURES.map(({ marker, label }, index) => {
+    const start = body.indexOf(`data-testid="${marker}"`);
+    const nextMarker = METHODOLOGY_DISCLOSURES[index + 1]?.marker;
+    const end = nextMarker === undefined ? body.length : body.indexOf(`data-testid="${nextMarker}"`);
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    const html = body.slice(start, end);
+    const headings = [...html.matchAll(/<h[2-6][^>]*>(.*?)<\/h[2-6]>/gs)].map((match) =>
+      methodologyTextContent(match[1])
+    );
+    expect(headings).toContain(label);
+    return html;
+  });
+  const methodologyRegionTestIds = [...body.matchAll(/data-testid="(methodology-[^"]+)"/g)].map(
+    (match) => match[1]
+  );
+
+  expect(methodologyRegionTestIds).toEqual(METHODOLOGY_DISCLOSURES.map(({ marker }) => marker));
+  return regions;
+}
+
 const PERSON_DETAIL = {
   id: PERSON_ID,
   canonical_name: "Jane Doe",
@@ -391,17 +464,82 @@ describe("route head rendering", () => {
       expectsOgUrl: true
     });
     expect(rendered.head).toContain(
-      '<meta name="description" content="Coverage scope, confidence labels, and source guidance for campaign-finance, civic office, and property records."'
+      '<meta name="description" content="Federal Schedule A scope, donor grouping, coverage, and freshness methodology for Civibus money views."'
     );
     expect(rendered.head).toContain('"@type":"Article"');
     expect(rendered.head).toContain('"url":"https://civibus.test/methodology"');
-    expect(rendered.body).toContain(
-      "Civibus combines campaign-finance, civic office, and property records in one search experience. Coverage varies by jurisdiction and is refreshed based on source cadence."
+  });
+
+  it("renders the four methodology disclosures with distinct grouping and freshness contracts", () => {
+    const rendered = render(MethodologyPage);
+    const requiredBodyDisclosures = [
+      "Methodology",
+      ...METHODOLOGY_DISCLOSURES.map(({ marker }) => `data-testid="${marker}"`),
+      APP_SHELL.reportingLink.label,
+      `href="${APP_SHELL.reportingLink.href}"`
+    ];
+    const missingBodyDisclosures = requiredBodyDisclosures.filter(
+      (disclosure) => !rendered.body.includes(disclosure)
     );
-    expect(rendered.body).toContain("Data freshness policy");
-    expect(rendered.body).toContain(
-      "Every surfaced record is tied to provenance metadata and source links so users can trace claims back to official filings or source systems."
+
+    expect(missingBodyDisclosures).toEqual([]);
+    const disclosureRegions = extractMethodologyDisclosureRegions(rendered.body);
+    expectRegionTextTokens(disclosureRegions[0], ["2022", "2024", "2026"]);
+    expectRegionTextValues(disclosureRegions[0], [
+      "transaction_date >= 2022-01-01",
+      "transaction_type LIKE '1%'",
+      "contributor_entity_type = 'IND'",
+      "no memo rows",
+      "no terminated amendments",
+      "no superseded source records",
+      "current-officeholder committee slice",
+      "floors",
+      "not full-universe FEC Schedule A totals"
+    ]);
+    const sentences = methodologyTextContent(disclosureRegions[1]).split(/(?<=[.!?])\s+/);
+    const donorSearchSentence = sentences.find(
+      (sentence) => /donor search/i.test(sentence) && sentence.includes("contributor_employer")
     );
+    const unresolvedTopDonorSentence = sentences.find(
+      (sentence) => /unresolved raw identities/i.test(sentence) && sentence.includes("contributor_name_raw")
+    );
+
+    expect(contributorIdentifiers(donorSearchSentence ?? "")).toEqual([
+      "contributor_name",
+      "contributor_employer",
+      "contributor_occupation",
+      "contributor_city",
+      "contributor_state",
+      "normalized_zip5"
+    ]);
+    expect(contributorIdentifiers(unresolvedTopDonorSentence ?? "")).toEqual([
+      "contributor_name_raw",
+      "contributor_city",
+      "contributor_state"
+    ]);
+    expect(methodologyTextContent(disclosureRegions[1])).toContain(
+      "collapses to one canonical donor identity only when the backend resolves exactly one canonical donor identity"
+    );
+    expect(disclosureRegions[2]).toContain('href="/coverage"');
+    expect(disclosureRegions[2]).toContain('href="/data-sources"');
+    expectRegionNumberTokens(disclosureRegions[2], ["837", "13487"]);
+    expect(methodologyTextContent(disclosureRegions[2])).toMatch(
+      /(^|[^0-9.])(?:6|5\.8|5\.84|5\.843|5\.8433|5\.84334|5\.843340)%($|[^0-9])/
+    );
+    const freshnessText = methodologyTextContent(disclosureRegions[3]);
+    expect(freshnessText).toContain("weekly");
+    for (const [role, bound] of [
+      ["FEC bulk freshness health", "7d"],
+      ["donor-rollup health", "7d6h"],
+      ["donor-search serving freshness", "8d"]
+    ] as const) {
+      expect(freshnessText).toMatch(
+        new RegExp(
+          `${escapeRegExp(role)}[^.!?]*\\bbounded\\s+at\\s+${escapeRegExp(bound)}(?![A-Za-z0-9_])`,
+          "i"
+        )
+      );
+    }
   });
 
   it("renders election-date page with slashless canonical URL and election JSON-LD", () => {

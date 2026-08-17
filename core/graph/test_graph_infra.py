@@ -5,8 +5,8 @@ from uuid import uuid4
 import pytest
 
 from core.db import get_connection
-from core.graph import age_post_connect, ensure_graph, query_formatted_cypher
-from core.graph.loader import merge_person_node
+from core.graph import age_post_connect, delete_entity_nodes, ensure_graph, query_formatted_cypher
+from core.graph.loader import create_contributed_to_edge, merge_organization_node, merge_person_node
 
 
 @pytest.mark.integration
@@ -105,3 +105,42 @@ class TestQueryFormattedCypher:
         )
 
         assert len(results) == 1
+
+
+@pytest.mark.integration
+def test_delete_entity_nodes_detaches_edges_and_preserves_unselected_nodes(graph_conn):
+    person_id = uuid4()
+    organization_id = uuid4()
+    source_record_id = uuid4()
+    merge_person_node(graph_conn, person_id, "Deleted Graph Person")
+    merge_organization_node(graph_conn, organization_id, "Preserved Graph Organization")
+    create_contributed_to_edge(
+        graph_conn,
+        person_id,
+        organization_id,
+        amount=25.0,
+        transaction_date="2026-08-16",
+        source_record_id=source_record_id,
+    )
+
+    delete_entity_nodes(graph_conn, [person_id])
+
+    assert query_formatted_cypher(graph_conn, 'MATCH (n {id: "%s"}) RETURN n.id', str(person_id)) == []
+    assert (
+        len(
+            query_formatted_cypher(
+                graph_conn,
+                'MATCH (n {id: "%s"}) RETURN n.id',
+                str(organization_id),
+            )
+        )
+        == 1
+    )
+    assert (
+        query_formatted_cypher(
+            graph_conn,
+            'MATCH ()-[edge]->() WHERE edge.source_record_id = "%s" RETURN edge',
+            str(source_record_id),
+        )
+        == []
+    )

@@ -28,18 +28,20 @@
   <p>{APP_SHELL.methodology.coverageSummary}</p>
 
   {#each APP_SHELL.methodology.sections as section}
-    <h3>{section.heading}</h3>
-    <p>{section.body}</p>
+    <section class="methodology__section" data-testid={section.testId}>
+      <h3>{section.heading}</h3>
+      {#each section.paragraphs as paragraph}
+        <p>{paragraph}</p>
+      {/each}
+      {#if section.links.length > 0}
+        <ul class="methodology__links" aria-label={`${section.heading} links`}>
+          {#each section.links as link}
+            <li><a href={link.href}>{link.label}</a></li>
+          {/each}
+        </ul>
+      {/if}
+    </section>
   {/each}
-
-  <h3>{APP_SHELL.methodology.confidenceHeading}</h3>
-  <ul class="methodology__confidence-labels">
-    {#each APP_SHELL.methodology.confidenceLabels as confidenceLabel}
-      <li>
-        <strong>{confidenceLabel.label}</strong>: {confidenceLabel.description}
-      </li>
-    {/each}
-  </ul>
 
   <p>
     <a href={APP_SHELL.reportingLink.href}>{APP_SHELL.reportingLink.label}</a>
@@ -51,7 +53,7 @@
     margin: 1.1rem 0 0.45rem;
   }
 
-  .methodology__confidence-labels {
+  .methodology__links {
     margin: 0;
     padding-left: 1.2rem;
   }

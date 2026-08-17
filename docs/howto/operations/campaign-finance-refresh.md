@@ -86,7 +86,7 @@ Prove the repository plan locally before considering production:
 uv run python -m core.refresh.runner --scope federal --dry-run
 ```
 
-The dry-run must exit `0` with nine unique ordered keys, with no
+The dry-run must exit `0` with ten unique ordered keys, with no
 `federal-irs-527`. The exact order is tested in
 `core/test_refresh_runner.py` and must not be restated here.
 

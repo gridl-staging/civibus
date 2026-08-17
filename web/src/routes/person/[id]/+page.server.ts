@@ -1,6 +1,7 @@
 import {
   fetchEntityDetailBundle
 } from "$lib/server/api/entity-detail";
+import { PersonPayloadContractError } from "$lib/entity-detail/contract";
 import { withApiResponseErrorHandling } from "$lib/server/api/error";
 import { loadPersonMoneyBundle } from "$lib/server/api/person-money-bundle";
 import type { PersonCandidateFinanceSection } from "$lib/server/api/campaign-finance-detail";
@@ -68,15 +69,32 @@ async function resolvePersonFinanceSections(
 }
 
 /**
+ * Fetches the canonical person detail bundle, adapting the contract guard's
+ * typed `PersonPayloadContractError` into a 502-class route error. A malformed
+ * *core* person payload must never escape as a raw SvelteKit 500. Backend
+ * `ApiResponseError`s (404/422) pass through to the outer route error handler.
+ */
+async function fetchPersonDetailBundleOrTypedError(
+  apiClient: Parameters<typeof fetchEntityDetailBundle>[0],
+  id: string
+): ReturnType<typeof fetchEntityDetailBundle> {
+  try {
+    return await fetchEntityDetailBundle(apiClient, { entityType: "person", id });
+  } catch (cause) {
+    if (cause instanceof PersonPayloadContractError) {
+      throw error(cause.status, cause.routeErrorBody);
+    }
+    throw cause;
+  }
+}
+
+/**
  */
 export const load: PageServerLoad = ({ params, locals, url }) =>
   withApiResponseErrorHandling(
     async () => {
       const requestedCycle = parseSelectedCycle(url.searchParams);
-      const bundle = await fetchEntityDetailBundle(locals.api, {
-        entityType: "person",
-        id: params.id
-      });
+      const bundle = await fetchPersonDetailBundleOrTypedError(locals.api, params.id);
       const moneyBundle = requestedCycle === undefined
         ? loadPersonMoneyBundle(locals.api, params.id, {
             fallbackWhenBackendSelectedInsightsUnavailable: true

@@ -1,6 +1,27 @@
 /** Contracts and route helpers for shared entity detail pages. */
 export const STAGE4_DETAIL_ENTITY_TYPES = ["person", "org"] as const;
 
+/** Public route message for a contract-invalid core person payload. */
+export const PERSON_PROFILE_UNAVAILABLE_MESSAGE = "Person profile is temporarily unavailable.";
+
+/**
+ * Typed, adapter-mappable failure raised when a `/v1/person/{id}` payload is
+ * present but violates the core person-detail contract (missing/invalid bio
+ * attribution keys or malformed `current_office`). The runtime guard owns the
+ * shape diagnosis; the server API adapter maps `status` + `routeErrorBody` to a
+ * 502-class route error so a contract-invalid payload never escapes as a raw
+ * SvelteKit 500 and never renders a blank HTTP 200.
+ */
+export class PersonPayloadContractError extends Error {
+  readonly status = 502;
+  readonly routeErrorBody = { message: PERSON_PROFILE_UNAVAILABLE_MESSAGE };
+
+  constructor(detail: string) {
+    super(detail);
+    this.name = "PersonPayloadContractError";
+  }
+}
+
 export type Stage4EntityType = (typeof STAGE4_DETAIL_ENTITY_TYPES)[number];
 const REQUIRED_PERSON_BIO_KEYS = [
   "bio_text",
@@ -97,14 +118,14 @@ export function assertPersonPayloadHasRequiredBioKeys(
   payload: unknown
 ): asserts payload is PersonDetailResponse {
   if (payload === null || typeof payload !== "object" || Array.isArray(payload)) {
-    throw new Error("Person payload must be an object.");
+    throw new PersonPayloadContractError("Person payload must be an object.");
   }
 
   const personPayload = payload as Record<string, unknown>;
   const missingBioKeys = REQUIRED_PERSON_BIO_KEYS.filter((key) => !(key in personPayload));
 
   if (missingBioKeys.length > 0) {
-    throw new Error(`Person payload missing required bio keys: ${missingBioKeys.join(", ")}`);
+    throw new PersonPayloadContractError(`Person payload missing required bio keys: ${missingBioKeys.join(", ")}`);
   }
 
   const invalidValueKeys = REQUIRED_PERSON_BIO_KEYS.filter((key) => {
@@ -113,7 +134,7 @@ export function assertPersonPayloadHasRequiredBioKeys(
   });
 
   if (invalidValueKeys.length > 0) {
-    throw new Error(
+    throw new PersonPayloadContractError(
       `Person payload bio keys must be string or null: ${invalidValueKeys.join(", ")}`
     );
   }
@@ -127,17 +148,17 @@ export function assertPersonPayloadHasRequiredBioKeys(
     return;
   }
   if (typeof currentOffice !== "object" || Array.isArray(currentOffice)) {
-    throw new Error("Person payload current_office must be an object or null.");
+    throw new PersonPayloadContractError("Person payload current_office must be an object or null.");
   }
 
   const currentOfficePayload = currentOffice as Record<string, unknown>;
   for (const key of ["officeholding_id", "office_id", "office_name", "office_level"] as const) {
     if (typeof currentOfficePayload[key] !== "string") {
-      throw new Error(`Person payload current_office.${key} must be a string.`);
+      throw new PersonPayloadContractError(`Person payload current_office.${key} must be a string.`);
     }
   }
   if (currentOfficePayload.state !== null && typeof currentOfficePayload.state !== "string") {
-    throw new Error("Person payload current_office.state must be a string or null.");
+    throw new PersonPayloadContractError("Person payload current_office.state must be a string or null.");
   }
 }
 

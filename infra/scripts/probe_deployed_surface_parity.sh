@@ -6,23 +6,115 @@ EXPECTED_SHA="${CIVIBUS_EXPECTED_SHA:-}"
 FIXTURE_DIR="${CIVIBUS_DEPLOYED_SURFACE_FIXTURE_DIR:-}"
 CIVIBUS_PUBLIC_MONEY_VALUE_FATAL="${CIVIBUS_PUBLIC_MONEY_VALUE_FATAL:-0}"
 SITEMAP_LATENCY_BUDGET_SECONDS="30.000"
-PUBLIC_PAGES=(
-  "/|Follow money around Congress and the White House."
-  "/search?q=ossoff|data-testid=\"search-results-region\""
-  "/donors?q=smith&by=name|data-testid=\"donor-result-row\""
-  "/congress|data-testid=\"congress-member-row-0\""
-  "/methodology|Methodology"
-  "/developers|GET /api/public/v1/federal/officials"
-  "/candidates|Candidates"
-  "/committees|Committees"
-  "/committee/jon-ossoff-for-senate|Key metrics"
-  "/compare|Compare officeholders"
-  "/calendar|Election calendar"
-  "/coverage|campaign_finance"
-  "/data-sources|campaign_finance"
-  "/sitemap.xml|<sitemapindex"
-)
-KNOWN_RED_PUBLIC_PAGES=()
+PUBLIC_SURFACE_MANIFEST_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../public_surface_probes.tsv"
+PUBLIC_SURFACE_MANIFEST_HEADER=$'surface_id\tkind\tpath\tmarker\tparity_mode\tuptime_mode\towners'
+PUBLIC_SURFACE_RECORDS=()
+
+manifest_header_has_column() {
+  local header="$1"
+  local column="$2"
+
+  [[ $'\t'"${header}"$'\t' == *$'\t'"${column}"$'\t'* ]]
+}
+
+validate_public_surface_manifest_header() {
+  local header="$1"
+  local column
+
+  if [[ "${header}" == "${PUBLIC_SURFACE_MANIFEST_HEADER}" ]]; then
+    return 0
+  fi
+  for column in surface_id kind path marker parity_mode uptime_mode owners; do
+    if ! manifest_header_has_column "${header}" "${column}"; then
+      echo "public_surface_manifest_error header missing_column=${column}" >&2
+      return 1
+    fi
+  done
+  echo "public_surface_manifest_error header does_not_match_fixed_schema" >&2
+  return 1
+}
+
+validate_public_surface_manifest_field() {
+  local row_number="$1"
+  local field_name="$2"
+  local value="$3"
+  local non_whitespace_value
+
+  non_whitespace_value="${value//[[:space:]]/}"
+  if [[ -z "${non_whitespace_value}" ]]; then
+    echo "public_surface_manifest_error row=${row_number} blank_field=${field_name}" >&2
+    return 1
+  fi
+}
+
+validate_public_surface_manifest_enum() {
+  local row_number="$1"
+  local field_name="$2"
+  local value="$3"
+  local known_values="$4"
+
+  case " ${known_values} " in
+    *" ${value} "*) return 0 ;;
+  esac
+  echo "public_surface_manifest_error row=${row_number} unknown_${field_name}=${value}" >&2
+  return 1
+}
+
+load_public_surface_manifest() {
+  local header manifest_line without_tabs field_count
+  local row_number=1
+  local surface_id kind path marker parity_mode uptime_mode owners
+  local existing_id
+  local -a seen_surface_ids=()
+
+  if [[ ! -f "${PUBLIC_SURFACE_MANIFEST_PATH}" ]]; then
+    echo "public_surface_manifest_error missing_file=${PUBLIC_SURFACE_MANIFEST_PATH}" >&2
+    return 1
+  fi
+  exec 3< "${PUBLIC_SURFACE_MANIFEST_PATH}"
+  IFS= read -r header <&3 || {
+    echo "public_surface_manifest_error missing_header" >&2
+    return 1
+  }
+  validate_public_surface_manifest_header "${header}" || return 1
+
+  while IFS= read -r manifest_line || [[ -n "${manifest_line}" ]]; do
+    row_number=$((row_number + 1))
+    without_tabs="${manifest_line//$'\t'/}"
+    field_count=$((${#manifest_line} - ${#without_tabs} + 1))
+    if [[ "${field_count}" -ne 7 ]]; then
+      echo "public_surface_manifest_error row=${row_number} field_count=${field_count} expected=7" >&2
+      return 1
+    fi
+    IFS=$'\t' read -r surface_id kind path marker parity_mode uptime_mode owners <<< "${manifest_line}"
+    validate_public_surface_manifest_field "${row_number}" surface_id "${surface_id}" || return 1
+    validate_public_surface_manifest_field "${row_number}" kind "${kind}" || return 1
+    validate_public_surface_manifest_field "${row_number}" path "${path}" || return 1
+    validate_public_surface_manifest_field "${row_number}" marker "${marker}" || return 1
+    validate_public_surface_manifest_field "${row_number}" parity_mode "${parity_mode}" || return 1
+    validate_public_surface_manifest_field "${row_number}" uptime_mode "${uptime_mode}" || return 1
+    validate_public_surface_manifest_field "${row_number}" owners "${owners}" || return 1
+    validate_public_surface_manifest_enum "${row_number}" kind "${kind}" "static person_sitemap" || return 1
+    validate_public_surface_manifest_enum "${row_number}" parity_mode "${parity_mode}" "fatal known_red skip" || return 1
+    validate_public_surface_manifest_enum "${row_number}" uptime_mode "${uptime_mode}" "fatal skip" || return 1
+    for existing_id in "${seen_surface_ids[@]+"${seen_surface_ids[@]}"}"; do
+      if [[ "${existing_id}" == "${surface_id}" ]]; then
+        echo "public_surface_manifest_error row=${row_number} duplicate_surface_id=${surface_id}" >&2
+        return 1
+      fi
+    done
+    seen_surface_ids+=("${surface_id}")
+    PUBLIC_SURFACE_RECORDS+=("${manifest_line}")
+  done <&3
+  exec 3<&-
+
+  if [[ "${#PUBLIC_SURFACE_RECORDS[@]}" -eq 0 ]]; then
+    echo "public_surface_manifest_error no_surface_rows" >&2
+    return 1
+  fi
+}
+
+load_public_surface_manifest || exit 1
 TMP_DIR="$(mktemp -d)"
 DEPLOYED_OPENAPI_JSON="${TMP_DIR}/deployed_openapi.json"
 API_VERSION_JSON="${TMP_DIR}/api_health_version.json"
@@ -408,6 +500,34 @@ fetch_public_page_body() {
   printf '%s\t%s\n' "${status}" "${latency_seconds}"
 }
 
+resolve_person_surface_specimen() {
+  local sitemap_path="$1"
+  local body_path="${TMP_DIR}/person_surface_sitemap.html"
+  local fetch_result
+  local specimen_path
+  local specimen_url
+  local status
+
+  fetch_result="$(fetch_public_page_body "${sitemap_path}" "${body_path}")" || {
+    printf '%s\tfetch_error\n' "${sitemap_path}"
+    return 1
+  }
+  status="${fetch_result%%$'\t'*}"
+  if [[ "${status}" != "200" ]]; then
+    printf '%s\tunexpected_http_status_%s\n' "${sitemap_path}" "${status}"
+    return 1
+  fi
+
+  specimen_url="$(grep -o 'https\?://[^<]*/person/[^<]*' "${body_path}" | sed -n '1p')" || true
+  if [[ -z "${specimen_url}" ]]; then
+    printf '%s\tno_person_specimen\n' "${sitemap_path}"
+    return 1
+  fi
+
+  specimen_path="/person/${specimen_url#*/person/}"
+  printf '%s\tok\n' "${specimen_path}"
+}
+
 warm_up_public_page() {
   local path="$1"
   local body_path="${TMP_DIR}/warmup_$(page_body_slug "${path}").html"
@@ -428,20 +548,27 @@ assert_public_page_body() {
     return 1
   fi
 
-  if ! grep -Fq "${marker}" "${body_path}"; then
+  if ! grep -Fq -- "${marker}" "${body_path}"; then
     echo "page_content_marker_missing ${path} marker=${marker}" >&2
     return 1
   fi
 }
 
 probe_public_page() {
-  local entry="$1"
-  local path="${entry%%|*}"
-  local marker="${entry#*|}"
+  local path="$1"
+  local marker="$2"
+  local parity_mode="$3"
+  local surface_id="$4"
+  local owners="$5"
   local fetch_result
   local latency_seconds
   local status
   local body_path="${TMP_DIR}/page_body_$(page_body_slug "${path}").html"
+
+  if [[ "${parity_mode}" == "known_red" ]]; then
+    probe_known_red_public_page "${path}" "${surface_id}" "${owners}"
+    return 0
+  fi
 
   if [[ "${path}" == "/donors?q=smith&by=name" ]]; then
     warm_up_public_page "${path}"
@@ -462,7 +589,7 @@ probe_public_page() {
 
   assert_public_page_body "${path}" "${marker}" "${body_path}" || return 1
 
-  echo "page_status ${path} ${status} marker_ok"
+  echo "page_status ${path} ${status} marker_ok surface_id=${surface_id} owner=${owners}"
   if [[ "${path}" == "/sitemap.xml" ]]; then
     echo "page_latency ${path} seconds=${latency_seconds} budget_seconds=${SITEMAP_LATENCY_BUDGET_SECONDS}"
     if ! python3 - "${latency_seconds}" "${SITEMAP_LATENCY_BUDGET_SECONDS}" <<'PY'
@@ -479,36 +606,89 @@ PY
 }
 
 probe_known_red_public_page() {
-  local entry="$1"
-  local path="${entry%%|*}"
-  local remainder="${entry#*|}"
-  local reason="${remainder%%|*}"
-  local owner="${remainder#*|}"
+  local path="$1"
+  local surface_id="$2"
+  local owners="$3"
   local status
   local body_path="${TMP_DIR}/known_red_body_$(page_body_slug "${path}").html"
 
   if status="$(fetch_public_page_body "${path}" "${body_path}")"; then
-    echo "WARN known_red_page ${path} ${status} owner=${owner} reason=${reason}"
+    echo "WARN known_red_page ${path} ${status} surface_id=${surface_id} owner=${owners} reason=manifest_known_red"
   else
-    echo "WARN known_red_page ${path} fetch_error owner=${owner} reason=${reason}"
+    echo "WARN known_red_page ${path} fetch_error surface_id=${surface_id} owner=${owners} reason=manifest_known_red"
   fi
 }
 
+probe_person_surface() {
+  local sitemap_path="$1"
+  local marker="$2"
+  local surface_id="$3"
+  local owners="$4"
+  local body_path
+  local fetch_result
+  local reason
+  local specimen_result
+  local specimen_path
+  local status
+
+  specimen_result="$(resolve_person_surface_specimen "${sitemap_path}")" || {
+    specimen_path="${specimen_result%%$'\t'*}"
+    reason="${specimen_result#*$'\t'}"
+    echo "person_surface ${specimen_path} failed reason=${reason} surface_id=${surface_id} owner=${owners}"
+    return 1
+  }
+  specimen_path="${specimen_result%%$'\t'*}"
+  body_path="${TMP_DIR}/person_surface_body_$(page_body_slug "${specimen_path}").html"
+  fetch_result="$(fetch_public_page_body "${specimen_path}" "${body_path}")" || {
+    echo "person_surface ${specimen_path} failed reason=fetch_error surface_id=${surface_id} owner=${owners}"
+    return 1
+  }
+  status="${fetch_result%%$'\t'*}"
+  if [[ "${status}" != "200" ]]; then
+    echo "person_surface ${specimen_path} failed reason=unexpected_http_status_${status} surface_id=${surface_id} owner=${owners}"
+    return 1
+  fi
+  if ! assert_public_page_body "${specimen_path}" "${marker}" "${body_path}"; then
+    if grep -Eiq "temporarily unavailable" "${body_path}"; then
+      reason="backend_failure_copy"
+    else
+      reason="breadcrumb_missing"
+    fi
+    echo "person_surface ${specimen_path} failed reason=${reason} surface_id=${surface_id} owner=${owners}"
+    return 1
+  fi
+
+  echo "person_surface ${specimen_path} ok surface_id=${surface_id} owner=${owners}"
+}
+
 probe_public_surface() {
-  local entry
+  local record
+  local surface_id kind path marker parity_mode uptime_mode owners
   local surfaces_probed=0
   local failed=0
 
-  for entry in "${PUBLIC_PAGES[@]}"; do
-    surfaces_probed=$((surfaces_probed + 1))
-    if ! probe_public_page "${entry}"; then
-      failed=$((failed + 1))
+  for record in "${PUBLIC_SURFACE_RECORDS[@]}"; do
+    IFS=$'\t' read -r surface_id kind path marker parity_mode uptime_mode owners <<< "${record}"
+    if [[ "${parity_mode}" == "skip" ]]; then
+      continue
     fi
-  done
-
-  # Bash 3.2 treats an empty array expansion as unbound under `set -u`.
-  for entry in "${KNOWN_RED_PUBLIC_PAGES[@]+"${KNOWN_RED_PUBLIC_PAGES[@]}"}"; do
-    probe_known_red_public_page "${entry}"
+    if [[ "${kind}" == "static" ]]; then
+      if [[ "${parity_mode}" == "fatal" ]]; then
+        surfaces_probed=$((surfaces_probed + 1))
+        if ! probe_public_page "${path}" "${marker}" "${parity_mode}" "${surface_id}" "${owners}"; then
+          failed=$((failed + 1))
+        fi
+      else
+        probe_public_page "${path}" "${marker}" "${parity_mode}" "${surface_id}" "${owners}"
+      fi
+    elif [[ "${parity_mode}" == "fatal" ]]; then
+      surfaces_probed=$((surfaces_probed + 1))
+      if ! probe_person_surface "${path}" "${marker}" "${surface_id}" "${owners}"; then
+        failed=$((failed + 1))
+      fi
+    else
+      probe_person_surface "${path}" "${marker}" "${surface_id}" "${owners}" || true
+    fi
   done
 
   echo "surfaces_probed=${surfaces_probed} failed=${failed}"

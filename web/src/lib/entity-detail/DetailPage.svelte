@@ -375,7 +375,7 @@
         {/if}
       {/if}
     {:catch}
-      <p>Contribution insights are temporarily unavailable.</p>
+      <p data-testid="person-insights-unavailable">Contribution insights are temporarily unavailable.</p>
     {/await}
   {/if}
 {/snippet}
@@ -489,7 +489,7 @@
       {@render moneyAtGlanceReceiptComposition(moneyAtGlance, moneyAtGlance.receiptComposition.testId)}
     </section>
   {:catch}
-    <p>Selected-cycle money summary is temporarily unavailable.</p>
+    <p data-testid="person-money-summary-unavailable">Selected-cycle money summary is temporarily unavailable.</p>
   {/await}
 {/snippet}
 
@@ -640,7 +640,7 @@
                       </div>
                     {/if}
                   {:catch}
-                    <p>Linked committees are temporarily unavailable.</p>
+                    <p data-testid="person-linked-committees-unavailable">Linked committees are temporarily unavailable.</p>
                   {/await}
 
                   <h4>Donors and vendors</h4>
@@ -676,7 +676,7 @@
                       </div>
                     {/if}
                   {:catch}
-                    <p>Donor/vendor transactions are temporarily unavailable.</p>
+                    <p data-testid="person-donor-vendor-unavailable">Donor/vendor transactions are temporarily unavailable.</p>
                   {/await}
 
                   <h4 id={candidateIndex === 0 ? "person-outside-spending" : undefined}>Outside spending</h4>
@@ -779,14 +779,14 @@
                       {/if}
                     {/if}
                   {:catch}
-                    <p>Outside-spending data is temporarily unavailable.</p>
+                    <p data-testid="person-outside-spending-unavailable">Outside-spending data is temporarily unavailable.</p>
                   {/await}
                 </article>
               {/each}
             {/if}
           {:catch}
             {@render fundraisingDetail()}
-            <p>Campaign-finance sections are temporarily unavailable.</p>
+            <p data-testid="person-finance-unavailable">Campaign-finance sections are temporarily unavailable.</p>
           {/await}
         </section>
       {/if}

@@ -951,4 +951,38 @@ describe("/person/[id] +page.server load", () => {
       body: { detail: [{ loc: ["path", "person_id"], msg: "Input should be a valid UUID" }] }
     });
   });
+
+  // Stage 3 regression: the backend returns HTTP 200 with a core payload
+  // whose required bio value is contract-invalid. Per docs/reference/screen_specs/
+  // person_detail.md `### Error`, the contract guard must raise a typed,
+  // adapter-mappable failure that surfaces as a 502-class route error, never a
+  // raw uncaught `Error` escaping `withApiResponseErrorHandling` as a page 500.
+  it("maps a 200 payload with numeric bio_text to a typed 502-class route error", async () => {
+    const requestJson = vi.fn(async (path: string): Promise<unknown> => {
+      if (path === `/v1/person/${PERSON_ID}`) {
+        return { ...buildPersonDetail(), bio_text: 123 };
+      }
+      throw new Error(`unexpected path: ${path}`);
+    });
+
+    await expect(load(createLoadEvent(requestJson))).rejects.toMatchObject({
+      status: 502,
+      body: { message: "Person profile is temporarily unavailable." }
+    });
+  });
+
+  it("maps a 200 payload missing a required bio key to a typed 502-class route error", async () => {
+    const requestJson = vi.fn(async (path: string): Promise<unknown> => {
+      if (path === `/v1/person/${PERSON_ID}`) {
+        const { bio_text: _bioText, ...detailWithoutBioText } = buildPersonDetail();
+        return detailWithoutBioText;
+      }
+      throw new Error(`unexpected path: ${path}`);
+    });
+
+    await expect(load(createLoadEvent(requestJson))).rejects.toMatchObject({
+      status: 502,
+      body: { message: "Person profile is temporarily unavailable." }
+    });
+  });
 });

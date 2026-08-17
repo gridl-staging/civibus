@@ -425,13 +425,11 @@ main() {
 
   # flyctl resolves the tag to its digest; passing an @sha256 reference makes
   # flyctl append that digest again and the Machines API rejects the result.
-  flyctl machine update "$MACHINE_ID" -a "$APP_NAME" --image "$image_tag" --skip-start --yes \
+  flyctl machine update "$MACHINE_ID" -a "$APP_NAME" --image "$image_tag" --yes \
     >"$evidence_dir/machine_update.txt" 2>&1 \
     || fail "image-only Machine update failed"
 
   capture_refresh_state "post" "$evidence_dir"
-  verify_refresh_state "post" "$evidence_dir" \
-    || fail "post-update refresh Machine contract verification failed"
   verify_post_image_digest "$evidence_dir/post_machines.json" "$digest_ref" \
     >"$evidence_dir/post_image_digest.txt" \
     || fail "post-update Machine image does not match proven digest"

@@ -130,7 +130,7 @@ def _make_races_data_source(conn: psycopg.Connection) -> UUID:
 def _cn_fields(
     *,
     cand_id: str,
-    name: str,
+    name: str | None,
     office: str,
     state: str,
     district: str = "00",
@@ -138,7 +138,7 @@ def _cn_fields(
     party: str = "DEM",
     ici: str = "C",
     status: str = "C",
-) -> dict[str, str]:
+) -> dict[str, str | None]:
     return {
         "CAND_ID": cand_id,
         "CAND_NAME": name,
@@ -153,7 +153,7 @@ def _cn_fields(
     }
 
 
-def _house(cand_id: str = "H4NC01234", **kwargs) -> dict[str, str]:
+def _house(cand_id: str = "H4NC01234", **kwargs) -> dict[str, str | None]:
     return _cn_fields(
         cand_id=cand_id,
         name=kwargs.pop("name", "DOE, JANE"),
@@ -164,18 +164,18 @@ def _house(cand_id: str = "H4NC01234", **kwargs) -> dict[str, str]:
     )
 
 
-def _senate(cand_id: str = "S4NC00567", **kwargs) -> dict[str, str]:
+def _senate(cand_id: str = "S4NC00567", **kwargs) -> dict[str, str | None]:
     return _cn_fields(
         cand_id=cand_id, name=kwargs.pop("name", "SMITH, JOHN"), office="S", state=kwargs.pop("state", "NC"), **kwargs
     )
 
 
-def _president(cand_id: str = "P40000001", **kwargs) -> dict[str, str]:
+def _president(cand_id: str = "P40000001", **kwargs) -> dict[str, str | None]:
     return _cn_fields(cand_id=cand_id, name=kwargs.pop("name", "JONES, BOB"), office="P", state="US", **kwargs)
 
 
 def _seed_cn_records(
-    conn: psycopg.Connection, cn_ds_id: UUID, rows: list[dict[str, str]], *, cycle: int = 2024
+    conn: psycopg.Connection, cn_ds_id: UUID, rows: list[dict[str, str | None]], *, cycle: int = 2024
 ) -> None:
     for row in rows:
         raw_fields = dict(row)
@@ -194,7 +194,7 @@ def _seed_cn_records(
 def _load(
     conn: psycopg.Connection,
     *,
-    rows: list[dict[str, str]],
+    rows: list[dict[str, str | None]],
     general_dates_by_year: dict[int, str] | None = None,
     min_election_year: int = 2022,
     cycle: int = 2024,
@@ -311,6 +311,68 @@ class TestElectionPopulation:
 
 
 class TestCandidacyAndProvenance:
+    def test_quarantines_name_only_rejection_without_materializing_race_rows(
+        self,
+        db_conn: psycopg.Connection,
+    ) -> None:
+        valid_candidate_id = "H4NC01234"
+        quarantined_candidate_id = "H6AZ08210"
+        races_ds_id, _client, result = _load(
+            db_conn,
+            rows=[
+                _house(cand_id=valid_candidate_id),
+                _house(
+                    cand_id=quarantined_candidate_id,
+                    name=None,
+                    state="AZ",
+                    district="08",
+                    year="2026",
+                ),
+            ],
+            general_dates_by_year={2024: "2024-11-05", 2026: "2026-11-03"},
+        )
+
+        assert result.inserted == 1
+        assert result.quarantined == 1
+        assert result.errors == 0
+        source_record_keys = db_conn.execute(
+            "SELECT source_record_key FROM core.source_record WHERE data_source_id = %s ORDER BY source_record_key",
+            (races_ds_id,),
+        ).fetchall()
+        assert source_record_keys == [(f"fec_races:{valid_candidate_id}:2024",)]
+        candidate_numbers = db_conn.execute(
+            """
+            SELECT ca.candidate_number
+            FROM civic.candidacy ca
+            JOIN core.source_record sr ON sr.id = ca.source_record_id
+            WHERE sr.data_source_id = %s
+            ORDER BY ca.candidate_number
+            """,
+            (races_ds_id,),
+        ).fetchall()
+        assert candidate_numbers == [(valid_candidate_id,)]
+        assert (
+            db_conn.execute(
+                "SELECT COUNT(*) FROM core.person WHERE identifiers @> %s",
+                ('{"fec_candidate_id": "H6AZ08210"}',),
+            ).fetchone()[0]
+            == 0
+        )
+
+    def test_non_name_rejections_remain_errors_for_multiple_rows(self, db_conn: psycopg.Connection) -> None:
+        invalid_rows = [
+            {**_house(cand_id="H4NC09991"), "CAND_OFFICE": "X"},
+            {**_house(cand_id="H4NC09992"), "CAND_OFFICE": "X"},
+        ]
+
+        races_ds_id, client, result = _load(db_conn, rows=invalid_rows)
+
+        assert result.inserted == 0
+        assert result.quarantined == 0
+        assert result.errors == 2
+        assert client.calls == []
+        assert _races_source_ids(db_conn, races_ds_id) == []
+
     def test_candidate_status_preserved_on_candidacy(self, db_conn: psycopg.Connection) -> None:
         races_ds_id, _client, _result = _load(
             db_conn,

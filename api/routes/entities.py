@@ -4,10 +4,12 @@ Stub summary for jun04_3pm_4_congress_directory_ui/civibus_dev/api/routes/entiti
 
 from __future__ import annotations
 
+from typing import TypeVar
 from uuid import UUID
 
 import psycopg
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import ValidationError
 
 from api.deps import get_db
 from api.models import OrgResponse, PersonResponse, PersonSlugResult
@@ -88,6 +90,8 @@ _PERSON_PORTRAIT_COLUMN_TO_RESPONSE_KEY = {
     "portrait_height_px": "height_px",
 }
 
+_EntityResponseT = TypeVar("_EntityResponseT", PersonResponse, OrgResponse)
+
 
 def _build_entity_response(
     conn: psycopg.Connection,
@@ -96,8 +100,8 @@ def _build_entity_response(
     entity_id: UUID,
     entity_type: str,
     not_found_detail: str,
-    response_model: type[PersonResponse] | type[OrgResponse],
-) -> PersonResponse | OrgResponse:
+    response_model: type[_EntityResponseT],
+) -> _EntityResponseT:
     entity_row = fetch_one_row(conn, query=query, row_id=entity_id)
     if entity_row is None:
         raise HTTPException(status_code=404, detail=not_found_detail)
@@ -114,7 +118,18 @@ def _build_entity_response(
         entity_row["portrait"] = portrait_payload if portrait_status is not None else None
         entity_row["current_office"] = fetch_current_office_for_person(conn, entity_id)
     entity_row["sources"] = fetch_entity_provenance(conn, entity_type, entity_id)
-    return response_model.model_validate(entity_row)
+    try:
+        return response_model.model_validate(entity_row)
+    except ValidationError as exc:
+        # Stored columns are schema-legal at the table but can hold shapes the
+        # response contract rejects (e.g. a JSON-array ``identifiers`` where the
+        # model requires an object). Surface that as a typed 502 rather than
+        # letting the ValidationError escape as an untyped 500. The response
+        # model stays strict; we never widen it to accept the dishonest shape.
+        raise HTTPException(
+            status_code=502,
+            detail=(f"Stored {entity_type} record does not satisfy the response contract and cannot be served."),
+        ) from exc
 
 
 @router.get("/person/by-slug/{slug}", response_model=list[PersonSlugResult])

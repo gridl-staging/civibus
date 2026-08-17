@@ -20,6 +20,7 @@ if _repo_root_path in sys.path:
     sys.path.remove(_repo_root_path)
 sys.path.insert(0, _repo_root_path)
 
+from test_support.browser_smoke_seed import SMOKE_COMMITTEE_SLUG, SMOKE_PERSON_ID  # noqa: E402
 from tests.ci.public_mirror_contract import (  # noqa: E402
     DEV_REPO_ONLY_CLASSIFICATIONS_BY_NODE_ID,
     MINIMUM_PUBLIC_CLASSIFICATION_TOTAL,
@@ -37,6 +38,9 @@ MAKEFILE_PATH = REPO_ROOT / "Makefile"
 WEB_PACKAGE_PATH = REPO_ROOT / "web/package.json"
 BATMAN_CONFIG_PATH = REPO_ROOT / ".batman.toml"
 STAGE2_DISPOSITIONS_TEST_PATH = Path("domains/civics/loaders/official_rosters/test_stage2_dispositions.py")
+BROWSER_SMOKE_SEED_MODULE = "test_support.browser_smoke_seed"
+BROWSER_SMOKE_SEED_MODULE_PATH = REPO_ROOT / "test_support/browser_smoke_seed.py"
+BROWSER_SMOKE_SEED_COMMAND = f"uv run --extra dev --extra entity-resolution python -m {BROWSER_SMOKE_SEED_MODULE}"
 CHECKOUT_SHA = "11bd71901bbe5b1630ceea73d27597364c9af683"
 SETUP_NODE_SHA = "820762786026740c76f36085b0efc47a31fe5020"
 SETUP_UV_SHA = "0c5e2b8115b80b4c7c5ddf6ffdd634974642d182"
@@ -449,22 +453,92 @@ def test_nightly_workflow_owns_exhaustive_scheduled_proof() -> None:
     assert "- name: Stop DB\n        if: always()\n        run: make db-down" in e2e_job
 
     browser_job = _job_block(workflow_text, "browser-smoke")
+    browser_job_lines = browser_job.splitlines()
     for command in (
         "make db-up",
         "make db-wait",
         "make db-reset",
         "make ingest-fec-bulk-sample",
         "make graph-load",
+        BROWSER_SMOKE_SEED_COMMAND,
         "npm run test:smoke",
     ):
-        assert f"        run: {command}" in browser_job.splitlines()
+        assert f"        run: {command}" in browser_job_lines
+    # The seed replaces the bulk sample's entities with the deterministic
+    # specimens the journeys assert on, so it must land after the graph is
+    # loaded from that sample and before any journey reads a page.
+    seed_step_index = browser_job_lines.index(f"        run: {BROWSER_SMOKE_SEED_COMMAND}")
+    assert browser_job_lines.index("        run: make graph-load") < seed_step_index
+    assert seed_step_index < browser_job_lines.index("        run: npm run test:smoke")
+    # The specimen pins are the Playwright fixtures' env overrides. They are
+    # imported from the seed module, so a literal that drifts from the rows
+    # the seed actually writes fails here instead of in a browser journey.
+    assert f'      SMOKE_PERSON_ID: "{SMOKE_PERSON_ID}"' in browser_job_lines
+    assert f'      SMOKE_COMMITTEE_SLUG: "{SMOKE_COMMITTEE_SLUG}"' in browser_job_lines
     # Live mode is what binds the journeys to the seeded database.
-    assert '      SMOKE_USE_LIVE_API: "1"' in browser_job.splitlines()
+    assert '      SMOKE_USE_LIVE_API: "1"' in browser_job_lines
     # Teardown must be unconditional AND attached to the db-down step itself.
     assert "- name: Stop DB\n        if: always()\n        run: make db-down" in browser_job
     # The shadow-warn escape hatch may never appear in scheduled proof.
     assert "CIVIBUS_MERGE_DB_SLICE_SHADOW_WARN" not in workflow_text
     assert "run: make test\n" not in workflow_text
+
+
+def test_browser_smoke_seed_module_runs_its_seed_when_executed_as_a_module() -> None:
+    """`python -m` on a module with no entrypoint guard exits 0 having done nothing.
+
+    The nightly job's only signal that the seed ran is the exit status, so a
+    module that merely defines `main()` would let browser-smoke proceed
+    against unseeded rows and fail in a journey assertion instead of here.
+    """
+    module_body = ast.parse(BROWSER_SMOKE_SEED_MODULE_PATH.read_text(encoding="utf-8")).body
+    entrypoint_guards = [node for node in module_body if _is_exact_main_entrypoint_guard(node)]
+
+    assert len(entrypoint_guards) == 1, f"expected exactly one __main__ guard in {BROWSER_SMOKE_SEED_MODULE}"
+
+
+@pytest.mark.parametrize(
+    "invalid_entrypoint",
+    [
+        'if __name__ != "__main__":\n    main()\n',
+        'if __name__ == "__main__":\n    main("unexpected")\n',
+        'if __name__ == "__main__":\n    main(unexpected=True)\n',
+        'if __name__ == "__main__":\n    main()\n    print("extra")\n',
+        'if __name__ == "__main__":\n    main()\nelse:\n    pass\n',
+    ],
+    ids=["not-equal", "positional-argument", "keyword-argument", "extra-body-statement", "else-branch"],
+)
+def test_browser_smoke_seed_entrypoint_contract_rejects_invalid_shapes(invalid_entrypoint: str) -> None:
+    [entrypoint] = ast.parse(invalid_entrypoint).body
+
+    assert not _is_exact_main_entrypoint_guard(entrypoint)
+
+
+def _is_exact_main_entrypoint_guard(node: ast.stmt) -> bool:
+    if not isinstance(node, ast.If) or not _guards_on_main_module_name(node.test):
+        return False
+    if len(node.body) != 1 or node.orelse:
+        return False
+
+    statement = node.body[0]
+    if not isinstance(statement, ast.Expr) or not isinstance(statement.value, ast.Call):
+        return False
+
+    call = statement.value
+    return isinstance(call.func, ast.Name) and call.func.id == "main" and not call.args and not call.keywords
+
+
+def _guards_on_main_module_name(test: ast.expr) -> bool:
+    return (
+        isinstance(test, ast.Compare)
+        and isinstance(test.left, ast.Name)
+        and test.left.id == "__name__"
+        and len(test.ops) == 1
+        and isinstance(test.ops[0], ast.Eq)
+        and len(test.comparators) == 1
+        and isinstance(test.comparators[0], ast.Constant)
+        and test.comparators[0].value == "__main__"
+    )
 
 
 def test_makefile_merge_slice_preflight_delegates_to_conftest_connection_owner() -> None:

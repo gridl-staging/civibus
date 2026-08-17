@@ -113,6 +113,11 @@ jobs:
       # and skips every DB-touching journey, leaving the seeded database dead
       # weight. Live mode makes the runner start uvicorn against it.
       SMOKE_USE_LIVE_API: "1"
+      # Specimen pins for the Playwright fixtures. test_support/browser_smoke_seed.py
+      # owns these values; tests/ci/test_ci_workflow_contract.py imports them
+      # from there and fails this workflow's contract on any drift.
+      SMOKE_PERSON_ID: "11111111-1111-4111-8111-111111111111"
+      SMOKE_COMMITTEE_SLUG: "citizens-for-civibus"
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -145,6 +150,12 @@ jobs:
         run: make ingest-fec-bulk-sample
       - name: Load graph
         run: make graph-load
+      # The bulk sample supplies volume; the seed replaces its entities with
+      # the deterministic specimens the journeys assert on. It must run after
+      # graph-load, whose entity nodes the seed rewrites, and before any
+      # journey reads a page.
+      - name: Seed browser-smoke live data
+        run: uv run --extra dev --extra entity-resolution python -m test_support.browser_smoke_seed
       - name: Browser smoke journeys
         working-directory: web
         run: npm run test:smoke

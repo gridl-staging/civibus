@@ -30,13 +30,13 @@ export default defineConfig({
   // it fully parallel makes the gate a load test against itself: a burst of
   // concurrent page loads (the committee page alone takes ~6.5s) drives heavy
   // surfaces past their 20s budget, so tests fail for contention the deploy did
-  // not cause — and retries fail too, because the concurrent partner sustains the
-  // load across every attempt. Serialize production mode so it exercises prod like
-  // a human. retries here absorb only the rare single-request transient of a live
-  // service; the deterministic test/data mismatches this gate used to hide were
-  // fixed in the specs, not papered over here. Local fixture mode is unaffected
-  // (undefined workers = full parallelism against the throwaway fixture backend).
-  workers: isProductionSmokeMode ? 1 : undefined,
+  // not cause. Local live-API smoke also needs one worker because several specs
+  // own temporary DB seed/cleanup lifecycles; parallel workers can make those
+  // fixtures visible to unrelated journeys. Retries remain production-only and
+  // absorb only rare single-request transients of a live service. Local fixture
+  // mode is unaffected (undefined workers = full parallelism against the
+  // throwaway fixture backend).
+  workers: isProductionSmokeMode || USE_LIVE_API ? 1 : undefined,
   retries: isProductionSmokeMode ? 2 : 0,
   projects: [
     {

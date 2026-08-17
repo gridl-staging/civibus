@@ -186,6 +186,7 @@ PUBLIC_MIRROR_TEST_CLASSIFICATIONS: tuple[PublicMirrorTestClassification, ...] =
             "tests/ci/test_fly_ops_docs_contract.py::test_stage_owned_runnable_docs_do_not_publish_password_prefix_commands",
             "tests/ci/test_fly_ops_docs_contract.py::test_roadmap_tracks_only_unresolved_stage4_and_rotation_work",
             "tests/ci/test_fly_ops_docs_contract.py::test_scheduler_boundary_red_keeps_weekly_refresh_recheck_open",
+            "tests/ci/test_fly_ops_docs_contract.py::test_feature_matrix_history_split_preserves_owner_contract_and_continuations",
             "tests/ci/test_fly_ops_docs_contract.py::test_end_the_person_outage_receipt_is_falsifiable",
             (
                 "tests/ci/test_fly_ops_docs_contract.py::"
@@ -358,6 +359,194 @@ PUBLIC_MIRROR_TEST_CLASSIFICATIONS: tuple[PublicMirrorTestClassification, ...] =
         node_ids=(
             "tests/ci/test_ci_workflow_contract.py::test_batman_config_declares_qa_fast_merge_gate",
             "tests/ci/test_ci_workflow_contract.py::test_shadow_warning_is_executable_only_in_optional_make_test",
+        ),
+    ),
+    *_entries(
+        private_asset="scripts/uptime_incident_bridge.py",
+        owner="uptime incident bridge contract",
+        node_ids=(
+            ("tests/ci/test_uptime_incident_bridge.py::test_new_open_incidents_create_beads_for_allowlisted_mirrors"),
+            (
+                "tests/ci/test_uptime_incident_bridge.py::"
+                "test_new_open_incident_without_comments_uses_issue_body_red_probe_evidence"
+            ),
+            ("tests/ci/test_uptime_incident_bridge.py::test_second_consecutive_run_against_unchanged_input_is_noop"),
+            (
+                "tests/ci/test_uptime_incident_bridge.py::"
+                "test_existing_open_bridge_bead_receives_one_dated_heartbeat_comment_only"
+            ),
+            (
+                "tests/ci/test_uptime_incident_bridge.py::"
+                "test_closed_incident_with_open_bridge_bead_adds_closure_proposal_without_closing_bead"
+            ),
+            ("tests/ci/test_uptime_incident_bridge.py::test_gh_issue_list_failure_fails_closed_without_bd_write_calls"),
+            (
+                "tests/ci/test_uptime_incident_bridge.py::"
+                "test_malformed_or_indeterminate_issue_json_fails_closed_without_bd_write_calls"
+            ),
+            (
+                "tests/ci/test_uptime_incident_bridge.py::"
+                "test_comment_read_failure_or_indeterminate_json_fails_closed_without_bd_write_calls"
+            ),
+            (
+                "tests/ci/test_uptime_incident_bridge.py::"
+                "test_bead_lookup_failure_or_indeterminate_json_fails_closed_without_bd_write_calls"
+            ),
+            (
+                "tests/ci/test_uptime_incident_bridge.py::"
+                "test_valid_earlier_repo_write_is_withheld_when_a_later_gh_query_fails"
+            ),
+            (
+                "tests/ci/test_uptime_incident_bridge.py::"
+                "test_valid_earlier_repo_write_is_withheld_when_a_later_response_is_indeterminate"
+            ),
+            (
+                "tests/ci/test_uptime_incident_bridge.py::"
+                "test_open_write_candidate_is_withheld_when_later_closed_query_fails"
+            ),
+            (
+                "tests/ci/test_uptime_incident_bridge.py::"
+                "test_open_write_candidate_is_withheld_when_later_closed_response_is_indeterminate"
+            ),
+        ),
+    ),
+    *_entries(
+        private_asset="scripts/uptime_incident_bridge.py",
+        owner="uptime incident bridge contract",
+        node_ids=(
+            (
+                "tests/ci/test_uptime_incident_bridge_resilience.py::"
+                "test_later_untrusted_public_comment_is_ignored_for_create_evidence"
+            ),
+            (
+                "tests/ci/test_uptime_incident_bridge_resilience.py::"
+                "test_torn_bead_comment_read_disagreeing_with_count_fails_closed"
+            ),
+            (
+                "tests/ci/test_uptime_incident_bridge_resilience.py::"
+                "test_open_incident_with_closed_bridge_bead_is_already_reconciled"
+            ),
+            "tests/ci/test_uptime_incident_bridge_resilience.py::test_in_progress_bridge_bead_still_receives_heartbeat",
+            (
+                "tests/ci/test_uptime_incident_bridge_resilience.py::test_in_progress_bridge_bead_still_receives_closure_proposal"
+            ),
+            "tests/ci/test_uptime_incident_bridge_resilience.py::test_closed_bridge_bead_receives_no_reconciliation_comment",
+            (
+                "tests/ci/test_uptime_incident_bridge_resilience.py::"
+                "test_failed_push_is_retried_on_next_idempotent_run_without_duplicate_comment"
+            ),
+            (
+                "tests/ci/test_uptime_incident_bridge_resilience.py::test_pending_push_is_retried_before_failing_upstream_read_set"
+            ),
+            (
+                "tests/ci/test_uptime_incident_bridge_resilience.py::"
+                "test_push_mutation_argv_is_shared_between_dry_run_preview_and_real_execution"
+            ),
+            (
+                "tests/ci/test_uptime_incident_bridge_resilience.py::"
+                "test_interruption_after_local_mutation_retries_push_without_duplicate_comment"
+            ),
+            (
+                "tests/ci/test_uptime_incident_bridge_resilience.py::"
+                "test_pending_push_journal_is_retried_only_from_its_originating_checkout"
+            ),
+            (
+                "tests/ci/test_uptime_incident_bridge_resilience.py::"
+                "test_pending_push_journal_identity_is_stable_from_checkout_subdirectory"
+            ),
+            (
+                "tests/ci/test_uptime_incident_bridge_resilience.py::"
+                "test_foreign_pending_push_journal_error_names_path_and_ledger_identities"
+            ),
+            (
+                "tests/ci/test_uptime_incident_bridge_resilience.py::"
+                "test_malformed_pending_push_journal_error_names_path_and_expected_ledger"
+            ),
+            (
+                "tests/ci/test_uptime_incident_bridge_resilience.py::"
+                "test_successful_noop_run_emits_scheduled_execution_summary"
+            ),
+            (
+                "tests/ci/test_uptime_incident_bridge_resilience.py::"
+                "test_authorless_issue_comment_is_untrusted_and_does_not_block_later_trusted_evidence"
+            ),
+            (
+                "tests/ci/test_uptime_incident_bridge_resilience.py::"
+                "test_issue_comment_missing_author_fails_closed_without_bd_write_calls"
+            ),
+        ),
+    ),
+    *_entries(
+        # The launchd renderer and installation assets are private scripts absent
+        # from public mirrors, so their rendered-execution contract can only run
+        # in the dev repository.
+        private_asset=(
+            "scripts/uptime_bridge.plist.template, scripts/install_uptime_bridge_launchd.sh, "
+            "and scripts/uptime_bridge_launchd.py"
+        ),
+        owner="uptime bridge launchd contract",
+        node_ids=(
+            "tests/ci/test_uptime_bridge_launchd.py::test_rendered_plist_environment_path_resolves_gh_and_bd",
+            "tests/ci/test_uptime_bridge_launchd.py::test_resolve_tool_directories_fails_closed_on_missing_tool",
+            "tests/ci/test_uptime_bridge_launchd.py::test_render_plist_fails_closed_on_unresolved_placeholder",
+            "tests/ci/test_uptime_bridge_launchd.py::test_minimum_python_version_matches_pyproject_requires_python",
+            (
+                "tests/ci/test_uptime_bridge_launchd.py::"
+                "test_probe_interpreter_version_reads_the_named_executables_version"
+            ),
+            (
+                "tests/ci/test_uptime_bridge_launchd.py::"
+                "test_probe_interpreter_version_fails_closed_when_the_executable_errors"
+            ),
+            (
+                "tests/ci/test_uptime_bridge_launchd.py::"
+                "test_require_supported_interpreter_rejects_a_version_below_the_floor"
+            ),
+            "tests/ci/test_uptime_bridge_launchd.py::test_require_supported_interpreter_accepts_the_floor_version",
+            (
+                "tests/ci/test_uptime_bridge_launchd.py::"
+                "test_check_interpreter_mode_rejects_a_running_interpreter_below_the_floor"
+            ),
+            (
+                "tests/ci/test_uptime_bridge_launchd.py::"
+                "test_check_interpreter_mode_accepts_a_supported_running_interpreter"
+            ),
+            (
+                "tests/ci/test_uptime_bridge_launchd.py::"
+                "test_render_and_install_fails_closed_before_writing_an_unsupported_interpreters_plist"
+            ),
+            (
+                "tests/ci/test_uptime_bridge_launchd.py::"
+                "test_installer_fails_closed_when_no_candidate_interpreter_is_supported"
+            ),
+            (
+                "tests/ci/test_uptime_bridge_launchd.py::"
+                "test_installer_renders_and_loads_the_job_with_a_supported_interpreter"
+            ),
+            (
+                "tests/ci/test_uptime_bridge_launchd.py::"
+                "test_installer_deploys_bridge_outside_the_source_worktree_and_uses_canonical_ledger_root"
+            ),
+            (
+                "tests/ci/test_uptime_bridge_launchd.py::"
+                "test_installer_discovers_a_newer_supported_versioned_interpreter"
+            ),
+            (
+                "tests/ci/test_uptime_bridge_launchd.py::"
+                "test_installer_renders_an_absolute_interpreter_from_a_relative_path_entry"
+            ),
+            (
+                "tests/ci/test_uptime_bridge_launchd.py::"
+                "test_installer_preserves_empty_path_component_as_current_directory"
+            ),
+            (
+                "tests/ci/test_uptime_bridge_launchd.py::"
+                "test_installer_anchors_ledger_discovery_to_the_source_checkout_not_the_caller_cwd"
+            ),
+            (
+                "tests/ci/test_uptime_bridge_launchd.py::"
+                "test_render_and_install_leaves_deployed_bridge_untouched_when_plist_write_fails"
+            ),
         ),
     ),
     *_entries(

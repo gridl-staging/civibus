@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import "$lib/client_test_environment";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { mount, unmount } from "svelte";
 import OutsideSpendingChart from "./OutsideSpendingChart.svelte";
@@ -11,19 +12,6 @@ vi.hoisted(() => {
     disconnect() {}
   }
 
-  Object.defineProperty(window, "matchMedia", {
-    configurable: true,
-    value: vi.fn().mockImplementation((query: string) => ({
-      matches: false,
-      media: query,
-      onchange: null,
-      addEventListener: vi.fn(),
-      removeEventListener: vi.fn(),
-      addListener: vi.fn(),
-      removeListener: vi.fn(),
-      dispatchEvent: vi.fn()
-    }))
-  });
   vi.stubGlobal("ResizeObserver", TestResizeObserver);
 });
 

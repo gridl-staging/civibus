@@ -142,4 +142,51 @@ describe("entity detail contract", () => {
       /current_office\.office_name must be a string/i
     );
   });
+
+  // Stage 3 regression: the guard distinguishes an absent optional
+  // current_office (accepted) from malformed core data by raising a typed,
+  // adapter-mappable failure rather than a bare `Error`. The shared contract owns
+  // the shape error; the server API layer owns adapting it to a route response.
+  it("raises a typed adapter-mappable 502 failure for malformed core data, not a bare Error", () => {
+    const validPayloadWithoutCurrentOffice = {
+      id: PERSON_ID,
+      canonical_name: "Jane Doe",
+      name_variants: [],
+      first_name: "Jane",
+      middle_name: null,
+      last_name: "Doe",
+      suffix: null,
+      date_of_birth: null,
+      year_of_birth: 1980,
+      identifiers: {},
+      primary_address_id: null,
+      er_cluster_id: null,
+      er_confidence: null,
+      portrait: null,
+      sources: [],
+      bio_text: null,
+      bio_source_url: null,
+      bio_license: null,
+      bio_pulled_at: null
+    };
+
+    expect(() =>
+      assertPersonPayloadHasRequiredBioKeys(validPayloadWithoutCurrentOffice)
+    ).not.toThrow();
+
+    const malformedCorePayload = { ...validPayloadWithoutCurrentOffice, bio_text: 123 };
+
+    let thrown: unknown;
+    try {
+      assertPersonPayloadHasRequiredBioKeys(malformedCorePayload);
+    } catch (cause) {
+      thrown = cause;
+    }
+
+    expect(thrown).toMatchObject({
+      name: "PersonPayloadContractError",
+      status: 502
+    });
+    expect((thrown as Error).constructor).not.toBe(Error);
+  });
 });

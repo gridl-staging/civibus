@@ -92,7 +92,7 @@ describe('APP_SHELL shared static-route contract', () => {
     expect(APP_SHELL.staticRoutes.methodology).toEqual({
       title: 'Methodology | Civibus',
       description:
-        'Coverage scope, confidence labels, and source guidance for campaign-finance, civic office, and property records.'
+        'Federal Schedule A scope, donor grouping, coverage, and freshness methodology for Civibus money views.'
     });
     expect(APP_SHELL.staticRoutes.calendar).toEqual({
       title: 'Election Calendar | Civibus',
@@ -127,49 +127,34 @@ describe('APP_SHELL shared static-route contract', () => {
     ]);
   });
 
-  it('captures methodology confidence labels from classify_confidence tiers', () => {
-    expect(APP_SHELL.methodology.confidenceLabels).toEqual([
-      {
-        label: 'match',
-        description: 'Confidence >= 0.95. Auto-merge threshold.'
-      },
-      {
-        label: 'probable_match',
-        description: 'Confidence from 0.80 to <0.95. Likely same entity and review-worthy.'
-      },
-      {
-        label: 'possible_match',
-        description: 'Confidence from 0.60 to <0.80. Candidate link with lower confidence.'
-      }
-    ]);
-  });
+  it('carries the federal-first methodology disclosure contract in shared config', () => {
+    const methodologyText = JSON.stringify(APP_SHELL.methodology);
+    const requiredDisclosures = [
+      'Methodology',
+      '/coverage',
+      '/data-sources',
+      '2022-01-01',
+      "transaction_type LIKE '1%'",
+      "contributor_entity_type = 'IND'",
+      'no memo rows',
+      'no terminated amendments',
+      'no superseded source records',
+      'current-officeholder committee slice',
+      'floors',
+      'not full-universe FEC Schedule A totals'
+    ];
 
-  it('keeps methodology sections in shared config', () => {
-    expect(APP_SHELL.methodology.coverageSummary).toBe(
-      'Civibus combines campaign-finance, civic office, and property records in one search experience. Coverage varies by jurisdiction and is refreshed based on source cadence.'
+    const missingDisclosures = requiredDisclosures.filter(
+      (disclosure) => !methodologyText.includes(disclosure)
     );
-    expect(APP_SHELL.methodology.sections).toEqual([
-      {
-        heading: 'Data freshness policy',
-        body:
-          'Production support requires data that can be refreshed at least weekly near elections, with daily updates preferred. Sources that only publish annual or quarterly exports are not treated as fully launch-ready without a supplementary path.'
-      },
-      {
-        heading: 'Entity resolution methodology',
-        body:
-          'Entity resolution uses probabilistic matching with confidence tiers derived from model scores. High-confidence matches can be auto-merged while lower-confidence links remain reviewable so users can inspect uncertainty.'
-      },
-      {
-        heading: 'Source-linking and evidence',
-        body:
-          'Every surfaced record is tied to provenance metadata and source links so users can trace claims back to official filings or source systems. Civibus prioritizes verifiable evidence over inferred narrative summaries. Person-page Top employers aggregate raw employer names from itemized individual contributions; they are not industry- or sector-coded.'
-      }
-    ]);
-  });
+    const missingCycles = [2022, 2024, 2026].filter(
+      (cycle) => !new RegExp(`(^|[^\\d-])${cycle}($|[^\\d-])`).test(methodologyText)
+    );
 
-  it('pins methodology headings to shared stage-2 copy', () => {
-    expect(APP_SHELL.methodology.heading).toBe('Methodology');
-    expect(APP_SHELL.methodology.confidenceHeading).toBe('Entity resolution confidence labels');
+    expect({ missingDisclosures, missingCycles }).toEqual({
+      missingDisclosures: [],
+      missingCycles: []
+    });
   });
 
   it('shares one reporting link for static pages', () => {

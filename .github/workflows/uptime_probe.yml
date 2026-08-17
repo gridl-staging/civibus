@@ -127,50 +127,210 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           echo "Probe result: healthy=${HEALTHY} status=${STATUS}"
 
-      # Every production surface is probed BEFORE the issue flow so that all of
-      # them can open an incident. Until 2026-08-03 these two ran after issue
-      # filing and were wired to nothing: the donor-surface check failed ten
-      # consecutive scheduled runs while donor search served zero rows, and no
-      # issue was ever opened. A probe that cannot page is not an alarm.
-      # `continue-on-error` keeps a red surface from aborting the job before the
-      # issue flow runs; `steps.<id>.outcome` is the result BEFORE that
-      # suppression, so the final gate still sees the failure.
-      - name: Check donor search surface
-        id: donor
+      # Manifest-owned production surfaces run before issue filing so their
+      # aggregate result can participate in the incident flow. Stage 5 owns the
+      # downstream consumer rewiring. `continue-on-error` preserves that flow
+      # after a red row; the step still exits non-zero after exporting every red.
+      - name: Check manifest-declared public surfaces
+        id: public_surfaces
         continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          TARGET="${PROBE_BASE_URL%/}/donors?q=smith&by=name"
-          BODY_FILE="$(mktemp)"
-          trap 'rm -f "$BODY_FILE"' EXIT
 
-          set +e
-          STATUS=$(curl -sS "$TARGET" \
-            --max-time 30 \
-            --write-out '%{http_code}' \
-            --output "$BODY_FILE")
-          CURL_EXIT=$?
-          set -e
+          MANIFEST_HEADER=$'surface_id\tkind\tpath\tmarker\tparity_mode\tuptime_mode\towners'
+          TMP_DIR="$(mktemp -d)"
+          MANIFEST_FILE="${TMP_DIR}/public_surface_probes.tsv"
+          DETAIL_FILE="${TMP_DIR}/detail.txt"
+          SEEN_IDS_FILE="${TMP_DIR}/seen_ids.txt"
+          RED_IDS=""
+          : > "$DETAIL_FILE"
+          : > "$SEEN_IDS_FILE"
+          trap 'rm -rf "$TMP_DIR"' EXIT
 
-          if [ "$CURL_EXIT" -ne 0 ]; then
-            echo "::error::donor surface probe curl_error target=${TARGET} exit=${CURL_EXIT}"
+          record_failure() {
+            local surface_id="$1"
+            local reason="$2"
+            if [ -n "$RED_IDS" ]; then
+              RED_IDS="${RED_IDS},${surface_id}"
+            else
+              RED_IDS="$surface_id"
+            fi
+            printf '%s %s\n' "$surface_id" "$reason" >> "$DETAIL_FILE"
+            echo "::error::public surface probe surface_id=${surface_id} ${reason}"
+          }
+
+          emit_outputs() {
+            local healthy=true
+            if [ -n "$RED_IDS" ]; then
+              healthy=false
+            fi
+            echo "healthy=${healthy}" >> "$GITHUB_OUTPUT"
+            echo "red_ids=${RED_IDS}" >> "$GITHUB_OUTPUT"
+            DETAIL_DELIMITER="DETAIL_DELIMITER_$(uuidgen)"
+            {
+              echo "detail<<${DETAIL_DELIMITER}"
+              cat "$DETAIL_FILE"
+              echo "${DETAIL_DELIMITER}"
+            } >> "$GITHUB_OUTPUT"
+          }
+
+          manifest_error() {
+            record_failure public_surface_manifest_error "$1"
+            return 1
+          }
+
+          validate_field() {
+            local row_number="$1"
+            local field_name="$2"
+            local value="$3"
+            if [ -z "${value//[[:space:]]/}" ]; then
+              manifest_error "reason=blank_field row=${row_number} field=${field_name}"
+            fi
+          }
+
+          validate_enum() {
+            local row_number="$1"
+            local field_name="$2"
+            local value="$3"
+            local allowed_values="$4"
+            case " ${allowed_values} " in
+              *" ${value} "*) return 0 ;;
+            esac
+            manifest_error "reason=unknown_${field_name} row=${row_number} value=${value}"
+          }
+
+          validate_manifest() {
+            local header line without_tabs field_count existing_rows=0 row_number=1
+            local surface_id kind path marker parity_mode uptime_mode owners
+            exec 3< "$MANIFEST_FILE"
+            IFS= read -r header <&3 || {
+              manifest_error "reason=missing_header"
+              return 1
+            }
+            if [ "$header" != "$MANIFEST_HEADER" ]; then
+              manifest_error "reason=invalid_header"
+              return 1
+            fi
+            while IFS= read -r line <&3 || [ -n "$line" ]; do
+              row_number=$((row_number + 1))
+              without_tabs="${line//$'\t'/}"
+              field_count=$((${#line} - ${#without_tabs} + 1))
+              if [ "$field_count" -ne 7 ]; then
+                manifest_error "reason=field_count row=${row_number} actual=${field_count} expected=7"
+                return 1
+              fi
+              IFS=$'\t' read -r surface_id kind path marker parity_mode uptime_mode owners <<< "$line"
+              validate_field "$row_number" surface_id "$surface_id" || return 1
+              validate_field "$row_number" kind "$kind" || return 1
+              validate_field "$row_number" path "$path" || return 1
+              validate_field "$row_number" marker "$marker" || return 1
+              validate_field "$row_number" parity_mode "$parity_mode" || return 1
+              validate_field "$row_number" uptime_mode "$uptime_mode" || return 1
+              validate_field "$row_number" owners "$owners" || return 1
+              validate_enum "$row_number" kind "$kind" "static person_sitemap" || return 1
+              validate_enum "$row_number" parity_mode "$parity_mode" "fatal known_red skip" || return 1
+              validate_enum "$row_number" uptime_mode "$uptime_mode" "fatal skip" || return 1
+              if grep -Fqx -- "$surface_id" "$SEEN_IDS_FILE"; then
+                manifest_error "reason=duplicate_surface_id row=${row_number} value=${surface_id}"
+                return 1
+              fi
+              printf '%s\n' "$surface_id" >> "$SEEN_IDS_FILE"
+              existing_rows=$((existing_rows + 1))
+            done
+            exec 3<&-
+            if [ "$existing_rows" -eq 0 ]; then
+              manifest_error "reason=no_surface_rows"
+              return 1
+            fi
+          }
+
+          probe_url() {
+            local surface_id="$1"
+            local target="$2"
+            local marker="$3"
+            local body_file status curl_exit
+            body_file="$(mktemp "${TMP_DIR}/body.XXXXXX")"
+            set +e
+            status=$(curl -sS "$target" --max-time 30 --write-out '%{http_code}' --output "$body_file")
+            curl_exit=$?
+            set -e
+            if [ "$curl_exit" -ne 0 ]; then
+              record_failure "$surface_id" "reason=curl_error status=${status:-000} exit=${curl_exit}"
+            elif [ "$status" != "200" ]; then
+              record_failure "$surface_id" "reason=http_status status=${status}"
+            elif ! grep -Fq -- "$marker" "$body_file"; then
+              record_failure "$surface_id" "reason=missing_marker status=${status}"
+            else
+              echo "public_surface_healthy surface_id=${surface_id} status=${status}"
+              rm -f "$body_file"
+              return 0
+            fi
+            rm -f "$body_file"
+            return 1
+          }
+
+          probe_person_sitemap() {
+            local surface_id="$1"
+            local sitemap_path="$2"
+            local marker="$3"
+            local sitemap_target sitemap_file sitemap_status sitemap_exit specimen_target
+            sitemap_target="${PROBE_BASE_URL%/}${sitemap_path}"
+            sitemap_file="$(mktemp "${TMP_DIR}/sitemap.XXXXXX")"
+            set +e
+            sitemap_status=$(curl -sS "$sitemap_target" --max-time 30 --write-out '%{http_code}' --output "$sitemap_file")
+            sitemap_exit=$?
+            set -e
+            if [ "$sitemap_exit" -ne 0 ]; then
+              record_failure "$surface_id" "reason=sitemap_curl_error status=${sitemap_status:-000} exit=${sitemap_exit}"
+              rm -f "$sitemap_file"
+              return 1
+            fi
+            if [ "$sitemap_status" != "200" ]; then
+              record_failure "$surface_id" "reason=sitemap_http_status status=${sitemap_status}"
+              rm -f "$sitemap_file"
+              return 1
+            fi
+            specimen_target=$(grep -o 'https\?://[^<]*/person/[^<]*' "$sitemap_file" | head -n 1 || true)
+            rm -f "$sitemap_file"
+            if [ -z "$specimen_target" ]; then
+              record_failure "$surface_id" "reason=no_person_specimen status=${sitemap_status}"
+              return 1
+            fi
+            probe_url "$surface_id" "$specimen_target" "$marker"
+          }
+
+          if ! gh api "repos/${{ github.repository }}/contents/infra/public_surface_probes.tsv?ref=${{ github.sha }}" --jq '.content' | base64 -d > "$MANIFEST_FILE"; then
+            manifest_error "reason=fetch_failed" || true
+            emit_outputs
+            exit 1
+          fi
+          if ! validate_manifest; then
+            emit_outputs
             exit 1
           fi
 
-          if [ "$STATUS" != "200" ]; then
-            BODY_EXCERPT=$(head -c 500 "$BODY_FILE" 2>/dev/null || true)
-            echo "::error::donor surface probe http_status target=${TARGET} status=${STATUS} body=${BODY_EXCERPT}"
+          exec 3< "$MANIFEST_FILE"
+          IFS= read -r _ <&3
+          manifest_line=""
+          while IFS= read -r manifest_line <&3 || [ -n "$manifest_line" ]; do
+            IFS=$'\t' read -r surface_id kind path marker parity_mode uptime_mode owners <<< "$manifest_line"
+            if [ "$uptime_mode" != "fatal" ]; then
+              continue
+            fi
+            if [ "$kind" = "static" ]; then
+              probe_url "$surface_id" "${PROBE_BASE_URL%/}${path}" "$marker" || true
+            else
+              probe_person_sitemap "$surface_id" "$path" "$marker" || true
+            fi
+          done
+          exec 3<&-
+
+          emit_outputs
+          if [ -n "$RED_IDS" ]; then
             exit 1
           fi
-
-          if grep -q 'data-testid="donor-result-row"' "$BODY_FILE"; then
-            echo "donor_surface_ok target=${TARGET} status=200 marker=data-testid=\"donor-result-row\""
-            exit 0
-          fi
-
-          BODY_EXCERPT=$(head -c 500 "$BODY_FILE" 2>/dev/null || true)
-          echo "::error::donor surface probe missing_marker target=${TARGET} status=${STATUS} marker=data-testid=\"donor-result-row\" body=${BODY_EXCERPT}"
-          exit 1
 
       - name: Check public deploy drift
         id: drift
@@ -203,84 +363,6 @@ jobs:
           echo "::error::deploy lag detected for ${PROBE_BASE_URL}: expected=$expected_sha api=$api_sha web=$web_sha. This mirror-side warning cannot detect sync lag; the dev-repo parity probe owns that."
           exit 1
 
-      - name: Check person detail surface
-        id: person
-        continue-on-error: true
-        run: |
-          set -euo pipefail
-          # Person detail is the flagship surface and until 2026-08-05 nothing
-          # watched it: /person/<id> was HTTP 500 route-wide for 48+ hours while
-          # this probe reported only content health, donor search, and drift,
-          # and /api/health/content stayed {"healthy":true} throughout because it
-          # counts rows and cannot observe a render.
-          #
-          # The specimen is resolved from the published sitemap, not hardcoded.
-          # Person URLs are UUIDs that change on reload, so a pinned id would
-          # eventually fail for a reason unrelated to the surface being down --
-          # and a probe that cries wolf gets muted, which is how we got here.
-          SITEMAP="${PROBE_BASE_URL%/}/sitemap-person-0.xml"
-          SITEMAP_FILE="$(mktemp)"
-          BODY_FILE="$(mktemp)"
-          trap 'rm -f "$SITEMAP_FILE" "$BODY_FILE"' EXIT
-
-          set +e
-          SITEMAP_STATUS=$(curl -sS "$SITEMAP" \
-            --max-time 30 \
-            --write-out '%{http_code}' \
-            --output "$SITEMAP_FILE")
-          SITEMAP_EXIT=$?
-          set -e
-
-          if [ "$SITEMAP_EXIT" -ne 0 ] || [ "$SITEMAP_STATUS" != "200" ]; then
-            echo "::error::person surface probe no_specimen sitemap=${SITEMAP} status=${SITEMAP_STATUS} exit=${SITEMAP_EXIT}"
-            exit 1
-          fi
-
-          # First <loc> that is a person detail URL. Fail closed when there is
-          # none: an empty person sitemap is itself a defect and must never read
-          # as "nothing to check, therefore healthy".
-          TARGET=$(grep -o 'https\?://[^<]*/person/[^<]*' "$SITEMAP_FILE" | head -n 1 || true)
-          if [ -z "$TARGET" ]; then
-            echo "::error::person surface probe no_specimen sitemap=${SITEMAP} reason=no /person/ loc entries"
-            exit 1
-          fi
-
-          set +e
-          STATUS=$(curl -sS "$TARGET" \
-            --max-time 30 \
-            --write-out '%{http_code}' \
-            --output "$BODY_FILE")
-          CURL_EXIT=$?
-          set -e
-
-          if [ "$CURL_EXIT" -ne 0 ]; then
-            echo "::error::person surface probe curl_error target=${TARGET} exit=${CURL_EXIT}"
-            exit 1
-          fi
-
-          if [ "$STATUS" != "200" ]; then
-            BODY_EXCERPT=$(head -c 500 "$BODY_FILE" 2>/dev/null || true)
-            echo "::error::person surface probe http_status target=${TARGET} status=${STATUS} body=${BODY_EXCERPT}"
-            exit 1
-          fi
-
-          # Status alone would pass on a 200 that rendered an error body. This
-          # marker was validated against live production on 2026-08-05 in both
-          # directions: absent (count=0) on the HTTP 500 person page, present
-          # (count=1) on /committee/jon-ossoff-for-senate, which renders the same
-          # Breadcrumb component. It is unconditional on the person route
-          # (web/src/routes/person/[id]/+page.svelte renders <Breadcrumb> outside
-          # any money-dependent branch), so an officeholder with no FEC money
-          # still satisfies it.
-          if grep -q 'aria-label="Breadcrumb"' "$BODY_FILE"; then
-            echo "person_surface_ok target=${TARGET} status=200 marker=aria-label=\"Breadcrumb\""
-            exit 0
-          fi
-
-          BODY_EXCERPT=$(head -c 500 "$BODY_FILE" 2>/dev/null || true)
-          echo "::error::person surface probe missing_marker target=${TARGET} status=${STATUS} marker=aria-label=\"Breadcrumb\" body=${BODY_EXCERPT}"
-          exit 1
-
       - name: Find existing open uptime-incident issue
         id: find
         env:
@@ -297,7 +379,7 @@ jobs:
           echo "Existing open uptime-incident issue: ${NUMBER:-none}"
 
       - name: Close existing issue (endpoint recovered)
-        if: steps.probe.outputs.healthy == 'true' && steps.donor.outcome == 'success' && steps.drift.outcome == 'success' && steps.person.outcome == 'success' && steps.find.outputs.number != ''
+        if: steps.probe.outputs.healthy == 'true' && steps.public_surfaces.outcome == 'success' && steps.public_surfaces.outputs.healthy == 'true' && steps.drift.outcome == 'success' && steps.find.outputs.number != ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -309,12 +391,15 @@ jobs:
             --repo "${{ github.repository }}"
 
       - name: Comment on existing issue (endpoint still failing)
-        if: (steps.probe.outputs.healthy == 'false' || steps.donor.outcome == 'failure' || steps.drift.outcome == 'failure' || steps.person.outcome == 'failure') && steps.find.outputs.number != ''
+        if: (steps.probe.outputs.healthy == 'false' || steps.public_surfaces.outcome == 'failure' || steps.public_surfaces.outputs.healthy != 'true' || steps.drift.outcome == 'failure') && steps.find.outputs.number != ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PROBE_DETAIL: ${{ steps.probe.outputs.detail }}
           PROBE_STATUS: ${{ steps.probe.outputs.status }}
           PROBE_TARGET: ${{ steps.probe.outputs.target }}
+          PUBLIC_SURFACES_DETAIL: ${{ steps.public_surfaces.outputs.detail || 'public_surface_manifest_error' }}
+          PUBLIC_SURFACES_HEALTHY: ${{ steps.public_surfaces.outputs.healthy }}
+          PUBLIC_SURFACES_OUTCOME: ${{ steps.public_surfaces.outcome }}
         run: |
           NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           DETAIL="${PROBE_DETAIL}"
@@ -336,13 +421,12 @@ jobs:
           - Status: ${STATUS}
           - Detail: ${DETAIL}"
           fi
-          if [ "${{ steps.donor.outcome }}" = "failure" ]; then
-            RED_TOKENS+=("donor_search_surface")
+          if [ "${PUBLIC_SURFACES_OUTCOME}" = "failure" ] || [ "${PUBLIC_SURFACES_HEALTHY}" != "true" ]; then
+            RED_TOKENS+=("${PUBLIC_SURFACES_DETAIL}")
             RED_BLOCKS="${RED_BLOCKS}
 
-          donor_search_surface
-          - Endpoint: ${PROBE_BASE_URL%/}/donors?q=smith&by=name
-          - Owners: web/src/routes/donors/+page.server.ts, api/routes/donors.py, api/queries/campaign_finance.py"
+          public_surface_probes
+          - Detail: ${PUBLIC_SURFACES_DETAIL}"
           fi
           if [ "${{ steps.drift.outcome }}" = "failure" ]; then
             RED_TOKENS+=("public_deploy_drift")
@@ -354,15 +438,6 @@ jobs:
           - Owner: .github/workflows/deploy.yml
           - Condition: observed public deploy version drift"
           fi
-          if [ "${{ steps.person.outcome }}" = "failure" ]; then
-            RED_TOKENS+=("person_detail_surface")
-            RED_BLOCKS="${RED_BLOCKS}
-
-          person_detail_surface
-          - Specimen: first /person/<id> in ${PROBE_BASE_URL%/}/sitemap-person-0.xml
-          - Owners: web/src/routes/person/[id]/+page.server.ts, web/src/lib/entity-detail/contract.ts, api/routes/civics.py"
-          fi
-
           RED_SUMMARY=$(IFS=", "; echo "${RED_TOKENS[*]}")
           gh issue comment "${{ steps.find.outputs.number }}" \
             --repo "${{ github.repository }}" \
@@ -371,12 +446,15 @@ jobs:
           Run: ${RUN_URL}${RED_BLOCKS}"
 
       - name: Open new uptime-incident issue (endpoint failing, no existing issue)
-        if: (steps.probe.outputs.healthy == 'false' || steps.donor.outcome == 'failure' || steps.drift.outcome == 'failure' || steps.person.outcome == 'failure') && steps.find.outputs.number == ''
+        if: (steps.probe.outputs.healthy == 'false' || steps.public_surfaces.outcome == 'failure' || steps.public_surfaces.outputs.healthy != 'true' || steps.drift.outcome == 'failure') && steps.find.outputs.number == ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PROBE_DETAIL: ${{ steps.probe.outputs.detail }}
           PROBE_STATUS: ${{ steps.probe.outputs.status }}
           PROBE_TARGET: ${{ steps.probe.outputs.target }}
+          PUBLIC_SURFACES_DETAIL: ${{ steps.public_surfaces.outputs.detail || 'public_surface_manifest_error' }}
+          PUBLIC_SURFACES_HEALTHY: ${{ steps.public_surfaces.outputs.healthy }}
+          PUBLIC_SURFACES_OUTCOME: ${{ steps.public_surfaces.outcome }}
         run: |
           # Idempotent label create. --force lets us update the color/description
           # without erroring if the label already exists.
@@ -410,17 +488,16 @@ jobs:
           - Endpoint: ${TARGET}
           - Owner: api/health_content.py + api/main.py:186"
           fi
-          if [ "${{ steps.donor.outcome }}" = "failure" ]; then
-            RED_TOKENS+=("donor_search_surface")
+          if [ "${PUBLIC_SURFACES_OUTCOME}" = "failure" ] || [ "${PUBLIC_SURFACES_HEALTHY}" != "true" ]; then
+            RED_TOKENS+=("${PUBLIC_SURFACES_DETAIL}")
             RED_BLOCKS="${RED_BLOCKS}
 
-          donor_search_surface failed.
+          public_surface_probes failed.
 
           **Probe time:** ${NOW}
           **Workflow run:** ${RUN_URL}
 
-          - Endpoint: ${PROBE_BASE_URL%/}/donors?q=smith&by=name
-          - Owners: web/src/routes/donors/+page.server.ts, api/routes/donors.py, api/queries/campaign_finance.py"
+          - Detail: ${PUBLIC_SURFACES_DETAIL}"
           fi
           if [ "${{ steps.drift.outcome }}" = "failure" ]; then
             RED_TOKENS+=("public_deploy_drift")
@@ -436,15 +513,6 @@ jobs:
           - Owner: .github/workflows/deploy.yml
           - Condition: observed public deploy version drift"
           fi
-          if [ "${{ steps.person.outcome }}" = "failure" ]; then
-            RED_TOKENS+=("person_detail_surface")
-            RED_BLOCKS="${RED_BLOCKS}
-
-          person_detail_surface
-          - Specimen: first /person/<id> in ${PROBE_BASE_URL%/}/sitemap-person-0.xml
-          - Owners: web/src/routes/person/[id]/+page.server.ts, web/src/lib/entity-detail/contract.ts, api/routes/civics.py"
-          fi
-
           RED_SUMMARY=$(IFS=", "; echo "${RED_TOKENS[*]}")
 
           BODY="The ${{ env.PROBE_BASE_URL }} production uptime probe detected red surface(s): ${RED_SUMMARY}.
@@ -469,9 +537,9 @@ jobs:
           # Trusted enum values produced by Actions itself ('success' /
           # 'failure' / 'skipped'), never response bodies -- safe to expand into
           # shell, unlike the probe detail which stays env-passed above.
-          DONOR_OUTCOME: ${{ steps.donor.outcome }}
           DRIFT_OUTCOME: ${{ steps.drift.outcome }}
-          PERSON_OUTCOME: ${{ steps.person.outcome }}
+          PUBLIC_SURFACES_HEALTHY: ${{ steps.public_surfaces.outputs.healthy }}
+          PUBLIC_SURFACES_OUTCOME: ${{ steps.public_surfaces.outcome }}
         run: |
           set -euo pipefail
           # The surface probes suppress their own abort so the issue flow can
@@ -479,9 +547,10 @@ jobs:
           # the run red. Without it the probes would be advisory and the run
           # would go green while production was broken.
           red=""
-          [ "${DONOR_OUTCOME}" = "failure" ] && red="${red} donor_search_surface"
+          if [ "${PUBLIC_SURFACES_OUTCOME}" = "failure" ] || [ "${PUBLIC_SURFACES_HEALTHY}" != "true" ]; then
+            red="${red} public_surface_probes"
+          fi
           [ "${DRIFT_OUTCOME}" = "failure" ] && red="${red} public_deploy_drift"
-          [ "${PERSON_OUTCOME}" = "failure" ] && red="${red} person_detail_surface"
           if [ -n "${red}" ]; then
             echo "::error::production surface probe red:${red}"
             exit 1

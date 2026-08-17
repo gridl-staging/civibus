@@ -7,6 +7,7 @@ import psycopg
 import pytest
 from fastapi.testclient import TestClient
 
+from api.models.entities import PersonResponse
 from api.test_campaign_finance_support import insert_data_source_for_test, insert_source_record_for_test
 from api.test_civics import _insert_office, _insert_officeholding
 from api.queries.civics import fetch_current_office_for_person
@@ -381,6 +382,43 @@ def test_get_person_rejects_malformed_uuid(api_client: TestClient) -> None:
 
     assert response.status_code == 422
     assert response.json()["detail"][0]["loc"] == ["path", "person_id"]
+
+
+def test_get_person_returns_typed_response_for_model_illegal_stored_identifiers(
+    api_client: TestClient,
+    db_conn: psycopg.Connection,
+) -> None:
+    """RED (Stage 3 turns green): the producer half of the raw-throw class.
+
+    ``core.person.identifiers`` is ``NOT NULL jsonb`` but unconstrained in shape,
+    while ``PersonResponse.identifiers`` requires a JSON object. A stored JSON
+    array is schema-legal at the column and model-illegal at the response, so
+    Without the producer boundary, ``_build_entity_response`` raises an unhandled
+    ``pydantic.ValidationError`` that surfaces as a 500. Per the person_detail
+    Error contract, the producer returns a valid payload or a typed JSON error
+    response instead of letting the stored-shape defect escape unhandled.
+    """
+    person = Person(
+        canonical_name="Model Illegal Identifiers Person",
+        first_name="Model",
+        last_name="Illegal",
+    )
+    insert_person(db_conn, person)
+    db_conn.execute(
+        "UPDATE core.person SET identifiers = %s::jsonb WHERE id = %s",
+        ('["x"]', person.id),
+    )
+
+    response = api_client.get(f"/v1/person/{person.id}")
+
+    assert response.status_code in (200, 502), (
+        f"expected a valid payload or a typed 502-class JSON error, got {response.status_code}"
+    )
+    assert response.headers.get("content-type", "").startswith("application/json")
+    if response.status_code == 200:
+        PersonResponse.model_validate(response.json())
+    else:
+        assert "detail" in response.json()
 
 
 def test_get_person_returns_active_portrait_payload_when_present(

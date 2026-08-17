@@ -1,0 +1,16 @@
+surface_id	kind	path	marker	parity_mode	uptime_mode	owners
+home_surface	static	/	Follow money around Congress and the White House.	fatal	skip	web home route
+search_surface	static	/search?q=ossoff	data-testid="search-results-region"	fatal	skip	web search route
+donor_search_surface	static	/donors?q=smith&by=name	data-testid="donor-result-row"	fatal	fatal	web donor search route
+congress_surface	static	/congress	data-testid="congress-member-row-0"	fatal	skip	web Congress directory route
+methodology_surface	static	/methodology	Methodology	fatal	skip	web methodology route
+developers_surface	static	/developers	GET /api/public/v1/federal/officials	fatal	skip	web developers route
+candidates_surface	static	/candidates	Candidates	fatal	skip	web candidates route
+committees_surface	static	/committees	Committees	fatal	skip	web committees route
+committee_detail_surface	static	/committee/jon-ossoff-for-senate	Key metrics	fatal	skip	web committee detail route
+compare_surface	static	/compare	Compare officeholders	fatal	skip	web comparison route
+calendar_surface	static	/calendar	Election calendar	fatal	skip	web election calendar route
+coverage_surface	static	/coverage	campaign_finance	fatal	skip	web coverage route
+data_sources_surface	static	/data-sources	campaign_finance	fatal	skip	web data sources route
+sitemap_index_surface	static	/sitemap.xml	<sitemapindex	fatal	skip	web sitemap index route
+person_detail_surface	person_sitemap	/sitemap-person-0.xml	aria-label="Breadcrumb"	known_red	fatal	web person detail and person sitemap routes
