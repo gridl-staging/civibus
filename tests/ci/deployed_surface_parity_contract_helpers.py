@@ -17,20 +17,9 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 PROBE_PATH = REPO_ROOT / "infra/scripts/probe_deployed_surface_parity.sh"
 MANIFEST_PATH = REPO_ROOT / "infra/public_surface_probes.tsv"
 EXPECTED_PRODUCTION_MANIFEST_READERS = frozenset(
-    {
-        ".github/workflows/uptime_probe.yml",
-        "infra/scripts/probe_deployed_surface_parity.sh",
-    }
+    {".github/workflows/uptime_probe.yml", "infra/scripts/probe_deployed_surface_parity.sh"}
 )
-MANIFEST_HEADER = (
-    "surface_id",
-    "kind",
-    "path",
-    "marker",
-    "parity_mode",
-    "uptime_mode",
-    "owners",
-)
+MANIFEST_HEADER = ("surface_id", "kind", "path", "marker", "parity_mode", "uptime_mode", "owners")
 KNOWN_SURFACE_KINDS = frozenset({"static", "person_sitemap"})
 KNOWN_PARITY_MODES = frozenset({"fatal", "known_red", "skip"})
 KNOWN_UPTIME_MODES = frozenset({"fatal", "skip"})
@@ -48,6 +37,9 @@ STATIC_SURFACE_IDS = (
     "calendar_surface",
     "coverage_surface",
     "data_sources_surface",
+    "about_surface",
+    "contact_surface",
+    "privacy_surface",
     "sitemap_index_surface",
 )
 RUNBOOK_PATH = REPO_ROOT / "docs/howto/operations/fly_deployment_runbook.md"
@@ -85,7 +77,10 @@ PUBLIC_PAGE_BODIES = {
     "/compare": "Compare officeholders",
     "/calendar": "Election calendar",
     "/coverage": "campaign_finance",
-    "/data-sources": "campaign_finance",
+    "/data-sources": 'data-testid="fec-contributor-data-use-notice"',
+    "/about": 'data-testid="about-page"',
+    "/contact": 'data-testid="contact-page"',
+    "/privacy": 'data-testid="privacy-page"',
     "/sitemap.xml": "<sitemapindex",
 }
 KNOWN_RED_PAGE_BODIES = {
@@ -121,12 +116,9 @@ _INTERPOLATED_PUBLIC_SURFACE_ROUTE = re.compile(
     r"(?:\$\{(?=[^}]*BASE_URL)[^}]+}|\$\((?=[^)]*base_url)[^)]+\))(?P<route>/[^\s\"'`]*)",
     re.IGNORECASE,
 )
-# Health, deploy-drift, and version routes are owned outside the manifest and
-# are not public surfaces, so a literal reference to one is not a bypass.
+# Health, deploy-drift, and version routes are not manifest-owned public surfaces.
 _NON_SURFACE_ROUTE_PREFIXES = ("/api/", "/health", "/version", "/.well-known")
-# A metadata name can be introduced by a shell declaration qualifier
-# (``readonly NAME=``, ``declare -r NAME=``) or sit under a YAML sequence dash,
-# so the leading token is optional and never part of the captured name.
+# The optional prefix accepts shell declaration qualifiers and YAML sequence dashes.
 _SHELL_OR_YAML_ASSIGNMENT = re.compile(
     r"^\s*(?:-\s+)?"
     r"(?:(?:readonly|export|local|declare|typeset)\s+(?:-[A-Za-z]+\s+)*)?"
@@ -336,9 +328,8 @@ def _registration_mismatch_message(
     value: str,
     expected_value: str,
 ) -> str:
-    return (
-        f"{relative_path_text}:{line_number} metadata_mismatch route={route} {field}={value} expected={expected_value}"
-    )
+    prefix = f"{relative_path_text}:{line_number} metadata_mismatch route={route}"
+    return f"{prefix} {field}={value} expected={expected_value}"
 
 
 def _has_shell_expansion(value: str) -> bool:
@@ -525,20 +516,14 @@ def unregistered_metadata_in_source(
                 registered_routes_by_prefix.setdefault(prefix, set()).add(route)
 
     for line_number, prefix, field, raw_value in assignments:
-        if prefix not in prefixes_with_unregistered_routes or field in {"path", "url"}:
+        if field in {"path", "url"}:
             continue
         value = _display_assignment_value(raw_value)
         if value is None:
             continue
-        if value not in allowed[field]:
+        if prefix in prefixes_with_unregistered_routes and value not in allowed[field]:
             violations.append(f"{relative_path_text}:{line_number} unregistered {field}={value}")
-    for line_number, prefix, field, raw_value in assignments:
-        if prefix not in registered_routes_by_prefix or field in {"path", "url"}:
-            continue
-        value = _display_assignment_value(raw_value)
-        if value is None:
-            continue
-        for route in sorted(registered_routes_by_prefix[prefix]):
+        for route in sorted(registered_routes_by_prefix.get(prefix, ())):
             expected_value = rows_by_path[route][field]
             if value != expected_value:
                 violations.append(

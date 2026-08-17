@@ -1,5 +1,19 @@
 import { describe, expect, it } from 'vitest';
+import { readFileSync, readdirSync } from 'node:fs';
+import { join, relative } from 'node:path';
 import { APP_SHELL, MAP_LAYERS } from './app';
+
+const ANALYTICS_INTEGRATION_PATTERN =
+  /@segment\/analytics|analytics-next|@vercel\/analytics|posthog-js|mixpanel-browser|google-analytics|googletagmanager|plausible\.io|matomo|\bgtag\s*\(/i;
+
+function frontendProductionSources(directory: string): Array<{ path: string; source: string }> {
+  return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+    const path = join(directory, entry.name);
+    if (entry.isDirectory()) return frontendProductionSources(path);
+    if (!entry.isFile() || entry.name.includes('.test.')) return [];
+    return [{ path: relative(process.cwd(), path), source: readFileSync(path, 'utf8') }];
+  });
+}
 
 describe('APP_SHELL shared static-route contract', () => {
   it('keeps shell branding and default app title in shared config', () => {
@@ -15,7 +29,7 @@ describe('APP_SHELL shared static-route contract', () => {
     expect(APP_SHELL.branding.stageLabel).not.toBe('Frontend Probe');
   });
 
-  it('defines a footer contract with methodology and reporting links', () => {
+  it('defines an exact rendered footer contract for currently available routes', () => {
     const shellWithFooter = APP_SHELL as unknown as {
       footer?: {
         links?: Array<{
@@ -26,13 +40,38 @@ describe('APP_SHELL shared static-route contract', () => {
     };
 
     expect(shellWithFooter.footer).toBeDefined();
-    expect(shellWithFooter.footer?.links).toEqual(
-      expect.arrayContaining([
-        { label: 'Methodology', href: '/methodology' },
-        { label: 'Public API', href: '/developers' },
-        APP_SHELL.reportingLink
-      ])
-    );
+    expect(shellWithFooter.footer?.links).toEqual([
+      { label: 'Methodology', href: '/methodology' },
+      { label: 'Public API', href: '/developers' },
+      APP_SHELL.reportingLink
+    ]);
+  });
+
+  it('owns trust-route footer links as a distinct shared footer group', () => {
+    const shellWithFooter = APP_SHELL as unknown as {
+      footer?: {
+        links?: Array<{
+          label: string;
+          href: string;
+        }>;
+        trustPageLinks?: Array<{
+          label: string;
+          href: string;
+        }>;
+      };
+    };
+    const primaryFooterHrefs = shellWithFooter.footer?.links?.map((link) => link.href) ?? [];
+    const trustPageHrefs = shellWithFooter.footer?.trustPageLinks?.map((link) => link.href) ?? [];
+
+    expect(shellWithFooter.footer?.trustPageLinks).toEqual([
+      { label: 'About', href: '/about' },
+      { label: 'Contact', href: '/contact' },
+      { label: 'Privacy', href: '/privacy' }
+    ]);
+    expect(primaryFooterHrefs.filter((href) => trustPageHrefs.includes(href))).toEqual([]);
+    expect(APP_SHELL.shellNavigation.map((link) => link.href)).not.toContain('/about');
+    expect(APP_SHELL.shellNavigation.map((link) => link.href)).not.toContain('/contact');
+    expect(APP_SHELL.shellNavigation.map((link) => link.href)).not.toContain('/privacy');
   });
 
   it('pins federal-first primary shell navigation to shared config', () => {
@@ -114,17 +153,120 @@ describe('APP_SHELL shared static-route contract', () => {
       description:
         "Static reference for developers and journalists migrating from OpenSecrets or ProPublica APIs to Civibus's nonpartisan, source-linked federal public-record endpoints."
     });
+    expect(APP_SHELL.staticRoutes.about).toEqual({
+      title: 'About | Civibus',
+      description:
+        'Learn what Civibus is, what federal-first v1 covers, and the source-linked boundaries for its public-records presentation.'
+    });
+    expect(APP_SHELL.staticRoutes.contact).toEqual({
+      title: 'Contact | Civibus',
+      description:
+        'Report a Civibus data issue through the shared reporting link without a contact form or page-local submission flow.'
+    });
+    expect(APP_SHELL.staticRoutes.privacy).toEqual({
+      title: 'Privacy | Civibus',
+      description:
+        'Review the privacy-relevant behavior Civibus can substantiate from frontend integration scans and API logging tests.'
+    });
   });
 
   it('limits static-route metadata ownership to static pages only', () => {
     expect(Object.keys(APP_SHELL.staticRoutes).sort()).toEqual([
+      'about',
       'calendar',
+      'contact',
       'coverage',
       'dataSources',
       'developers',
       'home',
-      'methodology'
+      'methodology',
+      'privacy'
     ]);
+  });
+
+  it('groups About page copy under shared trust-page config', () => {
+    const aboutText = JSON.stringify(APP_SHELL.trustPages.about);
+    const requiredMarkers = [
+      'Civibus',
+      'public-records intelligence platform',
+      'fragmented government records searchable',
+      '543 elected federal seats',
+      '435 House seats',
+      '100 Senate seats',
+      '6 non-voting delegate seats',
+      'President',
+      'Vice President',
+      'FEC money summaries',
+      'Schedule E independent expenditures',
+      'nonpartisan',
+      'source-linked',
+      'without editorial commentary',
+      'state',
+      'city',
+      'post-v1 race and challenger expansion',
+      'non-campaign-finance domains',
+      'future work'
+    ];
+
+    const missingMarkers = requiredMarkers.filter((marker) => !aboutText.includes(marker));
+
+    expect(APP_SHELL.trustPages.about.heading).toBe('About');
+    expect(missingMarkers).toEqual([]);
+    expect(aboutText).not.toMatch(/\b(inc\.?|llc|legal entity)\b/i);
+  });
+
+  it('keeps Contact copy on the shared reporting action only', () => {
+    const contactPage = APP_SHELL.trustPages.contact as typeof APP_SHELL.trustPages.contact & {
+      actions?: unknown;
+    };
+    const contactText = JSON.stringify(contactPage);
+
+    expect(contactPage.action).toBe(APP_SHELL.reportingLink);
+    expect(contactPage.actions).toBeUndefined();
+    expect(contactText).toContain('report a data issue');
+    expect(contactText).toContain(APP_SHELL.reportingLink.label);
+    expect(contactText).not.toMatch(/\b(contact form|form field|submission|success state|mailbox)\b/i);
+  });
+
+  it('bounds Privacy copy to scanned frontend and API logging evidence', () => {
+    const privacyText = JSON.stringify(APP_SHELL.trustPages.privacy);
+    const requiredEvidence = [
+      'scanned frontend paths',
+      'no analytics or telemetry integration',
+      'api/test_logging.py',
+      'method',
+      'path',
+      'status',
+      'request ID',
+      'duration',
+      'query-string values',
+      'Internal Server Error',
+      'generic 500 response bodies',
+      'exception messages',
+      'tracebacks',
+      'stack traces',
+      'exc_info'
+    ];
+    const missingEvidence = requiredEvidence.filter((evidence) => !privacyText.includes(evidence));
+
+    expect(missingEvidence).toEqual([]);
+    expect(privacyText).not.toMatch(
+      /\b(retention|storage|security guarantee|secure infrastructure|legal entity|company|corporation)\b/i
+    );
+  });
+
+  it('blocks stale no-analytics copy when a frontend integration is introduced', () => {
+    const packageManifest = readFileSync(join(process.cwd(), 'package.json'), 'utf8');
+    const integrationHits = [
+      { path: 'package.json', source: packageManifest },
+      ...frontendProductionSources(join(process.cwd(), 'src'))
+    ]
+      .filter(({ source }) => ANALYTICS_INTEGRATION_PATTERN.test(source))
+      .map(({ path }) => path);
+    const privacyText = JSON.stringify(APP_SHELL.trustPages.privacy);
+
+    expect({ integrationHits, claimsNoIntegration: privacyText.includes('no analytics or telemetry integration') })
+      .toEqual({ integrationHits: [], claimsNoIntegration: true });
   });
 
   it('carries the federal-first methodology disclosure contract in shared config', () => {

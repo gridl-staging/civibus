@@ -101,6 +101,18 @@ def test_committed_public_surface_manifest_contract() -> None:
             "row=2 blank_field=marker",
             id="whitespace-only-marker",
         ),
+        pytest.param(
+            MANIFEST_HEADER,
+            (manifest_row(path="@attacker.example/person/specimen"),),
+            "row=2 unsafe_path=@attacker.example/person/specimen",
+            id="authority-switching-path",
+        ),
+        pytest.param(
+            MANIFEST_HEADER,
+            (manifest_row(path="/public/%252e%252e/api/private"),),
+            "row=2 unsafe_path=/public/%252e%252e/api/private",
+            id="encoded-traversal-path",
+        ),
     ),
 )
 def test_probe_fails_closed_on_malformed_script_relative_manifest(
@@ -403,7 +415,7 @@ def test_deployed_surface_parity_probe_accepts_matching_fixture_surface(tmp_path
         assert f"page_status {page_path} 200 marker_ok" in result.stdout
     assert "page_latency /sitemap.xml seconds=30.000 budget_seconds=30.000" in result.stdout
     assert "WARN known_red_page /sitemap.xml" not in result.stdout
-    assert "surfaces_probed=14 failed=0" in result.stdout
+    assert "surfaces_probed=17 failed=0" in result.stdout
     assert "money_value_assertion fec_money_coverage PASS numerator=537 denominator=539" in result.stdout
     assert "money_value_probe_ok" in result.stdout
     for expected_line in expected_money_value_pass_lines():
@@ -543,7 +555,7 @@ def test_deployed_surface_parity_probe_fails_on_status_200_without_donor_result_
 
     assert result.returncode != 0
     assert 'page_content_marker_missing /donors?q=smith&by=name marker=data-testid="donor-result-row"' in result.stderr
-    assert "surfaces_probed=14 failed=1" in result.stdout
+    assert "surfaces_probed=17 failed=1" in result.stdout
 
 
 def test_deployed_surface_parity_probe_aggregates_failures_and_probes_sitemap(tmp_path: Path) -> None:
@@ -565,7 +577,7 @@ def test_deployed_surface_parity_probe_aggregates_failures_and_probes_sitemap(tm
     assert "page_status /donors?q=smith&by=name 200 marker_ok" in result.stdout
     assert "page_status /calendar 200 marker_ok" in result.stdout
     assert "page_status /sitemap.xml 200 marker_ok" in result.stdout
-    assert "surfaces_probed=14 failed=1" in result.stdout
+    assert "surfaces_probed=17 failed=1" in result.stdout
 
 
 def test_deployed_surface_parity_probe_runs_money_assertions_after_structural_failure(tmp_path: Path) -> None:
@@ -639,7 +651,7 @@ def test_deployed_surface_parity_probe_fails_closed_without_sitemap_latency(tmp_
 
     assert result.returncode != 0
     assert "page_fetch_error /sitemap.xml fixture_latency_table_missing" in result.stderr
-    assert "surfaces_probed=14 failed=1" in result.stdout
+    assert "surfaces_probed=17 failed=1" in result.stdout
 
 
 def test_deployed_surface_parity_probe_renders_money_helper_failures_nonfatally(tmp_path: Path) -> None:

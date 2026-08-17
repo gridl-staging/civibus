@@ -19,6 +19,37 @@ vi.mock("$app/stores", () => ({
   }
 }));
 
+const FEC_NOTICE_MARKER = 'data-testid="fec-contributor-data-use-notice"';
+
+const FEC_NOTICE_COPY = [
+  "Individual contributor information in FEC reports is public",
+  "may not be sold or used to solicit contributions or for commercial purposes",
+  "summarizes FEC source restrictions and is not legal advice"
+] as const;
+
+const FEC_NOTICE_LINK_HREFS = [
+  "https://www.fec.gov/updates/sale-or-use-contributor-information/",
+  "https://www.fec.gov/introduction-campaign-finance/how-to-research-public-records/individual-contributions/",
+  "https://www.fec.gov/data/browse-data/"
+] as const;
+
+/** The static FEC notice must render exactly once and precede the registry content. */
+function expectFecContributorDataUseNotice(body: string, followingContentMarker: string): void {
+  expect(body.match(new RegExp(FEC_NOTICE_MARKER, "g"))).toHaveLength(1);
+
+  const missingCopy = FEC_NOTICE_COPY.filter((copy) => !body.includes(copy));
+  expect(missingCopy).toEqual([]);
+
+  const missingLinks = FEC_NOTICE_LINK_HREFS.filter(
+    (href) => !body.includes(`href="${href}" target="_blank" rel="noopener nofollow"`)
+  );
+  expect(missingLinks).toEqual([]);
+
+  const followingContentIndex = body.indexOf(followingContentMarker);
+  expect(followingContentIndex).toBeGreaterThan(-1);
+  expect(body.indexOf(FEC_NOTICE_MARKER)).toBeLessThan(followingContentIndex);
+}
+
 describe("/data-sources route rendering", () => {
   it("renders data-source rows", () => {
     const rendered = render(DataSourcesPage, {
@@ -54,6 +85,7 @@ describe("/data-sources route rendering", () => {
     expect(rendered.body).toContain("https://example.org/record-1");
     expect(rendered.body).toContain("2026-04-29T12:00:00Z");
     expect(rendered.body).toContain("2026-04-28T12:00:00Z");
+    expectFecContributorDataUseNotice(rendered.body, "<table");
     expect(rendered.body).toContain('href="https://example.org/source" target="_blank" rel="noopener nofollow"');
     expect(rendered.body).toContain(
       'href="https://example.org/record-1" target="_blank" rel="noopener nofollow"'
@@ -70,6 +102,10 @@ describe("/data-sources route rendering", () => {
 
     expect(rendered.body).toContain("Data sources");
     expect(rendered.body).toContain("No runtime data-source rows are available right now.");
+    expectFecContributorDataUseNotice(
+      rendered.body,
+      "No runtime data-source rows are available right now."
+    );
   });
 
   it("does not render clickable latest source record links for non-http and malformed URLs", () => {

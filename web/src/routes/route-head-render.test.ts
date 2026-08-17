@@ -3,6 +3,9 @@ import { render } from "svelte/server";
 import Layout from "./+layout.svelte";
 import HomePage from "./+page.svelte";
 import MethodologyPage from "./methodology/+page.svelte";
+import AboutPage from "./about/+page.svelte";
+import ContactPage from "./contact/+page.svelte";
+import PrivacyPage from "./privacy/+page.svelte";
 import ElectionPage from "./election/[date]/+page.svelte";
 import CalendarPage from "./calendar/+page.svelte";
 import CoveragePage from "./coverage/+page.svelte";
@@ -157,6 +160,62 @@ function getPrimaryNavigationLinks(body: string): Array<{ href: string; label: s
   return [...(primaryNav?.[1] ?? "").matchAll(/<a\b[^>]*href="([^"]+)"[^>]*>([^<]+)<\/a>/g)].map(
     ([, href, label]) => ({ href, label })
   );
+}
+
+function getFooterNavigationLinks(body: string): Array<{ href: string; label: string }> {
+  const footerNav = body.match(/<nav[^>]*aria-label="Footer"[^>]*>([\s\S]*?)<\/nav>/);
+  expect(footerNav).not.toBeNull();
+  return [...(footerNav?.[1] ?? "").matchAll(/<a\b[^>]*href="([^"]+)"[^>]*>([^<]+)<\/a>/g)].map(
+    ([, href, label]) => ({ href, label })
+  );
+}
+
+/** Trust routes render only shared APP_SHELL copy behind one pinned marker each. */
+const TRUST_ROUTES = [
+  {
+    canonicalPath: "/about",
+    marker: "about-page",
+    component: AboutPage,
+    metadata: APP_SHELL.staticRoutes.about,
+    copy: APP_SHELL.trustPages.about
+  },
+  {
+    canonicalPath: "/contact",
+    marker: "contact-page",
+    component: ContactPage,
+    metadata: APP_SHELL.staticRoutes.contact,
+    copy: APP_SHELL.trustPages.contact
+  },
+  {
+    canonicalPath: "/privacy",
+    marker: "privacy-page",
+    component: PrivacyPage,
+    metadata: APP_SHELL.staticRoutes.privacy,
+    copy: APP_SHELL.trustPages.privacy
+  }
+] as const;
+
+/** Collects every string leaf of a shared copy object so no configured copy can go unrendered. */
+function collectCopyStrings(value: unknown): string[] {
+  if (typeof value === "string") {
+    return [value];
+  }
+  if (Array.isArray(value)) {
+    return value.flatMap(collectCopyStrings);
+  }
+  if (value !== null && typeof value === "object") {
+    return Object.values(value).flatMap(collectCopyStrings);
+  }
+  return [];
+}
+
+function expectNoFormOrSubmissionState(body: string): void {
+  const formControls = ["<form", "<input", "<textarea", "<select", "<button"].filter((control) =>
+    body.includes(control)
+  );
+
+  expect(formControls).toEqual([]);
+  expect(body).not.toMatch(/message (sent|received)|submitted|submission/i);
 }
 
 const METHODOLOGY_DISCLOSURES = [
@@ -399,10 +458,14 @@ describe("route head rendering", () => {
     expect(rendered.body).toContain('href="/committees"');
     expect(rendered.body).toContain("<footer");
     expect(rendered.body).toContain('aria-label="Footer"');
-    expect(rendered.body).toMatch(
-      /<footer[^>]*>[\s\S]*aria-label="Footer"[\s\S]*href="\/methodology"[\s\S]*>Methodology<\/a>/
-    );
-    expect(rendered.body).toContain("Report a data issue");
+    expect(getFooterNavigationLinks(rendered.body)).toEqual([
+      { label: "Methodology", href: "/methodology" },
+      { label: "Public API", href: "/developers" },
+      APP_SHELL.reportingLink,
+      { label: "About", href: "/about" },
+      { label: "Contact", href: "/contact" },
+      { label: "Privacy", href: "/privacy" }
+    ]);
     expect(rendered.body).toContain('aria-hidden="true"');
     expect(rendered.body).not.toContain('role="progressbar"');
     expect(rendered.body).not.toContain("aria-value");
@@ -540,6 +603,45 @@ describe("route head rendering", () => {
         )
       );
     }
+  });
+
+  for (const trustRoute of TRUST_ROUTES) {
+    it(`renders ${trustRoute.canonicalPath} from shared APP_SHELL copy with one pinned marker and no route JSON-LD`, () => {
+      currentPageUrl = new URL(`https://preview.internal:5173${trustRoute.canonicalPath}?ref=footer`);
+      const rendered = render(trustRoute.component);
+
+      expectDefaultShareHead(rendered.head, {
+        canonicalPath: trustRoute.canonicalPath,
+        ogType: "website",
+        expectsJsonLd: false,
+        expectsOgUrl: true
+      });
+      expect(rendered.head).toContain(trustRoute.metadata.title);
+      expect(rendered.head).toContain(
+        `<meta name="description" content="${trustRoute.metadata.description}"`
+      );
+
+      expect(rendered.body.match(new RegExp(`data-testid="${trustRoute.marker}"`, "g"))).toHaveLength(
+        1
+      );
+      const unrenderedCopy = collectCopyStrings(trustRoute.copy).filter(
+        (copy) => !rendered.body.includes(copy)
+      );
+      expect(unrenderedCopy).toEqual([]);
+      expect(rendered.body).not.toContain("application/ld+json");
+      expectNoFormOrSubmissionState(rendered.body);
+    });
+  }
+
+  it("renders the contact route with the shared reporting action as its only contact control", () => {
+    currentPageUrl = new URL("https://preview.internal:5173/contact");
+    const rendered = render(ContactPage);
+
+    expect(rendered.body).toContain(
+      `href="${APP_SHELL.reportingLink.href}"`
+    );
+    expect(rendered.body.match(/<a\b/g)).toHaveLength(1);
+    expect(rendered.body).toContain(APP_SHELL.reportingLink.label);
   });
 
   it("renders election-date page with slashless canonical URL and election JSON-LD", () => {

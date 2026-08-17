@@ -6,6 +6,7 @@
   import NavigationProgress from "$lib/navigation/NavigationProgress.svelte";
 
   const seoDefaults = getSeoDefaults();
+  const footerLinks = [...APP_SHELL.footer.links, ...APP_SHELL.footer.trustPageLinks];
 
   function shellRouteTestId(href: string): string {
     return href === "/" ? "home" : href.slice(1).replace(/[^a-z0-9]+/g, "-");
@@ -37,7 +38,7 @@
   </main>
   <footer class="shell__footer" data-testid="shell-footer">
     <nav aria-label="Footer" data-testid="shell-footer-nav">
-      {#each APP_SHELL.footer.links as link}
+      {#each footerLinks as link}
         <a class="shell__footer-link" href={link.href} data-testid={`shell-footer-link-${shellRouteTestId(link.href)}`}>
           {link.label}
         </a>

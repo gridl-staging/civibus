@@ -47,6 +47,47 @@ validate_public_surface_manifest_field() {
   fi
 }
 
+validate_public_surface_manifest_path() {
+  local row_number="$1"
+  local value="$2"
+
+  if python3 - "${value}" <<'PY'
+import sys
+from urllib.parse import unquote, urlsplit
+
+
+raw_path = sys.argv[1]
+if not raw_path.startswith("/") or raw_path.startswith("//"):
+    raise SystemExit(1)
+if any(ord(character) < 32 or ord(character) == 127 or character == "\\" for character in raw_path):
+    raise SystemExit(1)
+
+parsed = urlsplit(raw_path)
+if parsed.scheme or parsed.netloc or parsed.fragment:
+    raise SystemExit(1)
+
+decoded_path = parsed.path
+for _ in range(len(decoded_path) + 1):
+    next_path = unquote(decoded_path)
+    if next_path == decoded_path:
+        break
+    decoded_path = next_path
+else:
+    raise SystemExit(1)
+
+if decoded_path.startswith("//") or "\\" in decoded_path:
+    raise SystemExit(1)
+if any(segment in {".", ".."} for segment in decoded_path.split("/")):
+    raise SystemExit(1)
+PY
+  then
+    return 0
+  fi
+
+  echo "public_surface_manifest_error row=${row_number} unsafe_path=${value}" >&2
+  return 1
+}
+
 validate_public_surface_manifest_enum() {
   local row_number="$1"
   local field_name="$2"
@@ -94,6 +135,7 @@ load_public_surface_manifest() {
     validate_public_surface_manifest_field "${row_number}" parity_mode "${parity_mode}" || return 1
     validate_public_surface_manifest_field "${row_number}" uptime_mode "${uptime_mode}" || return 1
     validate_public_surface_manifest_field "${row_number}" owners "${owners}" || return 1
+    validate_public_surface_manifest_path "${row_number}" "${path}" || return 1
     validate_public_surface_manifest_enum "${row_number}" kind "${kind}" "static person_sitemap" || return 1
     validate_public_surface_manifest_enum "${row_number}" parity_mode "${parity_mode}" "fatal known_red skip" || return 1
     validate_public_surface_manifest_enum "${row_number}" uptime_mode "${uptime_mode}" "fatal skip" || return 1

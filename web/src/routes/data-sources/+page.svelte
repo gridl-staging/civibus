@@ -12,6 +12,19 @@
 
   const routeMetadata = APP_SHELL.staticRoutes.dataSources;
 
+  /** Official FEC pages backing the page-local contributor data-use notice. */
+  const FEC_CONTRIBUTOR_GUIDANCE_LINKS = [
+    {
+      label: "Sale or use of contributor information",
+      href: "https://www.fec.gov/updates/sale-or-use-contributor-information/"
+    },
+    {
+      label: "Individual contributions",
+      href: "https://www.fec.gov/introduction-campaign-finance/how-to-research-public-records/individual-contributions/"
+    },
+    { label: "Browse data", href: "https://www.fec.gov/data/browse-data/" }
+  ] as const;
+
   $: canonicalPageUrl = new URL(buildDataSourcesRoutePath(), $page.url);
   $: headModel = buildSeoHeadModel({
     metadata: routeMetadata,
@@ -25,6 +38,24 @@
 
 <section class="card" aria-label="Data sources">
   <h2>Data sources</h2>
+
+  <aside
+    class="contributor-notice"
+    aria-label="FEC contributor data use"
+    data-testid="fec-contributor-data-use-notice"
+  >
+    <h3>FEC contributor data use</h3>
+    <!-- Kept on one source line so the rendered sentence stays a single contiguous string. -->
+    <p>Individual contributor information in FEC reports is public, but FEC guidance says it may not be sold or used to solicit contributions or for commercial purposes.</p>
+    <p>This notice summarizes FEC source restrictions and is not legal advice.</p>
+    <ul>
+      {#each FEC_CONTRIBUTOR_GUIDANCE_LINKS as link}
+        <li>
+          <a href={link.href} target="_blank" rel="noopener nofollow">{link.label}</a>
+        </li>
+      {/each}
+    </ul>
+  </aside>
 
   {#if data.dataSources.length === 0}
     <p>No runtime data-source rows are available right now.</p>

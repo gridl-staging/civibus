@@ -76,18 +76,20 @@ export function buildMapLayerVisibilityDefaults(pageLevel: MapPageLevel): MapLay
   return defaults;
 }
 
+const BRANDING = {
+  name: "Civibus",
+  appTitle: "Civibus",
+  stageLabel: "Public Beta",
+  tagline: "Universal public-records intelligence"
+} as const;
+
 const REPORTING_LINK = {
   label: "Report a data issue",
   href: "mailto:team@civibus.org?subject=Civibus%20data%20issue"
 } as const;
 
 export const APP_SHELL = {
-  branding: {
-    name: "Civibus",
-    appTitle: "Civibus",
-    stageLabel: "Public Beta",
-    tagline: "Universal public-records intelligence"
-  },
+  branding: BRANDING,
   shellNavigation: [
     { label: "Home", href: "/" },
     { label: "Search", href: "/search" },
@@ -127,6 +129,21 @@ export const APP_SHELL = {
       title: "Public API | Civibus",
       description:
         "Static reference for developers and journalists migrating from OpenSecrets or ProPublica APIs to Civibus's nonpartisan, source-linked federal public-record endpoints."
+    },
+    about: {
+      title: `About | ${BRANDING.name}`,
+      description:
+        `Learn what ${BRANDING.name} is, what federal-first v1 covers, and the source-linked boundaries for its public-records presentation.`
+    },
+    contact: {
+      title: `Contact | ${BRANDING.name}`,
+      description:
+        `Report a ${BRANDING.name} data issue through the shared reporting link without a contact form or page-local submission flow.`
+    },
+    privacy: {
+      title: `Privacy | ${BRANDING.name}`,
+      description:
+        `Review the privacy-relevant behavior ${BRANDING.name} can substantiate from frontend integration scans and API logging tests.`
     }
   },
   reportingLink: REPORTING_LINK,
@@ -135,7 +152,82 @@ export const APP_SHELL = {
       { label: "Methodology", href: "/methodology" },
       { label: "Public API", href: "/developers" },
       REPORTING_LINK
+    ],
+    trustPageLinks: [
+      { label: "About", href: "/about" },
+      { label: "Contact", href: "/contact" },
+      { label: "Privacy", href: "/privacy" }
     ]
+  },
+  trustPages: {
+    about: {
+      heading: "About",
+      sections: [
+        {
+          heading: "Identity",
+          paragraphs: [
+            `${BRANDING.name} is a public-records intelligence platform that makes fragmented government records searchable and connects records across sources.`
+          ]
+        },
+        {
+          heading: "Federal-first v1",
+          paragraphs: [
+            "The launch scope is 543 elected federal seats: 435 House seats, 100 Senate seats, 6 non-voting delegate seats, the President, and the Vice President.",
+            "Profiles pair federal officeholder records with FEC money summaries and Schedule E independent expenditures for and against officials."
+          ]
+        },
+        {
+          heading: "Presentation boundaries",
+          paragraphs: [
+            "Displayed data is nonpartisan, source-linked, and presented without editorial commentary."
+          ]
+        },
+        {
+          heading: "Parked work",
+          paragraphs: [
+            "Parked state, city, post-v1 race and challenger expansion, and non-campaign-finance domains remain future work until explicitly scheduled after v1."
+          ]
+        }
+      ]
+    },
+    contact: {
+      heading: "Contact",
+      paragraphs: [
+        `Use ${REPORTING_LINK.label.toLowerCase()} to report a data issue through the existing shared contact path.`
+      ],
+      action: REPORTING_LINK
+    },
+    privacy: {
+      heading: "Privacy",
+      sections: [
+        {
+          heading: "Evidence boundary",
+          paragraphs: [
+            "This page describes tested application behavior from scanned frontend paths and api/test_logging.py."
+          ]
+        },
+        {
+          heading: "Application analytics",
+          paragraphs: [
+            "The scanned frontend paths contain no analytics or telemetry integration."
+          ]
+        },
+        {
+          heading: "API request logging",
+          paragraphs: [
+            "Structured API request logs tested in api/test_logging.py include method, path, status, request ID, and duration.",
+            "The recorded path omits query-string values."
+          ]
+        },
+        {
+          heading: "Error handling",
+          paragraphs: [
+            "Unhandled API errors tested in api/test_logging.py return Internal Server Error as generic 500 response bodies.",
+            "Structured log records omit exception messages, tracebacks, stack traces, and exc_info."
+          ]
+        }
+      ]
+    }
   },
   landing: {
     eyebrow: "Federal-first public records",

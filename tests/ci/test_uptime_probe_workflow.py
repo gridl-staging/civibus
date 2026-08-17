@@ -161,6 +161,18 @@ def test_two_red_surface_incident_rendering_names_only_current_failures(
             19,
             id="manifest-fetch-failure",
         ),
+        pytest.param(
+            f"{PUBLIC_SURFACE_MANIFEST_HEADER}\n"
+            f"{DONOR_MANIFEST_ROW.replace('/donors?q=smith&by=name', '@attacker.example/person/specimen')}\n",
+            0,
+            id="authority-switching-path",
+        ),
+        pytest.param(
+            f"{PUBLIC_SURFACE_MANIFEST_HEADER}\n"
+            f"{DONOR_MANIFEST_ROW.replace('/donors?q=smith&by=name', '/public/%252e%252e/api/private')}\n",
+            0,
+            id="encoded-traversal-path",
+        ),
     ),
 )
 def test_public_surface_manifest_errors_fail_closed_and_name_manifest_error(
@@ -179,6 +191,10 @@ def test_public_surface_manifest_errors_fail_closed_and_name_manifest_error(
     assert probe_result.returncode != 0 or outputs.get("healthy") != "true", (
         "manifest failure was reported healthy:\n"
         f"stdout={probe_result.stdout}\nstderr={probe_result.stderr}\noutputs={outputs}"
+    )
+    assert "fixture_curl_target=" not in probe_result.stderr, (
+        "a rejected manifest performed an HTTP request before failing closed:\n"
+        f"stdout={probe_result.stdout}\nstderr={probe_result.stderr}"
     )
 
     title, open_body, comment_body = _render_incident_texts(

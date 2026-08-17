@@ -36,7 +36,10 @@ export const STATIC_PATHS = [
   "/committees",
   "/coverage",
   "/calendar",
-  "/data-sources"
+  "/data-sources",
+  "/about",
+  "/contact",
+  "/privacy"
 ];
 
 type ListResponse<TItem> = {

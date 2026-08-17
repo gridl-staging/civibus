@@ -11,6 +11,9 @@ committee_detail_surface	static	/committee/jon-ossoff-for-senate	Key metrics	fat
 compare_surface	static	/compare	Compare officeholders	fatal	skip	web comparison route
 calendar_surface	static	/calendar	Election calendar	fatal	skip	web election calendar route
 coverage_surface	static	/coverage	campaign_finance	fatal	skip	web coverage route
-data_sources_surface	static	/data-sources	campaign_finance	fatal	skip	web data sources route
+data_sources_surface	static	/data-sources	data-testid="fec-contributor-data-use-notice"	fatal	skip	web data sources route
+about_surface	static	/about	data-testid="about-page"	fatal	skip	web about route
+contact_surface	static	/contact	data-testid="contact-page"	fatal	skip	web contact route
+privacy_surface	static	/privacy	data-testid="privacy-page"	fatal	skip	web privacy route
 sitemap_index_surface	static	/sitemap.xml	<sitemapindex	fatal	skip	web sitemap index route
 person_detail_surface	person_sitemap	/sitemap-person-0.xml	aria-label="Breadcrumb"	known_red	fatal	web person detail and person sitemap routes

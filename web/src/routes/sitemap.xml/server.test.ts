@@ -28,7 +28,18 @@ const civicDetailMockState = vi.hoisted(() => ({
   fetchCongressMembers: undefined as ((api: any) => Promise<any>) | undefined,
   fetchUpcomingElectionTimeline: undefined as ((api: any) => Promise<any>) | undefined
 }));
-const STATIC_PATHS = ["/", "/congress", "/candidates", "/committees", "/coverage", "/calendar", "/data-sources"];
+const STATIC_PATHS = [
+  "/",
+  "/congress",
+  "/candidates",
+  "/committees",
+  "/coverage",
+  "/calendar",
+  "/data-sources",
+  "/about",
+  "/contact",
+  "/privacy"
+];
 const SITEMAP_PROTOCOL_NAMESPACE = "http://www.sitemaps.org/schemas/sitemap/0.9";
 
 vi.mock("$env/dynamic/public", () => ({
@@ -381,6 +392,22 @@ describe("GET /sitemap.xml bounded sitemap index", () => {
       "/sitemap-committee-0.xml",
       "/sitemap-person-0.xml"
     ]);
+  });
+
+  it("serves canonical static and election loc entries in declared order", async () => {
+    const response = await GET_STATIC_SITEMAP(
+      createRequestEvent("https://civibus.org/sitemap-static.xml", createPaginatedListRequestJson())
+    );
+    const xml = await expectXmlResponse(response);
+    const expectedPaths = [
+      ...STATIC_PATHS,
+      ...UPCOMING_TIMELINE.map((entry) => buildElectionDateRoutePath(entry.date))
+    ];
+
+    expect(extractLocPaths(xml)).toEqual(expectedPaths);
+    expect([...xml.matchAll(/<loc>(.*?)<\/loc>/g)].map((match) => match[1])).toEqual(
+      expectedPaths.map((path) => `https://civibus.org${path}`)
+    );
   });
 
   it("discovers candidate and committee shard ranges with bounded offset probes", async () => {
