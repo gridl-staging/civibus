@@ -160,6 +160,15 @@ elif command == "docker":
             print(json.dumps(["registry.fly.io/civibus-refresh@sha256:short"]))
         else:
             print("[]")
+    elif args[:2] == ["image", "rm"]:
+        # Dropping the local copy before the Machine update stops flyctl from
+        # finding the tag locally and re-pushing it under a second deployment
+        # tag, which would mint a second digest and make the post-update digest
+        # guard unpassable (civibus-n8r).
+        if failure == "local_image_rm":
+            print("no such image", file=sys.stderr)
+            sys.exit(1)
+        print("Untagged: " + args[2])
     elif args[:1] == ["run"]:
         if failure in {"image_version", "image_guard"}:
             print(failure, file=sys.stderr)
@@ -294,6 +303,20 @@ def test_deploy_uses_exact_build_probe_update_and_verifier_contract(tmp_path: Pa
             "--yes",
         ]
     ]
+
+    # The local copy of the pushed image must be dropped exactly once, AFTER the
+    # content proof needs it and BEFORE the Machine update. Ordering is the whole
+    # point: with the tag still in the local daemon, `flyctl machine update`
+    # re-pushes it under a second deployment tag, minting a second manifest
+    # digest and making verify_post_image_digest unpassable (civibus-n8r, which
+    # failed both 2026-08-17 deploy attempts). Assert positions, not just
+    # presence, so reordering these steps fails here instead of in production.
+    local_image_removals = [argv for argv in invocations if argv[:3] == ["docker", "image", "rm"]]
+    assert local_image_removals == [["docker", "image", "rm", IMAGE_TAG]]
+    image_probe_index = max(index for index, argv in enumerate(invocations) if argv[:2] == ["docker", "run"])
+    removal_index = invocations.index(["docker", "image", "rm", IMAGE_TAG])
+    machine_update_index = invocations.index(machine_updates[0])
+    assert image_probe_index < removal_index < machine_update_index
 
     verifier_path = str(REPO_ROOT / "infra/scripts/verify_refresh_machine.sh")
     verifier_calls = [argv for argv in invocations if argv[0:2] == ["bash", verifier_path]]

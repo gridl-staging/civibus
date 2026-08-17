@@ -423,6 +423,20 @@ main() {
   verify_image_refresh_plan "$evidence_dir" \
     || fail "pushed image refresh plan verification failed"
 
+  # Drop the local copy before updating the Machine. pull_pushed_image put this
+  # tag in the local docker daemon so prove_image_contents could run the image;
+  # that proof is complete by this point. If the tag is still present locally,
+  # `flyctl machine update --image` logs "Searching for image ... locally...
+  # image found" and RE-PUSHES it, minting a second deployment tag and therefore
+  # a second manifest digest (identical layers -- every one logs "Layer already
+  # exists"). verify_post_image_digest below then compares the first digest to
+  # the second and can never match, which made this gate unpassable on both
+  # 2026-08-17 deploy attempts (civibus-n8r). With no local copy, flyctl
+  # references the already-pushed remote tag and the post-update digest equals
+  # the proven digest by construction.
+  docker image rm "$image_tag" >"$evidence_dir/local_image_rm.txt" 2>&1 \
+    || fail "could not drop the local copy of the pushed image before Machine update"
+
   # flyctl resolves the tag to its digest; passing an @sha256 reference makes
   # flyctl append that digest again and the Machines API rejects the result.
   flyctl machine update "$MACHINE_ID" -a "$APP_NAME" --image "$image_tag" --yes \
