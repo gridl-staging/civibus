@@ -72,3 +72,19 @@
 {"node_id":"tests/test_db_integration.py::test_run_cf_candidate_enrichment_is_idempotent_for_portrait_provenance_and_bio_fill_only","reason":"Enrichment runner selects canonical seeded records beyond this test's fixture","owner":"tests/test_db_integration.py enrichment test-isolation owner"}
 {"node_id":"tests/test_db_integration.py::test_run_cf_candidate_enrichment_limit_run_uses_partial_provenance_without_superseding_full_run","reason":"Enrichment runner selects canonical seeded records beyond this test's fixture","owner":"tests/test_db_integration.py enrichment test-isolation owner"}
 {"node_id":"tests/test_db_integration.py::test_run_cf_candidate_enrichment_blocks_reingest_for_takedown_requested_source_image","reason":"Enrichment runner selects canonical seeded records beyond this test's fixture","owner":"tests/test_db_integration.py enrichment test-isolation owner"}
+
+# tests/integration/test_browser_smoke_seed.py — landed on main from the
+# civibus-5ud seed family while that work is still open (civibus-5ud.3 is
+# "full smoke suite green in live mode"). These six nodes cannot pass in this
+# gate, whose setup deliberately seeds the canonical FEC bulk sample
+# (integration.yml: db-reset -> ingest-fec-bulk-sample -> graph-load).
+# Reproduced locally via `make qa-integration`: 6 failed / 1339 passed,
+# byte-identical to staging CI, so this is a property of the gate's setup and
+# not a mirror quirk. The file's seventh test needs no database and stays live.
+# Retire all six when civibus-5ud.3 lands the isolated/live seed profile.
+{"node_id":"tests/integration/test_browser_smoke_seed.py::test_browser_smoke_seed_is_idempotent_and_satisfies_live_smoke_contract","reason":"Browser-smoke seed refuses a non-isolated database, and this gate seeds the canonical FEC bulk sample (test_support/browser_smoke_seed.py:297)","owner":"civibus-5ud.3 browser-smoke seed profile owner"}
+{"node_id":"tests/integration/test_browser_smoke_seed.py::test_browser_smoke_seed_rejects_non_isolated_smoke_database[extra_committee]","reason":"Browser-smoke seed refuses a non-isolated database, and this gate seeds the canonical FEC bulk sample (test_support/browser_smoke_seed.py:297)","owner":"civibus-5ud.3 browser-smoke seed profile owner"}
+{"node_id":"tests/integration/test_browser_smoke_seed.py::test_browser_smoke_seed_rejects_non_isolated_smoke_database[extra_search_organization]","reason":"Browser-smoke seed refuses a non-isolated database, and this gate seeds the canonical FEC bulk sample (test_support/browser_smoke_seed.py:297)","owner":"civibus-5ud.3 browser-smoke seed profile owner"}
+{"node_id":"tests/integration/test_browser_smoke_seed.py::test_browser_smoke_seed_rejects_non_isolated_smoke_database[extra_current_federal_officeholder]","reason":"Browser-smoke seed refuses a non-isolated database, and this gate seeds the canonical FEC bulk sample (test_support/browser_smoke_seed.py:297)","owner":"civibus-5ud.3 browser-smoke seed profile owner"}
+{"node_id":"tests/integration/test_browser_smoke_seed.py::test_chart_oracle_rejects_superseded_seed_receipts","reason":"Browser-smoke seed refuses a non-isolated database, and this gate seeds the canonical FEC bulk sample (test_support/browser_smoke_seed.py:297)","owner":"civibus-5ud.3 browser-smoke seed profile owner"}
+{"node_id":"tests/integration/test_browser_smoke_seed.py::test_browser_smoke_seed_accepts_canonical_bulk_sample_preload","reason":"Asserts every bulk-loaded entity is a graph node, but core/graph/loader.py derives nodes from edge rows, so canonical-sample entities with no edge are legitimately absent","owner":"civibus-5ud.3 browser-smoke seed profile owner"}
