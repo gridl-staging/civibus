@@ -127,13 +127,33 @@ export const SMOKE_STATE_DETAIL_TOP_COMMITTEE_NAME = "Citizens for Civibus";
 export const SMOKE_STATE_DETAIL_TOP_COMMITTEE_TOTAL = "$125.00";
 export const SMOKE_STATE_DETAIL_TOP_IE_SPENDER_NAME = "Super PAC Alpha";
 export const SMOKE_STATE_DETAIL_TOP_IE_SPENDER_TOTAL = "$15,000.00";
-export const SMOKE_METHODOLOGY_TITLE = "Methodology | Civibus";
-export const SMOKE_METHODOLOGY_DESCRIPTION =
-  "Coverage scope, confidence labels, and source guidance for campaign-finance, civic office, and property records.";
-export const SMOKE_METHODOLOGY_SECTION_HEADING = "Data freshness policy";
-export const SMOKE_METHODOLOGY_SECTION_BODY =
-  "Production support requires data that can be refreshed at least weekly near elections, with daily updates preferred. Sources that only publish annual or quarterly exports are not treated as fully launch-ready without a supplementary path.";
-export const SMOKE_METHODOLOGY_CONFIDENCE_HEADING = "Entity resolution confidence labels";
+// Methodology smoke expectations are DERIVED from the copy owner, never retyped.
+// web/src/routes/methodology/+page.svelte renders APP_SHELL.methodology.sections
+// verbatim (heading, then each paragraph), so deriving here makes it impossible
+// for these fixtures to assert text the page no longer renders.
+//
+// Why this matters: these constants were previously hardcoded copies. The
+// 2026-08-15 methodology rewrite (d8e6a514d) replaced the page copy but left the
+// duplicates here pinned to deleted text, and the resulting smoke failure rolled
+// back the 2026-08-17 production deploy. A hardcoded second copy of copy is the
+// defect; derivation is the fix.
+//
+// Look the section up by testId, not array index: the screen spec
+// (docs/reference/screen_specs/methodology.md "## Disclosure contract") pins the
+// four test ids, so an id is a stable contract while position is not.
+const methodologyFreshnessSection = APP_SHELL.methodology.sections.find(
+  (section) => section.testId === "methodology-freshness"
+);
+if (!methodologyFreshnessSection) {
+  // Fail loudly at import time rather than exporting undefined, which would make
+  // every consuming assertion silently vacuous.
+  throw new Error("APP_SHELL.methodology has no methodology-freshness section");
+}
+
+export const SMOKE_METHODOLOGY_TITLE = APP_SHELL.staticRoutes.methodology.title;
+export const SMOKE_METHODOLOGY_DESCRIPTION = APP_SHELL.staticRoutes.methodology.description;
+export const SMOKE_METHODOLOGY_SECTION_HEADING = methodologyFreshnessSection.heading;
+export const SMOKE_METHODOLOGY_SECTION_BODY = methodologyFreshnessSection.paragraphs[0];
 export const SMOKE_SHELL_NAV_HOME = "Home";
 export const SMOKE_SHELL_NAV_SEARCH = "Search";
 export const SMOKE_SHELL_NAV_CANDIDATES = "Candidates";

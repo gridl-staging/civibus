@@ -22,7 +22,6 @@ import {
   SMOKE_HOME_PRIMARY_ACTION,
   SMOKE_HOME_PRIMARY_ACTION_HREF,
   SMOKE_HOME_TITLE,
-  SMOKE_METHODOLOGY_CONFIDENCE_HEADING,
   SMOKE_METHODOLOGY_DESCRIPTION,
   SMOKE_METHODOLOGY_SECTION_BODY,
   SMOKE_METHODOLOGY_SECTION_HEADING,
@@ -213,7 +212,13 @@ test.describe("shell and responsive smoke", () => {
     await expect(page.getByRole("heading", { level: 2, name: "Methodology", exact: true })).toBeVisible();
     await expect(page.getByText(SMOKE_METHODOLOGY_SECTION_HEADING)).toBeVisible();
     await expect(page.getByText(SMOKE_METHODOLOGY_SECTION_BODY)).toBeVisible();
-    await expect(page.getByText(SMOKE_METHODOLOGY_CONFIDENCE_HEADING)).toBeVisible();
+    // No confidence-labels assertion here on purpose. The page renders exactly the
+    // four disclosure regions the screen spec pins (Schedule A scope, Donor
+    // grouping, Coverage, Freshness) and no entity-resolution confidence section;
+    // APP_SHELL.methodology.confidenceLabels is unrendered config. Asserting it
+    // visible asserted a contract violation. The four-region contract is owned by
+    // web/src/routes/route-head-render.test.ts, which compares the rendered test
+    // ids to METHODOLOGY_DISCLOSURES exactly.
     await expect(page.getByLabel("Methodology").getByRole("link", { name: "Report a data issue" })).toHaveAttribute(
       "href",
       "mailto:team@civibus.org?subject=Civibus%20data%20issue"
