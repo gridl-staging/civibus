@@ -22,6 +22,7 @@ import {
   SMOKE_CANDIDATE_OPPOSE_TOTAL,
   SMOKE_CANDIDATE_PERSON_LINK_TEXT,
   SMOKE_CANDIDATE_SLUG,
+  SMOKE_CONTEST_ID,
   SMOKE_OUT_OF_CYCLE_CANDIDATE_ID,
   SMOKE_OUT_OF_CYCLE_CANDIDATE_NAME,
   SMOKE_OUT_OF_CYCLE_CANDIDATE_SLUG,
@@ -836,6 +837,13 @@ test.describe("sitemap.xml fixture detail URLs", () => {
       SMOKE_CALENDAR_ROUTE_PATH,
       SMOKE_DATA_SOURCES_ROUTE_PATH,
       SMOKE_ELECTION_ROUTE_PATH,
+      // Trust pages, shipped with the about/contact/privacy surfaces.
+      "/about",
+      "/contact",
+      "/privacy",
+      // Race pages. The contest shard is what makes them crawlable at all;
+      // before it existed the sitemap carried no contest URL of any kind.
+      `/contest/${SMOKE_CONTEST_ID}`,
       `/candidate/${SMOKE_CANDIDATE_SLUG}`,
       `/candidate/${SMOKE_OUT_OF_CYCLE_CANDIDATE_SLUG}`,
       `/committee/${SMOKE_COMMITTEE_SLUG}`,
@@ -891,9 +899,20 @@ test.describe("sitemap.xml fixture detail URLs", () => {
         SMOKE_COVERAGE_ROUTE_PATH,
         SMOKE_CALENDAR_ROUTE_PATH,
         SMOKE_DATA_SOURCES_ROUTE_PATH,
+        "/about",
+        "/contact",
+        "/privacy",
         SMOKE_ELECTION_ROUTE_PATH
       ])
     );
+    // Contests live in their own bounded shard, not the static one.
+    expect(
+      pathSet(
+        extractSitemapLocs(xmlByPath.get("/sitemap-contest-0.xml") ?? "").map(
+          (loc) => new URL(loc).pathname
+        )
+      )
+    ).toEqual(pathSet([`/contest/${SMOKE_CONTEST_ID}`]));
   });
 });
 

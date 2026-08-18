@@ -373,12 +373,23 @@ describe("loadPersonMoneyBundle", () => {
 
     const bundle = loadPersonMoneyBundle(createApi(requestJson), PERSON_ID);
 
-    await expect(bundle.personMoneyHeadline).resolves.toEqual({
-      kind: "not_loaded",
+    const headline = await bundle.personMoneyHeadline;
+
+    expect(headline.kind).toBe("not_loaded");
+    expect(headline).toMatchObject({
       message:
         "A linked FEC candidate exists for this person, but Civibus has not loaded authoritative selected-cycle fundraising evidence for that candidate.",
       selectedCycle: SELECTED_CYCLE
     });
+
+    // The aggregate summary rides along so the render layer can keep the cycle
+    // switcher. It must still carry the honest discriminator, and its money
+    // values stay placeholders that no figure may be rendered from.
+    if (headline.kind !== "not_loaded") {
+      throw new Error("expected the not_loaded arm");
+    }
+    expect(headline.summary.coverage.activity_state).toBe("not_loaded");
+    expect(headline.summary.available_cycles).toContain(SELECTED_CYCLE);
   });
 
   it("keeps the loaded headline when every linked candidate summary proves loaded-zero coverage", async () => {

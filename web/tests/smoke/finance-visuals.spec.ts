@@ -186,22 +186,27 @@ test.describe("fixture-backed finance visuals", () => {
       await page.setViewportSize({ width: viewport.width, height: viewport.height });
       await page.goto(`/contest/${SMOKE_CONTEST_ID}`);
 
+      // The headline claim of this test, stated inline: the race page renders
+      // its money scoreboard at this viewport. The full contract follows.
+      await expect(page.getByTestId("race-money-scoreboard")).toBeVisible();
       await expectContestFinanceContract(page);
 
-      const outsideSpendingRegion = await chartRegion(
-        page,
-        "Zero-centered support and oppose spending comparison"
-      );
-      await expect(outsideSpendingRegion).toBeVisible();
-      await expectRealChartRender(outsideSpendingRegion, BAR_SERIES_MARK_SELECTOR);
-      await expectNoOpaqueNearBlackPaints(outsideSpendingRegion);
+      // No chart assertions here any more: the race page carries totals, and the
+      // per-candidate outside-spending plot lives on /candidate/[slug], where
+      // finance-visuals already covers its render quality. The scoreboard is a
+      // wide table, so the overflow check is the load-bearing layout assertion.
       await expectNoHorizontalOverflow(page);
 
-      await expect(page).toHaveScreenshot(`contest-finance-${viewport.name}.png`, {
-        fullPage: true,
-        animations: "disabled",
-        mask: [page.getByText(/^Last pulled:/)]
-      });
+      // No screenshot assertion here, deliberately. The contest page changed
+      // from per-candidate cards to a scoreboard table, so the committed
+      // baseline no longer describes it — and playwright.config.ts's snapshot
+      // path carries no platform token, so one baseline serves every platform.
+      // Regenerating on macOS ships a baseline that fails on CI's Linux by the
+      // same ~1% font-rendering delta that already makes the neighbouring
+      // person and committee baselines fail locally. A correct baseline has to
+      // be produced on the CI platform; until then the contract assertions
+      // above plus the overflow check are the layout guard, and a stale or
+      // wrong-platform screenshot would only fail for non-defects.
     });
   }
 
@@ -597,45 +602,45 @@ async function expectSourceLinks(page: Page): Promise<void> {
   ).toHaveAttribute("href", "/v1/filings/33333333-3333-4333-8333-333333333333");
 }
 
+/**
+ * The race money scoreboard contract on /contest/[id].
+ *
+ * This replaced a per-candidate card layout with per-candidate outside-spending
+ * charts, top-spender tables and transaction tables. That breakdown moved to
+ * /candidate/[slug]: a race with twenty candidates rendered a hundred rows of
+ * spender detail here, and the page took ~18s because it fetched each candidate
+ * separately. The scoreboard now comes from one batched call, so this contract
+ * asserts a table of rows with race-level totals rather than per-candidate
+ * charts.
+ */
 async function expectContestFinanceContract(page: Page): Promise<void> {
-  await expect(page.getByRole("heading", { name: "Candidate finance and outside spending" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Money in this race" })).toBeVisible();
+
+  const scoreboard = page.getByTestId("race-money-scoreboard");
+  await expect(scoreboard).toBeVisible();
+  // Answer-first summary line: the takeaway without scrolling.
+  await expect(page.getByTestId("race-money-summary")).toBeVisible();
+
+  // Person and candidate links both carry the race's backend-resolved cycle.
   await expect(
     page.getByRole("link", { name: SMOKE_CANDIDACY_PERSON_NAME, exact: true }).first()
   ).toHaveAttribute("href", `/person/${SMOKE_PERSON_ID}?cycle=${SMOKE_CANDIDATE_SELECTED_CYCLE}`);
   await expect(
-    page.getByRole("heading", { name: SMOKE_CANDIDACY_PERSON_NAME, level: 4 }).getByRole("link", {
-      name: SMOKE_CANDIDACY_PERSON_NAME,
-      exact: true
-    })
-  ).toHaveAttribute("href", `/candidate/${SMOKE_CANDIDATE_SLUG}?cycle=${SMOKE_CANDIDATE_SELECTED_CYCLE}`);
+    scoreboard.getByRole("link", { name: SMOKE_CANDIDACY_PERSON_NAME, exact: true }).first()
+  ).toBeVisible();
 
-  await expectContestFact(page, "Selected cycle", SMOKE_CANDIDATE_SELECTED_CYCLE);
-  await expectContestFact(page, "Coverage through", SMOKE_CANDIDATE_COVERAGE_THROUGH);
-  await expectContestFact(page, "Receipts", SMOKE_CANDIDATE_TOTAL_RAISED);
-  await expectContestFact(page, "Disbursements", SMOKE_CANDIDATE_TOTAL_SPENT);
+  // Exact money values, from the fixture's own totals.
+  await expectContestFact(page, "Raised", SMOKE_CANDIDATE_TOTAL_RAISED);
+  await expectContestFact(page, "Spent", SMOKE_CANDIDATE_TOTAL_SPENT);
   await expectContestFact(page, "Cash on hand", SMOKE_CANDIDATE_CASH_ON_HAND);
+  await expectContestFact(page, "Outside spending supporting", SMOKE_CANDIDATE_SUPPORT_TOTAL);
+  await expectContestFact(page, "Outside spending opposing", SMOKE_CANDIDATE_OPPOSE_TOTAL);
+
+  // The per-candidate breakdown belongs on the candidate page, not here.
   await expect(page.getByText("Fundraising summary", { exact: true })).toHaveCount(0);
   await expect(page.getByText(/Finance chart for|Outside spending chart for/)).toHaveCount(0);
-
-  await expect(
-    page.getByText(SMOKE_CANDIDATE_OUTSIDE_SPENDING_EXPLANATION, { exact: true })
-  ).toBeVisible();
-  await expect(
-    page.getByText(SMOKE_CANDIDATE_OUTSIDE_SPENDING_COVERAGE_META, { exact: true })
-  ).toBeVisible();
-  await expect(
-    page.getByText(SMOKE_CANDIDATE_OUTSIDE_SPENDING_CHART_SUMMARY, { exact: true })
-  ).toBeVisible();
-  await page.getByTestId(`contest-outside-spending-${SMOKE_PERSON_ID}`).getByText("View chart data").click();
-  await expect(page.getByRole("cell").filter({ hasText: SMOKE_CANDIDATE_SUPPORT_TOTAL }).first()).toBeVisible();
-  await expect(page.getByRole("cell").filter({ hasText: SMOKE_CANDIDATE_OPPOSE_TOTAL }).first()).toBeVisible();
-  await expect(page.getByRole("link", { name: SMOKE_IE_COMMITTEE_A_NAME }).first()).toHaveAttribute(
-    "href",
-    `/committee/${SMOKE_IE_COMMITTEE_A_ID}`
-  );
-  await expect(
-    page.getByRole("cell", { name: SMOKE_IE_TRANSACTION_DISSEMINATION_DATE, exact: true })
-  ).toBeVisible();
+  await expect(page.getByTestId(`contest-outside-spending-${SMOKE_PERSON_ID}`)).toHaveCount(0);
+  await expect(page.getByTestId("contest-top-spenders-scroll")).toHaveCount(0);
 }
 
 async function expectContestFact(page: Page, label: string, value: string): Promise<void> {

@@ -46,7 +46,15 @@ export type PersonDetailPageExtensions = {
 export type PersonMoneyHeadlineState =
   | { kind: "loaded"; summary: PersonMoneyAtGlanceSummary }
   | { kind: "no_linked_candidate"; message: string }
-  | { kind: "not_loaded"; message: string; selectedCycle: number }
+  // Carries the aggregate summary even though no figure from it may be shown.
+  // The cycle switcher is built from its available_cycles, and a cycle with no
+  // loaded evidence is precisely the page a reader most needs to leave.
+  | {
+      kind: "not_loaded";
+      message: string;
+      selectedCycle: number;
+      summary: PersonMoneyAtGlanceSummary;
+    }
   | { kind: "missing_summary"; message: string; selectedCycle: number }
   | { kind: "temporarily_unavailable"; message: string; selectedCycle: number };
 

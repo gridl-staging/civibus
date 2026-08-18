@@ -841,6 +841,13 @@ const server = createServer(async (request, response) => {
     return;
   }
 
+  // The race money scoreboard. One response for the whole contest, which is
+  // what replaced the per-candidacy fan-out the contest page used to issue.
+  if (url.pathname === `/v1/contests/${smokeFixtures.contest.id}/candidate-money`) {
+    writeJson(response, 200, smokeFixtures.contest.candidateMoney);
+    return;
+  }
+
   if (url.pathname === `/v1/candidacies/${smokeFixtures.candidacy.id}`) {
     writeJson(response, 200, smokeFixtures.candidacy.detail);
     return;

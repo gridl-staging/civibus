@@ -474,6 +474,7 @@
       "not loaded" and "temporarily unavailable" are different claims to a reader and
       to a probe.
     -->
+    {@const notLoadedGlance = buildPersonMoneyAtGlancePresentation(headline.summary)}
     <section
       class="detail__money-glance"
       aria-label="Money at a glance"
@@ -481,6 +482,13 @@
     >
       <h4>Money at a glance</h4>
       <p>{headline.selectedCycle} cycle</p>
+      <!--
+        The cycle switcher, and ONLY the cycle switcher, is rendered from the
+        summary. A cycle with no loaded evidence is exactly the page a reader
+        most needs to leave; without this the not-loaded state is a dead end.
+        No metric rows, no receipt composition, no figure of any kind.
+      -->
+      {@render moneyAtGlanceCycleNav(notLoadedGlance)}
       <p>{headline.message}</p>
     </section>
   {:else}

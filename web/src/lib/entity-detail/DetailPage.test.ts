@@ -188,7 +188,10 @@ function buildNotLoadedMoneyHeadline() {
     kind: "not_loaded" as const,
     message:
       "A linked FEC candidate exists for this person, but Civibus has not loaded authoritative selected-cycle fundraising evidence for that candidate.",
-    selectedCycle: 2026
+    selectedCycle: 2026,
+    // The summary carries available_cycles, which is what the cycle switcher is
+    // built from. It is deliberately NOT used for any figure in this arm.
+    summary: buildLoadedMoneyHeadline().summary
   };
 }
 
@@ -747,6 +750,14 @@ describe("entity detail page rendering", () => {
     expect(moneyGlance).toContain(
       "A linked FEC candidate exists for this person, but Civibus has not loaded authoritative selected-cycle fundraising evidence for that candidate."
     );
+
+    // The reader must not be stranded. A cycle with no loaded evidence is exactly
+    // the page you most need to leave, so the cycle switcher stays — dropping it
+    // turned the not-loaded state into a dead end with no way back to a cycle
+    // that does have data.
+    expect(moneyGlance).toContain('aria-label="Election cycle"');
+    expect(moneyGlance).toContain('aria-current="page"');
+    expect(moneyGlance).toContain("?cycle=2024");
 
     // No dollar sign at all inside the region: no $0.00, no suppressed-metric labels.
     expect(moneyGlance).not.toContain("$");

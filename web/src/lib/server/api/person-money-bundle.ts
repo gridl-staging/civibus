@@ -8,6 +8,7 @@ import {
 import type { CandidateFundraisingSummary, PersonContributionInsights } from "$lib/campaign-finance-detail/contract";
 import {
   buildPersonMoneyAtGlanceSummary,
+  type PersonMoneyAtGlanceSummary,
   PERSON_MISSING_SUMMARY_MESSAGE,
   PERSON_NO_LINKED_CANDIDACY_MESSAGE,
   PERSON_NOT_LOADED_MESSAGE,
@@ -72,11 +73,18 @@ function buildTemporarilyUnavailableHeadline(selectedCycle: number): PersonMoney
   };
 }
 
-function buildNotLoadedHeadline(selectedCycle: number): PersonMoneyHeadlineState {
+function buildNotLoadedHeadline(
+  selectedCycle: number,
+  summary: PersonMoneyAtGlanceSummary
+): PersonMoneyHeadlineState {
   return {
     kind: "not_loaded",
     message: PERSON_NOT_LOADED_MESSAGE,
-    selectedCycle
+    selectedCycle,
+    // Passed through for the cycle switcher only. No figure from this summary
+    // may be rendered in this arm; the values are placeholders for evidence
+    // that was never loaded.
+    summary
   };
 }
 
@@ -117,7 +125,7 @@ async function resolvePersonMoneyHeadline(
   if (summary.coverage.activity_state === "not_loaded") {
     // Prefer the cycle the money payload itself reports over the caller's parameter,
     // so the rendered cycle label matches the cycle whose evidence is missing.
-    return buildNotLoadedHeadline(summary.selected_cycle);
+    return buildNotLoadedHeadline(summary.selected_cycle, summary);
   }
 
   return {

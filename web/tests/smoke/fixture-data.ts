@@ -2475,6 +2475,46 @@ export const smokeFixtures = {
           pull_date: "2026-03-19T00:00:00Z"
         }
       ]
+    },
+    // The race money scoreboard, served by
+    // GET /v1/contests/{id}/candidate-money. Values mirror the candidate
+    // fixture's own totals so the contest page and the candidate page cannot
+    // disagree about the same candidate.
+    candidateMoney: {
+      contest_id: SMOKE_CONTEST_ID,
+      selected_cycle: 2026,
+      candidate_count: 1,
+      total_raised: "250.00",
+      total_ie_support: "15000.00",
+      total_ie_oppose: "8500.00",
+      has_unknown_candidate_money: false,
+      rows: [
+        {
+          candidacy_id: SMOKE_CANDIDACY_ID,
+          person_id: SMOKE_PERSON_ID,
+          person_name: SMOKE_CANDIDACY_PERSON_NAME,
+          party: "DEM",
+          status: "filed",
+          incumbent_challenge: "I",
+          fec_candidate_id: "H0NC01001",
+          candidate_id: SMOKE_CANDIDATE_ID,
+          candidate_name: SMOKE_CANDIDATE_NAME,
+          candidate_slug: SMOKE_CANDIDATE_SLUG,
+          candidate_slug_is_unique: true,
+          candidate_identity_is_safe: true,
+          has_fec_money: true,
+          total_raised: "250.00",
+          total_spent: "80.00",
+          net: "170.00",
+          cash_on_hand: "125.00",
+          summary_source: "fec_weball",
+          fundraising_coverage: null,
+          ie_support_total: "15000.00",
+          ie_oppose_total: "8500.00",
+          ie_support_count: 1,
+          ie_oppose_count: 1
+        }
+      ]
     }
   },
   candidacy: {

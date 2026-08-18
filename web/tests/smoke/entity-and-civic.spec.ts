@@ -446,7 +446,7 @@ test.describe("entity and civic detail smoke", () => {
     await expect(page.getByRole("heading", { name: "Key metrics" })).toBeVisible();
     await expect(page.getByRole("heading", { name: "Results" })).toBeVisible();
     await expect(page.getByRole("heading", { name: "Candidacies" })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Candidate finance and outside spending" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Money in this race" })).toBeVisible();
     await expect(page.getByRole("heading", { name: "District map context" })).toBeVisible();
     await expect(page.getByRole("link", { name: "View office record" })).toHaveAttribute(
       "href",
@@ -468,12 +468,12 @@ test.describe("entity and civic detail smoke", () => {
     await expect(
       candidaciesRow.getByRole("link", { name: SMOKE_CANDIDACY_PERSON_NAME, exact: true })
     ).toHaveAttribute("href", `/person/${SMOKE_PERSON_ID}?cycle=${SMOKE_CANDIDATE_SELECTED_CYCLE}`);
-    const financeCardHeading = page.getByRole("heading", {
-      name: SMOKE_CANDIDACY_PERSON_NAME,
-      level: 4
-    });
+    // The money scoreboard is a table now, not per-candidate h4 cards. The
+    // candidate link lives in the row header cell and carries the race's
+    // backend-resolved cycle, same as the candidacies table's person link.
+    const moneyRow = page.getByTestId("race-money-row").first();
     await expect(
-      financeCardHeading.getByRole("link", { name: SMOKE_CANDIDACY_PERSON_NAME, exact: true })
+      moneyRow.getByRole("link", { name: SMOKE_CANDIDACY_PERSON_NAME, exact: true })
     ).toHaveAttribute("href", `/candidate/${SMOKE_CANDIDATE_SLUG}?cycle=${SMOKE_CANDIDATE_SELECTED_CYCLE}`);
     await expect(page.getByRole("link", { name: SMOKE_CONTEST_FINANCE_LINK_NAME })).toHaveCount(0);
     await expect(
@@ -669,7 +669,7 @@ test.describe.serial("entity and civic detail smoke (live mode)", () => {
     await expect(page.getByRole("heading", { name: "Key metrics" })).toBeVisible();
     await expect(page.getByRole("heading", { name: "Results" })).toBeVisible();
     await expect(page.getByRole("heading", { name: "Candidacies" })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Candidate finance and outside spending" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Money in this race" })).toBeVisible();
     await expect(page.getByRole("heading", { name: "District map context" })).toBeVisible();
     await expect(page.getByRole("link", { name: /View candidacy detail for/ }).first()).toBeVisible();
     await assertBreadcrumbNav(page);
