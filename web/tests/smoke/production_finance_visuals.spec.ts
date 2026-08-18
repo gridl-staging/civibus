@@ -219,6 +219,21 @@ async function expectRealFigureOrTruthfulNoData(page: Page): Promise<void> {
 async function expectRenderedFinanceChartsAreHonest(page: Page): Promise<void> {
   const renderedCharts = await collectRenderedFinanceCharts(page, FINANCE_CHART_FRAMES);
   if (renderedCharts.length === 0) {
+    // The invariant is "the reader is told why there is no chart", not "a chart
+    // frame is the thing that tells them". When the selected cycle has no loaded
+    // evidence, the Money at a glance panel says so directly and prominently,
+    // and the receipt-composition frame that used to carry that message is
+    // deliberately not rendered — building it would mean building it from money
+    // values that are placeholders for evidence never loaded.
+    //
+    // This branch is not a relaxation: it requires the not-loaded panel to be
+    // present AND visible, so a page that simply rendered nothing still fails.
+    const notLoadedPanel = page.getByTestId("person-money-not-loaded");
+    if ((await notLoadedPanel.count()) > 0) {
+      await expect(notLoadedPanel.first()).toBeVisible();
+      await expect(notLoadedPanel.first().getByText(TRUTHFUL_NO_DATA).first()).toBeVisible();
+      return;
+    }
     await expectFinanceChartNoDataState(page);
     return;
   }
