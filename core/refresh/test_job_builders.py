@@ -602,6 +602,10 @@ class TestFederalFecRacesJobContract:
         assert call_kwargs["cn_data_source_id"] == cn_data_source_id
         assert call_kwargs["election_client"].fetch_election_dates(election_year=2026) == []
         assert call_kwargs["min_election_year"] == 2022
+        # Symmetric ceiling: without it, filer-supplied garbage years (2089,
+        # 2929) become live, indexable contests. Pinned to the exact value so a
+        # silent widening cannot slip through.
+        assert call_kwargs["max_election_year"] == 2030
         connection.transaction.assert_called_once_with()
         connection.close.assert_called_once_with()
 

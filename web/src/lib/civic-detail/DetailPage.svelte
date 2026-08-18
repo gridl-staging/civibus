@@ -1,6 +1,5 @@
 <script lang="ts">
   import { navigating } from "$app/stores";
-  import OutsideSpendingChart from "$lib/charts/OutsideSpendingChart.svelte";
   import type { MapLayerVisibility, MapPageLevel } from "$lib/config/app";
   import TrustSection from "$lib/detail-trust/TrustSection.svelte";
   import SkeletonPanel from "$lib/loading/SkeletonPanel.svelte";
@@ -13,12 +12,12 @@
     type CandidacyDetailPresentation,
     type ContestDetailPresentation,
     type OfficeDetailPresentation,
-    type OfficeholdingDetailPresentation,
-    type ContestCandidateFinanceByPersonId
+    type OfficeholdingDetailPresentation
   } from "$lib/civic-detail/presentation";
   import {
     CIVIC_ROUTE_PREFIXES,
     type CandidacyDetailResponse,
+    type ContestCandidateMoneyResponse,
     type ContestDetailResponse,
     type OfficeDetailResponse,
     type OfficeholdingDetailResponse
@@ -36,7 +35,10 @@
     | ContestDetailResponse
     | CandidacyDetailResponse
     | OfficeholdingDetailResponse;
-  export let contestCandidateFinanceByPersonId: ContestCandidateFinanceByPersonId = {};
+  // One batched money response for the whole race, or null when the scoreboard
+  // could not be loaded. Never a per-candidate map: the old shape let a single
+  // failed fetch masquerade as one candidate simply having no data.
+  export let contestCandidateMoney: ContestCandidateMoneyResponse | null = null;
   export let contestSelectedCycle: number | null = null;
   export let contestMap:
     | {
@@ -62,7 +64,7 @@
       officeViewModel = buildOfficeDetailPresentation(data as OfficeDetailResponse);
     } else if (entityType === "contest") {
       contestViewModel = buildContestDetailPresentation(data as ContestDetailResponse, {
-        candidateFinanceByPersonId: contestCandidateFinanceByPersonId,
+        candidateMoney: contestCandidateMoney,
         selectedCycle: contestSelectedCycle
       });
     } else if (entityType === "candidacy") {
@@ -253,7 +255,7 @@
         </section>
 
         <section class="detail__panel">
-          <h3>Recent contests</h3>
+          <h3>Elections for this office</h3>
           {#if officeViewModel.recentContestRows.length === 0}
             <p>{officeViewModel.recentContestEmptyMessage}</p>
           {:else}
@@ -412,106 +414,88 @@
           {/if}
         </section>
 
-        <section class="detail__panel">
-          <h3>Candidate finance and outside spending</h3>
+        <section class="detail__panel" data-testid="race-money-scoreboard">
+          <h3>Money in this race</h3>
+          {#if contestViewModel.raceMoneySummary}
+            <!-- Answer-first summary: the one line a reader (or an extraction
+                 model) should be able to take away without scrolling. -->
+            <p class="detail__race-summary" data-testid="race-money-summary">
+              Across {contestViewModel.raceMoneySummary.candidateCount} candidates in the
+              {contestViewModel.raceMoneySummary.selectedCycle} cycle, Civibus has loaded
+              {contestViewModel.raceMoneySummary.totalRaised} raised. Outside groups spent
+              {contestViewModel.raceMoneySummary.totalOutsideSupport} supporting and
+              {contestViewModel.raceMoneySummary.totalOutsideOppose} opposing candidates in this
+              race.
+            </p>
+            {#if contestViewModel.raceMoneySummary.incompleteNote}
+              <p class="detail__caveat" data-testid="race-money-incomplete-note">
+                {contestViewModel.raceMoneySummary.incompleteNote}
+              </p>
+            {/if}
+          {/if}
+
           {#if contestViewModel.financeRows.length === 0}
             <p>{contestViewModel.financeEmptyMessage}</p>
           {:else}
-            {#each contestViewModel.financeRows as financeRow (financeRow.personId)}
-              <article class="detail__committee-card">
-                <h4>
-                  {#if financeRow.candidateHref}
-                    <a href={financeRow.candidateHref}>{financeRow.personName}</a>
-                  {:else if financeRow.personHref}
-                    <a href={financeRow.personHref}>{financeRow.personName}</a>
-                  {:else}
-                    {financeRow.personName}
-                  {/if}
-                </h4>
-
-                {#if financeRow.financeFacts.length > 0}
-                  <dl class="detail__rows">
-                    {#each financeRow.financeFacts as fact (fact.label)}
-                      <div class="detail__row">
-                        <dt>{fact.label}</dt>
-                        <dd>{fact.value}</dd>
-                      </div>
-                    {/each}
-                  </dl>
-                {:else}
-                  <p>Candidate fundraising data is not yet available.</p>
-                {/if}
-
-                <h5>Outside Spending</h5>
-                {#if financeRow.outsideSpendingFigure === null}
-                  <p>{financeRow.outsideSpending.emptyMessage}</p>
-                {:else}
-                  {#if financeRow.outsideSpending.explanatoryBlock}
-                    <p>{financeRow.outsideSpending.explanatoryBlock}</p>
-                  {/if}
-                  <OutsideSpendingChart
-                    testId={`contest-outside-spending-${financeRow.personId}`}
-                    cycle={financeRow.outsideSpendingFigure.cycle}
-                    coverageThrough={financeRow.outsideSpendingFigure.coverageThrough}
-                    sources={financeRow.outsideSpendingFigure.sources}
-                    rows={financeRow.outsideSpendingFigure.rows}
-                    topSpenders={financeRow.outsideSpendingFigure.topSpenders}
-                  />
-                  {#if financeRow.outsideSpending.topSpenders.length > 0}
-                    <h6>Top spenders</h6>
-                    <div class="detail__table-scroll" data-testid="contest-top-spenders-scroll">
-                      <table>
-                        <thead>
-                          <tr>
-                            <th>Committee</th>
-                            <th>Stance</th>
-                            <th>Total</th>
-                            <th>Transactions</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {#each financeRow.outsideSpending.topSpenders as spender (spender.committeeHref + spender.stance)}
-                            <tr>
-                              <td><a href={spender.committeeHref}>{spender.committeeName}</a></td>
-                              <td>{spender.stance}</td>
-                              <td>{spender.totalAmount}</td>
-                              <td>{spender.transactionCountLabel}</td>
-                            </tr>
+            <div class="detail__table-scroll" data-testid="race-money-table-scroll">
+              <table>
+                <thead>
+                  <tr>
+                    <th scope="col">Candidate</th>
+                    <th scope="col">Party</th>
+                    <th scope="col">Status</th>
+                    <th scope="col">Money</th>
+                    <th scope="col">Outside spending</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {#each contestViewModel.financeRows as financeRow (financeRow.personId)}
+                    <tr data-testid="race-money-row">
+                      <th scope="row">
+                        {#if financeRow.candidateHref}
+                          <a href={financeRow.candidateHref}>{financeRow.personName}</a>
+                        {:else if financeRow.personHref}
+                          <a href={financeRow.personHref}>{financeRow.personName}</a>
+                        {:else}
+                          {financeRow.personName}
+                        {/if}
+                      </th>
+                      <td>{financeRow.party}</td>
+                      <td>{financeRow.incumbentChallenge}</td>
+                      <td>
+                        {#if financeRow.moneyUnavailableMessage}
+                          <!-- Unknown coverage renders as copy, never as a figure.
+                               Publishing $0.00 here would assert something false
+                               about a real campaign. -->
+                          <span data-testid="race-money-unavailable"
+                            >{financeRow.moneyUnavailableMessage}</span
+                          >
+                        {:else}
+                          <dl class="detail__rows">
+                            {#each financeRow.financeFacts as fact (fact.label)}
+                              <div class="detail__row">
+                                <dt>{fact.label}</dt>
+                                <dd>{fact.value}</dd>
+                              </div>
+                            {/each}
+                          </dl>
+                        {/if}
+                      </td>
+                      <td>
+                        <dl class="detail__rows">
+                          {#each financeRow.outsideSpendingFacts as fact (fact.label)}
+                            <div class="detail__row">
+                              <dt>{fact.label}</dt>
+                              <dd>{fact.value}</dd>
+                            </div>
                           {/each}
-                        </tbody>
-                      </table>
-                    </div>
-                  {/if}
-                  {#if financeRow.outsideSpending.transactionRows.length > 0}
-                    <h6>Transactions</h6>
-                    <div class="detail__table-scroll" data-testid="contest-outside-spending-transactions">
-                      <table>
-                        <thead>
-                          <tr>
-                            <th>Date</th>
-                            <th>Dissemination Date</th>
-                            <th>Spender</th>
-                            <th>Stance</th>
-                            <th>Amount</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {#each financeRow.outsideSpending.transactionRows as tx (tx.date + tx.spenderHref + tx.amount)}
-                            <tr>
-                              <td>{tx.date}</td>
-                              <td>{tx.disseminationDate}</td>
-                              <td><a href={tx.spenderHref}>{tx.spender}</a></td>
-                              <td>{tx.stance}</td>
-                              <td>{tx.amount}</td>
-                            </tr>
-                          {/each}
-                        </tbody>
-                      </table>
-                    </div>
-                  {/if}
-                {/if}
-              </article>
-            {/each}
+                        </dl>
+                      </td>
+                    </tr>
+                  {/each}
+                </tbody>
+              </table>
+            </div>
           {/if}
         </section>
 

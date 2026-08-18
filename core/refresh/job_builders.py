@@ -1702,6 +1702,20 @@ def _federal_fec_races_min_election_year(parameters: RunnerParameters) -> int:
     return parameters.fec_cycle - 4
 
 
+def _federal_fec_races_max_election_year(parameters: RunnerParameters) -> int:
+    """Forward five-cycle window (inclusive), symmetric with the floor above.
+
+    FEC candidate rows carry a filer-supplied election year that nothing
+    validates beyond "parses as an int", so production accumulated contests
+    dated 2089 and 2929 that served as live race pages. Two cycles ahead is too
+    tight — presidential candidates genuinely file early — so the ceiling
+    mirrors the existing floor at four years out. That admits every plausible
+    early filing while excluding the implausible-and-unmaintainable tail; the
+    threshold is a judgment call, and this is the one place to retune it.
+    """
+    return parameters.fec_cycle + 4
+
+
 def _build_federal_fec_races_job(parameters: RunnerParameters) -> RefreshJob:
     def _run_federal_fec_races_job() -> object:
         connection = get_connection()
@@ -1715,6 +1729,7 @@ def _build_federal_fec_races_job(parameters: RunnerParameters) -> RefreshJob:
                 cn_data_source_id=cn_data_source_id,
                 election_client=_ComputedElectionDatesClient(),
                 min_election_year=_federal_fec_races_min_election_year(parameters),
+                max_election_year=_federal_fec_races_max_election_year(parameters),
             )
         finally:
             connection.close()

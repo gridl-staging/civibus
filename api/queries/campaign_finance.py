@@ -2293,7 +2293,46 @@ _TRANSACTION_LIST_SQL_TEMPLATE = """
     OFFSET %s
 """
 
-_CANDIDATE_LIST_SQL_TEMPLATE = f"""
+# Closed map from the validated ``CandidateListParams.sort`` token to the two
+# ORDER BY fragments the list query needs: one for the paging CTE (aliased to
+# ``cf.candidate c``) and one for the final projection (aliased to
+# ``filtered``). Nothing caller-supplied is ever interpolated; only these fixed
+# fragments are, and only after Pydantic has narrowed the token to this key set.
+#
+# ``total_receipts DESC NULLS LAST`` is deliberate: a candidate with no loaded
+# official total sorts after every candidate with one, including after a
+# reported ``0.00``. Unknown money is not zero money, so it must not outrank it.
+_CANDIDATE_LIST_ORDER_BY: dict[str, tuple[str, str]] = {
+    "name": (
+        "c.name ASC, c.id ASC",
+        "filtered.name ASC, filtered.id ASC",
+    ),
+    "total_raised_desc": (
+        "c.total_receipts DESC NULLS LAST, c.name ASC, c.id ASC",
+        "filtered.total_receipts DESC NULLS LAST, filtered.name ASC, filtered.id ASC",
+    ),
+}
+
+
+@lru_cache(maxsize=None)
+def _candidate_list_sql_template(sort: str, *, include_unsafe_identity: bool) -> str:
+    """Render the candidate-list SQL for one validated sort + browse-scope pair.
+
+    The template is built per (sort, scope) combination rather than per request
+    because the ORDER BY and the identity predicate are the only moving parts;
+    ``lru_cache`` keeps it to one string per combination for the process
+    lifetime.
+
+    Identity suppression is applied inside the paging CTE's WHERE so that
+    ``LIMIT``/``OFFSET`` and the resulting ``has_next`` flag all count only rows
+    the browse page will actually show. It is a *listing* rule: the row is not
+    deleted, redacted, or made unreachable, and ``CAMPAIGN_FINANCE_CANDIDATE_DETAIL_SQL``
+    plus ``CANDIDATE_BY_SLUG_SQL`` still serve it in full with its raw FEC name
+    as source evidence.
+    """
+    page_order_by, projection_order_by = _CANDIDATE_LIST_ORDER_BY[sort]
+    identity_scope_sql = "" if include_unsafe_identity else f"\n          AND {_CANDIDATE_IDENTITY_IS_SAFE_EXPR}"
+    return f"""
     WITH candidate_page AS MATERIALIZED (
         SELECT
             c.id,
@@ -2309,8 +2348,8 @@ _CANDIDATE_LIST_SQL_TEMPLATE = f"""
             c.total_disbursements,
             c.cash_on_hand
         FROM cf.candidate c
-        WHERE {{where_sql}}
-        ORDER BY c.name ASC, c.id ASC
+        WHERE {{where_sql}}{identity_scope_sql}
+        ORDER BY {page_order_by}
         LIMIT %s + 1
         OFFSET %s
     ),
@@ -2325,13 +2364,14 @@ _CANDIDATE_LIST_SQL_TEMPLATE = f"""
             page.office,
             page.state,
             page.district,
+            page.total_receipts,
             {_SLUG_NORMALIZE_EXPR.format(value="page.name")} AS slug,
             {
-    _candidate_identity_is_safe_expr(
-        name_sql="page.name",
-        slug_sql=_SLUG_NORMALIZE_EXPR.format(value="page.name"),
-    )
-} AS identity_is_safe,
+        _candidate_identity_is_safe_expr(
+            name_sql="page.name",
+            slug_sql=_SLUG_NORMALIZE_EXPR.format(value="page.name"),
+        )
+    } AS identity_is_safe,
             {_has_official_candidate_totals_sql("page")} AS has_official_total
         FROM candidate_page page
     ),
@@ -2361,12 +2401,14 @@ _CANDIDATE_LIST_SQL_TEMPLATE = f"""
         filtered.slug,
         slug_counts.candidate_count = 1 AS slug_is_unique,
         filtered.identity_is_safe,
-        filtered.has_official_total
+        filtered.has_official_total,
+        filtered.total_receipts
     FROM filtered_candidates filtered
     JOIN slug_counts
       ON slug_counts.slug = filtered.slug
-    ORDER BY filtered.name ASC, filtered.id ASC
+    ORDER BY {projection_order_by}
 """
+
 
 _CANDIDATES_FOR_PEOPLE_SQL = f"""
     SELECT
@@ -4265,9 +4307,27 @@ def fetch_candidate_list(
     conn: psycopg.Connection,
     params: CandidateListParams,
 ) -> dict[str, Any]:
+    """Fetch one page of the candidate browse list.
+
+    ``params.sort`` and the resolved identity scope select a prebuilt SQL
+    template rather than being interpolated as values, because both control SQL
+    structure (ORDER BY and WHERE) rather than SQL parameters. Both arrive
+    already narrowed by ``CandidateListParams`` validation.
+
+    Identity suppression trims the *browse* list. A ``person_id``-scoped request
+    is an entity-scoped lookup instead: the person is already resolved, and the
+    caller is asking for that person's candidate records specifically. Dropping
+    a row there would silently delete a real person's money from their own page
+    because of a name-quality rule, so ``person_id`` keeps every linked row, as
+    does the explicit ``include_unsafe_identity`` opt-in.
+    """
+    include_unsafe_identity = params.include_unsafe_identity or params.person_id is not None
     rows = _fetch_filtered_rows(
         conn,
-        sql_template=_CANDIDATE_LIST_SQL_TEMPLATE,
+        sql_template=_candidate_list_sql_template(
+            params.sort,
+            include_unsafe_identity=include_unsafe_identity,
+        ),
         filter_values=(
             (params.state, "c.state = %s"),
             (params.office, "c.office = %s"),

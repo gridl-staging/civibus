@@ -432,7 +432,14 @@ function parseFiniteSerializedMoney(value: SerializedMoney | number | null): num
   return Number.isFinite(parsedValue) ? parsedValue : null;
 }
 
-function formatOptionalCurrency(value: SerializedMoney | null | undefined): string {
+/**
+ * Formats money that may be unknown.
+ *
+ * Exported so every surface that can receive a missing amount shares one answer
+ * for "we do not have this figure". Absence must never render as `$0.00`: a
+ * loaded zero is a reported fact, a missing value is not.
+ */
+export function formatOptionalCurrency(value: SerializedMoney | null | undefined): string {
   return value === null || value === undefined ? "Not available" : formatCurrency(value);
 }
 

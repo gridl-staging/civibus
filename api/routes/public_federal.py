@@ -285,7 +285,7 @@ def _money_summary_for_candidate(
             canonical_entity_id=person_id,
         )
     )
-    public_totals = _public_money_totals(resolved_summary)
+    public_totals = public_money_totals(resolved_summary)
     return PublicMemberMoneySummary.model_validate(
         {
             "person_id": person_id,
@@ -302,7 +302,14 @@ def _money_summary_for_candidate(
     )
 
 
-def _public_money_totals(summary: dict[str, Any]) -> dict[str, Any]:
+def public_money_totals(summary: dict[str, Any]) -> dict[str, Any]:
+    """Pick the totals a public surface should show, given coverage state.
+
+    Shared owner: the congress directory and the contest money scoreboard
+    both route through here so the same candidate cannot show one headline
+    figure on a member page and a different one on a race page. Exported
+    (no leading underscore) because api/routes/civics.py consumes it.
+    """
     out_of_cycle_total = summary.get("out_of_cycle_official_total")
     coverage = summary.get("coverage")
     public_coverage_payload = (

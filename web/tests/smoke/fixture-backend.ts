@@ -197,7 +197,15 @@ function isCandidateListRequest(url: URL): boolean {
     return false;
   }
 
-  return hasOnlyAllowedQueryParams(url, ["state", "office", "person_id", "limit", "offset"]);
+  return hasOnlyAllowedQueryParams(url, [
+    "state",
+    "office",
+    "person_id",
+    "sort",
+    "include_unsafe_identity",
+    "limit",
+    "offset"
+  ]);
 }
 
 function isCommitteeListRequest(url: URL): boolean {

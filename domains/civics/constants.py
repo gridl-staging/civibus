@@ -70,6 +70,83 @@ LAUNCH_SCOPE_STATE_FIPS: frozenset[str] = frozenset(fips for fips, _ in LAUNCH_S
 LAUNCH_SCOPE_USPS_STATES: tuple[str, ...] = tuple(usps for _, usps in LAUNCH_SCOPE_STATE_FIPS_TO_USPS)
 CENSUS_STATE_FIPS_TO_USPS_MAP: dict[str, str] = dict(CENSUS_STATE_FIPS_TO_USPS)
 
+# Display spellings for every jurisdiction CENSUS_STATE_FIPS_TO_USPS recognises.
+# FEC bulk files carry only the two-letter code, so this is what turns a wire
+# value like "NC" into the "North Carolina 9th Congressional District" a reader
+# (and a search engine) can actually use. domains/civics/tests/test_constants.py
+# pins coverage against the FIPS map so the two never drift apart.
+USPS_TO_STATE_NAME: dict[str, str] = {
+    "AL": "Alabama",
+    "AK": "Alaska",
+    "AZ": "Arizona",
+    "AR": "Arkansas",
+    "CA": "California",
+    "CO": "Colorado",
+    "CT": "Connecticut",
+    "DE": "Delaware",
+    "DC": "District of Columbia",
+    "FL": "Florida",
+    "GA": "Georgia",
+    "HI": "Hawaii",
+    "ID": "Idaho",
+    "IL": "Illinois",
+    "IN": "Indiana",
+    "IA": "Iowa",
+    "KS": "Kansas",
+    "KY": "Kentucky",
+    "LA": "Louisiana",
+    "ME": "Maine",
+    "MD": "Maryland",
+    "MA": "Massachusetts",
+    "MI": "Michigan",
+    "MN": "Minnesota",
+    "MS": "Mississippi",
+    "MO": "Missouri",
+    "MT": "Montana",
+    "NE": "Nebraska",
+    "NV": "Nevada",
+    "NH": "New Hampshire",
+    "NJ": "New Jersey",
+    "NM": "New Mexico",
+    "NY": "New York",
+    "NC": "North Carolina",
+    "ND": "North Dakota",
+    "OH": "Ohio",
+    "OK": "Oklahoma",
+    "OR": "Oregon",
+    "PA": "Pennsylvania",
+    "RI": "Rhode Island",
+    "SC": "South Carolina",
+    "SD": "South Dakota",
+    "TN": "Tennessee",
+    "TX": "Texas",
+    "UT": "Utah",
+    "VT": "Vermont",
+    "VA": "Virginia",
+    "WA": "Washington",
+    "WV": "West Virginia",
+    "WI": "Wisconsin",
+    "WY": "Wyoming",
+    "AS": "American Samoa",
+    "GU": "Guam",
+    "MP": "Northern Mariana Islands",
+    "PR": "Puerto Rico",
+    "VI": "U.S. Virgin Islands",
+}
+
+# FEC bulk files model every non-voting seat as House office code "H" with
+# district "00", which is indistinguishable on the wire from a state's at-large
+# district. These six are not congressional districts and must not be labelled
+# as such: five send a Delegate, Puerto Rico sends a Resident Commissioner.
+US_HOUSE_NON_VOTING_SEAT_TITLES: dict[str, str] = {
+    "AS": "Delegate to the U.S. House",
+    "DC": "Delegate to the U.S. House",
+    "GU": "Delegate to the U.S. House",
+    "MP": "Delegate to the U.S. House",
+    "VI": "Delegate to the U.S. House",
+    "PR": "Resident Commissioner",
+}
+
 # Canonical office.name values that make up the federal Congress + executive
 # directory. The civics ingest layer accepts arbitrary names at
 # office_level='federal', so callers presenting the Congress directory MUST

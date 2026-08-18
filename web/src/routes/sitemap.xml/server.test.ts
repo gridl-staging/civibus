@@ -308,6 +308,9 @@ function expectedKnownAnswerPaths(includePeople: boolean): Set<string> {
   const expectedElectionPaths = UPCOMING_TIMELINE.map((entry) =>
     buildElectionDateRoutePath(entry.date)
   );
+  const expectedContestPaths = UPCOMING_TIMELINE.flatMap((entry) =>
+    entry.contests.map((contest) => `/contest/${contest.contest_id}`)
+  );
   const expectedPersonPaths = includePeople
     ? CONGRESS_MEMBERS.flatMap((member) => {
         const path = buildEntityRouteHref("person", member.person_id);
@@ -319,6 +322,7 @@ function expectedKnownAnswerPaths(includePeople: boolean): Set<string> {
     ...expectedCandidatePaths,
     ...expectedCommitteePaths,
     ...expectedElectionPaths,
+    ...expectedContestPaths,
     ...expectedPersonPaths
   ]);
 }
@@ -390,8 +394,54 @@ describe("GET /sitemap.xml bounded sitemap index", () => {
       "/sitemap-static.xml",
       "/sitemap-candidate-0.xml",
       "/sitemap-committee-0.xml",
+      "/sitemap-contest-0.xml",
       "/sitemap-person-0.xml"
     ]);
+  });
+
+  it("emits one contest loc per upcoming contest so race pages are discoverable", async () => {
+    // Race pages were completely absent from the sitemap: it covered static,
+    // candidate, committee and person only. A race page nobody can find is not
+    // a shipped surface, and the whole programmatic-SEO plan depends on these.
+    vi.resetModules();
+    civicDetailMockState.fetchUpcomingElectionTimeline = vi.fn(() =>
+      Promise.resolve(UPCOMING_TIMELINE)
+    );
+    const moduleUnderTest = await import("../sitemap-[kind]-[page].xml/+server");
+
+    const response = await moduleUnderTest.GET(
+      createRequestEvent(
+        "https://civibus.org/sitemap-contest-0.xml",
+        createPaginatedListRequestJson(),
+        { kind: "contest", page: "0" }
+      )
+    );
+    const xml = await expectXmlResponse(response);
+    const paths = extractLocPaths(xml);
+
+    const expectedContestPaths = UPCOMING_TIMELINE.flatMap((entry) =>
+      entry.contests.map((contest) => `/contest/${contest.contest_id}`)
+    );
+    expect(expectedContestPaths.length).toBe(3);
+    expect(paths).toEqual(expectedContestPaths);
+  });
+
+  it("rejects nonzero contest shard pages rather than serving an empty success", async () => {
+    // Upcoming contests are a single bounded shard, like people. A nonzero page
+    // is an invalid route, not an empty one; returning 200-with-no-urls would
+    // invite crawlers to keep walking pages that will never exist.
+    vi.resetModules();
+    const moduleUnderTest = await import("../sitemap-[kind]-[page].xml/+server");
+
+    const response = await moduleUnderTest.GET(
+      createRequestEvent(
+        "https://civibus.org/sitemap-contest-1.xml",
+        createPaginatedListRequestJson(),
+        { kind: "contest", page: "1" }
+      )
+    );
+
+    expect(response.status).toBe(404);
   });
 
   it("serves canonical static and election loc entries in declared order", async () => {

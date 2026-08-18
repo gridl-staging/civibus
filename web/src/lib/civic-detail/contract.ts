@@ -1,4 +1,5 @@
 import { encodeRoutePathSegment, type SourceInfo } from "$lib/entity-detail/contract";
+import type { CandidateFundraisingCoverage } from "$lib/campaign-finance-detail/contract";
 
 export const ELECTION_TYPES = ["general", "primary", "runoff", "special", "recall"] as const;
 
@@ -138,6 +139,58 @@ export type ContestDetailResponse = {
   sources: SourceInfo[];
 };
 
+/**
+ * One candidate's money scoreboard line inside a contest.
+ *
+ * Money fields are nullable by contract. A candidacy with no matching FEC
+ * candidate row has UNKNOWN money, not zero money, and the screen specs forbid
+ * rendering unknown coverage as `$0.00`. `has_fec_money === false` is the
+ * discriminator; never infer coverage from the numbers themselves.
+ */
+export type ContestCandidateMoneyRow = {
+  candidacy_id: string;
+  person_id: string;
+  person_name: string;
+  party: string | null;
+  status: string | null;
+  incumbent_challenge: string | null;
+  fec_candidate_id: string | null;
+  candidate_id: string | null;
+  candidate_name: string | null;
+  candidate_slug: string | null;
+  candidate_slug_is_unique: boolean;
+  candidate_identity_is_safe: boolean;
+  has_fec_money: boolean;
+  total_raised: string | null;
+  total_spent: string | null;
+  net: string | null;
+  cash_on_hand: string | null;
+  summary_source: string | null;
+  fundraising_coverage: CandidateFundraisingCoverage | null;
+  ie_support_total: string;
+  ie_oppose_total: string;
+  ie_support_count: number;
+  ie_oppose_count: number;
+};
+
+/**
+ * The whole race money scoreboard in one response.
+ *
+ * Replaces a per-candidacy fan-out of 4N+1 backend calls, which measured ~18s
+ * on a 21-candidacy Senate contest and swallowed every failure as "data not
+ * yet available".
+ */
+export type ContestCandidateMoneyResponse = {
+  contest_id: string;
+  selected_cycle: number;
+  candidate_count: number;
+  total_raised: string;
+  total_ie_support: string;
+  total_ie_oppose: string;
+  has_unknown_candidate_money: boolean;
+  rows: ContestCandidateMoneyRow[];
+};
+
 export type CandidacyDetailResponse = {
   id: string;
   person_id: string;
@@ -164,6 +217,18 @@ export type OfficeholdingDetailResponse = {
   sources: SourceInfo[];
 };
 
+/**
+ * One contest row in the `/election/[date]` index and the upcoming timeline.
+ *
+ * Mirrors `ElectionContestSummary` in `api/models/civics.py`. The
+ * `electoral_division_*` and `district_number` fields are the seat context the
+ * race index groups and labels by; `electoral_division_id` on its own is a UUID
+ * no reader can interpret.
+ *
+ * `result_status` and `winning_person_name` were removed on 2026-08-17: neither
+ * backing query ever selected them, so they were permanently `null` on the wire.
+ * Contest results live on `ContestDetailResponse.result_winner_*`.
+ */
 export type ElectionContestSummary = {
   contest_id: string;
   office_id: string;
@@ -174,9 +239,10 @@ export type ElectionContestSummary = {
   state: string | null;
   jurisdiction_id: string | null;
   electoral_division_id: string | null;
+  electoral_division_type: string | null;
+  electoral_division_state: string | null;
+  district_number: string | null;
   candidate_count: number;
-  result_status: string | null;
-  winning_person_name: string | null;
 };
 
 export type ElectionDateAggregateResponse = {
@@ -247,6 +313,14 @@ export function buildContestDetailPath(contestId: string): string {
   return `/v1/contests/${encodeRoutePathSegment(contestId)}`;
 }
 
+export function buildContestCandidateMoneyPath(
+  contestId: string,
+  request: { cycle?: number } = {}
+): string {
+  const base = `/v1/contests/${encodeRoutePathSegment(contestId)}/candidate-money`;
+  return request.cycle === undefined ? base : `${base}?cycle=${request.cycle}`;
+}
+
 export function buildContestRoutePath(contestId: string): string {
   return `/contest/${encodeRoutePathSegment(contestId)}`;
 }
@@ -279,4 +353,9 @@ export function buildElectionDateRoutePath(electionDate: string): string {
   return `/election/${encodeRoutePathSegment(electionDate)}`;
 }
 
-export const CIVIC_ROUTE_PREFIXES = ["/office/", "/contest/", "/candidacy/", "/officeholding/"] as const;
+export const CIVIC_ROUTE_PREFIXES = [
+  "/office/",
+  "/contest/",
+  "/candidacy/",
+  "/officeholding/"
+] as const;

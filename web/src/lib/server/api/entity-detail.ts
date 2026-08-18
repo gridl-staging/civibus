@@ -32,9 +32,21 @@ export type PersonDetailPageExtensions = {
   personTopEmployers: PersonTopEmployerRow[] | Promise<PersonTopEmployerRow[]>;
 };
 
+/**
+ * Person Money at a glance states.
+ *
+ * `not_loaded` is distinct from every other arm and must stay distinct: the backend
+ * answers 200 with zero-valued money strings when it has no authoritative
+ * selected-cycle evidence, and the only thing separating that from a real $0 is
+ * `coverage.activity_state`. Collapsing `not_loaded` into `loaded` publishes
+ * "Total receipts $0.00" as a fact we never established. See
+ * `docs/reference/screen_specs/person_detail.md` ("Money at a glance") and the shared
+ * coverage-discriminator matrix in `docs/reference/screen_specs/candidate_detail.md`.
+ */
 export type PersonMoneyHeadlineState =
   | { kind: "loaded"; summary: PersonMoneyAtGlanceSummary }
   | { kind: "no_linked_candidate"; message: string }
+  | { kind: "not_loaded"; message: string; selectedCycle: number }
   | { kind: "missing_summary"; message: string; selectedCycle: number }
   | { kind: "temporarily_unavailable"; message: string; selectedCycle: number };
 

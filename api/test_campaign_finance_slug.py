@@ -240,6 +240,15 @@ def test_slug_routes_do_not_shadow_uuid_detail_routes(
 # ---------------------------------------------------------------------------
 
 
+# Digit-free on purpose. The shared candidate identity predicate
+# (_candidate_identity_is_safe_expr) rejects any name containing a digit, since
+# address-like FEC source strings such as "212 N HALF W. JOHN, RODNEY HOWARD MR."
+# are exactly what it exists to keep out of public listings. Default browse now
+# suppresses unsafe rows, so a fixture named "List Candidate 1" would be
+# filtered out and these pagination tests would silently measure an empty list.
+_LIST_TEST_NAME_WORDS = ("Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot", "Golf")
+
+
 def _insert_candidates_for_list_tests(db_conn: psycopg.Connection) -> None:
     """Insert a small set of candidates for list/pagination testing."""
     for i in range(1, 6):
@@ -248,7 +257,7 @@ def _insert_candidates_for_list_tests(db_conn: psycopg.Connection) -> None:
             CandidateRowSeed(
                 id=UUID(f"00000000-0000-0000-0000-000000000{600 + i:03d}"),
                 fec_candidate_id=f"H0GA{i:05d}",
-                name=f"List Candidate {i}",
+                name=f"List Candidate {_LIST_TEST_NAME_WORDS[i - 1]}",
                 office="H",
                 state="GA",
                 party="DEM",
@@ -261,7 +270,7 @@ def _insert_candidates_for_list_tests(db_conn: psycopg.Connection) -> None:
             CandidateRowSeed(
                 id=UUID(f"00000000-0000-0000-0000-000000000{600 + i:03d}"),
                 fec_candidate_id=f"S0OH{i:05d}",
-                name=f"List Candidate {i}",
+                name=f"List Candidate {_LIST_TEST_NAME_WORDS[i - 1]}",
                 office="S",
                 state="OH",
             ),
@@ -529,7 +538,10 @@ def test_candidate_identity_safety_is_exposed_on_slug_list_and_detail_surfaces(
         },
     }
 
-    list_response = api_client.get("/v1/candidates?limit=50")
+    # include_unsafe_identity is required here: default browse suppresses the
+    # address-like rows, and this test exists to prove the flag is exposed ON
+    # them. Suppression is a listing default, never a removal from the API.
+    list_response = api_client.get("/v1/candidates?limit=50&include_unsafe_identity=true")
     assert list_response.status_code == 200
     listed_by_id = {item["id"]: item for item in list_response.json()["items"]}
     assert {candidate_id: listed_by_id[candidate_id] for candidate_id in expected} == {

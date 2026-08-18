@@ -4,12 +4,14 @@ import {
   buildElectionDateAggregatePath,
   buildUpcomingElectionTimelinePath,
   buildCandidacyDetailPath,
+  buildContestCandidateMoneyPath,
   buildContestDetailPath,
   buildOfficeDetailPath,
   buildOfficeholdingDetailPath,
   type CongressMemberSummary,
   type CongressMemberMoneySummary,
   type CandidacyDetailResponse,
+  type ContestCandidateMoneyResponse,
   type ContestDetailResponse,
   type ElectionDateAggregateResponse,
   type OfficeDetailResponse,
@@ -20,6 +22,11 @@ import type { ApiClient } from "./client";
 
 export type OfficeDetailRequest = {
   id: string;
+};
+
+export type ContestCandidateMoneyRequest = {
+  id: string;
+  cycle?: number;
 };
 
 export type ContestDetailRequest = {
@@ -58,6 +65,24 @@ export async function fetchContestDetail(
   request: ContestDetailRequest
 ): Promise<ContestDetailResponse> {
   return apiClient.requestJson<ContestDetailResponse>(buildContestDetailPath(request.id));
+}
+
+/**
+ * Fetch the whole race money scoreboard in one backend call.
+ *
+ * Deliberately NOT wrapped in a try/catch. The previous per-candidacy
+ * implementation swallowed every failure into an empty section, so a backend
+ * outage rendered as "data is not yet available" and was indistinguishable
+ * from a real data gap. Letting this reject lets the route's error handling
+ * surface a real failure as a real failure.
+ */
+export async function fetchContestCandidateMoney(
+  apiClient: ApiClient,
+  request: ContestCandidateMoneyRequest
+): Promise<ContestCandidateMoneyResponse> {
+  return apiClient.requestJson<ContestCandidateMoneyResponse>(
+    buildContestCandidateMoneyPath(request.id, { cycle: request.cycle })
+  );
 }
 
 export async function fetchCandidacyDetail(

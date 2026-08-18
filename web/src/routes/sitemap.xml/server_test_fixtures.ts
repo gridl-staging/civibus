@@ -160,14 +160,64 @@ export const TERMINAL_COMMITTEE_PAGE: CommitteeListResponse = {
   has_next: false
 };
 
+// Contests are populated here on purpose: they are the source for the contest
+// sitemap shard, and an all-empty fixture would let a shard that emits nothing
+// pass its own test.
 export const UPCOMING_TIMELINE: UpcomingElectionTimelineEntry[] = [
   {
     date: "2026-11-03",
-    contests: []
+    contests: [
+      {
+        contest_id: "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
+        office_id: "11111111-1111-4111-8111-111111111111",
+        name: "North Carolina 4th Congressional District — 2026 General Election",
+        election_type: "general",
+        office_name: "us_house",
+        office_level: "federal",
+        state: "NC",
+        jurisdiction_id: null,
+        electoral_division_id: "dddddddd-1111-4111-8111-dddddddddddd",
+        electoral_division_type: "congressional_district",
+        electoral_division_state: "NC",
+        district_number: "04",
+        candidate_count: 3
+      },
+      {
+        contest_id: "aaaaaaaa-2222-4222-8222-aaaaaaaaaaaa",
+        office_id: "22222222-2222-4222-8222-222222222222",
+        name: "Georgia U.S. Senate — 2026 General Election",
+        election_type: "general",
+        office_name: "us_senate",
+        office_level: "federal",
+        state: "GA",
+        jurisdiction_id: null,
+        electoral_division_id: null,
+        electoral_division_type: null,
+        electoral_division_state: null,
+        district_number: null,
+        candidate_count: 5
+      }
+    ]
   },
   {
     date: "2027-03-09",
-    contests: []
+    contests: [
+      {
+        contest_id: "aaaaaaaa-3333-4333-8333-aaaaaaaaaaaa",
+        office_id: "11111111-1111-4111-8111-111111111111",
+        name: "Florida 1st Congressional District — 2027 General Election",
+        election_type: "special",
+        office_name: "us_house",
+        office_level: "federal",
+        state: "FL",
+        jurisdiction_id: null,
+        electoral_division_id: "dddddddd-3333-4333-8333-dddddddddddd",
+        electoral_division_type: "congressional_district",
+        electoral_division_state: "FL",
+        district_number: "01",
+        candidate_count: 2
+      }
+    ]
   }
 ];
 

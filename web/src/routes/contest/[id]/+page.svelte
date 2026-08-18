@@ -48,7 +48,7 @@
 <DetailPage
   entityType="contest"
   data={data.contest}
-  contestCandidateFinanceByPersonId={data.contestCandidateFinanceByPersonId ?? {}}
+  contestCandidateMoney={data.contestCandidateMoney ?? null}
   contestSelectedCycle={data.contestSelectedCycle ?? null}
   {contestMap}
 />

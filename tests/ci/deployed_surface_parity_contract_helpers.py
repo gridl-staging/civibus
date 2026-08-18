@@ -93,7 +93,10 @@ KNOWN_RED_PAGE_BODIES = {
 }
 DEFAULT_PAGE_BODIES = PUBLIC_PAGE_BODIES | KNOWN_RED_PAGE_BODIES
 
-_NON_PRODUCTION_TOP_LEVELS = frozenset({"decisions", "docs", "tests"})
+# "chats" holds private session notes (handoffs, checklists, transcripts). It is
+# absent from .debbie.toml's sync whitelist, so nothing under it is mirrored or
+# executed; a handoff quoting the manifest filename describes it, never reads it.
+_NON_PRODUCTION_TOP_LEVELS = frozenset({"chats", "decisions", "docs", "tests"})
 _NON_PRODUCTION_PATH_TOKENS = frozenset({"artifacts"})
 _ROOT_DOCUMENTATION_FILES = frozenset(
     {
@@ -782,6 +785,29 @@ def assert_qualified_assignment_metadata_detection() -> None:
         'export MANIFEST_PATH="infra/public_surface_probes.tsv"',
     )
     assert exempt_qualified == []
+
+
+def assert_session_notes_source_filter() -> None:
+    """Private session notes are not production readers; runtime owners still are.
+
+    ``chats/`` holds handoffs, checklists, and session transcripts. It is absent
+    from ``.debbie.toml``'s sync whitelist, so nothing under it ever reaches a
+    mirror or executes anywhere. A handoff that *quotes* the public-surface
+    manifest filename is describing the manifest, not reading it, and counting
+    it as a production reader turns ordinary note-taking into a red gate.
+    """
+    session_notes = (
+        Path("chats/handoffs/example_handoff.md"),
+        Path("chats/icg/example_checklist.md"),
+        Path("chats/chatting/example_plan.md"),
+    )
+    runtime_owners = (Path("Makefile"), Path("infra/Caddyfile"), Path("infra/api/Dockerfile"))
+    assert {path.as_posix(): _is_production_source_path(path) for path in session_notes} == {
+        "chats/handoffs/example_handoff.md": False,
+        "chats/icg/example_checklist.md": False,
+        "chats/chatting/example_plan.md": False,
+    }
+    assert all(_is_production_source_path(path) for path in runtime_owners)
 
 
 def assert_root_doc_source_filter() -> None:

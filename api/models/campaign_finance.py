@@ -420,6 +420,13 @@ class CandidateListItem(BaseModel):
     slug_is_unique: bool
     identity_is_safe: bool
     has_official_total: bool
+    # Optional on purpose. A candidate with no loaded FEC total receipts must
+    # serialise as ``null`` so the client can say "unknown"; typing this as a
+    # plain ``Decimal`` would coerce the missing case into a false ``0`` claim.
+    # Some CandidateListItem producers (for example the person-scoped and
+    # by-slug row shapes) do not select this column at all, which is also an
+    # unknown, not a zero.
+    total_receipts: Decimal | None = None
 
 
 class CommitteeListItem(BaseModel):
@@ -433,12 +440,43 @@ class CommitteeListItem(BaseModel):
     slug_is_unique: bool
 
 
+# Closed set of candidate browse orderings. The query layer maps each token to a
+# fixed ORDER BY fragment, so this literal is the only place a caller-supplied
+# string can influence SQL ordering.
+CandidateListSort = Literal["name", "total_raised_desc"]
+CANDIDATE_LIST_SORTS: tuple[CandidateListSort, ...] = ("name", "total_raised_desc")
+DEFAULT_CANDIDATE_LIST_SORT: CandidateListSort = "name"
+
+
 class CandidateListParams(BaseModel):
     state: str | None = None
     office: str | None = None
     person_id: UUID | None = None
+    sort: CandidateListSort = DEFAULT_CANDIDATE_LIST_SORT
+    # Browse-listing switch, not an access-control switch. The default browse
+    # omits rows whose raw FEC name cannot stand as a public identity; those rows
+    # stay fully readable at their own candidate URLs. Entity-scoped reads (for
+    # example the person-linked money sections) pass true so a name-quality rule
+    # never hides a linked candidate's money.
+    include_unsafe_identity: bool = False
     limit: int = Field(default=50, ge=1, le=200)
     offset: int = Field(default=0, ge=0)
+
+    @field_validator("sort", mode="before")
+    @classmethod
+    def _coerce_unknown_sort_to_default(cls, value: object) -> object:
+        """Degrade an unrecognized sort token to the default instead of 422ing.
+
+        Sort is a presentation preference carried in a shareable URL, so a stale
+        or hand-edited token should still render a usable browse page. Filters
+        keep their strict validation because a wrong filter changes which
+        records the reader believes exist.
+        """
+        if value is None:
+            return DEFAULT_CANDIDATE_LIST_SORT
+        if isinstance(value, str) and value not in CANDIDATE_LIST_SORTS:
+            return DEFAULT_CANDIDATE_LIST_SORT
+        return value
 
 
 class CommitteeListParams(BaseModel):

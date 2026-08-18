@@ -23,7 +23,6 @@ import {
 import {
   fetchCandidateDetail,
   fetchCandidateDetailBundle,
-  fetchContestCandidateFinanceByPersonId,
   fetchCandidateList,
   fetchPersonCandidateFinanceSections,
   fetchPersonContributionInsights,
@@ -794,87 +793,6 @@ describe("campaign-finance detail api", () => {
       buildCandidateIndependentExpendituresPath(CANDIDATE_ID, { cycle: 2024 }),
       buildCandidateIndependentExpendituresSummaryPath(CANDIDATE_ID, { cycle: 2024 }),
       buildCommitteeTransactionsPath(COMMITTEE_ID, { cycle: 2024 })
-    ]);
-  });
-
-  it("fetches contest candidate finance with backend-owned selected-cycle facts and exact cycle paths", async () => {
-    const candidateSummary = {
-      candidate_id: CANDIDATE_ID,
-      candidate_name: "Candidate One",
-      total_raised: "250.00",
-      total_spent: "100.00",
-      net: "150.00",
-      transaction_count: 5,
-      committees: [],
-      cash_on_hand: "75.00",
-      summary_source: "fec_weball" as const,
-      itemized_transaction_count: 5,
-      selected_cycle: 2024,
-      coverage_start_date: "2023-01-01",
-      coverage_end_date: "2024-12-31",
-      available_cycles: [2022, 2024, 2026]
-    };
-    const ieSummary = {
-      candidate_id: CANDIDATE_ID,
-      support_total: "10.00",
-      oppose_total: "5.00",
-      support_count: 1,
-      oppose_count: 1,
-      top_spenders: [],
-      excluded_outlier_count: 0,
-      selected_cycle: 2024,
-      coverage_start_date: "2023-01-01",
-      coverage_end_date: "2024-12-31",
-      available_cycles: [2022, 2024, 2026]
-    };
-    const requestJson = vi.fn(async (path: string) => {
-      if (path === `/v1/candidates?person_id=${PERSON_ID}&limit=10&offset=0`) {
-        return CANDIDATE_LIST_RESPONSE;
-      }
-      if (path === buildCandidateDetailPath(CANDIDATE_ID)) {
-        return { ...CANDIDATE_DETAIL, person_id: PERSON_ID, principal_committee_id: null };
-      }
-      if (path === buildCandidateSummaryPath(CANDIDATE_ID, { cycle: 2024 })) {
-        return candidateSummary;
-      }
-      if (path === buildCandidateIndependentExpendituresPath(CANDIDATE_ID, { cycle: 2024 })) {
-        return [];
-      }
-      if (path === buildCandidateIndependentExpendituresSummaryPath(CANDIDATE_ID, { cycle: 2024 })) {
-        return ieSummary;
-      }
-
-      throw new Error(`unexpected path: ${path}`);
-    });
-
-    const sections = await fetchContestCandidateFinanceByPersonId(
-      { requestJson: requestJson as ApiClient["requestJson"] },
-      { candidacies: [{ personId: PERSON_ID }], cycle: 2024 }
-    );
-
-    expect(sections[PERSON_ID]).toMatchObject({
-      personId: PERSON_ID,
-      candidateHref: "/candidate/candidate-one",
-      summary: {
-        selected_cycle: 2024,
-        coverage_start_date: "2023-01-01",
-        coverage_end_date: "2024-12-31",
-        total_raised: "250.00",
-        total_spent: "100.00",
-        cash_on_hand: "75.00"
-      },
-      ieSummary: {
-        selected_cycle: 2024,
-        coverage_end_date: "2024-12-31"
-      },
-      ieTransactions: []
-    });
-    expect(requestJson.mock.calls.map(([path]) => path)).toEqual([
-      `/v1/candidates?person_id=${PERSON_ID}&limit=10&offset=0`,
-      buildCandidateDetailPath(CANDIDATE_ID),
-      buildCandidateSummaryPath(CANDIDATE_ID, { cycle: 2024 }),
-      buildCandidateIndependentExpendituresPath(CANDIDATE_ID, { cycle: 2024 }),
-      buildCandidateIndependentExpendituresSummaryPath(CANDIDATE_ID, { cycle: 2024 })
     ]);
   });
 

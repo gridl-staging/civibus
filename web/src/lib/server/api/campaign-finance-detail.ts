@@ -153,26 +153,6 @@ export type PersonCandidateFinanceRequest = {
   cycle?: number;
 };
 
-export type ContestCandidacyFinanceRequestItem = {
-  personId: string;
-};
-
-export type ContestCandidateFinanceSection = {
-  personId: string;
-  candidateHref: string | null;
-  summary: CandidateFundraisingSummary | null;
-  ieSummary: IndependentExpenditureSummary | null;
-  ieTransactions: IndependentExpenditureResponse[];
-};
-
-export type ContestCandidateFinanceByPersonId = Record<string, ContestCandidateFinanceSection>;
-
-export type ContestCandidateFinanceRequest = {
-  candidacies: ContestCandidacyFinanceRequestItem[];
-  limitPerPerson?: number;
-  cycle?: number;
-};
-
 export async function fetchCandidateSummary(
   apiClient: ApiClient,
   request: CandidateDetailRequest
@@ -337,79 +317,6 @@ export async function fetchPersonCandidateFinanceSections(
       };
     })
   );
-}
-
-function createEmptyContestCandidateFinanceSection(personId: string): ContestCandidateFinanceSection {
-  return {
-    personId,
-    candidateHref: null,
-    summary: null,
-    ieSummary: null,
-    ieTransactions: []
-  };
-}
-
-/**
- */
-function selectPersonCandidateFinanceSection(
-  sections: PersonCandidateFinanceSection[],
-  personId: string
-): PersonCandidateFinanceSection | null {
-  if (sections.length === 0) {
-    return null;
-  }
-
-  for (const section of sections) {
-    if (section.candidate.person_id === personId) {
-      return section;
-    }
-  }
-
-  return sections[0];
-}
-
-/**
- */
-export async function fetchContestCandidateFinanceByPersonId(
-  apiClient: ApiClient,
-  request: ContestCandidateFinanceRequest
-): Promise<ContestCandidateFinanceByPersonId> {
-  const personIds = [...new Set(request.candidacies.map((candidacy) => candidacy.personId))];
-  const entries = await Promise.all(
-    personIds.map(async (personId) => {
-      try {
-        const personSections = await fetchPersonCandidateFinanceSections(apiClient, {
-          personId,
-          limit: request.limitPerPerson ?? 10,
-          cycle: request.cycle
-        });
-        const matchedSection = selectPersonCandidateFinanceSection(personSections, personId);
-        if (matchedSection === null) {
-          return [personId, createEmptyContestCandidateFinanceSection(personId)] as const;
-        }
-
-        const [summary, ieSummary, ieTransactions] = await Promise.all([
-          matchedSection.summary,
-          matchedSection.ieSummary,
-          matchedSection.ieTransactions
-        ]);
-        return [
-          personId,
-          {
-            personId,
-            candidateHref: buildCandidateHref(matchedSection.candidate),
-            summary,
-            ieSummary,
-            ieTransactions
-          }
-        ] as const;
-      } catch {
-        return [personId, createEmptyContestCandidateFinanceSection(personId)] as const;
-      }
-    })
-  );
-
-  return Object.fromEntries(entries);
 }
 
 export async function fetchCommitteeList(

@@ -8,10 +8,13 @@ import pytest
 
 from api.queries._common import _render_filtered_rows_query
 from api.queries.campaign_finance import (
-    _CANDIDATE_LIST_SQL_TEMPLATE,
     _COMMITTEE_LIST_SQL_TEMPLATE,
+    _candidate_list_sql_template,
 )
 from test_support.donor_search_fixture import seed_full_scope_skewed_donor_search_fixture
+
+# Default browse shape: name sort with identity suppression applied.
+_CANDIDATE_LIST_SQL_TEMPLATE = _candidate_list_sql_template("name", include_unsafe_identity=False)
 
 
 def _plan_nodes(plan: dict[str, Any]) -> list[dict[str, Any]]:
@@ -64,6 +67,31 @@ def test_candidate_list_sql_renderer_preserves_regex_quantifiers() -> None:
     assert r"(?:\s+\S+){0,6}\s+" in rendered_sql
 
 
+def test_candidate_list_sql_orders_by_the_requested_sort_only() -> None:
+    """Each sort token maps to its own fixed ORDER BY; nothing else varies."""
+    name_sql = re.sub(r"\s+", " ", _candidate_list_sql_template("name", include_unsafe_identity=False))
+    raised_sql = re.sub(r"\s+", " ", _candidate_list_sql_template("total_raised_desc", include_unsafe_identity=False))
+
+    assert "ORDER BY c.name ASC, c.id ASC" in name_sql
+    assert "c.total_receipts DESC" not in name_sql
+    # Unknown official totals must sort after every known total, including 0.00.
+    assert "ORDER BY c.total_receipts DESC NULLS LAST, c.name ASC, c.id ASC" in raised_sql
+    assert "ORDER BY filtered.total_receipts DESC NULLS LAST, filtered.name ASC, filtered.id ASC" in raised_sql
+
+
+def test_candidate_list_sql_scopes_identity_suppression_to_default_browse() -> None:
+    """The identity predicate filters the browse page and only the browse page."""
+    browse_sql = re.sub(r"\s+", " ", _candidate_list_sql_template("name", include_unsafe_identity=False))
+    opted_in_sql = re.sub(r"\s+", " ", _candidate_list_sql_template("name", include_unsafe_identity=True))
+
+    # The predicate is still projected in both shapes so callers keep the flag.
+    assert browse_sql.count("AS identity_is_safe") == 1
+    assert opted_in_sql.count("AS identity_is_safe") == 1
+    # ...but only the browse shape also filters the paging CTE on it.
+    assert "WHERE {where_sql} AND (" in browse_sql
+    assert "WHERE {where_sql} ORDER BY" in opted_in_sql
+
+
 @pytest.mark.integration
 def test_list_slug_projection_reads_only_the_materialized_page(
     db_conn: psycopg.Connection,
@@ -71,8 +99,14 @@ def test_list_slug_projection_reads_only_the_materialized_page(
     fixture = seed_full_scope_skewed_donor_search_fixture(db_conn)
     observed_page_scans: dict[str, list[tuple[int, int]]] = {}
 
+    # The candidate case uses the identity opt-in shape because this fixture
+    # names its synthetic candidates "Unrelated Candidate Person 0007" — the
+    # digits make every one of them identity-unsafe, so the suppressed browse
+    # shape would only ever materialize a single row and could not prove the
+    # projection reads a full page exactly once. The projection under test is
+    # identical in both shapes; only the paging CTE's WHERE differs.
     for label, sql_template, relation_name in (
-        ("candidate", _CANDIDATE_LIST_SQL_TEMPLATE, "candidate"),
+        ("candidate", _candidate_list_sql_template("name", include_unsafe_identity=True), "candidate"),
         ("committee", _COMMITTEE_LIST_SQL_TEMPLATE, "committee"),
     ):
         nodes = _plan_nodes(_explain_analyze_list_query(db_conn, sql_template))

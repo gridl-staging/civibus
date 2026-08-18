@@ -6,7 +6,9 @@ export const COMMITTEE_FILINGS_WINDOW_LIMIT = 200;
 export const CANDIDATES_PAGE_PATH = "/candidates";
 export const COMMITTEES_PAGE_PATH = "/committees";
 export type SerializedMoney = string;
-type ListQueryParamValue = string | number | undefined;
+// Booleans are included so list requests can carry explicit backend switches
+// (for example the candidate identity opt-in) through the shared path builder.
+type ListQueryParamValue = string | number | boolean | undefined;
 type CampaignFinanceListPathParams = Record<string, ListQueryParamValue>;
 type ListRequestParam = string | number;
 export type SelectedCycleRequest = {
@@ -77,6 +79,13 @@ export type CandidateListItem = {
   slug_is_unique: boolean;
   identity_is_safe: boolean;
   has_official_total: boolean;
+  /**
+   * Official FEC total receipts. Nullable and optional on purpose: a candidate
+   * with no loaded official total, and a producer that does not select the
+   * column at all, are both *unknown* money, never zero money. Rendering code
+   * must show unknown as unknown rather than `$0.00`.
+   */
+  total_receipts?: SerializedMoney | null;
 };
 
 export type CommitteeListItem = {
@@ -111,6 +120,15 @@ export type CandidateListRequest = {
   state?: string;
   office?: string;
   person_id?: string;
+  /** Browse ordering code; see `CANDIDATE_SORT_OPTIONS` in filter-options.ts. */
+  sort?: string;
+  /**
+   * Opt back into rows the default browse suppresses because their raw FEC name
+   * cannot stand as a public identity. Entity-scoped reads set this so a
+   * name-quality rule never hides a linked candidate's money; the browse page
+   * leaves it unset.
+   */
+  include_unsafe_identity?: boolean;
   limit?: ListRequestParam;
   offset?: ListRequestParam;
 };

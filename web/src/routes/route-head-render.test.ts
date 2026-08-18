@@ -24,6 +24,7 @@ import CandidacyPage from "./candidacy/[id]/+page.svelte";
 import OfficeholdingPage from "./officeholding/[id]/+page.svelte";
 import ErrorPage from "./+error.svelte";
 import {
+  CANDIDATE_SORT_OPTIONS,
   COMMITTEE_TYPE_OPTIONS,
   FEC_CANDIDATE_OFFICE_OPTIONS,
   US_STATE_OPTIONS
@@ -663,9 +664,10 @@ describe("route head rendering", () => {
               state: "NC",
               jurisdiction_id: null,
               electoral_division_id: ELECTORAL_DIVISION_ID,
-              candidate_count: 2,
-              result_status: null,
-              winning_person_name: null
+              electoral_division_type: "statewide",
+              electoral_division_state: "NC",
+              district_number: null,
+              candidate_count: 2
             }
           ]
         }
@@ -702,9 +704,10 @@ describe("route head rendering", () => {
                   state: "NC",
                   jurisdiction_id: null,
                   electoral_division_id: ELECTORAL_DIVISION_ID,
-                  candidate_count: 2,
-                  result_status: null,
-                  winning_person_name: null
+                  electoral_division_type: "statewide",
+                  electoral_division_state: "NC",
+                  district_number: null,
+                  candidate_count: 2
                 }
               ]
             }
@@ -852,12 +855,18 @@ describe("route head rendering", () => {
     expect(rendered.body).toMatch(/<option[^>]*value="S"[^>]*selected[^>]*>/);
     expectOptionList(rendered.body, US_STATE_OPTIONS);
     expectOptionList(rendered.body, FEC_CANDIDATE_OFFICE_OPTIONS);
+    // Pagination links carry the active sort so paging never silently reorders.
     expect(rendered.body).toContain(
-      'href="/candidates?state=NC&amp;office=S&amp;offset=0&amp;limit=25"'
+      'href="/candidates?state=NC&amp;office=S&amp;sort=name&amp;offset=0&amp;limit=25"'
     );
     expect(rendered.body).toContain(
-      'href="/candidates?state=NC&amp;office=S&amp;offset=50&amp;limit=25"'
+      'href="/candidates?state=NC&amp;office=S&amp;sort=name&amp;offset=50&amp;limit=25"'
     );
+    expect(rendered.body).toContain('for="candidate-sort"');
+    expect(rendered.body).toContain(">Sort</label>");
+    expect(rendered.body).toContain('id="candidate-sort"');
+    expect(rendered.body).toContain('name="sort"');
+    expectOptionList(rendered.body, CANDIDATE_SORT_OPTIONS);
   });
 
   it("renders committees list with shared canonical/OG/Twitter tags, filter controls, and filter-preserving pagination links", () => {
@@ -1168,7 +1177,10 @@ describe("route head rendering", () => {
             county: createEmptyFeatureCollection(),
             congressional_district: createEmptyFeatureCollection()
           },
-          contestCandidateFinanceByPersonId: {},
+          // The race scoreboard is one batched response, not a per-person map.
+          // A head-render fixture only needs the contest itself, so null is the
+          // honest "no money loaded" value here.
+          contestCandidateMoney: null,
           contestSelectedCycle: 2026
         }
       }

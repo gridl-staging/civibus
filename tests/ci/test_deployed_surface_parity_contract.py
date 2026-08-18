@@ -27,6 +27,7 @@ from tests.ci.deployed_surface_parity_contract_helpers import (
     assert_qualified_assignment_metadata_detection,
     assert_interpolated_metadata_detection,
     assert_root_doc_source_filter,
+    assert_session_notes_source_filter,
     assert_split_path_metadata_detection,
     expected_money_value_pass_lines,
     fixture_body_slug,
@@ -805,3 +806,7 @@ def test_public_surface_metadata_guard_rejects_split_paths_and_row_overrides() -
 
 def test_production_source_path_filter_excludes_root_docs_but_keeps_runtime_owners() -> None:
     assert_root_doc_source_filter()
+
+
+def test_production_source_path_filter_excludes_private_session_notes() -> None:
+    assert_session_notes_source_filter()

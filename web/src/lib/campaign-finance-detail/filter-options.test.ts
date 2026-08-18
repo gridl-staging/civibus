@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { COMMITTEE_TYPE_OPTIONS, FEC_CANDIDATE_OFFICE_OPTIONS, US_STATE_OPTIONS } from "./filter-options";
+import {
+  CANDIDATE_SORT_OPTIONS,
+  COMMITTEE_TYPE_OPTIONS,
+  DEFAULT_CANDIDATE_SORT,
+  FEC_CANDIDATE_OFFICE_OPTIONS,
+  US_STATE_OPTIONS,
+  normalizeCandidateSort
+} from "./filter-options";
 
 const EXPECTED_US_STATE_CODES = [
   "AL",
@@ -87,6 +94,23 @@ describe("campaign-finance filter options", () => {
     ]);
     expect(COMMITTEE_TYPE_OPTIONS).toHaveLength(16);
     expect(uniqueCodes.size).toBe(COMMITTEE_TYPE_OPTIONS.length);
+  });
+
+  it("exports the candidate sort codes the backend accepts, default first", () => {
+    expect(CANDIDATE_SORT_OPTIONS).toEqual([
+      { code: "name", label: "Name (A–Z)" },
+      { code: "total_raised_desc", label: "Total raised (high to low)" }
+    ]);
+    expect(DEFAULT_CANDIDATE_SORT).toBe("name");
+  });
+
+  it("narrows unknown, blank, and missing sort tokens to the default", () => {
+    expect(normalizeCandidateSort("total_raised_desc")).toBe("total_raised_desc");
+    expect(normalizeCandidateSort("name")).toBe("name");
+    expect(normalizeCandidateSort("total_raised_asc")).toBe("name");
+    expect(normalizeCandidateSort("")).toBe("name");
+    expect(normalizeCandidateSort(null)).toBe("name");
+    expect(normalizeCandidateSort(undefined)).toBe("name");
   });
 
   it("has human-readable labels for all committee type codes", () => {

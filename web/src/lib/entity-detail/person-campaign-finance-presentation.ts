@@ -164,6 +164,19 @@ const MIXED_TOTALS_CAVEAT =
   "Totals combine itemized transactions with available committee-summary data; unitemized coverage may be incomplete.";
 export const PERSON_NO_LINKED_CANDIDACY_MESSAGE =
   "No campaign-finance candidacies are linked yet.";
+/**
+ * Copy for `coverage.activity_state === "not_loaded"`.
+ *
+ * `person_detail.md` fixes the two claims this sentence must make: a linked FEC
+ * candidate exists, and Civibus has not loaded authoritative selected-cycle
+ * fundraising evidence for that candidate. It must not describe the missing evidence
+ * as `$0 raised`, true zero activity, an absence of filings, a full campaign total,
+ * or a career total. The candidate-page constants say "not yet available for this
+ * candidate and cycle", which omits the linked-candidate half, so the person page
+ * needs its own wording rather than a reused import.
+ */
+export const PERSON_NOT_LOADED_MESSAGE =
+  "A linked FEC candidate exists for this person, but Civibus has not loaded authoritative selected-cycle fundraising evidence for that candidate.";
 export const PERSON_MISSING_SUMMARY_MESSAGE =
   "Selected-cycle money summary is not available yet.";
 export const PERSON_TEMPORARILY_UNAVAILABLE_MESSAGE =

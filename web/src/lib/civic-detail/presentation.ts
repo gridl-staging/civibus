@@ -1,32 +1,29 @@
 /** View-model builders for civic detail pages and their record tables. */
 import { formatCountLabel } from "$lib/count-label";
 import { formatBoolean, formatDisplayValue } from "$lib/detail-format";
-import {
-  buildTrustSection,
-  type TrustSectionViewModel
-} from "$lib/detail-trust/presentation";
+import { buildTrustSection, type TrustSectionViewModel } from "$lib/detail-trust/presentation";
 import { buildEntityRouteHref } from "$lib/entity-detail/contract";
-import type {
-  CandidateFundraisingSummary,
-  IndependentExpenditureResponse,
-  IndependentExpenditureSummary
-} from "$lib/campaign-finance-detail/contract";
-import {
-  buildCandidateDeferredOutsideSpending,
-  buildCandidateDeferredOutsideSpendingFigure,
-  formatCurrency,
-  type CandidateOutsideSpendingFigure,
-  type OutsideSpendingPresentation
-} from "$lib/campaign-finance-detail/presentation";
+import { buildCandidateHref } from "$lib/campaign-finance-detail/contract";
+import { formatCurrency } from "$lib/campaign-finance-detail/presentation";
+// US_STATE_OPTIONS is the repo's single owner of USPS-code -> display-spelling
+// pairs. The election index reuses it for state group headings rather than
+// standing up a second, drift-prone copy of the same map.
+import { US_STATE_OPTIONS } from "$lib/campaign-finance-detail/filter-options";
 import {
   OFFICE_LEVELS,
   buildCandidacyRoutePath,
   buildContestRoutePath,
+  buildElectionDateRoutePath,
   buildOfficeRoutePath,
   buildOfficeholdingRoutePath,
   type CandidacyDetailResponse,
   type CandidacySummary,
+  type ContestCandidateMoneyResponse,
+  type ContestCandidateMoneyRow,
   type ContestDetailResponse,
+  type UpcomingElectionTimelineEntry,
+  type ElectionContestSummary,
+  type ElectionDateAggregateResponse,
   type OfficeDetailResponse,
   type OfficeIncompleteDataState,
   type OfficeholderSummary,
@@ -95,24 +92,28 @@ export type ContestCandidacyRow = {
   linkAriaLabel: string;
 };
 
-export type ContestCandidateFinanceSection = {
-  personId: string;
-  candidateHref: string | null;
-  summary: CandidateFundraisingSummary | null;
-  ieSummary: IndependentExpenditureSummary | null;
-  ieTransactions: IndependentExpenditureResponse[];
-};
-
-export type ContestCandidateFinanceByPersonId = Record<string, ContestCandidateFinanceSection>;
-
 export type ContestCandidateFinanceRow = {
   personId: string;
   personName: string;
   personHref: string | null;
   candidateHref: string | null;
+  party: string;
+  incumbentChallenge: string;
   financeFacts: CivicFactRow[];
-  outsideSpending: OutsideSpendingPresentation;
-  outsideSpendingFigure: CandidateOutsideSpendingFigure | null;
+  outsideSpendingFacts: CivicFactRow[];
+  /** Non-null exactly when this candidacy has no linked FEC candidate record. */
+  moneyUnavailableMessage: string | null;
+};
+
+/** Answer-first race totals, rendered above the scoreboard. */
+export type RaceMoneySummary = {
+  candidateCount: number;
+  totalRaised: string;
+  totalOutsideSupport: string;
+  totalOutsideOppose: string;
+  selectedCycle: number;
+  /** Set when at least one candidate's money is unknown, qualifying the totals. */
+  incompleteNote: string | null;
 };
 
 /**
@@ -151,6 +152,7 @@ export type ContestDetailPresentation = {
   candidacyRows: ContestCandidacyRow[];
   financeRows: ContestCandidateFinanceRow[];
   financeEmptyMessage: string | null;
+  raceMoneySummary: RaceMoneySummary | null;
   trustSection: TrustSectionViewModel;
   candidacyEmptyMessage: string | null;
   candidateListWarning: string | null;
@@ -224,6 +226,16 @@ const CONTEST_CANDIDATE_LIST_WARNING = "Candidate list coverage is incomplete fo
 const CONTEST_RESULT_EMPTY_MESSAGE = "Results are not yet available for this contest.";
 const CONTEST_FINANCE_EMPTY_MESSAGE =
   "Candidate finance and outside-spending data are not linked for this contest yet.";
+// Unknown coverage, never zero activity. The screen specs forbid "$0" here:
+// "this candidate raised nothing" and "we have not loaded this candidate's
+// filings" are different claims and only one of them is true.
+const CONTEST_CANDIDATE_MONEY_UNKNOWN_MESSAGE =
+  "No FEC candidate record is linked for this candidacy, so Civibus has not loaded " +
+  "fundraising figures for it. This is missing coverage, not zero fundraising.";
+const CONTEST_UNKNOWN_MONEY_VALUE = "Not available";
+const RACE_MONEY_INCOMPLETE_NOTE =
+  "At least one candidate in this race has no linked FEC record, so these race " +
+  "totals cover only the candidates Civibus has loaded.";
 const CANDIDACY_STATUS_EMPTY_MESSAGE = "Status is not available for this candidacy yet.";
 const OFFICEHOLDING_PERIOD_EMPTY_MESSAGE =
   "No valid-period bounds are available for this officeholding.";
@@ -266,9 +278,7 @@ function assignUniqueAriaLabels(
 ): string[] {
   const nameCounts = countOccurrences(rows.map((r) => r.personName));
   const nameOnly = rows.map((r) => `${prefix} ${r.personName}`);
-  const withDisambiguator = rows.map(
-    (r) => `${prefix} ${r.personName}, ${r.disambiguator}`
-  );
+  const withDisambiguator = rows.map((r) => `${prefix} ${r.personName}, ${r.disambiguator}`);
   const disambiguatorCounts = countOccurrences(withDisambiguator);
 
   const disambiguatorSeen = new Map<string, number>();
@@ -299,7 +309,10 @@ function buildOfficeholderRows(officeholders: OfficeholderSummary[]): Officehold
 
   const labels = assignUniqueAriaLabels(
     "View officeholding detail for",
-    baseRows.map((r) => ({ personName: r.personName, disambiguator: r.holderStatus }))
+    baseRows.map((r) => ({
+      personName: r.personName,
+      disambiguator: r.holderStatus
+    }))
   );
 
   return baseRows.map((row, i) => ({ ...row, linkAriaLabel: labels[i] }));
@@ -310,9 +323,7 @@ function buildIncompleteDataWarning(incompleteStates: OfficeIncompleteDataState[
     return null;
   }
 
-  return incompleteStates
-    .map((state) => INCOMPLETE_DATA_WARNING_BY_STATE[state])
-    .join(" ");
+  return incompleteStates.map((state) => INCOMPLETE_DATA_WARNING_BY_STATE[state]).join(" ");
 }
 
 /**
@@ -342,7 +353,10 @@ function buildOfficeFactRows(detail: OfficeDetailResponse): CivicFactRow[] {
     { label: "Office level", value: formatOfficeLevel(detail.office_level) },
     { label: "State", value: formatDisplayValue(detail.state) },
     { label: "Elected", value: formatBoolean(detail.is_elected) },
-    { label: "Number of seats", value: formatDisplayValue(detail.number_of_seats) }
+    {
+      label: "Number of seats",
+      value: formatDisplayValue(detail.number_of_seats)
+    }
   ];
 }
 
@@ -375,7 +389,9 @@ function isOfficeCurrentHolderCardValue(value: unknown): value is OfficeCurrentH
 
 /**
  */
-function buildOfficeCurrentHolderCard(detail: OfficeDetailResponse): OfficeCurrentHolderCard | null {
+function buildOfficeCurrentHolderCard(
+  detail: OfficeDetailResponse
+): OfficeCurrentHolderCard | null {
   const holder = detail.current_holder_card;
   if (!isOfficeCurrentHolderCardValue(holder)) {
     const fallbackOfficeholders = Array.isArray(detail.current_officeholders)
@@ -446,11 +462,13 @@ function buildOfficeTimelineRows(detail: OfficeDetailResponse): OfficeTimelineRo
     if (a.is_active !== b.is_active) {
       return a.is_active ? -1 : 1;
     }
-    const lowerDiff = parseDateSortValue(b.valid_period_lower) - parseDateSortValue(a.valid_period_lower);
+    const lowerDiff =
+      parseDateSortValue(b.valid_period_lower) - parseDateSortValue(a.valid_period_lower);
     if (lowerDiff !== 0) {
       return lowerDiff;
     }
-    const upperDiff = parseDateSortValue(b.valid_period_upper) - parseDateSortValue(a.valid_period_upper);
+    const upperDiff =
+      parseDateSortValue(b.valid_period_upper) - parseDateSortValue(a.valid_period_upper);
     if (upperDiff !== 0) {
       return upperDiff;
     }
@@ -479,15 +497,17 @@ function buildOfficeTimelineRows(detail: OfficeDetailResponse): OfficeTimelineRo
 
 /**
  */
+/**
+ * Office contest rows, in the order the backend selected them.
+ *
+ * Deliberately does NOT re-sort. The backend picks five rows ordered by
+ * distance from today (see _OFFICE_RECENT_CONTESTS_SQL) so the election a
+ * reader came for leads the list. Re-sorting by date descending here would put
+ * the most distant future contest back on top and silently undo that — the
+ * presenter would be overruling a selection it cannot see the rest of.
+ */
 function buildOfficeRecentContestRows(detail: OfficeDetailResponse): OfficeRecentContestRow[] {
   const rows = Array.isArray(detail.recent_contests) ? [...detail.recent_contests] : [];
-  rows.sort((a, b) => {
-    const electionDiff = parseDateSortValue(b.election_date) - parseDateSortValue(a.election_date);
-    if (electionDiff !== 0) {
-      return electionDiff;
-    }
-    return a.contest_name.localeCompare(b.contest_name);
-  });
 
   return rows.map((contest) => ({
     contestId: contest.contest_id,
@@ -544,9 +564,15 @@ function buildContestFactRows(detail: ContestDetailResponse): CivicFactRow[] {
     { label: "Name", value: detail.name },
     { label: "Election date", value: formatDateValue(detail.election_date) },
     { label: "Election type", value: detail.election_type },
-    { label: "Filing deadline", value: formatDateValue(detail.filing_deadline) },
+    {
+      label: "Filing deadline",
+      value: formatDateValue(detail.filing_deadline)
+    },
     { label: "Partisan", value: formatBoolean(detail.is_partisan) },
-    { label: "Number of seats", value: formatDisplayValue(detail.number_of_seats) }
+    {
+      label: "Number of seats",
+      value: formatDisplayValue(detail.number_of_seats)
+    }
   ];
 }
 
@@ -554,7 +580,10 @@ function buildContestKeyMetricRows(candidacyRows: ContestCandidacyRow[]): CivicF
   return [{ label: "Candidacies", value: String(candidacyRows.length) }];
 }
 
-function appendSelectedCycleToHref(href: string | null, selectedCycle: number | null): string | null {
+function appendSelectedCycleToHref(
+  href: string | null,
+  selectedCycle: number | null
+): string | null {
   if (href === null || selectedCycle === null) {
     return href;
   }
@@ -567,113 +596,131 @@ function appendSelectedCycleToHref(href: string | null, selectedCycle: number | 
   return `${href}${separator}cycle=${selectedCycle}`;
 }
 
-function getContestFinanceSelectedCycle(
-  financeSection: ContestCandidateFinanceSection
-): number | null {
-  return financeSection.summary?.selected_cycle ?? financeSection.ieSummary?.selected_cycle ?? null;
-}
-
-function getContestLinkSelectedCycle(
-  financeSection: ContestCandidateFinanceSection | undefined,
+/**
+ * Read the race's selected cycle from the batched money response.
+ *
+ * The backend resolves and validates the cycle once for the whole contest, so
+ * every candidate on a race page is by construction reporting the same window.
+ * The old per-candidate fan-out could not guarantee that.
+ */
+function getRaceSelectedCycle(
+  candidateMoney: ContestCandidateMoneyResponse | null,
   fallbackSelectedCycle: number | null
 ): number | null {
-  if (financeSection === undefined) {
-    return fallbackSelectedCycle;
-  }
-
-  return getContestFinanceSelectedCycle(financeSection) ?? fallbackSelectedCycle;
+  return candidateMoney?.selected_cycle ?? fallbackSelectedCycle;
 }
 
 /**
+ * Money facts for one candidate row.
+ *
+ * Returns an empty list when the candidacy has no linked FEC candidate row.
+ * That is the ONLY signal for unknown coverage — the caller renders explicit
+ * unknown copy rather than any figure. Never derive "no money" from the
+ * numbers: a real zero and an absent record are different claims, and the
+ * screen specs forbid publishing the second as the first.
  */
-function buildContestLinkSelectedCycleByPersonId(
-  candidacies: CandidacySummary[],
-  candidateFinanceByPersonId: ContestCandidateFinanceByPersonId,
-  fallbackSelectedCycle: number | null
-): Record<string, number | null> {
-  const selectedCycleByPersonId: Record<string, number | null> = {};
-
-  for (const candidacy of candidacies) {
-    selectedCycleByPersonId[candidacy.person_id] = getContestLinkSelectedCycle(
-      candidateFinanceByPersonId[candidacy.person_id],
-      fallbackSelectedCycle
-    );
-  }
-
-  return selectedCycleByPersonId;
-}
-
-function getContestSelectedCycle(
-  candidateFinanceByPersonId: ContestCandidateFinanceByPersonId
-): number | null {
-  for (const financeSection of Object.values(candidateFinanceByPersonId)) {
-    const selectedCycle = getContestFinanceSelectedCycle(financeSection);
-    if (selectedCycle !== null) {
-      return selectedCycle;
-    }
-  }
-
-  return null;
-}
-
-/**
- */
-function buildContestCandidateFinanceFacts(
-  summary: CandidateFundraisingSummary | null
-): CivicFactRow[] {
-  if (summary === null) {
+function buildContestCandidateFinanceFacts(row: ContestCandidateMoneyRow): CivicFactRow[] {
+  if (!row.has_fec_money) {
     return [];
   }
 
   return [
-    { label: "Selected cycle", value: String(summary.selected_cycle) },
-    { label: "Coverage through", value: formatDateValue(summary.coverage_end_date) },
-    { label: "Receipts", value: formatCurrency(summary.total_raised) },
-    { label: "Disbursements", value: formatCurrency(summary.total_spent) },
+    { label: "Raised", value: formatOptionalContestCurrency(row.total_raised) },
+    { label: "Spent", value: formatOptionalContestCurrency(row.total_spent) },
     {
       label: "Cash on hand",
-      value: summary.cash_on_hand === null ? "—" : formatCurrency(summary.cash_on_hand)
+      value: formatOptionalContestCurrency(row.cash_on_hand)
     }
   ];
 }
 
-/**
- */
-function buildContestCandidateFinanceRows(
-  candidacyRows: ContestCandidacyRow[],
-  candidateFinanceByPersonId: ContestCandidateFinanceByPersonId,
-  selectedCycleByPersonId: Record<string, number | null>
-): ContestCandidateFinanceRow[] {
-  const rows: ContestCandidateFinanceRow[] = [];
-
-  for (const candidacyRow of candidacyRows) {
-    const financeSection = candidateFinanceByPersonId[candidacyRow.personId];
-    if (!financeSection) {
-      continue;
+/** Outside-spending facts. Zeroes here are real: nothing was spent, not "unknown". */
+function buildContestCandidateOutsideSpendingFacts(row: ContestCandidateMoneyRow): CivicFactRow[] {
+  return [
+    {
+      label: "Outside spending supporting",
+      value: formatCurrency(row.ie_support_total)
+    },
+    {
+      label: "Outside spending opposing",
+      value: formatCurrency(row.ie_oppose_total)
     }
+  ];
+}
 
-    const linkSelectedCycle =
-      selectedCycleByPersonId[candidacyRow.personId] ??
-      getContestFinanceSelectedCycle(financeSection);
-    rows.push({
-      personId: candidacyRow.personId,
-      personName: candidacyRow.personName,
-      personHref: appendSelectedCycleToHref(candidacyRow.personHref, linkSelectedCycle),
-      candidateHref: appendSelectedCycleToHref(financeSection.candidateHref, linkSelectedCycle),
-      financeFacts: buildContestCandidateFinanceFacts(financeSection.summary),
-      outsideSpending: buildCandidateDeferredOutsideSpending(
-        financeSection.ieSummary,
-        financeSection.ieTransactions,
-        linkSelectedCycle
-      ),
-      outsideSpendingFigure: buildCandidateDeferredOutsideSpendingFigure(
-        financeSection.ieSummary,
-        linkSelectedCycle
-      )
-    });
+/** Format a nullable money string; null means unknown, and must not read as zero. */
+function formatOptionalContestCurrency(value: string | null): string {
+  return value === null ? CONTEST_UNKNOWN_MONEY_VALUE : formatCurrency(value);
+}
+
+/**
+ * Build the candidate href with the same slug-vs-UUID rule the candidate list
+ * uses, so a race page never links to a URL the candidate page would not own.
+ */
+function buildContestCandidateHref(row: ContestCandidateMoneyRow): string | null {
+  if (row.candidate_id === null) {
+    return null;
   }
 
-  return rows;
+  return buildCandidateHref({
+    id: row.candidate_id,
+    slug: row.candidate_slug ?? "",
+    slug_is_unique: row.candidate_slug_is_unique,
+    identity_is_safe: row.candidate_identity_is_safe
+  });
+}
+
+/**
+ * The money scoreboard, one row per candidacy, in the backend's order.
+ *
+ * Order is the backend's (raised desc, unknown last) rather than the candidacy
+ * table's alphabetical order: a race page's job is to show who is ahead.
+ */
+function buildContestCandidateFinanceRows(
+  candidateMoney: ContestCandidateMoneyResponse | null,
+  selectedCycle: number | null
+): ContestCandidateFinanceRow[] {
+  if (candidateMoney === null) {
+    return [];
+  }
+
+  return candidateMoney.rows.map((row) => ({
+    personId: row.person_id,
+    personName: row.person_name,
+    personHref: appendSelectedCycleToHref(
+      buildEntityRouteHref("person", row.person_id),
+      selectedCycle
+    ),
+    candidateHref: appendSelectedCycleToHref(buildContestCandidateHref(row), selectedCycle),
+    party: formatDisplayValue(row.party),
+    incumbentChallenge: formatDisplayValue(row.incumbent_challenge),
+    financeFacts: buildContestCandidateFinanceFacts(row),
+    outsideSpendingFacts: buildContestCandidateOutsideSpendingFacts(row),
+    moneyUnavailableMessage: row.has_fec_money ? null : CONTEST_CANDIDATE_MONEY_UNKNOWN_MESSAGE
+  }));
+}
+
+/**
+ * The answer-first headline race_detail.md specifies.
+ *
+ * Qualifies itself when any candidate's money is unknown, so a partial total is
+ * never presented as the race's complete total.
+ */
+function buildRaceMoneySummary(
+  candidateMoney: ContestCandidateMoneyResponse | null
+): RaceMoneySummary | null {
+  if (candidateMoney === null || candidateMoney.candidate_count === 0) {
+    return null;
+  }
+
+  return {
+    candidateCount: candidateMoney.candidate_count,
+    totalRaised: formatCurrency(candidateMoney.total_raised),
+    totalOutsideSupport: formatCurrency(candidateMoney.total_ie_support),
+    totalOutsideOppose: formatCurrency(candidateMoney.total_ie_oppose),
+    selectedCycle: candidateMoney.selected_cycle,
+    incompleteNote: candidateMoney.has_unknown_candidate_money ? RACE_MONEY_INCOMPLETE_NOTE : null
+  };
 }
 
 function buildCandidacyFactRows(detail: CandidacyDetailResponse): CivicFactRow[] {
@@ -682,8 +729,14 @@ function buildCandidacyFactRows(detail: CandidacyDetailResponse): CivicFactRow[]
     { label: "Party", value: formatDisplayValue(detail.party) },
     { label: "Filing date", value: formatDateValue(detail.filing_date) },
     { label: "Status", value: formatDisplayValue(detail.status) },
-    { label: "Incumbent/challenger", value: formatDisplayValue(detail.incumbent_challenge) },
-    { label: "Candidate number", value: formatDisplayValue(detail.candidate_number) }
+    {
+      label: "Incumbent/challenger",
+      value: formatDisplayValue(detail.incumbent_challenge)
+    },
+    {
+      label: "Candidate number",
+      value: formatDisplayValue(detail.candidate_number)
+    }
   ];
 }
 
@@ -696,7 +749,10 @@ function buildOfficeholdingFactRows(detail: OfficeholdingDetailResponse): CivicF
     { label: "Person", value: detail.person_name },
     { label: "Holder status", value: detail.holder_status },
     { label: "Valid from", value: formatDateValue(detail.valid_period_lower) },
-    { label: "Valid through", value: formatDateValue(detail.valid_period_upper) },
+    {
+      label: "Valid through",
+      value: formatDateValue(detail.valid_period_upper)
+    },
     { label: "Date precision", value: detail.date_precision }
   ];
 }
@@ -721,7 +777,9 @@ export function buildOfficeDetailMetadata(
   };
 }
 
-export function buildOfficeDetailMetadataFromDetail(detail: OfficeDetailResponse): DetailRouteMetadata {
+export function buildOfficeDetailMetadataFromDetail(
+  detail: OfficeDetailResponse
+): DetailRouteMetadata {
   return buildOfficeDetailMetadata(detail.name, detail.current_officeholders.length);
 }
 
@@ -737,7 +795,9 @@ export function buildContestDetailMetadata(
   };
 }
 
-export function buildContestDetailMetadataFromDetail(detail: ContestDetailResponse): DetailRouteMetadata {
+export function buildContestDetailMetadataFromDetail(
+  detail: ContestDetailResponse
+): DetailRouteMetadata {
   return buildContestDetailMetadata(detail.name, detail.candidacies.length);
 }
 
@@ -748,7 +808,9 @@ export function buildCandidacyDetailMetadata(personName: string): DetailRouteMet
   };
 }
 
-export function buildCandidacyDetailMetadataFromDetail(detail: CandidacyDetailResponse): DetailRouteMetadata {
+export function buildCandidacyDetailMetadataFromDetail(
+  detail: CandidacyDetailResponse
+): DetailRouteMetadata {
   return buildCandidacyDetailMetadata(detail.person_name);
 }
 
@@ -767,7 +829,9 @@ export function buildOfficeholdingDetailMetadataFromDetail(
 
 /**
  */
-export function buildOfficeDetailPresentation(detail: OfficeDetailResponse): OfficeDetailPresentation {
+export function buildOfficeDetailPresentation(
+  detail: OfficeDetailResponse
+): OfficeDetailPresentation {
   const officeholderRows = buildOfficeholderRows(detail.current_officeholders);
   const timelineRows = buildOfficeTimelineRows(detail);
   const recentContestRows = buildOfficeRecentContestRows(detail);
@@ -798,7 +862,7 @@ export function buildOfficeDetailPresentation(detail: OfficeDetailResponse): Off
 }
 
 type BuildContestDetailPresentationOptions = {
-  candidateFinanceByPersonId?: ContestCandidateFinanceByPersonId;
+  candidateMoney?: ContestCandidateMoneyResponse | null;
   selectedCycle?: number | null;
 };
 
@@ -808,39 +872,31 @@ export function buildContestDetailPresentation(
   detail: ContestDetailResponse,
   options?: BuildContestDetailPresentationOptions
 ): ContestDetailPresentation {
-  const candidateFinanceByPersonId = options?.candidateFinanceByPersonId ?? {};
-  const selectedCycle = options?.selectedCycle ?? getContestSelectedCycle(candidateFinanceByPersonId);
-  const selectedCycleByPersonId = buildContestLinkSelectedCycleByPersonId(
-    detail.candidacies,
-    candidateFinanceByPersonId,
-    selectedCycle
+  const candidateMoney = options?.candidateMoney ?? null;
+  const selectedCycle = getRaceSelectedCycle(candidateMoney, options?.selectedCycle ?? null);
+  // The whole race shares one cycle, so every person link carries the same one.
+  const selectedCycleByPersonId: Record<string, number | null> = Object.fromEntries(
+    detail.candidacies.map((candidacy) => [candidacy.person_id, selectedCycle])
   );
   const candidacyRows = buildContestCandidacyRows(
     detail.candidacies,
     detail.result_winner_candidacy_id,
     selectedCycleByPersonId
   );
-  const financeRows = buildContestCandidateFinanceRows(
-    candidacyRows,
-    candidateFinanceByPersonId,
-    selectedCycleByPersonId
-  );
+  const financeRows = buildContestCandidateFinanceRows(candidateMoney, selectedCycle);
 
   const matchedWinnerRow =
     detail.result_winner_candidacy_id === undefined || detail.result_winner_candidacy_id === null
       ? null
-      : candidacyRows.find((row) => row.id === detail.result_winner_candidacy_id) ?? null;
+      : (candidacyRows.find((row) => row.id === detail.result_winner_candidacy_id) ?? null);
   const resultWinnerPersonName =
     detail.result_winner_person_name ?? matchedWinnerRow?.personName ?? null;
   const resultWinnerPersonHref =
     detail.result_winner_person_id === undefined || detail.result_winner_person_id === null
-      ? matchedWinnerRow?.personHref ?? null
+      ? (matchedWinnerRow?.personHref ?? null)
       : appendSelectedCycleToHref(
           buildEntityRouteHref("person", detail.result_winner_person_id),
-          getContestLinkSelectedCycle(
-            candidateFinanceByPersonId[detail.result_winner_person_id],
-            selectedCycle
-          )
+          selectedCycle
         );
   const resultWinnerCandidacyHref = matchedWinnerRow?.candidacyHref ?? null;
 
@@ -858,13 +914,16 @@ export function buildContestDetailPresentation(
     candidacyRows,
     financeRows,
     financeEmptyMessage: financeRows.length === 0 ? CONTEST_FINANCE_EMPTY_MESSAGE : null,
+    raceMoneySummary: buildRaceMoneySummary(candidateMoney),
     trustSection: buildTrustSection(detail.sources),
     candidacyEmptyMessage: candidacyRows.length === 0 ? CONTEST_CANDIDACY_EMPTY_MESSAGE : null,
     candidateListWarning: detail.candidate_list_incomplete ? CONTEST_CANDIDATE_LIST_WARNING : null
   };
 }
 
-export function buildCandidacyDetailPresentation(detail: CandidacyDetailResponse): CandidacyDetailPresentation {
+export function buildCandidacyDetailPresentation(
+  detail: CandidacyDetailResponse
+): CandidacyDetailPresentation {
   return {
     title: `${detail.person_name} candidacy`,
     sectionOrder: CIVIC_COMPACT_SECTION_ORDER,
@@ -893,5 +952,314 @@ export function buildOfficeholdingDetailPresentation(
       detail.valid_period_lower === null && detail.valid_period_upper === null
         ? OFFICEHOLDING_PERIOD_EMPTY_MESSAGE
         : null
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Election date race index (`/election/[date]`)
+// ---------------------------------------------------------------------------
+//
+// The election-date aggregate arrives as one flat list — 515 rows on a federal
+// general-election date. Rendering it as a flat list of names is unusable, so
+// everything the reader needs to navigate it is derived here: a link per row, a
+// state grouping, a within-group rank that puts the statewide seat first, and a
+// context line naming the seat. Screen spec:
+// `docs/reference/screen_specs/election_date.md`.
+
+/** One navigable contest row in the election index. */
+export type ElectionContestRow = {
+  contestId: string;
+  contestName: string;
+  contestHref: string;
+  linkAriaLabel: string;
+  officeLabel: string;
+  /** Null when the contest has no electoral division to describe. */
+  seatLabel: string | null;
+  electionTypeLabel: string;
+  candidateCountLabel: string;
+  /** Pre-joined `officeLabel · seatLabel · electionTypeLabel · candidateCountLabel`. */
+  contextLine: string;
+};
+
+/** Contests for one state (or the stateless bucket), in reader order. */
+export type ElectionStateGroup = {
+  key: string;
+  /** Two-letter USPS code, or null for the stateless bucket. */
+  stateCode: string | null;
+  heading: string;
+  contestCountLabel: string;
+  rows: ElectionContestRow[];
+};
+
+export type ElectionIndexPresentation = {
+  date: string;
+  totalContestsLabel: string;
+  totalCandidaciesLabel: string;
+  groups: ElectionStateGroup[];
+  isEmpty: boolean;
+};
+
+/** Sort key for the stateless bucket, chosen to sort after every state group. */
+const ELECTION_UNASSIGNED_GROUP_KEY = "__unassigned__";
+const ELECTION_UNASSIGNED_GROUP_HEADING = "Nationwide and unassigned";
+
+const ELECTION_STATE_NAME_BY_CODE: ReadonlyMap<string, string> = new Map(
+  US_STATE_OPTIONS.map((option) => [option.code, option.label])
+);
+
+/**
+ * Display spellings for the canonical federal office names in
+ * `domains/civics/constants.py::CANONICAL_FEDERAL_DIRECTORY_OFFICE_NAMES`.
+ * Anything outside that set (state and local offices) falls back to the raw
+ * `office_name`, because inventing a display spelling for an arbitrary ingest
+ * value would misreport the seat.
+ */
+const ELECTION_OFFICE_LABEL_BY_NAME: Readonly<Record<string, string>> = {
+  us_president: "U.S. President",
+  us_vice_president: "U.S. Vice President",
+  us_senate: "U.S. Senate",
+  us_house: "U.S. House",
+  us_house_delegate: "U.S. House (delegate)"
+};
+
+/**
+ * Rank offices the way a reader scans a state: the statewide and national seats
+ * first, then the district seats. This is why Senate precedes House even though
+ * "us_house" sorts before "us_senate" alphabetically, which is all the SQL
+ * ORDER BY can offer.
+ */
+const ELECTION_OFFICE_RANK_BY_NAME: Readonly<Record<string, number>> = {
+  us_president: 0,
+  us_vice_president: 1,
+  us_senate: 2,
+  us_house: 3,
+  us_house_delegate: 4
+};
+
+const ELECTION_OFFICE_RANK_FALLBACK = 5;
+
+const ELECTION_TYPE_LABEL_BY_TYPE: Readonly<Record<string, string>> = {
+  general: "General",
+  primary: "Primary",
+  runoff: "Runoff",
+  special: "Special",
+  recall: "Recall"
+};
+
+/** Display labels for the division types `civic.electoral_division` allows. */
+const ELECTION_DIVISION_LABEL_BY_TYPE: Readonly<Record<string, string>> = {
+  congressional_district: "Congressional district",
+  state_legislative_upper: "State senate district",
+  state_legislative_lower: "State house district",
+  county: "County",
+  municipal: "Municipal",
+  judicial_district: "Judicial district",
+  school_district: "School district",
+  special_district: "Special district",
+  at_large: "At-large",
+  statewide: "Statewide"
+};
+
+/**
+ * Parse a district number for ordering and labelling.
+ *
+ * FEC-derived rows carry zero-padded strings ("01"), and at-large seats arrive
+ * as "00", "0", or null. Returning null for all of those keeps at-large seats
+ * out of the numeric ordering and stops the label claiming a "District 0".
+ */
+function parseElectionDistrictNumber(districtNumber: string | null): number | null {
+  if (districtNumber === null) {
+    return null;
+  }
+  const trimmed = districtNumber.trim();
+  if (trimmed === "" || !/^\d+$/.test(trimmed)) {
+    return null;
+  }
+  const parsed = Number.parseInt(trimmed, 10);
+  return parsed > 0 ? parsed : null;
+}
+
+/** Name the seat a contest fills, or null when no division is joined. */
+function buildElectionSeatLabel(contest: ElectionContestSummary): string | null {
+  const divisionType = contest.electoral_division_type;
+  if (divisionType === null) {
+    return null;
+  }
+
+  const districtNumber = parseElectionDistrictNumber(contest.district_number);
+  if (divisionType === "congressional_district") {
+    return districtNumber === null ? "At-large district" : `District ${districtNumber}`;
+  }
+
+  const divisionLabel = ELECTION_DIVISION_LABEL_BY_TYPE[divisionType] ?? divisionType;
+  return districtNumber === null ? divisionLabel : `${divisionLabel} ${districtNumber}`;
+}
+
+function buildElectionContestRow(contest: ElectionContestSummary): ElectionContestRow {
+  const officeLabel = ELECTION_OFFICE_LABEL_BY_NAME[contest.office_name] ?? contest.office_name;
+  const seatLabel = buildElectionSeatLabel(contest);
+  const electionTypeLabel =
+    ELECTION_TYPE_LABEL_BY_TYPE[contest.election_type] ?? contest.election_type;
+  const candidateCountLabel = formatCountLabel(contest.candidate_count, "candidate");
+
+  return {
+    contestId: contest.contest_id,
+    contestName: contest.name,
+    // buildContestRoutePath is the single owner of the /contest/[id] path shape.
+    contestHref: buildContestRoutePath(contest.contest_id),
+    linkAriaLabel: `View ${contest.name}`,
+    officeLabel,
+    seatLabel,
+    electionTypeLabel,
+    candidateCountLabel,
+    contextLine: [officeLabel, seatLabel, electionTypeLabel, candidateCountLabel]
+      .filter((segment): segment is string => segment !== null)
+      .join(" · ")
+  };
+}
+
+/**
+ * The state a contest belongs to.
+ *
+ * `office.state` is authoritative when set. Some ingest paths leave it null on
+ * an office whose electoral division does carry the state (territory delegate
+ * seats especially), so the division is the fallback rather than dropping the
+ * row into the unassigned bucket.
+ */
+function resolveElectionStateCode(contest: ElectionContestSummary): string | null {
+  const officeState = contest.state?.trim();
+  if (officeState !== undefined && officeState !== "") {
+    return officeState;
+  }
+  const divisionState = contest.electoral_division_state?.trim();
+  return divisionState !== undefined && divisionState !== "" ? divisionState : null;
+}
+
+/**
+ * Total order inside a state group: office rank, then district number
+ * ascending, then name, then id. The trailing id keeps the order total, so two
+ * otherwise-identical rows never swap between renders.
+ */
+function compareElectionContestRows(
+  left: ElectionContestSummary,
+  right: ElectionContestSummary
+): number {
+  const leftRank = ELECTION_OFFICE_RANK_BY_NAME[left.office_name] ?? ELECTION_OFFICE_RANK_FALLBACK;
+  const rightRank =
+    ELECTION_OFFICE_RANK_BY_NAME[right.office_name] ?? ELECTION_OFFICE_RANK_FALLBACK;
+  if (leftRank !== rightRank) {
+    return leftRank - rightRank;
+  }
+
+  // Numeric, not lexicographic: district 2 must precede district 12 whether or
+  // not the source zero-padded them. Districtless rows sort after numbered ones.
+  const leftDistrict = parseElectionDistrictNumber(left.district_number);
+  const rightDistrict = parseElectionDistrictNumber(right.district_number);
+  if (leftDistrict !== rightDistrict) {
+    if (leftDistrict === null) {
+      return 1;
+    }
+    if (rightDistrict === null) {
+      return -1;
+    }
+    return leftDistrict - rightDistrict;
+  }
+
+  const byName = left.name.localeCompare(right.name);
+  return byName !== 0 ? byName : left.contest_id.localeCompare(right.contest_id);
+}
+
+/**
+ * Turn one election-date aggregate into the grouped, linked race index.
+ *
+ * Pure and total: it never drops a contest, so the rendered row count always
+ * equals `aggregate.contests.length` even when a row carries no state, no
+ * division, and an office name the federal map does not know.
+ */
+/** One upcoming election date, with its contests as linked rows. */
+export type ElectionCalendarEntry = {
+  date: string;
+  dateHref: string;
+  contestCountLabel: string;
+  rows: ElectionContestRow[];
+  /** Non-null when the date has no loaded contests yet. */
+  emptyMessage: string | null;
+};
+
+const ELECTION_CALENDAR_DATE_EMPTY_MESSAGE = "No contests are loaded for this date yet.";
+
+/**
+ * The upcoming-election calendar, as linked rows.
+ *
+ * /calendar sits in the shell navigation and in STATIC_PATHS, so it is the top
+ * of the race discovery chain — and it rendered 681 contests as bare text, with
+ * no link to a contest and not even a link to the election date's own page.
+ * Reuses the same row builder and ordering as the per-date election index so
+ * the two surfaces cannot describe the same contest differently.
+ *
+ * A date whose roster has not loaded keeps its heading rather than being
+ * dropped: "an election exists here and filings have not opened" is real
+ * information, and hiding the row would read as "no election".
+ */
+export function buildElectionCalendarPresentation(
+  entries: UpcomingElectionTimelineEntry[]
+): ElectionCalendarEntry[] {
+  return entries.map((entry) => ({
+    date: entry.date,
+    dateHref: buildElectionDateRoutePath(entry.date),
+    contestCountLabel: formatCountLabel(entry.contests.length, "contest"),
+    rows: [...entry.contests].sort(compareElectionContestRows).map(buildElectionContestRow),
+    emptyMessage: entry.contests.length === 0 ? ELECTION_CALENDAR_DATE_EMPTY_MESSAGE : null
+  }));
+}
+
+export function buildElectionIndexPresentation(
+  aggregate: ElectionDateAggregateResponse
+): ElectionIndexPresentation {
+  const contestsByStateCode = new Map<string, ElectionContestSummary[]>();
+  for (const contest of aggregate.contests) {
+    const stateCode = resolveElectionStateCode(contest);
+    const key = stateCode ?? ELECTION_UNASSIGNED_GROUP_KEY;
+    const bucket = contestsByStateCode.get(key);
+    if (bucket === undefined) {
+      contestsByStateCode.set(key, [contest]);
+    } else {
+      bucket.push(contest);
+    }
+  }
+
+  const groups: ElectionStateGroup[] = [...contestsByStateCode.entries()]
+    .map(([key, contests]) => {
+      const stateCode = key === ELECTION_UNASSIGNED_GROUP_KEY ? null : key;
+      return {
+        key,
+        stateCode,
+        // Territories (GU, PR, VI, AS, MP) have no entry in US_STATE_OPTIONS;
+        // showing the raw code beats hiding the group.
+        heading:
+          stateCode === null
+            ? ELECTION_UNASSIGNED_GROUP_HEADING
+            : (ELECTION_STATE_NAME_BY_CODE.get(stateCode) ?? stateCode),
+        contestCountLabel: formatCountLabel(contests.length, "contest"),
+        rows: [...contests].sort(compareElectionContestRows).map(buildElectionContestRow)
+      };
+    })
+    .sort((left, right) => {
+      // The stateless bucket always sorts last, whatever its heading spells.
+      if (left.stateCode === null) {
+        return right.stateCode === null ? 0 : 1;
+      }
+      if (right.stateCode === null) {
+        return -1;
+      }
+      return left.heading.localeCompare(right.heading);
+    });
+
+  return {
+    date: aggregate.date,
+    totalContestsLabel: `Total contests: ${aggregate.total_contests}`,
+    totalCandidaciesLabel: `Total candidacies: ${aggregate.total_candidacies}`,
+    groups,
+    isEmpty: aggregate.contests.length === 0
   };
 }

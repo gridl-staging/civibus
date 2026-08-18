@@ -16,6 +16,7 @@ import pytest
 
 from core.db import insert_data_source, insert_person
 from core.types.python.models import DataSource, Person, ValidDateRange
+from domains.campaign_finance.ingest.fec_canonical_loader import federal_contest_display_name
 from domains.civics.ingest import upsert_electoral_division, upsert_officeholding
 from domains.civics.types.models import ElectoralDivision, Officeholding
 
@@ -71,6 +72,14 @@ def _write_cn_file(tmp_path: Path, rows: list[dict[str, str]]) -> Path:
         lines.append(line)
     filepath.write_text("\n".join(lines) + "\n")
     return filepath
+
+
+# These tests assert election-date keying, not naming. The contest name is only
+# a filter that isolates this test's rows from data other tests committed, so it
+# is derived from the one naming owner rather than re-spelled here; correctness
+# of the name itself is owned by test_federal_contest_name.py.
+def _house_row_contest_name(year: int, *, state: str = "NC", district: str = "01") -> str:
+    return federal_contest_display_name(office_code="H", state=state, district=district, election_year=year)
 
 
 def _house_row(
@@ -315,10 +324,10 @@ class TestContestElectionDateKeying:
             FROM civic.contest c
             JOIN core.source_record sr ON sr.id = c.source_record_id
             WHERE c.office_id = %s
-              AND c.name = 'H NC General 2024'
+              AND c.name = %s
               AND sr.data_source_id = %s
             """,
-            (OFFICE_US_HOUSE, ds.id),
+            (OFFICE_US_HOUSE, _house_row_contest_name(2024), ds.id),
         ).fetchone()
         assert row is not None
         # First Tuesday after the first Monday in November 2024 = Nov 5, 2024
@@ -341,7 +350,7 @@ class TestContestElectionDateKeying:
             WHERE c.name = %s
               AND sr.data_source_id = %s
             """,
-            ("H NC General 2022", ds.id),
+            (_house_row_contest_name(2022), ds.id),
         ).fetchone()
         assert row is not None
         # First Tuesday after the first Monday in November 2022 = Nov 8, 2022
@@ -364,10 +373,10 @@ class TestContestElectionDateKeying:
             SELECT COUNT(*)
             FROM civic.contest c
             JOIN core.source_record sr ON sr.id = c.source_record_id
-            WHERE c.name IN ('H NC General 2022', 'H NC General 2024')
+            WHERE c.name IN (%s, %s)
               AND sr.data_source_id = %s
             """,
-            (ds.id,),
+            (_house_row_contest_name(2022), _house_row_contest_name(2024), ds.id),
         ).fetchone()[0]
         assert count == 2
 

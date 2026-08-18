@@ -197,6 +197,7 @@ def _load(
     rows: list[dict[str, str | None]],
     general_dates_by_year: dict[int, str] | None = None,
     min_election_year: int = 2022,
+    max_election_year: int = 2030,
     cycle: int = 2024,
 ) -> tuple[UUID, FakeElectionClient, object]:
     cn_ds_id = _make_cn_data_source(conn)
@@ -209,6 +210,7 @@ def _load(
         cn_data_source_id=cn_ds_id,
         election_client=client,
         min_election_year=min_election_year,
+        max_election_year=max_election_year,
     )
     return races_ds_id, client, result
 
@@ -448,6 +450,7 @@ class TestRecentWindowAndIdempotency:
             ],
             general_dates_by_year={2024: "2024-11-05"},
             min_election_year=2022,
+            max_election_year=2030,
         )
         assert result.inserted == 1
 
@@ -462,6 +465,81 @@ class TestRecentWindowAndIdempotency:
         ).fetchall()
         assert {row[0] for row in candidate_numbers} == {"H4NC05002"}
 
+    def test_future_rows_filtered_by_max_election_year(self, db_conn: psycopg.Connection) -> None:
+        """A corrupt CAND_ELECTION_YR must not mint a contest.
+
+        FEC candidate rows carry the filer-supplied election year unchecked, and
+        validate_candidate_row only proves it parses as an int. Production held
+        contests dated 2089 and 2929 that rendered as live race pages and were
+        submitted to search engines. The window is symmetric with the floor and
+        skips silently (never counts an error) so one absurd row cannot degrade
+        the weekly refresh the way a malformed name row once did.
+        """
+        races_ds_id, _client, result = _load(
+            db_conn,
+            rows=[
+                _house(cand_id="H4NC05010", year="2024"),
+                _house(cand_id="H4NC05011", year="2929"),
+                _house(cand_id="H4NC05012", year="2089"),
+            ],
+            general_dates_by_year={2024: "2024-11-05"},
+            min_election_year=2022,
+            max_election_year=2028,
+        )
+        assert result.inserted == 1
+        # Silently skipped, not rejected: an out-of-window year is uninteresting
+        # data, not a defect in the row, and errors abort the downstream plan.
+        assert result.errors == 0
+
+        candidate_numbers = db_conn.execute(
+            """
+            SELECT ca.candidate_number
+            FROM civic.candidacy ca
+            JOIN core.source_record sr ON sr.id = ca.source_record_id
+            WHERE sr.data_source_id = %s
+            """,
+            (races_ds_id,),
+        ).fetchall()
+        assert {row[0] for row in candidate_numbers} == {"H4NC05010"}
+
+        # Nothing beyond the window reached civic.election either; a stray
+        # election row would still surface on /calendar and in the sitemap.
+        # Scoped to this run's data source: civic.election is keyed globally by
+        # date, so an unscoped count would pick up other tests' committed rows.
+        election_dates = db_conn.execute(
+            """
+            SELECT DISTINCT e.election_date
+            FROM civic.election e
+            JOIN core.source_record sr ON sr.id = e.source_record_id
+            WHERE sr.data_source_id = %s
+            """,
+            (races_ds_id,),
+        ).fetchall()
+        assert {row[0] for row in election_dates} == {date(2024, 11, 5)}
+
+    def test_boundary_years_are_inclusive(self, db_conn: psycopg.Connection) -> None:
+        """The window is closed on both ends: a row on either boundary still loads.
+
+        Deliberately uses far-out cycles no other test in this file touches.
+        civic.election is keyed globally by date and these tests commit, so
+        reusing a neighbouring test's cycle silently corrupts its row counts.
+        """
+        _races_ds_id, _client, result = _load(
+            db_conn,
+            rows=[
+                _house(cand_id="H4NC05019", year="2032"),
+                _house(cand_id="H4NC05020", year="2034"),
+                _house(cand_id="H4NC05021", year="2036"),
+                _house(cand_id="H4NC05022", year="2038"),
+            ],
+            general_dates_by_year={2034: "2034-11-07", 2036: "2036-11-04"},
+            min_election_year=2034,
+            max_election_year=2036,
+        )
+        # Both boundaries in, both neighbours out.
+        assert result.inserted == 2
+        assert result.errors == 0
+
     def test_rerun_is_idempotent(self, db_conn: psycopg.Connection) -> None:
         cn_ds_id = _make_cn_data_source(db_conn)
         _seed_cn_records(db_conn, cn_ds_id, [_house(cand_id="H4NC04001"), _senate(cand_id="S4NC04002")])
@@ -474,6 +552,7 @@ class TestRecentWindowAndIdempotency:
             cn_data_source_id=cn_ds_id,
             election_client=client,
             min_election_year=2022,
+            max_election_year=2030,
         )
         assert first.inserted == 2
 
@@ -501,6 +580,7 @@ class TestRecentWindowAndIdempotency:
             cn_data_source_id=cn_ds_id,
             election_client=client,
             min_election_year=2022,
+            max_election_year=2030,
         )
         assert second.inserted == 0
         assert second.skipped == 2
@@ -529,6 +609,7 @@ class TestElectionDateSupersession:
             cn_data_source_id=cn_ds_id,
             election_client=FakeElectionClient({2028: "2028-11-07"}),
             min_election_year=2022,
+            max_election_year=2030,
         )
         assert first.inserted == 2
 
@@ -539,6 +620,7 @@ class TestElectionDateSupersession:
             cn_data_source_id=cn_ds_id,
             election_client=FakeElectionClient({2028: "2028-11-21"}),
             min_election_year=2022,
+            max_election_year=2030,
         )
         # Changed payload => re-ingested via supersession, not a no-op skip.
         assert second.inserted == 2
@@ -617,6 +699,7 @@ class TestElectionDateSupersession:
             cn_data_source_id=cn_ds_id,
             election_client=FakeElectionClient({2029: "2029-11-06"}),
             min_election_year=2022,
+            max_election_year=2030,
         )
         # Capture the old-date entity ids before the supersession rerun deletes them.
         old_election_ids = {
@@ -648,6 +731,7 @@ class TestElectionDateSupersession:
             cn_data_source_id=cn_ds_id,
             election_client=FakeElectionClient({2029: "2029-11-20"}),
             min_election_year=2022,
+            max_election_year=2030,
         )
 
         deleted_ids = list(old_election_ids | old_contest_ids | old_candidacy_ids)
@@ -780,6 +864,7 @@ class TestElectionDatesFetchResilience:
             cn_data_source_id=cn_ds_id,
             election_client=client,
             min_election_year=2022,
+            max_election_year=2030,
         )
         # A rate-limit error must not abort the load; every row still lands.
         assert result.inserted == 2
@@ -816,6 +901,7 @@ class TestBatchedCommits:
             cn_data_source_id=cn_ds_id,
             election_client=FakeElectionClient({2024: "2024-11-05"}),
             min_election_year=2022,
+            max_election_year=2030,
             batch_size=2,
         )
         assert result.inserted == 3
@@ -832,5 +918,6 @@ class TestBatchedCommits:
                 cn_data_source_id=cn_ds_id,
                 election_client=FakeElectionClient(),
                 min_election_year=2022,
+                max_election_year=2030,
                 batch_size=0,
             )

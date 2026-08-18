@@ -179,6 +179,60 @@ function buildLoadedMoneyHeadline() {
   };
 }
 
+/**
+ * The `not_loaded` headline arm carries no summary at all — that is the point.
+ * The backend's zero-valued money fields never reach the presentation layer.
+ */
+function buildNotLoadedMoneyHeadline() {
+  return {
+    kind: "not_loaded" as const,
+    message:
+      "A linked FEC candidate exists for this person, but Civibus has not loaded authoritative selected-cycle fundraising evidence for that candidate.",
+    selectedCycle: 2026
+  };
+}
+
+/**
+ * Genuine no-money coverage. Same zero money strings as the not-loaded payload, but
+ * the discriminator proves the loader ran, so these zeroes are facts that must render.
+ */
+function buildLoadedZeroMoneyHeadline() {
+  return {
+    kind: "loaded" as const,
+    summary: {
+      ...buildLoadedMoneyHeadline().summary,
+      total_raised: "0.00",
+      total_spent: "0.00",
+      net: "0.00",
+      transaction_count: 0,
+      itemized_transaction_count: 0,
+      cash_on_hand: "0.00",
+      net_self_funding: null,
+      debts_owed_by_committee: "0.00",
+      receipt_source_composition: [],
+      can_render_share: false,
+      coverage: LOADED_ZERO_CANDIDATE_MONEY_COVERAGE
+    }
+  };
+}
+
+/**
+ * Slices the rendered Money at a glance region so currency assertions cannot be
+ * satisfied (or defeated) by dollar values from unrelated panels on the page.
+ */
+function extractMoneyGlanceSection(body: string): string {
+  const start = body.indexOf('<section class="detail__money-glance"');
+  if (start === -1) {
+    throw new Error("Expected a rendered Money at a glance section.");
+  }
+  const end = body.indexOf("</section>", start);
+  if (end === -1) {
+    throw new Error("Expected the Money at a glance section to be closed.");
+  }
+
+  return body.slice(start, end);
+}
+
 function buildPersonFinanceSection(
   overrides: Partial<PersonCandidateFinanceSection> = {}
 ): PersonCandidateFinanceSection {
@@ -664,6 +718,79 @@ describe("entity detail page rendering", () => {
     expect(rendered.body).toContain("2026 cycle");
     expect(rendered.body).not.toContain("<dd>$0.00</dd>");
     expect(rendered.body).not.toContain("Total receipts");
+  });
+
+  it("renders not-loaded Money at a glance copy with no dollar figures at all", () => {
+    // person_detail.md: when fundraising coverage is `not_loaded`, Money at a glance
+    // must say a linked FEC candidate exists but Civibus has not loaded authoritative
+    // selected-cycle evidence, and must suppress the zero headline values entirely.
+    const rendered = render(DetailPage, {
+      props: {
+        data: buildPersonPageBundle({
+          personMoneyHeadline: buildNotLoadedMoneyHeadline(),
+          personFinanceSections: new Promise(() => {}),
+          personContributionInsights: new Promise(() => {}),
+          personTopDonors: new Promise(() => {}),
+          personTopEmployers: new Promise(() => {})
+        })
+      }
+    });
+
+    const moneyGlance = extractMoneyGlanceSection(rendered.body);
+
+    // A dedicated test id, not the shared unavailable arm: "we have not loaded this"
+    // and "this is temporarily broken" are different claims and must stay separable
+    // for component and browser probes.
+    expect(moneyGlance).toContain('data-testid="person-money-not-loaded"');
+    expect(moneyGlance).toContain("Money at a glance");
+    expect(moneyGlance).toContain("2026 cycle");
+    expect(moneyGlance).toContain(
+      "A linked FEC candidate exists for this person, but Civibus has not loaded authoritative selected-cycle fundraising evidence for that candidate."
+    );
+
+    // No dollar sign at all inside the region: no $0.00, no suppressed-metric labels.
+    expect(moneyGlance).not.toContain("$");
+    expect(moneyGlance).not.toContain("Total receipts");
+    expect(moneyGlance).not.toContain("Total disbursements");
+    expect(moneyGlance).not.toContain("Cash on hand");
+    expect(moneyGlance).not.toContain("Debts owed by the committee");
+
+    // Forbidden framings from the spec: missing evidence is not zero activity,
+    // not an absence of filings, and not a campaign-wide or career total.
+    expect(moneyGlance).not.toContain("no activity");
+    expect(moneyGlance).not.toContain("No activity");
+    expect(moneyGlance).not.toContain("no filings");
+    expect(moneyGlance).not.toContain("career total");
+    expect(moneyGlance).not.toContain("campaign total");
+  });
+
+  it("still renders explicit $0.00 when the discriminator proves loaded-zero coverage", () => {
+    // Over-suppression guard. `loaded_zero` is authoritative evidence of genuine
+    // no-money coverage, so the real zeroes must keep rendering as figures.
+    const rendered = render(DetailPage, {
+      props: {
+        data: buildPersonPageBundle({
+          personMoneyHeadline: buildLoadedZeroMoneyHeadline(),
+          personFinanceSections: new Promise(() => {}),
+          personContributionInsights: new Promise(() => {}),
+          personTopDonors: new Promise(() => {}),
+          personTopEmployers: new Promise(() => {})
+        })
+      }
+    });
+
+    const moneyGlance = extractMoneyGlanceSection(rendered.body);
+
+    expect(moneyGlance).toContain("Money at a glance");
+    expect(moneyGlance).toContain("2026 cycle");
+    expect(moneyGlance).toContain("<dt>Total receipts</dt>");
+    expect(moneyGlance).toContain("<dt>Total disbursements</dt>");
+    expect(moneyGlance).toContain("<dt>Cash on hand</dt>");
+    expect(moneyGlance).toContain("<dt>Debts owed by the committee</dt>");
+    expect(moneyGlance.match(/<dd>\$0\.00<\/dd>/g)).toHaveLength(4);
+    expect(moneyGlance).not.toContain(
+      "A linked FEC candidate exists for this person, but Civibus has not loaded authoritative selected-cycle fundraising evidence for that candidate."
+    );
   });
 
   it("keeps identity and headline visible when a deferred non-headline section rejects", () => {

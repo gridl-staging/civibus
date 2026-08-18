@@ -9,6 +9,30 @@ export const FEC_CANDIDATE_OFFICE_OPTIONS: readonly FilterOption[] = [
   { code: "P", label: "President" }
 ];
 
+/**
+ * Candidate browse orderings. Codes must stay identical to the backend's
+ * `CandidateListSort` literal in `api/models/campaign_finance.py`; the first
+ * entry is the default the backend falls back to for unknown tokens.
+ */
+export const CANDIDATE_SORT_OPTIONS: readonly FilterOption[] = [
+  { code: "name", label: "Name (A–Z)" },
+  { code: "total_raised_desc", label: "Total raised (high to low)" }
+];
+
+export const DEFAULT_CANDIDATE_SORT = CANDIDATE_SORT_OPTIONS[0].code;
+
+/**
+ * Narrows an arbitrary URL `sort` value to a supported code.
+ *
+ * A stale or hand-edited sort token should still render a usable page, so this
+ * mirrors the backend's lenient fallback rather than surfacing an error.
+ */
+export function normalizeCandidateSort(value: string | null | undefined): string {
+  return CANDIDATE_SORT_OPTIONS.some((option) => option.code === value)
+    ? (value as string)
+    : DEFAULT_CANDIDATE_SORT;
+}
+
 export const COMMITTEE_TYPE_OPTIONS: readonly FilterOption[] = [
   { code: "C", label: "Communication Cost" },
   { code: "D", label: "Delegate Committee" },

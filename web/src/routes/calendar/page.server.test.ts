@@ -46,9 +46,10 @@ describe("/calendar +page.server load", () => {
             state: "NC",
             jurisdiction_id: null,
             electoral_division_id: ELECTORAL_DIVISION_ID,
-            candidate_count: 2,
-            result_status: null,
-            winning_person_name: null
+            electoral_division_type: "statewide",
+            electoral_division_state: "NC",
+            district_number: null,
+            candidate_count: 2
           }
         ]
       }

@@ -49,9 +49,10 @@ describe("/election/[date] +page.server load", () => {
           state: "NC",
           jurisdiction_id: null,
           electoral_division_id: ELECTORAL_DIVISION_ID,
-          candidate_count: 2,
-          result_status: null,
-          winning_person_name: null
+          electoral_division_type: "statewide",
+          electoral_division_state: "NC",
+          district_number: null,
+          candidate_count: 2
         }
       ]
     } satisfies ElectionDateAggregateResponse);
@@ -147,7 +148,11 @@ describe("/election/[date] +page.server load", () => {
     expect(data.date).toBe(ELECTION_DATE);
   });
 
-  it("passes contest payloads through unchanged including unrecognized result_status and null winning_person_name", async () => {
+  it("passes contest payloads through unchanged including unrecognized division types and null district context", async () => {
+    // The load function is a pass-through; the page's presentation layer is the
+    // only place allowed to interpret these values. A division_type the frontend
+    // has no label for, and a null district on a row that does have a division,
+    // must both survive the load untouched rather than being coerced or dropped.
     const malformedAggregate = {
       date: ELECTION_DATE,
       total_contests: 1,
@@ -163,9 +168,10 @@ describe("/election/[date] +page.server load", () => {
           state: "NC",
           jurisdiction_id: null,
           electoral_division_id: ELECTORAL_DIVISION_ID,
-          candidate_count: 0,
-          result_status: "audit_in_progress",
-          winning_person_name: null
+          electoral_division_type: "tribal_district",
+          electoral_division_state: null,
+          district_number: null,
+          candidate_count: 0
         }
       ]
     } as unknown as ElectionDateAggregateResponse;
@@ -175,8 +181,9 @@ describe("/election/[date] +page.server load", () => {
     const data = (await load(event)) as ElectionDateAggregateResponse;
 
     expect(data).toBe(malformedAggregate);
-    expect(data.contests[0]?.result_status).toBe("audit_in_progress");
+    expect(data.contests[0]?.electoral_division_type).toBe("tribal_district");
+    expect(data.contests[0]?.electoral_division_state).toBeNull();
+    expect(data.contests[0]?.district_number).toBeNull();
     expect(data.contests[0]?.candidate_count).toBe(0);
-    expect(data.contests[0]?.winning_person_name).toBeNull();
   });
 });

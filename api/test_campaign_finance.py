@@ -3184,6 +3184,229 @@ def test_list_candidates_filters_by_person_id(
     assert payload["items"][0]["person_id"] == str(person_a.id)
 
 
+def test_candidate_browse_omits_unsafe_identity_rows_but_keeps_them_addressable(
+    api_client: TestClient,
+    db_conn: psycopg.Connection,
+) -> None:
+    """Default browse hides address-like FEC name strings without deleting them.
+
+    ``_candidate_identity_is_safe_expr`` already classifies these source strings.
+    This test pins the *listing* consequence: they leave the browse page, and
+    they stay fully reachable at their own canonical URLs, because the raw FEC
+    name remains source evidence rather than something Civibus conceals.
+    """
+    unsafe_candidate_id = UUID("94000000-0000-0000-0000-000000000001")
+    safe_candidate_id = UUID("94000000-0000-0000-0000-000000000002")
+    unsafe_name = "212 N HALF  W. JOHN, RODNEY HOWARD MR."
+
+    insert_candidate_row(
+        db_conn,
+        CandidateRowSeed(
+            id=unsafe_candidate_id,
+            fec_candidate_id="H0NC09401",
+            name=unsafe_name,
+            office="H",
+            state="NC",
+        ),
+    )
+    insert_candidate_row(
+        db_conn,
+        CandidateRowSeed(
+            id=safe_candidate_id,
+            fec_candidate_id="H0NC09402",
+            name="Safe Browse Candidate",
+            office="H",
+            state="NC",
+        ),
+    )
+
+    # Scoped to this test's own seeds: the integration database is loaded with a
+    # real FEC bulk sample that also contains NC House candidates, so asserting
+    # the whole NC/H browse would measure other fixtures' rows rather than the
+    # suppression rule.
+    seeded_ids = {str(unsafe_candidate_id), str(safe_candidate_id)}
+    browse_response = api_client.get("/v1/candidates?state=NC&office=H&limit=50&offset=0")
+    assert browse_response.status_code == 200
+    browse_payload = browse_response.json()
+    browse_seeded = [row for row in browse_payload["items"] if row["id"] in seeded_ids]
+    assert [row["id"] for row in browse_seeded] == [str(safe_candidate_id)]
+    assert [row["identity_is_safe"] for row in browse_seeded] == [True]
+    # Nothing unsafe survives the default browse, seeded or otherwise.
+    assert all(row["identity_is_safe"] for row in browse_payload["items"])
+
+    # Suppression is browse-only: the canonical detail URL keeps serving the row
+    # and keeps the raw FEC-filed string as source evidence.
+    detail_response = api_client.get(f"/v1/candidates/{unsafe_candidate_id}")
+    assert detail_response.status_code == 200
+    detail_payload = detail_response.json()
+    assert detail_payload["name"] == unsafe_name
+    assert detail_payload["identity_is_safe"] is False
+
+    # The slug lookup that backs the public candidate route also still resolves.
+    slug_response = api_client.get("/v1/candidates/by-slug/212-n-half-w-john-rodney-howard-mr")
+    assert slug_response.status_code == 200
+    assert [row["id"] for row in slug_response.json()] == [str(unsafe_candidate_id)]
+
+    # Entity-scoped reads opt back in so a name-quality rule never hides a
+    # linked candidate's money.
+    opted_in_response = api_client.get(
+        "/v1/candidates?state=NC&office=H&limit=50&offset=0&include_unsafe_identity=true"
+    )
+    assert opted_in_response.status_code == 200
+    opted_in_ids = {row["id"] for row in opted_in_response.json()["items"]}
+    assert opted_in_ids & seeded_ids == seeded_ids
+
+
+def test_person_scoped_candidate_list_keeps_unsafe_identity_rows(
+    api_client: TestClient,
+    db_conn: psycopg.Connection,
+) -> None:
+    """A person's own linked candidate record must survive the browse rule.
+
+    Person money sections read ``/v1/candidates?person_id=...``. That is an
+    entity-scoped lookup, not a browse, so suppressing the row would delete a
+    real person's money from their own page over a name-quality rule.
+    """
+    person = Person(canonical_name="Address Named Filer")
+    insert_person(db_conn, person)
+    unsafe_candidate_id = UUID("94000000-0000-0000-0000-000000000011")
+    insert_candidate_row(
+        db_conn,
+        CandidateRowSeed(
+            id=unsafe_candidate_id,
+            fec_candidate_id="H0NC09411",
+            name="375 ROB ROY DR, DAVID J SR SR",
+            office="H",
+            person_id=person.id,
+            state="NC",
+            total_receipts=Decimal("4200.00"),
+        ),
+    )
+
+    # Confirmed suppressed from the browse view. Scoped to this row's id: the
+    # sample-seeded NC House candidates are legitimately listed and are not what
+    # this test is about.
+    browse_response = api_client.get("/v1/candidates?state=NC&office=H&limit=50&offset=0")
+    assert browse_response.status_code == 200
+    browse_ids = {row["id"] for row in browse_response.json()["items"]}
+    assert str(unsafe_candidate_id) not in browse_ids
+
+    # ...but present, with money, on the person-scoped read.
+    person_scoped_response = api_client.get(f"/v1/candidates?person_id={person.id}&limit=50&offset=0")
+    assert person_scoped_response.status_code == 200
+    person_scoped_items = person_scoped_response.json()["items"]
+    assert [row["id"] for row in person_scoped_items] == [str(unsafe_candidate_id)]
+    assert person_scoped_items[0]["identity_is_safe"] is False
+    assert person_scoped_items[0]["total_receipts"] == "4200.00"
+
+
+def test_candidate_list_sorts_by_total_raised_desc_with_unknown_totals_last(
+    api_client: TestClient,
+    db_conn: psycopg.Connection,
+) -> None:
+    """Hand-calculated money ordering, deliberately different from name ordering."""
+    alpha_id = UUID("95000000-0000-0000-0000-000000000001")
+    bravo_id = UUID("95000000-0000-0000-0000-000000000002")
+    charlie_id = UUID("95000000-0000-0000-0000-000000000003")
+    delta_id = UUID("95000000-0000-0000-0000-000000000004")
+    seeds = [
+        (alpha_id, "S0AK09501", "Alpha Money Candidate", Decimal("1200.00")),
+        (bravo_id, "S0AK09502", "Bravo Money Candidate", Decimal("250000.50")),
+        (charlie_id, "S0AK09503", "Charlie Money Candidate", Decimal("0.00")),
+        (delta_id, "S0AK09504", "Delta Money Candidate", None),
+    ]
+    for candidate_id, fec_candidate_id, name, total_receipts in seeds:
+        insert_candidate_row(
+            db_conn,
+            CandidateRowSeed(
+                id=candidate_id,
+                fec_candidate_id=fec_candidate_id,
+                name=name,
+                office="S",
+                state="AK",
+                total_receipts=total_receipts,
+            ),
+        )
+
+    # Default sort is alphabetical by name.
+    default_response = api_client.get("/v1/candidates?state=AK&office=S&limit=50&offset=0")
+    assert default_response.status_code == 200
+    assert [row["id"] for row in default_response.json()["items"]] == [
+        str(alpha_id),
+        str(bravo_id),
+        str(charlie_id),
+        str(delta_id),
+    ]
+
+    # 250000.50 > 1200.00 > 0.00 > unknown. Unknown sorts last because a missing
+    # official total is not the same claim as a reported zero.
+    sorted_response = api_client.get("/v1/candidates?state=AK&office=S&limit=50&offset=0&sort=total_raised_desc")
+    assert sorted_response.status_code == 200
+    sorted_items = sorted_response.json()["items"]
+    assert [row["id"] for row in sorted_items] == [
+        str(bravo_id),
+        str(alpha_id),
+        str(charlie_id),
+        str(delta_id),
+    ]
+    assert [row["total_receipts"] for row in sorted_items] == ["250000.50", "1200.00", "0.00", None]
+
+    # An unrecognized sort value degrades to the name sort instead of erroring.
+    fallback_response = api_client.get("/v1/candidates?state=AK&office=S&limit=50&offset=0&sort=not_a_real_sort")
+    assert fallback_response.status_code == 200
+    assert [row["id"] for row in fallback_response.json()["items"]] == [
+        str(alpha_id),
+        str(bravo_id),
+        str(charlie_id),
+        str(delta_id),
+    ]
+
+
+def test_candidate_list_serializes_missing_official_total_as_unknown_not_zero(
+    api_client: TestClient,
+    db_conn: psycopg.Connection,
+) -> None:
+    """A candidate with no loaded official total must never serialise as ``0``."""
+    unknown_total_id = UUID("96000000-0000-0000-0000-000000000001")
+    loaded_zero_id = UUID("96000000-0000-0000-0000-000000000002")
+    insert_candidate_row(
+        db_conn,
+        CandidateRowSeed(
+            id=unknown_total_id,
+            fec_candidate_id="H0WY09601",
+            name="Unknown Total Candidate",
+            office="H",
+            state="WY",
+        ),
+    )
+    insert_candidate_row(
+        db_conn,
+        CandidateRowSeed(
+            id=loaded_zero_id,
+            fec_candidate_id="H0WY09602",
+            name="Zero Total Candidate",
+            office="H",
+            state="WY",
+            total_receipts=Decimal("0.00"),
+            summary_coverage_end_date=date(2026, 3, 31),
+        ),
+    )
+
+    response = api_client.get("/v1/candidates?state=WY&office=H&limit=50&offset=0")
+    assert response.status_code == 200
+    items_by_id = {row["id"]: row for row in response.json()["items"]}
+
+    unknown_row = items_by_id[str(unknown_total_id)]
+    assert unknown_row["total_receipts"] is None
+    assert unknown_row["has_official_total"] is False
+
+    # A loaded zero is a real reported figure and must stay distinguishable from
+    # the unknown case above.
+    zero_row = items_by_id[str(loaded_zero_id)]
+    assert zero_row["total_receipts"] == "0.00"
+    assert zero_row["has_official_total"] is True
+
+
 def test_candidate_routes_expose_any_date_official_total_signal(
     api_client: TestClient,
     db_conn: psycopg.Connection,
@@ -9559,7 +9782,11 @@ def test_get_committee_detail_exposes_active_linked_candidates_shape(
         "slug_is_unique",
         "identity_is_safe",
         "has_official_total",
+        "total_receipts",
     }
+    # This producer does not select the money column, so the shared list shape
+    # reports it as unknown rather than inventing a zero.
+    assert alpha_row["total_receipts"] is None
     assert alpha_row["person_id"] == str(person_id_alpha)
     assert alpha_row["fec_candidate_id"] == "H0NC66001"
     assert alpha_row["party"] == "DEM"

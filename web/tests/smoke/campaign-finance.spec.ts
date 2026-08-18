@@ -218,7 +218,9 @@ test.describe("campaign finance smoke", () => {
     await page.getByLabel("Office").selectOption("S");
     await page.getByRole("button", { name: "Apply filters" }).click();
 
-    await expect(page).toHaveURL(/\/candidates\?state=GA&office=S&limit=1$/);
+    // Sort submits with the filter form, so the default sort token is part of
+    // the applied browse URL.
+    await expect(page).toHaveURL(/\/candidates\?state=GA&office=S&sort=name&limit=1$/);
     await expect(page.getByText("No candidates found for the selected filters.")).toBeVisible();
     await expect(page.getByRole("link", { name: SMOKE_CANDIDATE_NAME })).toHaveCount(0);
 

@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 from datetime import date
+from decimal import Decimal
 from typing import Any, Literal
 from uuid import UUID
 
@@ -22,6 +23,8 @@ from api.models.civics import (
     CivicGeometryFeature,
     CivicGeometryFeatureCollection,
     CivicGeometryFeatureProperties,
+    ContestCandidateMoneyResponse,
+    ContestCandidateMoneyRow,
     ContestResponse,
     OfficeCurrentHolderCard,
     ElectionContestSummary,
@@ -35,11 +38,18 @@ from api.models.civics import (
     UpcomingElectionTimelineEntry,
 )
 from api.queries._common import fetch_entity_provenance
+from api.queries.campaign_finance import (
+    SelectedCycle,
+    fetch_candidate_ie_summaries,
+    fetch_candidate_public_money_summaries,
+    resolve_selected_cycle,
+)
 from api.queries.civics import (
     GeometryLevelLiteral,
     fetch_candidacy_detail,
     fetch_contacts_by_owner,
     fetch_contest_candidacies,
+    fetch_contest_candidate_links,
     fetch_contest_detail,
     fetch_country_state_geometries,
     fetch_current_federal_members,
@@ -56,7 +66,7 @@ from api.queries.civics import (
     fetch_state_geometry,
     fetch_upcoming_election_contests,
 )
-from api.routes.public_federal import build_public_federal_money_rows
+from api.routes.public_federal import build_public_federal_money_rows, public_money_totals
 
 router = APIRouter()
 _WINNER_CANDIDACY_STATUSES = {"elected", "won", "winner"}
@@ -142,6 +152,101 @@ def get_contest(contest_id: UUID, conn: psycopg.Connection = Depends(get_db)) ->
 
     row["sources"] = fetch_entity_provenance(conn, "contest", contest_id)
     return ContestResponse.model_validate(row)
+
+
+@router.get("/contests/{contest_id}/candidate-money", response_model=ContestCandidateMoneyResponse)
+def get_contest_candidate_money(
+    contest_id: UUID,
+    cycle: int | None = Query(default=None),
+    conn: psycopg.Connection = Depends(get_db),
+) -> ContestCandidateMoneyResponse:
+    """Return the money scoreboard for every candidacy in one contest.
+
+    Fixed cost, three batched queries, regardless of how many candidates run:
+    the candidacy-to-FEC-candidate join, then the shared public-money summary
+    and independent-expenditure summary fetchers that the congress directory
+    already uses. This replaces a web-layer fan-out of 4N+1 HTTP calls that
+    measured ~18s on a 21-candidacy Senate contest.
+    """
+    _fetch_or_404(fetch_contest_detail(conn, contest_id), "Contest not found")
+
+    try:
+        selected_cycle = resolve_selected_cycle(cycle)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+    links = fetch_contest_candidate_links(conn, contest_id)
+    # Only candidacies that resolved to a real cf.candidate row can have money.
+    linked = [link for link in links if link["candidate_id"] is not None]
+    candidate_refs = [(link["candidate_id"], link["candidate_name"]) for link in linked]
+    candidate_ids = [link["candidate_id"] for link in linked]
+
+    summaries_by_candidate = fetch_candidate_public_money_summaries(conn, candidate_refs, selected_cycle)
+    ie_summaries_by_candidate = fetch_candidate_ie_summaries(conn, candidate_ids, selected_cycle)
+
+    rows = [
+        _contest_candidate_money_row(
+            link,
+            summary=summaries_by_candidate.get(link["candidate_id"]),
+            ie_summary=ie_summaries_by_candidate.get(link["candidate_id"]),
+            selected_cycle=selected_cycle,
+        )
+        for link in links
+    ]
+    # Scoreboard order: biggest raiser first. Unknown money sorts last rather
+    # than tying with a genuine zero, and name breaks ties deterministically.
+    rows.sort(key=lambda row: (row.total_raised is None, -(row.total_raised or Decimal("0")), row.person_name))
+
+    return ContestCandidateMoneyResponse(
+        contest_id=contest_id,
+        selected_cycle=selected_cycle.selected_cycle,
+        candidate_count=len(rows),
+        total_raised=sum((row.total_raised for row in rows if row.total_raised is not None), Decimal("0.00")),
+        total_ie_support=sum((row.ie_support_total for row in rows), Decimal("0.00")),
+        total_ie_oppose=sum((row.ie_oppose_total for row in rows), Decimal("0.00")),
+        has_unknown_candidate_money=any(row.total_raised is None for row in rows),
+        rows=rows,
+    )
+
+
+def _contest_candidate_money_row(
+    link: dict[str, Any],
+    *,
+    summary: dict[str, Any] | None,
+    ie_summary: dict[str, Any] | None,
+    selected_cycle: SelectedCycle,
+) -> ContestCandidateMoneyRow:
+    """Build one scoreboard row, leaving unknown money unknown.
+
+    ``public_money_totals`` is the shared owner of "given this summary's
+    coverage state, which totals should a public surface show" — the same rule
+    the congress directory uses — so a race page and a member page can never
+    disagree about the same candidate's headline figure.
+    """
+    base = {
+        "candidacy_id": link["candidacy_id"],
+        "person_id": link["person_id"],
+        "person_name": link["person_name"],
+        "party": link["party"],
+        "status": link["status"],
+        "incumbent_challenge": link["incumbent_challenge"],
+        "fec_candidate_id": link["fec_candidate_id"],
+        "candidate_id": link["candidate_id"],
+        "candidate_name": link["candidate_name"],
+        "candidate_slug": link["candidate_slug"],
+        "candidate_slug_is_unique": bool(link["candidate_slug_is_unique"]),
+        "candidate_identity_is_safe": bool(link["candidate_identity_is_safe"]),
+        # A candidacy with no FEC candidate row is not a candidate with $0; the
+        # IE aggregates are genuinely zero because there is nothing to spend on.
+        "ie_support_total": Decimal("0.00") if ie_summary is None else ie_summary["support_total"],
+        "ie_oppose_total": Decimal("0.00") if ie_summary is None else ie_summary["oppose_total"],
+        "ie_support_count": 0 if ie_summary is None else ie_summary["support_count"],
+        "ie_oppose_count": 0 if ie_summary is None else ie_summary["oppose_count"],
+    }
+    if summary is None:
+        return ContestCandidateMoneyRow.model_validate({**base, "has_fec_money": False})
+
+    return ContestCandidateMoneyRow.model_validate({**base, "has_fec_money": True, **public_money_totals(summary)})
 
 
 @router.get("/candidacies/{candidacy_id}", response_model=CandidacyResponse)

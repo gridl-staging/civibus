@@ -436,6 +436,8 @@ def _assert_candidate_list_route_owner_contract(
                 "slug_is_unique": True,
                 "identity_is_safe": True,
                 "has_official_total": True,
+                # Money column value seeded by test_support.browser_smoke_seed.
+                "total_receipts": Decimal("250.00"),
             }
         ],
         "has_next": False,

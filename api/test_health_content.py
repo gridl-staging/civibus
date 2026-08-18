@@ -1093,7 +1093,7 @@ def test_out_of_cycle_official_total_promoted_uncounted_by_health_predicate_db_c
     from api.health_content import _CANDIDATE_MONEY_OFFICIAL_TOTALS_PREDICATE
     from api.health_content import candidate_money_serving_coverage_count
     from api.queries.campaign_finance import fetch_candidate_summary, resolve_selected_cycle
-    from api.routes.public_federal import _public_money_totals
+    from api.routes.public_federal import public_money_totals
 
     selected_cycle = resolve_selected_cycle(None)
     baseline = candidate_money_serving_coverage_count(db_conn, cycle=selected_cycle.selected_cycle)
@@ -1127,8 +1127,8 @@ def test_out_of_cycle_official_total_promoted_uncounted_by_health_predicate_db_c
     suppressed_summary = fetch_candidate_summary(db_conn, suppressed_id, suppressed_name, selected_cycle)
     assert promoted_summary is not None
     assert suppressed_summary is not None
-    promoted_public_totals = _public_money_totals(promoted_summary)
-    suppressed_public_totals = _public_money_totals(suppressed_summary)
+    promoted_public_totals = public_money_totals(promoted_summary)
+    suppressed_public_totals = public_money_totals(suppressed_summary)
     repaired_count = candidate_money_serving_coverage_count(db_conn, cycle=selected_cycle.selected_cycle)
 
     assert selected_cycle.selected_cycle == 2026
@@ -1152,7 +1152,7 @@ def test_out_of_cycle_official_total_suppressed_by_transaction_derived_activity(
 ) -> None:
     from api.health_content import candidate_money_serving_coverage_count
     from api.queries.campaign_finance import fetch_candidate_summary, resolve_selected_cycle
-    from api.routes.public_federal import _public_money_totals
+    from api.routes.public_federal import public_money_totals
 
     selected_cycle = resolve_selected_cycle(None)
     baseline = candidate_money_serving_coverage_count(db_conn, cycle=selected_cycle.selected_cycle)
@@ -1165,7 +1165,7 @@ def test_out_of_cycle_official_total_suppressed_by_transaction_derived_activity(
 
     suppressed_summary = fetch_candidate_summary(db_conn, suppressed_id, suppressed_name, selected_cycle)
     assert suppressed_summary is not None
-    suppressed_public_totals = _public_money_totals(suppressed_summary)
+    suppressed_public_totals = public_money_totals(suppressed_summary)
     repaired_count = candidate_money_serving_coverage_count(db_conn, cycle=selected_cycle.selected_cycle)
 
     assert selected_cycle.selected_cycle == 2026
@@ -1186,7 +1186,7 @@ def test_out_of_cycle_official_total_suppressed_by_positive_precomputed_transact
 ) -> None:
     from api.health_content import candidate_money_serving_coverage_count
     from api.queries.campaign_finance import fetch_candidate_summary, resolve_selected_cycle
-    from api.routes.public_federal import _public_money_totals
+    from api.routes.public_federal import public_money_totals
 
     selected_cycle = resolve_selected_cycle(None)
     baseline = candidate_money_serving_coverage_count(db_conn, cycle=selected_cycle.selected_cycle)
@@ -1199,7 +1199,7 @@ def test_out_of_cycle_official_total_suppressed_by_positive_precomputed_transact
 
     summary = fetch_candidate_summary(db_conn, candidate_id, candidate_name, selected_cycle)
     assert summary is not None
-    public_totals = _public_money_totals(summary)
+    public_totals = public_money_totals(summary)
     repaired_count = candidate_money_serving_coverage_count(db_conn, cycle=selected_cycle.selected_cycle)
 
     assert summary["transaction_count"] == 1
@@ -1218,7 +1218,7 @@ def test_out_of_cycle_official_total_promoted_by_zero_precomputed_transaction_co
 ) -> None:
     from api.health_content import candidate_money_serving_coverage_count
     from api.queries.campaign_finance import fetch_candidate_summary, resolve_selected_cycle
-    from api.routes.public_federal import _public_money_totals
+    from api.routes.public_federal import public_money_totals
 
     selected_cycle = resolve_selected_cycle(None)
     baseline = candidate_money_serving_coverage_count(db_conn, cycle=selected_cycle.selected_cycle)
@@ -1231,7 +1231,7 @@ def test_out_of_cycle_official_total_promoted_by_zero_precomputed_transaction_co
 
     summary = fetch_candidate_summary(db_conn, candidate_id, candidate_name, selected_cycle)
     assert summary is not None
-    public_totals = _public_money_totals(summary)
+    public_totals = public_money_totals(summary)
     repaired_count = candidate_money_serving_coverage_count(db_conn, cycle=selected_cycle.selected_cycle)
 
     assert summary["transaction_count"] == 0
@@ -1258,7 +1258,7 @@ def test_out_of_cycle_official_total_promoted_despite_denylisted_committee_activ
     """
     from api.health_content import candidate_money_serving_coverage_count
     from api.queries.campaign_finance import fetch_candidate_summary, resolve_selected_cycle
-    from api.routes.public_federal import _public_money_totals
+    from api.routes.public_federal import public_money_totals
 
     selected_cycle = resolve_selected_cycle(None)
     baseline = candidate_money_serving_coverage_count(db_conn, cycle=selected_cycle.selected_cycle)
@@ -1288,7 +1288,7 @@ def test_out_of_cycle_official_total_promoted_despite_denylisted_committee_activ
 
     summary = fetch_candidate_summary(db_conn, candidate_id, candidate_name, selected_cycle)
     assert summary is not None
-    public_totals = _public_money_totals(summary)
+    public_totals = public_money_totals(summary)
     repaired_count = candidate_money_serving_coverage_count(db_conn, cycle=selected_cycle.selected_cycle)
 
     assert summary["committees"] == []

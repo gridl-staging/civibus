@@ -10,7 +10,8 @@ import psycopg
 from psycopg.rows import dict_row
 
 from api.portrait_policy import reusable_portrait_rights_statuses
-from api.queries._common import fetch_one_row
+from api.queries._common import _SLUG_NORMALIZE_EXPR, fetch_one_row
+from api.queries.campaign_finance import _candidate_identity_is_safe_expr
 from domains.civics.constants import CANONICAL_FEDERAL_DIRECTORY_OFFICE_NAMES, LAUNCH_SCOPE_USPS_STATES
 
 # ---------------------------------------------------------------------------
@@ -95,7 +96,16 @@ _OFFICE_RECENT_CONTESTS_SQL = """
     FROM civic.contest c
     LEFT JOIN civic.electoral_division ed ON ed.id = c.electoral_division_id
     WHERE c.office_id = %s
-    ORDER BY c.election_date DESC NULLS LAST, c.id DESC
+    -- Nearest election first, not furthest-future first. The list is capped at
+    -- five, and ordering by election_date descending selected the most distant
+    -- rows: /office/us_house served five contests dated 2036 through 2924 and
+    -- pushed the imminent general election off the list entirely. Distance from
+    -- today puts the election a reader came for at the top; the descending
+    -- secondary key keeps upcoming ahead of equally-distant past contests.
+    ORDER BY
+        ABS(c.election_date - CURRENT_DATE) ASC NULLS LAST,
+        c.election_date DESC NULLS LAST,
+        c.id DESC
     LIMIT 5
 """
 
@@ -452,6 +462,84 @@ def fetch_contest_candidacies(conn: psycopg.Connection, contest_id: UUID) -> lis
         return list(cursor.fetchall())
 
 
+# The candidate identity-safety predicate, rebound to this query's alias.
+# cf.candidate.name is raw FEC text: some rows are mailing addresses rather
+# than people, and only safe ones may be promoted into a slug URL.
+_CONTEST_CANDIDATE_IDENTITY_IS_SAFE_EXPR = _candidate_identity_is_safe_expr(
+    name_sql="cf_c.name",
+    slug_sql=_SLUG_NORMALIZE_EXPR.format(value="cf_c.name"),
+)
+
+# Resolve each candidacy in a contest to its FEC candidate row.
+#
+# The join key is civic.candidacy.candidate_number (the FEC candidate id the
+# races loader copies from CAND_ID), NOT candidacy.person_id. That is
+# deliberate and load-bearing: a chamber-switching incumbent carries two FEC
+# candidate ids, and production ended up with the candidacy bound to an
+# FEC-only shadow person row while cf.candidate.person_id points at the
+# bioguide-anchored spine row. Joining on person_id returns nothing for those
+# candidates and the race page reports the incumbent as having no money.
+# cf.candidate.fec_candidate_id is NOT NULL UNIQUE, so this join is exact.
+_CONTEST_CANDIDATE_LINKS_SQL = f"""
+    SELECT
+        cand.id AS candidacy_id,
+        cand.person_id,
+        p.canonical_name AS person_name,
+        cand.party,
+        cand.status,
+        cand.incumbent_challenge,
+        cand.candidate_number AS fec_candidate_id,
+        cf_c.id AS candidate_id,
+        cf_c.name AS candidate_name,
+        {_SLUG_NORMALIZE_EXPR.format(value="cf_c.name")} AS candidate_slug,
+        -- Same three routing facts the candidate detail query returns, so a
+        -- race page and a candidate page agree on whether a slug URL is safe.
+        -- The identity predicate is imported rather than restated: it encodes a
+        -- non-obvious address-string rule that must have exactly one owner.
+        (
+            SELECT COUNT(*) FROM cf.candidate slug_peer
+            WHERE {_SLUG_NORMALIZE_EXPR.format(value="slug_peer.name")}
+                = {_SLUG_NORMALIZE_EXPR.format(value="cf_c.name")}
+        ) = 1 AS candidate_slug_is_unique,
+        {_CONTEST_CANDIDATE_IDENTITY_IS_SAFE_EXPR} AS candidate_identity_is_safe
+    FROM civic.candidacy cand
+    JOIN core.person p ON p.id = cand.person_id
+    LEFT JOIN cf.candidate cf_c ON cf_c.fec_candidate_id = cand.candidate_number
+    WHERE cand.contest_id = %s
+    ORDER BY p.canonical_name, cand.id
+"""
+
+
+def fetch_contest_candidate_links(conn: psycopg.Connection, contest_id: UUID) -> list[dict[str, Any]]:
+    """Return every candidacy in a contest joined to its FEC candidate row.
+
+    One query for the whole contest. The route feeds the resolved candidate ids
+    straight into the batched money and IE summary fetchers, so a contest of any
+    size costs a fixed number of round trips instead of the 4N+1 HTTP calls the
+    web layer used to issue per candidacy.
+    """
+    with conn.cursor(row_factory=dict_row) as cursor:
+        cursor.execute(_CONTEST_CANDIDATE_LINKS_SQL, (contest_id,))
+        return list(cursor.fetchall())
+
+
+# Seat context for the `/election/[date]` race index.
+#
+# The electoral-division join mirrors CIVIC_CONTEST_DETAIL_SQL above. Without it
+# the aggregate hands the index a bare `electoral_division_id` UUID, which the
+# page cannot render, so every one of ~515 rows on a general-election date looks
+# identical apart from its name. `division_type`/`state`/`district_number` are
+# what the index groups and labels by; see
+# `docs/reference/screen_specs/election_date.md`.
+#
+# The LEFT JOIN is load-bearing: statewide and presidential contests carry no
+# electoral division, and an inner join would silently drop them from the index.
+#
+# ORDER BY here only guarantees a deterministic wire order. The reader-facing
+# grouping (by state) and ranking (Senate before House, districts numerically)
+# are owned by `buildElectionIndexPresentation` in
+# `web/src/lib/civic-detail/presentation.ts`, because they depend on display
+# spellings and office-rank rules that belong in the presentation layer.
 _ELECTION_CONTESTS_BY_DATE_SQL = """
     SELECT
         c.id AS contest_id,
@@ -463,9 +551,13 @@ _ELECTION_CONTESTS_BY_DATE_SQL = """
         o.state,
         o.jurisdiction_id,
         c.electoral_division_id,
+        ed.division_type AS electoral_division_type,
+        ed.state AS electoral_division_state,
+        ed.district_number,
         COUNT(cd.id)::int AS candidate_count
     FROM civic.contest c
     JOIN civic.office o ON o.id = c.office_id
+    LEFT JOIN civic.electoral_division ed ON ed.id = c.electoral_division_id
     LEFT JOIN civic.candidacy cd ON cd.contest_id = c.id
     WHERE c.election_date = %s
     GROUP BY
@@ -477,11 +569,31 @@ _ELECTION_CONTESTS_BY_DATE_SQL = """
         o.office_level,
         o.state,
         o.jurisdiction_id,
-        c.electoral_division_id
+        c.electoral_division_id,
+        ed.division_type,
+        ed.state,
+        ed.district_number
     ORDER BY o.state NULLS LAST, o.name, c.name, c.id
 """
 
-_UPCOMING_ELECTION_CONTESTS_SQL = """
+# Same projection as _ELECTION_CONTESTS_BY_DATE_SQL plus the election date, so
+# both feed the identical ElectionContestSummary contract. Keep the two column
+# lists in lockstep: the timeline and the single-date index share one model, and
+# a column added to only one of them yields a half-populated row on one route.
+# How far ahead the upcoming-election timeline will publish.
+#
+# Deliberately LOOSER than the loader's own election-year ceiling
+# (_federal_fec_races_max_election_year, fec_cycle + 4), so serving can never
+# hide a contest ingest chose to load. This exists because CAND_ELECTION_YR is
+# filer-supplied and production accumulated contests dated 2820 through 2929
+# before the loader had a ceiling. Those rows are FEC-sourced evidence and are
+# deliberately not deleted, so serving is what declines to publish them — this
+# timeline is what /calendar renders and what the contest sitemap shard submits
+# to search engines. It also stays as a backstop if an ingest guard ever
+# regresses.
+_UPCOMING_ELECTION_HORIZON_YEARS = 6
+
+_UPCOMING_ELECTION_CONTESTS_SQL = f"""
     SELECT
         c.election_date,
         c.id AS contest_id,
@@ -493,11 +605,16 @@ _UPCOMING_ELECTION_CONTESTS_SQL = """
         o.state,
         o.jurisdiction_id,
         c.electoral_division_id,
+        ed.division_type AS electoral_division_type,
+        ed.state AS electoral_division_state,
+        ed.district_number,
         COUNT(cd.id)::int AS candidate_count
     FROM civic.contest c
     JOIN civic.office o ON o.id = c.office_id
+    LEFT JOIN civic.electoral_division ed ON ed.id = c.electoral_division_id
     LEFT JOIN civic.candidacy cd ON cd.contest_id = c.id
     WHERE c.election_date >= CURRENT_DATE
+      AND c.election_date <= CURRENT_DATE + INTERVAL '{_UPCOMING_ELECTION_HORIZON_YEARS} years'
     GROUP BY
         c.election_date,
         c.id,
@@ -508,7 +625,10 @@ _UPCOMING_ELECTION_CONTESTS_SQL = """
         o.office_level,
         o.state,
         o.jurisdiction_id,
-        c.electoral_division_id
+        c.electoral_division_id,
+        ed.division_type,
+        ed.state,
+        ed.district_number
     ORDER BY c.election_date, o.state NULLS LAST, o.name, c.name, c.id
 """
 

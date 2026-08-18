@@ -20,7 +20,8 @@ const FULL_CANDIDATE: CandidateListItem = {
   slug: "candidate-one",
   slug_is_unique: true,
   identity_is_safe: true,
-  has_official_total: true
+  has_official_total: true,
+  total_receipts: "1234.56"
 };
 
 const SPARSE_CANDIDATE: CandidateListItem = {
@@ -65,8 +66,42 @@ describe("buildCandidateListItemPresentation", () => {
     expect(result).toEqual({
       name: "Candidate One",
       href: "/candidate/candidate-one",
-      contextLine: "DEM · H · NC-01"
+      contextLine: "DEM · H · NC-01",
+      totalRaisedLabel: "Total raised",
+      totalRaisedValue: "$1,234.56"
     });
+  });
+
+  it("formats a loaded official total through the shared currency owner", () => {
+    const result = buildCandidateListItemPresentation({
+      ...FULL_CANDIDATE,
+      total_receipts: "250000.50"
+    });
+
+    expect(result.totalRaisedValue).toBe("$250,000.50");
+  });
+
+  it("reports a missing official total as unknown rather than zero money", () => {
+    const missingTotal = buildCandidateListItemPresentation({
+      ...FULL_CANDIDATE,
+      total_receipts: null
+    });
+    // A producer that omits the column entirely is the same unknown case.
+    const absentField = buildCandidateListItemPresentation(SPARSE_CANDIDATE);
+
+    expect(missingTotal.totalRaisedValue).toBe("Not available");
+    expect(absentField.totalRaisedValue).toBe("Not available");
+    expect(missingTotal.totalRaisedValue).not.toContain("$");
+    expect(absentField.totalRaisedValue).not.toContain("$");
+  });
+
+  it("still renders a reported zero as an explicit dollar figure", () => {
+    const result = buildCandidateListItemPresentation({
+      ...FULL_CANDIDATE,
+      total_receipts: "0.00"
+    });
+
+    expect(result.totalRaisedValue).toBe("$0.00");
   });
 
   it("returns office only when all nullable fields are null", () => {

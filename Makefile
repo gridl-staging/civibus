@@ -59,7 +59,9 @@ QA_FAST_PRODUCT_TEST_PATHS := \
 	domains/campaign_finance/entity_extractors \
 	domains/campaign_finance/normalize \
 	domains/campaign_finance/tests \
+	domains/campaign_finance/ingest/test_federal_contest_name.py \
 	domains/civics/loaders/test_federal_fec_races.py \
+	domains/civics/tests/test_constants.py \
 	tests/test_stage1_fec_committee_summary_format_outputs.py \
 	tests/test_stage1_fec_schedule_b_source_contract.py \
 	tests/test_stage1_fec_schedule_e_format_outputs.py \

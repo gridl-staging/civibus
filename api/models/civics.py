@@ -5,11 +5,16 @@ Stub summary for jun04_3pm_4_congress_directory_ui/civibus_dev/api/models/civics
 from __future__ import annotations
 
 from datetime import date
+from decimal import Decimal
 from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field
 
+from api.models.campaign_finance import (
+    CandidateFundraisingCoverage,
+    CandidateOutOfCycleOfficialTotal,
+)
 from api.models.provenance import SourceInfo
 from domains.civics.types.models import (
     DatePrecisionLiteral,
@@ -137,6 +142,69 @@ class ContestResponse(BaseModel):
     sources: list[SourceInfo] = Field(default_factory=list)
 
 
+class ContestCandidateMoneyRow(BaseModel):
+    """One candidate's money scoreboard line within a contest.
+
+    Money fields are optional on purpose. A candidacy with no matching
+    ``cf.candidate`` row has UNKNOWN money, not zero money, and the product's
+    own screen specs forbid rendering unknown coverage as ``$0.00``. Typing
+    these as ``Decimal`` would force a zero at serialization and reintroduce
+    exactly that defect at the source.
+    """
+
+    candidacy_id: UUID
+    person_id: UUID
+    person_name: str
+    party: str | None = None
+    status: str | None = None
+    incumbent_challenge: str | None = None
+    fec_candidate_id: str | None = None
+    candidate_id: UUID | None = None
+    candidate_name: str | None = None
+    candidate_slug: str | None = None
+    # Routing facts, not display facts: the client uses the same rule as the
+    # candidate detail page to decide between a slug URL and a UUID URL.
+    candidate_slug_is_unique: bool = False
+    candidate_identity_is_safe: bool = False
+    # False when no cf.candidate row matched; the client must render the
+    # unknown-coverage copy rather than any figure.
+    has_fec_money: bool
+    total_raised: Decimal | None = None
+    total_spent: Decimal | None = None
+    net: Decimal | None = None
+    cash_on_hand: Decimal | None = None
+    summary_source: str | None = None
+    fundraising_coverage: CandidateFundraisingCoverage | None = None
+    out_of_cycle_official_total: CandidateOutOfCycleOfficialTotal | None = None
+    ie_support_total: Decimal
+    ie_oppose_total: Decimal
+    ie_support_count: int
+    ie_oppose_count: int
+
+
+class ContestCandidateMoneyResponse(BaseModel):
+    """Race-level money scoreboard for one contest, in a single response.
+
+    Replaces a per-candidacy HTTP fan-out (4N+1 backend calls from the web
+    layer) with one call backed by three batched queries, so cost is flat in
+    the number of candidates.
+    """
+
+    contest_id: UUID
+    selected_cycle: int
+    candidate_count: int
+    # Race-level rollups over the rows below, for the answer-first summary line
+    # race_detail.md specifies. Candidates with unknown money contribute nothing
+    # rather than a zero, so these are sums of what is actually known.
+    total_raised: Decimal
+    total_ie_support: Decimal
+    total_ie_oppose: Decimal
+    # True when at least one candidacy has no loaded money; the summary line
+    # must qualify itself rather than present a partial total as complete.
+    has_unknown_candidate_money: bool
+    rows: list[ContestCandidateMoneyRow] = Field(default_factory=list)
+
+
 class CandidacyResponse(BaseModel):
     id: UUID
     person_id: UUID
@@ -223,6 +291,20 @@ class CivicGeometryFeatureCollection(BaseModel):
 
 
 class ElectionContestSummary(BaseModel):
+    """One contest row in the `/election/[date]` index and the upcoming timeline.
+
+    Fed by `_ELECTION_CONTESTS_BY_DATE_SQL` and `_UPCOMING_ELECTION_CONTESTS_SQL`,
+    which must stay column-identical. The `electoral_division_*` and
+    `district_number` fields are the seat context the race index groups and
+    labels by; `electoral_division_id` alone is a UUID no reader can interpret.
+
+    `result_status` and `winning_person_name` used to live here and were removed
+    on 2026-08-17: neither query ever selected them, so they serialized as `null`
+    on every row of every response and no caller could ever read a real value.
+    Contest results are exposed by `ContestDetailResponse.result_winner_*`, which
+    is populated from the candidacy status.
+    """
+
     contest_id: UUID
     office_id: UUID
     name: str
@@ -232,9 +314,10 @@ class ElectionContestSummary(BaseModel):
     state: str | None = None
     jurisdiction_id: UUID | None = None
     electoral_division_id: UUID | None = None
+    electoral_division_type: str | None = None
+    electoral_division_state: str | None = None
+    district_number: str | None = None
     candidate_count: int
-    result_status: str | None = None
-    winning_person_name: str | None = None
 
 
 class ElectionDateAggregateResponse(BaseModel):

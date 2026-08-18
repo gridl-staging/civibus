@@ -4,8 +4,10 @@
   import { CANDIDATES_PAGE_PATH, buildCandidatesPagePath } from "$lib/campaign-finance-detail/contract";
   import ListNavigationLoading from "$lib/campaign-finance-detail/ListNavigationLoading.svelte";
   import {
+    CANDIDATE_SORT_OPTIONS,
     FEC_CANDIDATE_OFFICE_OPTIONS,
-    US_STATE_OPTIONS
+    US_STATE_OPTIONS,
+    normalizeCandidateSort
   } from "$lib/campaign-finance-detail/filter-options";
   import {
     buildCandidateListItemPresentation,
@@ -36,11 +38,15 @@
   }));
   $: activeState = $page.url.searchParams.get("state") ?? "";
   $: activeOffice = $page.url.searchParams.get("office") ?? "";
+  // URL is the source of truth for sort too; an unrecognized token degrades to
+  // the default so a stale shared link still renders a usable page.
+  $: activeSort = normalizeCandidateSort($page.url.searchParams.get("sort"));
   $: paginationContext = buildPaginationContext(data.offset, data.limit, data.has_next, data.items.length);
   $: previousHref = paginationContext.hasPrevious
     ? buildCandidatesPagePath({
         state: activeState,
         office: activeOffice,
+        sort: activeSort,
         offset: Math.max(data.offset - data.limit, 0),
         limit: data.limit
       })
@@ -49,10 +55,12 @@
     ? buildCandidatesPagePath({
         state: activeState,
         office: activeOffice,
+        sort: activeSort,
         offset: data.offset + data.limit,
         limit: data.limit
       })
     : null;
+  // Clearing filters resets sort as well, returning the canonical browse URL.
   $: clearFiltersHref = buildCandidatesPagePath({ limit: data.limit });
 </script>
 
@@ -78,13 +86,26 @@
       {/each}
     </select>
 
+    <label for="candidate-sort">Sort</label>
+    <select id="candidate-sort" name="sort">
+      {#each CANDIDATE_SORT_OPTIONS as option}
+        <option value={option.code} selected={activeSort === option.code}>{option.label}</option>
+      {/each}
+    </select>
+
     <!-- Preserve backend-owned page size while clearing stale offset on each filter submit. -->
     <input type="hidden" name="limit" value={data.limit} />
 
     <button type="submit">Apply filters</button>
     <a href={clearFiltersHref}>Clear filters</a>
   </form>
-  <ListNavigationLoading routePath={CANDIDATES_PAGE_PATH} filterParams={["state", "office"]} label="Updating results…" let:isFilterNavigation>
+  <!-- Browse scope is a listing rule, not concealment: say so on the page so the
+       omission is never mistaken for the record not existing. -->
+  <p class="campaign-list__scope-note">
+    Candidates whose FEC-filed name cannot stand on its own as a public identity are
+    left out of this list and stay reachable at their own candidate pages.
+  </p>
+  <ListNavigationLoading routePath={CANDIDATES_PAGE_PATH} filterParams={["state", "office", "sort"]} label="Updating results…" let:isFilterNavigation>
     {#if isFilterNavigation}
       <!-- Swap stale list results for a busy placeholder while the filtered
            browse response streams in on the same route. -->
@@ -103,6 +124,12 @@
                 <a href={itemView.presentation.href}>{itemView.presentation.name}</a>
               </h3>
               <p class="campaign-list__context">{itemView.presentation.contextLine}</p>
+              <!-- Money cell. The presenter already resolved unknown-vs-loaded, so
+                   this never has to decide whether a missing total means zero. -->
+              <p class="campaign-list__money" data-testid="candidate-total-raised">
+                <span class="campaign-list__money-label">{itemView.presentation.totalRaisedLabel}</span>
+                <span class="campaign-list__money-value">{itemView.presentation.totalRaisedValue}</span>
+              </p>
             </li>
           {/each}
         </ul>
@@ -150,6 +177,28 @@
     margin: 0.2rem 0 0;
     color: var(--text-secondary, #44515e);
     font-size: 0.95rem;
+  }
+
+  .campaign-list__scope-note {
+    margin: 0 0 0.75rem;
+    color: var(--text-secondary, #44515e);
+    font-size: 0.9rem;
+  }
+
+  .campaign-list__money {
+    margin: 0.2rem 0 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    font-size: 0.95rem;
+  }
+
+  .campaign-list__money-label {
+    color: var(--text-secondary, #44515e);
+  }
+
+  .campaign-list__money-value {
+    font-variant-numeric: tabular-nums;
   }
 
   .campaign-list__pagination {

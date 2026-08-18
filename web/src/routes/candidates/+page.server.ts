@@ -10,14 +10,23 @@ export const load: PageServerLoad = ({ url, locals }) =>
     const queryParams = readOptionalQueryParams(url.searchParams, [
       "state",
       "office",
+      "sort",
       "offset",
       "limit"
     ] as const);
     const request: CandidateListRequest = {
       ...queryParams,
       state: queryParams.state === "" ? undefined : queryParams.state,
-      office: queryParams.office === "" ? undefined : queryParams.office
+      office: queryParams.office === "" ? undefined : queryParams.office,
+      // A blank sort submit means "default", so drop it rather than sending an
+      // empty token. Non-blank values pass through untouched: the backend owns
+      // the closed sort vocabulary and falls back to the default for anything
+      // it does not recognize.
+      sort: queryParams.sort === "" ? undefined : queryParams.sort
     };
 
+    // The browse page deliberately does not set include_unsafe_identity, so the
+    // backend applies its default identity suppression. Suppressed candidates
+    // stay reachable at their own /candidate/... routes.
     return fetchCandidateList(locals.api, request);
   }, "Backend candidate list request failed.");

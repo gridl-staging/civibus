@@ -22,7 +22,11 @@ from domains.campaign_finance.ingest.bulk_stage4_loader import LoadResult
 from domains.campaign_finance.ingest.federal_officeholder_loader import OFFICE_US_PRESIDENT
 from domains.campaign_finance.ingest.field_mapper import map_candidate_fields
 from domains.campaign_finance.ingest.text_utils import normalize_optional_text
-from domains.civics.constants import congressional_boundary_year
+from domains.civics.constants import (
+    US_HOUSE_NON_VOTING_SEAT_TITLES,
+    USPS_TO_STATE_NAME,
+    congressional_boundary_year,
+)
 from domains.civics.ingest import (
     derive_incumbent_challenge,
     upsert_candidacy,
@@ -260,10 +264,93 @@ def resolve_candidate_division(conn: psycopg.Connection, row: ValidatedRow) -> U
     return _resolve_electoral_division(conn, row.office_code, state, district, election_year=row.election_year)
 
 
+def _ordinal(number: int) -> str:
+    """Render an English ordinal: 1 -> "1st", 11 -> "11th", 22 -> "22nd"."""
+    # 11/12/13 end in 1/2/3 but take "th"; they are the only exceptions, and
+    # they are real district numbers in the larger states, so they are checked
+    # before the units digit.
+    if 11 <= (number % 100) <= 13:
+        suffix = "th"
+    else:
+        suffix = {1: "st", 2: "nd", 3: "rd"}.get(number % 10, "th")
+    return f"{number}{suffix}"
+
+
+def federal_contest_display_name(
+    *,
+    office_code: str,
+    state: str | None,
+    district: str | None,
+    election_year: int,
+) -> str:
+    """Build the canonical human-readable name for one federal general contest.
+
+    Single owner for federal contest naming. `civic.contest` keys on
+    (office, electoral_division, election_date, election_type), so two House
+    races in the same state are distinct rows — but the name previously omitted
+    the district, so every California House race rendered as the identical
+    string "H CA General 2026". Election lists, search results, `<title>` tags
+    and JSON-LD all read `contest.name`, so a non-unique name made the entire
+    race surface unusable.
+
+    Keyword-only and DB-free on purpose: the ingest path calls it through
+    `federal_contest_name`, and `scripts/backfill_contest_display_names.py`
+    calls it with columns read back out of the database. Both must produce
+    byte-identical names, which only holds if there is exactly one builder.
+    """
+    state_code = (state or "").strip().upper() or None
+    state_name = USPS_TO_STATE_NAME.get(state_code, state_code) if state_code else None
+
+    if office_code == "P":
+        # The presidency has no jurisdiction qualifier; FEC files it as state "US".
+        seat = "U.S. President"
+        state_prefix = ""
+    else:
+        if office_code == "S":
+            seat = "U.S. Senate"
+        elif office_code == "H":
+            seat = _house_seat_title(state_code=state_code, district=district)
+        else:
+            # Unknown office codes should never reach here, but a name that
+            # silently drops the code would collide with a sibling contest.
+            seat = office_code
+        state_prefix = f"{state_name} " if state_name else ""
+
+    return f"{state_prefix}{seat} — {election_year} General Election"
+
+
+def _house_seat_title(*, state_code: str | None, district: str | None) -> str:
+    """Name the House seat a FEC row describes.
+
+    FEC models every non-voting seat as office "H", district "00", which on the
+    wire is indistinguishable from a state's single at-large district. The six
+    non-voting jurisdictions are looked up first so Puerto Rico's seat is named
+    "Resident Commissioner" rather than a congressional district it is not.
+    """
+    if state_code is not None and state_code in US_HOUSE_NON_VOTING_SEAT_TITLES:
+        return US_HOUSE_NON_VOTING_SEAT_TITLES[state_code]
+
+    district_text = (district or "").strip()
+    try:
+        district_number = int(district_text)
+    except ValueError:
+        # Missing or unparseable district: FEC uses "00" and blank
+        # interchangeably for single-seat states, so both mean at-large.
+        district_number = 0
+
+    if district_number <= 0:
+        return "At-Large Congressional District"
+    return f"{_ordinal(district_number)} Congressional District"
+
+
 def federal_contest_name(row: ValidatedRow) -> str:
     """Deterministic contest name shared by every FEC candidate-to-civic loader."""
-    state = normalize_optional_text(row.mapped.get("state"))
-    return f"{row.office_code} {state or 'US'} General {row.election_year}"
+    return federal_contest_display_name(
+        office_code=row.office_code,
+        state=normalize_optional_text(row.mapped.get("state")),
+        district=normalize_optional_text(row.mapped.get("district")),
+        election_year=row.election_year,
+    )
 
 
 def resolve_candidate_incumbent_challenge(

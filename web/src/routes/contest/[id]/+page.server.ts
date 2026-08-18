@@ -1,12 +1,32 @@
+/**
+ * @module Contest (race) detail route loader.
+ *
+ * Loads the contest record and the whole-race money scoreboard. Both come from
+ * one backend call each, and the money call runs concurrently with the map
+ * lookup, so page latency is the slower of the two rather than their sum.
+ *
+ * History worth keeping: this route used to fan out 4N+1 backend calls, one
+ * bundle per candidacy, and measured 17.96s cold on a 21-candidacy Senate
+ * contest with no cache-control at all. Worse, each candidacy's fetch was
+ * wrapped in a bare `catch {}` that returned an empty section, so a backend
+ * failure rendered as "data is not yet available" — indistinguishable from a
+ * genuine data gap, which is how a real defect (an incumbent's money sitting on
+ * a different person row) stayed hidden. Neither the fan-out nor the swallow
+ * exists any more; a failed money fetch is now a visible failure.
+ */
 import { withApiResponseErrorHandling } from "$lib/server/api/error";
-import { fetchContestDetail } from "$lib/server/api/civic-detail";
-import { fetchContestCandidateFinanceByPersonId } from "$lib/server/api/campaign-finance-detail";
+import { fetchContestCandidateMoney, fetchContestDetail } from "$lib/server/api/civic-detail";
 import {
   createGeometryByLevelRecord,
   fetchOptionalCivicGeometry,
   toCivicGeometryLevel
 } from "$lib/server/api/civic-geometry";
 import type { PageServerLoad } from "./$types";
+
+// Contest records and FEC money both change on a weekly refresh cadence at
+// most, so a short shared-cache window costs nothing in freshness and removes
+// the repeat-visit and crawler cost entirely. Matches /election/[date].
+const CONTEST_CACHE_CONTROL = "public, max-age=120, s-maxage=120, stale-while-revalidate=60";
 
 function parseSelectedCycleParam(value: string | null): number | undefined {
   if (value === null || value.trim() === "") {
@@ -18,6 +38,11 @@ function parseSelectedCycleParam(value: string | null): number | undefined {
 }
 
 /**
+ * Derive the campaign-finance cycle from the contest's election date.
+ *
+ * Used only when the request does not pin a cycle. Validates the date's
+ * round-trip so a malformed election_date yields "no opinion" rather than a
+ * plausible-looking wrong year; the backend then falls back to its own default.
  */
 function parseElectionYearCycle(electionDate: string | null | undefined): number | undefined {
   const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(electionDate ?? "");
@@ -39,10 +64,10 @@ function parseElectionYearCycle(electionDate: string | null | undefined): number
   return Number(year);
 }
 
-/**
- */
-export const load: PageServerLoad = ({ params, locals, url }) =>
+export const load: PageServerLoad = ({ params, locals, url, setHeaders }) =>
   withApiResponseErrorHandling(async () => {
+    setHeaders({ "cache-control": CONTEST_CACHE_CONTROL });
+
     const contest = await fetchContestDetail(locals.api, { id: params.id });
     const selectedCycle =
       parseSelectedCycleParam(url.searchParams.get("cycle")) ??
@@ -51,27 +76,27 @@ export const load: PageServerLoad = ({ params, locals, url }) =>
     const stateCode = contest.electoral_division_state?.toUpperCase() ?? null;
     const geometryByLevel = createGeometryByLevelRecord();
 
-    if (level !== null && stateCode !== null) {
-      geometryByLevel[level] = await fetchOptionalCivicGeometry(locals.api, {
-        level,
-        state: stateCode
-      });
-    }
-
-    const contestCandidateFinanceByPersonId =
+    // Geometry and money are independent of each other, so run them together: a
+    // slow map lookup must not delay the scoreboard, and vice versa.
+    const [geometry, contestCandidateMoney] = await Promise.all([
+      level !== null && stateCode !== null
+        ? fetchOptionalCivicGeometry(locals.api, { level, state: stateCode })
+        : Promise.resolve(null),
       contest.candidacies.length === 0
-        ? {}
-        : await fetchContestCandidateFinanceByPersonId(locals.api, {
-            candidacies: contest.candidacies.map((candidacy) => ({
-              personId: candidacy.person_id
-            })),
-            cycle: selectedCycle
-          });
+        ? Promise.resolve(null)
+        : fetchContestCandidateMoney(locals.api, { id: params.id, cycle: selectedCycle })
+    ]);
+
+    if (level !== null && geometry !== null) {
+      geometryByLevel[level] = geometry;
+    }
 
     return {
       contest,
       geometryByLevel,
-      contestCandidateFinanceByPersonId,
-      contestSelectedCycle: selectedCycle ?? null
+      contestCandidateMoney,
+      // The backend resolved and validated the cycle for every row in the
+      // response, so it wins over whatever the client guessed from the date.
+      contestSelectedCycle: contestCandidateMoney?.selected_cycle ?? selectedCycle ?? null
     };
   }, "Backend contest detail request failed.");

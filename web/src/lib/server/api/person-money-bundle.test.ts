@@ -335,6 +335,104 @@ describe("loadPersonMoneyBundle", () => {
     });
   });
 
+  it("builds a not-loaded headline when the linked candidate summary carries not_loaded coverage", async () => {
+    // A 200 response with zero-valued money fields is NOT proof of zero money. The
+    // backend ships the honest discriminator on `coverage.activity_state`; the person
+    // headline must read it instead of treating "0.00" as a loaded fact. See
+    // docs/reference/screen_specs/person_detail.md ("Money at a glance").
+    const requestJson = vi.fn((path: string): Promise<unknown> => {
+      if (path === `/v1/person/${PERSON_ID}/contribution-insights`) {
+        return Promise.resolve(buildContributionInsights(SELECTED_CYCLE));
+      }
+      if (path === `/v1/candidates?person_id=${PERSON_ID}&limit=10&offset=0`) {
+        return Promise.resolve({
+          items: [buildCandidateListItem(CANDIDATE_ID, "Candidate One")],
+          has_next: false,
+          offset: 0,
+          limit: 10
+        });
+      }
+      if (path === `/v1/candidates/${CANDIDATE_ID}`) {
+        return Promise.resolve(buildCandidateDetail());
+      }
+      if (path === `/v1/candidates/${CANDIDATE_ID}/summary?cycle=${SELECTED_CYCLE}`) {
+        return Promise.resolve(buildNotLoadedCandidateSummary());
+      }
+      if (path.includes("/independent-expenditures")) {
+        return Promise.resolve(path.includes("/summary") ? null : []);
+      }
+      if (path === `/v1/person/${PERSON_ID}/top-donors?cycle=${SELECTED_CYCLE}`) {
+        return Promise.resolve([]);
+      }
+      if (path === `/v1/person/${PERSON_ID}/top-employers?cycle=${SELECTED_CYCLE}`) {
+        return Promise.resolve([]);
+      }
+
+      return Promise.reject(new Error(`Unexpected path: ${path}`));
+    });
+
+    const bundle = loadPersonMoneyBundle(createApi(requestJson), PERSON_ID);
+
+    await expect(bundle.personMoneyHeadline).resolves.toEqual({
+      kind: "not_loaded",
+      message:
+        "A linked FEC candidate exists for this person, but Civibus has not loaded authoritative selected-cycle fundraising evidence for that candidate.",
+      selectedCycle: SELECTED_CYCLE
+    });
+  });
+
+  it("keeps the loaded headline when every linked candidate summary proves loaded-zero coverage", async () => {
+    // Guard against over-suppression: `loaded_zero` is authoritative evidence that the
+    // candidate genuinely raised and spent nothing in the selected cycle, so the
+    // headline must stay `loaded` and keep rendering real zeroes.
+    const requestJson = vi.fn((path: string): Promise<unknown> => {
+      if (path === `/v1/person/${PERSON_ID}/contribution-insights`) {
+        return Promise.resolve(buildContributionInsights(SELECTED_CYCLE));
+      }
+      if (path === `/v1/candidates?person_id=${PERSON_ID}&limit=10&offset=0`) {
+        return Promise.resolve({
+          items: [buildCandidateListItem(CANDIDATE_ID, "Candidate One")],
+          has_next: false,
+          offset: 0,
+          limit: 10
+        });
+      }
+      if (path === `/v1/candidates/${CANDIDATE_ID}`) {
+        return Promise.resolve(buildCandidateDetail());
+      }
+      if (path === `/v1/candidates/${CANDIDATE_ID}/summary?cycle=${SELECTED_CYCLE}`) {
+        return Promise.resolve(buildLoadedZeroCandidateSummary());
+      }
+      if (path.includes("/independent-expenditures")) {
+        return Promise.resolve(path.includes("/summary") ? null : []);
+      }
+      if (path === `/v1/person/${PERSON_ID}/top-donors?cycle=${SELECTED_CYCLE}`) {
+        return Promise.resolve([]);
+      }
+      if (path === `/v1/person/${PERSON_ID}/top-employers?cycle=${SELECTED_CYCLE}`) {
+        return Promise.resolve([]);
+      }
+
+      return Promise.reject(new Error(`Unexpected path: ${path}`));
+    });
+
+    const bundle = loadPersonMoneyBundle(createApi(requestJson), PERSON_ID);
+
+    await expect(bundle.personMoneyHeadline).resolves.toMatchObject({
+      kind: "loaded",
+      summary: {
+        selected_cycle: SELECTED_CYCLE,
+        total_raised: "0.00",
+        total_spent: "0.00",
+        coverage: {
+          activity_state: "loaded_zero",
+          completeness: "complete",
+          basis: "authoritative_load_evidence"
+        }
+      }
+    });
+  });
+
   it("prioritizes backend failure over missing summary across linked candidates", async () => {
     const requestJson = vi.fn((path: string): Promise<unknown> => {
       if (path === `/v1/person/${PERSON_ID}/contribution-insights`) {
@@ -661,6 +759,60 @@ function buildCandidateDetail(id = CANDIDATE_ID, name = "Candidate One") {
     incumbent_challenge: "I",
     principal_committee_id: null,
     sources: []
+  };
+}
+
+/**
+ * Mirrors the backend's not-loaded candidate summary payload
+ * (`_not_loaded_candidate_money_coverage` in `api/queries/campaign_finance.py`):
+ * zero-valued money strings alongside a `not_loaded` discriminator and null
+ * optional money. The zeros here are placeholders, not evidence.
+ */
+function buildNotLoadedCandidateSummary() {
+  return {
+    ...buildCandidateSummary(),
+    total_raised: "0.00",
+    total_spent: "0.00",
+    net: "0.00",
+    transaction_count: 0,
+    itemized_transaction_count: 0,
+    cash_on_hand: null,
+    net_self_funding: null,
+    debts_owed_by_committee: null,
+    summary_source: "derived" as const,
+    receipt_source_composition: [],
+    selected_cycle_coverage_complete: false,
+    can_render_share: false,
+    receipt_source_caveats: ["missing_committee_summary"],
+    coverage: {
+      activity_state: "not_loaded" as const,
+      completeness: "unknown" as const,
+      basis: "no_authoritative_load_evidence" as const
+    }
+  };
+}
+
+/**
+ * Genuine no-money coverage: the loader ran, produced authoritative evidence, and
+ * that evidence says zero. These zeroes are facts and must survive presentation.
+ */
+function buildLoadedZeroCandidateSummary() {
+  return {
+    ...buildCandidateSummary(),
+    total_raised: "0.00",
+    total_spent: "0.00",
+    net: "0.00",
+    transaction_count: 0,
+    itemized_transaction_count: 0,
+    cash_on_hand: "0.00",
+    net_self_funding: null,
+    debts_owed_by_committee: "0.00",
+    receipt_source_composition: [],
+    coverage: {
+      activity_state: "loaded_zero" as const,
+      completeness: "complete" as const,
+      basis: "authoritative_load_evidence" as const
+    }
   };
 }
 

@@ -374,7 +374,7 @@ test.describe("entity and civic detail smoke", () => {
     await expect(page.getByRole("heading", { name: "Current holder" })).toBeVisible();
     await expect(page.getByRole("heading", { name: "Current officeholders" })).toBeVisible();
     await expect(page.getByRole("heading", { name: "Officeholding timeline" })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Recent contests" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Elections for this office" })).toBeVisible();
     await expect(page.getByRole("heading", { name: "District map context" })).toBeVisible();
     await expect(
       page.getByRole("link", { name: SMOKE_OFFICE_OFFICEHOLDER_NAME, exact: true }).first()
@@ -688,10 +688,10 @@ test.describe.serial("entity and civic detail smoke (live mode)", () => {
     await expect(page.getByRole("heading", { name: "Current holder" })).toBeVisible();
     await expect(page.getByRole("heading", { name: "Current officeholders" })).toBeVisible();
     await expect(page.getByRole("heading", { name: "Officeholding timeline" })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Recent contests" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Elections for this office" })).toBeVisible();
     await expect(page.getByRole("heading", { name: "District map context" })).toBeVisible();
     await expect(page.getByRole("link", { name: /View officeholding detail for/ }).first()).toBeVisible();
-    const recentContestsRegion = page.getByRole("region", { name: "Recent contests" });
+    const recentContestsRegion = page.getByRole("region", { name: "Elections for this office" });
     await expect(recentContestsRegion.getByRole("link", { name: /\d{4}/ }).first()).toBeVisible();
     await assertBreadcrumbNav(page);
     await pageLoadErrors.assertNoErrors();

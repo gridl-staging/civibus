@@ -1,9 +1,19 @@
 import { buildCandidateHref, buildCommitteeHref, type CandidateListItem, type CommitteeListItem } from "./contract";
+import { formatOptionalCurrency } from "./presentation";
+
+/** Label for the candidate browse money column. */
+export const CANDIDATE_TOTAL_RAISED_LABEL = "Total raised";
 
 export type CandidateListItemPresentation = {
   name: string;
   href: string;
   contextLine: string;
+  totalRaisedLabel: string;
+  /**
+   * Formatted official total receipts, or the shared unknown copy when the
+   * candidate has no loaded total. Never `$0.00` for a missing total.
+   */
+  totalRaisedValue: string;
 };
 
 export type CommitteeListItemPresentation = {
@@ -37,7 +47,11 @@ export function buildCandidateListItemPresentation(
   return {
     name: item.name,
     href: buildCandidateHref(item),
-    contextLine
+    contextLine,
+    totalRaisedLabel: CANDIDATE_TOTAL_RAISED_LABEL,
+    // Delegates to the shared money owner so the browse list, the detail page,
+    // and every other surface agree on formatting and on the unknown copy.
+    totalRaisedValue: formatOptionalCurrency(item.total_receipts)
   };
 }
 

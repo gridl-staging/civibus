@@ -90,7 +90,12 @@ jobs:
           # and graph-loaded by the repo-owned setup path above. Keep this gate as
           # the complete DB-backed product slice and let the quarantine marker
           # exclude only known-bad exact nodes.
+          # --durations makes suite time observable. Without it nobody can see
+          # which nodes dominate this gate, so slow tests accrue invisibly and
+          # the only visible symptom is the whole gate getting slower. It costs
+          # nothing and changes no pass/fail behavior.
           uv run --locked pytest -m "integration and not quarantined" \
+            --durations=20 \
             api/ \
             core/ \
             domains/ \

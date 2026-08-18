@@ -12,6 +12,7 @@ import {
 } from "$lib/campaign-finance-detail/contract";
 import {
   CONGRESS_PAGE_PATH,
+  buildContestRoutePath,
   buildElectionDateRoutePath,
   type CongressMemberSummary
 } from "$lib/civic-detail/contract";
@@ -79,7 +80,9 @@ export function buildSitemapIndexXml(
   eventOrigin: string,
   canonicalOrigin: string | undefined
 ): string {
-  const urls = shardPaths.map((path) => buildCanonicalUrl(new URL(path, eventOrigin), canonicalOrigin));
+  const urls = shardPaths.map((path) =>
+    buildCanonicalUrl(new URL(path, eventOrigin), canonicalOrigin)
+  );
   const entries = urls.map((loc) => `  <sitemap><loc>${escapeXml(loc)}</loc></sitemap>`).join("\n");
 
   return [
@@ -102,7 +105,11 @@ export async function buildSitemapIndexPaths(api: ApiClient): Promise<string[]> 
   const paths = [
     "/sitemap-static.xml",
     ...candidatePages.map((page) => `/sitemap-candidate-${page}.xml`),
-    ...committeePages.map((page) => `/sitemap-committee-${page}.xml`)
+    ...committeePages.map((page) => `/sitemap-committee-${page}.xml`),
+    // Race pages. A single bounded shard, like people: the upcoming-election
+    // timeline is unpaginated and the loaded election-year window keeps it
+    // small (hundreds, against a 7,000 cap).
+    "/sitemap-contest-0.xml"
   ];
   if (PERSON_ROUTE_INDEXABILITY.isIndexable) {
     paths.push("/sitemap-person-0.xml");
@@ -129,6 +136,34 @@ export async function buildPersonShardPaths(api: ApiClient, page: number): Promi
   return members.flatMap(personPath);
 }
 
+/**
+ * Every upcoming contest, as a race-page URL.
+ *
+ * Race pages were absent from the sitemap entirely — it covered static,
+ * candidate, committee and person only — so the one surface the programmatic-SEO
+ * plan is built around was unreachable by crawlers.
+ *
+ * Sourced from the upcoming-election timeline, which is already fetched for the
+ * static shard, so this adds no new backend surface. That scope is deliberate:
+ * only elections that have not happened yet are worth submitting for indexing.
+ *
+ * The shard is bounded and `assertShardCapacity` throws above SITEMAP_SHARD_SIZE
+ * rather than silently truncating. That is the intended failure mode — a loud
+ * sitemap error beats quietly dropping race pages — and the ingest-side election
+ * year window (see load_federal_fec_races) is what keeps the count far below it.
+ */
+export async function buildContestShardPaths(api: ApiClient, page: number): Promise<string[]> {
+  if (page !== 0) {
+    throw new Error("Contest sitemap shards only support page 0.");
+  }
+  const timelineEntries = await fetchUpcomingElectionTimeline(api);
+  const contestPaths = timelineEntries.flatMap((entry) =>
+    entry.contests.map((contest) => buildContestRoutePath(contest.contest_id))
+  );
+  assertShardCapacity("contest", contestPaths.length);
+  return contestPaths;
+}
+
 export async function buildCampaignFinanceShardPaths(
   api: ApiClient,
   kind: ListKind,
@@ -142,20 +177,22 @@ export async function buildCampaignFinanceShardPaths(
   return items.map((item) => buildCommitteeHref(item));
 }
 
-export function parseShardParams(params: Record<string, string | undefined>):
-  | { kind: "candidate" | "committee" | "person"; page: number }
-  | null {
+export function parseShardParams(params: Record<string, string | undefined>): {
+  kind: "candidate" | "committee" | "contest" | "person";
+  page: number;
+} | null {
   const { kind, page } = params;
-  if (kind !== "candidate" && kind !== "committee" && kind !== "person") {
+  if (kind !== "candidate" && kind !== "committee" && kind !== "contest" && kind !== "person") {
     return null;
   }
   if (page === undefined || !/^(0|[1-9]\d*)$/.test(page)) {
     return null;
   }
   const parsedPage = Number(page);
-  // Federal-first people are a single bounded shard, so nonzero pages are not
-  // "empty success" cases: they are invalid sitemap routes.
-  if (kind === "person" && parsedPage !== 0) {
+  // Federal-first people and upcoming contests are single bounded shards, so
+  // nonzero pages are not "empty success" cases: they are invalid sitemap
+  // routes, and answering 200 would invite crawlers to walk them forever.
+  if ((kind === "person" || kind === "contest") && parsedPage !== 0) {
     return null;
   }
   return { kind, page: parsedPage };
@@ -210,8 +247,7 @@ async function collectShardItems<TItem>(
       .then((response) => {
         pages.set(offset, response.items);
         if (!response.has_next || response.items.length === 0) {
-          terminalOffset =
-            terminalOffset === undefined ? offset : Math.min(terminalOffset, offset);
+          terminalOffset = terminalOffset === undefined ? offset : Math.min(terminalOffset, offset);
         }
       })
       .catch((error: unknown) => {
@@ -268,11 +304,17 @@ async function requestListPage<TItem>(
   if (response.limit !== SITEMAP_API_PAGE_LIMIT || response.offset !== offset) {
     throw new Error("Sitemap pagination response drifted from the requested limit or offset.");
   }
-  if (!Number.isInteger(response.limit) || response.limit <= 0 || !Number.isInteger(response.offset)) {
+  if (
+    !Number.isInteger(response.limit) ||
+    response.limit <= 0 ||
+    !Number.isInteger(response.offset)
+  ) {
     throw new Error("Sitemap pagination requires positive integer limit and integer offset.");
   }
   if (response.items.length === 0 && response.has_next) {
-    throw new Error("Sitemap pagination cannot advertise additional pages after an empty result window.");
+    throw new Error(
+      "Sitemap pagination cannot advertise additional pages after an empty result window."
+    );
   }
   return response;
 }

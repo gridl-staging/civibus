@@ -555,9 +555,10 @@ export const smokeFixtures = {
           state: "NC",
           jurisdiction_id: null,
           electoral_division_id: null,
-          candidate_count: 1,
-          result_status: null,
-          winning_person_name: null
+          electoral_division_type: null,
+          electoral_division_state: null,
+          district_number: null,
+          candidate_count: 1
         }
       ]
     }
@@ -577,9 +578,10 @@ export const smokeFixtures = {
         state: "NC",
         jurisdiction_id: null,
         electoral_division_id: null,
-        candidate_count: 1,
-        result_status: null,
-        winning_person_name: null
+        electoral_division_type: null,
+        electoral_division_state: null,
+        district_number: null,
+        candidate_count: 1
       }
     ]
   },

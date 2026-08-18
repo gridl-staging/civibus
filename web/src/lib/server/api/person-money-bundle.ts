@@ -10,6 +10,7 @@ import {
   buildPersonMoneyAtGlanceSummary,
   PERSON_MISSING_SUMMARY_MESSAGE,
   PERSON_NO_LINKED_CANDIDACY_MESSAGE,
+  PERSON_NOT_LOADED_MESSAGE,
   PERSON_TEMPORARILY_UNAVAILABLE_MESSAGE
 } from "$lib/entity-detail/person-campaign-finance-presentation";
 import type { ApiClient } from "./client";
@@ -71,6 +72,14 @@ function buildTemporarilyUnavailableHeadline(selectedCycle: number): PersonMoney
   };
 }
 
+function buildNotLoadedHeadline(selectedCycle: number): PersonMoneyHeadlineState {
+  return {
+    kind: "not_loaded",
+    message: PERSON_NOT_LOADED_MESSAGE,
+    selectedCycle
+  };
+}
+
 async function resolvePersonMoneyHeadline(
   sections: PersonCandidateFinanceSection[],
   selectedCycle: number
@@ -94,9 +103,26 @@ async function resolvePersonMoneyHeadline(
   }
 
   const summaries = summaryResults.filter(fulfilledOutcome).map((result) => result.value);
+  const summary = buildPersonMoneyAtGlanceSummary(summaries);
+
+  // A 200 is not evidence. `buildPersonMoneyAtGlanceSummary` already folds the
+  // per-candidate discriminators into one aggregate `coverage.activity_state`
+  // (populated wins, all-loaded_zero stays loaded_zero, otherwise not_loaded); this is
+  // the only place that reads it for the headline. Without this branch a not-loaded
+  // payload falls through as `loaded` and the metric grid publishes the backend's
+  // placeholder "0.00" as "Total receipts $0.00".
+  //
+  // Deliberately narrow: only `not_loaded` diverts. `loaded_zero` is authoritative
+  // proof of genuine no-money coverage and must keep rendering explicit zeroes.
+  if (summary.coverage.activity_state === "not_loaded") {
+    // Prefer the cycle the money payload itself reports over the caller's parameter,
+    // so the rendered cycle label matches the cycle whose evidence is missing.
+    return buildNotLoadedHeadline(summary.selected_cycle);
+  }
+
   return {
     kind: "loaded",
-    summary: buildPersonMoneyAtGlanceSummary(summaries)
+    summary
   };
 }
 

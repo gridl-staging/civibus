@@ -336,20 +336,28 @@ def load_federal_fec_races(
     cn_data_source_id: UUID,
     election_client: ElectionDatesClient,
     min_election_year: int,
+    max_election_year: int,
     batch_size: int = 1000,
 ) -> LoadResult:
     """Load recent federal races from existing FEC ``cn`` source data.
 
-    For each active ``cn`` candidate record with ``candidate_election_year`` at or
-    after ``min_election_year``, this populates the ``civic.election`` row for that
-    general-election date and reuses the canonical FEC candidate-to-civic mapping to
-    upsert the person, electoral division, contest (linked to the election), and
-    candidacy. ``candidate_status`` from the Stage 1 mapper output is preserved in
+    For each active ``cn`` candidate record whose ``candidate_election_year``
+    falls inside the closed window ``[min_election_year, max_election_year]``,
+    this populates the ``civic.election`` row for that general-election date and
+    reuses the canonical FEC candidate-to-civic mapping to upsert the person,
+    electoral division, contest (linked to the election), and candidacy.
+    ``candidate_status`` from the Stage 1 mapper output is preserved in
     ``civic.candidacy.status``. Work is committed every ``batch_size`` inserted rows
     so a failure late in a bulk federal run does not discard all prior progress.
+
+    ``max_election_year`` is required rather than defaulted: it is the only guard
+    against filer-supplied garbage years, and a caller that forgets it should
+    fail loudly here instead of quietly publishing a contest dated 2929.
     """
     if batch_size <= 0:
         raise ValueError("batch_size must be greater than zero")
+    if max_election_year < min_election_year:
+        raise ValueError("max_election_year must not precede min_election_year")
 
     result = LoadResult()
     date_resolver = _ElectionDateResolver(election_client)
@@ -364,7 +372,13 @@ def load_federal_fec_races(
                 result.errors += 1
             continue
         validated = validation
-        if validated.election_year < min_election_year:
+        # CAND_ELECTION_YR is filer-supplied and only proven to parse as an int,
+        # so it routinely carries typos (2089, 2929) that used to become live,
+        # indexable contests. Skipping silently — rather than counting an error —
+        # is deliberate: an out-of-window year is uninteresting data, not a
+        # defect in the row, and errors mark the run degraded and abort the
+        # downstream refresh plan.
+        if not min_election_year <= validated.election_year <= max_election_year:
             continue
 
         payload = date_resolver.payload_for(year=validated.election_year)

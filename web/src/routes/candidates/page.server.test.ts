@@ -105,4 +105,36 @@ describe("/candidates +page.server load", () => {
 
     expect(requestJson).toHaveBeenCalledWith("/v1/candidates?state=NC&limit=25");
   });
+
+  it("forwards the sort param to the candidates list endpoint", async () => {
+    const requestJson = vi.fn().mockResolvedValue(CANDIDATE_LIST_RESPONSE);
+
+    await load(
+      createLoadEvent(
+        "https://web.civibus.local/candidates?state=NC&sort=total_raised_desc&limit=25",
+        requestJson
+      )
+    );
+
+    expect(requestJson).toHaveBeenCalledWith(
+      "/v1/candidates?state=NC&sort=total_raised_desc&limit=25"
+    );
+  });
+
+  it("drops a blank sort submit so the backend default applies", async () => {
+    const requestJson = vi.fn().mockResolvedValue(CANDIDATE_LIST_RESPONSE);
+
+    await load(createLoadEvent("https://web.civibus.local/candidates?sort=&limit=25", requestJson));
+
+    expect(requestJson).toHaveBeenCalledWith("/v1/candidates?limit=25");
+  });
+
+  it("never opts the browse page into identity-unsafe rows", async () => {
+    const requestJson = vi.fn().mockResolvedValue(CANDIDATE_LIST_RESPONSE);
+
+    await load(createLoadEvent("https://web.civibus.local/candidates", requestJson));
+
+    const [calledPath] = requestJson.mock.calls[0] as [string];
+    expect(calledPath).not.toContain("include_unsafe_identity");
+  });
 });

@@ -1276,6 +1276,49 @@ class TestOfficeDetail:
         assert timeline_names == ["Future Holder", "Active Holder"]
         assert payload["current_holder_card"]["person_name"] == "Active Holder"
 
+    def test_office_contests_surface_the_nearest_elections_not_the_furthest_future(
+        self, api_client: TestClient, db_conn: psycopg.Connection
+    ) -> None:
+        """The five-row list must not be crowded out by distant future contests.
+
+        The list is capped at five and used to be ordered by election_date
+        descending, which selects the FURTHEST-future rows. On /office/us_house
+        that meant the imminent general election was pushed off the list
+        entirely by a handful of far-out filings — verified live, where the page
+        showed five contests dated 2036 through 2924 and zero real 2026 races.
+        Ordering by distance from today puts the election a reader is actually
+        looking for at the top.
+        """
+        office_id = _insert_office(db_conn, name="test_nearest_contest_office", office_level="federal")
+        current_date = _database_current_date(db_conn)
+        # Five distant contests, enough to fill the cap on their own, plus one
+        # imminent contest seeded last so insertion order cannot carry the test.
+        distant_dates = [current_date + timedelta(days=365 * years) for years in (4, 6, 8, 10, 12)]
+        for index, distant_date in enumerate(distant_dates):
+            _insert_contest(
+                db_conn,
+                name=f"Distant Contest {index}",
+                office_id=office_id,
+                election_date=distant_date,
+                election_type="general",
+            )
+        imminent_date = current_date + timedelta(days=45)
+        _insert_contest(
+            db_conn,
+            name="Imminent Contest",
+            office_id=office_id,
+            election_date=imminent_date,
+            election_type="general",
+        )
+
+        payload = api_client.get(f"/v1/offices/{office_id}").json()
+
+        contest_names = [contest["contest_name"] for contest in payload["recent_contests"]]
+        assert contest_names[0] == "Imminent Contest"
+        # The two furthest contests are the ones dropped by the cap, not the near one.
+        assert "Distant Contest 4" not in contest_names
+        assert len(contest_names) == 5
+
     def test_returns_timeline_recent_contests_and_map_context_for_office(
         self, api_client: TestClient, db_conn: psycopg.Connection
     ) -> None:
@@ -1811,6 +1854,102 @@ class TestElectionContracts:
         assert by_name["test_or_general"]["state"] == "OR"
         assert by_name["test_or_general"]["candidate_count"] == 1
 
+    def test_election_date_aggregate_exposes_electoral_division_context(
+        self, api_client: TestClient, db_conn: psycopg.Connection
+    ) -> None:
+        """The date aggregate must carry seat context, not a bare division UUID.
+
+        `/election/[date]` is the only race index on the site, and it groups and
+        labels rows by seat (see `docs/reference/screen_specs/election_date.md`).
+        Selecting `c.electoral_division_id` alone hands the page a UUID it cannot
+        render, so `_ELECTION_CONTESTS_BY_DATE_SQL` joins
+        `civic.electoral_division` exactly like `CIVIC_CONTEST_DETAIL_SQL` already
+        does and exposes the three columns the index actually reads.
+
+        Both expected payloads are compared as whole dicts. That makes this test
+        fail red for a dropped join, a wrong column alias, a mis-grouped
+        aggregate, or a resurrected always-null field, not merely for a missing
+        key. The live specimen for the red state is HEAD before this change,
+        where the response carries `result_status`/`winning_person_name` and no
+        division columns at all.
+        """
+        office_house = _insert_office(
+            db_conn,
+            name="test_division_context_us_house",
+            office_level="federal",
+            state="CA",
+        )
+        office_senate = _insert_office(
+            db_conn,
+            name="test_division_context_us_senate",
+            office_level="federal",
+            state="CA",
+        )
+        district_division = _insert_electoral_division(
+            db_conn,
+            name="test_division_context_ca_12",
+            division_type="congressional_district",
+            state="CA",
+            district_number="12",
+        )
+        contest_house = _insert_contest(
+            db_conn,
+            name="test_division_context_house_contest",
+            office_id=office_house,
+            election_date=date(2026, 11, 3),
+            election_type="general",
+            electoral_division_id=district_division,
+        )
+        # Deliberately division-less: a LEFT JOIN must keep this row in the index
+        # with every division column NULL, never drop it.
+        contest_senate = _insert_contest(
+            db_conn,
+            name="test_division_context_senate_contest",
+            office_id=office_senate,
+            election_date=date(2026, 11, 3),
+            election_type="general",
+        )
+
+        person = Person(canonical_name="Division Context Candidate")
+        insert_person(db_conn, person)
+        _insert_candidacy(db_conn, contest_id=contest_house, person_id=person.id)
+
+        response = api_client.get("/v1/elections/2026-11-03")
+
+        assert response.status_code == 200
+        payload = response.json()
+        by_name = {contest["name"]: contest for contest in payload["contests"]}
+        assert by_name["test_division_context_house_contest"] == {
+            "contest_id": str(contest_house),
+            "office_id": str(office_house),
+            "name": "test_division_context_house_contest",
+            "election_type": "general",
+            "office_name": "test_division_context_us_house",
+            "office_level": "federal",
+            "state": "CA",
+            "jurisdiction_id": None,
+            "electoral_division_id": str(district_division),
+            "electoral_division_type": "congressional_district",
+            "electoral_division_state": "CA",
+            "district_number": "12",
+            "candidate_count": 1,
+        }
+        assert by_name["test_division_context_senate_contest"] == {
+            "contest_id": str(contest_senate),
+            "office_id": str(office_senate),
+            "name": "test_division_context_senate_contest",
+            "election_type": "general",
+            "office_name": "test_division_context_us_senate",
+            "office_level": "federal",
+            "state": "CA",
+            "jurisdiction_id": None,
+            "electoral_division_id": None,
+            "electoral_division_type": None,
+            "electoral_division_state": None,
+            "district_number": None,
+            "candidate_count": 0,
+        }
+
     def test_elections_timeline_upcoming_returns_ordered_dates_without_cross_jurisdiction_collapsing(
         self, api_client: TestClient, db_conn: psycopg.Connection
     ) -> None:
@@ -1846,13 +1985,85 @@ class TestElectionContracts:
 
         assert response.status_code == 200
         payload = response.json()
-        assert [entry["date"] for entry in payload] == [
-            election_dates.primary.isoformat(),
-            election_dates.general.isoformat(),
+
+        # Scoped to this test's own fixtures rather than asserting the whole
+        # upcoming timeline. civic.election rows are keyed globally by date and
+        # the federal races loader commits, so several committing tests in other
+        # directories leave future-dated elections behind. A global assertion
+        # here passes only by accident of pytest's directory ordering, which is
+        # false confidence: it would go red on an unrelated fixture change and
+        # green again on a reorder, without either touching this behaviour.
+        entry_dates = [entry["date"] for entry in payload]
+        primary_index = entry_dates.index(election_dates.primary.isoformat())
+        general_index = entry_dates.index(election_dates.general.isoformat())
+
+        # Ordering is the actual claim: earlier dates first.
+        assert primary_index < general_index
+
+        # Two same-day contests in different states must stay two rows, not
+        # collapse into one — that is the defect this test guards.
+        seeded_contest_names = {"test_wa_primary", "test_or_primary", "test_ca_general"}
+        primary_contests = [
+            contest for contest in payload[primary_index]["contests"] if contest["name"] in seeded_contest_names
         ]
-        assert len(payload[0]["contests"]) == 2
-        assert {contest["state"] for contest in payload[0]["contests"]} == {"WA", "OR"}
-        assert payload[1]["contests"][0]["state"] == "CA"
+        assert len(primary_contests) == 2
+        assert {contest["state"] for contest in primary_contests} == {"WA", "OR"}
+
+        general_contests = [
+            contest for contest in payload[general_index]["contests"] if contest["name"] in seeded_contest_names
+        ]
+        assert [contest["state"] for contest in general_contests] == ["CA"]
+
+    def test_elections_timeline_upcoming_excludes_implausibly_distant_contests(
+        self, api_client: TestClient, db_conn: psycopg.Connection
+    ) -> None:
+        """The timeline is what /calendar and the contest sitemap shard publish.
+
+        CAND_ELECTION_YR is filer-supplied and production accumulated contests
+        dated 2820 through 2929 before the loader had a ceiling. Those rows are
+        FEC-sourced evidence and are deliberately NOT deleted, so serving is
+        what must decline to publish them: an absurd date should never reach
+        /calendar, and must never be submitted to a search engine.
+
+        The horizon is deliberately looser than the ingest ceiling so serving
+        can never hide a contest ingest chose to load.
+        """
+        office_id = _insert_office(db_conn, name="test_distant_horizon_office", office_level="federal")
+        current_date = _database_current_date(db_conn)
+        near_date = current_date + timedelta(days=60)
+        # Comfortably inside the horizon, and inside the loader's own ceiling.
+        in_horizon_date = current_date + timedelta(days=365 * 4)
+        # The shape production actually holds: a transcription error, centuries out.
+        corrupt_date = current_date + timedelta(days=365 * 900)
+
+        _insert_contest(
+            db_conn,
+            name="Horizon Near Contest",
+            office_id=office_id,
+            election_date=near_date,
+            election_type="general",
+        )
+        _insert_contest(
+            db_conn,
+            name="Horizon Inside Contest",
+            office_id=office_id,
+            election_date=in_horizon_date,
+            election_type="general",
+        )
+        _insert_contest(
+            db_conn,
+            name="Horizon Corrupt Contest",
+            office_id=office_id,
+            election_date=corrupt_date,
+            election_type="general",
+        )
+
+        payload = api_client.get("/v1/elections/timeline/upcoming").json()
+
+        published_names = {contest["name"] for entry in payload for contest in entry["contests"]}
+        assert "Horizon Near Contest" in published_names
+        assert "Horizon Inside Contest" in published_names
+        assert "Horizon Corrupt Contest" not in published_names
 
     def test_elections_timeline_upcoming_excludes_database_past_contests(
         self, api_client: TestClient, db_conn: psycopg.Connection
@@ -1909,9 +2120,12 @@ class TestElectionContracts:
                 "state": "NM",
                 "jurisdiction_id": None,
                 "electoral_division_id": None,
+                # The upcoming timeline shares ElectionContestSummary with the
+                # single-date index, so it must carry the same division columns.
+                "electoral_division_type": None,
+                "electoral_division_state": None,
+                "district_number": None,
                 "candidate_count": 0,
-                "result_status": None,
-                "winning_person_name": None,
             }
         }
 
@@ -2319,3 +2533,178 @@ class TestGeometryEndpoint:
 
         assert response.status_code == 422
         assert error_fragment in response.text
+
+
+class TestContestCandidateMoney:
+    """The race-page money scoreboard: one call, one row per candidacy.
+
+    Before this endpoint the contest page issued 4N+1 HTTP requests (one
+    candidate-list call plus a four-call detail bundle per candidacy), which
+    measured 17.96s cold on a 21-candidacy Senate contest. Every assertion here
+    is on hand-calculated values so the batch cannot quietly return zeros.
+    """
+
+    @staticmethod
+    def _seed_race(db_conn: psycopg.Connection) -> dict[str, object]:
+        """Two candidacies with different money, linked by FEC candidate id.
+
+        The incumbent is deliberately seeded the way production actually looks
+        for a chamber-switcher: civic.candidacy.person_id points at an
+        FEC-only shadow person row, while cf.candidate.person_id points at the
+        bioguide-anchored spine row. Resolving money through candidate_number
+        (the FEC candidate id) rather than person_id is what makes the money
+        show up anyway.
+        """
+        shadow_person = Person(canonical_name="OSSIFY, T. JONATHAN")
+        spine_person = Person(canonical_name="Ossify, Jon")
+        challenger_person = Person(canonical_name="Rival, Dana")
+        for person in (shadow_person, spine_person, challenger_person):
+            insert_person(db_conn, person)
+
+        office_id = _insert_office(db_conn, name="test_money_us_senate", office_level="federal")
+        contest_id = _insert_contest(
+            db_conn,
+            name="Georgia U.S. Senate — 2026 General Election",
+            office_id=office_id,
+            election_date=date(2026, 11, 3),
+            election_type="general",
+        )
+
+        insert_candidate_row(
+            db_conn,
+            CandidateRowSeed(
+                id=uuid4(),
+                fec_candidate_id="S8GA90180",
+                name="OSSIFY, T. JONATHAN",
+                office="S",
+                state="GA",
+                # Bound to the spine row, NOT the candidacy's shadow person.
+                person_id=spine_person.id,
+                total_receipts=Decimal("77279766.48"),
+                total_disbursements=Decimal("40000000.00"),
+                cash_on_hand=Decimal("37279766.48"),
+                summary_coverage_end_date=date(2026, 6, 30),
+            ),
+        )
+        insert_candidate_row(
+            db_conn,
+            CandidateRowSeed(
+                id=uuid4(),
+                fec_candidate_id="S8GA90999",
+                name="RIVAL, DANA",
+                office="S",
+                state="GA",
+                person_id=challenger_person.id,
+                total_receipts=Decimal("1250000.00"),
+                total_disbursements=Decimal("900000.00"),
+                cash_on_hand=Decimal("350000.00"),
+                summary_coverage_end_date=date(2026, 6, 30),
+            ),
+        )
+
+        _insert_candidacy(
+            db_conn,
+            person_id=shadow_person.id,
+            contest_id=contest_id,
+            party="DEM",
+            status="qualified",
+            incumbent_challenge="I",
+            candidate_number="S8GA90180",
+        )
+        _insert_candidacy(
+            db_conn,
+            person_id=challenger_person.id,
+            contest_id=contest_id,
+            party="REP",
+            status="filed",
+            incumbent_challenge="C",
+            candidate_number="S8GA90999",
+        )
+        return {"contest_id": contest_id, "shadow_person_id": shadow_person.id}
+
+    def test_returns_one_row_per_candidacy_sorted_by_money(
+        self, api_client: TestClient, db_conn: psycopg.Connection
+    ) -> None:
+        seeded = self._seed_race(db_conn)
+
+        response = api_client.get(f"/v1/contests/{seeded['contest_id']}/candidate-money?cycle=2026")
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["contest_id"] == str(seeded["contest_id"])
+        assert payload["selected_cycle"] == 2026
+        assert len(payload["rows"]) == 2
+
+        # Highest raiser first: this is the scoreboard order the race page renders.
+        assert [row["person_name"] for row in payload["rows"]] == ["OSSIFY, T. JONATHAN", "Rival, Dana"]
+        assert payload["rows"][0]["total_raised"] == "77279766.48"
+        assert payload["rows"][0]["cash_on_hand"] == "37279766.48"
+        assert payload["rows"][1]["total_raised"] == "1250000.00"
+        assert payload["rows"][0]["party"] == "DEM"
+        assert payload["rows"][0]["incumbent_challenge"] == "I"
+
+    def test_incumbent_money_resolves_through_the_fec_candidate_id(
+        self, api_client: TestClient, db_conn: psycopg.Connection
+    ) -> None:
+        """The shadow-person split must not hide the incumbent's money.
+
+        Red-capable: resolving candidates by civic.candidacy.person_id instead
+        of candidate_number returns has_fec_money False and 0.00 here, which is
+        exactly the live defect this endpoint exists to avoid.
+        """
+        seeded = self._seed_race(db_conn)
+
+        payload = api_client.get(f"/v1/contests/{seeded['contest_id']}/candidate-money?cycle=2026").json()
+        incumbent = next(row for row in payload["rows"] if row["incumbent_challenge"] == "I")
+
+        assert incumbent["person_id"] == str(seeded["shadow_person_id"])
+        assert incumbent["has_fec_money"] is True
+        assert incumbent["fec_candidate_id"] == "S8GA90180"
+        assert incumbent["total_raised"] == "77279766.48"
+
+    def test_race_totals_are_the_sum_of_the_rows(self, api_client: TestClient, db_conn: psycopg.Connection) -> None:
+        """The answer-first headline on a race page; hand-calculated."""
+        seeded = self._seed_race(db_conn)
+
+        payload = api_client.get(f"/v1/contests/{seeded['contest_id']}/candidate-money?cycle=2026").json()
+
+        # 77,279,766.48 + 1,250,000.00
+        assert payload["total_raised"] == "78529766.48"
+        assert payload["candidate_count"] == 2
+        assert payload["total_ie_support"] == "0.00"
+        assert payload["total_ie_oppose"] == "0.00"
+
+    def test_candidacy_without_an_fec_candidate_row_reports_unknown_not_zero(
+        self, api_client: TestClient, db_conn: psycopg.Connection
+    ) -> None:
+        """A candidacy with no matching cf.candidate is unknown, never $0 raised."""
+        person = Person(canonical_name="Unlinked Filer")
+        insert_person(db_conn, person)
+        office_id = _insert_office(db_conn, name="test_money_unlinked_house", office_level="federal")
+        contest_id = _insert_contest(
+            db_conn,
+            name="Wyoming At-Large Congressional District — 2026 General Election",
+            office_id=office_id,
+            election_date=date(2026, 11, 3),
+            election_type="general",
+        )
+        _insert_candidacy(
+            db_conn,
+            person_id=person.id,
+            contest_id=contest_id,
+            candidate_number="H6WY00NOPE",
+        )
+
+        payload = api_client.get(f"/v1/contests/{contest_id}/candidate-money?cycle=2026").json()
+
+        assert len(payload["rows"]) == 1
+        row = payload["rows"][0]
+        assert row["has_fec_money"] is False
+        assert row["candidate_id"] is None
+        # Unknown coverage must not be minted as a real zero.
+        assert row["total_raised"] is None
+        assert row["cash_on_hand"] is None
+
+    def test_returns_404_for_missing_contest(self, api_client: TestClient) -> None:
+        response = api_client.get(f"/v1/contests/{uuid4()}/candidate-money")
+        assert response.status_code == 404

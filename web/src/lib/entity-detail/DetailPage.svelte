@@ -464,6 +464,25 @@
     </section>
   {:else if headline.kind === "no_linked_candidate"}
     <p>{headline.message}</p>
+  {:else if headline.kind === "not_loaded"}
+    <!--
+      Not-loaded selected-cycle coverage. Renders the heading, the cycle, and the
+      unavailable copy only: no metric grid, no coverage/source rows, no receipt
+      composition, and no dollar figures of any kind. Suppressing the figures is the
+      requirement — the backend's zero-valued money strings are placeholders for
+      evidence we never loaded, not a measured $0. Carries its own test id because
+      "not loaded" and "temporarily unavailable" are different claims to a reader and
+      to a probe.
+    -->
+    <section
+      class="detail__money-glance"
+      aria-label="Money at a glance"
+      data-testid="person-money-not-loaded"
+    >
+      <h4>Money at a glance</h4>
+      <p>{headline.selectedCycle} cycle</p>
+      <p>{headline.message}</p>
+    </section>
   {:else}
     <section class="detail__money-glance" aria-label="Money at a glance">
       <h4>Money at a glance</h4>
