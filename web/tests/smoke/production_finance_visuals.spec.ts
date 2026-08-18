@@ -34,7 +34,12 @@ const MONEY_AT_GLANCE_REGION = "Money at a glance";
 const CAMPAIGN_FINANCE_HEADING = "Campaign finance";
 const CURRENCY_FIGURE = /\$[\d,]+\.\d{2}/;
 const NONZERO_CURRENCY_FIGURE = /\$(?!0\.00)(?:\d{1,3}(?:,\d{3})+|[1-9]\d*)\.\d{2}/;
-const TRUTHFUL_NO_DATA = /not available|unavailable|not available yet|not loaded yet|no .* available/i;
+// "has not loaded" is the not-loaded selected-cycle copy
+// (PERSON_NOT_LOADED_MESSAGE). It is an honest no-data state and must count
+// as one; without it a correctly-honest page reads as having neither figures
+// nor an explanation.
+const TRUTHFUL_NO_DATA =
+  /not available|unavailable|not available yet|not loaded yet|has not loaded|no .* available/i;
 const CHART_FRAME_STATE_COPY =
   /not loaded|not available|unavailable|no .* loaded|no .* reported|do not reconcile|table-only|required before rendering/i;
 const COVERAGE_DATE = /\d{4}-\d{2}-\d{2}/;
@@ -181,7 +186,26 @@ async function expectSelectedCycleScope(page: Page): Promise<void> {
   const moneyAtGlance = page.getByRole("region", { name: MONEY_AT_GLANCE_REGION });
   await expect(moneyAtGlance).toBeVisible({ timeout: 20_000 });
   await expect(moneyAtGlance.getByText(SELECTED_CYCLE_COPY, { exact: true })).toBeVisible();
-  await expect(moneyAtGlance.getByText(COVERAGE_DATE).first()).toBeVisible();
+
+  // Two legitimate shapes for a re-scoped module, and the assertion has to know
+  // both. The claim under test is that switching cycles actually re-scoped the
+  // panel, which the absence of prior-cycle copy proves either way.
+  //
+  // Until 2026-08-18 this probe required a coverage-through date unconditionally.
+  // That silently pinned the defect civibus-c4t describes: a cycle with NO loaded
+  // evidence still rendered a coverage date and $0.00 figures, asserting coverage
+  // Civibus does not have. A date is evidence about loaded data, so it can only be
+  // required when there is loaded data.
+  const notLoadedPanel = page.getByTestId("person-money-not-loaded");
+  if ((await notLoadedPanel.count()) > 0) {
+    // Stricter than the loaded branch, deliberately: no dollar figure of any
+    // kind may appear, and the state must say why rather than just going blank.
+    await expect(moneyAtGlance.getByText(CURRENCY_FIGURE)).toHaveCount(0);
+    await expect(moneyAtGlance.getByText(TRUTHFUL_NO_DATA).first()).toBeVisible();
+  } else {
+    await expect(moneyAtGlance.getByText(COVERAGE_DATE).first()).toBeVisible();
+  }
+
   await expect(moneyAtGlance.getByText(PRIOR_CYCLE_COPY)).toHaveCount(0);
 }
 
