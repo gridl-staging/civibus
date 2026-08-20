@@ -11,6 +11,7 @@ import {
   type SearchEntityType
 } from './contract';
 import { formatCountLabel } from '$lib/count-label';
+import { formatPersonDisplayName } from '$lib/display-name';
 
 export type SearchResultCardData = SearchApiResult;
 
@@ -291,11 +292,28 @@ function buildContextLine(result: SearchResultCardData): string {
   return buildGenericContextLine(result);
 }
 
+/**
+ * The entity types whose `name` is a human's name.
+ *
+ * Both lanes read `core.person.canonical_name`, which is *usually* already
+ * formatted but carries raw FEC strings for people the spine has not resolved
+ * yet. Routing them through the shared owner means one human reads the same way
+ * whichever lane surfaced them. Org, committee, office and contest names are not
+ * personal names and must render verbatim.
+ */
+const PERSONAL_NAME_ENTITY_TYPES: ReadonlySet<SearchEntityType> = new Set(['person', 'candidate']);
+
+function formatSearchResultName(result: SearchResultCardData): string {
+  return PERSONAL_NAME_ENTITY_TYPES.has(result.entity_type)
+    ? formatPersonDisplayName(result.name)
+    : result.name;
+}
+
 export function buildSearchResultCards(results: SearchResultCardData[]): SearchResultCard[] {
   return results.map((result) => ({
     entityType: result.entity_type,
     entityId: result.entity_id,
-    name: result.name,
+    name: formatSearchResultName(result),
     routeLabel: SEARCH_ENTITY_ROUTE_LABELS[result.entity_type],
     href: toSearchResultHref(result),
     contextLine: buildContextLine(result)

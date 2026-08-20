@@ -67,6 +67,7 @@
       kind="bar"
       title="Receipt source composition"
       ariaLabel="Receipt source composition by dollars"
+      unit="dollars"
       series={chartSeries}
     />
     {#each rows as row (row.id)}

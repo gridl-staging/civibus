@@ -457,11 +457,21 @@ export const SMOKE_COMMITTEE_IE_SOURCE_RECORD_KEY = "committee-ie-source";
 export const SMOKE_COMMITTEE_IE_SOURCE_URL = "https://www.fec.gov/data/independent-expenditures/";
 export const SMOKE_COMMITTEE_OUTSIDE_SPENDING_EMPTY =
   "This committee reported no independent expenditures";
-export const SMOKE_CONGRESS_SEARCH_TERM = SMOKE_PERSON_CANONICAL_NAME;
+// The congress-directory scenario seeds a person of its own, so its name must
+// differ from the browser-smoke seed specimen's. Both were SMOKE_PERSON_CANONICAL_NAME
+// until test_support/browser_smoke_seed.py started writing a person with that
+// name too: /congress then listed two members called "Jane Doe" and every
+// name-based locator in congress.spec.ts hit a strict-mode violation. Distinct
+// names are the fix, not a .first() on an ambiguous locator, which would have
+// asserted against whichever row happened to sort first.
+export const SMOKE_CONGRESS_PERSON_CANONICAL_NAME = "Dana Directory";
+export const SMOKE_CONGRESS_PERSON_FIRST_NAME = "Dana";
+export const SMOKE_CONGRESS_PERSON_LAST_NAME = "Directory";
+export const SMOKE_CONGRESS_SEARCH_TERM = SMOKE_CONGRESS_PERSON_CANONICAL_NAME;
 export const SMOKE_CONGRESS_MEMBER_CONTEXT = "House · NC · District 01 · DEM";
 export const SMOKE_CONGRESS_PORTRAIT_URL =
   "data:image/gif;base64,R0lGODlhAQABAAAAACw=";
-export const SMOKE_CONGRESS_PORTRAIT_ALT = `Portrait of ${SMOKE_PERSON_CANONICAL_NAME}`;
+export const SMOKE_CONGRESS_PORTRAIT_ALT = `Portrait of ${SMOKE_CONGRESS_PERSON_CANONICAL_NAME}`;
 export const SMOKE_CONGRESS_LEADER_PERSON_ID = SMOKE_PERSON_ID;
 export const SMOKE_CONGRESS_LEADER_NAME = SMOKE_PERSON_CANONICAL_NAME;
 export const SMOKE_CONGRESS_SECOND_PERSON_ID = "21111111-1111-4111-8111-111111111111";
@@ -1012,6 +1022,11 @@ export const SMOKE_STAGE6_ITEMIZED_COVERAGE_NOTE = buildCommitteeItemizedCoverag
   summary_source: "fec_committee_summary"
 });
 export const SMOKE_STAGE6_COMMITTEE_TOTAL_RAISED_LITERAL = "$1,250,000.00";
+// The past cycle the Stage 6 seed writes a committee_summary row for, so the
+// journey covers a real historical record and not only the current cycle. It is
+// NOT what the spec asserts under "Per-cycle history" — the page renders the
+// summaries for the cycle the API selected, which getSeededStage6CommitteeRoute
+// reads from the response.
 export const SMOKE_STAGE6_COMMITTEE_CYCLE_LABEL = "2024";
 
 export const SMOKE_STAGE6_FEC_COMMITTEE_ID = "C90099901";
@@ -1019,6 +1034,15 @@ export const SMOKE_STAGE6_FEC_CANDIDATE_ID = "H0LA04901";
 export const SMOKE_STAGE6_DATA_SOURCE_ID = "50000000-0000-4000-8000-000000000010";
 export const SMOKE_STAGE6_SOURCE_RECORD_ID = "50000000-0000-4000-8000-000000000011";
 export const SMOKE_STAGE6_COMMITTEE_SUMMARY_ID = "50000000-0000-4000-8000-000000000012";
+// A second summary row, written at the cycle the committee page selects by
+// default. api/queries/campaign_finance.py resolves that as
+// max(SUPPORTED_COMMITTEE_SUMMARY_CYCLES), which moved to 2026 while this
+// fixture still only carried a 2024 summary — so the default view fell back to
+// "derived from itemized transactions" and reported $0.00, and the journey that
+// exists to prove a positive official total is never rendered as a false $0
+// failed on its own fixture. The cycle is discovered from the API at seed time
+// rather than pinned here, so the next cycle rollover cannot re-stale it.
+export const SMOKE_STAGE6_CURRENT_CYCLE_SUMMARY_ID = "50000000-0000-4000-8000-000000000014";
 export const SMOKE_STAGE6_LINK_ID = "50000000-0000-4000-8000-000000000013";
 const SMOKE_STAGE6_COMMITTEE_SLUG = "mike-johnson-for-louisiana";
 
@@ -1036,13 +1060,34 @@ export type LiveCommitteeRouteDiscovery = {
   expectedOutsideSpendingTargetName: string | null;
 };
 
-export function getSeededStage6CommitteeRoute(): LiveCommitteeRouteDiscovery {
+/**
+ * Assertions for the seeded Stage 6 committee.
+ *
+ * Everything the seed writes stays a pinned literal - the whole point is that a
+ * positive official total renders instead of a false $0 while itemized
+ * transactions are zero. The cycle label is the one value the seed does not own:
+ * the committee page renders `cycle_summaries` for the cycle the API selected,
+ * and that selection is max(SUPPORTED_COMMITTEE_SUMMARY_CYCLES) in
+ * api/queries/campaign_finance.py, which moves. Pinning it as "2024" is what
+ * broke this journey when the supported tuple grew a 2026 entry. Deriving it
+ * from the same response the live-data branch of this discovery already derives
+ * from keeps one pattern rather than two.
+ */
+export function getSeededStage6CommitteeRoute(
+  summary: LiveCommitteeSummaryResponse
+): LiveCommitteeRouteDiscovery {
+  const cycle = summary.cycle_summaries?.[0]?.cycle;
+  if (typeof cycle !== "number") {
+    throw new Error(
+      "Seeded Stage 6 committee: summary carries no cycle_summaries row, so the seeded official totals are not being served"
+    );
+  }
   return {
     committeePath: `/committee/${SMOKE_STAGE6_COMMITTEE_ID}`,
     expectedSummarySourceLabel: SMOKE_STAGE6_SUMMARY_SOURCE_LABEL,
     expectedItemizedCoverageNote: SMOKE_STAGE6_ITEMIZED_COVERAGE_NOTE,
     expectedLinkedCandidateName: SMOKE_STAGE6_LINKED_CANDIDATE_NAME,
-    expectedCycleLabel: SMOKE_STAGE6_COMMITTEE_CYCLE_LABEL,
+    expectedCycleLabel: String(cycle),
     expectedTotalRaisedText: SMOKE_STAGE6_COMMITTEE_TOTAL_RAISED_LITERAL,
     expectedOutsideSpendingEmptyText: SMOKE_COMMITTEE_OUTSIDE_SPENDING_EMPTY,
     expectedOutsideSpendingTargetName: null
@@ -1221,7 +1266,8 @@ export async function discoverLiveLouisianaCommitteeRoute(page: {
     const slugMatches = (await seededRouteResponse.json()) as LiveSearchCommitteeResult[];
     const seededMatch = slugMatches.find((match) => match.id === SMOKE_STAGE6_COMMITTEE_ID);
     if (seededMatch !== undefined) {
-      return getSeededStage6CommitteeRoute();
+      const seededRecord = await fetchLiveCommitteeDiscoveryRecord(page, SMOKE_STAGE6_COMMITTEE_ID);
+      return getSeededStage6CommitteeRoute(seededRecord.summary);
     }
 
     const liveSlugMatch = slugMatches.find(
@@ -1270,3 +1316,14 @@ export async function discoverLiveLouisianaCommitteeRoute(page: {
     await fetchLiveCommitteeDiscoveryRecord(page, match.id)
   );
 }
+
+// Candidate-list name search (lane B, aug18 findability).
+// The /candidates name box hands off to /search with `q` alone, so this fixture
+// is keyed on a query carrying no entity_type. The raw name is the shape FEC
+// filings actually ship; the formatted one is what formatPersonDisplayName must
+// put on screen. Digit-free on purpose: the candidate identity predicate in
+// api/queries/campaign_finance.py rejects any name matching '[0-9]', which
+// silently empties a browse list while a test still reports green.
+export const SMOKE_CANDIDATE_NAME_SEARCH_QUERY = "ossoff";
+export const SMOKE_CANDIDATE_NAME_SEARCH_RAW_NAME = "OSSOFF, T. JONATHAN";
+export const SMOKE_CANDIDATE_NAME_SEARCH_FORMATTED_NAME = "Ossoff, T. Jonathan";

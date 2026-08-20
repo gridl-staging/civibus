@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from decimal import Decimal
@@ -1620,7 +1621,35 @@ def _seed_ordering_tie_rows(
 
 
 def main() -> None:
+    """Seed the donor-search fixture, or remove it again with ``--cleanup``.
+
+    The live browser-smoke lane shares one database across every spec, and
+    several journeys assert whole-database facts: ``/congress`` reports a member
+    count and the candidate and committee lists render a ``Showing 1-N`` label.
+    This fixture seeds three current federal officeholders and six candidates,
+    and until ``--cleanup`` existed it never removed them, so whichever specs ran
+    after ``donor_lookup`` failed on rows a different spec had written. That is
+    what made the nightly lane's member count read 5 instead of 3.
+
+    ``--cleanup`` also rebuilds the donor rollup, because the serving view is
+    derived from the transactions being deleted and would otherwise keep
+    advertising donors whose underlying rows are gone.
+    """
+    parser = argparse.ArgumentParser(description="Seed or remove the donor-search fixture rows.")
+    parser.add_argument(
+        "--cleanup",
+        action="store_true",
+        help="Delete the fixture rows and rebuild the donor rollup instead of seeding.",
+    )
+    arguments = parser.parse_args()
+
     with get_connection() as conn:
+        if arguments.cleanup:
+            with conn.transaction():
+                cleanup_donor_search_fixture(conn)
+            rebuild_donor_search_rollup(conn)
+            print("cleaned up donor search fixture")
+            return
         with conn.transaction():
             fixture_ids = seed_donor_search_fixture(conn)
         print(f"seeded donor search fixture for {fixture_ids.alpha.person_id}")

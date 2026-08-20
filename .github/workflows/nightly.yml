@@ -2,14 +2,25 @@ name: Nightly
 
 # Exhaustive scheduled proof: the tiers deliberately kept OUT of the per-push
 # fast loop. backend-full owns the complete public unit suite plus coverage,
-# web-full owns the complete web gate set, and browser-smoke owns the
-# Playwright journeys against a seeded database. The DB-backed integration
-# suite is NOT duplicated here — integration.yml carries its own daily
-# schedule (offset by 30 minutes so the two heavy runs never contend).
+# web-full owns the complete web gate set, and the two browser-smoke jobs own the
+# Playwright journeys: browser-smoke runs the LIVE lane against a seeded database
+# and browser-smoke-fixture runs the FIXTURE lane, including the screenshot
+# oracle. Which spec belongs to which lane is declared once, in
+# web/tests/smoke/execution-contract.json. The DB-backed integration suite is NOT
+# duplicated here — integration.yml carries its own daily schedule (offset by 30
+# minutes so the two heavy runs never contend).
 on:
   schedule:
     - cron: '0 7 * * *'
   workflow_dispatch:
+    inputs:
+      update_snapshots:
+        description: >-
+          Rewrite the finance-visuals screenshot baselines on this runner and
+          publish them as the finance-visuals-playwright artifact. Download,
+          unzip, and commit the *-chromium.png files it contains.
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -162,3 +173,82 @@ jobs:
       - name: Stop DB
         if: always()
         run: make db-down
+
+  # The other half of the execution contract in web/tests/smoke/execution-contract.json.
+  # browser-smoke above runs the LIVE lane; this job runs the FIXTURE lane, which is
+  # the named owner for every spec whose oracle a federal-first seed cannot satisfy —
+  # the parked NC county, property and roster surfaces, the fixture-backed registry
+  # routes, and the shell/responsive layout suite. Without it those specs would be
+  # excluded from the live lane and owned by nothing, which is the failure mode the
+  # split exists to avoid.
+  #
+  # It also owns the screenshot oracle in finance-visuals.spec.ts, which is fixture-only
+  # by its own describe-level skip. browser-smoke never executes a single
+  # toHaveScreenshot, and before this job existed no workflow anywhere did — which is
+  # exactly how seven baselines came to enshrine charts with clipped y-axis labels as
+  # "correct".
+  #
+  # It needs no database and no Python: fixture mode boots the Node fixture
+  # backend plus a preview server, so the whole job is checkout + npm + browser.
+  #
+  # It is also the ONLY supported way to regenerate a screenshot baseline. Screenshots
+  # are platform-bound and playwright.config.ts's snapshot pathTemplate carries no
+  # platform token (one baseline serves every platform), so a baseline written
+  # on a developer's macOS differs from this runner's by ~1% of pixels on an
+  # entirely unchanged page. Regeneration procedure lives in
+  # docs/reference/ui_chart_encoding.md.
+  browser-smoke-fixture:
+    name: browser-smoke-fixture
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: web/package.json
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Install web dependencies
+        working-directory: web
+        run: npm ci
+      - name: Install Playwright browsers
+        working-directory: web
+        run: npx playwright install --with-deps chromium
+      # No spec-file arguments: the fixture lane is whatever the execution
+      # contract declares fixture-eligible, so adding or retiring a spec changes
+      # this job's selection through the contract instead of through this file.
+      # --update-snapshots only rewrites toHaveScreenshot baselines, which exist
+      # in finance-visuals.spec.ts alone, so a regeneration dispatch is still
+      # scoped to the screenshot oracle even though the run is now wider.
+      - name: Fixture-lane smoke journeys
+        working-directory: web
+        env:
+          # Empty on `schedule` (the inputs context only carries workflow_dispatch
+          # values), so the scheduled run always asserts rather than rewrites.
+          UPDATE_SNAPSHOTS: ${{ inputs.update_snapshots }}
+        run: |
+          set -euo pipefail
+          update_flag=()
+          if [[ "${UPDATE_SNAPSHOTS:-false}" == "true" ]]; then
+            update_flag=(--update-snapshots)
+          fi
+          npm run test:smoke -- --reporter=line "${update_flag[@]}"
+      # Runs on failure too: without it a red screenshot assertion in CI leaves
+      # nothing to look at, which was the second half of the un-landable-layout
+      # blocker. test-results/ carries the *-actual.png / *-diff.png pair for a
+      # mismatch; the snapshots directory carries the rewritten baselines after
+      # an update_snapshots dispatch. if-no-files-found may stay `error` because
+      # the committed snapshots directory is never empty.
+      - name: Upload Playwright artifacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: finance-visuals-playwright
+          path: |
+            web/test-results/
+            web/tests/smoke/finance-visuals.spec.ts-snapshots/
+          if-no-files-found: error
+          retention-days: 14

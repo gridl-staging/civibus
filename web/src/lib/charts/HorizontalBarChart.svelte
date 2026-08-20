@@ -16,6 +16,9 @@
   export let scaleMax: number | undefined = undefined;
 
   $: plottedRows = rows.filter((row) => row.canPlot);
+  // One expression, consumed by both the frame's declared unit and the plot's axis
+  // formatter, so the two cannot drift apart.
+  $: declaredUnit = plottedRows[0]?.unit ?? "dollars";
   $: ownMaxRowValue = Math.max(0, ...plottedRows.map((row) => getRowValue(row)));
   $: effectiveScaleMax = scaleMax ?? ownMaxRowValue;
   $: chartSeries = buildChartSeries(plottedRows);
@@ -61,7 +64,7 @@
 <ChartFrame
   {testId}
   {title}
-  unit={plottedRows[0]?.unit ?? "dollars"}
+  unit={declaredUnit}
   {cycle}
   {coverageThrough}
   {sources}
@@ -74,6 +77,7 @@
       kind="bar"
       title={title}
       ariaLabel={`${title} bar chart`}
+      unit={declaredUnit}
       series={chartSeries}
     />
     {#each plottedRows as row (row.id)}

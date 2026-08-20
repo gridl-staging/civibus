@@ -97,9 +97,32 @@ describe("smoke fixtures single-source aliases", () => {
     );
   });
 
+  // The seeded-route helper now reads the selected cycle out of the committee
+  // summary the discovery step fetched, because the committee page renders the
+  // cycle the API selected and that selection moves with
+  // SUPPORTED_COMMITTEE_SUMMARY_CYCLES. A minimal stand-in summary is enough for
+  // the alias assertions below, which are about the pinned values around it.
+  const seededSummaryStub = {
+    cycle_summaries: [{ cycle: 2026 }]
+  } as unknown as Parameters<typeof getSeededStage6CommitteeRoute>[0];
+
   it("routes the seeded Stage 6 committee by stable fixture id instead of its collidable slug", () => {
-    expect(getSeededStage6CommitteeRoute().committeePath).toBe(
+    expect(getSeededStage6CommitteeRoute(seededSummaryStub).committeePath).toBe(
       `/committee/${SMOKE_STAGE6_COMMITTEE_ID}`
+    );
+  });
+
+  it("refuses a seeded Stage 6 summary that carries no cycle row", () => {
+    // A committee whose selected cycle has no summary renders the derived $0.00
+    // path, which is exactly the false-$0 the journey exists to catch. Throwing
+    // here is what stops the discovery step from handing the spec an expectation
+    // built on an absent row.
+    const summaryWithoutCycles = {
+      cycle_summaries: []
+    } as unknown as Parameters<typeof getSeededStage6CommitteeRoute>[0];
+
+    expect(() => getSeededStage6CommitteeRoute(summaryWithoutCycles)).toThrow(
+      /no cycle_summaries row/
     );
   });
 
@@ -117,7 +140,7 @@ describe("smoke fixtures single-source aliases", () => {
   });
 
   it("seeded smoke constants derive from the canonical presenter", () => {
-    const seeded = getSeededStage6CommitteeRoute();
+    const seeded = getSeededStage6CommitteeRoute(seededSummaryStub);
     expect(seeded.expectedSummarySourceLabel).toBe(
       COMMITTEE_SUMMARY_SOURCE_LABELS.fec_committee_summary
     );

@@ -146,6 +146,168 @@ def test_production_finance_source_links_are_exercised_inside_chart_frames() -> 
     assert "page.getByText(EXACT_FEC_SOURCE)" not in source
 
 
+FIXTURE_FINANCE_SPEC = REPO_ROOT / "web/tests/smoke/finance-visuals.spec.ts"
+FIXTURE_FINANCE_SNAPSHOTS = REPO_ROOT / "web/tests/smoke/finance-visuals.spec.ts-snapshots"
+CHART_ADAPTER = REPO_ROOT / "web/src/lib/charts/Chart.svelte"
+CHART_FRAME = REPO_ROOT / "web/src/lib/charts/ChartFrame.svelte"
+
+
+def _fixture_finance_spec() -> str:
+    return FIXTURE_FINANCE_SPEC.read_text(encoding="utf-8")
+
+
+def _screenshot_name_patterns(spec_source: str) -> list[re.Pattern[str]]:
+    """Compile every ``toHaveScreenshot`` name in the spec into a filename matcher.
+
+    Screenshot names are template literals (``person-finance-${viewport.name}.png``)
+    while the committed files carry a resolved viewport plus the Playwright project
+    suffix (``person-finance-desktop-chromium.png``). So each ``${...}`` becomes a
+    wildcard and the project suffix is matched as a trailing segment. Everything
+    outside the interpolations is escaped, which keeps the ``.`` in ``.png``
+    literal rather than letting it match any character.
+    """
+    patterns: list[re.Pattern[str]] = []
+    for template in re.findall(r"toHaveScreenshot\(\s*`([^`]+)`", spec_source):
+        stem = template.removesuffix(".png")
+        # Split on interpolations so the literal halves can be escaped separately.
+        literal_parts = [re.escape(part) for part in re.split(r"\$\{[^}]*\}", stem)]
+        patterns.append(re.compile(rf"^{'.+'.join(literal_parts)}-[^-]+\.png$"))
+    return patterns
+
+
+def test_every_committed_screenshot_baseline_is_still_asserted() -> None:
+    """No baseline may outlive the assertion that produced it.
+
+    A committed screenshot with no ``toHaveScreenshot`` call behind it is never
+    compared against anything, so it silently rots: it keeps describing a page
+    that has since changed, and the next person regenerating baselines has no way
+    to tell a live baseline from a dead one. That is not hypothetical here — the
+    contest frames outlived their assertion when the race page moved from
+    per-candidate cards to a scoreboard table, and stale baselines are part of why
+    the clipped-axis defect survived review for as long as it did.
+
+    This guard can fail: delete a ``toHaveScreenshot`` call while leaving its
+    ``.png`` committed, or commit a baseline for a page nothing screenshots, and
+    the orphan is named here.
+    """
+    patterns = _screenshot_name_patterns(_fixture_finance_spec())
+    committed = sorted(path.name for path in FIXTURE_FINANCE_SNAPSHOTS.glob("*.png"))
+
+    # A spec that screenshots nothing must not be silently "satisfied" by an
+    # empty pattern list while baselines sit committed beside it.
+    assert patterns, "finance-visuals.spec.ts declares no toHaveScreenshot names"
+
+    orphans = [name for name in committed if not any(pattern.match(name) for pattern in patterns)]
+
+    assert orphans == [], f"committed baselines with no assertion behind them: {orphans}"
+
+
+def test_chart_legibility_guards_measure_geometry_and_not_label_length() -> None:
+    """The guard this replaced could not fail on the defect it was aimed at.
+
+    `expectBoundedNumericTickLabels` read tick TEXT and asserted each label was at
+    most 12 characters, so the 9-character "1,000,000" hanging 34px into the
+    neighbouring column scored a pass. Character count is not a rendering
+    measurement. Pinned here so the geometric version cannot regress back into a
+    string check, and so the tolerance stays sub-pixel: the same defect overflowed
+    28-34px against production money values but only ~1px against fixture values,
+    which is what makes a "safe" 2px tolerance ship the production bug.
+    """
+    helpers = _smoke_helpers()
+
+    assert "expectBoundedNumericTickLabels" not in helpers
+    assert "export async function expectTickLabelsInsidePlotBox" in helpers
+    assert "getBoundingClientRect()" in helpers
+    assert "const TICK_LABEL_ESCAPE_TOLERANCE_PX = 0.5;" in helpers
+    # Vacuity guards: a page whose charts all rendered nothing must fail, not pass.
+    assert 'expect(plottedCharts, "no chart region rendered a plot to measure").toBeGreaterThan(0)' in helpers
+    assert 'expect(checkedCharts, "no chart region rendered a value axis to check").toBeGreaterThan(0)' in helpers
+
+
+def test_axis_format_guard_derives_the_expected_unit_from_the_chart_frame() -> None:
+    """Reading the unit off the frame is what makes this hold either way.
+
+    GeographyShareChart declared dollars, printed dollars in its rows, and plotted a
+    unitless fraction. A guard with a hardcoded per-chart format would have had to
+    pick a side before the disagreement was resolved; deriving from `data-unit`
+    means the chart and its frame simply have to agree.
+    """
+    helpers = _smoke_helpers()
+    frame = CHART_FRAME.read_text(encoding="utf-8")
+
+    assert "export async function expectAxisFormatMatchesDeclaredUnit" in helpers
+    assert 'getAttribute("data-unit")' in helpers
+    assert "AXIS_TICK_TEXT_BY_DECLARED_UNIT" in helpers
+    assert "data-unit={unit}" in frame
+
+
+def test_chart_adapter_keeps_the_padding_formatter_and_interaction_fixes() -> None:
+    """One adapter owns all three fixes, which is why one change repaired every chart.
+
+    `web/src/lib/charts/import-boundary.test.ts` pins Chart.svelte as the sole
+    layerchart consumer; this pins what that adapter has to keep doing.
+    """
+    adapter = CHART_ADAPTER.read_text(encoding="utf-8")
+
+    # Axis gutters, sized against the abbreviated currency formatter.
+    assert "const AXIS_PADDING = " in adapter
+    assert "padding={AXIS_PADDING}" in adapter
+    # The value axis formats from the declared unit rather than per chart.
+    assert "AXIS_VALUE_FORMATTERS[unit]" in adapter
+    assert "TOOLTIP_VALUE_FORMATTERS[unit]" in adapter
+    # Band axes subsample instead of drawing every category as an unreadable smear.
+    assert "tickSpacing: X_TICK_SPACING_PX" in adapter
+    # Interaction: the one CSS declaration that silently discarded layerchart's
+    # shipped tooltips may not come back. Matched with its semicolon so the comment
+    # explaining its absence does not trip the check.
+    assert "pointer-events: none;" not in adapter
+
+
+def test_fixture_finance_spec_exercises_interaction_and_diverging_encoding() -> None:
+    """Interaction and stance colour are asserted as behaviour, not as CSS.
+
+    Asserting `pointer-events !== none` would assert the harness rather than what a
+    reader gets, which is the same invalid-probe mistake as counting characters in a
+    tick label. The tooltip assertion hovers and reads the tooltip's content, and
+    the stance assertion compares painted fills against the shared colour tokens the
+    HTML rows already consume.
+    """
+    fixture_spec = _fixture_finance_spec()
+    helpers = _smoke_helpers()
+
+    assert "expectChartTooltipOnHover" in fixture_spec
+    assert "expectDivergingStanceFills" in fixture_spec
+    assert "FINANCE_CHART_COLORS.support" in fixture_spec
+    assert "FINANCE_CHART_COLORS.oppose" in fixture_spec
+    # No probe anywhere may assert the CSS property instead of the behaviour.
+    assert 'toHaveCSS("pointer-events"' not in fixture_spec
+    assert 'toHaveCSS("pointer-events"' not in helpers
+    assert "await bandHitArea.hover()" in helpers
+    assert 'region.page().getByRole("tooltip")' in helpers
+    # layerchart draws a bar as a rounded <path class="lc-bar">, never a <rect>; a
+    # sampler restricted to rects only ever saw transparent tooltip hit areas.
+    assert '"svg path.lc-bar"' in helpers
+    # Tooltip containment belongs where a tooltip is open. The spec-local version
+    # ran on an unhovered page, found zero [role="tooltip"] elements, and asserted
+    # zero had escaped.
+    assert "expectContainedTooltips" not in fixture_spec
+    assert "an open chart tooltip rendered outside the viewport" in helpers
+
+
+def test_production_finance_smoke_runs_the_chart_legibility_guards() -> None:
+    """The deploy gate carries the guards, not just the fixture suite.
+
+    The clipped-axis defect was 28-34px in production and ~1px in the fixture, so a
+    guard that only ran locally would have kept passing through the failure it
+    exists to catch.
+    """
+    source = _production_finance_spec()
+
+    assert "expectTickLabelsInsidePlotBox" in source
+    assert "expectAxisFormatMatchesDeclaredUnit" in source
+    assert "expectBoundedNumericTickLabels" not in source
+
+
 def test_production_finance_reuses_shared_regex_escape_helper() -> None:
     source = _production_finance_spec()
     helpers = _smoke_helpers()

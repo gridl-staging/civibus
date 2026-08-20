@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  AXIS_VALUE_FORMATTERS,
   FEC_SIZE_BUCKET_LABELS,
   FINANCE_CHART_COLORS,
+  TOOLTIP_VALUE_FORMATTERS,
   buildCashOnHandSeries,
   calculateOutsideSpendingDomain,
   formatCurrency,
@@ -31,6 +33,45 @@ describe("charts/finance helpers", () => {
     expect(formatCount(1234)).toBe("1,234");
     expect(formatPercent(0.125)).toBe("12.5%");
     expect(formatPercent(0)).toBe("0%");
+  });
+
+  it("abbreviates negative dollars with the sign outside the glyph", () => {
+    // The zero-centered support/oppose axis plots negative dollars, and the naive
+    // form rendered "$-20000" on every oppose tick.
+    expect(formatCurrencyShort(-20_000)).toBe("-$20K");
+    expect(formatCurrencyShort(-1_500_000)).toBe("-$1.5M");
+    expect(formatCurrencyShort(-950)).toBe("-$950");
+    expect(formatCurrencyShort(0)).toBe("$0");
+  });
+
+  it("maps every declared chart unit to an axis and a tooltip formatter", () => {
+    // Closed rule set: FinanceChartUnit has exactly these four members, and a unit
+    // with no entry would make Chart.svelte pass `undefined` to layerchart's axis
+    // and silently fall back to a raw number.
+    expect(Object.keys(AXIS_VALUE_FORMATTERS).sort()).toEqual([
+      "count",
+      "dollars",
+      "percent",
+      "reported_transactions"
+    ]);
+    expect(Object.keys(TOOLTIP_VALUE_FORMATTERS).sort()).toEqual([
+      "count",
+      "dollars",
+      "percent",
+      "reported_transactions"
+    ]);
+
+    // The axis abbreviates and the tooltip does not: the axis is for judging scale
+    // in a narrow gutter, the tooltip is where the reader asked for the number.
+    // 1_250_000 / 1e6 = 1.25, and toFixed(1) rounds half away from zero.
+    expect(AXIS_VALUE_FORMATTERS.dollars(1_250_000)).toBe("$1.3M");
+    expect(TOOLTIP_VALUE_FORMATTERS.dollars(1_250_000)).toBe("$1,250,000.00");
+    expect(AXIS_VALUE_FORMATTERS.percent(0.125)).toBe("12.5%");
+    expect(TOOLTIP_VALUE_FORMATTERS.percent(0.125)).toBe("12.5%");
+    expect(AXIS_VALUE_FORMATTERS.count(1234)).toBe("1,234");
+    expect(TOOLTIP_VALUE_FORMATTERS.count(1234)).toBe("1,234");
+    expect(AXIS_VALUE_FORMATTERS.reported_transactions(1234)).toBe("1,234");
+    expect(TOOLTIP_VALUE_FORMATTERS.reported_transactions(1234)).toBe("1,234");
   });
 
   it("zero-fills covered UTC months only and preserves month ordering", () => {

@@ -1899,3 +1899,24 @@ describe("committee trust section duplicate-provenance regression (prod run 3015
     expect(countOccurrences(rendered.body, /data-testid="key-metrics"/g)).toBe(1);
   });
 });
+
+describe("campaign finance detail scrollable regions", () => {
+  // axe rule scrollable-region-focusable, impact serious, reported live against
+  // /committee/[slug]'s filing-breakdown-scroll. .detail__table-scroll sets overflow-x: auto over a table wider
+  // than its container; with no focusable descendant such a region cannot be
+  // scrolled from the keyboard at all. The smoke a11y floor refuses serious
+  // violations, but it only runs nightly - this holds the same invariant at
+  // vitest speed, and it fails the moment a new scroll container is added
+  // without the attribute rather than when the fix is deleted from an old one.
+  it("gives every horizontal scroll container a keyboard tab stop", () => {
+    const source = readFileSync(new URL("./DetailPage.svelte", import.meta.url), "utf8");
+    const containers = [...source.matchAll(/<div class="detail__table-scroll"[^>]*>/g)].map(
+      (match) => match[0]
+    );
+
+    expect(containers.length).toBeGreaterThan(0);
+    for (const container of containers) {
+      expect(container).toContain('tabindex="0"');
+    }
+  });
+});

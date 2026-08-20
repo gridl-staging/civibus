@@ -153,7 +153,16 @@
               </dl>
               {#if outsideSpending.targetRows.length > 0}
                 <h4>Target candidates</h4>
-                <div class="detail__table-scroll" data-testid="committee-outside-spending-targets">
+                <!-- tabindex="0" is required, not decorative: .detail__table-scroll sets
+                     overflow-x: auto over a table wider than its container, and a scrollable
+                     region with no focusable descendant cannot be scrolled from the keyboard
+                     at all. axe reports that as scrollable-region-focusable (serious), which
+                     the smoke a11y floor refuses. Applied to every scroll container in this
+                     component rather than only the ones that happen to lack links today, so a
+                     table whose links become conditional cannot silently regress. Same
+                     remedy the /developers code blocks already carry. -->
+                <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+                <div class="detail__table-scroll" tabindex="0" data-testid="committee-outside-spending-targets">
                   <table>
                     <thead>
                       <tr>
@@ -186,7 +195,8 @@
               {/if}
               {#if outsideSpending.sourceRows.length > 0}
                 <h4>Source filings</h4>
-                <div class="detail__table-scroll" data-testid="committee-outside-spending-sources">
+                <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+                <div class="detail__table-scroll" tabindex="0" data-testid="committee-outside-spending-sources">
                   <table>
                     <thead>
                       <tr>
@@ -282,7 +292,8 @@
             {#if highSignalSummary.topDonors.length === 0}
               <p>No donor rankings available.</p>
             {:else}
-              <div class="detail__table-scroll" data-testid="top-donors-scroll">
+              <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+              <div class="detail__table-scroll" tabindex="0" data-testid="top-donors-scroll">
                 <table>
                   <thead>
                     <tr>
@@ -310,7 +321,8 @@
             {#if highSignalSummary.topVendors.length === 0}
               <p>No vendor rankings available.</p>
             {:else}
-              <div class="detail__table-scroll" data-testid="top-vendors-scroll">
+              <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+              <div class="detail__table-scroll" tabindex="0" data-testid="top-vendors-scroll">
                 <table>
                   <thead>
                     <tr>
@@ -336,7 +348,8 @@
           <section class="detail__panel">
             <h3>Spend categories</h3>
             {#if highSignalSummary.spendCategories.length > 0}
-              <div class="detail__table-scroll" data-testid="spend-categories-scroll">
+              <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+              <div class="detail__table-scroll" tabindex="0" data-testid="spend-categories-scroll">
                 <table>
                   <thead>
                     <tr>
@@ -367,7 +380,8 @@
             {#if cycleSummaryRows.length === 0}
               <p>No cycle-level FEC totals loaded for this committee yet.</p>
             {:else}
-              <div class="detail__table-scroll" data-testid="committee-cycle-summaries-scroll">
+              <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+              <div class="detail__table-scroll" tabindex="0" data-testid="committee-cycle-summaries-scroll">
                 <table>
                   <thead>
                     <tr>
@@ -430,7 +444,8 @@
             {#if filingBreakdownPresentation.rows.length === 0}
               <p>{filingBreakdownPresentation.emptyMessage}</p>
             {:else}
-              <div class="detail__table-scroll" data-testid="filing-breakdown-scroll">
+              <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+              <div class="detail__table-scroll" tabindex="0" data-testid="filing-breakdown-scroll">
                 <table>
                   <thead>
                     <tr>
@@ -494,7 +509,8 @@
             {#if transactionRows.length === 0}
               <p>{getCampaignFinanceEmptyMessage()}</p>
             {:else}
-              <div class="detail__table-scroll" data-testid="committee-transactions-scroll">
+              <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+              <div class="detail__table-scroll" tabindex="0" data-testid="committee-transactions-scroll">
                 <table>
                   <thead>
                     <tr>
@@ -671,7 +687,8 @@
                 </dl>
                 {#if outsideSpending.topSpenders.length > 0}
                   <h4>Top spenders</h4>
-                  <div class="detail__table-scroll" data-testid="top-spenders-scroll">
+                  <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+                  <div class="detail__table-scroll" tabindex="0" data-testid="top-spenders-scroll">
                     <table>
                       <thead>
                         <tr>
@@ -696,7 +713,8 @@
                 {/if}
                 {#if outsideSpending.transactionRows.length > 0}
                   <h4>Transactions</h4>
-                  <div class="detail__table-scroll" data-testid="outside-spending-transactions-scroll">
+                  <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+                  <div class="detail__table-scroll" tabindex="0" data-testid="outside-spending-transactions-scroll">
                     <table>
                       <thead>
                         <tr>

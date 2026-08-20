@@ -1,7 +1,13 @@
 <script lang="ts">
   import ChartFrame from "./ChartFrame.svelte";
   import Chart from "./Chart.svelte";
-  import { calculateOutsideSpendingDomain, formatCount, formatCurrency, toExactRows } from "./finance";
+  import {
+    FINANCE_CHART_COLORS,
+    calculateOutsideSpendingDomain,
+    formatCount,
+    formatCurrency,
+    toExactRows
+  } from "./finance";
   import type { ChartFrameProps, ChartSeries, ExactDisclosureRow, OutsideSpendingRow } from "./types";
 
   export let testId: string;
@@ -22,7 +28,7 @@
     .reduce((sum, row) => sum + row.amount, 0);
   $: hasActivity = supportTotal > 0 || opposeTotal > 0;
   $: domain = calculateOutsideSpendingDomain(rows, scaleMax);
-  $: chartSeries = buildChartSeries(domain.signedRows);
+  $: chartSeries = buildChartSeries(domain.signedRows, rows);
   $: state = hasActivity
     ? { kind: "ready" as const }
     : {
@@ -73,15 +79,44 @@
     return `outside-spending__row outside-spending__row--${stance}`;
   }
 
+  /**
+   * Two series, one per stance, so the diverging scale carries its meaning in
+   * colour as well as in direction.
+   *
+   * This was a single series of signed amounts, which meant every bar was painted
+   * the same palette colour and only its direction distinguished money spent FOR a
+   * candidate from money spent AGAINST them — while the HTML rows immediately below
+   * the plot already carried the stance in a coloured left border. Two encodings of
+   * one fact, disagreeing.
+   *
+   * Each series carries a point for every row, zero where the row belongs to the
+   * other stance, so both series share one x domain and a row's own bar is the only
+   * one with height at its band. Colours come from FINANCE_CHART_COLORS, the same
+   * tokens the rows below consume.
+   */
   function buildChartSeries(
-    signedRows: Array<{ id: string; label: string; signedAmount: number }>
+    signedRows: Array<{ id: string; label: string; signedAmount: number }>,
+    spendingRows: OutsideSpendingRow[]
   ): ChartSeries[] {
+    const stanceByRowId = new Map(spendingRows.map((row) => [row.id, row.stance]));
+
+    const stanceSeries = (
+      stance: OutsideSpendingRow["stance"],
+      label: string,
+      color: string
+    ): ChartSeries => ({
+      id: `outside_spending_${stance}`,
+      label,
+      color,
+      points: signedRows.map((row) => ({
+        x: row.label,
+        y: stanceByRowId.get(row.id) === stance ? row.signedAmount : 0
+      }))
+    });
+
     return [
-      {
-        id: "outside_spending",
-        label: "Support and oppose spending",
-        points: signedRows.map((row) => ({ x: row.label, y: row.signedAmount }))
-      }
+      stanceSeries("support", "Support spending", FINANCE_CHART_COLORS.support),
+      stanceSeries("oppose", "Oppose spending", FINANCE_CHART_COLORS.oppose)
     ];
   }
 </script>
@@ -115,6 +150,7 @@
       kind="bar"
       title="Zero-centered support/oppose comparison"
       ariaLabel="Zero-centered support and oppose spending comparison"
+      unit="dollars"
       series={chartSeries}
       yDomain={[domain.min, domain.max]}
     />
@@ -163,6 +199,13 @@
     padding-left: 0.5rem;
   }
 
+  /*
+    These two must stay equal to FINANCE_CHART_COLORS.support / .oppose in
+    finance.ts, which is what the plot's bars use. A Svelte <style> block cannot
+    read a module constant, so the pairing is held by
+    expectDivergingStanceFills in web/tests/smoke/smoke-helpers.ts, which asserts
+    the bars paint in exactly those tokens. Change both or neither.
+  */
   .outside-spending__row--support {
     border-left: 0.5rem solid #0f766e;
   }

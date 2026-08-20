@@ -109,11 +109,30 @@ export type ContestCandidateFinanceRow = {
 export type RaceMoneySummary = {
   candidateCount: number;
   totalRaised: string;
+  /**
+   * False when no candidate in the race has loaded fundraising. The summary
+   * line then states the gap instead of printing "$0.00 raised" about a race
+   * whose fundraising nobody has measured. The exact twin of
+   * `outsideSpendingKnown` below, on the other dataset in the same response.
+   */
+  fundraisingKnown: boolean;
   totalOutsideSupport: string;
   totalOutsideOppose: string;
+  /**
+   * False when no candidate in the race has loaded outside spending. The
+   * summary line then states the gap instead of printing "$0.00 supporting",
+   * which is the claim that made the most expensive Senate race in US history
+   * read as having drawn no outside money at all.
+   */
+  outsideSpendingKnown: boolean;
   selectedCycle: number;
   /** Set when at least one candidate's money is unknown, qualifying the totals. */
   incompleteNote: string | null;
+  /**
+   * Set when at least one candidate's outside spending was never loaded, so the
+   * support/oppose totals cover only part of the race.
+   */
+  outsideSpendingNote: string | null;
 };
 
 /**
@@ -233,6 +252,10 @@ const CONTEST_CANDIDATE_MONEY_UNKNOWN_MESSAGE =
   "No FEC candidate record is linked for this candidacy, so Civibus has not loaded " +
   "fundraising figures for it. This is missing coverage, not zero fundraising.";
 const CONTEST_UNKNOWN_MONEY_VALUE = "Not available";
+const RACE_OUTSIDE_SPENDING_INCOMPLETE_NOTE =
+  "Civibus has not loaded independent-expenditure filings for at least one candidate " +
+  "in this race for this cycle, so outside spending shown here is incomplete. This is " +
+  "missing coverage, not an absence of outside spending.";
 const RACE_MONEY_INCOMPLETE_NOTE =
   "At least one candidate in this race has no linked FEC record, so these race " +
   "totals cover only the candidates Civibus has loaded.";
@@ -634,16 +657,23 @@ function buildContestCandidateFinanceFacts(row: ContestCandidateMoneyRow): Civic
   ];
 }
 
-/** Outside-spending facts. Zeroes here are real: nothing was spent, not "unknown". */
+/**
+ * Outside-spending facts.
+ *
+ * A zero here is real *only* when the backend measured it. `ie_support_total`
+ * is null when no Schedule E was loaded for the selected cycle, and the two
+ * cases must not look alike: rendering "$0.00" for an unloaded cycle told
+ * readers the most expensive Senate race in US history drew no outside money.
+ */
 function buildContestCandidateOutsideSpendingFacts(row: ContestCandidateMoneyRow): CivicFactRow[] {
   return [
     {
       label: "Outside spending supporting",
-      value: formatCurrency(row.ie_support_total)
+      value: formatOptionalContestCurrency(row.ie_support_total)
     },
     {
       label: "Outside spending opposing",
-      value: formatCurrency(row.ie_oppose_total)
+      value: formatOptionalContestCurrency(row.ie_oppose_total)
     }
   ];
 }
@@ -713,13 +743,37 @@ function buildRaceMoneySummary(
     return null;
   }
 
+  // Null race totals mean no candidate in the race has loaded outside spending,
+  // so the headline has to say that in words instead of printing a figure.
+  const outsideSpendingKnown = candidateMoney.total_ie_support !== null;
+  // Same rule, same response, other dataset: a null fundraising rollup means
+  // nothing was loaded for anyone in the race, so there is no figure to print.
+  const fundraisingKnown = candidateMoney.total_raised !== null;
+
   return {
     candidateCount: candidateMoney.candidate_count,
-    totalRaised: formatCurrency(candidateMoney.total_raised),
-    totalOutsideSupport: formatCurrency(candidateMoney.total_ie_support),
-    totalOutsideOppose: formatCurrency(candidateMoney.total_ie_oppose),
+    totalRaised: formatOptionalContestCurrency(candidateMoney.total_raised),
+    fundraisingKnown,
+    totalOutsideSupport: formatOptionalContestCurrency(candidateMoney.total_ie_support),
+    totalOutsideOppose: formatOptionalContestCurrency(candidateMoney.total_ie_oppose),
+    outsideSpendingKnown,
     selectedCycle: candidateMoney.selected_cycle,
-    incompleteNote: candidateMoney.has_unknown_candidate_money ? RACE_MONEY_INCOMPLETE_NOTE : null
+    // Only a total that exists gets qualified. When nothing is known the
+    // headline already says so outright, and adding "these totals cover only
+    // the candidates Civibus has loaded" beneath it would imply there were
+    // totals. Mirrors outsideSpendingNote below.
+    incompleteNote:
+      fundraisingKnown && candidateMoney.has_unknown_candidate_money ? RACE_MONEY_INCOMPLETE_NOTE : null,
+    // Its own note, not a reuse of incompleteNote: Schedule A and Schedule E
+    // load independently, so a race can have complete fundraising and no
+    // outside-spending coverage at all, and the reader needs to know which.
+    // Only a total that exists gets qualified — when nothing is known the
+    // summary line already says so outright, and repeating it as a caveat
+    // would read as a second, weaker claim.
+    outsideSpendingNote:
+      outsideSpendingKnown && candidateMoney.has_unknown_candidate_ie
+        ? RACE_OUTSIDE_SPENDING_INCOMPLETE_NOTE
+        : null
   };
 }
 

@@ -24,7 +24,7 @@
   $: totalAmount = filledRows.reduce((sum, row) => sum + row.amount, 0);
   $: maxAmount = Math.max(0, ...filledRows.map((row) => row.amount));
   $: tickCeiling = getReadableTickCeiling(scaleMax ?? maxAmount);
-  $: chartSeries = buildChartSeries(filledRows, tickCeiling);
+  $: chartSeries = buildChartSeries(filledRows);
   $: state =
     filledRows.length === 0
       ? {
@@ -46,14 +46,14 @@
     sentence: `Itemized individual contributions total ${formatCurrency(totalAmount)} in the ${cycle} cycle.`
   };
 
-  function buildChartSeries(
-    inputRows: MonthlyContributionRow[],
-    readableCeiling: number
-  ): ChartSeries[] {
+  function buildChartSeries(inputRows: MonthlyContributionRow[]): ChartSeries[] {
     return [
       {
         id: "monthly_contributions",
-        label: `Monthly contribution dollars; readable ceiling ${formatCurrency(readableCeiling)}`,
+        // Reader-facing: this string is the tooltip's series label. The readable
+        // ceiling is a domain calculation, not something to say to a person, and it
+        // stays in `tickCeiling` where it is used.
+        label: "Contributions",
         points: inputRows.map((row) => ({ x: row.month, y: row.amount }))
       }
     ];
@@ -76,6 +76,7 @@
       kind="bar"
       title="Monthly contribution columns"
       ariaLabel="Monthly contribution columns"
+      unit="dollars"
       series={chartSeries}
       yDomain={tickCeiling > 0 ? [0, tickCeiling] : undefined}
     />

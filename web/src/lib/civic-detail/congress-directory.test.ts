@@ -116,16 +116,62 @@ const MONEY_SUMMARIES: CongressMemberMoneySummary[] = [
     person_name: "Maria Delegate",
     has_fec_money: false,
     candidate_id: null,
+    // No linked FEC candidate at all: nothing is known, so the API sends null
+    // rather than minting zeros for a member no filing could describe.
+    total_raised: null,
+    total_spent: null,
+    net: null,
+    cash_on_hand: null,
+    summary_source: null,
+    ie_support_total: null,
+    ie_oppose_total: null,
+    ie_support_count: null,
+    ie_oppose_count: null,
+    sources: []
+  }
+];
+
+const NOT_LOADED_FUNDRAISING_COVERAGE = {
+  activity_state: "not_loaded" as const,
+  completeness: "unknown" as const,
+  basis: "no_authoritative_load_evidence" as const
+};
+
+/**
+ * The three fundraising states a directory row can be in, as the API sends
+ * them. Only the middle one is a dollar figure the reader may be shown.
+ */
+const THREE_STATE_MONEY_SUMMARIES: CongressMemberMoneySummary[] = [
+  {
+    // POPULATED: filings read, real money.
+    ...MONEY_SUMMARIES[0]!,
+    person_id: MEMBERS[0]!.person_id,
+    total_raised: "300.00"
+  },
+  {
+    // LOADED AND GENUINELY ZERO: filings read, and they said nothing came in.
+    // "0.00" is a measurement and must survive as $0.00.
+    ...MONEY_SUMMARIES[1]!,
+    person_id: MEMBERS[1]!.person_id,
+    has_fec_money: true,
     total_raised: "0.00",
     total_spent: "0.00",
     net: "0.00",
+    cash_on_hand: "0.00"
+  },
+  {
+    // NOT LOADED: linked to a real FEC candidate, so has_fec_money is true, but
+    // no Schedule A was loaded for the cycle. Nothing is known.
+    ...MONEY_SUMMARIES[2]!,
+    person_id: MEMBERS[2]!.person_id,
+    has_fec_money: true,
+    candidate_id: "H8PR00001",
+    total_raised: null,
+    total_spent: null,
+    net: null,
     cash_on_hand: null,
     summary_source: null,
-    ie_support_total: "0.00",
-    ie_oppose_total: "0.00",
-    ie_support_count: 0,
-    ie_oppose_count: 0,
-    sources: []
+    fundraising_coverage: NOT_LOADED_FUNDRAISING_COVERAGE
   }
 ];
 
@@ -292,6 +338,65 @@ describe("Congress directory presentation", () => {
 
     expect(directory.activeSort).toBe(sort);
     expect(directory.rows.map((row) => row.personName)).toEqual(expectedNames);
+  });
+
+  it("keeps a measured zero distinguishable from unknown money on every row field", () => {
+    const rows = buildCongressDirectory(MEMBERS, {}, THREE_STATE_MONEY_SUMMARIES).rows;
+    const byName = new Map(rows.map((row) => [row.personName, row]));
+
+    // populated: the figure renders.
+    expect(byName.get("Jane A. Representative")).toMatchObject({
+      hasFecMoney: true,
+      totalRaised: "300.00"
+    });
+    // loaded and genuinely zero: still a figure, and still $0.00. A repair that
+    // blanked every zero would delete a fact the product measured and sourced.
+    expect(byName.get("Alex Senator")).toMatchObject({
+      hasFecMoney: true,
+      totalRaised: "0.00",
+      cashOnHand: "0.00"
+    });
+    // not loaded: has_fec_money is true and the figure is still absent, which
+    // is exactly why has_fec_money cannot be the coverage discriminator.
+    expect(byName.get("Maria Delegate")).toMatchObject({
+      hasFecMoney: true,
+      totalRaised: null,
+      cashOnHand: null
+    });
+
+    // The metric the comparison bar reads keeps the same distinction: 0 draws a
+    // zero-width bar labelled $0.00, null draws no bar and says so in words.
+    expect(getCongressMoneyMetric(byName.get("Alex Senator")!, "total_raised")).toBe(0);
+    expect(getCongressMoneyMetric(byName.get("Maria Delegate")!, "total_raised")).toBeNull();
+  });
+
+  it("sorts unknown money below a measured zero rather than alongside it", () => {
+    const directory = buildCongressDirectory(MEMBERS, {}, THREE_STATE_MONEY_SUMMARIES, "total_raised");
+
+    // Hand-ordered: 300.00, then the measured 0.00, then the two rows nobody
+    // measured (Maria not loaded, Sam no summary at all) by name.
+    //
+    // The measured zero outranking the unknowns is the whole assertion. Reading
+    // an unknown as 0 would tie it with Alex Senator and let name ordering
+    // decide, placing an unmeasured member among the members the product
+    // measured and found empty — a claim about them nobody established.
+    expect(directory.rows.map((row) => row.personName)).toEqual([
+      "Jane A. Representative",
+      "Alex Senator",
+      "Maria Delegate",
+      "Sam President"
+    ]);
+
+    // Same rule on every other money sort, so no column can quietly disagree.
+    for (const sort of ["outside_against", "outside_support", "cash_on_hand"] as const) {
+      const sorted = buildCongressDirectory(MEMBERS, {}, THREE_STATE_MONEY_SUMMARIES, sort).rows;
+      const unknownIndex = sorted.findIndex((row) => getCongressMoneyMetric(row, sort) === null);
+      const lastKnownIndex = sorted.reduce(
+        (last, row, index) => (getCongressMoneyMetric(row, sort) === null ? last : index),
+        -1
+      );
+      expect(unknownIndex).toBeGreaterThan(lastKnownIndex);
+    }
   });
 
   it("falls back to total_raised when the sort param is invalid", () => {

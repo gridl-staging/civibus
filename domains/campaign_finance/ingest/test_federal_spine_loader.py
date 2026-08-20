@@ -13,6 +13,7 @@ that core.person count and cf.candidate.person_id values do not change.
 from __future__ import annotations
 
 from collections.abc import Iterator
+from datetime import date
 from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
@@ -62,6 +63,10 @@ RELINK_BIO = "G000602"
 RELINK_FEC = "H2NY04244"
 RELINK_STALE_FEC = "H4NY04158"
 ABSENCE_BIO = "A000383"
+
+# Deterministic contest id for the shadow-candidacy specimen (civibus-5lm).
+# Kept as a module constant so _delete_test_rows can drop it precisely.
+SHADOW_CANDIDACY_CONTEST_ID = UUID("00000000-0000-4000-8000-000000009901")
 
 CORE_BIOS = (HOUSE_BIO, SENATE_BIO, DELEGATE_BIO, PREZ_BIO, VP_BIO)
 ALL_BIOS = CORE_BIOS + (RELINK_BIO, ABSENCE_BIO)
@@ -260,6 +265,39 @@ def _candidate_person_ids(
         return dict(cur.fetchall())
 
 
+def _seed_shadow_candidacy(
+    conn: psycopg.Connection,
+    *,
+    person_id: UUID,
+    fec_candidate_id: str,
+) -> UUID:
+    """Bind a candidacy to an FEC-only shadow person, as the races loader does.
+
+    Mirrors ``ingest_candidate_civic_rows``: ``candidate_number`` carries the FEC
+    CAND_ID copied from the source row, and ``person_id`` is whatever
+    ``find_person_by_identifier`` resolved at the time — the shadow, when the
+    masters job ran before the spine job existed.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO civic.contest (id, name, election_date, election_type, office_id)
+            VALUES (%s, %s, %s, 'general', %s)
+            ON CONFLICT (id) DO NOTHING
+            """,
+            (SHADOW_CANDIDACY_CONTEST_ID, "Spine Shadow Candidacy Contest", date(2026, 11, 3), OFFICE_US_SENATE),
+        )
+        cur.execute(
+            """
+            INSERT INTO civic.candidacy (person_id, contest_id, party, status, candidate_number)
+            VALUES (%s, %s, 'DEM', 'qualified', %s)
+            """,
+            (person_id, SHADOW_CANDIDACY_CONTEST_ID, fec_candidate_id),
+        )
+    conn.commit()
+    return SHADOW_CANDIDACY_CONTEST_ID
+
+
 def _delete_test_rows(conn: psycopg.Connection) -> None:
     """Remove every row introduced by this test file, in FK-safe order."""
     cn_source_record_keys = [f"cn:{cycle}:{fec_id}" for cycle in (2024, 2026) for fec_id in SEEDED_FEC_IDS]
@@ -349,6 +387,18 @@ def _delete_test_rows(conn: psycopg.Connection) -> None:
                 "DELETE FROM core.person_portrait WHERE person_id = ANY(%s)",
                 (person_ids,),
             )
+        # The shadow-candidacy specimen's contest is seeded directly rather than
+        # through a loader, so no source_record key above reaches it. Its candidacy
+        # is normally already gone with its person; the delete is kept anyway so a
+        # candidacy repointed somewhere unexpected cannot block the contest delete.
+        cur.execute(
+            "DELETE FROM civic.candidacy WHERE contest_id = %s",
+            (SHADOW_CANDIDACY_CONTEST_ID,),
+        )
+        cur.execute(
+            "DELETE FROM civic.contest WHERE id = %s",
+            (SHADOW_CANDIDACY_CONTEST_ID,),
+        )
         cur.execute(
             "DELETE FROM civic.officeholding WHERE person_id IN ("
             " SELECT id FROM core.person WHERE identifiers ->> 'bioguide_id' = ANY(%s)"
@@ -858,6 +908,148 @@ def test_candidate_master_rerun_does_not_overwrite_spine_candidate_link(
         HOUSE_FEC_B: spine_person_id,
     }
     assert set(post_rerun_person_ids.values()).isdisjoint(pre_spine_person_ids.values())
+
+
+def test_spine_convergence_repoints_candidacy_off_the_fec_shadow_person(
+    spine_conn: psycopg.Connection,
+    tmp_path: Path,
+) -> None:
+    """civibus-5lm: the candidacy must follow the money onto the spine person.
+
+    Reproduces the production chamber-switcher shape exactly. ``load_candidates``
+    runs first — as ``federal-fec-masters`` does in the refresh plan — and mints
+    an FEC-only shadow ``core.person`` for HOUSE_FEC_B. The races loader binds the
+    candidacy to that shadow. ``load_federal_spine`` then mints the
+    bioguide-anchored person and converges ``cf.candidate.person_id`` onto it.
+
+    Before this fix convergence stopped there, and the candidacy stayed on the
+    shadow. Because the race page reads ``civic.candidacy.person_id`` for its
+    ``/person/`` link, the incumbent's link pointed at a person row carrying no
+    money: measured live on 2026-08-19, Jon Ossoff's $77,279,766.48 was on the
+    spine row while the race page linked to the shadow.
+
+    HOUSE_FEC_A/HOUSE_FEC_B are the file's existing dual-FEC-id House member, i.e.
+    the chamber-switcher class this defect is confined to.
+    """
+    candidates_ds_id = _ensure_candidates_data_source(spine_conn)
+    load_candidates(
+        spine_conn,
+        _write_cn_fixture(tmp_path),
+        cycle=2026,
+        data_source_id=candidates_ds_id,
+    )
+
+    shadow_person_id = find_person_by_identifier(spine_conn, "fec_candidate_id", HOUSE_FEC_B)
+    assert shadow_person_id is not None
+    contest_id = _seed_shadow_candidacy(
+        spine_conn,
+        person_id=shadow_person_id,
+        fec_candidate_id=HOUSE_FEC_B,
+    )
+
+    data_source_id = ensure_federal_spine_data_source(spine_conn)
+    adapted = _build_adapted_legislators()
+    first_result = load_federal_spine(spine_conn, adapted, data_source_id=data_source_id)
+    second_result = load_federal_spine(spine_conn, adapted, data_source_id=data_source_id)
+
+    spine_person_id = find_person_by_identifier(spine_conn, "bioguide_id", HOUSE_BIO)
+    assert spine_person_id is not None
+    assert spine_person_id != shadow_person_id
+
+    with spine_conn.cursor() as cur:
+        cur.execute(
+            "SELECT person_id, candidate_number, party, status FROM civic.candidacy WHERE contest_id = %s",
+            (contest_id,),
+        )
+        candidacy_rows = cur.fetchall()
+
+    # One candidacy, moved rather than duplicated, with its source facts intact.
+    assert candidacy_rows == [(spine_person_id, HOUSE_FEC_B, "DEM", "qualified")]
+    # Both FEC ids of the chamber-switcher land on the same person, so the race
+    # page's /person/ link and the person page's money panel now agree.
+    assert _candidate_person_ids(spine_conn, (HOUSE_FEC_A, HOUSE_FEC_B)) == {
+        HOUSE_FEC_A: spine_person_id,
+        HOUSE_FEC_B: spine_person_id,
+    }
+    assert first_result.converged_candidacies == 1
+    # Idempotent: the second spine run finds nothing left to move.
+    assert second_result.converged_candidacies == 0
+
+
+def test_spine_convergence_merges_a_candidacy_that_would_violate_the_canonical_key(
+    spine_conn: psycopg.Connection,
+    tmp_path: Path,
+) -> None:
+    """The repoint survives ``uq_candidacy_canonical_key`` (person_id, contest_id).
+
+    When the spine person ALREADY holds a candidacy in the same contest, moving
+    the shadow's row with a plain UPDATE would raise a unique violation and abort
+    the whole spine refresh. ``repoint_candidacy_person`` merges instead: the
+    canonical row keeps its own non-null values, fills its nulls from the shadow
+    row, inherits the shadow's ``core.entity_source`` provenance links, and only
+    then is the redundant duplicate dropped.
+
+    Here the canonical row is seeded with a NULL ``candidate_number`` and NULL
+    ``party``, so the assertion below proves the merge actually copied the
+    shadow's values across rather than merely deleting the duplicate.
+
+    This proof is not vacuous. Verified 2026-08-19 by replacing the
+    ``repoint_candidacy_person`` call in ``_converge_spine_candidacies`` with a
+    plain ``UPDATE civic.candidacy SET person_id = ...``: this test goes red with
+    ``psycopg.errors.UniqueViolation: duplicate key value violates unique
+    constraint "uq_candidacy_canonical_key"``. That is the condition it guards —
+    a naive repoint aborts the entire spine refresh, not just this one row.
+    """
+    candidates_ds_id = _ensure_candidates_data_source(spine_conn)
+    load_candidates(
+        spine_conn,
+        _write_cn_fixture(tmp_path),
+        cycle=2026,
+        data_source_id=candidates_ds_id,
+    )
+    shadow_person_id = find_person_by_identifier(spine_conn, "fec_candidate_id", HOUSE_FEC_B)
+    assert shadow_person_id is not None
+    contest_id = _seed_shadow_candidacy(
+        spine_conn,
+        person_id=shadow_person_id,
+        fec_candidate_id=HOUSE_FEC_B,
+    )
+
+    # Materialize the spine person first, then plant the colliding candidacy on it.
+    data_source_id = ensure_federal_spine_data_source(spine_conn)
+    load_federal_spine(spine_conn, _build_adapted_legislators(), data_source_id=data_source_id)
+    spine_person_id = find_person_by_identifier(spine_conn, "bioguide_id", HOUSE_BIO)
+    assert spine_person_id is not None
+
+    with spine_conn.cursor() as cur:
+        # Re-plant the shadow binding the first spine run just repaired, so this
+        # test exercises the collision branch rather than the plain-UPDATE branch.
+        cur.execute(
+            "UPDATE civic.candidacy SET person_id = %s WHERE contest_id = %s",
+            (shadow_person_id, contest_id),
+        )
+        cur.execute(
+            """
+            INSERT INTO civic.candidacy (person_id, contest_id, party, status, candidate_number)
+            VALUES (%s, %s, NULL, 'filed', NULL)
+            """,
+            (spine_person_id, contest_id),
+        )
+    spine_conn.commit()
+
+    result = load_federal_spine(spine_conn, _build_adapted_legislators(), data_source_id=data_source_id)
+
+    with spine_conn.cursor() as cur:
+        cur.execute(
+            "SELECT person_id, candidate_number, party, status FROM civic.candidacy WHERE contest_id = %s",
+            (contest_id,),
+        )
+        candidacy_rows = cur.fetchall()
+
+    assert result.converged_candidacies == 1
+    # One surviving row on the canonical person: its own 'filed' status kept, and
+    # the shadow's party and FEC id filled into the columns it had left null.
+    assert candidacy_rows == [(spine_person_id, HOUSE_FEC_B, "DEM", "filed")]
 
 
 def test_relink_policy_refresh_reapplies_source_linked_exception(

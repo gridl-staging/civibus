@@ -19,6 +19,9 @@ import {
   SMOKE_AL_CANDIDATE_ID,
   SMOKE_AL_CANDIDATE_TITLE,
   SMOKE_CANDIDATE_NAME,
+  SMOKE_CANDIDATE_NAME_SEARCH_FORMATTED_NAME,
+  SMOKE_CANDIDATE_NAME_SEARCH_QUERY,
+  SMOKE_CANDIDATE_NAME_SEARCH_RAW_NAME,
   SMOKE_CANDIDATE_OPPOSE_TOTAL,
   SMOKE_CANDIDATE_PERSON_LINK_TEXT,
   SMOKE_CANDIDATE_SLUG,
@@ -230,6 +233,46 @@ test.describe("campaign finance smoke", () => {
     await expect(page).toHaveURL(/\/candidates\?limit=1$/);
     await expect(page.getByRole("link", { name: SMOKE_CANDIDATE_NAME })).toBeVisible();
     await expect(page.getByText(SMOKE_CANDIDATES_FIRST_PAGE_LABEL)).toBeVisible();
+  });
+
+  test("/candidates name search hands the typed name off to /search and renders it formatted", async ({
+    page
+  }: {
+    page: any;
+  }) => {
+    await page.goto("/candidates");
+
+    // Load-and-verify before exercising the control. A findability test run
+    // against an empty list passes for the wrong reason, and the heading plus a
+    // result link are page-body content: /candidates is in the primary nav, so
+    // a bare "Candidates" text match would survive a crashed page.
+    await expect(page.getByRole("heading", { name: "Candidates" })).toBeVisible();
+    await expect(page.getByRole("link", { name: SMOKE_CANDIDATE_NAME })).toBeVisible();
+
+    await page.getByLabel("Find a candidate by name").fill(SMOKE_CANDIDATE_NAME_SEARCH_QUERY);
+    await page.getByRole("button", { name: "Search names" }).click();
+
+    // The handoff carries the term and nothing else: no entity_type, and none of
+    // the browse filter params. The fixture backend only answers an unfiltered
+    // query, so a pinned type would surface here as an error page.
+    await expect(page).toHaveURL(`/search?q=${SMOKE_CANDIDATE_NAME_SEARCH_QUERY}`);
+
+    // `exact: true` is load-bearing on both assertions below. Playwright matches
+    // accessible names and text case-insensitively by default, so without it
+    // both would pass against the unformatted `OSSOFF, T. JONATHAN` and the
+    // whole check would be blind to the thing it exists to catch.
+    const resultsRegion = page.getByTestId("search-results-region");
+    await expect(
+      resultsRegion.getByRole("link", {
+        name: SMOKE_CANDIDATE_NAME_SEARCH_FORMATTED_NAME,
+        exact: true
+      })
+    ).toBeVisible();
+    // The backend served raw FEC casing; the shouted form must not reach the
+    // screen, which is what proves the formatter ran in the real render path.
+    await expect(
+      resultsRegion.getByText(SMOKE_CANDIDATE_NAME_SEARCH_RAW_NAME, { exact: true })
+    ).toHaveCount(0);
   });
 
   test("/committees renders index page links, SEO tags, and pagination controls", async ({ page }: { page: any }) => {

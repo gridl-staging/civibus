@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date
 from uuid import UUID, uuid4
 
 import psycopg
@@ -821,10 +822,146 @@ def test_search_office_entity_type(
     ]
 
 
-def test_search_union_includes_all_six_entity_types(
+def test_search_union_returns_one_row_per_person_with_several_candidacies(
     api_client: TestClient,
     db_conn: psycopg.Connection,
 ) -> None:
+    """civibus-9hv: the union emits one row per human, not one row per candidacy.
+
+    Before the fix this person rendered THREE rows in the cross-entity union: one
+    from the person lane and one per candidacy from the candidate lane, all three
+    carrying the same entity_id and therefore the same `/person/<uuid>` href
+    (SEARCH_ROUTE_SEGMENT_BY_ENTITY_TYPE maps both badges to `/person/`).
+    Production showed exactly this shape for `?q=ossoff` on 2026-08-19.
+
+    The surviving row is the person lane's, and it absorbs the candidacy context
+    from the MOST RECENT contest — so `state`, `party` and `office_name` here are
+    the Northshore ones (2026), not the Bayside ones (2024). Asserting the later
+    triple is what proves the context merge is ordered rather than arbitrary.
+
+    Fixture names are digit-free (the campaign-finance identity predicate rejects
+    names containing a digit) and carry unique tokens so they cannot collide with
+    the bundled FEC sample data; every assertion is scoped to the seeded ids.
+    """
+    person = Person(
+        id=UUID("00000000-0000-0000-0000-000000000570"),
+        canonical_name="Twicefiled Searchperson",
+    )
+    insert_person(db_conn, person)
+
+    # Two offices rather than two contests on one office: civic.contest is unique
+    # on (office, division, election_date, election_type), and separate offices
+    # let the assertion below discriminate state and office_name as well as party.
+    earlier_office_id = _insert_office(
+        db_conn,
+        id=UUID("00000000-0000-0000-0000-000000000571"),
+        name="Bayside Comptroller Seat",
+        office_level="state",
+        state="OR",
+    )
+    later_office_id = _insert_office(
+        db_conn,
+        id=UUID("00000000-0000-0000-0000-000000000572"),
+        name="Northshore Treasurer Seat",
+        office_level="state",
+        state="WA",
+    )
+    earlier_contest_id = _insert_contest(
+        db_conn,
+        id=UUID("00000000-0000-0000-0000-000000000573"),
+        name="Bayside Cycle Alpha",
+        office_id=earlier_office_id,
+        election_date=date(2024, 11, 5),
+    )
+    later_contest_id = _insert_contest(
+        db_conn,
+        id=UUID("00000000-0000-0000-0000-000000000574"),
+        name="Northshore Cycle Beta",
+        office_id=later_office_id,
+        election_date=date(2026, 11, 3),
+    )
+    _insert_candidacy(
+        db_conn,
+        id=UUID("00000000-0000-0000-0000-000000000575"),
+        person_id=person.id,
+        contest_id=earlier_contest_id,
+        party="GRN",
+        status="lost",
+    )
+    _insert_candidacy(
+        db_conn,
+        id=UUID("00000000-0000-0000-0000-000000000576"),
+        person_id=person.id,
+        contest_id=later_contest_id,
+        party="LIB",
+        status="qualified",
+    )
+
+    response = api_client.get("/v1/search", params={"q": "twicefiled searchperson", "limit": 10})
+
+    assert response.status_code == 200
+    rows_for_person = [row for row in response.json() if row["entity_id"] == str(person.id)]
+    assert rows_for_person == [
+        {
+            "entity_type": "person",
+            "entity_id": "00000000-0000-0000-0000-000000000570",
+            "name": "Twicefiled Searchperson",
+            "state": "WA",
+            "party": "LIB",
+            "office_name": "Northshore Treasurer Seat",
+            "committee_type": None,
+            "total_raised": None,
+        }
+    ]
+
+    # The explicit candidate filter is unchanged: it still answers "which races is
+    # this person in", so it still emits one row per candidacy. Both rows share an
+    # entity_id, and entity_id is the last ORDER BY key, so their relative order is
+    # not defined by the query — sort locally rather than asserting an accident.
+    candidate_response = api_client.get(
+        "/v1/search",
+        params={"q": "twicefiled searchperson", "entity_type": "candidate"},
+    )
+    assert candidate_response.status_code == 200
+    assert sorted(candidate_response.json(), key=lambda row: row["office_name"]) == [
+        {
+            "entity_type": "candidate",
+            "entity_id": "00000000-0000-0000-0000-000000000570",
+            "name": "Twicefiled Searchperson",
+            "state": "OR",
+            "party": "GRN",
+            "office_name": "Bayside Comptroller Seat",
+            "committee_type": None,
+            "total_raised": None,
+        },
+        {
+            "entity_type": "candidate",
+            "entity_id": "00000000-0000-0000-0000-000000000570",
+            "name": "Twicefiled Searchperson",
+            "state": "WA",
+            "party": "LIB",
+            "office_name": "Northshore Treasurer Seat",
+            "committee_type": None,
+            "total_raised": None,
+        },
+    ]
+
+
+def test_search_union_covers_every_routable_entity_type_without_duplicating_a_person(
+    api_client: TestClient,
+    db_conn: psycopg.Connection,
+) -> None:
+    """The union emits five entity types; `candidate` is deliberately absent.
+
+    Rewritten 2026-08-19 for civibus-9hv. The previous assertion here was
+    `result_types == {person, org, committee, office, candidate, contest}`, which
+    encoded the defect rather than guarding against it: the candidate lane shares
+    a byte-identical name predicate with the person lane, so the ONLY way a
+    `candidate` row reaches the union is as a duplicate of a person row already in
+    it, with the same entity_id and the same `/person/<uuid>` href.
+    `entity_type=candidate` is still served on its own — see
+    test_search_candidate_entity_type and test_search_populates_candidate_context_fields.
+    """
     insert_person(
         db_conn,
         Person(
@@ -878,8 +1015,25 @@ def test_search_union_includes_all_six_entity_types(
     response = api_client.get("/v1/search", params={"q": "fiveway match", "limit": 10})
 
     assert response.status_code == 200
-    result_types = {r["entity_type"] for r in response.json()}
-    assert result_types == {"person", "org", "committee", "office", "candidate", "contest"}
+    payload = response.json()
+    result_types = {r["entity_type"] for r in payload}
+    assert result_types == {"person", "org", "committee", "office", "contest"}
+
+    # The candidate seed still appears — once, as a person, carrying the context
+    # the candidate lane used to contribute on a second row. `Fiveway Match Office`
+    # is federal with no state, so `state` is None while party and office survive.
+    assert [row for row in payload if row["entity_id"] == str(cand_person.id)] == [
+        {
+            "entity_type": "person",
+            "entity_id": str(cand_person.id),
+            "name": "Fiveway Match Candidate",
+            "state": None,
+            "party": "IND",
+            "office_name": "Fiveway Match Office",
+            "committee_type": None,
+            "total_raised": None,
+        }
+    ]
 
 
 def test_search_candidate_does_not_return_non_candidate_persons(
@@ -981,7 +1135,6 @@ def test_search_officeholder_person_ranks_before_namesake_challenger(
     payload = response.json()
     officeholder_key = ("person", str(officeholder.person_id))
     challenger_person_key = ("person", str(challenger_id))
-    challenger_candidate_key = ("candidate", str(challenger_id))
     indexed_keys = {(row["entity_type"], row["entity_id"]): index for index, row in enumerate(payload)}
 
     assert payload[indexed_keys[officeholder_key]] == {
@@ -994,18 +1147,14 @@ def test_search_officeholder_person_ranks_before_namesake_challenger(
         "committee_type": None,
         "total_raised": None,
     }
+    # The challenger's own candidacy now supplies party and sought-office on the
+    # single person row (civibus-9hv). Before the union dropped the duplicate
+    # candidate lane these two facts lived on a SECOND row with an identical href;
+    # keeping them here is what still lets a reader tell the namesakes apart —
+    # sitting member "NC-01 · DEM · U.S. Representative" versus challenger
+    # "IND · us_house" — without rendering the same link twice.
     assert payload[indexed_keys[challenger_person_key]] == {
         "entity_type": "person",
-        "entity_id": str(challenger_id),
-        "name": "Alice Representative",
-        "state": None,
-        "party": None,
-        "office_name": None,
-        "committee_type": None,
-        "total_raised": None,
-    }
-    assert payload[indexed_keys[challenger_candidate_key]] == {
-        "entity_type": "candidate",
         "entity_id": str(challenger_id),
         "name": "Alice Representative",
         "state": None,
@@ -1014,8 +1163,8 @@ def test_search_officeholder_person_ranks_before_namesake_challenger(
         "committee_type": None,
         "total_raised": None,
     }
+    assert ("candidate", str(challenger_id)) not in indexed_keys
     assert indexed_keys[officeholder_key] < indexed_keys[challenger_person_key]
-    assert indexed_keys[officeholder_key] < indexed_keys[challenger_candidate_key]
 
 
 def test_search_officeholder_person_context_values_do_not_enrich_bare_person(

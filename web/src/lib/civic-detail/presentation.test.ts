@@ -829,6 +829,7 @@ describe("contest detail presentation", () => {
           total_ie_support: "100.00",
           total_ie_oppose: "50.00",
           has_unknown_candidate_money: false,
+          has_unknown_candidate_ie: false,
           rows: [
             {
               candidacy_id: CANDIDACY_ID,
@@ -853,7 +854,8 @@ describe("contest detail presentation", () => {
               ie_support_total: "100.00",
               ie_oppose_total: "50.00",
               ie_support_count: 1,
-              ie_oppose_count: 1
+              ie_oppose_count: 1,
+              ie_coverage: null
             },
             {
               candidacy_id: "99999999-9999-4999-8999-999999999999",
@@ -878,7 +880,14 @@ describe("contest detail presentation", () => {
               ie_support_total: "0.00",
               ie_oppose_total: "0.00",
               ie_support_count: 0,
-              ie_oppose_count: 0
+              ie_oppose_count: 0,
+              // Schedule E was loaded for this cycle and named somebody else:
+              // this zero is measured, so it must keep rendering as $0.00.
+              ie_coverage: {
+                activity_state: "loaded_zero",
+                completeness: "partial",
+                basis: "fec_schedule_e_transactions"
+              }
             }
           ]
         }
@@ -912,10 +921,13 @@ describe("contest detail presentation", () => {
     expect(presentation.raceMoneySummary).toEqual({
       candidateCount: 2,
       totalRaised: "$5,500.00",
+      fundraisingKnown: true,
       totalOutsideSupport: "$100.00",
       totalOutsideOppose: "$50.00",
+      outsideSpendingKnown: true,
       selectedCycle: 2026,
-      incompleteNote: null
+      incompleteNote: null,
+      outsideSpendingNote: null
     });
     expect(presentation.financeEmptyMessage).toBeNull();
   });
@@ -930,6 +942,7 @@ describe("contest detail presentation", () => {
         total_ie_support: "0.00",
         total_ie_oppose: "0.00",
         has_unknown_candidate_money: true,
+        has_unknown_candidate_ie: true,
         rows: [
           {
             candidacy_id: CANDIDACY_ID,
@@ -951,10 +964,15 @@ describe("contest detail presentation", () => {
             cash_on_hand: null,
             summary_source: null,
             fundraising_coverage: null,
-            ie_support_total: "0.00",
-            ie_oppose_total: "0.00",
-            ie_support_count: 0,
-            ie_oppose_count: 0
+            ie_support_total: null,
+            ie_oppose_total: null,
+            ie_support_count: null,
+            ie_oppose_count: null,
+            ie_coverage: {
+              activity_state: "not_loaded",
+              completeness: "unknown",
+              basis: "no_authoritative_load_evidence"
+            }
           }
         ]
       }
@@ -962,6 +980,12 @@ describe("contest detail presentation", () => {
 
     // No figures at all for an unlinked candidacy: the row carries copy instead.
     expect(presentation.financeRows[0].financeFacts).toEqual([]);
+    // Including the outside-spending half. An unlinked candidacy has no FEC
+    // candidate ID for a Schedule E filing to name, so "$0.00" would be invented.
+    expect(presentation.financeRows[0].outsideSpendingFacts).toEqual([
+      { label: "Outside spending supporting", value: "Not available" },
+      { label: "Outside spending opposing", value: "Not available" }
+    ]);
     expect(presentation.financeRows[0].moneyUnavailableMessage).toContain(
       "missing coverage, not zero fundraising"
     );
@@ -969,6 +993,293 @@ describe("contest detail presentation", () => {
     expect(presentation.raceMoneySummary?.incompleteNote).toContain(
       "only the candidates Civibus has loaded"
     );
+  });
+
+  it("separates loaded-zero outside spending from outside spending that was never loaded", () => {
+    // Three candidates, three coverage states, one race. The whole feature is
+    // that these three render as three different claims.
+    const baseRow = {
+      party: "DEM",
+      status: "filed",
+      incumbent_challenge: "C",
+      candidate_slug_is_unique: true,
+      candidate_identity_is_safe: true,
+      has_fec_money: true,
+      total_raised: "5000.00",
+      total_spent: "2000.00",
+      net: "3000.00",
+      cash_on_hand: "1000.00",
+      summary_source: "fec_weball",
+      fundraising_coverage: null
+    };
+    const presentation = buildContestDetailPresentation(CONTEST_DETAIL, {
+      candidateMoney: {
+        contest_id: CONTEST_DETAIL.id,
+        selected_cycle: 2024,
+        candidate_count: 3,
+        total_raised: "15000.00",
+        total_ie_support: "250.00",
+        total_ie_oppose: "100.00",
+        has_unknown_candidate_money: false,
+        has_unknown_candidate_ie: true,
+        rows: [
+          {
+            ...baseRow,
+            candidacy_id: CANDIDACY_ID,
+            person_id: PERSON_ID,
+            person_name: "Populated Candidate",
+            fec_candidate_id: "H0NC01001",
+            candidate_id: "22222222-2222-4222-8222-222222222222",
+            candidate_name: "CANDIDATE, POPULATED",
+            candidate_slug: "populated-candidate",
+            ie_support_total: "250.00",
+            ie_oppose_total: "100.00",
+            ie_support_count: 1,
+            ie_oppose_count: 1,
+            ie_coverage: null
+          },
+          {
+            ...baseRow,
+            candidacy_id: "99999999-9999-4999-8999-999999999991",
+            person_id: "88888888-8888-4888-8888-888888888881",
+            person_name: "Loaded Zero Candidate",
+            fec_candidate_id: "H0NC01002",
+            candidate_id: "33333333-3333-4333-8333-333333333331",
+            candidate_name: "CANDIDATE, LOADED ZERO",
+            candidate_slug: "loaded-zero-candidate",
+            ie_support_total: "0.00",
+            ie_oppose_total: "0.00",
+            ie_support_count: 0,
+            ie_oppose_count: 0,
+            ie_coverage: {
+              activity_state: "loaded_zero",
+              completeness: "partial",
+              basis: "fec_schedule_e_transactions"
+            }
+          },
+          {
+            ...baseRow,
+            candidacy_id: "99999999-9999-4999-8999-999999999992",
+            person_id: "88888888-8888-4888-8888-888888888882",
+            person_name: "Not Loaded Candidate",
+            fec_candidate_id: "H0NC01003",
+            candidate_id: "33333333-3333-4333-8333-333333333332",
+            candidate_name: "CANDIDATE, NOT LOADED",
+            candidate_slug: "not-loaded-candidate",
+            ie_support_total: null,
+            ie_oppose_total: null,
+            ie_support_count: null,
+            ie_oppose_count: null,
+            ie_coverage: {
+              activity_state: "not_loaded",
+              completeness: "unknown",
+              basis: "no_authoritative_load_evidence"
+            }
+          }
+        ]
+      }
+    });
+
+    const [populated, loadedZero, notLoaded] = presentation.financeRows;
+
+    expect(populated.outsideSpendingFacts).toEqual([
+      { label: "Outside spending supporting", value: "$250.00" },
+      { label: "Outside spending opposing", value: "$100.00" }
+    ]);
+    // A measured zero stays a zero. Turning this into "Not available" would be
+    // the same dishonesty pointing the other way.
+    expect(loadedZero.outsideSpendingFacts).toEqual([
+      { label: "Outside spending supporting", value: "$0.00" },
+      { label: "Outside spending opposing", value: "$0.00" }
+    ]);
+    expect(notLoaded.outsideSpendingFacts).toEqual([
+      { label: "Outside spending supporting", value: "Not available" },
+      { label: "Outside spending opposing", value: "Not available" }
+    ]);
+    expect(
+      notLoaded.outsideSpendingFacts.map((fact) => fact.value).join(" ")
+    ).not.toContain("$");
+
+    // Partially known race: the totals exist but cover only two of three
+    // candidates, so they must carry the qualifying caveat.
+    expect(presentation.raceMoneySummary?.outsideSpendingKnown).toBe(true);
+    expect(presentation.raceMoneySummary?.totalOutsideSupport).toBe("$250.00");
+    expect(presentation.raceMoneySummary?.outsideSpendingNote).toContain(
+      "missing coverage, not an absence of outside spending"
+    );
+  });
+
+  it("reads a race with no loaded outside spending as unknown, not as zero", () => {
+    const presentation = buildContestDetailPresentation(CONTEST_DETAIL, {
+      candidateMoney: {
+        contest_id: CONTEST_DETAIL.id,
+        selected_cycle: 2024,
+        candidate_count: 1,
+        total_raised: "5000.00",
+        total_ie_support: null,
+        total_ie_oppose: null,
+        has_unknown_candidate_money: false,
+        has_unknown_candidate_ie: true,
+        rows: [
+          {
+            candidacy_id: CANDIDACY_ID,
+            person_id: PERSON_ID,
+            person_name: "Jane Candidate",
+            party: "DEM",
+            status: "filed",
+            incumbent_challenge: "C",
+            fec_candidate_id: "H0NC01001",
+            candidate_id: "22222222-2222-4222-8222-222222222222",
+            candidate_name: "CANDIDATE, JANE",
+            candidate_slug: "jane-candidate",
+            candidate_slug_is_unique: true,
+            candidate_identity_is_safe: true,
+            has_fec_money: true,
+            total_raised: "5000.00",
+            total_spent: "2000.00",
+            net: "3000.00",
+            cash_on_hand: "1000.00",
+            summary_source: "fec_weball",
+            fundraising_coverage: null,
+            ie_support_total: null,
+            ie_oppose_total: null,
+            ie_support_count: null,
+            ie_oppose_count: null,
+            ie_coverage: {
+              activity_state: "not_loaded",
+              completeness: "unknown",
+              basis: "no_authoritative_load_evidence"
+            }
+          }
+        ]
+      }
+    });
+
+    // The headline is the most prominent figure on a race page. "$0.00" here is
+    // the Sherrod Brown defect: the most expensive race in US history reading
+    // as no outside spending at all.
+    expect(presentation.raceMoneySummary?.totalOutsideSupport).toBe("Not available");
+    expect(presentation.raceMoneySummary?.totalOutsideOppose).toBe("Not available");
+    expect(presentation.raceMoneySummary?.totalRaised).toBe("$5,000.00");
+    expect(presentation.raceMoneySummary?.outsideSpendingKnown).toBe(false);
+    // Nothing is known, so there is no partial total to qualify: the summary
+    // line states the gap outright instead of carrying a weaker caveat.
+    expect(presentation.raceMoneySummary?.outsideSpendingNote).toBeNull();
+  });
+
+  it("reads a race with no loaded fundraising as unknown, not as zero", () => {
+    const presentation = buildContestDetailPresentation(CONTEST_DETAIL, {
+      candidateMoney: {
+        contest_id: CONTEST_DETAIL.id,
+        selected_cycle: 2024,
+        candidate_count: 1,
+        // No candidacy in the race resolved to a cf.candidate row, so there is
+        // no known value to total. The API now says so instead of flooring the
+        // sum of an empty set at "0.00".
+        total_raised: null,
+        total_ie_support: null,
+        total_ie_oppose: null,
+        has_unknown_candidate_money: true,
+        has_unknown_candidate_ie: true,
+        rows: [
+          {
+            candidacy_id: CANDIDACY_ID,
+            person_id: PERSON_ID,
+            person_name: "Jane Candidate",
+            party: "DEM",
+            status: "filed",
+            incumbent_challenge: "C",
+            fec_candidate_id: null,
+            candidate_id: null,
+            candidate_name: null,
+            candidate_slug: null,
+            candidate_slug_is_unique: false,
+            candidate_identity_is_safe: false,
+            has_fec_money: false,
+            total_raised: null,
+            total_spent: null,
+            net: null,
+            cash_on_hand: null,
+            summary_source: null,
+            fundraising_coverage: null,
+            ie_support_total: null,
+            ie_oppose_total: null,
+            ie_support_count: null,
+            ie_oppose_count: null,
+            ie_coverage: null
+          }
+        ]
+      }
+    });
+
+    // The headline figure is the single most-read claim on a race page.
+    // "$0.00 raised" about a race nobody measured is the fundraising twin of
+    // the outside-spending defect above.
+    expect(presentation.raceMoneySummary?.totalRaised).toBe("Not available");
+    expect(presentation.raceMoneySummary?.fundraisingKnown).toBe(false);
+    // Nothing is known, so there is no partial total to qualify: the headline
+    // states the gap outright rather than adding a weaker caveat beneath a
+    // figure it should not have printed.
+    expect(presentation.raceMoneySummary?.incompleteNote).toBeNull();
+  });
+
+  it("keeps a measured zero race total as $0.00 rather than reading it as unknown", () => {
+    const presentation = buildContestDetailPresentation(CONTEST_DETAIL, {
+      candidateMoney: {
+        contest_id: CONTEST_DETAIL.id,
+        selected_cycle: 2024,
+        candidate_count: 1,
+        // Loaded, and genuinely nothing raised. This zero is a measurement.
+        total_raised: "0.00",
+        total_ie_support: "0.00",
+        total_ie_oppose: "0.00",
+        has_unknown_candidate_money: false,
+        has_unknown_candidate_ie: false,
+        rows: [
+          {
+            candidacy_id: CANDIDACY_ID,
+            person_id: PERSON_ID,
+            person_name: "Jane Candidate",
+            party: "DEM",
+            status: "filed",
+            incumbent_challenge: "C",
+            fec_candidate_id: "H0NC01001",
+            candidate_id: "22222222-2222-4222-8222-222222222222",
+            candidate_name: "CANDIDATE, JANE",
+            candidate_slug: "jane-candidate",
+            candidate_slug_is_unique: true,
+            candidate_identity_is_safe: true,
+            has_fec_money: true,
+            total_raised: "0.00",
+            total_spent: "0.00",
+            net: "0.00",
+            cash_on_hand: "0.00",
+            summary_source: "fec_weball",
+            fundraising_coverage: {
+              activity_state: "loaded_zero",
+              completeness: "partial",
+              basis: "qualifying_transactions"
+            },
+            ie_support_total: "0.00",
+            ie_oppose_total: "0.00",
+            ie_support_count: 0,
+            ie_oppose_count: 0,
+            ie_coverage: {
+              activity_state: "loaded_zero",
+              completeness: "partial",
+              basis: "fec_schedule_e_transactions"
+            }
+          }
+        ]
+      }
+    });
+
+    // Suppressing a measured zero would be the same dishonesty inverted: it
+    // would hide a fact the product actually established and sourced.
+    expect(presentation.raceMoneySummary?.totalRaised).toBe("$0.00");
+    expect(presentation.raceMoneySummary?.fundraisingKnown).toBe(true);
+    expect(presentation.raceMoneySummary?.totalOutsideSupport).toBe("$0.00");
+    expect(presentation.raceMoneySummary?.outsideSpendingKnown).toBe(true);
   });
 
   it("falls back to the contest finance empty state when no money response loaded", () => {

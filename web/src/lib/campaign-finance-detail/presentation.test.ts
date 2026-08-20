@@ -987,3 +987,61 @@ describe("buildPaginatedCommitteeFilingBreakdown", () => {
     expect(page.normalizedOffset).toBe(0);
   });
 });
+
+describe("candidate detail name formatting", () => {
+  // Contract: docs/reference/screen_specs/candidate_list.md -> "Name presentation
+  // contract". Candidate Detail and the browse list must agree with Person
+  // Detail on how a human's name is spelled.
+  const RAW_FEC_NAME = "OSSOFF, T. JONATHAN";
+  const FORMATTED_NAME = "Ossoff, T. Jonathan";
+
+  it("formats the canonical name of a safe-identity candidate", () => {
+    const shell = buildCandidateDetailShellPresentation({
+      ...DEFAULT_CANDIDATE_DETAIL,
+      name: RAW_FEC_NAME,
+      identity_is_safe: true
+    });
+
+    expect(shell.canonicalName).toBe(FORMATTED_NAME);
+    // JSON-LD names the same entity the page does; a second spelling here would
+    // put a different identity in front of crawlers than in front of readers.
+    expect(shell.jsonLdName).toBe(FORMATTED_NAME);
+  });
+
+  it("formats the Candidate name fact row for a safe-identity candidate", () => {
+    const rows = buildCandidateFactRows({
+      ...DEFAULT_CANDIDATE_DETAIL,
+      name: RAW_FEC_NAME,
+      identity_is_safe: true
+    });
+
+    expect(rows).toContainEqual({ label: "Candidate name", value: FORMATTED_NAME, href: null });
+  });
+
+  it("keeps the FEC-filed candidate name row verbatim for an unsafe identity", () => {
+    // That row is labelled as the *filed* string and exists as source evidence.
+    // Re-casing it would misreport what the filing actually says, so the
+    // formatter stops at the identity surface.
+    const unsafeName = "212 N HALF  W. JOHN, RODNEY HOWARD MR.";
+    const rows = buildCandidateFactRows({
+      ...DEFAULT_CANDIDATE_DETAIL,
+      name: unsafeName,
+      identity_is_safe: false
+    });
+
+    expect(rows).toContainEqual({
+      label: "FEC-filed candidate name",
+      value: unsafeName,
+      href: null
+    });
+  });
+
+  it("still falls back to the generic label when a formatted name is blank", () => {
+    const shell = buildCandidateDetailShellPresentation({
+      ...DEFAULT_CANDIDATE_DETAIL,
+      name: "   "
+    });
+
+    expect(shell.canonicalName).toBe("Candidate");
+  });
+});

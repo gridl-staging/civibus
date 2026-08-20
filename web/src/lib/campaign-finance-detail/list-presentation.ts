@@ -1,5 +1,6 @@
 import { buildCandidateHref, buildCommitteeHref, type CandidateListItem, type CommitteeListItem } from "./contract";
 import { formatOptionalCurrency } from "./presentation";
+import { formatPersonDisplayName } from "$lib/display-name";
 
 /** Label for the candidate browse money column. */
 export const CANDIDATE_TOTAL_RAISED_LABEL = "Total raised";
@@ -45,7 +46,10 @@ export function buildCandidateListItemPresentation(
     .join(" \u00b7 ");
 
   return {
-    name: item.name,
+    // cf.candidate.name arrives as the raw FEC filing string, which is shouted
+    // uppercase. Delegating to the shared name owner is what stops one human
+    // reading as two unrelated records across the browse list and Person Detail.
+    name: formatPersonDisplayName(item.name),
     href: buildCandidateHref(item),
     contextLine,
     totalRaisedLabel: CANDIDATE_TOTAL_RAISED_LABEL,

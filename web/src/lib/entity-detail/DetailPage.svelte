@@ -276,11 +276,31 @@
           approximationNote={fundraisingDetail.geographyShare.approximationNote}
           unknownIncludedInDenominator={fundraisingDetail.geographyShare.mode === "district"}
         />
-        <h5>{fundraisingDetail.rankingLabels.topDonors}</h5>
+        <!-- NOTE: h4, not h5, and the level is load-bearing.
+
+             The chart components rendered above these ranking tables emit their own
+             <h3> (lib/charts/Chart.svelte), which resets the document outline depth
+             mid-snippet. axe's heading-order rule then reads h3 -> h5 as a skipped
+             level and reports a violation, which is what the smoke a11y baseline used
+             to record against "Top reported contributor names". h4 is the deepest level
+             that follows an h3 legally, so every heading rendered after a chart in this
+             snippet must be h4 or shallower until the chart heading level itself becomes
+             a prop (civibus-4yw). "Individual contribution totals" at :187 stays h5
+             because no chart precedes it - it follows the h4 above directly. -->
+        <h4>{fundraisingDetail.rankingLabels.topDonors}</h4>
         {#if fundraisingDetail.topDonorsEmptyMessage !== null}
           <p>{fundraisingDetail.topDonorsEmptyMessage}</p>
         {:else}
-          <div class="detail__table-scroll" data-testid="person-top-donors-scroll">
+          <!-- tabindex="0" is required, not decorative: .detail__table-scroll sets
+               overflow-x: auto over a table wider than its container, and a scrollable
+               region with no focusable descendant cannot be scrolled from the keyboard
+               at all. axe reports that as scrollable-region-focusable (serious), which
+               the smoke a11y floor refuses. Applied to every scroll container in this
+               component rather than only the ones that happen to lack links today, so a
+               table whose links become conditional cannot silently regress. Same
+               remedy the /developers code blocks already carry. -->
+          <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+          <div class="detail__table-scroll" tabindex="0" data-testid="person-top-donors-scroll">
             <table>
               <thead>
                 <tr>
@@ -310,13 +330,14 @@
             </table>
           </div>
         {/if}
-        <h5>{fundraisingDetail.rankingLabels.topEmployers}</h5>
+        <h4>{fundraisingDetail.rankingLabels.topEmployers}</h4>
         <p>{fundraisingDetail.topEmployerDisclaimer}</p>
         <p>{fundraisingDetail.topEmployerMethodologyReference}</p>
         {#if fundraisingDetail.topEmployersEmptyMessage !== null}
           <p>{fundraisingDetail.topEmployersEmptyMessage}</p>
         {:else}
-          <div class="detail__table-scroll" data-testid="person-top-employers-scroll">
+          <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+          <div class="detail__table-scroll" tabindex="0" data-testid="person-top-employers-scroll">
             <table>
               <thead>
                 <tr>
@@ -346,12 +367,13 @@
             </table>
           </div>
         {/if}
-        <h5>{fundraisingDetail.industryRollup.heading}</h5>
+        <h4>{fundraisingDetail.industryRollup.heading}</h4>
         <p>{fundraisingDetail.industryRollup.sourceNote}</p>
         {#if fundraisingDetail.industryRollup.emptyMessage !== null}
           <p>{fundraisingDetail.industryRollup.emptyMessage}</p>
         {:else}
-          <div class="detail__table-scroll">
+          <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+          <div class="detail__table-scroll" tabindex="0">
             <table>
               <thead>
                 <tr>
@@ -641,7 +663,8 @@
                     {#if linkedCommitteeBanner}
                       <p>{linkedCommitteeBanner}</p>
                     {:else}
-                      <div class="detail__table-scroll" data-testid="person-linked-committees">
+                      <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+                      <div class="detail__table-scroll" tabindex="0" data-testid="person-linked-committees">
                         <table>
                           <thead>
                             <tr>
@@ -679,7 +702,8 @@
                     {#if donorVendorBanner}
                       <p>{donorVendorBanner}</p>
                     {:else}
-                      <div class="detail__table-scroll">
+                      <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+                      <div class="detail__table-scroll" tabindex="0">
                         <table>
                           <thead>
                             <tr>
@@ -744,7 +768,8 @@
                       {#if outsideSpending.topSpenders.length === 0}
                         <p>No outside-spending rankings available.</p>
                       {:else}
-                        <div class="detail__table-scroll" data-testid="person-ie-top-spenders-scroll">
+                        <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+                        <div class="detail__table-scroll" tabindex="0" data-testid="person-ie-top-spenders-scroll">
                           <table>
                             <thead>
                               <tr>
@@ -771,7 +796,8 @@
                       {#if outsideSpending.transactionRows.length === 0}
                         <p>No outside-spending transactions available.</p>
                       {:else}
-                        <div class="detail__table-scroll" data-testid="person-ie-transactions-scroll">
+                        <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+                        <div class="detail__table-scroll" tabindex="0" data-testid="person-ie-transactions-scroll">
                           <table>
                             <thead>
                               <tr>

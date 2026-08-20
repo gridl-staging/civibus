@@ -8,7 +8,7 @@
  * `CongressPersonSmokeFixture` this module builds.
  */
 // @ts-expect-error Smoke seed helpers run under Node ESM and import the TS module directly.
-import { SMOKE_CHART_LIVE_PERSON_ID, SMOKE_CONGRESS_CANDIDATE_ID, SMOKE_CONGRESS_FILING_ID, SMOKE_CONGRESS_IE_COMMITTEE_ID, SMOKE_CONGRESS_PERSON_ID, SMOKE_CONGRESS_PRINCIPAL_COMMITTEE_ID, SMOKE_FINANCE_LIVE_PERSON_ID } from "./fixtures.ts";
+import { SMOKE_CHART_LIVE_PERSON_ID, SMOKE_CONGRESS_CANDIDATE_ID, SMOKE_CONGRESS_FILING_ID, SMOKE_CONGRESS_IE_COMMITTEE_ID, SMOKE_CONGRESS_PERSON_CANONICAL_NAME, SMOKE_CONGRESS_PERSON_FIRST_NAME, SMOKE_CONGRESS_PERSON_ID, SMOKE_CONGRESS_PERSON_LAST_NAME, SMOKE_CONGRESS_PRINCIPAL_COMMITTEE_ID, SMOKE_FINANCE_LIVE_PERSON_ID, SMOKE_PERSON_CANONICAL_NAME } from "./fixtures.ts";
 
 export type CongressPersonSmokeScenario = "directory" | "charts" | "finance";
 export type CongressSmokeScenario = CongressPersonSmokeScenario | "compare";
@@ -17,6 +17,13 @@ type CongressPersonSmokeFixtureInput = {
   namespace: string;
   slug: string;
   personId: string;
+  // Per-scenario person identity. The directory scenario's person is listed on
+  // /congress alongside the browser-smoke seed's officeholders, so it needs a
+  // name no other seeded row shares; the charts and finance scenarios are only
+  // ever read on their own /person/[id] page and keep the shared specimen name.
+  personCanonicalName: string;
+  personFirstName: string;
+  personLastName: string;
   candidateId: string;
   principalCommitteeId: string;
   ieCommitteeId: string;
@@ -50,6 +57,9 @@ function buildCongressPersonSmokeFixture(input: CongressPersonSmokeFixtureInput)
     SMOKE_CONGRESS_COMMITTEE_SUMMARY_2024_ID: fixtureId("000000000415"),
     SMOKE_CONGRESS_COMMITTEE_SUMMARY_2026_ID: fixtureId("000000000416"),
     SMOKE_CONGRESS_PERSON_ID: input.personId,
+    personCanonicalName: input.personCanonicalName,
+    personFirstName: input.personFirstName,
+    personLastName: input.personLastName,
     SMOKE_CONGRESS_CANDIDATE_ID: input.candidateId,
     SMOKE_CONGRESS_PRINCIPAL_COMMITTEE_ID: input.principalCommitteeId,
     SMOKE_CONGRESS_IE_COMMITTEE_ID: input.ieCommitteeId,
@@ -88,6 +98,9 @@ export function congressPersonSmokeFixture(scenario: CongressPersonSmokeScenario
       namespace: "90000000",
       slug: "congress",
       personId: SMOKE_CONGRESS_PERSON_ID,
+      personCanonicalName: SMOKE_CONGRESS_PERSON_CANONICAL_NAME,
+      personFirstName: SMOKE_CONGRESS_PERSON_FIRST_NAME,
+      personLastName: SMOKE_CONGRESS_PERSON_LAST_NAME,
       candidateId: SMOKE_CONGRESS_CANDIDATE_ID,
       principalCommitteeId: SMOKE_CONGRESS_PRINCIPAL_COMMITTEE_ID,
       ieCommitteeId: SMOKE_CONGRESS_IE_COMMITTEE_ID,
@@ -102,6 +115,9 @@ export function congressPersonSmokeFixture(scenario: CongressPersonSmokeScenario
       namespace: "94000000",
       slug: "person-charts",
       personId: SMOKE_CHART_LIVE_PERSON_ID,
+      personCanonicalName: SMOKE_PERSON_CANONICAL_NAME,
+      personFirstName: "Jane",
+      personLastName: "Doe",
       candidateId: "94000000-0000-4000-8000-000000000412",
       principalCommitteeId: "94000000-0000-4000-8000-000000000413",
       ieCommitteeId: "94000000-0000-4000-8000-000000000414",
@@ -116,6 +132,9 @@ export function congressPersonSmokeFixture(scenario: CongressPersonSmokeScenario
       namespace: "95000000",
       slug: "person-finance",
       personId: SMOKE_FINANCE_LIVE_PERSON_ID,
+      personCanonicalName: SMOKE_PERSON_CANONICAL_NAME,
+      personFirstName: "Jane",
+      personLastName: "Doe",
       candidateId: "95000000-0000-4000-8000-000000000412",
       principalCommitteeId: "95000000-0000-4000-8000-000000000413",
       ieCommitteeId: "95000000-0000-4000-8000-000000000414",

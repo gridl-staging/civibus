@@ -116,6 +116,18 @@ const SHOULD_RUN_LIVE_CONTEST_SMOKE = process.env.SMOKE_CONTEST_ID !== undefined
 const SHOULD_RUN_LIVE_OFFICE_SMOKE = process.env.SMOKE_OFFICE_ID !== undefined;
 const LIVE_API_BASE_URL = process.env.SMOKE_LIVE_API_BASE_URL ?? "http://127.0.0.1:8000";
 const LIVE_DURHAM_PERSON_NAME = "Carl Rist";
+// The Durham journey needs a specimen env of its own, following the same
+// operator-supplied shape as SMOKE_CONTEST_ID and SMOKE_OFFICE_ID above.
+//
+// It used to key off "SMOKE_PERSON_ID is set", which stopped meaning what it
+// said the moment test_support/browser_smoke_seed.py started pinning
+// SMOKE_PERSON_ID to a federal House member: the journey then ran in every CI
+// live lane and looked for a Durham city council member on that member's page.
+// The Durham municipal roster is a parked state/city surface under federal-first
+// v1, so no CI seed can satisfy it; an operator pointing this at a real roster
+// person still runs it unchanged. Un-parking is tracked on civibus-5ud.2.
+const LIVE_DURHAM_PERSON_ID = process.env.SMOKE_DURHAM_PERSON_ID;
+const SHOULD_RUN_LIVE_DURHAM_SMOKE = LIVE_DURHAM_PERSON_ID !== undefined;
 
 async function expectFinanceChartHasStableHeight(page: any, chartName: string | RegExp): Promise<void> {
   const chartRegion = page.getByLabel(chartName).first();
@@ -627,10 +639,13 @@ test.describe.serial("entity and civic detail smoke (live mode)", () => {
     page: any;
     request: any;
   }) => {
-    test.skip(SHOULD_SEED_LIVE_PERSON_SMOKE, "Durham live smoke requires SMOKE_PERSON_ID");
+    test.skip(
+      !SHOULD_RUN_LIVE_DURHAM_SMOKE,
+      "live Durham roster smoke requires SMOKE_DURHAM_PERSON_ID for a known-populated municipal record"
+    );
     const pageLoadErrors = capturePageLoadErrors(page);
 
-    const personResponse = await page.goto(`/person/${LIVE_PERSON_ID}`);
+    const personResponse = await page.goto(`/person/${LIVE_DURHAM_PERSON_ID}`);
 
     expect(personResponse?.ok()).toBe(true);
     await expect(page.getByRole("heading", { name: LIVE_DURHAM_PERSON_NAME })).toBeVisible();
@@ -644,10 +659,10 @@ test.describe.serial("entity and civic detail smoke (live mode)", () => {
     const searchResponse = await request.get(searchUrl.toString());
     expect(searchResponse.ok()).toBe(true);
     const results = await searchResponse.json();
-    const result = results.find((row: { entity_id: string }) => row.entity_id === LIVE_PERSON_ID);
+    const result = results.find((row: { entity_id: string }) => row.entity_id === LIVE_DURHAM_PERSON_ID);
     expect(result).toEqual({
       entity_type: "person",
-      entity_id: LIVE_PERSON_ID,
+      entity_id: LIVE_DURHAM_PERSON_ID,
       name: LIVE_DURHAM_PERSON_NAME,
       state: "NC",
       party: null,

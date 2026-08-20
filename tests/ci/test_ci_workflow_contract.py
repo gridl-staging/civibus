@@ -825,3 +825,139 @@ def _validate_marker_metadata(
     entry = classifications.get(node_id)
     assert entry is not None, f"{node_id} is marked dev_repo_only but not classified"
     assert entry.category == PublicMirrorCategory.DEV_REPO_ONLY, f"{node_id} classified as product_runtime"
+
+
+# --- browser-smoke execution contract (civibus-5ud.2) ---------------------------
+#
+# The Playwright smoke suite runs against two different backends: a Node fixture
+# backend that serves synthetic records (`web/tests/smoke/fixture-backend.ts`) and
+# the real FastAPI stack against a database the federal-first seed writes
+# (`test_support/browser_smoke_seed.py`). Some journeys can only ever hold against
+# one of them — a parked NC-county drilldown has no federal seed, and a live
+# committee's official FEC totals have no fixture. Before the contract existed the
+# suite ran every spec in every mode, so the nightly live lane failed 38 specs that
+# were never capable of passing there, and the fixture-only half had no scheduled
+# owner at all.
+#
+# web/tests/smoke/execution-contract.json is the single declaration of which mode
+# each spec runs in; playwright.config.ts routes on it. The tests below are what
+# makes it a contract rather than a comment: an undeclared spec, a stale entry, an
+# unexplained exclusion, an inert config, or a mode with no nightly owner all fail
+# here, in the merge-time `tests/ci` selection, not in a nightly nobody watches.
+SMOKE_SPEC_DIRECTORY = REPO_ROOT / "web/tests/smoke"
+SMOKE_EXECUTION_CONTRACT_PATH = SMOKE_SPEC_DIRECTORY / "execution-contract.json"
+SMOKE_EXECUTION_CONTRACT_MODULE_PATH = SMOKE_SPEC_DIRECTORY / "execution-contract.ts"
+PLAYWRIGHT_CONFIG_PATH = REPO_ROOT / "web/playwright.config.ts"
+DEPLOY_WORKFLOW_PATH = REPO_ROOT / ".github/workflows/deploy.yml"
+SMOKE_EXECUTION_MODES = ("fixture", "live", "production")
+
+
+def _smoke_execution_contract() -> dict[str, dict[str, object]]:
+    contract = json.loads(SMOKE_EXECUTION_CONTRACT_PATH.read_text(encoding="utf-8"))
+    return contract["specs"]
+
+
+def _smoke_spec_filenames() -> set[str]:
+    return {path.name for path in SMOKE_SPEC_DIRECTORY.glob("*.spec.ts")}
+
+
+def test_every_smoke_spec_declares_its_execution_modes() -> None:
+    """An undeclared spec is a spec nobody decided where to run.
+
+    Adding `web/tests/smoke/whatever.spec.ts` without a contract entry fails
+    here; so does deleting a spec while leaving its entry behind, which would
+    otherwise let the routing exclude a filename that no longer exists.
+    """
+    declared = set(_smoke_execution_contract())
+    on_disk = _smoke_spec_filenames()
+
+    assert on_disk, "no smoke specs found — the glob or the directory moved"
+    assert declared == on_disk, (
+        f"undeclared specs: {sorted(on_disk - declared)}; stale contract entries: {sorted(declared - on_disk)}"
+    )
+
+
+def test_smoke_execution_contract_entries_name_real_modes_and_explain_themselves() -> None:
+    """Every entry carries at least one known mode and a written reason.
+
+    The reason field is the "named owner" half of the split: a spec excluded
+    from the live lane has to say why and what runs it instead, and an empty
+    string is not an explanation.
+    """
+    for spec_name, entry in sorted(_smoke_execution_contract().items()):
+        modes = entry["modes"]
+        assert isinstance(modes, list) and modes, f"{spec_name} declares no execution mode"
+        assert set(modes) <= set(SMOKE_EXECUTION_MODES), f"{spec_name} declares unknown modes {modes}"
+        assert len(set(modes)) == len(modes), f"{spec_name} repeats a mode"
+        reason = entry["reason"]
+        assert isinstance(reason, str) and len(reason.strip()) >= 30, (
+            f"{spec_name} needs a reason explaining its modes and who owns the modes it skips"
+        )
+
+
+def test_smoke_execution_contract_covers_every_mode() -> None:
+    """No mode may end up with an empty spec list.
+
+    A mode nothing runs in is a lane whose job would pass vacuously.
+    """
+    modes_in_use = {mode for entry in _smoke_execution_contract().values() for mode in entry["modes"]}
+
+    assert modes_in_use == set(SMOKE_EXECUTION_MODES)
+
+
+def test_playwright_config_routes_on_the_execution_contract() -> None:
+    """A contract the runner ignores would be documentation, not routing.
+
+    playwright.config.ts must build `testIgnore` from the contract, so a spec
+    excluded from the current mode is never collected.
+    """
+    config_text = PLAYWRIGHT_CONFIG_PATH.read_text(encoding="utf-8")
+
+    assert 'from "./tests/smoke/execution-contract"' in config_text
+    assert "resolveSmokeExecutionMode" in config_text
+    assert "testIgnore: specsExcludedFromMode(" in config_text
+
+
+def test_deploy_gate_smoke_specs_are_production_eligible() -> None:
+    """The deploy gate names its specs by path; the contract must agree.
+
+    tests/ci/test_deploy_workflow_contract.py owns *which* specs the gate runs.
+    This asserts only that the contract lets them run in production mode — the
+    routing would otherwise silently ignore an explicitly named spec file and
+    turn the deploy gate into a no-op.
+    """
+    deploy_text = DEPLOY_WORKFLOW_PATH.read_text(encoding="utf-8")
+    named_specs = set(re.findall(r"tests/smoke/([\w.-]+\.spec\.ts)", deploy_text))
+    contract = _smoke_execution_contract()
+
+    assert named_specs, "deploy workflow names no smoke specs — the regex or the gate moved"
+    for spec_name in sorted(named_specs):
+        assert "production" in contract[spec_name]["modes"], (
+            f"{spec_name} runs in the deploy gate but is not production-eligible"
+        )
+
+
+def test_nightly_owns_both_local_smoke_lanes() -> None:
+    """Both halves of the split run on the same schedule.
+
+    browser-smoke owns the live lane against the seeded database; the fixture
+    lane needs a job of its own or every spec the live lane legitimately skips
+    would have no automated owner anywhere — which is the failure mode the
+    split exists to avoid.
+    """
+    workflow_text = NIGHTLY_WORKFLOW_PATH.read_text(encoding="utf-8")
+
+    live_job = _job_block(workflow_text, "browser-smoke")
+    assert '      SMOKE_USE_LIVE_API: "1"' in live_job.splitlines()
+
+    fixture_job = _job_block(workflow_text, "browser-smoke-fixture")
+    fixture_job_lines = fixture_job.splitlines()
+    # Fixture mode is the absence of live mode, so the fixture lane must not
+    # inherit the live pins; asserting their absence is what keeps a copy-paste
+    # of the live job from quietly running the live lane twice.
+    assert "SMOKE_USE_LIVE_API" not in fixture_job
+    assert "        run: npm ci" in fixture_job_lines
+    assert "        run: npx playwright install --with-deps chromium" in fixture_job_lines
+    # No database: fixture mode boots the Node fixture backend, so a db-up here
+    # would be dead weight and would contend with the live lane's container.
+    assert "make db-up" not in fixture_job

@@ -25,16 +25,23 @@ export const SMOKE_DONOR_LOOKUP_COMBINED_CITY_A = "Durham";
 export const SMOKE_DONOR_LOOKUP_COMBINED_CITY_B = "Raleigh";
 export const SMOKE_DONOR_LOOKUP_NOT_COMBINED_CONTRIBUTOR = "JANET SMYTHE NOT COMBINED";
 
-const RESTORE_DONOR_ROLLUP_FINGERPRINT_SCRIPT = [
-  "from core.db import get_connection",
-  "from core.refresh.donor_rollup import donor_key_fingerprint",
-  "connection = get_connection()",
-  "connection.execute('UPDATE cf.donor_search_rollup_provenance SET donor_key_fingerprint = %s WHERE singleton', (donor_key_fingerprint(),))",
-  "connection.commit()",
-  "connection.close()"
-].join("; ");
-
-async function restoreLiveDonorLookupFingerprint(): Promise<void> {
+/**
+ * Removes the donor-search fixture rows and rebuilds the donor rollup.
+ *
+ * The live lane runs every spec against one shared database, so a fixture that
+ * seeds rows and never removes them is not local to its own journey: this one
+ * adds three current federal officeholders and six candidates, which made
+ * `/congress` report 5 members instead of 3 and the candidate and committee
+ * lists report `Showing 1-6` instead of `Showing 1-1` for whichever specs
+ * happened to run afterwards. Deleting the rows on teardown is what keeps those
+ * whole-database assertions about the browser-smoke seed and nothing else.
+ *
+ * The rebuild also restores a valid rollup provenance fingerprint, which is why
+ * this single call replaces the narrower fingerprint-only restore it grew from:
+ * the journey deliberately corrupts that fingerprint mid-test to prove the
+ * unavailable state renders, and a rebuild is a superset of undoing it.
+ */
+async function cleanUpLiveDonorLookupSmoke(): Promise<void> {
   await runSmokeSeedCommand("uv", [
     "run",
     "--directory",
@@ -42,8 +49,9 @@ async function restoreLiveDonorLookupFingerprint(): Promise<void> {
     "--extra",
     "dev",
     "python",
-    "-c",
-    RESTORE_DONOR_ROLLUP_FINGERPRINT_SCRIPT
+    "-m",
+    "test_support.donor_search_fixture",
+    "--cleanup"
   ]);
 }
 
@@ -58,7 +66,7 @@ export async function seedLiveDonorLookupSmoke(): Promise<SmokeSeedCleanupCallba
     "-m",
     "test_support.donor_search_fixture"
   ]);
-  return restoreLiveDonorLookupFingerprint;
+  return cleanUpLiveDonorLookupSmoke;
 }
 
 export async function makeLiveDonorLookupFingerprintIncompatible(): Promise<void> {

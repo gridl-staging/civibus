@@ -95,14 +95,55 @@ def _build_search_sql(entity_rows_sql: str) -> str:
 _CURRENT_FEDERAL_OFFICEHOLDER_SEARCH_ROWS_SQL = _current_federal_officeholder_search_rows_sql()
 _CURRENT_OFFICE_SEARCH_SQL = _current_office_selection_sql("p.id")
 
+# One owner for the candidacy → contest → office context chain. Two surfaces read
+# a candidate's state / party / sought-office through it: the explicit
+# `entity_type=candidate` lane, and the person lane's context fallback below.
+# Keeping a single FROM clause and a single ContextExprs stops the two from
+# drifting apart — a person searched with and without the filter must describe
+# the same candidacy the same way.
+_CANDIDACY_CONTEXT_JOIN_SQL = """
+    FROM civic.candidacy cand
+    LEFT JOIN civic.contest cont ON cand.contest_id = cont.id
+    LEFT JOIN civic.office off ON cont.office_id = off.id
+"""
+_CANDIDACY_CONTEXT = ContextExprs(state="off.state", party="cand.party", office_name="off.name")
+
+# Best-candidacy context for one person, correlated on the outer `p` alias.
+# A person can hold several candidacies (re-election, a chamber switch, a primary
+# plus a general). The most recent contest wins, because that is the race a
+# searcher is most likely looking for; `cand.id` breaks ties so the projection
+# stays deterministic under LIMIT/OFFSET pagination.
+_SEARCH_PERSON_CANDIDACY_CONTEXT_SQL = f"""
+    SELECT
+        {_CANDIDACY_CONTEXT.state} AS state,
+        {_CANDIDACY_CONTEXT.party} AS party,
+        {_CANDIDACY_CONTEXT.office_name} AS office_name
+    {_CANDIDACY_CONTEXT_JOIN_SQL}
+    WHERE cand.person_id = p.id
+    ORDER BY cont.election_date DESC NULLS LAST, cand.id ASC
+    LIMIT 1
+"""
+
+# The person lane is the canonical lane for a human: it emits exactly one row per
+# core.person, and it is the only lane that carries
+# `is_current_federal_officeholder`, the ranking signal that floats a sitting
+# member above an identically named challenger. Context is layered
+# officeholder → current office → best candidacy, i.e. office actually held wins
+# over office merely sought. The candidacy fallback is what lets the union drop
+# the separate candidate lane without losing anything a user could read; see the
+# comment on _SEARCH_ALL_ENTITIES_SQL.
 _SEARCH_PERSON_ROWS_SQL = f"""
     SELECT
         'person'::text AS entity_type,
         p.id AS entity_id,
         p.canonical_name AS name,
-        COALESCE(officeholder.search_geography_token, current_office.state) AS state,
-        officeholder.party AS party,
-        COALESCE(officeholder.short_office_label, current_office.office_name) AS office_name,
+        COALESCE(officeholder.search_geography_token, current_office.state, candidacy.state) AS state,
+        COALESCE(officeholder.party, candidacy.party) AS party,
+        COALESCE(
+            officeholder.short_office_label,
+            current_office.office_name,
+            candidacy.office_name
+        ) AS office_name,
         NULL::text AS committee_type,
         NULL::numeric AS total_raised,
         (officeholder.person_id IS NOT NULL) AS is_current_federal_officeholder,
@@ -115,6 +156,9 @@ _SEARCH_PERSON_ROWS_SQL = f"""
     LEFT JOIN LATERAL (
         {_CURRENT_OFFICE_SEARCH_SQL}
     ) current_office ON TRUE
+    LEFT JOIN LATERAL (
+        {_SEARCH_PERSON_CANDIDACY_CONTEXT_SQL}
+    ) candidacy ON TRUE
     CROSS JOIN search_params params
     WHERE (
         p.canonical_name ILIKE params.like_pattern ESCAPE '\\'
@@ -144,23 +188,27 @@ _SEARCH_OFFICE_ROWS_SQL = _build_ranked_entity_search_sql(
 
 # Candidate search requires a JOIN: candidacy → person for the searchable name.
 # The entity_id returned is the person_id (the entity the user cares about).
-_SEARCH_CANDIDATE_ROWS_SQL = """
+#
+# This lane serves `entity_type=candidate` ONLY. It is deliberately absent from
+# the cross-entity union — see the comment on _SEARCH_ALL_ENTITIES_SQL. It emits
+# one row per candidacy, so a person with three candidacies yields three rows;
+# under an explicit candidate filter that is the documented contract ("which
+# races is this person in"), but in the union it was pure duplication.
+_SEARCH_CANDIDATE_ROWS_SQL = f"""
     SELECT
         'candidate'::text AS entity_type,
         p.id AS entity_id,
         p.canonical_name AS name,
-        off.state AS state,
-        cand.party AS party,
-        off.name AS office_name,
+        {_CANDIDACY_CONTEXT.state} AS state,
+        {_CANDIDACY_CONTEXT.party} AS party,
+        {_CANDIDACY_CONTEXT.office_name} AS office_name,
         NULL::text AS committee_type,
         NULL::numeric AS total_raised,
         FALSE AS is_current_federal_officeholder,
         (p.canonical_name ILIKE params.like_pattern ESCAPE '\\') AS contains_match,
         similarity(p.canonical_name, params.query_text) AS similarity_score
-    FROM civic.candidacy cand
+    {_CANDIDACY_CONTEXT_JOIN_SQL}
     JOIN core.person p ON cand.person_id = p.id
-    LEFT JOIN civic.contest cont ON cand.contest_id = cont.id
-    LEFT JOIN civic.office off ON cont.office_id = off.id
     CROSS JOIN search_params params
     WHERE (
         p.canonical_name ILIKE params.like_pattern ESCAPE '\\'
@@ -200,6 +248,31 @@ _SEARCH_CONTEST_ROWS_SQL = """
     )
 """
 
+# The cross-entity union deliberately omits the candidate lane (civibus-9hv).
+#
+# Why: _SEARCH_CANDIDATE_ROWS_SQL projects `p.id AS entity_id` — the very same
+# identifier the person lane projects — and the frontend routes both `person` and
+# `candidate` rows to `/person/<id>` (SEARCH_ROUTE_SEGMENT_BY_ENTITY_TYPE in
+# web/src/lib/search/contract.ts). The two lanes also share a byte-identical name
+# predicate over `p.canonical_name`, so *every* candidate row the union could
+# produce was provably a second copy — a third and fourth, for a person with
+# several candidacies — of a person row already in the result set, differing only
+# in badge. Measured on production 2026-08-19: `?q=ossoff` returned three rows for
+# one senator, two of them with a byte-identical href.
+#
+# Which lane wins, and why the person lane: it is the canonical lane for the
+# destination (a `/person/` page is a person), it exists for every human rather
+# than only for those carrying a civic.candidacy (so the badge cannot flip as
+# candidacy data loads), and it is the sole carrier of
+# `is_current_federal_officeholder`, which the ORDER BY uses to float a sitting
+# member above an identically named challenger — a signal the candidate lane
+# hardcodes to FALSE. Nothing is lost by dropping the candidate row: its only
+# distinct payload was context columns, and the person lane now COALESCEs those
+# in from the same candidacy join.
+#
+# This is not a dedupe-by-href filter. Removing the arm is cheaper (one fewer
+# scan of civic.candidacy per query) and it keeps LIMIT/OFFSET honest, because a
+# post-hoc DISTINCT would shrink pages after the window had already been taken.
 _SEARCH_ALL_ENTITIES_SQL = _build_search_sql(
     f"""
     {_SEARCH_PERSON_ROWS_SQL}
@@ -209,8 +282,6 @@ _SEARCH_ALL_ENTITIES_SQL = _build_search_sql(
     {_SEARCH_COMMITTEE_ROWS_SQL}
     UNION ALL
     {_SEARCH_OFFICE_ROWS_SQL}
-    UNION ALL
-    {_SEARCH_CANDIDATE_ROWS_SQL}
     UNION ALL
     {_SEARCH_CONTEST_ROWS_SQL}
     """.strip()

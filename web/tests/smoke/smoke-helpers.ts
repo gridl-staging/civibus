@@ -343,11 +343,21 @@ async function sampleVisibleSvgPaints(region: Locator, selector: string): Promis
   )) as SvgPaintSample[];
 }
 
-/** Returns visible SVG series paint samples so smoke tests can reject fallback-black chart fills. */
+/**
+ * Returns visible SVG series paint samples so smoke tests can reject fallback-black
+ * chart fills.
+ *
+ * `svg path.lc-bar` is load-bearing and easy to lose: layerchart renders a bar as a
+ * rounded <path class="lc-rect lc-bar lc-bars-bar">, NOT as a <rect>. The only
+ * <rect> elements a bar chart emits are the transparent `lc-tooltip-rect` hit areas
+ * in its second layout svg, so a sampler restricted to rects never looked at a
+ * single bar - it sampled `rgba(0, 0, 0, 0)` hit areas and reported chart paint.
+ */
 export async function sampleVisibleRectPaints(region: Locator): Promise<SvgPaintSample[]> {
   return [
     ...(await sampleVisibleSvgPaints(region, "svg rect")),
-    ...(await sampleVisibleSvgPaints(region, "svg path.lc-path"))
+    ...(await sampleVisibleSvgPaints(region, "svg path.lc-path")),
+    ...(await sampleVisibleSvgPaints(region, "svg path.lc-bar"))
   ];
 }
 
@@ -398,19 +408,255 @@ export async function expectNoChartFrameOverflow(regions: Locator[]): Promise<vo
 }
 
 /**
- * Asserts every rendered numeric axis tick stays short enough to read (never a
- * truncated/overflowing money label). Requires at least one numeric tick.
+ * A rendered axis tick label may not extend past the edge of its own `<svg>` by
+ * more than this many CSS pixels.
+ *
+ * The tolerance is deliberately sub-pixel rather than a comfortable 2px. The
+ * clipped y-axis this guard replaces overflowed by 28-34px against live
+ * production money values but by only ~1px against the small fixture values, so
+ * a 2px tolerance is green on every local run and still ships the production
+ * defect - the exact local-green / production-red shape behind three rollbacks
+ * on this surface. Anything above zero is a real escape; 0.5px only absorbs
+ * sub-pixel rounding in getBoundingClientRect.
  */
-export async function expectBoundedNumericTickLabels(regions: Locator[]): Promise<void> {
+const TICK_LABEL_ESCAPE_TOLERANCE_PX = 0.5;
+
+/** `#0f766e` -> `rgb(15, 118, 110)`, the form getComputedStyle returns a fill in. */
+function hexToComputedRgb(hexColor: string): string {
+  const channels = hexColor.replace("#", "");
+  const [red, green, blue] = [0, 2, 4].map((offset) =>
+    Number.parseInt(channels.slice(offset, offset + 2), 16)
+  );
+  return `rgb(${red}, ${green}, ${blue})`;
+}
+
+/**
+ * Tick text a chart's value axis is allowed to render, keyed by the unit the
+ * chart's `ChartFrame` declares via `data-unit`.
+ *
+ * The minus sign is matched in both forms: d3's default numeric formatter emits
+ * U+2212 MINUS SIGN, the repo's own currency formatters emit ASCII hyphen.
+ * Owner of the rule: `docs/reference/ui_chart_encoding.md` §3.
+ */
+const AXIS_TICK_TEXT_BY_DECLARED_UNIT: Record<string, RegExp> = {
+  dollars: /^[−-]?\$\d[\d,]*(?:\.\d+)?[KMB]?$/,
+  percent: /^[−-]?\d[\d,]*(?:\.\d+)?%$/,
+  count: /^[−-]?\d[\d,]*$/,
+  reported_transactions: /^[−-]?\d[\d,]*$/
+};
+
+/**
+ * Asserts every rendered axis tick label sits inside the chart's own plot box.
+ *
+ * This replaces a guard that could not fail: it read tick *text* out of the DOM and
+ * asserted each label was at most 12 characters, so the 9-character "1,000,000"
+ * that was hanging 34px into the neighbouring column scored a pass. Character count
+ * is not a rendering measurement. This one compares the label's real
+ * getBoundingClientRect against the svg's, which is the thing a reader sees.
+ */
+export async function expectTickLabelsInsidePlotBox(regions: Locator[]): Promise<void> {
+  let plottedCharts = 0;
+
   for (const region of regions) {
-    const numericTickLabels = await region.evaluate((element: HTMLElement) =>
-      Array.from(element.querySelectorAll("svg text"))
-        .map((text) => text.textContent?.trim() ?? "")
-        .filter((label) => /^[−-]?\$?\d[\d,.]*(?:\.\d+)?$/.test(label))
-    );
-    expect(numericTickLabels.length).toBeGreaterThan(0);
-    expect(numericTickLabels.every((label) => label.length <= 12)).toBe(true);
+    const measurement = await region.evaluate((element: HTMLElement, tolerancePx: number) => {
+      // The chart's own layout svg is the first one in the region. layerchart also
+      // nests one <svg> per tick label inside it and appends a second layout svg
+      // for tooltip hit areas after it, so "the first svg" is the plot box.
+      const svg = element.querySelector("svg");
+      // A frame in the no-data or table-only state renders no plot at all. Skipping
+      // it is what makes this usable against live production, where a chart
+      // legitimately has nothing to draw; the caller-side plottedCharts count below
+      // is what stops an all-empty page from passing vacuously.
+      if (svg === null) {
+        return null;
+      }
+
+      const plot = svg.getBoundingClientRect();
+      const escaping: Array<{ axis: string; text: string; escapedByPx: number }> = [];
+      let tickCount = 0;
+
+      for (const axis of Array.from(svg.querySelectorAll("g.lc-axis"))) {
+        for (const label of Array.from(axis.querySelectorAll("text.lc-axis-tick-label"))) {
+          const box = label.getBoundingClientRect();
+          if (box.width === 0 && box.height === 0) {
+            continue;
+          }
+          tickCount += 1;
+          const escapedByPx = Math.max(
+            plot.left - box.left,
+            box.right - plot.right,
+            plot.top - box.top,
+            box.bottom - plot.bottom
+          );
+          if (escapedByPx > tolerancePx) {
+            escaping.push({
+              axis: axis.getAttribute("data-placement") ?? "unknown",
+              text: label.textContent?.trim() ?? "",
+              escapedByPx: Number(escapedByPx.toFixed(2))
+            });
+          }
+        }
+      }
+
+      return {
+        chart: element.getAttribute("aria-label") ?? "unlabelled chart",
+        tickCount,
+        escaping
+      };
+    }, TICK_LABEL_ESCAPE_TOLERANCE_PX);
+
+    if (measurement === null) {
+      continue;
+    }
+
+    plottedCharts += 1;
+    expect(
+      measurement.tickCount,
+      `${measurement.chart} plotted an svg but rendered no axis tick labels`
+    ).toBeGreaterThan(0);
+    expect(
+      measurement.escaping,
+      `${measurement.chart} rendered tick labels outside its own plot box`
+    ).toEqual([]);
   }
+
+  expect(plottedCharts, "no chart region rendered a plot to measure").toBeGreaterThan(0);
+}
+
+/**
+ * Asserts each chart's value axis renders in the unit its frame declares.
+ *
+ * Derived from the frame's own `data-unit`, never from a per-chart expectation, so
+ * it holds for whichever way a disagreement is resolved. The live case:
+ * `GeographyShareChart` declared `unit="dollars"`, printed `formatCurrency(...)` in
+ * its rows and its disclosure table, and plotted a unitless 0.0-0.5 fraction. Three
+ * surfaces of one chart, three answers.
+ */
+export async function expectAxisFormatMatchesDeclaredUnit(regions: Locator[]): Promise<void> {
+  let checkedCharts = 0;
+
+  for (const region of regions) {
+    const measurement = await region.evaluate((element: HTMLElement) => {
+      const svg = element.querySelector("svg");
+      if (svg === null) {
+        return null;
+      }
+      const valueAxis = svg.querySelector('g.lc-axis[data-placement="left"]');
+      return {
+        chart: element.getAttribute("aria-label") ?? "unlabelled chart",
+        declaredUnit: element.closest("figure.finance-chart")?.getAttribute("data-unit") ?? null,
+        ticks: Array.from(valueAxis?.querySelectorAll("text.lc-axis-tick-label") ?? []).map(
+          (label) => label.textContent?.trim() ?? ""
+        )
+      };
+    });
+
+    if (measurement === null) {
+      continue;
+    }
+
+    const { declaredUnit, ticks } = measurement;
+    expect(declaredUnit, `${measurement.chart} is not inside a frame declaring a unit`).not.toBeNull();
+
+    const allowedTickText = AXIS_TICK_TEXT_BY_DECLARED_UNIT[declaredUnit as string];
+    expect(
+      allowedTickText,
+      `no axis tick format is declared for unit "${declaredUnit}"`
+    ).toBeDefined();
+    expect(ticks.length, `${measurement.chart} rendered no value-axis ticks`).toBeGreaterThan(0);
+    expect(
+      ticks.filter((tick) => !allowedTickText.test(tick)),
+      `${measurement.chart} declares unit "${declaredUnit}" but its value axis does not render in it`
+    ).toEqual([]);
+    checkedCharts += 1;
+  }
+
+  expect(checkedCharts, "no chart region rendered a value axis to check").toBeGreaterThan(0);
+}
+
+/**
+ * Asserts hovering a chart surfaces a tooltip carrying the series label and a real
+ * money value.
+ *
+ * Deliberately asserts tooltip CONTENT and not `pointer-events`. Asserting the CSS
+ * property would assert the harness rather than the behaviour, which is the same
+ * invalid-probe mistake as counting characters in a tick label. Tooltips ship with
+ * layerchart (`BarChart` defaults `tooltipContext` to true) and were dark only
+ * because the adapter set `pointer-events: none` on the svg.
+ */
+export async function expectChartTooltipOnHover(
+  region: Locator,
+  expected: { seriesLabel: string }
+): Promise<void> {
+  // Hover the band hit area, which is the element a reader's pointer actually
+  // lands on: layerchart overlays the plot with one transparent `lc-tooltip-rect`
+  // per band, so hovering the plot svg itself is intercepted by them. Playwright's
+  // actionability check is what surfaces that — and is also what proves the
+  // reachability, since a covered or pointer-events-disabled target fails here.
+  // eslint-disable-next-line playwright/no-raw-locators -- package-rendered SVG hit area carrying no role of its own.
+  const bandHitArea = region.locator("svg rect.lc-tooltip-rect").first();
+  await expect(bandHitArea).toBeVisible();
+  await bandHitArea.hover();
+
+  // The tooltip is portaled out of the chart region, so it is located on the page.
+  const tooltip = region.page().getByRole("tooltip");
+  await expect(tooltip).toBeVisible();
+  await expect(tooltip).toContainText(expected.seriesLabel);
+  await expect(tooltip).toContainText(RENDERED_MONEY_VALUE_COPY);
+
+  // Containment is checked HERE, with a tooltip actually open, because that is the
+  // only moment it can fail. finance-visuals.spec.ts used to run the same check on
+  // a page where nothing was hovered: it queried [role="tooltip"], found zero
+  // elements, and asserted zero had escaped — a pass that no defect could have
+  // turned red.
+  const escapedTooltips = await region.page().evaluate(() =>
+    Array.from(document.querySelectorAll<HTMLElement>('[role="tooltip"]'))
+      .filter((element) => element.offsetParent !== null)
+      .map((element) => element.getBoundingClientRect())
+      .filter(
+        (box) =>
+          box.left < 0 ||
+          box.top < 0 ||
+          box.right > window.innerWidth ||
+          box.bottom > window.innerHeight
+      )
+  );
+  expect(escapedTooltips, "an open chart tooltip rendered outside the viewport").toEqual([]);
+}
+
+/**
+ * Asserts a diverging chart paints its two stances in two distinct fills, and in
+ * exactly the colours the surrounding HTML rows already use for the same stance.
+ *
+ * Before this, the whole zero-centered support/oppose plot was one series, so every
+ * bar carried `color[0]` and only the bar's direction distinguished spending FOR a
+ * candidate from spending AGAINST them - while the HTML rows immediately below
+ * carried the stance in a coloured left border. Two encodings of one fact.
+ */
+export async function expectDivergingStanceFills(
+  region: Locator,
+  expectedHexFills: string[]
+): Promise<void> {
+  // Callers pass the same design tokens the components consume, so the expectation
+  // has one owner; computed fills come back from the browser as rgb() triples.
+  const expectedFills = expectedHexFills.map(hexToComputedRgb);
+
+  // Scoped to the bar marks themselves. The wider paint sampler also returns the
+  // transparent `lc-tooltip-rect` hit areas, which carry no encoding.
+  await expect
+    .poll(async () => (await sampleVisibleSvgPaints(region, "svg path.lc-bar")).length, {
+      message: "diverging chart painted no series marks"
+    })
+    .toBeGreaterThan(0);
+
+  const samples = await sampleVisibleSvgPaints(region, "svg path.lc-bar");
+  const paintedFills = Array.from(
+    new Set(samples.map((sample) => samplePaint(sample).color))
+  ).sort();
+
+  expect(paintedFills, "diverging chart did not paint its two stances distinctly").toEqual(
+    [...expectedFills].sort()
+  );
 }
 
 /**

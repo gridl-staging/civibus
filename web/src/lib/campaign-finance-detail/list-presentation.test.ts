@@ -221,3 +221,34 @@ describe("buildPaginationContext", () => {
     expect(result.hasNext).toBe(false);
   });
 });
+
+describe("candidate browse name formatting", () => {
+  // Contract: docs/reference/screen_specs/candidate_list.md -> "Name presentation
+  // contract". The browse list renders cf.candidate.name, which arrives as the
+  // raw FEC filing string; the person spine renders a title-cased canonical
+  // name. One owner resolves the disagreement.
+  it("renders a raw all-caps FEC name in the shared person-name format", () => {
+    // Live specimen from /candidates?state=GA&office=S, production 2026-08-19.
+    const presentation = buildCandidateListItemPresentation({
+      ...FULL_CANDIDATE,
+      name: "OSSOFF, T. JONATHAN"
+    });
+
+    expect(presentation.name).toBe("Ossoff, T. Jonathan");
+  });
+
+  it("leaves an already-formatted candidate name unchanged", () => {
+    expect(buildCandidateListItemPresentation(FULL_CANDIDATE).name).toBe("Candidate One");
+  });
+
+  it("does not apply person-name casing to committee rows", () => {
+    // A committee is an organization, not a human. `Last, First` casing rules do
+    // not hold for it, so its name stays verbatim.
+    const presentation = buildCommitteeListItemPresentation({
+      ...FULL_COMMITTEE,
+      name: "JON OSSOFF FOR SENATE"
+    });
+
+    expect(presentation.name).toBe("JON OSSOFF FOR SENATE");
+  });
+});

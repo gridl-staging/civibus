@@ -147,6 +147,13 @@ function buildMoneySummaryByPersonId(
 }
 
 /**
+ * Lift one member's money summary onto the row, leaving unknowns unknown.
+ *
+ * Every money field on the row is `string | null`, and null means UNKNOWN
+ * throughout the directory: the cell renders "Not reported/loaded", the
+ * comparison bar renders no bar at all, and the sort puts the row last. A
+ * member whose filings were read and genuinely totalled nothing arrives here
+ * as "0.00" and keeps its bar and its $0.00, because that is a measurement.
  */
 function buildRowMoney(summary: CongressMemberMoneySummary | undefined): Pick<
   CongressMemberRow,
@@ -200,6 +207,24 @@ function compareRowsByNameThenId(left: CongressMemberRow, right: CongressMemberR
 }
 
 /**
+ * Order the directory by the active money metric, biggest first.
+ *
+ * WHERE UNKNOWNS GO, AND WHY. Rows whose metric is unknown sort to the very
+ * bottom in every sort, below a member who genuinely reported $0.00, and they
+ * are ordered among themselves by name so the tail is stable rather than
+ * arbitrary.
+ *
+ * They deliberately do NOT sort as zero. Treating an unmeasured member as if
+ * they had raised nothing is the ranking form of the same false claim the
+ * $0.00 cell used to make: it places them precisely among the members the
+ * product measured and found empty, which is a statement about them that
+ * nobody established. Bottom-of-list is the only position that asserts
+ * nothing about magnitude.
+ *
+ * A descending sort makes this cheap — unknown and "smallest" happen to land
+ * in the same place — but the comparator states it explicitly rather than
+ * relying on that coincidence, because an ascending sort would need the same
+ * rule and would get the opposite answer from a zero substitution.
  */
 function sortCongressMemberRows(rows: CongressMemberRow[], sort: CongressMoneySort): CongressMemberRow[] {
   return [...rows].sort((left, right) => {

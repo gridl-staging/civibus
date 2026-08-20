@@ -23,6 +23,11 @@ is idempotent by construction: re-running cannot create duplicates or alter
 values once every matching ``cf.candidate`` row already points at the spine
 person. ``cf.candidate.updated_at`` is maintained by the existing
 ``trg_candidate_updated_at`` trigger (``domains/campaign_finance/schema/tables.sql``).
+
+Convergence has a second half, added 2026-08-19 for civibus-5lm: the same FEC
+candidate ids also repoint ``civic.candidacy.person_id`` via
+``_converge_spine_candidacies``. Repairing only the money side left the race
+page linking its incumbent to a person row with no money on it.
 """
 
 from __future__ import annotations
@@ -62,7 +67,7 @@ from domains.campaign_finance.ingest.officeholder_contact import (
     run_officeholder_row,
 )
 from domains.campaign_finance.jurisdictions.states.load_utils import ensure_data_source
-from domains.civics.ingest import upsert_officeholding
+from domains.civics.ingest import repoint_candidacy_person, upsert_officeholding
 
 LOGGER = logging.getLogger(__name__)
 
@@ -77,12 +82,28 @@ OFFICE_BY_EXECUTIVE_TYPE: dict[str, UUID] = {
 }
 
 
+@dataclass(frozen=True, slots=True)
+class SpineConvergence:
+    """Both halves of one person's identity convergence.
+
+    ``candidates`` counts ``cf.candidate`` rows repointed at the spine person
+    (the money side); ``candidacies`` counts ``civic.candidacy`` rows repointed
+    or merged (the civic side). They are returned together, rather than as two
+    independent calls, because repairing only one of them is exactly the defect
+    ``_converge_spine_candidacies`` exists to close — see its docstring.
+    """
+
+    candidates: int = 0
+    candidacies: int = 0
+
+
 @dataclass(slots=True)
 class _BucketResult:
     inserted: int = 0
     skipped: int = 0
     errors: int = 0
     converged_candidates: int = 0
+    converged_candidacies: int = 0
 
 
 @dataclass(slots=True)
@@ -120,6 +141,10 @@ class SpineLoadResult:
         return sum(bucket.converged_candidates for bucket in self._buckets)
 
     @property
+    def converged_candidacies(self) -> int:
+        return sum(bucket.converged_candidacies for bucket in self._buckets)
+
+    @property
     def _buckets(self) -> tuple[_BucketResult, ...]:
         return (self.house, self.senate, self.delegate, self.president, self.vice_president)
 
@@ -154,6 +179,80 @@ def ensure_federal_spine_data_source(conn: psycopg.Connection) -> UUID:
 # ---------------------------------------------------------------------------
 
 
+def _converge_spine_candidacies(
+    conn: psycopg.Connection,
+    *,
+    person_id: UUID,
+    normalized_fec_ids: list[str],
+) -> int:
+    """Repoint ``civic.candidacy`` rows for these FEC candidate ids at the spine person.
+
+    The civic sibling of the ``cf.candidate`` UPDATE below, and the reason it
+    exists (civibus-5lm): ``federal-fec-masters`` runs *before*
+    ``federal-congress-spine`` in the refresh plan and mints an FEC-only "shadow"
+    ``core.person`` keyed on ``fec_candidate_id`` — the masters job even declares
+    ``side_effects_repaired_by_job_key="federal-congress-spine"``. The races
+    loader then binds ``civic.candidacy.person_id`` to that shadow. Convergence
+    used to repair only the money side, so ``cf.candidate.person_id`` moved onto
+    the bioguide-anchored spine person while the candidacy stayed behind.
+
+    The user-visible consequence is severe, because the race page reads
+    ``civic.candidacy.person_id`` for its ``/person/`` link: the incumbent's link
+    pointed at a person row that has no money attached. Measured live on
+    2026-08-19, Jon Ossoff's $77,279,766.48 sat on the spine row while the race
+    page linked to the shadow. The blast radius is every chamber-switching
+    incumbent — the highest-profile, highest-money races on the site.
+
+    ``civic.candidacy.candidate_number`` carries the FEC ``CAND_ID`` the races
+    loader copies from the source row (see ``ingest_candidate_civic_rows``), so
+    it is the *same* key the ``cf.candidate`` UPDATE uses. That makes the match
+    exact rather than heuristic: ``cf.candidate.fec_candidate_id`` is NOT NULL
+    UNIQUE, and both sides are now keyed off one identifier.
+
+    The move goes through ``repoint_candidacy_person``, the existing conflict-safe
+    owner in ``domains/civics/ingest.py`` — this deliberately does not open a
+    second reconciliation path. ``uq_candidacy_canonical_key`` is
+    ``(person_id, contest_id)``, so a naive UPDATE would raise whenever the spine
+    person already holds a candidacy in the same contest. That helper instead
+    COALESCEs the shadow row's fields into the canonical row and copies its
+    ``core.entity_source`` provenance links across before dropping the redundant
+    duplicate, so every surviving data point keeps its link to a source filing.
+
+    Idempotent: on a re-run every matching candidacy already points at
+    ``person_id`` and ``repoint_candidacy_person`` short-circuits to ``False``.
+
+    Returns the number of candidacy rows moved or merged.
+    """
+    if not normalized_fec_ids:
+        return 0
+
+    with conn.cursor() as cur:
+        # Read the work set up front. repoint_candidacy_person may DELETE the row
+        # it was handed (the merge branch), so holding an open cursor over the
+        # same rows while mutating them would be unsound.
+        cur.execute(
+            """
+            SELECT id, person_id
+            FROM civic.candidacy
+            WHERE candidate_number = ANY(%s)
+              AND person_id <> %s
+            ORDER BY id
+            """,
+            (normalized_fec_ids, person_id),
+        )
+        misbound_candidacies: list[tuple[UUID, UUID]] = list(cur.fetchall())
+
+    return sum(
+        repoint_candidacy_person(
+            conn,
+            candidacy_id=candidacy_id,
+            expected_person_id=current_person_id,
+            target_person_id=person_id,
+        )
+        for candidacy_id, current_person_id in misbound_candidacies
+    )
+
+
 def _converge_spine_identity(
     conn: psycopg.Connection,
     *,
@@ -162,10 +261,13 @@ def _converge_spine_identity(
     bioguide_id: str | None = None,
     wikidata_id: str | None = None,
     govtrack_id: str | None = None,
-) -> int:
-    """Enrich identifiers on the spine person and repoint matching cf.candidate rows.
+) -> SpineConvergence:
+    """Enrich identifiers on the spine person and repoint everything keyed to its FEC ids.
 
-    Returns the number of cf.candidate rows updated by the convergence UPDATE.
+    Returns both convergence counts. The money side (``cf.candidate``) and the
+    civic side (``civic.candidacy``) are repaired in one call on purpose: they are
+    two halves of one identity claim, and repairing only the money side is the
+    exact production defect civibus-5lm describes.
 
     The UPDATE is idempotent: when every matching candidate row already points
     at ``person_id``, no rows are touched. ``cf.candidate.updated_at`` is set by
@@ -187,7 +289,7 @@ def _converge_spine_identity(
         merge_person_identifiers(conn, person_id=person_id, identifiers=identifier_payload)
 
     if not normalized_fec_ids:
-        return 0
+        return SpineConvergence()
 
     with conn.cursor() as cur:
         cur.execute(
@@ -199,7 +301,16 @@ def _converge_spine_identity(
             """,
             (person_id, normalized_fec_ids, person_id),
         )
-        return cur.rowcount or 0
+        converged_candidates = cur.rowcount or 0
+
+    return SpineConvergence(
+        candidates=converged_candidates,
+        candidacies=_converge_spine_candidacies(
+            conn,
+            person_id=person_id,
+            normalized_fec_ids=normalized_fec_ids,
+        ),
+    )
 
 
 def _jsonable_raw_row(row: dict[str, Any]) -> dict[str, Any]:
@@ -275,7 +386,7 @@ def _converge_chamber_rows(
                 bioguide_id,
             )
             continue
-        bucket.converged_candidates += _converge_spine_identity(
+        convergence = _converge_spine_identity(
             conn,
             person_id=person_id,
             fec_ids=fec_ids,
@@ -283,6 +394,8 @@ def _converge_chamber_rows(
             wikidata_id=row.get("wikidata_id"),
             govtrack_id=row.get("govtrack_id"),
         )
+        bucket.converged_candidates += convergence.candidates
+        bucket.converged_candidacies += convergence.candidacies
 
 
 def _record_chamber_bucket(result: LoadResult, bucket: _BucketResult) -> None:
@@ -347,7 +460,7 @@ def _load_delegate_row(
 
         fec_ids = list(row.get("fec_ids") or [])
         if fec_ids:
-            bucket.converged_candidates += _converge_spine_identity(
+            convergence = _converge_spine_identity(
                 conn,
                 person_id=person_id,
                 fec_ids=fec_ids,
@@ -355,6 +468,8 @@ def _load_delegate_row(
                 wikidata_id=row.get("wikidata_id"),
                 govtrack_id=row.get("govtrack_id"),
             )
+            bucket.converged_candidates += convergence.candidates
+            bucket.converged_candidacies += convergence.candidacies
 
         if row_inserted:
             bucket.inserted += 1
@@ -437,7 +552,7 @@ def _load_executive_row(
 
         fec_ids = list(row.get("fec_ids") or [])
         if fec_ids or wikidata_id or govtrack_id:
-            bucket.converged_candidates += _converge_spine_identity(
+            convergence = _converge_spine_identity(
                 conn,
                 person_id=person_id,
                 fec_ids=fec_ids,
@@ -445,6 +560,8 @@ def _load_executive_row(
                 wikidata_id=wikidata_id,
                 govtrack_id=govtrack_id,
             )
+            bucket.converged_candidates += convergence.candidates
+            bucket.converged_candidacies += convergence.candidacies
 
         if row_inserted:
             bucket.inserted += 1

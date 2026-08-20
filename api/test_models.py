@@ -1637,8 +1637,20 @@ def test_candidate_fundraising_summary_serializes_cash_on_hand_and_summary_sourc
 def _candidate_fundraising_summary_payload(
     *,
     coverage: dict[str, str] | None = None,
+    omit_coverage: bool = False,
     out_of_cycle_official_total: dict[str, object] | None = None,
+    total_raised: Decimal = Decimal("0.00"),
+    total_spent: Decimal = Decimal("0.00"),
+    net: Decimal = Decimal("0.00"),
+    cash_on_hand: Decimal | None = None,
+    summary_source: str = "derived",
 ) -> dict[str, object]:
+    """One candidate fundraising summary as the query layer hands it to serving.
+
+    ``omit_coverage`` drops the key entirely rather than setting it to ``None``:
+    a caller that never attached a coverage block is a distinct case from one
+    that attached an empty one, and the serving owner has to fail closed on it.
+    """
     payload: dict[str, object] = {
         "candidate_id": uuid4(),
         "candidate_name": "Out Of Cycle Candidate",
@@ -1646,15 +1658,16 @@ def _candidate_fundraising_summary_payload(
         "coverage_start_date": date(2025, 1, 1),
         "coverage_end_date": date(2026, 12, 31),
         "available_cycles": [2022, 2024, 2026],
-        "total_raised": Decimal("0.00"),
-        "total_spent": Decimal("0.00"),
-        "net": Decimal("0.00"),
+        "total_raised": total_raised,
+        "total_spent": total_spent,
+        "net": net,
         "transaction_count": 0,
         "committees": [],
-        "cash_on_hand": None,
-        "summary_source": "derived",
-        "coverage": coverage or _candidate_money_coverage_payload(),
+        "cash_on_hand": cash_on_hand,
+        "summary_source": summary_source,
     }
+    if not omit_coverage:
+        payload["coverage"] = coverage or _candidate_money_coverage_payload()
     if out_of_cycle_official_total is not None:
         payload["out_of_cycle_official_total"] = out_of_cycle_official_total
     return payload
@@ -2389,3 +2402,621 @@ def test_models_package_reexports_public_response_and_params_models() -> None:
     assert expected_exports.issubset(set(api_models.__all__))
     for export_name in expected_exports:
         assert getattr(api_models, export_name).__name__ == export_name
+
+
+# ---------------------------------------------------------------------------
+# Independent-expenditure coverage discriminator
+#
+# Three states, three different true statements, and the whole point of these
+# tests is that the product never says one of them when another is true:
+#   populated   -> Schedule E rows exist for this candidate; show the money.
+#   loaded_zero -> Schedule E is loaded for this cycle and names nobody here;
+#                  "$0.00" is then a TRUE claim and must keep rendering.
+#   not_loaded  -> no Schedule E was loaded for this cycle at all; any figure,
+#                  including "$0.00", would be a fabrication.
+# ---------------------------------------------------------------------------
+
+
+_POPULATED_IE_COVERAGE = {
+    "activity_state": "populated",
+    "completeness": "partial",
+    "basis": "fec_schedule_e_transactions",
+}
+_LOADED_ZERO_IE_COVERAGE = {
+    "activity_state": "loaded_zero",
+    "completeness": "partial",
+    "basis": "fec_schedule_e_transactions",
+}
+_NOT_LOADED_IE_COVERAGE = {
+    "activity_state": "not_loaded",
+    "completeness": "unknown",
+    "basis": "no_authoritative_load_evidence",
+}
+
+
+def test_schedule_e_coverage_separates_loaded_zero_from_not_loaded() -> None:
+    from api.queries.campaign_finance import _schedule_e_coverage
+
+    # A candidate with rows is its own evidence: load evidence cannot downgrade it,
+    # so both parameterizations must stay "populated".
+    for has_load_evidence in (True, False):
+        assert (
+            _schedule_e_coverage(
+                support_total=Decimal("40.00"),
+                oppose_total=Decimal("0.00"),
+                support_count=1,
+                oppose_count=0,
+                has_load_evidence=has_load_evidence,
+            )
+            == _POPULATED_IE_COVERAGE
+        )
+
+    # Counts alone are enough: a real $0.00 Schedule E row is still a loaded row.
+    assert (
+        _schedule_e_coverage(
+            support_total=Decimal("0.00"),
+            oppose_total=Decimal("0.00"),
+            support_count=0,
+            oppose_count=2,
+            has_load_evidence=False,
+        )
+        == _POPULATED_IE_COVERAGE
+    )
+
+    # All zero, Schedule E loaded for the window -> genuinely nothing spent here.
+    assert (
+        _schedule_e_coverage(
+            support_total=Decimal("0.00"),
+            oppose_total=Decimal("0.00"),
+            support_count=0,
+            oppose_count=0,
+            has_load_evidence=True,
+        )
+        == _LOADED_ZERO_IE_COVERAGE
+    )
+
+    # All zero, nothing loaded for the window -> unknown, never zero.
+    assert (
+        _schedule_e_coverage(
+            support_total=Decimal("0.00"),
+            oppose_total=Decimal("0.00"),
+            support_count=0,
+            oppose_count=0,
+            has_load_evidence=False,
+        )
+        == _NOT_LOADED_IE_COVERAGE
+    )
+
+
+def test_schedule_e_coverage_requires_explicit_load_evidence() -> None:
+    """No caller may fall through to a default that reads as "loaded"."""
+    from api.queries.campaign_finance import _schedule_e_coverage
+
+    with pytest.raises(TypeError):
+        _schedule_e_coverage(  # type: ignore[call-arg]
+            support_total=Decimal("0.00"),
+            oppose_total=Decimal("0.00"),
+            support_count=0,
+            oppose_count=0,
+        )
+
+
+def _ie_summary_payload(
+    *,
+    support_total: Decimal,
+    oppose_total: Decimal,
+    support_count: int,
+    oppose_count: int,
+    coverage: dict[str, str],
+) -> dict[str, object]:
+    return {
+        "candidate_id": UUID("22222222-2222-4222-8222-222222222222"),
+        "selected_cycle": 2026,
+        "coverage_start_date": date(2025, 1, 1),
+        "coverage_end_date": date(2026, 12, 31),
+        "support_total": support_total,
+        "oppose_total": oppose_total,
+        "support_count": support_count,
+        "oppose_count": oppose_count,
+        "top_spenders": [],
+        "excluded_outlier_count": 0,
+        "coverage": coverage,
+    }
+
+
+def test_public_ie_totals_suppresses_figures_only_when_schedule_e_is_not_loaded() -> None:
+    from api.routes.public_federal import public_ie_totals
+
+    populated = public_ie_totals(
+        _ie_summary_payload(
+            support_total=Decimal("250.00"),
+            oppose_total=Decimal("100.00"),
+            support_count=1,
+            oppose_count=1,
+            coverage=_POPULATED_IE_COVERAGE,
+        )
+    )
+    # Populated rows carry no coverage block, exactly as public_money_totals
+    # omits fundraising_coverage on the populated branch.
+    assert populated == {
+        "ie_support_total": Decimal("250.00"),
+        "ie_oppose_total": Decimal("100.00"),
+        "ie_support_count": 1,
+        "ie_oppose_count": 1,
+    }
+
+    loaded_zero = public_ie_totals(
+        _ie_summary_payload(
+            support_total=Decimal("0.00"),
+            oppose_total=Decimal("0.00"),
+            support_count=0,
+            oppose_count=0,
+            coverage=_LOADED_ZERO_IE_COVERAGE,
+        )
+    )
+    # The zero survives: it is a measured zero, and deleting it would be the
+    # same defect in the opposite direction.
+    assert loaded_zero == {
+        "ie_support_total": Decimal("0.00"),
+        "ie_oppose_total": Decimal("0.00"),
+        "ie_support_count": 0,
+        "ie_oppose_count": 0,
+        "ie_coverage": _LOADED_ZERO_IE_COVERAGE,
+    }
+
+    not_loaded = public_ie_totals(
+        _ie_summary_payload(
+            support_total=Decimal("0.00"),
+            oppose_total=Decimal("0.00"),
+            support_count=0,
+            oppose_count=0,
+            coverage=_NOT_LOADED_IE_COVERAGE,
+        )
+    )
+    assert not_loaded == {
+        "ie_support_total": None,
+        "ie_oppose_total": None,
+        "ie_support_count": None,
+        "ie_oppose_count": None,
+        "ie_coverage": _NOT_LOADED_IE_COVERAGE,
+    }
+
+    # An indeterminate coverage block is not a licence to publish either: a
+    # caller that forgot to attach one must not get the raw figures back.
+    missing_coverage_summary = _ie_summary_payload(
+        support_total=Decimal("250.00"),
+        oppose_total=Decimal("100.00"),
+        support_count=1,
+        oppose_count=1,
+        coverage=_POPULATED_IE_COVERAGE,
+    )
+    del missing_coverage_summary["coverage"]
+    assert public_ie_totals(missing_coverage_summary) == {
+        "ie_support_total": None,
+        "ie_oppose_total": None,
+        "ie_support_count": None,
+        "ie_oppose_count": None,
+        "ie_coverage": _NOT_LOADED_IE_COVERAGE,
+    }
+
+    # No candidate row at all: there is no FEC identity for a Schedule E filing
+    # to name, so nothing about this candidacy's outside spending is known.
+    assert public_ie_totals(None) == {
+        "ie_support_total": None,
+        "ie_oppose_total": None,
+        "ie_support_count": None,
+        "ie_oppose_count": None,
+        "ie_coverage": _NOT_LOADED_IE_COVERAGE,
+    }
+
+
+# ---------------------------------------------------------------------------
+# The same three-state rule on the FUNDRAISING dataset, which is the other half
+# of every public money surface. ``CandidateFundraisingActivityState`` is a
+# closed four-member set and every member is exercised below:
+#
+#   populated                  -> Schedule A / weball figures are measured; a
+#                                 $0.00 here is a TRUE claim and must render.
+#   loaded_zero                -> same conclusion by a different route. The
+#                                 fundraising query owner does not emit this
+#                                 state today (``_qualifying_fundraising_coverage``
+#                                 returns populated or not_loaded), but the
+#                                 Literal permits it, so the publish rule must
+#                                 already be right for it rather than falling
+#                                 through to whatever the last branch does.
+#   not_loaded                 -> nothing was loaded for the cycle; ANY figure,
+#                                 "$0.00" included, is a fabrication.
+#   out_of_cycle_official_total-> the selected cycle is empty but a labelled
+#                                 prior-cycle official total exists; publish
+#                                 THAT, never the empty selected-cycle zeros.
+# ---------------------------------------------------------------------------
+
+
+# Built through the existing coverage-payload owner rather than restated as
+# literals, so a change to the coverage block shape cannot leave these behind.
+_POPULATED_FUNDRAISING_COVERAGE = _candidate_money_coverage_payload()
+_LOADED_ZERO_FUNDRAISING_COVERAGE = _candidate_money_coverage_payload(
+    activity_state="loaded_zero",
+    completeness="partial",
+    basis="qualifying_transactions",
+)
+_NOT_LOADED_FUNDRAISING_COVERAGE = _candidate_money_coverage_payload(
+    activity_state="not_loaded",
+    completeness="unknown",
+    basis="no_authoritative_load_evidence",
+)
+_OUT_OF_CYCLE_FUNDRAISING_COVERAGE = _candidate_money_coverage_payload(
+    activity_state="out_of_cycle_official_total",
+)
+_OUT_OF_CYCLE_OFFICIAL_TOTAL = {
+    "coverage_start_date": date(2023, 1, 1),
+    "coverage_end_date": date(2024, 12, 31),
+    "total_raised": Decimal("31077805.53"),
+    "total_spent": Decimal("31027960.15"),
+    "net": Decimal("49845.38"),
+    "cash_on_hand": Decimal("49845.38"),
+    "summary_source": "fec_weball",
+}
+
+
+def test_public_money_totals_suppresses_figures_only_when_fundraising_is_not_loaded() -> None:
+    """Every branch of the closed fundraising-coverage set, with hand-set values.
+
+    The sibling assertion for outside spending is
+    ``test_public_ie_totals_suppresses_figures_only_when_schedule_e_is_not_loaded``
+    directly above; these two owners implement one rule over two datasets and
+    are read side by side on purpose.
+    """
+    from api.routes.public_federal import public_money_totals
+
+    populated = public_money_totals(
+        _candidate_fundraising_summary_payload(
+            coverage=_POPULATED_FUNDRAISING_COVERAGE,
+            total_raised=Decimal("9000.00"),
+            total_spent=Decimal("1000.00"),
+            net=Decimal("8000.00"),
+            cash_on_hand=Decimal("8000.00"),
+            summary_source="fec_weball",
+        )
+    )
+    # A populated row carries no coverage block: it has no news, and attaching
+    # one would change the exported payload shape for the overwhelming majority
+    # of rows. Identical to the populated branch of public_ie_totals.
+    assert populated == {
+        "total_raised": Decimal("9000.00"),
+        "total_spent": Decimal("1000.00"),
+        "net": Decimal("8000.00"),
+        "cash_on_hand": Decimal("8000.00"),
+        "summary_source": "fec_weball",
+    }
+
+    # A MEASURED zero. FEC's official candidate summary says this candidate
+    # raised nothing; that is a fact the product established and sourced, and
+    # blanking it would be the same dishonesty pointing the other way.
+    populated_zero = public_money_totals(
+        _candidate_fundraising_summary_payload(
+            coverage=_POPULATED_FUNDRAISING_COVERAGE,
+            cash_on_hand=Decimal("0.00"),
+            summary_source="fec_weball",
+        )
+    )
+    assert populated_zero == {
+        "total_raised": Decimal("0.00"),
+        "total_spent": Decimal("0.00"),
+        "net": Decimal("0.00"),
+        "cash_on_hand": Decimal("0.00"),
+        "summary_source": "fec_weball",
+    }
+
+    # loaded_zero reaches the same conclusion and keeps its coverage block,
+    # because "we looked and there was nothing" is news worth shipping.
+    loaded_zero = public_money_totals(
+        _candidate_fundraising_summary_payload(
+            coverage=_LOADED_ZERO_FUNDRAISING_COVERAGE,
+            cash_on_hand=Decimal("0.00"),
+        )
+    )
+    assert loaded_zero == {
+        "total_raised": Decimal("0.00"),
+        "total_spent": Decimal("0.00"),
+        "net": Decimal("0.00"),
+        "cash_on_hand": Decimal("0.00"),
+        "summary_source": "derived",
+        "fundraising_coverage": _LOADED_ZERO_FUNDRAISING_COVERAGE,
+    }
+
+    # not_loaded: the zeros in the summary are placeholders for an absent load,
+    # not measurements. Publishing any of them -- including summary_source,
+    # which names the origin of a figure that does not exist -- states a
+    # measurement nobody took.
+    not_loaded = public_money_totals(_candidate_fundraising_summary_payload(coverage=_NOT_LOADED_FUNDRAISING_COVERAGE))
+    assert not_loaded == {
+        "total_raised": None,
+        "total_spent": None,
+        "net": None,
+        "cash_on_hand": None,
+        "summary_source": None,
+        "fundraising_coverage": _NOT_LOADED_FUNDRAISING_COVERAGE,
+    }
+
+    # A labelled prior-cycle official total is honest and unchanged by this
+    # rule: the figures published are the supplemental ones, never the empty
+    # selected-cycle zeros sitting beside them in the same summary.
+    out_of_cycle = public_money_totals(
+        _candidate_fundraising_summary_payload(
+            coverage=_OUT_OF_CYCLE_FUNDRAISING_COVERAGE,
+            out_of_cycle_official_total=_OUT_OF_CYCLE_OFFICIAL_TOTAL,
+        )
+    )
+    assert out_of_cycle == {
+        "total_raised": Decimal("31077805.53"),
+        "total_spent": Decimal("31027960.15"),
+        "net": Decimal("49845.38"),
+        "cash_on_hand": Decimal("49845.38"),
+        "summary_source": "fec_weball",
+        "fundraising_coverage": _OUT_OF_CYCLE_FUNDRAISING_COVERAGE,
+        "out_of_cycle_official_total": _OUT_OF_CYCLE_OFFICIAL_TOTAL,
+    }
+
+    # The state without its supplemental total is an incoherent row. The
+    # figures it would otherwise fall through to are the empty selected-cycle
+    # zeros, which is exactly the defect, so it suppresses.
+    assert public_money_totals(
+        _candidate_fundraising_summary_payload(
+            coverage=_OUT_OF_CYCLE_FUNDRAISING_COVERAGE,
+            out_of_cycle_official_total=None,
+        )
+    ) == {
+        "total_raised": None,
+        "total_spent": None,
+        "net": None,
+        "cash_on_hand": None,
+        "summary_source": None,
+        "fundraising_coverage": _OUT_OF_CYCLE_FUNDRAISING_COVERAGE,
+    }
+
+    # A caller that forgot to attach a coverage block gets nothing published.
+    # An indeterminate state is never a licence to publish: that is precisely
+    # how a future caller would quietly reintroduce the fabricated $0.00.
+    assert public_money_totals(_candidate_fundraising_summary_payload(omit_coverage=True)) == {
+        "total_raised": None,
+        "total_spent": None,
+        "net": None,
+        "cash_on_hand": None,
+        "summary_source": None,
+        "fundraising_coverage": _NOT_LOADED_FUNDRAISING_COVERAGE,
+    }
+
+    # Same for a state this module has never heard of. The rule is a positive
+    # allowlist, not a not_loaded denylist, so adding a state to the Literal
+    # without teaching this owner about it fails closed.
+    invented_coverage = {**_POPULATED_FUNDRAISING_COVERAGE, "activity_state": "invented_state"}
+    assert public_money_totals(_candidate_fundraising_summary_payload(coverage=invented_coverage)) == {
+        "total_raised": None,
+        "total_spent": None,
+        "net": None,
+        "cash_on_hand": None,
+        "summary_source": None,
+        "fundraising_coverage": invented_coverage,
+    }
+
+    # No candidate row at all: with no FEC candidate identity there are no
+    # committees to have filed a Schedule A, so nothing is known -- not zero.
+    # Mirrors public_ie_totals(None) exactly.
+    assert public_money_totals(None) == {
+        "total_raised": None,
+        "total_spent": None,
+        "net": None,
+        "cash_on_hand": None,
+        "summary_source": None,
+        "fundraising_coverage": _NOT_LOADED_FUNDRAISING_COVERAGE,
+    }
+
+
+def _contest_candidate_money_row_payload(**overrides: object) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "candidacy_id": UUID("11111111-1111-4111-8111-111111111111"),
+        "person_id": UUID("33333333-3333-4333-8333-333333333333"),
+        "person_name": "Jane Candidate",
+        "party": "DEM",
+        "status": "filed",
+        "incumbent_challenge": "C",
+        "fec_candidate_id": "H0NC01001",
+        "candidate_id": UUID("22222222-2222-4222-8222-222222222222"),
+        "candidate_name": "CANDIDATE, JANE",
+        "candidate_slug": "jane-candidate",
+        "candidate_slug_is_unique": True,
+        "candidate_identity_is_safe": True,
+        "has_fec_money": True,
+        "total_raised": Decimal("5000.00"),
+        "total_spent": Decimal("2000.00"),
+        "net": Decimal("3000.00"),
+        "cash_on_hand": Decimal("1000.00"),
+        "summary_source": "fec_weball",
+        "ie_support_total": Decimal("250.00"),
+        "ie_oppose_total": Decimal("100.00"),
+        "ie_support_count": 1,
+        "ie_oppose_count": 1,
+    }
+    payload.update(overrides)
+    return payload
+
+
+def test_contest_candidate_money_row_serializes_unloaded_outside_spending_as_null() -> None:
+    from api.models.civics import ContestCandidateMoneyRow
+
+    populated = ContestCandidateMoneyRow.model_validate(_contest_candidate_money_row_payload())
+    dumped_populated = populated.model_dump(mode="json")
+    assert dumped_populated["ie_support_total"] == "250.00"
+    assert dumped_populated["ie_oppose_total"] == "100.00"
+    assert dumped_populated["ie_support_count"] == 1
+    assert dumped_populated["ie_oppose_count"] == 1
+    assert dumped_populated["ie_coverage"] is None
+
+    loaded_zero = ContestCandidateMoneyRow.model_validate(
+        _contest_candidate_money_row_payload(
+            ie_support_total=Decimal("0.00"),
+            ie_oppose_total=Decimal("0.00"),
+            ie_support_count=0,
+            ie_oppose_count=0,
+            ie_coverage=_LOADED_ZERO_IE_COVERAGE,
+        )
+    )
+    dumped_loaded_zero = loaded_zero.model_dump(mode="json")
+    assert dumped_loaded_zero["ie_support_total"] == "0.00"
+    assert dumped_loaded_zero["ie_oppose_total"] == "0.00"
+    assert dumped_loaded_zero["ie_coverage"] == _LOADED_ZERO_IE_COVERAGE
+
+    not_loaded = ContestCandidateMoneyRow.model_validate(
+        _contest_candidate_money_row_payload(
+            ie_support_total=None,
+            ie_oppose_total=None,
+            ie_support_count=None,
+            ie_oppose_count=None,
+            ie_coverage=_NOT_LOADED_IE_COVERAGE,
+        )
+    )
+    dumped_not_loaded = not_loaded.model_dump(mode="json")
+    assert dumped_not_loaded["ie_support_total"] is None
+    assert dumped_not_loaded["ie_oppose_total"] is None
+    assert dumped_not_loaded["ie_support_count"] is None
+    assert dumped_not_loaded["ie_oppose_count"] is None
+    assert dumped_not_loaded["ie_coverage"] == _NOT_LOADED_IE_COVERAGE
+    assert ContestCandidateMoneyRow.model_validate(dumped_not_loaded).model_dump(mode="json") == dumped_not_loaded
+
+
+def test_public_member_money_summary_serializes_unloaded_fundraising_as_null() -> None:
+    """The exported member row must be able to say "unknown" about fundraising.
+
+    Sibling of the outside-spending test below. Without nullability the model is
+    structurally unable to express the not_loaded state and the route has no
+    choice but to publish a fabricated ``0.00`` next to its own
+    ``no_authoritative_load_evidence`` coverage block.
+    """
+    from api.models import PublicMemberMoneySummary
+
+    base_payload: dict[str, object] = {
+        "person_id": UUID("55555555-5555-4555-8555-555555555555"),
+        "person_name": "Jane Member",
+        "has_fec_money": True,
+        "candidate_id": UUID("22222222-2222-4222-8222-222222222222"),
+        "ie_support_total": None,
+        "ie_oppose_total": None,
+        "ie_support_count": None,
+        "ie_oppose_count": None,
+        "ie_coverage": _NOT_LOADED_IE_COVERAGE,
+        "sources": [],
+    }
+
+    # A measured zero keeps its figure and its scale. "0.00" is a claim; None is
+    # the absence of one, and the export must be able to tell them apart.
+    measured_zero = PublicMemberMoneySummary.model_validate(
+        {
+            **base_payload,
+            "total_raised": Decimal("0.00"),
+            "total_spent": Decimal("0.00"),
+            "net": Decimal("0.00"),
+            "cash_on_hand": Decimal("0.00"),
+            "summary_source": "fec_weball",
+        }
+    )
+    dumped_measured_zero = measured_zero.model_dump(mode="json")
+    assert dumped_measured_zero["total_raised"] == "0.00"
+    assert dumped_measured_zero["total_spent"] == "0.00"
+    assert dumped_measured_zero["net"] == "0.00"
+    # Populated rows keep the exported payload shape unchanged: no coverage key.
+    assert "fundraising_coverage" not in dumped_measured_zero
+
+    unloaded = PublicMemberMoneySummary.model_validate(
+        {
+            **base_payload,
+            "total_raised": None,
+            "total_spent": None,
+            "net": None,
+            "cash_on_hand": None,
+            "summary_source": None,
+            "fundraising_coverage": _NOT_LOADED_FUNDRAISING_COVERAGE,
+        }
+    )
+    dumped_unloaded = unloaded.model_dump(mode="json")
+    assert dumped_unloaded["total_raised"] is None
+    assert dumped_unloaded["total_spent"] is None
+    assert dumped_unloaded["net"] is None
+    assert dumped_unloaded["cash_on_hand"] is None
+    assert dumped_unloaded["summary_source"] is None
+    assert dumped_unloaded["fundraising_coverage"] == _NOT_LOADED_FUNDRAISING_COVERAGE
+    # Round-trips: a client that re-validates the exported payload gets the same
+    # unknowns back rather than coercing them to zeros.
+    assert PublicMemberMoneySummary.model_validate(dumped_unloaded).model_dump(mode="json") == dumped_unloaded
+
+
+def test_contest_candidate_money_response_reports_unknown_race_outside_spending() -> None:
+    from api.models.civics import ContestCandidateMoneyResponse
+
+    response = ContestCandidateMoneyResponse.model_validate(
+        {
+            "contest_id": UUID("44444444-4444-4444-8444-444444444444"),
+            "selected_cycle": 2026,
+            "candidate_count": 1,
+            "total_raised": Decimal("5000.00"),
+            # Nothing known race-wide: the headline must not read "$0.00".
+            "total_ie_support": None,
+            "total_ie_oppose": None,
+            "has_unknown_candidate_money": False,
+            "has_unknown_candidate_ie": True,
+            "rows": [],
+        }
+    )
+    dumped = response.model_dump(mode="json")
+
+    assert dumped["total_ie_support"] is None
+    assert dumped["total_ie_oppose"] is None
+    assert dumped["has_unknown_candidate_ie"] is True
+
+
+def test_public_member_money_summary_serializes_unloaded_outside_spending_as_null() -> None:
+    from api.models import PublicMemberMoneySummary
+
+    base_payload: dict[str, object] = {
+        "person_id": UUID("55555555-5555-4555-8555-555555555555"),
+        "person_name": "Jane Member",
+        "has_fec_money": True,
+        "candidate_id": UUID("22222222-2222-4222-8222-222222222222"),
+        "total_raised": Decimal("9000.00"),
+        "total_spent": Decimal("1000.00"),
+        "net": Decimal("8000.00"),
+        "cash_on_hand": Decimal("8000.00"),
+        "summary_source": "fec_weball",
+        "sources": [],
+    }
+
+    populated = PublicMemberMoneySummary.model_validate(
+        {
+            **base_payload,
+            "ie_support_total": Decimal("250.00"),
+            "ie_oppose_total": Decimal("100.00"),
+            "ie_support_count": 1,
+            "ie_oppose_count": 1,
+        }
+    )
+    dumped_populated = populated.model_dump(mode="json")
+    assert dumped_populated["ie_support_total"] == "250.00"
+    # Populated rows keep the exported payload shape unchanged: no coverage key.
+    assert "ie_coverage" not in dumped_populated
+
+    not_loaded = PublicMemberMoneySummary.model_validate(
+        {
+            **base_payload,
+            "ie_support_total": None,
+            "ie_oppose_total": None,
+            "ie_support_count": None,
+            "ie_oppose_count": None,
+            "ie_coverage": _NOT_LOADED_IE_COVERAGE,
+        }
+    )
+    dumped_not_loaded = not_loaded.model_dump(mode="json")
+    assert dumped_not_loaded["ie_support_total"] is None
+    assert dumped_not_loaded["ie_oppose_total"] is None
+    assert dumped_not_loaded["ie_support_count"] is None
+    assert dumped_not_loaded["ie_oppose_count"] is None
+    assert dumped_not_loaded["ie_coverage"] == _NOT_LOADED_IE_COVERAGE

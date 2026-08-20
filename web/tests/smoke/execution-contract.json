@@ -1,0 +1,113 @@
+{
+  "$schema_note": "One entry per web/tests/smoke/*.spec.ts. `modes` lists every SMOKE mode the spec is allowed to run in; playwright.config.ts builds testIgnore from it, so a spec is never collected in a mode it does not declare. `reason` must say WHY, and for any mode a spec skips it must name what owns that coverage instead. tests/ci/test_ci_workflow_contract.py enforces both, plus the existence of a nightly job for each local lane. Modes: `fixture` = the Node fixture backend in web/tests/smoke/fixture-backend.ts (nightly browser-smoke-fixture); `live` = the real API against the database test_support/browser_smoke_seed.py writes (nightly browser-smoke); `production` = SMOKE_MODE=production against a deployed target (the deploy gate, pinned by tests/ci/test_deploy_workflow_contract.py).",
+  "specs": {
+    "accessibility.spec.ts": {
+      "modes": ["fixture", "live"],
+      "reason": "Scans the seven shell routes plus the seeded person and committee — every destination in a11y-helpers.ts exists in both backends, and civibus-5ud.1 requires the axe floor to hold against the real rendered stack, not only against fixtures."
+    },
+    "campaign-finance.spec.ts": {
+      "modes": ["fixture", "live"],
+      "reason": "Carries both a fixture-only block (:178) and a live-only block (:969) behind its own describe-level gates; the file itself belongs to both lanes and the gates route the halves."
+    },
+    "chart_data_access.spec.ts": {
+      "modes": ["fixture", "live"],
+      "reason": "Chart data-access journeys exist for both backends behind describe-level gates at :177 and :257; the live half proves the seeded person's chart series come from the real API."
+    },
+    "chart_render_oracle.spec.ts": {
+      "modes": ["fixture", "live"],
+      "reason": "Asserts LayerChart marks actually render on the seeded person and committee pages. Passes against the browser-smoke seed today and is one of civibus-5ud's three named live-journey specimens, so it must stay in the live lane."
+    },
+    "committee_live.spec.ts": {
+      "modes": ["live"],
+      "reason": "Self-gated live-only (:17). Its oracle is that a committee with official FEC totals never renders a false $0, which requires the real committee-summary query path; the fixture backend hands back a canned body and would prove nothing."
+    },
+    "compare.spec.ts": {
+      "modes": ["fixture", "live"],
+      "reason": "Fixture-only deterministic delay/error paths at :36 and a live compare journey at :250, both behind describe-level gates."
+    },
+    "congress-leaderboard.spec.ts": {
+      "modes": ["fixture"],
+      "reason": "Pins exact per-member money (`$300.00` raised, FEC source hrefs H6NC01001/S6GA00001) that only fixture-data.ts produces; the federal seed has no congress money summaries and no independent-expenditure rows. Live /congress coverage is owned by congress.spec.ts (directory to member detail) and primary_nav_nonempty.spec.ts (non-empty member roster). A live money-leaderboard journey needs a seed extension — filed as civibus-8lu."
+    },
+    "congress.spec.ts": {
+      "modes": ["live"],
+      "reason": "Self-gated live-only (:22). Seeds its own congress-directory person and proves /congress links through to a member detail with federal finance and IE against the real API."
+    },
+    "donor_lookup.spec.ts": {
+      "modes": ["fixture", "live"],
+      "reason": "Fixture-only block at :34 and a live block at :149 that seeds real donor-rollup rows; both halves are gated inside the file."
+    },
+    "dwo_mvp_release.spec.ts": {
+      "modes": ["fixture", "production"],
+      "reason": "A fixture release checklist: it walks candidate/committee/state journeys asserting fixture-pinned counts (`Showing 1–1`), fixture IE dollars (`$15,000.00`, `Super PAC Alpha`) and the retired NC state page, none of which a federal-first seed owns while state/city trees stay parked. It also carries a production-only invariant at :217. The federal half of what it walks is covered live by primary_nav_nonempty.spec.ts and campaign-finance.spec.ts."
+    },
+    "dwo_new_routes.spec.ts": {
+      "modes": ["fixture"],
+      "reason": "Explicitly fixture-backed by its own test names: /coverage and /data-sources assert registry rows for `state/NC` and `NC Campaign Finance`, and /calendar and /election/[date] assert a `2026 NC Senate General` contest. The federal seed writes no civic.contest rows and no NC data source. Live equivalents would need a state-jurisdiction seed, which federal-first v1 parks; the routes' server-side contracts are held by web/src/routes unit tests."
+    },
+    "entity-and-civic.spec.ts": {
+      "modes": ["fixture", "live"],
+      "reason": "Fixture-only block at :150 and a live block at :563 covering the seeded person and civic detail routes against the real API."
+    },
+    "finance-visuals.spec.ts": {
+      "modes": ["fixture"],
+      "reason": "The toHaveScreenshot oracle, whose baselines are rendered from fixture data; its own describe already skips live and production mode. The nightly browser-smoke-fixture job runs it and uploads the actual/diff artifacts, and its baselines are regenerated through that job's update_snapshots dispatch input."
+    },
+    "honesty_pass.spec.ts": {
+      "modes": ["fixture"],
+      "reason": "Its discriminating test asserts a county click-through link (`nc_county_wake`) that exists only in fixture county geometry; the federal seed writes congressional districts, not counties. NC county drilldown is parked with the rest of the state trees, so the fixture lane is its only owner until v1 ships."
+    },
+    "landing_federal.spec.ts": {
+      "modes": ["fixture", "live"],
+      "reason": "Federal landing surfaces render from seeded federal rows in live mode and from fixture rows otherwise; it passes in both lanes today and is cheap enough to keep in each."
+    },
+    "launch_hygiene.spec.ts": {
+      "modes": ["fixture"],
+      "reason": "Asserts the sitemap static shard as an exact path set including a fixture election date, and OG/Twitter meta against the fixture candidate. The exact-set assertion is the point of the test and cannot survive a data-dependent election timeline. The live and deployed sitemap are owned by web/src/routes/sitemap.xml/server.test.ts and the deployed-surface parity probes in tests/ci/."
+    },
+    "nc-county-detail.spec.ts": {
+      "modes": ["fixture"],
+      "reason": "Wake County drilldown: county geometry and county campaign-finance rollups are parked state/city surfaces the federal-first seed does not write. Fixture lane is the owner until state coverage is un-parked."
+    },
+    "nc-county-toggle.spec.ts": {
+      "modes": ["fixture"],
+      "reason": "The /state/NC county link and district overlay ride on the same parked county geometry as nc-county-detail.spec.ts."
+    },
+    "primary_nav_nonempty.spec.ts": {
+      "modes": ["fixture", "live", "production"],
+      "reason": "The non-empty guarantee for every primary-nav destination, and the one spec that already carries per-mode assertion sets. It runs in all three lanes on purpose: fixtures for determinism, the seed for the real API, and the deployed target for the deploy gate."
+    },
+    "production_deploy.spec.ts": {
+      "modes": ["production"],
+      "reason": "Self-gated production-only (:169). It probes a deployed target's real content and has no meaning against either local backend."
+    },
+    "production_finance_visuals.spec.ts": {
+      "modes": ["production"],
+      "reason": "Self-gated production-only (:80). Measures chart geometry on the deployed target, where the data volume that broke the axes actually exists."
+    },
+    "property.spec.ts": {
+      "modes": ["fixture"],
+      "reason": "Parcel detail is a parked domain: /property/[id] returns 404 against a federal-first seed because no parcel rows are written. The fixture lane keeps the page's ownership, assessment and empty-state journeys covered until property work is un-parked."
+    },
+    "public_api.spec.ts": {
+      "modes": ["fixture", "live"],
+      "reason": "The /developers reference page renders from static config, so it holds against either backend; keeping it in the live lane also proves the shell renders when the real API is behind it."
+    },
+    "roster-pilot.spec.ts": {
+      "modes": ["fixture"],
+      "reason": "Durham and NC House roster portraits are parked municipal/state roster records with no federal-first seed equivalent. Fixture lane owns them until the roster pilot is un-parked."
+    },
+    "search.spec.ts": {
+      "modes": ["live"],
+      "reason": "Self-gated live-only (:13). Its oracle is the real search query path against seeded rows."
+    },
+    "shell-and-responsive.spec.ts": {
+      "modes": ["fixture"],
+      "reason": "A layout, SEO and responsive-viewport suite that uses fixture entities as scaffolding: it asserts fixture-only civic routes (/contest, /candidacy, /officeholding), a synthetic backend 422 the real validator cannot emit, and a fixture office named `U.S. Senator, North Carolina`. Its oracle is presentation, not data, so the fixture lane is the correct and complete owner; live-mode rendering of the same shell is covered by accessibility.spec.ts and primary_nav_nonempty.spec.ts."
+    },
+    "state_detail.spec.ts": {
+      "modes": ["fixture"],
+      "reason": "The retired-state heading is derived from country map geometry that only the fixture backend serves; a federal-first seed writes no statewide electoral divisions, so the heading falls back to the bare code. Parked with the rest of the state trees."
+    }
+  }
+}

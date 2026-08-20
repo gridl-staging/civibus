@@ -59,7 +59,50 @@ router = APIRouter(
     dependencies=[Depends(enforce_public_ip_rate_limit)],
 )
 
-_ZERO_MONEY = Decimal("0")
+# The coverage block attached when nothing at all is known about a candidacy's
+# outside spending. Mirrors ``_not_loaded_candidate_money_coverage`` in the
+# query layer; declared here because this branch has no query result to read it
+# from, and the two must stay identical.
+_NOT_LOADED_IE_COVERAGE = {
+    "activity_state": "not_loaded",
+    "completeness": "unknown",
+    "basis": "no_authoritative_load_evidence",
+}
+# Same block on the fundraising side, for the same reason: a candidacy with no
+# ``cf.candidate`` row has no query result to read a coverage state from. Kept
+# as its own name because the two datasets are typed separately
+# (``CandidateMoneyCoverage`` vs ``CandidateFundraisingCoverage``) even though
+# the not_loaded payload happens to be identical.
+_NOT_LOADED_FUNDRAISING_COVERAGE = {
+    "activity_state": "not_loaded",
+    "completeness": "unknown",
+    "basis": "no_authoritative_load_evidence",
+}
+# The fundraising states whose selected-cycle figures are measurements a public
+# surface may print. Deliberately an allowlist rather than a "not_loaded"
+# denylist: a state this module has never heard of must fail closed, because
+# every way this defect has been reintroduced started with a branch falling
+# through to "publish whatever the summary happens to hold".
+#
+#   populated   -> Schedule A / weball figures exist; a $0.00 here is a
+#                  measured fact and must keep rendering.
+#   loaded_zero -> we looked at the cycle and found nothing for this candidate.
+#                  Also a fact. Not emitted by the fundraising query owner
+#                  today, but permitted by CandidateFundraisingActivityState.
+#
+# ``out_of_cycle_official_total`` is handled on its own branch below: it
+# publishes the labelled prior-cycle total, never the selected-cycle zeros.
+_PUBLISHABLE_FUNDRAISING_ACTIVITY_STATES = frozenset({"populated", "loaded_zero"})
+# What a public surface returns when fundraising is unknown. Every money field
+# goes away together, ``summary_source`` included: it names the origin of a
+# figure that does not exist.
+_UNKNOWN_PUBLIC_MONEY_TOTALS = {
+    "total_raised": None,
+    "total_spent": None,
+    "net": None,
+    "cash_on_hand": None,
+    "summary_source": None,
+}
 # Fixed 14,324-row industry-classification benchmark: 837 classified /
 # 13,487 unknown. Both the employer endpoint and the metadata payload derive the
 # coverage percentage from these two counts, so the ratio can never drift.
@@ -239,21 +282,20 @@ def _no_fec_money_summary(
     person_name: str,
     sources: list[dict[str, Any]] | None = None,
 ) -> PublicMemberMoneySummary:
-    """Return an honest, source-linked absence instead of invented FEC money."""
+    """Return an honest, source-linked absence instead of invented FEC money.
+
+    Both halves route through the shared owners with ``None``, so this member
+    carries the same "nothing is known" payload a linked-but-unloaded candidacy
+    does. Hand-written zeros here were the last place a member with no FEC
+    identity at all still published dollar figures.
+    """
     return PublicMemberMoneySummary(
         person_id=person_id,
         person_name=person_name,
         has_fec_money=False,
         candidate_id=None,
-        total_raised=_ZERO_MONEY,
-        total_spent=_ZERO_MONEY,
-        net=_ZERO_MONEY,
-        cash_on_hand=None,
-        summary_source=None,
-        ie_support_total=_ZERO_MONEY,
-        ie_oppose_total=_ZERO_MONEY,
-        ie_support_count=0,
-        ie_oppose_count=0,
+        **public_money_totals(None),
+        **public_ie_totals(None),
         sources=sources or [],
     )
 
@@ -293,35 +335,43 @@ def _money_summary_for_candidate(
             "has_fec_money": True,
             "candidate_id": candidate_id,
             **public_totals,
-            "ie_support_total": resolved_ie_summary["support_total"],
-            "ie_oppose_total": resolved_ie_summary["oppose_total"],
-            "ie_support_count": resolved_ie_summary["support_count"],
-            "ie_oppose_count": resolved_ie_summary["oppose_count"],
+            **public_ie_totals(resolved_ie_summary),
             "sources": resolved_sources,
         }
     )
 
 
-def public_money_totals(summary: dict[str, Any]) -> dict[str, Any]:
+def public_money_totals(summary: dict[str, Any] | None) -> dict[str, Any]:
     """Pick the totals a public surface should show, given coverage state.
 
     Shared owner: the congress directory and the contest money scoreboard
     both route through here so the same candidate cannot show one headline
     figure on a member page and a different one on a race page. Exported
     (no leading underscore) because api/routes/civics.py consumes it.
+
+    The coverage state decides whether a figure may be published at all —
+    exactly the rule its sibling ``public_ie_totals`` applies to the other
+    dataset a few lines below.
+
+    ``not_loaded`` is the state that suppresses the numbers, and the zeros it
+    suppresses are the ones the query layer pre-seeds for an absent load, not
+    measurements. A ``populated`` or ``loaded_zero`` candidate keeps its zeros:
+    FEC's summary was read and it said nothing came in, which makes ``$0.00``
+    a measured fact. Blanking that would be the same dishonesty inverted.
+
+    ``summary is None`` means the candidacy resolved to no ``cf.candidate`` row
+    at all. Committees file Schedule A against an FEC candidate ID, so with no
+    such identity there is nothing a filing could have been matched to and
+    nothing is known — not zero.
     """
-    out_of_cycle_total = summary.get("out_of_cycle_official_total")
-    coverage = summary.get("coverage")
-    public_coverage_payload = (
-        {"fundraising_coverage": coverage}
-        if isinstance(coverage, dict) and coverage.get("activity_state") != "populated"
-        else {}
-    )
-    if (
-        isinstance(coverage, dict)
-        and coverage.get("activity_state") == "out_of_cycle_official_total"
-        and out_of_cycle_total is not None
-    ):
+    coverage = summary.get("coverage") if isinstance(summary, dict) else None
+    activity_state = coverage.get("activity_state") if isinstance(coverage, dict) else None
+    out_of_cycle_total = summary.get("out_of_cycle_official_total") if isinstance(summary, dict) else None
+
+    if activity_state == "out_of_cycle_official_total" and out_of_cycle_total is not None:
+        # The selected cycle is empty but a labelled prior-cycle official total
+        # exists. Publishing that, with its own coverage window attached, is
+        # honest; publishing the empty selected-cycle zeros beside it is not.
         return {
             "total_raised": out_of_cycle_total["total_raised"],
             "total_spent": out_of_cycle_total["total_spent"],
@@ -331,12 +381,71 @@ def public_money_totals(summary: dict[str, Any]) -> dict[str, Any]:
             "fundraising_coverage": coverage,
             "out_of_cycle_official_total": out_of_cycle_total,
         }
+
+    if activity_state not in _PUBLISHABLE_FUNDRAISING_ACTIVITY_STATES:
+        # Everything else suppresses: not_loaded, an out_of_cycle row that lost
+        # its supplemental total, a state this module does not recognise, and a
+        # caller that attached no coverage block at all. An indeterminate state
+        # must never read as a licence to publish.
+        return {
+            **_UNKNOWN_PUBLIC_MONEY_TOTALS,
+            "fundraising_coverage": coverage if isinstance(coverage, dict) else _NOT_LOADED_FUNDRAISING_COVERAGE,
+        }
+
+    # Match public_ie_totals: the coverage block rides along only when it
+    # carries news, so populated rows keep the payload shape they already had.
+    public_coverage_payload = {} if activity_state == "populated" else {"fundraising_coverage": coverage}
     return {
         "total_raised": summary["total_raised"],
         "total_spent": summary["total_spent"],
         "net": summary["net"],
         "cash_on_hand": summary["cash_on_hand"],
         "summary_source": summary["summary_source"],
+        **public_coverage_payload,
+    }
+
+
+def public_ie_totals(ie_summary: dict[str, Any] | None) -> dict[str, Any]:
+    """Pick the outside-spending figures a public surface should show.
+
+    Sibling of ``public_money_totals`` and the same rule applied to the other
+    dataset: the coverage state decides whether a figure may be published at
+    all. Both the congress directory and the contest money scoreboard route
+    through here, so the same candidate can never show ``$0.00`` of outside
+    spending on one page and "not loaded" on another.
+
+    ``not_loaded`` is the only state that suppresses the numbers. A
+    ``loaded_zero`` candidate keeps its zeros: Schedule E was loaded for the
+    cycle and named somebody else, which makes ``$0.00`` a measured fact about
+    this candidate. Blanking that would be the same dishonesty pointing the
+    other way.
+
+    ``ie_summary is None`` means the candidacy resolved to no ``cf.candidate``
+    row at all. Independent expenditures are filed against an FEC candidate ID,
+    so with no such identity there is nothing a filing could have been matched
+    to and nothing is known — not zero.
+    """
+    coverage = ie_summary.get("coverage") if isinstance(ie_summary, dict) else None
+    activity_state = coverage.get("activity_state") if isinstance(coverage, dict) else None
+    # Missing or unrecognisable coverage suppresses the figures too. An
+    # indeterminate state must never read as a licence to publish -- that is
+    # how a future caller would quietly reintroduce the fabricated $0.00.
+    if activity_state is None or activity_state == "not_loaded":
+        return {
+            "ie_support_total": None,
+            "ie_oppose_total": None,
+            "ie_support_count": None,
+            "ie_oppose_count": None,
+            "ie_coverage": coverage if isinstance(coverage, dict) else _NOT_LOADED_IE_COVERAGE,
+        }
+    # Match public_money_totals: the coverage block rides along only when it
+    # carries news, so populated rows keep the payload shape they already had.
+    public_coverage_payload = {} if activity_state == "populated" else {"ie_coverage": coverage}
+    return {
+        "ie_support_total": ie_summary["support_total"],
+        "ie_oppose_total": ie_summary["oppose_total"],
+        "ie_support_count": ie_summary["support_count"],
+        "ie_oppose_count": ie_summary["oppose_count"],
         **public_coverage_payload,
     }
 
@@ -598,8 +707,12 @@ def _public_money_row_for_person(conn: psycopg.Connection, person_id: UUID) -> P
     description=(
         "Return the FEC money and Schedule E independent-expenditure summary for every "
         "current federal official in one JSON array — the bulk counterpart to the "
-        "per-official money endpoint, with identical per-row fields. Officials with no "
-        "linked FEC candidate are included with `has_fec_money` false and zeroed totals. "
+        "per-official money endpoint, with identical per-row fields. Every money field is "
+        "nullable and null always means UNKNOWN, never zero: officials with no linked FEC "
+        "candidate, and officials whose filings were never loaded for the cycle, are "
+        "included with null totals and a `fundraising_coverage` / `ie_coverage` block "
+        "saying why. A candidate whose loaded filings genuinely total nothing sends "
+        '`"0.00"`. '
         f"{_PUBLIC_ACCESS_NOTE}"
     ),
 )
@@ -689,8 +802,10 @@ def export_federal_money_csv(
         "Return total raised, total spent, net, cash on hand, and the Schedule E "
         "independent expenditures made for and against one current federal official, with "
         "a source link for every figure. A known official with no linked FEC candidate "
-        "returns 200 with `has_fec_money` false and zeroed totals rather than invented "
-        f"money; 404 means `person_id` is not a current federal officeholder. {_PUBLIC_ACCESS_NOTE}"
+        "returns 200 with `has_fec_money` false and null totals rather than invented "
+        "money, as does an official whose filings were never loaded for the cycle; null "
+        "means unknown, never zero. 404 means `person_id` is not a current federal "
+        f"officeholder. {_PUBLIC_ACCESS_NOTE}"
     ),
     responses=_FEDERAL_OFFICIAL_NOT_FOUND_OPENAPI_RESPONSE,
 )

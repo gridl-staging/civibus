@@ -717,6 +717,18 @@ const server = createServer(async (request, response) => {
     return;
   }
 
+  // Unfiltered name search, the shape the /candidates name box submits. The
+  // absent entity_type is load-bearing: matching on it would let a handoff that
+  // wrongly pinned a type still find this fixture and pass.
+  if (
+    url.pathname === "/v1/search" &&
+    url.searchParams.get("q") === smokeFixtures.candidateNameSearch.query &&
+    url.searchParams.get("entity_type") === null
+  ) {
+    writeJson(response, 200, smokeFixtures.candidateNameSearch.results);
+    return;
+  }
+
   const candidateSlug = decodeBySlugPath(url.pathname, "/v1/candidates/by-slug/");
   if (candidateSlug !== null) {
     const candidateSlugLookups = smokeFixtures.slugLookups.candidates as Record<string, unknown>;

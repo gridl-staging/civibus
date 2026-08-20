@@ -584,6 +584,7 @@ describe("civic detail page rendering", () => {
           total_ie_support: "100.00",
           total_ie_oppose: "50.00",
           has_unknown_candidate_money: false,
+          has_unknown_candidate_ie: false,
           rows: [
             {
               candidacy_id: CANDIDACY_ID,
@@ -608,7 +609,8 @@ describe("civic detail page rendering", () => {
               ie_support_total: "100.00",
               ie_oppose_total: "50.00",
               ie_support_count: 1,
-              ie_oppose_count: 1
+              ie_oppose_count: 1,
+              ie_coverage: null
             },
             {
               candidacy_id: "99999999-9999-4999-8999-999999999999",
@@ -633,7 +635,13 @@ describe("civic detail page rendering", () => {
               ie_support_total: "0.00",
               ie_oppose_total: "0.00",
               ie_support_count: 0,
-              ie_oppose_count: 0
+              ie_oppose_count: 0,
+              // Measured zero: Schedule E was loaded and named someone else.
+              ie_coverage: {
+                activity_state: "loaded_zero",
+                completeness: "partial",
+                basis: "fec_schedule_e_transactions"
+              }
             }
           ]
         }
@@ -683,10 +691,13 @@ describe("civic detail page rendering", () => {
           contest_id: CONTEST_DETAIL.id,
           selected_cycle: 2026,
           candidate_count: 1,
-          total_raised: "0.00",
-          total_ie_support: "0.00",
-          total_ie_oppose: "0.00",
+          // The API now sends null here: the single candidacy has no linked FEC
+          // candidate, so no known value exists to total.
+          total_raised: null,
+          total_ie_support: null,
+          total_ie_oppose: null,
           has_unknown_candidate_money: true,
+          has_unknown_candidate_ie: true,
           rows: [
             {
               candidacy_id: CANDIDACY_ID,
@@ -708,10 +719,15 @@ describe("civic detail page rendering", () => {
               cash_on_hand: null,
               summary_source: null,
               fundraising_coverage: null,
-              ie_support_total: "0.00",
-              ie_oppose_total: "0.00",
-              ie_support_count: 0,
-              ie_oppose_count: 0
+              ie_support_total: null,
+              ie_oppose_total: null,
+              ie_support_count: null,
+              ie_oppose_count: null,
+              ie_coverage: {
+                activity_state: "not_loaded",
+                completeness: "unknown",
+                basis: "no_authoritative_load_evidence"
+              }
             }
           ]
         }
@@ -720,8 +736,24 @@ describe("civic detail page rendering", () => {
 
     expect(rendered.body).toContain('data-testid="race-money-unavailable"');
     expect(rendered.body).toContain("This is missing coverage, not zero fundraising.");
-    // The race totals must qualify themselves rather than pose as complete.
-    expect(rendered.body).toContain('data-testid="race-money-incomplete-note"');
+    // No qualifying note here any more, and its absence is the point: the note
+    // reads "these race totals cover only the candidates Civibus has loaded",
+    // which implies totals exist. With nothing loaded for anyone there are no
+    // totals to qualify, so the headline states the gap outright instead. The
+    // outside-spending half already behaves exactly this way.
+    expect(rendered.body).not.toContain('data-testid="race-money-incomplete-note"');
+    // The outside-spending headline must not invent a figure either: with no
+    // linked FEC candidate there is nothing a Schedule E filing could name.
+    expect(rendered.body).toContain("outside spending is not available");
+    // The fundraising headline must state the gap in words, exactly as the
+    // outside-spending half already does.
+    expect(rendered.body).toContain("the amount raised is not available");
+    // Whole-body now, not scoped to the scoreboard rows. The race-level
+    // `total_raised` rollup became nullable (civibus-nzz), so nothing on this
+    // page may publish a dollar figure about a race nobody measured. Scoping
+    // this to `<dd>` was the concession that let "$0.00 raised" survive in the
+    // headline; there is nothing left to concede.
+    expect(rendered.body).not.toContain("$0.00");
     // No candidate link at all: there is no FEC candidate row to link to.
     expect(rendered.body).not.toContain('href="/candidate/');
     // The person link still resolves, carrying the race's cycle.

@@ -7,13 +7,14 @@ import {
   capturePageLoadErrors,
   chartRegion,
   escapeRegExp,
-  expectBoundedNumericTickLabels,
+  expectAxisFormatMatchesDeclaredUnit,
   expectNoBackendFailureStates,
   expectNoChartFrameOverflow,
   expectNoHorizontalOverflow,
   expectNoMaterialNearBlackOverlay,
   expectNoOpaqueNearBlackPaints,
   expectRealChartRender,
+  expectTickLabelsInsidePlotBox,
   sampleVisibleRectPaints
 } from "./smoke-helpers";
 
@@ -241,7 +242,8 @@ async function expectRenderedFinanceChartsAreHonest(page: Page): Promise<void> {
   const chartRegions = renderedCharts.map((chart) => chart.chart);
   const chartFrames = renderedCharts.map((chart) => chart.frame);
   await expectNoOpaqueNearBlackPaints(chartRegions);
-  await expectBoundedNumericTickLabels(chartRegions);
+  await expectTickLabelsInsidePlotBox(chartRegions);
+  await expectAxisFormatMatchesDeclaredUnit(chartRegions);
   await expectNoChartFrameOverflow(chartFrames);
   await expectChartSourceLinksKeyboardReachable(chartFrames);
 }
@@ -308,7 +310,8 @@ async function expectOutsideSpendingLabelsWhenPresent(page: Page): Promise<void>
   await expect(outsideRegion.getByText(/support/i).first()).toBeVisible();
   await expect(outsideRegion.getByText(/oppose/i).first()).toBeVisible();
   await expectNoOpaqueNearBlackPaints(outsideRegion);
-  await expectBoundedNumericTickLabels([outsideRegion]);
+  await expectTickLabelsInsidePlotBox([outsideRegion]);
+  await expectAxisFormatMatchesDeclaredUnit([outsideRegion]);
   await expectNoChartFrameOverflow([outsideFrame]);
   await expectChartSourceLinksKeyboardReachable([outsideFrame]);
 }

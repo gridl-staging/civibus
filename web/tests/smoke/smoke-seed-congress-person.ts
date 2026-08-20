@@ -8,7 +8,7 @@
  * an ordered list of table writes.
  */
 // @ts-expect-error Smoke seed helpers run under Node ESM and import the TS module directly.
-import { SMOKE_CANDIDATE_NAME, SMOKE_CANDIDATE_TOTAL_RAISED, SMOKE_CANDIDATE_TOTAL_SPENT, SMOKE_CHART_LIVE_RECEIPT_INDIVIDUAL_DOLLARS, SMOKE_CHART_LIVE_RECEIPT_PAC_DOLLARS, SMOKE_CHART_LIVE_RECEIPT_TOTAL_DOLLARS, SMOKE_CHART_LIVE_SUMMARY_COVERAGE_END, SMOKE_COMMITTEE_NAME, SMOKE_CONGRESS_PORTRAIT_URL, SMOKE_FINANCE_LIVE_IE_COMMITTEE_B_NAME, SMOKE_IE_COMMITTEE_A_NAME, SMOKE_OFFICE_ID, SMOKE_PERSON_CANONICAL_NAME, SMOKE_PERSON_CASH_ON_HAND_DOLLARS, SMOKE_PERSON_PRIOR_UNITEMIZED_DOLLARS, SMOKE_PERSON_TOTAL_CONTRIBUTION_DOLLARS, SMOKE_PERSON_UNITEMIZED_DOLLARS } from "./fixtures.ts";
+import { SMOKE_CANDIDATE_NAME, SMOKE_CANDIDATE_TOTAL_RAISED, SMOKE_CANDIDATE_TOTAL_SPENT, SMOKE_CHART_LIVE_RECEIPT_INDIVIDUAL_DOLLARS, SMOKE_CHART_LIVE_RECEIPT_PAC_DOLLARS, SMOKE_CHART_LIVE_RECEIPT_TOTAL_DOLLARS, SMOKE_CHART_LIVE_SUMMARY_COVERAGE_END, SMOKE_COMMITTEE_NAME, SMOKE_CONGRESS_PORTRAIT_URL, SMOKE_FINANCE_LIVE_IE_COMMITTEE_B_NAME, SMOKE_IE_COMMITTEE_A_NAME, SMOKE_OFFICE_ID, SMOKE_PERSON_CASH_ON_HAND_DOLLARS, SMOKE_PERSON_PRIOR_UNITEMIZED_DOLLARS, SMOKE_PERSON_TOTAL_CONTRIBUTION_DOLLARS, SMOKE_PERSON_UNITEMIZED_DOLLARS } from "./fixtures.ts";
 // @ts-expect-error Smoke seed helpers run under Node ESM and import the TS module directly.
 import { cypherString, jsonbLiteral, moneyLiteral, sqlLiteral, sqlUuid } from "./smoke_seed_helpers.ts";
 // Type-only import: erased at emit, so the .ts extension needs no @ts-expect-error.
@@ -223,7 +223,7 @@ VALUES
     ${sqlUuid(SMOKE_CONGRESS_CIVICS_DATA_SOURCE_ID, "SMOKE_CONGRESS_CIVICS_DATA_SOURCE_ID")},
     ${sqlLiteral(`smoke-${scenarioSlug}-officeholding`)},
     ${sqlLiteral(`${sourceBaseUrl}/officeholding`)},
-    ${jsonbLiteral({ member_name: SMOKE_PERSON_CANONICAL_NAME, party: "DEM" })},
+    ${jsonbLiteral({ member_name: fixture.personCanonicalName, party: "DEM" })},
     '2026-06-01T12:00:00Z',
     ${sqlLiteral(`smoke-${scenarioSlug}-officeholding-hash`)}
   ),
@@ -242,13 +242,13 @@ VALUES
 }
 
 function buildSmokeCivicIdentityInserts(fixture: CongressPersonSmokeFixture): string {
-  const { SMOKE_CONGRESS_PERSON_ID, SMOKE_CONGRESS_FEC_CANDIDATE_ID, SMOKE_CONGRESS_DIVISION_ID, SMOKE_CONGRESS_SOURCE_RECORD_ID, divisionName } = fixture;
+  const { SMOKE_CONGRESS_PERSON_ID, SMOKE_CONGRESS_FEC_CANDIDATE_ID, SMOKE_CONGRESS_DIVISION_ID, SMOKE_CONGRESS_SOURCE_RECORD_ID, divisionName, personCanonicalName, personFirstName, personLastName } = fixture;
   return `INSERT INTO core.person (id, canonical_name, first_name, last_name, identifiers)
 VALUES (
   ${sqlUuid(SMOKE_CONGRESS_PERSON_ID, "SMOKE_CONGRESS_PERSON_ID")},
-  ${sqlLiteral(SMOKE_PERSON_CANONICAL_NAME)},
-  'Jane',
-  'Doe',
+  ${sqlLiteral(personCanonicalName)},
+  ${sqlLiteral(personFirstName)},
+  ${sqlLiteral(personLastName)},
   ${jsonbLiteral({ fec_candidate_id: SMOKE_CONGRESS_FEC_CANDIDATE_ID })}
 );
 INSERT INTO civic.electoral_division (
@@ -583,6 +583,6 @@ WHERE NOT EXISTS (
 SELECT *
 FROM ag_catalog.cypher('civibus', $$
   MERGE (n:Person {id: "${cypherString(SMOKE_CONGRESS_PERSON_ID)}"})
-  SET n.canonical_name = "${cypherString(SMOKE_PERSON_CANONICAL_NAME)}"
+  SET n.canonical_name = "${cypherString(fixture.personCanonicalName)}"
 $$) AS (v agtype);`;
 }

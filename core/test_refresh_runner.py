@@ -460,6 +460,68 @@ def test_build_refresh_plan_wires_federal_schedule_b_job_parameters(monkeypatch:
     assert request.path == config.path
 
 
+def test_build_refresh_plan_loads_schedule_e_for_every_active_cycle(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Schedule E must cover the same active-cycle window Schedule A does.
+
+    Loading only the current cycle left the previous cycle with no independent
+    expenditures at all, so every candidate in a 2024 race reported "outside
+    spending not loaded" no matter how much was actually spent on it.
+    """
+    connection = MagicMock()
+    data_source_id = UUID("6f93a177-c7ca-4a16-88e6-932245a1ddaf")
+    load_results = [object(), object()]
+
+    urlretrieve = MagicMock()
+    ensure_fec_bulk_data_source = MagicMock(return_value=data_source_id)
+    dispatch_load = MagicMock(side_effect=load_results)
+    get_connection = MagicMock(return_value=connection)
+
+    monkeypatch.setattr(job_builders, "urlretrieve", urlretrieve)
+    monkeypatch.setattr(job_builders, "get_connection", get_connection)
+    monkeypatch.setattr(job_builders, "ensure_fec_bulk_data_source", ensure_fec_bulk_data_source)
+    monkeypatch.setattr(job_builders, "dispatch_load", dispatch_load)
+
+    jobs = job_builders.build_refresh_plan(
+        scope="all",
+        parameters=runner.RunnerParameters(fec_cycle=2026, fec_limit=50),
+    )
+    jobs_by_key = {job.key: job for job in jobs}
+
+    result = jobs_by_key["federal-fec-schedule-e"].run_callable()
+
+    # The same two cycles Schedule A loads, from the same owner, in the same order.
+    assert job_builders._active_fec_transaction_cycles(2026) == (2024, 2026)
+    assert [call.args[0] for call in urlretrieve.call_args_list] == [
+        job_builders.fec_schedule_e_url(2024),
+        job_builders.fec_schedule_e_url(2026),
+    ]
+    assert [Path(call.args[1]).name for call in urlretrieve.call_args_list] == [
+        "independent_expenditure_2024.csv",
+        "independent_expenditure_2026.csv",
+    ]
+    assert result == load_results
+
+    get_connection.assert_called_once_with()
+    ensure_fec_bulk_data_source.assert_called_once_with(connection)
+    connection.close.assert_called_once_with()
+
+    assert dispatch_load.call_count == 2
+    dispatched_cycles = [call.kwargs["config"].cycle for call in dispatch_load.call_args_list]
+    assert dispatched_cycles == [2024, 2026]
+    for call in dispatch_load.call_args_list:
+        config = call.kwargs["config"]
+        assert call.kwargs["conn"] is connection
+        assert call.kwargs["data_source_id"] == data_source_id
+        assert config.mode == "single"
+        assert config.file_type == "schedule_e"
+        assert config.batch_size == 1000
+        assert config.limit is None
+        assert config.graph_enabled is False
+        assert config.with_transactions is False
+        assert call.kwargs["request"].file_type == "schedule_e"
+        assert call.kwargs["request"].path == config.path
+
+
 def test_build_refresh_plan_wires_federal_fec_masters_job_parameters(monkeypatch: pytest.MonkeyPatch) -> None:
     connection = MagicMock()
     data_source_id = UUID("6f93a177-c7ca-4a16-88e6-932245a1ddaf")

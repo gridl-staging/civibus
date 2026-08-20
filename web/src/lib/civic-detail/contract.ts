@@ -1,5 +1,8 @@
 import { encodeRoutePathSegment, type SourceInfo } from "$lib/entity-detail/contract";
-import type { CandidateFundraisingCoverage } from "$lib/campaign-finance-detail/contract";
+import type {
+  CandidateFundraisingCoverage,
+  CandidateMoneyCoverage
+} from "$lib/campaign-finance-detail/contract";
 
 export const ELECTION_TYPES = ["general", "primary", "runoff", "special", "recall"] as const;
 
@@ -167,10 +170,16 @@ export type ContestCandidateMoneyRow = {
   cash_on_hand: string | null;
   summary_source: string | null;
   fundraising_coverage: CandidateFundraisingCoverage | null;
-  ie_support_total: string;
-  ie_oppose_total: string;
-  ie_support_count: number;
-  ie_oppose_count: number;
+  /**
+   * Null when no Schedule E was loaded for the selected cycle. "Nothing was
+   * spent" and "nothing was loaded" are different claims; only `ie_coverage`
+   * says which one a zero here means, and a null must never render as $0.00.
+   */
+  ie_support_total: string | null;
+  ie_oppose_total: string | null;
+  ie_support_count: number | null;
+  ie_oppose_count: number | null;
+  ie_coverage: CandidateMoneyCoverage | null;
 };
 
 /**
@@ -184,10 +193,18 @@ export type ContestCandidateMoneyResponse = {
   contest_id: string;
   selected_cycle: number;
   candidate_count: number;
-  total_raised: string;
-  total_ie_support: string;
-  total_ie_oppose: string;
+  /**
+   * Null when no candidate in the race has loaded fundraising. Summing an empty
+   * set of known values gives no total, and "Civibus has loaded $0.00 raised"
+   * would state a measurement nobody took. A race whose loaded candidates
+   * genuinely raised nothing still sends "0.00".
+   */
+  total_raised: string | null;
+  /** Null when no candidate in the race has loaded outside spending. */
+  total_ie_support: string | null;
+  total_ie_oppose: string | null;
   has_unknown_candidate_money: boolean;
+  has_unknown_candidate_ie: boolean;
   rows: ContestCandidateMoneyRow[];
 };
 
@@ -273,21 +290,40 @@ export type CongressMemberSummary = {
 };
 
 /**
+ * One seated federal official's money row, as served by
+ * `/congress/money-summaries` and by the public JSON/CSV export.
+ *
+ * Every money field is nullable and null always means UNKNOWN, never zero.
+ * `has_fec_money` is a weaker discriminator than it looks: a member can be
+ * linked to a real FEC candidate and still have had no Schedule A loaded for
+ * the cycle, so `has_fec_money` is true while nothing is known. Read
+ * `fundraising_coverage` / `ie_coverage` for that, and never infer coverage
+ * from the numbers themselves.
  */
 export type CongressMemberMoneySummary = {
   person_id: string;
   person_name: string;
   has_fec_money: boolean;
   candidate_id: string | null;
-  total_raised: string;
-  total_spent: string;
-  net: string;
+  /**
+   * Null when no Schedule A was loaded for the selected cycle, or when the
+   * member has no linked FEC candidate at all. A member whose loaded filings
+   * genuinely total nothing still sends "0.00" — that zero is a measurement
+   * and must keep rendering as $0.00.
+   */
+  total_raised: string | null;
+  total_spent: string | null;
+  net: string | null;
   cash_on_hand: string | null;
   summary_source: string | null;
-  ie_support_total: string;
-  ie_oppose_total: string;
-  ie_support_count: number;
-  ie_oppose_count: number;
+  /** Present only when the state is not `populated`, so absent means populated. */
+  fundraising_coverage?: CandidateFundraisingCoverage | null;
+  /** Null when no Schedule E was loaded for the selected cycle. */
+  ie_support_total: string | null;
+  ie_oppose_total: string | null;
+  ie_support_count: number | null;
+  ie_oppose_count: number | null;
+  ie_coverage?: CandidateMoneyCoverage | null;
   sources: SourceInfo[];
 };
 

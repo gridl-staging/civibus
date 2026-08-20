@@ -109,6 +109,8 @@ const {
   SMOKE_STATE_DETAIL_TOP_COMMITTEE_TOTAL,
   SMOKE_STATE_DETAIL_TOP_IE_SPENDER_NAME,
   SMOKE_STATE_DETAIL_TOP_IE_SPENDER_TOTAL,
+  SMOKE_CANDIDATE_NAME_SEARCH_QUERY,
+  SMOKE_CANDIDATE_NAME_SEARCH_RAW_NAME,
   SMOKE_SEARCH_CANDIDATE_QUERY,
   SMOKE_SEARCH_CANDIDATE_RESULT_NAME,
   SMOKE_SEARCH_CONTEST_QUERY,
@@ -2849,5 +2851,20 @@ export const smokeFixtures = {
       top_committees: [],
       top_ie_spenders: []
     }
+  },
+  // Candidate-list name search. Keyed on a query with no entity_type, because
+  // the /candidates name box deliberately sends `q` alone; see
+  // docs/reference/screen_specs/candidate_list.md -> "Name-search contract".
+  candidateNameSearch: {
+    query: SMOKE_CANDIDATE_NAME_SEARCH_QUERY,
+    results: [
+      {
+        entity_type: "person",
+        entity_id: SMOKE_PERSON_ID,
+        // Raw FEC casing on purpose: the browser assertion proves the shared
+        // name formatter runs on the rendered card, not just in unit tests.
+        name: SMOKE_CANDIDATE_NAME_SEARCH_RAW_NAME
+      }
+    ]
   }
 } as const;

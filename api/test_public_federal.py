@@ -1666,6 +1666,47 @@ def test_export_csv_header_and_known_row(api_client: TestClient, db_conn: psycop
     }
 
 
+def test_export_csv_leaves_unloaded_fundraising_cells_empty(
+    api_client: TestClient, db_conn: psycopg.Connection
+) -> None:
+    """An unknown is an empty CSV cell, never ``0.00``.
+
+    A downstream spreadsheet cannot see a coverage block; the cell is the whole
+    claim. ``0.00`` there sums into totals and averages as a real measurement,
+    which is the CSV form of the same fabrication. The precedent is the
+    Schedule E columns, which already ship empty when nothing was loaded.
+    """
+    expectations = _seed_current_federal_members_mix(db_conn)
+    member = _member_by_name(expectations, "Alice Representative")
+    # Official totals whose coverage window ends in a prior cycle and which are
+    # not promotable, so the selected cycle resolves to not_loaded.
+    _insert_candidate_with_official_totals(
+        db_conn,
+        candidate_id=UUID("bb000000-0000-0000-0000-000000000271"),
+        fec_candidate_id="H4NC01271",
+        name="Alice Unloaded Cycle Candidate",
+        person_id=member.person_id,
+        office="H",
+        state="NC",
+        district="01",
+        total_receipts=Decimal("31077805.53"),
+        total_disbursements=Decimal("31027960.15"),
+        cash_on_hand=Decimal("49845.38"),
+        summary_coverage_end_date=date(2024, 12, 31),
+    )
+
+    response = api_client.get("/public/v1/federal/export.csv")
+
+    assert response.status_code == 200
+    row = _public_money_csv_row_for_person(response.text, member.person_id)
+    assert row["has_fec_money"] == "true"
+    assert row["total_raised"] == ""
+    assert row["total_spent"] == ""
+    assert row["net"] == ""
+    assert row["cash_on_hand"] == ""
+    assert row["summary_source"] == ""
+
+
 @pytest.mark.parametrize(
     ("raw_value", "expected_csv_value"),
     [
@@ -1871,8 +1912,10 @@ def _assert_vice_president_out_of_cycle_money_row(row: dict[str, object], candid
     assert row["cash_on_hand"] == "135631.56"
     assert row["out_of_cycle_official_total"]["coverage_start_date"] == "2023-01-01"
     assert row["out_of_cycle_official_total"]["coverage_end_date"] == "2024-12-31"
-    assert row["ie_support_total"] == "0.00"
-    assert row["ie_oppose_total"] == "0.00"
+    # No Schedule E in this cycle window: unknown, not a measured zero.
+    assert row["ie_support_total"] is None
+    assert row["ie_oppose_total"] is None
+    assert row["ie_coverage"]["activity_state"] == "not_loaded"
     assert row["sources"] == []
 
 
@@ -2077,9 +2120,12 @@ def test_public_member_money_rejects_linked_candidate_for_prior_office(
     payload = response.json()
     assert payload["has_fec_money"] is False
     assert payload["candidate_id"] is None
-    assert payload["total_raised"] == "0"
-    assert payload["total_spent"] == "0"
-    assert payload["net"] == "0"
+    # The prior-office candidate was rejected, so no FEC identity is attached to
+    # this member for the selected cycle and nothing about their fundraising is
+    # known -- not zero.
+    assert payload["total_raised"] is None
+    assert payload["total_spent"] is None
+    assert payload["net"] is None
 
 
 def test_public_member_money_uses_committee_summary_when_candidate_official_totals_missing(
@@ -2171,8 +2217,17 @@ def test_public_member_money_preserves_not_loaded_coverage_for_selected_zero_can
     payload = response.json()
     assert payload["has_fec_money"] is True
     assert payload["candidate_id"] == str(candidate_id)
-    assert payload["total_raised"] == "0.00"
-    assert payload["summary_source"] == "derived"
+    # The zeros this summary carries are pre-seeded placeholders for a load that
+    # never happened, not measurements. The row used to publish them beside its
+    # own no_authoritative_load_evidence coverage block: one row, two claims,
+    # only one of which can be true (civibus-9nu).
+    assert payload["total_raised"] is None
+    assert payload["total_spent"] is None
+    assert payload["net"] is None
+    assert payload["cash_on_hand"] is None
+    # summary_source names the origin of a figure; with no figure it has no
+    # referent either.
+    assert payload["summary_source"] is None
     assert payload["fundraising_coverage"] == {
         "activity_state": "not_loaded",
         "basis": "no_authoritative_load_evidence",
@@ -2213,14 +2268,20 @@ def test_public_member_money_reports_no_fec_money_for_member_without_candidate(
     assert payload["has_fec_money"] is False
     assert payload["candidate_id"] is None
     assert payload["summary_source"] is None
-    assert payload["total_raised"] == "0"
-    assert payload["total_spent"] == "0"
-    assert payload["net"] == "0"
+    # No cf.candidate row: no committee could have filed a Schedule A against
+    # this member, so their fundraising is unknown, never a minted zero. The
+    # same conclusion the outside-spending fields below already reached.
+    assert payload["total_raised"] is None
+    assert payload["total_spent"] is None
+    assert payload["net"] is None
     assert payload["cash_on_hand"] is None
-    assert payload["ie_support_total"] == "0"
-    assert payload["ie_oppose_total"] == "0"
-    assert payload["ie_support_count"] == 0
-    assert payload["ie_oppose_count"] == 0
+    assert payload["fundraising_coverage"]["activity_state"] == "not_loaded"
+    # No cf.candidate row: outside spending is unknown, never a minted zero.
+    assert payload["ie_support_total"] is None
+    assert payload["ie_oppose_total"] is None
+    assert payload["ie_support_count"] is None
+    assert payload["ie_oppose_count"] is None
+    assert payload["ie_coverage"]["activity_state"] == "not_loaded"
     assert [source["source_record_key"] for source in payload["sources"]] == [f"officeholding-{member.person_id}"]
 
 

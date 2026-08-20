@@ -210,7 +210,16 @@ test.describe("shell and responsive smoke", () => {
     });
     await expect(page.getByRole("heading", { name: "Civibus" })).toBeVisible();
     await expect(page.getByRole("heading", { level: 2, name: "Methodology", exact: true })).toBeVisible();
-    await expect(page.getByText(SMOKE_METHODOLOGY_SECTION_HEADING)).toBeVisible();
+    // Role + level + exact, not getByText: the section heading is the single
+    // word "Freshness", and getByText matches substrings case-insensitively, so
+    // it also resolved the paragraph "FEC bulk freshness health is bounded at
+    // 7d…" and failed on a strict-mode violation rather than on anything about
+    // the page. Asserting the heading role and its level is strictly more than
+    // the text match proved: the section must render as a real h3 under the
+    // Methodology h2, which is the disclosure structure the screen spec pins.
+    await expect(
+      page.getByRole("heading", { level: 3, name: SMOKE_METHODOLOGY_SECTION_HEADING, exact: true })
+    ).toBeVisible();
     await expect(page.getByText(SMOKE_METHODOLOGY_SECTION_BODY)).toBeVisible();
     // No confidence-labels assertion here on purpose. The page renders exactly the
     // four disclosure regions the screen spec pins (Schedule A scope, Donor

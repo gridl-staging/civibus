@@ -1,5 +1,9 @@
 import { defineConfig, devices } from 'playwright/test';
 import { resolveSmokeApiPort, resolveSmokeWebPort } from "./src/lib/server/api/smoke-port";
+import {
+  resolveSmokeExecutionMode,
+  specsExcludedFromMode
+} from "./tests/smoke/execution-contract";
 
 const API_PORT = resolveSmokeApiPort(process.env);
 const WEB_PORT = resolveSmokeWebPort(process.env);
@@ -22,8 +26,17 @@ const backendServer = USE_LIVE_API
       }
     ];
 
+const EXECUTION_MODE = resolveSmokeExecutionMode(process.env);
+
 export default defineConfig({
   testDir: './tests/smoke',
+  // Routing, not skipping. tests/smoke/execution-contract.json declares which
+  // backend each spec's oracle is written against; a spec that cannot hold in
+  // this mode is not collected, so the run neither fails on it nor reports a
+  // skip that hides which lane owns it. The declaration carries the reason and
+  // the owning lane per spec, and tests/ci/test_ci_workflow_contract.py refuses
+  // an undeclared spec, an unexplained exclusion, or a lane with no nightly job.
+  testIgnore: specsExcludedFromMode(EXECUTION_MODE),
   timeout: 30_000,
   fullyParallel: true,
   // Production smoke runs read-only against ONE small live Fly instance. Running

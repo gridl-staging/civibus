@@ -651,3 +651,80 @@ describe('search presentation', () => {
     });
   });
 });
+
+describe('search result name formatting', () => {
+  // Contract: docs/reference/screen_specs/search.md -> "Results". Person and
+  // candidate names route through the single name-format owner; every other
+  // entity type is not a personal name and renders verbatim.
+  it('formats a person result name through the shared owner', () => {
+    // Live specimen: /search?q=ossoff&entity_type=person returned this exact
+    // pair from production on 2026-08-19 — two core.person rows, one human.
+    const [canonical, duplicate] = buildSearchResultCards([
+      {
+        entity_type: 'person',
+        entity_id: 'f80b982e-4155-4404-a04a-a2cb4d792280',
+        name: 'Ossoff, Jon'
+      },
+      {
+        entity_type: 'person',
+        entity_id: '4cd26288-8500-49d7-bd43-580c5ac17775',
+        name: 'OSSOFF, T. JONATHAN'
+      }
+    ]);
+
+    expect(canonical.name).toBe('Ossoff, Jon');
+    expect(duplicate.name).toBe('Ossoff, T. Jonathan');
+    // Deliberate: consistent casing makes the duplicate-identity defect
+    // (civibus-5lm) legible instead of disguising it as an unrelated record.
+    // These two rows are one human and must read that way.
+    expect(canonical.entityId).not.toBe(duplicate.entityId);
+  });
+
+  it('formats a candidate result name through the shared owner', () => {
+    const [card] = buildSearchResultCards([
+      {
+        entity_type: 'candidate',
+        entity_id: '4cd26288-8500-49d7-bd43-580c5ac17775',
+        name: 'OSSOFF, T. JONATHAN'
+      }
+    ]);
+
+    expect(card.name).toBe('Ossoff, T. Jonathan');
+  });
+
+  it('leaves committee and org result names verbatim', () => {
+    const cards = buildSearchResultCards([
+      {
+        entity_type: 'committee',
+        entity_id: '3b2e3182-4047-4fb5-a8f7-f6cd3d4b93e1',
+        name: 'JON OSSOFF FOR SENATE'
+      },
+      {
+        entity_type: 'org',
+        entity_id: '223ba311-828d-431b-81b6-4d5c96184387',
+        name: 'COOPER OSSOFF VICTORY FUND'
+      }
+    ]);
+
+    expect(cards[0].name).toBe('JON OSSOFF FOR SENATE');
+    expect(cards[1].name).toBe('COOPER OSSOFF VICTORY FUND');
+  });
+
+  it('leaves office and contest result names verbatim', () => {
+    const cards = buildSearchResultCards([
+      {
+        entity_type: 'office',
+        entity_id: '11111111-1111-4111-8111-111111111111',
+        name: 'U.S. SENATOR FROM GEORGIA'
+      },
+      {
+        entity_type: 'contest',
+        entity_id: '22222222-2222-4222-8222-222222222222',
+        name: 'GA SENATE GENERAL ELECTION'
+      }
+    ]);
+
+    expect(cards[0].name).toBe('U.S. SENATOR FROM GEORGIA');
+    expect(cards[1].name).toBe('GA SENATE GENERAL ELECTION');
+  });
+});

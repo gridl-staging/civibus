@@ -3558,16 +3558,70 @@ def _qualifying_fundraising_coverage(
     return _not_loaded_candidate_money_coverage()
 
 
+def _has_schedule_e_activity(
+    *,
+    support_total: Decimal,
+    oppose_total: Decimal,
+    support_count: int,
+    oppose_count: int,
+) -> bool:
+    """True when this candidate has qualifying Schedule E rows of its own.
+
+    Sibling of ``_has_selected_cycle_fundraising_activity``. Owning this
+    predicate separately lets callers skip the load-evidence probe on the
+    populated path without restating the condition, which would let the two
+    copies drift apart.
+    """
+    return support_count > 0 or oppose_count > 0 or support_total != _MONEY_SCALE or oppose_total != _MONEY_SCALE
+
+
 def _schedule_e_coverage(
     *,
     support_total: Decimal,
     oppose_total: Decimal,
     support_count: int,
     oppose_count: int,
+    has_load_evidence: bool,
 ) -> dict[str, str]:
-    if support_count > 0 or oppose_count > 0 or support_total != _MONEY_SCALE or oppose_total != _MONEY_SCALE:
+    """Classify one candidate's Schedule E aggregates into a coverage state.
+
+    Three states, three different true statements, and the product must never
+    publish one of them while another is true:
+
+    ``populated``
+        The candidate has qualifying Schedule E rows. Those rows are their own
+        load evidence, so ``has_load_evidence`` cannot downgrade this branch.
+    ``loaded_zero``
+        Every aggregate is zero *and* Schedule E was loaded for this cycle
+        window. The zero is measured, so ``$0.00`` is a true statement about
+        this candidate and must keep rendering as a figure.
+    ``not_loaded``
+        Every aggregate is zero and nothing was loaded for this window. The
+        zero is an artifact of the sum over an empty set, not a measurement,
+        so no figure at all may be published for it.
+
+    ``has_load_evidence`` is a required keyword with no default on purpose: a
+    default would let a new caller fall through to "loaded" and silently
+    reintroduce the fabricated ``$0.00`` this function exists to prevent.
+
+    ``completeness`` stays ``partial`` on both loaded branches. We know Schedule
+    E rows are present for the window; we never claim the whole cycle's filings
+    are in, which is a stronger claim than the loader can support.
+    """
+    if _has_schedule_e_activity(
+        support_total=support_total,
+        oppose_total=oppose_total,
+        support_count=support_count,
+        oppose_count=oppose_count,
+    ):
         return _candidate_money_coverage(
             activity_state="populated",
+            completeness="partial",
+            basis="fec_schedule_e_transactions",
+        )
+    if has_load_evidence:
+        return _candidate_money_coverage(
+            activity_state="loaded_zero",
             completeness="partial",
             basis="fec_schedule_e_transactions",
         )
@@ -4675,6 +4729,22 @@ _CANDIDATE_IE_SUMMARIES_SQL = f"""
     GROUP BY candidate_id
 """
 
+# Window-level Schedule E load evidence. Deliberately not scoped to a candidate:
+# the FEC publishes independent expenditures as one bulk file per cycle, so
+# "was Schedule E loaded" is a fact about the file, and asking it per candidate
+# could only return that candidate's own row count — the very value we are
+# trying to interpret, not evidence about it.
+_SCHEDULE_E_WINDOW_LOAD_EVIDENCE_SQL = f"""
+    SELECT EXISTS (
+        SELECT 1
+        FROM cf.transaction t
+        {_CANDIDATE_IE_SOURCE_RECORD_JOIN_SQL}
+        WHERE t.transaction_date >= %s
+          AND t.transaction_date <= %s
+          AND {_CANDIDATE_IE_QUALIFYING_PREDICATE_SQL}
+    ) AS has_load_evidence
+"""
+
 _CANDIDATE_IE_TOP_SPENDERS_SQL = f"""
     SELECT
         t.committee_id,
@@ -5490,6 +5560,31 @@ def fetch_candidate_ie_transactions(
         return list(cursor.fetchall())
 
 
+def schedule_e_window_has_load_evidence(
+    conn: psycopg.Connection,
+    selected_cycle: SelectedCycle | int | None = None,
+) -> bool:
+    """True when any qualifying Schedule E row exists inside the cycle window.
+
+    This is the evidence that tells a *measured* zero apart from an unmeasured
+    one. Cost is one indexed existence probe per request:
+    ``idx_transaction_support_oppose`` is a partial index over IE rows only, so
+    even the negative answer — the case that cannot short-circuit on the first
+    match — scans Schedule E volume rather than the whole transaction table.
+
+    Returns ``False`` whenever no such row exists, including on an empty
+    database. Absence of evidence must never read as evidence of a load.
+    """
+    cycle = _coerce_selected_cycle(selected_cycle)
+    with conn.cursor() as cursor:
+        cursor.execute(
+            _SCHEDULE_E_WINDOW_LOAD_EVIDENCE_SQL,
+            (cycle.coverage_start_date, cycle.coverage_end_date),
+        )
+        evidence_row = cursor.fetchone()
+    return bool(evidence_row[0]) if evidence_row is not None else False
+
+
 def fetch_candidate_ie_summary(
     conn: psycopg.Connection,
     candidate_id: UUID,
@@ -5535,28 +5630,38 @@ def fetch_candidate_ie_summary(
         _quantize_money_fields(top_spender_row, "total_amount")
 
     excluded_outlier_count = 0 if outlier_count_row is None else outlier_count_row["excluded_outlier_count"]
+    support_total = _quantize_money(summary_row["support_total"])
+    oppose_total = _quantize_money(summary_row["oppose_total"])
+    aggregates = {
+        "support_total": support_total,
+        "oppose_total": oppose_total,
+        "support_count": summary_row["support_count"],
+        "oppose_count": summary_row["oppose_count"],
+    }
+    # Only the all-zero branch consults load evidence, so probe lazily: a
+    # candidate that already has Schedule E rows never pays for the extra query.
+    has_load_evidence = _has_schedule_e_activity(**aggregates) or schedule_e_window_has_load_evidence(conn, cycle)
     return {
         "candidate_id": candidate_id,
         **cycle.as_payload(),
-        "support_total": _quantize_money(summary_row["support_total"]),
-        "oppose_total": _quantize_money(summary_row["oppose_total"]),
-        "support_count": summary_row["support_count"],
-        "oppose_count": summary_row["oppose_count"],
+        **aggregates,
         "top_spenders": top_spender_rows,
         "excluded_outlier_count": excluded_outlier_count,
-        "coverage": _schedule_e_coverage(
-            support_total=_quantize_money(summary_row["support_total"]),
-            oppose_total=_quantize_money(summary_row["oppose_total"]),
-            support_count=summary_row["support_count"],
-            oppose_count=summary_row["oppose_count"],
-        ),
+        "coverage": _schedule_e_coverage(**aggregates, has_load_evidence=has_load_evidence),
     }
 
 
 def _zero_candidate_ie_summary(
     candidate_id: UUID,
     selected_cycle: SelectedCycle | int | None = None,
+    *,
+    has_load_evidence: bool,
 ) -> dict[str, Any]:
+    """Seed row for a candidate the IE aggregate query returned nothing for.
+
+    The zeros here are placeholders, never measurements; ``coverage`` is the
+    only field that says whether they may be published as figures.
+    """
     cycle = _coerce_selected_cycle(selected_cycle)
     return {
         "candidate_id": candidate_id,
@@ -5567,7 +5672,13 @@ def _zero_candidate_ie_summary(
         "oppose_count": 0,
         "top_spenders": [],
         "excluded_outlier_count": 0,
-        "coverage": _not_loaded_candidate_money_coverage(),
+        "coverage": _schedule_e_coverage(
+            support_total=_MONEY_SCALE,
+            oppose_total=_MONEY_SCALE,
+            support_count=0,
+            oppose_count=0,
+            has_load_evidence=has_load_evidence,
+        ),
     }
 
 
@@ -5578,9 +5689,16 @@ def fetch_candidate_ie_summaries(
 ) -> dict[UUID, dict[str, Any]]:
     """Fetch public IE support/oppose totals for many candidates."""
     cycle = _coerce_selected_cycle(selected_cycle)
-    summaries = {candidate_id: _zero_candidate_ie_summary(candidate_id, cycle) for candidate_id in candidate_ids}
     if not candidate_ids:
-        return summaries
+        return {}
+
+    # One probe for the whole batch: load evidence is a property of the cycle
+    # window, so a race page pays for it once rather than once per candidate.
+    has_load_evidence = schedule_e_window_has_load_evidence(conn, cycle)
+    summaries = {
+        candidate_id: _zero_candidate_ie_summary(candidate_id, cycle, has_load_evidence=has_load_evidence)
+        for candidate_id in candidate_ids
+    }
 
     with conn.cursor(row_factory=dict_row) as cursor:
         cursor.execute(
@@ -5612,6 +5730,7 @@ def fetch_candidate_ie_summaries(
                 oppose_total=oppose_total,
                 support_count=row["support_count"],
                 oppose_count=row["oppose_count"],
+                has_load_evidence=has_load_evidence,
             ),
         }
     return summaries

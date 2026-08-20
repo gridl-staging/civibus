@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 from datetime import date
 from decimal import Decimal
+from collections.abc import Iterable
 from typing import Any, Literal
 from uuid import UUID
 
@@ -66,7 +67,7 @@ from api.queries.civics import (
     fetch_state_geometry,
     fetch_upcoming_election_contests,
 )
-from api.routes.public_federal import build_public_federal_money_rows, public_money_totals
+from api.routes.public_federal import build_public_federal_money_rows, public_ie_totals, public_money_totals
 
 router = APIRouter()
 _WINNER_CANDIDACY_STATUSES = {"elected", "won", "winner"}
@@ -201,12 +202,26 @@ def get_contest_candidate_money(
         contest_id=contest_id,
         selected_cycle=selected_cycle.selected_cycle,
         candidate_count=len(rows),
-        total_raised=sum((row.total_raised for row in rows if row.total_raised is not None), Decimal("0.00")),
-        total_ie_support=sum((row.ie_support_total for row in rows), Decimal("0.00")),
-        total_ie_oppose=sum((row.ie_oppose_total for row in rows), Decimal("0.00")),
+        # Same owner as the outside-spending rollups below, for the same reason:
+        # summing only known values floored at Decimal("0.00") could not tell a
+        # race that raised nothing from a race nobody had measured, and it
+        # published the second as the first.
+        total_raised=_known_money_total(row.total_raised for row in rows),
+        # Sum only what is known, and stay None when nothing is: a race where no
+        # Schedule E was loaded has no total, and printing "$0.00 supporting"
+        # as the headline would be the loudest false claim on the page.
+        total_ie_support=_known_money_total(row.ie_support_total for row in rows),
+        total_ie_oppose=_known_money_total(row.ie_oppose_total for row in rows),
         has_unknown_candidate_money=any(row.total_raised is None for row in rows),
+        has_unknown_candidate_ie=any(row.ie_support_total is None for row in rows),
         rows=rows,
     )
+
+
+def _known_money_total(values: Iterable[Decimal | None]) -> Decimal | None:
+    """Total the known values, or None when none of them are known."""
+    known = [value for value in values if value is not None]
+    return sum(known, Decimal("0.00")) if known else None
 
 
 def _contest_candidate_money_row(
@@ -236,15 +251,17 @@ def _contest_candidate_money_row(
         "candidate_slug": link["candidate_slug"],
         "candidate_slug_is_unique": bool(link["candidate_slug_is_unique"]),
         "candidate_identity_is_safe": bool(link["candidate_identity_is_safe"]),
-        # A candidacy with no FEC candidate row is not a candidate with $0; the
-        # IE aggregates are genuinely zero because there is nothing to spend on.
-        "ie_support_total": Decimal("0.00") if ie_summary is None else ie_summary["support_total"],
-        "ie_oppose_total": Decimal("0.00") if ie_summary is None else ie_summary["oppose_total"],
-        "ie_support_count": 0 if ie_summary is None else ie_summary["support_count"],
-        "ie_oppose_count": 0 if ie_summary is None else ie_summary["oppose_count"],
+        # ``public_ie_totals`` is the outside-spending half of the same shared
+        # owner, so the race page and the member page cannot disagree about
+        # whether a candidate's $0.00 is measured or missing.
+        **public_ie_totals(ie_summary),
     }
     if summary is None:
-        return ContestCandidateMoneyRow.model_validate({**base, "has_fec_money": False})
+        # No ``cf.candidate`` row, so no committee could have filed a Schedule A
+        # against this candidacy. Routed through the same owner with ``None`` as
+        # the outside-spending half above, so both halves of the row state the
+        # absence the same way instead of one of them relying on has_fec_money.
+        return ContestCandidateMoneyRow.model_validate({**base, "has_fec_money": False, **public_money_totals(None)})
 
     return ContestCandidateMoneyRow.model_validate({**base, "has_fec_money": True, **public_money_totals(summary)})
 

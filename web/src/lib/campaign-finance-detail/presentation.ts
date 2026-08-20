@@ -5,6 +5,7 @@ import {
   type TrustSectionViewModel
 } from "$lib/detail-trust/presentation";
 import { formatCountLabel } from "$lib/count-label";
+import { formatPersonDisplayName } from "$lib/display-name";
 import {
   buildCandidateHref,
   buildCommitteeHref,
@@ -934,8 +935,12 @@ export function buildCommitteeFactRows(detail: CommitteeDetailResponse): Campaig
 /** Formats candidate fields and linked canonical records for the detail summary. */
 export function buildCandidateFactRows(detail: CandidateDetailResponse): CampaignFinanceFactRow[] {
   const nameLabel = detail.identity_is_safe ? "Candidate name" : "FEC-filed candidate name";
+  // The safe-identity row *is* the candidate's public identity, so it takes the
+  // shared person-name format. The unsafe row is labelled as the filed string
+  // and exists as source evidence; re-casing it would misreport the filing.
+  const nameValue = detail.identity_is_safe ? formatPersonDisplayName(detail.name) : detail.name;
   return [
-    { label: nameLabel, value: detail.name, href: null },
+    { label: nameLabel, value: nameValue, href: null },
     { label: "FEC candidate ID", value: detail.fec_candidate_id, href: null },
     buildLinkFactRow("Canonical person", "person", detail.person_id, PERSON_RECORD_LINK_VALUE_PREFIX),
     buildLinkFactRow(
@@ -1094,8 +1099,11 @@ export function buildCandidateDetailShellPresentation(
   const identityQualifier = detail.identity_is_safe
     ? null
     : "FEC-filed candidate name needs review.";
+  // Candidate names are personal names and go through the shared format owner.
+  // Committee names deliberately do not: a committee is an organization, and
+  // `Last, First` casing rules do not hold for one.
   const canonicalName = detail.identity_is_safe
-    ? resolveCanonicalName(detail.name, "Candidate")
+    ? resolveCanonicalName(formatPersonDisplayName(detail.name), "Candidate")
     : "Candidate record";
 
   return {

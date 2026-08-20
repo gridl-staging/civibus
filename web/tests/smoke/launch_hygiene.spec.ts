@@ -61,6 +61,15 @@ test.describe("launch hygiene", () => {
     expect(staticResponse.headers()["cache-control"]).toBe("public, max-age=900");
     const staticXml = await staticResponse.text();
     expect(staticXml).toContain('<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">');
+    // Exact set, deliberately: the sitemap is what search engines are told
+    // exists, so an omission and an addition are both defects. The literals
+    // mirror STATIC_PATHS in web/src/lib/server/sitemap.ts, which cannot be
+    // imported here (it resolves $lib and $env aliases that the Node ESM spec
+    // process does not). web/src/routes/sitemap.xml/server.test.ts pins the same
+    // list at unit level; this assertion is the one that proves the served HTTP
+    // route emits it. The trust pages below were added to STATIC_PATHS by
+    // 4a1e9a278 and this expectation was not updated with them, which is the
+    // staleness an exact set is supposed to catch.
     expect(new Set(locPaths(staticXml))).toEqual(
       new Set([
         "/",
@@ -70,6 +79,9 @@ test.describe("launch hygiene", () => {
         SMOKE_COVERAGE_ROUTE_PATH,
         SMOKE_CALENDAR_ROUTE_PATH,
         SMOKE_DATA_SOURCES_ROUTE_PATH,
+        "/about",
+        "/contact",
+        "/privacy",
         SMOKE_ELECTION_ROUTE_PATH
       ])
     );

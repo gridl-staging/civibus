@@ -786,19 +786,32 @@ class PublicMemberMoneySummary(BaseModel):
     person_name: str
     has_fec_money: bool
     candidate_id: UUID | None = None
-    total_raised: Decimal
-    total_spent: Decimal
-    net: Decimal
+    # Nullable for the same reason as the outside-spending fields below: when
+    # no Schedule A was loaded for the selected cycle — or the member has no
+    # linked FEC candidate at all — this member's fundraising is unknown, and a
+    # serialized ``0.00`` would publish that unknown as a measured zero right
+    # beside a ``fundraising_coverage`` block saying nobody measured it.
+    # A candidate whose loaded filings genuinely total nothing still sends
+    # ``"0.00"``; the coverage state, never the number, says which is which.
+    total_raised: Decimal | None = None
+    total_spent: Decimal | None = None
+    net: Decimal | None = None
     cash_on_hand: Decimal | None = None
     summary_source: str | None = None
     fundraising_coverage: CandidateFundraisingCoverage | None = Field(None, exclude_if=lambda value: value is None)
     out_of_cycle_official_total: CandidateOutOfCycleOfficialTotal | None = Field(
         None, exclude_if=lambda value: value is None
     )
-    ie_support_total: Decimal
-    ie_oppose_total: Decimal
-    ie_support_count: int
-    ie_oppose_count: int
+    # Nullable for the same reason as the fundraising side: when no Schedule E
+    # was loaded for the selected cycle, this member's outside spending is
+    # unknown, and a serialized ``0`` would publish that unknown as a measured
+    # zero. ``ie_coverage`` is attached only when the state is not ``populated``
+    # so the exported payload shape is unchanged for rows that do have data.
+    ie_support_total: Decimal | None = None
+    ie_oppose_total: Decimal | None = None
+    ie_support_count: int | None = None
+    ie_oppose_count: int | None = None
+    ie_coverage: CandidateMoneyCoverage | None = Field(None, exclude_if=lambda value: value is None)
     sources: list[SourceInfo]
 
 

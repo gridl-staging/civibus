@@ -55,6 +55,7 @@
       kind="line"
       title="Cash on hand trend"
       ariaLabel="Cash on hand trend by filing period"
+      unit="dollars"
       series={chartSeries}
     />
     {#each orderedPoints as point (point.periodEnd)}

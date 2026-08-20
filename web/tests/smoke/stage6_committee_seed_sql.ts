@@ -1,7 +1,19 @@
 // @ts-expect-error Smoke seed helpers run under Node ESM and import the TS module directly.
-import { SMOKE_STAGE6_COMMITTEE_ID, SMOKE_STAGE6_COMMITTEE_NAME, SMOKE_STAGE6_COMMITTEE_SUMMARY_ID, SMOKE_STAGE6_DATA_SOURCE_ID, SMOKE_STAGE6_FEC_CANDIDATE_ID, SMOKE_STAGE6_FEC_COMMITTEE_ID, SMOKE_STAGE6_LINKED_CANDIDATE_ID, SMOKE_STAGE6_LINKED_CANDIDATE_NAME, SMOKE_STAGE6_LINK_ID, SMOKE_STAGE6_SOURCE_RECORD_ID } from "./fixtures.ts";
+import { SMOKE_LIVE_API_BASE_URL, SMOKE_STAGE6_COMMITTEE_ID, SMOKE_STAGE6_COMMITTEE_CYCLE_LABEL, SMOKE_STAGE6_COMMITTEE_NAME, SMOKE_STAGE6_COMMITTEE_SUMMARY_ID, SMOKE_STAGE6_CURRENT_CYCLE_SUMMARY_ID, SMOKE_STAGE6_DATA_SOURCE_ID, SMOKE_STAGE6_FEC_CANDIDATE_ID, SMOKE_STAGE6_FEC_COMMITTEE_ID, SMOKE_STAGE6_LINKED_CANDIDATE_ID, SMOKE_STAGE6_LINKED_CANDIDATE_NAME, SMOKE_STAGE6_LINK_ID, SMOKE_STAGE6_SOURCE_RECORD_ID } from "./fixtures.ts";
 // @ts-expect-error Smoke seed helpers run under Node ESM and import the TS module directly.
 import { runSmokeSeedSql, sqlLiteral, sqlUuid, type SmokeSeedCleanupCallback } from "./smoke_seed_helpers.ts";
+
+// The past cycle the base seed writes a committee_summary row for, so the
+// committee carries a real historical record alongside the current-cycle one the
+// page selects by default.
+//
+// Read from the fixtures constant rather than duplicated as a literal, and read
+// inside a function rather than at module scope: fixtures.ts re-exports this
+// module's seed helper, so the two form an import cycle and a top-level read of a
+// fixtures.ts constant lands in its temporal dead zone.
+function stage6HistoryCycle(): number {
+  return Number(SMOKE_STAGE6_COMMITTEE_CYCLE_LABEL);
+}
 
 /**
  */
@@ -11,7 +23,10 @@ BEGIN;
 DELETE FROM cf.candidate_committee_link
 WHERE id = ${sqlUuid(SMOKE_STAGE6_LINK_ID, "SMOKE_STAGE6_LINK_ID")};
 DELETE FROM cf.committee_summary
-WHERE id = ${sqlUuid(SMOKE_STAGE6_COMMITTEE_SUMMARY_ID, "SMOKE_STAGE6_COMMITTEE_SUMMARY_ID")};
+WHERE id IN (
+  ${sqlUuid(SMOKE_STAGE6_COMMITTEE_SUMMARY_ID, "SMOKE_STAGE6_COMMITTEE_SUMMARY_ID")},
+  ${sqlUuid(SMOKE_STAGE6_CURRENT_CYCLE_SUMMARY_ID, "SMOKE_STAGE6_CURRENT_CYCLE_SUMMARY_ID")}
+);
 DELETE FROM cf.candidate
 WHERE id = ${sqlUuid(SMOKE_STAGE6_LINKED_CANDIDATE_ID, "SMOKE_STAGE6_LINKED_CANDIDATE_ID")}
 OR fec_candidate_id = ${sqlLiteral(SMOKE_STAGE6_FEC_CANDIDATE_ID)};
@@ -115,9 +130,9 @@ VALUES (
   ${sqlUuid(SMOKE_STAGE6_COMMITTEE_SUMMARY_ID, "SMOKE_STAGE6_COMMITTEE_SUMMARY_ID")},
   ${sqlUuid(SMOKE_STAGE6_COMMITTEE_ID, "SMOKE_STAGE6_COMMITTEE_ID")},
   ${sqlUuid(SMOKE_STAGE6_SOURCE_RECORD_ID, "SMOKE_STAGE6_SOURCE_RECORD_ID")},
-  2024,
-  '2023-01-01',
-  '2024-12-31',
+  ${stage6HistoryCycle()},
+  '${stage6HistoryCycle() - 1}-01-01',
+  '${stage6HistoryCycle()}-12-31',
   1250000.00,
   400000.00,
   850000.00
@@ -126,8 +141,63 @@ COMMIT;
 `;
 }
 
+/**
+ * The cycle the committee detail page will select when no cycle is requested.
+ *
+ * api/queries/campaign_finance.py resolves that as
+ * max(SUPPORTED_COMMITTEE_SUMMARY_CYCLES) and reports the same tuple back as
+ * `available_cycles`, so reading it from the API keeps one owner for the value.
+ * Pinning a literal here is what went stale: the fixture seeded a 2024 summary,
+ * the supported tuple grew a 2026 entry, and the default view silently fell back
+ * to "derived from itemized transactions" with a $0.00 total.
+ */
+async function resolveDefaultCommitteeSummaryCycle(): Promise<number> {
+  const response = await fetch(
+    `${SMOKE_LIVE_API_BASE_URL}/v1/committees/${SMOKE_STAGE6_COMMITTEE_ID}/summary`
+  );
+  if (!response.ok) {
+    throw new Error(
+      `Stage 6 seed could not read available cycles: committee summary returned ${response.status}`
+    );
+  }
+  const body = (await response.json()) as { available_cycles?: number[] };
+  const cycles = body.available_cycles ?? [];
+  if (cycles.length === 0) {
+    // Never guess a cycle: a silent fallback would reseed at whatever literal we
+    // picked and reintroduce exactly the staleness this function removes.
+    throw new Error("Stage 6 seed could not read available cycles: response carried none");
+  }
+  return Math.max(...cycles);
+}
+
+function buildStage6CurrentCycleSummarySql(cycle: number): string {
+  return `
+INSERT INTO cf.committee_summary (
+  id, committee_id, source_record_id, cycle, coverage_start_date, coverage_end_date,
+  total_receipts, total_disbursements, cash_on_hand
+)
+VALUES (
+  ${sqlUuid(SMOKE_STAGE6_CURRENT_CYCLE_SUMMARY_ID, "SMOKE_STAGE6_CURRENT_CYCLE_SUMMARY_ID")},
+  ${sqlUuid(SMOKE_STAGE6_COMMITTEE_ID, "SMOKE_STAGE6_COMMITTEE_ID")},
+  ${sqlUuid(SMOKE_STAGE6_SOURCE_RECORD_ID, "SMOKE_STAGE6_SOURCE_RECORD_ID")},
+  ${cycle},
+  '${cycle - 1}-01-01',
+  '${cycle}-12-31',
+  1250000.00,
+  400000.00,
+  850000.00
+);
+`;
+}
+
 export async function seedLiveStage6CommitteeSmoke(): Promise<SmokeSeedCleanupCallback> {
   await runSmokeSeedSql(buildStage6CommitteeSeedSql());
+  // Two round trips on purpose: the committee has to exist before the summary
+  // endpoint will report which cycles the API supports.
+  const defaultCycle = await resolveDefaultCommitteeSummaryCycle();
+  if (defaultCycle !== stage6HistoryCycle()) {
+    await runSmokeSeedSql(buildStage6CurrentCycleSummarySql(defaultCycle));
+  }
   return async () => {
     await runSmokeSeedSql(buildStage6CommitteeCleanupSql());
   };

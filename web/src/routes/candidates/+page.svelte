@@ -13,6 +13,7 @@
     buildCandidateListItemPresentation,
     buildPaginationContext
   } from "$lib/campaign-finance-detail/list-presentation";
+  import { SEARCH_PAGE_PATH, SEARCH_QUERY_MIN_LENGTH } from "$lib/search/contract";
   import SkeletonPanel from "$lib/loading/SkeletonPanel.svelte";
   import SeoHead from "$lib/seo/SeoHead.svelte";
   import { buildSeoHeadModel } from "$lib/seo/head";
@@ -68,6 +69,31 @@
 
 <section class="card campaign-list" aria-label="Candidates">
   <h2>Candidates</h2>
+  <!-- Name lookup is a hand-off, not a filter. `GET /v1/candidates` has no name
+       parameter, and /search already owns name matching, so this submits there
+       instead of adding a second search implementation to this route.
+       Deliberately sends `q` alone: measured on production 2026-08-19,
+       `entity_type=candidate` returned only the unmerged FEC duplicate for
+       "ossoff" and hid the sitting senator, because that lane reads
+       civic.candidacy rather than cf.candidate. Narrowing belongs on /search,
+       where the reader can see and change it. Contract:
+       docs/reference/screen_specs/candidate_list.md -> "Name-search contract". -->
+  <form
+    method="GET"
+    action={SEARCH_PAGE_PATH}
+    class="campaign-list__name-search"
+    aria-label="Candidate name search"
+  >
+    <label for="candidate-name-search">Find a candidate by name</label>
+    <input
+      id="candidate-name-search"
+      name="q"
+      type="search"
+      minlength={SEARCH_QUERY_MIN_LENGTH}
+      placeholder="Candidate name"
+    />
+    <button type="submit">Search names</button>
+  </form>
   <form method="GET" class="campaign-list__filters" aria-label="Candidate filters">
     <!-- Keep URL query params as the source of truth so SSR and deep links stay aligned. -->
     <label for="candidate-filter-state">State</label>
@@ -158,6 +184,16 @@
 
   .campaign-list__filters {
     margin-bottom: 1rem;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  /* Same row layout as the filter bar so the two controls read as one toolbar,
+     with the name lookup first because it answers the more common question. */
+  .campaign-list__name-search {
+    margin-bottom: 0.75rem;
     display: flex;
     flex-wrap: wrap;
     align-items: center;

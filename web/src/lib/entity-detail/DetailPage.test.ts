@@ -599,12 +599,12 @@ describe("entity detail page rendering", () => {
     expect(rendered.body).toContain("District share");
     expect(rendered.body).toContain("100% in district");
     expect(rendered.body).toContain("$100.00 in district and $0.00 out of district.");
-    expect(rendered.body).toContain("<h5>Top reported contributor names</h5>");
+    expect(rendered.body).toContain("<h4>Top reported contributor names</h4>");
     expect(rendered.body).toContain("detail__rank-bar");
     expect(rendered.body).toContain("Largest Person Donor");
     expect(rendered.body).toContain("$500.00");
     expect(rendered.body).toContain("Second Person Donor");
-    expect(rendered.body).toContain("<h5>Top reported employer names</h5>");
+    expect(rendered.body).toContain("<h4>Top reported employer names</h4>");
     expect(rendered.body).toContain("Top employers aggregate raw employer names from itemized individual contributions only.");
     expect(rendered.body).toContain(
       "The raw ranking remains employer-name data; see Methodology for source-linking and evidence limitations."
@@ -959,7 +959,7 @@ describe("entity detail page rendering", () => {
       }
     });
 
-    const topDonorsIndex = rendered.body.indexOf("<h5>Top reported contributor names</h5>");
+    const topDonorsIndex = rendered.body.indexOf("<h4>Top reported contributor names</h4>");
     const largestDonorIndex = rendered.body.indexOf("Largest Person Donor", topDonorsIndex);
     const secondDonorIndex = rendered.body.indexOf("Second Person Donor", topDonorsIndex);
     const donorVendorIndex = rendered.body.indexOf("<h4>Donors and vendors</h4>");
@@ -985,8 +985,8 @@ describe("entity detail page rendering", () => {
       }
     });
 
-    const topDonorsIndex = rendered.body.indexOf("<h5>Top reported contributor names</h5>");
-    const topEmployersIndex = rendered.body.indexOf("<h5>Top reported employer names</h5>", topDonorsIndex);
+    const topDonorsIndex = rendered.body.indexOf("<h4>Top reported contributor names</h4>");
+    const topEmployersIndex = rendered.body.indexOf("<h4>Top reported employer names</h4>", topDonorsIndex);
     const acmeIndex = rendered.body.indexOf("ACME CORP", topEmployersIndex);
     const universityIndex = rendered.body.indexOf("State University", topEmployersIndex);
     const donorVendorIndex = rendered.body.indexOf("<h4>Donors and vendors</h4>");
@@ -1014,10 +1014,10 @@ describe("entity detail page rendering", () => {
       }
     });
 
-    const topEmployersIndex = rendered.body.indexOf("<h5>Top reported employer names</h5>");
+    const topEmployersIndex = rendered.body.indexOf("<h4>Top reported employer names</h4>");
     const legacyEmployerIndex = rendered.body.indexOf("Legacy employer bucket", topEmployersIndex);
     const industryHeadingIndex = rendered.body.indexOf(
-      "<h5>Industries among top reported employer names</h5>",
+      "<h4>Industries among top reported employer names</h4>",
       topEmployersIndex
     );
     const industryRows = rendered.body.match(/data-testid="industry-rollup-row"/g) ?? [];
@@ -1059,7 +1059,7 @@ describe("entity detail page rendering", () => {
       }
     });
 
-    expect(rendered.body).toContain("<h5>Industries among top reported employer names</h5>");
+    expect(rendered.body).toContain("<h4>Industries among top reported employer names</h4>");
     expect(rendered.body).toContain(
       "No industry data is available among eligible top-employer rows for this cycle."
     );
@@ -1805,5 +1805,26 @@ describe("entity detail page rendering", () => {
     expect(combinedThenIndex).toBeGreaterThan(combinedAwaitIndex);
     expect(outsideSpendingBuildIndex).toBeGreaterThan(combinedThenIndex);
     expect(personFinanceSlice).not.toContain("{#await section.ieSummary}");
+  });
+});
+
+describe("entity detail scrollable regions", () => {
+  // axe rule scrollable-region-focusable, impact serious, reported live against
+  // /person/[id] before this guard existed. .detail__table-scroll sets overflow-x: auto over a table wider
+  // than its container; with no focusable descendant such a region cannot be
+  // scrolled from the keyboard at all. The smoke a11y floor refuses serious
+  // violations, but it only runs nightly - this holds the same invariant at
+  // vitest speed, and it fails the moment a new scroll container is added
+  // without the attribute rather than when the fix is deleted from an old one.
+  it("gives every horizontal scroll container a keyboard tab stop", () => {
+    const source = readFileSync(new URL("./DetailPage.svelte", import.meta.url), "utf8");
+    const containers = [...source.matchAll(/<div class="detail__table-scroll"[^>]*>/g)].map(
+      (match) => match[0]
+    );
+
+    expect(containers.length).toBeGreaterThan(0);
+    for (const container of containers) {
+      expect(container).toContain('tabindex="0"');
+    }
   });
 });

@@ -29,6 +29,7 @@ describe("charts/types", () => {
     };
     const props: ChartProps = {
       kind: "line",
+      unit: "dollars",
       title: "Weekly receipts",
       ariaLabel: "Weekly receipts trend",
       series: [series]

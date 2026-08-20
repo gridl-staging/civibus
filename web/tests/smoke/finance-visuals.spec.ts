@@ -69,17 +69,21 @@ import {
   SMOKE_USE_LIVE_API
 } from "./fixtures";
 import { seedLiveCongressDirectorySmoke } from "./smoke-seed-sql";
+import { FINANCE_CHART_COLORS } from "../../src/lib/charts/finance";
 import {
   BAR_SERIES_MARK_SELECTOR,
   LINE_SERIES_MARK_SELECTOR,
   chartRegion,
   escapeRegExp,
-  expectBoundedNumericTickLabels,
+  expectAxisFormatMatchesDeclaredUnit,
+  expectChartTooltipOnHover,
+  expectDivergingStanceFills,
   expectNoChartFrameOverflow,
   expectNoHorizontalOverflow,
   expectNoMaterialNearBlackOverlay,
   expectNoOpaqueNearBlackPaints,
-  expectRealChartRender
+  expectRealChartRender,
+  expectTickLabelsInsidePlotBox
 } from "./smoke-helpers";
 
 const VIEWPORTS = [
@@ -209,6 +213,38 @@ test.describe("fixture-backed finance visuals", () => {
       // wrong-platform screenshot would only fail for non-defects.
     });
   }
+
+  // One page load, one viewport, deliberately. The interaction and encoding
+  // contracts are viewport-independent, and a hover is the only assertion in this
+  // file with material cost, so repeating it across the three snapshot widths
+  // would buy nothing and spend the fixture suite's runtime budget.
+  test("person money charts are interactive and encode stance distinctly", async ({
+    page
+  }: {
+    page: Page;
+  }) => {
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await page.goto(`/person/${SMOKE_PERSON_ID}`);
+
+    // Hovering a bar must surface the value. Tooltips ship with the chart package
+    // and were dark for months because the adapter disabled pointer events, so this
+    // asserts the tooltip's rendered content rather than the CSS that suppressed it.
+    const monthlyRegion = await chartRegion(page, "Monthly contribution columns");
+    await expect(monthlyRegion).toBeVisible();
+    await expectChartTooltipOnHover(monthlyRegion, { seriesLabel: "Contributions" });
+
+    // Support and oppose are the two halves of a diverging scale and must read as
+    // two encodings, in the same two colours the HTML rows below the plot use.
+    const outsideSpendingRegion = await chartRegion(
+      page,
+      "Zero-centered support and oppose spending comparison"
+    );
+    await expect(outsideSpendingRegion).toBeVisible();
+    await expectDivergingStanceFills(outsideSpendingRegion, [
+      FINANCE_CHART_COLORS.support,
+      FINANCE_CHART_COLORS.oppose
+    ]);
+  });
 
   test("candidate finance detail keeps exact outside-spending facts", async ({ page }: { page: Page }) => {
     await page.goto(`/candidate/${SMOKE_CANDIDATE_ID}`);
@@ -702,8 +738,8 @@ async function expectPersonFinanceLayout(page: Page, chartRegions: Locator[]): P
   }
   await expectZeroDocumentOverflow(page);
   await expectNoChartFrameOverflow(chartRegions);
-  await expectBoundedNumericTickLabels(chartRegions);
-  await expectContainedTooltips(page);
+  await expectTickLabelsInsidePlotBox(chartRegions);
+  await expectAxisFormatMatchesDeclaredUnit(chartRegions);
   await expectNoMaterialNearBlackOverlay(page);
 }
 
@@ -719,21 +755,8 @@ async function expectZeroDocumentOverflow(page: Page): Promise<void> {
   expect(overflow).toEqual({ x: 0, bodyX: 0 });
 }
 
-async function expectContainedTooltips(page: Page): Promise<void> {
-  const escapedTooltips = await page.evaluate(() => {
-    const viewportWidth = window.innerWidth;
-    const viewportHeight = window.innerHeight;
-    return Array.from(document.querySelectorAll<HTMLElement>('[role="tooltip"], [data-testid*="tooltip"]'))
-      .filter((element) => element.offsetParent !== null)
-      .map((element) => element.getBoundingClientRect())
-      .filter(
-        (box) =>
-          box.left < 0 ||
-          box.top < 0 ||
-          box.right > viewportWidth ||
-          box.bottom > viewportHeight
-      ).length;
-  });
-  expect(escapedTooltips).toBe(0);
-}
+// Tooltip containment is NOT checked here any more. It used to run on a page where
+// nothing was hovered, so it queried [role="tooltip"], found zero elements, and
+// asserted zero had escaped — a pass no defect could turn red. It now runs inside
+// expectChartTooltipOnHover, with a tooltip actually open.
 /* eslint-enable no-restricted-syntax */

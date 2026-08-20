@@ -28,6 +28,7 @@ describe("charts/Chart.svelte", () => {
     const rendered = render(Chart, {
       props: {
         kind: "line",
+        unit: "dollars",
         title: "Weekly receipts",
         ariaLabel: "Weekly receipts trend",
         series: MINIMAL_SERIES
@@ -46,6 +47,7 @@ describe("charts/Chart.svelte", () => {
     const rendered = render(Chart, {
       props: {
         kind: "bar",
+        unit: "dollars",
         title: "Weekly receipts",
         ariaLabel: "Weekly receipts trend",
         series: MINIMAL_SERIES
@@ -92,6 +94,7 @@ describe("charts/Chart.svelte", () => {
     const rendered = render(Chart, {
       props: {
         kind: "line",
+        unit: "dollars",
         title: "Weekly receipts",
         ariaLabel: "Weekly receipts trend",
         series: []

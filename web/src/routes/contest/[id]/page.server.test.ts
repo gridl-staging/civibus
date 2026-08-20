@@ -65,6 +65,7 @@ function candidateMoney(selectedCycle = 2026): ContestCandidateMoneyResponse {
     total_ie_support: "100.00",
     total_ie_oppose: "50.00",
     has_unknown_candidate_money: false,
+    has_unknown_candidate_ie: false,
     rows: [
       {
         candidacy_id: "candidacy-1",
@@ -89,7 +90,8 @@ function candidateMoney(selectedCycle = 2026): ContestCandidateMoneyResponse {
         ie_support_total: "100.00",
         ie_oppose_total: "50.00",
         ie_support_count: 1,
-        ie_oppose_count: 1
+        ie_oppose_count: 1,
+        ie_coverage: null
       }
     ]
   };

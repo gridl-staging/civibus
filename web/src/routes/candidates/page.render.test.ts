@@ -30,6 +30,7 @@ vi.mock("$app/stores", () => ({
   }
 }));
 
+import { SEARCH_QUERY_MIN_LENGTH } from "$lib/search/contract";
 import CandidatesPage from "./+page.svelte";
 
 function setPageUrl(pathAndSearch: string): void {
@@ -209,5 +210,76 @@ describe("/candidates +page.svelte browse scope caption", () => {
     expect(rendered.body).toContain("<h2>Candidates</h2>");
     expect(rendered.body).toContain('data-testid="candidate-result-row"');
     expect(rendered.body).toContain("reachable at their own candidate pages");
+  });
+});
+
+describe("/candidates +page.svelte name search", () => {
+  beforeEach(() => {
+    setPageUrl("/candidates");
+  });
+
+  it("renders a labelled name input that submits to the shared search route", () => {
+    const rendered = render(CandidatesPage, {
+      props: { data: buildPageData([FUNDED_CANDIDATE]) }
+    });
+
+    expect(rendered.body).toContain('action="/search"');
+    expect(rendered.body).toContain('id="candidate-name-search"');
+    expect(rendered.body).toContain('name="q"');
+    expect(rendered.body).toContain("Find a candidate by name");
+    expect(rendered.body).toContain("Search names");
+  });
+
+  it("sends no entity_type on the handoff", () => {
+    // Measured on production 2026-08-19: /search?q=ossoff&entity_type=candidate
+    // returns 1 row (the unmerged FEC duplicate) while entity_type=person
+    // returns 2 (including the sitting senator). Pinning a type on this handoff
+    // would hide matches, so narrowing stays on /search where the reader can see
+    // and change it. See candidate_list.md -> "Name-search contract".
+    const rendered = render(CandidatesPage, {
+      props: { data: buildPageData([FUNDED_CANDIDATE]) }
+    });
+
+    expect(rendered.body).not.toContain('name="entity_type"');
+  });
+
+  it("carries no browse filter state into the name-search form", () => {
+    // A name lookup replaces the browse rather than refining it. Leaking state,
+    // office, sort or limit into the handoff would silently scope the search to
+    // whatever slice the reader happened to be looking at.
+    setPageUrl("/candidates?state=GA&office=S&sort=total_raised_desc&limit=25");
+    const rendered = render(CandidatesPage, {
+      props: { data: buildPageData([FUNDED_CANDIDATE]) }
+    });
+
+    const nameSearchForm = rendered.body.slice(
+      rendered.body.indexOf('action="/search"'),
+      rendered.body.indexOf("</form>", rendered.body.indexOf('action="/search"'))
+    );
+
+    expect(nameSearchForm).toContain('name="q"');
+    expect(nameSearchForm).not.toContain('name="state"');
+    expect(nameSearchForm).not.toContain('name="office"');
+    expect(nameSearchForm).not.toContain('name="sort"');
+    expect(nameSearchForm).not.toContain('name="limit"');
+  });
+
+  it("enforces the shared minimum query length on the input", () => {
+    const rendered = render(CandidatesPage, {
+      props: { data: buildPageData([FUNDED_CANDIDATE]) }
+    });
+
+    expect(rendered.body).toContain(`minlength="${SEARCH_QUERY_MIN_LENGTH}"`);
+  });
+
+  it("keeps the name search reachable when the filtered browse is empty", () => {
+    // An empty filtered list is exactly when a reader most needs to look a name
+    // up, so the control must not be inside the results branch.
+    const rendered = render(CandidatesPage, {
+      props: { data: buildPageData([]) }
+    });
+
+    expect(rendered.body).toContain("No candidates found for the selected filters.");
+    expect(rendered.body).toContain('id="candidate-name-search"');
   });
 });

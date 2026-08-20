@@ -11,12 +11,25 @@ export interface ChartSeries {
   id: string;
   label: string;
   points: ChartPoint[];
+  /**
+   * Explicit series colour. Omitted for the ordinary categorical/sequential case,
+   * where `Chart.svelte` assigns from its own palette by series position. Set only
+   * where the colour itself is the encoding — a diverging support/oppose scale
+   * whose two hues must match the stance colours the surrounding HTML rows already
+   * use. See `docs/reference/ui_chart_encoding.md` §1.
+   */
+  color?: string;
 }
 
 export interface ChartProps {
   kind: ChartKind;
   title: string;
   ariaLabel: string;
+  /**
+   * The unit the enclosing `ChartFrame` declares. Selects the value-axis and
+   * tooltip formatters so the plot cannot disagree with the frame's own label.
+   */
+  unit: FinanceChartUnit;
   series: ChartSeries[];
   yDomain?: [number, number];
 }

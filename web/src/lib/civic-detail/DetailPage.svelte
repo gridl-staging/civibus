@@ -420,16 +420,40 @@
             <!-- Answer-first summary: the one line a reader (or an extraction
                  model) should be able to take away without scrolling. -->
             <p class="detail__race-summary" data-testid="race-money-summary">
-              Across {contestViewModel.raceMoneySummary.candidateCount} candidates in the
-              {contestViewModel.raceMoneySummary.selectedCycle} cycle, Civibus has loaded
-              {contestViewModel.raceMoneySummary.totalRaised} raised. Outside groups spent
-              {contestViewModel.raceMoneySummary.totalOutsideSupport} supporting and
-              {contestViewModel.raceMoneySummary.totalOutsideOppose} opposing candidates in this
-              race.
+              <!-- Two sentences on the fundraising half too, for the same
+                   reason as outside spending below: when no candidate in the
+                   race has loaded fundraising there is no figure to put in the
+                   sentence, and "$0.00 raised" is a measurement nobody took. -->
+              {#if contestViewModel.raceMoneySummary.fundraisingKnown}
+                Across {contestViewModel.raceMoneySummary.candidateCount} candidates in the
+                {contestViewModel.raceMoneySummary.selectedCycle} cycle, Civibus has loaded
+                {contestViewModel.raceMoneySummary.totalRaised} raised.
+              {:else}
+                Across {contestViewModel.raceMoneySummary.candidateCount} candidates in the
+                {contestViewModel.raceMoneySummary.selectedCycle} cycle, Civibus has not loaded
+                fundraising filings for this race, so the amount raised is not available — not
+                zero.
+              {/if}
+              <!-- Two sentences, not one interpolated figure: when outside
+                   spending was never loaded there is no number to put in the
+                   sentence, and forcing one there is the whole defect. -->
+              {#if contestViewModel.raceMoneySummary.outsideSpendingKnown}
+                Outside groups spent {contestViewModel.raceMoneySummary.totalOutsideSupport}
+                supporting and {contestViewModel.raceMoneySummary.totalOutsideOppose} opposing
+                candidates in this race.
+              {:else}
+                Civibus has not loaded independent-expenditure filings for this race in this
+                cycle, so outside spending is not available — not zero.
+              {/if}
             </p>
             {#if contestViewModel.raceMoneySummary.incompleteNote}
               <p class="detail__caveat" data-testid="race-money-incomplete-note">
                 {contestViewModel.raceMoneySummary.incompleteNote}
+              </p>
+            {/if}
+            {#if contestViewModel.raceMoneySummary.outsideSpendingNote}
+              <p class="detail__caveat" data-testid="race-outside-spending-incomplete-note">
+                {contestViewModel.raceMoneySummary.outsideSpendingNote}
               </p>
             {/if}
           {/if}

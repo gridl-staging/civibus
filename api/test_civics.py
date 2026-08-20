@@ -1084,13 +1084,19 @@ class TestCongressMemberMoneySummaries:
         assert row["cash_on_hand"] is None
         assert [source["source_record_key"] for source in row["sources"]] == [f"officeholding-{member.person_id}"]
         assert row["sources"][0]["record_url"] == (f"https://example.org/congress/officeholding-{member.person_id}")
-        assert row["total_raised"] == "0"
-        assert row["total_spent"] == "0"
-        assert row["net"] == "0"
-        assert row["ie_support_total"] == "0"
-        assert row["ie_oppose_total"] == "0"
-        assert row["ie_support_count"] == 0
-        assert row["ie_oppose_count"] == 0
+        # No cf.candidate row means no committee could have filed a Schedule A
+        # for this member either, so their fundraising is unknown, not zero.
+        assert row["total_raised"] is None
+        assert row["total_spent"] is None
+        assert row["net"] is None
+        assert row["fundraising_coverage"]["activity_state"] == "not_loaded"
+        # No cf.candidate row means no FEC candidate id for a Schedule E filing
+        # to name, so nothing is known about outside spending for this member.
+        assert row["ie_support_total"] is None
+        assert row["ie_oppose_total"] is None
+        assert row["ie_support_count"] is None
+        assert row["ie_oppose_count"] is None
+        assert row["ie_coverage"]["activity_state"] == "not_loaded"
 
 
 class TestMapContextHelpers:
@@ -2671,8 +2677,88 @@ class TestContestCandidateMoney:
         # 77,279,766.48 + 1,250,000.00
         assert payload["total_raised"] == "78529766.48"
         assert payload["candidate_count"] == 2
-        assert payload["total_ie_support"] == "0.00"
-        assert payload["total_ie_oppose"] == "0.00"
+        # No Schedule E exists in this cycle window, so the outside-spending
+        # headline has nothing to total. Publishing "0.00" here is the defect:
+        # it asserts that no outside money was spent on a race nobody measured.
+        assert payload["total_ie_support"] is None
+        assert payload["total_ie_oppose"] is None
+        assert payload["has_unknown_candidate_ie"] is True
+        for row in payload["rows"]:
+            assert row["ie_support_total"] is None
+            assert row["ie_oppose_total"] is None
+            assert row["ie_coverage"]["activity_state"] == "not_loaded"
+
+    def test_race_outside_spending_separates_measured_zero_from_unloaded(
+        self, api_client: TestClient, db_conn: psycopg.Connection
+    ) -> None:
+        """Both loaded states in one race, end to end through the HTTP contract.
+
+        The incumbent draws real independent expenditures; the challenger draws
+        none. Once Schedule E exists for the window the challenger's zero is a
+        measurement, so it must publish as 0.00 rather than as unknown — the
+        inverse of the headline defect and just as false if we got it wrong.
+        """
+        seeded = self._seed_race(db_conn)
+        with db_conn.cursor() as cursor:
+            cursor.execute("SELECT id FROM cf.candidate WHERE fec_candidate_id = %s", ("S8GA90180",))
+            incumbent_candidate_id = cursor.fetchone()[0]
+
+        # Suffixed ids that cannot collide with the bundled FEC sample data.
+        committee_id = UUID("c0000000-0000-0000-0000-0000000009e1")
+        filing_id = UUID("c0000000-0000-0000-0000-0000000009e2")
+        insert_committee_row(
+            db_conn,
+            CommitteeRowSeed(id=committee_id, fec_committee_id="C99900901", name="Race IE Coverage Spender"),
+        )
+        insert_filing_row(
+            db_conn,
+            FilingRowSeed(id=filing_id, filing_fec_id="RACE-IE-COVERAGE-FILING", committee_id=committee_id),
+        )
+        for transaction_id, amount, support_oppose in (
+            (UUID("c0000000-0000-0000-0000-0000000009e3"), Decimal("6000000.00"), "S"),
+            (UUID("c0000000-0000-0000-0000-0000000009e4"), Decimal("2500000.00"), "O"),
+        ):
+            insert_transaction_row(
+                db_conn,
+                TransactionRowSeed(
+                    id=transaction_id,
+                    filing_id=filing_id,
+                    committee_id=committee_id,
+                    transaction_type="24E",
+                    amount=amount,
+                    amendment_indicator="N",
+                    transaction_date=date(2026, 3, 1),
+                    recipient_candidate_id=incumbent_candidate_id,
+                    support_oppose=support_oppose,
+                ),
+            )
+
+        payload = api_client.get(f"/v1/contests/{seeded['contest_id']}/candidate-money?cycle=2026").json()
+
+        rows_by_name = {row["person_name"]: row for row in payload["rows"]}
+        incumbent = rows_by_name["OSSIFY, T. JONATHAN"]
+        challenger = rows_by_name["Rival, Dana"]
+
+        assert incumbent["ie_support_total"] == "6000000.00"
+        assert incumbent["ie_oppose_total"] == "2500000.00"
+        assert incumbent["ie_support_count"] == 1
+        assert incumbent["ie_oppose_count"] == 1
+        # Populated rows carry no coverage block, matching the fundraising side.
+        assert incumbent["ie_coverage"] is None
+
+        assert challenger["ie_support_total"] == "0.00"
+        assert challenger["ie_oppose_total"] == "0.00"
+        assert challenger["ie_coverage"] == {
+            "activity_state": "loaded_zero",
+            "completeness": "partial",
+            "basis": "fec_schedule_e_transactions",
+        }
+
+        # Every candidate in the race is now measured, so the headline totals
+        # are real sums and carry no qualifier.
+        assert payload["total_ie_support"] == "6000000.00"
+        assert payload["total_ie_oppose"] == "2500000.00"
+        assert payload["has_unknown_candidate_ie"] is False
 
     def test_candidacy_without_an_fec_candidate_row_reports_unknown_not_zero(
         self, api_client: TestClient, db_conn: psycopg.Connection
@@ -2704,6 +2790,204 @@ class TestContestCandidateMoney:
         # Unknown coverage must not be minted as a real zero.
         assert row["total_raised"] is None
         assert row["cash_on_hand"] is None
+
+    def test_race_where_no_candidacy_has_loaded_money_reports_unknown_total_not_zero(
+        self, api_client: TestClient, db_conn: psycopg.Connection
+    ) -> None:
+        """A race with nothing loaded has an UNKNOWN total, never a $0.00 headline.
+
+        The row-level rule already says unknown; the race rollup used to floor
+        the sum at Decimal("0.00") and publish it, so the answer-first headline
+        read "Civibus has loaded $0.00 raised" about a race whose fundraising
+        nobody had measured. Summing an empty set of known values yields no
+        total at all, and that is what the response must say.
+        """
+        first = Person(canonical_name="Unlinked Filer Alpha")
+        second = Person(canonical_name="Unlinked Filer Beta")
+        for person in (first, second):
+            insert_person(db_conn, person)
+        office_id = _insert_office(db_conn, name="test_money_unknown_rollup_house", office_level="federal")
+        contest_id = _insert_contest(
+            db_conn,
+            name="Alaska At-Large Congressional District — 2026 Unknown-Rollup General",
+            office_id=office_id,
+            election_date=date(2026, 11, 3),
+            election_type="general",
+        )
+        for person, candidate_number in ((first, "H6AK00901"), (second, "H6AK00902")):
+            _insert_candidacy(
+                db_conn,
+                person_id=person.id,
+                contest_id=contest_id,
+                candidate_number=candidate_number,
+            )
+
+        payload = api_client.get(f"/v1/contests/{contest_id}/candidate-money?cycle=2026").json()
+
+        assert payload["candidate_count"] == 2
+        assert [row["total_raised"] for row in payload["rows"]] == [None, None]
+        # The whole point: no known value means no total, not a zero total.
+        assert payload["total_raised"] is None
+        assert payload["has_unknown_candidate_money"] is True
+
+    def test_race_where_every_loaded_candidate_raised_nothing_keeps_the_measured_zero(
+        self, api_client: TestClient, db_conn: psycopg.Connection
+    ) -> None:
+        """A measured zero stays $0.00. Blanking it would be the same lie inverted.
+
+        Both candidates have official FEC weball totals of zero for the selected
+        cycle, so "this race raised $0.00" is a true, sourced statement. A fix
+        that turned every zero into "not available" would suppress a fact the
+        product actually established.
+        """
+        first = Person(canonical_name="Measured Zero Alpha")
+        second = Person(canonical_name="Measured Zero Beta")
+        for person in (first, second):
+            insert_person(db_conn, person)
+        office_id = _insert_office(db_conn, name="test_money_measured_zero_house", office_level="federal")
+        contest_id = _insert_contest(
+            db_conn,
+            name="Vermont At-Large Congressional District — 2026 Measured-Zero General",
+            office_id=office_id,
+            election_date=date(2026, 11, 3),
+            election_type="general",
+        )
+        for person, fec_candidate_id in ((first, "H6VT00901"), (second, "H6VT00902")):
+            insert_candidate_row(
+                db_conn,
+                CandidateRowSeed(
+                    id=uuid4(),
+                    fec_candidate_id=fec_candidate_id,
+                    name=person.canonical_name,
+                    office="H",
+                    state="VT",
+                    person_id=person.id,
+                    total_receipts=Decimal("0.00"),
+                    total_disbursements=Decimal("0.00"),
+                    cash_on_hand=Decimal("0.00"),
+                    summary_coverage_end_date=date(2026, 6, 30),
+                ),
+            )
+            _insert_candidacy(
+                db_conn,
+                person_id=person.id,
+                contest_id=contest_id,
+                candidate_number=fec_candidate_id,
+            )
+
+        payload = api_client.get(f"/v1/contests/{contest_id}/candidate-money?cycle=2026").json()
+
+        assert payload["candidate_count"] == 2
+        assert [row["total_raised"] for row in payload["rows"]] == ["0.00", "0.00"]
+        # 0.00 + 0.00, both known: the rollup is a real figure, not None.
+        assert payload["total_raised"] == "0.00"
+        assert payload["has_unknown_candidate_money"] is False
+
+    def test_linked_candidate_with_no_loaded_fundraising_reports_unknown_not_zero(
+        self, api_client: TestClient, db_conn: psycopg.Connection
+    ) -> None:
+        """The 25-of-26 scoreboard defect: linked, but nothing loaded for the cycle.
+
+        This is a strictly different specimen from the unlinked candidacy above.
+        Here ``cf.candidate`` exists, so the batch summary fetcher DOES return a
+        row -- one whose selected-cycle coverage is ``not_loaded`` with zeros
+        pre-seeded for the absent load. ``public_money_totals`` had no branch
+        for that state, so the scoreboard published those pre-seeded zeros as
+        ``$0.00 raised`` and ``has_unknown_candidate_money`` stayed false, so
+        the reader got no caveat either.
+
+        The measured-zero race above is the control: it must keep its ``0.00``.
+        """
+        linked_person = Person(canonical_name="Linked Unloaded Alpha")
+        measured_person = Person(canonical_name="Measured Zero Control")
+        for person in (linked_person, measured_person):
+            insert_person(db_conn, person)
+        office_id = _insert_office(db_conn, name="test_money_linked_unloaded_house", office_level="federal")
+        contest_id = _insert_contest(
+            db_conn,
+            name="Maine At-Large Congressional District — 2026 Linked-Unloaded General",
+            office_id=office_id,
+            election_date=date(2026, 11, 3),
+            election_type="general",
+        )
+        # No official totals at all and no committee summaries: the selected
+        # cycle was never loaded for this candidate, which is what not_loaded
+        # coverage means.
+        insert_candidate_row(
+            db_conn,
+            CandidateRowSeed(
+                id=uuid4(),
+                fec_candidate_id="H6ME00907",
+                name=linked_person.canonical_name,
+                office="H",
+                state="ME",
+                person_id=linked_person.id,
+            ),
+        )
+        # Control: official weball totals covering the selected cycle, all zero.
+        insert_candidate_row(
+            db_conn,
+            CandidateRowSeed(
+                id=uuid4(),
+                fec_candidate_id="H6ME00908",
+                name=measured_person.canonical_name,
+                office="H",
+                state="ME",
+                person_id=measured_person.id,
+                total_receipts=Decimal("0.00"),
+                total_disbursements=Decimal("0.00"),
+                cash_on_hand=Decimal("0.00"),
+                summary_coverage_end_date=date(2026, 6, 30),
+            ),
+        )
+        for person, candidate_number in (
+            (linked_person, "H6ME00907"),
+            (measured_person, "H6ME00908"),
+        ):
+            _insert_candidacy(
+                db_conn,
+                person_id=person.id,
+                contest_id=contest_id,
+                candidate_number=candidate_number,
+            )
+
+        payload = api_client.get(f"/v1/contests/{contest_id}/candidate-money?cycle=2026").json()
+
+        rows_by_name = {row["person_name"]: row for row in payload["rows"]}
+        unloaded_row = rows_by_name["Linked Unloaded Alpha"]
+        measured_row = rows_by_name["Measured Zero Control"]
+
+        # Linked to a real FEC candidate, so has_fec_money is true -- which is
+        # exactly why has_fec_money cannot be the coverage discriminator here.
+        assert unloaded_row["has_fec_money"] is True
+        assert unloaded_row["candidate_id"] is not None
+        assert unloaded_row["total_raised"] is None
+        assert unloaded_row["total_spent"] is None
+        assert unloaded_row["net"] is None
+        assert unloaded_row["cash_on_hand"] is None
+        assert unloaded_row["summary_source"] is None
+        assert unloaded_row["fundraising_coverage"] == {
+            "activity_state": "not_loaded",
+            "completeness": "unknown",
+            "basis": "no_authoritative_load_evidence",
+        }
+
+        # The control keeps every one of its measured zeros.
+        assert measured_row["total_raised"] == "0.00"
+        assert measured_row["total_spent"] == "0.00"
+        assert measured_row["summary_source"] == "fec_weball"
+
+        # 0.00 from the one candidate whose filings were read; the unknown
+        # contributes nothing rather than a zero.
+        assert payload["total_raised"] == "0.00"
+        # And the caveat now fires, which is what the reader actually sees.
+        assert payload["has_unknown_candidate_money"] is True
+        # Unknown money sorts last, so the scoreboard never ranks an unmeasured
+        # candidate as if they had tied a measured $0.00.
+        assert [row["person_name"] for row in payload["rows"]] == [
+            "Measured Zero Control",
+            "Linked Unloaded Alpha",
+        ]
 
     def test_returns_404_for_missing_contest(self, api_client: TestClient) -> None:
         response = api_client.get(f"/v1/contests/{uuid4()}/candidate-money")

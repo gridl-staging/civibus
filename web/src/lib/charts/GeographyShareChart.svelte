@@ -56,11 +56,22 @@
     return [
       {
         id: "geography_share",
-        label: "Geography dollar share",
-        points: inputRows.map((row) => ({
-          x: row.label,
-          y: row.denominator === 0 ? 0 : row.amount / row.denominator
-        }))
+        label: "Contributions",
+        // Plots DOLLARS, not the amount/denominator fraction it used to plot.
+        //
+        // The frame declares unit="dollars", the rows below print
+        // formatCurrency(amount) of formatCurrency(denominator), and the disclosure
+        // table prints dollars — but the SVG plotted a unitless 0.0-0.5, so its axis
+        // read as a fraction while everything around it read as money. Three
+        // surfaces of one chart, three answers.
+        //
+        // Resolved toward the declared unit rather than by relabelling the frame as
+        // a percentage: two of the three surfaces and the frame's own label already
+        // said dollars, and this way one currency axis formatter serves every money
+        // chart instead of this one needing a bespoke percentage axis. Bar heights
+        // are unchanged where the denominator is shared across rows, since dividing
+        // every row by the same number only rescales the axis.
+        points: inputRows.map((row) => ({ x: row.label, y: row.amount }))
       }
     ];
   }
@@ -82,6 +93,7 @@
       kind="bar"
       title="Geography dollar share"
       ariaLabel="Geography dollar share by contributor location"
+      unit="dollars"
       series={chartSeries}
     />
     {#each rows as row (row.id)}

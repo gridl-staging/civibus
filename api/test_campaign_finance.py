@@ -29,7 +29,6 @@ from api.queries.campaign_finance import (
     COMMITTEE_FUNDRAISING_SUMMARY_SQL,
     DISBURSEMENT_TYPE_PREFIX,
     _COUNTY_PROXY_QUALIFYING_TRANSACTIONS_CTE,
-    _zero_candidate_ie_summary,
     fetch_candidate_ie_summaries,
 )
 from api.test_campaign_finance_support import (
@@ -6068,19 +6067,39 @@ def test_fetch_candidate_ie_summary_reports_selected_cycle_money_coverage_states
         ),
     )
 
+    from api.queries.campaign_finance import SelectedCycle, schedule_e_window_has_load_evidence
+
     populated = fetch_candidate_ie_summary(db_conn, populated_candidate_id)
-    not_loaded = _zero_candidate_ie_summary(unknown_candidate_id)
-    loaded_zero = build_zero_candidate_money_coverage_fixture(
-        not_loaded,
-        activity_state="loaded_zero",
-        completeness="complete",
-        basis="authoritative_load_evidence",
+    # Real loaded_zero, not a fabricated payload: this candidate has no Schedule E
+    # rows of its own, but the row seeded above puts Schedule E in the same cycle
+    # window, so its zero is measured and may be published as $0.00.
+    loaded_zero = fetch_candidate_ie_summary(db_conn, unknown_candidate_id)
+    # A window nothing was ever loaded into. Built directly rather than through
+    # resolve_selected_cycle so the negative case does not depend on which cycles
+    # the bundled FEC sample happens to populate.
+    empty_window = SelectedCycle(
+        selected_cycle=1990,
+        coverage_start_date=date(1989, 1, 1),
+        coverage_end_date=date(1990, 12, 31),
+        available_cycles=(1990,),
     )
+    not_loaded = fetch_candidate_ie_summary(db_conn, unknown_candidate_id, selected_cycle=empty_window)
 
     assert populated["support_total"] == Decimal("321.00")
     assert populated["support_count"] == 1
     assert populated["coverage"] == {
         "activity_state": "populated",
+        "completeness": "partial",
+        "basis": "fec_schedule_e_transactions",
+    }
+    # The discriminator's own evidence probe, proven both ways against real
+    # PostgreSQL: True where the seeded 2026 row lives, False in an empty window.
+    assert schedule_e_window_has_load_evidence(db_conn) is True
+    assert schedule_e_window_has_load_evidence(db_conn, empty_window) is False
+    assert loaded_zero["support_total"] == Decimal("0.00")
+    assert loaded_zero["oppose_total"] == Decimal("0.00")
+    assert loaded_zero["coverage"] == {
+        "activity_state": "loaded_zero",
         "completeness": "partial",
         "basis": "fec_schedule_e_transactions",
     }
@@ -6090,13 +6109,6 @@ def test_fetch_candidate_ie_summary_reports_selected_cycle_money_coverage_states
         "activity_state": "not_loaded",
         "completeness": "unknown",
         "basis": "no_authoritative_load_evidence",
-    }
-    assert loaded_zero["support_total"] == Decimal("0.00")
-    assert loaded_zero["oppose_total"] == Decimal("0.00")
-    assert loaded_zero["coverage"] == {
-        "activity_state": "loaded_zero",
-        "completeness": "complete",
-        "basis": "authoritative_load_evidence",
     }
 
 
@@ -9994,10 +10006,13 @@ def test_fetch_candidate_ie_summaries_applies_cycle_qualification_and_outlier_ru
             "oppose_count": 0,
             "top_spenders": [],
             "excluded_outlier_count": 0,
+            # loaded_zero, not not_loaded: the sibling candidate's rows prove
+            # Schedule E was loaded for this same 2024 window, so this
+            # candidate's zero is measured rather than missing.
             "coverage": {
-                "activity_state": "not_loaded",
-                "completeness": "unknown",
-                "basis": "no_authoritative_load_evidence",
+                "activity_state": "loaded_zero",
+                "completeness": "partial",
+                "basis": "fec_schedule_e_transactions",
             },
         },
     }

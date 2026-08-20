@@ -46,7 +46,15 @@
   }
 </script>
 
-<figure class="finance-chart" data-testid={testId}>
+<!--
+  data-unit publishes the frame's declared unit to the DOM so a browser probe can
+  hold the plot to it. Without it the unit exists only inside the "Unit: dollars"
+  sentence, and a guard would have to parse prose or hardcode an expected format
+  per chart - which is how the geography chart came to declare dollars, print
+  dollars in its rows, and plot a unitless fraction with nothing able to notice.
+  See docs/reference/ui_chart_encoding.md §3.
+-->
+<figure class="finance-chart" data-testid={testId} data-unit={unit}>
   <figcaption class="finance-chart__caption">
     <span class="finance-chart__title">{title}</span>
     <span class="finance-chart__meta">

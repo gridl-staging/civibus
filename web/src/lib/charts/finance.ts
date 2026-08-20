@@ -3,6 +3,7 @@ import type {
   ChartPoint,
   ChartSeries,
   ExactDisclosureRow,
+  FinanceChartUnit,
   GeographyShareRow,
   MonthlyContributionRow,
   OutsideSpendingRow
@@ -50,13 +51,20 @@ export function formatCurrency(value: number): string {
 }
 
 export function formatCurrencyShort(value: number): string {
-  if (value >= 1_000_000) {
-    return `$${(value / 1_000_000).toFixed(1)}M`;
+  // The sign is carried outside the dollar glyph ("-$1.2M", not "$-1.2M") and the
+  // magnitude is chosen from the absolute value, because the zero-centered
+  // support/oppose chart plots negative dollars and would otherwise emit
+  // "$-20000" on every oppose tick.
+  const sign = value < 0 ? "-" : "";
+  const magnitude = Math.abs(value);
+
+  if (magnitude >= 1_000_000) {
+    return `${sign}$${(magnitude / 1_000_000).toFixed(1)}M`;
   }
-  if (value >= 1_000) {
-    return `$${(value / 1_000).toFixed(0)}K`;
+  if (magnitude >= 1_000) {
+    return `${sign}$${(magnitude / 1_000).toFixed(0)}K`;
   }
-  return `$${value}`;
+  return `${sign}$${magnitude}`;
 }
 
 export function formatCount(value: number): string {
@@ -68,6 +76,39 @@ export function formatPercent(value: number): string {
   const rounded = Math.round(percent * 10) / 10;
   return `${rounded.toLocaleString("en-US", { maximumFractionDigits: 1 })}%`;
 }
+
+/**
+ * Value-axis tick formatters keyed by the unit a chart declares on its `ChartFrame`.
+ *
+ * `docs/reference/ui_chart_encoding.md` §3 owns the rule that a chart's value axis
+ * must render in its declared unit; this map is the single implementation of it, so
+ * no chart picks a format of its own and none can drift from its declared unit.
+ *
+ * The dollar entry is deliberately the *abbreviated* formatter. A full-precision
+ * `$1,250,000.00` is 14 characters of axis gutter for a number the reader is only
+ * using to judge scale, and it was the direct cause of y-axis labels overflowing
+ * their own plot by 28-34px in production. Exact cents live in the chart's
+ * `View chart data` table and in the hover tooltip below.
+ */
+export const AXIS_VALUE_FORMATTERS: Record<FinanceChartUnit, (value: number) => string> = {
+  dollars: formatCurrencyShort,
+  percent: formatPercent,
+  count: formatCount,
+  reported_transactions: formatCount
+};
+
+/**
+ * Tooltip value formatters, keyed by the same declared unit.
+ *
+ * A tooltip is a precision surface — the reader hovered *because* they wanted the
+ * number — so money is rendered in full here where the axis abbreviates.
+ */
+export const TOOLTIP_VALUE_FORMATTERS: Record<FinanceChartUnit, (value: number) => string> = {
+  dollars: formatCurrency,
+  percent: formatPercent,
+  count: formatCount,
+  reported_transactions: formatCount
+};
 
 export function formatMonthKey(monthKey: string): string {
   return MONTH_FORMATTER.format(new Date(`${monthKey}-01T00:00:00.000Z`));

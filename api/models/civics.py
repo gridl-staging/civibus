@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 
 from api.models.campaign_finance import (
     CandidateFundraisingCoverage,
+    CandidateMoneyCoverage,
     CandidateOutOfCycleOfficialTotal,
 )
 from api.models.provenance import SourceInfo
@@ -176,10 +177,17 @@ class ContestCandidateMoneyRow(BaseModel):
     summary_source: str | None = None
     fundraising_coverage: CandidateFundraisingCoverage | None = None
     out_of_cycle_official_total: CandidateOutOfCycleOfficialTotal | None = None
-    ie_support_total: Decimal
-    ie_oppose_total: Decimal
-    ie_support_count: int
-    ie_oppose_count: int
+    # Optional for the same reason as the fundraising fields above. "No Schedule
+    # E was loaded for this cycle" and "no outside money was spent on this
+    # candidate" are different claims; typing these as ``Decimal`` forced a zero
+    # at serialization and published the second whenever the first was true.
+    # ``ie_coverage`` is present only when the state is not ``populated``,
+    # mirroring ``fundraising_coverage`` above.
+    ie_support_total: Decimal | None = None
+    ie_oppose_total: Decimal | None = None
+    ie_support_count: int | None = None
+    ie_oppose_count: int | None = None
+    ie_coverage: CandidateMoneyCoverage | None = None
 
 
 class ContestCandidateMoneyResponse(BaseModel):
@@ -196,12 +204,25 @@ class ContestCandidateMoneyResponse(BaseModel):
     # Race-level rollups over the rows below, for the answer-first summary line
     # race_detail.md specifies. Candidates with unknown money contribute nothing
     # rather than a zero, so these are sums of what is actually known.
-    total_raised: Decimal
-    total_ie_support: Decimal
-    total_ie_oppose: Decimal
+    #
+    # ``None`` when NO candidate in the race has loaded fundraising: summing an
+    # empty set of known values yields no total, and a headline reading
+    # "Civibus has loaded $0.00 raised" would state a measurement nobody took.
+    # A race where every loaded candidate genuinely raised nothing still totals
+    # ``Decimal("0.00")`` — that zero is measured and must keep its figure.
+    total_raised: Decimal | None = None
+    # ``None`` when no candidate in the race has loaded outside spending: there
+    # is nothing to total, and a race headline reading "$0.00 supporting" would
+    # be the loudest false statement on the page.
+    total_ie_support: Decimal | None = None
+    total_ie_oppose: Decimal | None = None
     # True when at least one candidacy has no loaded money; the summary line
     # must qualify itself rather than present a partial total as complete.
     has_unknown_candidate_money: bool
+    # The same qualifier for the outside-spending half. Separate from the
+    # fundraising flag because the two datasets load independently: Schedule A
+    # can be current while Schedule E for the same cycle was never fetched.
+    has_unknown_candidate_ie: bool = False
     rows: list[ContestCandidateMoneyRow] = Field(default_factory=list)
 
 

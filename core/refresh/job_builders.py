@@ -1569,31 +1569,51 @@ def _build_fec_committee_summary_job(parameters: RunnerParameters) -> RefreshJob
 
 
 def _build_fec_schedule_e_job(parameters: RunnerParameters) -> RefreshJob:
-    def _run_fec_schedule_e_job() -> object:
+    # Schedule E follows the same active-cycle window as Schedule A rather than
+    # keeping its own rule. Loading only the current cycle meant a race in the
+    # previous cycle had no independent-expenditure rows at all, so the surfaces
+    # could show only "not loaded" for it — the 2024 Senate races among them.
+    # Measured 2026-08-19 via HTTP HEAD on the FEC bulk endpoint:
+    # independent_expenditure_2024.csv is 19,534,174 bytes and _2026.csv is
+    # 3,694,250, so the added cycle is tens of MB, not the tens of GB the
+    # Schedule A capacity work in docs/live-state/2026_07_27_b2_disposition.md
+    # is about.
+    cycles = _active_fec_transaction_cycles(parameters.fec_cycle)
+
+    def _run_fec_schedule_e_job() -> list[object]:
         with _temporary_refresh_directory(prefix="refresh-fec-schedule-e-") as temp_dir:
-            destination_path = Path(temp_dir) / f"independent_expenditure_{parameters.fec_cycle}.csv"
-            urlretrieve(fec_schedule_e_url(parameters.fec_cycle), destination_path)
+            download_paths: list[tuple[int, Path]] = []
+            for cycle in cycles:
+                destination_path = Path(temp_dir) / f"independent_expenditure_{cycle}.csv"
+                urlretrieve(fec_schedule_e_url(cycle), destination_path)
+                download_paths.append((cycle, destination_path))
 
             connection = get_connection()
             try:
                 with connection.transaction():
                     data_source_id = ensure_fec_bulk_data_source(connection)
-                return dispatch_load(
-                    conn=connection,
-                    config=CliConfig(
-                        mode="single",
-                        cycle=parameters.fec_cycle,
-                        file_type="schedule_e",
-                        path=destination_path,
-                        directory=None,
-                        batch_size=1000,
-                        limit=None,
-                        graph_enabled=False,
-                        with_transactions=False,
-                    ),
-                    request=LoadRequest(file_type="schedule_e", path=destination_path),
-                    data_source_id=data_source_id,
-                )
+                # One dispatch per cycle: the loader stamps the cycle into every
+                # source_record key, so re-running is idempotent per cycle and
+                # the two loads cannot collide on the active-key unique index.
+                return [
+                    dispatch_load(
+                        conn=connection,
+                        config=CliConfig(
+                            mode="single",
+                            cycle=cycle,
+                            file_type="schedule_e",
+                            path=destination_path,
+                            directory=None,
+                            batch_size=1000,
+                            limit=None,
+                            graph_enabled=False,
+                            with_transactions=False,
+                        ),
+                        request=LoadRequest(file_type="schedule_e", path=destination_path),
+                        data_source_id=data_source_id,
+                    )
+                    for cycle, destination_path in download_paths
+                ]
             finally:
                 connection.close()
 

@@ -71,6 +71,20 @@ const MEMBERS = [
     party: "Democratic",
     portrait_source_image_url: null,
     person_detail_path: "/person/77777777-7777-4777-8777-777777777777"
+  },
+  {
+    person_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    person_name: "Sam Unloaded",
+    officeholding_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+    office_id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+    office_name: "U.S. Senator from Wyoming",
+    chamber: "Senate",
+    state: "WY",
+    district: null,
+    district_or_class: "Class I",
+    party: "Republican",
+    portrait_source_image_url: null,
+    person_detail_path: "/person/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
   }
 ];
 
@@ -118,19 +132,44 @@ const MONEY_SUMMARIES = [
     sources: []
   },
   {
+    // No linked FEC candidate at all. The API sends nulls, not minted zeros.
     person_id: "77777777-7777-4777-8777-777777777777",
     person_name: "Maria Delegate",
     has_fec_money: false,
     candidate_id: null,
-    total_raised: "0.00",
-    total_spent: "0.00",
-    net: "0.00",
+    total_raised: null,
+    total_spent: null,
+    net: null,
     cash_on_hand: null,
     summary_source: null,
-    ie_support_total: "0.00",
-    ie_oppose_total: "0.00",
-    ie_support_count: 0,
-    ie_oppose_count: 0,
+    ie_support_total: null,
+    ie_oppose_total: null,
+    ie_support_count: null,
+    ie_oppose_count: null,
+    sources: []
+  },
+  {
+    // Linked to a real FEC candidate -- has_fec_money is TRUE -- but no
+    // Schedule A was loaded for the cycle. This is the 74-of-539 shape: the
+    // money panel renders, and every cell in it has to say so in words.
+    person_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    person_name: "Sam Unloaded",
+    has_fec_money: true,
+    candidate_id: "S6WY00001",
+    total_raised: null,
+    total_spent: null,
+    net: null,
+    cash_on_hand: null,
+    summary_source: null,
+    fundraising_coverage: {
+      activity_state: "not_loaded" as const,
+      completeness: "unknown" as const,
+      basis: "no_authoritative_load_evidence" as const
+    },
+    ie_support_total: null,
+    ie_oppose_total: null,
+    ie_support_count: null,
+    ie_oppose_count: null,
     sources: []
   }
 ];
@@ -219,5 +258,31 @@ describe("/congress route render", () => {
     expect(mariaRow).toContain("Maria Delegate");
     expect(mariaRow).toContain("No reported/loaded money.");
     expect(mariaRow).not.toContain("$0");
+  });
+
+  it("renders words, not a dollar figure, for a linked member whose cycle was never loaded", () => {
+    currentPageUrl = new URL("https://preview.internal:5173/congress");
+    const rendered = render(CongressPage, {
+      props: { data: { members: MEMBERS, moneySummaries: MONEY_SUMMARIES } }
+    });
+    // Located by name, not by sort position: the assertions below are about
+    // what this member's row says, and a failure should read "printed $0.00",
+    // not "the row moved".
+    const samRow = [0, 1, 2, 3]
+      .map((index) => renderedMemberRow(rendered.body, index))
+      .find((row) => row.includes("Sam Unloaded"));
+
+    expect(samRow).toBeDefined();
+    // has_fec_money is true, so the money panel renders -- and every one of its
+    // four cells has to say the figure is missing rather than print $0.00.
+    expect(samRow).toContain('aria-label="Money summary for Sam Unloaded"');
+    expect(samRow!.match(/Not reported\/loaded/g)).toHaveLength(4);
+    // The single most important assertion on this page: no dollar figure at
+    // all. A "$0.00" here is a measurement nobody took.
+    expect(samRow).not.toContain("$");
+    // No bar either. A zero-width bar is the graphical form of the same claim,
+    // so the comparison row states the gap in words instead.
+    expect(samRow).not.toContain('data-testid="comparison-bar-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"');
+    expect(samRow).toContain("No reported/loaded money.");
   });
 });
