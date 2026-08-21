@@ -65,7 +65,12 @@ async function expectFixtureSearchResult(page: Page): Promise<void> {
 }
 
 async function expectProductionSearchResult(page: Page): Promise<void> {
-  await expect(page.getByTestId("search-status")).toHaveText(/^[1-9]\d* results found\.$/);
+  // Two valid wordings, decided by production data volume (search.md pagination
+  // contract, civibus-x9d/aug20): an unpaged set says "N results found." while
+  // a set spanning pages says "N results shown." — production's org query
+  // returns well over one page, so pinning "found" alone turned the 2026-08-20
+  // deploy gate red against a healthy build.
+  await expect(page.getByTestId("search-status")).toHaveText(/^[1-9]\d* results? (found|shown)\.$/);
   const matchingResult = page
     .getByTestId("search-results-region")
     .getByRole("link", { name: new RegExp(SMOKE_SEARCH_QUERY, "i") })
