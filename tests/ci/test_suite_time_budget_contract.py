@@ -142,8 +142,15 @@ def test_every_local_command_exists_in_its_owner() -> None:
             pytest.fail(f"{budget.suite}: unrecognised local command shape {command!r}")
 
 
+@pytest.mark.dev_repo_only(private_asset="docs/reference/testing.md", owner="Debbie projection contract")
 def test_testing_doc_is_authoritative_and_routes_numbers_to_this_registry() -> None:
     """docs/reference/testing.md owns the policy prose; the numbers live here.
+
+    dev_repo_only because the doc it audits is deliberately outside the public
+    mirror's sync whitelist — the 2026-08-21 staging CI run proved the public
+    composition red with FileNotFoundError. The registry/workflow/Makefile pins
+    in this module stay in the public composition; only the doc-authority audit
+    is dev-repo-scoped.
 
     Before civibus-y1x the doc declared itself "not authoritative" while
     holding the integration-gate policy, which left the policy unowned. The doc
