@@ -152,6 +152,7 @@ PUBLIC_MIRROR_TEST_CLASSIFICATIONS: tuple[PublicMirrorTestClassification, ...] =
             "tests/test_donor_er_scale_spike.py::test_debbie_projection_includes_harness_script_and_tests_mirror",
             "tests/ci/test_api_dockerfile_contract.py::test_debbie_sync_includes_api_dockerfile_root_inputs",
             "tests/ci/test_refresh_cron_scripts_contract.py::test_debbie_sync_keeps_evidence_and_findings_private_by_default",
+            "tests/test_debbie_post_sync_hook.py::test_nightly_live_accessibility_receipt_is_projected",
         ),
     ),
     *_entries(

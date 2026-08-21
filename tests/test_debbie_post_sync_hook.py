@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import fnmatch
+import json
 import os
 import shlex
 import shutil
@@ -24,6 +25,9 @@ from tests.ci.public_mirror_contract import (
 REPO_ROOT = Path(__file__).resolve().parents[1]
 POST_SYNC_SCRIPT = REPO_ROOT / ".debbie" / "post-sync.sh"
 DEBBIE_CONFIG_PATH = REPO_ROOT / ".debbie.toml"
+ACCESSIBILITY_SPEC_PATH = REPO_ROOT / "web/tests/smoke/accessibility.spec.ts"
+SMOKE_EXECUTION_CONTRACT_PATH = REPO_ROOT / "web/tests/smoke/execution-contract.json"
+ACCESSIBILITY_RECEIPT_RELATIVE_PATH = "docs/live-state/2026_07_29_accessibility_baseline.md"
 PUBLIC_RUN_SPECIMENS = (
     ".debbie.toml",
     "ROADMAP.md",
@@ -90,6 +94,18 @@ def test_debbie_projection_excludes_private_ledger_and_planning_docs_from_physic
     assert not (target_root / "BEADS_QA_TRANSITION.md").exists(), (
         "Debbie projection leaked private path BEADS_QA_TRANSITION.md"
     )
+
+
+@pytest.mark.dev_repo_only(private_asset=".debbie.toml", owner="Debbie projection contract")
+def test_nightly_live_accessibility_receipt_is_projected() -> None:
+    """Every private input read by a mirrored live journey must be projected."""
+    debbie_payload = tomllib.loads(DEBBIE_CONFIG_PATH.read_text(encoding="utf-8"))
+    accessibility_spec = ACCESSIBILITY_SPEC_PATH.read_text(encoding="utf-8")
+    execution_contract = json.loads(SMOKE_EXECUTION_CONTRACT_PATH.read_text(encoding="utf-8"))["specs"]
+
+    assert ACCESSIBILITY_RECEIPT_RELATIVE_PATH in accessibility_spec
+    assert "live" in execution_contract["accessibility.spec.ts"]["modes"]
+    assert ACCESSIBILITY_RECEIPT_RELATIVE_PATH in debbie_payload["sync"]["files"]
 
 
 def _copy_project_toolchain(target_root: Path) -> None:
