@@ -316,14 +316,36 @@ async function expectDisclosureKeyboardReachable(page: Page): Promise<void> {
 }
 
 async function expectOutsideSpendingLabelsWhenPresent(page: Page): Promise<void> {
-  if (!(await outsideSpendingHasReportedActivity(page))) {
+  // Three-state contract, decided by VALUES, never by label presence:
+  //   nonzero totals  -> the zero-centered chart must render real bar marks;
+  //   loaded_zero     -> the figure's honest words arm renders and NO marks may;
+  //   not_loaded/none -> the totals <dl> never appears; nothing to assert here.
+  // The pre-2026-08-21 predicate keyed on "Support total" label VISIBILITY with
+  // an unwaited isVisible(), which failed twice at once: the 2024 Schedule E
+  // load created the first real loaded_zero view (labels + $0.00, no marks) and
+  // the gate demanded marks against it; and on slow hydration the race made the
+  // whole helper silently skip -- a vacuous pass. Deploy run 32450666834 is the
+  // recorded red; the desktop retry-green in the same run is the recorded race.
+  const totals = await settledOutsideSpendingTotals(page);
+  if (totals === null) {
+    return;
+  }
+
+  const outsideFrame = await chartFrameRegion(page, OUTSIDE_SPENDING_CHART_FRAME.title);
+  await expect(outsideFrame).toBeVisible({ timeout: 20_000 });
+
+  if (!totals.hasNonzeroActivity) {
+    // Measured zero: the figure states it in words, and marks would be a lie.
+    await expect(
+      outsideFrame.getByText(/reports \$0\.00 in support spending and \$0\.00 in oppose spending/i)
+    ).toBeVisible({ timeout: 20_000 });
+    expect(await outsideFrame.locator(BAR_SERIES_MARK_SELECTOR).count()).toBe(0);
+    await expectChartSourceLinksKeyboardReachable([outsideFrame]);
     return;
   }
 
   const outsideRegion = await chartRegion(page, OUTSIDE_SPENDING_CHART_FRAME.chartLabel);
-  const outsideFrame = await chartFrameRegion(page, OUTSIDE_SPENDING_CHART_FRAME.title);
   await expect(outsideRegion).toBeVisible({ timeout: 20_000 });
-  await expect(outsideFrame).toBeVisible({ timeout: 20_000 });
 
   await expectRealChartRender(outsideRegion, BAR_SERIES_MARK_SELECTOR);
   const outsidePaints = await sampleVisibleRectPaints(outsideRegion);
@@ -338,10 +360,46 @@ async function expectOutsideSpendingLabelsWhenPresent(page: Page): Promise<void>
   await expectChartSourceLinksKeyboardReachable([outsideFrame]);
 }
 
-async function outsideSpendingHasReportedActivity(page: Page): Promise<boolean> {
-  const supportTotal = page.getByText("Support total", { exact: true }).first();
-  const opposeTotal = page.getByText("Oppose total", { exact: true }).first();
-  return (await supportTotal.isVisible()) && (await opposeTotal.isVisible());
+/**
+ * Waits for the outside-spending panel to settle, then reads the totals.
+ *
+ * Returns null when the panel never presents a totals <dl> (the not_loaded /
+ * no-candidate arms render words without "Support total"/"Oppose total"
+ * definitions). Waiting on the panel heading first -- server-rendered on every
+ * arm -- and then polling for the totals keeps this deterministic where the old
+ * unwaited isVisible() pair raced hydration and skipped the whole assertion.
+ */
+async function settledOutsideSpendingTotals(
+  page: Page
+): Promise<{ hasNonzeroActivity: boolean } | null> {
+  await expect(page.getByRole("heading", { name: "Outside spending" }).first()).toBeVisible({
+    timeout: 20_000
+  });
+
+  const supportLabel = page.getByText("Support total", { exact: true }).first();
+  try {
+    await supportLabel.waitFor({ state: "visible", timeout: 20_000 });
+  } catch {
+    return null;
+  }
+
+  // dt/dd pairs: the definition follows its term inside the same row container.
+  const readTotal = async (label: string): Promise<string> => {
+    const row = page
+      .locator("div", { has: page.getByText(label, { exact: true }) })
+      .filter({ hasText: /\$/ })
+      .first();
+    return (await row.textContent()) ?? "";
+  };
+
+  const supportText = await readTotal("Support total");
+  const opposeText = await readTotal("Oppose total");
+  const nonzero = (text: string): boolean => {
+    const match = text.match(/\$([\d,]+\.\d{2})/);
+    return match !== null && Number(match[1].replace(/,/g, "")) > 0;
+  };
+
+  return { hasNonzeroActivity: nonzero(supportText) || nonzero(opposeText) };
 }
 
 type FinanceChartFrame = {

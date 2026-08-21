@@ -125,11 +125,33 @@ def test_production_finance_smoke_exercises_each_chart_disclosure() -> None:
 
 
 def test_production_finance_smoke_requires_outside_spending_marks_when_activity_exists() -> None:
+    """The outside-spending gate decides by VALUES across three states.
+
+    The pre-2026-08-21 predicate keyed on "Support total" label VISIBILITY with
+    an unwaited isVisible(): the first real loaded_zero view (created by the
+    2024 Schedule E load) rendered honest $0.00 labels with no marks and the
+    gate demanded marks against it (deploy run 32450666834), while the same
+    run's desktop retry passed by racing hydration into a silent skip. These
+    pins hold the replacement to its three-state shape: totals parsed as
+    dollars, nonzero -> real marks required, measured zero -> the words arm
+    plus an explicit zero-mark assertion, and a settled wait so the helper can
+    never skip by racing.
+    """
     source = _production_finance_spec()
 
-    assert "outsideSpendingHasReportedActivity" in source
+    assert "settledOutsideSpendingTotals" in source
+    assert "hasNonzeroActivity" in source
+    # The settle step waits on the SSR panel heading, then polls the totals —
+    # the un-waited isVisible() race must not come back.
+    assert 'getByRole("heading", { name: "Outside spending" })' in source
+    assert "await supportLabel.waitFor" in source
+    # Nonzero arm still demands a real render and painted marks.
     assert "expect(outsidePaints.length).toBeGreaterThan(0)" in source
-    assert "outsidePaints.length === 0" not in source
+    # Measured-zero arm asserts the honest words AND that no bar mark rendered.
+    assert "reports \\$0\\.00 in support spending and \\$0\\.00 in oppose spending" in source
+    assert "expect(await outsideFrame.locator(BAR_SERIES_MARK_SELECTOR).count()).toBe(0)" in source
+    # The label-presence predicate is retired; presence is not activity.
+    assert "outsideSpendingHasReportedActivity" not in source
 
 
 def test_production_finance_no_chart_fallback_is_scoped_to_chart_frames() -> None:
