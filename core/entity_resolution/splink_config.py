@@ -300,27 +300,55 @@ DONOR_PREPROCESSING_SQL = """
 # =============================================================================
 # These produce confidence=1.0 matches without needing probabilistic scoring.
 
+# Every key these rules read MUST be one some ingest path actually writes —
+# guarded by test_splink_config.py::
+# test_every_deterministic_person_rule_keys_on_an_identifier_some_ingest_path_writes.
+# The original fec rule keyed on 'fec_id', which nothing wrote, so the one rule
+# aimed at FEC-minted duplicate persons silently matched nothing for months
+# (civibus-s5q). A rule for a future key (e.g. a state voter-registration id)
+# lands together with its writer, never ahead of it: the deleted
+# 'voter_reg_match' rule sat equally dead because no voter ingest exists yet.
 DETERMINISTIC_PERSON_RULES = [
     {
-        "name": "fec_id_match",
-        "description": "Same FEC individual contributor ID",
+        "name": "fec_candidate_id_match",
+        "description": "Overlapping FEC candidate IDs (CAND_ID)",
+        # Ingest writes two shapes (see core/db_ingest.py, bulk_loader.py,
+        # federal_spine_loader.py): FEC-lane persons carry a scalar
+        # 'fec_candidate_id'; spine persons carry that scalar PLUS the full
+        # 'fec_candidate_ids' array — a chamber switcher (House -> Senate) has
+        # two CAND_IDs, and the array is a superset of the scalar whenever both
+        # exist. Overlap of the per-person id SETS is therefore the correct
+        # predicate: it collapses the production shadow-person class where one
+        # row holds only the Senate CAND_ID and the canonical row holds both.
         "sql": """
-            SELECT a.id AS entity_id_a, b.id AS entity_id_b, 1.0 AS confidence
-            FROM core.person a, core.person b
-            WHERE a.id < b.id
-              AND BTRIM(a.identifiers->>'fec_id') = BTRIM(b.identifiers->>'fec_id')
-              AND NULLIF(BTRIM(a.identifiers->>'fec_id'), '') IS NOT NULL
+            WITH person_fec_ids AS (
+                SELECT p.id, BTRIM(ids.fec_candidate_id) AS fec_candidate_id
+                FROM core.person p,
+                     LATERAL jsonb_array_elements_text(
+                         COALESCE(p.identifiers->'fec_candidate_ids',
+                                  jsonb_build_array(p.identifiers->>'fec_candidate_id'))
+                     ) AS ids(fec_candidate_id)
+                WHERE NULLIF(BTRIM(ids.fec_candidate_id), '') IS NOT NULL
+            )
+            SELECT DISTINCT a.id AS entity_id_a, b.id AS entity_id_b, 1.0 AS confidence
+            FROM person_fec_ids a
+            JOIN person_fec_ids b
+              ON a.fec_candidate_id = b.fec_candidate_id
+             AND a.id < b.id
         """,
     },
     {
-        "name": "voter_reg_match",
-        "description": "Same state voter registration ID",
+        "name": "bioguide_id_match",
+        "description": "Same Congressional Bioguide ID",
+        # bioguide_id is the spine's primary identity anchor (see
+        # resolve_or_create_person_by_identifier callers); two rows sharing it
+        # are the same member of Congress by construction.
         "sql": """
             SELECT a.id AS entity_id_a, b.id AS entity_id_b, 1.0 AS confidence
             FROM core.person a, core.person b
             WHERE a.id < b.id
-              AND BTRIM(a.identifiers->>'voter_reg_id') = BTRIM(b.identifiers->>'voter_reg_id')
-              AND NULLIF(BTRIM(a.identifiers->>'voter_reg_id'), '') IS NOT NULL
+              AND BTRIM(a.identifiers->>'bioguide_id') = BTRIM(b.identifiers->>'bioguide_id')
+              AND NULLIF(BTRIM(a.identifiers->>'bioguide_id'), '') IS NOT NULL
         """,
     },
 ]

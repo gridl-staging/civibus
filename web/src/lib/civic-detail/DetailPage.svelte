@@ -175,7 +175,16 @@
           {#if officeViewModel.officeholderRows.length === 0}
             <p>{officeViewModel.officeholderEmptyMessage}</p>
           {:else}
-            <div class="detail__table-scroll">
+            <!-- tabindex="0" is required, not decorative: .detail__table-scroll sets
+                 overflow-x: auto over a table wider than its container, and a scrollable
+                 region with no focusable descendant cannot be scrolled from the keyboard
+                 at all. axe reports that as scrollable-region-focusable (serious), which
+                 the smoke a11y floor refuses. Applied to every scroll container in this
+                 component rather than only the ones that happen to lack links today, so a
+                 table whose links become conditional cannot silently regress. Same remedy
+                 the entity-detail and campaign-finance-detail DetailPages carry. -->
+            <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+            <div class="detail__table-scroll" tabindex="0">
               <table>
                 <thead>
                   <tr>
@@ -216,7 +225,8 @@
           {#if officeViewModel.timelineRows.length === 0}
             <p>{officeViewModel.timelineEmptyMessage}</p>
           {:else}
-            <div class="detail__table-scroll">
+            <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+            <div class="detail__table-scroll" tabindex="0">
               <table>
                 <thead>
                   <tr>
@@ -259,7 +269,8 @@
           {#if officeViewModel.recentContestRows.length === 0}
             <p>{officeViewModel.recentContestEmptyMessage}</p>
           {:else}
-            <div class="detail__table-scroll">
+            <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+            <div class="detail__table-scroll" tabindex="0">
               <table>
                 <thead>
                   <tr>
@@ -374,7 +385,8 @@
           {#if contestViewModel.candidacyRows.length === 0}
             <p>{contestViewModel.candidacyEmptyMessage}</p>
           {:else}
-            <div class="detail__table-scroll">
+            <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+            <div class="detail__table-scroll" tabindex="0">
               <table>
                 <thead>
                   <tr>
@@ -458,10 +470,67 @@
             {/if}
           {/if}
 
+          {#if contestViewModel.raceMoneyBars}
+            {@const raceMoneyBars = contestViewModel.raceMoneyBars}
+            <!-- The one-second answer: ranked HTML/CSS bars, deliberately not an
+                 SVG chart. A single-series ranked list needs no chart package —
+                 divs server-render, cannot clip an axis, and add no screenshot
+                 baseline. The scoreboard table below remains the accessible data
+                 view; each bar row's text (name + exact figure) is complete on
+                 its own and the track is decoration, hidden from assistive tech.
+
+                 Unknown money must not rank as cheap: candidates with no
+                 measured total are NOT in this list ranked as $0 — they form
+                 the words-only group below it. See buildRaceMoneyBars. -->
+            <div class="race-money-bars" data-testid="race-money-bars">
+              <h4 class="race-money-bars__heading">Who leads in money raised</h4>
+              <ol class="race-money-bars__list">
+                {#each raceMoneyBars.rankedRows as barRow (barRow.personId)}
+                  <li class="race-money-bars__row" data-testid="race-money-bar-row">
+                    <span class="race-money-bars__name">
+                      {#if barRow.href}
+                        <a href={barRow.href}>{barRow.personName}</a>
+                      {:else}
+                        {barRow.personName}
+                      {/if}
+                    </span>
+                    <!-- A measured $0.00 keeps this track at 0% width: an empty
+                         ruler with a figure, visibly unlike the not-loaded group,
+                         which has no track at all. -->
+                    <span class="race-money-bars__track" aria-hidden="true">
+                      <span
+                        class="race-money-bars__fill"
+                        style:--race-bar-width={`${barRow.barWidthPct}%`}
+                      ></span>
+                    </span>
+                    <span class="race-money-bars__amount">{barRow.amountLabel}</span>
+                  </li>
+                {/each}
+              </ol>
+              {#if raceMoneyBars.notLoadedLabel !== null}
+                <!-- Bottom group, words instead of a bar: nobody measured this
+                     money, so no figure and no ranking position exists for it. -->
+                <p class="race-money-bars__not-loaded-label">{raceMoneyBars.notLoadedLabel}</p>
+                <ul class="race-money-bars__not-loaded" data-testid="race-money-bars-not-loaded">
+                  {#each raceMoneyBars.notLoadedRows as notLoadedRow (notLoadedRow.personId)}
+                    <li>
+                      {#if notLoadedRow.href}
+                        <a href={notLoadedRow.href}>{notLoadedRow.personName}</a>
+                      {:else}
+                        {notLoadedRow.personName}
+                      {/if}
+                    </li>
+                  {/each}
+                </ul>
+              {/if}
+            </div>
+          {/if}
+
           {#if contestViewModel.financeRows.length === 0}
             <p>{contestViewModel.financeEmptyMessage}</p>
           {:else}
-            <div class="detail__table-scroll" data-testid="race-money-table-scroll">
+            <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+            <div class="detail__table-scroll" tabindex="0" data-testid="race-money-table-scroll">
               <table>
                 <thead>
                   <tr>
@@ -629,3 +698,105 @@
     {/each}
   {/if}
 </section>
+
+<style>
+  /* Ranked race money bars. Same finance-bar palette as the entity-detail
+     rank bars (.detail__rank-bar): teal fill on a slate track, with all text
+     in ink colors — the bar carries magnitude, never the words. */
+  .race-money-bars {
+    display: grid;
+    gap: 0.5rem;
+    margin: 0.75rem 0;
+  }
+
+  .race-money-bars__heading {
+    margin: 0;
+  }
+
+  /* One grid for the whole list, rows joining via subgrid: every row must
+     share the same three column widths, or a long dollar figure would shrink
+     its own row's track and bars would stop being comparable across rows —
+     the leader's 100% bar rendering shorter than a rival's track is exactly
+     the defect this prevents. */
+  .race-money-bars__list {
+    display: grid;
+    gap: 0.5rem;
+    grid-template-columns: minmax(9rem, 1fr) minmax(6rem, 3fr) max-content;
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+
+  .race-money-bars__row {
+    align-items: center;
+    display: grid;
+    gap: 0.75rem;
+    grid-column: 1 / -1;
+    grid-template-columns: subgrid;
+    min-width: 0;
+  }
+
+  /* Older engines without subgrid fall back to per-row columns: tracks can
+     drift a few pixels between rows, but nothing breaks or stacks. */
+  @supports not (grid-template-columns: subgrid) {
+    .race-money-bars__row {
+      grid-template-columns: minmax(9rem, 1fr) minmax(6rem, 3fr) max-content;
+    }
+  }
+
+  .race-money-bars__name {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  /* Full-width track on every measured row: a $0.00 row shows the whole empty
+     ruler, which is what makes zero look measured instead of missing. */
+  .race-money-bars__track {
+    background: #e2e8f0;
+    border: 1px solid #cbd5e1;
+    display: block;
+    height: 0.75rem;
+  }
+
+  .race-money-bars__fill {
+    background: #0f766e;
+    display: block;
+    height: 100%;
+    max-width: 100%;
+    width: var(--race-bar-width);
+  }
+
+  .race-money-bars__amount {
+    color: #334155;
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+  }
+
+  .race-money-bars__not-loaded-label {
+    color: #334155;
+    margin: 0;
+  }
+
+  .race-money-bars__not-loaded {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem 1rem;
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+
+  @media (max-width: 42rem) {
+    .race-money-bars__list {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .race-money-bars__row {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .race-money-bars__amount {
+      text-align: left;
+    }
+  }
+</style>

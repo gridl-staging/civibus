@@ -180,12 +180,57 @@ function buildRowMoney(summary: CongressMemberMoneySummary | undefined): Pick<
   };
 }
 
-function parseMoneyMetric(value: string | null): number | null {
+/**
+ * Parse a serialized money value into a rankable metric.
+ *
+ * Null in means null out: an absent value is UNKNOWN money, never zero money.
+ * Exported so every money-ranked surface (this directory, the race money bars
+ * in `presentation.ts`) parses "no value" identically instead of each caller
+ * deciding what null becomes.
+ */
+export function parseMoneyMetric(value: string | null): number | null {
   if (value === null) {
     return null;
   }
   const parsedValue = Number(value);
   return Number.isFinite(parsedValue) ? parsedValue : null;
+}
+
+/**
+ * The product's ONE unknown-money ranking rule, shared by every money sort.
+ *
+ * WHERE UNKNOWNS GO, AND WHY. Rows whose metric is unknown sort to the very
+ * bottom in every sort, below a row that genuinely reported $0.00. They
+ * deliberately do NOT sort as zero. Treating an unmeasured row as if it had
+ * raised nothing is the ranking form of the same false claim a fabricated
+ * "$0.00" cell makes: it places the row precisely among the rows the product
+ * measured and found empty, which is a statement about it that nobody
+ * established. Bottom-of-list is the only position that asserts nothing about
+ * magnitude.
+ *
+ * A descending sort makes this cheap — unknown and "smallest" happen to land
+ * in the same place — but the comparator states it explicitly rather than
+ * relying on that coincidence, because an ascending sort would need the same
+ * rule and would get the opposite answer from a zero substitution.
+ *
+ * Returns 0 for ties (including two unknowns) so each caller applies its own
+ * stable tie-break; both current callers use name order so the tail reads
+ * alphabetically rather than arbitrarily.
+ */
+export function compareMoneyMetricsDescUnknownLast(
+  left: number | null,
+  right: number | null
+): number {
+  if (left === null && right === null) {
+    return 0;
+  }
+  if (left === null) {
+    return 1;
+  }
+  if (right === null) {
+    return -1;
+  }
+  return right - left;
 }
 
 export function getCongressMoneyMetric(row: CongressMemberRow, sort: CongressMoneySort): number | null {
@@ -209,41 +254,17 @@ function compareRowsByNameThenId(left: CongressMemberRow, right: CongressMemberR
 /**
  * Order the directory by the active money metric, biggest first.
  *
- * WHERE UNKNOWNS GO, AND WHY. Rows whose metric is unknown sort to the very
- * bottom in every sort, below a member who genuinely reported $0.00, and they
- * are ordered among themselves by name so the tail is stable rather than
- * arbitrary.
- *
- * They deliberately do NOT sort as zero. Treating an unmeasured member as if
- * they had raised nothing is the ranking form of the same false claim the
- * $0.00 cell used to make: it places them precisely among the members the
- * product measured and found empty, which is a statement about them that
- * nobody established. Bottom-of-list is the only position that asserts
- * nothing about magnitude.
- *
- * A descending sort makes this cheap — unknown and "smallest" happen to land
- * in the same place — but the comparator states it explicitly rather than
- * relying on that coincidence, because an ascending sort would need the same
- * rule and would get the opposite answer from a zero substitution.
+ * Unknown placement is `compareMoneyMetricsDescUnknownLast` above — the one
+ * rule shared with every other money-ranked surface. Ties (including two
+ * unknowns) fall through to name-then-id so the tail is stable.
  */
 function sortCongressMemberRows(rows: CongressMemberRow[], sort: CongressMoneySort): CongressMemberRow[] {
   return [...rows].sort((left, right) => {
-    const leftMetric = getCongressMoneyMetric(left, sort);
-    const rightMetric = getCongressMoneyMetric(right, sort);
-
-    if (leftMetric === null && rightMetric === null) {
-      return compareRowsByNameThenId(left, right);
-    }
-    if (leftMetric === null) {
-      return 1;
-    }
-    if (rightMetric === null) {
-      return -1;
-    }
-    if (leftMetric !== rightMetric) {
-      return rightMetric - leftMetric;
-    }
-    return compareRowsByNameThenId(left, right);
+    const metricOrder = compareMoneyMetricsDescUnknownLast(
+      getCongressMoneyMetric(left, sort),
+      getCongressMoneyMetric(right, sort)
+    );
+    return metricOrder !== 0 ? metricOrder : compareRowsByNameThenId(left, right);
   });
 }
 

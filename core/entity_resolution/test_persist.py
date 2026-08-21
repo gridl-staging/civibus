@@ -366,9 +366,9 @@ def test_persist_match_decisions_canonicalizes_pairs_and_persists_metadata_and_e
                 confidence=1.0,
                 decision="match",
                 decision_method="deterministic",
-                decided_by="deterministic_fec_id_match",
+                decided_by="deterministic_fec_candidate_id_match",
             ),
-            "matched_rule_names": ["deterministic_fec_id_match"],
+            "matched_rule_names": ["deterministic_fec_candidate_id_match"],
         },
         _match_pair(c, a, confidence=0.86, decision="probable_match"),
         _match_pair(d, a, confidence=0.64, decision="possible_match"),
@@ -408,8 +408,8 @@ def test_persist_match_decisions_canonicalizes_pairs_and_persists_metadata_and_e
     assert decisions[min(a, e), max(a, e)] == "no_match"
 
     deterministic_row = next(row for row in rows if row["decision_method"] == "deterministic")
-    assert deterministic_row["decided_by"] == "deterministic_fec_id_match"
-    assert deterministic_row["match_evidence"]["matched_rule_names"] == ["deterministic_fec_id_match"]
+    assert deterministic_row["decided_by"] == "deterministic_fec_candidate_id_match"
+    assert deterministic_row["match_evidence"]["matched_rule_names"] == ["deterministic_fec_candidate_id_match"]
     assert deterministic_row["match_evidence_is_null"] is False
     assert deterministic_row["match_evidence_type"] == "object"
 
@@ -501,7 +501,7 @@ def test_persist_match_decisions_supersedes_existing_active_decision_on_rerun(
                 confidence=0.99,
                 decision="match",
                 decision_method="deterministic",
-                decided_by="deterministic_fec_id_match",
+                decided_by="deterministic_fec_candidate_id_match",
             )
         ],
         "person",

@@ -7,24 +7,28 @@ import {
   expectCampaignFinanceKeyMetricsReady,
   expectCandidateKeyFinancialsReady,
   expectEarlierCycleOfficialTotalCaveat,
+  expectHtmlBarListRenderIfPlotted,
   expectNoBackendFailureStates,
   expectNoPartyCommitteeInLinkedCommittees,
   parseRenderedMoneyLabel
 } from "./smoke-helpers";
 
 const MIN_FINANCE_CHART_HEIGHT_PX = 250;
-// Every finance chart on the person page. These are data-dependent: the
+// Every SVG finance chart on the person page. These are data-dependent: the
 // receipt-source-composition chart shows a truthful "components not loaded yet"
 // state for members whose committee-summary breakdown is not loaded (true for
 // every member on prod today), and the itemized insight charts are empty for a
 // member with no itemized rows. /congress is now money-sorted (LB4), so row 0 is
 // an arbitrary top fundraiser whose data shape we cannot assume.
+// The size-buckets module is deliberately NOT here: since civibus-3a3 its one
+// visual encoding is a ranked HTML bar list with no aria-labelled svg section,
+// checked separately below via its frame testId.
 const FINANCE_CHART_LABELS = [
   "Receipt source composition by dollars",
   "Monthly contribution columns",
-  "Itemized contribution-size buckets bar chart",
   "Geography dollar share by contributor location"
 ] as const;
+const PERSON_SIZE_BUCKETS_FRAME_TEST_ID = "person-size-buckets";
 
 // Guard that IF a finance chart renders it is not collapsed -- without demanding
 // that any specific chart render, because chart presence depends on live data
@@ -42,6 +46,11 @@ async function expectRenderedFinanceChartsNotCollapsed(page: any): Promise<void>
     const chartBox = await region.boundingBox();
     expect(chartBox?.height ?? 0).toBeGreaterThanOrEqual(MIN_FINANCE_CHART_HEIGHT_PX);
   }
+  // Same IF-it-renders contract for the HTML bar list: a member with no
+  // itemized rows truthfully shows the frame's no-data state (the tolerant
+  // helper returns false), but a plotted list must carry painted bars. The
+  // strict twin runs in the fixture lane, which is what keeps this failable.
+  await expectHtmlBarListRenderIfPlotted(page.getByTestId(PERSON_SIZE_BUCKETS_FRAME_TEST_ID));
 }
 
 // Post-deploy smoke for a LIVE deployment (SMOKE_MODE=production +

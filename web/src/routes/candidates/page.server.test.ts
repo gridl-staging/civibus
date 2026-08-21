@@ -106,6 +106,26 @@ describe("/candidates +page.server load", () => {
     expect(requestJson).toHaveBeenCalledWith("/v1/candidates?state=NC&limit=25");
   });
 
+  it("forwards the name param to the candidates list endpoint", async () => {
+    // civibus-frq: name is a first-class browse filter and composes with the
+    // other filters in one request.
+    const requestJson = vi.fn().mockResolvedValue(CANDIDATE_LIST_RESPONSE);
+
+    await load(
+      createLoadEvent("https://web.civibus.local/candidates?name=ossoff&state=GA&limit=25", requestJson)
+    );
+
+    expect(requestJson).toHaveBeenCalledWith("/v1/candidates?name=ossoff&state=GA&limit=25");
+  });
+
+  it("drops a blank name submit so it behaves like no name filter", async () => {
+    const requestJson = vi.fn().mockResolvedValue(CANDIDATE_LIST_RESPONSE);
+
+    await load(createLoadEvent("https://web.civibus.local/candidates?name=&limit=25", requestJson));
+
+    expect(requestJson).toHaveBeenCalledWith("/v1/candidates?limit=25");
+  });
+
   it("forwards the sort param to the candidates list endpoint", async () => {
     const requestJson = vi.fn().mockResolvedValue(CANDIDATE_LIST_RESPONSE);
 

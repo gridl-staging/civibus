@@ -21,6 +21,16 @@ export interface ChartSeries {
   color?: string;
 }
 
+/**
+ * Document-outline level for a chart's own title heading. Charts are embedded
+ * inside sections whose depth varies by page, so the level is a prop rather
+ * than a fixed tag: a fixed `<h3>` inside an h4-level section resets the
+ * outline mid-section and forces every heading after the chart to h4 or
+ * shallower (civibus-4yw). Defaults to 3, preserving pre-prop rendering for
+ * every consumer that has not opted in.
+ */
+export type ChartHeadingLevel = 2 | 3 | 4 | 5 | 6;
+
 export interface ChartProps {
   kind: ChartKind;
   title: string;
@@ -32,6 +42,7 @@ export interface ChartProps {
   unit: FinanceChartUnit;
   series: ChartSeries[];
   yDomain?: [number, number];
+  headingLevel?: ChartHeadingLevel;
 }
 
 export type FinanceChartUnit = "dollars" | "reported_transactions" | "count" | "percent";

@@ -213,7 +213,7 @@ def test_cluster_scored_pairs_all_match_is_auto_merge() -> None:
     a, b, c = uuid4(), uuid4(), uuid4()
 
     classified_pairs = [
-        _classified_pair(a, b, 1.0, "match", "deterministic", "deterministic_fec_id_match"),
+        _classified_pair(a, b, 1.0, "match", "deterministic", "deterministic_fec_candidate_id_match"),
         _classified_pair(b, c, 0.97, "match"),
     ]
     entity_rows = [
@@ -238,7 +238,7 @@ def test_cluster_scored_pairs_probable_link_goes_to_review() -> None:
     a, b, c = uuid4(), uuid4(), uuid4()
 
     classified_pairs = [
-        _classified_pair(a, b, 1.0, "match", "deterministic", "deterministic_fec_id_match"),
+        _classified_pair(a, b, 1.0, "match", "deterministic", "deterministic_fec_candidate_id_match"),
         _classified_pair(b, c, 0.85, "probable_match"),
     ]
     entity_rows = [
@@ -349,8 +349,8 @@ def test_end_to_end_deterministic_and_probabilistic_pipeline() -> None:
             "entity_id_b": max(a, b),
             "confidence": 1.0,
             "decision_method": "deterministic",
-            "decided_by": "deterministic_fec_id_match",
-            "matched_rule_names": ["deterministic_fec_id_match"],
+            "decided_by": "deterministic_fec_candidate_id_match",
+            "matched_rule_names": ["deterministic_fec_candidate_id_match"],
         },
         # Deterministic: B-C share voter_reg_id (transitive with A-B)
         {
@@ -358,8 +358,8 @@ def test_end_to_end_deterministic_and_probabilistic_pipeline() -> None:
             "entity_id_b": max(b, c),
             "confidence": 1.0,
             "decision_method": "deterministic",
-            "decided_by": "deterministic_voter_reg_match",
-            "matched_rule_names": ["deterministic_voter_reg_match"],
+            "decided_by": "deterministic_bioguide_id_match",
+            "matched_rule_names": ["deterministic_bioguide_id_match"],
         },
         # Probabilistic: D-E are probable (below auto-merge)
         {

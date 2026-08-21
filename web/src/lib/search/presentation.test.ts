@@ -105,7 +105,10 @@ describe('search presentation', () => {
     ]);
   });
 
-  it('builds a candidate result card that routes to the linked person record', () => {
+  it('builds a candidate result card that routes to the candidate record page', () => {
+    // civibus-x9d: candidate rows carry cf.candidate ids, so the card links to
+    // the FEC candidate record — the same destination `/candidates` rows use —
+    // not to a person page that may not exist for the record.
     const results = [
       {
         entity_type: 'candidate',
@@ -120,7 +123,7 @@ describe('search presentation', () => {
         entityType: 'candidate',
         entityId: '66666666-6666-4666-8666-666666666666',
         routeLabel: 'Candidate',
-        href: '/person/66666666-6666-4666-8666-666666666666',
+        href: '/candidate/66666666-6666-4666-8666-666666666666',
         contextLine: ''
       }
     ]);
@@ -268,7 +271,7 @@ describe('search presentation', () => {
         entityId: '55555555-5555-4555-8555-555555555555',
         name: 'Candidate Four',
         routeLabel: 'Candidate',
-        href: '/person/55555555-5555-4555-8555-555555555555',
+        href: '/candidate/55555555-5555-4555-8555-555555555555',
         contextLine: ''
       },
       {
@@ -371,7 +374,7 @@ describe('search presentation', () => {
         entityId: '88888888-8888-4888-8888-888888888888',
         name: 'Pat Candidate',
         routeLabel: 'Candidate',
-        href: '/person/88888888-8888-4888-8888-888888888888',
+        href: '/candidate/88888888-8888-4888-8888-888888888888',
         contextLine: 'Democrat · Governor · OR'
       },
       {
@@ -726,5 +729,107 @@ describe('search result name formatting', () => {
 
     expect(cards[0].name).toBe('U.S. SENATOR FROM GEORGIA');
     expect(cards[1].name).toBe('GA SENATE GENERAL ELECTION');
+  });
+});
+
+describe('search pagination presentation', () => {
+  // Carved out of civibus-ehk: /search was capped at 20 rows with no way to
+  // reach the rest. The view-model reuses buildPaginationContext — the same
+  // pagination owner /candidates renders through — over the page-server's
+  // LIMIT+1 outcome.
+  function buildPagedResults(count: number): SearchResultCardData[] {
+    return Array.from({ length: count }, (_, index) => ({
+      entity_type: 'org' as const,
+      entity_id: `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`,
+      name: `Paged Org ${index}`
+    }));
+  }
+
+  it('builds previous/next hrefs stepping by the page size and preserving query and type', () => {
+    const vm = buildSearchPagePresentation({
+      query: 'civ',
+      entityType: 'org',
+      results: buildPagedResults(20),
+      offset: 20,
+      hasNext: true
+    });
+
+    expect(vm.pagination).toEqual({
+      label: 'Showing 21–40',
+      // Page one is the canonical /search URL: no offset param.
+      previousHref: '/search?q=civ&entity_type=org',
+      nextHref: '/search?q=civ&entity_type=org&offset=40'
+    });
+    expect(vm.statusMessage).toBe('20 results shown.');
+  });
+
+  it('hides pagination entirely on a single-page result set', () => {
+    const vm = buildSearchPagePresentation({
+      query: 'civ',
+      entityType: '',
+      results: buildPagedResults(3),
+      offset: 0,
+      hasNext: false
+    });
+
+    expect(vm.pagination).toBeNull();
+    // An unpaged set keeps the exact-count wording: nothing was held back.
+    expect(vm.statusMessage).toBe('3 results found.');
+  });
+
+  it('offers a previous-page escape hatch when an offset overshoots the result set', () => {
+    const vm = buildSearchPagePresentation({
+      query: 'civ',
+      entityType: '',
+      results: [],
+      offset: 40,
+      hasNext: false
+    });
+
+    expect(vm.pagination).toEqual({
+      label: 'Showing 0–0',
+      previousHref: '/search?q=civ&offset=20',
+      nextHref: null
+    });
+  });
+
+  it('says found on the final page only when it is also the first page', () => {
+    const vm = buildSearchPagePresentation({
+      query: 'civ',
+      entityType: '',
+      results: buildPagedResults(5),
+      offset: 20,
+      hasNext: false
+    });
+
+    // Deep pages still say "shown": the count describes this page, not the set.
+    expect(vm.statusMessage).toBe('5 results shown.');
+    expect(vm.pagination).toEqual({
+      label: 'Showing 21–25',
+      previousHref: '/search?q=civ',
+      nextHref: null
+    });
+  });
+
+  it('suppresses pagination while a submit is in flight or validation failed', () => {
+    const submitting = buildSearchPagePresentation({
+      query: 'civ',
+      entityType: '',
+      results: buildPagedResults(20),
+      offset: 20,
+      hasNext: true,
+      isSubmitting: true
+    });
+    const invalid = buildSearchPagePresentation({
+      query: 'civ',
+      entityType: '',
+      results: buildPagedResults(20),
+      offset: 20,
+      hasNext: true,
+      validationMessage: 'Query too short.'
+    });
+
+    expect(submitting.pagination).toBeNull();
+    expect(invalid.pagination).toBeNull();
   });
 });

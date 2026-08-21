@@ -5,6 +5,13 @@ import { buildTrustSection, type TrustSectionViewModel } from "$lib/detail-trust
 import { buildEntityRouteHref } from "$lib/entity-detail/contract";
 import { buildCandidateHref } from "$lib/campaign-finance-detail/contract";
 import { formatCurrency } from "$lib/campaign-finance-detail/presentation";
+// The product's ONE unknown-money ranking rule. The congress directory owns it
+// (see the WHERE UNKNOWNS GO comment there); the race money bars reuse it so a
+// race page and the directory can never rank the same unknown differently.
+import {
+  compareMoneyMetricsDescUnknownLast,
+  parseMoneyMetric
+} from "$lib/civic-detail/congress-directory";
 // US_STATE_OPTIONS is the repo's single owner of USPS-code -> display-spelling
 // pairs. The election index reuses it for state group headings rather than
 // standing up a second, drift-prone copy of the same map.
@@ -135,6 +142,42 @@ export type RaceMoneySummary = {
   outsideSpendingNote: string | null;
 };
 
+/** One ranked bar in the race money bars: a measured candidate, never an unknown. */
+export type RaceMoneyBarRow = {
+  personId: string;
+  personName: string;
+  /** Candidate page when linkable, else person page — the table's href rules. */
+  href: string | null;
+  /**
+   * 0–100, unrounded: this row's total raised over the race's maximum measured
+   * total. Exactly 0 for a measured $0.00, which renders as an empty track with
+   * its figure — visibly different from the not-loaded group below the list.
+   */
+  barWidthPct: number;
+  /** The exact formatted figure. Always rendered: no information is bar-only. */
+  amountLabel: string;
+};
+
+/** A candidate whose fundraising was never loaded: words, no bar, no figure. */
+export type RaceMoneyNotLoadedRow = {
+  personId: string;
+  personName: string;
+  href: string | null;
+};
+
+/**
+ * The ranked money bars above the scoreboard table (`civic_detail.md`,
+ * "Ranked money bars"). Null when no candidate has measured fundraising —
+ * nothing measured means no scale to draw, and the summary line already
+ * states the gap in words.
+ */
+export type RaceMoneyBarsViewModel = {
+  rankedRows: RaceMoneyBarRow[];
+  notLoadedRows: RaceMoneyNotLoadedRow[];
+  /** Words for the not-loaded group; null when every candidate is measured. */
+  notLoadedLabel: string | null;
+};
+
 /**
  */
 export type OfficeDetailPresentation = {
@@ -172,6 +215,7 @@ export type ContestDetailPresentation = {
   financeRows: ContestCandidateFinanceRow[];
   financeEmptyMessage: string | null;
   raceMoneySummary: RaceMoneySummary | null;
+  raceMoneyBars: RaceMoneyBarsViewModel | null;
   trustSection: TrustSectionViewModel;
   candidacyEmptyMessage: string | null;
   candidateListWarning: string | null;
@@ -259,6 +303,10 @@ const RACE_OUTSIDE_SPENDING_INCOMPLETE_NOTE =
 const RACE_MONEY_INCOMPLETE_NOTE =
   "At least one candidate in this race has no linked FEC record, so these race " +
   "totals cover only the candidates Civibus has loaded.";
+// Words only, and deliberately no dollar sign anywhere in the copy: the group
+// exists precisely because these candidates have no figure to print.
+const RACE_MONEY_BARS_NOT_LOADED_LABEL =
+  "Fundraising not loaded for these candidates. This is missing coverage, not zero.";
 const CANDIDACY_STATUS_EMPTY_MESSAGE = "Status is not available for this candidacy yet.";
 const OFFICEHOLDING_PERIOD_EMPTY_MESSAGE =
   "No valid-period bounds are available for this officeholding.";
@@ -731,6 +779,89 @@ function buildContestCandidateFinanceRows(
 }
 
 /**
+ * The ranked money bars: who leads this race in money, answerable in a second.
+ *
+ * HTML/CSS bars by design, not an SVG chart (`civic_detail.md`, "Ranked money
+ * bars"): a single-series ranked list needs no chart package, server-renders,
+ * cannot clip an axis, and adds no screenshot-baseline burden.
+ *
+ * THE RANKING RULE. A null `total_raised` is money nobody measured, and it
+ * must not rank as cheap: coercing null to 0 would slot an unmeasured
+ * candidate precisely among those the product measured and found empty — the
+ * ranking form of the fabricated "$0.00" cell. Unknowns therefore leave the
+ * ranking entirely and form a words-only group below it, via the same
+ * comparator the congress directory sorts by. A measured "0.00" stays ranked,
+ * with a zero-width bar and its $0.00 figure: that zero is a measurement, and
+ * hiding it would be as dishonest as inventing one.
+ */
+function buildRaceMoneyBars(
+  candidateMoney: ContestCandidateMoneyResponse | null,
+  selectedCycle: number | null
+): RaceMoneyBarsViewModel | null {
+  if (candidateMoney === null) {
+    return null;
+  }
+
+  const measured: { row: ContestCandidateMoneyRow; metric: number }[] = [];
+  const notLoaded: ContestCandidateMoneyRow[] = [];
+  for (const row of candidateMoney.rows) {
+    // One discriminator, shared with the scoreboard cells: the value itself is
+    // null exactly when nothing was measured (no linked FEC candidate, or no
+    // loaded filings). Never infer coverage from any other field here.
+    const metric = parseMoneyMetric(row.total_raised);
+    if (metric === null) {
+      notLoaded.push(row);
+    } else {
+      measured.push({ row, metric });
+    }
+  }
+
+  // No measured candidate means no scale to draw. The answer-first summary
+  // line already says the filings were not loaded; rendering an empty ruler
+  // under it would imply a measurement nobody took.
+  if (measured.length === 0) {
+    return null;
+  }
+
+  measured.sort((left, right) => {
+    const metricOrder = compareMoneyMetricsDescUnknownLast(left.metric, right.metric);
+    return metricOrder !== 0
+      ? metricOrder
+      : left.row.person_name.localeCompare(right.row.person_name) ||
+          left.row.person_id.localeCompare(right.row.person_id);
+  });
+  notLoaded.sort(
+    (left, right) =>
+      left.person_name.localeCompare(right.person_name) ||
+      left.person_id.localeCompare(right.person_id)
+  );
+
+  // Widths share one scale: the race's largest measured total. An all-zero
+  // race has maxMetric 0; the guard yields 0% for every row rather than NaN%.
+  const maxMetric = Math.max(...measured.map((entry) => entry.metric));
+
+  const buildHref = (row: ContestCandidateMoneyRow): string | null =>
+    appendSelectedCycleToHref(buildContestCandidateHref(row), selectedCycle) ??
+    appendSelectedCycleToHref(buildEntityRouteHref("person", row.person_id), selectedCycle);
+
+  return {
+    rankedRows: measured.map(({ row, metric }) => ({
+      personId: row.person_id,
+      personName: row.person_name,
+      href: buildHref(row),
+      barWidthPct: maxMetric === 0 ? 0 : (metric / maxMetric) * 100,
+      amountLabel: formatCurrency(metric)
+    })),
+    notLoadedRows: notLoaded.map((row) => ({
+      personId: row.person_id,
+      personName: row.person_name,
+      href: buildHref(row)
+    })),
+    notLoadedLabel: notLoaded.length > 0 ? RACE_MONEY_BARS_NOT_LOADED_LABEL : null
+  };
+}
+
+/**
  * The answer-first headline race_detail.md specifies.
  *
  * Qualifies itself when any candidate's money is unknown, so a partial total is
@@ -969,6 +1100,7 @@ export function buildContestDetailPresentation(
     financeRows,
     financeEmptyMessage: financeRows.length === 0 ? CONTEST_FINANCE_EMPTY_MESSAGE : null,
     raceMoneySummary: buildRaceMoneySummary(candidateMoney),
+    raceMoneyBars: buildRaceMoneyBars(candidateMoney, selectedCycle),
     trustSection: buildTrustSection(detail.sources),
     candidacyEmptyMessage: candidacyRows.length === 0 ? CONTEST_CANDIDACY_EMPTY_MESSAGE : null,
     candidateListWarning: detail.candidate_list_incomplete ? CONTEST_CANDIDATE_LIST_WARNING : null

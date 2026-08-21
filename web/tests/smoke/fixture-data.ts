@@ -111,6 +111,8 @@ const {
   SMOKE_STATE_DETAIL_TOP_IE_SPENDER_TOTAL,
   SMOKE_CANDIDATE_NAME_SEARCH_QUERY,
   SMOKE_CANDIDATE_NAME_SEARCH_RAW_NAME,
+  SMOKE_NAME_FILTER_CANDIDATE_ID,
+  SMOKE_NAME_FILTER_CANDIDATE_SLUG,
   SMOKE_SEARCH_CANDIDATE_QUERY,
   SMOKE_SEARCH_CANDIDATE_RESULT_NAME,
   SMOKE_SEARCH_CONTEST_QUERY,
@@ -387,7 +389,9 @@ export const smokeFixtures = {
     results: [
       {
         entity_type: "candidate",
-        entity_id: SMOKE_PERSON_ID,
+        // The candidate RECORD's id, not a person id: /candidate/[id]
+        // canonicalizes this UUID to the slug URL (civibus-x9d).
+        entity_id: SMOKE_CANDIDATE_ID,
         name: SMOKE_SEARCH_CANDIDATE_RESULT_NAME
       }
     ]
@@ -1988,6 +1992,32 @@ export const smokeFixtures = {
         slug: SMOKE_EMPTY_CANDIDATE_SLUG,
         slug_is_unique: true,
         identity_is_safe: true,
+        has_official_total: false
+      },
+      {
+        // Raw-FEC-cased browse row for the in-place name filter journey
+        // (civibus-af3). Last on purpose: the unfiltered first page (limit 1)
+        // never reaches it, so only a working name filter can put it on
+        // screen — and the shouted casing is what proves the browse list runs
+        // the display-name formatter.
+        // House, not Senate, on purpose: the filter-form journey pins
+        // "State GA + Office S finds nothing", so this row must stay outside
+        // that combination.
+        id: SMOKE_NAME_FILTER_CANDIDATE_ID,
+        fec_candidate_id: "H0GA01001",
+        name: SMOKE_CANDIDATE_NAME_SEARCH_RAW_NAME,
+        person_id: null,
+        party: "DEM",
+        office: "H",
+        state: "GA",
+        district: "01",
+        slug: SMOKE_NAME_FILTER_CANDIDATE_SLUG,
+        slug_is_unique: true,
+        identity_is_safe: true,
+        // No official total, deliberately: money eligibility would put this row
+        // in the sitemap candidate shard, whose exact-set test pins the two
+        // money-loaded fixtures. The name-filter contract is about names, not
+        // money.
         has_official_total: false
       }
     ],

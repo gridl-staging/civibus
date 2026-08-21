@@ -1,13 +1,19 @@
 from __future__ import annotations
 
 from datetime import date
+from decimal import Decimal
 from uuid import UUID, uuid4
 
 import psycopg
 import pytest
 from fastapi.testclient import TestClient
 
-from api.test_campaign_finance_support import CommitteeRowSeed, insert_committee_row
+from api.test_campaign_finance_support import (
+    CandidateRowSeed,
+    CommitteeRowSeed,
+    insert_candidate_row,
+    insert_committee_row,
+)
 from api.test_entities import _ensure_durham_officeholder
 from api.test_civics import (
     _insert_candidacy,
@@ -554,15 +560,37 @@ def test_search_populates_committee_context_fields(
     api_client: TestClient,
     db_conn: psycopg.Connection,
 ) -> None:
+    """civibus-o9n: assert the seeded row, never the whole collection.
+
+    The committee lane matches on trigram similarity >= 0.3 as well as ILIKE,
+    so ANY committee row in the database whose name is trigram-close to the
+    query is a legitimate member of the response. The previous whole-body
+    equality flaked on accumulated databases (a leftover ``Committee B`` from a
+    prior integration run matched and broke it). The second seed below bakes
+    that failure mode into every run: it is deliberately trigram-close to the
+    query, so a whole-collection assertion cannot come back — the test now
+    fails the moment someone reverts the scoping, on a fresh database too.
+    """
+    seeded_id = UUID("00000000-0000-0000-0000-000000000560")
     insert_committee_row(
         db_conn,
         CommitteeRowSeed(
-            id=UUID("00000000-0000-0000-0000-000000000560"),
+            id=seeded_id,
             fec_committee_id="C20000020",
             name="Context Search Committee",
             state="CA",
             party="DEM",
             committee_type="Q",
+        ),
+    )
+    # Trigram-close neighbour standing in for the accumulated-database rows
+    # that made the old assertion flake.
+    insert_committee_row(
+        db_conn,
+        CommitteeRowSeed(
+            id=UUID("00000000-0000-0000-0000-000000000559"),
+            fec_committee_id="C20000021",
+            name="Context Search Committee Beta",
         ),
     )
 
@@ -572,10 +600,10 @@ def test_search_populates_committee_context_fields(
     )
 
     assert response.status_code == 200
-    assert response.json() == [
+    assert [row for row in response.json() if row["entity_id"] == str(seeded_id)] == [
         {
             "entity_type": "committee",
-            "entity_id": "00000000-0000-0000-0000-000000000560",
+            "entity_id": str(seeded_id),
             "name": "Context Search Committee",
             "state": "CA",
             "party": "DEM",
@@ -586,55 +614,172 @@ def test_search_populates_committee_context_fields(
     ]
 
 
-def test_search_populates_candidate_context_fields(
+def test_search_candidate_filter_finds_fec_candidate_without_candidacy(
     api_client: TestClient,
     db_conn: psycopg.Connection,
 ) -> None:
-    candidate_person = Person(
-        id=UUID("00000000-0000-0000-0000-000000000561"),
-        canonical_name="Context Candidate Person",
-    )
-    insert_person(db_conn, candidate_person)
-    office_id = _insert_office(
+    """civibus-x9d: the explicit candidate filter covers ``cf.candidate``.
+
+    The pre-fix lane read ``civic.candidacy JOIN core.person`` only, so an FEC
+    candidate with no civic candidacy — most of the dataset ``/candidates``
+    browses — was invisible under ``entity_type=candidate``. Measured on
+    production 2026-08-19: ``?q=ossoff&entity_type=candidate`` returned one row
+    and hid the sitting senator.
+
+    Context expectations are hand-picked from the seed: ``office_name`` carries
+    the raw FEC office code (``H``/``S``/``P``) that the web layer expands
+    through its existing ``FEC_CANDIDATE_OFFICE_OPTIONS`` owner, and
+    ``total_raised`` carries the official FEC total so same-named candidates
+    stay distinguishable in results. Fixture name is digit-free (the identity
+    predicate rejects digit-bearing names) and carries a unique token.
+    """
+    candidate_id = UUID("00000000-0000-0000-0000-000000000601")
+    insert_candidate_row(
         db_conn,
-        id=UUID("00000000-0000-0000-0000-000000000562"),
-        name="Context Candidate Office",
-        office_level="state",
-        state="OR",
-    )
-    contest_id = _insert_contest(
-        db_conn,
-        id=UUID("00000000-0000-0000-0000-000000000563"),
-        name="Candidate Election 2026",
-        office_id=office_id,
-    )
-    _insert_candidacy(
-        db_conn,
-        id=UUID("00000000-0000-0000-0000-000000000564"),
-        person_id=candidate_person.id,
-        contest_id=contest_id,
-        party="NPP",
-        status="qualified",
+        CandidateRowSeed(
+            id=candidate_id,
+            fec_candidate_id="H0GA00601",
+            name="FECFILER, QUORNELIA MAE",
+            office="H",
+            state="GA",
+            district="03",
+            party="DEM",
+            total_receipts=Decimal("1234.56"),
+        ),
     )
 
     response = api_client.get(
         "/v1/search",
-        params={"q": "context candidate person", "entity_type": "candidate"},
+        params={"q": "quornelia", "entity_type": "candidate"},
     )
 
     assert response.status_code == 200
-    assert response.json() == [
+    assert [row for row in response.json() if row["entity_id"] == str(candidate_id)] == [
         {
             "entity_type": "candidate",
-            "entity_id": "00000000-0000-0000-0000-000000000561",
-            "name": "Context Candidate Person",
-            "state": "OR",
-            "party": "NPP",
-            "office_name": "Context Candidate Office",
+            "entity_id": str(candidate_id),
+            "name": "FECFILER, QUORNELIA MAE",
+            "state": "GA",
+            "party": "DEM",
+            "office_name": "H",
             "committee_type": None,
-            "total_raised": None,
+            "total_raised": "1234.56",
         }
     ]
+
+
+def test_search_candidate_filter_omits_identity_unsafe_fec_names(
+    api_client: TestClient,
+    db_conn: psycopg.Connection,
+) -> None:
+    """The candidate lane reuses the browse identity predicate, not a copy.
+
+    ``_CANDIDATE_IDENTITY_IS_SAFE_EXPR`` is the single owner that keeps
+    address-like FEC source strings off browse surfaces; search is a browse
+    surface, so the same rows must stay out here. The digit-bearing name below
+    is the tested specimen, and the safe sibling sharing the query token proves
+    the query itself matched — the unsafe row is missing because it was
+    suppressed, not because nothing matched.
+    """
+    unsafe_id = UUID("00000000-0000-0000-0000-000000000602")
+    safe_id = UUID("00000000-0000-0000-0000-000000000603")
+    insert_candidate_row(
+        db_conn,
+        CandidateRowSeed(
+            id=unsafe_id,
+            fec_candidate_id="H0GA00602",
+            name="212 QUIBBLETON DR, FECFILER",
+            office="H",
+            state="GA",
+        ),
+    )
+    insert_candidate_row(
+        db_conn,
+        CandidateRowSeed(
+            id=safe_id,
+            fec_candidate_id="H0GA00603",
+            name="FECFILER, QUIBBLETON SAFE",
+            office="H",
+            state="GA",
+        ),
+    )
+
+    response = api_client.get(
+        "/v1/search",
+        params={"q": "quibbleton", "entity_type": "candidate"},
+    )
+
+    assert response.status_code == 200
+    returned_ids = {row["entity_id"] for row in response.json()}
+    assert str(safe_id) in returned_ids
+    assert str(unsafe_id) not in returned_ids
+
+
+def test_search_union_covers_spine_orphan_fec_candidate_and_dedupes_spine_linked(
+    api_client: TestClient,
+    db_conn: psycopg.Connection,
+) -> None:
+    """The union shows an FEC candidate exactly once, whichever lane owns it.
+
+    A ``cf.candidate`` row with no ``person_id`` has no ``core.person`` row to
+    represent it, so before civibus-x9d the default (union) search could not
+    find it at all. It now appears through the candidate arm. A spine-linked
+    row is the opposite case: its human already surfaces through the person
+    lane, so the union suppresses the candidate row rather than rendering one
+    human twice — but the explicit ``entity_type=candidate`` filter still
+    serves the FEC record itself.
+    """
+    orphan_id = UUID("00000000-0000-0000-0000-000000000604")
+    insert_candidate_row(
+        db_conn,
+        CandidateRowSeed(
+            id=orphan_id,
+            fec_candidate_id="S0OR00604",
+            name="SEARCHFILER, ORPHANIA VEE",
+            office="S",
+            state="OR",
+        ),
+    )
+    linked_person = Person(
+        id=UUID("00000000-0000-0000-0000-000000000605"),
+        canonical_name="Searchfiler, Linkelda",
+    )
+    insert_person(db_conn, linked_person)
+    linked_candidate_id = UUID("00000000-0000-0000-0000-000000000606")
+    insert_candidate_row(
+        db_conn,
+        CandidateRowSeed(
+            id=linked_candidate_id,
+            fec_candidate_id="S0OR00605",
+            name="SEARCHFILER, LINKELDA",
+            office="S",
+            state="OR",
+            person_id=linked_person.id,
+        ),
+    )
+
+    union_response = api_client.get("/v1/search", params={"q": "searchfiler", "limit": 20})
+
+    assert union_response.status_code == 200
+    union_keys = {(row["entity_type"], row["entity_id"]) for row in union_response.json()}
+    assert ("candidate", str(orphan_id)) in union_keys
+    assert ("person", str(linked_person.id)) in union_keys
+    # One human, one row: the linked FEC record must not add a second row for a
+    # person the union already lists.
+    assert ("candidate", str(linked_candidate_id)) not in union_keys
+
+    filtered_response = api_client.get(
+        "/v1/search",
+        params={"q": "searchfiler", "entity_type": "candidate"},
+    )
+
+    assert filtered_response.status_code == 200
+    filtered_keys = {(row["entity_type"], row["entity_id"]) for row in filtered_response.json()}
+    # The explicit filter answers "which FEC candidate records match", so the
+    # spine-linked record itself is served here even though the union collapses
+    # it into its person row.
+    assert ("candidate", str(orphan_id)) in filtered_keys
+    assert ("candidate", str(linked_candidate_id)) in filtered_keys
 
 
 def test_search_populates_contest_context_fields(
@@ -675,10 +820,19 @@ def test_search_populates_contest_context_fields(
     ]
 
 
-def test_search_candidate_entity_type(
+def test_search_candidate_filter_does_not_cover_candidacy_only_humans(
     api_client: TestClient,
     db_conn: psycopg.Connection,
 ) -> None:
+    """A civic candidacy without an FEC record is a person, not a candidate row.
+
+    civibus-x9d moved the explicit candidate filter onto ``cf.candidate`` — the
+    dataset ``/candidates`` browses — so a human whose only trace is a
+    ``civic.candidacy`` is served by the person lane (union and
+    ``entity_type=person``), where their candidacy already supplies party and
+    sought-office context. Keeping them out of the candidate filter is what
+    stops one human from carrying two badges with two different hrefs.
+    """
     person = Person(
         id=UUID("00000000-0000-0000-0000-000000000501"),
         canonical_name="Candidate Searchable",
@@ -695,15 +849,25 @@ def test_search_candidate_entity_type(
         status="qualified",
     )
 
-    response = api_client.get(
+    candidate_response = api_client.get(
         "/v1/search",
         params={"q": "candidate searchable", "entity_type": "candidate"},
     )
 
-    assert response.status_code == 200
-    assert response.json() == [
+    assert candidate_response.status_code == 200
+    assert [row for row in candidate_response.json() if row["entity_id"] == str(person.id)] == []
+
+    # The person lane still finds the human, carrying the candidacy context the
+    # old candidate lane used to duplicate onto a second row.
+    person_response = api_client.get(
+        "/v1/search",
+        params={"q": "candidate searchable", "entity_type": "person"},
+    )
+
+    assert person_response.status_code == 200
+    assert [row for row in person_response.json() if row["entity_id"] == str(person.id)] == [
         {
-            "entity_type": "candidate",
+            "entity_type": "person",
             "entity_id": str(person.id),
             "name": "Candidate Searchable",
             "state": None,
@@ -914,54 +1078,45 @@ def test_search_union_returns_one_row_per_person_with_several_candidacies(
         }
     ]
 
-    # The explicit candidate filter is unchanged: it still answers "which races is
-    # this person in", so it still emits one row per candidacy. Both rows share an
-    # entity_id, and entity_id is the last ORDER BY key, so their relative order is
-    # not defined by the query — sort locally rather than asserting an accident.
+    # The explicit candidate filter no longer reads civic.candidacy (civibus-x9d):
+    # it covers cf.candidate, and this person has no FEC record. Their candidacies
+    # stay readable as context on the single person row above, so nothing a user
+    # could reach is lost — and the one-href-per-human rule now holds under the
+    # filter as well as in the union.
     candidate_response = api_client.get(
         "/v1/search",
         params={"q": "twicefiled searchperson", "entity_type": "candidate"},
     )
     assert candidate_response.status_code == 200
-    assert sorted(candidate_response.json(), key=lambda row: row["office_name"]) == [
-        {
-            "entity_type": "candidate",
-            "entity_id": "00000000-0000-0000-0000-000000000570",
-            "name": "Twicefiled Searchperson",
-            "state": "OR",
-            "party": "GRN",
-            "office_name": "Bayside Comptroller Seat",
-            "committee_type": None,
-            "total_raised": None,
-        },
-        {
-            "entity_type": "candidate",
-            "entity_id": "00000000-0000-0000-0000-000000000570",
-            "name": "Twicefiled Searchperson",
-            "state": "WA",
-            "party": "LIB",
-            "office_name": "Northshore Treasurer Seat",
-            "committee_type": None,
-            "total_raised": None,
-        },
-    ]
+    assert [row for row in candidate_response.json() if row["entity_id"] == str(person.id)] == []
 
 
 def test_search_union_covers_every_routable_entity_type_without_duplicating_a_person(
     api_client: TestClient,
     db_conn: psycopg.Connection,
 ) -> None:
-    """The union emits five entity types; `candidate` is deliberately absent.
+    """The union emits all six entity types, one row per underlying record.
 
-    Rewritten 2026-08-19 for civibus-9hv. The previous assertion here was
-    `result_types == {person, org, committee, office, candidate, contest}`, which
-    encoded the defect rather than guarding against it: the candidate lane shares
-    a byte-identical name predicate with the person lane, so the ONLY way a
-    `candidate` row reaches the union is as a duplicate of a person row already in
-    it, with the same entity_id and the same `/person/<uuid>` href.
-    `entity_type=candidate` is still served on its own — see
-    test_search_candidate_entity_type and test_search_populates_candidate_context_fields.
+    Rewritten 2026-08-19 for civibus-9hv, and again 2026-08-20 for civibus-x9d.
+    The 9hv rewrite removed the old candidacy-based candidate arm because every
+    row it emitted duplicated a person row (byte-identical name predicate, same
+    entity_id, same `/person/<uuid>` href). The x9d candidate arm reads
+    ``cf.candidate`` instead — records that mostly have NO ``core.person`` row —
+    so a spine-orphan FEC candidate is new reach, not duplication, and belongs
+    in the union. The spine-LINKED case (where a candidate row would double a
+    person row) is covered by
+    test_search_union_covers_spine_orphan_fec_candidate_and_dedupes_spine_linked.
     """
+    insert_candidate_row(
+        db_conn,
+        CandidateRowSeed(
+            id=UUID("00000000-0000-0000-0000-000000000526"),
+            fec_candidate_id="H0NC00526",
+            name="FIVEWAY MATCH FECFILER",
+            office="H",
+            state="NC",
+        ),
+    )
     insert_person(
         db_conn,
         Person(
@@ -1017,7 +1172,7 @@ def test_search_union_covers_every_routable_entity_type_without_duplicating_a_pe
     assert response.status_code == 200
     payload = response.json()
     result_types = {r["entity_type"] for r in payload}
-    assert result_types == {"person", "org", "committee", "office", "contest"}
+    assert result_types == {"person", "org", "committee", "office", "contest", "candidate"}
 
     # The candidate seed still appears — once, as a person, carrying the context
     # the candidate lane used to contribute on a second row. `Fiveway Match Office`

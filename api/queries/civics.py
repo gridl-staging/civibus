@@ -523,6 +523,30 @@ def fetch_contest_candidate_links(conn: psycopg.Connection, contest_id: UUID) ->
         return list(cursor.fetchall())
 
 
+# How far ahead election serving will publish, in years past CURRENT_DATE.
+#
+# THE single owner of the election-date publish horizon. Three predicates carry
+# it and must stay in lockstep, which is why each is an f-string over this
+# constant: _ELECTION_CONTESTS_BY_DATE_SQL (the /election/[date] index),
+# _UPCOMING_ELECTION_CONTESTS_SQL (the timeline behind /calendar and both the
+# static and contest sitemap shards), and _ELECTION_DATE_WITHIN_PUBLISH_HORIZON_SQL
+# (the 404 decision for beyond-horizon dates).
+#
+# Deliberately LOOSER than the loader's own election-year ceiling
+# (_federal_fec_races_max_election_year, fec_cycle + 4), so serving can never
+# hide a contest ingest chose to load. This exists because CAND_ELECTION_YR is
+# filer-supplied and production accumulated contests dated 2820 through 2929
+# before the loader had a ceiling. Those rows are FEC-sourced evidence and are
+# deliberately not deleted, so serving is what declines to publish them. It also
+# stays as a backstop if an ingest guard ever regresses.
+#
+# An upper bound only, on purpose: the observed corruption is future-dated filer
+# typos, while past-dated contests are real history and stay servable on the
+# single-date index (the timeline separately floors at CURRENT_DATE because it
+# is an *upcoming* list, not because past dates are unpublishable).
+_UPCOMING_ELECTION_HORIZON_YEARS = 6
+
+
 # Seat context for the `/election/[date]` race index.
 #
 # The electoral-division join mirrors CIVIC_CONTEST_DETAIL_SQL above. Without it
@@ -540,7 +564,7 @@ def fetch_contest_candidate_links(conn: psycopg.Connection, contest_id: UUID) ->
 # are owned by `buildElectionIndexPresentation` in
 # `web/src/lib/civic-detail/presentation.ts`, because they depend on display
 # spellings and office-rank rules that belong in the presentation layer.
-_ELECTION_CONTESTS_BY_DATE_SQL = """
+_ELECTION_CONTESTS_BY_DATE_SQL = f"""
     SELECT
         c.id AS contest_id,
         c.office_id,
@@ -560,6 +584,9 @@ _ELECTION_CONTESTS_BY_DATE_SQL = """
     LEFT JOIN civic.electoral_division ed ON ed.id = c.electoral_division_id
     LEFT JOIN civic.candidacy cd ON cd.contest_id = c.id
     WHERE c.election_date = %s
+      -- Publish-horizon bound: a corrupt filer-typo date (2929-11-08 class) must
+      -- not render its contests even when the URL is typed directly.
+      AND c.election_date <= CURRENT_DATE + INTERVAL '{_UPCOMING_ELECTION_HORIZON_YEARS} years'
     GROUP BY
         c.id,
         c.office_id,
@@ -580,19 +607,9 @@ _ELECTION_CONTESTS_BY_DATE_SQL = """
 # both feed the identical ElectionContestSummary contract. Keep the two column
 # lists in lockstep: the timeline and the single-date index share one model, and
 # a column added to only one of them yields a half-populated row on one route.
-# How far ahead the upcoming-election timeline will publish.
-#
-# Deliberately LOOSER than the loader's own election-year ceiling
-# (_federal_fec_races_max_election_year, fec_cycle + 4), so serving can never
-# hide a contest ingest chose to load. This exists because CAND_ELECTION_YR is
-# filer-supplied and production accumulated contests dated 2820 through 2929
-# before the loader had a ceiling. Those rows are FEC-sourced evidence and are
-# deliberately not deleted, so serving is what declines to publish them — this
-# timeline is what /calendar renders and what the contest sitemap shard submits
-# to search engines. It also stays as a backstop if an ingest guard ever
-# regresses.
-_UPCOMING_ELECTION_HORIZON_YEARS = 6
-
+# Both also carry the same _UPCOMING_ELECTION_HORIZON_YEARS bound (see the
+# constant's comment); this timeline is what /calendar renders and what the
+# contest sitemap shard submits to search engines.
 _UPCOMING_ELECTION_CONTESTS_SQL = f"""
     SELECT
         c.election_date,
@@ -637,6 +654,27 @@ def fetch_election_contests_by_date(conn: psycopg.Connection, election_date: dat
     with conn.cursor(row_factory=dict_row) as cursor:
         cursor.execute(_ELECTION_CONTESTS_BY_DATE_SQL, (election_date,))
         return list(cursor.fetchall())
+
+
+# Evaluated on the database clock, the same clock the two contest SQLs compare
+# against, so the 404 decision and the row filters cannot disagree on the
+# boundary day across timezones.
+_ELECTION_DATE_WITHIN_PUBLISH_HORIZON_SQL = f"""
+    SELECT %s::date <= CURRENT_DATE + INTERVAL '{_UPCOMING_ELECTION_HORIZON_YEARS} years' AS within_horizon
+"""
+
+
+def election_date_is_within_publish_horizon(conn: psycopg.Connection, election_date: date) -> bool:
+    """Whether serving publishes an election page for this date at all.
+
+    Past and in-horizon dates are publishable; a date beyond the horizon is the
+    corrupt filer-typo class (2820-2929 observed in production) and answers 404
+    at the route so search engines drop the previously-submitted corrupt
+    /election/[date] URLs. See _UPCOMING_ELECTION_HORIZON_YEARS for the rationale
+    and the deliberate looseness relative to the ingest ceiling.
+    """
+    row = conn.execute(_ELECTION_DATE_WITHIN_PUBLISH_HORIZON_SQL, (election_date,)).fetchone()
+    return bool(row[0])
 
 
 def fetch_upcoming_election_contests(conn: psycopg.Connection) -> list[dict[str, Any]]:

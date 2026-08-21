@@ -2,12 +2,15 @@
   import ChartFrame from "./ChartFrame.svelte";
   import Chart from "./Chart.svelte";
   import { formatCount, formatCurrency, toExactRows } from "./finance";
-  import type { ChartFrameProps, ChartSeries, GeographyShareRow } from "./types";
+  import type { ChartHeadingLevel, ChartFrameProps, ChartSeries, GeographyShareRow } from "./types";
 
   export let testId: string;
   export let cycle: number;
   export let coverageThrough: string | null;
   export let sources: ChartFrameProps["sources"] = [];
+  // Outline depth for the inner chart heading; forwarded to the Chart
+  // adapter (civibus-4yw). Default 3 preserves pre-prop rendering.
+  export let headingLevel: ChartHeadingLevel = 3;
   export let rows: GeographyShareRow[] = [];
   export let approximationNote = "";
   export let unknownIncludedInDenominator = false;
@@ -95,6 +98,7 @@
       ariaLabel="Geography dollar share by contributor location"
       unit="dollars"
       series={chartSeries}
+      {headingLevel}
     />
     {#each rows as row (row.id)}
       <div class="geography-share__row">

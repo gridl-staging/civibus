@@ -160,7 +160,7 @@ def _seed_person_cluster(
             "decision": "match",
             "confidence": 0.98,
             "decision_method": "deterministic",
-            "decided_by": "deterministic_fec_id_match",
+            "decided_by": "deterministic_fec_candidate_id_match",
         }
         for index in range(len(member_ids) - 1)
     ]
@@ -534,7 +534,7 @@ def test_build_persisted_state_cutover_proof_uses_latest_completed_runs_and_clus
                 "decision": "match",
                 "confidence": 0.97,
                 "decision_method": "deterministic",
-                "decided_by": "deterministic_fec_id_match",
+                "decided_by": "deterministic_fec_candidate_id_match",
             }
         ],
         "organization",

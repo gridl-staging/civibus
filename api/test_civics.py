@@ -253,7 +253,11 @@ def _future_upcoming_election_dates(conn: psycopg.Connection) -> _UpcomingElecti
 _CLOCK_FILTERED_ELECTION_TEST_NAMES = {
     "test_elections_timeline_upcoming_returns_ordered_dates_without_cross_jurisdiction_collapsing",
     "test_elections_timeline_upcoming_excludes_database_past_contests",
+    "test_elections_timeline_upcoming_excludes_implausibly_distant_contests",
     "test_returns_timeline_recent_contests_and_map_context_for_office",
+    "test_election_date_declines_dates_beyond_the_publish_horizon",
+    "test_election_date_serves_in_horizon_far_future_and_past_dates",
+    "test_election_date_within_horizon_with_no_contests_stays_an_empty_200",
 }
 
 
@@ -2071,6 +2075,97 @@ class TestElectionContracts:
         assert "Horizon Inside Contest" in published_names
         assert "Horizon Corrupt Contest" not in published_names
 
+    def test_election_date_declines_dates_beyond_the_publish_horizon(
+        self, api_client: TestClient, db_conn: psycopg.Connection
+    ) -> None:
+        """A beyond-horizon date answers 404 even when corrupt rows exist for it.
+
+        Red-first against 2026-08-20 production: /election/2929-11-08 answered
+        200 and rendered a link to its corrupt contest, because the by-date SQL
+        had no horizon bound and the endpoint never 404s. The pre-fix sitemap
+        submitted those corrupt /election/[date] URLs to search engines, so a
+        200 keeps them indexed indefinitely; only a non-200 gets them dropped.
+        The rows themselves are FEC-sourced evidence and stay in the database —
+        serving is what declines to publish them.
+        """
+        office_id = _insert_office(db_conn, name="test_by_date_horizon_office", office_level="federal")
+        current_date = _database_current_date(db_conn)
+        # The shape production actually holds: a filer-typo year, centuries out.
+        corrupt_date = current_date + timedelta(days=365 * 900)
+        _insert_contest(
+            db_conn,
+            name="By Date Corrupt Contest",
+            office_id=office_id,
+            election_date=corrupt_date,
+            election_type="general",
+        )
+
+        response = api_client.get(f"/v1/elections/{corrupt_date.isoformat()}")
+
+        assert response.status_code == 404
+
+    def test_election_date_serves_in_horizon_far_future_and_past_dates(
+        self, api_client: TestClient, db_conn: psycopg.Connection
+    ) -> None:
+        """The horizon must not hide legitimate far dates — the inverse defect.
+
+        A Senate race four years out (the 2030/2031 class: six-year terms make
+        those real filings today) sits inside the publish horizon and must keep
+        serving. A past date must also keep serving: the horizon is an upper
+        bound only, because the corruption this guards against is future-dated
+        filer typos, and already-held elections are real history.
+        """
+        office_id = _insert_office(db_conn, name="test_by_date_in_window_office", office_level="federal")
+        current_date = _database_current_date(db_conn)
+        far_senate_date = current_date + timedelta(days=365 * 4)
+        past_date = current_date - timedelta(days=30)
+        _insert_contest(
+            db_conn,
+            name="By Date Far Senate Contest",
+            office_id=office_id,
+            election_date=far_senate_date,
+            election_type="general",
+        )
+        _insert_contest(
+            db_conn,
+            name="By Date Held Contest",
+            office_id=office_id,
+            election_date=past_date,
+            election_type="general",
+        )
+
+        far_response = api_client.get(f"/v1/elections/{far_senate_date.isoformat()}")
+        past_response = api_client.get(f"/v1/elections/{past_date.isoformat()}")
+
+        assert far_response.status_code == 200
+        assert [contest["name"] for contest in far_response.json()["contests"]] == ["By Date Far Senate Contest"]
+        assert far_response.json()["total_contests"] == 1
+        assert past_response.status_code == 200
+        assert [contest["name"] for contest in past_response.json()["contests"]] == ["By Date Held Contest"]
+
+    def test_election_date_within_horizon_with_no_contests_stays_an_empty_200(
+        self, api_client: TestClient, db_conn: psycopg.Connection
+    ) -> None:
+        """The specced Empty state survives: 404 is only for beyond-horizon dates.
+
+        election_date.md contracts an in-horizon date with no contests to render
+        heading plus zero counts, so the backend must answer an empty 200 there.
+        A blanket 404-on-empty would break that page state; this pins the
+        boundary between Empty (in horizon) and Error (beyond horizon).
+        """
+        current_date = _database_current_date(db_conn)
+        # In-horizon, but an offbeat day no fixture corpus seeds contests on.
+        empty_date = current_date + timedelta(days=365 * 5 + 123)
+
+        response = api_client.get(f"/v1/elections/{empty_date.isoformat()}")
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["date"] == empty_date.isoformat()
+        assert payload["total_contests"] == 0
+        assert payload["total_candidacies"] == 0
+        assert payload["contests"] == []
+
     def test_elections_timeline_upcoming_excludes_database_past_contests(
         self, api_client: TestClient, db_conn: psycopg.Connection
     ) -> None:
@@ -2144,7 +2239,15 @@ class TestElectionContracts:
         `c.election_date` against `CURRENT_DATE` (`_UPCOMING_ELECTION_CONTESTS_SQL` and
         `_OFFICE_ACTIVE_CONTEST_COUNT_SQL`), so an absolute `election_date` on the future
         side of that boundary is a date bomb: it crosses to the past side unattended and
-        flips the assertion it was written to prove. Three literal forms carry the fuse and
+        flips the assertion it was written to prove.
+
+        `_ELECTION_CONTESTS_BY_DATE_SQL` also compares against the clock, but only as
+        the upper publish-horizon bound (`<= CURRENT_DATE + INTERVAL '.. years'`). A
+        fixed date only ages toward the past, so it can cross `CURRENT_DATE` but can
+        never newly cross a future horizon; by-date tests using near-future literals
+        therefore carry no fuse and stay out of this registry, while by-date tests that
+        exercise the horizon itself are registered because their corrupt fixtures must
+        stay clock-derived. Three literal forms carry the fuse and
         all reach the date column — a `date(...)` call, a `datetime(...)` call, and an ISO
         `"YYYY-MM-DD"` string (psycopg binds it untyped and Postgres casts it) — passed
         directly or through a local variable, as does a `_insert_contest` call that omits

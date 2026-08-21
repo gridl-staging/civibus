@@ -19,6 +19,15 @@ test.describe("chart render oracle", () => {
     expect(LINE_SERIES_MARK_SELECTOR).toBe("svg path.lc-path");
   });
 
+  test("bar chart proof targets LayerChart bar paths, not tooltip hit rectangles", () => {
+    // civibus-d0o: "svg rect" matched only the transparent lc-tooltip-rect hit
+    // areas (a bar chart emits no other rects), so the render oracle proved a
+    // tooltip overlay existed, never that a bar painted. Proven un-failable on
+    // 2026-08-20: with every bar's value plumbing severed (y forced NaN, all
+    // lc-bar path lengths 0), the rect selector still passed this suite.
+    expect(BAR_SERIES_MARK_SELECTOR).toBe("svg path.lc-bar");
+  });
+
   test("zero-length LayerChart paths do not count as visible chart paint", async ({
     page
   }: {
@@ -58,7 +67,11 @@ test.describe("chart render oracle", () => {
     await expectNoOpaqueNearBlackPaints(lineChartRegion);
 
     await page.goto(`/person/${SMOKE_PERSON_ID}`);
-    const barChartRegion = await chartRegion(page, "Itemized contribution-size buckets bar chart");
+    // The bar specimen is the monthly-contributions chart. It used to be the
+    // size-buckets chart, but that module's svg was deleted with civibus-3a3 —
+    // HorizontalBarChart's one visual encoding is a ranked HTML bar list,
+    // covered by expectHtmlBarListRender in the finance-visuals suite.
+    const barChartRegion = await chartRegion(page, "Monthly contribution columns");
     await expect(barChartRegion).toBeVisible();
     await expectRealChartRender(barChartRegion, BAR_SERIES_MARK_SELECTOR);
     await expectNoOpaqueNearBlackPaints(barChartRegion);

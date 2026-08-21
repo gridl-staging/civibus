@@ -8,12 +8,15 @@
     getReadableTickCeiling,
     zeroFillCoveredMonths
   } from "./finance";
-  import type { ChartFrameProps, ChartSeries, ExactDisclosureRow, MonthlyContributionRow } from "./types";
+  import type { ChartHeadingLevel, ChartFrameProps, ChartSeries, ExactDisclosureRow, MonthlyContributionRow } from "./types";
 
   export let testId: string;
   export let cycle: number;
   export let coverageThrough: string | null;
   export let sources: ChartFrameProps["sources"] = [];
+  // Outline depth for the inner chart heading; forwarded to the Chart
+  // adapter (civibus-4yw). Default 3 preserves pre-prop rendering.
+  export let headingLevel: ChartHeadingLevel = 3;
   export let rows: MonthlyContributionRow[] = [];
   export let coveredMonths: string[] = [];
   // Supplied by comparison surfaces so sibling columns plot against one domain;
@@ -78,6 +81,7 @@
       ariaLabel="Monthly contribution columns"
       unit="dollars"
       series={chartSeries}
+      {headingLevel}
       yDomain={tickCeiling > 0 ? [0, tickCeiling] : undefined}
     />
     {#each filledRows as row (row.month)}

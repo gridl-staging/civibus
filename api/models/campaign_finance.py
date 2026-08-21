@@ -452,6 +452,12 @@ class CandidateListParams(BaseModel):
     state: str | None = None
     office: str | None = None
     person_id: UUID | None = None
+    # Case-insensitive containment over the raw FEC cf.candidate.name
+    # (civibus-frq). A browse filter, so deliberately deterministic: no trigram
+    # similarity, no ranking — fuzzy name lookup is /search's job. No minimum
+    # length either, because a contains-filter cannot rank noise above matches;
+    # the cap matches SearchParams.q's.
+    name: str | None = Field(default=None, max_length=100)
     sort: CandidateListSort = DEFAULT_CANDIDATE_LIST_SORT
     # Browse-listing switch, not an access-control switch. The default browse
     # omits rows whose raw FEC name cannot stand as a public identity; those rows

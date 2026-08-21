@@ -38,7 +38,13 @@ def test_production_deploy_smoke_uses_current_chart_accessibility_labels() -> No
     assert "Fundraising geography for" not in source
     assert "Receipt source composition by dollars" in source
     assert "Monthly contribution columns" in source
-    assert "Itemized contribution-size buckets bar chart" in source
+    # Retired with civibus-3a3: HorizontalBarChart no longer renders an svg
+    # chart section, so this aria label no longer exists anywhere in the app and
+    # a probe using it can only ever no-op. The module is checked through its
+    # frame testId and the HTML bar-list oracle instead.
+    assert "Itemized contribution-size buckets bar chart" not in source
+    assert '"person-size-buckets"' in source
+    assert "expectHtmlBarListRenderIfPlotted" in source
     assert "Geography dollar share by contributor location" in source
 
 
@@ -286,7 +292,12 @@ def test_fixture_finance_spec_exercises_interaction_and_diverging_encoding() -> 
     assert 'region.page().getByRole("tooltip")' in helpers
     # layerchart draws a bar as a rounded <path class="lc-bar">, never a <rect>; a
     # sampler restricted to rects only ever saw transparent tooltip hit areas.
+    # The exported constant is pinned exactly (civibus-d0o): "svg rect" made
+    # every expectRealChartRender consumer pass against a chart whose bars could
+    # not draw, because the tooltip hit rects satisfied it.
     assert '"svg path.lc-bar"' in helpers
+    assert 'export const BAR_SERIES_MARK_SELECTOR = "svg path.lc-bar";' in helpers
+    assert 'BAR_SERIES_MARK_SELECTOR = "svg rect"' not in helpers
     # Tooltip containment belongs where a tooltip is open. The spec-local version
     # ran on an unhovered page, found zero [role="tooltip"] elements, and asserted
     # zero had escaped.
@@ -306,6 +317,47 @@ def test_production_finance_smoke_runs_the_chart_legibility_guards() -> None:
     assert "expectTickLabelsInsidePlotBox" in source
     assert "expectAxisFormatMatchesDeclaredUnit" in source
     assert "expectBoundedNumericTickLabels" not in source
+
+
+HORIZONTAL_BAR_CHART = REPO_ROOT / "web/src/lib/charts/HorizontalBarChart.svelte"
+
+
+def test_horizontal_bar_chart_has_one_visual_encoding_and_every_lane_asserts_it() -> None:
+    """HorizontalBarChart draws its series exactly once, as an HTML bar list.
+
+    civibus-3a3: the component used to render the same rows THREE ways — a
+    layerchart VERTICAL svg bar chart, the ranked HTML bar list, and the
+    disclosure table. The svg duplicate is gone; this pins that it stays gone
+    and that each smoke lane's probe moved with it rather than silently
+    no-opping against a label that no longer exists.
+
+    Fails for a real defect: re-importing Chart.svelte into the component,
+    resurrecting the retired svg aria label, or dropping the bar-list oracle
+    from any of the four lanes that carry it.
+    """
+    component = HORIZONTAL_BAR_CHART.read_text(encoding="utf-8")
+    helpers = _smoke_helpers()
+
+    # The component renders no layerchart adapter and no svg of its own.
+    assert 'from "./Chart.svelte"' not in component
+    assert "<svg" not in component
+    assert "horizontal-bars__bar" in component
+
+    # The oracle exists, pins the no-svg contract, and reads real painted style.
+    assert "export async function expectHtmlBarListRender" in helpers
+    assert 'region.locator("svg")).toHaveCount(0)' in helpers
+    assert "linear-gradient" in helpers
+
+    # Every lane that used to assert the svg render now asserts the bar list:
+    # fixture visuals, fixture+live data access, fixture+live accessibility,
+    # the production deploy gate, and the production visuals gate.
+    assert "expectHtmlBarListRender" in _fixture_finance_spec()
+    assert "expectHtmlBarListRender" in (REPO_ROOT / "web/tests/smoke/chart_data_access.spec.ts").read_text(
+        encoding="utf-8"
+    )
+    assert "expectHtmlBarListRender" in (REPO_ROOT / "web/tests/smoke/a11y-helpers.ts").read_text(encoding="utf-8")
+    assert "expectHtmlBarListRenderIfPlotted" in _production_deploy_spec()
+    assert "expectHtmlBarListRenderIfPlotted" in _production_finance_spec()
 
 
 def test_production_finance_reuses_shared_regex_escape_helper() -> None:

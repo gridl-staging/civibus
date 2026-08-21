@@ -1,5 +1,8 @@
 <script lang="ts">
   import { buildCandidateHref } from "$lib/campaign-finance-detail/contract";
+  // Route-path owner for /office/[id]; keeps the person page's office link on
+  // the same path shape the civic pages own rather than a hand-built string.
+  import { buildOfficeRoutePath } from "$lib/civic-detail/contract";
   import GeographyShareChart from "$lib/charts/GeographyShareChart.svelte";
   import HorizontalBarChart from "$lib/charts/HorizontalBarChart.svelte";
   import MonthlyContributionsChart from "$lib/charts/MonthlyContributionsChart.svelte";
@@ -577,7 +580,16 @@
           {#if personDetail?.current_office}
             <div class="detail__row">
               <dt>Current office</dt>
-              <dd>{personDetail.current_office.office_name}</dd>
+              <dd>
+                <!-- The person page's return path into the race-discovery chain
+                     (civibus-7qj): person -> office -> "Elections for this
+                     office" -> contest. A direct races-for-this-person section
+                     needs a backend surface that does not exist yet
+                     (civibus-x8b); this link is the path the data supports. -->
+                <a href={buildOfficeRoutePath(personDetail.current_office.office_id)}>
+                  {personDetail.current_office.office_name}
+                </a>
+              </dd>
             </div>
             <div class="detail__row">
               <dt>Office level</dt>

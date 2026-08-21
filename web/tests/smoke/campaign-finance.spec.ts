@@ -223,8 +223,12 @@ test.describe("campaign finance smoke", () => {
     await page.getByRole("button", { name: "Apply filters" }).click();
 
     // Sort submits with the filter form, so the default sort token is part of
-    // the applied browse URL.
-    await expect(page).toHaveURL(/\/candidates\?state=GA&office=S&sort=name&limit=1$/);
+    // the applied browse URL. The optional leading `name=` accommodates the
+    // in-place name filter joining the form at the aug20 merge
+    // (civibus-af3): a plain GET form serializes its empty name input, and
+    // the field sits first in DOM order. Every other param stays pinned
+    // exactly.
+    await expect(page).toHaveURL(/\/candidates\?(?:name=&)?state=GA&office=S&sort=name&limit=1$/);
     await expect(page.getByText("No candidates found for the selected filters.")).toBeVisible();
     await expect(page.getByRole("link", { name: SMOKE_CANDIDATE_NAME })).toHaveCount(0);
 
@@ -235,7 +239,15 @@ test.describe("campaign finance smoke", () => {
     await expect(page.getByText(SMOKE_CANDIDATES_FIRST_PAGE_LABEL)).toBeVisible();
   });
 
-  test("/candidates name search hands the typed name off to /search and renders it formatted", async ({
+  // civibus-af3: this journey encodes the IN-PLACE name filter that
+  // batman/aug20_search_reach (civibus-frq) put on /candidates, replacing the
+  // /search handoff the previous version of this test pinned. It is EXPECTED
+  // RED on this branch alone — the Name input only exists after the aug20
+  // merge joins that branch — and goes green on the merged tree, where the
+  // fixture backend's /v1/candidates name filter (added here) answers it.
+  // Contract: docs/reference/screen_specs/candidate_list.md, "Name-filter
+  // contract".
+  test("/candidates name filter narrows the browse list in place and renders it formatted", async ({
     page
   }: {
     page: any;
@@ -249,30 +261,46 @@ test.describe("campaign finance smoke", () => {
     await expect(page.getByRole("heading", { name: "Candidates" })).toBeVisible();
     await expect(page.getByRole("link", { name: SMOKE_CANDIDATE_NAME })).toBeVisible();
 
-    await page.getByLabel("Find a candidate by name").fill(SMOKE_CANDIDATE_NAME_SEARCH_QUERY);
-    await page.getByRole("button", { name: "Search names" }).click();
+    // The name box is part of the filter form and submits with it. The whole
+    // fill-and-apply interaction retries as a unit: the input is value-bound
+    // to the URL param, so a fill that lands BEFORE hydration completes is
+    // wiped when hydration re-renders the empty active value, and the submit
+    // then carries name= — observed as a real race under parallel workers. A
+    // retry that starts after that failed round trip runs against a hydrated
+    // page, where the fill sticks. The URL assertion inside is what makes a
+    // retry attempt fail loudly instead of soaking a broken filter: if the
+    // name param never arrives, this times out red.
+    await expect(async () => {
+      await page.getByLabel("Name", { exact: true }).fill(SMOKE_CANDIDATE_NAME_SEARCH_QUERY);
+      await page.getByRole("button", { name: "Apply filters" }).click();
+      // In place: still /candidates, with `name` a browse param beside the
+      // form's other filter params — not a /search handoff that would discard
+      // the reader's browse context.
+      await expect(page).toHaveURL(/\/candidates\?(?:[^#]*&)?name=ossoff(?:&|$)/, {
+        timeout: 2_000
+      });
+    }).toPass();
 
-    // The handoff carries the term and nothing else: no entity_type, and none of
-    // the browse filter params. The fixture backend only answers an unfiltered
-    // query, so a pinned type would surface here as an error page.
-    await expect(page).toHaveURL(`/search?q=${SMOKE_CANDIDATE_NAME_SEARCH_QUERY}`);
-
-    // `exact: true` is load-bearing on both assertions below. Playwright matches
-    // accessible names and text case-insensitively by default, so without it
-    // both would pass against the unformatted `OSSOFF, T. JONATHAN` and the
-    // whole check would be blind to the thing it exists to catch.
-    const resultsRegion = page.getByTestId("search-results-region");
+    // The filter surfaced a candidate the unfiltered first page never shows
+    // (the raw-cased specimen sits last in the fixture list, past the 1-item
+    // page), so this cannot be satisfied by pagination — only by filtering.
+    // `exact: true` is load-bearing on both assertions below. Playwright
+    // matches accessible names and text case-insensitively by default, so
+    // without it both would pass against the unformatted `OSSOFF, T. JONATHAN`
+    // and the check would be blind to the thing it exists to catch.
     await expect(
-      resultsRegion.getByRole("link", {
+      page.getByRole("link", {
         name: SMOKE_CANDIDATE_NAME_SEARCH_FORMATTED_NAME,
         exact: true
       })
     ).toBeVisible();
     // The backend served raw FEC casing; the shouted form must not reach the
-    // screen, which is what proves the formatter ran in the real render path.
+    // screen, which is what proves the formatter ran on browse rows.
     await expect(
-      resultsRegion.getByText(SMOKE_CANDIDATE_NAME_SEARCH_RAW_NAME, { exact: true })
+      page.getByText(SMOKE_CANDIDATE_NAME_SEARCH_RAW_NAME, { exact: true })
     ).toHaveCount(0);
+    // And the non-matching candidate that opened the journey is filtered out.
+    await expect(page.getByRole("link", { name: SMOKE_CANDIDATE_NAME })).toHaveCount(0);
   });
 
   test("/committees renders index page links, SEO tags, and pagination controls", async ({ page }: { page: any }) => {

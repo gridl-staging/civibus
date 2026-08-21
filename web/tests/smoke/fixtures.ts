@@ -68,8 +68,17 @@ export const SMOKE_SEARCH_RESULT_NAME = "Civibus Action Org";
 export const SMOKE_SEARCH_VALIDATION_QUERY = "zz";
 export const SMOKE_SEARCH_VALIDATION_MESSAGE = "query.q: Synthetic validation failure for smoke coverage";
 export const SMOKE_SEARCH_SLOW_QUERY = "slow";
-export const SMOKE_SEARCH_CANDIDATE_QUERY = "jane";
-export const SMOKE_SEARCH_CANDIDATE_RESULT_NAME = "Jane Doe";
+// civibus-x9d (2026-08-20): candidate search rows are cf.candidate records
+// routed to /candidate/[id], so the fixture row must point at the smoke
+// candidate RECORD (SMOKE_CANDIDATE_ID / "Pat Candidate"), not a person row.
+// The old "Jane Doe" row carried a person UUID under a candidate badge — the
+// superseded pre-x9d contract — which routed to a page the fixture backend
+// cannot serve under the new routing.
+export const SMOKE_SEARCH_CANDIDATE_QUERY = "pat";
+// Must equal the fixture candidate record's presented name (SMOKE_CANDIDATE_NAME,
+// declared below; string duplicated here only because const declaration order
+// forbids the forward reference).
+export const SMOKE_SEARCH_CANDIDATE_RESULT_NAME = "Pat Candidate";
 export const SMOKE_SEARCH_CONTEST_QUERY = "senate";
 export const SMOKE_SEARCH_CONTEST_RESULT_NAME = "2026 NC Senate General";
 export const SMOKE_SEARCH_EMPTY_TITLE = "Search | Civibus";
@@ -1297,10 +1306,14 @@ export async function discoverLiveLouisianaCommitteeRoute(page: {
     );
   }
 
-  const searchBody = (await searchResponse.json()) as {
-    results?: LiveSearchCommitteeResult[];
-  };
-  const match = (searchBody.results ?? []).find(
+  // /v1/search returns a BARE ARRAY (api/routes/search.py declares
+  // response_model=list[SearchResult]). This used to read `.results` off the
+  // body, which is always undefined on an array, so the fallback could never
+  // find a committee and threw the misleading "search returned no committee
+  // named" error below instead (noted on civibus-af3).
+  const searchBody = (await searchResponse.json()) as unknown;
+  const searchResults: LiveSearchCommitteeResult[] = Array.isArray(searchBody) ? searchBody : [];
+  const match = searchResults.find(
     (candidate) =>
       typeof candidate.name === "string" &&
       candidate.name.toUpperCase() === SMOKE_STAGE6_COMMITTEE_NAME
@@ -1327,3 +1340,12 @@ export async function discoverLiveLouisianaCommitteeRoute(page: {
 export const SMOKE_CANDIDATE_NAME_SEARCH_QUERY = "ossoff";
 export const SMOKE_CANDIDATE_NAME_SEARCH_RAW_NAME = "OSSOFF, T. JONATHAN";
 export const SMOKE_CANDIDATE_NAME_SEARCH_FORMATTED_NAME = "Ossoff, T. Jonathan";
+// Browse-list twin of the raw-cased search specimen (civibus-af3): since the
+// in-place /candidates name filter replaced the /search handoff, the
+// raw-vs-formatted proof has to run against a BROWSE row, so the candidate
+// list fixture carries one item whose name ships in raw FEC casing. It sits
+// last in the list on purpose: the unfiltered first page (limit 1) never shows
+// it, which is what makes "the filter surfaced it" a discriminating assertion
+// rather than one pagination could satisfy.
+export const SMOKE_NAME_FILTER_CANDIDATE_ID = "fafafafa-fafa-4faf-8faf-fafafafafafa";
+export const SMOKE_NAME_FILTER_CANDIDATE_SLUG = "ossoff-t-jonathan";

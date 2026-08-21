@@ -2,12 +2,15 @@
   import ChartFrame from "./ChartFrame.svelte";
   import Chart from "./Chart.svelte";
   import { buildCashOnHandSeries, formatCurrency, formatDate } from "./finance";
-  import type { CashOnHandPoint, ChartFrameProps, ExactDisclosureRow } from "./types";
+  import type { ChartHeadingLevel, CashOnHandPoint, ChartFrameProps, ExactDisclosureRow } from "./types";
 
   export let testId: string;
   export let cycle: number;
   export let coverageThrough: string | null;
   export let sources: ChartFrameProps["sources"] = [];
+  // Outline depth for the inner chart heading; forwarded to the Chart
+  // adapter (civibus-4yw). Default 3 preserves pre-prop rendering.
+  export let headingLevel: ChartHeadingLevel = 3;
   export let points: CashOnHandPoint[] = [];
 
   $: orderedPoints = [...points].sort((left, right) => left.periodEnd.localeCompare(right.periodEnd));
@@ -57,6 +60,7 @@
       ariaLabel="Cash on hand trend by filing period"
       unit="dollars"
       series={chartSeries}
+      {headingLevel}
     />
     {#each orderedPoints as point (point.periodEnd)}
       <div class:cash-trend__gap={point.missingIntervalBefore}>

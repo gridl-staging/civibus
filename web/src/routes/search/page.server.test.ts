@@ -58,6 +58,8 @@ describe('/search +page.server load', () => {
     expect(data).toEqual({
       query: '',
       entityType: '',
+      offset: 0,
+      hasNext: false,
       results: []
     });
     expect(requestJson).not.toHaveBeenCalled();
@@ -73,6 +75,8 @@ describe('/search +page.server load', () => {
     expect(data).toEqual({
       query: '',
       entityType: 'person',
+      offset: 0,
+      hasNext: false,
       results: []
     });
     expect(requestJson).not.toHaveBeenCalled();
@@ -94,6 +98,8 @@ describe('/search +page.server load', () => {
     expect(data).toEqual({
       query: 'civ',
       entityType: 'org',
+      offset: 0,
+      hasNext: false,
       results: [
         {
           entity_type: 'org',
@@ -102,7 +108,49 @@ describe('/search +page.server load', () => {
         }
       ]
     });
-    expect(requestJson).toHaveBeenCalledWith('/v1/search?q=civ&entity_type=org');
+    expect(requestJson).toHaveBeenCalledWith('/v1/search?q=civ&entity_type=org&limit=21');
+  });
+
+  it('requests one row beyond the page size and converts the extra row into hasNext', async () => {
+    // 21 rows back for a 21-row request: exactly one more page exists. The
+    // 21st row must fuel hasNext and never render — if it leaked, the page
+    // would show 21 results and repeat that row at the top of page two.
+    const backendRows = Array.from({ length: 21 }, (_, index) => ({
+      entity_type: 'org',
+      entity_id: `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`,
+      name: `Paged Org ${index}`
+    }));
+    const requestJson = vi.fn().mockResolvedValue(backendRows);
+
+    const data = (await load(
+      createLoadEvent('https://web.civibus.local/search?q=paged', requestJson)
+    )) as { results: Array<{ name: string }>; hasNext: boolean; offset: number };
+
+    expect(requestJson).toHaveBeenCalledWith('/v1/search?q=paged&limit=21');
+    expect(data.results).toHaveLength(20);
+    expect(data.results.map((row) => row.name)).not.toContain('Paged Org 20');
+    expect(data.hasNext).toBe(true);
+    expect(data.offset).toBe(0);
+  });
+
+  it('passes the URL offset through to the backend and reports the accepted position', async () => {
+    const requestJson = vi.fn().mockResolvedValue([
+      {
+        entity_type: 'org',
+        entity_id: '00000000-0000-4000-8000-000000000099',
+        name: 'Last Page Org'
+      }
+    ]);
+
+    const data = (await load(
+      createLoadEvent('https://web.civibus.local/search?q=paged&offset=20', requestJson)
+    )) as { results: unknown[]; hasNext: boolean; offset: number };
+
+    expect(requestJson).toHaveBeenCalledWith('/v1/search?q=paged&limit=21&offset=20');
+    // One row on a 21-row request: this is the final page.
+    expect(data.hasNext).toBe(false);
+    expect(data.offset).toBe(20);
+    expect(data.results).toHaveLength(1);
   });
 
   it('keeps backend 422 validation errors distinct from empty successful results', async () => {
@@ -111,6 +159,8 @@ describe('/search +page.server load', () => {
       createLoadEvent('https://web.civibus.local/search?q=ci', successfulRequestJson)
     );
     expect(successfulData).toMatchObject({
+      offset: 0,
+      hasNext: false,
       results: []
     });
 
@@ -123,6 +173,8 @@ describe('/search +page.server load', () => {
     await expect(load(createLoadEvent('https://web.civibus.local/search?q=c', failedRequestJson))).resolves.toEqual({
       query: 'c',
       entityType: '',
+      offset: 0,
+      hasNext: false,
       results: [],
       validationMessage: 'query.q: String should have at least 2 characters'
     });
@@ -134,6 +186,8 @@ describe('/search +page.server load', () => {
     await expect(load(createLoadEvent('https://web.civibus.local/search?q=c', requestJson))).resolves.toEqual({
       query: 'c',
       entityType: '',
+      offset: 0,
+      hasNext: false,
       results: [],
       validationMessage: 'The search request could not be validated. Review your query and try again.'
     });
@@ -151,10 +205,12 @@ describe('/search +page.server load', () => {
     ).resolves.toEqual({
       query: ' civ ',
       entityType: ' ',
+      offset: 0,
+      hasNext: false,
       results: [],
       validationMessage: 'query.entity_type: Input should be person, org, or committee'
     });
-    expect(requestJson).toHaveBeenCalledWith('/v1/search?q=+civ+&entity_type=+');
+    expect(requestJson).toHaveBeenCalledWith('/v1/search?q=+civ+&entity_type=+&limit=21');
   });
 
   it('keeps blank state when only a candidate filter is selected', async () => {
@@ -167,6 +223,8 @@ describe('/search +page.server load', () => {
     expect(data).toEqual({
       query: '',
       entityType: 'candidate',
+      offset: 0,
+      hasNext: false,
       results: []
     });
     expect(requestJson).not.toHaveBeenCalled();
@@ -182,6 +240,8 @@ describe('/search +page.server load', () => {
     expect(data).toEqual({
       query: '',
       entityType: 'contest',
+      offset: 0,
+      hasNext: false,
       results: []
     });
     expect(requestJson).not.toHaveBeenCalled();
@@ -197,9 +257,11 @@ describe('/search +page.server load', () => {
     expect(data).toEqual({
       query: 'civ',
       entityType: 'candidate',
+      offset: 0,
+      hasNext: false,
       results: []
     });
-    expect(requestJson).toHaveBeenCalledWith('/v1/search?q=civ&entity_type=candidate');
+    expect(requestJson).toHaveBeenCalledWith('/v1/search?q=civ&entity_type=candidate&limit=21');
   });
 
   it('drops backend search results that the frontend cannot route safely', async () => {
@@ -233,6 +295,8 @@ describe('/search +page.server load', () => {
     expect(data).toEqual({
       query: 'civ',
       entityType: 'candidate',
+      offset: 0,
+      hasNext: false,
       results: [
         {
           entity_type: 'candidate',
@@ -246,7 +310,7 @@ describe('/search +page.server load', () => {
         }
       ]
     });
-    expect(requestJson).toHaveBeenCalledWith('/v1/search?q=civ&entity_type=candidate');
+    expect(requestJson).toHaveBeenCalledWith('/v1/search?q=civ&entity_type=candidate&limit=21');
   });
 
   it('forwards explicit empty q params so backend validation stays authoritative', async () => {
@@ -261,10 +325,12 @@ describe('/search +page.server load', () => {
     ).resolves.toEqual({
       query: '',
       entityType: 'person',
+      offset: 0,
+      hasNext: false,
       results: [],
       validationMessage: 'query.q: String should have at least 2 characters'
     });
-    expect(requestJson).toHaveBeenCalledWith('/v1/search?q=&entity_type=person');
+    expect(requestJson).toHaveBeenCalledWith('/v1/search?q=&entity_type=person&limit=21');
   });
 
   it('keeps shared route error handling for backend 404 responses', async () => {
@@ -314,6 +380,8 @@ describe('/search +page.server load', () => {
     expect(data).toEqual({
       query: '',
       entityType: 'office',
+      offset: 0,
+      hasNext: false,
       results: []
     });
     expect(requestJson).not.toHaveBeenCalled();

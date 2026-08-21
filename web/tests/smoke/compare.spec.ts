@@ -3,6 +3,7 @@ import type { Locator, Page } from "playwright";
 import {
   BACKEND_FAILURE_STATE_COPY,
   BAR_SERIES_MARK_SELECTOR,
+  expectHtmlBarListRender,
   expectNoBackendFailureStates,
   expectNoChartFrameOverflow,
   expectNoHorizontalOverflow,
@@ -381,11 +382,16 @@ async function expectCompareCharts(
   officeholders: readonly (typeof compareOfficeholders)[number][]
 ): Promise<void> {
   for (const officeholder of officeholders) {
-    for (const chartSuffix of ["monthly", "size", "geography", "outside-spending"]) {
+    for (const chartSuffix of ["monthly", "geography", "outside-spending"]) {
       const chart = page.getByTestId(`compare-${officeholder.id}-${chartSuffix}`);
       await expect(chart).toBeVisible();
       await expectRealChartRender(chart, BAR_SERIES_MARK_SELECTOR);
     }
+    // The size column is a HorizontalBarChart: its one visual encoding is a
+    // ranked HTML bar list, not an svg (civibus-3a3).
+    const sizeChart = page.getByTestId(`compare-${officeholder.id}-size`);
+    await expect(sizeChart).toBeVisible();
+    await expectHtmlBarListRender(sizeChart);
   }
 }
 

@@ -36,6 +36,7 @@ from api.contribution_insights_contract import (
 from api.queries._common import (
     _MONEY_SCALE,
     _SLUG_NORMALIZE_EXPR,
+    _build_ilike_contains_pattern,
     _build_paginated_response,
     _fetch_filtered_rows,
     fetch_one_row,
@@ -4376,6 +4377,11 @@ def fetch_candidate_list(
     does the explicit ``include_unsafe_identity`` opt-in.
     """
     include_unsafe_identity = params.include_unsafe_identity or params.person_id is not None
+    # civibus-frq: name is deterministic case-insensitive containment over the
+    # raw FEC filing string, through the same escape owner /search uses, so
+    # `%`/`_`/`\` in a typed term are literal characters and never wildcards.
+    # No trigram arm on purpose — a browse filter narrows; it does not rank.
+    name_contains_pattern = None if params.name is None else _build_ilike_contains_pattern(params.name)
     rows = _fetch_filtered_rows(
         conn,
         sql_template=_candidate_list_sql_template(
@@ -4386,6 +4392,7 @@ def fetch_candidate_list(
             (params.state, "c.state = %s"),
             (params.office, "c.office = %s"),
             (params.person_id, "c.person_id = %s"),
+            (name_contains_pattern, "c.name ILIKE %s ESCAPE '\\'"),
         ),
         limit=params.limit,
         offset=params.offset,

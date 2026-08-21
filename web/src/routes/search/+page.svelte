@@ -134,5 +134,20 @@
         {/each}
       </ul>
     {/if}
+    {#if viewModel.pagination !== null}
+      <!-- Same shape as the /candidates pagination nav: position label plus
+           Previous/Next links. The view model already suppresses this during
+           submits and validation errors, and renders a previous-only escape
+           hatch when a stale offset overshoots the result set. -->
+      <nav class="search__pagination" aria-label="Search results pagination">
+        <p class="search__pagination-label">{viewModel.pagination.label}</p>
+        {#if viewModel.pagination.previousHref !== null}
+          <a href={viewModel.pagination.previousHref}>Previous</a>
+        {/if}
+        {#if viewModel.pagination.nextHref !== null}
+          <a href={viewModel.pagination.nextHref}>Next</a>
+        {/if}
+      </nav>
+    {/if}
   </div>
 </section>

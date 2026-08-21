@@ -30,6 +30,7 @@ import {
   SMOKE_OFFICE_OFFICEHOLDER_NAME,
   SMOKE_OFFICE_OFFICEHOLDER_ID,
   SMOKE_OFFICE_NAME,
+  SMOKE_CANDIDATE_SLUG,
   SMOKE_PERSON_CANONICAL_NAME,
   SMOKE_PERSON_ID,
   SMOKE_SEARCH_CANDIDATE_QUERY,
@@ -246,7 +247,11 @@ test.describe("shell and responsive smoke", () => {
     await expect(page.getByRole("link", { name: SMOKE_SEARCH_RESULT_NAME })).toBeVisible();
   });
 
-  test("/search candidate results route to canonical person detail", async ({ page }: { page: any }) => {
+  // civibus-x9d (2026-08-20): candidate search rows are cf.candidate records
+  // routed to /candidate/[id], which canonicalizes the UUID to the slug URL.
+  // Before x9d they were candidacy-holding persons routed to /person/[id];
+  // this test previously pinned that superseded contract.
+  test("/search candidate results route to the candidate record page", async ({ page }: { page: any }) => {
     await page.goto(`/search?q=${SMOKE_SEARCH_CANDIDATE_QUERY}&entity_type=candidate`);
 
     const candidateResultCard = page
@@ -257,8 +262,12 @@ test.describe("shell and responsive smoke", () => {
 
     await candidateResultCard.getByRole("link", { name: SMOKE_SEARCH_CANDIDATE_RESULT_NAME }).click();
 
-    await expect(page).toHaveURL(`/person/${SMOKE_PERSON_ID}`);
-    await expect(page.getByRole("heading", { name: SMOKE_PERSON_CANONICAL_NAME })).toBeVisible();
+    // The href carries the UUID; the route loader answers with the canonical
+    // slug redirect, so the settled URL is the slug form.
+    await expect(page).toHaveURL(`/candidate/${SMOKE_CANDIDATE_SLUG}`);
+    await expect(
+      page.getByRole("heading", { level: 2, name: SMOKE_SEARCH_CANDIDATE_RESULT_NAME, exact: true })
+    ).toBeVisible();
   });
 
   test("/search keeps backend 422 validation inline instead of routing to +error", async ({

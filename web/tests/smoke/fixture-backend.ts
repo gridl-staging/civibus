@@ -198,6 +198,7 @@ function isCandidateListRequest(url: URL): boolean {
   }
 
   return hasOnlyAllowedQueryParams(url, [
+    "name",
     "state",
     "office",
     "person_id",
@@ -491,12 +492,20 @@ function buildCandidateListResponse(url: URL): PagedListResponse<CandidateListIt
       const stateFilter = currentUrl.searchParams.get("state");
       const officeFilter = currentUrl.searchParams.get("office");
       const personFilter = currentUrl.searchParams.get("person_id");
+      // In-place browse name filter (civibus-frq / civibus-af3): the real
+      // backend matches case-insensitive substring containment over the raw
+      // FEC name, with pattern metacharacters treated as literals. Fixture
+      // names carry no metacharacters, so lowercase containment IS that
+      // contract here.
+      const nameFilter = currentUrl.searchParams.get("name");
 
       return items.filter(
         (item) =>
           (stateFilter === null || item.state === stateFilter) &&
           (officeFilter === null || item.office === officeFilter) &&
-          (personFilter === null || getCandidatePersonId(item) === personFilter)
+          (personFilter === null || getCandidatePersonId(item) === personFilter) &&
+          (nameFilter === null ||
+            item.name.toLowerCase().includes(nameFilter.toLowerCase()))
       );
     }
   });

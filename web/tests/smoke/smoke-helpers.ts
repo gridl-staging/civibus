@@ -6,7 +6,16 @@ const NEAR_BLACK_RGB_CHANNEL_MAX = 24;
 const OPAQUE_ALPHA_MIN = 0.95;
 
 export const LINE_SERIES_MARK_SELECTOR = "svg path.lc-path";
-export const BAR_SERIES_MARK_SELECTOR = "svg rect";
+// layerchart draws a bar as a rounded <path class="lc-rect lc-bar lc-bars-bar">,
+// NEVER as a <rect>. The only <rect> elements a bar chart emits are the
+// transparent lc-tooltip-rect hit areas of its tooltip context — verified by DOM
+// probe on the fixture person page (2026-08-20): 54/54 rects were
+// lc-tooltip-rect with fill rgba(0,0,0,0). The previous value, "svg rect",
+// therefore proved a tooltip overlay existed, never that a bar painted: with bar
+// value plumbing deliberately severed (every bar y forced to NaN, path lengths
+// 0), every consumer of this constant still passed. This selector goes red on
+// that same breakage. civibus-d0o.
+export const BAR_SERIES_MARK_SELECTOR = "svg path.lc-bar";
 
 // Repo-wide copy convention for a panel whose backend call FAILED, as opposed to a panel
 // whose data is legitimately absent. Rendered inline by the {:catch} arms of
@@ -367,6 +376,91 @@ export async function expectRealChartRender(region: Locator, markSelector: strin
   await expect
     .poll(async () => (await sampleVisibleSvgPaints(region, markSelector)).length)
     .toBeGreaterThan(0);
+}
+
+// HorizontalBarChart's single-series hue. Kept equal to FINANCE_CHART_COLORS.support
+// in web/src/lib/charts/finance.ts and to the hardcoded gradient hex in
+// HorizontalBarChart.svelte's <style> (a Svelte style block cannot read a module
+// constant, so this assertion is what holds the pairing). Change all three or none.
+const HTML_BAR_LIST_FILL_HEX = "#0f766e";
+const HTML_BAR_LIST_ROW_SELECTOR = ".horizontal-bars__row";
+const HTML_BAR_LIST_MARK_SELECTOR = ".horizontal-bars__bar";
+
+/**
+ * Render oracle for the ranked HTML bar list that HorizontalBarChart draws
+ * (civibus-3a3). The list is that component's ONLY visual encoding — until
+ * 2026-08-20 it also drew the same series as a layerchart VERTICAL svg bar
+ * chart, so this asserts both halves of the fix:
+ *
+ *  1. no `<svg>` exists anywhere in the frame (the duplicate encoding may not
+ *     come back), and
+ *  2. the bars actually painted: at least one row, every bar span carrying the
+ *     shared-scale gradient in the single-series token, and at least one bar
+ *     with a nonzero filled width.
+ *
+ * Each check can fail for a real defect: rows disappear if the data plumbing or
+ * the CSS class is dropped, the gradient check fails if the fill breaks or the
+ * hue drifts from the token, and the width check fails if the shared-scale
+ * width computation regresses to all-zero.
+ */
+export async function expectHtmlBarListRender(region: Locator): Promise<void> {
+  // eslint-disable-next-line playwright/no-raw-locators -- the oracle inspects the component's own bar markup.
+  await expect(region.locator(HTML_BAR_LIST_ROW_SELECTOR).first()).toBeVisible();
+  // eslint-disable-next-line playwright/no-raw-locators -- the single-encoding pin must count raw svg elements.
+  await expect(region.locator("svg")).toHaveCount(0);
+
+  const expectedFill = hexToComputedRgb(HTML_BAR_LIST_FILL_HEX);
+  // eslint-disable-next-line playwright/no-raw-locators -- the oracle must read computed paint off package-free markup.
+  const barPaints = await region.locator(HTML_BAR_LIST_MARK_SELECTOR).evaluateAll(
+    (elements: Element[]) =>
+      elements.map((element) => {
+        const styles = window.getComputedStyle(element);
+        const box = element.getBoundingClientRect();
+        return {
+          backgroundImage: styles.backgroundImage,
+          filledWidth: styles.getPropertyValue("--finance-width").trim(),
+          boundingBox: { width: box.width, height: box.height }
+        };
+      })
+  );
+
+  expect(barPaints.length, "html bar list rendered rows but no bar marks").toBeGreaterThan(0);
+  for (const paint of barPaints) {
+    expect(paint.backgroundImage, "bar mark lost its shared-scale gradient").toContain(
+      "linear-gradient"
+    );
+    expect(paint.backgroundImage, "bar mark fill drifted from the single-series token").toContain(
+      expectedFill
+    );
+    expect(paint.boundingBox.width).toBeGreaterThan(0);
+    expect(paint.boundingBox.height).toBeGreaterThan(0);
+  }
+
+  const filledWidths = barPaints
+    .map((paint) => Number.parseFloat(paint.filledWidth))
+    .filter((width) => Number.isFinite(width) && width > 0);
+  expect(filledWidths.length, "no bar carries a nonzero filled width").toBeGreaterThan(0);
+}
+
+/**
+ * Production-tolerant twin of `expectHtmlBarListRender` for data-dependent
+ * surfaces: a live member may truthfully have no itemized size-bucket rows, in
+ * which case the frame renders its no-data state and there is nothing to
+ * assert. Returns whether a plotted list was actually asserted, so a caller
+ * that requires at least one render can count. The strict twin runs in the
+ * fixture lane on known-present data, which is what stops this tolerance from
+ * making the check vacuous.
+ */
+export async function expectHtmlBarListRenderIfPlotted(region: Locator): Promise<boolean> {
+  if ((await region.count()) === 0 || !(await region.first().isVisible())) {
+    return false;
+  }
+  // eslint-disable-next-line playwright/no-raw-locators -- presence probe for the component's own bar markup.
+  if ((await region.locator(HTML_BAR_LIST_ROW_SELECTOR).count()) === 0) {
+    return false;
+  }
+  await expectHtmlBarListRender(region);
+  return true;
 }
 
 export async function expectNoOpaqueNearBlackPaints(regions: Locator | Locator[]): Promise<void> {

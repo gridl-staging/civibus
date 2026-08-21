@@ -8,12 +8,18 @@
     formatCurrency,
     toExactRows
   } from "./finance";
-  import type { ChartFrameProps, ChartSeries, ExactDisclosureRow, OutsideSpendingRow } from "./types";
+  import type { ChartHeadingLevel, ChartFrameProps, ChartSeries, ExactDisclosureRow, OutsideSpendingRow } from "./types";
 
   export let testId: string;
   export let cycle: number;
   export let coverageThrough: string | null;
   export let sources: ChartFrameProps["sources"] = [];
+  // Outline depth for the inner chart heading; forwarded to the Chart
+  // adapter (civibus-4yw). Default 3 preserves pre-prop rendering.
+  export let headingLevel: ChartHeadingLevel = 3;
+  // The Top spenders / Transactions subsections nest one level under the chart
+  // heading, clamped at h6, the deepest HTML heading.
+  $: subheadingTag = `h${Math.min(headingLevel + 1, 6)}`;
   export let rows: OutsideSpendingRow[] = [];
   export let topSpenders: OutsideSpendingRow[] = [];
   // Supplied by comparison surfaces so sibling columns share one zero-centered
@@ -152,6 +158,7 @@
       ariaLabel="Zero-centered support and oppose spending comparison"
       unit="dollars"
       series={chartSeries}
+      {headingLevel}
       yDomain={[domain.min, domain.max]}
     />
     {#each domain.signedRows as row (row.id)}
@@ -162,7 +169,7 @@
     {/each}
 
     <section>
-      <h4>Top spenders</h4>
+      <svelte:element this={subheadingTag}>Top spenders</svelte:element>
       {#each topSpenders as spender (`${spender.id}-${spender.stance}`)}
         <p>
           {spender.label}: {formatCurrency(spender.amount)}; Transactions:
@@ -172,7 +179,7 @@
     </section>
 
     <section>
-      <h4>Transactions</h4>
+      <svelte:element this={subheadingTag}>Transactions</svelte:element>
       {#each rows as row (row.id)}
         <p>{row.label}: {formatCount(row.transactionCount)} transactions</p>
       {/each}
@@ -214,7 +221,11 @@
     border-left: 0.5rem solid #92400e;
   }
 
+  /* The subheadings are a dynamic tag (h4 by default, deeper when the caller
+     passes a headingLevel), so every level they can render is styled. */
   .outside-spending h4,
+  .outside-spending h5,
+  .outside-spending h6,
   .outside-spending p {
     margin: 0;
   }

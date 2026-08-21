@@ -7,6 +7,7 @@ decisions at the configured confidence thresholds.
 
 from __future__ import annotations
 
+import re
 import uuid
 from datetime import date
 from pathlib import Path
@@ -20,6 +21,7 @@ from core.entity_resolution.confidence import resolve_auto_merge_threshold
 from core.entity_resolution.l8_regression import _build_fixture_rows
 from core.entity_resolution.scoring import score_with_splink
 from core.entity_resolution.splink_config import (
+    DETERMINISTIC_PERSON_RULES,
     PERSON_FIRST_NAME_DISAGREEMENT_M_PROBABILITY,
     PERSON_FIRST_NAME_DISAGREEMENT_U_PROBABILITY,
     build_person_probabilistic_settings,
@@ -106,7 +108,7 @@ SYNTHETIC_PERSONS = [
         "state": "NC",
         "employer": "Self-Employed",
         "occupation": "Attorney",
-        "identifiers": {"fec_id": "FEC-12345"},
+        "identifiers": {"fec_candidate_id": "FEC-12345"},
     },
     {
         "id": str(uuid.UUID("00000000-0000-0000-0000-000000000006")),
@@ -120,7 +122,7 @@ SYNTHETIC_PERSONS = [
         "state": "NC",
         "employer": "Wilson Law PLLC",
         "occupation": "Lawyer",
-        "identifiers": {"fec_id": "FEC-12345"},
+        "identifiers": {"fec_candidate_id": "FEC-12345"},
     },
 ]
 
@@ -435,7 +437,7 @@ class TestPersonBlockingRules:
         """Pair 3 (Robert/Bob Wilson) share an FEC ID — deterministic match."""
         p5 = SYNTHETIC_PERSONS[4]
         p6 = SYNTHETIC_PERSONS[5]
-        assert p5["identifiers"]["fec_id"] == p6["identifiers"]["fec_id"]
+        assert p5["identifiers"]["fec_candidate_id"] == p6["identifiers"]["fec_candidate_id"]
 
 
 class TestOrganizationBlockingRules:
@@ -515,7 +517,7 @@ class TestExpectedMatchOutcomes:
     def test_pair3_wilson_deterministic_match(self):
         """Robert/Bob Wilson: shared FEC ID → deterministic match before Splink runs."""
         p5, p6 = SYNTHETIC_PERSONS[4], SYNTHETIC_PERSONS[5]
-        assert p5["identifiers"]["fec_id"] == p6["identifiers"]["fec_id"]
+        assert p5["identifiers"]["fec_candidate_id"] == p6["identifiers"]["fec_candidate_id"]
         # Expected: confidence = 1.0 (deterministic)
 
     def test_org_pair1_brightwater_should_auto_merge(self):
@@ -692,3 +694,100 @@ def test_person_settings_term_frequency_adjustments_are_name_only() -> None:
         "first_name",
         "last_name",
     }
+
+
+# ---------------------------------------------------------------------------
+# civibus-s5q guard: no deterministic person rule may key on an identifier
+# key that no ingest path writes.
+#
+# WHY THIS EXISTS: the original fec rule keyed on identifiers->>'fec_id',
+# a key NOTHING in production ever wrote (every ingest path writes
+# 'fec_candidate_id' / 'fec_candidate_ids'). A deterministic rule aimed at a
+# key with no writer is a silent no-op at confidence 1.0 — it looks exactly
+# like a rule that simply found no duplicates, so the defect is invisible in
+# every run report. That dead rule is why the exact duplicate class it
+# targeted (FEC-only shadow persons) accumulated in production and had to be
+# repaired imperatively in federal_spine_loader instead of by ER.
+# ---------------------------------------------------------------------------
+
+_RULE_IDENTIFIER_KEY_PATTERN = re.compile(r"identifiers\s*(?:->>|->)\s*'([A-Za-z0-9_]+)'")
+
+# Directories whose production code counts as "an ingest path that writes
+# identifier keys". Deliberately broad (all of core/ and domains/) so a writer
+# anywhere in the product vouches for a key; test files and this ER package
+# itself are excluded below — a rule must never vouch for its own key.
+_IDENTIFIER_WRITER_SCAN_ROOTS = ("core", "domains")
+
+
+def _identifier_keys_named_in_person_rules() -> dict[str, set[str]]:
+    """Map each deterministic person rule name to the identifier keys its SQL reads."""
+    keys_by_rule: dict[str, set[str]] = {}
+    for rule in DETERMINISTIC_PERSON_RULES:
+        keys = set(_RULE_IDENTIFIER_KEY_PATTERN.findall(rule["sql"]))
+        # A person rule that keys on no identifiers at all would silently escape
+        # this guard; every rule in the current closed set keys on identifiers,
+        # so an empty extraction means the SQL shape drifted past the regex and
+        # the guard must be updated consciously, not bypassed.
+        assert keys, (
+            f"deterministic person rule {rule['name']!r} names no identifiers->>'key' "
+            "expression this guard can extract; update _RULE_IDENTIFIER_KEY_PATTERN "
+            "or exempt the rule explicitly with a comment explaining its predicate"
+        )
+        keys_by_rule[rule["name"]] = keys
+    return keys_by_rule
+
+
+def _production_files_that_could_write_identifiers() -> list[Path]:
+    files: list[Path] = []
+    er_package_dir = Path(__file__).resolve().parent
+    for scan_root in _IDENTIFIER_WRITER_SCAN_ROOTS:
+        for path in sorted((REPO_ROOT / scan_root).rglob("*.py")):
+            if er_package_dir in path.parents:
+                continue  # the rule may not vouch for its own key
+            if path.name.startswith("test_") or path.name == "conftest.py":
+                continue
+            if "tests" in path.parts:
+                continue
+            files.append(path)
+    return files
+
+
+def test_every_deterministic_person_rule_keys_on_an_identifier_some_ingest_path_writes() -> None:
+    """civibus-s5q: a matching rule keyed on an unwritten identifier is a dead rule.
+
+    For every identifier key named in DETERMINISTIC_PERSON_RULES, some production
+    file under core/ or domains/ (tests and this ER package excluded) must
+    mention the key as a quoted literal — the shape every real writer takes
+    (`identifiers={"fec_candidate_id": ...}`, `identifier_payload["bioguide_id"]`,
+    `identifier_key="bioguide_id"`).
+
+    Proven red 2026-08-20 against the pre-fix rules: 'fec_id' and 'voter_reg_id'
+    each had ZERO production occurrences — the only non-test mentions in the
+    repo were the rules themselves and a stale schema comment. The test fails
+    again the moment anyone adds a rule keyed on a key nothing writes, which is
+    the exact condition it guards: a silent no-op matcher at confidence 1.0.
+
+    Limitation, on purpose: a key that production only READS would also pass.
+    That failure mode still leaves the key present in live rows somewhere, which
+    is categorically different from the fec_id defect (no writer, no reader, no
+    data — matcher provably inert).
+    """
+    scanned_files = _production_files_that_could_write_identifiers()
+    assert scanned_files, "identifier-writer scan found no production files; scan roots are wrong"
+    scanned_texts = [path.read_text(encoding="utf-8") for path in scanned_files]
+
+    unwritten_keys_by_rule: dict[str, set[str]] = {}
+    for rule_name, keys in _identifier_keys_named_in_person_rules().items():
+        for key in keys:
+            quoted_forms = (f"'{key}'", f'"{key}"')
+            written = any(quoted_form in text for text in scanned_texts for quoted_form in quoted_forms)
+            if not written:
+                unwritten_keys_by_rule.setdefault(rule_name, set()).add(key)
+
+    assert not unwritten_keys_by_rule, (
+        "Deterministic person rules key on identifier keys that NO ingest path "
+        f"writes: {unwritten_keys_by_rule}. Such a rule is a silent no-op at "
+        "confidence 1.0 (civibus-s5q). Either make an ingest path write the key "
+        "or re-key/delete the rule — never leave a matcher aimed at a key with "
+        "no writer."
+    )

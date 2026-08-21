@@ -55,7 +55,16 @@
         {#if viewModel.ownershipRows.length === 0}
           <p>{viewModel.ownershipEmptyMessage}</p>
         {:else}
-          <div class="detail__table-scroll">
+          <!-- tabindex="0" is required, not decorative: .detail__table-scroll sets
+               overflow-x: auto over a table wider than its container, and a scrollable
+               region with no focusable descendant cannot be scrolled from the keyboard
+               at all. axe reports that as scrollable-region-focusable (serious), which
+               the smoke a11y floor refuses. Applied to every scroll container in this
+               component rather than only the ones that happen to lack links today, so a
+               table whose links become conditional cannot silently regress. Same remedy
+               the entity-detail and campaign-finance-detail DetailPages carry. -->
+          <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+          <div class="detail__table-scroll" tabindex="0">
             <table>
               <thead>
                 <tr>
@@ -112,7 +121,8 @@
         {#if viewModel.assessmentRows.length === 0}
           <p>{viewModel.assessmentEmptyMessage}</p>
         {:else}
-          <div class="detail__table-scroll">
+          <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+          <div class="detail__table-scroll" tabindex="0">
             <table>
               <thead>
                 <tr>

@@ -2,12 +2,15 @@
   import ChartFrame from "./ChartFrame.svelte";
   import Chart from "./Chart.svelte";
   import { formatCurrency, formatPercent } from "./finance";
-  import type { ChartFrameProps, ChartSeries, ExactDisclosureRow, ReceiptCompositionRow } from "./types";
+  import type { ChartHeadingLevel, ChartFrameProps, ChartSeries, ExactDisclosureRow, ReceiptCompositionRow } from "./types";
 
   export let testId: string;
   export let cycle: number;
   export let coverageThrough: string | null;
   export let sources: ChartFrameProps["sources"] = [];
+  // Outline depth for the inner chart heading; forwarded to the Chart
+  // adapter (civibus-4yw). Default 3 preserves pre-prop rendering.
+  export let headingLevel: ChartHeadingLevel = 3;
   export let rows: ReceiptCompositionRow[] = [];
   export let totalReceipts: number;
   export let canPlot: boolean;
@@ -69,6 +72,7 @@
       ariaLabel="Receipt source composition by dollars"
       unit="dollars"
       series={chartSeries}
+      {headingLevel}
     />
     {#each rows as row (row.id)}
       <div class="receipt-composition__row">

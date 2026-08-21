@@ -669,10 +669,38 @@ function buildLinkedCandidateContext(candidate: CandidateListItem): string {
   return buildCandidateContext(candidate);
 }
 
+/**
+ * One owner for the formatted-vs-raw decision on a candidate's rendered name.
+ *
+ * `identity_is_safe` decides whether the raw FEC filing string may stand as a
+ * public identity. A safe name takes the shared person-name format; an unsafe
+ * name renders as the filed string, because re-casing an address-like filing
+ * would misreport source evidence.
+ *
+ * Every campaign-finance surface that renders a candidate's name — the detail
+ * heading, its fact row, browse list rows, and committee linked-candidate
+ * links — must route through this helper rather than calling
+ * `formatPersonDisplayName` directly. The production deploy gate asserts that
+ * a candidate link's text equals the destination page's heading with
+ * `exact: true`; a surface making its own decision breaks that invariant in
+ * whichever direction it diverges. Measured in production 2026-08-20: the
+ * linked-candidates list rendered raw `OSSOFF, T. JONATHAN` while the detail
+ * h2 rendered `Ossoff, T. Jonathan`, failing the gate and rolling the deploy
+ * back.
+ */
+export function formatCandidatePublicName(candidate: {
+  name: string;
+  identity_is_safe: boolean;
+}): string {
+  return candidate.identity_is_safe ? formatPersonDisplayName(candidate.name) : candidate.name;
+}
+
 export function buildLinkedCandidateLinks(detail: CommitteeDetailResponse): LinkedCandidateLink[] {
   return detail.linked_candidates.map((candidate) => ({
     candidateId: candidate.id,
-    name: candidate.name,
+    // The link's text must match the heading its href lands on; the shared
+    // identity-gated owner is what keeps the two byte-identical.
+    name: formatCandidatePublicName(candidate),
     context: buildLinkedCandidateContext(candidate),
     href: buildCandidateHref(candidate)
   }));
@@ -937,8 +965,8 @@ export function buildCandidateFactRows(detail: CandidateDetailResponse): Campaig
   const nameLabel = detail.identity_is_safe ? "Candidate name" : "FEC-filed candidate name";
   // The safe-identity row *is* the candidate's public identity, so it takes the
   // shared person-name format. The unsafe row is labelled as the filed string
-  // and exists as source evidence; re-casing it would misreport the filing.
-  const nameValue = detail.identity_is_safe ? formatPersonDisplayName(detail.name) : detail.name;
+  // and exists as source evidence; formatCandidatePublicName owns that gate.
+  const nameValue = formatCandidatePublicName(detail);
   return [
     { label: nameLabel, value: nameValue, href: null },
     { label: "FEC candidate ID", value: detail.fec_candidate_id, href: null },
@@ -1099,11 +1127,14 @@ export function buildCandidateDetailShellPresentation(
   const identityQualifier = detail.identity_is_safe
     ? null
     : "FEC-filed candidate name needs review.";
-  // Candidate names are personal names and go through the shared format owner.
-  // Committee names deliberately do not: a committee is an organization, and
-  // `Last, First` casing rules do not hold for one.
+  // Candidate names are personal names and go through the shared
+  // identity-gated owner (formatCandidatePublicName). Committee names
+  // deliberately do not: a committee is an organization, and `Last, First`
+  // casing rules do not hold for one. The unsafe branch renders the neutral
+  // "Candidate record" heading rather than the raw filing, which the fact row
+  // below still presents as source evidence.
   const canonicalName = detail.identity_is_safe
-    ? resolveCanonicalName(formatPersonDisplayName(detail.name), "Candidate")
+    ? resolveCanonicalName(formatCandidatePublicName(detail), "Candidate")
     : "Candidate record";
 
   return {
@@ -1468,7 +1499,13 @@ function buildCommitteeOutsideSpendingTargetRows(
 ): CommitteeOutsideSpendingTargetRow[] {
   return targets.map((target) => ({
     rowKey: target.candidate_id,
-    candidateName: target.candidate_name,
+    // Target rows link to /person/<id>, whose heading renders the formatted
+    // spine name; the shared identity-gated owner keeps link text and
+    // destination headline in agreement (the deploy-gate invariant).
+    candidateName: formatCandidatePublicName({
+      name: target.candidate_name,
+      identity_is_safe: target.identity_is_safe
+    }),
     targetHref: buildOptionalEntityHref("person", target.person_id),
     context: buildCandidateContext(target),
     supportTotal: formatCurrency(target.support_total),
@@ -1483,7 +1520,12 @@ function buildCommitteeOutsideSpendingSourceRows(
   return targets.flatMap((target) =>
     target.sources.map((source, sourceIndex) => ({
       rowKey: `${target.candidate_id}:${source.source_record_key ?? "unknown"}:${sourceIndex}`,
-      candidateName: target.candidate_name,
+      // Same name, same owner, same output as the target row above — a reader
+      // matching a source filing to its target must see one spelling.
+      candidateName: formatCandidatePublicName({
+        name: target.candidate_name,
+        identity_is_safe: target.identity_is_safe
+      }),
       sourceName: source.data_source_name,
       sourceRecordKey: source.source_record_key ?? "—",
       href: sanitizeExternalUrl(source.record_url) ?? sanitizeExternalUrl(source.data_source_url)

@@ -110,6 +110,71 @@ export const TOOLTIP_VALUE_FORMATTERS: Record<FinanceChartUnit, (value: number) 
   reported_transactions: formatCount
 };
 
+/**
+ * Minimum horizontal room per x tick label, in CSS pixels. Handed to layerchart
+ * as the band axis `tickSpacing`, which is what makes a band axis subsample
+ * instead of drawing every category (54 months rendered as 54 overlapping
+ * labels before this existed). Owned here beside the label-budget arithmetic
+ * below because the two must agree on how many ticks actually render.
+ * See docs/reference/ui_chart_encoding.md §5.
+ */
+export const X_TICK_SPACING_PX = 80;
+
+/**
+ * Average width of one axis-tick glyph at the chart's tick font, in CSS pixels.
+ * Measured ~5.6px on the CI runner; 6px is deliberately conservative so the
+ * budget errs toward truncating one character early rather than letting two
+ * neighbouring labels touch. Re-measure alongside AXIS_PADDING if the tick
+ * font changes.
+ */
+const AXIS_TICK_CHAR_WIDTH_PX = 6;
+
+/**
+ * A truncated label shorter than this stops being readable at all, so the
+ * budget never collapses below it even in an absurdly narrow plot — at that
+ * point the full labels in the frame's HTML rows and disclosure table are the
+ * readable surface, and the axis only has to stay untangled.
+ */
+const MIN_TICK_LABEL_CHARS = 8;
+
+/**
+ * How many characters one rendered band-axis tick label may spend before it
+ * collides with its neighbour (civibus-tfz).
+ *
+ * Mirrors layerchart's own tick subsampling: `tickSpacing` caps rendered ticks
+ * at `floor(bandAreaWidth / X_TICK_SPACING_PX)`, so each rendered label owns
+ * `bandAreaWidth / renderedTicks` pixels. Band labels are centred on their
+ * band, so two neighbours touch exactly when each label fills its own slot —
+ * dividing the slot by a conservative glyph width keeps a visible gap.
+ *
+ * Degenerate inputs (unmeasured plot, no bands) return Infinity: "no plot to
+ * budget" must mean no truncation, never a zero budget that eats every label.
+ */
+export function bandTickLabelBudgetChars(bandAreaWidthPx: number, bandCount: number): number {
+  if (!(bandAreaWidthPx > 0) || !(bandCount > 0)) {
+    return Number.POSITIVE_INFINITY;
+  }
+
+  const renderedTickCount = Math.max(
+    1,
+    Math.min(bandCount, Math.floor(bandAreaWidthPx / X_TICK_SPACING_PX))
+  );
+  const roomPerLabelPx = bandAreaWidthPx / renderedTickCount;
+  return Math.max(MIN_TICK_LABEL_CHARS, Math.floor(roomPerLabelPx / AXIS_TICK_CHAR_WIDTH_PX));
+}
+
+/**
+ * Truncate one tick label to its budget with a single ellipsis. Information is
+ * not lost: every chart's frame prints the full label beside its value in the
+ * HTML rows and again in the `View chart data` table (civibus-tfz).
+ */
+export function truncateTickLabel(label: string, maxChars: number): string {
+  if (label.length <= maxChars) {
+    return label;
+  }
+  return `${label.slice(0, Math.max(1, maxChars - 1)).trimEnd()}…`;
+}
+
 export function formatMonthKey(monthKey: string): string {
   return MONTH_FORMATTER.format(new Date(`${monthKey}-01T00:00:00.000Z`));
 }

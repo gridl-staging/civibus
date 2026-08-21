@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from datetime import date
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
@@ -63,13 +64,29 @@ RELINK_BIO = "G000602"
 RELINK_FEC = "H2NY04244"
 RELINK_STALE_FEC = "H4NY04158"
 ABSENCE_BIO = "A000383"
+# Independent identity anchor planted on a would-be shadow person by the
+# absorb-refusal test; listed in ALL_BIOS so cleanup removes that row.
+OTHER_BIO = "TST00X1"
 
 # Deterministic contest id for the shadow-candidacy specimen (civibus-5lm).
 # Kept as a module constant so _delete_test_rows can drop it precisely.
 SHADOW_CANDIDACY_CONTEST_ID = UUID("00000000-0000-4000-8000-000000009901")
 
+# Deterministic ids for the absorb test's stray dependents: rows referencing the
+# shadow person that the FEC-id-keyed convergence steps CANNOT repair (a
+# candidacy with no candidate_number; a transaction contributor attribution).
+# Only the absorb's own FK sweeps move them, which is what makes the naive
+# no-repoint merge fail rather than pass vacuously. All kept as module
+# constants so _delete_test_rows can drop them precisely.
+STRAY_CANDIDACY_CONTEST_ID = UUID("00000000-0000-4000-8000-000000009902")
+STRAY_COMMITTEE_ID = UUID("00000000-0000-4000-8000-000000009903")
+STRAY_FILING_ID = UUID("00000000-0000-4000-8000-000000009904")
+STRAY_TRANSACTION_ID = UUID("00000000-0000-4000-8000-000000009905")
+STRAY_COMMITTEE_FEC_ID = "C99000151"
+STRAY_FILING_FEC_ID = "TST-STRAY-FILING-9904"
+
 CORE_BIOS = (HOUSE_BIO, SENATE_BIO, DELEGATE_BIO, PREZ_BIO, VP_BIO)
-ALL_BIOS = CORE_BIOS + (RELINK_BIO, ABSENCE_BIO)
+ALL_BIOS = CORE_BIOS + (RELINK_BIO, ABSENCE_BIO, OTHER_BIO)
 ALL_FEC_IDS = (HOUSE_FEC_A, HOUSE_FEC_B, SENATE_FEC, DELEGATE_FEC, PREZ_FEC)
 CORE_SEEDED_FEC_IDS = (
     HOUSE_FEC_A,
@@ -99,10 +116,46 @@ def _write_cn_fixture(tmp_path: Path) -> Path:
     territory delegates as 'H'); 'S' for Senate; 'P' for President.
     """
     cn_rows = [
-        # House member, first FEC ID
-        (HOUSE_FEC_A, "TEST HOUSE DUAL A", "DEM", "2024", "WA", "H", "01", "I", "C", "", "", "", "", "", ""),
+        # House member, first FEC ID. Both House rows carry the SAME campaign
+        # mailing address, as a chamber-switcher's cn rows do in production: the
+        # loader links one entity_address per shadow person, so the absorb must
+        # dedup the second link against the first when both land on the spine
+        # person (the WITHOUT-OVERLAPS-aware branch).
+        (
+            HOUSE_FEC_A,
+            "TEST HOUSE DUAL A",
+            "DEM",
+            "2024",
+            "WA",
+            "H",
+            "01",
+            "I",
+            "C",
+            "",
+            "100 Test Spine Ave",
+            "",
+            "Seattle",
+            "WA",
+            "98101",
+        ),
         # Same House member, second FEC ID (different office code 'S' to mimic legacy chamber-swap)
-        (HOUSE_FEC_B, "TEST HOUSE DUAL B", "DEM", "2024", "WA", "S", "", "C", "C", "", "", "", "", "", ""),
+        (
+            HOUSE_FEC_B,
+            "TEST HOUSE DUAL B",
+            "DEM",
+            "2024",
+            "WA",
+            "S",
+            "",
+            "C",
+            "C",
+            "",
+            "100 Test Spine Ave",
+            "",
+            "Seattle",
+            "WA",
+            "98101",
+        ),
         # Senator
         (SENATE_FEC, "TEST SENATOR", "DEM", "2024", "CA", "S", "", "I", "C", "", "", "", "", "", ""),
         # Delegate (FEC office='H' for territories)
@@ -298,8 +351,70 @@ def _seed_shadow_candidacy(
     return SHADOW_CANDIDACY_CONTEST_ID
 
 
+def _seed_stray_shadow_dependents(conn: psycopg.Connection, *, person_id: UUID) -> None:
+    """Attach dependents to the shadow that FEC-id-keyed convergence cannot repair.
+
+    A candidacy with a NULL candidate_number (no FEC id to key on) and a
+    cf.transaction contributor attribution. Both reference the shadow person
+    directly, so a merge that deletes the row without repointing them dies on
+    the person FK — the exact naive-merge failure the absorb test proves against.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO civic.contest (id, name, election_date, election_type, office_id)
+            VALUES (%s, %s, %s, 'general', %s)
+            ON CONFLICT (id) DO NOTHING
+            """,
+            (STRAY_CANDIDACY_CONTEST_ID, "Spine Stray Candidacy Contest", date(2026, 11, 3), OFFICE_US_HOUSE),
+        )
+        cur.execute(
+            """
+            INSERT INTO civic.candidacy (person_id, contest_id, party, status, candidate_number)
+            VALUES (%s, %s, 'DEM', 'filed', NULL)
+            """,
+            (person_id, STRAY_CANDIDACY_CONTEST_ID),
+        )
+        cur.execute(
+            """
+            INSERT INTO cf.committee (id, fec_committee_id, name)
+            VALUES (%s, %s, 'Test Stray Absorb Committee')
+            ON CONFLICT (id) DO NOTHING
+            """,
+            (STRAY_COMMITTEE_ID, STRAY_COMMITTEE_FEC_ID),
+        )
+        cur.execute(
+            """
+            INSERT INTO cf.filing (id, filing_fec_id, committee_id, amendment_indicator)
+            VALUES (%s, %s, %s, 'N')
+            ON CONFLICT (id) DO NOTHING
+            """,
+            (STRAY_FILING_ID, STRAY_FILING_FEC_ID, STRAY_COMMITTEE_ID),
+        )
+        cur.execute(
+            """
+            INSERT INTO cf.transaction (
+                id, filing_id, committee_id, transaction_type,
+                amount, amendment_indicator, contributor_person_id
+            )
+            VALUES (%s, %s, %s, '15', 250.00, 'N', %s)
+            """,
+            (STRAY_TRANSACTION_ID, STRAY_FILING_ID, STRAY_COMMITTEE_ID, person_id),
+        )
+    conn.commit()
+
+
 def _delete_test_rows(conn: psycopg.Connection) -> None:
     """Remove every row introduced by this test file, in FK-safe order."""
+    with conn.cursor() as cur:
+        # Stray absorb dependents: transaction -> filing -> committee, and the
+        # stray contest's candidacies. Deterministic ids, dropped first so the
+        # later person deletes cannot be blocked by them.
+        cur.execute("DELETE FROM cf.transaction WHERE id = %s", (STRAY_TRANSACTION_ID,))
+        cur.execute("DELETE FROM cf.filing WHERE id = %s", (STRAY_FILING_ID,))
+        cur.execute("DELETE FROM cf.committee WHERE id = %s", (STRAY_COMMITTEE_ID,))
+        cur.execute("DELETE FROM civic.candidacy WHERE contest_id = %s", (STRAY_CANDIDACY_CONTEST_ID,))
+        cur.execute("DELETE FROM civic.contest WHERE id = %s", (STRAY_CANDIDACY_CONTEST_ID,))
     cn_source_record_keys = [f"cn:{cycle}:{fec_id}" for cycle in (2024, 2026) for fec_id in SEEDED_FEC_IDS]
     spine_source_record_keys = [
         "house:" + HOUSE_BIO,
@@ -422,6 +537,13 @@ def _delete_test_rows(conn: psycopg.Connection) -> None:
         cur.execute(
             "DELETE FROM core.person WHERE identifiers ->> 'fec_candidate_id' = ANY(%s)",
             (list(SEEDED_FEC_IDS),),
+        )
+        # The shared campaign mailing address the cn fixture seeds. Its
+        # entity_address links are already gone (deleted above by source_record
+        # and by person); a leftover reference here fails loudly on the FK,
+        # which is a cleanup bug we would want to see.
+        cur.execute(
+            "DELETE FROM core.address WHERE raw_address = '100 Test Spine Ave, Seattle WA 98101'",
         )
         if source_record_ids:
             cur.execute(
@@ -1022,11 +1144,22 @@ def test_spine_convergence_merges_a_candidacy_that_would_violate_the_canonical_k
     assert spine_person_id is not None
 
     with spine_conn.cursor() as cur:
-        # Re-plant the shadow binding the first spine run just repaired, so this
-        # test exercises the collision branch rather than the plain-UPDATE branch.
+        # The first spine run absorbed (deleted) the original shadow row, so
+        # re-mint a fresh FEC-only shadow in the exact shape the masters loader
+        # produced historically, then re-plant the shadow binding the first run
+        # just repaired. This exercises the collision branch rather than the
+        # plain-UPDATE branch.
+        replanted_shadow_id = uuid4()
+        cur.execute(
+            """
+            INSERT INTO core.person (id, canonical_name, identifiers)
+            VALUES (%s, 'TEST HOUSE DUAL B', jsonb_build_object('fec_candidate_id', %s::text))
+            """,
+            (replanted_shadow_id, HOUSE_FEC_B),
+        )
         cur.execute(
             "UPDATE civic.candidacy SET person_id = %s WHERE contest_id = %s",
-            (shadow_person_id, contest_id),
+            (replanted_shadow_id, contest_id),
         )
         cur.execute(
             """
@@ -1050,6 +1183,316 @@ def test_spine_convergence_merges_a_candidacy_that_would_violate_the_canonical_k
     # One surviving row on the canonical person: its own 'filed' status kept, and
     # the shadow's party and FEC id filled into the columns it had left null.
     assert candidacy_rows == [(spine_person_id, HOUSE_FEC_B, "DEM", "filed")]
+
+
+def _person_ids_carrying_fec_id(conn: psycopg.Connection, fec_candidate_id: str) -> set[UUID]:
+    """Every core.person row claiming this FEC candidate id, scalar or array."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT id FROM core.person
+            WHERE identifiers ->> 'fec_candidate_id' = %(fec_id)s
+               OR identifiers -> 'fec_candidate_ids' @> to_jsonb(%(fec_id)s::text)
+            """,
+            {"fec_id": fec_candidate_id},
+        )
+        return {row[0] for row in cur.fetchall()}
+
+
+def _person_entity_source_rows(
+    conn: psycopg.Connection,
+    person_ids: tuple[UUID, ...],
+) -> set[tuple[UUID, str, str | None]]:
+    """(person_id, source_record_key, extraction_role) provenance links for these persons."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT es.entity_id, sr.source_record_key, es.extraction_role
+            FROM core.entity_source es
+            JOIN core.source_record sr ON sr.id = es.source_record_id
+            WHERE es.entity_type = 'person'
+              AND es.entity_id = ANY(%s)
+            """,
+            (list(person_ids),),
+        )
+        return set(cur.fetchall())
+
+
+def test_spine_refresh_absorbs_the_fec_shadow_person_rows(
+    spine_conn: psycopg.Connection,
+    tmp_path: Path,
+) -> None:
+    """civibus-5lm remainder: the FEC-only shadow person ROWS must not survive the refresh.
+
+    Yesterday's convergence repaired everything the shadow row pointed at
+    (cf.candidate, civic.candidacy), but the row itself remained — so /search
+    still rendered two persons for one human and the shadow's /person/ page
+    still existed. This asserts the spine refresh finishes the job: it absorbs
+    each FEC-only shadow into the bioguide-anchored spine person, moving every
+    provenance link across and deleting the duplicate row.
+
+    Proven red 2026-08-20 pre-implementation: after load_federal_spine, both
+    shadow rows still existed and two persons carried HOUSE_FEC_B.
+
+    The FK-repoint machinery is proven non-vacuous the same way yesterday's
+    canonical-key test was, sweep by sweep on 2026-08-20:
+
+    - candidacy sweep disabled -> psycopg.errors.ForeignKeyViolation on
+      constraint "candidacy_person_id_fkey";
+    - cf.transaction sweep disabled -> ForeignKeyViolation on
+      "transaction_contributor_person_id_fkey".
+
+    The stray dependents seeded below are what make those proofs possible: they
+    reference the shadow person in ways the FEC-id-keyed convergence steps
+    cannot repair, so only the absorb's own sweeps stand between the DELETE and
+    the FK. That RESTRICT behavior is also the absorb's safety net in
+    production: a person-referencing table this repo adds later cannot be
+    silently stranded — the refresh fails loudly instead.
+    """
+    candidates_ds_id = _ensure_candidates_data_source(spine_conn)
+    load_candidates(
+        spine_conn,
+        _write_cn_fixture(tmp_path),
+        cycle=2026,
+        data_source_id=candidates_ds_id,
+    )
+
+    # The cn loader minted one FEC-only shadow person per cn row; the dual-id
+    # House member therefore has TWO shadows (one per CAND_ID).
+    shadow_a_id = find_person_by_identifier(spine_conn, "fec_candidate_id", HOUSE_FEC_A)
+    shadow_b_id = find_person_by_identifier(spine_conn, "fec_candidate_id", HOUSE_FEC_B)
+    assert shadow_a_id is not None and shadow_b_id is not None
+    assert shadow_a_id != shadow_b_id
+    contest_id = _seed_shadow_candidacy(
+        spine_conn,
+        person_id=shadow_b_id,
+        fec_candidate_id=HOUSE_FEC_B,
+    )
+    # Dependents the FEC-id-keyed convergence steps can NOT repair: a candidacy
+    # with no candidate_number and a transaction contributor attribution. Only
+    # the absorb's own FK sweeps can move these, so the naive
+    # copy-provenance-then-DELETE merge fails on them instead of passing
+    # because earlier convergence happened to have emptied the row's references.
+    _seed_stray_shadow_dependents(spine_conn, person_id=shadow_b_id)
+
+    # Hand-calculated provenance baseline: load_candidates linked exactly one
+    # 'candidate' entity_source row per shadow (cn:2026:<CAND_ID>).
+    shadow_provenance = _person_entity_source_rows(spine_conn, (shadow_a_id, shadow_b_id))
+    assert shadow_provenance == {
+        (shadow_a_id, f"cn:2026:{HOUSE_FEC_A}", "candidate"),
+        (shadow_b_id, f"cn:2026:{HOUSE_FEC_B}", "candidate"),
+    }
+
+    data_source_id = ensure_federal_spine_data_source(spine_conn)
+    adapted = _build_adapted_legislators()
+    first_result = load_federal_spine(spine_conn, adapted, data_source_id=data_source_id)
+    spine_conn.commit()
+
+    spine_person_id = find_person_by_identifier(spine_conn, "bioguide_id", HOUSE_BIO)
+    assert spine_person_id is not None
+    assert spine_person_id not in {shadow_a_id, shadow_b_id}
+
+    # THE POINT: both shadow person rows are gone...
+    with spine_conn.cursor() as cur:
+        cur.execute(
+            "SELECT count(*) FROM core.person WHERE id = ANY(%s)",
+            ([shadow_a_id, shadow_b_id],),
+        )
+        assert cur.fetchone()[0] == 0
+
+    # ...so exactly ONE person row claims each of the member's FEC ids — the
+    # duplicate /search result and orphan /person/ page cannot exist any more.
+    assert _person_ids_carrying_fec_id(spine_conn, HOUSE_FEC_A) == {spine_person_id}
+    assert _person_ids_carrying_fec_id(spine_conn, HOUSE_FEC_B) == {spine_person_id}
+
+    # Nothing lost: the exact cn provenance links now ride on the spine person.
+    spine_provenance = _person_entity_source_rows(spine_conn, (spine_person_id,))
+    assert (spine_person_id, f"cn:2026:{HOUSE_FEC_A}", "candidate") in spine_provenance
+    assert (spine_person_id, f"cn:2026:{HOUSE_FEC_B}", "candidate") in spine_provenance
+    # And nothing still points at the dead rows (count preserved, not duplicated:
+    # 2 links before on 2 shadows, the same 2 links after on the spine person).
+    with spine_conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT count(*)
+            FROM core.entity_source es
+            JOIN core.source_record sr ON sr.id = es.source_record_id
+            WHERE sr.source_record_key = ANY(%s)
+              AND es.entity_type = 'person'
+            """,
+            ([f"cn:2026:{HOUSE_FEC_A}", f"cn:2026:{HOUSE_FEC_B}"],),
+        )
+        assert cur.fetchone()[0] == 2
+
+    # The observed FEC name forms survive on the canonical row as variants,
+    # never as its canonical_name — the spine keeps the human-formatted name.
+    with spine_conn.cursor() as cur:
+        cur.execute(
+            "SELECT canonical_name, name_variants FROM core.person WHERE id = %s",
+            (spine_person_id,),
+        )
+        canonical_name, name_variants = cur.fetchone()
+    assert canonical_name == "HouseDual, Test"
+    assert {"TEST HOUSE DUAL A", "TEST HOUSE DUAL B"} <= set(name_variants)
+
+    # Every dependent FK moved: money rows and the candidacy follow the person.
+    assert _candidate_person_ids(spine_conn, (HOUSE_FEC_A, HOUSE_FEC_B)) == {
+        HOUSE_FEC_A: spine_person_id,
+        HOUSE_FEC_B: spine_person_id,
+    }
+    with spine_conn.cursor() as cur:
+        cur.execute(
+            "SELECT person_id, candidate_number FROM civic.candidacy WHERE contest_id = %s",
+            (contest_id,),
+        )
+        assert cur.fetchall() == [(spine_person_id, HOUSE_FEC_B)]
+        # The stray dependents — repairable only by the absorb's own sweeps —
+        # moved too, values intact.
+        cur.execute(
+            "SELECT person_id, candidate_number, party, status FROM civic.candidacy WHERE contest_id = %s",
+            (STRAY_CANDIDACY_CONTEST_ID,),
+        )
+        assert cur.fetchall() == [(spine_person_id, None, "DEM", "filed")]
+        cur.execute(
+            "SELECT contributor_person_id, amount FROM cf.transaction WHERE id = %s",
+            (STRAY_TRANSACTION_ID,),
+        )
+        assert cur.fetchall() == [(spine_person_id, Decimal("250.00"))]
+        # Both shadows linked the SAME campaign mailing address (as a real
+        # chamber-switcher's cn rows do). Hand-calculated: the first link moves
+        # to the spine person; the second is an overlap-duplicate the
+        # WITHOUT-OVERLAPS-aware branch drops instead of raising on
+        # entity_address's unique constraint — leaving exactly ONE link.
+        cur.execute(
+            """
+            SELECT ea.entity_id, count(*)
+            FROM core.entity_address AS ea
+            JOIN core.address AS a ON a.id = ea.address_id
+            WHERE ea.entity_type = 'person'
+              AND a.raw_address = '100 Test Spine Ave, Seattle WA 98101'
+            GROUP BY ea.entity_id
+            """
+        )
+        assert cur.fetchall() == [(spine_person_id, 1)]
+
+    # Hand-counted across the whole fixture: 2 House shadows + 1 Senate +
+    # 1 delegate = 4 absorbed rows (President has no cn row, VP has no FEC ids).
+    assert first_result.absorbed_persons == 4
+
+    # Idempotent: a second refresh finds no shadow left to absorb and changes nothing.
+    second_result = load_federal_spine(spine_conn, adapted, data_source_id=data_source_id)
+    spine_conn.commit()
+    assert second_result.absorbed_persons == 0
+    assert _person_ids_carrying_fec_id(spine_conn, HOUSE_FEC_B) == {spine_person_id}
+    assert _person_entity_source_rows(spine_conn, (spine_person_id,)) == spine_provenance
+
+
+def test_spine_refresh_never_absorbs_a_person_with_an_independent_identity_anchor(
+    spine_conn: psycopg.Connection,
+    tmp_path: Path,
+) -> None:
+    """A person sharing an FEC id but carrying its OWN bioguide_id is never absorbed.
+
+    The absorb's safety core is its eligibility predicate: only rows whose
+    identifiers are exclusively FEC-derived (fec_candidate_id/fec_candidate_ids)
+    are shadows. Two bioguide-anchored persons sharing an FEC id would be data
+    corruption upstream; silently merging them would destroy a real person row,
+    so the refresh must leave both rows and keep going.
+    """
+    candidates_ds_id = _ensure_candidates_data_source(spine_conn)
+    load_candidates(
+        spine_conn,
+        _write_cn_fixture(tmp_path),
+        cycle=2026,
+        data_source_id=candidates_ds_id,
+    )
+    # Give the HOUSE_FEC_B shadow an independent identity anchor. OTHER_BIO is in
+    # ALL_BIOS so the fixture cleanup still removes this row on exit.
+    anchored_person_id = find_person_by_identifier(spine_conn, "fec_candidate_id", HOUSE_FEC_B)
+    assert anchored_person_id is not None
+    with spine_conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE core.person
+            SET identifiers = identifiers || jsonb_build_object('bioguide_id', %s::text)
+            WHERE id = %s
+            """,
+            (OTHER_BIO, anchored_person_id),
+        )
+    spine_conn.commit()
+
+    data_source_id = ensure_federal_spine_data_source(spine_conn)
+    result = load_federal_spine(spine_conn, _build_adapted_legislators(), data_source_id=data_source_id)
+    spine_conn.commit()
+
+    # The anchored row survives with its identity intact...
+    with spine_conn.cursor() as cur:
+        cur.execute(
+            "SELECT identifiers ->> 'bioguide_id' FROM core.person WHERE id = %s",
+            (anchored_person_id,),
+        )
+        row = cur.fetchone()
+    assert row is not None and row[0] == OTHER_BIO
+    # ...and only the three true shadows (HOUSE_FEC_A, SENATE_FEC, DELEGATE_FEC)
+    # were absorbed.
+    assert result.absorbed_persons == 3
+    # The serving-side money repair is deliberately unaffected by the refusal:
+    # cf.candidate still converges onto the spine person by FEC id.
+    spine_person_id = find_person_by_identifier(spine_conn, "bioguide_id", HOUSE_BIO)
+    assert _candidate_person_ids(spine_conn, (HOUSE_FEC_B,)) == {HOUSE_FEC_B: spine_person_id}
+
+
+def test_spine_refresh_never_absorbs_a_shadow_that_acquired_an_officeholding(
+    spine_conn: psycopg.Connection,
+    tmp_path: Path,
+) -> None:
+    """A shadow with an officeholding row is refused, not merged.
+
+    civic.officeholding carries uq_officeholding_canonical_key
+    (person_id, office_id, valid_period WITHOUT OVERLAPS): blindly repointing an
+    officeholding onto a spine person that already holds the office for an
+    overlapping period would raise mid-refresh and abort the whole spine load.
+    The narrow absorb refuses instead — conflict-aware officeholding merging is
+    the general case's problem, and refusal preserves the status quo the
+    serving-side repairs already keep correct.
+    """
+    candidates_ds_id = _ensure_candidates_data_source(spine_conn)
+    load_candidates(
+        spine_conn,
+        _write_cn_fixture(tmp_path),
+        cycle=2026,
+        data_source_id=candidates_ds_id,
+    )
+    shadow_person_id = find_person_by_identifier(spine_conn, "fec_candidate_id", HOUSE_FEC_B)
+    assert shadow_person_id is not None
+    with spine_conn.cursor() as cur:
+        # Hand-seeded corruption shape: an FEC-only person that somehow acquired
+        # an officeholding. The overlapping open-ended Senate period is exactly
+        # what would collide with a spine-held officeholding on repoint.
+        cur.execute(
+            """
+            INSERT INTO civic.officeholding (person_id, office_id, holder_status)
+            VALUES (%s, %s, 'elected')
+            """,
+            (shadow_person_id, OFFICE_US_SENATE),
+        )
+    spine_conn.commit()
+
+    data_source_id = ensure_federal_spine_data_source(spine_conn)
+    result = load_federal_spine(spine_conn, _build_adapted_legislators(), data_source_id=data_source_id)
+    spine_conn.commit()
+
+    # The refused shadow survives, officeholding intact.
+    with spine_conn.cursor() as cur:
+        cur.execute(
+            "SELECT count(*) FROM civic.officeholding WHERE person_id = %s AND office_id = %s",
+            (shadow_person_id, OFFICE_US_SENATE),
+        )
+        assert cur.fetchone()[0] == 1
+        cur.execute("SELECT count(*) FROM core.person WHERE id = %s", (shadow_person_id,))
+        assert cur.fetchone()[0] == 1
+    # The other three shadows were still absorbed; the refusal is per-row.
+    assert result.absorbed_persons == 3
 
 
 def test_relink_policy_refresh_reapplies_source_linked_exception(

@@ -215,16 +215,20 @@ describe("smoke fixtures single-source aliases", () => {
         {
           ok: true,
           status: 200,
-          body: {
-            results: [
-              {
-                id: "live-committee-id",
-                name: "MIKE JOHNSON FOR LOUISIANA",
-                slug: "mike-johnson-for-louisiana",
-                slug_is_unique: true
-              }
-            ]
-          }
+          // /v1/search returns a BARE ARRAY (api/routes/search.py declares
+          // response_model=list[SearchResult]). This mock previously wrapped the
+          // rows in `{results: [...]}` — the exact wrong shape the discovery
+          // helper's old `.results` read expected — so the test green-lit a
+          // parser that could never find a committee against the real API.
+          // The mock must mirror the wire shape or this SSOT test guards nothing.
+          body: [
+            {
+              id: "live-committee-id",
+              name: "MIKE JOHNSON FOR LOUISIANA",
+              slug: "mike-johnson-for-louisiana",
+              slug_is_unique: true
+            }
+          ]
         }
       ],
       [

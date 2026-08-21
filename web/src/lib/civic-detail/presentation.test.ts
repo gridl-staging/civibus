@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { vi } from "vitest";
 import { buildTrustSection } from "$lib/detail-trust/presentation";
-import { OFFICE_LEVELS, type ContestDetailResponse } from "./contract";
+import {
+  OFFICE_LEVELS,
+  type ContestCandidateMoneyRow,
+  type ContestDetailResponse
+} from "./contract";
 import {
   buildCandidacyDetailMetadataFromDetail,
   buildCandidacyDetailPresentation,
@@ -1526,5 +1530,203 @@ describe("officeholding detail presentation", () => {
       title: "Jane Officeholder | Officeholding | Civibus",
       description: "Officeholding profile for Jane Officeholder."
     });
+  });
+});
+
+describe("race money bars", () => {
+  // Minimal contest record: the bars are built entirely from the money
+  // response, so the contest itself only needs to exist.
+  const BAR_CONTEST: ContestDetailResponse = {
+    id: CONTEST_ID,
+    name: "Governor 2026 General Election",
+    election_date: "2026-11-03",
+    election_type: "general",
+    office_id: OFFICE_ID,
+    electoral_division_id: null,
+    number_of_seats: 1,
+    filing_deadline: null,
+    is_partisan: true,
+    candidate_list_incomplete: false,
+    candidacies: [],
+    sources: []
+  };
+
+  type MoneyRowOverrides = Partial<ContestCandidateMoneyRow> & {
+    person_name: string;
+    total_raised: string | null;
+  };
+
+  let rowCounter = 0;
+
+  // One factory, three coverage archetypes: populated (a figure), loaded_zero
+  // ("0.00" — a measurement), and not_loaded (null — no measurement at all).
+  // These are the same shapes the scoreboard fixtures above model literally.
+  function buildMoneyRow(overrides: MoneyRowOverrides): ContestCandidateMoneyRow {
+    rowCounter += 1;
+    const suffix = String(rowCounter).padStart(4, "0");
+    const measured = overrides.total_raised !== null;
+    return {
+      candidacy_id: `99999999-9999-4999-8999-99999999${suffix}`,
+      person_id: `88888888-8888-4888-8888-88888888${suffix}`,
+      party: "DEM",
+      status: "filed",
+      incumbent_challenge: "C",
+      fec_candidate_id: measured ? `H0NC01${suffix}` : null,
+      candidate_id: measured ? `22222222-2222-4222-8222-22222222${suffix}` : null,
+      candidate_name: measured ? overrides.person_name.toUpperCase() : null,
+      candidate_slug: null,
+      candidate_slug_is_unique: false,
+      candidate_identity_is_safe: false,
+      has_fec_money: measured,
+      total_spent: null,
+      net: null,
+      cash_on_hand: null,
+      summary_source: measured ? "fec_weball" : null,
+      fundraising_coverage: null,
+      ie_support_total: null,
+      ie_oppose_total: null,
+      ie_support_count: null,
+      ie_oppose_count: null,
+      ie_coverage: null,
+      ...overrides
+    };
+  }
+
+  function buildBarsPresentation(rows: ContestCandidateMoneyRow[]) {
+    const knownTotals = rows
+      .map((row) => (row.total_raised === null ? null : Number(row.total_raised)))
+      .filter((value): value is number => value !== null);
+    const totalRaised =
+      knownTotals.length === 0 ? null : knownTotals.reduce((sum, value) => sum + value, 0).toFixed(2);
+    return buildContestDetailPresentation(BAR_CONTEST, {
+      candidateMoney: {
+        contest_id: CONTEST_ID,
+        selected_cycle: 2026,
+        candidate_count: rows.length,
+        total_raised: totalRaised,
+        total_ie_support: null,
+        total_ie_oppose: null,
+        has_unknown_candidate_money: rows.some((row) => row.total_raised === null),
+        has_unknown_candidate_ie: true,
+        rows
+      }
+    });
+  }
+
+  it("ranks measured candidates by total raised with hand-calculated widths", () => {
+    // Deliberately scrambled input order: the builder must rank, not trust
+    // whatever order the wire happened to carry.
+    const presentation = buildBarsPresentation([
+      buildMoneyRow({ person_name: "Carol Chase", total_raised: "2000.00" }),
+      buildMoneyRow({
+        person_name: "Alice Ahead",
+        total_raised: "8000.00",
+        candidate_slug: "alice-ahead",
+        candidate_slug_is_unique: true,
+        candidate_identity_is_safe: true
+      }),
+      buildMoneyRow({ person_name: "Bob Behind", total_raised: "4000.00" })
+    ]);
+
+    const bars = presentation.raceMoneyBars;
+    expect(bars).not.toBeNull();
+    expect(bars?.rankedRows.map((row) => row.personName)).toEqual([
+      "Alice Ahead",
+      "Bob Behind",
+      "Carol Chase"
+    ]);
+    // Hand-calculated: 8000/8000, 4000/8000, 2000/8000.
+    expect(bars?.rankedRows.map((row) => row.barWidthPct)).toEqual([100, 50, 25]);
+    expect(bars?.rankedRows.map((row) => row.amountLabel)).toEqual([
+      "$8,000.00",
+      "$4,000.00",
+      "$2,000.00"
+    ]);
+    // Same slug-vs-UUID and cycle href rules as the scoreboard table.
+    expect(bars?.rankedRows[0].href).toBe("/candidate/alice-ahead?cycle=2026");
+    expect(bars?.notLoadedRows).toEqual([]);
+    expect(bars?.notLoadedLabel).toBeNull();
+  });
+
+  it("keeps not-loaded money out of the ranking and below a measured zero", () => {
+    // THE TRAP, both directions. Unknown must not rank as cheap, and a
+    // measured $0.00 must not be hidden as if it were unknown.
+    const presentation = buildBarsPresentation([
+      buildMoneyRow({ person_name: "Dave Dark", total_raised: null }),
+      buildMoneyRow({
+        person_name: "Eve Empty",
+        total_raised: "0.00",
+        fundraising_coverage: {
+          activity_state: "loaded_zero",
+          completeness: "complete",
+          basis: "authoritative_load_evidence"
+        }
+      }),
+      buildMoneyRow({ person_name: "Alice Ahead", total_raised: "8000.00" })
+    ]);
+
+    const bars = presentation.raceMoneyBars;
+    // Direction 1: if null were coerced to 0, Dave would appear in the ranking
+    // beside Eve. He must not: nobody measured his money.
+    expect(bars?.rankedRows.map((row) => row.personName)).toEqual(["Alice Ahead", "Eve Empty"]);
+    expect(bars?.notLoadedRows.map((row) => row.personName)).toEqual(["Dave Dark"]);
+    // The group is words, never a figure.
+    expect(bars?.notLoadedLabel).toContain("not loaded");
+    expect(bars?.notLoadedLabel).not.toContain("$");
+    // Direction 2: Eve's zero is a measurement and keeps its row, its zero-width
+    // bar, and its exact figure.
+    expect(bars?.rankedRows[1]).toMatchObject({
+      personName: "Eve Empty",
+      barWidthPct: 0,
+      amountLabel: "$0.00"
+    });
+  });
+
+  it("orders the not-loaded group by name so the tail is stable", () => {
+    const presentation = buildBarsPresentation([
+      buildMoneyRow({ person_name: "Zed Zero-Data", total_raised: null }),
+      buildMoneyRow({ person_name: "Ann Absent", total_raised: null }),
+      buildMoneyRow({ person_name: "Mia Missing", total_raised: null }),
+      buildMoneyRow({ person_name: "Alice Ahead", total_raised: "100.00" })
+    ]);
+
+    expect(presentation.raceMoneyBars?.notLoadedRows.map((row) => row.personName)).toEqual([
+      "Ann Absent",
+      "Mia Missing",
+      "Zed Zero-Data"
+    ]);
+  });
+
+  it("builds no bar list when no candidate has measured fundraising", () => {
+    // Nothing measured means no scale to draw. The answer-first summary line
+    // already states the gap in words; an empty ruler would imply a measurement.
+    const presentation = buildBarsPresentation([
+      buildMoneyRow({ person_name: "Dave Dark", total_raised: null }),
+      buildMoneyRow({ person_name: "Uma Unknown", total_raised: null })
+    ]);
+    expect(presentation.raceMoneyBars).toBeNull();
+
+    const withoutMoney = buildContestDetailPresentation(BAR_CONTEST, { candidateMoney: null });
+    expect(withoutMoney.raceMoneyBars).toBeNull();
+  });
+
+  it("draws zero-width bars when every measured candidate raised nothing", () => {
+    // An all-zero race divides by a zero maximum; the guard must yield 0%,
+    // not NaN%, and the measured figures still render.
+    const presentation = buildBarsPresentation([
+      buildMoneyRow({ person_name: "Eve Empty", total_raised: "0.00" }),
+      buildMoneyRow({ person_name: "Frank Flat", total_raised: "0.00" })
+    ]);
+
+    // Equal metrics tie-break by name.
+    expect(presentation.raceMoneyBars?.rankedRows.map((row) => row.personName)).toEqual([
+      "Eve Empty",
+      "Frank Flat"
+    ]);
+    expect(presentation.raceMoneyBars?.rankedRows.map((row) => row.barWidthPct)).toEqual([0, 0]);
+    expect(presentation.raceMoneyBars?.rankedRows.map((row) => row.amountLabel)).toEqual([
+      "$0.00",
+      "$0.00"
+    ]);
   });
 });

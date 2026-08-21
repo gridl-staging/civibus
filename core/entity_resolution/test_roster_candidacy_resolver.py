@@ -54,7 +54,7 @@ def _seed_pair(
     candidacy_person_name: str,
     roster_source_record_id: UUID,
     candidacy_source_record_id: UUID,
-    shared_voter_reg_id: str | None = None,
+    shared_bioguide_id: str | None = None,
 ) -> tuple[UUID, UUID, UUID]:
     office_id = upsert_office(
         conn,
@@ -81,7 +81,7 @@ def _seed_pair(
             canonical_name=roster_person_name,
             first_name=roster_person_name.split(" ", 1)[0],
             last_name=roster_person_name.split(" ", 1)[1],
-            identifiers={"voter_reg_id": shared_voter_reg_id} if shared_voter_reg_id is not None else {},
+            identifiers={"bioguide_id": shared_bioguide_id} if shared_bioguide_id is not None else {},
         ),
     )
     candidacy_person_id = insert_person(
@@ -90,7 +90,7 @@ def _seed_pair(
             canonical_name=candidacy_person_name,
             first_name=candidacy_person_name.split(" ", 1)[0],
             last_name=candidacy_person_name.split(" ", 1)[1],
-            identifiers={"voter_reg_id": shared_voter_reg_id} if shared_voter_reg_id is not None else {},
+            identifiers={"bioguide_id": shared_bioguide_id} if shared_bioguide_id is not None else {},
         ),
     )
 
@@ -174,7 +174,7 @@ def test_resolver_links_known_match_and_preserves_known_nonmatch(
         candidacy_person_name="Alicia Match",
         roster_source_record_id=roster_source_record.id,
         candidacy_source_record_id=candidacy_source_record.id,
-        shared_voter_reg_id="VR-MATCH-001",
+        shared_bioguide_id="BG-MATCH-001",
     )
     nonmatch_office_id, nonmatch_roster_person_id, nonmatch_candidacy_person_id = _seed_pair(
         db_conn,
@@ -223,7 +223,7 @@ def test_resolver_second_run_is_idempotent_with_stable_summary(
         candidacy_person_name="Dawn Match",
         roster_source_record_id=roster_source_record.id,
         candidacy_source_record_id=candidacy_source_record.id,
-        shared_voter_reg_id="VR-MATCH-002",
+        shared_bioguide_id="BG-MATCH-002",
     )
     nonmatch_office_id, _, _ = _seed_pair(
         db_conn,
@@ -302,7 +302,7 @@ def test_resolver_ignores_stale_officeholdings_for_same_office(
             canonical_name="Harold Stale",
             first_name="Harold",
             last_name="Stale",
-            identifiers={"voter_reg_id": "VR-STALE-HIST"},
+            identifiers={"bioguide_id": "BG-STALE-HIST"},
         ),
     )
     current_roster_person_id = insert_person(
@@ -311,7 +311,7 @@ def test_resolver_ignores_stale_officeholdings_for_same_office(
             canonical_name="Carla Current",
             first_name="Carla",
             last_name="Current",
-            identifiers={"voter_reg_id": "VR-CURRENT-001"},
+            identifiers={"bioguide_id": "BG-CURRENT-001"},
         ),
     )
     candidacy_person_id = insert_person(
@@ -320,7 +320,7 @@ def test_resolver_ignores_stale_officeholdings_for_same_office(
             canonical_name="Carla Candidate",
             first_name="Carla",
             last_name="Candidate",
-            identifiers={"voter_reg_id": "VR-CURRENT-001"},
+            identifiers={"bioguide_id": "BG-CURRENT-001"},
         ),
     )
 
@@ -409,7 +409,7 @@ def test_resolver_skips_ambiguous_multi_match_candidacy(
             canonical_name="Amber Ambiguous",
             first_name="Amber",
             last_name="Ambiguous",
-            identifiers={"voter_reg_id": "VR-AMB-001"},
+            identifiers={"bioguide_id": "BG-AMB-001"},
         ),
     )
     roster_person_b = insert_person(
@@ -418,7 +418,7 @@ def test_resolver_skips_ambiguous_multi_match_candidacy(
             canonical_name="Avery Ambiguous",
             first_name="Avery",
             last_name="Ambiguous",
-            identifiers={"voter_reg_id": "VR-AMB-001"},
+            identifiers={"bioguide_id": "BG-AMB-001"},
         ),
     )
     candidacy_person_id = insert_person(
@@ -427,7 +427,7 @@ def test_resolver_skips_ambiguous_multi_match_candidacy(
             canonical_name="Alex Ambiguous Candidate",
             first_name="Alex",
             last_name="Candidate",
-            identifiers={"voter_reg_id": "VR-AMB-001"},
+            identifiers={"bioguide_id": "BG-AMB-001"},
         ),
     )
 

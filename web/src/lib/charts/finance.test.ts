@@ -4,6 +4,8 @@ import {
   FEC_SIZE_BUCKET_LABELS,
   FINANCE_CHART_COLORS,
   TOOLTIP_VALUE_FORMATTERS,
+  X_TICK_SPACING_PX,
+  bandTickLabelBudgetChars,
   buildCashOnHandSeries,
   calculateOutsideSpendingDomain,
   formatCurrency,
@@ -14,6 +16,7 @@ import {
   getReadableTickCeiling,
   orderByUtcMonthKey,
   summarizeShare,
+  truncateTickLabel,
   zeroFillCoveredMonths
 } from "./finance";
 import type {
@@ -309,6 +312,54 @@ describe("charts/finance helpers", () => {
         { id: "oppose", label: "Oppose spending", signedAmount: -250 }
       ]
     });
+  });
+
+  it("budgets band tick label characters from measured plot width, hand-calculated", () => {
+    // civibus-tfz. The receipt-composition chart at a 390px viewport: the
+    // chart body measures 338px, minus the 56+24px axis gutters leaves a
+    // 258px band area over 2 bands. Both bands render a tick
+    // (floor(258 / 80) = 3 >= 2), so each label owns 258 / 2 = 129px, and at
+    // 6px per character that is a 21-character budget.
+    expect(bandTickLabelBudgetChars(258, 2)).toBe(21);
+
+    // Desktop, same chart: 947px body - 80px gutters = 867px over 2 bands ->
+    // 433.5px per label -> 72 characters, i.e. no real-world label truncates.
+    expect(bandTickLabelBudgetChars(867, 2)).toBe(72);
+
+    // 54 monthly bands at desktop: tickSpacing caps rendered ticks at
+    // floor(867 / 80) = 10, so each rendered label owns 86.7px -> 14 chars,
+    // comfortably above the 7-character "2026-06" month keys.
+    expect(bandTickLabelBudgetChars(867, 54)).toBe(14);
+
+    // The budget never collapses below the readable floor of 8 characters,
+    // even in an absurdly narrow plot.
+    expect(bandTickLabelBudgetChars(40, 5)).toBe(8);
+
+    // Degenerate inputs mean "no plot to budget": no truncation pressure.
+    expect(bandTickLabelBudgetChars(0, 2)).toBe(Number.POSITIVE_INFINITY);
+    expect(bandTickLabelBudgetChars(258, 0)).toBe(Number.POSITIVE_INFINITY);
+
+    // The budget arithmetic must stay derived from the same tick spacing the
+    // adapter hands layerchart, or the two subsampling models drift apart.
+    expect(X_TICK_SPACING_PX).toBe(80);
+  });
+
+  it("truncates tick labels to the budget with a single ellipsis", () => {
+    expect(truncateTickLabel("Gross individual contributions", 21)).toBe(
+      "Gross individual con…"
+    );
+    expect(truncateTickLabel("PAC/other committee contributions", 21)).toBe(
+      "PAC/other committee…"
+    );
+    // A label at or under budget is untouched — desktop must render full labels.
+    expect(truncateTickLabel("In district", 21)).toBe("In district");
+    expect(truncateTickLabel("2026-06", 14)).toBe("2026-06");
+    // Exactly at budget: untouched.
+    expect(truncateTickLabel("abcdefgh", 8)).toBe("abcdefgh");
+    // An infinite budget (unmeasured plot) never truncates.
+    expect(truncateTickLabel("Gross individual contributions", Number.POSITIVE_INFINITY)).toBe(
+      "Gross individual contributions"
+    );
   });
 
   it("keeps support and oppose colors above WCAG contrast thresholds", () => {

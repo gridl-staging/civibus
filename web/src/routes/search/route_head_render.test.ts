@@ -60,6 +60,8 @@ describe("search route head rendering", () => {
         data: {
           query: "jane",
           entityType: "",
+          offset: 0,
+          hasNext: false,
           results: []
         }
       }
@@ -90,6 +92,8 @@ describe("search route head rendering", () => {
         data: {
           query: "",
           entityType: "",
+          offset: 0,
+          hasNext: false,
           results: []
         },
         form: {
@@ -113,6 +117,8 @@ describe("search route head rendering", () => {
         data: {
           query: "",
           entityType: "",
+          offset: 0,
+          hasNext: false,
           results: []
         },
         form: {
@@ -133,6 +139,8 @@ describe("search route head rendering", () => {
         data: {
           query: "civ",
           entityType: "org",
+          offset: 0,
+          hasNext: false,
           results: []
         }
       }
@@ -149,6 +157,8 @@ describe("search route head rendering", () => {
         data: {
           query: "c",
           entityType: "candidate",
+          offset: 0,
+          hasNext: false,
           results: [],
           validationMessage: "query.q: String should have at least 2 characters"
         } as any,
@@ -172,6 +182,8 @@ describe("search route head rendering", () => {
         data: {
           query: "jane",
           entityType: "",
+          offset: 0,
+          hasNext: false,
           results: []
         },
         isSubmitting: true
@@ -194,6 +206,8 @@ describe("search route head rendering", () => {
         data: {
           query: "jane",
           entityType: "",
+          offset: 0,
+          hasNext: false,
           results: []
         },
         isSubmitting: true
@@ -211,6 +225,8 @@ describe("search route head rendering", () => {
         data: {
           query: "jane",
           entityType: "",
+          offset: 0,
+          hasNext: false,
           results: [
             {
               entity_type: "person",
@@ -233,6 +249,8 @@ describe("search route head rendering", () => {
         data: {
           query: "jane",
           entityType: "",
+          offset: 0,
+          hasNext: false,
           results: [
             {
               entity_type: "person",
@@ -249,6 +267,57 @@ describe("search route head rendering", () => {
     expect(rendered.body).not.toContain("skeleton-panel");
   });
 
+  it("renders pagination inside the results region when the result set spans pages", () => {
+    currentPageUrl = new URL("https://preview.internal:5173/search?q=civ&offset=20");
+    const rendered = render(SearchPage, {
+      props: {
+        data: {
+          query: "civ",
+          entityType: "",
+          offset: 20,
+          hasNext: true,
+          results: [
+            {
+              entity_type: "org",
+              entity_id: "22222222-2222-4222-8222-222222222222",
+              name: "Paged Org"
+            }
+          ]
+        }
+      }
+    });
+
+    const resultsRegion = getSearchResultsRegionMarkup(rendered.body);
+    expect(resultsRegion).toContain('aria-label="Search results pagination"');
+    expect(resultsRegion).toContain("Showing 21–21");
+    // Previous returns to canonical page one (no offset); Next steps one page.
+    expect(resultsRegion).toContain('href="/search?q=civ"');
+    expect(resultsRegion).toContain('href="/search?q=civ&amp;offset=40"');
+  });
+
+  it("renders no pagination when everything fits one page", () => {
+    currentPageUrl = new URL("https://preview.internal:5173/search?q=jane");
+    const rendered = render(SearchPage, {
+      props: {
+        data: {
+          query: "jane",
+          entityType: "",
+          offset: 0,
+          hasNext: false,
+          results: [
+            {
+              entity_type: "person",
+              entity_id: "11111111-1111-4111-8111-111111111111",
+              name: "Jane Smith"
+            }
+          ]
+        }
+      }
+    });
+
+    expect(rendered.body).not.toContain('aria-label="Search results pagination"');
+  });
+
   // --- Five-state SSR regression matrix (Stage 3) ---
 
   describe("five-state SSR matrix", () => {
@@ -258,6 +327,8 @@ describe("search route head rendering", () => {
           data: {
             query: "",
             entityType: "",
+            offset: 0,
+            hasNext: false,
             results: []
           }
         }
@@ -282,6 +353,8 @@ describe("search route head rendering", () => {
           data: {
             query: "jane",
             entityType: "",
+            offset: 0,
+            hasNext: false,
             results: [
               {
                 entity_type: "person",
@@ -316,6 +389,8 @@ describe("search route head rendering", () => {
           data: {
             query: "xyznonexistent",
             entityType: "person",
+            offset: 0,
+            hasNext: false,
             results: []
           }
         }
@@ -336,6 +411,8 @@ describe("search route head rendering", () => {
           data: {
             query: "civ",
             entityType: "org",
+            offset: 0,
+            hasNext: false,
             results: [
               {
                 entity_type: "org",
@@ -371,6 +448,8 @@ describe("search route head rendering", () => {
           data: {
             query: "jane",
             entityType: "person",
+            offset: 0,
+            hasNext: false,
             results: [
               {
                 entity_type: "person",

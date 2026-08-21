@@ -28,6 +28,13 @@ Convergence has a second half, added 2026-08-19 for civibus-5lm: the same FEC
 candidate ids also repoint ``civic.candidacy.person_id`` via
 ``_converge_spine_candidacies``. Repairing only the money side left the race
 page linking its incumbent to a person row with no money on it.
+
+And a third, added 2026-08-20 to finish civibus-5lm: after everything the
+FEC-only shadow person row pointed at has been repointed, the row itself is
+absorbed into the spine person by ``_absorb_fec_shadow_persons`` — provenance
+links moved, observed FEC name forms kept as variants, duplicate row deleted —
+so /search stops returning two persons for one official and the shadow's empty
+/person/ page stops existing.
 """
 
 from __future__ import annotations
@@ -84,17 +91,20 @@ OFFICE_BY_EXECUTIVE_TYPE: dict[str, UUID] = {
 
 @dataclass(frozen=True, slots=True)
 class SpineConvergence:
-    """Both halves of one person's identity convergence.
+    """All three parts of one person's identity convergence.
 
     ``candidates`` counts ``cf.candidate`` rows repointed at the spine person
     (the money side); ``candidacies`` counts ``civic.candidacy`` rows repointed
-    or merged (the civic side). They are returned together, rather than as two
-    independent calls, because repairing only one of them is exactly the defect
-    ``_converge_spine_candidacies`` exists to close — see its docstring.
+    or merged (the civic side); ``absorbed_persons`` counts FEC-only shadow
+    ``core.person`` rows merged INTO the spine person and deleted (the identity
+    side, civibus-5lm). They are returned together, rather than as independent
+    calls, because repairing only one of them is exactly the class of defect
+    this convergence path exists to close — see the helper docstrings.
     """
 
     candidates: int = 0
     candidacies: int = 0
+    absorbed_persons: int = 0
 
 
 @dataclass(slots=True)
@@ -104,6 +114,7 @@ class _BucketResult:
     errors: int = 0
     converged_candidates: int = 0
     converged_candidacies: int = 0
+    absorbed_persons: int = 0
 
 
 @dataclass(slots=True)
@@ -143,6 +154,10 @@ class SpineLoadResult:
     @property
     def converged_candidacies(self) -> int:
         return sum(bucket.converged_candidacies for bucket in self._buckets)
+
+    @property
+    def absorbed_persons(self) -> int:
+        return sum(bucket.absorbed_persons for bucket in self._buckets)
 
     @property
     def _buckets(self) -> tuple[_BucketResult, ...]:
@@ -253,6 +268,344 @@ def _converge_spine_candidacies(
     )
 
 
+# Identifier keys an FEC-lane shadow person may carry. The cn/masters loaders
+# mint persons with exactly {"fec_candidate_id": ...}; the spine adds
+# 'fec_candidate_ids' when it merges. A person carrying ANY other key
+# (bioguide_id, govtrack_id, wikidata_id, a future voter id, ...) has an
+# independent identity anchor and is NEVER absorbed by this narrow path —
+# collapsing two independently-anchored rows is entity resolution's job.
+_FEC_SHADOW_IDENTIFIER_KEYS = frozenset({"fec_candidate_id", "fec_candidate_ids"})
+
+
+def _shadow_fec_id_set(identifiers: dict[str, Any]) -> set[str]:
+    """Every FEC candidate id a person row claims, scalar and array, trimmed."""
+    fec_ids: set[str] = set()
+    scalar = str(identifiers.get("fec_candidate_id") or "").strip()
+    if scalar:
+        fec_ids.add(scalar)
+    for value in identifiers.get("fec_candidate_ids") or []:
+        trimmed = str(value).strip()
+        if trimmed:
+            fec_ids.add(trimmed)
+    return fec_ids
+
+
+def _shadow_person_blockers(conn: psycopg.Connection, shadow_person_id: UUID) -> list[str]:
+    """Name every condition that makes this row unsafe for the narrow absorb.
+
+    Each blocker is a table the narrow path deliberately does not know how to
+    merge without conflict machinery of its own:
+
+    - ``officeholding``: uq_officeholding_canonical_key uses WITHOUT OVERLAPS;
+      a blind repoint onto a spine person already holding the office for an
+      overlapping period raises mid-refresh and aborts the whole spine load.
+    - ``portrait``: idx_person_portrait_active_per_person allows one active
+      portrait per person; moving a second one across would raise.
+    - ``field_provenance``: idx_field_prov_current allows one current value per
+      (person, field); merging needs a demote-the-loser policy.
+    - ``contact_point`` and the ER bookkeeping tables (er_cluster_id,
+      cluster_member, entity_cluster, match_decision, donor_cluster_person):
+      each records identity facts about the row that a delete would orphan.
+
+    A true FEC-lane shadow has NONE of these — nothing in the FEC candidate
+    lane writes them — so in practice this returns []. When it does not, the
+    absorb refuses that row and the refresh keeps going: two person rows remain
+    (the pre-existing state, which the serving-side convergence above already
+    keeps correct), and the general merge (tracked on civibus-5lm's follow-up)
+    owns the conflict-aware handling.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT
+                EXISTS (SELECT 1 FROM civic.officeholding
+                        WHERE person_id = %(shadow)s) AS officeholding,
+                EXISTS (SELECT 1 FROM core.person_portrait
+                        WHERE person_id = %(shadow)s) AS portrait,
+                EXISTS (SELECT 1 FROM core.field_provenance
+                        WHERE entity_type = 'person' AND entity_id = %(shadow)s) AS field_provenance,
+                EXISTS (SELECT 1 FROM core.contact_point
+                        WHERE owner_type = 'person' AND owner_id = %(shadow)s) AS contact_point,
+                EXISTS (SELECT 1 FROM core.person
+                        WHERE id = %(shadow)s AND er_cluster_id IS NOT NULL) AS er_cluster,
+                EXISTS (SELECT 1 FROM core.cluster_member
+                        WHERE entity_type = 'person' AND entity_id = %(shadow)s) AS cluster_member,
+                EXISTS (SELECT 1 FROM core.entity_cluster
+                        WHERE entity_type = 'person' AND canonical_entity_id = %(shadow)s) AS entity_cluster,
+                EXISTS (SELECT 1 FROM core.match_decision
+                        WHERE entity_type = 'person'
+                          AND (entity_id_a = %(shadow)s OR entity_id_b = %(shadow)s)) AS match_decision,
+                EXISTS (SELECT 1 FROM core.donor_cluster_person
+                        WHERE person_id = %(shadow)s) AS donor_cluster_person
+            """,
+            {"shadow": shadow_person_id},
+        )
+        row = cur.fetchone()
+        blocker_names = (
+            "officeholding",
+            "portrait",
+            "field_provenance",
+            "contact_point",
+            "er_cluster",
+            "cluster_member",
+            "entity_cluster",
+            "match_decision",
+            "donor_cluster_person",
+        )
+        return [name for name, present in zip(blocker_names, row) if present]
+
+
+def _absorb_one_shadow_person(
+    conn: psycopg.Connection,
+    *,
+    canonical_person_id: UUID,
+    shadow_person_id: UUID,
+    shadow_canonical_name: str,
+    shadow_name_variants: list[str],
+) -> None:
+    """Move every reference off the shadow row onto the spine person, then delete it.
+
+    The repoint inventory below is the complete set of tables referencing
+    ``core.person`` (FKs: cf.candidate.person_id, cf.transaction.contributor_person_id,
+    civic.candidacy.person_id, civic.officeholding.person_id,
+    core.person_portrait.person_id, core.donor_cluster_person.person_id,
+    prop.ownership.owner_person_id; polymorphic: core.entity_source,
+    core.entity_address, core.field_provenance, core.contact_point, and the ER
+    bookkeeping tables). Officeholding, portrait, field_provenance,
+    contact_point and ER bookkeeping are eligibility blockers handled by
+    ``_shadow_person_blockers`` — by the time this runs they are proven empty —
+    so what remains is repointed here. The final DELETE doubles as the safety
+    net: if this repo ever adds a person FK this function does not know about,
+    the delete fails with a ForeignKeyViolation and aborts the refresh loudly
+    instead of silently stranding rows.
+    """
+    # Candidacies go through repoint_candidacy_person, the existing
+    # conflict-safe owner: uq_candidacy_canonical_key (person_id, contest_id)
+    # means a plain UPDATE raises whenever the spine person already holds a
+    # candidacy in the same contest; the helper merges field-wise and copies
+    # core.entity_source provenance before dropping the duplicate row.
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT id FROM civic.candidacy WHERE person_id = %s ORDER BY id",
+            (shadow_person_id,),
+        )
+        shadow_candidacy_ids = [row[0] for row in cur.fetchall()]
+    for candidacy_id in shadow_candidacy_ids:
+        repoint_candidacy_person(
+            conn,
+            candidacy_id=candidacy_id,
+            expected_person_id=shadow_person_id,
+            target_person_id=canonical_person_id,
+        )
+
+    with conn.cursor() as cur:
+        # Money rows: no unique constraint involves person_id, so plain UPDATEs
+        # are conflict-free. The convergence UPDATE above already moved the rows
+        # matching this person's FEC ids; these sweeps make the delete safe even
+        # for rows attached to the shadow under some other id.
+        cur.execute(
+            "UPDATE cf.candidate SET person_id = %s WHERE person_id = %s",
+            (canonical_person_id, shadow_person_id),
+        )
+        cur.execute(
+            "UPDATE cf.transaction SET contributor_person_id = %s WHERE contributor_person_id = %s",
+            (canonical_person_id, shadow_person_id),
+        )
+        # Parked property domain: kept in the inventory so un-parking never
+        # discovers rows stranded on a deleted person.
+        cur.execute(
+            "UPDATE prop.ownership SET owner_person_id = %s WHERE owner_person_id = %s",
+            (canonical_person_id, shadow_person_id),
+        )
+
+        # Address links carry UNIQUE (entity_type, entity_id, address_id,
+        # address_role, valid_period WITHOUT OVERLAPS): move every link that
+        # does not collide with one the spine person already has. What remains
+        # after the UPDATE is by definition an overlap-duplicate of an existing
+        # canonical link (same address, same role, overlapping period) — the
+        # address FACT survives on the spine person, and the duplicate row's
+        # source linkage survives through the entity_source move below, so the
+        # DELETE loses nothing.
+        cur.execute(
+            """
+            UPDATE core.entity_address AS shadow_link
+            SET entity_id = %(canonical)s
+            WHERE shadow_link.entity_type = 'person'
+              AND shadow_link.entity_id = %(shadow)s
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM core.entity_address AS canonical_link
+                  WHERE canonical_link.entity_type = 'person'
+                    AND canonical_link.entity_id = %(canonical)s
+                    AND canonical_link.address_id = shadow_link.address_id
+                    AND canonical_link.address_role = shadow_link.address_role
+                    AND canonical_link.valid_period && shadow_link.valid_period
+              )
+            """,
+            {"canonical": canonical_person_id, "shadow": shadow_person_id},
+        )
+        cur.execute(
+            "DELETE FROM core.entity_address WHERE entity_type = 'person' AND entity_id = %s",
+            (shadow_person_id,),
+        )
+
+        # Provenance links: copy-with-dedup then delete = move. Source records
+        # themselves are never touched — every data point keeps its link to a
+        # source filing, now through the surviving person.
+        cur.execute(
+            """
+            INSERT INTO core.entity_source (
+                entity_type, entity_id, source_record_id,
+                extraction_role, confidence, extracted_fields
+            )
+            SELECT entity_type, %s, source_record_id,
+                   extraction_role, confidence, extracted_fields
+            FROM core.entity_source
+            WHERE entity_type = 'person'
+              AND entity_id = %s
+            ON CONFLICT (entity_type, entity_id, source_record_id, extraction_role)
+            DO NOTHING
+            """,
+            (canonical_person_id, shadow_person_id),
+        )
+        cur.execute(
+            "DELETE FROM core.entity_source WHERE entity_type = 'person' AND entity_id = %s",
+            (shadow_person_id,),
+        )
+
+        # The spine person's canonical_name always wins: it is the
+        # human-formatted bioguide-anchored name ("Ossoff, Jon"), while the
+        # shadow carries the raw FEC filing form ("OSSOFF, T. JONATHAN").
+        # The FEC form is still an observed name for this human, so it is
+        # preserved as a variant rather than discarded. No other scalar is
+        # copied: FEC-lane shadows are minted with every biographical column
+        # NULL, and the shadow's FEC ids are already on the spine person (the
+        # eligibility subset check proved that before this ran).
+        cur.execute(
+            """
+            UPDATE core.person
+            SET name_variants = (
+                    SELECT COALESCE(array_agg(DISTINCT observed_name ORDER BY observed_name), '{}')
+                    FROM unnest(name_variants || %s::text[]) AS observed_name
+                    WHERE BTRIM(COALESCE(observed_name, '')) <> ''
+                      AND observed_name <> canonical_name
+                ),
+                updated_at = NOW()
+            WHERE id = %s
+            """,
+            ([shadow_canonical_name, *shadow_name_variants], canonical_person_id),
+        )
+
+        # Everything that referenced the shadow now references the spine person,
+        # so the duplicate row — the second search result, the orphan /person/
+        # page — can finally go.
+        cur.execute("DELETE FROM core.person WHERE id = %s", (shadow_person_id,))
+
+
+def _absorb_fec_shadow_persons(
+    conn: psycopg.Connection,
+    *,
+    person_id: UUID,
+    normalized_fec_ids: list[str],
+) -> int:
+    """Merge FEC-only shadow person rows into the spine person and delete them.
+
+    The identity side of convergence (civibus-5lm). ``federal-fec-masters`` runs
+    before ``federal-congress-spine`` in the refresh plan and mints one
+    ``core.person`` per unseen CAND_ID with identifiers ``{"fec_candidate_id"}``
+    and no name columns. The two convergence steps above repoint everything such
+    a row is POINTED AT BY — but the row itself survived, so /search returned
+    two persons for one senator and the shadow's empty /person/ page stayed
+    reachable (measured live 2026-08-19: "Ossoff, Jon" with $77,279,766.48 and
+    "OSSOFF, T. JONATHAN" with nothing).
+
+    Absorption is deliberately narrow. A row qualifies only when BOTH hold:
+
+    1. its identifier keys are a subset of {fec_candidate_id, fec_candidate_ids}
+       — no independent identity anchor; and
+    2. every FEC id it claims is one the spine person already carries — the
+       shadow makes no identity claim the spine row does not.
+
+    plus none of the ``_shadow_person_blockers`` conditions. Anything else is
+    logged and left alone: refusal preserves the previous (serving-side
+    repaired) state, and the general merge belongs to entity resolution.
+
+    Idempotent: absorbed rows are deleted, so a second run matches nothing.
+    Returns the number of person rows absorbed.
+    """
+    if not normalized_fec_ids:
+        return 0
+
+    with conn.cursor() as cur:
+        # Read the work set up front, mirroring _converge_spine_candidacies:
+        # the absorb DELETEs person rows, so iterating an open cursor over the
+        # same rows while mutating them would be unsound.
+        cur.execute(
+            """
+            SELECT id, canonical_name, identifiers, name_variants
+            FROM core.person
+            WHERE id <> %(spine)s
+              AND (
+                    BTRIM(COALESCE(identifiers ->> 'fec_candidate_id', '')) = ANY(%(fec_ids)s)
+                 OR EXISTS (
+                        SELECT 1
+                        FROM jsonb_array_elements_text(
+                            COALESCE(identifiers -> 'fec_candidate_ids', '[]'::jsonb)
+                        ) AS claimed(fec_candidate_id)
+                        WHERE BTRIM(claimed.fec_candidate_id) = ANY(%(fec_ids)s)
+                    )
+              )
+            ORDER BY id
+            """,
+            {"spine": person_id, "fec_ids": normalized_fec_ids},
+        )
+        candidate_shadow_rows = list(cur.fetchall())
+
+    spine_fec_ids = set(normalized_fec_ids)
+    absorbed = 0
+    for shadow_id, shadow_canonical_name, shadow_identifiers, shadow_name_variants in candidate_shadow_rows:
+        extra_identifier_keys = set(shadow_identifiers) - _FEC_SHADOW_IDENTIFIER_KEYS
+        if extra_identifier_keys:
+            LOGGER.warning(
+                "Not absorbing person %s into spine person %s: it carries independent "
+                "identity anchors %s alongside a shared FEC candidate id; two anchored "
+                "rows sharing an FEC id is an upstream data defect for entity resolution",
+                shadow_id,
+                person_id,
+                sorted(extra_identifier_keys),
+            )
+            continue
+        unshared_fec_ids = _shadow_fec_id_set(shadow_identifiers) - spine_fec_ids
+        if unshared_fec_ids:
+            LOGGER.warning(
+                "Not absorbing person %s into spine person %s: it claims FEC candidate "
+                "ids %s the spine person does not carry",
+                shadow_id,
+                person_id,
+                sorted(unshared_fec_ids),
+            )
+            continue
+        blockers = _shadow_person_blockers(conn, shadow_id)
+        if blockers:
+            LOGGER.warning(
+                "Not absorbing FEC shadow person %s into spine person %s: it carries %s "
+                "rows the narrow absorb does not merge; left for the general ER merge",
+                shadow_id,
+                person_id,
+                ", ".join(blockers),
+            )
+            continue
+        _absorb_one_shadow_person(
+            conn,
+            canonical_person_id=person_id,
+            shadow_person_id=shadow_id,
+            shadow_canonical_name=shadow_canonical_name,
+            shadow_name_variants=list(shadow_name_variants or []),
+        )
+        absorbed += 1
+    return absorbed
+
+
 def _converge_spine_identity(
     conn: psycopg.Connection,
     *,
@@ -303,9 +656,18 @@ def _converge_spine_identity(
         )
         converged_candidates = cur.rowcount or 0
 
+    # Order matters: candidacies move first (keyed by candidate_number, the
+    # broadest sweep), then the absorb sweeps whatever still points at a shadow
+    # row before deleting it. Running the absorb last means the shadow is
+    # reference-free at DELETE time whenever the row is a true shadow.
     return SpineConvergence(
         candidates=converged_candidates,
         candidacies=_converge_spine_candidacies(
+            conn,
+            person_id=person_id,
+            normalized_fec_ids=normalized_fec_ids,
+        ),
+        absorbed_persons=_absorb_fec_shadow_persons(
             conn,
             person_id=person_id,
             normalized_fec_ids=normalized_fec_ids,
@@ -396,6 +758,7 @@ def _converge_chamber_rows(
         )
         bucket.converged_candidates += convergence.candidates
         bucket.converged_candidacies += convergence.candidacies
+        bucket.absorbed_persons += convergence.absorbed_persons
 
 
 def _record_chamber_bucket(result: LoadResult, bucket: _BucketResult) -> None:
@@ -470,6 +833,7 @@ def _load_delegate_row(
             )
             bucket.converged_candidates += convergence.candidates
             bucket.converged_candidacies += convergence.candidacies
+            bucket.absorbed_persons += convergence.absorbed_persons
 
         if row_inserted:
             bucket.inserted += 1
@@ -562,6 +926,7 @@ def _load_executive_row(
             )
             bucket.converged_candidates += convergence.candidates
             bucket.converged_candidacies += convergence.candidacies
+            bucket.absorbed_persons += convergence.absorbed_persons
 
         if row_inserted:
             bucket.inserted += 1

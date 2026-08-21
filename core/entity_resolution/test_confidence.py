@@ -55,8 +55,8 @@ def test_classify_scored_pairs_deterministic_match() -> None:
             "entity_id_b": max(id_a, id_b),
             "confidence": 1.0,
             "decision_method": "deterministic",
-            "decided_by": "deterministic_fec_id_match",
-            "matched_rule_names": ["deterministic_fec_id_match"],
+            "decided_by": "deterministic_fec_candidate_id_match",
+            "matched_rule_names": ["deterministic_fec_candidate_id_match"],
         }
     ]
 
@@ -69,8 +69,8 @@ def test_classify_scored_pairs_deterministic_match() -> None:
     assert result["entity_id_b"] == max(id_a, id_b)
     assert result["confidence"] == 1.0
     assert result["decision_method"] == "deterministic"
-    assert result["decided_by"] == "deterministic_fec_id_match"
-    assert result["matched_rule_names"] == ["deterministic_fec_id_match"]
+    assert result["decided_by"] == "deterministic_fec_candidate_id_match"
+    assert result["matched_rule_names"] == ["deterministic_fec_candidate_id_match"]
 
 
 def test_classify_scored_pairs_probabilistic_tiers() -> None:
@@ -150,8 +150,8 @@ def test_classify_scored_pairs_multi_rule_deterministic() -> None:
             "decision_method": "deterministic",
             "decided_by": "deterministic_multi_rule",
             "matched_rule_names": [
-                "deterministic_fec_id_match",
-                "deterministic_voter_reg_match",
+                "deterministic_fec_candidate_id_match",
+                "deterministic_bioguide_id_match",
             ],
         }
     ]
@@ -160,8 +160,8 @@ def test_classify_scored_pairs_multi_rule_deterministic() -> None:
 
     assert classified[0]["decision"] == "match"
     assert classified[0]["matched_rule_names"] == [
-        "deterministic_fec_id_match",
-        "deterministic_voter_reg_match",
+        "deterministic_fec_candidate_id_match",
+        "deterministic_bioguide_id_match",
     ]
 
 

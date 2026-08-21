@@ -352,6 +352,50 @@ describe("finance chart SSR components", () => {
     expect(rendered.body).not.toContain("Unitemized");
   });
 
+  it("renders the ranked HTML bar list as its ONLY visual encoding", () => {
+    // civibus-3a3: until 2026-08-20 this component rendered the same series
+    // twice — the HTML bar list below AND a layerchart VERTICAL svg bar chart
+    // above it via the Chart adapter. Two competing visual encodings of one
+    // series in one component, and the svg duplicate clipped/thinned its own
+    // band labels at mobile widths while duplicating the frame's title as an
+    // extra heading. The HTML list is the encoding that survived (see
+    // docs/reference/ui_chart_encoding.md §1); this pins that the svg cannot
+    // come back. Fails if HorizontalBarChart ever re-imports Chart.svelte
+    // (chart-wrapper markup) or renders any inline svg.
+    const rows: HorizontalBarRow[] = [
+      {
+        id: "200-under",
+        label: "$200 and under",
+        amount: 500,
+        transactionCount: 10,
+        unit: "dollars",
+        canPlot: true
+      },
+      {
+        id: "500-999",
+        label: "$500-$999.99",
+        amount: 250,
+        transactionCount: 1,
+        unit: "dollars",
+        canPlot: true
+      }
+    ];
+    const rendered = render(HorizontalBarChart, {
+      props: {
+        ...baseFrame,
+        testId: "size-buckets",
+        title: "Itemized contribution-size buckets",
+        rows
+      }
+    });
+
+    expect(rendered.body).not.toContain("chart-wrapper");
+    expect(rendered.body).not.toContain("<svg");
+    // The surviving encoding must actually be present: bars with shared-scale widths.
+    expect(rendered.body).toContain("horizontal-bars__bar");
+    expect(rendered.body).toContain("--finance-width");
+  });
+
   it("scales reported-transaction horizontal bars by transaction count", () => {
     const rows: HorizontalBarRow[] = [
       {
@@ -788,6 +832,33 @@ describe("finance chart SSR components", () => {
     // Readable tick ceilings: own max 250 -> 250; shared max 900 -> 1000.
     expect(ownScale.body).toContain('data-domain-max="250"');
     expect(sharedScale.body).toContain('data-domain-max="1000"');
+  });
+
+  it("forwards headingLevel through a wrapper and nests the outside-spending subsections", () => {
+    // civibus-4yw. Default rendering must stay byte-identical (h3 chart title,
+    // h4 subsections) so no consumer changes until it opts in; an opted-in
+    // level moves the chart title AND keeps the subsections exactly one level
+    // deeper.
+    const rows: OutsideSpendingRow[] = [
+      { id: "support", label: "Support spending", stance: "support", amount: 100, transactionCount: 1 }
+    ];
+
+    const defaultLevel = render(OutsideSpendingChart, {
+      props: { ...baseFrame, testId: "outside", rows, topSpenders: [] }
+    });
+    // svelte:element SSR output carries hydration comment anchors inside the
+    // tag, so match on the opening tag + text rather than a closed literal.
+    expect(defaultLevel.body).toMatch(/<h3[^>]*>Zero-centered support\/oppose comparison/);
+    expect(defaultLevel.body).toMatch(/<h4[^>]*>Top spenders/);
+    expect(defaultLevel.body).toMatch(/<h4[^>]*>Transactions/);
+
+    const nestedLevel = render(OutsideSpendingChart, {
+      props: { ...baseFrame, testId: "outside", rows, topSpenders: [], headingLevel: 4 }
+    });
+    expect(nestedLevel.body).toMatch(/<h4[^>]*>Zero-centered support\/oppose comparison/);
+    expect(nestedLevel.body).toMatch(/<h5[^>]*>Top spenders/);
+    expect(nestedLevel.body).toMatch(/<h5[^>]*>Transactions/);
+    expect(nestedLevel.body).not.toContain("<h3");
   });
 
   it("centers outside spending on a shared scale maximum when one is supplied", () => {

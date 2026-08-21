@@ -13,7 +13,6 @@
     buildCandidateListItemPresentation,
     buildPaginationContext
   } from "$lib/campaign-finance-detail/list-presentation";
-  import { SEARCH_PAGE_PATH, SEARCH_QUERY_MIN_LENGTH } from "$lib/search/contract";
   import SkeletonPanel from "$lib/loading/SkeletonPanel.svelte";
   import SeoHead from "$lib/seo/SeoHead.svelte";
   import { buildSeoHeadModel } from "$lib/seo/head";
@@ -37,6 +36,9 @@
     item,
     presentation: buildCandidateListItemPresentation(item)
   }));
+  // URL is the source of truth for the name filter exactly as for the selects
+  // (civibus-frq): the input renders the active value, and pagination carries it.
+  $: activeName = $page.url.searchParams.get("name") ?? "";
   $: activeState = $page.url.searchParams.get("state") ?? "";
   $: activeOffice = $page.url.searchParams.get("office") ?? "";
   // URL is the source of truth for sort too; an unrecognized token degrades to
@@ -45,6 +47,7 @@
   $: paginationContext = buildPaginationContext(data.offset, data.limit, data.has_next, data.items.length);
   $: previousHref = paginationContext.hasPrevious
     ? buildCandidatesPagePath({
+        name: activeName,
         state: activeState,
         office: activeOffice,
         sort: activeSort,
@@ -54,6 +57,7 @@
     : null;
   $: nextHref = paginationContext.hasNext
     ? buildCandidatesPagePath({
+        name: activeName,
         state: activeState,
         office: activeOffice,
         sort: activeSort,
@@ -69,33 +73,23 @@
 
 <section class="card campaign-list" aria-label="Candidates">
   <h2>Candidates</h2>
-  <!-- Name lookup is a hand-off, not a filter. `GET /v1/candidates` has no name
-       parameter, and /search already owns name matching, so this submits there
-       instead of adding a second search implementation to this route.
-       Deliberately sends `q` alone: measured on production 2026-08-19,
-       `entity_type=candidate` returned only the unmerged FEC duplicate for
-       "ossoff" and hid the sitting senator, because that lane reads
-       civic.candidacy rather than cf.candidate. Narrowing belongs on /search,
-       where the reader can see and change it. Contract:
-       docs/reference/screen_specs/candidate_list.md -> "Name-search contract". -->
-  <form
-    method="GET"
-    action={SEARCH_PAGE_PATH}
-    class="campaign-list__name-search"
-    aria-label="Candidate name search"
-  >
-    <label for="candidate-name-search">Find a candidate by name</label>
-    <input
-      id="candidate-name-search"
-      name="q"
-      type="search"
-      minlength={SEARCH_QUERY_MIN_LENGTH}
-      placeholder="Candidate name"
-    />
-    <button type="submit">Search names</button>
-  </form>
   <form method="GET" class="campaign-list__filters" aria-label="Candidate filters">
     <!-- Keep URL query params as the source of truth so SSR and deep links stay aligned. -->
+    <!-- Name filters IN PLACE (civibus-frq), composing with state/office/sort —
+         this replaced the earlier /search handoff, which cost the reader their
+         browse context on every lookup. Deterministic containment over the raw
+         FEC filed string; the placeholder steers toward surname because
+         "Last, First" typed terms can miss middle-name filings. Contract:
+         docs/reference/screen_specs/candidate_list.md -> "Name-filter contract". -->
+    <label for="candidate-filter-name">Name</label>
+    <input
+      id="candidate-filter-name"
+      name="name"
+      type="search"
+      value={activeName}
+      placeholder="Surname works best"
+    />
+
     <label for="candidate-filter-state">State</label>
     <select id="candidate-filter-state" name="state">
       <option value="" selected={activeState === ""}>All states</option>
@@ -131,7 +125,7 @@
     Candidates whose FEC-filed name cannot stand on its own as a public identity are
     left out of this list and stay reachable at their own candidate pages.
   </p>
-  <ListNavigationLoading routePath={CANDIDATES_PAGE_PATH} filterParams={["state", "office", "sort"]} label="Updating results…" let:isFilterNavigation>
+  <ListNavigationLoading routePath={CANDIDATES_PAGE_PATH} filterParams={["name", "state", "office", "sort"]} label="Updating results…" let:isFilterNavigation>
     {#if isFilterNavigation}
       <!-- Swap stale list results for a busy placeholder while the filtered
            browse response streams in on the same route. -->
@@ -184,16 +178,6 @@
 
   .campaign-list__filters {
     margin-bottom: 1rem;
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 0.5rem;
-  }
-
-  /* Same row layout as the filter bar so the two controls read as one toolbar,
-     with the name lookup first because it answers the more common question. */
-  .campaign-list__name-search {
-    margin-bottom: 0.75rem;
     display: flex;
     flex-wrap: wrap;
     align-items: center;

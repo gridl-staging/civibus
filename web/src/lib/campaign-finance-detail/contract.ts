@@ -117,6 +117,12 @@ export type CandidateSlugMatchResponse = CandidateListItem[];
 export type CommitteeSlugMatchResponse = CommitteeListItem[];
 
 export type CandidateListRequest = {
+  /**
+   * Case-insensitive containment filter over the raw FEC filed name
+   * (civibus-frq). A browse filter that composes with state/office/sort;
+   * blank means "no name filter" and is dropped before the request.
+   */
+  name?: string;
   state?: string;
   office?: string;
   person_id?: string;

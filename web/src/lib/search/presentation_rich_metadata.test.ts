@@ -32,6 +32,47 @@ describe('search presentation rich metadata', () => {
     expect(cards[0].contextLine).toBe('Republican · U.S. Senate · TX');
   });
 
+  it('expands FEC office codes on candidate cards through the shared filter-options owner', () => {
+    // civibus-x9d: candidate search rows come from cf.candidate, whose office
+    // column is the raw FEC code (H/S/P). The card expands it with the same
+    // FEC_CANDIDATE_OFFICE_OPTIONS labels the /candidates filter dropdown uses,
+    // so one owner names each office. The money figure is the official FEC
+    // total the backend now projects for candidate rows.
+    const cards = buildSearchResultCards([
+      {
+        entity_type: 'candidate',
+        entity_id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+        name: 'Pat Candidate',
+        party: 'DEM',
+        office_name: 'H',
+        state: 'GA',
+        total_raised: '1234.56'
+      },
+      {
+        entity_type: 'candidate',
+        entity_id: 'cccccccc-cccc-4ccc-8ccc-ccccccccccc1',
+        name: 'Sam Candidate',
+        party: null,
+        office_name: 'S',
+        state: null
+      },
+      {
+        entity_type: 'candidate',
+        entity_id: 'cccccccc-cccc-4ccc-8ccc-ccccccccccc2',
+        name: 'Prez Candidate',
+        party: null,
+        office_name: 'P',
+        state: null
+      }
+    ]);
+
+    expect(cards.map((card) => card.contextLine)).toEqual([
+      'Democrat · U.S. House · $1,235 · GA',
+      'U.S. Senate',
+      'President'
+    ]);
+  });
+
   it('builds officeholder person metadata for senate delegate and executive offices', () => {
     const cards = buildSearchResultCards([
       {

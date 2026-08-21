@@ -54,6 +54,7 @@ from api.queries.civics import (
     fetch_contest_detail,
     fetch_country_state_geometries,
     fetch_current_federal_members,
+    election_date_is_within_publish_horizon,
     fetch_election_contests_by_date,
     fetch_electoral_division_geometries,
     fetch_office_active_contest_count,
@@ -323,6 +324,14 @@ def get_election_date_aggregate(
     contests = [
         ElectionContestSummary.model_validate(row) for row in fetch_election_contests_by_date(conn, election_date)
     ]
+    # A beyond-horizon date is the corrupt filer-typo class (/election/2929-11-08):
+    # its rows are already excluded by the query's horizon bound, and the date
+    # itself answers 404 rather than an empty 200 so search engines drop the
+    # corrupt URLs the pre-fix sitemap submitted. In-horizon dates with no
+    # contests keep the empty 200 that election_date.md's Empty state contracts,
+    # so the probe only runs on the empty path.
+    if not contests and not election_date_is_within_publish_horizon(conn, election_date):
+        raise HTTPException(status_code=404, detail="No published election on this date")
     return ElectionDateAggregateResponse(
         date=election_date,
         total_contests=len(contests),

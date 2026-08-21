@@ -25,6 +25,7 @@ import {
 import {
   BAR_SERIES_MARK_SELECTOR,
   chartRegion,
+  expectHtmlBarListRender,
   expectRealChartRender
 } from "./smoke-helpers";
 
@@ -56,7 +57,10 @@ const CHART_DATA_ACCESS_CASES = [
   {
     owner: "HorizontalBarChart",
     route: "person",
-    paintLabel: "Itemized contribution-size buckets bar chart",
+    // No paintLabel: HorizontalBarChart's one visual encoding is a ranked HTML
+    // bar list with no svg and no aria-labelled chart section (civibus-3a3).
+    // Its paint proof is expectHtmlBarListRender against the frame testId.
+    paintLabel: null,
     testId: "person-size-buckets",
     rows: SMOKE_USE_LIVE_API
       ? SMOKE_CHART_LIVE_DATA_ACCESS_ROWS.sizeBuckets
@@ -173,6 +177,24 @@ function personChartCases(): PersonChartDataAccessCase[] {
   );
 }
 
+/**
+ * Paint proof for one person chart case. Module-scope so the per-case branch is
+ * data routing rather than test-body control flow: a case with a `paintLabel`
+ * is a layerchart svg plot, a case without one is HorizontalBarChart's ranked
+ * HTML bar list (civibus-3a3), whose oracle is the bar-list helper against the
+ * frame testId.
+ */
+async function expectPersonChartPaint(page: Page, chartCase: PersonChartDataAccessCase): Promise<void> {
+  const paintLabel = chartCase.paintLabel;
+  if (paintLabel === null) {
+    await expectHtmlBarListRender(page.getByTestId(chartCase.testId));
+    return;
+  }
+  const paintedChart = await chartRegion(page, paintLabel);
+  await expect(paintedChart).toBeVisible();
+  await expectRealChartRender(paintedChart, BAR_SERIES_MARK_SELECTOR);
+}
+
 test.describe("fixture-backed chart data accessibility", () => {
   test.skip(
     SMOKE_USE_LIVE_API || IS_PRODUCTION_SMOKE_MODE,
@@ -278,9 +300,7 @@ test.describe.serial("live person chart data known-answer smoke", () => {
         const chartFrame = page.getByTestId(chartCase.testId);
         await expect(chartFrame).toBeVisible({ timeout: 15_000 });
 
-        const paintedChart = await chartRegion(page, chartCase.paintLabel);
-        await expect(paintedChart).toBeVisible();
-        await expectRealChartRender(paintedChart, BAR_SERIES_MARK_SELECTOR);
+        await expectPersonChartPaint(page, chartCase);
 
         const snapshot = await openChartDataAndSnapshot(chartFrame);
         expectExactAccessibleRows(snapshot, chartCase.rows);

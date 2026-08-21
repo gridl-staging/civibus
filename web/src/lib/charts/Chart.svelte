@@ -1,12 +1,23 @@
 <script lang="ts">
   import "layerchart/core.css";
   import { BarChart, LineChart } from "layerchart/svg";
-  import { AXIS_VALUE_FORMATTERS, TOOLTIP_VALUE_FORMATTERS } from "./finance";
-  import type { ChartKind, ChartSeries, FinanceChartUnit } from "./types";
+  import {
+    AXIS_VALUE_FORMATTERS,
+    TOOLTIP_VALUE_FORMATTERS,
+    X_TICK_SPACING_PX,
+    bandTickLabelBudgetChars,
+    truncateTickLabel
+  } from "./finance";
+  import type { ChartHeadingLevel, ChartKind, ChartSeries, FinanceChartUnit } from "./types";
 
   export let kind: ChartKind;
   export let title: string;
   export let ariaLabel: string;
+  // Outline depth of the chart's title heading (civibus-4yw). Default 3 keeps
+  // every existing consumer's rendering byte-identical until it opts in; a
+  // chart embedded in an h4-level section passes 5 so the outline nests instead
+  // of resetting. See ChartHeadingLevel in types.ts.
+  export let headingLevel: ChartHeadingLevel = 3;
   // The unit the enclosing ChartFrame declares. Selects the value-axis and tooltip
   // formatters below, so the plot cannot disagree with the frame's own "Unit: …"
   // label the way GeographyShareChart did. See docs/reference/ui_chart_encoding.md §3.
@@ -44,14 +55,15 @@
   // numbers.
   const AXIS_PADDING = { top: 16, right: 24, bottom: 32, left: 56 } as const;
 
-  // Minimum horizontal room per x tick label, which is what makes a band axis
-  // subsample instead of drawing every category. layerchart defaults band scales
-  // to tickSpacing: null, i.e. "render the entire domain", so 54 months rendered
-  // as 54 overlapping labels — an unreadable smear rather than an axis. 80px fits
-  // a "2026-06" label with air, thins labels out as the viewport narrows, and is
-  // a no-op for the categorical charts, whose handful of bands stays under the
-  // resulting count. See docs/reference/ui_chart_encoding.md §5.
-  const X_TICK_SPACING_PX = 80;
+  // X_TICK_SPACING_PX (imported above, owned in finance.ts beside the label
+  // budget arithmetic) is the minimum horizontal room per x tick label, which is
+  // what makes a band axis subsample instead of drawing every category.
+  // layerchart defaults band scales to tickSpacing: null, i.e. "render the
+  // entire domain", so 54 months rendered as 54 overlapping labels — an
+  // unreadable smear rather than an axis. 80px fits a "2026-06" label with air,
+  // thins labels out as the viewport narrows, and is a no-op for the categorical
+  // charts, whose handful of bands stays under the resulting count.
+  // See docs/reference/ui_chart_encoding.md §5.
 
   type LayerChartRow = {
     x: string | number | Date;
@@ -117,12 +129,41 @@
     });
   }
 
+  // Measured width of the chart body, bound below. 0 during SSR and before the
+  // first layout, where the label budget stays Infinity and labels render full;
+  // hydration then applies the real budget. Screenshot baselines capture the
+  // hydrated result, which is what a reader sees.
+  let plotBodyWidthPx = 0;
+
   $: hasPoints = series.some((item) => item.points.length > 0);
   $: chartRows = toLayerChartRows(series);
   $: layerSeries = toLayerChartSeries(series);
+  // Band-axis tick labels get a character budget derived from the measured plot
+  // width and band count, then truncate with an ellipsis (civibus-tfz). This is
+  // what keeps "Gross individual contributions" and "PAC/other committee
+  // contributions" from colliding in a ~258px band area at a 390px viewport,
+  // while desktop labels stay untouched (their budget exceeds every real label).
+  // Bar charts only: the line charts plot time scales whose tick text layerchart
+  // already formats to a bounded width. There is deliberately NO automated
+  // overlap assertion behind this (ui_chart_encoding.md §5) — the proof is the
+  // regenerated mobile baseline, looked at.
+  $: xTickLabelBudgetChars =
+    kind === "bar"
+      ? bandTickLabelBudgetChars(
+          plotBodyWidthPx - AXIS_PADDING.left - AXIS_PADDING.right,
+          chartRows.length
+        )
+      : Number.POSITIVE_INFINITY;
   $: chartProps = {
     yAxis: { format: AXIS_VALUE_FORMATTERS[unit] },
-    xAxis: { tickSpacing: X_TICK_SPACING_PX },
+    xAxis: {
+      tickSpacing: X_TICK_SPACING_PX,
+      // Bar charts only: an explicit format would override layerchart's own
+      // time-scale tick formatting on the line charts' Date axes.
+      ...(kind === "bar"
+        ? { format: (tick: unknown) => truncateTickLabel(String(tick), xTickLabelBudgetChars) }
+        : {})
+    },
     tooltip: {
       item: { format: TOOLTIP_VALUE_FORMATTERS[unit] },
       // layerchart's tooltip carries no role of its own. Naming it lets a browser
@@ -134,9 +175,9 @@
 </script>
 
 <section class="chart-wrapper" aria-label={ariaLabel}>
-  <h3>{title}</h3>
+  <svelte:element this={`h${headingLevel}`}>{title}</svelte:element>
 
-  <div class="chart-wrapper__body">
+  <div class="chart-wrapper__body" bind:clientWidth={plotBodyWidthPx}>
     {#if hasPoints}
       {#if kind === "line"}
         <LineChart

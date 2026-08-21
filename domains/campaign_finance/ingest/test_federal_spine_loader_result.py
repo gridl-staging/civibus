@@ -10,10 +10,14 @@ def test_spine_load_result_exposes_refresh_runner_count_contract() -> None:
     result = SpineLoadResult()
     result.house.inserted = 2
     result.house.converged_candidates = 3
+    result.house.converged_candidacies = 2
+    result.house.absorbed_persons = 2
     result.senate.skipped = 1
+    result.senate.absorbed_persons = 1
     result.delegate.errors = 4
     result.president.inserted = 1
     result.vice_president.converged_candidates = 1
+    result.vice_president.converged_candidacies = 1
 
     assert result.inserted == 3
     assert result.skipped == 1
@@ -21,3 +25,5 @@ def test_spine_load_result_exposes_refresh_runner_count_contract() -> None:
     assert result.superseded == 0
     assert result.errors == 4
     assert result.converged_candidates == 4
+    assert result.converged_candidacies == 3
+    assert result.absorbed_persons == 3

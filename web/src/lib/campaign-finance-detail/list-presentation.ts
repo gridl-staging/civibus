@@ -1,6 +1,5 @@
 import { buildCandidateHref, buildCommitteeHref, type CandidateListItem, type CommitteeListItem } from "./contract";
-import { formatOptionalCurrency } from "./presentation";
-import { formatPersonDisplayName } from "$lib/display-name";
+import { formatCandidatePublicName, formatOptionalCurrency } from "./presentation";
 
 /** Label for the candidate browse money column. */
 export const CANDIDATE_TOTAL_RAISED_LABEL = "Total raised";
@@ -47,9 +46,13 @@ export function buildCandidateListItemPresentation(
 
   return {
     // cf.candidate.name arrives as the raw FEC filing string, which is shouted
-    // uppercase. Delegating to the shared name owner is what stops one human
-    // reading as two unrelated records across the browse list and Person Detail.
-    name: formatPersonDisplayName(item.name),
+    // uppercase. The shared identity-gated owner formats safe names (stopping
+    // one human reading as two unrelated records across the browse list and
+    // Person Detail) and keeps unsafe filings raw, matching the neutral
+    // presentation their own detail page uses. Person-scoped and
+    // include_unsafe_identity reads DO put unsafe rows through here, so the
+    // gate is load-bearing, not theoretical.
+    name: formatCandidatePublicName(item),
     href: buildCandidateHref(item),
     contextLine,
     totalRaisedLabel: CANDIDATE_TOTAL_RAISED_LABEL,

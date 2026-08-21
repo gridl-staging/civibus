@@ -115,7 +115,7 @@ def _seed_dry_run_fixture(graph_conn: psycopg.Connection) -> _DryRunFixtureSet:
         first_name="CLI",
         last_name="Alpha",
         date_of_birth=None,
-        identifiers={"fec_id": shared_fec_id},
+        identifiers={"fec_candidate_id": shared_fec_id},
     )
     _insert_person(
         graph_conn,
@@ -124,7 +124,7 @@ def _seed_dry_run_fixture(graph_conn: psycopg.Connection) -> _DryRunFixtureSet:
         first_name="CLI",
         last_name="Beta",
         date_of_birth=None,
-        identifiers={"fec_id": shared_fec_id},
+        identifiers={"fec_candidate_id": shared_fec_id},
     )
 
     data_source_id = _insert_data_source(graph_conn, name="ER CLI dry-run integration")
@@ -190,7 +190,7 @@ def _patch_dry_run_dependencies(
                 "entity_id_b": max(fixtures.person_a, fixtures.person_b),
                 "confidence": 1.0,
                 "decision_method": "deterministic",
-                "decided_by": "deterministic_fec_id_match",
+                "decided_by": "deterministic_fec_candidate_id_match",
             }
         ],
     )
@@ -236,25 +236,25 @@ def _seed_persisted_run_fixture(graph_conn: psycopg.Connection) -> _PersistedRun
         graph_conn,
         person_id=auto_merge_person_a,
         canonical_name="Run Alpha",
-        identifiers={"fec_id": "CLI-RUN-FEC-MATCH"},
+        identifiers={"fec_candidate_id": "CLI-RUN-FEC-MATCH"},
     )
     _insert_seed_person(
         graph_conn,
         person_id=auto_merge_person_b,
         canonical_name="Run Beta",
-        identifiers={"fec_id": "CLI-RUN-FEC-MATCH"},
+        identifiers={"fec_candidate_id": "CLI-RUN-FEC-MATCH"},
     )
     _insert_seed_person(
         graph_conn,
         person_id=auto_merge_person_c,
         canonical_name="Run Gamma",
-        identifiers={"voter_reg_id": "CLI-RUN-VOTER-MATCH"},
+        identifiers={"bioguide_id": "CLI-RUN-VOTER-MATCH"},
     )
     _insert_seed_person(
         graph_conn,
         person_id=auto_merge_person_d,
         canonical_name="Run Delta",
-        identifiers={"voter_reg_id": "CLI-RUN-VOTER-MATCH"},
+        identifiers={"bioguide_id": "CLI-RUN-VOTER-MATCH"},
     )
 
     jurisdictions_by_person = {
@@ -431,12 +431,12 @@ def _assert_persisted_run_active_matches(
     assert {(row["entity_id_a"], row["entity_id_b"]) for row in active_matches} == expected_pairs
     assert {row["decision_method"] for row in active_matches} == {"deterministic"}
     assert {row["decided_by"] for row in active_matches} == {
-        "deterministic_fec_id_match",
-        "deterministic_voter_reg_match",
+        "deterministic_fec_candidate_id_match",
+        "deterministic_bioguide_id_match",
     }
     assert {tuple(row["match_evidence"]["matched_rule_names"]) for row in active_matches} == {
-        ("deterministic_fec_id_match",),
-        ("deterministic_voter_reg_match",),
+        ("deterministic_fec_candidate_id_match",),
+        ("deterministic_bioguide_id_match",),
     }
 
 

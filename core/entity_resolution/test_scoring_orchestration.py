@@ -29,8 +29,8 @@ def test_score_entities_runs_deterministic_then_probabilistic(
             "entity_id_b": ordered_pair[1],
             "confidence": 1.0,
             "decision_method": "deterministic",
-            "decided_by": "deterministic_fec_id_match",
-            "matched_rule_names": ["deterministic_fec_id_match"],
+            "decided_by": "deterministic_fec_candidate_id_match",
+            "matched_rule_names": ["deterministic_fec_candidate_id_match"],
         }
     ]
     probabilistic_pairs = [
@@ -94,8 +94,8 @@ def test_score_entities_skips_probabilistic_when_all_rows_resolved(
             "entity_id_b": max(person_a, person_b),
             "confidence": 1.0,
             "decision_method": "deterministic",
-            "decided_by": "deterministic_fec_id_match",
-            "matched_rule_names": ["deterministic_fec_id_match"],
+            "decided_by": "deterministic_fec_candidate_id_match",
+            "matched_rule_names": ["deterministic_fec_candidate_id_match"],
         }
     ]
     score_called = False
@@ -177,7 +177,7 @@ def test_score_rows_threads_bounded_factory_after_deterministic_filtering(
         "entity_id_b": max(person_a, person_b),
         "confidence": 1.0,
         "decision_method": "deterministic",
-        "decided_by": "deterministic_fec_id_match",
+        "decided_by": "deterministic_fec_candidate_id_match",
     }
     probabilistic_pair = {
         "entity_id_a": person_c,

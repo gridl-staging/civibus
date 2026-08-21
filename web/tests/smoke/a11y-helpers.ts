@@ -26,14 +26,16 @@ import {
   SMOKE_SEARCH_RESULT_NAME
 } from "./fixtures";
 import {
-  BAR_SERIES_MARK_SELECTOR,
   LINE_SERIES_MARK_SELECTOR,
   chartRegion,
+  expectHtmlBarListRender,
   expectRealChartRender
 } from "./smoke-helpers";
 
 const COMMITTEE_CASH_ON_HAND_CHART_LABEL = "Cash on hand trend by filing period";
-const PERSON_SIZE_BUCKETS_CHART_LABEL = "Itemized contribution-size buckets bar chart";
+// HorizontalBarChart's frame testId. The old aria-labelled svg section is gone:
+// the component's one visual encoding is a ranked HTML bar list (civibus-3a3).
+const PERSON_SIZE_BUCKETS_FRAME_TEST_ID = "person-size-buckets";
 const TRANSPARENT_GIF = Buffer.from("R0lGODlhAQABAAAAACw=", "base64");
 
 export type AccessibilityScanDestination = {
@@ -119,9 +121,7 @@ async function expectMethodologyContent(page: Page): Promise<void> {
 async function expectPersonDetailContent(page: Page): Promise<void> {
   await expect(page.getByRole("heading", { name: SMOKE_PERSON_CANONICAL_NAME })).toBeVisible();
   await expect(page.getByRole("heading", { name: SMOKE_PERSON_MONEY_AT_GLANCE_HEADING })).toBeVisible();
-  const chart = await chartRegion(page, PERSON_SIZE_BUCKETS_CHART_LABEL);
-  await expect(chart).toBeVisible();
-  await expectRealChartRender(chart, BAR_SERIES_MARK_SELECTOR);
+  await expectHtmlBarListRender(page.getByTestId(PERSON_SIZE_BUCKETS_FRAME_TEST_ID));
 }
 
 async function expectCommitteeDetailContent(page: Page): Promise<void> {

@@ -417,6 +417,69 @@ describe("campaign finance detail presentation", () => {
     ]);
   });
 
+  it("routes outside-spending target and source names through the identity-gated owner", () => {
+    // Same defect class as the linked-candidates deploy-gate failure: target
+    // rows link to `/person/<id>`, whose heading renders the formatted spine
+    // name, so the link text must be formatted too — and an unsafe filing must
+    // stay raw, matching its own record's neutral presentation. ALL-CAPS
+    // specimens on purpose; mixed-case fixtures pass vacuously.
+    const target = {
+      candidate_id: CANDIDATE_ID,
+      fec_candidate_id: "S0GA00001",
+      candidate_name: "OSSOFF, T. JONATHAN",
+      person_id: PERSON_ID,
+      party: "DEM",
+      office: "S",
+      state: "GA",
+      district: null,
+      slug: "ossoff-t-jonathan",
+      slug_is_unique: true,
+      identity_is_safe: true,
+      support_total: "1500.00",
+      oppose_total: "250.00",
+      transaction_count: 3,
+      sources: [
+        {
+          domain: "campaign_finance",
+          jurisdiction: "federal/fec",
+          data_source_name: "FEC Schedule E",
+          data_source_url: "https://www.fec.gov",
+          source_record_key: "schedule-e-source",
+          record_url: "https://www.fec.gov/data/independent-expenditures/",
+          pull_date: "2026-07-08T00:00:00Z"
+        }
+      ]
+    };
+    const presentation = buildCommitteeDeferredOutsideSpending({
+      committee_id: COMMITTEE_ID,
+      support_total: "1500.00",
+      oppose_total: "250.00",
+      ie_transaction_count: 4,
+      excluded_outlier_count: 0,
+      targets: [
+        target,
+        {
+          ...target,
+          candidate_id: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeee02",
+          fec_candidate_id: "S0GA00003",
+          candidate_name: "RAWFILED, QUIRKSALL UNSAFE",
+          person_id: null,
+          slug: "rawfiled-quirksall-unsafe",
+          identity_is_safe: false
+        }
+      ]
+    });
+
+    expect(presentation.targetRows.map((row) => row.candidateName)).toEqual([
+      "Ossoff, T. Jonathan",
+      "RAWFILED, QUIRKSALL UNSAFE"
+    ]);
+    expect(presentation.sourceRows.map((row) => row.candidateName)).toEqual([
+      "Ossoff, T. Jonathan",
+      "RAWFILED, QUIRKSALL UNSAFE"
+    ]);
+  });
+
   it("builds committee-made outside spending rows with person links and source-filing links", () => {
     const presentation = buildCommitteeDeferredOutsideSpending({
       committee_id: COMMITTEE_ID,
@@ -713,6 +776,55 @@ describe("campaign finance detail presentation", () => {
         href: "/candidate/eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"
       }
     ]);
+  });
+
+  it("routes linked-candidate names through the shared identity-gated format owner", () => {
+    // Production deploy-gate regression (2026-08-20): the linked-candidates list
+    // rendered the raw FEC filing string while the candidate detail heading
+    // rendered the formatted name, so clicking `OSSOFF, T. JONATHAN` landed on a
+    // page whose h2 read `Ossoff, T. Jonathan` and the link-text == headline
+    // journey failed. Fixture names elsewhere in this file are already
+    // mixed-case, which is exactly why the defect passed vacuously — this
+    // specimen must stay ALL-CAPS (and digit-free, so identity_is_safe is an
+    // honest flag for it).
+    const links = buildLinkedCandidateLinks({
+      ...DEFAULT_COMMITTEE_DETAIL,
+      linked_candidates: [
+        {
+          id: CANDIDATE_ID,
+          fec_candidate_id: "S0GA00001",
+          name: "OSSOFF, T. JONATHAN",
+          party: "DEM",
+          office: "S",
+          state: "GA",
+          district: null,
+          slug: "ossoff-t-jonathan",
+          slug_is_unique: true,
+          identity_is_safe: true,
+          has_official_total: true
+        },
+        {
+          id: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeee01",
+          fec_candidate_id: "S0GA00002",
+          name: "RAWFILED, QUIRKSALL UNSAFE",
+          party: null,
+          office: "S",
+          state: "GA",
+          district: null,
+          slug: "rawfiled-quirksall-unsafe",
+          slug_is_unique: true,
+          identity_is_safe: false,
+          has_official_total: false
+        }
+      ]
+    });
+
+    // Safe identity: the shared person-name format, byte-identical to what the
+    // candidate detail heading will render.
+    expect(links[0].name).toBe("Ossoff, T. Jonathan");
+    // Unsafe identity: the raw filed string, matching the detail page's
+    // source-evidence presentation instead of inventing a re-cased identity.
+    expect(links[1].name).toBe("RAWFILED, QUIRKSALL UNSAFE");
   });
 
   it("includes linked-candidate presentations on the committee shell so the summary section can link out", () => {

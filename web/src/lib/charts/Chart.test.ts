@@ -90,6 +90,38 @@ describe("charts/Chart.svelte", () => {
     expect(Array.from(dependencyNames).filter((name) => name.includes("tailwind"))).toEqual([]);
   });
 
+  it("renders its title as an h3 by default and at the caller's heading level when given", () => {
+    // civibus-4yw: the fixed <h3> forced every heading after a chart to h4 or
+    // shallower — charts embedded in h4-level sections reset the document
+    // outline mid-section. The level is now a prop; the default stays 3 so no
+    // existing consumer's rendering changes until it opts in.
+    const defaultLevel = render(Chart, {
+      props: {
+        kind: "bar",
+        unit: "dollars",
+        title: "Weekly receipts",
+        ariaLabel: "Weekly receipts trend",
+        series: MINIMAL_SERIES
+      }
+    });
+    // svelte:element SSR output carries hydration comment anchors inside the
+    // tag, so match on the opening tag + text rather than a closed literal.
+    expect(defaultLevel.body).toMatch(/<h3[^>]*>Weekly receipts/);
+
+    const deeperLevel = render(Chart, {
+      props: {
+        kind: "bar",
+        unit: "dollars",
+        title: "Weekly receipts",
+        ariaLabel: "Weekly receipts trend",
+        series: MINIMAL_SERIES,
+        headingLevel: 5
+      }
+    });
+    expect(deeperLevel.body).toMatch(/<h5[^>]*>Weekly receipts/);
+    expect(deeperLevel.body).not.toContain("<h3");
+  });
+
   it("renders a stable fallback when series is empty", () => {
     const rendered = render(Chart, {
       props: {

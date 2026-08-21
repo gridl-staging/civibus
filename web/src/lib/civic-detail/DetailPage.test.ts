@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render } from "svelte/server";
 import type {
@@ -961,6 +962,208 @@ describe("civic detail page rendering", () => {
       expect(rendered.body).toMatch(/class="[^"]*caveat-banner[^"]*"/);
       expect(rendered.body).toContain(warningCase.warning as string);
       expect((rendered.body.match(/role="note"/g) ?? []).length).toBe(1);
+    }
+  });
+});
+
+describe("race money bars rendering", () => {
+  // One money row per coverage archetype the bars must distinguish:
+  // a leader, a trailer, a measured zero, and a never-loaded candidate.
+  function buildBarsMoneyRow(
+    overrides: Partial<
+      import("./contract").ContestCandidateMoneyRow
+    > & { person_name: string; person_id: string; total_raised: string | null }
+  ): import("./contract").ContestCandidateMoneyRow {
+    const measured = overrides.total_raised !== null;
+    return {
+      candidacy_id: `${overrides.person_id.slice(0, 8)}-0000-4000-8000-000000000000`,
+      party: "DEM",
+      status: "filed",
+      incumbent_challenge: "C",
+      fec_candidate_id: measured ? "H0NC01001" : null,
+      candidate_id: null,
+      candidate_name: null,
+      candidate_slug: null,
+      candidate_slug_is_unique: false,
+      candidate_identity_is_safe: false,
+      has_fec_money: measured,
+      total_spent: null,
+      net: null,
+      cash_on_hand: null,
+      summary_source: measured ? "fec_weball" : null,
+      fundraising_coverage: null,
+      ie_support_total: null,
+      ie_oppose_total: null,
+      ie_support_count: null,
+      ie_oppose_count: null,
+      ie_coverage: null,
+      ...overrides
+    };
+  }
+
+  const BAR_MONEY_RESPONSE = {
+    contest_id: CONTEST_ID,
+    selected_cycle: 2026,
+    candidate_count: 4,
+    total_raised: "5500.00",
+    total_ie_support: null,
+    total_ie_oppose: null,
+    has_unknown_candidate_money: true,
+    has_unknown_candidate_ie: true,
+    rows: [
+      // Wire order is deliberately not rank order: Zoe and Uma first.
+      buildBarsMoneyRow({
+        person_id: "aaaa1111-1111-4111-8111-111111111111",
+        person_name: "Zoe Zilch",
+        total_raised: "0.00",
+        fundraising_coverage: {
+          activity_state: "loaded_zero",
+          completeness: "complete",
+          basis: "authoritative_load_evidence"
+        }
+      }),
+      buildBarsMoneyRow({
+        person_id: "bbbb2222-2222-4222-8222-222222222222",
+        person_name: "Uma Unloaded",
+        total_raised: null
+      }),
+      buildBarsMoneyRow({
+        person_id: "cccc3333-3333-4333-8333-333333333333",
+        person_name: "Jane Candidate",
+        total_raised: "5000.00",
+        candidate_id: "22222222-2222-4222-8222-222222222222",
+        candidate_slug: "jane-candidate",
+        candidate_slug_is_unique: true,
+        candidate_identity_is_safe: true
+      }),
+      buildBarsMoneyRow({
+        person_id: "dddd4444-4444-4444-8444-444444444444",
+        person_name: "Sam Runner",
+        total_raised: "500.00"
+      })
+    ]
+  };
+
+  it("renders ranked bars above the table with proportional widths and exact figures", () => {
+    const rendered = render(DetailPage, {
+      props: {
+        entityType: "contest",
+        data: CONTEST_DETAIL,
+        contestCandidateMoney: BAR_MONEY_RESPONSE
+      }
+    });
+
+    const barsIndex = rendered.body.indexOf('data-testid="race-money-bars"');
+    const tableIndex = rendered.body.indexOf('data-testid="race-money-table-scroll"');
+    expect(barsIndex).toBeGreaterThan(-1);
+    expect(tableIndex).toBeGreaterThan(-1);
+    // The bars are the one-second answer; they come before the data table.
+    expect(barsIndex).toBeLessThan(tableIndex);
+
+    const barsBody = rendered.body.slice(barsIndex, tableIndex);
+    // Ranked order in the DOM, not wire order: Jane, Sam, Zoe, then the group.
+    const janeIndex = barsBody.indexOf("Jane Candidate");
+    const samIndex = barsBody.indexOf("Sam Runner");
+    const zoeIndex = barsBody.indexOf("Zoe Zilch");
+    const umaIndex = barsBody.indexOf("Uma Unloaded");
+    expect(janeIndex).toBeGreaterThan(-1);
+    expect(janeIndex).toBeLessThan(samIndex);
+    expect(samIndex).toBeLessThan(zoeIndex);
+    expect(zoeIndex).toBeLessThan(umaIndex);
+
+    // Hand-calculated widths: 5000/5000 and 500/5000.
+    expect(barsBody).toContain("--race-bar-width: 100%");
+    expect(barsBody).toContain("--race-bar-width: 10%");
+    // Direct labels carry the exact figures.
+    expect(barsBody).toContain("$5,000.00");
+    expect(barsBody).toContain("$500.00");
+    // Candidate link keeps the table's slug and cycle rules.
+    expect(barsBody).toContain('href="/candidate/jane-candidate?cycle=2026"');
+    // Heading sits below the panel h3, holding the heading-order floor.
+    expect(barsBody).toContain("<h4");
+    expect(barsBody).not.toContain("<h3");
+  });
+
+  it("keeps a measured zero visually distinct from money that was never loaded", () => {
+    const rendered = render(DetailPage, {
+      props: {
+        entityType: "contest",
+        data: CONTEST_DETAIL,
+        contestCandidateMoney: BAR_MONEY_RESPONSE
+      }
+    });
+
+    const barsIndex = rendered.body.indexOf('data-testid="race-money-bars"');
+    const tableIndex = rendered.body.indexOf('data-testid="race-money-table-scroll"');
+    const barsBody = rendered.body.slice(barsIndex, tableIndex);
+
+    // Measured zero: a ranked row with a zero-width bar AND the $0.00 figure.
+    const zoeRow = barsBody.slice(
+      barsBody.indexOf("Zoe Zilch"),
+      barsBody.indexOf('data-testid="race-money-bars-not-loaded"')
+    );
+    expect(zoeRow).toContain("--race-bar-width: 0%");
+    expect(zoeRow).toContain("$0.00");
+
+    // Never loaded: words in a distinct group, no bar track, no dollar figure.
+    const notLoadedIndex = barsBody.indexOf('data-testid="race-money-bars-not-loaded"');
+    expect(notLoadedIndex).toBeGreaterThan(-1);
+    const notLoadedBody = barsBody.slice(notLoadedIndex);
+    expect(notLoadedBody).toContain("Uma Unloaded");
+    expect(notLoadedBody).not.toContain("race-money-bars__track");
+    expect(notLoadedBody).not.toContain("$");
+    // The group label states the claim in words, before the group.
+    expect(barsBody).toContain("not loaded");
+
+    // The decorative track is hidden from assistive tech; the row text
+    // (name + figure) is the accessible content.
+    expect(barsBody).toContain('aria-hidden="true"');
+  });
+
+  it("renders no bars when no candidate has measured fundraising", () => {
+    const rendered = render(DetailPage, {
+      props: {
+        entityType: "contest",
+        data: CONTEST_DETAIL,
+        contestCandidateMoney: {
+          ...BAR_MONEY_RESPONSE,
+          total_raised: null,
+          candidate_count: 1,
+          rows: [
+            buildBarsMoneyRow({
+              person_id: "bbbb2222-2222-4222-8222-222222222222",
+              person_name: "Uma Unloaded",
+              total_raised: null
+            })
+          ]
+        }
+      }
+    });
+
+    expect(rendered.body).not.toContain('data-testid="race-money-bars"');
+    // The scoreboard table remains: it carries the unknown-coverage copy.
+    expect(rendered.body).toContain('data-testid="race-money-table-scroll"');
+  });
+});
+
+describe("scrollable regions", () => {
+  // axe rule scrollable-region-focusable, impact serious - the same defect the
+  // entity-detail and campaign-finance-detail DetailPages fixed on 2026-08-19.
+  // .detail__table-scroll sets overflow-x: auto over a table wider than its
+  // container; with no focusable descendant such a region cannot be scrolled
+  // from the keyboard at all. The smoke a11y floor refuses serious violations,
+  // but it only runs nightly - this holds the same invariant at vitest speed,
+  // and it fails the moment a new scroll container is added without the
+  // attribute rather than when the fix is deleted from an old one.
+  it("gives every horizontal scroll container a keyboard tab stop", () => {
+    const source = readFileSync(new URL("./DetailPage.svelte", import.meta.url), "utf8");
+    const containers = [...source.matchAll(/<div class="detail__table-scroll"[^>]*>/g)].map(
+      (match) => match[0]
+    );
+
+    expect(containers.length).toBeGreaterThan(0);
+    for (const container of containers) {
+      expect(container).toContain('tabindex="0"');
     }
   });
 });

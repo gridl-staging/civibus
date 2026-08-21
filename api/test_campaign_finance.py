@@ -3183,6 +3183,75 @@ def test_list_candidates_filters_by_person_id(
     assert payload["items"][0]["person_id"] == str(person_a.id)
 
 
+def test_list_candidates_filters_by_name_contains(
+    api_client: TestClient,
+    db_conn: psycopg.Connection,
+) -> None:
+    """civibus-frq: ``name`` narrows the browse by case-insensitive containment.
+
+    Hand-picked expectations throughout. The lower-case query against upper-case
+    FEC seeds is what proves the match is case-insensitive; the unique
+    ``zilphrane`` token is what makes exact-list assertions safe on an
+    accumulated database (no other row can contain it); names are digit-free so
+    the identity predicate cannot silently suppress the fixtures.
+    """
+    alpha_id = UUID("97000000-0000-0000-0000-000000000001")
+    bravo_id = UUID("97000000-0000-0000-0000-000000000002")
+    other_id = UUID("97000000-0000-0000-0000-000000000003")
+    insert_candidate_row(
+        db_conn,
+        CandidateRowSeed(
+            id=alpha_id,
+            fec_candidate_id="S0GA09701",
+            name="ZILPHRANE, GRETCHEN ALPHA",
+            office="S",
+            state="GA",
+        ),
+    )
+    insert_candidate_row(
+        db_conn,
+        CandidateRowSeed(
+            id=bravo_id,
+            fec_candidate_id="H0GA09702",
+            name="ZILPHRANE, HORTENSE BRAVO",
+            office="H",
+            state="GA",
+        ),
+    )
+    insert_candidate_row(
+        db_conn,
+        CandidateRowSeed(
+            id=other_id,
+            fec_candidate_id="S0GA09703",
+            name="OTHERSURNAME, GRETCHEN",
+            office="S",
+            state="GA",
+        ),
+    )
+
+    # Containment, case-insensitive, ordered by the default name sort. The
+    # unique token means these two rows are the complete result set, so the
+    # exact list also proves the third seed was excluded.
+    response = api_client.get("/v1/candidates?name=zilphrane&limit=50&offset=0")
+    assert response.status_code == 200
+    payload = response.json()
+    assert [row["id"] for row in payload["items"]] == [str(alpha_id), str(bravo_id)]
+    assert payload["has_next"] is False
+
+    # The name filter composes with the office filter: intersection, not union.
+    combined_response = api_client.get("/v1/candidates?name=zilphrane&office=S&limit=50&offset=0")
+    assert combined_response.status_code == 200
+    assert [row["id"] for row in combined_response.json()["items"]] == [str(alpha_id)]
+
+    # SQL wildcards are literal characters. No seeded name contains a percent
+    # sign, so a wildcard-interpreting implementation (which would match every
+    # row) fails this by returning the seeds.
+    wildcard_response = api_client.get("/v1/candidates?name=%25&limit=50&offset=0")
+    assert wildcard_response.status_code == 200
+    wildcard_ids = {row["id"] for row in wildcard_response.json()["items"]}
+    assert wildcard_ids & {str(alpha_id), str(bravo_id), str(other_id)} == set()
+
+
 def test_candidate_browse_omits_unsafe_identity_rows_but_keeps_them_addressable(
     api_client: TestClient,
     db_conn: psycopg.Connection,

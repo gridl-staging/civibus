@@ -241,6 +241,22 @@ describe("candidate browse name formatting", () => {
     expect(buildCandidateListItemPresentation(FULL_CANDIDATE).name).toBe("Candidate One");
   });
 
+  it("renders an identity-unsafe candidate's filed name raw, matching its detail page", () => {
+    // The unsafe row's detail page deliberately presents the raw filed string
+    // as source evidence (`buildCandidateFactRows`), so a list row that re-cases
+    // it would disagree with its own destination — the same link-text vs
+    // headline mismatch class that failed the production deploy gate 2026-08-20,
+    // in the opposite direction. Unsafe rows reach lists through person-scoped
+    // and include_unsafe_identity reads, so this path renders for real readers.
+    const presentation = buildCandidateListItemPresentation({
+      ...FULL_CANDIDATE,
+      name: "RAWFILED, QUIRKSALL UNSAFE",
+      identity_is_safe: false
+    });
+
+    expect(presentation.name).toBe("RAWFILED, QUIRKSALL UNSAFE");
+  });
+
   it("does not apply person-name casing to committee rows", () => {
     // A committee is an organization, not a human. `Last, First` casing rules do
     // not hold for it, so its name stays verbatim.

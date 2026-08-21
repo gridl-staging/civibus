@@ -8,6 +8,7 @@ import {
   chartRegion,
   escapeRegExp,
   expectAxisFormatMatchesDeclaredUnit,
+  expectHtmlBarListRenderIfPlotted,
   expectNoBackendFailureStates,
   expectNoChartFrameOverflow,
   expectNoHorizontalOverflow,
@@ -47,6 +48,9 @@ const COVERAGE_DATE = /\d{4}-\d{2}-\d{2}/;
 const EXACT_FEC_SOURCE =
   /^FEC (?:Schedule A itemized individual contributions|candidate and committee summaries|Schedule E independent expenditures)$/;
 
+// SVG chart frames only. The size-buckets module is deliberately separate: since
+// civibus-3a3 HorizontalBarChart's one visual encoding is a ranked HTML bar list
+// with no aria-labelled svg section, so it cannot ride the chartLabel lookup.
 const FINANCE_CHART_FRAMES = [
   {
     title: "Sources of receipts",
@@ -57,14 +61,11 @@ const FINANCE_CHART_FRAMES = [
     chartLabel: "Monthly contribution columns"
   },
   {
-    title: "Itemized contribution-size buckets",
-    chartLabel: "Itemized contribution-size buckets bar chart"
-  },
-  {
     title: "Geography",
     chartLabel: "Geography dollar share by contributor location"
   }
 ] as const;
+const SIZE_BUCKETS_CHART_FRAME = { title: "Itemized contribution-size buckets" } as const;
 const OUTSIDE_SPENDING_CHART_LABEL = "Zero-centered support and oppose spending comparison";
 const OUTSIDE_SPENDING_CHART_FRAME = {
   title: "Outside spending",
@@ -219,7 +220,19 @@ async function expectRealFigureOrTruthfulNoData(page: Page): Promise<void> {
 
 async function expectRenderedFinanceChartsAreHonest(page: Page): Promise<void> {
   const renderedCharts = await collectRenderedFinanceCharts(page, FINANCE_CHART_FRAMES);
-  if (renderedCharts.length === 0) {
+
+  // The size-buckets module paints a ranked HTML bar list, not an svg
+  // (civibus-3a3). Same IF-it-renders contract as the svg frames: a member with
+  // no itemized rows shows the frame's truthful no-data state (the tolerant
+  // helper returns false), but a plotted list must carry painted bars, and its
+  // frame keeps the keyboard-reachable FEC source link contract.
+  const sizeBucketsFrame = await chartFrameRegion(page, SIZE_BUCKETS_CHART_FRAME.title);
+  const sizeBucketsPlotted = await expectHtmlBarListRenderIfPlotted(sizeBucketsFrame);
+  if (sizeBucketsPlotted) {
+    await expectChartSourceLinksKeyboardReachable([sizeBucketsFrame]);
+  }
+
+  if (renderedCharts.length === 0 && !sizeBucketsPlotted) {
     // The invariant is "the reader is told why there is no chart", not "a chart
     // frame is the thing that tells them". When the selected cycle has no loaded
     // evidence, the Money at a glance panel says so directly and prominently,
@@ -239,17 +252,26 @@ async function expectRenderedFinanceChartsAreHonest(page: Page): Promise<void> {
     return;
   }
 
-  const chartRegions = renderedCharts.map((chart) => chart.chart);
-  const chartFrames = renderedCharts.map((chart) => chart.frame);
-  await expectNoOpaqueNearBlackPaints(chartRegions);
-  await expectTickLabelsInsidePlotBox(chartRegions);
-  await expectAxisFormatMatchesDeclaredUnit(chartRegions);
-  await expectNoChartFrameOverflow(chartFrames);
-  await expectChartSourceLinksKeyboardReachable(chartFrames);
+  // Guarded: the html-bars module can be the only plotted chart, in which case
+  // there are no svg regions to sample and the geometry oracles have no subject.
+  if (renderedCharts.length > 0) {
+    const chartRegions = renderedCharts.map((chart) => chart.chart);
+    const chartFrames = renderedCharts.map((chart) => chart.frame);
+    await expectNoOpaqueNearBlackPaints(chartRegions);
+    await expectTickLabelsInsidePlotBox(chartRegions);
+    await expectAxisFormatMatchesDeclaredUnit(chartRegions);
+    await expectNoChartFrameOverflow(chartFrames);
+    await expectChartSourceLinksKeyboardReachable(chartFrames);
+  }
 }
 
 async function expectFinanceChartNoDataState(page: Page): Promise<void> {
-  const chartFrames = await collectChartFrameRegions(page, FINANCE_CHART_FRAMES);
+  // The size-buckets frame is hunted too: its no-data state copy comes from the
+  // same ChartFrame owner even though its plot is an HTML bar list.
+  const chartFrames = await collectChartFrameRegions(page, [
+    ...FINANCE_CHART_FRAMES,
+    SIZE_BUCKETS_CHART_FRAME
+  ]);
   const financeChartNoDataStates: Locator[] = [];
   for (const frame of chartFrames) {
     const chartOwnedState = frame.getByText(CHART_FRAME_STATE_COPY).first();
@@ -324,7 +346,8 @@ async function outsideSpendingHasReportedActivity(page: Page): Promise<boolean> 
 
 type FinanceChartFrame = {
   title: string;
-  chartLabel: string;
+  /** Absent for the size-buckets module, whose HTML bar list has no aria-labelled svg section. */
+  chartLabel?: string;
 };
 
 type RenderedFinanceChart = {
@@ -358,6 +381,9 @@ async function collectRenderedFinanceCharts(
 ): Promise<RenderedFinanceChart[]> {
   const regions: RenderedFinanceChart[] = [];
   for (const frame of frames) {
+    if (frame.chartLabel === undefined) {
+      continue;
+    }
     const chart = await chartRegion(page, frame.chartLabel);
     if ((await chart.count()) === 0 || !(await chart.isVisible())) {
       continue;

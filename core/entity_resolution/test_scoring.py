@@ -43,8 +43,8 @@ def _is_pair(pair: dict, id_a: UUID, id_b: UUID) -> bool:
 
 
 @pytest.mark.integration
-def test_deterministic_person_fec_id_match(db_conn: psycopg.Connection) -> None:
-    """Two persons sharing the same fec_id are matched deterministically."""
+def test_deterministic_person_fec_candidate_id_match(db_conn: psycopg.Connection) -> None:
+    """Two persons sharing the same scalar fec_candidate_id are matched deterministically."""
     person_a = uuid4()
     person_b = uuid4()
 
@@ -55,7 +55,7 @@ def test_deterministic_person_fec_id_match(db_conn: psycopg.Connection) -> None:
         first_name="Alice",
         last_name="Smith",
         date_of_birth=None,
-        identifiers={"fec_id": "FEC-SHARED-001"},
+        identifiers={"fec_candidate_id": "FEC-SHARED-001"},
     )
     _insert_person(
         db_conn,
@@ -64,7 +64,7 @@ def test_deterministic_person_fec_id_match(db_conn: psycopg.Connection) -> None:
         first_name="Alice",
         last_name="Smith",
         date_of_birth=None,
-        identifiers={"fec_id": "FEC-SHARED-001"},
+        identifiers={"fec_candidate_id": "FEC-SHARED-001"},
     )
 
     pairs = run_deterministic_rules(db_conn, "person")
@@ -73,9 +73,93 @@ def test_deterministic_person_fec_id_match(db_conn: psycopg.Connection) -> None:
     assert test_pair is not None, f"Expected pair not found among {len(pairs)} pairs"
     assert test_pair["confidence"] == 1.0
     assert test_pair["decision_method"] == "deterministic"
-    assert test_pair["decided_by"] == "deterministic_fec_id_match"
-    assert test_pair["matched_rule_names"] == ["deterministic_fec_id_match"]
+    assert test_pair["decided_by"] == "deterministic_fec_candidate_id_match"
+    assert test_pair["matched_rule_names"] == ["deterministic_fec_candidate_id_match"]
     assert test_pair["entity_id_a"] < test_pair["entity_id_b"]
+
+
+@pytest.mark.integration
+def test_deterministic_person_fec_candidate_ids_array_overlap_match(
+    db_conn: psycopg.Connection,
+) -> None:
+    """civibus-s5q: a spine person's id ARRAY overlapping a shadow's scalar id matches.
+
+    This is the exact production duplicate class the original dead 'fec_id' rule
+    was aimed at: a chamber-switching spine person carries BOTH FEC candidate ids
+    in 'fec_candidate_ids' (House + Senate), while the FEC-lane shadow row carries
+    only the scalar Senate id. Scalar equality alone cannot collapse this pair
+    because the two scalar values differ; set overlap can.
+    """
+    spine_person = uuid4()
+    shadow_person = uuid4()
+
+    _insert_person(
+        db_conn,
+        person_id=spine_person,
+        canonical_name="Switcher Spine",
+        first_name="Switcher",
+        last_name="Spine",
+        date_of_birth=None,
+        # Spine shape (federal_spine_loader): scalar = first id, array = all ids.
+        identifiers={
+            "bioguide_id": "BG-SWITCH-S5Q",
+            "fec_candidate_id": "TSTQHOUSE01",
+            "fec_candidate_ids": ["TSTQHOUSE01", "TSTQSENATE01"],
+        },
+    )
+    _insert_person(
+        db_conn,
+        person_id=shadow_person,
+        canonical_name="Switcher Shadow",
+        first_name="Switcher",
+        last_name="Shadow",
+        date_of_birth=None,
+        # Shadow shape (bulk_loader load_candidates): scalar only, no array.
+        identifiers={"fec_candidate_id": "TSTQSENATE01"},
+    )
+
+    pairs = run_deterministic_rules(db_conn, "person")
+
+    test_pair = _find_pair(pairs, spine_person, shadow_person)
+    assert test_pair is not None, f"Expected chamber-switcher pair not found among {len(pairs)} pairs"
+    assert test_pair["confidence"] == 1.0
+    assert test_pair["decision_method"] == "deterministic"
+    assert test_pair["decided_by"] == "deterministic_fec_candidate_id_match"
+    assert test_pair["matched_rule_names"] == ["deterministic_fec_candidate_id_match"]
+
+
+@pytest.mark.integration
+def test_deterministic_person_bioguide_id_match(db_conn: psycopg.Connection) -> None:
+    """Two persons sharing a bioguide_id are matched deterministically."""
+    person_a = uuid4()
+    person_b = uuid4()
+
+    _insert_person(
+        db_conn,
+        person_id=person_a,
+        canonical_name="Bioguide One",
+        first_name="Bioguide",
+        last_name="One",
+        date_of_birth=None,
+        identifiers={"bioguide_id": "BG-SHARED-S5Q-001"},
+    )
+    _insert_person(
+        db_conn,
+        person_id=person_b,
+        canonical_name="Bioguide Two",
+        first_name="Bioguide",
+        last_name="Two",
+        date_of_birth=None,
+        identifiers={"bioguide_id": "BG-SHARED-S5Q-001"},
+    )
+
+    pairs = run_deterministic_rules(db_conn, "person")
+
+    test_pair = _find_pair(pairs, person_a, person_b)
+    assert test_pair is not None
+    assert test_pair["confidence"] == 1.0
+    assert test_pair["decided_by"] == "deterministic_bioguide_id_match"
+    assert test_pair["matched_rule_names"] == ["deterministic_bioguide_id_match"]
 
 
 @pytest.mark.integration
@@ -124,7 +208,7 @@ def test_deterministic_person_trimmed_identifier_match(db_conn: psycopg.Connecti
         first_name="Trimmed",
         last_name="Alpha",
         date_of_birth=None,
-        identifiers={"voter_reg_id": " VR-TRIM-001 "},
+        identifiers={"bioguide_id": " VR-TRIM-001 "},
     )
     _insert_person(
         db_conn,
@@ -133,15 +217,15 @@ def test_deterministic_person_trimmed_identifier_match(db_conn: psycopg.Connecti
         first_name="Trimmed",
         last_name="Beta",
         date_of_birth=None,
-        identifiers={"voter_reg_id": "VR-TRIM-001"},
+        identifiers={"bioguide_id": "VR-TRIM-001"},
     )
 
     pairs = run_deterministic_rules(db_conn, "person")
 
     test_pair = _find_pair(pairs, person_a, person_b)
     assert test_pair is not None
-    assert test_pair["decided_by"] == "deterministic_voter_reg_match"
-    assert test_pair["matched_rule_names"] == ["deterministic_voter_reg_match"]
+    assert test_pair["decided_by"] == "deterministic_bioguide_id_match"
+    assert test_pair["matched_rule_names"] == ["deterministic_bioguide_id_match"]
 
 
 @pytest.mark.integration
@@ -177,7 +261,7 @@ def test_deterministic_org_trimmed_identifier_match(db_conn: psycopg.Connection)
 
 @pytest.mark.integration
 def test_deterministic_null_identifier_no_match(db_conn: psycopg.Connection) -> None:
-    """Persons with no fec_id (key absent from identifiers) are not matched."""
+    """Persons with no fec_candidate_id (key absent from identifiers) are not matched."""
     person_a = uuid4()
     person_b = uuid4()
 
@@ -217,7 +301,7 @@ def test_deterministic_blank_identifier_no_match(db_conn: psycopg.Connection) ->
         first_name="Blank",
         last_name="One",
         date_of_birth=None,
-        identifiers={"fec_id": "", "voter_reg_id": "   "},
+        identifiers={"fec_candidate_id": "", "bioguide_id": "   "},
     )
     _insert_person(
         db_conn,
@@ -226,7 +310,7 @@ def test_deterministic_blank_identifier_no_match(db_conn: psycopg.Connection) ->
         first_name="Blank",
         last_name="Two",
         date_of_birth=None,
-        identifiers={"fec_id": "", "voter_reg_id": "   "},
+        identifiers={"fec_candidate_id": "", "bioguide_id": "   "},
     )
 
     pairs = run_deterministic_rules(db_conn, "person")
@@ -264,7 +348,7 @@ def test_deterministic_org_blank_identifier_no_match(db_conn: psycopg.Connection
 def test_deterministic_multiple_rules_collapse_to_one_pair(
     db_conn: psycopg.Connection,
 ) -> None:
-    """Two persons matching on both fec_id and voter_reg_id produce one pair with both rule names."""
+    """Two persons matching on both fec_candidate_id and bioguide_id produce one pair with both rule names."""
     person_a = uuid4()
     person_b = uuid4()
 
@@ -275,7 +359,7 @@ def test_deterministic_multiple_rules_collapse_to_one_pair(
         first_name="Multi",
         last_name="MatchA",
         date_of_birth=None,
-        identifiers={"fec_id": "FEC-MULTI-001", "voter_reg_id": "VR-MULTI-001"},
+        identifiers={"fec_candidate_id": "FEC-MULTI-001", "bioguide_id": "VR-MULTI-001"},
     )
     _insert_person(
         db_conn,
@@ -284,7 +368,7 @@ def test_deterministic_multiple_rules_collapse_to_one_pair(
         first_name="Multi",
         last_name="MatchB",
         date_of_birth=None,
-        identifiers={"fec_id": "FEC-MULTI-001", "voter_reg_id": "VR-MULTI-001"},
+        identifiers={"fec_candidate_id": "FEC-MULTI-001", "bioguide_id": "VR-MULTI-001"},
     )
 
     pairs = run_deterministic_rules(db_conn, "person")
@@ -297,8 +381,8 @@ def test_deterministic_multiple_rules_collapse_to_one_pair(
     assert pair["decision_method"] == "deterministic"
     assert pair["decided_by"] == "deterministic_multi_rule"
     assert set(pair["matched_rule_names"]) == {
-        "deterministic_fec_id_match",
-        "deterministic_voter_reg_match",
+        "deterministic_fec_candidate_id_match",
+        "deterministic_bioguide_id_match",
     }
 
 
@@ -315,7 +399,7 @@ def test_deterministic_canonical_ordering(db_conn: psycopg.Connection) -> None:
         first_name="Order",
         last_name="Alpha",
         date_of_birth=None,
-        identifiers={"fec_id": "FEC-ORDER-001"},
+        identifiers={"fec_candidate_id": "FEC-ORDER-001"},
     )
     _insert_person(
         db_conn,
@@ -324,7 +408,7 @@ def test_deterministic_canonical_ordering(db_conn: psycopg.Connection) -> None:
         first_name="Order",
         last_name="Beta",
         date_of_birth=None,
-        identifiers={"fec_id": "FEC-ORDER-001"},
+        identifiers={"fec_candidate_id": "FEC-ORDER-001"},
     )
 
     pairs = run_deterministic_rules(db_conn, "person")
@@ -348,7 +432,7 @@ def test_deterministic_no_shared_identifiers_no_match(
         first_name="Unique",
         last_name="One",
         date_of_birth=None,
-        identifiers={"fec_id": "FEC-UNIQUE-001"},
+        identifiers={"fec_candidate_id": "FEC-UNIQUE-001"},
     )
     _insert_person(
         db_conn,
@@ -357,7 +441,7 @@ def test_deterministic_no_shared_identifiers_no_match(
         first_name="Unique",
         last_name="Two",
         date_of_birth=None,
-        identifiers={"fec_id": "FEC-UNIQUE-002"},
+        identifiers={"fec_candidate_id": "FEC-UNIQUE-002"},
     )
 
     pairs = run_deterministic_rules(db_conn, "person")
@@ -394,8 +478,8 @@ def test_filter_unresolved_rows_removes_matched_entities() -> None:
             "entity_id_b": max(id_a, id_b),
             "confidence": 1.0,
             "decision_method": "deterministic",
-            "decided_by": "deterministic_fec_id_match",
-            "matched_rule_names": ["deterministic_fec_id_match"],
+            "decided_by": "deterministic_fec_candidate_id_match",
+            "matched_rule_names": ["deterministic_fec_candidate_id_match"],
         }
     ]
 
@@ -437,8 +521,8 @@ def test_filter_unresolved_rows_preserves_row_shape() -> None:
             "entity_id_b": max(id_a, id_b),
             "confidence": 1.0,
             "decision_method": "deterministic",
-            "decided_by": "deterministic_fec_id_match",
-            "matched_rule_names": ["deterministic_fec_id_match"],
+            "decided_by": "deterministic_fec_candidate_id_match",
+            "matched_rule_names": ["deterministic_fec_candidate_id_match"],
         }
     ]
 

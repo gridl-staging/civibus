@@ -156,7 +156,7 @@ def test_materialize_er_edges_creates_expected_labels_and_properties_for_person_
             "confidence": 0.99,
             "decision": "match",
             "decision_method": "deterministic",
-            "decided_by": "deterministic_fec_id_match",
+            "decided_by": "deterministic_fec_candidate_id_match",
         },
         {
             "entity_id_a": min(b, d),
@@ -290,7 +290,7 @@ def test_materialize_er_edges_removes_stale_uncertain_edge_when_pair_becomes_mat
     pair["confidence"] = 0.99
     pair["decision"] = "match"
     pair["decision_method"] = "deterministic"
-    pair["decided_by"] = "deterministic_fec_id_match"
+    pair["decided_by"] = "deterministic_fec_candidate_id_match"
     materialize_er_edges(graph_conn, [pair], "person")
 
     assert (
@@ -484,16 +484,16 @@ def test_stage4_pipeline_persists_decisions_clusters_and_edges_end_to_end(
             "entity_id_b": max(a, b),
             "confidence": 1.0,
             "decision_method": "deterministic",
-            "decided_by": "deterministic_fec_id_match",
-            "matched_rule_names": ["deterministic_fec_id_match"],
+            "decided_by": "deterministic_fec_candidate_id_match",
+            "matched_rule_names": ["deterministic_fec_candidate_id_match"],
         },
         {
             "entity_id_a": min(b, c),
             "entity_id_b": max(b, c),
             "confidence": 1.0,
             "decision_method": "deterministic",
-            "decided_by": "deterministic_voter_reg_match",
-            "matched_rule_names": ["deterministic_voter_reg_match"],
+            "decided_by": "deterministic_bioguide_id_match",
+            "matched_rule_names": ["deterministic_bioguide_id_match"],
         },
         {
             "entity_id_a": min(d, e),

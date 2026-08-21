@@ -106,6 +106,7 @@ import {
   assertBreadcrumbNav,
   assertSeoHead,
   assertSourceRecordLink,
+  expectHtmlBarListRender,
   expectNoBackendFailureStates
 } from "./smoke-helpers";
 
@@ -231,10 +232,15 @@ test.describe("entity and civic detail smoke", () => {
       .click();
     await expect(contributionTotalsSummary.getByText(SMOKE_PERSON_CAREER_TOTAL, { exact: true })).toBeVisible();
     await expectFinanceChartHasStableHeight(page, "Monthly contribution columns");
-    await expectFinanceChartHasStableHeight(page, "Itemized contribution-size buckets bar chart");
+    // The size-buckets module is a ranked HTML bar list with no svg chart
+    // section or chart heading of its own (civibus-3a3); its title lives in the
+    // frame's figcaption and its render proof is the bar-list oracle.
+    await expectHtmlBarListRender(page.getByTestId("person-size-buckets"));
+    await expect(
+      page.getByTestId("person-size-buckets").getByText("Itemized contribution-size buckets").first()
+    ).toBeVisible();
     await expectFinanceChartHasStableHeight(page, "Geography dollar share by contributor location");
     await expect(page.getByRole("heading", { name: "Monthly contribution columns" })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Itemized contribution-size buckets" })).toBeVisible();
     await expect(page.getByRole("heading", { name: "Geography dollar share" })).toBeVisible();
     await expect(page.getByText(SMOKE_PERSON_DISTRICT_SHARE_HEADLINE, { exact: true })).toBeVisible();
     await expect(page.getByText(SMOKE_PERSON_DISTRICT_SHARE_SUMMARY, { exact: true })).toBeVisible();

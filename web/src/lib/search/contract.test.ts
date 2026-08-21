@@ -6,6 +6,7 @@ import {
   isSearchEntityType,
   isRenderableSearchResult,
   SEARCH_ENTITY_TYPES,
+  SEARCH_PAGE_SIZE,
   SEARCH_QUERY_MIN_LENGTH,
   toSearchResultHref,
   type SearchApiResult,
@@ -51,7 +52,9 @@ describe('search contract', () => {
       '/person/11111111-1111-4111-8111-111111111111',
       '/org/22222222-2222-4222-8222-222222222222',
       '/committee/33333333-3333-4333-8333-333333333333',
-      '/person/44444444-4444-4444-8444-444444444444',
+      // candidate rows are cf.candidate records (civibus-x9d) and route to the
+      // candidate detail page, which canonicalizes a UUID to its slug URL.
+      '/candidate/44444444-4444-4444-8444-444444444444',
       '/contest/55555555-5555-4555-8555-555555555555'
     ]);
   });
@@ -192,6 +195,34 @@ describe('search contract', () => {
   it('keeps candidate in the UI filter list while still allowing backend-owned passthrough values', () => {
     expect(SEARCH_ENTITY_TYPES).toContain('candidate');
     expect(buildSearchPath({ q: 'civ', entityType: 'candidate' })).toBe('/v1/search?q=civ&entity_type=candidate');
+  });
+
+  // --- Pagination (carved out of civibus-ehk) ---
+
+  it('exposes the fixed search page size', () => {
+    expect(SEARCH_PAGE_SIZE).toBe(20);
+  });
+
+  it('appends limit and offset to the API path for paginated requests', () => {
+    // The page server requests SEARCH_PAGE_SIZE + 1 rows and uses the extra row
+    // as the has-next signal, mirroring the backend's LIMIT+1 envelope pattern.
+    expect(buildSearchPath({ q: 'civ', entityType: '', limit: 21, offset: '20' })).toBe(
+      '/v1/search?q=civ&limit=21&offset=20'
+    );
+  });
+
+  it('omits limit and offset from the API path when not supplied', () => {
+    expect(buildSearchPath({ q: 'civ', entityType: 'org' })).toBe('/v1/search?q=civ&entity_type=org');
+  });
+
+  it('appends offset to the page path only when positive', () => {
+    // Page one is the canonical URL; offset=0 would make one page shareable
+    // under two URLs.
+    expect(buildSearchPagePath({ q: 'civ', offset: 20 })).toBe('/search?q=civ&offset=20');
+    expect(buildSearchPagePath({ q: 'civ', entityType: 'org', offset: 40 })).toBe(
+      '/search?q=civ&entity_type=org&offset=40'
+    );
+    expect(buildSearchPagePath({ q: 'civ', offset: 0 })).toBe('/search?q=civ');
   });
 
   // --- Context field passthrough (Stage 4 pin tests) ---

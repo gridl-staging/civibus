@@ -426,7 +426,12 @@ describe("entity detail page rendering", () => {
     expect(rendered.body).toContain("Portrait of Jane Doe");
     expect(rendered.body).toContain("<h3>Core attributes</h3>");
     expect(rendered.body).toContain("<dt>Current office</dt>");
-    expect(rendered.body).toContain("<dd>City Council Member</dd>");
+    // The office name is the person page's return path into the race-discovery
+    // chain (person -> office -> "Elections for this office" -> contest), so it
+    // must be a link to the office record, not bare text. civibus-7qj.
+    expect(rendered.body).toContain(
+      '<a href="/office/bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb">City Council Member</a>'
+    );
     expect(rendered.body).toContain("<dt>Office level</dt>");
     expect(rendered.body).toContain("<dd>municipal</dd>");
     expect(rendered.body).toContain("<dt>Identifiers</dt>");

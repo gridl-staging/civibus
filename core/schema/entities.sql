@@ -45,7 +45,7 @@ CREATE TABLE core.person (
     bio_pulled_at   TIMESTAMPTZ,                   -- UTC timestamp when biography text was last fetched
     date_of_birth   DATE,
     year_of_birth   SMALLINT,                     -- When full DOB unavailable
-    identifiers     JSONB NOT NULL DEFAULT '{}',   -- {"fec_id": "...", "nc_voter_id": "..."}
+    identifiers     JSONB NOT NULL DEFAULT '{}',   -- {"bioguide_id": "...", "fec_candidate_id": "..."}
     primary_address_id UUID,                      -- FK to core.address
     er_cluster_id   UUID,                         -- Entity resolution cluster identifier
     er_confidence   REAL,                         -- Overall entity resolution confidence [0..1]

@@ -8,6 +8,7 @@ import type { PageServerLoad } from "./$types";
 export const load: PageServerLoad = ({ url, locals }) =>
   withApiResponseErrorHandling(async () => {
     const queryParams = readOptionalQueryParams(url.searchParams, [
+      "name",
       "state",
       "office",
       "sort",
@@ -16,6 +17,9 @@ export const load: PageServerLoad = ({ url, locals }) =>
     ] as const);
     const request: CandidateListRequest = {
       ...queryParams,
+      // A blank name submit means "no name filter" (civibus-frq), matching the
+      // blank-select convention below rather than sending an empty token.
+      name: queryParams.name === "" ? undefined : queryParams.name,
       state: queryParams.state === "" ? undefined : queryParams.state,
       office: queryParams.office === "" ? undefined : queryParams.office,
       // A blank sort submit means "default", so drop it rather than sending an
