@@ -8402,6 +8402,7 @@ def test_get_county_campaign_finance_summary_returns_aggregated_proxy_totals_for
         {
             "candidate_id": str(context.candidate_id),
             "candidate_name": "Jordan Candidate",
+            "identity_is_safe": True,
             "donor_total_cents": 10000,
             "transaction_count": 1,
         }
@@ -8504,18 +8505,21 @@ def test_get_county_campaign_finance_summary_ranks_recipients_and_candidates_wit
         {
             "candidate_id": str(recipient_alpha.candidate_id),
             "candidate_name": "Candidate Alpha",
+            "identity_is_safe": True,
             "donor_total_cents": 12000,
             "transaction_count": 2,
         },
         {
             "candidate_id": str(recipient_beta.candidate_id),
             "candidate_name": "Candidate Beta",
+            "identity_is_safe": True,
             "donor_total_cents": 12000,
             "transaction_count": 2,
         },
         {
             "candidate_id": str(recipient_gamma.candidate_id),
             "candidate_name": "Candidate Gamma",
+            "identity_is_safe": True,
             "donor_total_cents": 12000,
             "transaction_count": 1,
         },
@@ -8628,6 +8632,7 @@ def test_get_county_campaign_finance_summary_excludes_memo_terminated_and_supers
             {
                 "candidate_id": str(context.candidate_id),
                 "candidate_name": "Filter Candidate",
+                "identity_is_safe": True,
                 "donor_total_cents": 7500,
                 "transaction_count": 1,
             }
@@ -8644,6 +8649,74 @@ def test_get_county_campaign_finance_summary_excludes_memo_terminated_and_supers
             }
         ],
     }
+
+
+def test_get_county_campaign_finance_summary_flags_linked_candidate_identity_safety(
+    api_client: TestClient,
+    db_conn: psycopg.Connection,
+) -> None:
+    """Each linked-candidate row must carry the candidate identity gate.
+    Specimens are deliberate: an ALL-CAPS digit-free FEC name is identity-SAFE
+    (frontends may format it), while a digit-bearing address-like source string
+    is UNSAFE and must stay raw. The mixed-case names used by the other county
+    tests pass the gate vacuously and cannot distinguish the branches."""
+    context = seed_county_summary_fixture(
+        db_conn,
+        committee_id=UUID("a2300000-0000-0000-0000-000000000001"),
+        committee_name="Wake Honesty PAC",
+        recipient_committee_id=UUID("a2300000-0000-0000-0000-000000000010"),
+        recipient_committee_name="Recipient Honesty Safe",
+        candidate_id=UUID("a2300000-0000-0000-0000-000000000020"),
+        candidate_name="OSSOFF, T. JONATHAN",
+    )
+    unsafe_recipient = seed_county_summary_recipient(
+        db_conn,
+        recipient_committee_id=UUID("a2300000-0000-0000-0000-000000000011"),
+        recipient_committee_name="Recipient Honesty Unsafe",
+        recipient_committee_fec_id="C23000011",
+        candidate_id=UUID("a2300000-0000-0000-0000-000000000021"),
+        candidate_name="212 MAIN AVE W. JOHN, RODNEY",
+        candidate_fec_id="H0NC23001",
+        link_id=UUID("a2300000-0000-0000-0000-000000000101"),
+    )
+    seeded_rows = [
+        (UUID("a2300000-0000-0000-0000-000000000111"), context.recipient_committee_id, Decimal("200.00")),
+        (UUID("a2300000-0000-0000-0000-000000000112"), unsafe_recipient.recipient_committee_id, Decimal("100.00")),
+    ]
+    for transaction_id, recipient_committee_id, amount in seeded_rows:
+        insert_transaction_row(
+            db_conn,
+            TransactionRowSeed(
+                id=transaction_id,
+                filing_id=context.filing_id,
+                committee_id=context.committee_id,
+                transaction_type="24A",
+                amount=amount,
+                amendment_indicator="N",
+                recipient_committee_id=recipient_committee_id,
+            ),
+        )
+
+    response = api_client.get("/v1/counties/nc/wake/campaign-finance-summary")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["top_linked_candidates"] == [
+        {
+            "candidate_id": str(context.candidate_id),
+            "candidate_name": "OSSOFF, T. JONATHAN",
+            "identity_is_safe": True,
+            "donor_total_cents": 20000,
+            "transaction_count": 1,
+        },
+        {
+            "candidate_id": str(unsafe_recipient.candidate_id),
+            "candidate_name": "212 MAIN AVE W. JOHN, RODNEY",
+            "identity_is_safe": False,
+            "donor_total_cents": 10000,
+            "transaction_count": 1,
+        },
+    ]
 
 
 def test_get_county_campaign_finance_summary_returns_404_for_unknown_county_slug(

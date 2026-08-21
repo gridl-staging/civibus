@@ -39,6 +39,9 @@ jobs:
         working-directory: web
         run: npm ci
       - name: qa-fast (public locality)
+        # Hard cap owned by tests/ci/pytest_tier_classifier.py::SUITE_TIME_BUDGETS
+        # (qa_medium tier); pinned by test_suite_time_budget_contract.py.
+        timeout-minutes: 10
         run: make qa-fast-public
 
   build:

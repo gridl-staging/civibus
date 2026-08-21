@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { formatCandidatePublicName } from "$lib/campaign-finance-detail/presentation";
   import type { MapLayerVisibility } from "$lib/config/app";
   import TrustSection from "$lib/detail-trust/TrustSection.svelte";
   import LayerToggle, { type LayerToggleChangeDetail } from "$lib/region-map/LayerToggle.svelte";
@@ -67,7 +68,16 @@
         <ul>
           {#each data.top_linked_candidates as candidate (candidate.candidate_id)}
             <li>
-              <strong>{candidate.candidate_name}</strong>
+              <!-- candidate_name is the raw FEC filing string (cf.candidate.name);
+                   the shared identity-gated owner decides formatted vs raw. A
+                   missing flag (smoke-fixture parity) must render raw, never be
+                   promoted to a formatted identity — hence `=== true`. -->
+              <strong
+                >{formatCandidatePublicName({
+                  name: candidate.candidate_name,
+                  identity_is_safe: candidate.identity_is_safe === true
+                })}</strong
+              >
               <span> {formatUsdFromCents(candidate.donor_total_cents)} ({candidate.transaction_count} txns)</span>
             </li>
           {/each}

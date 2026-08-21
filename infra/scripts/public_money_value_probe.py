@@ -7,6 +7,7 @@ import json
 import random
 import re
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor
 from decimal import Decimal
 from html.parser import HTMLParser
@@ -43,6 +44,51 @@ PROMOTED_FATAL_ASSERTIONS = frozenset(
 )
 MINIMUM_NONEMPTY_ROWS = 1
 HTTP_OK_STATUS = 200
+
+# --- Donor-search latency shape (civibus-6e1) --------------------------------
+#
+# The red-capable pin for donor-search cold latency. It asserts a SHAPE over a
+# fixed ten-surname sample, never a single reading, because a single network
+# sample flakes and a per-sample product-target assertion (3.5s) would page on
+# a healthy run: the 2026-08-21 quiet-DB measurement already has miller at
+# 4.07s and three more surnames within 0.5s of 3.5s.
+#
+# Chosen thresholds, from the recorded specimens on the bead:
+# * budget 5.0s/sample — generous over the 3.5s product target; the healthy
+#   2026-08-21 run's worst sample is 4.07s (>=0.9s margin on every surname),
+#   while the 2026-08-17 regression had four samples over 5s.
+# * shape >=8/10 within budget — the bead's own exit shape; tolerates two slow
+#   or errored samples so one hot surname or one transient blip cannot page.
+# * a non-200 response counts against the shape regardless of speed: the
+#   aug17 regression included a user-visible 503, and speed does not excuse an
+#   error page.
+# With these numbers the recorded regression scores 6/10 (FAIL), the uniform
+# mid-refresh ~10.3s stall scores 0/10 (FAIL), and the healthy post-deploy run
+# scores 10/10 (PASS) — red-capable on both recorded defect shapes without
+# flaking on the recorded healthy one.
+#
+# Opt-in (--assert-donor-latency) and deliberately NOT in
+# PROMOTED_FATAL_ASSERTIONS: this is a receipt/regression lane, not a deploy
+# gate, and it must never run against fixtures (timing a file read is a fake
+# latency receipt). The surname set is fixed for run-to-run comparability, and
+# includes smith even though the 4-hourly uptime probe keeps smith warm — the
+# shape tolerates warm outliers in either direction.
+DONOR_LATENCY_SURNAMES = (
+    "jones",
+    "miller",
+    "smith",
+    "johnson",
+    "williams",
+    "brown",
+    "davis",
+    "garcia",
+    "wilson",
+    "taylor",
+)
+DONOR_LATENCY_BUDGET_SECONDS = 5.0
+DONOR_LATENCY_REQUIRED_WITHIN_BUDGET = 8
+# A hung endpoint must fail its sample, not hang the probe.
+DONOR_LATENCY_REQUEST_TIMEOUT_SECONDS = 30.0
 
 EXPORT_PATH = "/api/public/v1/federal/export.json"
 CANDIDATES_PATH = "/candidates"
@@ -547,6 +593,66 @@ def evaluate_public_money_value(base_url: str, fixture_dir: Optional[Path] = Non
     return PublicMoneyProbeReport(assertions=assertions)
 
 
+class DonorLatencySample(BaseModel):
+    """One timed donor-search request; ``status is None`` means transport failure."""
+
+    surname: str
+    status: Optional[int] = None
+    elapsed_seconds: float
+
+    @property
+    def within_shape(self) -> bool:
+        return self.status == HTTP_OK_STATUS and self.elapsed_seconds <= DONOR_LATENCY_BUDGET_SECONDS
+
+    def format_reading(self) -> str:
+        status_label = "transport-error" if self.status is None else str(self.status)
+        return f"{self.surname}={self.elapsed_seconds:.2f}s status={status_label}"
+
+
+def _timed_donor_search_fetch(base_url: str, surname: str) -> DonorLatencySample:
+    """Fetch one live donor-search page and measure wall seconds to full body."""
+    request = Request(
+        f"{base_url}/donors?q={quote(surname)}&by=name",
+        headers={"Accept": "text/html, application/json"},
+    )
+    started = time.monotonic()
+    status: Optional[int] = None
+    try:
+        with urlopen(request, timeout=DONOR_LATENCY_REQUEST_TIMEOUT_SECONDS) as response:
+            response.read()
+            status = response.status
+    except HTTPError as error:
+        status = error.code
+    except (URLError, TimeoutError, http.client.HTTPException, OSError):
+        status = None
+    return DonorLatencySample(surname=surname, status=status, elapsed_seconds=time.monotonic() - started)
+
+
+def evaluate_donor_search_latency(
+    base_url: str,
+    timed_fetch: Callable[[str, str], DonorLatencySample] = _timed_donor_search_fetch,
+) -> PublicMoneyAssertion:
+    """Assert the ten-surname donor-search latency shape (see constants above).
+
+    Sequential on purpose: firing ten requests in parallel would contend with
+    each other and measure the probe, not the serving path.
+    """
+    samples = [timed_fetch(base_url, surname) for surname in DONOR_LATENCY_SURNAMES]
+    within_budget = sum(1 for sample in samples if sample.within_shape)
+    readings = " ".join(sample.format_reading() for sample in samples)
+    status = STATUS_PASS if within_budget >= DONOR_LATENCY_REQUIRED_WITHIN_BUDGET else STATUS_FAIL
+    return PublicMoneyAssertion(
+        name="donor_search_latency_shape",
+        status=status,
+        numerator=within_budget,
+        denominator=len(samples),
+        diagnostic=(
+            f"{within_budget}/{len(samples)} surnames within {DONOR_LATENCY_BUDGET_SECONDS}s "
+            f"(required {DONOR_LATENCY_REQUIRED_WITHIN_BUDGET}): {readings}"
+        ),
+    )
+
+
 class SvelteKitPayloadError(ValueError):
     """A ``/__data.json`` body was not the shape SvelteKit serves."""
 
@@ -1046,6 +1152,15 @@ def _parse_args() -> argparse.Namespace:
         default="",
         help="Optional path to write the per-page sample observations as JSON.",
     )
+    parser.add_argument(
+        "--assert-donor-latency",
+        action="store_true",
+        help=(
+            "Assert the ten-surname donor-search latency shape against the live base URL. "
+            "Off by default: this is a receipt/regression lane, not a deploy gate, and it "
+            "is incompatible with --fixture-dir."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -1057,8 +1172,19 @@ def main() -> int:
         print(f"money_value_probe_invalid_base_url {error}", file=sys.stderr)
         return 3
     fixture_dir = Path(args.fixture_dir) if args.fixture_dir else None
+    if args.assert_donor_latency and fixture_dir is not None:
+        # Timing a fixture file read is a fake-green donor latency receipt.
+        # Invalid configuration, not a healthy probe (validation_locality.md).
+        print(
+            "money_value_probe_invalid_config --assert-donor-latency requires a live base URL "
+            "and cannot run with --fixture-dir",
+            file=sys.stderr,
+        )
+        return 3
     try:
         report = evaluate_public_money_value(base_url, fixture_dir)
+        if args.assert_donor_latency:
+            report = PublicMoneyProbeReport(assertions=[*report.assertions, evaluate_donor_search_latency(base_url)])
         # Opt-in only. The deploy lane never passes --sample-indexed-candidates,
         # so the gating assertion set stays exactly what it was.
         if args.sample_indexed_candidates > 0:

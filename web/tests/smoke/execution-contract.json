@@ -26,12 +26,16 @@
       "reason": "Fixture-only deterministic delay/error paths at :36 and a live compare journey at :250, both behind describe-level gates."
     },
     "congress-leaderboard.spec.ts": {
-      "modes": ["fixture"],
-      "reason": "Pins exact per-member money (`$300.00` raised, FEC source hrefs H6NC01001/S6GA00001) that only fixture-data.ts produces; the federal seed has no congress money summaries and no independent-expenditure rows. Live /congress coverage is owned by congress.spec.ts (directory to member detail) and primary_nav_nonempty.spec.ts (non-empty member roster). A live money-leaderboard journey needs a seed extension — filed as civibus-8lu."
+      "modes": ["fixture", "live"],
+      "reason": "The money leaderboard's actual claim — ordering, sort toggle, comparison-bar ratio, per-member money links — proven against both backends (civibus-8lu). The journey is identical in both modes because the fixture members mirror the live seed's people; each mode asserts its own seed-owned exact dollars and source hrefs (fixture-data.ts vs test_support/browser_smoke_seed.py, which now writes official totals for two members plus four Schedule E rows)."
     },
     "congress.spec.ts": {
       "modes": ["live"],
       "reason": "Self-gated live-only (:22). Seeds its own congress-directory person and proves /congress links through to a member detail with federal finance and IE against the real API."
+    },
+    "deploy_gate_blindspots.spec.ts": {
+      "modes": ["fixture"],
+      "reason": "Fixture twins for the three deploy-gate blind spots the aug20 saga exposed: an identity-UNSAFE first linked candidate (civibus-7o7 — production_deploy.spec.ts shares expectCandidateDetailMatchesLinkedName, so the gate inherits the branched invariant proven red-first here), an identity-SAFE ALL-CAPS FEC-filed name on a click-through, and a >20-row paged search asserting the exact 'N results shown.' wording. The arrangements are deterministic fixture data only; production coverage of the same surfaces is owned by production_deploy.spec.ts and primary_nav_nonempty.spec.ts, and the live seed deliberately stays minimal (civibus-5ud)."
     },
     "donor_lookup.spec.ts": {
       "modes": ["fixture", "live"],
@@ -72,6 +76,14 @@
     "nc-county-toggle.spec.ts": {
       "modes": ["fixture"],
       "reason": "The /state/NC county link and district overlay ride on the same parked county geometry as nc-county-detail.spec.ts."
+    },
+    "person_races.spec.ts": {
+      "modes": ["fixture"],
+      "reason": "The person -> contest click-through via the Races panel (civibus-i80): the one fixture person WITH candidacies proves the panel renders, its row links the contest it names, and the destination heading equals the link text. The live seed writes no civic.contest rows (federal-first v1 parks contest seeding), so the live-mode leg is owned by the contest page's live block in entity-and-civic.spec.ts until a contest seed exists. NOTE: expected red until batman/aug21_person_race merges — this branch does not carry the Races panel UI; proven green on a scratch merge (see civibus-i80)."
+    },
+    "person_resilience.spec.ts": {
+      "modes": ["live"],
+      "reason": "The person-page degradation contract (person_detail.md ### Error) proven in a browser: it poisons its DEDICATED specimen's DB row at the civibus-ga8 contract seam and asserts the page stays 200 with per-section unavailable notices. The failure is injected in the real database behind the real API, so the fixture backend (which fabricates responses) can prove nothing here; unit-level coverage of the same contract is owned by DetailPage.client.test.ts and tests/integration/test_person_resilience_fixture.py."
     },
     "primary_nav_nonempty.spec.ts": {
       "modes": ["fixture", "live", "production"],

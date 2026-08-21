@@ -444,6 +444,95 @@ describe("entity detail page rendering", () => {
     expect(rendered.body).not.toContain("Entity internals");
   });
 
+  // civibus-7qj: the direct person -> race link. The backend orders candidacies
+  // nearest election first; the page renders payload order without re-sorting.
+  it("renders a Races panel linking each candidacy's contest in payload order", () => {
+    const rendered = render(DetailPage, {
+      props: {
+        data: buildPersonPageBundle({
+          detail: buildPersonDetailFixture({
+            candidacies: [
+              {
+                candidacy_id: "77777777-7777-4777-8777-777777777777",
+                contest_id: "88888888-8888-4888-8888-888888888888",
+                contest_name: "Test State U.S. Senate — 2026 General Election",
+                election_date: "2026-11-03",
+                election_type: "general",
+                office_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+                office_name: "Test Senator",
+                office_level: "federal",
+                party: "DEM",
+                status: "qualified",
+                incumbent_challenge: "I",
+                fec_candidate_id: "S8ZZ00001"
+              },
+              {
+                candidacy_id: "99999999-9999-4999-8999-999999999999",
+                contest_id: "aaaaaaaa-1111-4111-8111-aaaaaaaa1111",
+                contest_name: "Test State U.S. Senate — 2026 Primary",
+                election_date: null,
+                election_type: "primary",
+                office_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+                office_name: "Test Senator",
+                office_level: "federal",
+                party: null,
+                status: null,
+                incumbent_challenge: null,
+                fec_candidate_id: null
+              }
+            ]
+          })
+        })
+      }
+    });
+
+    expect(rendered.body).toContain('data-testid="person-races"');
+    expect(rendered.body).toContain("<h3>Races</h3>");
+    // Each contest name links its race through the shared /contest/[id] path owner.
+    expect(rendered.body).toContain(
+      '<a href="/contest/88888888-8888-4888-8888-888888888888">Test State U.S. Senate — 2026 General Election</a>'
+    );
+    expect(rendered.body).toContain(
+      '<a href="/contest/aaaaaaaa-1111-4111-8111-aaaaaaaa1111">Test State U.S. Senate — 2026 Primary</a>'
+    );
+    // Response-backed secondary facts for the first row.
+    expect(rendered.body).toContain("2026-11-03");
+    expect(rendered.body).toContain("DEM");
+    expect(rendered.body).toContain("qualified");
+    // Payload order is preserved: the general race renders before the primary.
+    const generalIndex = rendered.body.indexOf("2026 General Election");
+    const primaryIndex = rendered.body.indexOf("2026 Primary");
+    expect(generalIndex).toBeGreaterThan(-1);
+    expect(primaryIndex).toBeGreaterThan(generalIndex);
+    // Two rows, no placeholder facts for the null-valued second row.
+    expect(rendered.body.match(/data-testid="person-race-row"/g)).toHaveLength(2);
+  });
+
+  it("omits the Races panel when the candidacies list is empty", () => {
+    const rendered = render(DetailPage, {
+      props: { data: buildPersonPageBundle() }
+    });
+
+    expect(rendered.body).not.toContain('data-testid="person-races"');
+    expect(rendered.body).not.toContain("<h3>Races</h3>");
+    expect(rendered.body).not.toContain('data-testid="person-race-row"');
+  });
+
+  it("omits the Races panel when an older payload lacks the candidacies key entirely", () => {
+    const data = buildPersonPageBundle();
+    if (data.entityType !== "person" || !("candidacies" in data.detail)) {
+      throw new Error("Expected a person detail bundle with a candidacies list.");
+    }
+    const { candidacies: _candidacies, ...detail } = data.detail;
+
+    const rendered = render(DetailPage, {
+      props: { data: buildPersonPageBundle({ detail }) }
+    });
+
+    expect(rendered.body).not.toContain('data-testid="person-races"');
+    expect(rendered.body).not.toContain('data-testid="person-race-row"');
+  });
+
   it("renders canonical person facts without current-office rows when current office is omitted", () => {
     const rendered = render(DetailPage, {
       props: {
@@ -541,6 +630,53 @@ describe("entity detail page rendering", () => {
 
     expect(rendered.body).not.toContain('href="javascript:alert(1)"');
     expect(rendered.body).toContain("Biography source unavailable");
+  });
+
+  // civibus-bmg: the finance-section card heading rendered `candidate.name`
+  // bare. Mixed-case fixtures ("Candidate One") pass vacuously through the
+  // formatter, so these specimens are deliberately ALL-CAPS/raw — the exact
+  // class the 2026-08-20 deploy gate caught on the committee page.
+  it("formats an identity-safe candidate's ALL-CAPS filed name in the finance card heading", () => {
+    const rendered = render(DetailPage, {
+      props: {
+        data: buildPersonPageBundle({
+          personFinanceSections: asSettled([
+            buildPersonFinanceSection({
+              candidate: {
+                ...buildPersonFinanceSection().candidate,
+                name: "WHITFIELD, T. MARGARET",
+                identity_is_safe: true
+              }
+            })
+          ])
+        })
+      }
+    });
+
+    expect(rendered.body).toContain("Whitfield, T. Margaret");
+    expect(rendered.body).not.toContain("WHITFIELD, T. MARGARET");
+  });
+
+  it("keeps an identity-unsafe candidate's filed name raw in the finance card heading", () => {
+    const rendered = render(DetailPage, {
+      props: {
+        data: buildPersonPageBundle({
+          personFinanceSections: asSettled([
+            buildPersonFinanceSection({
+              candidate: {
+                ...buildPersonFinanceSection().candidate,
+                name: "212 N HALF W. JOHN, RODNEY HOWARD MR.",
+                identity_is_safe: false
+              }
+            })
+          ])
+        })
+      }
+    });
+
+    // Raw filed string survives untouched: prettifying a junk identity would
+    // present source evidence as a vetted human name.
+    expect(rendered.body).toContain("212 N HALF W. JOHN, RODNEY HOWARD MR.");
   });
 
   it("renders person campaign-finance sections from the existing finance owner shape", () => {

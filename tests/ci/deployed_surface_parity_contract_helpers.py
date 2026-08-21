@@ -69,7 +69,12 @@ PUBLIC_PAGE_BODIES = {
     "/search?q=ossoff": 'data-testid="search-results-region"',
     "/donors?q=smith&by=name": 'data-testid="donor-result-row"',
     "/congress": 'data-testid="congress-member-row-0"',
-    "/methodology": "Methodology",
+    # Strengthened from the bare word "Methodology" (civibus-dsf): the shell
+    # heading satisfied that marker while zero disclosure regions rendered
+    # (live 2026-08-03..17). "methodology-freshness" is the last of the four
+    # spec-pinned disclosure regions in render order, so matching it implies
+    # the preceding three rendered.
+    "/methodology": 'data-testid="methodology-freshness"',
     "/developers": "GET /api/public/v1/federal/officials",
     "/candidates": "Candidates",
     "/committees": "Committees",
@@ -198,7 +203,10 @@ def assert_manifest_surface_topology(parsed_rows: list[dict[str, str]]) -> None:
         "kind": "person_sitemap",
         "path": PERSON_SURFACE_SITEMAP_PATH,
         "marker": 'aria-label="Breadcrumb"',
-        "parity_mode": "known_red",
+        # Promoted known_red -> fatal at Checkpoint A (2026-08-21) after the
+        # person surface was observed green on the deployed site; person-detail
+        # outages are deploy-fatal from this point forward.
+        "parity_mode": "fatal",
         "uptime_mode": "fatal",
     }
 

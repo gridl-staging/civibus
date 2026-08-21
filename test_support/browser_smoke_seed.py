@@ -52,6 +52,27 @@ SMOKE_CANDIDATE_ID = "55555555-5555-4555-8555-555555555555"
 SMOKE_CANDIDATE_FEC_ID = "H6NC14001"
 SMOKE_CANDIDATE_NAME = "Pat Candidate"
 SMOKE_CANDIDATE_SLUG = "pat-candidate"
+# The /congress money leaderboard's second-ranked member (civibus-8lu): Alex
+# Money Senator carries official FEC totals and Schedule E rows so the
+# leaderboard's ordering, sort toggle, and comparison-bar ratio have live
+# proof. Kept deliberately minimal — one candidate row, one spender committee,
+# four IE transactions — per the civibus-5ud lesson: fix the seed gap, don't
+# grow the seed wholesale.
+SMOKE_SECOND_CANDIDATE_ID = "65555555-5555-4555-8555-555555555555"
+SMOKE_SECOND_CANDIDATE_FEC_ID = "H6NC02001"
+SMOKE_SECOND_CANDIDATE_NAME = "Senator, Alex Money"
+SMOKE_IE_COMMITTEE_ID = "74444444-4444-4444-8444-444444444444"
+SMOKE_IE_COMMITTEE_FEC_ID = "C14000002"
+SMOKE_IE_COMMITTEE_NAME = "Civibus Outside Spenders"
+# Rendered money the live leaderboard must show — the seed owns these numbers.
+SMOKE_LEADER_IE_SUPPORT = Decimal("90.00")
+SMOKE_LEADER_IE_OPPOSE = Decimal("30.00")
+SMOKE_SECOND_TOTAL_RECEIPTS = Decimal("100.00")
+SMOKE_SECOND_TOTAL_DISBURSEMENTS = Decimal("75.00")
+SMOKE_SECOND_CASH_ON_HAND = Decimal("0.00")
+SMOKE_SECOND_IE_SUPPORT = Decimal("20.00")
+SMOKE_SECOND_IE_OPPOSE = Decimal("80.00")
+SMOKE_SECOND_SOURCE_RECORD_URL = "https://example.org/browser-smoke/alex-money/record"
 SMOKE_ORG_ID = "22222222-2222-4222-8222-222222222222"
 SMOKE_SEARCH_RESULT_NAME = "Civibus Action Org"
 SMOKE_ORG_CANONICAL_NAME = SMOKE_SEARCH_RESULT_NAME
@@ -80,15 +101,25 @@ _OFFICEHOLDING_IDS = (
 )
 _DATA_SOURCE_ID = UUID("14d10000-0000-4000-8000-000000000301")
 _SOURCE_RECORD_ID = UUID("14d10000-0000-4000-8000-000000000302")
+# Alex's candidate rides its own source record so the leaderboard's per-member
+# money-source links resolve to two DISTINCT hrefs — an ordering-proof detail.
+_SECOND_SOURCE_RECORD_ID = UUID("14d10000-0000-4000-8000-000000000303")
 _LINK_ID = UUID("14d10000-0000-4000-8000-000000000401")
 _FILING_IDS = (
     UUID("14d10000-0000-4000-8000-000000000501"),
     UUID("14d10000-0000-4000-8000-000000000502"),
 )
+_IE_FILING_ID = UUID("14d10000-0000-4000-8000-000000000503")
 _TRANSACTION_IDS = (
     UUID("14d10000-0000-4000-8000-000000000601"),
     UUID("14d10000-0000-4000-8000-000000000602"),
     UUID("14d10000-0000-4000-8000-000000000603"),
+)
+_IE_TRANSACTION_IDS = (
+    UUID("14d10000-0000-4000-8000-000000000604"),
+    UUID("14d10000-0000-4000-8000-000000000605"),
+    UUID("14d10000-0000-4000-8000-000000000606"),
+    UUID("14d10000-0000-4000-8000-000000000607"),
 )
 _PULL_DATE = datetime(2026, 8, 15, 12, 0, tzinfo=timezone.utc)
 _BULK_SAMPLE_DIRECTORY = Path(__file__).parents[1] / "tests/fixtures/bulk"
@@ -231,11 +262,20 @@ def _bulk_sample_entity_ids(conn: psycopg.Connection, source_record_ids: list[UU
 
 
 def _cleanup(conn: psycopg.Connection) -> None:
-    conn.execute("DELETE FROM cf.transaction WHERE id = ANY(%s::uuid[])", (list(_TRANSACTION_IDS),))
-    conn.execute("DELETE FROM cf.filing WHERE id = ANY(%s::uuid[])", (list(_FILING_IDS),))
+    conn.execute(
+        "DELETE FROM cf.transaction WHERE id = ANY(%s::uuid[])",
+        (list(_TRANSACTION_IDS) + list(_IE_TRANSACTION_IDS),),
+    )
+    conn.execute("DELETE FROM cf.filing WHERE id = ANY(%s::uuid[])", (list(_FILING_IDS) + [_IE_FILING_ID],))
     conn.execute("DELETE FROM cf.candidate_committee_link WHERE id = %s", (_LINK_ID,))
-    conn.execute("DELETE FROM cf.candidate WHERE id = %s", (UUID(SMOKE_CANDIDATE_ID),))
-    conn.execute("DELETE FROM cf.committee WHERE id = %s", (UUID(SMOKE_COMMITTEE_ID),))
+    conn.execute(
+        "DELETE FROM cf.candidate WHERE id = ANY(%s::uuid[])",
+        ([UUID(SMOKE_CANDIDATE_ID), UUID(SMOKE_SECOND_CANDIDATE_ID)],),
+    )
+    conn.execute(
+        "DELETE FROM cf.committee WHERE id = ANY(%s::uuid[])",
+        ([UUID(SMOKE_COMMITTEE_ID), UUID(SMOKE_IE_COMMITTEE_ID)],),
+    )
     conn.execute(
         """
         DELETE FROM civic.officeholding
@@ -258,7 +298,10 @@ def _cleanup(conn: psycopg.Connection) -> None:
     )
     conn.execute("DELETE FROM civic.electoral_division WHERE id = ANY(%s::uuid[])", (list(_DIVISION_IDS),))
     conn.execute("DELETE FROM core.organization WHERE id = %s", (UUID(SMOKE_ORG_ID),))
-    conn.execute("DELETE FROM core.source_record WHERE id = %s", (_SOURCE_RECORD_ID,))
+    conn.execute(
+        "DELETE FROM core.source_record WHERE id = ANY(%s::uuid[])",
+        ([_SOURCE_RECORD_ID, _SECOND_SOURCE_RECORD_ID],),
+    )
     conn.execute("DELETE FROM core.data_source WHERE id = %s", (_DATA_SOURCE_ID,))
     conn.execute("DELETE FROM core.person WHERE id = ANY(%s::uuid[])", (list(_PERSON_IDS),))
 
@@ -270,9 +313,9 @@ def _assert_smoke_isolated(conn: psycopg.Connection) -> bool:
         FROM cf.candidate candidate
         LEFT JOIN core.source_record record ON record.id = candidate.source_record_id
         LEFT JOIN core.data_source source ON source.id = record.data_source_id
-        WHERE candidate.id <> %s
+        WHERE candidate.id <> ALL(%s::uuid[])
         """,
-        (UUID(SMOKE_CANDIDATE_ID),),
+        ([UUID(SMOKE_CANDIDATE_ID), UUID(SMOKE_SECOND_CANDIDATE_ID)],),
     ).fetchall()
     committee_rows = conn.execute(
         """
@@ -280,9 +323,9 @@ def _assert_smoke_isolated(conn: psycopg.Connection) -> bool:
         FROM cf.committee committee
         LEFT JOIN core.source_record record ON record.id = committee.source_record_id
         LEFT JOIN core.data_source source ON source.id = record.data_source_id
-        WHERE committee.id <> %s
+        WHERE committee.id <> ALL(%s::uuid[])
         """,
-        (UUID(SMOKE_COMMITTEE_ID),),
+        ([UUID(SMOKE_COMMITTEE_ID), UUID(SMOKE_IE_COMMITTEE_ID)],),
     ).fetchall()
     canonical_bulk_sample_is_loaded = _is_canonical_bulk_sample(conn, candidate_rows, committee_rows)
     extra_search_org_count = _count_extra_search_organizations(
@@ -380,6 +423,23 @@ def _seed_sources(conn: psycopg.Connection) -> None:
             raw_fields=raw_fields,
             pull_date=_PULL_DATE,
             record_hash=compute_record_hash(raw_fields),
+        ),
+    )
+    second_raw_fields = {
+        "fixture": "browser-smoke-seed-second-member",
+        "fec_candidate_id": SMOKE_SECOND_CANDIDATE_FEC_ID,
+        "fec_committee_id": SMOKE_IE_COMMITTEE_FEC_ID,
+    }
+    insert_source_record(
+        conn,
+        SourceRecord(
+            id=_SECOND_SOURCE_RECORD_ID,
+            data_source_id=_DATA_SOURCE_ID,
+            source_record_key="browser-smoke-campaign-finance-second-member",
+            source_url=SMOKE_SECOND_SOURCE_RECORD_URL,
+            raw_fields=second_raw_fields,
+            pull_date=_PULL_DATE,
+            record_hash=compute_record_hash(second_raw_fields),
         ),
     )
 
@@ -515,8 +575,35 @@ def _seed_campaign_finance(conn: psycopg.Connection) -> None:
             source_record_id=_SOURCE_RECORD_ID,
         ),
     )
+    # Second money-carrying member (civibus-8lu): official totals only — the
+    # leaderboard's fundraising figures come from the candidate row's FEC
+    # weball columns, so no committee link or itemized rows are needed.
+    insert_candidate_row(
+        conn,
+        CandidateRowSeed(
+            id=UUID(SMOKE_SECOND_CANDIDATE_ID),
+            fec_candidate_id=SMOKE_SECOND_CANDIDATE_FEC_ID,
+            name=SMOKE_SECOND_CANDIDATE_NAME,
+            # Must match Alex's live officeholding (House, NC-02): the public
+            # money row only links a candidate whose office/state/district
+            # match the member's current seat.
+            office="H",
+            person_id=UUID(SMOKE_SECOND_PERSON_ID),
+            principal_committee_id=None,
+            source_record_id=_SECOND_SOURCE_RECORD_ID,
+            party="REP",
+            state="NC",
+            district="02",
+            incumbent_challenge="I",
+            total_receipts=SMOKE_SECOND_TOTAL_RECEIPTS,
+            total_disbursements=SMOKE_SECOND_TOTAL_DISBURSEMENTS,
+            cash_on_hand=SMOKE_SECOND_CASH_ON_HAND,
+            summary_coverage_end_date=date(2026, 3, 19),
+        ),
+    )
     _seed_filings(conn)
     _seed_transactions(conn)
+    _seed_independent_expenditures(conn)
 
 
 def _seed_filings(conn: psycopg.Connection) -> None:
@@ -570,6 +657,74 @@ def _seed_transactions(conn: psycopg.Connection) -> None:
                 contributor_city="Raleigh",
                 contributor_state="NC",
                 contributor_zip="27601",
+            ),
+        )
+
+
+def _seed_independent_expenditures(conn: psycopg.Connection) -> None:
+    """Schedule E rows for both money-carrying members (civibus-8lu).
+
+    A dedicated spender committee keeps Citizens for Civibus's derived
+    summary, cash trend, and chart oracles untouched. The four rows are the
+    minimal set that makes both leaderboard sorts discriminating: Jane leads
+    total_raised while Alex leads outside_against, so a broken sort toggle
+    cannot render the same order twice.
+    """
+    insert_committee_row(
+        conn,
+        CommitteeRowSeed(
+            id=UUID(SMOKE_IE_COMMITTEE_ID),
+            fec_committee_id=SMOKE_IE_COMMITTEE_FEC_ID,
+            name=SMOKE_IE_COMMITTEE_NAME,
+            source_record_id=_SECOND_SOURCE_RECORD_ID,
+            committee_type="O",
+            committee_designation="U",
+            party=None,
+            state="NC",
+            city="Raleigh",
+            zip_code="27601",
+            treasurer_name="Outside Treasurer",
+        ),
+    )
+    insert_filing_row(
+        conn,
+        FilingRowSeed(
+            id=_IE_FILING_ID,
+            filing_fec_id="browser-smoke-2026-ie",
+            committee_id=UUID(SMOKE_IE_COMMITTEE_ID),
+            candidate_id=None,
+            report_type="F24",
+            amendment_indicator="N",
+            filing_name="IE Filing (F24)",
+            coverage_start_date=date(2026, 1, 1),
+            coverage_end_date=date(2026, 6, 30),
+            receipt_date=date(2026, 6, 30),
+            accepted_date=date(2026, 6, 30),
+            source_record_id=_SECOND_SOURCE_RECORD_ID,
+        ),
+    )
+    ie_rows = (
+        (_IE_TRANSACTION_IDS[0], UUID(SMOKE_CANDIDATE_ID), "S", "24E", SMOKE_LEADER_IE_SUPPORT),
+        (_IE_TRANSACTION_IDS[1], UUID(SMOKE_CANDIDATE_ID), "O", "24A", SMOKE_LEADER_IE_OPPOSE),
+        (_IE_TRANSACTION_IDS[2], UUID(SMOKE_SECOND_CANDIDATE_ID), "S", "24E", SMOKE_SECOND_IE_SUPPORT),
+        (_IE_TRANSACTION_IDS[3], UUID(SMOKE_SECOND_CANDIDATE_ID), "O", "24A", SMOKE_SECOND_IE_OPPOSE),
+    )
+    for transaction_id, recipient_candidate_id, support_oppose, transaction_type, amount in ie_rows:
+        insert_transaction_row(
+            conn,
+            TransactionRowSeed(
+                id=transaction_id,
+                filing_id=_IE_FILING_ID,
+                committee_id=UUID(SMOKE_IE_COMMITTEE_ID),
+                transaction_type=transaction_type,
+                amount=amount,
+                amendment_indicator="N",
+                source_record_id=_SECOND_SOURCE_RECORD_ID,
+                transaction_identifier=f"browser-smoke-ie-{transaction_id.hex[-4:]}",
+                transaction_date=date(2026, 5, 15),
+                contributor_entity_type="ORG",
+                support_oppose=support_oppose,
+                recipient_candidate_id=recipient_candidate_id,
             ),
         )
 

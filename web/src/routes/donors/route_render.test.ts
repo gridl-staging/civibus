@@ -439,4 +439,79 @@ describe('/donors route rendering', () => {
       'Results cover itemized contributions to committees of current federal officeholders only. Unitemized (&lt;$200) contributions are not included.'
     );
   });
+
+  // Recipient names come from cf.candidate.name — the raw FEC filing string.
+  // The three tests below pin the identity-gated owner (formatCandidatePublicName)
+  // on the recipient link text. The specimens are ALL-CAPS on purpose: the
+  // fixture default 'Alpha Officeholder' is already cased, so it passes through
+  // the formatter unchanged and can never prove formatting happened.
+  it('formats an identity-safe ALL-CAPS recipient name through the shared owner', () => {
+    const base = unresolvedResult();
+    const rendered = render(DonorPage, {
+      props: {
+        data: donorResponse({
+          results: [
+            {
+              ...base,
+              recipients: [
+                {
+                  ...base.recipients[0],
+                  candidate_name: 'OSSOFF, T. JONATHAN',
+                  identity_is_safe: true
+                }
+              ]
+            }
+          ]
+        })
+      }
+    });
+
+    expect(rendered.body).toContain('>Ossoff, T. Jonathan</a>');
+    expect(rendered.body).not.toContain('OSSOFF, T. JONATHAN');
+  });
+
+  it('renders an identity-unsafe recipient name as the raw filed string', () => {
+    const base = unresolvedResult();
+    const rendered = render(DonorPage, {
+      props: {
+        data: donorResponse({
+          results: [
+            {
+              ...base,
+              recipients: [
+                {
+                  ...base.recipients[0],
+                  // Address-like FEC source string; digits mark it identity-unsafe.
+                  candidate_name: '212 MAIN AVE W. JOHN, RODNEY',
+                  identity_is_safe: false
+                }
+              ]
+            }
+          ]
+        })
+      }
+    });
+
+    expect(rendered.body).toContain('>212 MAIN AVE W. JOHN, RODNEY</a>');
+    expect(rendered.body).not.toContain('212 Main Ave W. John, Rodney');
+  });
+
+  it('renders a recipient without an identity flag as the raw filed string', () => {
+    // Conservative default: a missing flag must never be treated as safe, so
+    // the raw source string renders. Absence is tolerated only for smoke-seed
+    // fixture parity (web/tests/smoke payloads predate the flag).
+    const base = unresolvedResult();
+    const flagless = { ...base.recipients[0], candidate_name: 'OSSOFF, T. JONATHAN' };
+    delete (flagless as { identity_is_safe?: boolean }).identity_is_safe;
+    const rendered = render(DonorPage, {
+      props: {
+        data: donorResponse({
+          results: [{ ...base, recipients: [flagless] }]
+        })
+      }
+    });
+
+    expect(rendered.body).toContain('>OSSOFF, T. JONATHAN</a>');
+    expect(rendered.body).not.toContain('Ossoff, T. Jonathan');
+  });
 });

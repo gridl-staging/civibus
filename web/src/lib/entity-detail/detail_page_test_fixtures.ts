@@ -40,6 +40,9 @@ export function buildPersonDetailFixture(
       width_px: 512,
       height_px: 512
     },
+    // The backend always serves the key; an empty list is the no-races state
+    // (civibus-7qj). Tests seed rows through overrides.
+    candidacies: [],
     sources: [],
     ...overrides
   };

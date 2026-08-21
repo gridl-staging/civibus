@@ -82,6 +82,31 @@ export type PersonDetailResponse = BaseDetailResponse & {
   bio_pulled_at: string | null;
   portrait?: PersonPortraitResponse | null;
   current_office?: CurrentOfficeResponse | null;
+  // Optional for version skew like current_office: older payloads may omit it.
+  // The backend always serves the key (empty list = no races). civibus-x8b/7qj.
+  candidacies?: PersonCandidacyResponse[] | null;
+};
+
+/**
+ * One race the person is a candidate in, with linkable contest identity.
+ * Server-ordered nearest election first; consumers must not re-sort. The
+ * backend resolves rows through the shadow-person-safe join (candidate_number
+ * -> cf.candidate.fec_candidate_id as well as person_id), so this list is
+ * trustworthy for chamber-switching incumbents split across two person rows.
+ */
+export type PersonCandidacyResponse = {
+  candidacy_id: string;
+  contest_id: string;
+  contest_name: string;
+  election_date: string | null;
+  election_type: string;
+  office_id: string;
+  office_name: string;
+  office_level: string;
+  party: string | null;
+  status: string | null;
+  incumbent_challenge: string | null;
+  fec_candidate_id: string | null;
 };
 
 export type OrgDetailResponse = BaseDetailResponse & {
@@ -139,6 +164,10 @@ export function assertPersonPayloadHasRequiredBioKeys(
     );
   }
 
+  // Before the current_office early-returns: candidacies must be validated even
+  // when the payload has no current-office context.
+  assertCandidaciesShape(personPayload);
+
   if (!("current_office" in personPayload)) {
     return;
   }
@@ -160,6 +189,63 @@ export function assertPersonPayloadHasRequiredBioKeys(
   if (currentOfficePayload.state !== null && typeof currentOfficePayload.state !== "string") {
     throw new PersonPayloadContractError("Person payload current_office.state must be a string or null.");
   }
+}
+
+// Required-string identity fields of a candidacy row: without these a Races row
+// cannot render a truthful link. The nullable facts below may be absent-as-null
+// but never a non-string value.
+const REQUIRED_CANDIDACY_STRING_KEYS = [
+  "candidacy_id",
+  "contest_id",
+  "contest_name",
+  "election_type",
+  "office_id",
+  "office_name",
+  "office_level"
+] as const;
+
+const NULLABLE_CANDIDACY_STRING_KEYS = [
+  "election_date",
+  "party",
+  "status",
+  "incumbent_challenge",
+  "fec_candidate_id"
+] as const;
+
+/**
+ * Guard for the optional `candidacies` list, called from
+ * `assertPersonPayloadHasRequiredBioKeys` with the same version-skew rule as
+ * `current_office`: omission (or null) is legal, malformed presence is the
+ * typed 502-class contract failure.
+ */
+function assertCandidaciesShape(personPayload: Record<string, unknown>): void {
+  if (!("candidacies" in personPayload) || personPayload.candidacies === null) {
+    return;
+  }
+
+  const candidacies = personPayload.candidacies;
+  if (!Array.isArray(candidacies)) {
+    throw new PersonPayloadContractError("Person payload candidacies must be an array.");
+  }
+
+  candidacies.forEach((row, index) => {
+    if (row === null || typeof row !== "object" || Array.isArray(row)) {
+      throw new PersonPayloadContractError(`Person payload candidacies[${index}] must be an object.`);
+    }
+    const candidacyRow = row as Record<string, unknown>;
+    for (const key of REQUIRED_CANDIDACY_STRING_KEYS) {
+      if (typeof candidacyRow[key] !== "string") {
+        throw new PersonPayloadContractError(`Person payload candidacies[${index}].${key} must be a string.`);
+      }
+    }
+    for (const key of NULLABLE_CANDIDACY_STRING_KEYS) {
+      if (candidacyRow[key] !== null && typeof candidacyRow[key] !== "string") {
+        throw new PersonPayloadContractError(
+          `Person payload candidacies[${index}].${key} must be a string or null.`
+        );
+      }
+    }
+  });
 }
 
 export function encodeRoutePathSegment(value: string): string {

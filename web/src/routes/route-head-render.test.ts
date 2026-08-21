@@ -794,12 +794,29 @@ describe("route head rendering", () => {
       "OpenSecrets API candContrib",
       "OpenSecrets API candIndustry"
     ]);
+    // Nullable public money contract (civibus-o53): the prose and samples must
+    // show that null / empty-cell means UNKNOWN, never zero, for both the
+    // fundraising and outside-spending datasets, with the coverage blocks that
+    // say why. These markers pin the not-loaded sample JSON and the CSV
+    // empty-cell row so the page cannot quietly revert to populated-only docs.
+    expectMarkers(rendered.body, [
+      "Sample JSON (money not loaded)",
+      '"total_raised": null',
+      '"summary_source": null',
+      '"ie_support_total": null',
+      '"activity_state": "not_loaded"',
+      '"basis": "no_authoritative_load_evidence"',
+      "fundraising_coverage",
+      "ie_coverage",
+      "never means zero",
+      "Sample Official Without Loaded Filings,false,,,,,,,,,,,"
+    ]);
     expect(rendered.body).not.toContain('"ie_oppose_total": "0",');
     expect(rendered.body).not.toContain(",fec_weball,5000.00,0,2,0,");
     expect(rendered.body).toContain('href="/api/openapi.json">/api/openapi.json</a>');
     expect(rendered.body).toContain('href="/api/docs">/api/docs</a>');
     expect(rendered.body).toContain('href="/api/redoc">/api/redoc</a>');
-    expect(rendered.body.match(/<pre[^>]*tabindex="0"[^>]*>/g)).toHaveLength(14);
+    expect(rendered.body.match(/<pre[^>]*tabindex="0"[^>]*>/g)).toHaveLength(15);
   });
 
   it("renders candidates list with shared canonical/OG/Twitter tags, filter controls, and unchanged pagination links", () => {

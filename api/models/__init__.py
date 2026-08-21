@@ -64,6 +64,7 @@ from api.models.civics import (
 from api.models.entities import (
     CurrentOfficeResponse,
     OrgResponse,
+    PersonCandidacyResponse,
     PersonPortraitResponse,
     PersonResponse,
     PersonSlugResult,
@@ -187,6 +188,7 @@ __all__ = [
     "ParcelDetailResponse",
     "ParcelListParams",
     "ParcelSummaryResponse",
+    "PersonCandidacyResponse",
     "PersonResponse",
     "PersonContributionInsights",
     "PersonTopEmployerRow",

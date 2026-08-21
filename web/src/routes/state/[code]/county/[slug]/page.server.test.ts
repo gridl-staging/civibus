@@ -25,6 +25,7 @@ type CountyPageData = {
     candidate_name: string;
     donor_total_cents: number;
     transaction_count: number;
+    identity_is_safe?: boolean;
   }>;
   trustSection: TrustSectionViewModel;
 };
@@ -112,7 +113,8 @@ describe("/state/[code]/county/[slug] +page.server load", () => {
               candidate_id: "22222222-2222-4222-8222-222222222222",
               candidate_name: "Candidate B",
               donor_total_cents: 12000,
-              transaction_count: 2
+              transaction_count: 2,
+              identity_is_safe: true
             }
           ],
           sources: [
@@ -156,6 +158,9 @@ describe("/state/[code]/county/[slug] +page.server load", () => {
     expect(data.donor_total_cents).toBe(12345);
     expect(data.top_recipient_committees[0]?.committee_name).toBe("Committee A");
     expect(data.top_linked_candidates[0]?.candidate_name).toBe("Candidate B");
+    // The load must carry the API's identity gate through to the page; a
+    // mapping step that rebuilds rows and drops the flag would fail this.
+    expect(data.top_linked_candidates[0]?.identity_is_safe).toBe(true);
     expect(data.trustSection.rows).toHaveLength(1);
     expect(data.trustSection.rows[0]?.sourceRecordKey).toBe("wake-summary-001");
   });

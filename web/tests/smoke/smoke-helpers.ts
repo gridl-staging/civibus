@@ -138,6 +138,68 @@ export async function expectCandidateKeyFinancialsReady(
   assertCandidateKeyFinancialsTextReady((await keyMetrics.textContent()) ?? "");
 }
 
+// The neutral h2 the candidate detail shell renders for an identity-UNSAFE
+// record (buildCandidateDetailShellPresentation), and the fact-row label that
+// still presents the raw filed string as source evidence beneath it.
+const NEUTRAL_CANDIDATE_RECORD_HEADING = "Candidate record";
+const UNSAFE_CANDIDATE_FILED_NAME_LABEL = "FEC-filed candidate name";
+
+/**
+ * Asserts that a clicked candidate link landed on the record it named.
+ *
+ * WHY THIS BRANCHES (civibus-7o7): the deploy gate used to assert
+ * `link text == destination h2` with exact:true unconditionally. By the
+ * neutral-identity spec contract (candidate_list.md -> Browse scope), an
+ * identity-UNSAFE candidate renders its raw filed string in lists but a
+ * neutral "Candidate record" h2 on its detail page — the unconditional
+ * invariant CANNOT hold for unsafe rows *by design*, so a data reorder that
+ * put an unsafe row first would fail a deploy with no product defect. The
+ * remedy chosen by the smoke owner is to assert the branch the spec actually
+ * contracts, rather than to skip unsafe rows: skipping needs a rendered
+ * identity marker the list deliberately does not carry (a heuristic on name
+ * casing would misclassify mixed-case unsafe filings), and it would silently
+ * stop covering the unsafe arm at all.
+ *
+ * Both arms stay failable in both directions:
+ * - safe row rendered raw in the list (production attempt #1): the destination
+ *   h2 is the FORMATTED name, which matches neither the raw link text nor
+ *   "Candidate record" -> red.
+ * - unsafe row formatted in the list (the inverse bug the same sweep found):
+ *   the destination h2 is "Candidate record" but the filed-name fact row holds
+ *   the RAW string, which no longer equals the formatted link text -> red.
+ * - any wrong-destination navigation: neither arm matches -> red.
+ */
+export async function expectCandidateDetailMatchesLinkedName(
+  page: Page,
+  linkedName: string,
+  timeoutMs: number
+): Promise<void> {
+  await expect(page).toHaveURL(/\/candidate\//, { timeout: timeoutMs });
+  const detailHeading = page.getByRole("heading", { level: 2 }).first();
+  await expect(detailHeading).toBeVisible({ timeout: timeoutMs });
+  const headingText = ((await detailHeading.textContent()) ?? "").trim();
+
+  if (headingText === NEUTRAL_CANDIDATE_RECORD_HEADING) {
+    // Unsafe arm: the neutral heading is the spec's contract, so the identity
+    // check moves to the fact row that presents the filed string as evidence.
+    await expect(
+      page.getByText(UNSAFE_CANDIDATE_FILED_NAME_LABEL, { exact: true })
+    ).toBeVisible({ timeout: timeoutMs });
+    await expect(
+      page.getByRole("definition").filter({
+        hasText: new RegExp(`^${escapeRegExp(linkedName)}$`)
+      })
+    ).toBeVisible({ timeout: timeoutMs });
+    return;
+  }
+
+  // Safe arm: byte-identical link text and h2, exact:true because casing is
+  // the very defect class this guards (raw OSSOFF, T. JONATHAN vs formatted).
+  await expect(
+    page.getByRole("heading", { level: 2, name: linkedName, exact: true })
+  ).toBeVisible({ timeout: timeoutMs });
+}
+
 /**
  */
 export async function expectActionToVisibleContentWithinBudget({

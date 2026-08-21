@@ -5,6 +5,7 @@ import {
   chartRegion,
   expectActionToVisibleContentWithinBudget,
   expectCampaignFinanceKeyMetricsReady,
+  expectCandidateDetailMatchesLinkedName,
   expectCandidateKeyFinancialsReady,
   expectEarlierCycleOfficialTotalCaveat,
   expectHtmlBarListRenderIfPlotted,
@@ -436,12 +437,18 @@ test.describe("production deployment smoke (read-only)", () => {
         await firstLinkedCandidate.click();
       },
       visibleContent: async () => {
-        await expect(page).toHaveURL(/\/candidate\//, { timeout: PERF_BUDGET_MS });
-        await expect(
-          page.getByRole("heading", { level: 2, name: candidateName, exact: true })
-        ).toBeVisible({
-          timeout: PERF_BUDGET_MS
-        });
+        // civibus-7o7: NOT the plain `link text == h2, exact:true` this journey
+        // used to assert. An identity-UNSAFE first linked candidate renders its
+        // raw filed name in the list but a neutral "Candidate record" h2 on the
+        // detail page — by the neutral-identity spec contract, so the plain
+        // invariant CANNOT hold for that row and a data reorder on this pinned
+        // committee would fail a deploy with no defect. The shared helper
+        // asserts the branch the spec contracts for whichever identity arrives
+        // first, and stays exact:true inside each arm. Proven red-first against
+        // an unsafe-first fixture arrangement in deploy_gate_blindspots.spec.ts,
+        // which shares this helper so the gate's invariant stays red-provable
+        // locally.
+        await expectCandidateDetailMatchesLinkedName(page, candidateName, PERF_BUDGET_MS);
         await expectCandidateKeyFinancialsReady(page, PERF_BUDGET_MS);
       }
     });

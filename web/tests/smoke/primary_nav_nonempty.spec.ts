@@ -4,9 +4,11 @@ import type { Locator, Page } from "playwright";
 import { APP_SHELL } from "../../src/lib/config/app";
 import {
   SMOKE_CANDIDATES_FIRST_PAGE_LABEL,
+  SMOKE_CANDIDATES_FIRST_PAGE_LABEL_LIVE,
   SMOKE_CANDIDATE_LIST_CONTEXT,
   SMOKE_CANDIDATE_NAME,
   SMOKE_COMMITTEES_FIRST_PAGE_LABEL,
+  SMOKE_COMMITTEES_FIRST_PAGE_LABEL_LIVE,
   SMOKE_COMMITTEE_LIST_CONTEXT,
   SMOKE_COMMITTEE_NAME,
   SMOKE_CONGRESS_LEADER_NAME,
@@ -25,7 +27,8 @@ import {
   SMOKE_SHELL_NAV_DEVELOPERS,
   SMOKE_SHELL_NAV_HOME,
   SMOKE_SHELL_NAV_METHODOLOGY,
-  SMOKE_SHELL_NAV_SEARCH
+  SMOKE_SHELL_NAV_SEARCH,
+  SMOKE_USE_LIVE_API
 } from "./fixtures";
 
 type PrimaryNavigationLabel =
@@ -38,6 +41,15 @@ type PrimaryNavigationLabel =
   | typeof SMOKE_SHELL_NAV_METHODOLOGY;
 
 const isProductionSmokeMode = (process.env.SMOKE_MODE ?? "local") === "production";
+// The live seed writes two candidates and two committees (civibus-8lu), so the
+// browse lists' first-page labels are mode-dependent; every other assertion in
+// the fixture arm holds against both backends.
+const candidatesFirstPageLabel = SMOKE_USE_LIVE_API
+  ? SMOKE_CANDIDATES_FIRST_PAGE_LABEL_LIVE
+  : SMOKE_CANDIDATES_FIRST_PAGE_LABEL;
+const committeesFirstPageLabel = SMOKE_USE_LIVE_API
+  ? SMOKE_COMMITTEES_FIRST_PAGE_LABEL_LIVE
+  : SMOKE_COMMITTEES_FIRST_PAGE_LABEL;
 const primaryNavigationPathsByLabel = new Map(
   APP_SHELL.shellNavigation.map((destination) => [destination.label, destination.href])
 );
@@ -82,7 +94,7 @@ async function expectProductionSearchResult(page: Page): Promise<void> {
 async function expectFixtureCandidateRows(page: Page): Promise<void> {
   await expect(page.getByRole("link", { name: SMOKE_CANDIDATE_NAME })).toBeVisible();
   await expect(page.getByText(SMOKE_CANDIDATE_LIST_CONTEXT)).toBeVisible();
-  await expect(page.getByText(SMOKE_CANDIDATES_FIRST_PAGE_LABEL)).toBeVisible();
+  await expect(page.getByText(candidatesFirstPageLabel)).toBeVisible();
 }
 
 async function expectProductionCandidateRows(page: Page, candidateRows: Locator): Promise<void> {
@@ -98,7 +110,7 @@ async function expectProductionCandidateRows(page: Page, candidateRows: Locator)
 async function expectFixtureCommitteeRows(page: Page): Promise<void> {
   await expect(page.getByRole("link", { name: SMOKE_COMMITTEE_NAME })).toBeVisible();
   await expect(page.getByText(SMOKE_COMMITTEE_LIST_CONTEXT)).toBeVisible();
-  await expect(page.getByText(SMOKE_COMMITTEES_FIRST_PAGE_LABEL)).toBeVisible();
+  await expect(page.getByText(committeesFirstPageLabel)).toBeVisible();
 }
 
 async function expectProductionCommitteeRows(page: Page, committeeRows: Locator): Promise<void> {

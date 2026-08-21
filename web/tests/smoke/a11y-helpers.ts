@@ -5,9 +5,11 @@ import { APP_SHELL } from "../../src/lib/config/app";
 import {
   SMOKE_CAMPAIGN_FINANCE_IN_PROVENANCE_SOURCE_NAME,
   SMOKE_CANDIDATES_FIRST_PAGE_LABEL,
+  SMOKE_CANDIDATES_FIRST_PAGE_LABEL_LIVE,
   SMOKE_CANDIDATE_LIST_CONTEXT,
   SMOKE_CANDIDATE_NAME,
   SMOKE_COMMITTEES_FIRST_PAGE_LABEL,
+  SMOKE_COMMITTEES_FIRST_PAGE_LABEL_LIVE,
   SMOKE_COMMITTEE_LIST_CONTEXT,
   SMOKE_COMMITTEE_NAME,
   SMOKE_COMMITTEE_SLUG,
@@ -23,7 +25,8 @@ import {
   SMOKE_PUBLIC_API_ENDPOINTS,
   SMOKE_PUBLIC_API_HEADING,
   SMOKE_SEARCH_QUERY,
-  SMOKE_SEARCH_RESULT_NAME
+  SMOKE_SEARCH_RESULT_NAME,
+  SMOKE_USE_LIVE_API
 } from "./fixtures";
 import {
   LINE_SERIES_MARK_SELECTOR,
@@ -85,12 +88,21 @@ async function expectSearchContent(page: Page): Promise<void> {
   await expect(page.getByRole("link", { name: SMOKE_SEARCH_RESULT_NAME })).toBeVisible();
 }
 
+// The live seed writes two candidates and two committees (civibus-8lu), so the
+// first-page labels are mode-dependent.
+const candidatesFirstPageLabel = SMOKE_USE_LIVE_API
+  ? SMOKE_CANDIDATES_FIRST_PAGE_LABEL_LIVE
+  : SMOKE_CANDIDATES_FIRST_PAGE_LABEL;
+const committeesFirstPageLabel = SMOKE_USE_LIVE_API
+  ? SMOKE_COMMITTEES_FIRST_PAGE_LABEL_LIVE
+  : SMOKE_COMMITTEES_FIRST_PAGE_LABEL;
+
 async function expectCandidatesContent(page: Page): Promise<void> {
   await expect(page.getByRole("heading", { name: "Candidates" })).toBeVisible();
   await expectVisibleRows(page, "candidate-result-row");
   await expect(page.getByRole("link", { name: SMOKE_CANDIDATE_NAME })).toBeVisible();
   await expect(page.getByText(SMOKE_CANDIDATE_LIST_CONTEXT)).toBeVisible();
-  await expect(page.getByText(SMOKE_CANDIDATES_FIRST_PAGE_LABEL)).toBeVisible();
+  await expect(page.getByText(candidatesFirstPageLabel)).toBeVisible();
 }
 
 async function expectCommitteesContent(page: Page): Promise<void> {
@@ -98,7 +110,7 @@ async function expectCommitteesContent(page: Page): Promise<void> {
   await expectVisibleRows(page, "committee-result-row");
   await expect(page.getByRole("link", { name: SMOKE_COMMITTEE_NAME })).toBeVisible();
   await expect(page.getByText(SMOKE_COMMITTEE_LIST_CONTEXT)).toBeVisible();
-  await expect(page.getByText(SMOKE_COMMITTEES_FIRST_PAGE_LABEL)).toBeVisible();
+  await expect(page.getByText(committeesFirstPageLabel)).toBeVisible();
 }
 
 async function expectCongressContent(page: Page): Promise<void> {

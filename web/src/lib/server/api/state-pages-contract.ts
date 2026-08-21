@@ -1,5 +1,34 @@
 /** Backend contract types for landing-page and state-detail data fetches. */
+import type {
+  CountyCampaignFinanceSummaryResponse,
+  CountySummaryLinkedCandidate
+} from "$lib/campaign-finance-detail/contract";
 import type { SourceInfo } from "$lib/entity-detail/contract";
+
+/**
+ * County linked-candidate row carrying the identity gate the API now sends
+ * (api/models/campaign_finance.py::CountySummaryLinkedCandidate).
+ *
+ * The canonical home for this field is `CountySummaryLinkedCandidate` in
+ * `$lib/campaign-finance-detail/contract.ts`; this wave that file is another
+ * lane's surface, so the county page extends the base type here instead. Fold
+ * the field back into the canonical type when that file is editable.
+ *
+ * `identity_is_safe` is optional only because fixture-mode smoke payloads
+ * (web/tests/smoke, another lane's files) predate the flag. Renders must treat
+ * absence as unsafe (raw filed string), never as a formatted identity.
+ */
+export type IdentityGatedCountySummaryLinkedCandidate = CountySummaryLinkedCandidate & {
+  identity_is_safe?: boolean;
+};
+
+/** County summary response with identity-gated linked-candidate rows. */
+export type IdentityGatedCountyCampaignFinanceSummaryResponse = Omit<
+  CountyCampaignFinanceSummaryResponse,
+  "top_linked_candidates"
+> & {
+  top_linked_candidates: IdentityGatedCountySummaryLinkedCandidate[];
+};
 
 export const STATE_SUPPORT_STATUS_VALUES = [
   "supported",

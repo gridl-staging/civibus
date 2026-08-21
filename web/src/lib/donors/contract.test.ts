@@ -92,6 +92,19 @@ const possibleMatchResult = {
   ]
 };
 
+const recipient = {
+  person_id: '72000000-0000-4000-8000-000000000001',
+  candidate_id: '72000000-0000-0000-0000-000000000014',
+  fec_candidate_id: 'H0NC01001',
+  candidate_name: 'OSSOFF, T. JONATHAN',
+  committee_id: '72000000-0000-0000-0000-000000000015',
+  fec_committee_id: 'C72000001',
+  committee_name: 'Alpha Officeholder Committee',
+  total_amount: '375.00',
+  transaction_count: 2,
+  identity_is_safe: true
+};
+
 function responseWithResult(result: unknown): unknown {
   return {
     query: 'identity',
@@ -221,6 +234,29 @@ describe('donor search contract', () => {
 
     expect(() => assertDonorSearchResponse(responseWithResult(result))).toThrow(
       'results[0].not_combined_candidates[0].confidence_band must be "possible_match".'
+    );
+  });
+
+  it('accepts a recipient identity flag and tolerates its absence for smoke-parity payloads', () => {
+    // Absence stays accepted only because fixture-mode smoke payloads
+    // (web/tests/smoke, another lane's files) predate the flag; the render
+    // treats a missing flag as identity-unsafe rather than formatting it.
+    const withFlag = { ...unresolvedResult, recipients: [{ ...recipient, identity_is_safe: false }] };
+    const withoutFlag = { ...unresolvedResult, recipients: [{ ...recipient }] };
+    delete (withoutFlag.recipients[0] as { identity_is_safe?: boolean }).identity_is_safe;
+
+    expect(() => assertDonorSearchResponse(responseWithResult(withFlag))).not.toThrow();
+    expect(() => assertDonorSearchResponse(responseWithResult(withoutFlag))).not.toThrow();
+  });
+
+  it('rejects a recipient whose identity flag is not a boolean', () => {
+    const result = {
+      ...unresolvedResult,
+      recipients: [{ ...recipient, identity_is_safe: 'true' }]
+    };
+
+    expect(() => assertDonorSearchResponse(responseWithResult(result))).toThrow(
+      'results[0].recipients[0].identity_is_safe must be a boolean when present.'
     );
   });
 });

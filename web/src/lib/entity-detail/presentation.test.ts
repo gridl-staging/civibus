@@ -11,6 +11,7 @@ import {
   buildPersonContributionInsightsPresentation,
   buildPersonMoneyAtGlancePresentation,
   buildPersonMoneyAtGlanceSummary,
+  buildPersonRaceRows,
   getIdentifierEmptyMessage
 } from "./presentation";
 
@@ -1387,5 +1388,65 @@ describe("entity detail presentation", () => {
       title: "Civibus Action Org | Organization | Civibus",
       description: "Organization profile with 2 identifiers and source-linked records."
     });
+  });
+});
+
+// civibus-7qj: view rows for the person page's Races panel. The builder maps
+// response-backed values only and preserves the backend's nearest-election-first
+// order; re-sorting or inferring facts client-side is forbidden by the spec.
+describe("buildPersonRaceRows", () => {
+  const GENERAL_CANDIDACY = {
+    candidacy_id: "77777777-7777-4777-8777-777777777777",
+    contest_id: "88888888-8888-4888-8888-888888888888",
+    contest_name: "Test State U.S. Senate — 2026 General Election",
+    election_date: "2026-11-03",
+    election_type: "general",
+    office_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+    office_name: "Test Senator",
+    office_level: "federal",
+    party: "DEM",
+    status: "qualified",
+    incumbent_challenge: "I",
+    fec_candidate_id: "S8ZZ00001"
+  };
+
+  it("maps candidacies to linkable race rows in payload order", () => {
+    const rows = buildPersonRaceRows([
+      GENERAL_CANDIDACY,
+      {
+        ...GENERAL_CANDIDACY,
+        candidacy_id: "99999999-9999-4999-8999-999999999999",
+        contest_id: "aaaaaaaa-1111-4111-8111-aaaaaaaa1111",
+        contest_name: "Test State U.S. Senate — 2026 Primary",
+        election_date: null,
+        party: null,
+        status: null
+      }
+    ]);
+
+    expect(rows).toEqual([
+      {
+        candidacyId: "77777777-7777-4777-8777-777777777777",
+        contestHref: "/contest/88888888-8888-4888-8888-888888888888",
+        contestName: "Test State U.S. Senate — 2026 General Election",
+        electionDateLabel: "2026-11-03",
+        partyLabel: "DEM",
+        statusLabel: "qualified"
+      },
+      {
+        candidacyId: "99999999-9999-4999-8999-999999999999",
+        contestHref: "/contest/aaaaaaaa-1111-4111-8111-aaaaaaaa1111",
+        contestName: "Test State U.S. Senate — 2026 Primary",
+        electionDateLabel: null,
+        partyLabel: null,
+        statusLabel: null
+      }
+    ]);
+  });
+
+  it("returns no rows for an empty, absent, or null candidacies list", () => {
+    expect(buildPersonRaceRows([])).toEqual([]);
+    expect(buildPersonRaceRows(undefined)).toEqual([]);
+    expect(buildPersonRaceRows(null)).toEqual([]);
   });
 });

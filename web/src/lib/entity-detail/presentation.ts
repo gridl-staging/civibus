@@ -6,9 +6,13 @@ import {
   buildTrustSection,
   type TrustSectionViewModel
 } from "$lib/detail-trust/presentation";
+// buildContestRoutePath is the single owner of the /contest/[id] path shape;
+// the person page's race links must agree with the civic pages byte-for-byte.
+import { buildContestRoutePath } from "$lib/civic-detail/contract";
 import type {
   EntityDetailResponse,
   OrgDetailResponse,
+  PersonCandidacyResponse,
   PersonDetailResponse,
   Stage4EntityType
 } from "$lib/entity-detail/contract";
@@ -195,4 +199,40 @@ export function buildEntityDetailPresentation(
   input: EntityDetailShellInput
 ): EntityDetailPresentation {
   return buildEntityDetailShellPresentation(input);
+}
+
+/** One rendered row of the person page's Races panel (civibus-7qj). */
+export type PersonRaceRow = {
+  candidacyId: string;
+  contestHref: string;
+  contestName: string;
+  electionDateLabel: string | null;
+  partyLabel: string | null;
+  statusLabel: string | null;
+};
+
+/**
+ * Maps the person payload's `candidacies` list to linkable Races rows.
+ *
+ * Payload order is preserved on purpose: the backend orders nearest election
+ * first through one SQL owner, and a client-side re-sort would fork that rule.
+ * Values are response-backed only — the spec forbids inferring a race from
+ * office/district context. Null facts stay null so the panel omits them
+ * instead of rendering placeholder text.
+ */
+export function buildPersonRaceRows(
+  candidacies: PersonCandidacyResponse[] | null | undefined
+): PersonRaceRow[] {
+  if (!candidacies) {
+    return [];
+  }
+
+  return candidacies.map((candidacy) => ({
+    candidacyId: candidacy.candidacy_id,
+    contestHref: buildContestRoutePath(candidacy.contest_id),
+    contestName: candidacy.contest_name,
+    electionDateLabel: candidacy.election_date,
+    partyLabel: candidacy.party,
+    statusLabel: candidacy.status
+  }));
 }

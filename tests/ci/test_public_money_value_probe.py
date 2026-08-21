@@ -867,3 +867,156 @@ def test_unknown_money_never_counts_toward_the_nonempty_floor() -> None:
     assert assertion.status == "FAIL"
     assert assertion.numerator == 0
     assert assertion.denominator == 3
+
+
+# --- Donor-search latency shape pin (civibus-6e1) ----------------------------
+#
+# The pin asserts the SHAPE of a ten-surname cold sample, never a single
+# reading: at least DONOR_LATENCY_REQUIRED_WITHIN_BUDGET of the fixed surnames
+# must return HTTP 200 within DONOR_LATENCY_BUDGET_SECONDS. The known-answer
+# specimens below are real recorded measurements from the bead, so each proof
+# names the live condition under which it goes red.
+
+HEALTHY_AUG21_LATENCY_SECONDS = {
+    # Measured 2026-08-21 post-deploy against prod, quiet DB (civibus-6e1 note).
+    "jones": 3.28,
+    "miller": 4.07,
+    "smith": 1.80,
+    "johnson": 2.63,
+    "williams": 3.16,
+    "brown": 2.30,
+    "davis": 1.91,
+    "garcia": 1.51,
+    "wilson": 2.10,
+    "taylor": 2.98,
+}
+
+REGRESSED_AUG17_LATENCY = {
+    # Measured 2026-08-17 ~22:20Z against prod (civibus-6e1 comment): the
+    # serving-path regression this pin exists to catch. Recorded surnames
+    # martinez/anderson are mapped onto the fixed probe set's johnson/taylor
+    # slots; what matters is the distribution, and the recorded set had four
+    # samples over five seconds including one 503.
+    "smith": (200, 2.669),
+    "jones": (200, 8.090),
+    "miller": (200, 5.779),
+    "williams": (200, 9.662),
+    "brown": (503, 5.324),
+    "davis": (200, 3.445),
+    "garcia": (200, 1.557),
+    "wilson": (200, 2.335),
+    "johnson": (200, 1.546),
+    "taylor": (200, 3.411),
+}
+
+
+def _latency_fake_fetch(module, readings: dict[str, tuple[int | None, float]]):
+    def timed_fetch(_base_url: str, surname: str):
+        status, elapsed = readings[surname]
+        return module.DonorLatencySample(surname=surname, status=status, elapsed_seconds=elapsed)
+
+    return timed_fetch
+
+
+def test_latency_pin_constants_match_the_bead_exit_shape() -> None:
+    module = _probe_module()
+
+    assert set(HEALTHY_AUG21_LATENCY_SECONDS) == set(module.DONOR_LATENCY_SURNAMES)
+    # The bead's acceptance criteria require jones and miller among the specimens.
+    assert "jones" in module.DONOR_LATENCY_SURNAMES
+    assert "miller" in module.DONOR_LATENCY_SURNAMES
+    assert len(module.DONOR_LATENCY_SURNAMES) == 10
+    assert module.DONOR_LATENCY_REQUIRED_WITHIN_BUDGET == 8
+    assert module.DONOR_LATENCY_BUDGET_SECONDS == 5.0
+    # The pin is deliberately absent from the promoted deploy-gate set: it is
+    # an opt-in receipt lane, not a deploy gate.
+    assert "donor_search_latency_shape" not in module.PROMOTED_FATAL_ASSERTIONS
+
+
+def test_healthy_aug21_sample_passes_the_latency_shape() -> None:
+    module = _probe_module()
+    readings = {surname: (200, seconds) for surname, seconds in HEALTHY_AUG21_LATENCY_SECONDS.items()}
+
+    assertion = module.evaluate_donor_search_latency(
+        "https://prod.example", timed_fetch=_latency_fake_fetch(module, readings)
+    )
+
+    assert assertion.name == "donor_search_latency_shape"
+    assert assertion.status == "PASS"
+    assert assertion.numerator == 10
+    assert assertion.denominator == 10
+
+
+def test_recorded_aug17_regression_fails_the_latency_shape() -> None:
+    module = _probe_module()
+
+    assertion = module.evaluate_donor_search_latency(
+        "https://prod.example", timed_fetch=_latency_fake_fetch(module, REGRESSED_AUG17_LATENCY)
+    )
+
+    assert assertion.status == "FAIL"
+    assert assertion.numerator == 6
+    assert assertion.denominator == 10
+    assert "jones=8.09s" in assertion.diagnostic
+    assert "brown=5.32s status=503" in assertion.diagnostic
+
+
+def test_uniform_contention_stall_fails_the_latency_shape() -> None:
+    # The 2026-08-21 mid-refresh reading: uniform ~10.3s across all ten
+    # surnames. Whether contention or a serving-path stall, users are seeing a
+    # ten-second search box, so the shape must go red.
+    module = _probe_module()
+    readings = {surname: (200, 10.3) for surname in HEALTHY_AUG21_LATENCY_SECONDS}
+
+    assertion = module.evaluate_donor_search_latency(
+        "https://prod.example", timed_fetch=_latency_fake_fetch(module, readings)
+    )
+
+    assert assertion.status == "FAIL"
+    assert assertion.numerator == 0
+
+
+def test_latency_shape_boundary_tolerates_two_failures_and_flags_three() -> None:
+    module = _probe_module()
+    surnames = list(HEALTHY_AUG21_LATENCY_SECONDS)
+    two_bad = {surname: (200, 1.0) for surname in surnames}
+    two_bad[surnames[0]] = (200, 9.0)
+    two_bad[surnames[1]] = (503, 0.9)  # a fast error is still out of shape
+    three_bad = dict(two_bad)
+    three_bad[surnames[2]] = (None, 30.0)  # transport failure / timeout
+
+    tolerated = module.evaluate_donor_search_latency(
+        "https://prod.example", timed_fetch=_latency_fake_fetch(module, two_bad)
+    )
+    flagged = module.evaluate_donor_search_latency(
+        "https://prod.example", timed_fetch=_latency_fake_fetch(module, three_bad)
+    )
+
+    assert (tolerated.status, tolerated.numerator) == ("PASS", 8)
+    assert (flagged.status, flagged.numerator) == ("FAIL", 7)
+
+
+def test_latency_flag_refuses_fixture_mode(tmp_path: Path) -> None:
+    # Timing a local fixture file read would be a fake-green latency receipt;
+    # the combination is invalid configuration, not a healthy probe.
+    fixture_dir = tmp_path / "latency-fixture"
+    _write_helper_fixture(fixture_dir, export_payload=_export_rows(denominator=540, fec_rows=540))
+
+    result = subprocess.run(
+        [
+            "python3",
+            str(PROBE_PATH),
+            "--base-url",
+            "https://fixture.example",
+            "--fixture-dir",
+            str(fixture_dir),
+            "--assert-donor-latency",
+        ],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 3
+    assert "money_value_probe_invalid_config --assert-donor-latency" in result.stderr

@@ -1,5 +1,6 @@
 <script lang="ts">
   import { navigating } from '$app/stores';
+  import { formatCandidatePublicName } from '$lib/campaign-finance-detail/presentation';
   import { formatDisplayValue } from '$lib/detail-format';
   import { buildTimestampFreshnessPresentation } from '$lib/detail-trust/presentation';
   import { buildDonorPagePath, DONOR_SEARCH_BY_MODES, DONOR_SEARCH_PAGE_PATH } from '$lib/donors/contract';
@@ -223,7 +224,16 @@
                     <ul class="donor-lookup__nested-list">
                       {#each result.recipients as recipient (recipient.person_id + recipient.committee_id)}
                         <li>
-                          <a href={personHref(recipient.person_id)}>{recipient.candidate_name}</a>
+                          <!-- candidate_name is the raw FEC filing string; the shared
+                               identity-gated owner decides formatted vs raw. A missing
+                               flag (smoke-fixture parity) must render raw, never be
+                               promoted to a formatted identity — hence `=== true`. -->
+                          <a href={personHref(recipient.person_id)}
+                            >{formatCandidatePublicName({
+                              name: recipient.candidate_name,
+                              identity_is_safe: recipient.identity_is_safe === true
+                            })}</a
+                          >
                         </li>
                       {/each}
                     </ul>

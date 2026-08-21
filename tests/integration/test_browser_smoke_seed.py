@@ -2,16 +2,19 @@
 
 Live-mode browser assertions reachable from ``ACCESSIBILITY_SCAN_DESTINATIONS``
 and the live chart smoke tests require a seed-only database shape: Jane Doe as
-the person detail heading and Congress leader, Pat Candidate as the only
-candidate row, Citizens for Civibus as the only committee row with slug
-``citizens-for-civibus``, Civibus Action Org as the ``/search?q=civ&entity_type=org``
-result, ``3 members`` on ``/congress``, provenance label
-``Indiana Campaign Finance (campaign_finance/state/IN)``, a renderable committee
-cash-on-hand line chart, and a renderable person contribution-size bar chart.
+the person detail heading and Congress money leader, Pat Candidate and Senator,
+Alex Money as the only candidate rows (the second carries the leaderboard's
+second-ranked official totals and Schedule E targets, civibus-8lu), Citizens
+for Civibus plus the dedicated Schedule E spender Civibus Outside Spenders as
+the only committee rows, Civibus Action Org as the
+``/search?q=civ&entity_type=org`` result, ``3 members`` on ``/congress``,
+provenance label ``Indiana Campaign Finance (campaign_finance/state/IN)``, a
+renderable committee cash-on-hand line chart, and a renderable person
+contribution-size bar chart.
 
 The canonical 2024 FEC bulk sample is the only accepted preload: the seed
 recognizes its exact source lineage, removes those relational rows, and then
-supplies the isolated specimen rows required by ``Showing 1-1``. Any other
+supplies the isolated specimen rows required by ``Showing 1-2``. Any other
 candidate, committee, current federal officeholder, or matching organization
 still fails before mutation so a later browser assertion cannot fail opaquely.
 """
@@ -438,7 +441,24 @@ def _assert_candidate_list_route_owner_contract(
                 "has_official_total": True,
                 # Money column value seeded by test_support.browser_smoke_seed.
                 "total_receipts": Decimal("250.00"),
-            }
+            },
+            {
+                # Second money-carrying member (civibus-8lu): the live
+                # /congress money leaderboard's second-ranked row.
+                "id": UUID(browser_smoke_seed.SMOKE_SECOND_CANDIDATE_ID),
+                "fec_candidate_id": browser_smoke_seed.SMOKE_SECOND_CANDIDATE_FEC_ID,
+                "name": browser_smoke_seed.SMOKE_SECOND_CANDIDATE_NAME,
+                "person_id": UUID(browser_smoke_seed.SMOKE_SECOND_PERSON_ID),
+                "party": "REP",
+                "office": "H",
+                "state": "NC",
+                "district": "02",
+                "slug": "senator-alex-money",
+                "slug_is_unique": True,
+                "identity_is_safe": True,
+                "has_official_total": True,
+                "total_receipts": Decimal("100.00"),
+            },
         ],
         "has_next": False,
         "offset": 0,
@@ -464,7 +484,20 @@ def _assert_committee_list_route_owner_contract(
                 "state": "NC",
                 "slug": browser_smoke_seed.SMOKE_COMMITTEE_SLUG,
                 "slug_is_unique": True,
-            }
+            },
+            {
+                # Dedicated Schedule E spender (civibus-8lu). A separate
+                # committee keeps Citizens for Civibus's derived summary and
+                # cash-trend chart oracles untouched by IE disbursements.
+                "id": UUID(browser_smoke_seed.SMOKE_IE_COMMITTEE_ID),
+                "fec_committee_id": browser_smoke_seed.SMOKE_IE_COMMITTEE_FEC_ID,
+                "name": browser_smoke_seed.SMOKE_IE_COMMITTEE_NAME,
+                "committee_type": "O",
+                "party": None,
+                "state": "NC",
+                "slug": "civibus-outside-spenders",
+                "slug_is_unique": True,
+            },
         ],
         "has_next": False,
         "offset": 0,

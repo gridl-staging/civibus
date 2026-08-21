@@ -3,7 +3,7 @@ home_surface	static	/	Follow money around Congress and the White House.	fatal	sk
 search_surface	static	/search?q=ossoff	data-testid="search-results-region"	fatal	skip	web search route
 donor_search_surface	static	/donors?q=smith&by=name	data-testid="donor-result-row"	fatal	fatal	web donor search route
 congress_surface	static	/congress	data-testid="congress-member-row-0"	fatal	skip	web Congress directory route
-methodology_surface	static	/methodology	Methodology	fatal	skip	web methodology route
+methodology_surface	static	/methodology	data-testid="methodology-freshness"	fatal	skip	web methodology route
 developers_surface	static	/developers	GET /api/public/v1/federal/officials	fatal	skip	web developers route
 candidates_surface	static	/candidates	Candidates	fatal	skip	web candidates route
 committees_surface	static	/committees	Committees	fatal	skip	web committees route
@@ -16,4 +16,4 @@ about_surface	static	/about	data-testid="about-page"	fatal	skip	web about route
 contact_surface	static	/contact	data-testid="contact-page"	fatal	skip	web contact route
 privacy_surface	static	/privacy	data-testid="privacy-page"	fatal	skip	web privacy route
 sitemap_index_surface	static	/sitemap.xml	<sitemapindex	fatal	skip	web sitemap index route
-person_detail_surface	person_sitemap	/sitemap-person-0.xml	aria-label="Breadcrumb"	known_red	fatal	web person detail and person sitemap routes
+person_detail_surface	person_sitemap	/sitemap-person-0.xml	aria-label="Breadcrumb"	fatal	fatal	web person detail and person sitemap routes

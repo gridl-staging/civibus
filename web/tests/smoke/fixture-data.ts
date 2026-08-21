@@ -4,9 +4,15 @@ const fixtureConstants =
 const {
   SMOKE_CANDIDACY_ID,
   SMOKE_CANDIDACY_PERSON_NAME,
+  SMOKE_ALLCAPS_CANDIDATE_ID,
+  SMOKE_ALLCAPS_CANDIDATE_RAW_NAME,
   SMOKE_AUDITED_MALFORMED_CANDIDATE_ID,
   SMOKE_AUDITED_MALFORMED_CANDIDATE_RAW_NAME,
   SMOKE_AUDITED_MALFORMED_CANDIDATE_SOURCE_URL,
+  SMOKE_IDENTITY_JOURNEY_COMMITTEE_ID,
+  SMOKE_IDENTITY_JOURNEY_COMMITTEE_NAME,
+  SMOKE_PAGED_SEARCH_QUERY,
+  SMOKE_PAGED_SEARCH_TOTAL_ORG_COUNT,
   SMOKE_CANDIDATE_ID,
   SMOKE_AL_CANDIDATE_ID,
   SMOKE_CANDIDATE_CASH_ON_HAND,
@@ -407,6 +413,22 @@ export const smokeFixtures = {
       }
     ]
   },
+  // 21 org rows: one more than SEARCH_PAGE_SIZE, so the page server's LIMIT+1
+  // probe sees a held-back row and the status must read "20 results shown."
+  // (paged) instead of "N results found." (complete) — the wording class the
+  // 2026-08-20 deploy gate hit in production while every fixture search set
+  // was single-result. The backend handler slices by offset/limit so page two
+  // renders the one remaining row as "1 result shown.".
+  searchPagedOrgs: {
+    query: SMOKE_PAGED_SEARCH_QUERY,
+    entityType: "org",
+    results: Array.from({ length: SMOKE_PAGED_SEARCH_TOTAL_ORG_COUNT }, (_, index) => ({
+      entity_type: "org",
+      // Deterministic distinct UUIDs: index maps to the trailing hex digits.
+      entity_id: `9e000000-0000-4000-8000-0000000000${(index + 10).toString(16).padStart(2, "0")}`,
+      name: `Grove Neighbors Fund ${String.fromCharCode(65 + index)}`
+    }))
+  },
   congressMembers: [
     {
       person_id: SMOKE_PERSON_ID,
@@ -781,7 +803,29 @@ export const smokeFixtures = {
       er_cluster_id: null,
       er_confidence: null,
       portrait: null,
-      sources: []
+      sources: [],
+      // The one fixture person WITH candidacies (civibus-i80): the Races
+      // panel's person -> contest click-through needs a fixture arrangement,
+      // and this person is visited by exactly one other journey (the portrait
+      // fallback) and never screenshot, so the panel cannot shift the
+      // finance-visuals full-page baselines. The contest is the existing
+      // fixture contest, so the destination page already renders.
+      candidacies: [
+        {
+          candidacy_id: "ab333333-3333-4333-8333-333333333333",
+          contest_id: SMOKE_CONTEST_ID,
+          contest_name: SMOKE_CONTEST_NAME,
+          election_date: SMOKE_ELECTION_DATE,
+          election_type: "general",
+          office_id: SMOKE_OFFICE_ID,
+          office_name: SMOKE_OFFICE_NAME,
+          office_level: "state",
+          party: "DEM",
+          status: null,
+          incumbent_challenge: null,
+          fec_candidate_id: "H0NC00001"
+        }
+      ]
     },
   },
   congressSecondPerson: {
@@ -1331,6 +1375,97 @@ export const smokeFixtures = {
       targets: []
     }
   },
+  // Deploy-saga blind-spot committee (civibus-7o7 + aug21 handoff §1): its FIRST
+  // linked candidate is identity-UNSAFE (renders the raw filed string in the
+  // list but a neutral "Candidate record" h2 on its detail page — the neutral-
+  // identity contract makes link-text == h2 impossible by design), and its
+  // SECOND is identity-SAFE with a raw ALL-CAPS FEC name (the list must render
+  // the formatted name, byte-equal to the destination h2). Deliberately NOT in
+  // committeeList.items: journeys navigate here directly, so browse-list count
+  // pins ("Showing 1–1") stay untouched.
+  committeeIdentityJourney: {
+    id: SMOKE_IDENTITY_JOURNEY_COMMITTEE_ID,
+    detail: {
+      id: SMOKE_IDENTITY_JOURNEY_COMMITTEE_ID,
+      fec_committee_id: "C00000077",
+      name: SMOKE_IDENTITY_JOURNEY_COMMITTEE_NAME,
+      slug: "identity-journey-committee",
+      slug_is_unique: false,
+      organization_id: null,
+      committee_type: "Q",
+      committee_designation: "P",
+      party: null,
+      state: "TX",
+      city: null,
+      zip_code: null,
+      treasurer_name: null,
+      linked_candidates: [
+        {
+          id: SMOKE_AUDITED_MALFORMED_CANDIDATE_ID,
+          fec_candidate_id: "H0TX05005",
+          name: SMOKE_AUDITED_MALFORMED_CANDIDATE_RAW_NAME,
+          person_id: null,
+          party: "DEM",
+          office: "H",
+          state: "TX",
+          district: "05",
+          slug: "212-n-half-w-john-rodney-howard-mr",
+          slug_is_unique: true,
+          identity_is_safe: false,
+          has_official_total: false
+        },
+        {
+          id: SMOKE_ALLCAPS_CANDIDATE_ID,
+          fec_candidate_id: "H0GA00202",
+          name: SMOKE_ALLCAPS_CANDIDATE_RAW_NAME,
+          person_id: null,
+          party: "DEM",
+          office: "H",
+          state: "GA",
+          district: "02",
+          slug: "whitfield-t-margaret",
+          slug_is_unique: false,
+          identity_is_safe: true,
+          has_official_total: false
+        }
+      ],
+      sources: []
+    },
+    transactions: [],
+    summary: {
+      committee_id: SMOKE_IDENTITY_JOURNEY_COMMITTEE_ID,
+      committee_name: SMOKE_IDENTITY_JOURNEY_COMMITTEE_NAME,
+      total_raised: "0.00",
+      total_spent: "0.00",
+      net: "0.00",
+      transaction_count: 0,
+      jurisdiction: null,
+      data_through: null,
+      cash_receipts_total: "0.00",
+      in_kind_receipts_total: "0.00",
+      loan_receipts_total: "0.00",
+      contribution_receipts_total: "0.00",
+      top_donors: [],
+      top_vendors: [],
+      spend_categories: [],
+      itemized_transaction_count: 0,
+      cycle_summaries: [],
+      summary_source: "derived" as const
+    },
+    filingBreakdown: {
+      committee_id: SMOKE_IDENTITY_JOURNEY_COMMITTEE_ID,
+      committee_name: SMOKE_IDENTITY_JOURNEY_COMMITTEE_NAME,
+      filings: []
+    },
+    independentExpendituresMade: {
+      committee_id: SMOKE_IDENTITY_JOURNEY_COMMITTEE_ID,
+      support_total: "0.00",
+      oppose_total: "0.00",
+      ie_transaction_count: 0,
+      excluded_outlier_count: 0,
+      targets: []
+    }
+  },
   candidate: {
     id: SMOKE_CANDIDATE_ID,
     detail: {
@@ -1773,6 +1908,68 @@ export const smokeFixtures = {
     ieTransactions: [],
     ieSummary: {
       candidate_id: SMOKE_AUDITED_MALFORMED_CANDIDATE_ID,
+      selected_cycle: Number(SMOKE_CANDIDATE_SELECTED_CYCLE),
+      coverage_start_date: null,
+      coverage_end_date: null,
+      available_cycles: [],
+      support_total: "0.00",
+      oppose_total: "0.00",
+      support_count: 0,
+      oppose_count: 0,
+      top_spenders: [],
+      excluded_outlier_count: 0,
+      coverage: NOT_LOADED_COVERAGE
+    }
+  },
+  // Identity-SAFE candidate stored under its raw ALL-CAPS FEC filing string.
+  // The detail h2 must render the shared-owner FORMATTED name
+  // ("Whitfield, T. Margaret"); the linked-candidates list on
+  // committeeIdentityJourney must render the same formatted string. Mixed-case
+  // fixture names made both assertions vacuously true before this specimen.
+  candidateSafeAllCaps: {
+    id: SMOKE_ALLCAPS_CANDIDATE_ID,
+    detail: {
+      id: SMOKE_ALLCAPS_CANDIDATE_ID,
+      fec_candidate_id: "H0GA00202",
+      name: SMOKE_ALLCAPS_CANDIDATE_RAW_NAME,
+      slug: "whitfield-t-margaret",
+      slug_is_unique: false,
+      identity_is_safe: true,
+      has_official_total: false,
+      person_id: null,
+      party: "DEM",
+      office: "H",
+      state: "GA",
+      district: "02",
+      incumbent_challenge: "C",
+      principal_committee_id: null,
+      sources: []
+    },
+    summary: {
+      candidate_id: SMOKE_ALLCAPS_CANDIDATE_ID,
+      candidate_name: SMOKE_ALLCAPS_CANDIDATE_RAW_NAME,
+      selected_cycle: Number(SMOKE_CANDIDATE_SELECTED_CYCLE),
+      coverage_start_date: null,
+      coverage_end_date: null,
+      available_cycles: [],
+      total_raised: "0.00",
+      total_spent: "0.00",
+      net: "0.00",
+      transaction_count: 0,
+      committees: [],
+      cash_on_hand: null,
+      net_self_funding: null,
+      summary_source: "derived" as const,
+      itemized_transaction_count: 0,
+      receipt_source_composition: [],
+      selected_cycle_coverage_complete: false,
+      can_render_share: false,
+      receipt_source_caveats: [],
+      coverage: NOT_LOADED_COVERAGE
+    },
+    ieTransactions: [],
+    ieSummary: {
+      candidate_id: SMOKE_ALLCAPS_CANDIDATE_ID,
       selected_cycle: Number(SMOKE_CANDIDATE_SELECTED_CYCLE),
       coverage_start_date: null,
       coverage_end_date: null,

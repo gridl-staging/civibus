@@ -437,6 +437,32 @@ export const SMOKE_AUDITED_MALFORMED_CANDIDATE_RAW_NAME = "212 N HALF  W. JOHN, 
 export const SMOKE_AUDITED_MALFORMED_CANDIDATE_SOURCE_URL =
   "https://www.fec.gov/data/candidate/H0TX05005/";
 export const SMOKE_AUDITED_MALFORMED_CANDIDATE_TITLE = "Candidate record | Civibus";
+// Deploy-saga blind-spot specimens (civibus-7o7 + aug21 handoff §1). Every other
+// fixture candidate name is mixed-case, so the raw-vs-formatted class
+// (formatCandidatePublicName) passed vacuously until production served
+// `OSSOFF, T. JONATHAN`. This identity-SAFE candidate stores the raw ALL-CAPS
+// FEC filing string; every list/link/heading render must show the FORMATTED
+// name, so a surface that bypasses the shared formatter goes red here instead
+// of at the 8-minute production gate. Digit-free on purpose: the live identity
+// predicate silently suppresses digit-bearing names, and this specimen must
+// stay identity-safe.
+export const SMOKE_ALLCAPS_CANDIDATE_ID = "cacacaca-caca-4aca-8aca-cacacacacaca";
+export const SMOKE_ALLCAPS_CANDIDATE_RAW_NAME = "WHITFIELD, T. MARGARET";
+export const SMOKE_ALLCAPS_CANDIDATE_FORMATTED_NAME = "Whitfield, T. Margaret";
+// A committee whose FIRST linked candidate is identity-UNSAFE: the arrangement
+// production could reorder into at any time (civibus-7o7). The deploy gate's
+// linked-candidate journey shares its destination assertion with this fixture's
+// twin spec, so the unsafe-first case is proven locally instead of discovered
+// as a spurious deploy failure.
+export const SMOKE_IDENTITY_JOURNEY_COMMITTEE_ID = "abababab-abab-4bab-8bab-abababababab";
+export const SMOKE_IDENTITY_JOURNEY_COMMITTEE_NAME = "Identity Journey Committee";
+// A >20-row org search set. Fixture search sets were all single-result, so the
+// paged wording ("N results shown." vs "N results found.") was unreachable
+// locally and failed the 2026-08-20 deploy gate against a healthy build.
+export const SMOKE_PAGED_SEARCH_QUERY = "grove";
+export const SMOKE_PAGED_SEARCH_TOTAL_ORG_COUNT = 21;
+export const SMOKE_PAGED_SEARCH_FIRST_PAGE_STATUS = "20 results shown.";
+export const SMOKE_PAGED_SEARCH_SECOND_PAGE_STATUS = "1 result shown.";
 export const SMOKE_AL_CANDIDATE_TITLE = "Candidate Alabama | Candidate | Civibus";
 export const SMOKE_AL_CANDIDATE_DESCRIPTION = "Candidate profile from campaign-finance records.";
 export const SMOKE_GA_CANDIDATE_TITLE = "Candidate Georgia | Candidate | Civibus";
@@ -498,6 +524,28 @@ export const SMOKE_CONGRESS_SECOND_OUTSIDE_AGAINST = "$80.00";
 export const SMOKE_CONGRESS_SECOND_CASH_ON_HAND = "$0.00";
 export const SMOKE_CONGRESS_LEADER_SOURCE_HREF = "https://www.fec.gov/data/candidate/H6NC01001/";
 export const SMOKE_CONGRESS_SECOND_SOURCE_HREF = "https://www.fec.gov/data/candidate/S6GA00001/";
+// Live-seed leaderboard expectations (civibus-8lu). The values are owned by
+// test_support/browser_smoke_seed.py: Jane Doe's candidate row (H6NC14001)
+// and Alex Money Senator's (H6NC02001) official totals plus the four Schedule
+// E rows written against them. Same journey, same members, same ordering as
+// the fixture lane — only the dollars and source hrefs are seed-owned.
+export const SMOKE_CONGRESS_LIVE_LEADER_TOTAL_RAISED = "$250.00";
+export const SMOKE_CONGRESS_LIVE_LEADER_OUTSIDE_SUPPORT = "$90.00";
+export const SMOKE_CONGRESS_LIVE_LEADER_OUTSIDE_AGAINST = "$30.00";
+export const SMOKE_CONGRESS_LIVE_LEADER_CASH_ON_HAND = "$125.00";
+export const SMOKE_CONGRESS_LIVE_LEADER_SOURCE_HREF =
+  "https://example.org/browser-smoke/indiana-campaign-finance/record";
+export const SMOKE_CONGRESS_LIVE_SECOND_TOTAL_RAISED = "$100.00";
+export const SMOKE_CONGRESS_LIVE_SECOND_OUTSIDE_SUPPORT = "$20.00";
+export const SMOKE_CONGRESS_LIVE_SECOND_OUTSIDE_AGAINST = "$80.00";
+export const SMOKE_CONGRESS_LIVE_SECOND_CASH_ON_HAND = "$0.00";
+export const SMOKE_CONGRESS_LIVE_SECOND_SOURCE_HREF =
+  "https://example.org/browser-smoke/alex-money/record";
+// The live seed now writes TWO candidates and TWO committees (civibus-8lu),
+// so the browse lists' first-page labels differ from the single-row fixture
+// lists. primary_nav_nonempty.spec.ts picks per mode.
+export const SMOKE_CANDIDATES_FIRST_PAGE_LABEL_LIVE = "Showing 1–2";
+export const SMOKE_COMMITTEES_FIRST_PAGE_LABEL_LIVE = "Showing 1–2";
 export const SMOKE_CONGRESS_PERSON_ID = "90000000-0000-4000-8000-000000000411";
 export const SMOKE_CONGRESS_CANDIDATE_ID = "90000000-0000-4000-8000-000000000412";
 export const SMOKE_CONGRESS_PRINCIPAL_COMMITTEE_ID = "90000000-0000-4000-8000-000000000413";

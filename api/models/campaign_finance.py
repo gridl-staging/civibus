@@ -106,7 +106,10 @@ class DonorSearchRecipient(BaseModel):
     person_id: UUID
     candidate_id: UUID
     fec_candidate_id: str
+    # Raw FEC filing string (cf.candidate.name); identity_is_safe decides
+    # whether frontends may promote it into a formatted public identity.
     candidate_name: str
+    identity_is_safe: bool
     committee_id: UUID
     fec_committee_id: str
     committee_name: str
@@ -717,7 +720,10 @@ class CountySummaryRecipientCommittee(BaseModel):
 
 class CountySummaryLinkedCandidate(BaseModel):
     candidate_id: UUID
+    # Raw FEC filing string (cf.candidate.name); identity_is_safe decides
+    # whether frontends may promote it into a formatted public identity.
     candidate_name: str
+    identity_is_safe: bool
     donor_total_cents: int
     transaction_count: int
 

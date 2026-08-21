@@ -85,6 +85,9 @@ jobs:
       - name: Load graph
         run: make graph-load
       - name: DB-backed product suite
+        # Hard cap owned by tests/ci/pytest_tier_classifier.py::SUITE_TIME_BUDGETS
+        # (qa_signoff tier); pinned by test_suite_time_budget_contract.py.
+        timeout-minutes: 20
         run: |
           # The database has already been started, health-checked, reset, seeded,
           # and graph-loaded by the repo-owned setup path above. Keep this gate as

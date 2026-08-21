@@ -1029,6 +1029,18 @@ def _donor_key_sql(alias: str) -> str:
     return "md5(" + " || E'\\x1f' || ".join(encoded_columns) + ")"
 
 
+# The donor-search template below goes through str.format (match_sql /
+# identity_match_sql interpolation), so the literal regex braces inside the
+# identity predicate must be format-escaped or .format would parse them.
+_DONOR_SEARCH_CANDIDATE_IDENTITY_IS_SAFE_EXPR = (
+    _candidate_identity_is_safe_expr(
+        name_sql="candidate.name",
+        slug_sql=_SLUG_NORMALIZE_EXPR.format(value="candidate.name"),
+    )
+    .replace("{", "{{")
+    .replace("}", "}}")
+)
+
 _DONOR_SEARCH_SQL_TEMPLATE = f"""
     WITH current_federal_officeholders AS MATERIALIZED (
         SELECT DISTINCT officeholding.person_id
@@ -1044,6 +1056,7 @@ _DONOR_SEARCH_SQL_TEMPLATE = f"""
             candidate.id AS candidate_id,
             candidate.fec_candidate_id,
             candidate.name AS candidate_name,
+            {_DONOR_SEARCH_CANDIDATE_IDENTITY_IS_SAFE_EXPR} AS candidate_identity_is_safe,
             link.committee_id,
             committee.fec_committee_id,
             committee.name AS committee_name
@@ -1486,6 +1499,8 @@ _DONOR_SEARCH_SQL_TEMPLATE = f"""
                 AS fec_candidate_id,
             (ARRAY_AGG(scope.candidate_name ORDER BY scope.candidate_name ASC, scope.candidate_id ASC, scope.committee_name ASC, scope.committee_id ASC))[1]
                 AS candidate_name,
+            (ARRAY_AGG(scope.candidate_identity_is_safe ORDER BY scope.candidate_name ASC, scope.candidate_id ASC, scope.committee_name ASC, scope.committee_id ASC))[1]
+                AS identity_is_safe,
             (ARRAY_AGG(scope.committee_id ORDER BY scope.candidate_name ASC, scope.candidate_id ASC, scope.committee_name ASC, scope.committee_id ASC))[1]
                 AS committee_id,
             (ARRAY_AGG(scope.fec_committee_id ORDER BY scope.candidate_name ASC, scope.candidate_id ASC, scope.committee_name ASC, scope.committee_id ASC))[1]
@@ -1714,6 +1729,7 @@ _DONOR_SEARCH_SQL_TEMPLATE = f"""
         recipient.candidate_id,
         recipient.fec_candidate_id,
         recipient.candidate_name,
+        recipient.identity_is_safe,
         recipient.committee_id,
         recipient.fec_committee_id,
         recipient.committee_name,
@@ -2206,6 +2222,12 @@ _COUNTY_SUMMARY_TOP_LINKED_CANDIDATES_SQL = f"""
     SELECT
         candidate.id AS candidate_id,
         candidate.name AS candidate_name,
+        {
+    _candidate_identity_is_safe_expr(
+        name_sql="candidate.name",
+        slug_sql=_SLUG_NORMALIZE_EXPR.format(value="candidate.name"),
+    )
+} AS identity_is_safe,
         CAST(ROUND(COALESCE(SUM(qt.amount), 0) * 100, 0) AS BIGINT) AS donor_total_cents,
         COUNT(*)::integer AS transaction_count
     FROM qualifying_transactions qt
@@ -2816,6 +2838,7 @@ def _recipient_payload(row: dict[str, Any]) -> dict[str, Any]:
         "candidate_id": row["candidate_id"],
         "fec_candidate_id": row["fec_candidate_id"],
         "candidate_name": row["candidate_name"],
+        "identity_is_safe": row["identity_is_safe"],
         "committee_id": row["committee_id"],
         "fec_committee_id": row["fec_committee_id"],
         "committee_name": row["committee_name"],

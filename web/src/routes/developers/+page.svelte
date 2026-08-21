@@ -8,6 +8,33 @@
   const routeMetadata = APP_SHELL.staticRoutes.developers;
   const samplePersonId = "11111111-1111-1111-1111-111111111111";
   const sampleCandidateId = "44444444-4444-4444-4444-444444444444";
+  const sampleUnloadedPersonId = "66666666-6666-6666-6666-666666666666";
+  const sampleUnloadedPersonName = "Sample Official Without Loaded Filings";
+  // api/routes/public_federal.py::_csv_cell writes an empty cell for every
+  // null money value, so the unknown-money CSV row is name + false + eleven
+  // empty cells. Built by join so the column count cannot drift from
+  // csvColumns silently.
+  const notLoadedCoverageBlock = `{
+    "activity_state": "not_loaded",
+    "completeness": "unknown",
+    "basis": "no_authoritative_load_evidence"
+  }`;
+  // The nullable-money contract, shared verbatim by the money endpoint and
+  // both export blocks (civibus-o53): null and empty-cell values are unknown,
+  // never zero, per api.models.campaign_finance.PublicMemberMoneySummary.
+  const nullableMoneyNote =
+    "Every money field is nullable — the fundraising fields (total_raised, total_spent, net, " +
+    "cash_on_hand, summary_source) and the outside-spending fields (ie_support_total, " +
+    "ie_oppose_total, ie_support_count, ie_oppose_count). A null value means the figure is " +
+    "unknown and never means zero: the official has no linked FEC candidate, or the FEC filings " +
+    "for the selected cycle were never loaded. A fundraising_coverage / ie_coverage block " +
+    "accompanies every non-populated state and says why. A candidate whose loaded filings " +
+    'genuinely total nothing still sends "0.00" — the coverage state, never the number, says ' +
+    "which is which.";
+  const csvEmptyCellNote =
+    "The money columns write an empty cell when the value is unknown — an empty cell never " +
+    "means zero. The CSV carries no coverage columns; consult export.json's " +
+    "fundraising_coverage / ie_coverage blocks for why a value is unknown.";
   const shellBaseGuard =
     ': "${CIVIBUS_PUBLIC_API_BASE:?Set CIVIBUS_PUBLIC_API_BASE to a Civibus origin that serves /api}"';
   const csvColumns = [
@@ -26,7 +53,41 @@
     "ie_oppose_count",
     "source_urls"
   ] as const;
-  const endpointReferences = [
+  const notLoadedMoneySample = `{
+  "person_id": "${sampleUnloadedPersonId}",
+  "person_name": "${sampleUnloadedPersonName}",
+  "has_fec_money": false,
+  "candidate_id": null,
+  "total_raised": null,
+  "total_spent": null,
+  "net": null,
+  "cash_on_hand": null,
+  "summary_source": null,
+  "fundraising_coverage": ${notLoadedCoverageBlock},
+  "ie_support_total": null,
+  "ie_oppose_total": null,
+  "ie_support_count": null,
+  "ie_oppose_count": null,
+  "ie_coverage": ${notLoadedCoverageBlock},
+  "sources": []
+}`;
+  const csvNotLoadedRow = [
+    sampleUnloadedPersonId,
+    sampleUnloadedPersonName,
+    "false",
+    ...Array.from({ length: csvColumns.length - 3 }, () => "")
+  ].join(",");
+  type EndpointReference = {
+    label: string;
+    parameters: readonly string[];
+    curl: string;
+    sampleLabel: string;
+    sampleBody: string;
+    notes?: string;
+    secondarySampleLabel?: string;
+    secondarySampleBody?: string;
+  };
+  const endpointReferences: readonly EndpointReference[] = [
     {
       label: "GET /api/public/v1/federal/officials",
       parameters: ["chamber", "state", "party"],
@@ -53,6 +114,9 @@
       label: "GET /api/public/v1/federal/officials/{person_id}/money",
       parameters: ["none beyond person_id in the path"],
       curl: `${shellBaseGuard} && curl "\${CIVIBUS_PUBLIC_API_BASE}/api/public/v1/federal/officials/${samplePersonId}/money"`,
+      notes: nullableMoneyNote,
+      secondarySampleLabel: "Sample JSON (money not loaded)",
+      secondarySampleBody: notLoadedMoneySample,
       sampleLabel: "Sample JSON",
       sampleBody: `{
   "person_id": "${samplePersonId}",
@@ -143,6 +207,10 @@
       label: "GET /api/public/v1/federal/export.json",
       parameters: ["none"],
       curl: `${shellBaseGuard} && curl "\${CIVIBUS_PUBLIC_API_BASE}/api/public/v1/federal/export.json"`,
+      notes:
+        "Rows use the same nullable-money contract as the per-official money endpoint: " +
+        "officials whose money is unknown appear with null totals and a fundraising_coverage / " +
+        "ie_coverage block saying why, never with fabricated zeros.",
       sampleLabel: "Sample JSON",
       sampleBody: `[
   {
@@ -177,9 +245,11 @@
       label: "GET /api/public/v1/federal/export.csv",
       parameters: ["none"],
       curl: `${shellBaseGuard} && curl -L "\${CIVIBUS_PUBLIC_API_BASE}/api/public/v1/federal/export.csv" -o civibus_federal_money.csv`,
+      notes: csvEmptyCellNote,
       sampleLabel: "Sample CSV",
       sampleBody: `${csvColumns.join(",")}
-${samplePersonId},Sample Official,true,${sampleCandidateId},125000.00,100000.00,25000.00,45000.00,fec_weball,5000.00,0.00,2,0,https://www.fec.gov/data/candidate/H4NC00000/`
+${samplePersonId},Sample Official,true,${sampleCandidateId},125000.00,100000.00,25000.00,45000.00,fec_weball,5000.00,0.00,2,0,https://www.fec.gov/data/candidate/H4NC00000/
+${csvNotLoadedRow}`
     },
     {
       label: "GET /api/public/v1/federal/metadata",
@@ -288,6 +358,9 @@ ${samplePersonId},Sample Official,true,${sampleCandidateId},125000.00,100000.00,
     <article class="developers__endpoint">
       <h4><code>{endpoint.label}</code></h4>
       <p>Parameters: {endpoint.parameters.join(", ")}.</p>
+      {#if endpoint.notes}
+        <p>{endpoint.notes}</p>
+      {/if}
       <h5>Curl</h5>
       <!-- The overflow is intentional; keyboard users need to focus the scrolling element. -->
       <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
@@ -295,6 +368,11 @@ ${samplePersonId},Sample Official,true,${sampleCandidateId},125000.00,100000.00,
       <h5>{endpoint.sampleLabel}</h5>
       <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
       <pre tabindex="0"><code>{endpoint.sampleBody}</code></pre>
+      {#if endpoint.secondarySampleLabel && endpoint.secondarySampleBody}
+        <h5>{endpoint.secondarySampleLabel}</h5>
+        <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+        <pre tabindex="0"><code>{endpoint.secondarySampleBody}</code></pre>
+      {/if}
     </article>
   {/each}
 

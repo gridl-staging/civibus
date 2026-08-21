@@ -12,10 +12,12 @@ import api.queries.campaign_finance as campaign_finance_queries
 from api.test_campaign_finance_support import (
     CandidateCommitteeLinkSeed,
     CandidateRowSeed,
+    CommitteeRowSeed,
     FilingRowSeed,
     TransactionRowSeed,
     insert_candidate_committee_link_row,
     insert_candidate_row,
+    insert_committee_row,
     insert_electoral_division_row,
     insert_filing_row,
     insert_office_row,
@@ -501,6 +503,7 @@ def test_search_donors_by_name_rolls_up_current_federal_recipient_activity(
             "candidate_id": fixture.alpha.candidate_id,
             "fec_candidate_id": "H9NC72001",
             "candidate_name": "Alpha Officeholder",
+            "identity_is_safe": True,
             "committee_id": fixture.alpha.committee_id,
             "fec_committee_id": "C72000001",
             "committee_name": "Alpha Officeholder Committee",
@@ -512,6 +515,7 @@ def test_search_donors_by_name_rolls_up_current_federal_recipient_activity(
             "candidate_id": fixture.beta.candidate_id,
             "fec_candidate_id": "S0NC00002",
             "candidate_name": "Beta Officeholder",
+            "identity_is_safe": True,
             "committee_id": fixture.beta.committee_id,
             "fec_committee_id": "C72000002",
             "committee_name": "Beta Officeholder Committee",
@@ -567,6 +571,206 @@ def test_search_donors_counts_shared_committee_transactions_once(db_conn: psycop
     ] == [
         (fixture.alpha.person_id, Decimal("80.00"), 1),
         (_SHARED_COMMITTEE_PERSON_ID, Decimal("80.00"), 1),
+    ]
+
+
+_IDENTITY_GATE_SAFE_PERSON_ID = UUID("73000000-0000-4000-8000-000000000001")
+_IDENTITY_GATE_UNSAFE_PERSON_ID = UUID("73000000-0000-4000-8000-000000000002")
+
+
+def _seed_identity_gate_recipient(
+    conn: psycopg.Connection,
+    *,
+    suffix: int,
+    person_id: UUID,
+    canonical_name: str,
+    candidate_name: str,
+    fec_candidate_id: str,
+    fec_committee_id: str,
+    committee_name: str,
+    district: str,
+    amount: Decimal,
+    source_record_id: UUID,
+) -> None:
+    """Seed one current federal officeholder whose candidate committee received
+    one donation from HONESTY GATE SMITH. Test-local because the shared fixture
+    (test_support/donor_search_fixture.py) only carries already-cased,
+    identity-safe candidate names, which pass the identity gate vacuously."""
+    division_id = UUID(f"73000000-0000-0000-0000-0000000000{suffix}1")
+    office_id = UUID(f"73000000-0000-0000-0000-0000000000{suffix}2")
+    officeholding_id = UUID(f"73000000-0000-0000-0000-0000000000{suffix}3")
+    candidate_id = UUID(f"73000000-0000-0000-0000-0000000000{suffix}4")
+    committee_id = UUID(f"73000000-0000-0000-0000-0000000000{suffix}5")
+    link_id = UUID(f"73000000-0000-0000-0000-0000000000{suffix}6")
+    filing_id = UUID(f"73000000-0000-0000-0000-0000000000{suffix}7")
+    transaction_id = UUID(f"73000000-0000-0000-0000-0000000000{suffix}8")
+
+    insert_person(
+        conn,
+        Person(
+            id=person_id,
+            canonical_name=canonical_name,
+            first_name="Honesty",
+            last_name=canonical_name.split()[-1],
+        ),
+    )
+    insert_electoral_division_row(
+        conn,
+        division_id=division_id,
+        name=f"NC honesty federal division {district}",
+        division_type="congressional_district",
+        state="NC",
+        district_number=district,
+    )
+    insert_office_row(
+        conn,
+        office_id=office_id,
+        name="us_house",
+        title="Representative",
+        state="NC",
+        electoral_division_id=division_id,
+    )
+    insert_officeholding_row(
+        conn,
+        officeholding_id=officeholding_id,
+        person_id=person_id,
+        office_id=office_id,
+        electoral_division_id=division_id,
+    )
+    insert_committee_row(
+        conn,
+        CommitteeRowSeed(
+            id=committee_id,
+            fec_committee_id=fec_committee_id,
+            name=committee_name,
+            state="NC",
+            city="Raleigh",
+        ),
+    )
+    insert_candidate_row(
+        conn,
+        CandidateRowSeed(
+            id=candidate_id,
+            fec_candidate_id=fec_candidate_id,
+            name=candidate_name,
+            office="H",
+            person_id=person_id,
+            principal_committee_id=committee_id,
+            source_record_id=source_record_id,
+            state="NC",
+            district=district,
+        ),
+    )
+    insert_candidate_committee_link_row(
+        conn,
+        CandidateCommitteeLinkSeed(
+            id=link_id,
+            candidate_id=candidate_id,
+            committee_id=committee_id,
+            valid_period="[2024-01-01,2100-01-01)",
+            designation="P",
+            source_record_id=source_record_id,
+        ),
+    )
+    insert_filing_row(
+        conn,
+        FilingRowSeed(
+            id=filing_id,
+            filing_fec_id=f"donor-search-identity-gate-filing-{suffix}",
+            committee_id=committee_id,
+            amendment_indicator="N",
+            source_record_id=source_record_id,
+        ),
+    )
+    insert_transaction_row(
+        conn,
+        TransactionRowSeed(
+            id=transaction_id,
+            filing_id=filing_id,
+            committee_id=committee_id,
+            transaction_type="15",
+            amount=amount,
+            amendment_indicator="N",
+            source_record_id=source_record_id,
+            transaction_identifier=f"donor-search-identity-gate-donation-{suffix}",
+            transaction_date=date(2025, 6, 1),
+            contributor_name_raw="HONESTY GATE SMITH",
+            contributor_entity_type="IND",
+            contributor_employer="Civibus Labs",
+            contributor_occupation="Engineer",
+            contributor_city="Durham",
+            contributor_state="NC",
+            contributor_zip="27701",
+            recipient_candidate_id=candidate_id,
+            recipient_committee_id=committee_id,
+        ),
+    )
+
+
+def test_search_donors_flags_recipient_identity_safety(db_conn: psycopg.Connection) -> None:
+    """Each recipient row must carry the candidate identity gate. Specimens are
+    deliberate: an ALL-CAPS digit-free FEC name is identity-SAFE (frontends may
+    format it), while a digit-bearing address-like source string is UNSAFE and
+    must stay raw. The shared fixture's mixed-case names cannot distinguish the
+    two branches."""
+    fixture = seed_donor_search_fixture(db_conn)
+    _seed_identity_gate_recipient(
+        db_conn,
+        suffix=1,
+        person_id=_IDENTITY_GATE_SAFE_PERSON_ID,
+        canonical_name="Safe Honesty Officeholder",
+        candidate_name="OSSOFF, T. JONATHAN",
+        fec_candidate_id="H0NC72051",
+        fec_committee_id="C72000051",
+        committee_name="Honesty Safe Committee",
+        district="05",
+        amount=Decimal("300.00"),
+        source_record_id=fixture.source_record_current,
+    )
+    _seed_identity_gate_recipient(
+        db_conn,
+        suffix=2,
+        person_id=_IDENTITY_GATE_UNSAFE_PERSON_ID,
+        canonical_name="Unsafe Honesty Officeholder",
+        candidate_name="212 MAIN AVE W. JOHN, RODNEY",
+        fec_candidate_id="H0NC72052",
+        fec_committee_id="C72000052",
+        committee_name="Honesty Unsafe Committee",
+        district="06",
+        amount=Decimal("100.00"),
+        source_record_id=fixture.source_record_current,
+    )
+    rebuild_donor_search_rollup(db_conn)
+
+    payload = campaign_finance_queries.search_donors(db_conn, q="honesty gate", by="name", limit=20, offset=0)
+
+    assert [row["contributor_name"] for row in payload["results"]] == ["HONESTY GATE SMITH"]
+    donor = payload["results"][0]
+    assert donor["recipients"] == [
+        {
+            "person_id": _IDENTITY_GATE_SAFE_PERSON_ID,
+            "candidate_id": UUID("73000000-0000-0000-0000-000000000014"),
+            "fec_candidate_id": "H0NC72051",
+            "candidate_name": "OSSOFF, T. JONATHAN",
+            "identity_is_safe": True,
+            "committee_id": UUID("73000000-0000-0000-0000-000000000015"),
+            "fec_committee_id": "C72000051",
+            "committee_name": "Honesty Safe Committee",
+            "total_amount": Decimal("300.00"),
+            "transaction_count": 1,
+        },
+        {
+            "person_id": _IDENTITY_GATE_UNSAFE_PERSON_ID,
+            "candidate_id": UUID("73000000-0000-0000-0000-000000000024"),
+            "fec_candidate_id": "H0NC72052",
+            "candidate_name": "212 MAIN AVE W. JOHN, RODNEY",
+            "identity_is_safe": False,
+            "committee_id": UUID("73000000-0000-0000-0000-000000000025"),
+            "fec_committee_id": "C72000052",
+            "committee_name": "Honesty Unsafe Committee",
+            "total_amount": Decimal("100.00"),
+            "transaction_count": 1,
+        },
     ]
 
 

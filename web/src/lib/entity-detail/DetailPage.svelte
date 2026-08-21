@@ -1,5 +1,9 @@
 <script lang="ts">
   import { buildCandidateHref } from "$lib/campaign-finance-detail/contract";
+  // civibus-bmg: candidate names route through the ONE identity-gated owner
+  // (safe -> formatted, unsafe -> raw filed string) so this card's heading can
+  // never disagree with the candidate page it links to.
+  import { formatCandidatePublicName } from "$lib/campaign-finance-detail/presentation";
   // Route-path owner for /office/[id]; keeps the person page's office link on
   // the same path shape the civic pages own rather than a hand-built string.
   import { buildOfficeRoutePath } from "$lib/civic-detail/contract";
@@ -21,10 +25,12 @@
     buildPersonMoneyAtGlancePresentation,
     buildPersonMoneyAtGlanceSummary,
     buildPersonOutsideSpendingSection,
+    buildPersonRaceRows,
     buildEntityDetailShellPresentation,
     type EntityDetailShellPresentation,
     type PersonMoneyAtGlancePresentation,
-    type PersonMoneyAtGlanceSummary
+    type PersonMoneyAtGlanceSummary,
+    type PersonRaceRow
   } from "$lib/entity-detail/presentation";
   import type { EntityDetailPageBundle } from "$lib/server/api/entity-detail";
   import type { PersonMoneyHeadlineState } from "$lib/server/api/entity-detail";
@@ -58,6 +64,10 @@
 
   $: personDetail =
     data.entityType === "person" ? (data.detail as PersonDetailResponse) : null;
+  // The direct person -> race links (civibus-7qj). Server-ordered nearest
+  // election first; empty (or an omitted key on an older payload) means no panel.
+  let personRaceRows: PersonRaceRow[];
+  $: personRaceRows = buildPersonRaceRows(personDetail?.candidacies);
   $: personBioLicenseLabel =
     personDetail === null
       ? null
@@ -604,6 +614,35 @@
           {/each}
         </dl>
       </section>
+      {#if personRaceRows.length > 0}
+        <!-- The direct person -> race entry into the race-discovery chain
+             (civibus-7qj), fed by the shadow-person-safe backend surface
+             (civibus-x8b). Rows render in payload order: the backend owns the
+             nearest-election-first rule, and re-sorting here would fork it. -->
+        <section class="detail__panel" data-testid="person-races">
+          <h3>Races</h3>
+          <ul class="detail__race-list">
+            {#each personRaceRows as raceRow (raceRow.candidacyId)}
+              <li class="detail__race-row" data-testid="person-race-row">
+                <a href={raceRow.contestHref}>{raceRow.contestName}</a>
+                {#if raceRow.electionDateLabel !== null || raceRow.partyLabel !== null || raceRow.statusLabel !== null}
+                  <span class="detail__race-facts">
+                    {#if raceRow.electionDateLabel !== null}
+                      <span>{raceRow.electionDateLabel}</span>
+                    {/if}
+                    {#if raceRow.partyLabel !== null}
+                      <span>{raceRow.partyLabel}</span>
+                    {/if}
+                    {#if raceRow.statusLabel !== null}
+                      <span>{raceRow.statusLabel}</span>
+                    {/if}
+                  </span>
+                {/if}
+              </li>
+            {/each}
+          </ul>
+        </section>
+      {/if}
     {:else if sectionKey === "trust"}
       <TrustSection trustSection={shellViewModel.trustSection} />
     {:else if sectionKey === "metrics"}
@@ -660,7 +699,7 @@
                 <article class="detail__committee-card">
                   <h4>
                     <a href={buildCandidateHref(section.candidate)}>
-                      {section.candidate.name}
+                      {formatCandidatePublicName(section.candidate)}
                     </a>
                   </h4>
 
@@ -860,6 +899,29 @@
 </section>
 
 <style>
+  .detail__race-list {
+    display: grid;
+    gap: 0.5rem;
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+
+  .detail__race-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem 0.75rem;
+    align-items: baseline;
+  }
+
+  .detail__race-facts {
+    color: var(--color-text-muted, #64748b);
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 0 0.75rem;
+    font-size: 0.9em;
+  }
+
   .detail__rank-cell {
     display: grid;
     gap: 0.25rem;

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from uuid import UUID, uuid4
 
 import psycopg
@@ -8,8 +8,19 @@ import pytest
 from fastapi.testclient import TestClient
 
 from api.models.entities import PersonResponse
-from api.test_campaign_finance_support import insert_data_source_for_test, insert_source_record_for_test
-from api.test_civics import _insert_office, _insert_officeholding
+from api.test_campaign_finance_support import (
+    CandidateRowSeed,
+    insert_candidate_row,
+    insert_data_source_for_test,
+    insert_source_record_for_test,
+)
+from api.test_civics import (
+    _database_current_date,
+    _insert_candidacy,
+    _insert_contest,
+    _insert_office,
+    _insert_officeholding,
+)
 from api.queries.civics import fetch_current_office_for_person
 from core.db import (
     insert_data_source,
@@ -742,3 +753,254 @@ def test_get_org_rejects_malformed_uuid(api_client: TestClient) -> None:
 
     assert response.status_code == 422
     assert response.json()["detail"][0]["loc"] == ["path", "organization_id"]
+
+
+# ---------------------------------------------------------------------------
+# Person candidacies (civibus-x8b): the person -> race surface
+# ---------------------------------------------------------------------------
+
+
+def _unique_fec_candidate_ids(count: int) -> list[str]:
+    """Unique FEC candidate ids satisfying ck_candidate_fec_candidate_id_format.
+
+    Format: ^[HSP][0-9][A-Z0-9]{2}[0-9]{5}$. One random base plus offsets keeps
+    the ids unique within a test without a cross-draw collision chance.
+    """
+    base = uuid4().int % 100000
+    return [f"S8ZZ{(base + offset) % 100000:05d}" for offset in range(count)]
+
+
+class TestPersonCandidacies:
+    """`candidacies` on the person-detail payload (civibus-x8b).
+
+    THE JOIN RULE UNDER TEST: a person's races must resolve through BOTH
+    civic.candidacy.person_id (direct) AND the person's cf.candidate rows via
+    candidacy.candidate_number -> cf.candidate.fec_candidate_id. Production
+    holds chamber-switching incumbents as TWO person rows: the candidacy is
+    bound to an FEC-only shadow person while cf.candidate.person_id points at
+    the bioguide-anchored spine person (the aug20 shadow-person lesson,
+    civibus-5lm). A person_id-only join returns nothing for exactly the
+    highest-profile people; every value asserted here is hand-calculated.
+    """
+
+    def test_person_with_direct_candidacy_lists_the_race_with_contest_identity(
+        self, api_client: TestClient, db_conn: psycopg.Connection
+    ) -> None:
+        suffix = uuid4().hex[:12]
+        person = Person(canonical_name=f"Direct Candidacy Person {suffix}")
+        insert_person(db_conn, person)
+        (fec_candidate_id,) = _unique_fec_candidate_ids(1)
+
+        current_date = _database_current_date(db_conn)
+        election_date = current_date + timedelta(days=90)
+        office_id = _insert_office(
+            db_conn,
+            name=f"test_x8b_senate_{suffix}",
+            office_level="federal",
+            title="Test Senator",
+            state="ZZ",
+        )
+        contest_id = _insert_contest(
+            db_conn,
+            name=f"Zavala Test Senate — General ({suffix})",
+            office_id=office_id,
+            election_date=election_date,
+            election_type="general",
+        )
+        candidacy_id = _insert_candidacy(
+            db_conn,
+            person_id=person.id,
+            contest_id=contest_id,
+            party="DEM",
+            status="qualified",
+            incumbent_challenge="C",
+            candidate_number=fec_candidate_id,
+        )
+
+        response = api_client.get(f"/v1/person/{person.id}")
+
+        assert response.status_code == 200
+        candidacies = response.json()["candidacies"]
+        assert candidacies == [
+            {
+                "candidacy_id": str(candidacy_id),
+                "contest_id": str(contest_id),
+                "contest_name": f"Zavala Test Senate — General ({suffix})",
+                "election_date": election_date.isoformat(),
+                "election_type": "general",
+                "office_id": str(office_id),
+                "office_name": "Test Senator",
+                "office_level": "federal",
+                "party": "DEM",
+                "status": "qualified",
+                "incumbent_challenge": "C",
+                "fec_candidate_id": fec_candidate_id,
+            }
+        ]
+
+    def test_spine_person_reaches_the_race_through_the_fec_candidate_id(
+        self, api_client: TestClient, db_conn: psycopg.Connection
+    ) -> None:
+        """The two-row world: candidacy on the shadow row, money on the spine row.
+
+        Red-capable proof of the join rule: the candidacy's person_id points at
+        the FEC-only shadow person, while cf.candidate.person_id points at the
+        bioguide-anchored spine person. A person_id-only join returns [] for
+        the spine person — exactly the live Ossoff-class defect — so this test
+        fails red under that implementation. Both rows must reach the race
+        until the Tuesday spine convergence merges them.
+        """
+        suffix = uuid4().hex[:12]
+        shadow_person = Person(canonical_name=f"OSSIFY SHADOW, T. {suffix}")
+        spine_person = Person(canonical_name=f"Ossify Spine {suffix}")
+        for row in (shadow_person, spine_person):
+            insert_person(db_conn, row)
+        (fec_candidate_id,) = _unique_fec_candidate_ids(1)
+
+        current_date = _database_current_date(db_conn)
+        election_date = current_date + timedelta(days=60)
+        office_id = _insert_office(
+            db_conn,
+            name=f"test_x8b_shadow_senate_{suffix}",
+            office_level="federal",
+            title="Test Senator",
+            state="ZZ",
+        )
+        contest_id = _insert_contest(
+            db_conn,
+            name=f"Zavala Test Senate Shadow Split ({suffix})",
+            office_id=office_id,
+            election_date=election_date,
+            election_type="general",
+        )
+        insert_candidate_row(
+            db_conn,
+            CandidateRowSeed(
+                id=uuid4(),
+                fec_candidate_id=fec_candidate_id,
+                name=f"OSSIFY SHADOW, T. {suffix}",
+                office="S",
+                state="ZZ",
+                # The FEC-money row is bound to the SPINE person, not the
+                # shadow person the candidacy points at.
+                person_id=spine_person.id,
+            ),
+        )
+        candidacy_id = _insert_candidacy(
+            db_conn,
+            person_id=shadow_person.id,
+            contest_id=contest_id,
+            party="DEM",
+            status="qualified",
+            incumbent_challenge="I",
+            candidate_number=fec_candidate_id,
+        )
+
+        spine_payload = api_client.get(f"/v1/person/{spine_person.id}").json()
+        shadow_payload = api_client.get(f"/v1/person/{shadow_person.id}").json()
+
+        # The spine person reaches the race ONLY through its cf.candidate row's
+        # fec_candidate_id; person_id alone finds nothing for this row.
+        assert [row["candidacy_id"] for row in spine_payload["candidacies"]] == [str(candidacy_id)]
+        assert spine_payload["candidacies"][0]["contest_id"] == str(contest_id)
+        assert spine_payload["candidacies"][0]["fec_candidate_id"] == fec_candidate_id
+        # The shadow person reaches the same race through the direct person_id
+        # binding, and the union must not duplicate the row for either person.
+        assert [row["candidacy_id"] for row in shadow_payload["candidacies"]] == [str(candidacy_id)]
+        assert shadow_payload["candidacies"][0]["contest_id"] == str(contest_id)
+
+    def test_candidacies_are_ordered_nearest_election_first(
+        self, api_client: TestClient, db_conn: psycopg.Connection
+    ) -> None:
+        """Same distance-from-today rule as the office page's contest list.
+
+        Hand-calculated distances: +30 days (upcoming), -120 days (past),
+        +400 days (future) => expected order +30, -120, +400.
+        """
+        suffix = uuid4().hex[:12]
+        person = Person(canonical_name=f"Serial Candidate {suffix}")
+        insert_person(db_conn, person)
+
+        current_date = _database_current_date(db_conn)
+        office_id = _insert_office(
+            db_conn,
+            name=f"test_x8b_ordering_{suffix}",
+            office_level="federal",
+            title="Test Representative",
+        )
+        offsets_and_types = [
+            (timedelta(days=30), "general"),
+            (timedelta(days=-120), "primary"),
+            (timedelta(days=400), "special"),
+        ]
+        contest_ids_by_offset: dict[int, UUID] = {}
+        for offset, election_type in offsets_and_types:
+            contest_id = _insert_contest(
+                db_conn,
+                name=f"Ordering Contest {offset.days} ({suffix})",
+                office_id=office_id,
+                election_date=current_date + offset,
+                election_type=election_type,
+            )
+            contest_ids_by_offset[offset.days] = contest_id
+            _insert_candidacy(db_conn, person_id=person.id, contest_id=contest_id)
+
+        payload = api_client.get(f"/v1/person/{person.id}").json()
+
+        assert [row["contest_id"] for row in payload["candidacies"]] == [
+            str(contest_ids_by_offset[30]),
+            str(contest_ids_by_offset[-120]),
+            str(contest_ids_by_offset[400]),
+        ]
+
+    def test_candidacies_exclude_contests_beyond_the_publish_horizon(
+        self, api_client: TestClient, db_conn: psycopg.Connection
+    ) -> None:
+        """A corrupt filer-typo date (2929-11-08 class) must not surface here.
+
+        Serving already refuses these dates on /election/[date] and the
+        upcoming timeline; the person payload must carry the same horizon bound
+        or it becomes the one public surface still linking corrupt contests.
+        """
+        suffix = uuid4().hex[:12]
+        person = Person(canonical_name=f"Horizon Person {suffix}")
+        insert_person(db_conn, person)
+
+        current_date = _database_current_date(db_conn)
+        office_id = _insert_office(
+            db_conn,
+            name=f"test_x8b_horizon_{suffix}",
+            office_level="federal",
+            title="Test Senator",
+        )
+        legit_contest_id = _insert_contest(
+            db_conn,
+            name=f"Legit Contest ({suffix})",
+            office_id=office_id,
+            election_date=current_date + timedelta(days=45),
+            election_type="general",
+        )
+        corrupt_contest_id = _insert_contest(
+            db_conn,
+            name=f"Corrupt Far Future Contest ({suffix})",
+            office_id=office_id,
+            # Beyond CURRENT_DATE + 6 years: the corrupt CAND_ELECTION_YR class.
+            election_date=current_date + timedelta(days=365 * 100),
+            election_type="general",
+        )
+        _insert_candidacy(db_conn, person_id=person.id, contest_id=legit_contest_id)
+        _insert_candidacy(db_conn, person_id=person.id, contest_id=corrupt_contest_id)
+
+        payload = api_client.get(f"/v1/person/{person.id}").json()
+
+        assert [row["contest_id"] for row in payload["candidacies"]] == [str(legit_contest_id)]
+
+    def test_person_with_no_candidacies_serves_an_empty_list(
+        self, api_client: TestClient, db_conn: psycopg.Connection
+    ) -> None:
+        person = Person(canonical_name=f"No Races Person {uuid4().hex[:12]}")
+        insert_person(db_conn, person)
+
+        payload = api_client.get(f"/v1/person/{person.id}").json()
+
+        assert payload["candidacies"] == []

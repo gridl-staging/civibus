@@ -525,12 +525,14 @@ def fetch_contest_candidate_links(conn: psycopg.Connection, contest_id: UUID) ->
 
 # How far ahead election serving will publish, in years past CURRENT_DATE.
 #
-# THE single owner of the election-date publish horizon. Three predicates carry
+# THE single owner of the election-date publish horizon. Four predicates carry
 # it and must stay in lockstep, which is why each is an f-string over this
 # constant: _ELECTION_CONTESTS_BY_DATE_SQL (the /election/[date] index),
 # _UPCOMING_ELECTION_CONTESTS_SQL (the timeline behind /calendar and both the
-# static and contest sitemap shards), and _ELECTION_DATE_WITHIN_PUBLISH_HORIZON_SQL
-# (the 404 decision for beyond-horizon dates).
+# static and contest sitemap shards), _ELECTION_DATE_WITHIN_PUBLISH_HORIZON_SQL
+# (the 404 decision for beyond-horizon dates), and _PERSON_CANDIDACIES_SQL (the
+# person page's races list, which must not become the one public surface still
+# linking a corrupt-dated contest).
 #
 # Deliberately LOOSER than the loader's own election-year ceiling
 # (_federal_fec_races_max_election_year, fec_cycle + 4), so serving can never
@@ -708,6 +710,83 @@ def fetch_candidacy_detail(conn: psycopg.Connection, candidacy_id: UUID) -> dict
     with conn.cursor(row_factory=dict_row) as cursor:
         cursor.execute(CIVIC_CANDIDACY_DETAIL_SQL, (candidacy_id,))
         return cursor.fetchone()
+
+
+# The person page's races list (civibus-x8b): every candidacy this person is a
+# candidate in, joined to its contest and office so the payload carries a
+# linkable contest identity.
+#
+# THE JOIN RULE — read before "simplifying" this to a person_id join. A
+# chamber-switching incumbent exists in production as TWO core.person rows: the
+# candidacy is bound to an FEC-only shadow person row, while
+# cf.candidate.person_id points at the bioguide-anchored spine person row (the
+# aug20 shadow-person lesson; civibus-5lm owns the convergence). A person_id-only
+# join therefore finds NOTHING for exactly the highest-profile people. The fix
+# mirrors _CONTEST_CANDIDATE_LINKS_SQL above: resolve through
+# civic.candidacy.candidate_number -> cf.candidate.fec_candidate_id (NOT NULL
+# UNIQUE), so a person reaches their races through EITHER binding:
+#   1. direct: candidacy.person_id = person        (the shadow row's path)
+#   2. FEC id: candidacy.candidate_number IN the fec_candidate_ids of the
+#      person's cf.candidate rows                  (the spine row's path)
+# The OR is a single-pass predicate over civic.candidacy, so a candidacy that
+# matches both arms (the post-convergence merged-person world) still yields
+# exactly one row — no DISTINCT needed.
+#
+# Ordering reuses the office page's distance-from-today rule
+# (_OFFICE_RECENT_CONTESTS_SQL): the race a reader came for — the imminent one —
+# sorts first, with upcoming ahead of equally-distant past contests.
+#
+# The publish-horizon bound is the same f-string predicate the election index
+# and timeline carry (see _UPCOMING_ELECTION_HORIZON_YEARS): corrupt
+# filer-typo contest dates (2820–2929 observed) must not resurface through the
+# person page. NULL election dates are kept — an undated contest is real,
+# not corrupt.
+_PERSON_CANDIDACIES_SQL = f"""
+    SELECT
+        cand.id AS candidacy_id,
+        cand.contest_id,
+        ct.name AS contest_name,
+        ct.election_date,
+        ct.election_type,
+        ct.office_id,
+        COALESCE(NULLIF(btrim(o.title), ''), o.name) AS office_name,
+        o.office_level,
+        cand.party,
+        cand.status,
+        cand.incumbent_challenge,
+        cand.candidate_number AS fec_candidate_id
+    FROM civic.candidacy cand
+    JOIN civic.contest ct ON ct.id = cand.contest_id
+    JOIN civic.office o ON o.id = ct.office_id
+    WHERE (
+        cand.person_id = %(person_id)s
+        OR cand.candidate_number IN (
+            SELECT cf_c.fec_candidate_id
+            FROM cf.candidate cf_c
+            WHERE cf_c.person_id = %(person_id)s
+        )
+    )
+    AND (
+        ct.election_date IS NULL
+        OR ct.election_date <= CURRENT_DATE + INTERVAL '{_UPCOMING_ELECTION_HORIZON_YEARS} years'
+    )
+    ORDER BY
+        ABS(ct.election_date - CURRENT_DATE) ASC NULLS LAST,
+        ct.election_date DESC NULLS LAST,
+        cand.id
+"""
+
+
+def fetch_candidacies_for_person(conn: psycopg.Connection, person_id: UUID) -> list[dict[str, Any]]:
+    """Return the races a person is a candidate in, nearest election first.
+
+    Feeds the `candidacies` field of the person-detail payload
+    (api/routes/entities.py). See _PERSON_CANDIDACIES_SQL for the load-bearing
+    shadow-person join rule.
+    """
+    with conn.cursor(row_factory=dict_row) as cursor:
+        cursor.execute(_PERSON_CANDIDACIES_SQL, {"person_id": person_id})
+        return list(cursor.fetchall())
 
 
 # ---------------------------------------------------------------------------

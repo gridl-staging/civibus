@@ -63,6 +63,9 @@ jobs:
         run: npm ci
       - name: Web unit tests
         working-directory: web
+        # Hard cap owned by tests/ci/pytest_tier_classifier.py::SUITE_TIME_BUDGETS
+        # (edit_fast tier); pinned by test_suite_time_budget_contract.py.
+        timeout-minutes: 3
         run: npm test
       - name: Web type check
         working-directory: web
@@ -225,6 +228,9 @@ jobs:
       # scoped to the screenshot oracle even though the run is now wider.
       - name: Fixture-lane smoke journeys
         working-directory: web
+        # Hard cap owned by tests/ci/pytest_tier_classifier.py::SUITE_TIME_BUDGETS
+        # (qa_nightly tier); pinned by test_suite_time_budget_contract.py.
+        timeout-minutes: 10
         env:
           # Empty on `schedule` (the inputs context only carries workflow_dispatch
           # values), so the scheduled run always asserts rather than rewrites.

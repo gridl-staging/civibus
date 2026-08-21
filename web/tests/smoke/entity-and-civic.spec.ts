@@ -639,11 +639,9 @@ test.describe.serial("entity and civic detail smoke (live mode)", () => {
   });
 
   test("Durham officeholder renders on person detail and search against live data", async ({
-    page,
-    request
+    page
   }: {
     page: any;
-    request: any;
   }) => {
     test.skip(
       !SHOULD_RUN_LIVE_DURHAM_SMOKE,
@@ -662,7 +660,11 @@ test.describe.serial("entity and civic detail smoke (live mode)", () => {
     const searchUrl = new URL("/v1/search", LIVE_API_BASE_URL);
     searchUrl.searchParams.set("q", LIVE_DURHAM_PERSON_NAME);
     searchUrl.searchParams.set("entity_type", "person");
-    const searchResponse = await request.get(searchUrl.toString());
+    // page.request (the page's context-bound API client) rather than the bare
+    // `request` fixture: the smoke eslint config bans spec-file `request.*`
+    // calls, and page.request.get is the pattern the other live-mode specs in
+    // this suite already use (civibus-5bh).
+    const searchResponse = await page.request.get(searchUrl.toString());
     expect(searchResponse.ok()).toBe(true);
     const results = await searchResponse.json();
     const result = results.find((row: { entity_id: string }) => row.entity_id === LIVE_DURHAM_PERSON_ID);

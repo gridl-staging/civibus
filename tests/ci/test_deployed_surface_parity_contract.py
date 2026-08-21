@@ -416,7 +416,7 @@ def test_deployed_surface_parity_probe_accepts_matching_fixture_surface(tmp_path
         assert f"page_status {page_path} 200 marker_ok" in result.stdout
     assert "page_latency /sitemap.xml seconds=30.000 budget_seconds=30.000" in result.stdout
     assert "WARN known_red_page /sitemap.xml" not in result.stdout
-    assert "surfaces_probed=17 failed=0" in result.stdout
+    assert "surfaces_probed=18 failed=0" in result.stdout
     assert "money_value_assertion fec_money_coverage PASS numerator=537 denominator=539" in result.stdout
     assert "money_value_probe_ok" in result.stdout
     for expected_line in expected_money_value_pass_lines():
@@ -556,7 +556,33 @@ def test_deployed_surface_parity_probe_fails_on_status_200_without_donor_result_
 
     assert result.returncode != 0
     assert 'page_content_marker_missing /donors?q=smith&by=name marker=data-testid="donor-result-row"' in result.stderr
-    assert "surfaces_probed=17 failed=1" in result.stdout
+    assert "surfaces_probed=18 failed=1" in result.stdout
+
+
+def test_deployed_surface_parity_probe_fails_on_methodology_shell_without_disclosures(tmp_path: Path) -> None:
+    """Red on the live-demonstrated drift specimen (civibus-dsf).
+
+    Production served 14-day-old methodology copy from 2026-08-03 to
+    2026-08-17: the page body still said "Methodology" (shell heading) while
+    rendering zero data-testid="methodology-*" disclosure regions, and the
+    parity gate stayed green on every run. The manifest marker must fail that
+    exact body. The marker is data-testid="methodology-freshness" because the
+    screen spec renders it last of the four pinned disclosure regions, so
+    matching it implies the preceding three rendered.
+    """
+    fixture_dir = tmp_path / "methodology-shell-drift"
+    write_fixture(
+        fixture_dir,
+        repo_paths={"/health"},
+        deployed_paths={"/health"},
+        page_bodies={"/methodology": "<html><body><h1>Methodology</h1></body></html>"},
+    )
+
+    result = run_probe(fixture_dir)
+
+    assert result.returncode != 0
+    assert 'page_content_marker_missing /methodology marker=data-testid="methodology-freshness"' in result.stderr
+    assert "surfaces_probed=18 failed=1" in result.stdout
 
 
 def test_deployed_surface_parity_probe_aggregates_failures_and_probes_sitemap(tmp_path: Path) -> None:
@@ -578,7 +604,7 @@ def test_deployed_surface_parity_probe_aggregates_failures_and_probes_sitemap(tm
     assert "page_status /donors?q=smith&by=name 200 marker_ok" in result.stdout
     assert "page_status /calendar 200 marker_ok" in result.stdout
     assert "page_status /sitemap.xml 200 marker_ok" in result.stdout
-    assert "surfaces_probed=17 failed=1" in result.stdout
+    assert "surfaces_probed=18 failed=1" in result.stdout
 
 
 def test_deployed_surface_parity_probe_runs_money_assertions_after_structural_failure(tmp_path: Path) -> None:
@@ -652,7 +678,7 @@ def test_deployed_surface_parity_probe_fails_closed_without_sitemap_latency(tmp_
 
     assert result.returncode != 0
     assert "page_fetch_error /sitemap.xml fixture_latency_table_missing" in result.stderr
-    assert "surfaces_probed=17 failed=1" in result.stdout
+    assert "surfaces_probed=18 failed=1" in result.stdout
 
 
 def test_deployed_surface_parity_probe_renders_money_helper_failures_nonfatally(tmp_path: Path) -> None:

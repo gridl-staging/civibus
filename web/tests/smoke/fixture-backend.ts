@@ -273,6 +273,7 @@ type CommitteeFixture =
   | (typeof smokeFixtures)["committeeFilingsPaged"]
   | (typeof smokeFixtures)["committeeFilingsHighTotal"]
   | (typeof smokeFixtures)["committeeEmpty"]
+  | (typeof smokeFixtures)["committeeIdentityJourney"]
   | (typeof smokeFixtures)["committeePhl"];
 type PersonFixture =
   | (typeof smokeFixtures)["person"]
@@ -289,6 +290,7 @@ const standardCandidateFixtures = [
   smokeFixtures.candidateBackendFailure,
   smokeFixtures.candidateDeviant,
   smokeFixtures.candidateAuditedMalformed,
+  smokeFixtures.candidateSafeAllCaps,
   smokeFixtures.candidateAl,
   smokeFixtures.candidateGa
 ] as const;
@@ -303,6 +305,10 @@ function getCommitteeFixtureById(committeeId: string | null): CommitteeFixture |
 
   if (committeeId === smokeFixtures.committeeEmpty.id) {
     return smokeFixtures.committeeEmpty;
+  }
+
+  if (committeeId === smokeFixtures.committeeIdentityJourney.id) {
+    return smokeFixtures.committeeIdentityJourney;
   }
 
   if (committeeId === smokeFixtures.committeePhl.id) {
@@ -684,6 +690,26 @@ const server = createServer(async (request, response) => {
     url.searchParams.get("entity_type") === smokeFixtures.search.entityType
   ) {
     writeJson(response, 200, smokeFixtures.search.results);
+    return;
+  }
+
+  // The 21-row paged org set honors limit/offset because pagination is its
+  // whole point: the page server requests SEARCH_PAGE_SIZE + 1 rows and the
+  // held-back 21st row is what flips the status wording to "N results shown.".
+  if (
+    url.pathname === "/v1/search" &&
+    url.searchParams.get("q") === smokeFixtures.searchPagedOrgs.query &&
+    url.searchParams.get("entity_type") === smokeFixtures.searchPagedOrgs.entityType
+  ) {
+    const pagedOffset = parseOptionalNonNegativeInt(url.searchParams.get("offset")) ?? 0;
+    const pagedLimit =
+      parseOptionalNonNegativeInt(url.searchParams.get("limit")) ??
+      smokeFixtures.searchPagedOrgs.results.length;
+    writeJson(
+      response,
+      200,
+      smokeFixtures.searchPagedOrgs.results.slice(pagedOffset, pagedOffset + pagedLimit)
+    );
     return;
   }
 

@@ -29,6 +29,30 @@ class CurrentOfficeResponse(BaseModel):
     state: str | None = None
 
 
+class PersonCandidacyResponse(BaseModel):
+    """One race a person is a candidate in, with linkable contest identity.
+
+    Backed by ``fetch_candidacies_for_person`` (api/queries/civics.py), which
+    resolves through BOTH ``civic.candidacy.person_id`` and the person's
+    ``cf.candidate.fec_candidate_id`` rows — the shadow-person join rule
+    (civibus-x8b). ``fec_candidate_id`` is the candidacy's source-assigned
+    ``candidate_number``; it may be null for non-FEC candidacies.
+    """
+
+    candidacy_id: UUID
+    contest_id: UUID
+    contest_name: str
+    election_date: date | None = None
+    election_type: str
+    office_id: UUID
+    office_name: str
+    office_level: str
+    party: str | None = None
+    status: str | None = None
+    incumbent_challenge: str | None = None
+    fec_candidate_id: str | None = None
+
+
 class PersonResponse(BaseModel):
     id: UUID
     canonical_name: str
@@ -51,6 +75,9 @@ class PersonResponse(BaseModel):
     er_confidence: float | None = None
     portrait: PersonPortraitResponse | None = None
     current_office: CurrentOfficeResponse | None = None
+    # The races this person is a candidate in, nearest election first
+    # (civibus-x8b). Empty list — never omitted — when no candidacy resolves.
+    candidacies: list[PersonCandidacyResponse] = Field(default_factory=list)
     sources: list[SourceInfo]
 
 
