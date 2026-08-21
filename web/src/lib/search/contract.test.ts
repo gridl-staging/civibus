@@ -204,10 +204,9 @@ describe('search contract', () => {
   });
 
   it('appends limit and offset to the API path for paginated requests', () => {
-    // The page server requests SEARCH_PAGE_SIZE + 1 rows and uses the extra row
-    // as the has-next signal, mirroring the backend's LIMIT+1 envelope pattern.
-    expect(buildSearchPath({ q: 'civ', entityType: '', limit: 21, offset: '20' })).toBe(
-      '/v1/search?q=civ&limit=21&offset=20'
+    // The API owns the extra LIMIT+1 probe row and returns only the requested page.
+    expect(buildSearchPath({ q: 'civ', entityType: '', limit: 20, offset: '20' })).toBe(
+      '/v1/search?q=civ&limit=20&offset=20'
     );
   });
 

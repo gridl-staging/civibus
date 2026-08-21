@@ -647,3 +647,10 @@ def test_public_federal_probe_reports_database_and_congress_denominator_context(
     assert 'PROBE_DB_NAME="${POSTGRES_DB:-civibus}"' in probe_script
     assert "db_host=${PROBE_DB_HOST} db_port=${PROBE_DB_PORT} database=${PROBE_DB_NAME}" in probe_script
     assert probe_script.count("linked_officials=${EXPECTED_LINKED_OFFICIALS}") >= 3
+
+
+def test_public_federal_probe_counts_search_response_items() -> None:
+    probe_script = read_repo_text("infra/scripts/probe_public_federal_api.sh")
+    search_surface = probe_script.split("    search)\n", maxsplit=1)[1].split("      ;;", maxsplit=1)[0]
+
+    assert '".items | length"' in search_surface

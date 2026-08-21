@@ -272,7 +272,7 @@ def _assert_org_search_sees_conflict(conn: psycopg.Connection, browser_smoke_see
         for row in fetch_search_results(
             conn,
             SearchParams(q=browser_smoke_seed.SMOKE_SEARCH_QUERY, entity_type="org"),
-        )
+        )["items"]
     ]
     assert _CONFLICTING_ROW_ID in result_ids
     assert UUID(browser_smoke_seed.SMOKE_ORG_ID) in result_ids
@@ -402,7 +402,7 @@ def _assert_search_route_owner_contract(conn: psycopg.Connection, browser_smoke_
     search_results = fetch_search_results(
         conn,
         SearchParams(q=browser_smoke_seed.SMOKE_SEARCH_QUERY, entity_type="org"),
-    )
+    )["items"]
     assert search_results == [
         {
             "entity_type": "org",

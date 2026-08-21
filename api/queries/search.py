@@ -9,7 +9,7 @@ import psycopg
 from psycopg.rows import dict_row
 
 from api.models.search import SearchParams
-from api.queries._common import _build_ilike_contains_pattern
+from api.queries._common import _build_ilike_contains_pattern, _build_paginated_response
 from api.queries.campaign_finance import _CANDIDATE_IDENTITY_IS_SAFE_EXPR
 from api.queries.civics import _current_federal_officeholder_search_rows_sql, _current_office_selection_sql
 
@@ -351,14 +351,14 @@ _SEARCH_SINGLE_ENTITY_SQL: dict[str, str] = {
 # ---------------------------------------------------------------------------
 
 
-def fetch_search_results(conn: psycopg.Connection, params: SearchParams) -> list[dict[str, Any]]:
-    """Fetch ranked search results across entity types."""
+def fetch_search_results(conn: psycopg.Connection, params: SearchParams) -> dict[str, Any]:
+    """Fetch one ranked search-result page across entity types."""
     like_pattern = _build_ilike_contains_pattern(params.q)
     shared_params: Sequence[object] = (
         params.q,
         like_pattern,
         _SEARCH_TRIGRAM_MIN_SIMILARITY,
-        params.limit,
+        params.limit + 1,
         params.offset,
     )
 
@@ -371,4 +371,9 @@ def fetch_search_results(conn: psycopg.Connection, params: SearchParams) -> list
 
     with conn.cursor(row_factory=dict_row) as cursor:
         cursor.execute(query, query_params)
-        return list(cursor.fetchall())
+        page = _build_paginated_response(
+            list(cursor.fetchall()),
+            limit=params.limit,
+            offset=params.offset,
+        )
+    return {"items": page["items"], "has_next": page["has_next"]}

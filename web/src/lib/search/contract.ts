@@ -7,12 +7,9 @@ export const SEARCH_API_PATH = '/v1/search';
 export const SEARCH_PAGE_PATH = '/search';
 export const SEARCH_QUERY_MIN_LENGTH = 2;
 /**
- * Results per /search page. Pagination follows the /candidates LIMIT+1
- * pattern (`_build_paginated_response` in api/queries/_common.py): the page
- * server requests SEARCH_PAGE_SIZE + 1 rows and treats a returned extra row as
- * "another page exists". The +1 lives client-side because /v1/search returns a
- * bare array rather than the {items, has_next} envelope; folding the envelope
- * into the API is the recorded follow-up, not a second pattern.
+ * Results per /search page. The API applies the shared LIMIT+1 pagination
+ * pattern (`_build_paginated_response` in api/queries/_common.py) and reports
+ * whether another page exists in its response envelope.
  */
 export const SEARCH_PAGE_SIZE = 20;
 export const SEARCH_ENTITY_TYPES = ['person', 'org', 'committee', 'candidate', 'office', 'contest'] as const;
@@ -35,10 +32,15 @@ export type SearchApiResult = SearchApiResultPayload & {
   entity_type: SearchEntityType;
 };
 
+export type SearchApiResponse = {
+  items: SearchApiResult[];
+  has_next: boolean;
+};
+
 export type SearchPathParams = {
   q: string;
   entityType?: string | null;
-  /** Rows to request; the page server passes SEARCH_PAGE_SIZE + 1. */
+  /** Rows to return; the API owns the additional has-next probe row. */
   limit?: number;
   /**
    * Raw offset from the page URL, passed through unparsed so backend

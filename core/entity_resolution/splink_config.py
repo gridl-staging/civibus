@@ -355,17 +355,6 @@ DETERMINISTIC_PERSON_RULES = [
 
 DETERMINISTIC_ORG_RULES = [
     {
-        "name": "ein_match",
-        "description": "Same EIN (Employer Identification Number)",
-        "sql": """
-            SELECT a.id AS entity_id_a, b.id AS entity_id_b, 1.0 AS confidence
-            FROM core.organization a, core.organization b
-            WHERE a.id < b.id
-              AND BTRIM(a.identifiers->>'ein') = BTRIM(b.identifiers->>'ein')
-              AND NULLIF(BTRIM(a.identifiers->>'ein'), '') IS NOT NULL
-        """,
-    },
-    {
         "name": "fec_committee_match",
         "description": "Same FEC Committee ID",
         "sql": """
@@ -374,17 +363,6 @@ DETERMINISTIC_ORG_RULES = [
             WHERE a.id < b.id
               AND BTRIM(a.identifiers->>'fec_committee_id') = BTRIM(b.identifiers->>'fec_committee_id')
               AND NULLIF(BTRIM(a.identifiers->>'fec_committee_id'), '') IS NOT NULL
-        """,
-    },
-    {
-        "name": "sos_id_match",
-        "description": "Same Secretary of State registration ID",
-        "sql": """
-            SELECT a.id AS entity_id_a, b.id AS entity_id_b, 1.0 AS confidence
-            FROM core.organization a, core.organization b
-            WHERE a.id < b.id
-              AND BTRIM(a.identifiers->>'sos_id') = BTRIM(b.identifiers->>'sos_id')
-              AND NULLIF(BTRIM(a.identifiers->>'sos_id'), '') IS NOT NULL
         """,
     },
 ]

@@ -3,20 +3,21 @@ import { fetchSearchResults } from './search';
 
 describe('fetchSearchResults', () => {
   it('builds /v1/search query strings from shared contract params', async () => {
-    const requestJson = vi.fn().mockResolvedValue([]);
+    const response = { items: [], has_next: false };
+    const requestJson = vi.fn().mockResolvedValue(response);
 
-    await fetchSearchResults(
+    await expect(fetchSearchResults(
       {
         requestJson
       },
       { q: 'civ', entityType: 'org' }
-    );
+    )).resolves.toBe(response);
 
     expect(requestJson).toHaveBeenCalledWith('/v1/search?q=civ&entity_type=org');
   });
 
   it('keeps backend limit and offset defaults backend-owned', async () => {
-    const requestJson = vi.fn().mockResolvedValue([]);
+    const requestJson = vi.fn().mockResolvedValue({ items: [], has_next: false });
 
     await fetchSearchResults(
       {
@@ -29,7 +30,7 @@ describe('fetchSearchResults', () => {
   });
 
   it('forwards malformed non-empty entity_type values to backend validation unchanged', async () => {
-    const requestJson = vi.fn().mockResolvedValue([]);
+    const requestJson = vi.fn().mockResolvedValue({ items: [], has_next: false });
 
     await fetchSearchResults(
       {

@@ -1170,6 +1170,14 @@ type LiveSearchCommitteeResult = {
   slug_is_unique?: boolean;
 };
 
+type LiveSearchCommitteeResponse = {
+  items?: Array<{
+    entity_id?: string;
+    name?: string;
+  }>;
+  has_next?: boolean;
+};
+
 type LiveCommitteeDetailResponse = {
   linked_candidates?: Array<{ name?: string }>;
 };
@@ -1354,27 +1362,22 @@ export async function discoverLiveLouisianaCommitteeRoute(page: {
     );
   }
 
-  // /v1/search returns a BARE ARRAY (api/routes/search.py declares
-  // response_model=list[SearchResult]). This used to read `.results` off the
-  // body, which is always undefined on an array, so the fallback could never
-  // find a committee and threw the misleading "search returned no committee
-  // named" error below instead (noted on civibus-af3).
-  const searchBody = (await searchResponse.json()) as unknown;
-  const searchResults: LiveSearchCommitteeResult[] = Array.isArray(searchBody) ? searchBody : [];
+  const searchBody = (await searchResponse.json()) as LiveSearchCommitteeResponse;
+  const searchResults = Array.isArray(searchBody.items) ? searchBody.items : [];
   const match = searchResults.find(
     (candidate) =>
       typeof candidate.name === "string" &&
       candidate.name.toUpperCase() === SMOKE_STAGE6_COMMITTEE_NAME
   );
-  if (match === undefined || typeof match.id !== "string") {
+  if (match === undefined || typeof match.entity_id !== "string") {
     throw new Error(
       `Live committee discovery: search returned no committee named ${SMOKE_STAGE6_COMMITTEE_NAME}`
     );
   }
 
   return buildDiscoveredLiveCommitteeAssertions(
-    resolveDiscoveredCommitteeRouteId(match),
-    await fetchLiveCommitteeDiscoveryRecord(page, match.id)
+    match.entity_id,
+    await fetchLiveCommitteeDiscoveryRecord(page, match.entity_id)
   );
 }
 

@@ -220,7 +220,7 @@ class TestFederalEnrichmentJobContract:
         assert job.jurisdiction == "federal/congress"
         assert job.cadence == "weekly"
         assert job.refresh_history_key is None
-        assert job.activity_denominator_result_field == "selected"
+        assert job.activity_denominator_result_field == "due"
         assert job.data_source_names == ("people-enrichment-federal-congress",)
 
     def test_priority_scope_includes_federal_spine_before_weekly_enrichment(self) -> None:

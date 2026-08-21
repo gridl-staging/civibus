@@ -147,7 +147,7 @@ run_selected_surface() {
       measure_selected_request "committees" "/v1/committees?limit=50&offset=0" ".items | length"
       ;;
     search)
-      measure_selected_request "search" "/v1/search?q=smith&limit=20&offset=0" "length"
+      measure_selected_request "search" "/v1/search?q=smith&limit=20&offset=0" ".items | length"
       ;;
     *)
       echo "unknown CIVIBUS_PROBE_SURFACE=${selected_surface}; expected congress, candidates, committees, or search" >&2

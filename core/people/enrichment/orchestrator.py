@@ -1,6 +1,4 @@
-"""
-Stub summary for jun04_3pm_5_launch_gate_and_golive/civibus_dev/core/people/enrichment/orchestrator.py.
-"""
+"""People enrichment scope selection, orchestration, and write summaries."""
 
 from __future__ import annotations
 
@@ -92,6 +90,7 @@ class ScopeTarget:
     roster_bio_url: str | None = None
     wikidata_entity_id: str | None = None
     bioguide_id: str | None = None
+    enrichment_due: bool = False
 
 
 @dataclass(frozen=True)
@@ -110,6 +109,7 @@ def _rows_to_scope_targets(rows: list[dict[str, Any]]) -> list[ScopeTarget]:
             roster_bio_url=row.get("roster_bio_url"),
             wikidata_entity_id=row.get("wikidata_entity_id"),
             bioguide_id=row.get("bioguide_id"),
+            enrichment_due=bool(row.get("enrichment_due", False)),
         )
         for row in rows
     ]
@@ -150,8 +150,20 @@ def _select_cf_candidate_person_targets(
 
 
 def _select_federal_current_officeholder_targets(conn: psycopg.Connection) -> list[ScopeTarget]:
+    """Select federal officeholders, flagging each one that still owes bio or active-portrait work."""
+    scope_sql = f"""
+        WITH federal_targets AS ({federal_officeholder_targets_sql()})
+        SELECT ft.*,
+               (NULLIF(BTRIM(p.bio_text), '') IS NULL OR NOT EXISTS (
+                   SELECT 1 FROM core.person_portrait pp
+                   WHERE pp.person_id = ft.person_id AND pp.status = 'active'
+               )) AS enrichment_due
+        FROM federal_targets ft
+        JOIN core.person p ON p.id = ft.person_id
+        ORDER BY ft.canonical_name, ft.person_id
+    """
     with conn.cursor(row_factory=dict_row) as cursor:
-        cursor.execute(federal_officeholder_targets_sql())
+        cursor.execute(scope_sql)
         rows = list(cursor.fetchall())
     return _rows_to_scope_targets(rows)
 
@@ -664,11 +676,14 @@ def run_federal_enrichment(
     effective_limit = validated_limit(limit)
     scope_result = select_federal_scope_targets(conn)
     scope_targets = scope_result.targets if effective_limit is None else scope_result.targets[:effective_limit]
+    due_person_ids = {target.person_id for target in scope_targets if target.enrichment_due}
 
     summary: dict[str, Any] = {
         "scope": "federal",
         "jurisdiction": "federal/congress",
         "selected": len(scope_targets),
+        "due": len(due_person_ids),
+        "completed": 0,
         "processed": 0,
         "warnings": list(scope_result.warnings),
         "candidacy_count": scope_result.candidacy_count,
@@ -683,9 +698,7 @@ def run_federal_enrichment(
 
     if chain is None:
         qids = [
-            normalized_qid
-            for normalized_qid in (_normalize_qid(t.wikidata_entity_id) for t in scope_targets)
-            if normalized_qid is not None
+            normalized_qid for target in scope_targets if (normalized_qid := _normalize_qid(target.wikidata_entity_id))
         ]
         if qids:
             try:
@@ -696,23 +709,17 @@ def run_federal_enrichment(
             else:
                 for strategy in getattr(strategy_chain, "_strategies", ()):
                     if isinstance(strategy, WikipediaBioStrategy):
-                        strategy.install_prefetch_cache(
-                            title_cache=title_cache,
-                            summary_cache=summary_cache,
-                        )
+                        strategy.install_prefetch_cache(title_cache=title_cache, summary_cache=summary_cache)
                         break
 
     if not dry_run and source_record_id is None:
         data_source_id, source_record_id = _bootstrap_enrichment_source_record(
-            conn,
-            scope="federal",
-            cycle=None,
-            effective_limit=effective_limit,
+            conn, scope="federal", cycle=None, effective_limit=effective_limit
         )
         summary["data_source_id"] = data_source_id
         summary["source_record_id"] = source_record_id
 
-    return _apply_enrichment_for_targets(
+    applied_summary = _apply_enrichment_for_targets(
         conn,
         strategy_chain=strategy_chain,
         scope_targets=scope_targets,
@@ -721,6 +728,18 @@ def run_federal_enrichment(
         summary=summary,
         dry_run=dry_run,
     )
+    if dry_run or not due_person_ids:
+        return applied_summary
+
+    # Completion is measured by re-reading due state after the writes, so it counts remediated
+    # people rather than write volume. A person who left the roster mid-run stays uncompleted.
+    refreshed_targets = {target.person_id: target for target in select_federal_scope_targets(conn).targets}
+    applied_summary["completed"] = sum(
+        1
+        for person_id in due_person_ids
+        if person_id in refreshed_targets and not refreshed_targets[person_id].enrichment_due
+    )
+    return applied_summary
 
 
 def _build_argument_parser() -> argparse.ArgumentParser:

@@ -2,11 +2,13 @@ from __future__ import annotations
 
 from datetime import date
 from decimal import Decimal
+from typing import Any
 from uuid import UUID, uuid4
 
 import psycopg
 import pytest
 from fastapi.testclient import TestClient
+from httpx import Response
 
 from api.test_campaign_finance_support import (
     CandidateRowSeed,
@@ -30,6 +32,19 @@ from test_support.donor_search_fixture import seed_donor_search_fixture
 pytestmark = pytest.mark.integration
 
 
+def _search_payload(response: Response) -> dict[str, Any]:
+    payload = response.json()
+    assert isinstance(payload, dict)
+    assert set(payload) == {"items", "has_next"}
+    return payload
+
+
+def _search_items(response: Response) -> list[dict[str, Any]]:
+    items = _search_payload(response)["items"]
+    assert isinstance(items, list)
+    return items
+
+
 def test_search_returns_durham_municipal_office_context(
     api_client: TestClient,
     db_conn: psycopg.Connection,
@@ -42,7 +57,7 @@ def test_search_returns_durham_municipal_office_context(
     )
 
     assert response.status_code == 200
-    result = next(row for row in response.json() if row["entity_id"] == str(person_id))
+    result = next(row for row in _search_items(response) if row["entity_id"] == str(person_id))
     assert result == {
         "entity_type": "person",
         "entity_id": str(person_id),
@@ -122,7 +137,7 @@ def test_search_filters_by_entity_type(
     response = api_client.get("/v1/search", params={"q": "filter", "entity_type": entity_type})
 
     assert response.status_code == 200
-    assert response.json() == [
+    assert _search_items(response) == [
         {
             "entity_type": entity_type,
             "entity_id": str(expected_id),
@@ -175,7 +190,9 @@ def test_search_without_entity_type_returns_union_with_stable_order_and_paginati
 
     assert first_page.status_code == 200
     assert second_page.status_code == 200
-    assert first_page.json() == [
+    first_page_payload = _search_payload(first_page)
+    assert first_page_payload["has_next"] is True
+    assert first_page_payload["items"] == [
         {
             "entity_type": "org",
             "entity_id": "00000000-0000-0000-0000-000000000090",
@@ -197,7 +214,9 @@ def test_search_without_entity_type_returns_union_with_stable_order_and_paginati
             "total_raised": None,
         },
     ]
-    assert second_page.json() == [
+    second_page_payload = _search_payload(second_page)
+    assert second_page_payload["has_next"] is False
+    assert second_page_payload["items"] == [
         {
             "entity_type": "committee",
             "entity_id": "00000000-0000-0000-0000-000000000110",
@@ -219,6 +238,31 @@ def test_search_without_entity_type_returns_union_with_stable_order_and_paginati
             "total_raised": None,
         },
     ]
+
+
+def test_search_response_reports_has_next_without_returning_probe_row(
+    api_client: TestClient,
+    db_conn: psycopg.Connection,
+) -> None:
+    boundary_ids = [UUID(f"00000000-0000-4000-8000-{index:012d}") for index in range(1, 22)]
+    for index, organization_id in enumerate(boundary_ids, start=1):
+        insert_organization(
+            db_conn,
+            Organization(
+                id=organization_id,
+                canonical_name=f"Boundary Match {index:02d}",
+            ),
+        )
+
+    response = api_client.get("/v1/search", params={"q": "boundary match", "limit": 20})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert isinstance(payload, dict)
+    assert set(payload) == {"items", "has_next"}
+    assert len(payload["items"]) == 20
+    assert str(boundary_ids[20]) not in {item["entity_id"] for item in payload["items"]}
+    assert payload["has_next"] is True
 
 
 def test_search_single_entity_hybrid_contains_outranks_trigram_fallback(
@@ -248,7 +292,7 @@ def test_search_single_entity_hybrid_contains_outranks_trigram_fallback(
     )
 
     assert response.status_code == 200
-    assert response.json() == [
+    assert _search_items(response) == [
         {
             "entity_type": "person",
             "entity_id": str(contains_match_id),
@@ -297,7 +341,7 @@ def test_search_union_hybrid_contains_outranks_trigram_fallback(
     response = api_client.get("/v1/search", params={"q": "alexandria stone"})
 
     assert response.status_code == 200
-    assert response.json() == [
+    assert _search_items(response) == [
         {
             "entity_type": "org",
             "entity_id": str(contains_match_id),
@@ -346,7 +390,7 @@ def test_search_office_contains_outranks_trigram_fallback(
     )
 
     assert response.status_code == 200
-    assert response.json() == [
+    assert _search_items(response) == [
         {
             "entity_type": "office",
             "entity_id": str(contains_match_id),
@@ -402,7 +446,7 @@ def test_search_contest_contains_outranks_trigram_fallback(
     )
 
     assert response.status_code == 200
-    assert response.json() == [
+    assert _search_items(response) == [
         {
             "entity_type": "contest",
             "entity_id": str(contains_match_id),
@@ -453,7 +497,7 @@ def test_search_trigram_similarity_tie_breaks_by_name_then_entity_id(
     )
 
     assert response.status_code == 200
-    assert response.json() == [
+    assert _search_items(response) == [
         {
             "entity_type": "org",
             "entity_id": str(lower_id),
@@ -501,7 +545,7 @@ def test_search_treats_like_wildcards_as_literal_characters(
     response = api_client.get("/v1/search", params={"q": "100%", "entity_type": "person"})
 
     assert response.status_code == 200
-    assert response.json() == [
+    assert _search_items(response) == [
         {
             "entity_type": "person",
             "entity_id": str(percent_name_id),
@@ -526,7 +570,7 @@ def test_search_hostile_input_returns_200_without_sql_errors(
     response = api_client.get("/v1/search", params={"q": q_value})
 
     assert response.status_code == 200
-    assert isinstance(response.json(), list)
+    assert isinstance(_search_payload(response)["items"], list)
     assert "traceback" not in response.text.lower()
 
 
@@ -600,7 +644,7 @@ def test_search_populates_committee_context_fields(
     )
 
     assert response.status_code == 200
-    assert [row for row in response.json() if row["entity_id"] == str(seeded_id)] == [
+    assert [row for row in _search_items(response) if row["entity_id"] == str(seeded_id)] == [
         {
             "entity_type": "committee",
             "entity_id": str(seeded_id),
@@ -654,7 +698,7 @@ def test_search_candidate_filter_finds_fec_candidate_without_candidacy(
     )
 
     assert response.status_code == 200
-    assert [row for row in response.json() if row["entity_id"] == str(candidate_id)] == [
+    assert [row for row in _search_items(response) if row["entity_id"] == str(candidate_id)] == [
         {
             "entity_type": "candidate",
             "entity_id": str(candidate_id),
@@ -710,7 +754,7 @@ def test_search_candidate_filter_omits_identity_unsafe_fec_names(
     )
 
     assert response.status_code == 200
-    returned_ids = {row["entity_id"] for row in response.json()}
+    returned_ids = {row["entity_id"] for row in _search_items(response)}
     assert str(safe_id) in returned_ids
     assert str(unsafe_id) not in returned_ids
 
@@ -761,7 +805,7 @@ def test_search_union_covers_spine_orphan_fec_candidate_and_dedupes_spine_linked
     union_response = api_client.get("/v1/search", params={"q": "searchfiler", "limit": 20})
 
     assert union_response.status_code == 200
-    union_keys = {(row["entity_type"], row["entity_id"]) for row in union_response.json()}
+    union_keys = {(row["entity_type"], row["entity_id"]) for row in _search_items(union_response)}
     assert ("candidate", str(orphan_id)) in union_keys
     assert ("person", str(linked_person.id)) in union_keys
     # One human, one row: the linked FEC record must not add a second row for a
@@ -774,7 +818,7 @@ def test_search_union_covers_spine_orphan_fec_candidate_and_dedupes_spine_linked
     )
 
     assert filtered_response.status_code == 200
-    filtered_keys = {(row["entity_type"], row["entity_id"]) for row in filtered_response.json()}
+    filtered_keys = {(row["entity_type"], row["entity_id"]) for row in _search_items(filtered_response)}
     # The explicit filter answers "which FEC candidate records match", so the
     # spine-linked record itself is served here even though the union collapses
     # it into its person row.
@@ -806,7 +850,7 @@ def test_search_populates_contest_context_fields(
     )
 
     assert response.status_code == 200
-    assert response.json() == [
+    assert _search_items(response) == [
         {
             "entity_type": "contest",
             "entity_id": str(contest_id),
@@ -855,7 +899,7 @@ def test_search_candidate_filter_does_not_cover_candidacy_only_humans(
     )
 
     assert candidate_response.status_code == 200
-    assert [row for row in candidate_response.json() if row["entity_id"] == str(person.id)] == []
+    assert [row for row in _search_items(candidate_response) if row["entity_id"] == str(person.id)] == []
 
     # The person lane still finds the human, carrying the candidacy context the
     # old candidate lane used to duplicate onto a second row.
@@ -865,7 +909,7 @@ def test_search_candidate_filter_does_not_cover_candidacy_only_humans(
     )
 
     assert person_response.status_code == 200
-    assert [row for row in person_response.json() if row["entity_id"] == str(person.id)] == [
+    assert [row for row in _search_items(person_response) if row["entity_id"] == str(person.id)] == [
         {
             "entity_type": "person",
             "entity_id": str(person.id),
@@ -902,7 +946,7 @@ def test_search_contest_entity_type(
     )
 
     assert response.status_code == 200
-    assert response.json() == [
+    assert _search_items(response) == [
         {
             "entity_type": "contest",
             "entity_id": str(contest_id),
@@ -941,7 +985,7 @@ def test_search_contest_matches_via_office_name(
     )
 
     assert response.status_code == 200
-    results = response.json()
+    results = _search_items(response)
     assert len(results) == 1
     assert results[0] == {
         "entity_type": "contest",
@@ -972,7 +1016,7 @@ def test_search_office_entity_type(
     )
 
     assert response.status_code == 200
-    assert response.json() == [
+    assert _search_items(response) == [
         {
             "entity_type": "office",
             "entity_id": str(office_id),
@@ -1064,7 +1108,7 @@ def test_search_union_returns_one_row_per_person_with_several_candidacies(
     response = api_client.get("/v1/search", params={"q": "twicefiled searchperson", "limit": 10})
 
     assert response.status_code == 200
-    rows_for_person = [row for row in response.json() if row["entity_id"] == str(person.id)]
+    rows_for_person = [row for row in _search_items(response) if row["entity_id"] == str(person.id)]
     assert rows_for_person == [
         {
             "entity_type": "person",
@@ -1088,7 +1132,7 @@ def test_search_union_returns_one_row_per_person_with_several_candidacies(
         params={"q": "twicefiled searchperson", "entity_type": "candidate"},
     )
     assert candidate_response.status_code == 200
-    assert [row for row in candidate_response.json() if row["entity_id"] == str(person.id)] == []
+    assert [row for row in _search_items(candidate_response) if row["entity_id"] == str(person.id)] == []
 
 
 def test_search_union_covers_every_routable_entity_type_without_duplicating_a_person(
@@ -1170,7 +1214,7 @@ def test_search_union_covers_every_routable_entity_type_without_duplicating_a_pe
     response = api_client.get("/v1/search", params={"q": "fiveway match", "limit": 10})
 
     assert response.status_code == 200
-    payload = response.json()
+    payload = _search_items(response)
     result_types = {r["entity_type"] for r in payload}
     assert result_types == {"person", "org", "committee", "office", "contest", "candidate"}
 
@@ -1210,7 +1254,7 @@ def test_search_candidate_does_not_return_non_candidate_persons(
     )
 
     assert response.status_code == 200
-    assert response.json() == []
+    assert _search_items(response) == []
 
 
 def test_search_officeholder_not_confused_with_candidate(
@@ -1232,7 +1276,7 @@ def test_search_officeholder_not_confused_with_candidate(
     )
 
     assert response.status_code == 200
-    assert response.json() == []
+    assert _search_items(response) == []
 
 
 def test_search_officeholder_person_ranks_before_same_name_committee_and_bare_person(
@@ -1256,7 +1300,7 @@ def test_search_officeholder_person_ranks_before_same_name_committee_and_bare_pe
     response = api_client.get("/v1/search", params={"q": officeholder.person_name, "limit": 10})
 
     assert response.status_code == 200
-    payload = response.json()
+    payload = _search_items(response)
     assert payload[0] == {
         "entity_type": "person",
         "entity_id": str(officeholder.person_id),
@@ -1287,7 +1331,7 @@ def test_search_officeholder_person_ranks_before_namesake_challenger(
     response = api_client.get("/v1/search", params={"q": officeholder.person_name, "limit": 10})
 
     assert response.status_code == 200
-    payload = response.json()
+    payload = _search_items(response)
     officeholder_key = ("person", str(officeholder.person_id))
     challenger_person_key = ("person", str(challenger_id))
     indexed_keys = {(row["entity_type"], row["entity_id"]): index for index, row in enumerate(payload)}
@@ -1336,7 +1380,7 @@ def test_search_officeholder_person_context_values_do_not_enrich_bare_person(
 
     assert president_response.status_code == 200
     assert bare_response.status_code == 200
-    president_rows = president_response.json()
+    president_rows = _search_items(president_response)
     assert {
         "entity_type": "person",
         "entity_id": str(president.person_id),
@@ -1347,7 +1391,7 @@ def test_search_officeholder_person_context_values_do_not_enrich_bare_person(
         "committee_type": None,
         "total_raised": None,
     } in president_rows
-    assert bare_response.json()[0] == {
+    assert _search_items(bare_response)[0] == {
         "entity_type": "person",
         "entity_id": str(bare_person_id),
         "name": "Dana President Bare",

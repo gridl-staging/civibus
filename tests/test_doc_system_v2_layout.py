@@ -25,7 +25,7 @@ def test_decisions_are_root_owned_with_frontmatter_and_line_budget() -> None:
     assert not (REPO_ROOT / "docs" / "decisions").exists()
 
     decision_files = sorted(decisions_dir.glob("*.md"))
-    assert len(decision_files) == 15
+    assert len(decision_files) == 16
     for decision_file in decision_files:
         lines = decision_file.read_text(encoding="utf-8").splitlines()
         assert len(lines) <= 200, decision_file.name
@@ -41,7 +41,7 @@ def test_docs_top_level_uses_only_v2_quadrants() -> None:
     assert top_level_markdown == ["protocols.md"]
 
     top_level_dirs = sorted(path.name for path in docs_dir.iterdir() if path.is_dir())
-    assert top_level_dirs == ["howto", "live-state", "reference"]
+    assert top_level_dirs == ["design", "howto", "live-state", "reference"]
 
     for tracked_dir in ("decisions", "docs/howto", "docs/live-state"):
         assert _git_ls_files(tracked_dir), f"{tracked_dir} has no tracked files"

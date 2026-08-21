@@ -25,3 +25,8 @@ class SearchResult(BaseModel):
     office_name: str | None = None
     committee_type: str | None = None
     total_raised: Decimal | None = None
+
+
+class SearchResponse(BaseModel):
+    items: list[SearchResult]
+    has_next: bool

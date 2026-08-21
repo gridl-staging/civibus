@@ -666,8 +666,11 @@ test.describe.serial("entity and civic detail smoke (live mode)", () => {
     // this suite already use (civibus-5bh).
     const searchResponse = await page.request.get(searchUrl.toString());
     expect(searchResponse.ok()).toBe(true);
-    const results = await searchResponse.json();
-    const result = results.find((row: { entity_id: string }) => row.entity_id === LIVE_DURHAM_PERSON_ID);
+    const searchBody = (await searchResponse.json()) as {
+      items: Array<{ entity_id: string }>;
+      has_next: boolean;
+    };
+    const result = searchBody.items.find((row) => row.entity_id === LIVE_DURHAM_PERSON_ID);
     expect(result).toEqual({
       entity_type: "person",
       entity_id: LIVE_DURHAM_PERSON_ID,

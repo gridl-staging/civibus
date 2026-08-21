@@ -208,6 +208,7 @@ describe("smoke fixtures single-source aliases", () => {
   });
 
   it("derives fallback live committee assertions from discovered API records", async () => {
+    const discoveredCommitteeId = "60000000-0000-4000-8000-000000000001";
     const apiResponses = new Map<string, { ok: boolean; status: number; body: unknown }>([
       ["/v1/committees/by-slug/mike-johnson-for-louisiana", { ok: false, status: 404, body: {} }],
       [
@@ -215,24 +216,20 @@ describe("smoke fixtures single-source aliases", () => {
         {
           ok: true,
           status: 200,
-          // /v1/search returns a BARE ARRAY (api/routes/search.py declares
-          // response_model=list[SearchResult]). This mock previously wrapped the
-          // rows in `{results: [...]}` — the exact wrong shape the discovery
-          // helper's old `.results` read expected — so the test green-lit a
-          // parser that could never find a committee against the real API.
-          // The mock must mirror the wire shape or this SSOT test guards nothing.
-          body: [
-            {
-              id: "live-committee-id",
-              name: "MIKE JOHNSON FOR LOUISIANA",
-              slug: "mike-johnson-for-louisiana",
-              slug_is_unique: true
-            }
-          ]
+          body: {
+            items: [
+              {
+                entity_type: "committee",
+                entity_id: discoveredCommitteeId,
+                name: "MIKE JOHNSON FOR LOUISIANA"
+              }
+            ],
+            has_next: false
+          }
         }
       ],
       [
-        "/v1/committees/live-committee-id",
+        `/v1/committees/${discoveredCommitteeId}`,
         {
           ok: true,
           status: 200,
@@ -246,7 +243,7 @@ describe("smoke fixtures single-source aliases", () => {
         }
       ],
       [
-        "/v1/committees/live-committee-id/summary",
+        `/v1/committees/${discoveredCommitteeId}/summary`,
         {
           ok: true,
           status: 200,
@@ -259,7 +256,7 @@ describe("smoke fixtures single-source aliases", () => {
         }
       ],
       [
-        "/v1/committees/live-committee-id/independent-expenditures-made",
+        `/v1/committees/${discoveredCommitteeId}/independent-expenditures-made`,
         {
           ok: true,
           status: 200,
@@ -290,7 +287,7 @@ describe("smoke fixtures single-source aliases", () => {
     const discovery = await discoverLiveLouisianaCommitteeRoute(page);
 
     expect(discovery).toEqual({
-      committeePath: "/committee/mike-johnson-for-louisiana",
+      committeePath: `/committee/${discoveredCommitteeId}`,
       expectedSummarySourceLabel: "Official FEC committee summary",
       expectedItemizedCoverageNote:
         "Itemized transactions loaded: 17. Official totals above come directly from the FEC committee summary and are not derived from these transactions.",

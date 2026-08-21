@@ -83,13 +83,16 @@ describe('/search +page.server load', () => {
   });
 
   it('delegates populated requests through event.locals.api', async () => {
-    const requestJson = vi.fn().mockResolvedValue([
-      {
-        entity_type: 'org',
-        entity_id: '22222222-2222-4222-8222-222222222222',
-        name: 'Civibus Org'
-      }
-    ]);
+    const requestJson = vi.fn().mockResolvedValue({
+      items: [
+        {
+          entity_type: 'org',
+          entity_id: '22222222-2222-4222-8222-222222222222',
+          name: 'Civibus Org'
+        }
+      ],
+      has_next: false
+    });
 
     const data = await load(
       createLoadEvent('https://web.civibus.local/search?q=civ&entity_type=org', requestJson)
@@ -108,53 +111,52 @@ describe('/search +page.server load', () => {
         }
       ]
     });
-    expect(requestJson).toHaveBeenCalledWith('/v1/search?q=civ&entity_type=org&limit=21');
+    expect(requestJson).toHaveBeenCalledWith('/v1/search?q=civ&entity_type=org&limit=20');
   });
 
-  it('requests one row beyond the page size and converts the extra row into hasNext', async () => {
-    // 21 rows back for a 21-row request: exactly one more page exists. The
-    // 21st row must fuel hasNext and never render — if it leaked, the page
-    // would show 21 results and repeat that row at the top of page two.
+  it('trusts backend has_next and preserves every returned renderable row', async () => {
     const backendRows = Array.from({ length: 21 }, (_, index) => ({
       entity_type: 'org',
       entity_id: `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`,
       name: `Paged Org ${index}`
     }));
-    const requestJson = vi.fn().mockResolvedValue(backendRows);
+    const requestJson = vi.fn().mockResolvedValue({ items: backendRows, has_next: false });
 
     const data = (await load(
       createLoadEvent('https://web.civibus.local/search?q=paged', requestJson)
     )) as { results: Array<{ name: string }>; hasNext: boolean; offset: number };
 
-    expect(requestJson).toHaveBeenCalledWith('/v1/search?q=paged&limit=21');
-    expect(data.results).toHaveLength(20);
-    expect(data.results.map((row) => row.name)).not.toContain('Paged Org 20');
-    expect(data.hasNext).toBe(true);
+    expect(requestJson).toHaveBeenCalledWith('/v1/search?q=paged&limit=20');
+    expect(data.results).toHaveLength(21);
+    expect(data.results.map((row) => row.name)).toContain('Paged Org 20');
+    expect(data.hasNext).toBe(false);
     expect(data.offset).toBe(0);
   });
 
   it('passes the URL offset through to the backend and reports the accepted position', async () => {
-    const requestJson = vi.fn().mockResolvedValue([
-      {
-        entity_type: 'org',
-        entity_id: '00000000-0000-4000-8000-000000000099',
-        name: 'Last Page Org'
-      }
-    ]);
+    const requestJson = vi.fn().mockResolvedValue({
+      items: [
+        {
+          entity_type: 'org',
+          entity_id: '00000000-0000-4000-8000-000000000099',
+          name: 'Last Page Org'
+        }
+      ],
+      has_next: false
+    });
 
     const data = (await load(
       createLoadEvent('https://web.civibus.local/search?q=paged&offset=20', requestJson)
     )) as { results: unknown[]; hasNext: boolean; offset: number };
 
-    expect(requestJson).toHaveBeenCalledWith('/v1/search?q=paged&limit=21&offset=20');
-    // One row on a 21-row request: this is the final page.
+    expect(requestJson).toHaveBeenCalledWith('/v1/search?q=paged&limit=20&offset=20');
     expect(data.hasNext).toBe(false);
     expect(data.offset).toBe(20);
     expect(data.results).toHaveLength(1);
   });
 
   it('keeps backend 422 validation errors distinct from empty successful results', async () => {
-    const successfulRequestJson = vi.fn().mockResolvedValue([]);
+    const successfulRequestJson = vi.fn().mockResolvedValue({ items: [], has_next: false });
     const successfulData = await load(
       createLoadEvent('https://web.civibus.local/search?q=ci', successfulRequestJson)
     );
@@ -210,7 +212,7 @@ describe('/search +page.server load', () => {
       results: [],
       validationMessage: 'query.entity_type: Input should be person, org, or committee'
     });
-    expect(requestJson).toHaveBeenCalledWith('/v1/search?q=+civ+&entity_type=+&limit=21');
+    expect(requestJson).toHaveBeenCalledWith('/v1/search?q=+civ+&entity_type=+&limit=20');
   });
 
   it('keeps blank state when only a candidate filter is selected', async () => {
@@ -248,7 +250,7 @@ describe('/search +page.server load', () => {
   });
 
   it('forwards raw candidate entity_type params on populated queries so backend behavior stays authoritative', async () => {
-    const requestJson = vi.fn().mockResolvedValue([]);
+    const requestJson = vi.fn().mockResolvedValue({ items: [], has_next: false });
 
     const data = await load(
       createLoadEvent('https://web.civibus.local/search?q=civ&entity_type=candidate', requestJson)
@@ -261,32 +263,35 @@ describe('/search +page.server load', () => {
       hasNext: false,
       results: []
     });
-    expect(requestJson).toHaveBeenCalledWith('/v1/search?q=civ&entity_type=candidate&limit=21');
+    expect(requestJson).toHaveBeenCalledWith('/v1/search?q=civ&entity_type=candidate&limit=20');
   });
 
   it('drops backend search results that the frontend cannot route safely', async () => {
-    const requestJson = vi.fn().mockResolvedValue([
-      {
-        entity_type: 'candidate',
-        entity_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
-        name: 'Candidate UUID'
-      },
-      {
-        entity_type: 'candidate',
-        entity_id: 'H0NC01001',
-        name: 'Pat Candidate'
-      },
-      {
-        entity_type: 'office',
-        entity_id: '44444444-4444-4444-8444-444444444444',
-        name: 'Governor'
-      },
-      {
-        entity_type: 'person',
-        entity_id: 'not-a-uuid',
-        name: 'Alice'
-      }
-    ]);
+    const requestJson = vi.fn().mockResolvedValue({
+      items: [
+        {
+          entity_type: 'candidate',
+          entity_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+          name: 'Candidate UUID'
+        },
+        {
+          entity_type: 'candidate',
+          entity_id: 'H0NC01001',
+          name: 'Pat Candidate'
+        },
+        {
+          entity_type: 'office',
+          entity_id: '44444444-4444-4444-8444-444444444444',
+          name: 'Governor'
+        },
+        {
+          entity_type: 'person',
+          entity_id: 'not-a-uuid',
+          name: 'Alice'
+        }
+      ],
+      has_next: false
+    });
 
     const data = await load(
       createLoadEvent('https://web.civibus.local/search?q=civ&entity_type=candidate', requestJson)
@@ -310,7 +315,7 @@ describe('/search +page.server load', () => {
         }
       ]
     });
-    expect(requestJson).toHaveBeenCalledWith('/v1/search?q=civ&entity_type=candidate&limit=21');
+    expect(requestJson).toHaveBeenCalledWith('/v1/search?q=civ&entity_type=candidate&limit=20');
   });
 
   it('forwards explicit empty q params so backend validation stays authoritative', async () => {
@@ -330,7 +335,7 @@ describe('/search +page.server load', () => {
       results: [],
       validationMessage: 'query.q: String should have at least 2 characters'
     });
-    expect(requestJson).toHaveBeenCalledWith('/v1/search?q=&entity_type=person&limit=21');
+    expect(requestJson).toHaveBeenCalledWith('/v1/search?q=&entity_type=person&limit=20');
   });
 
   it('keeps shared route error handling for backend 404 responses', async () => {
@@ -390,7 +395,7 @@ describe('/search +page.server load', () => {
 
 describe('/search +page.server actions', () => {
   it('redirects successful submits through the shared search page path builder', async () => {
-    const requestJson = vi.fn().mockResolvedValue([]);
+    const requestJson = vi.fn().mockResolvedValue({ items: [], has_next: false });
 
     await expect(
       actions.default(createActionEvent({ q: 'civ', entity_type: 'org' }, requestJson))
@@ -442,7 +447,7 @@ describe('/search +page.server actions', () => {
   });
 
   it('coerces non-string form values to empty strings before invoking backend search', async () => {
-    const requestJson = vi.fn().mockResolvedValue([]);
+    const requestJson = vi.fn().mockResolvedValue({ items: [], has_next: false });
     const formData = new FormData();
     formData.set('q', new Blob(['query-bytes']), 'query.bin');
     formData.set('entity_type', new Blob(['type-bytes']), 'entity_type.bin');

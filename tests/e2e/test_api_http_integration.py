@@ -102,7 +102,7 @@ def test_search_accepts_public_api_key(
     response = client.get("/v1/search", params={"q": "zzstage1"}, headers=public_headers)
 
     assert response.status_code == 200
-    assert isinstance(response.json(), list)
+    assert response.json() == {"items": [], "has_next": False}
 
 
 def test_transactions_accepts_public_api_key(
@@ -140,9 +140,9 @@ def test_person_endpoint_uses_discovered_search_id(
     )
     assert search_response.status_code == 200
     search_payload = search_response.json()
-    assert search_payload
+    assert search_payload["items"]
 
-    person_id = search_payload[0]["entity_id"]
+    person_id = search_payload["items"][0]["entity_id"]
     person_response = client.get(f"/v1/person/{person_id}", headers=public_headers)
 
     assert person_response.status_code == 200
@@ -162,9 +162,9 @@ def test_graph_relationships_uses_discovered_person_id(
     )
     assert search_response.status_code == 200
     search_payload = search_response.json()
-    assert search_payload
+    assert search_payload["items"]
 
-    person_id = search_payload[0]["entity_id"]
+    person_id = search_payload["items"][0]["entity_id"]
     graph_response = client.get(f"/v1/graph/person/{person_id}/relationships", headers=public_headers)
 
     assert graph_response.status_code == 200

@@ -600,6 +600,7 @@ def test_select_federal_scope_targets_delegates_shared_officeholder_query(
                     "roster_bio_url": None,
                     "wikidata_entity_id": "Q999",
                     "bioguide_id": "S000999",
+                    "enrichment_due": True,
                 }
             ]
 
@@ -616,12 +617,16 @@ def test_select_federal_scope_targets_delegates_shared_officeholder_query(
     selected = select_federal_scope_targets(_Connection())
 
     assert "shared-federal-officeholder-targets" in executed_sql[0]
+    assert "bio_text" in executed_sql[0]
+    assert "core.person_portrait" in executed_sql[0]
+    assert "pp.status = 'active'" in executed_sql[0]
     assert selected.targets == [
         ScopeTarget(
             person_id=person_id,
             canonical_name="Shared Federal",
             wikidata_entity_id="Q999",
             bioguide_id="S000999",
+            enrichment_due=True,
         )
     ]
 
@@ -1491,7 +1496,13 @@ def test_run_federal_enrichment_dry_run_uses_federal_scope_without_bootstrap(
     monkeypatch.setattr(
         "core.people.enrichment.orchestrator.select_federal_scope_targets",
         lambda _conn: ScopeSelectionResult(
-            targets=[ScopeTarget(person_id=uuid4(), canonical_name="Dry Run Federal")],
+            targets=[
+                ScopeTarget(
+                    person_id=uuid4(),
+                    canonical_name="Dry Run Federal",
+                    enrichment_due=False,
+                )
+            ],
             warnings=[],
             candidacy_count=0,
             officeholder_count=1,
@@ -1516,6 +1527,8 @@ def test_run_federal_enrichment_dry_run_uses_federal_scope_without_bootstrap(
     assert summary["scope"] == "federal"
     assert summary["jurisdiction"] == "federal/congress"
     assert summary["selected"] == 1
+    assert summary["due"] == 0
+    assert summary["completed"] == 0
     assert summary["processed"] == 0
     assert summary["source_record_id"] is None
     assert summary["data_source_id"] is None
@@ -2546,14 +2559,31 @@ def test_run_federal_enrichment_summary_exposes_refresh_loader_counts(
     person_id = uuid4()
     source_record_id = uuid4()
 
+    scope_results = iter(
+        (
+            ScopeSelectionResult(
+                targets=[
+                    ScopeTarget(
+                        person_id=person_id,
+                        canonical_name="Federal Counted",
+                        enrichment_due=True,
+                    )
+                ],
+                warnings=[],
+                candidacy_count=0,
+                officeholder_count=1,
+            ),
+            ScopeSelectionResult(
+                targets=[ScopeTarget(person_id=person_id, canonical_name="Federal Counted")],
+                warnings=[],
+                candidacy_count=0,
+                officeholder_count=1,
+            ),
+        )
+    )
     monkeypatch.setattr(
         "core.people.enrichment.orchestrator.select_federal_scope_targets",
-        lambda _conn: ScopeSelectionResult(
-            targets=[ScopeTarget(person_id=person_id, canonical_name="Federal Counted")],
-            warnings=[],
-            candidacy_count=0,
-            officeholder_count=1,
-        ),
+        lambda _conn: next(scope_results),
     )
     monkeypatch.setattr(
         "core.people.enrichment.orchestrator.db.select_person",
@@ -2575,10 +2605,68 @@ def test_run_federal_enrichment_summary_exposes_refresh_loader_counts(
     )
 
     assert summary["inserted"] == 4
+    assert summary["due"] == 1
+    assert summary["completed"] == 1
     assert summary["skipped"] == 0
     assert summary["quarantined"] == 0
     assert summary["superseded"] == 0
     assert summary["errors"] == 0
+
+
+def test_run_federal_enrichment_completed_counts_only_people_whose_due_state_cleared(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cleared_person_id = uuid4()
+    still_due_person_id = uuid4()
+    departed_person_id = uuid4()
+    source_record_id = uuid4()
+
+    scope_results = iter(
+        (
+            ScopeSelectionResult(
+                targets=[
+                    ScopeTarget(person_id=cleared_person_id, canonical_name="Cleared", enrichment_due=True),
+                    ScopeTarget(person_id=still_due_person_id, canonical_name="Still Due", enrichment_due=True),
+                    ScopeTarget(person_id=departed_person_id, canonical_name="Departed", enrichment_due=True),
+                ],
+                warnings=[],
+                candidacy_count=0,
+                officeholder_count=3,
+            ),
+            ScopeSelectionResult(
+                targets=[
+                    ScopeTarget(person_id=cleared_person_id, canonical_name="Cleared", enrichment_due=False),
+                    ScopeTarget(person_id=still_due_person_id, canonical_name="Still Due", enrichment_due=True),
+                ],
+                warnings=[],
+                candidacy_count=0,
+                officeholder_count=2,
+            ),
+        )
+    )
+    monkeypatch.setattr(
+        "core.people.enrichment.orchestrator.select_federal_scope_targets",
+        lambda _conn: next(scope_results),
+    )
+    monkeypatch.setattr(
+        "core.people.enrichment.orchestrator.db.select_person",
+        lambda _conn, person_id: Person(id=person_id, canonical_name="Federal Person"),
+    )
+    monkeypatch.setattr(
+        "core.people.enrichment.orchestrator.db.update_person_bio_fields_if_missing",
+        lambda _conn, **_kwargs: (),
+    )
+
+    summary = run_federal_enrichment(
+        object(),
+        chain=_FakeChain(lambda _target: CandidateEnrichmentRecord()),
+        source_record_id=source_record_id,
+    )
+
+    assert summary["selected"] == 3
+    assert summary["due"] == 3
+    assert summary["processed"] == 3
+    assert summary["completed"] == 1
 
 
 def test_run_cf_candidate_enrichment_rejects_negative_limit_before_scope_selection(

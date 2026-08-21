@@ -163,8 +163,8 @@ def test_deterministic_person_bioguide_id_match(db_conn: psycopg.Connection) -> 
 
 
 @pytest.mark.integration
-def test_deterministic_org_ein_match(db_conn: psycopg.Connection) -> None:
-    """Two orgs sharing the same EIN are matched deterministically."""
+def test_deterministic_org_fec_committee_id_match(db_conn: psycopg.Connection) -> None:
+    """Two orgs sharing the same FEC committee ID are matched deterministically."""
     org_a = uuid4()
     org_b = uuid4()
 
@@ -174,7 +174,7 @@ def test_deterministic_org_ein_match(db_conn: psycopg.Connection) -> None:
         canonical_name="Acme Corp",
         registered_state="NC",
         org_type="llc",
-        identifiers={"ein": "12-3456789"},
+        identifiers={"fec_committee_id": "C00000001"},
     )
     _insert_organization(
         db_conn,
@@ -182,7 +182,7 @@ def test_deterministic_org_ein_match(db_conn: psycopg.Connection) -> None:
         canonical_name="ACME Corporation",
         registered_state="NC",
         org_type="llc",
-        identifiers={"ein": "12-3456789"},
+        identifiers={"fec_committee_id": "C00000001"},
     )
 
     pairs = run_deterministic_rules(db_conn, "organization")
@@ -191,8 +191,8 @@ def test_deterministic_org_ein_match(db_conn: psycopg.Connection) -> None:
     assert test_pair is not None
     assert test_pair["confidence"] == 1.0
     assert test_pair["decision_method"] == "deterministic"
-    assert test_pair["decided_by"] == "deterministic_ein_match"
-    assert test_pair["matched_rule_names"] == ["deterministic_ein_match"]
+    assert test_pair["decided_by"] == "deterministic_fec_committee_match"
+    assert test_pair["matched_rule_names"] == ["deterministic_fec_committee_match"]
 
 
 @pytest.mark.integration
@@ -230,7 +230,7 @@ def test_deterministic_person_trimmed_identifier_match(db_conn: psycopg.Connecti
 
 @pytest.mark.integration
 def test_deterministic_org_trimmed_identifier_match(db_conn: psycopg.Connection) -> None:
-    """Organization stable identifiers match even when one record includes padding."""
+    """Organization FEC committee IDs match even when one record includes padding."""
     org_a = uuid4()
     org_b = uuid4()
 
@@ -240,7 +240,7 @@ def test_deterministic_org_trimmed_identifier_match(db_conn: psycopg.Connection)
         canonical_name="Trimmed Org A",
         registered_state="NC",
         org_type="llc",
-        identifiers={"ein": " 98-7654321 "},
+        identifiers={"fec_committee_id": " C00000002 "},
     )
     _insert_organization(
         db_conn,
@@ -248,15 +248,15 @@ def test_deterministic_org_trimmed_identifier_match(db_conn: psycopg.Connection)
         canonical_name="Trimmed Org B",
         registered_state="NC",
         org_type="llc",
-        identifiers={"ein": "98-7654321"},
+        identifiers={"fec_committee_id": "C00000002"},
     )
 
     pairs = run_deterministic_rules(db_conn, "organization")
 
     test_pair = _find_pair(pairs, org_a, org_b)
     assert test_pair is not None
-    assert test_pair["decided_by"] == "deterministic_ein_match"
-    assert test_pair["matched_rule_names"] == ["deterministic_ein_match"]
+    assert test_pair["decided_by"] == "deterministic_fec_committee_match"
+    assert test_pair["matched_rule_names"] == ["deterministic_fec_committee_match"]
 
 
 @pytest.mark.integration

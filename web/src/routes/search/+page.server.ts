@@ -60,25 +60,19 @@ export const load: PageServerLoad = async ({ url, locals }) => {
   }
 
   try {
-    // LIMIT+1 pagination, the /candidates pattern applied client-side (see
-    // SEARCH_PAGE_SIZE): request one row beyond the page, use its presence as
-    // the has-next signal, and never render it. The raw offset passes through
-    // so backend validation stays authoritative for it too.
-    const apiResults = await fetchSearchResults(locals.api, {
+    const searchResponse = await fetchSearchResults(locals.api, {
       q: query,
       entityType,
-      limit: SEARCH_PAGE_SIZE + 1,
+      limit: SEARCH_PAGE_SIZE,
       offset: rawOffset
     });
-    const hasNext = apiResults.length > SEARCH_PAGE_SIZE;
-    const pageResults = hasNext ? apiResults.slice(0, SEARCH_PAGE_SIZE) : apiResults;
 
     return {
       query,
       entityType,
       offset: readAcceptedOffset(rawOffset),
-      hasNext,
-      results: filterRenderableSearchResults(pageResults)
+      hasNext: searchResponse.has_next,
+      results: filterRenderableSearchResults(searchResponse.items)
     };
   } catch (cause) {
     // Search treats backend 422 as user-correctable inline validation instead of a route error.

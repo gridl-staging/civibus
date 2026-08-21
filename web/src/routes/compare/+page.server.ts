@@ -171,14 +171,14 @@ export const actions: Actions = {
     const query = readFormValueAsString(formData, "q");
 
     try {
-      const results = await fetchSearchResults(locals.api, {
+      const searchResponse = await fetchSearchResults(locals.api, {
         q: query,
         entityType: "person"
       });
 
       return {
         query,
-        suggestions: filterRenderableSearchResults(results).filter(
+        suggestions: filterRenderableSearchResults(searchResponse.items).filter(
           (result) => result.entity_type === "person"
         )
       };

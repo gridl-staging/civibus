@@ -104,7 +104,7 @@ from api.models.property import (
     PropertyOwnershipResponse,
 )
 from api.models.provenance import SourceInfo
-from api.models.search import SearchParams, SearchResult
+from api.models.search import SearchParams, SearchResponse, SearchResult
 
 __all__ = [
     "AGE_LABEL_TO_NEIGHBOR_TYPE",
@@ -197,6 +197,7 @@ __all__ = [
     "PropertyOwnershipResponse",
     "RankedTransactionParty",
     "SearchParams",
+    "SearchResponse",
     "SearchResult",
     "SourceInfo",
     "TopSpenderEntry",

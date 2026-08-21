@@ -315,9 +315,9 @@ def _result_field_value(execution_result: object, field_name: str) -> object | N
     return getattr(execution_result, field_name, None)
 
 
-def _positive_int_result_field(execution_result: object, field_name: str) -> int | None:
+def _nonnegative_int_result_field(execution_result: object, field_name: str) -> int | None:
     value = _result_field_value(execution_result, field_name)
-    if type(value) is not int or value <= 0:
+    if type(value) is not int or value < 0:
         return None
     return value
 
@@ -345,7 +345,7 @@ def _derive_configured_denominator_pull_status(
             f"Refresh job configured activity denominator but loader counts are unavailable: field={denominator_field}",
         )
 
-    activity_denominator = _positive_int_result_field(execution_result, denominator_field)
+    activity_denominator = _nonnegative_int_result_field(execution_result, denominator_field)
     if activity_denominator is None:
         return (
             "degraded",
@@ -360,6 +360,35 @@ def _derive_configured_denominator_pull_status(
             counts,
             _format_loader_counts("Refresh job with configured denominator completed with loader errors: ", counts),
         )
+
+    if denominator_field == "due":
+        selected_count = _nonnegative_int_result_field(execution_result, "selected")
+        processed_count = _nonnegative_int_result_field(execution_result, "processed")
+        completed_count = _nonnegative_int_result_field(execution_result, "completed")
+        if selected_count is None or processed_count is None or completed_count is None:
+            return "degraded", counts, "Refresh job configured invalid enrichment progress summary"
+        if selected_count == 0:
+            return "degraded", counts, "Refresh job configured empty selected roster"
+        if activity_denominator > selected_count or completed_count > activity_denominator:
+            return "degraded", counts, "Refresh job configured inconsistent enrichment progress summary"
+        if processed_count != selected_count:
+            return (
+                "degraded",
+                counts,
+                f"Refresh job did not process selected roster: processed={processed_count} selected={selected_count}",
+            )
+        # Due and completed are both people counts; loader activity counts individual writes.
+        activity_count = completed_count
+
+    if activity_denominator == 0:
+        if denominator_field == "due" and activity_count == 0:
+            return (
+                "success",
+                counts,
+                _format_loader_counts("Refresh job succeeded: ", counts)
+                + f" activity={activity_count} denominator={activity_denominator}",
+            )
+        return "degraded", counts, f"Refresh job configured invalid activity denominator: field={denominator_field}"
     if activity_count < max(1, int(activity_denominator * _DEGRADED_VOLUME_RATIO_THRESHOLD)):
         return (
             "degraded",

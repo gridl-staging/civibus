@@ -2331,7 +2331,7 @@ def test_derive_pull_status_degrades_incremental_enrichment_below_selected_denom
     connection = MagicMock()
     job = _job_for_tests(
         key="federal-enrichment",
-        activity_denominator_result_field="selected",
+        activity_denominator_result_field="due",
     )
 
     status, counts, message = runner._derive_pull_status(
@@ -2339,8 +2339,11 @@ def test_derive_pull_status_degrades_incremental_enrichment_below_selected_denom
         job,
         execution_error=None,
         execution_result={
-            "selected": 200,
-            "inserted": 85,
+            "selected": 539,
+            "due": 100,
+            "completed": 10,
+            "processed": 539,
+            "inserted": 100,
             "skipped": 0,
             "quarantined": 0,
             "superseded": 0,
@@ -2352,20 +2355,20 @@ def test_derive_pull_status_degrades_incremental_enrichment_below_selected_denom
     connection.cursor.assert_not_called()
     assert status == "degraded"
     assert counts == {
-        "inserted": 85,
+        "inserted": 100,
         "skipped": 0,
         "quarantined": 0,
         "superseded": 0,
         "errors": 0,
     }
-    assert message == "Refresh job completed below configured volume threshold: activity=85 denominator=200"
+    assert message == "Refresh job completed below configured volume threshold: activity=10 denominator=100"
 
 
 def test_derive_pull_status_fails_closed_for_invalid_configured_denominator() -> None:
     connection = MagicMock()
     job = _job_for_tests(
         key="federal-enrichment",
-        activity_denominator_result_field="selected",
+        activity_denominator_result_field="due",
     )
 
     status, counts, message = runner._derive_pull_status(
@@ -2391,6 +2394,28 @@ def test_derive_pull_status_fails_closed_for_invalid_configured_denominator() ->
         "superseded": 0,
         "errors": 0,
     }
+    assert message == "Refresh job configured invalid activity denominator: field=due"
+
+    zero_denominator_job = _job_for_tests(
+        key="generic-configured-job",
+        activity_denominator_result_field="selected",
+    )
+    status, _, message = runner._derive_pull_status(
+        connection,
+        zero_denominator_job,
+        execution_error=None,
+        execution_result={
+            "selected": 0,
+            "inserted": 0,
+            "skipped": 0,
+            "quarantined": 0,
+            "superseded": 0,
+            "errors": 0,
+        },
+        completed_at=datetime(2026, 7, 25, 3, 21, 16, tzinfo=timezone.utc),
+    )
+
+    assert status == "degraded"
     assert message == "Refresh job configured invalid activity denominator: field=selected"
 
 
@@ -2398,14 +2423,14 @@ def test_derive_pull_status_fails_closed_for_configured_denominator_without_load
     connection = MagicMock()
     job = _job_for_tests(
         key="federal-enrichment",
-        activity_denominator_result_field="selected",
+        activity_denominator_result_field="due",
     )
 
     status, counts, message = runner._derive_pull_status(
         connection,
         job,
         execution_error=None,
-        execution_result={"selected": 540},
+        execution_result={"selected": 540, "due": 540},
         completed_at=datetime(2026, 7, 25, 3, 21, 16, tzinfo=timezone.utc),
     )
 
@@ -2418,14 +2443,14 @@ def test_derive_pull_status_fails_closed_for_configured_denominator_without_load
         "superseded": 0,
         "errors": 0,
     }
-    assert message == "Refresh job configured activity denominator but loader counts are unavailable: field=selected"
+    assert message == "Refresh job configured activity denominator but loader counts are unavailable: field=due"
 
 
 def test_derive_pull_status_fails_closed_for_empty_counts_with_invalid_configured_denominator() -> None:
     connection = MagicMock()
     job = _job_for_tests(
         key="federal-enrichment",
-        activity_denominator_result_field="selected",
+        activity_denominator_result_field="due",
     )
 
     status, counts, message = runner._derive_pull_status(
@@ -2433,7 +2458,8 @@ def test_derive_pull_status_fails_closed_for_empty_counts_with_invalid_configure
         job,
         execution_error=None,
         execution_result={
-            "selected": 0,
+            "selected": 539,
+            "due": -1,
             "inserted": 0,
             "skipped": 0,
             "quarantined": 0,
@@ -2452,7 +2478,163 @@ def test_derive_pull_status_fails_closed_for_empty_counts_with_invalid_configure
         "superseded": 0,
         "errors": 0,
     }
-    assert message == "Refresh job configured invalid activity denominator: field=selected"
+    assert message == "Refresh job configured invalid activity denominator: field=due"
+
+    status, counts, message = runner._derive_pull_status(
+        connection,
+        job,
+        execution_error=None,
+        execution_result={
+            "selected": 539,
+            "due": 1,
+            "completed": 2,
+            "processed": 539,
+            "inserted": 2,
+            "skipped": 0,
+            "quarantined": 0,
+            "superseded": 0,
+            "errors": 0,
+        },
+        completed_at=datetime(2026, 7, 25, 3, 21, 16, tzinfo=timezone.utc),
+    )
+
+    assert status == "degraded"
+    assert counts["inserted"] == 2
+    assert message == "Refresh job configured inconsistent enrichment progress summary"
+
+
+def test_derive_pull_status_succeeds_for_zero_due_incremental_enrichment() -> None:
+    connection = MagicMock()
+    job = _job_for_tests(
+        key="federal-enrichment",
+        activity_denominator_result_field="due",
+    )
+
+    status, counts, message = runner._derive_pull_status(
+        connection,
+        job,
+        execution_error=None,
+        execution_result={
+            "selected": 539,
+            "due": 0,
+            "completed": 0,
+            "processed": 539,
+            "inserted": 0,
+            "skipped": 0,
+            "quarantined": 0,
+            "superseded": 0,
+            "errors": 0,
+        },
+        completed_at=datetime(2026, 7, 25, 3, 21, 16, tzinfo=timezone.utc),
+    )
+
+    connection.cursor.assert_not_called()
+    assert status == "success"
+    assert counts == {
+        "inserted": 0,
+        "skipped": 0,
+        "quarantined": 0,
+        "superseded": 0,
+        "errors": 0,
+    }
+    assert (
+        message
+        == "Refresh job succeeded: inserted=0 skipped=0 quarantined=0 superseded=0 errors=0 activity=0 denominator=0"
+    )
+
+    status, _, message = runner._derive_pull_status(
+        connection,
+        job,
+        execution_error=None,
+        execution_result={
+            "selected": 539,
+            "due": 0,
+            "processed": 539,
+            "inserted": 0,
+            "skipped": 0,
+            "quarantined": 0,
+            "superseded": 0,
+            "errors": 0,
+        },
+        completed_at=datetime(2026, 7, 25, 3, 21, 16, tzinfo=timezone.utc),
+    )
+
+    assert status == "degraded"
+    assert message == "Refresh job configured invalid enrichment progress summary"
+
+
+def test_derive_pull_status_degrades_zero_due_enrichment_with_incomplete_roster_loop() -> None:
+    connection = MagicMock()
+    job = _job_for_tests(
+        key="federal-enrichment",
+        activity_denominator_result_field="due",
+    )
+
+    status, counts, message = runner._derive_pull_status(
+        connection,
+        job,
+        execution_error=None,
+        execution_result={
+            "selected": 539,
+            "due": 0,
+            "completed": 0,
+            "processed": 0,
+            "inserted": 0,
+            "skipped": 0,
+            "quarantined": 0,
+            "superseded": 0,
+            "errors": 0,
+        },
+        completed_at=datetime(2026, 7, 25, 3, 21, 16, tzinfo=timezone.utc),
+    )
+
+    connection.cursor.assert_not_called()
+    assert status == "degraded"
+    assert counts == {
+        "inserted": 0,
+        "skipped": 0,
+        "quarantined": 0,
+        "superseded": 0,
+        "errors": 0,
+    }
+    assert message == "Refresh job did not process selected roster: processed=0 selected=539"
+
+
+def test_derive_pull_status_degrades_zero_due_enrichment_with_empty_roster() -> None:
+    connection = MagicMock()
+    job = _job_for_tests(
+        key="federal-enrichment",
+        activity_denominator_result_field="due",
+    )
+
+    status, counts, message = runner._derive_pull_status(
+        connection,
+        job,
+        execution_error=None,
+        execution_result={
+            "selected": 0,
+            "due": 0,
+            "completed": 0,
+            "processed": 0,
+            "inserted": 0,
+            "skipped": 0,
+            "quarantined": 0,
+            "superseded": 0,
+            "errors": 0,
+        },
+        completed_at=datetime(2026, 7, 25, 3, 21, 16, tzinfo=timezone.utc),
+    )
+
+    connection.cursor.assert_not_called()
+    assert status == "degraded"
+    assert counts == {
+        "inserted": 0,
+        "skipped": 0,
+        "quarantined": 0,
+        "superseded": 0,
+        "errors": 0,
+    }
+    assert message == "Refresh job configured empty selected roster"
 
 
 def test_run_job_records_crashed_pull_status_on_exception(monkeypatch: pytest.MonkeyPatch) -> None:

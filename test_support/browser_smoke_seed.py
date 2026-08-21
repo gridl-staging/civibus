@@ -372,7 +372,7 @@ def _is_canonical_bulk_sample(
 
 def _count_extra_search_organizations(conn: psycopg.Connection, *, ignore_bulk_sample: bool) -> int:
     """Count non-canonical organizations the /search org route owner would return."""
-    results = fetch_search_results(conn, SearchParams(q=SMOKE_SEARCH_QUERY, entity_type="org"))
+    results = fetch_search_results(conn, SearchParams(q=SMOKE_SEARCH_QUERY, entity_type="org"))["items"]
     ignored_ids = {UUID(SMOKE_ORG_ID)}
     if ignore_bulk_sample:
         ignored_ids.update(

@@ -1785,7 +1785,7 @@ def _build_federal_enrichment_job() -> RefreshJob:
         cadence="weekly",
         data_source_names=(FEDERAL_ENRICHMENT_DATA_SOURCE_NAME,),
         run_callable=_run_federal_enrichment_job,
-        activity_denominator_result_field="selected",
+        activity_denominator_result_field="due",
     )
 
 

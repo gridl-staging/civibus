@@ -407,23 +407,26 @@ describe("/compare +page.server load", () => {
 
 describe("/compare +page.server actions", () => {
   it("addSearch returns only renderable person suggestions from the shared search fetcher", async () => {
-    const requestJson = vi.fn().mockResolvedValue([
-      {
-        entity_type: "person",
-        entity_id: "11111111-1111-4111-8111-111111111111",
-        name: "Jane Doe"
-      },
-      {
-        entity_type: "person",
-        entity_id: "not-a-uuid",
-        name: "Broken Person"
-      },
-      {
-        entity_type: "org",
-        entity_id: "22222222-2222-4222-8222-222222222222",
-        name: "Jane Org"
-      }
-    ]);
+    const requestJson = vi.fn().mockResolvedValue({
+      items: [
+        {
+          entity_type: "person",
+          entity_id: "11111111-1111-4111-8111-111111111111",
+          name: "Jane Doe"
+        },
+        {
+          entity_type: "person",
+          entity_id: "not-a-uuid",
+          name: "Broken Person"
+        },
+        {
+          entity_type: "org",
+          entity_id: "22222222-2222-4222-8222-222222222222",
+          name: "Jane Org"
+        }
+      ],
+      has_next: false
+    });
 
     const result = await actions.addSearch(createActionEvent("jane", requestJson));
 

@@ -33,7 +33,10 @@ function getCompareSearchResponse(url: URL): CompareFixtureResponse | null {
 
   return {
     status: 200,
-    body: [{ entity_type: "person", entity_id: fixture.id, name: fixture.name }]
+    body: {
+      items: [{ entity_type: "person", entity_id: fixture.id, name: fixture.name }],
+      has_next: false
+    }
   };
 }
 
@@ -689,13 +692,12 @@ const server = createServer(async (request, response) => {
     url.searchParams.get("q") === smokeFixtures.search.query &&
     url.searchParams.get("entity_type") === smokeFixtures.search.entityType
   ) {
-    writeJson(response, 200, smokeFixtures.search.results);
+    writeJson(response, 200, { items: smokeFixtures.search.results, has_next: false });
     return;
   }
 
   // The 21-row paged org set honors limit/offset because pagination is its
-  // whole point: the page server requests SEARCH_PAGE_SIZE + 1 rows and the
-  // held-back 21st row is what flips the status wording to "N results shown.".
+  // whole point: the backend holds back the probe row and reports has_next.
   if (
     url.pathname === "/v1/search" &&
     url.searchParams.get("q") === smokeFixtures.searchPagedOrgs.query &&
@@ -705,11 +707,14 @@ const server = createServer(async (request, response) => {
     const pagedLimit =
       parseOptionalNonNegativeInt(url.searchParams.get("limit")) ??
       smokeFixtures.searchPagedOrgs.results.length;
-    writeJson(
-      response,
-      200,
-      smokeFixtures.searchPagedOrgs.results.slice(pagedOffset, pagedOffset + pagedLimit)
+    const probedRows = smokeFixtures.searchPagedOrgs.results.slice(
+      pagedOffset,
+      pagedOffset + pagedLimit + 1
     );
+    writeJson(response, 200, {
+      items: probedRows.slice(0, pagedLimit),
+      has_next: probedRows.length > pagedLimit
+    });
     return;
   }
 
@@ -730,7 +735,7 @@ const server = createServer(async (request, response) => {
     url.searchParams.get("entity_type") === smokeFixtures.searchSlow.entityType
   ) {
     await new Promise((resolve) => setTimeout(resolve, smokeFixtures.searchSlow.delayMs));
-    writeJson(response, 200, smokeFixtures.searchSlow.results);
+    writeJson(response, 200, { items: smokeFixtures.searchSlow.results, has_next: false });
     return;
   }
 
@@ -739,7 +744,7 @@ const server = createServer(async (request, response) => {
     url.searchParams.get("q") === smokeFixtures.searchCandidate.query &&
     url.searchParams.get("entity_type") === smokeFixtures.searchCandidate.entityType
   ) {
-    writeJson(response, 200, smokeFixtures.searchCandidate.results);
+    writeJson(response, 200, { items: smokeFixtures.searchCandidate.results, has_next: false });
     return;
   }
 
@@ -748,7 +753,7 @@ const server = createServer(async (request, response) => {
     url.searchParams.get("q") === smokeFixtures.searchContest.query &&
     url.searchParams.get("entity_type") === smokeFixtures.searchContest.entityType
   ) {
-    writeJson(response, 200, smokeFixtures.searchContest.results);
+    writeJson(response, 200, { items: smokeFixtures.searchContest.results, has_next: false });
     return;
   }
 
@@ -760,7 +765,7 @@ const server = createServer(async (request, response) => {
     url.searchParams.get("q") === smokeFixtures.candidateNameSearch.query &&
     url.searchParams.get("entity_type") === null
   ) {
-    writeJson(response, 200, smokeFixtures.candidateNameSearch.results);
+    writeJson(response, 200, { items: smokeFixtures.candidateNameSearch.results, has_next: false });
     return;
   }
 
