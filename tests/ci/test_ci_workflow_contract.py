@@ -463,7 +463,7 @@ def test_nightly_workflow_owns_exhaustive_scheduled_proof() -> None:
         "make ingest-fec-bulk-sample",
         "make graph-load",
         BROWSER_SMOKE_SEED_COMMAND,
-        "npm run test:smoke",
+        "npm run test:smoke -- --reporter=line",
     ):
         assert f"        run: {command}" in browser_job_lines
     # The seed replaces the bulk sample's entities with the deterministic
@@ -471,7 +471,7 @@ def test_nightly_workflow_owns_exhaustive_scheduled_proof() -> None:
     # loaded from that sample and before any journey reads a page.
     seed_step_index = browser_job_lines.index(f"        run: {BROWSER_SMOKE_SEED_COMMAND}")
     assert browser_job_lines.index("        run: make graph-load") < seed_step_index
-    assert seed_step_index < browser_job_lines.index("        run: npm run test:smoke")
+    assert seed_step_index < browser_job_lines.index("        run: npm run test:smoke -- --reporter=line")
     # The specimen pins are the Playwright fixtures' env overrides. They are
     # imported from the seed module, so a literal that drifts from the rows
     # the seed actually writes fails here instead of in a browser journey.

@@ -172,7 +172,7 @@ jobs:
         run: uv run --extra dev --extra entity-resolution python -m test_support.browser_smoke_seed
       - name: Browser smoke journeys
         working-directory: web
-        run: npm run test:smoke
+        run: npm run test:smoke -- --reporter=line
       - name: Stop DB
         if: always()
         run: make db-down
