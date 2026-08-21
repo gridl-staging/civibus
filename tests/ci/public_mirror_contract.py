@@ -170,6 +170,17 @@ PUBLIC_MIRROR_TEST_CLASSIFICATIONS: tuple[PublicMirrorTestClassification, ...] =
         ),
     ),
     *_entries(
+        # The suite-time-budget registry's doc-authority audit reads
+        # docs/reference/testing.md, which the sync whitelist deliberately
+        # excludes; the 2026-08-21 staging run proved the public composition
+        # red with FileNotFoundError (civibus-y1x follow-through).
+        private_asset="docs/reference/testing.md",
+        owner="Debbie projection contract",
+        node_ids=(
+            "tests/ci/test_suite_time_budget_contract.py::test_testing_doc_is_authoritative_and_routes_numbers_to_this_registry",
+        ),
+    ),
+    *_entries(
         private_asset="docs/howto/operations/fly_deployment_runbook.md",
         owner="Fly deployment operations docs",
         node_ids=(
