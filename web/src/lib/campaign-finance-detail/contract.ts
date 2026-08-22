@@ -249,6 +249,8 @@ export type IndependentExpenditureSummary = SelectedCycleMetadata & {
   coverage: CandidateMoneyCoverage;
 };
 
+/**
+ */
 export type CommitteeIndependentExpenditureTarget = {
   candidate_id: string;
   fec_candidate_id: string;
@@ -291,6 +293,8 @@ export type ReceiptSourceComponent = {
   source: "fec_committee_summary" | "none";
 };
 
+/**
+ */
 export type CommitteeFundraisingSummary = SelectedCycleMetadata & {
   committee_id: string;
   committee_name: string;
@@ -331,6 +335,8 @@ export type SpendCategorySummary = {
   transaction_count: number;
 };
 
+/**
+ */
 export type FilingPeriodSummary = {
   filing_id: string;
   filing_fec_id: string;
@@ -555,6 +561,8 @@ export function buildCommitteeIndependentExpendituresMadePath(committeeId: strin
   return buildCampaignFinancePath("committees", committeeId, "/independent-expenditures-made");
 }
 
+/**
+ */
 export type CandidateFundraisingSummary = SelectedCycleMetadata & {
   candidate_id: string;
   candidate_name: string;

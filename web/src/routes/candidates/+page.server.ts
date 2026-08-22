@@ -3,6 +3,8 @@ import { withApiResponseErrorHandling } from "$lib/server/api/error";
 import { readOptionalQueryParams } from "$lib/server/query-params";
 import type { PageServerLoad } from "./$types";
 
+/**
+ */
 export const load: PageServerLoad = ({ url, locals }) =>
   withApiResponseErrorHandling(async () => {
     const queryParams = readOptionalQueryParams(url.searchParams, [

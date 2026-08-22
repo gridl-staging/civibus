@@ -131,6 +131,8 @@ function buildSharedFactRows(detail: EntityDetailResponse): DetailFactRow[] {
   return [{ label: "Canonical name", value: detail.canonical_name }];
 }
 
+/**
+ */
 export function buildCanonicalDetailFacts(
   entityType: Stage4EntityType,
   detail: EntityDetailResponse
@@ -174,6 +176,8 @@ export function getIdentifierEmptyMessage(): string {
   return IDENTIFIER_EMPTY_MESSAGE;
 }
 
+/**
+ */
 export function buildEntityDetailShellPresentation(
   input: EntityDetailShellInput
 ): EntityDetailShellPresentation {

@@ -86,6 +86,8 @@ export function parseSerializedMoney(value: SerializedMoney | null | undefined):
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+/**
+ */
 export function buildPersonReceiptCompositionPresentation(
   summary: ReceiptCompositionSummary
 ): PersonReceiptCompositionPresentation {
@@ -109,6 +111,8 @@ export function buildPersonReceiptCompositionPresentation(
   };
 }
 
+/**
+ */
 export function buildPersonMonthlyContributionsPresentation(
   insights: PersonContributionInsights
 ): PersonMonthlyContributionsPresentation {
@@ -130,6 +134,8 @@ export function buildPersonMonthlyContributionsPresentation(
   };
 }
 
+/**
+ */
 export function buildPersonSizeBucketPresentation(
   insights: PersonContributionInsights
 ): PersonSizeBucketPresentation {
@@ -158,6 +164,8 @@ export function buildPersonSizeBucketPresentation(
   };
 }
 
+/**
+ */
 export function buildPersonGeographySharePresentation(
   insights: PersonContributionInsights
 ): PersonGeographySharePresentation {
@@ -234,6 +242,8 @@ function appendUnknownGeographyRow(
   ];
 }
 
+/**
+ */
 function buildCoveredMonthKeys(startDate: string, endDate: string): string[] {
   const start = parseMonthStart(startDate);
   const end = parseMonthStart(endDate);

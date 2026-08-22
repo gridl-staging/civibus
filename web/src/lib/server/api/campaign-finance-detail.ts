@@ -199,6 +199,8 @@ function guardUnhandledRejection(promise: Promise<unknown>): void {
   void promise.catch(() => {});
 }
 
+/**
+ */
 function collectLinkedCommitteeIds(
   summary: CandidateFundraisingSummary,
   principalCommitteeId: string | null

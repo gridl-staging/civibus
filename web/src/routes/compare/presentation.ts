@@ -212,6 +212,8 @@ function prefixOutsideSpendingRows(
   }));
 }
 
+/**
+ */
 function buildOutsideSpendingChart(
   sections: ResolvedPersonMoneyBundle["personFinanceSections"],
   summaryFacts: IndependentExpenditureSummary[],
@@ -256,6 +258,8 @@ async function resolveIndependentExpenditureSummary(
   return value ?? null;
 }
 
+/**
+ */
 async function resolveColumnPresentation(
   bundle: ResolvedPersonMoneyBundle
 ): Promise<FulfilledColumnPresentation> {
@@ -386,6 +390,8 @@ function formatScaleMax(value: number, unit: CompareMetricUnit): string {
   return unit === "money" ? formatCurrency(value) : formatPercent(value);
 }
 
+/**
+ */
 function buildRow(
   id: string,
   label: string,
@@ -408,6 +414,8 @@ function buildRow(
   };
 }
 
+/**
+ */
 function buildRows(
   columns: readonly CompareColumn[],
   resolved: readonly ColumnPresentationResult[],
@@ -460,6 +468,8 @@ function buildRows(
   ];
 }
 
+/**
+ */
 function buildAnswerFirstSummary(
   columns: readonly ComparePresentationColumn[],
   rows: readonly CompareMetricRow[]
@@ -511,6 +521,8 @@ function buildDataThroughLabel(results: readonly ColumnPresentationResult[]): st
   return `Data through ${dates.sort().at(-1)}`;
 }
 
+/**
+ */
 export async function buildComparePresentation(
   columns: readonly CompareColumn[],
   outcomes: readonly PromiseSettledResult<ResolvedPersonMoneyBundle>[]

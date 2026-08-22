@@ -195,6 +195,8 @@ export function orderByUtcMonthKey(rows: MonthlyContributionRow[]): MonthlyContr
   return [...rows].sort((left, right) => left.month.localeCompare(right.month));
 }
 
+/**
+ */
 export function zeroFillCoveredMonths(
   rows: MonthlyContributionRow[],
   coveredMonths: string[]
@@ -229,6 +231,8 @@ export function summarizeShare(row: GeographyShareRow): string {
   return `${row.label} is ${formatCurrency(row.amount)} of ${formatCurrency(row.denominator)} (${formatPercent(share)}).`;
 }
 
+/**
+ */
 export function calculateOutsideSpendingDomain(
   rows: OutsideSpendingRow[],
   sharedScaleMax?: number
@@ -253,6 +257,8 @@ export function calculateOutsideSpendingDomain(
   };
 }
 
+/**
+ */
 export function buildCashOnHandSeries(points: CashOnHandPoint[]): ChartSeries[] {
   const orderedPoints = [...points].sort((left, right) => left.periodEnd.localeCompare(right.periodEnd));
   const segments: CashOnHandPoint[][] = [];
@@ -297,6 +303,8 @@ export function getContrastRatio(foreground: string, background: string): number
   return (lighter + 0.05) / (darker + 0.05);
 }
 
+/**
+ */
 export function toExactRows(
   rows: Array<{ label: string; amount: number; transactionCount?: number; denominator?: number }>
 ): ExactDisclosureRow[] {

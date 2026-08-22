@@ -157,6 +157,8 @@ function buildSearchEntityTypeOptions(): SearchEntityTypeOption[] {
   }));
 }
 
+/**
+ */
 export function buildSearchMetadata({ query, resultCount }: SearchStatusMessageInput): SearchRouteMetadata {
   const normalizedQuery = query.trim();
 
@@ -175,6 +177,8 @@ export function buildSearchMetadata({ query, resultCount }: SearchStatusMessageI
   };
 }
 
+/**
+ */
 export function getSearchStatusMessage({
   query,
   resultCount,
@@ -273,6 +277,8 @@ function buildPersonContextLine(result: SearchResultCardData): string {
   ]);
 }
 
+/**
+ */
 function buildGenericContextLine(result: SearchResultCardData): string {
   const contextSegments: string[] = [];
 
@@ -370,6 +376,8 @@ export function buildSearchResultKey(result: SearchResultCard): string {
   return `${result.entityType}:${result.entityId}`;
 }
 
+/**
+ */
 export function buildSearchPagePresentation({
   query,
   entityType,

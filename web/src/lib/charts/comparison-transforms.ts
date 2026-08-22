@@ -45,6 +45,8 @@ export function sharedScaleWidthPct(value: number, scaleMax: number): number {
   return value / scaleMax;
 }
 
+/**
+ */
 export function buildComparisonSegments(input: ComparisonSegmentsInput): ComparisonSegmentsResult {
   const orderedSegments = orderComparisonSegments(input.segments, input.segmentOrder);
   const normalizedTotal = getPositiveFiniteTotal(input.total);
@@ -97,6 +99,8 @@ export function lightenColor(hexColor: string): string {
   ]);
 }
 
+/**
+ */
 function normalizeComparisonSegment(
   segment: ComparisonSegmentInput,
   total: number

@@ -28,6 +28,8 @@ export type PaginationContext = {
   hasNext: boolean;
 };
 
+/**
+ */
 export function buildCandidateListItemPresentation(
   item: CandidateListItem
 ): CandidateListItemPresentation {
@@ -74,6 +76,8 @@ export function buildCommitteeListItemPresentation(
   };
 }
 
+/**
+ */
 export function buildPaginationContext(
   offset: number,
   _limit: number,

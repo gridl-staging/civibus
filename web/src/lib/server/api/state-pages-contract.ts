@@ -17,6 +17,8 @@ export const STATE_COVERAGE_TIER_VALUES = [
 export type StateSupportStatus = (typeof STATE_SUPPORT_STATUS_VALUES)[number];
 export type StateCoverageTier = (typeof STATE_COVERAGE_TIER_VALUES)[number] | null;
 
+/**
+ */
 export type StateSummaryItem = {
   state_code: string;
   total_raised: string | null;

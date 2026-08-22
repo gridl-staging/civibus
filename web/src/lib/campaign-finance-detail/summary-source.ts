@@ -18,6 +18,8 @@ export const CANDIDATE_SUMMARY_SOURCE_LABELS: Record<CandidateSummarySource, str
   derived: DERIVED_SUMMARY_SOURCE_LABEL
 };
 
+/**
+ */
 export function buildCommitteeItemizedCoverageNote(summary: {
   itemized_transaction_count: number;
   summary_source: CommitteeSummarySource;

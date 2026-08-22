@@ -82,6 +82,8 @@ function hasSearchQuery(query: SearchPagePathParams['q']): query is string {
   return query !== undefined && query !== null && query !== '';
 }
 
+/**
+ */
 function buildSearchQueryParams(
   // Only the shared q/entity_type pair; each caller appends its own
   // pagination params because the API path and the page path encode them

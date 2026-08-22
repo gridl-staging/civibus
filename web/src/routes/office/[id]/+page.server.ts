@@ -7,6 +7,8 @@ import {
 } from "$lib/server/api/civic-geometry";
 import type { PageServerLoad } from "./$types";
 
+/**
+ */
 export const load: PageServerLoad = ({ params, locals }) =>
   withApiResponseErrorHandling(async () => {
     const office = await fetchOfficeDetail(locals.api, { id: params.id });

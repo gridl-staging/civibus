@@ -15,6 +15,8 @@ function stage6HistoryCycle(): number {
   return Number(SMOKE_STAGE6_COMMITTEE_CYCLE_LABEL);
 }
 
+/**
+ */
 export function buildStage6CommitteeCleanupSql(): string {
   return `
 BEGIN;
@@ -39,6 +41,8 @@ COMMIT;
 `;
 }
 
+/**
+ */
 export function buildStage6CommitteeSeedSql(): string {
   const cleanup = buildStage6CommitteeCleanupSql();
   return `
