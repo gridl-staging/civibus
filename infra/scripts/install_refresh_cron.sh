@@ -70,6 +70,10 @@ grep -v "infra/scripts/refresh_priority.sh" "${existing_crontab}" \
   echo "20 */6 * * * bash ${keel_gates_wrapper} >> /var/log/civibus/keel-gates.log 2>&1"
   echo "0 3 * * * bash ${fec_bulk_wrapper} >> /var/log/civibus/refresh-fec-bulk.log 2>&1"
   echo "0 17 * * 0 bash ${nc_orchestrator_wrapper} >> /var/log/civibus/refresh-nc-orchestrator.log 2>&1"
+  # Current backup path is docs/howto/operations/db-backup-runbook.md.
+  # Parked historical Hetzner backup path: the 02:30 UTC cron entry below is
+  # superseded by the civibus-db-backup Fly Machine (daily schedule) and is
+  # retained executable only for the parked Hetzner VM.
   echo "30 2 * * * bash ${backup_wrapper} >> /var/log/civibus/backup.log 2>&1"
   echo "0 6 * * * bash ${cert_wrapper} >> /var/log/civibus/check-cert.log 2>&1"
 } >>"${next_crontab}"

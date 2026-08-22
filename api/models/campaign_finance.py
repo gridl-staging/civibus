@@ -36,6 +36,12 @@ class CommitteeResponse(BaseModel):
     linked_candidates: list[CandidateListItem] = Field(default_factory=list)
 
 
+class CandidateCandidacySummary(BaseModel):
+    contest_id: UUID
+    contest_name: str
+    election_date: date | None = None
+
+
 class CandidateResponse(BaseModel):
     id: UUID
     fec_candidate_id: str
@@ -51,6 +57,7 @@ class CandidateResponse(BaseModel):
     district: str | None = None
     incumbent_challenge: str | None = None
     principal_committee_id: UUID | None = None
+    candidacies: list[CandidateCandidacySummary] = Field(default_factory=list)
     sources: list[SourceInfo]
 
 

@@ -1,6 +1,6 @@
-import { readFileSync } from "node:fs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render } from "svelte/server";
+import { expectScrollContainersHaveTabStop } from "$lib/detail_scroll_tab_stop_guard";
 import type {
   CandidacyDetailResponse,
   ContestDetailResponse,
@@ -1147,23 +1147,6 @@ describe("race money bars rendering", () => {
 });
 
 describe("scrollable regions", () => {
-  // axe rule scrollable-region-focusable, impact serious - the same defect the
-  // entity-detail and campaign-finance-detail DetailPages fixed on 2026-08-19.
-  // .detail__table-scroll sets overflow-x: auto over a table wider than its
-  // container; with no focusable descendant such a region cannot be scrolled
-  // from the keyboard at all. The smoke a11y floor refuses serious violations,
-  // but it only runs nightly - this holds the same invariant at vitest speed,
-  // and it fails the moment a new scroll container is added without the
-  // attribute rather than when the fix is deleted from an old one.
-  it("gives every horizontal scroll container a keyboard tab stop", () => {
-    const source = readFileSync(new URL("./DetailPage.svelte", import.meta.url), "utf8");
-    const containers = [...source.matchAll(/<div class="detail__table-scroll"[^>]*>/g)].map(
-      (match) => match[0]
-    );
-
-    expect(containers.length).toBeGreaterThan(0);
-    for (const container of containers) {
-      expect(container).toContain('tabindex="0"');
-    }
-  });
+  it("gives every horizontal scroll container a keyboard tab stop", () =>
+    expectScrollContainersHaveTabStop(new URL("./DetailPage.svelte", import.meta.url)));
 });

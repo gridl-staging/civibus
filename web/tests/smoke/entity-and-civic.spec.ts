@@ -219,7 +219,7 @@ test.describe("entity and civic detail smoke", () => {
     await expect(page.getByText(SMOKE_PERSON_MONEY_CASH_ON_HAND, { exact: true }).first()).toBeVisible();
     await expect(page.getByText("Debts owed by the committee", { exact: true }).first()).toBeVisible();
     await expect(page.getByText(SMOKE_PERSON_MONEY_DEBTS_OWED, { exact: true }).first()).toBeVisible();
-    await expectFinanceChartHasStableHeight(page, "Receipt source composition by dollars");
+    await expectHtmlBarListRender(page.getByTestId("person-receipt-composition"));
     await expect(page.getByRole("heading", { name: SMOKE_PERSON_FUNDRAISING_DETAIL_HEADING })).toBeVisible();
     await expect(page.getByText(SMOKE_PERSON_SMALL_DOLLAR_HEADLINE, { exact: true })).toBeVisible();
     await expect(page.getByRole("heading", { name: "Individual contribution totals" })).toBeVisible();

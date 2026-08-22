@@ -201,13 +201,14 @@ describe("/candidates +page.svelte browse scope caption", () => {
     setPageUrl("/candidates");
   });
 
-  it("keeps the deploy-gate Candidates marker and explains browse suppression", () => {
+  it("keeps the result and deploy-gate money markers and explains browse suppression", () => {
     const rendered = render(CandidatesPage, {
       props: { data: buildPageData([FUNDED_CANDIDATE]) }
     });
 
     expect(rendered.body).toContain("<h2>Candidates</h2>");
     expect(rendered.body).toContain('data-testid="candidate-result-row"');
+    expect(rendered.body).toContain('data-testid="candidate-total-raised"');
     expect(rendered.body).toContain("reachable at their own candidate pages");
   });
 });

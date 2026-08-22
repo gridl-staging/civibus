@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Literal
 from uuid import UUID, uuid4
@@ -16,6 +16,7 @@ import api.queries as campaign_finance_queries
 import api.queries.campaign_finance as campaign_finance_query_module
 import api.routes.campaign_finance as campaign_finance_route_module
 from api.models.campaign_finance import CommitteeListParams
+from api.queries.civics import _UPCOMING_ELECTION_HORIZON_YEARS
 from api.queries import (
     fetch_candidate_public_money_summaries,
     fetch_candidate_public_money_summary,
@@ -62,6 +63,7 @@ from api.test_campaign_finance_support import (
     seed_committee_for_summary,
     seed_transactions_for_filters,
 )
+from api.test_civics import _insert_candidacy, _insert_contest, _insert_office
 from core.db import insert_entity_source, insert_organization, insert_person
 from core.refresh.job_builders import populate_committee_summary_derived_aggregates
 from core.types.python.models import Organization, Person
@@ -2997,6 +2999,7 @@ def test_get_candidate_returns_direct_provenance(
         "district",
         "incumbent_challenge",
         "principal_committee_id",
+        "candidacies",
         "sources",
     }
     assert payload["id"] == str(candidate_id)
@@ -3010,6 +3013,7 @@ def test_get_candidate_returns_direct_provenance(
     assert payload["district"] == "01"
     assert payload["incumbent_challenge"] == "I"
     assert payload["principal_committee_id"] == str(committee_id)
+    assert payload["candidacies"] == []
     assert payload["sources"] == [
         {
             "domain": "campaign_finance",
@@ -3023,6 +3027,84 @@ def test_get_candidate_returns_direct_provenance(
     ]
     assert "created_at" not in payload
     assert "updated_at" not in payload
+
+
+def test_get_candidate_returns_linked_candidacy_contest_identity_with_publish_horizon(
+    api_client: TestClient,
+    db_conn: psycopg.Connection,
+) -> None:
+    fec_candidate_id = "H6NC01111"
+    person = Person(canonical_name="Linked Candidacy Candidate")
+    insert_person(db_conn, person)
+    candidate_id = UUID("00000000-0000-0000-0000-000000009111")
+    insert_candidate_row(
+        db_conn,
+        CandidateRowSeed(
+            id=candidate_id,
+            fec_candidate_id=fec_candidate_id,
+            name="Linked Candidacy Candidate",
+            office="H",
+            person_id=person.id,
+        ),
+    )
+    office_id = _insert_office(
+        db_conn,
+        name="candidate_detail_candidacy_house",
+        office_level="federal",
+        title="U.S. House",
+    )
+    current_date = _database_current_date(db_conn)
+    in_horizon_election_date = current_date + timedelta(days=30)
+    equally_distant_past_election_date = current_date - timedelta(days=30)
+    nearest_election_date = current_date + timedelta(days=7)
+    beyond_horizon_election_date = current_date + timedelta(days=365 * (_UPCOMING_ELECTION_HORIZON_YEARS + 1))
+    expected_contests = [
+        ("Nearest North Carolina House Contest", nearest_election_date),
+        ("North Carolina House District 1 General", in_horizon_election_date),
+        ("Past North Carolina House District 1 General", equally_distant_past_election_date),
+        ("Undated North Carolina House Contest", None),
+    ]
+    publishable_contests = [
+        (
+            _insert_contest(db_conn, name=name, election_date=election_date, office_id=office_id),
+            name,
+            election_date,
+        )
+        for name, election_date in expected_contests
+    ]
+    beyond_horizon_contest_id = _insert_contest(
+        db_conn,
+        name="Corrupt Far Future House Contest",
+        election_date=beyond_horizon_election_date,
+        office_id=office_id,
+    )
+    for contest_id, _name, _election_date in reversed(publishable_contests):
+        _insert_candidacy(
+            db_conn,
+            person_id=person.id,
+            contest_id=contest_id,
+            candidate_number=fec_candidate_id,
+        )
+    _insert_candidacy(
+        db_conn,
+        person_id=person.id,
+        contest_id=beyond_horizon_contest_id,
+        candidate_number=fec_candidate_id,
+    )
+
+    response = api_client.get(f"/v1/candidates/{candidate_id}")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["candidacies"] == [
+        {
+            "contest_id": str(contest_id),
+            "contest_name": name,
+            "election_date": election_date.isoformat() if election_date is not None else None,
+        }
+        for contest_id, name, election_date in publishable_contests
+    ]
+    assert str(beyond_horizon_contest_id) not in {candidacy["contest_id"] for candidacy in payload["candidacies"]}
 
 
 def test_get_candidate_falls_back_to_person_entity_source_when_row_source_missing(

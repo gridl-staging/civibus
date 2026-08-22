@@ -263,7 +263,8 @@ def test_fly_runbook_password_guidance_points_to_pgpass_owners() -> None:
     required_fragments = (
         "`infra/scripts/postgres_local.py::create_backup`",
         "`infra/scripts/postgres_local.py::restore_backup`",
-        "`infra/scripts/backup_to_b2.sh`",
+        "`infra/scripts/backup_fly_db_to_b2.sh`",
+        "`docs/howto/operations/db-backup-runbook.md`",
         "`.pgpass`",
         "`PGPASSFILE`",
         "`/Users/stuart/repos/gridl-dev/civibus_dev/.secret/civibus-fly.env`",

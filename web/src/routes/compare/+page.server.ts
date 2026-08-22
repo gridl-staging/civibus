@@ -58,8 +58,6 @@ function guardUnhandledRejection(promise: Promise<unknown>): void {
   void promise.catch(() => {});
 }
 
-/**
- */
 async function fetchKnownPerson(
   apiClient: ApiClient,
   personId: string
@@ -78,8 +76,6 @@ async function fetchKnownPerson(
   }
 }
 
-/**
- */
 function resolveMoneyBundle(
   bundle: PersonDetailPageExtensions
 ): Promise<ResolvedPersonMoneyBundle> {

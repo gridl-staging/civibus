@@ -1,0 +1,45 @@
+# civibus-db-backup: build/env-only app contract for the dedicated Fly backup
+# machine. Stage 3 owns machine creation and the scheduled runtime command.
+#
+# This app exists solely to isolate the B2 backup credentials and lifecycle
+# from civibus-refresh and civibus-db. It has no [[services]] block: it never
+# serves traffic, it reaches civibus-db over Fly 6PN as civibus-db.internal:5432
+# and streams a pg_dump to Backblaze B2.
+#
+# The dump/upload runtime is owned by infra/scripts/backup_fly_db_to_b2.sh and
+# the B2 object contract by infra/scripts/b2_backup_lib.sh; this file restates
+# neither. The scheduled machine command is (set via `flyctl machine run`):
+#   bash /opt/civibus/infra/scripts/backup_fly_db_to_b2.sh
+#
+# Secrets (POSTGRES_PASSWORD, B2_ACCOUNT_ID, B2_APPLICATION_KEY) are set once via
+# `flyctl secrets import` and never appear in this file.
+#
+# Build/push from repo root: flyctl deploy --build-only --push -c infra/fly/db_backup.fly.toml
+# Create or update the scheduled machine explicitly with `flyctl machine run`
+# or `flyctl machine update --schedule daily`; plain deploy is not the runtime
+# owner for this no-service app.
+app = "civibus-db-backup"
+primary_region = "sjc"
+
+# Thin client-only backup image (pg18 client + rclone + the backup scripts).
+# dockerfile is resolved relative to this file's directory; build context is the
+# repo root, so the image's COPY paths are repo-root-relative.
+[build]
+  dockerfile = "../db/backup.Dockerfile"
+
+# Only non-secret DB identity/env belongs here. These mirror the defaults baked
+# into backup_fly_db_to_b2.sh and b2_backup_lib.sh; setting them explicitly
+# keeps the backup target and destination auditable in one place.
+[env]
+  FLY_DB_HOST = "civibus-db.internal"
+  FLY_DB_PORT = "5432"
+  FLY_DB_NAME = "civibus"
+  FLY_DB_USER = "civibus"
+  B2_BUCKET = "civibus-db-backups"
+  BACKUP_RETENTION_DAYS = "7"
+
+# Streaming backup: the dump is piped straight to B2, so the machine needs no
+# persistent volume and no [mounts] block.
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "1gb"

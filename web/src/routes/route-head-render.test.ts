@@ -855,6 +855,7 @@ describe("route head rendering", () => {
     });
     expect(rendered.body).toContain('<h3 class="campaign-list__name');
     expect(rendered.body).toContain('data-testid="candidate-result-row"');
+    expect(rendered.body).toContain('data-testid="candidate-total-raised"');
     expect(rendered.body).toContain('href="/candidate/jane-candidate"');
     expect(rendered.body).toContain("DEM · H · NC-01");
     expect(rendered.body).toContain("Showing 26–26");

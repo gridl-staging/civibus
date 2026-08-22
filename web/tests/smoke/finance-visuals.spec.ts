@@ -123,14 +123,9 @@ const LIVE_RANKING_TABLE_EXPECTATIONS: RankingTableExpectations = {
   topSpenders: SMOKE_FINANCE_LIVE_TOP_SPENDER_ROWS
 };
 
-// The four SVG chart plots on the person page. The size-buckets module is NOT
-// here any more: HorizontalBarChart's one visual encoding is a ranked HTML bar
-// list (civibus-3a3), asserted separately below via expectHtmlBarListRender.
+// The three SVG chart plots on the person page. Receipt composition and size
+// buckets are HTML bar lists, asserted separately through their frame testIds.
 const CHARTS = [
-  {
-    label: "Receipt source composition by dollars",
-    markSelector: BAR_SERIES_MARK_SELECTOR
-  },
   {
     label: "Monthly contribution columns",
     markSelector: BAR_SERIES_MARK_SELECTOR
@@ -169,8 +164,7 @@ test.describe("fixture-backed finance visuals", () => {
       }
       await expectNoOpaqueNearBlackPaints(chartRegions);
 
-      // The size-buckets module renders its one visual encoding — the ranked
-      // HTML bar list — with no svg duplicate above it (civibus-3a3).
+      await expectHtmlBarListRender(page.getByTestId("person-receipt-composition"));
       await expectHtmlBarListRender(page.getByTestId("person-size-buckets"));
 
       await expectPersonFinanceSemantics(page);

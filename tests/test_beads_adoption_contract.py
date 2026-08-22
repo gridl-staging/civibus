@@ -85,6 +85,11 @@ def test_pinned_bd_cli_version_is_exact() -> None:
     completed = _run(["bd", "--version"])
     assert completed.returncode == 0, completed.stderr
     assert completed.stdout.startswith(_PINNED_BD_VERSION_PREFIXES), completed.stdout
+    live_contract = _read(REPO_ROOT / "scripts" / "tests" / "beads_adoption_contract_live.sh")
+    for required_prefix in _PINNED_BD_VERSION_PREFIXES:
+        assert required_prefix in live_contract, (
+            "live Beads contract must allow the same pinned bd fleet window as pytest"
+        )
 
 
 def test_beads_tracked_and_ignored_boundary() -> None:
@@ -152,6 +157,16 @@ def test_beads_readme_documents_recovery_and_pin() -> None:
     assert "Pinned CLI: v1.2.1 or v1.2.2" in readme_text
     assert "refs/dolt/data" in readme_text
     assert "JSONL is not authoritative" in readme_text
+
+
+def test_live_contract_uses_pinned_bd_info_text_contract() -> None:
+    """bd v1.2.2 advertises info --json but emits text; the live guard must match reality."""
+    live_contract = _read(REPO_ROOT / "scripts" / "tests" / "beads_adoption_contract_live.sh")
+    assert "info --json" not in live_contract
+    assert "info --schema" in live_contract
+    assert "Detected Prefix:" in live_contract
+    assert "Mode:" in live_contract
+    assert "Issue Count:" in live_contract
 
 
 def _write_fake_bd(fake_bin: Path, calls_log: Path) -> None:
@@ -335,9 +350,16 @@ def test_current_work_authority_routes_to_beads() -> None:
             "Use pinned `bd` v1.2.1 or v1.2.2",
         ),
         # Generated outputs must carry the assembled section; catching drift
-        # here means a hand-edit or stale assembly fails the union.
-        "CLAUDE.md": ("### Beads Work Ledger",),
-        "AGENTS.md": ("### Beads Work Ledger",),
+        # here means a hand-edit or stale assembly fails the union, including
+        # the widened bd compatibility window text.
+        "CLAUDE.md": (
+            "### Beads Work Ledger",
+            "Use pinned `bd` v1.2.1 or v1.2.2",
+        ),
+        "AGENTS.md": (
+            "### Beads Work Ledger",
+            "Use pinned `bd` v1.2.1 or v1.2.2",
+        ),
         ".beads/README.md": ("Beads is the private source of truth",),
     }
     for relative_path, literals in required_literals.items():

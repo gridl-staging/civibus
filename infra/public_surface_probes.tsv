@@ -5,8 +5,8 @@ donor_search_surface	static	/donors?q=smith&by=name	data-testid="donor-result-ro
 congress_surface	static	/congress	data-testid="congress-member-row-0"	fatal	skip	web Congress directory route
 methodology_surface	static	/methodology	data-testid="methodology-freshness"	fatal	skip	web methodology route
 developers_surface	static	/developers	GET /api/public/v1/federal/officials	fatal	skip	web developers route
-candidates_surface	static	/candidates	Candidates	fatal	skip	web candidates route
-committees_surface	static	/committees	Committees	fatal	skip	web committees route
+candidates_surface	static	/candidates	data-testid="candidate-total-raised"	fatal	skip	web candidates route
+committees_surface	static	/committees	data-testid="committee-result-row"	fatal	skip	web committees route
 committee_detail_surface	static	/committee/jon-ossoff-for-senate	Key metrics	fatal	skip	web committee detail route
 compare_surface	static	/compare	Compare officeholders	fatal	skip	web comparison route
 calendar_surface	static	/calendar	Election calendar	fatal	skip	web election calendar route

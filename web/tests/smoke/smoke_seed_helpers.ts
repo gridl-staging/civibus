@@ -41,8 +41,6 @@ export function jsonbLiteral(value: Record<string, unknown>): string {
   return `${sqlLiteral(JSON.stringify(value))}::jsonb`;
 }
 
-/**
- */
 function buildPsqlArgs(): string[] {
   return [
     "-v",
@@ -62,8 +60,6 @@ function buildPsqlArgs(): string[] {
   ];
 }
 
-/**
- */
 export async function runSmokeSeedSql(sql: string): Promise<void> {
   const postgresPassword = requiredPostgresPassword();
   await new Promise<void>((resolve, reject) => {
@@ -93,8 +89,6 @@ export async function runSmokeSeedSql(sql: string): Promise<void> {
   });
 }
 
-/**
- */
 export async function runSmokeSeedCommand(command: string, args: string[]): Promise<void> {
   const postgresPassword = requiredPostgresPassword();
   await new Promise<void>((resolve, reject) => {

@@ -18,11 +18,7 @@ export type DonorSearchRecipient = {
   // identity-gated owner (formatCandidatePublicName), never bare.
   candidate_name: string;
   // Whether candidate_name may be promoted into a formatted public identity.
-  // The live API always sends it (api/models/campaign_finance.py::
-  // DonorSearchRecipient); optional here only because fixture-mode smoke
-  // payloads (web/tests/smoke, another lane's files) predate the flag.
-  // Renders must treat absence as unsafe (raw string), never as safe.
-  identity_is_safe?: boolean;
+  identity_is_safe: boolean;
   committee_id: string;
   fec_committee_id: string;
   committee_name: string;
@@ -188,10 +184,8 @@ function assertDonorSearchRecipient(value: unknown, path: string): void {
     'total_amount'
   ]);
   assertInteger(recipient.transaction_count, `${path}.transaction_count`);
-  // Absence is tolerated for smoke-fixture parity only (see the type comment);
-  // a present flag with a non-boolean value is contract drift and must fail.
-  if ('identity_is_safe' in recipient && typeof recipient.identity_is_safe !== 'boolean') {
-    throw new Error(`${path}.identity_is_safe must be a boolean when present.`);
+  if (typeof recipient.identity_is_safe !== 'boolean') {
+    throw new Error(`${path}.identity_is_safe must be a boolean.`);
   }
 }
 
@@ -300,8 +294,6 @@ function hasParamValue(value: string | number | null | undefined): value is stri
   return value !== undefined && value !== null && value !== '';
 }
 
-/**
- */
 function buildDonorQueryParams(
   params: DonorSearchPagePathParams,
   includeEmptyQuery: boolean

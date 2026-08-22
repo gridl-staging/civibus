@@ -145,8 +145,6 @@ async function resolvePersonMoneyHeadlineFromSections(
   }
 }
 
-/**
- */
 function buildUnavailableContributionInsights(
   personId: string,
   selectedCycle = DEFAULT_BACKEND_SELECTED_CYCLE
@@ -205,8 +203,6 @@ function shouldSurfaceContributionInsightsError(error: unknown): boolean {
   return error instanceof ApiResponseError && error.status === 400;
 }
 
-/**
- */
 async function loadContributionInsightsOutcome(
   apiClient: ApiClient,
   personId: string,
@@ -230,8 +226,6 @@ async function loadContributionInsightsOutcome(
   }
 }
 
-/**
- */
 function loadBackendSelectedCycleMoney(
   apiClient: ApiClient,
   personId: string,

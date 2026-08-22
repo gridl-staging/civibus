@@ -224,14 +224,10 @@
                     <ul class="donor-lookup__nested-list">
                       {#each result.recipients as recipient (recipient.person_id + recipient.committee_id)}
                         <li>
-                          <!-- candidate_name is the raw FEC filing string; the shared
-                               identity-gated owner decides formatted vs raw. A missing
-                               flag (smoke-fixture parity) must render raw, never be
-                               promoted to a formatted identity — hence `=== true`. -->
                           <a href={personHref(recipient.person_id)}
                             >{formatCandidatePublicName({
                               name: recipient.candidate_name,
-                              identity_is_safe: recipient.identity_is_safe === true
+                              identity_is_safe: recipient.identity_is_safe
                             })}</a
                           >
                         </li>

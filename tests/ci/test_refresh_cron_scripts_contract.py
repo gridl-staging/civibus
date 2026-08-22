@@ -512,12 +512,22 @@ def test_db_backup_runbook_retains_throwaway_restore_contract() -> None:
         "docs/howto/operations/db-backup-runbook.md must exist",
     )
 
-    assert "docker build -t civibus-db-verify -f infra/db/Dockerfile ." in runbook_text
-    assert "scratch_root=/mnt/HC_Volume_105390322/backup-restore-smoke-" in runbook_text
-    assert "--network none" in runbook_text
-    assert "-e PGDATA=/var/lib/postgresql/data" in runbook_text
-    assert "COUNT(*)" in runbook_text
-    assert "n_live_tup" in runbook_text
+    required_fragments = (
+        "### 4a. Restore locally when Colima has capacity",
+        "`infra/scripts/postgres_local.py::restore_backup`",
+        "### 4b. Restore into a throwaway Fly Postgres otherwise",
+        "`infra/db/Dockerfile`",
+        "pg_restore -U civibus -d civibus --no-owner --no-privileges --jobs=1",
+        "`flyctl machine destroy` / `flyctl volumes destroy` /",
+        "`flyctl apps destroy` cleanup commands",
+        "### 5. Validate with exact row counts",
+        "COUNT(*)",
+        "Do not use `pg_stat_user_tables.n_live_tup`",
+        "### 6. Cleanup",
+    )
+    for fragment in required_fragments:
+        assert fragment in runbook_text
+
     assert "postgres:18" not in runbook_text
 
 

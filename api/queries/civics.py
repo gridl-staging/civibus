@@ -10,7 +10,7 @@ import psycopg
 from psycopg.rows import dict_row
 
 from api.portrait_policy import reusable_portrait_rights_statuses
-from api.queries._common import _SLUG_NORMALIZE_EXPR, fetch_one_row
+from api.queries._common import _SLUG_NORMALIZE_EXPR, _UPCOMING_ELECTION_HORIZON_YEARS, fetch_one_row
 from api.queries.campaign_finance import _candidate_identity_is_safe_expr
 from domains.civics.constants import CANONICAL_FEDERAL_DIRECTORY_OFFICE_NAMES, LAUNCH_SCOPE_USPS_STATES
 
@@ -525,14 +525,18 @@ def fetch_contest_candidate_links(conn: psycopg.Connection, contest_id: UUID) ->
 
 # How far ahead election serving will publish, in years past CURRENT_DATE.
 #
-# THE single owner of the election-date publish horizon. Four predicates carry
+# THE single owner of the election-date publish horizon lives in
+# api.queries._common so campaign-finance candidate detail can share it without
+# a reverse import. Five predicates carry
 # it and must stay in lockstep, which is why each is an f-string over this
 # constant: _ELECTION_CONTESTS_BY_DATE_SQL (the /election/[date] index),
 # _UPCOMING_ELECTION_CONTESTS_SQL (the timeline behind /calendar and both the
 # static and contest sitemap shards), _ELECTION_DATE_WITHIN_PUBLISH_HORIZON_SQL
 # (the 404 decision for beyond-horizon dates), and _PERSON_CANDIDACIES_SQL (the
 # person page's races list, which must not become the one public surface still
-# linking a corrupt-dated contest).
+# linking a corrupt-dated contest), plus
+# CAMPAIGN_FINANCE_CANDIDATE_DETAIL_SQL (the candidate page's minimal
+# contest-link list).
 #
 # Deliberately LOOSER than the loader's own election-year ceiling
 # (_federal_fec_races_max_election_year, fec_cycle + 4), so serving can never
@@ -546,9 +550,6 @@ def fetch_contest_candidate_links(conn: psycopg.Connection, contest_id: UUID) ->
 # typos, while past-dated contests are real history and stay servable on the
 # single-date index (the timeline separately floors at CURRENT_DATE because it
 # is an *upcoming* list, not because past dates are unpublishable).
-_UPCOMING_ELECTION_HORIZON_YEARS = 6
-
-
 # Seat context for the `/election/[date]` race index.
 #
 # The electoral-division join mirrors CIVIC_CONTEST_DETAIL_SQL above. Without it

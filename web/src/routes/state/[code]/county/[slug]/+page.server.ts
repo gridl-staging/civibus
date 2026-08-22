@@ -14,7 +14,6 @@ import {
   type CivicGeometryFeatureCollection
 } from "$lib/server/api/civic-geometry";
 import { withApiResponseErrorHandling } from "$lib/server/api/error";
-import type { IdentityGatedCountySummaryLinkedCandidate } from "$lib/server/api/state-pages-contract";
 import type { PageServerLoad } from "./$types";
 
 function createEmptyFeatureCollection(): CivicGeometryFeatureCollection {
@@ -55,8 +54,6 @@ function findCountyFeatureBySlug(
   return null;
 }
 
-/**
- */
 export const load: PageServerLoad = ({ params, locals }) =>
   withApiResponseErrorHandling(async () => {
     const stateCode = params.code.toUpperCase();
@@ -78,14 +75,6 @@ export const load: PageServerLoad = ({ params, locals }) =>
       state: stateCode,
       countySlug
     });
-    // County linked-candidate rows are cf.candidate-derived (the API joins
-    // cf.candidate through cf.candidate_committee_link), so the candidate
-    // identity gate applies directly: the API computes identity_is_safe per
-    // row and the render routes candidate_name through the shared
-    // formatCandidatePublicName owner. Retyping (not casting a lie: the extra
-    // field is optional) is what carries the flag into PageData for the page.
-    const topLinkedCandidates: IdentityGatedCountySummaryLinkedCandidate[] =
-      summary.top_linked_candidates;
 
     const geometryByLevel = createGeometryByLevelRecord();
     geometryByLevel.county = {
@@ -104,7 +93,7 @@ export const load: PageServerLoad = ({ params, locals }) =>
       donor_total_cents: summary.donor_total_cents,
       transaction_count: summary.transaction_count,
       top_recipient_committees: summary.top_recipient_committees,
-      top_linked_candidates: topLinkedCandidates,
+      top_linked_candidates: summary.top_linked_candidates,
       trustSection: buildTrustSection(summary.sources, { includeJurisdictionFreshnessNote: true })
     };
   }, "Backend county drilldown request failed.");

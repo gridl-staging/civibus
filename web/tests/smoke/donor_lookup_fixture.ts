@@ -1,5 +1,6 @@
 // @ts-expect-error Smoke fixtures run under Node ESM and import the TS module directly.
 import { runSmokeSeedCommand, runSmokeSeedSql, type SmokeSeedCleanupCallback } from "./smoke_seed_helpers.ts";
+import type { DonorSearchRecipient } from "$lib/donors/contract";
 
 const fixtureConstants =
   (await import(new URL("./fixtures.ts", import.meta.url).href)) as typeof import("./fixtures");
@@ -249,8 +250,9 @@ function buildDonorSearchResult(params: {
         fec_committee_id: "C72000001",
         committee_name: "Alpha Officeholder Committee",
         total_amount: params.totalAmount,
-        transaction_count: 1
-      }
+        transaction_count: 1,
+        identity_is_safe: true
+      } satisfies DonorSearchRecipient
     ],
     sources: [
       buildFixtureSource({

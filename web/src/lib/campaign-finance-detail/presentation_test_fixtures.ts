@@ -151,6 +151,7 @@ export const DEFAULT_CANDIDATE_DETAIL = {
   district: "01",
   incumbent_challenge: "I",
   principal_committee_id: COMMITTEE_ID,
+  candidacies: [],
   sources: [] as DetailSource[]
 };
 

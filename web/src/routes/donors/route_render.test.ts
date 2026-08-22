@@ -83,7 +83,8 @@ function unresolvedResult(): DonorSearchResult {
         fec_committee_id: 'C72000001',
         committee_name: 'Alpha Officeholder Committee',
         total_amount: '375.00',
-        transaction_count: 2
+        transaction_count: 2,
+        identity_is_safe: true
       }
     ],
     sources: [aggregateSource],
@@ -494,24 +495,5 @@ describe('/donors route rendering', () => {
 
     expect(rendered.body).toContain('>212 MAIN AVE W. JOHN, RODNEY</a>');
     expect(rendered.body).not.toContain('212 Main Ave W. John, Rodney');
-  });
-
-  it('renders a recipient without an identity flag as the raw filed string', () => {
-    // Conservative default: a missing flag must never be treated as safe, so
-    // the raw source string renders. Absence is tolerated only for smoke-seed
-    // fixture parity (web/tests/smoke payloads predate the flag).
-    const base = unresolvedResult();
-    const flagless = { ...base.recipients[0], candidate_name: 'OSSOFF, T. JONATHAN' };
-    delete (flagless as { identity_is_safe?: boolean }).identity_is_safe;
-    const rendered = render(DonorPage, {
-      props: {
-        data: donorResponse({
-          results: [{ ...base, recipients: [flagless] }]
-        })
-      }
-    });
-
-    expect(rendered.body).toContain('>OSSOFF, T. JONATHAN</a>');
-    expect(rendered.body).not.toContain('Ossoff, T. Jonathan');
   });
 });

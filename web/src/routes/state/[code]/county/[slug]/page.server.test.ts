@@ -1,4 +1,5 @@
 import type { CivicGeometryLevel, MapLayerVisibility, MapPageLevel } from "$lib/config/app";
+import type { CountySummaryLinkedCandidate } from "$lib/campaign-finance-detail/contract";
 import type { TrustSectionViewModel } from "$lib/detail-trust/presentation";
 import type { CivicGeometryFeatureCollection } from "$lib/server/api/civic-geometry";
 import { ApiResponseError } from "$lib/server/api/client";
@@ -20,13 +21,7 @@ type CountyPageData = {
     donor_total_cents: number;
     transaction_count: number;
   }>;
-  top_linked_candidates: Array<{
-    candidate_id: string;
-    candidate_name: string;
-    donor_total_cents: number;
-    transaction_count: number;
-    identity_is_safe?: boolean;
-  }>;
+  top_linked_candidates: CountySummaryLinkedCandidate[];
   trustSection: TrustSectionViewModel;
 };
 

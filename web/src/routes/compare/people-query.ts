@@ -35,8 +35,6 @@ export function mergeCompareNotices(
   return sortNotices([...notices, ...additions]);
 }
 
-/**
- */
 export function normalizePeopleQuery(searchParams: URLSearchParams): NormalizedPeopleQuery {
   const rawValues = searchParams.getAll(PEOPLE_QUERY_KEY);
   const rawPeopleKey = rawValues.length === 1 ? rawValues[0] : null;
@@ -59,8 +57,6 @@ export function normalizePeopleQuery(searchParams: URLSearchParams): NormalizedP
   };
 }
 
-/**
- */
 export function buildCompareUrl(
   peopleIds: readonly string[],
   notices: readonly CompareNotice[] = []

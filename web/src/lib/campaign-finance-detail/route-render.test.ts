@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { render } from "svelte/server";
 import { readFileSync } from "node:fs";
+import { expectScrollContainersHaveTabStop } from "$lib/detail_scroll_tab_stop_guard";
 import CandidateRoutePage from "../../routes/candidate/[id]/+page.svelte";
 import CommitteeRoutePage from "../../routes/committee/[id]/+page.svelte";
 import { PHL_FRESHNESS_NOTE, buildTrustSection } from "$lib/detail-trust/presentation";
@@ -19,6 +20,7 @@ import {
   CANDIDATE_CANONICAL_DATA_WITH_IE,
   CANDIDATE_EMPTY_CANONICAL_DATA,
   CANDIDATE_ID,
+  CONTEST_ID,
   COMMITTEE_CANONICAL_DATA,
   COMMITTEE_CANONICAL_DATA_WITH_PAGINATED_FILINGS,
   COMMITTEE_CANONICAL_DATA_WITH_IE,
@@ -1056,6 +1058,29 @@ describe("DetailPage route presentation", () => {
     expect(rendered.body).toContain("Pat Candidate");
   });
 
+  it("renders a response-backed Race link and omits inferred fallback race links", () => {
+    const populatedRendered = render(DetailPage, {
+      props: {
+        presentation: buildCandidateRoutePresentation(CANDIDATE_CANONICAL_DATA)
+      }
+    });
+    const emptyRendered = render(DetailPage, {
+      props: {
+        presentation: buildCandidateRoutePresentation(CANDIDATE_EMPTY_CANONICAL_DATA)
+      }
+    });
+    const firstCandidacy = CANDIDATE_CANONICAL_DATA.detail.candidacies[0];
+
+    expect(firstCandidacy).toBeDefined();
+    expect(CANDIDATE_EMPTY_CANONICAL_DATA.detail.candidacies).toEqual([]);
+    expect(populatedRendered.body).toContain("<dt>Race</dt>");
+    expect(populatedRendered.body).toContain(
+      `<a href="/contest/${CONTEST_ID}">${firstCandidacy!.contest_name}</a>`
+    );
+    expect(emptyRendered.body).not.toContain("<dt>Race</dt>");
+    expect(emptyRendered.body).not.toContain('href="/contest/');
+  });
+
   it("renders readable cross-link copy instead of raw IDs or generic route labels", () => {
     const candidateRendered = render(DetailPage, {
       props: {
@@ -1901,22 +1926,6 @@ describe("committee trust section duplicate-provenance regression (prod run 3015
 });
 
 describe("campaign finance detail scrollable regions", () => {
-  // axe rule scrollable-region-focusable, impact serious, reported live against
-  // /committee/[slug]'s filing-breakdown-scroll. .detail__table-scroll sets overflow-x: auto over a table wider
-  // than its container; with no focusable descendant such a region cannot be
-  // scrolled from the keyboard at all. The smoke a11y floor refuses serious
-  // violations, but it only runs nightly - this holds the same invariant at
-  // vitest speed, and it fails the moment a new scroll container is added
-  // without the attribute rather than when the fix is deleted from an old one.
-  it("gives every horizontal scroll container a keyboard tab stop", () => {
-    const source = readFileSync(new URL("./DetailPage.svelte", import.meta.url), "utf8");
-    const containers = [...source.matchAll(/<div class="detail__table-scroll"[^>]*>/g)].map(
-      (match) => match[0]
-    );
-
-    expect(containers.length).toBeGreaterThan(0);
-    for (const container of containers) {
-      expect(container).toContain('tabindex="0"');
-    }
-  });
+  it("gives every horizontal scroll container a keyboard tab stop", () =>
+    expectScrollContainersHaveTabStop(new URL("./DetailPage.svelte", import.meta.url)));
 });

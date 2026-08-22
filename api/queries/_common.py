@@ -101,6 +101,13 @@ _CAMPAIGN_FINANCE_BATCH_PROVENANCE_SQL = f"""
 
 _MONEY_SCALE = Decimal("0.00")
 
+# How far ahead election serving will publish, in years past CURRENT_DATE.
+#
+# THE single owner of the election-date publish horizon. Civics route SQL and
+# campaign-finance candidate detail import this number so public contest links
+# stay in lockstep and corrupt filer-typo dates do not leak through one surface.
+_UPCOMING_ELECTION_HORIZON_YEARS = 6
+
 # ---------------------------------------------------------------------------
 # Query-building helpers
 # ---------------------------------------------------------------------------

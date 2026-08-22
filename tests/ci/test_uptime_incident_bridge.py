@@ -388,7 +388,7 @@ def test_bead_lookup_failure_or_indeterminate_json_fails_closed_without_bd_write
         (PROD_REPO, "closed"): [],
     }
     duplicate_rows = [
-        _bead_list_row(_bead(_opaque_lookup_bead_id(label), status="open"))
+        {**_bead_list_row(_bead(_opaque_lookup_bead_id(label), status="open")), "external_ref": PROD_EXTERNAL_REF}
         for label in ("duplicate-one", "duplicate-two")
     ]
     invalid_results = (

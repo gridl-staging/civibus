@@ -230,6 +230,40 @@ describe("finance chart SSR components", () => {
     expect(rendered.body).toMatch(/Share:[\s\S]*70%/);
   });
 
+  it("renders the receipt HTML bar list as its only visual encoding", () => {
+    const rows: ReceiptCompositionRow[] = [
+      {
+        id: "individual",
+        label: "Gross individual contributions",
+        amount: 700,
+        denominator: 1000,
+        canPlot: true
+      },
+      {
+        id: "other",
+        label: "Other receipts",
+        amount: 300,
+        denominator: 1000,
+        canPlot: true
+      }
+    ];
+    const rendered = render(ReceiptCompositionChart, {
+      props: {
+        ...baseFrame,
+        testId: "receipt-composition-single-encoding",
+        rows,
+        totalReceipts: 1000,
+        canPlot: true
+      }
+    });
+
+    expect(rendered.body).not.toContain("chart-wrapper");
+    expect(rendered.body).not.toContain("<svg");
+    expect(rendered.body).toContain("receipt-composition__row");
+    expect(rendered.body).toContain("receipt-composition__bar");
+    expect(rendered.body).toContain("--finance-share");
+  });
+
   it("renders monthly contribution columns with zero-filled covered months and counts", () => {
     const rows: MonthlyContributionRow[] = [
       { month: "2026-01", amount: 100, transactionCount: 1, covered: true },

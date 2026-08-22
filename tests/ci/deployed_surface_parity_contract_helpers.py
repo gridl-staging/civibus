@@ -76,8 +76,8 @@ PUBLIC_PAGE_BODIES = {
     # the preceding three rendered.
     "/methodology": 'data-testid="methodology-freshness"',
     "/developers": "GET /api/public/v1/federal/officials",
-    "/candidates": "Candidates",
-    "/committees": "Committees",
+    "/candidates": 'data-testid="candidate-total-raised"',
+    "/committees": 'data-testid="committee-result-row"',
     "/committee/jon-ossoff-for-senate": "Key metrics",
     "/compare": "Compare officeholders",
     "/calendar": "Election calendar",
@@ -958,7 +958,9 @@ def write_helper_http_fixture(
         "/api/public/v1/federal/export.json": json.dumps(
             helper_export_rows() if helper_export_payload is None else helper_export_payload
         ),
-        "/candidates": '<li data-testid="candidate-result-row">Candidate</li>',
+        "/candidates": (
+            '<li data-testid="candidate-result-row">Candidate<p data-testid="candidate-total-raised">$100</p></li>'
+        ),
         "/committees": '<li data-testid="committee-result-row">Committee</li>',
         f"/donors?q={donor_query}&by=name": (
             helper_donor_body

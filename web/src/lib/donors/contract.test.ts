@@ -237,16 +237,15 @@ describe('donor search contract', () => {
     );
   });
 
-  it('accepts a recipient identity flag and tolerates its absence for smoke-parity payloads', () => {
-    // Absence stays accepted only because fixture-mode smoke payloads
-    // (web/tests/smoke, another lane's files) predate the flag; the render
-    // treats a missing flag as identity-unsafe rather than formatting it.
+  it('rejects a recipient that omits the identity flag', () => {
     const withFlag = { ...unresolvedResult, recipients: [{ ...recipient, identity_is_safe: false }] };
     const withoutFlag = { ...unresolvedResult, recipients: [{ ...recipient }] };
     delete (withoutFlag.recipients[0] as { identity_is_safe?: boolean }).identity_is_safe;
 
     expect(() => assertDonorSearchResponse(responseWithResult(withFlag))).not.toThrow();
-    expect(() => assertDonorSearchResponse(responseWithResult(withoutFlag))).not.toThrow();
+    expect(() => assertDonorSearchResponse(responseWithResult(withoutFlag))).toThrow(
+      'results[0].recipients[0].identity_is_safe must be a boolean.'
+    );
   });
 
   it('rejects a recipient whose identity flag is not a boolean', () => {
@@ -256,7 +255,7 @@ describe('donor search contract', () => {
     };
 
     expect(() => assertDonorSearchResponse(responseWithResult(result))).toThrow(
-      'results[0].recipients[0].identity_is_safe must be a boolean when present.'
+      'results[0].recipients[0].identity_is_safe must be a boolean.'
     );
   });
 });

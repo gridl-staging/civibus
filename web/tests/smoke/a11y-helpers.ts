@@ -133,6 +133,7 @@ async function expectMethodologyContent(page: Page): Promise<void> {
 async function expectPersonDetailContent(page: Page): Promise<void> {
   await expect(page.getByRole("heading", { name: SMOKE_PERSON_CANONICAL_NAME })).toBeVisible();
   await expect(page.getByRole("heading", { name: SMOKE_PERSON_MONEY_AT_GLANCE_HEADING })).toBeVisible();
+  await expectHtmlBarListRender(page.getByTestId("person-receipt-composition"));
   await expectHtmlBarListRender(page.getByTestId(PERSON_SIZE_BUCKETS_FRAME_TEST_ID));
 }
 

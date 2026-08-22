@@ -585,6 +585,45 @@ def test_deployed_surface_parity_probe_fails_on_methodology_shell_without_disclo
     assert "surfaces_probed=18 failed=1" in result.stdout
 
 
+@pytest.mark.parametrize(
+    ("page_path", "shell_heading", "result_marker"),
+    (
+        pytest.param(
+            "/candidates",
+            "Candidates",
+            'data-testid="candidate-total-raised"',
+            id="candidates",
+        ),
+        pytest.param(
+            "/committees",
+            "Committees",
+            'data-testid="committee-result-row"',
+            id="committees",
+        ),
+    ),
+)
+def test_deployed_surface_parity_probe_fails_on_list_shell_without_results(
+    tmp_path: Path,
+    page_path: str,
+    shell_heading: str,
+    result_marker: str,
+) -> None:
+    """Reject a shared-shell heading when the page's result body is absent."""
+    fixture_dir = tmp_path / f"{shell_heading.lower()}-shell-drift"
+    write_fixture(
+        fixture_dir,
+        repo_paths={"/health"},
+        deployed_paths={"/health"},
+        page_bodies={page_path: f"<html><body><nav>{shell_heading}</nav></body></html>"},
+    )
+
+    result = run_probe(fixture_dir)
+
+    assert result.returncode != 0
+    assert f"page_content_marker_missing {page_path} marker={result_marker}" in result.stderr
+    assert "surfaces_probed=18 failed=1" in result.stdout
+
+
 def test_deployed_surface_parity_probe_aggregates_failures_and_probes_sitemap(tmp_path: Path) -> None:
     fixture_dir = tmp_path / "aggregates-failures"
     write_fixture(

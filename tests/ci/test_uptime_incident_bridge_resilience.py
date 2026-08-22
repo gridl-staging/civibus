@@ -83,13 +83,14 @@ def test_later_untrusted_public_comment_is_ignored_for_create_evidence(tmp_path:
 
 
 def test_torn_bead_comment_read_disagreeing_with_count_fails_closed(tmp_path: Path) -> None:
-    # ``bd list`` reports the authoritative comment_count; a concurrent or stale
+    # ``bd search`` reports the authoritative comment_count; a concurrent or stale
     # ``bd comments`` snapshot returning fewer rows is an indeterminate read.
     # Accepting it would let the bridge re-emit a heartbeat it already wrote, so
     # the mismatch must fail closed with zero writes.
     lookup_bead_id = _opaque_lookup_bead_id("torn-read")
     torn_list_row = {
         "id": lookup_bead_id,
+        "external_ref": STAGING_EXTERNAL_REF,
         "status": "open",
         "comment_count": 2,
     }
@@ -110,6 +111,36 @@ def test_torn_bead_comment_read_disagreeing_with_count_fails_closed(tmp_path: Pa
 
     _assert_bd_comment_read(runner, lookup_bead_id)
     assert runner.bd_write_calls == []
+
+
+def test_external_ref_substring_neighbor_does_not_suppress_exact_bead_creation(tmp_path: Path) -> None:
+    runner = FakeCommandRunner(
+        issues_by_repo_and_state={
+            (STAGING_REPO, "open"): [_issue(number=6, repo=STAGING_REPO, title="Staging health check red")],
+            (PROD_REPO, "open"): [],
+            (STAGING_REPO, "closed"): [],
+            (PROD_REPO, "closed"): [],
+        },
+        bd_read_results_by_argv={
+            tuple(_bd_lookup_argv(STAGING_EXTERNAL_REF)): FakeResult(
+                args=[],
+                stdout=json.dumps(
+                    [
+                        {
+                            "id": _opaque_lookup_bead_id("substring-neighbor"),
+                            "external_ref": f"{STAGING_EXTERNAL_REF}0",
+                        }
+                    ]
+                ),
+            )
+        },
+    )
+
+    assert _run_bridge(runner, lock_path=tmp_path) == 0
+
+    create_call = next(call for call in runner.calls if call[:2] == ["bd", "create"])
+    assert _option_value(create_call, "--external-ref") == STAGING_EXTERNAL_REF
+    assert _count_bd_create_calls(runner) == 1
 
 
 def test_open_incident_with_closed_bridge_bead_is_already_reconciled(tmp_path: Path) -> None:

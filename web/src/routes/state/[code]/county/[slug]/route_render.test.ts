@@ -1,16 +1,16 @@
 import { describe, expect, it } from "vitest";
 import { render } from "svelte/server";
 import { buildMapLayerVisibilityDefaults, type CivicGeometryLevel } from "$lib/config/app";
+import type { CountySummaryLinkedCandidate } from "$lib/campaign-finance-detail/contract";
 import { buildTrustSection } from "$lib/detail-trust/presentation";
 import type { CivicGeometryFeatureCollection } from "$lib/server/api/civic-geometry";
-import type { IdentityGatedCountySummaryLinkedCandidate } from "$lib/server/api/state-pages-contract";
 import CountyPage from "./+page.svelte";
 
 function emptyFeatureCollection(): CivicGeometryFeatureCollection {
   return { type: "FeatureCollection", features: [] };
 }
 
-function countyPageData(topLinkedCandidates: IdentityGatedCountySummaryLinkedCandidate[]) {
+function countyPageData(topLinkedCandidates: CountySummaryLinkedCandidate[]) {
   const geometryByLevel: Record<CivicGeometryLevel, CivicGeometryFeatureCollection> = {
     state: emptyFeatureCollection(),
     county: emptyFeatureCollection(),
@@ -40,8 +40,8 @@ function countyPageData(topLinkedCandidates: IdentityGatedCountySummaryLinkedCan
 }
 
 function linkedCandidate(
-  overrides: Partial<IdentityGatedCountySummaryLinkedCandidate> = {}
-): IdentityGatedCountySummaryLinkedCandidate {
+  overrides: Partial<CountySummaryLinkedCandidate> = {}
+): CountySummaryLinkedCandidate {
   return {
     candidate_id: "22222222-2222-4222-8222-222222222222",
     candidate_name: "Jordan Candidate",
@@ -86,17 +86,17 @@ describe("/state/[code]/county/[slug] route rendering", () => {
     expect(rendered.body).not.toContain("212 Main Ave W. John, Rodney");
   });
 
-  it("renders a linked candidate without an identity flag as the raw filed string", () => {
-    // Conservative default: a missing flag must never be treated as safe, so
-    // the raw source string renders. Absence is tolerated only for smoke-seed
-    // fixture parity (web/tests/smoke payloads predate the flag).
-    const flagless = linkedCandidate({ candidate_name: "OSSOFF, T. JONATHAN" });
-    delete (flagless as { identity_is_safe?: boolean }).identity_is_safe;
+  it("fails closed when the runtime identity flag is not a boolean", () => {
+    const malformedCandidate = {
+      ...linkedCandidate({ candidate_name: "212 MAIN AVE W. JOHN, RODNEY" }),
+      identity_is_safe: "false"
+    } as unknown as CountySummaryLinkedCandidate;
+
     const rendered = render(CountyPage, {
-      props: { data: countyPageData([flagless]) } as never
+      props: { data: countyPageData([malformedCandidate]) } as never
     });
 
-    expect(rendered.body).toContain("<strong>OSSOFF, T. JONATHAN</strong>");
-    expect(rendered.body).not.toContain("Ossoff, T. Jonathan");
+    expect(rendered.body).toContain("<strong>212 MAIN AVE W. JOHN, RODNEY</strong>");
+    expect(rendered.body).not.toContain("212 Main Ave W. John, Rodney");
   });
 });

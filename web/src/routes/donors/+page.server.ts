@@ -79,8 +79,6 @@ function isDonorRollupUnavailable(error: ApiResponseError): boolean {
   );
 }
 
-/**
- */
 function getDonorValidationMessage(errorBody: unknown): string {
   const detail = readFastApiDetail(errorBody);
 

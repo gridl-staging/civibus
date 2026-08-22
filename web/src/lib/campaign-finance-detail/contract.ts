@@ -48,6 +48,12 @@ export type CommitteeDetailResponse = {
   linked_candidates: CandidateListItem[];
 };
 
+export type CandidateCandidacySummary = {
+  contest_id: string;
+  contest_name: string;
+  election_date: string | null;
+};
+
 export type CandidateDetailResponse = {
   id: string;
   fec_candidate_id: string;
@@ -63,6 +69,7 @@ export type CandidateDetailResponse = {
   district: string | null;
   incumbent_challenge: string | null;
   principal_committee_id: string | null;
+  candidacies: CandidateCandidacySummary[];
   sources: SourceInfo[];
 };
 
@@ -242,8 +249,6 @@ export type IndependentExpenditureSummary = SelectedCycleMetadata & {
   coverage: CandidateMoneyCoverage;
 };
 
-/**
- */
 export type CommitteeIndependentExpenditureTarget = {
   candidate_id: string;
   fec_candidate_id: string;
@@ -286,8 +291,6 @@ export type ReceiptSourceComponent = {
   source: "fec_committee_summary" | "none";
 };
 
-/**
- */
 export type CommitteeFundraisingSummary = SelectedCycleMetadata & {
   committee_id: string;
   committee_name: string;
@@ -328,8 +331,6 @@ export type SpendCategorySummary = {
   transaction_count: number;
 };
 
-/**
- */
 export type FilingPeriodSummary = {
   filing_id: string;
   filing_fec_id: string;
@@ -554,8 +555,6 @@ export function buildCommitteeIndependentExpendituresMadePath(committeeId: strin
   return buildCampaignFinancePath("committees", committeeId, "/independent-expenditures-made");
 }
 
-/**
- */
 export type CandidateFundraisingSummary = SelectedCycleMetadata & {
   candidate_id: string;
   candidate_name: string;
@@ -589,6 +588,7 @@ export type CountySummaryRecipientCommittee = {
 export type CountySummaryLinkedCandidate = {
   candidate_id: string;
   candidate_name: string;
+  identity_is_safe: boolean;
   donor_total_cents: number;
   transaction_count: number;
 };

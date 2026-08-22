@@ -68,13 +68,12 @@
         <ul>
           {#each data.top_linked_candidates as candidate (candidate.candidate_id)}
             <li>
-              <!-- candidate_name is the raw FEC filing string (cf.candidate.name);
-                   the shared identity-gated owner decides formatted vs raw. A
-                   missing flag (smoke-fixture parity) must render raw, never be
-                   promoted to a formatted identity — hence `=== true`. -->
               <strong
                 >{formatCandidatePublicName({
                   name: candidate.candidate_name,
+                  // The county fetcher has a compile-time response type but no
+                  // runtime validator. Only a literal boolean true may promote
+                  // the filed string into a formatted public identity.
                   identity_is_safe: candidate.identity_is_safe === true
                 })}</strong
               >

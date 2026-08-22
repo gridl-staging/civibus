@@ -116,6 +116,7 @@ function buildCandidate(candidateId: string, personId: string): CandidateDetailR
     district: "01",
     incumbent_challenge: null,
     principal_committee_id: null,
+    candidacies: [],
     sources: []
   };
 }

@@ -36,6 +36,7 @@ from api.contribution_insights_contract import (
 from api.queries._common import (
     _MONEY_SCALE,
     _SLUG_NORMALIZE_EXPR,
+    _UPCOMING_ELECTION_HORIZON_YEARS,
     _build_ilike_contains_pattern,
     _build_paginated_response,
     _fetch_filtered_rows,
@@ -189,6 +190,29 @@ CAMPAIGN_FINANCE_CANDIDATE_DETAIL_SQL = f"""
         c.incumbent_challenge,
         c.principal_committee_id,
         {_has_official_candidate_totals_sql("c")} AS has_official_total,
+        COALESCE(
+            (
+                SELECT jsonb_agg(
+                    jsonb_build_object(
+                        'contest_id', ct.id,
+                        'contest_name', ct.name,
+                        'election_date', ct.election_date
+                    )
+                    ORDER BY
+                        ABS(ct.election_date - CURRENT_DATE) ASC NULLS LAST,
+                        ct.election_date DESC NULLS LAST,
+                        cand.id
+                )
+                FROM civic.candidacy cand
+                JOIN civic.contest ct ON ct.id = cand.contest_id
+                WHERE cand.candidate_number = c.fec_candidate_id
+                  AND (
+                      ct.election_date IS NULL
+                      OR ct.election_date <= CURRENT_DATE + INTERVAL '{_UPCOMING_ELECTION_HORIZON_YEARS} years'
+                  )
+            ),
+            '[]'::jsonb
+        ) AS candidacies,
         c.source_record_id
     FROM cf.candidate c
     WHERE c.id = %s

@@ -11,6 +11,7 @@ import type {
 
 export const COMMITTEE_ID = "33333333-3333-4333-8333-333333333333";
 export const CANDIDATE_ID = "44444444-4444-4444-8444-444444444444";
+export const CONTEST_ID = "55555555-5555-4555-8555-555555555555";
 export const PERSON_ID = "11111111-1111-4111-8111-111111111111";
 export const ORG_ID = "22222222-2222-4222-8222-222222222222";
 export const DEFAULT_SELECTED_CYCLE_FIELDS = {
@@ -57,6 +58,13 @@ export const CANDIDATE_CANONICAL_DATA = {
     district: "01",
     incumbent_challenge: "I",
     principal_committee_id: COMMITTEE_ID,
+    candidacies: [
+      {
+        contest_id: CONTEST_ID,
+        contest_name: "North Carolina House District 1 General",
+        election_date: "2026-11-03"
+      }
+    ],
     sources: []
   },
   summary: asDeferredValue<CandidateFundraisingSummary>({
@@ -116,7 +124,8 @@ export const CANDIDATE_EMPTY_CANONICAL_DATA = {
     identity_is_safe: true,
     has_official_total: false,
     person_id: null,
-    principal_committee_id: null
+    principal_committee_id: null,
+    candidacies: []
   },
   summary: asDeferredValue<CandidateFundraisingSummary>({
     ...DEFAULT_SELECTED_CYCLE_FIELDS,
@@ -215,8 +224,6 @@ export const SAMPLE_TRANSACTION = {
   date_is_reliable: true
 };
 
-/**
- */
 export function buildRouteRenderFilingRow(
   sequence: number,
   coverageEndDate: string | null

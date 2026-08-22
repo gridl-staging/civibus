@@ -32,9 +32,9 @@ class FakeResult:
 
 
 class FakeCommandRunner:
-    """Stateful fake ledger with the pinned bd v1.2.1 read boundaries.
+    """Stateful fake ledger with the pinned bd v1.2.2 read boundaries.
 
-    ``bd list --json`` exposes ``comment_count`` but not comment bodies. Replay
+    ``bd search --json`` exposes ``comment_count`` but not comment bodies. Replay
     markers therefore have to come from the supported ``bd comments <id>
     --json`` read. Writes mutate the same internal records so a second bridge
     run observes the first run's comments without inventing bridge-only state.
@@ -77,12 +77,13 @@ class FakeCommandRunner:
                 stdout=override.stdout,
                 stderr=override.stderr,
             )
-        if argv[:2] == ["bd", "list"]:
-            external_ref = _option_value(argv, "--external-ref")
+        if argv[:2] == ["bd", "search"]:
+            external_ref = _option_value(argv, "--external-contains")
             beads = self.beads_by_external_ref.get(external_ref, [])
-            if "--all" not in argv:
-                beads = [bead for bead in beads if bead["status"] != "closed"]
-            return FakeResult(args=argv, stdout=json.dumps([_bead_list_row(bead) for bead in beads]))
+            return FakeResult(
+                args=argv,
+                stdout=json.dumps([{**_bead_list_row(bead), "external_ref": external_ref} for bead in beads]),
+            )
         if len(argv) == 4 and argv[:2] == ["bd", "comments"] and argv[3] == "--json":
             bead_id = argv[2]
             return FakeResult(args=argv, stdout=json.dumps(self._comments_for(bead_id)))
@@ -285,7 +286,7 @@ def _opaque_lookup_bead_id(label: str) -> str:
 
 
 def _bead_list_row(bead: dict[str, Any]) -> dict[str, Any]:
-    """Return the count-only issue shape emitted by pinned ``bd list --json``."""
+    """Return the count-only issue shape emitted by pinned ``bd search --json``."""
     return {
         "id": bead["id"],
         "title": bead.get("title", "uptime incident bridge bead"),
@@ -334,7 +335,18 @@ def _gh_issue_list_argv(repo: str, state: str) -> list[str]:
 
 
 def _bd_lookup_argv(external_ref: str) -> list[str]:
-    return ["bd", "list", "--external-ref", external_ref, "--all", "--json"]
+    return [
+        "bd",
+        "search",
+        external_ref,
+        "--external-contains",
+        external_ref,
+        "--status",
+        "all",
+        "--limit",
+        "0",
+        "--json",
+    ]
 
 
 def _assert_gh_issue_list_call(runner: FakeCommandRunner, *, repo: str, state: str) -> None:

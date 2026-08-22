@@ -200,8 +200,6 @@ export async function expectCandidateDetailMatchesLinkedName(
   ).toBeVisible({ timeout: timeoutMs });
 }
 
-/**
- */
 export async function expectActionToVisibleContentWithinBudget({
   label,
   budgetMs,
@@ -291,8 +289,6 @@ const RENDERED_MONEY_MULTIPLIERS = {
   B: 1_000_000_000
 } as const;
 
-/**
- */
 export function parseRenderedMoneyLabel(label: string): number {
   const match = RENDERED_MONEY_PATTERN.exec(label.trim());
   if (!match?.groups) {
@@ -330,8 +326,6 @@ function parseAlpha(color: string): number {
   return Number(colorAlpha?.[1] ?? 1);
 }
 
-/**
- */
 function samplePaint(sample: SvgPaintSample): {
   color: string;
   alpha: number;
@@ -373,8 +367,6 @@ export async function chartRegion(page: Page, label: string | RegExp): Promise<L
   return page.getByLabel(new RegExp(`^${escapeRegExp(label)}(?: for .*)?$`, "i")).first();
 }
 
-/**
- */
 async function sampleVisibleSvgPaints(region: Locator, selector: string): Promise<SvgPaintSample[]> {
   // eslint-disable-next-line playwright/no-raw-locators -- the oracle must inspect package-rendered SVG paint internals.
   return (await region.locator(selector).evaluateAll((elements: Element[]) =>
@@ -440,19 +432,18 @@ export async function expectRealChartRender(region: Locator, markSelector: strin
     .toBeGreaterThan(0);
 }
 
-// HorizontalBarChart's single-series hue. Kept equal to FINANCE_CHART_COLORS.support
-// in web/src/lib/charts/finance.ts and to the hardcoded gradient hex in
-// HorizontalBarChart.svelte's <style> (a Svelte style block cannot read a module
-// constant, so this assertion is what holds the pairing). Change all three or none.
+// The HTML bar-list single-series hue. Kept equal to FINANCE_CHART_COLORS.support
+// in web/src/lib/charts/finance.ts and to the hardcoded gradient hex in both
+// bar-list components (a Svelte style block cannot read a module constant, so
+// this assertion is what holds the pairing). Change all owners or none.
 const HTML_BAR_LIST_FILL_HEX = "#0f766e";
-const HTML_BAR_LIST_ROW_SELECTOR = ".horizontal-bars__row";
-const HTML_BAR_LIST_MARK_SELECTOR = ".horizontal-bars__bar";
+const HTML_BAR_LIST_ROW_SELECTOR = ".horizontal-bars__row, .receipt-composition__row";
+const HTML_BAR_LIST_MARK_SELECTOR = ".horizontal-bars__bar, .receipt-composition__bar";
 
 /**
- * Render oracle for the ranked HTML bar list that HorizontalBarChart draws
- * (civibus-3a3). The list is that component's ONLY visual encoding — until
- * 2026-08-20 it also drew the same series as a layerchart VERTICAL svg bar
- * chart, so this asserts both halves of the fix:
+ * Render oracle for the ranked HTML bar lists drawn by HorizontalBarChart and
+ * ReceiptCompositionChart. Each list is its component's only visual encoding,
+ * so this asserts both halves of the duplicate-encoding fixes:
  *
  *  1. no `<svg>` exists anywhere in the frame (the duplicate encoding may not
  *     come back), and
@@ -480,7 +471,9 @@ export async function expectHtmlBarListRender(region: Locator): Promise<void> {
         const box = element.getBoundingClientRect();
         return {
           backgroundImage: styles.backgroundImage,
-          filledWidth: styles.getPropertyValue("--finance-width").trim(),
+          filledWidth:
+            styles.getPropertyValue("--finance-width").trim() ||
+            styles.getPropertyValue("--finance-share").trim(),
           boundingBox: { width: box.width, height: box.height }
         };
       })
@@ -998,8 +991,6 @@ export function formatCapturedBrowserValue(value: unknown): string {
   }
 }
 
-/**
- */
 async function formatConsoleMessage(message: any): Promise<string> {
   const args = message.args();
   if (args.length === 0) {
@@ -1018,8 +1009,6 @@ async function formatConsoleMessage(message: any): Promise<string> {
   return values.join(" ");
 }
 
-/**
- */
 export function capturePageLoadErrors(page: any) {
   const errors: string[] = [];
   const pendingConsoleErrors: Promise<void>[] = [];

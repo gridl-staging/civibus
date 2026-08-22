@@ -172,6 +172,7 @@ const COUNTY_CAMPAIGN_FINANCE_SUMMARY = {
     {
       candidate_id: CANDIDATE_ID,
       candidate_name: "Candidate One",
+      identity_is_safe: true,
       donor_total_cents: 12500,
       transaction_count: 2
     }

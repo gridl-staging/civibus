@@ -36,7 +36,8 @@ def test_production_deploy_smoke_uses_current_chart_accessibility_labels() -> No
     assert "Donation count by size bucket for" not in source
     assert "Dollars by size bucket for" not in source
     assert "Fundraising geography for" not in source
-    assert "Receipt source composition by dollars" in source
+    assert "Receipt source composition by dollars" not in source
+    assert '"person-receipt-composition"' in source
     assert "Monthly contribution columns" in source
     # Retired with civibus-3a3: HorizontalBarChart no longer renders an svg
     # chart section, so this aria label no longer exists anywhere in the app and
@@ -342,6 +343,7 @@ def test_production_finance_smoke_runs_the_chart_legibility_guards() -> None:
 
 
 HORIZONTAL_BAR_CHART = REPO_ROOT / "web/src/lib/charts/HorizontalBarChart.svelte"
+RECEIPT_COMPOSITION_CHART = REPO_ROOT / "web/src/lib/charts/ReceiptCompositionChart.svelte"
 
 
 def test_horizontal_bar_chart_has_one_visual_encoding_and_every_lane_asserts_it() -> None:
@@ -380,6 +382,26 @@ def test_horizontal_bar_chart_has_one_visual_encoding_and_every_lane_asserts_it(
     assert "expectHtmlBarListRender" in (REPO_ROOT / "web/tests/smoke/a11y-helpers.ts").read_text(encoding="utf-8")
     assert "expectHtmlBarListRenderIfPlotted" in _production_deploy_spec()
     assert "expectHtmlBarListRenderIfPlotted" in _production_finance_spec()
+
+
+def test_receipt_composition_has_one_visual_encoding_and_every_lane_asserts_it() -> None:
+    component = RECEIPT_COMPOSITION_CHART.read_text(encoding="utf-8")
+    fixture_visuals = _fixture_finance_spec()
+    chart_data_access = (REPO_ROOT / "web/tests/smoke/chart_data_access.spec.ts").read_text(encoding="utf-8")
+    entity_and_civic = (REPO_ROOT / "web/tests/smoke/entity-and-civic.spec.ts").read_text(encoding="utf-8")
+
+    assert 'from "./Chart.svelte"' not in component
+    assert "buildChartSeries" not in component
+    assert "receipt-composition__bar" in component
+    assert "Receipt source composition by dollars" not in fixture_visuals
+    assert 'page.getByTestId("person-receipt-composition")' in fixture_visuals
+    assert (
+        "paintLabel: null"
+        in chart_data_access.split('owner: "ReceiptCompositionChart"', maxsplit=1)[1].split("},", maxsplit=1)[0]
+    )
+    assert 'page.getByTestId("person-receipt-composition")' in entity_and_civic
+    assert '"person-receipt-composition"' in _production_deploy_spec()
+    assert '"person-receipt-composition"' in _production_finance_spec()
 
 
 def test_production_finance_reuses_shared_regex_escape_helper() -> None:

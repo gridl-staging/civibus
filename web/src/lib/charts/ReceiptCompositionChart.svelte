@@ -1,16 +1,16 @@
 <script lang="ts">
   import ChartFrame from "./ChartFrame.svelte";
-  import Chart from "./Chart.svelte";
   import { formatCurrency, formatPercent } from "./finance";
-  import type { ChartHeadingLevel, ChartFrameProps, ChartSeries, ExactDisclosureRow, ReceiptCompositionRow } from "./types";
+  import type { ChartHeadingLevel, ChartFrameProps, ExactDisclosureRow, ReceiptCompositionRow } from "./types";
 
   export let testId: string;
   export let cycle: number;
   export let coverageThrough: string | null;
   export let sources: ChartFrameProps["sources"] = [];
-  // Outline depth for the inner chart heading; forwarded to the Chart
-  // adapter (civibus-4yw). Default 3 preserves pre-prop rendering.
+  // Retained for the public DetailPage contract after the duplicate inner
+  // chart heading was removed; the HTML bar list has no nested heading.
   export let headingLevel: ChartHeadingLevel = 3;
+  void headingLevel;
   export let rows: ReceiptCompositionRow[] = [];
   export let totalReceipts: number;
   export let canPlot: boolean;
@@ -27,7 +27,6 @@
           message: caveat || "Source components do not reconcile cleanly enough for a proportional plot."
         };
   $: exactRows = buildExactRows(rows);
-  $: chartSeries = buildChartSeries(rows);
   $: summary = {
     sentence: `Receipt components disclose ${formatCurrency(totalReceipts)} in total receipts for the ${cycle} cycle.`
   };
@@ -43,15 +42,6 @@
     }));
   }
 
-  function buildChartSeries(inputRows: ReceiptCompositionRow[]): ChartSeries[] {
-    return [
-      {
-        id: "receipt_source_amount",
-        label: "Receipt source amount",
-        points: inputRows.map((row) => ({ x: row.label, y: row.amount }))
-      }
-    ];
-  }
 </script>
 
 <ChartFrame
@@ -66,14 +56,6 @@
   {state}
 >
   <div class="receipt-composition" data-testid="{testId}-plot">
-    <Chart
-      kind="bar"
-      title="Receipt source composition"
-      ariaLabel="Receipt source composition by dollars"
-      unit="dollars"
-      series={chartSeries}
-      {headingLevel}
-    />
     {#each rows as row (row.id)}
       <div class="receipt-composition__row">
         <span>{row.label}</span>

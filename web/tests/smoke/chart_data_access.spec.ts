@@ -39,7 +39,7 @@ const CHART_DATA_ACCESS_CASES = [
   {
     owner: "ReceiptCompositionChart",
     route: "person",
-    paintLabel: "Receipt source composition by dollars",
+    paintLabel: null,
     testId: "person-receipt-composition",
     rows: SMOKE_USE_LIVE_API
       ? SMOKE_CHART_LIVE_DATA_ACCESS_ROWS.receiptComposition
@@ -57,9 +57,8 @@ const CHART_DATA_ACCESS_CASES = [
   {
     owner: "HorizontalBarChart",
     route: "person",
-    // No paintLabel: HorizontalBarChart's one visual encoding is a ranked HTML
-    // bar list with no svg and no aria-labelled chart section (civibus-3a3).
-    // Its paint proof is expectHtmlBarListRender against the frame testId.
+    // No paintLabel: its one visual encoding is a ranked HTML bar list with no
+    // svg and no aria-labelled chart section.
     paintLabel: null,
     testId: "person-size-buckets",
     rows: SMOKE_USE_LIVE_API
@@ -180,9 +179,8 @@ function personChartCases(): PersonChartDataAccessCase[] {
 /**
  * Paint proof for one person chart case. Module-scope so the per-case branch is
  * data routing rather than test-body control flow: a case with a `paintLabel`
- * is a layerchart svg plot, a case without one is HorizontalBarChart's ranked
- * HTML bar list (civibus-3a3), whose oracle is the bar-list helper against the
- * frame testId.
+ * is a layerchart svg plot, while a case without one is an HTML bar list whose
+ * oracle runs against the frame testId.
  */
 async function expectPersonChartPaint(page: Page, chartCase: PersonChartDataAccessCase): Promise<void> {
   const paintLabel = chartCase.paintLabel;

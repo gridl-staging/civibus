@@ -436,6 +436,10 @@ PUBLIC_MIRROR_TEST_CLASSIFICATIONS: tuple[PublicMirrorTestClassification, ...] =
             ),
             (
                 "tests/ci/test_uptime_incident_bridge_resilience.py::"
+                "test_external_ref_substring_neighbor_does_not_suppress_exact_bead_creation"
+            ),
+            (
+                "tests/ci/test_uptime_incident_bridge_resilience.py::"
                 "test_open_incident_with_closed_bridge_bead_is_already_reconciled"
             ),
             "tests/ci/test_uptime_incident_bridge_resilience.py::test_in_progress_bridge_bead_still_receives_heartbeat",

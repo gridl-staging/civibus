@@ -567,6 +567,7 @@ describe("candidate detail response fields", () => {
       district: "01",
       incumbent_challenge: null,
       principal_committee_id: null,
+      candidacies: [],
       sources: []
     };
     expect(candidate).toMatchObject({

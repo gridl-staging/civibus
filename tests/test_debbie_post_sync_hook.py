@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import fnmatch
+import importlib.util
 import json
 import os
 import shlex
@@ -11,6 +11,7 @@ import textwrap
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 
@@ -28,6 +29,7 @@ DEBBIE_CONFIG_PATH = REPO_ROOT / ".debbie.toml"
 ACCESSIBILITY_SPEC_PATH = REPO_ROOT / "web/tests/smoke/accessibility.spec.ts"
 SMOKE_EXECUTION_CONTRACT_PATH = REPO_ROOT / "web/tests/smoke/execution-contract.json"
 ACCESSIBILITY_RECEIPT_RELATIVE_PATH = "docs/live-state/2026_07_29_accessibility_baseline.md"
+SYNC_GUARD_PATH = REPO_ROOT / ".debbie" / "verify_sync_source.py"
 PUBLIC_RUN_SPECIMENS = (
     ".debbie.toml",
     "ROADMAP.md",
@@ -36,6 +38,17 @@ PUBLIC_RUN_SPECIMENS = (
     "evidence/",
 )
 PROJECTED_PYTEST_TIMEOUT_SECONDS = 600
+
+
+def _load_guard_module() -> ModuleType:
+    spec = importlib.util.spec_from_file_location("debbie_verify_sync_source", SYNC_GUARD_PATH)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+debbie_selected_paths = _load_guard_module().debbie_selected_paths
 
 
 @dataclass(frozen=True)
@@ -65,18 +78,10 @@ def project_debbie_public_mirror(tmp_path: Path) -> ProjectedMirror:
 
 
 def _copy_debbie_projection(target_root: Path) -> None:
-    debbie_payload = tomllib.loads(DEBBIE_CONFIG_PATH.read_text(encoding="utf-8"))
-    for relative_path in debbie_payload["sync"]["files"]:
+    for relative_path in debbie_selected_paths(REPO_ROOT, DEBBIE_CONFIG_PATH):
         source_path = REPO_ROOT / relative_path
         if source_path.exists():
-            _copy_path(source_path, target_root / relative_path, excludes=())
-    for directory_entry in debbie_payload["sync"]["dirs"]:
-        relative_path = directory_entry["path"].rstrip("/")
-        _copy_path(
-            REPO_ROOT / relative_path,
-            target_root / relative_path,
-            excludes=tuple(directory_entry.get("exclude", ())),
-        )
+            _copy_path(source_path, target_root / relative_path)
 
 
 @pytest.mark.dev_repo_only(
@@ -97,39 +102,33 @@ def test_debbie_projection_excludes_private_ledger_and_planning_docs_from_physic
 
 
 @pytest.mark.dev_repo_only(private_asset=".debbie.toml", owner="Debbie projection contract")
-def test_nightly_live_accessibility_receipt_is_projected() -> None:
+def test_nightly_live_accessibility_receipt_is_projected(tmp_path: Path) -> None:
     """Every private input read by a mirrored live journey must be projected."""
     debbie_payload = tomllib.loads(DEBBIE_CONFIG_PATH.read_text(encoding="utf-8"))
     accessibility_spec = ACCESSIBILITY_SPEC_PATH.read_text(encoding="utf-8")
     execution_contract = json.loads(SMOKE_EXECUTION_CONTRACT_PATH.read_text(encoding="utf-8"))["specs"]
+    target_root = tmp_path / "public-mirror"
+    target_root.mkdir()
 
     assert ACCESSIBILITY_RECEIPT_RELATIVE_PATH in accessibility_spec
     assert "live" in execution_contract["accessibility.spec.ts"]["modes"]
     assert ACCESSIBILITY_RECEIPT_RELATIVE_PATH in debbie_payload["sync"]["files"]
+    _copy_debbie_projection(target_root)
+    assert (target_root / ACCESSIBILITY_RECEIPT_RELATIVE_PATH).read_bytes() == (
+        REPO_ROOT / ACCESSIBILITY_RECEIPT_RELATIVE_PATH
+    ).read_bytes()
 
 
 def _copy_project_toolchain(target_root: Path) -> None:
     for relative_path in ("pyproject.toml", "uv.lock"):
-        _copy_path(REPO_ROOT / relative_path, target_root / relative_path, excludes=())
+        _copy_path(REPO_ROOT / relative_path, target_root / relative_path)
     for package_dir in ("api", "core", "domains"):
         (target_root / package_dir).mkdir(exist_ok=True)
 
 
-def _copy_path(source_path: Path, target_path: Path, *, excludes: tuple[str, ...]) -> None:
-    if source_path.is_dir():
-        shutil.copytree(
-            source_path,
-            target_path,
-            dirs_exist_ok=True,
-            ignore=lambda _directory, names: {name for name in names if _matches_any(name, excludes)},
-        )
-        return
+def _copy_path(source_path: Path, target_path: Path) -> None:
     target_path.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(source_path, target_path)
-
-
-def _matches_any(name: str, patterns: tuple[str, ...]) -> bool:
-    return any(fnmatch.fnmatch(name, pattern) for pattern in patterns)
 
 
 def _initialize_projection_git_checkout(target_root: Path) -> None:

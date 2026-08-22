@@ -14,8 +14,6 @@ export type CongressFilterOption = {
   label: string;
 };
 
-/**
- */
 export type CongressMemberRow = {
   id: string;
   personName: string;
@@ -290,8 +288,6 @@ export function buildCongressCompareHref(selectedPersonIds: string[]): string | 
   return `/compare?people=${canonicalPersonIds.map((personId) => encodeURIComponent(personId)).join(",")}`;
 }
 
-/**
- */
 export function buildCongressMemberRow(
   member: CongressMemberSummary,
   moneySummary?: CongressMemberMoneySummary
@@ -327,8 +323,6 @@ export function filterCongressMembers(
     .map((member) => buildCongressMemberRow(member, moneySummaryByPersonId.get(member.person_id)));
 }
 
-/**
- */
 export function buildCongressDirectory(
   members: CongressMemberSummary[],
   filters: Partial<CongressDirectoryFilters>,

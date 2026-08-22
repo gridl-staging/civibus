@@ -1,3 +1,5 @@
+import type { CountySummaryLinkedCandidate } from "$lib/campaign-finance-detail/contract";
+
 const fixtureConstants =
   (await import(new URL("./fixtures.ts", import.meta.url).href)) as typeof import("./fixtures");
 
@@ -2462,9 +2464,10 @@ export const smokeFixtures = {
         {
           candidate_id: "0b222222-2222-4222-8222-222222222222",
           candidate_name: "Casey Example",
+          identity_is_safe: true,
           donor_total_cents: 61000,
           transaction_count: 3
-        }
+        } satisfies CountySummaryLinkedCandidate
       ],
       sources: [
         {
