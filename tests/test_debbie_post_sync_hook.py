@@ -119,6 +119,23 @@ def test_nightly_live_accessibility_receipt_is_projected(tmp_path: Path) -> None
     ).read_bytes()
 
 
+@pytest.mark.dev_repo_only(private_asset=".debbie.toml", owner="Debbie projection contract")
+def test_debbie_projection_excludes_sveltekit_generated_output() -> None:
+    selected_paths = debbie_selected_paths(
+        REPO_ROOT,
+        DEBBIE_CONFIG_PATH,
+        (
+            Path("web/src/routes/version.json/+server.ts"),
+            Path("web/.svelte-kit/output/server/app.js"),
+            Path("web/.svelte-kit/types/src/routes/proxy+page.server.ts"),
+        ),
+    )
+
+    assert Path("web/src/routes/version.json/+server.ts") in selected_paths
+    assert Path("web/.svelte-kit/output/server/app.js") not in selected_paths
+    assert Path("web/.svelte-kit/types/src/routes/proxy+page.server.ts") not in selected_paths
+
+
 def _copy_project_toolchain(target_root: Path) -> None:
     for relative_path in ("pyproject.toml", "uv.lock"):
         _copy_path(REPO_ROOT / relative_path, target_root / relative_path)

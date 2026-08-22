@@ -153,6 +153,7 @@ PUBLIC_MIRROR_TEST_CLASSIFICATIONS: tuple[PublicMirrorTestClassification, ...] =
             "tests/ci/test_api_dockerfile_contract.py::test_debbie_sync_includes_api_dockerfile_root_inputs",
             "tests/ci/test_refresh_cron_scripts_contract.py::test_debbie_sync_keeps_evidence_and_findings_private_by_default",
             "tests/test_debbie_post_sync_hook.py::test_nightly_live_accessibility_receipt_is_projected",
+            "tests/test_debbie_post_sync_hook.py::test_debbie_projection_excludes_sveltekit_generated_output",
         ),
     ),
     *_entries(
@@ -591,6 +592,11 @@ PUBLIC_MIRROR_TEST_CLASSIFICATIONS: tuple[PublicMirrorTestClassification, ...] =
             "tests/test_beads_adoption_contract.py::test_current_work_authority_routes_to_beads",
             "tests/test_beads_adoption_contract.py::test_batman_roadmap_mutation_refuses_adopted_repo",
         ),
+    ),
+    *_entries(
+        private_asset="scripts/tests/beads_adoption_contract_live.sh",
+        owner="Beads adoption contract",
+        node_ids=("tests/test_beads_adoption_contract.py::test_live_contract_uses_pinned_bd_info_text_contract",),
     ),
 )
 

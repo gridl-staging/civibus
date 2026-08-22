@@ -159,14 +159,14 @@ def test_search_without_entity_type_returns_union_with_stable_order_and_paginati
         db_conn,
         Organization(
             id=UUID("00000000-0000-0000-0000-000000000090"),
-            canonical_name="Civibus Alliance",
+            canonical_name="Union Pagebox Alliance",
         ),
     )
     insert_person(
         db_conn,
         Person(
             id=UUID("00000000-0000-0000-0000-000000000100"),
-            canonical_name="Civibus Alliance",
+            canonical_name="Union Pagebox Alliance",
         ),
     )
     insert_committee_row(
@@ -174,19 +174,19 @@ def test_search_without_entity_type_returns_union_with_stable_order_and_paginati
         CommitteeRowSeed(
             id=UUID("00000000-0000-0000-0000-000000000110"),
             fec_committee_id="C20000002",
-            name="Civibus Alliance",
+            name="Union Pagebox Alliance",
         ),
     )
     insert_organization(
         db_conn,
         Organization(
             id=UUID("00000000-0000-0000-0000-000000000200"),
-            canonical_name="Civibus Network",
+            canonical_name="Union Pagebox Network",
         ),
     )
 
-    first_page = api_client.get("/v1/search", params={"q": "civ", "limit": 2, "offset": 0})
-    second_page = api_client.get("/v1/search", params={"q": "civ", "limit": 2, "offset": 2})
+    first_page = api_client.get("/v1/search", params={"q": "pagebox", "limit": 2, "offset": 0})
+    second_page = api_client.get("/v1/search", params={"q": "pagebox", "limit": 2, "offset": 2})
 
     assert first_page.status_code == 200
     assert second_page.status_code == 200
@@ -196,7 +196,7 @@ def test_search_without_entity_type_returns_union_with_stable_order_and_paginati
         {
             "entity_type": "org",
             "entity_id": "00000000-0000-0000-0000-000000000090",
-            "name": "Civibus Alliance",
+            "name": "Union Pagebox Alliance",
             "state": None,
             "party": None,
             "office_name": None,
@@ -206,7 +206,7 @@ def test_search_without_entity_type_returns_union_with_stable_order_and_paginati
         {
             "entity_type": "person",
             "entity_id": "00000000-0000-0000-0000-000000000100",
-            "name": "Civibus Alliance",
+            "name": "Union Pagebox Alliance",
             "state": None,
             "party": None,
             "office_name": None,
@@ -220,7 +220,7 @@ def test_search_without_entity_type_returns_union_with_stable_order_and_paginati
         {
             "entity_type": "committee",
             "entity_id": "00000000-0000-0000-0000-000000000110",
-            "name": "Civibus Alliance",
+            "name": "Union Pagebox Alliance",
             "state": None,
             "party": None,
             "office_name": None,
@@ -230,7 +230,7 @@ def test_search_without_entity_type_returns_union_with_stable_order_and_paginati
         {
             "entity_type": "org",
             "entity_id": "00000000-0000-0000-0000-000000000200",
-            "name": "Civibus Network",
+            "name": "Union Pagebox Network",
             "state": None,
             "party": None,
             "office_name": None,

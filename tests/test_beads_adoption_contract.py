@@ -26,6 +26,7 @@ import tomllib
 from pathlib import Path
 
 import conftest as quarantine_loader_owner
+import pytest
 from tests.ci.public_mirror_contract import DEV_REPO_ONLY_CLASSIFICATIONS_BY_NODE_ID
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -159,6 +160,10 @@ def test_beads_readme_documents_recovery_and_pin() -> None:
     assert "JSONL is not authoritative" in readme_text
 
 
+@pytest.mark.dev_repo_only(
+    private_asset="scripts/tests/beads_adoption_contract_live.sh",
+    owner="Beads adoption contract",
+)
 def test_live_contract_uses_pinned_bd_info_text_contract() -> None:
     """bd v1.2.2 advertises info --json but emits text; the live guard must match reality."""
     live_contract = _read(REPO_ROOT / "scripts" / "tests" / "beads_adoption_contract_live.sh")
