@@ -16,6 +16,7 @@ from pathlib import Path
 
 import pytest
 
+import tests.infra.detached_runner_helpers as runner_helpers
 from tests.infra.detached_runner_helpers import (
     _assert_control_is_running,
     _assert_pid_keeps_identity,
@@ -23,10 +24,11 @@ from tests.infra.detached_runner_helpers import (
     _assert_stop_refused_without_signaling,
     _fixture_command,
     _json_stdout,
-    _kill_exact_pid,
     _observed_pgid,
+    _observed_process_identity,
     _pid_is_alive,
     _process_tree_fixture_command,
+    _reclaiming_test_owned_processes,
     _reused_pgid_stand_in,
     _run_runner,
     _signal_resistant_fixture,
@@ -112,6 +114,88 @@ def test_recorded_process_teardown_requires_a_matching_recorded_identity(tmp_pat
         _terminate_recorded_processes(job_dir)
 
 
+def test_reclaim_signals_only_the_test_owned_pids_still_tracked(tmp_path: Path) -> None:
+    """Prove the shared reclaim drops a PID whose exit the test body proved.
+
+    Every success-path teardown below hands its fixture PIDs to this seam.
+    Once `confirm_exited()` has proven a PID gone, that number may already
+    belong to somebody else, so the `finally` reclaim must not signal it. Both
+    directions are asserted: a seam that signalled nothing would also pass the
+    no-signal half while leaking a 300-second sleeper onto this shared host
+    every time a test body failed before proving its fixtures dead.
+    """
+    job_dir = tmp_path / "jobs" / "reclaim_guard"
+    job_dir.mkdir(parents=True)
+
+    with _unrelated_control_process() as discarded, _unrelated_control_process() as retained:
+        discarded_identity = _observed_process_identity(discarded.pid)
+        assert discarded_identity, "sentinel process must be observable before the reclaim"
+
+        with _reclaiming_test_owned_processes(job_dir) as reclaim:
+            reclaim.track(discarded.pid, retained.pid)
+            reclaim.discard_proven_dead(discarded.pid)
+
+        # `wait()` rather than a PID probe: a signalled-but-unreaped child stays
+        # a zombie whose PID still resolves, and only the reaped status names
+        # the signal that ended it.
+        assert retained.wait(timeout=5) == -signal.SIGKILL
+        _assert_pid_keeps_identity(discarded.pid, discarded_identity)
+        _assert_control_is_running(discarded)
+
+
+def test_reclaim_kills_each_tracked_pid_once_in_deepest_first_order(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[tuple[str, int | Path]] = []
+    job_dir = tmp_path / "jobs" / "ordered_reclaim"
+    monkeypatch.setattr(
+        runner_helpers,
+        "_kill_exact_pid",
+        lambda pid: events.append(("kill", pid)),
+    )
+    monkeypatch.setattr(
+        runner_helpers,
+        "_terminate_recorded_processes",
+        lambda recorded_job_dir: events.append(("recorded_sweep", recorded_job_dir)),
+    )
+    reclaimer = runner_helpers._OwnedProcessReclaimer(job_dir)
+    reclaimer.track(101, 202)
+    reclaimer.track(303, 202)
+
+    reclaimer.reclaim()
+    reclaimer.reclaim()
+
+    assert events == [
+        ("kill", 303),
+        ("kill", 202),
+        ("kill", 101),
+        ("recorded_sweep", job_dir),
+        ("recorded_sweep", job_dir),
+    ]
+
+
+def test_reclaim_refuses_to_track_a_pid_with_broadcast_signal_semantics() -> None:
+    """Prove the reclaim's only signal source can hold nothing but exact PIDs.
+
+    `os.kill` reads 0 as the caller's entire process group and -1 as every
+    process the user can signal, so a single non-positive number turns this
+    teardown from an exact-PID reclaim into a broadcast across a host that runs
+    concurrent workers. Tracked PIDs arrive from parsing a fixture-written
+    file, and `int("0")` parses, so intake is the last point that can still
+    tell an exact PID from a broadcast one. The rejected batch is asserted to
+    leave nothing tracked, because a guard that refused after storing would
+    still hand the number to `reclaim()`.
+    """
+    reclaimer = runner_helpers._OwnedProcessReclaimer(Path("unused_job_dir"))
+
+    for broadcast_pid in (0, -1, -os.getpid()):
+        with pytest.raises(AssertionError, match="exact PID"):
+            reclaimer.track(os.getpid(), broadcast_pid)
+
+    assert reclaimer._live_pids == []
+
+
 def test_stop_refuses_when_recorded_process_identity_does_not_match(tmp_path: Path) -> None:
     job_root = tmp_path / "jobs"
     job_name = "identity_guard"
@@ -152,7 +236,8 @@ def test_stop_kills_verified_group_when_term_does_not_finish(tmp_path: Path) -> 
     assert start.returncode == 0, start.stderr
     child_pid = _wait_for_pid_file(child_pid_path)
 
-    try:
+    with _reclaiming_test_owned_processes(job_dir) as reclaim:
+        reclaim.track(child_pid)
         stop = _run_runner(
             job_root,
             "stop",
@@ -161,14 +246,11 @@ def test_stop_kills_verified_group_when_term_does_not_finish(tmp_path: Path) -> 
             timeout_seconds=4,
         )
         assert stop.returncode == 0, stop.stderr
-        _wait_for_pid_to_exit(child_pid)
+        reclaim.confirm_exited(child_pid)
 
         status_payload = _status(job_root, job_name)
         assert status_payload["alive"] is False
         assert status_payload["exit_code"] == 143
-    finally:
-        _kill_exact_pid(child_pid)
-        _terminate_recorded_processes(job_dir)
 
 
 def test_stop_writes_receipt_when_group_drains_after_kill_wait(tmp_path: Path) -> None:
@@ -184,7 +266,8 @@ def test_stop_writes_receipt_when_group_drains_after_kill_wait(tmp_path: Path) -
     child_pid = _wait_for_pid_file(child_pid_path)
     _write_group_liveness_bash_env(bash_env, liveness_state, live_checks=40)
 
-    try:
+    with _reclaiming_test_owned_processes(job_dir) as reclaim:
+        reclaim.track(wrapper_pid, child_pid)
         stop = _run_runner(
             job_root,
             "stop",
@@ -201,10 +284,6 @@ def test_stop_writes_receipt_when_group_drains_after_kill_wait(tmp_path: Path) -
         assert status_payload["alive"] is False
         assert status_payload["exit_code"] == 143
         assert (job_dir / "exit_code").read_text(encoding="utf-8") == "143\n"
-    finally:
-        _kill_exact_pid(child_pid)
-        _kill_exact_pid(wrapper_pid)
-        _terminate_recorded_processes(job_dir)
 
 
 def test_stop_kills_group_when_descendant_survives_term(tmp_path: Path) -> None:
@@ -218,7 +297,8 @@ def test_stop_kills_group_when_descendant_survives_term(tmp_path: Path) -> None:
     child_pid = _wait_for_pid_file(tree_dir / "child.pid")
     grandchild_pid = _wait_for_pid_file(tree_dir / "grandchild.pid")
 
-    try:
+    with _reclaiming_test_owned_processes(job_dir) as reclaim:
+        reclaim.track(child_pid, grandchild_pid)
         _assert_recorded_wrapper_pgid(job_dir, wrapper_pid)
         recorded_pgid = int((job_dir / "pgid").read_text(encoding="utf-8").strip())
         assert int(_wait_for_file(tree_dir / "child.pgid")) == recorded_pgid
@@ -232,16 +312,12 @@ def test_stop_kills_group_when_descendant_survives_term(tmp_path: Path) -> None:
             timeout_seconds=4,
         )
         assert stop.returncode == 0, stop.stderr
-        _wait_for_pid_to_exit(child_pid)
-        _wait_for_pid_to_exit(grandchild_pid)
+        reclaim.confirm_exited(child_pid)
+        reclaim.confirm_exited(grandchild_pid)
 
         status_payload = _status(job_root, job_name)
         assert status_payload["alive"] is False
         assert status_payload["exit_code"] == 143
-    finally:
-        _kill_exact_pid(grandchild_pid)
-        _kill_exact_pid(child_pid)
-        _terminate_recorded_processes(job_dir)
 
 
 @pytest.mark.parametrize("metadata_name", ["pid", "process_identity", "pgid"])
@@ -375,36 +451,31 @@ def test_stop_terminates_owned_process_tree(tmp_path: Path) -> None:
     job_name = "process_tree_stop"
     job_dir = job_root / job_name
     tree_dir = tmp_path / "tree"
-    owned_pids: dict[str, int] = {}
 
-    with _unrelated_control_process() as control:
-        try:
-            start = _run_runner(job_root, "start", job_name, "--", *_process_tree_fixture_command(tree_dir))
-            assert start.returncode == 0, start.stderr
-            wrapper_pid = _json_stdout(start)["pid"]
-            owned_pids = _wait_for_process_tree(tree_dir)
-            _assert_recorded_wrapper_pgid(job_dir, wrapper_pid)
+    with _unrelated_control_process() as control, _reclaiming_test_owned_processes(job_dir) as reclaim:
+        start = _run_runner(job_root, "start", job_name, "--", *_process_tree_fixture_command(tree_dir))
+        assert start.returncode == 0, start.stderr
+        wrapper_pid = _json_stdout(start)["pid"]
+        owned_pids = _wait_for_process_tree(tree_dir)
+        reclaim.track(*owned_pids.values())
+        _assert_recorded_wrapper_pgid(job_dir, wrapper_pid)
 
-            recorded_pgid = int((job_dir / "pgid").read_text(encoding="utf-8").strip())
-            for level, pid in owned_pids.items():
-                assert _observed_pgid(pid) == recorded_pgid, level
-                assert int((tree_dir / f"{level}.pgid").read_text(encoding="utf-8").strip()) == recorded_pgid
-            assert _observed_pgid(control.pid) != recorded_pgid
+        recorded_pgid = int((job_dir / "pgid").read_text(encoding="utf-8").strip())
+        for level, pid in owned_pids.items():
+            assert _observed_pgid(pid) == recorded_pgid, level
+            assert int((tree_dir / f"{level}.pgid").read_text(encoding="utf-8").strip()) == recorded_pgid
+        assert _observed_pgid(control.pid) != recorded_pgid
 
-            stop = _run_runner(job_root, "stop", job_name)
-            assert stop.returncode == 0, stop.stderr
+        stop = _run_runner(job_root, "stop", job_name)
+        assert stop.returncode == 0, stop.stderr
 
-            for pid in owned_pids.values():
-                _wait_for_pid_to_exit(pid)
-            _assert_control_is_running(control)
+        for pid in owned_pids.values():
+            reclaim.confirm_exited(pid)
+        _assert_control_is_running(control)
 
-            status_payload = _status(job_root, job_name)
-            assert status_payload["alive"] is False
-            assert status_payload["exit_code"] == 143
-        finally:
-            for pid in owned_pids.values():
-                _terminate_exact_pid(pid)
-            _terminate_recorded_processes(job_dir)
+        status_payload = _status(job_root, job_name)
+        assert status_payload["alive"] is False
+        assert status_payload["exit_code"] == 143
 
 
 def test_stop_and_status_are_idempotent_after_termination(tmp_path: Path) -> None:

@@ -21,7 +21,12 @@ from domains.campaign_finance.jurisdictions.states.IN.scraper.parse import parse
 _SAMPLE_CONTRIBUTIONS_PATH = Path(__file__).parent / "test_fixtures" / "sample_contributions.csv"
 
 
-def write_in_contribution_fixture(tmp_path: Path, *, row_count: int) -> BulkFixture:
+def write_in_contribution_fixture(
+    tmp_path: Path,
+    *,
+    row_count: int,
+    amount: str | None = None,
+) -> BulkFixture:
     """Write a contributions CSV whose every identity is unique to this run.
 
     ``_in_source_record_key`` is a whole-parsed-row hash and Indiana exports carry no
@@ -59,6 +64,8 @@ def write_in_contribution_fixture(tmp_path: Path, *, row_count: int) -> BulkFixt
         row["Name"] = f"Donor{index} {run_suffix}"
         row["Address"] = f"{run_suffix} Test Street {index}"
         row["Amended"] = "0"
+        if amount is not None:
+            row["Amount"] = amount
         rows.append(row)
 
     with contributions_path.open("w", encoding="utf-8", newline="") as fixture_file:

@@ -183,6 +183,14 @@ class ImportClassification:
     kind: str
 
 
+@dataclass(frozen=True)
+class AcceptedInboundImportMismatch:
+    """Difference between accepted inbound policy keys and live observations."""
+
+    missing_accepted: frozenset[ImportPolicyEntry]
+    unexpected_observed: frozenset[ImportPolicyEntry]
+
+
 def _module_name_for_path(path: Path, naming_root: Path) -> tuple[str, bool]:
     """Return the dotted module name for ``path`` and whether it names a package."""
     relative_parts = list(path.resolve().relative_to(naming_root.resolve()).parts)
@@ -353,6 +361,38 @@ def find_import_boundary_policy_violations(
     return tuple(violations)
 
 
+def find_accepted_inbound_import_mismatch(
+    classifications: tuple[ImportClassification, ...],
+    repo_root: Path,
+) -> AcceptedInboundImportMismatch:
+    accepted_inbound = _locality_present_accepted_inbound_imports(repo_root)
+    observed_inbound = frozenset(
+        _policy_key(classification, repo_root)
+        for classification in classifications
+        if classification.kind == INBOUND_REGION_IMPORT
+    )
+    unexpected_observed = frozenset(
+        _policy_key(violation, repo_root)
+        for violation in find_import_boundary_policy_violations(classifications, repo_root)
+        if violation.kind == INBOUND_REGION_IMPORT
+    )
+    return AcceptedInboundImportMismatch(
+        missing_accepted=accepted_inbound - observed_inbound,
+        unexpected_observed=unexpected_observed,
+    )
+
+
+def _locality_present_accepted_inbound_imports(repo_root: Path) -> frozenset[ImportPolicyEntry]:
+    tracked_relative_paths = frozenset(
+        path.relative_to(repo_root).as_posix() for path in _tracked_python_files(repo_root)
+    )
+    return frozenset(
+        entry
+        for entry in _DEFAULT_ACCEPTED_INBOUND_IMPORTS | _ACCEPTED_INBOUND_IMPORT_DEBT
+        if entry[0] in tracked_relative_paths
+    )
+
+
 def format_import_boundary_policy_violations(
     violations: tuple[ImportClassification, ...],
     repo_root: Path,
@@ -410,6 +450,14 @@ def _make_classification(
         imported_region_root=imported_region_root,
         kind=kind,
     )
+
+
+def _public_locality_repo_root(tmp_path: Path) -> Path:
+    if (REPO_ROOT / ".debbie.toml").is_file():
+        from tests.test_debbie_post_sync_hook import project_debbie_public_mirror
+
+        return project_debbie_public_mirror(tmp_path).root
+    return REPO_ROOT
 
 
 # --------------------------------------------------------------------------
@@ -779,13 +827,78 @@ def test_live_policy_rejects_boundary_violations_with_complete_diagnostic(
         assert expected_detail in diagnostic
 
 
-def test_live_repository_respects_jurisdiction_import_boundary() -> None:
-    classifications = scan_repository_imports(REPO_ROOT)
-    violations = find_import_boundary_policy_violations(classifications, REPO_ROOT)
+def test_accepted_inbound_reconciliation_rejects_unaccepted_observed_inbound(tmp_path: Path) -> None:
+    unaccepted_key = (
+        "domains/campaign_finance/quality/unapproved.py",
+        "domains.campaign_finance.quality.unapproved",
+        f"{CA_PACKAGE}.scraper.load",
+    )
+    classification = _make_classification(
+        unaccepted_key,
+        line_number=7,
+        importing_region_root=None,
+        imported_region_root=CA_PACKAGE,
+        kind=INBOUND_REGION_IMPORT,
+    )
 
-    assert violations == (), format_import_boundary_policy_violations(violations, REPO_ROOT)
-    assert _DEFAULT_ACCEPTED_INBOUND_IMPORTS | _ACCEPTED_INBOUND_IMPORT_DEBT == {
+    mismatch = find_accepted_inbound_import_mismatch((classification,), REPO_ROOT)
+
+    assert unaccepted_key in mismatch.unexpected_observed
+
+    subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True, text=True)
+    accepted_untracked_key = next(iter(_ACCEPTED_INBOUND_IMPORT_DEBT))
+    accepted_untracked_classification = ImportClassification(
+        file_path=tmp_path / accepted_untracked_key[0],
+        line_number=1,
+        importing_module=accepted_untracked_key[1],
+        imported_module=accepted_untracked_key[2],
+        importing_region_root=None,
+        imported_region_root=f"{STATES_PACKAGE}.NC",
+        kind=INBOUND_REGION_IMPORT,
+    )
+
+    policy_violations = find_import_boundary_policy_violations((accepted_untracked_classification,), tmp_path)
+    accepted_mismatch = find_accepted_inbound_import_mismatch((accepted_untracked_classification,), tmp_path)
+
+    assert policy_violations == ()
+    assert accepted_mismatch.unexpected_observed == frozenset()
+
+
+def test_accepted_inbound_reconciliation_rejects_tracked_stale_debt() -> None:
+    classifications = scan_repository_imports(REPO_ROOT)
+    observed_accepted_keys = {
         _policy_key(classification, REPO_ROOT)
         for classification in classifications
         if classification.kind == INBOUND_REGION_IMPORT
-    }
+    } & _DEFAULT_ACCEPTED_INBOUND_IMPORTS
+    stale_key = sorted(observed_accepted_keys)[0]
+
+    mismatch = find_accepted_inbound_import_mismatch(
+        tuple(
+            classification for classification in classifications if _policy_key(classification, REPO_ROOT) != stale_key
+        ),
+        REPO_ROOT,
+    )
+
+    assert stale_key in mismatch.missing_accepted
+
+
+def test_projected_public_repository_reconciles_absent_untracked_accepted_debt(tmp_path: Path) -> None:
+    projected_root = _public_locality_repo_root(tmp_path)
+    debt_key = next(iter(_ACCEPTED_INBOUND_IMPORT_DEBT))
+
+    assert not (projected_root / debt_key[0]).exists()
+
+    classifications = scan_repository_imports(projected_root)
+    mismatch = find_accepted_inbound_import_mismatch(classifications, projected_root)
+
+    assert mismatch == AcceptedInboundImportMismatch(frozenset(), frozenset())
+
+
+def test_live_repository_respects_jurisdiction_import_boundary() -> None:
+    classifications = scan_repository_imports(REPO_ROOT)
+    violations = find_import_boundary_policy_violations(classifications, REPO_ROOT)
+    mismatch = find_accepted_inbound_import_mismatch(classifications, REPO_ROOT)
+
+    assert violations == (), format_import_boundary_policy_violations(violations, REPO_ROOT)
+    assert mismatch == AcceptedInboundImportMismatch(frozenset(), frozenset())

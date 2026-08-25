@@ -6,6 +6,7 @@ from dataclasses import replace
 from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 from uuid import uuid4
 
 import psycopg
@@ -28,17 +29,20 @@ from domains.campaign_finance.jurisdictions.states.IN.scraper import (
 )
 from domains.campaign_finance.jurisdictions.states.IN.scraper import load as in_load_module
 from domains.campaign_finance.jurisdictions.states.IN.scraper import load_helpers as in_load_helpers
+from domains.campaign_finance.jurisdictions.states.IN.scraper import relational_load as in_relational_load_module
 from domains.campaign_finance.jurisdictions.states.IN.scraper.load import (
     LoadResult,
+    ensure_in_data_source,
+    load_in_contribution,
+    load_in_contributions_with_filings,
+    load_in_expenditures_with_filings,
+)
+from domains.campaign_finance.jurisdictions.states.IN.scraper.load_helpers import (
     _in_amendment_indicator,
     _in_filing_fec_id,
     _in_native_committee_id,
     _in_source_record_key,
     _parse_in_date,
-    ensure_in_data_source,
-    load_in_contribution,
-    load_in_contributions_with_filings,
-    load_in_expenditures_with_filings,
 )
 from domains.campaign_finance.jurisdictions.states.IN.scraper.load_test_support import (
     write_in_contribution_fixture,
@@ -161,11 +165,15 @@ def test_resolve_in_filing_committee_id_uses_stable_committee_identity(
     row = _parsed_contributions()[0]
     expected_committee_id = _in_native_committee_id(row, data_type="contributions")
 
-    monkeypatch.setattr(in_load_module, "_resolve_in_committee_organization_id", lambda *_args, **_kwargs: "org-id")
+    monkeypatch.setattr(
+        in_relational_load_module,
+        "_resolve_in_committee_organization_id",
+        lambda *_args, **_kwargs: "org-id",
+    )
     ensure_state_committee = pytest.importorskip("unittest.mock").MagicMock(return_value="committee-id")
-    monkeypatch.setattr(in_load_module, "ensure_state_committee", ensure_state_committee)
+    monkeypatch.setattr(in_relational_load_module, "ensure_state_committee", ensure_state_committee)
 
-    committee_id = in_load_module._resolve_in_filing_committee_id(conn, row, "contributions")
+    committee_id = in_relational_load_module._resolve_in_filing_committee_id(conn, row, "contributions")
 
     assert committee_id == "committee-id"
     assert ensure_state_committee.call_args.kwargs["native_committee_id"] == expected_committee_id
@@ -182,9 +190,9 @@ def test_load_in_file_dispatches_parser_from_data_type_spec(monkeypatch: pytest.
 
     parser_rows = [{"from_spec_parser": "1"}]
     parser_mock = pytest.importorskip("unittest.mock").MagicMock(return_value=iter(parser_rows))
-    original_spec = in_load_module._IN_DATA_TYPE_SPECS["contributions"]
+    original_spec = in_load_helpers._IN_DATA_TYPE_SPECS["contributions"]
     monkeypatch.setitem(
-        in_load_module._IN_DATA_TYPE_SPECS,
+        in_load_helpers._IN_DATA_TYPE_SPECS,
         "contributions",
         replace(original_spec, parse_rows=parser_mock),
     )
@@ -210,15 +218,27 @@ def test_load_in_file_dispatches_parser_from_data_type_spec(monkeypatch: pytest.
     assert result == expected_result
 
 
+def test_raw_and_relational_loaders_share_data_type_contract_from_load_helpers() -> None:
+    assert in_load_module._in_data_type_spec is in_load_helpers._in_data_type_spec
+    assert in_relational_load_module._in_data_type_spec is in_load_helpers._in_data_type_spec
+    assert in_load_module._in_extract_row is in_load_helpers._in_extract_row
+    assert in_relational_load_module._in_extract_row is in_load_helpers._in_extract_row
+    assert in_load_module._resolve_in_committee_organization_id is in_load_helpers._resolve_in_committee_organization_id
+    assert (
+        in_relational_load_module._resolve_in_committee_organization_id
+        is in_load_helpers._resolve_in_committee_organization_id
+    )
+
+
 def test_counterparty_name_raw_uses_data_type_spec_entity_keys(monkeypatch: pytest.MonkeyPatch) -> None:
-    original_spec = in_load_module._IN_DATA_TYPE_SPECS["contributions"]
+    original_spec = in_load_helpers._IN_DATA_TYPE_SPECS["contributions"]
     monkeypatch.setitem(
-        in_load_module._IN_DATA_TYPE_SPECS,
+        in_load_helpers._IN_DATA_TYPE_SPECS,
         "contributions",
         replace(original_spec, person_key="custom_person", organization_key="custom_org"),
     )
     monkeypatch.setattr(
-        in_load_module,
+        in_relational_load_module,
         "_in_extract_row",
         lambda _row, _data_type: {
             "custom_person": None,
@@ -226,7 +246,7 @@ def test_counterparty_name_raw_uses_data_type_spec_entity_keys(monkeypatch: pyte
         },
     )
 
-    assert in_load_module._counterparty_name_raw({}, "contributions") == "Custom Organization"
+    assert in_relational_load_module._counterparty_name_raw({}, "contributions") == "Custom Organization"
 
 
 def test_load_in_rows_records_invalid_amendment_as_row_error(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -452,7 +472,7 @@ def test_ingest_in_expenditures_maps_amended_rows_to_indicator_a(db_conn: psycop
 
 
 @pytest.mark.integration
-def test_ingest_in_rolls_back_raw_phase_when_relational_phase_fails(
+def test_ingest_in_rolls_back_managed_transaction_when_relational_phase_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     conn = pytest.importorskip("unittest.mock").MagicMock()
@@ -466,15 +486,16 @@ def test_ingest_in_rolls_back_raw_phase_when_relational_phase_fails(
         elapsed_seconds=0.1,
     )
 
-    # Every commit the entry point owns now routes through commit_managed_transaction, so
-    # patching it is what keeps conn.commit.assert_not_called() meaningful.
+    # The raw phase is stubbed and performs no writes here. Every commit the entry point owns
+    # routes through commit_managed_transaction, so patching it keeps
+    # conn.commit.assert_not_called() meaningful while this test isolates exception cleanup.
     commit_managed_transaction = pytest.importorskip("unittest.mock").MagicMock()
     monkeypatch.setattr(in_load_module, "commit_managed_transaction", commit_managed_transaction)
     monkeypatch.setattr(in_load_module, "ensure_in_data_source", lambda *_args, **_kwargs: "in-source-id")
     monkeypatch.setattr(in_load_module, "_load_in_file", lambda *_args, **_kwargs: load_result)
-    original_spec = in_load_module._IN_DATA_TYPE_SPECS["contributions"]
+    original_spec = in_load_helpers._IN_DATA_TYPE_SPECS["contributions"]
     monkeypatch.setitem(
-        in_load_module._IN_DATA_TYPE_SPECS,
+        in_load_helpers._IN_DATA_TYPE_SPECS,
         "contributions",
         replace(original_spec, parse_rows=lambda _path: iter(())),
     )
@@ -491,6 +512,106 @@ def test_ingest_in_rolls_back_raw_phase_when_relational_phase_fails(
     commit_managed_transaction.assert_called_once_with(conn, True)
     conn.rollback.assert_called_once_with()
     conn.commit.assert_not_called()
+
+
+def test_load_in_relational_transactions_delegates_rows_to_no_savepoint_helper(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conn = MagicMock()
+    conn.info.transaction_status = psycopg.pq.TransactionStatus.IDLE
+    rows = [{"row": "0"}, {"row": "1"}, {"row": "2"}]
+    linked_source_record_ids = [uuid4(), None, uuid4()]
+    select_source_record_id = MagicMock(side_effect=linked_source_record_ids)
+    helper_calls: list[tuple[object, object, bool, str]] = []
+    helper_results = iter(((True, False), (None, False)))
+
+    def record_without_invoking_callback(
+        helper_conn: object,
+        callback: object,
+        *,
+        manages_outer_transaction: bool,
+        label: str,
+    ) -> tuple[bool | None, bool]:
+        helper_calls.append((helper_conn, callback, manages_outer_transaction, label))
+        return next(helper_results)
+
+    monkeypatch.setattr(in_relational_load_module, "_select_in_source_record_id", select_source_record_id)
+    monkeypatch.setattr(in_relational_load_module, "try_row_without_savepoint", record_without_invoking_callback)
+
+    errors = in_relational_load_module._load_in_relational_transactions(
+        conn,
+        rows,
+        data_source_id=uuid4(),
+        data_type="contributions",
+        limit=None,
+    )
+
+    assert len(helper_calls) == 2
+    assert [call[0] for call in helper_calls] == [conn, conn]
+    assert all(call[2] is True for call in helper_calls)
+    assert [call[3] for call in helper_calls] == ["IN contribution filing link"] * 2
+    assert errors == 1
+    conn.transaction.assert_not_called()
+    assert select_source_record_id.call_count == 3
+
+
+def _relational_transactions_over_two_rows(conn: MagicMock) -> int:
+    return in_relational_load_module._load_in_relational_transactions(
+        conn,
+        [{"row": "0"}, {"row": "1"}],
+        data_source_id=uuid4(),
+        data_type="contributions",
+        limit=None,
+    )
+
+
+@pytest.fixture
+def prepared_transaction(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
+    transaction = MagicMock()
+    monkeypatch.setattr(in_relational_load_module, "_build_in_transaction", MagicMock(return_value=transaction))
+    return transaction
+
+
+def test_load_in_relational_transactions_reraises_filing_lookup_drift(
+    monkeypatch: pytest.MonkeyPatch,
+    prepared_transaction: MagicMock,
+) -> None:
+    """A filing cache that disagrees with the database aborts the load, it is not a row error.
+
+    `try_row_without_savepoint` catches every `Exception`, so without an explicit re-raise the
+    drift guard would be downgraded to one counted row error and the load would keep writing
+    against a cache already known to be wrong.
+    """
+    conn = MagicMock()
+    conn.info.transaction_status = psycopg.pq.TransactionStatus.IDLE
+    drift = in_relational_load_module.INFilingLookupDrift("IN filing lookup drift for filing_fec_id='f': a != b")
+    upsert_filing = MagicMock(side_effect=drift)
+
+    monkeypatch.setattr(in_relational_load_module, "_select_in_source_record_id", MagicMock(return_value=uuid4()))
+    monkeypatch.setattr(in_relational_load_module, "_upsert_in_filing", upsert_filing)
+
+    with pytest.raises(in_relational_load_module.INFilingLookupDrift) as raised:
+        _relational_transactions_over_two_rows(conn)
+
+    assert raised.value is drift
+    # Aborted on the first row rather than continuing through the rest of the file.
+    assert upsert_filing.call_count == 1
+
+
+def test_load_in_relational_transactions_counts_ordinary_row_errors_without_aborting(
+    monkeypatch: pytest.MonkeyPatch,
+    prepared_transaction: MagicMock,
+) -> None:
+    """A plain `ValueError` stays a counted row error — only the drift subclass aborts."""
+    conn = MagicMock()
+    conn.info.transaction_status = psycopg.pq.TransactionStatus.IDLE
+    upsert_filing = MagicMock(side_effect=ValueError("unparseable row"))
+
+    monkeypatch.setattr(in_relational_load_module, "_select_in_source_record_id", MagicMock(return_value=uuid4()))
+    monkeypatch.setattr(in_relational_load_module, "_upsert_in_filing", upsert_filing)
+
+    assert _relational_transactions_over_two_rows(conn) == 2
+    assert upsert_filing.call_count == 2
 
 
 @pytest.mark.integration
@@ -575,6 +696,34 @@ _IN_BULK_ROW_COUNT = _EXPECTED_DURABLE_BATCH_ROWS + 1
 # The caller-owned invariant does not depend on crossing the batch boundary, so it uses a
 # small fixture to keep the full phase 1 + phase 2 load off the suite's critical path.
 _IN_CALLER_ARM_ROW_COUNT = 5
+# One full batch plus two rows, so a failure on the last row has exactly one uncommitted
+# sibling behind it and 1,000 committed rows that must NOT be charged as losses.
+_IN_POST_BOUNDARY_ROW_COUNT = _EXPECTED_DURABLE_BATCH_ROWS + 2
+
+
+def _install_relational_write_db_error(
+    db_conn: psycopg.Connection,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    fail_on_write: int,
+) -> dict[str, int]:
+    real_upsert_transaction = in_relational_load_module._upsert_in_transaction_with_filing
+    write_counts = {"writes": 0}
+
+    def fail_nth_relational_write(*args: object, **kwargs: object) -> None:
+        write_counts["writes"] += 1
+        if write_counts["writes"] == fail_on_write:
+            # Enter PostgreSQL's real INERROR state; a constructed psycopg exception
+            # would leave the connection healthy and would not prove rollback recovery.
+            db_conn.execute("SELECT 1 / 0")
+        real_upsert_transaction(*args, **kwargs)
+
+    monkeypatch.setattr(
+        in_relational_load_module,
+        "_upsert_in_transaction_with_filing",
+        fail_nth_relational_write,
+    )
+    return write_counts
 
 
 def test_write_in_contribution_fixture_produces_unique_keys_and_one_committee(tmp_path: Path) -> None:
@@ -650,10 +799,11 @@ def test_load_in_contributions_with_filings_commits_relational_batch_mid_loop(
 
     Before the relational boundary fix, an interruption on transaction 1,001 discarded
     every linked row because the pass committed only at the end of the job.
-    `BulkFixtureInterruption` subclasses `BaseException` on purpose: that is what makes IN's
-    `with conn.transaction():` block roll back only transaction 1,001's savepoint and re-raise,
-    so the interrupt propagates as a genuine interruption instead of being swallowed as a row
-    error.
+    `BulkFixtureInterruption` subclasses `BaseException` on purpose: that is what carries it
+    past `try_row_without_savepoint`'s `except psycopg.Error` / `except Exception` handlers and
+    past `_load_in_with_filings`' `except Exception`, so the interrupt propagates as a genuine
+    interruption instead of being swallowed as a row error, and this test's own
+    `db_conn.rollback()` discards the uncommitted remainder of the partial batch.
     """
     with ExitStack() as resources:
         fixture = seed_written_bulk_fixture(
@@ -667,7 +817,7 @@ def test_load_in_contributions_with_filings_commits_relational_batch_mid_loop(
         # effect.
         write_counts = install_write_interrupt(
             monkeypatch,
-            in_load_module,
+            in_relational_load_module,
             "_upsert_in_transaction_with_filing",
             raise_after_writes=_EXPECTED_DURABLE_BATCH_ROWS,
         )
@@ -680,6 +830,148 @@ def test_load_in_contributions_with_filings_commits_relational_batch_mid_loop(
         # pass was interrupted on transaction 1,001, so exactly its first full batch survives.
         assert write_counts["writes"] == _IN_BULK_ROW_COUNT
         assert bulk_fixture_row_counts(fixture) == (_IN_BULK_ROW_COUNT, _EXPECTED_DURABLE_BATCH_ROWS)
+
+
+@pytest.mark.integration
+def test_load_in_contributions_with_filings_recovers_from_relational_db_error(
+    db_conn: psycopg.Connection,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with ExitStack() as resources:
+        fixture = seed_written_bulk_fixture(
+            resources,
+            db_conn,
+            lambda: write_in_contribution_fixture(tmp_path, row_count=3),
+            row_count=3,
+        )
+        write_counts = _install_relational_write_db_error(db_conn, monkeypatch, fail_on_write=2)
+
+        result = load_in_contributions_with_filings(db_conn, fixture.input_path)
+
+        assert write_counts["writes"] == 3
+        assert result.errors == 2
+        assert result.inserted == 3
+        assert bulk_fixture_row_counts(fixture) == (3, 1)
+
+        db_conn.rollback()
+        with db_conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT filing.id
+                FROM cf.filing AS filing
+                JOIN cf.committee AS committee ON committee.id = filing.committee_id
+                WHERE committee.fec_committee_id = %s
+                """,
+                (fixture.committee_fec_id,),
+            )
+            fixture_filing_rows = cursor.fetchall()
+            cursor.execute(
+                """
+                SELECT transaction.filing_id
+                FROM cf.transaction AS transaction
+                JOIN core.source_record AS source_record
+                  ON source_record.id = transaction.source_record_id
+                WHERE source_record.source_record_key = ANY(%s)
+                """,
+                (fixture.source_record_keys,),
+            )
+            surviving_transaction_rows = cursor.fetchall()
+
+        assert len(fixture_filing_rows) == 1
+        assert surviving_transaction_rows == [fixture_filing_rows[0]]
+
+
+@pytest.mark.integration
+def test_load_in_contributions_with_filings_rejects_invalid_amount_before_writing_filing(
+    db_conn: psycopg.Connection,
+    tmp_path: Path,
+) -> None:
+    with ExitStack() as resources:
+        fixture = seed_written_bulk_fixture(
+            resources,
+            db_conn,
+            lambda: write_in_contribution_fixture(tmp_path, row_count=1, amount="not-a-number"),
+            row_count=1,
+        )
+
+        result = load_in_contributions_with_filings(db_conn, fixture.input_path)
+
+        assert result.inserted == 1
+        assert result.errors == 1
+        assert bulk_fixture_row_counts(fixture) == (1, 0)
+
+        db_conn.rollback()
+        with db_conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT COUNT(*)
+                FROM cf.filing AS filing
+                JOIN cf.committee AS committee ON committee.id = filing.committee_id
+                WHERE committee.fec_committee_id = %s
+                """,
+                (fixture.committee_fec_id,),
+            )
+            assert cursor.fetchone()[0] == 0
+
+
+@pytest.mark.integration
+def test_load_in_contributions_with_filings_charges_only_the_open_batch_after_a_boundary(
+    db_conn: psycopg.Connection,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A DB error past the 1,000-row commit loses only the rows linked since that commit.
+
+    The batch rollback erases the open batch, never the committed batches behind it. Without
+    the `linked_rows_since_commit` reset at the boundary the loader would charge every row
+    linked since the start of the file — 1,002 here instead of 2 — to `LoadResult.errors`,
+    reporting durable rows as lost.
+    """
+    with ExitStack() as resources:
+        fixture = seed_written_bulk_fixture(
+            resources,
+            db_conn,
+            lambda: write_in_contribution_fixture(tmp_path, row_count=_IN_POST_BOUNDARY_ROW_COUNT),
+            row_count=_IN_POST_BOUNDARY_ROW_COUNT,
+        )
+        write_counts = _install_relational_write_db_error(
+            db_conn,
+            monkeypatch,
+            fail_on_write=_IN_POST_BOUNDARY_ROW_COUNT,
+        )
+
+        result = load_in_contributions_with_filings(db_conn, fixture.input_path)
+
+        assert write_counts["writes"] == _IN_POST_BOUNDARY_ROW_COUNT
+        # Row 1,002 failed and took row 1,001 down with it; rows 1..1,000 were committed at
+        # the boundary and survive, so exactly two rows are lost.
+        assert result.errors == 2
+        assert result.inserted == _IN_POST_BOUNDARY_ROW_COUNT
+        assert bulk_fixture_row_counts(fixture) == (_IN_POST_BOUNDARY_ROW_COUNT, _EXPECTED_DURABLE_BATCH_ROWS)
+
+
+@pytest.mark.integration
+def test_load_in_contributions_with_filings_caller_owned_relational_db_error_is_loud(
+    db_conn: psycopg.Connection,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with ExitStack() as resources:
+        fixture = seed_written_bulk_fixture(
+            resources,
+            db_conn,
+            lambda: write_in_contribution_fixture(tmp_path, row_count=3),
+            row_count=3,
+        )
+        write_counts = _install_relational_write_db_error(db_conn, monkeypatch, fail_on_write=2)
+
+        db_conn.execute("BEGIN")
+        with pytest.raises(in_load_module.INCallerTransactionRolledBack):
+            load_in_contributions_with_filings(db_conn, fixture.input_path)
+
+        assert write_counts["writes"] == 2
+        assert bulk_fixture_row_counts(fixture) == (0, 0)
 
 
 @pytest.mark.integration

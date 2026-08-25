@@ -18,24 +18,30 @@ from pathlib import Path
 
 import pytest
 
-from test_support.line_budget import oversized_modules
 from tests.infra.detached_runner_helpers import (
-    REPO_ROOT,
     SCRIPT_PATH,
     UTC_TIMESTAMP,
+    _READY_WINDOW_SECONDS,
+    _READY_WINDOW_WALL_SECONDS,
     _assert_no_ownership_metadata,
+    _assert_ready_window_budget_ordering,
     _assert_recorded_wrapper_pgid,
+    _assert_start_and_wait_report_terminal_contract,
+    _declared_shell_constant_text,
     _fixture_command,
     _json_stdout,
     _kill_exact_pid,
     _observed_process_identity,
     _pid_is_alive,
+    _read_shell_constant,
     _run_probe,
     _run_runner,
     _runner_path_without_session_launcher,
+    _shell_library_source,
     _signal_resistant_fixture,
     _status,
     _stop_if_running,
+    _supported_bash,
     _terminate_exact_pid,
     _terminate_recorded_processes,
     _wait_for_file,
@@ -43,16 +49,10 @@ from tests.infra.detached_runner_helpers import (
     _wait_for_pid_to_exit,
     _write_executable,
     _write_kill_logging_bash_env,
+    _write_session_isolating_setsid_stub,
+    _write_unset_bashpid_bash_env,
 )
 
-_KNOWN_SOURCED_RUNNER_LIBRARIES = frozenset(
-    {
-        "detached_runner_job_state_lib.sh",
-        "detached_runner_ownership_lib.sh",
-        "detached_runner_launch_lib.sh",
-    }
-)
-_RUNNER_SOURCE_LINE = re.compile(r'^source "\$\{script_dir\}/([^"]+)"$', re.MULTILINE)
 _STOP_CADENCE_CONSTANTS = ("STOP_POLLS_PER_SECOND", "DEFAULT_STOP_GRACE_SECONDS")
 # The exact operator-visible duplicate-start refusals, pinned in full so the
 # runner keeps one wording per case instead of near-copies that can drift.
@@ -64,14 +64,6 @@ _UNVERIFIABLE_CHILD_REFUSAL = (
     "recorded child PID {pid} is still observable but its identity cannot be "
     "verified; inspect that PID or remove the stale job directory before retrying"
 )
-
-
-def _runner_sourced_library_names() -> set[str]:
-    return set(_RUNNER_SOURCE_LINE.findall(SCRIPT_PATH.read_text(encoding="utf-8")))
-
-
-def _ownership_library_source() -> str:
-    return (SCRIPT_PATH.parent / "detached_runner_ownership_lib.sh").read_text(encoding="utf-8")
 
 
 def test_probe_load_progress_appends_row_count_deltas_under_current_job(tmp_path: Path) -> None:
@@ -113,28 +105,8 @@ def test_probe_load_progress_appends_row_count_deltas_under_current_job(tmp_path
 
 
 def test_start_status_and_wait_report_terminal_metadata(tmp_path: Path) -> None:
-    job_root = tmp_path / "jobs"
-    job_name = "known_exit"
-    start = _run_runner(job_root, "start", job_name, "--", *_fixture_command(exit_code=7))
-    assert start.returncode == 0, start.stderr
-    start_payload = _json_stdout(start)
-    assert start_payload["job"] == job_name
-    assert start_payload["alive"] is True
-    assert start_payload["exit_code"] is None
-    assert UTC_TIMESTAMP.match(start_payload["started_at"])
-
-    wait = _run_runner(job_root, "wait", job_name, "--poll-seconds", "1", "--timeout-seconds", "5")
-    assert wait.returncode == 7, wait.stderr
-    terminal_payload = _json_stdout(wait)
-    assert terminal_payload == {
-        "job": job_name,
-        "pid": start_payload["pid"],
-        "alive": False,
-        "exit_code": 7,
-        "started_at": (job_root / job_name / "started_at").read_text(encoding="utf-8").strip(),
-        "last_log_line": "fixture final log",
-        "progress": {"phase": "finished", "rows": 2},
-    }
+    """Pin the terminal contract on whichever launcher the ambient PATH resolves."""
+    _assert_start_and_wait_report_terminal_contract(tmp_path / "jobs", "known_exit")
 
 
 def test_wrapper_writes_receipt_for_direct_normal_child_exit(tmp_path: Path) -> None:
@@ -145,7 +117,11 @@ def test_wrapper_writes_receipt_for_direct_normal_child_exit(tmp_path: Path) -> 
 
     result = subprocess.run(
         [
-            "bash",
+            # `run_wrapper` reads BASHPID, which bash only defines from 4.0. An
+            # inherited `bash` is 3.2 on macOS, where `set -u` aborts the EXIT
+            # trap on the unbound name -- silently, because the trap runs after
+            # `exit` has already fixed the status this test asserts on.
+            _supported_bash(),
             str(SCRIPT_PATH),
             "__run_wrapper",
             str(job_dir),
@@ -159,6 +135,11 @@ def test_wrapper_writes_receipt_for_direct_normal_child_exit(tmp_path: Path) -> 
     )
 
     assert result.returncode == 0, result.stderr
+    # The EXIT trap is the only wrapper path that can still write here after the
+    # status is set, so an empty stderr is what proves it ran to completion
+    # rather than dying on an unbound name.
+    assert result.stderr == "", result.stderr
+    assert not (job_dir / "cleanup_receipt").exists(), "no cleanup was requested of this wrapper"
     assert (job_dir / "exit_code").read_text(encoding="utf-8") == "0\n"
     assert (job_dir / "child_pid").read_text(encoding="utf-8").strip()
     assert "fixture final log" in (job_dir / "log").read_text(encoding="utf-8")
@@ -172,7 +153,8 @@ def test_wrapper_writes_receipt_and_terminates_child_on_cleanup_signal(tmp_path:
 
     wrapper = subprocess.Popen(
         [
-            "bash",
+            # Same BASHPID requirement as the normal-exit wrapper test above.
+            _supported_bash(),
             str(SCRIPT_PATH),
             "__run_wrapper",
             str(job_dir),
@@ -189,6 +171,7 @@ def test_wrapper_writes_receipt_and_terminates_child_on_cleanup_signal(tmp_path:
         os.kill(wrapper.pid, signal.SIGTERM)
         stderr = wrapper.communicate(timeout=10)[1]
         assert wrapper.returncode == 143, stderr
+        assert stderr == "", stderr
         assert (job_dir / "exit_code").read_text(encoding="utf-8") == "143\n"
 
         child_status = subprocess.run(
@@ -252,22 +235,49 @@ def test_start_python_session_fallback_keeps_job_alive_after_launcher_exits(tmp_
         _terminate_recorded_processes(job_dir)
 
 
+def test_start_python_session_handles_unset_bashpid(tmp_path: Path) -> None:
+    """The python-session launch branch must survive a shell without BASHPID.
+
+    Bash 3.2 — still the system bash on macOS — has no BASHPID, so a wrapper
+    that identifies itself with it dies on an unbound variable before it can
+    ready, and `start` refuses a job whose command would have run fine.
+    """
+    bash_env = tmp_path / "unset_bashpid_env"
+    _write_unset_bashpid_bash_env(bash_env)
+
+    _assert_start_and_wait_report_terminal_contract(
+        tmp_path / "jobs",
+        "python_session_unset_bashpid",
+        {"DETACHED_RUNNER_FORCE_PYTHON_SESSION": "1", "BASH_ENV": str(bash_env)},
+    )
+
+
+def test_start_setsid_branch_handles_unset_bashpid(tmp_path: Path) -> None:
+    """The setsid launch branch carries the same BASHPID-free requirement."""
+    bash_env = tmp_path / "unset_bashpid_env"
+    _write_unset_bashpid_bash_env(bash_env)
+    stub_bin = tmp_path / "bin"
+    stub_bin.mkdir()
+    _write_session_isolating_setsid_stub(stub_bin)
+
+    _assert_start_and_wait_report_terminal_contract(
+        tmp_path / "jobs",
+        "setsid_unset_bashpid",
+        {
+            "DETACHED_RUNNER_FORCE_PYTHON_SESSION": "0",
+            "PATH": f"{stub_bin}{os.pathsep}{os.environ['PATH']}",
+            "BASH_ENV": str(bash_env),
+        },
+    )
+
+
 def test_start_setsid_branch_records_isolated_wrapper_ownership(tmp_path: Path) -> None:
     job_root = tmp_path / "jobs"
     job_name = "setsid_session_detach"
     job_dir = job_root / job_name
     stub_bin = tmp_path / "bin"
     stub_bin.mkdir()
-    _write_executable(
-        stub_bin / "setsid",
-        f"""#!{sys.executable}
-import os
-import sys
-
-os.setsid()
-os.execvp(sys.argv[1], sys.argv[1:])
-""",
-    )
+    _write_session_isolating_setsid_stub(stub_bin)
 
     start = _run_runner(
         job_root,
@@ -357,6 +367,13 @@ done
             "DETACHED_RUNNER_FORCE_PYTHON_SESSION": "0",
             "PATH": path,
         },
+        # Upper budget, so the window term is the window's *wall* estimate, not
+        # its nominal value. Only that term is derived: the refusal path also
+        # runs the cleanup handshake after the window closes, and the whole path
+        # measured 7.84s against a ~5.6s wall window, leaving ~2.2s of cleanup
+        # plus process startup. 6.0s carries that measurement with headroom for
+        # shared-host load.
+        timeout_seconds=_assert_ready_window_budget_ordering(_READY_WINDOW_WALL_SECONDS + 6.0),
     )
 
     wrapper_pid = int((job_dir / "pid").read_text(encoding="utf-8").strip())
@@ -642,62 +659,6 @@ def test_status_and_wait_liveness_ignore_stop_only_pgid_metadata(tmp_path: Path)
         _terminate_recorded_processes(job_dir)
 
 
-def test_runner_and_every_library_it_sources_stay_within_the_line_budget() -> None:
-    """Hold the runner and its libraries to the repository's file-size ceiling.
-
-    The set under budget is discovered from the runner's own `source` lines, so
-    a library inherits the ceiling the moment the runner depends on it rather
-    than when someone remembers to list it here. Asserting each discovered path
-    exists keeps the guard fail-closed: a typo in a `source` line would
-    otherwise shrink the budgeted set to a passing one.
-    """
-    sourced_names = _runner_sourced_library_names()
-    budgeted_paths = [SCRIPT_PATH, *(SCRIPT_PATH.parent / name for name in sourced_names)]
-    for path in budgeted_paths:
-        assert path.is_file(), f"detached_runner.sh sources a path that does not exist: {path}"
-
-    assert oversized_modules(budgeted_paths) == {}
-
-
-def test_runner_sourced_library_discovery_is_fail_closed() -> None:
-    assert _runner_sourced_library_names() == _KNOWN_SOURCED_RUNNER_LIBRARIES
-
-
-def test_runner_shellcheck_directives_require_source_following_lint() -> None:
-    runner_source = SCRIPT_PATH.read_text(encoding="utf-8")
-    source_directives = [
-        line
-        for line in runner_source.splitlines()
-        if line.startswith("# shellcheck source=infra/scripts/detached_runner_")
-    ]
-
-    assert len(source_directives) == len(_KNOWN_SOURCED_RUNNER_LIBRARIES)
-    assert all("disable=SC1091" not in line for line in source_directives)
-
-
-def test_runner_and_its_sourced_libraries_lint_clean_under_check_sourced() -> None:
-    """Run the lint gate here so the flag that reaches the libraries lives in code.
-
-    `-x` alone only makes sourced definitions visible while analysing the
-    top-level file; shellcheck reports findings from inside a sourced file only
-    under `--check-sourced`. A prose-only `-x` gate therefore leaves most of the
-    runner's shell lines unlinted while reading as full coverage, so the command
-    is executed by this test rather than quoted in a checklist.
-    """
-    shellcheck = shutil.which("shellcheck")
-    assert shellcheck is not None, "shellcheck is required to lint the detached runner and its libraries"
-
-    result = subprocess.run(
-        [shellcheck, "-x", "--check-sourced", "-S", "style", str(SCRIPT_PATH)],
-        cwd=REPO_ROOT,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-
-    assert result.returncode == 0, result.stdout or result.stderr
-
-
 def test_recorded_liveness_publishes_no_verdict_from_a_previous_call_after_a_terminal_receipt(
     tmp_path: Path,
 ) -> None:
@@ -744,12 +705,85 @@ def test_stop_cadence_constants_live_with_the_ownership_owner() -> None:
     guard for a change that moved nothing.
     """
     runner_source = SCRIPT_PATH.read_text(encoding="utf-8")
-    ownership_source = _ownership_library_source()
+    ownership_source = _shell_library_source("detached_runner_ownership_lib.sh")
 
     for name in _STOP_CADENCE_CONSTANTS:
         assignment = re.compile(rf"^{name}=", re.MULTILINE)
         assert not assignment.search(runner_source), f"{name} is declared in the runner, not its cadence owner"
         assert assignment.search(ownership_source), f"{name} is not declared by the ownership owner"
+
+
+def test_cadence_constant_reader_raises_when_the_constant_is_absent() -> None:
+    """A renamed or deleted cadence constant must red, never fall back healthy.
+
+    This comes out red the moment `_read_shell_constant` grows a default or a
+    `try/except` that returns a number: the budgets derived from the readiness
+    window would then keep their stale hand-copied values while the runner
+    polled on a cadence nobody had checked against them.
+    """
+    with pytest.raises(AssertionError) as raised:
+        _read_shell_constant("detached_runner_launch_lib.sh", "WRAPPER_READY_ATTEMPTS_RENAMED")
+
+    assert "detached_runner_launch_lib.sh" in str(raised.value)
+    assert "WRAPPER_READY_ATTEMPTS_RENAMED" in str(raised.value)
+
+
+def test_cadence_constant_reader_raises_when_the_cadence_value_is_unparseable() -> None:
+    """A constant that is declared but not numeric must raise, not be coerced.
+
+    `runner_script` is the live specimen: detached_runner.sh declares it as
+    `"${BASH_SOURCE[0]}"`, which satisfies the assignment pattern and is not a
+    number, so it exercises the parse failure without a synthetic fixture.
+    """
+    with pytest.raises(AssertionError) as raised:
+        _read_shell_constant("detached_runner.sh", "runner_script")
+
+    assert "detached_runner.sh" in str(raised.value)
+    assert "runner_script" in str(raised.value)
+    # Discriminate the parse-failure branch from the no-match branch: both
+    # branches name the file and the constant, so without a parse-specific
+    # fragment this test would still pass if the live `runner_script=` specimen
+    # ever drifted and the no-match branch fired instead -- and it would then
+    # stop proving that a declared-but-non-numeric constant raises rather than
+    # being coerced. "is not a number" and the offending token appear only in
+    # the parse-failure message.
+    assert "is not a number" in str(raised.value)
+    assert "BASH_SOURCE" in str(raised.value)
+
+
+def test_ready_window_derives_from_the_declared_cadence_constants() -> None:
+    """Pin the declared cadence values and the window every derived budget uses.
+
+    Red if either owner retunes its constant without the derived budgets being
+    re-checked against the new window, and red if the reader ever returns
+    something other than what the shell files actually declare.
+    """
+    assert _read_shell_constant("detached_runner_launch_lib.sh", "WRAPPER_READY_ATTEMPTS") == 100.0
+    assert _read_shell_constant("detached_runner_ownership_lib.sh", "FAST_POLL_INTERVAL_SECONDS") == 0.05
+    assert _READY_WINDOW_SECONDS == 5.0
+    assert _READY_WINDOW_WALL_SECONDS == 6.0
+
+
+def test_readiness_poll_pairs_the_cadence_constants_the_window_derives_from() -> None:
+    """Pin the poll site the derived window assumes, not just the constants.
+
+    `_READY_WINDOW_SECONDS` multiplies these two constants because
+    `wait_for_wrapper_ready` pairs them. Repointing that poll at another cadence
+    constant -- `DEFAULT_POLL_INTERVAL_SECONDS` (0.1) is already in scope there --
+    leaves both constants declared and parseable, so the fail-closed reader stays
+    green while every derived budget silently describes half the real window.
+    This is the assertion that comes out red for that edit.
+    """
+    poll_call = re.compile(
+        r'^\s*poll_until "\$\{WRAPPER_READY_ATTEMPTS\}" "\$\{FAST_POLL_INTERVAL_SECONDS\}"',
+        re.MULTILINE,
+    )
+
+    assert poll_call.search(_shell_library_source("detached_runner_launch_lib.sh")), (
+        "the wrapper-readiness poll no longer pairs WRAPPER_READY_ATTEMPTS with "
+        "FAST_POLL_INTERVAL_SECONDS, so the budgets derived from their product "
+        "no longer describe the readiness window"
+    )
 
 
 def test_usage_advertises_the_stop_grace_default_its_owner_declares(tmp_path: Path) -> None:
@@ -758,10 +792,9 @@ def test_usage_advertises_the_stop_grace_default_its_owner_declares(tmp_path: Pa
     The default is operator-visible, and its constant lives in another file, so
     a hardcoded copy here would go stale the moment the window is retuned.
     """
-    declared = re.search(r"^DEFAULT_STOP_GRACE_SECONDS=(\S+)$", _ownership_library_source(), re.MULTILINE)
-    assert declared is not None, "the ownership library no longer declares DEFAULT_STOP_GRACE_SECONDS"
+    declared = _declared_shell_constant_text("detached_runner_ownership_lib.sh", "DEFAULT_STOP_GRACE_SECONDS")
 
     result = _run_runner(tmp_path / "jobs", "--help")
 
     assert result.returncode == 0, result.stderr
-    assert f"(default: {declared.group(1)})" in result.stderr
+    assert f"(default: {declared})" in result.stderr

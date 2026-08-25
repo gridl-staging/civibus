@@ -120,14 +120,19 @@ run_wrapper() {
   export DETACHED_RUNNER_PROGRESS_FILE="${progress_path}"
 
   set +e
-  local child_pid="" child_status="" receipt_written=false
+  # The wrapper runs as a separate `bash script.sh` process, so `$$` is its own
+  # PID. BASHPID would be equivalent here but does not exist in bash 3.2, so
+  # under this script's `set -u` every handshake read below aborted the wrapper
+  # with `BASHPID: unbound variable` -- invisibly, because the wrapper's stderr
+  # goes to /dev/null, leaving `start` to report a wrapper that never readied.
+  local child_pid="" child_status="" receipt_written=false wrapper_pid="$$"
 
   # shellcheck disable=SC2329  # Invoked by the EXIT trap below.
   write_cleanup_receipt_on_exit() {
     local requested_wrapper_pid
     requested_wrapper_pid="$(read_first_line_or_empty "${directory}/cleanup_requested")"
-    if [[ "${requested_wrapper_pid}" == "${BASHPID}" ]]; then
-      atomic_write "${directory}/cleanup_receipt" "${BASHPID} ${child_pid}"
+    if [[ "${requested_wrapper_pid}" == "${wrapper_pid}" ]]; then
+      atomic_write "${directory}/cleanup_receipt" "${wrapper_pid} ${child_pid}"
     fi
   }
 
@@ -159,16 +164,16 @@ run_wrapper() {
   if [[ "${require_launch_approval}" == "true" ]]; then
     local wrapper_state
     wrapper_state="$(read_first_line_or_empty "${directory}/wrapper_ready")"
-    if [[ "${wrapper_state}" != "${BASHPID} refused" ]]; then
-      atomic_write "${directory}/wrapper_ready" "${BASHPID} ready"
+    if [[ "${wrapper_state}" != "${wrapper_pid} refused" ]]; then
+      atomic_write "${directory}/wrapper_ready" "${wrapper_pid} ready"
     fi
     while true; do
       wrapper_state="$(read_first_line_or_empty "${directory}/wrapper_ready")"
-      if [[ "${wrapper_state}" == "${BASHPID} approved" ]]; then
+      if [[ "${wrapper_state}" == "${wrapper_pid} approved" ]]; then
         rm -f "${directory}/wrapper_ready"
         break
       fi
-      [[ "${wrapper_state}" == "${BASHPID} refused" ]] && exit 1
+      [[ "${wrapper_state}" == "${wrapper_pid} refused" ]] && exit 1
       sleep 0.05
     done
   fi

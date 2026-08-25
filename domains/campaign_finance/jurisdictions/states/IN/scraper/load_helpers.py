@@ -1,20 +1,100 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Iterable, Mapping
+from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
+from pathlib import Path
+from typing import Any
+from uuid import UUID
 
-from core.types.python.models import compute_record_hash
+import psycopg
+
+from core.db import find_organization_by_identifier, resolve_organization_by_canonical_name
+from core.types.python.models import Organization, compute_record_hash
 from domains.campaign_finance.ingest.text_utils import normalize_optional_text
 from domains.campaign_finance.types.models import AmendmentIndicatorLiteral
 
 from . import _load_column_for_semantic_path
+from .extract import (
+    INContributionExtraction,
+    INExpenditureExtraction,
+    extract_in_contribution,
+    extract_in_expenditure,
+)
+from .parse import parse_contributions, parse_expenditures
 
 _SUPPORTED_IN_DATA_TYPES = frozenset(("contributions", "expenditures"))
 _IN_COUNTERPARTY_OCCUPATION_PATH = {
     "contributions": "donor.occupation",
     "expenditures": "payee.occupation",
 }
+
+
+@dataclass(frozen=True, slots=True)
+class _INDataTypeSpec:
+    person_key: str
+    organization_key: str
+    person_role: str
+    organization_role: str
+    committee_role: str
+    address_role: str
+    person_roles: tuple[str, ...]
+    organization_roles: tuple[str, ...]
+    extract_row: Callable[[dict[str, str | None]], INContributionExtraction | INExpenditureExtraction]
+    parse_rows: Callable[[Path], Iterable[Mapping[str, str | None]]]
+
+
+_IN_DATA_TYPE_SPECS = {
+    "contributions": _INDataTypeSpec(
+        person_key="donor_person",
+        organization_key="donor_org",
+        person_role="donor",
+        organization_role="contributor",
+        committee_role="recipient",
+        address_role="contributor_address",
+        person_roles=("donor",),
+        organization_roles=("contributor",),
+        extract_row=extract_in_contribution,
+        parse_rows=parse_contributions,
+    ),
+    "expenditures": _INDataTypeSpec(
+        person_key="payee_person",
+        organization_key="payee_org",
+        person_role="payee",
+        organization_role="payee",
+        committee_role="payer",
+        address_role="payee_address",
+        person_roles=("payee",),
+        organization_roles=("payee",),
+        extract_row=extract_in_expenditure,
+        parse_rows=parse_expenditures,
+    ),
+}
+
+
+def _in_data_type_spec(data_type: str) -> _INDataTypeSpec:
+    try:
+        return _IN_DATA_TYPE_SPECS[data_type]
+    except KeyError as error:
+        raise ValueError(f"Unsupported IN data type: {data_type}") from error
+
+
+def _in_extract_row(row: Mapping[str, str | None], data_type: str) -> Mapping[str, Any]:
+    return _in_data_type_spec(data_type).extract_row(dict(row))
+
+
+def _resolve_in_committee_organization_id(conn: psycopg.Connection, committee: Organization) -> UUID:
+    committee_identifier = normalize_optional_text(committee.identifiers.get("in_committee_id"))
+    if committee_identifier is not None:
+        existing_org_id = find_organization_by_identifier(conn, "in_committee_id", committee_identifier)
+        if existing_org_id is not None:
+            return existing_org_id
+
+    resolved_org_id = resolve_organization_by_canonical_name(conn, committee)
+    if resolved_org_id is None:
+        raise ValueError("IN committee extraction did not produce a resolvable organization")
+    return resolved_org_id
 
 
 def _require_in_supported_data_type(data_type: str) -> None:

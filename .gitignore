@@ -40,3 +40,6 @@ docs/reference/research/artifacts/*/downloads/**/*.zip
 .beads/proxieddb/
 *.gate.lock*
 /.beads.gate.lock*
+
+# Generated pytest cache (untracked in 0fda5525f, but re-added without this rule)
+.pytest_cache/
