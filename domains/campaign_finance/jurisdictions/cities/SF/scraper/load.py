@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
@@ -43,12 +44,32 @@ _SF_JURISDICTION = "municipality/SF"
 _SF_SOURCE_FORMAT = "csv"
 _SF_DATA_TYPE = "transactions"
 
+# One commit per this many iterated rows: both SF passes share the boundary, each
+# advancing its own counter over its own pass of the file.
+_COMMIT_BATCH_ROWS = 1_000
+
 
 @dataclass(slots=True)
 class _SFLoadCounts:
     inserted: int = 0
     skipped: int = 0
     errors: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class _SFRowSource:
+    """The parsed-row stream both passes read, so each pass re-reads it identically."""
+
+    file_path: str | Path
+    limit: int | None
+    year_from: int | None
+
+    def iter_rows(self) -> Iterator[dict[str, object]]:
+        parser = parse_transactions(Path(self.file_path), year_from=self.year_from)
+        for index, row in enumerate(parser, start=1):
+            if self.limit is not None and index > self.limit:
+                break
+            yield row
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,58 +105,35 @@ def load_sf_transactions_with_filings(
     year_from: int | None = None,
 ) -> LoadResult:
     """Load SF transactions CSV with filing-aware two-pass approach."""
-    row_limit = validated_limit(limit)
-    data_source_id = ensure_sf_data_source(conn)
+    row_source = _SFRowSource(
+        file_path=file_path,
+        limit=validated_limit(limit),
+        year_from=year_from,
+    )
     started_at = time.monotonic()
     counts = _SFLoadCounts()
+    # Sample ownership before ensure_sf_data_source runs SQL and implicitly opens a
+    # transaction, then commit the data-source row so the connection is IDLE again.
+    # Sampling afterwards would read INTRANS off this loader's own lookup and make both
+    # passes skip every periodic commit.
     manages_outer = conn.info.transaction_status == psycopg.pq.TransactionStatus.IDLE
-
-    # Pass 1: provenance — insert source records for every parsed row
-    source_record_ids: dict[str, UUID] = {}
-
-    for row in _iter_sf_rows(file_path, limit=row_limit, year_from=year_from):
-        try:
-            if manages_outer:
-                ensure_transaction_open(conn)
-            with conn.transaction():
-                sr = _build_sf_source_record(data_source_id, row)
-                sr_id = try_insert_source_record(conn, sr)
-                if sr_id is None:
-                    counts.skipped += 1
-                else:
-                    source_record_ids[sr.record_hash] = sr_id
-                    counts.inserted += 1
-        except Exception:  # noqa: BLE001
-            counts.errors += 1
-            LOGGER.exception("Failed inserting SF source record")
-
+    data_source_id = ensure_sf_data_source(conn)
     commit_managed_transaction(conn, manages_outer)
 
-    # Pass 2: relational — upsert filings + transactions for rows with provenance
-    filing_lookup: dict[str, _SFFilingLookupEntry] = {}
-
-    for row in _iter_sf_rows(file_path, limit=row_limit, year_from=year_from):
-        raw_fields = _to_json_safe(row)
-        record_hash = compute_record_hash(raw_fields)
-        sr_id = source_record_ids.get(record_hash)
-        if sr_id is None:
-            continue
-
-        try:
-            if manages_outer:
-                ensure_transaction_open(conn)
-            with conn.transaction():
-                _upsert_sf_filing_and_transaction(
-                    conn,
-                    row,
-                    sr_id,
-                    filing_lookup=filing_lookup,
-                )
-        except Exception:  # noqa: BLE001
-            counts.errors += 1
-            LOGGER.exception("Failed linking SF transaction to filing")
-
-    commit_managed_transaction(conn, manages_outer)
+    source_record_ids = _load_sf_source_records(
+        conn,
+        row_source,
+        data_source_id=data_source_id,
+        counts=counts,
+        manages_outer=manages_outer,
+    )
+    _load_sf_relational_transactions(
+        conn,
+        row_source,
+        source_record_ids=source_record_ids,
+        counts=counts,
+        manages_outer=manages_outer,
+    )
 
     return LoadResult(
         inserted=counts.inserted,
@@ -152,18 +150,85 @@ def load_sf_transactions_with_filings(
 # ---------------------------------------------------------------------------
 
 
-def _iter_sf_rows(
-    file_path: str | Path,
+def _load_sf_source_records(
+    conn: psycopg.Connection,
+    row_source: _SFRowSource,
     *,
-    limit: int | None,
-    year_from: int | None,
-):
-    """Iterate parsed SF transaction rows, respecting limit."""
-    parser = parse_transactions(Path(file_path), year_from=year_from)
-    for idx, row in enumerate(parser, start=1):
-        if limit is not None and idx > limit:
-            break
-        yield row
+    data_source_id: UUID,
+    counts: _SFLoadCounts,
+    manages_outer: bool,
+) -> dict[str, UUID]:
+    """Pass 1 — insert a source record for every parsed row, returning what landed.
+
+    The returned mapping is keyed by record hash, which is what pass 2 looks a row up by.
+    A dedupe skip is deliberately absent from it: pass 2 links only rows this pass
+    inserted, so re-running the loader does not re-link content already linked.
+    """
+    source_record_ids: dict[str, UUID] = {}
+    processed_count = 0
+
+    for row in row_source.iter_rows():
+        try:
+            if manages_outer:
+                ensure_transaction_open(conn)
+            with conn.transaction():
+                sr = _build_sf_source_record(data_source_id, row)
+                sr_id = try_insert_source_record(conn, sr)
+                if sr_id is None:
+                    counts.skipped += 1
+                else:
+                    source_record_ids[sr.record_hash] = sr_id
+                    counts.inserted += 1
+        except Exception:  # noqa: BLE001
+            counts.errors += 1
+            LOGGER.exception("Failed inserting SF source record")
+
+        # Every parsed row advances the boundary, including dedupe skips and errored
+        # rows: each already opened a transaction.
+        processed_count += 1
+        if processed_count % _COMMIT_BATCH_ROWS == 0:
+            commit_managed_transaction(conn, manages_outer)
+
+    commit_managed_transaction(conn, manages_outer)
+    return source_record_ids
+
+
+def _load_sf_relational_transactions(
+    conn: psycopg.Connection,
+    row_source: _SFRowSource,
+    *,
+    source_record_ids: dict[str, UUID],
+    counts: _SFLoadCounts,
+    manages_outer: bool,
+) -> None:
+    """Pass 2 — upsert a filing and transaction for every row pass 1 gave provenance.
+
+    Runs strictly after pass 1 committed, so a row's source record always exists before
+    anything references it.
+    """
+    filing_lookup: dict[str, _SFFilingLookupEntry] = {}
+    processed_count = 0
+
+    for row in row_source.iter_rows():
+        record_hash = compute_record_hash(_to_json_safe(row))
+        sr_id = source_record_ids.get(record_hash)
+        if sr_id is not None:
+            try:
+                if manages_outer:
+                    ensure_transaction_open(conn)
+                with conn.transaction():
+                    _upsert_sf_filing_and_transaction(conn, row, sr_id, filing_lookup=filing_lookup)
+            except Exception:  # noqa: BLE001
+                counts.errors += 1
+                LOGGER.exception("Failed linking SF transaction to filing")
+
+        # Every re-parsed row advances the boundary, including rows pass 1 left without
+        # provenance and rows that raised while linking.
+        processed_count += 1
+        if processed_count % _COMMIT_BATCH_ROWS == 0:
+            commit_managed_transaction(conn, manages_outer)
+
+    commit_managed_transaction(conn, manages_outer)
 
 
 def _to_json_safe(row: dict[str, object]) -> dict[str, object]:

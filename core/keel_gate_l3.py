@@ -13,6 +13,7 @@ from jsonschema.validators import validator_for
 from pydantic import BaseModel, Field
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_SOURCES_REGISTRY_PATH = _REPO_ROOT / "sources.yaml"
 _ALLOWED_SOURCE_STATES = frozenset({"discovered", "prototyped", "validated", "operationalized", "degraded", "deferred"})
 # Default contract for `operationalized`: at least N consecutive passing L5 evidence_refs.
 # 7 covers a full week of weekly-cadence runs; tunable per project later.
@@ -106,8 +107,12 @@ def _load_json_schema(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def _load_registry(path: Path) -> SourcesRegistry:
+def load_sources_registry(path: Path) -> SourcesRegistry:
     return SourcesRegistry.model_validate(yaml.safe_load(path.read_text(encoding="utf-8")))
+
+
+def _load_registry(path: Path) -> SourcesRegistry:
+    return load_sources_registry(path)
 
 
 def _validate_evidence_payload(*, repo_root: Path, evidence_ref: EvidenceRef) -> tuple[bool, dict[str, object] | None]:

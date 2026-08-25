@@ -1,4 +1,7 @@
-import type { CountySummaryLinkedCandidate } from "$lib/campaign-finance-detail/contract";
+import type {
+  CandidateDetailResponse,
+  CountySummaryLinkedCandidate
+} from "$lib/campaign-finance-detail/contract";
 
 const fixtureConstants =
   (await import(new URL("./fixtures.ts", import.meta.url).href)) as typeof import("./fixtures");
@@ -68,7 +71,9 @@ const {
   SMOKE_GA_CANDIDATE_ID,
   SMOKE_NC_SHOWCASE_COUNTY_DIVISION_NAME,
   SMOKE_NC_SHOWCASE_COUNTY_SLUG,
+  SMOKE_NC_SHOWCASE_DISTRICT_DIVISION_ID,
   SMOKE_NC_SHOWCASE_DISTRICT_DIVISION_NAME,
+  SMOKE_NC_SHOWCASE_DISTRICT_DIVISION_TYPE,
   SMOKE_NC_SHOWCASE_RECIPIENT_NAME,
   SMOKE_NC_SHOWCASE_STATE_CODE,
   SMOKE_OFFICEHOLDING_ID,
@@ -165,6 +170,10 @@ const LOADED_ZERO_COVERAGE = {
   completeness: "complete",
   basis: "authoritative_load_evidence"
 } as const;
+
+function candidateDetail<const Detail extends CandidateDetailResponse>(detail: Detail): Detail {
+  return detail;
+}
 
 function buildCandidateCommitteeSummary({
   totalRaised,
@@ -437,7 +446,7 @@ export const smokeFixtures = {
       person_name: SMOKE_PERSON_CANONICAL_NAME,
       officeholding_id: SMOKE_OFFICEHOLDING_ID,
       office_id: SMOKE_OFFICE_ID,
-      office_name: "U.S. Representative for North Carolina's 1st congressional district",
+      office_name: SMOKE_OFFICE_NAME,
       chamber: "House",
       state: "NC",
       district: "01",
@@ -581,13 +590,13 @@ export const smokeFixtures = {
           name: SMOKE_CONTEST_NAME,
           election_type: "general" as const,
           office_name: SMOKE_OFFICE_NAME,
-          office_level: "state" as const,
+          office_level: "federal" as const,
           state: "NC",
           jurisdiction_id: null,
           electoral_division_id: null,
-          electoral_division_type: null,
-          electoral_division_state: null,
-          district_number: null,
+          electoral_division_type: "congressional_district",
+          electoral_division_state: "NC",
+          district_number: "01",
           candidate_count: 1
         }
       ]
@@ -604,13 +613,13 @@ export const smokeFixtures = {
         name: SMOKE_CONTEST_NAME,
         election_type: "general" as const,
         office_name: SMOKE_OFFICE_NAME,
-        office_level: "state" as const,
+        office_level: "federal" as const,
         state: "NC",
         jurisdiction_id: null,
         electoral_division_id: null,
-        electoral_division_type: null,
-        electoral_division_state: null,
-        district_number: null,
+        electoral_division_type: "congressional_district",
+        electoral_division_state: "NC",
+        district_number: "01",
         candidate_count: 1
       }
     ]
@@ -821,7 +830,7 @@ export const smokeFixtures = {
           election_type: "general",
           office_id: SMOKE_OFFICE_ID,
           office_name: SMOKE_OFFICE_NAME,
-          office_level: "state",
+          office_level: "federal",
           party: "DEM",
           status: null,
           incumbent_challenge: null,
@@ -1470,7 +1479,7 @@ export const smokeFixtures = {
   },
   candidate: {
     id: SMOKE_CANDIDATE_ID,
-    detail: {
+    detail: candidateDetail({
       id: SMOKE_CANDIDATE_ID,
       fec_candidate_id: "H0NC01001",
       name: SMOKE_CANDIDATE_NAME,
@@ -1485,6 +1494,13 @@ export const smokeFixtures = {
       district: "01",
       incumbent_challenge: "I",
       principal_committee_id: SMOKE_COMMITTEE_ID,
+      candidacies: [
+        {
+          contest_id: SMOKE_CONTEST_ID,
+          contest_name: SMOKE_CONTEST_NAME,
+          election_date: SMOKE_ELECTION_DATE
+        }
+      ],
       sources: [
         {
           domain: "campaign_finance",
@@ -1496,7 +1512,7 @@ export const smokeFixtures = {
           pull_date: "2026-03-19T00:00:00Z"
         }
       ]
-    },
+    }),
     summary: {
       candidate_id: SMOKE_CANDIDATE_ID,
       candidate_name: SMOKE_CANDIDATE_NAME,
@@ -1578,7 +1594,7 @@ export const smokeFixtures = {
   },
   candidateOutOfCycle: {
     id: SMOKE_OUT_OF_CYCLE_CANDIDATE_ID,
-    detail: {
+    detail: candidateDetail({
       id: SMOKE_OUT_OF_CYCLE_CANDIDATE_ID,
       fec_candidate_id: "H0NC04004",
       name: SMOKE_OUT_OF_CYCLE_CANDIDATE_NAME,
@@ -1593,8 +1609,9 @@ export const smokeFixtures = {
       district: "04",
       incumbent_challenge: "C",
       principal_committee_id: null,
+      candidacies: [],
       sources: []
-    },
+    }),
     summary: {
       candidate_id: SMOKE_OUT_OF_CYCLE_CANDIDATE_ID,
       candidate_name: SMOKE_OUT_OF_CYCLE_CANDIDATE_NAME,
@@ -1648,7 +1665,7 @@ export const smokeFixtures = {
   },
   candidateEmpty: {
     id: SMOKE_EMPTY_CANDIDATE_ID,
-    detail: {
+    detail: candidateDetail({
       id: SMOKE_EMPTY_CANDIDATE_ID,
       fec_candidate_id: "H0NC99998",
       name: "Candidate Empty",
@@ -1663,8 +1680,9 @@ export const smokeFixtures = {
       district: null,
       incumbent_challenge: null,
       principal_committee_id: null,
+      candidacies: [],
       sources: []
-    },
+    }),
     summary: {
       candidate_id: SMOKE_EMPTY_CANDIDATE_ID,
       candidate_name: "Candidate Empty",
@@ -1705,7 +1723,7 @@ export const smokeFixtures = {
   },
   candidateLoadedZero: {
     id: SMOKE_LOADED_ZERO_CANDIDATE_ID,
-    detail: {
+    detail: candidateDetail({
       id: SMOKE_LOADED_ZERO_CANDIDATE_ID,
       fec_candidate_id: "H0NC99996",
       name: "Candidate Loaded Zero",
@@ -1720,8 +1738,9 @@ export const smokeFixtures = {
       district: "02",
       incumbent_challenge: "C",
       principal_committee_id: null,
+      candidacies: [],
       sources: []
-    },
+    }),
     summary: {
       candidate_id: SMOKE_LOADED_ZERO_CANDIDATE_ID,
       candidate_name: "Candidate Loaded Zero",
@@ -1762,7 +1781,7 @@ export const smokeFixtures = {
   },
   candidateBackendFailure: {
     id: SMOKE_BACKEND_FAILURE_CANDIDATE_ID,
-    detail: {
+    detail: candidateDetail({
       id: SMOKE_BACKEND_FAILURE_CANDIDATE_ID,
       fec_candidate_id: "H0NC99995",
       name: "Candidate Backend Failure",
@@ -1777,8 +1796,9 @@ export const smokeFixtures = {
       district: "03",
       incumbent_challenge: "C",
       principal_committee_id: null,
+      candidacies: [],
       sources: []
-    },
+    }),
     behavior: {
       summaryStatus: 503,
       ieSummaryStatus: 503,
@@ -1787,7 +1807,7 @@ export const smokeFixtures = {
   },
   candidateDeviant: {
     id: SMOKE_DEVIANT_CANDIDATE_ID,
-    detail: {
+    detail: candidateDetail({
       id: SMOKE_DEVIANT_CANDIDATE_ID,
       fec_candidate_id: "H0NC99997",
       name: "Candidate Deviant",
@@ -1802,6 +1822,7 @@ export const smokeFixtures = {
       district: "09",
       incumbent_challenge: "C",
       principal_committee_id: SMOKE_COMMITTEE_ID,
+      candidacies: [],
       keel_l10_reference: {
         totalRaised: "1000.00",
         sourceLabel: "NC SBOE anchor",
@@ -1809,7 +1830,7 @@ export const smokeFixtures = {
         deviationThresholdRatio: 0.2
       },
       sources: []
-    },
+    }),
     summary: {
       candidate_id: SMOKE_DEVIANT_CANDIDATE_ID,
       candidate_name: "Candidate Deviant",
@@ -1858,7 +1879,7 @@ export const smokeFixtures = {
   },
   candidateAuditedMalformed: {
     id: SMOKE_AUDITED_MALFORMED_CANDIDATE_ID,
-    detail: {
+    detail: candidateDetail({
       id: SMOKE_AUDITED_MALFORMED_CANDIDATE_ID,
       fec_candidate_id: "H0TX05005",
       name: SMOKE_AUDITED_MALFORMED_CANDIDATE_RAW_NAME,
@@ -1873,6 +1894,7 @@ export const smokeFixtures = {
       district: "05",
       incumbent_challenge: "C",
       principal_committee_id: null,
+      candidacies: [],
       sources: [
         {
           domain: "campaign_finance",
@@ -1884,7 +1906,7 @@ export const smokeFixtures = {
           pull_date: "2026-03-19T00:00:00Z"
         }
       ]
-    },
+    }),
     summary: {
       candidate_id: SMOKE_AUDITED_MALFORMED_CANDIDATE_ID,
       candidate_name: SMOKE_AUDITED_MALFORMED_CANDIDATE_RAW_NAME,
@@ -1930,7 +1952,7 @@ export const smokeFixtures = {
   // fixture names made both assertions vacuously true before this specimen.
   candidateSafeAllCaps: {
     id: SMOKE_ALLCAPS_CANDIDATE_ID,
-    detail: {
+    detail: candidateDetail({
       id: SMOKE_ALLCAPS_CANDIDATE_ID,
       fec_candidate_id: "H0GA00202",
       name: SMOKE_ALLCAPS_CANDIDATE_RAW_NAME,
@@ -1945,8 +1967,9 @@ export const smokeFixtures = {
       district: "02",
       incumbent_challenge: "C",
       principal_committee_id: null,
+      candidacies: [],
       sources: []
-    },
+    }),
     summary: {
       candidate_id: SMOKE_ALLCAPS_CANDIDATE_ID,
       candidate_name: SMOKE_ALLCAPS_CANDIDATE_RAW_NAME,
@@ -1987,9 +2010,9 @@ export const smokeFixtures = {
   },
   candidateAl: {
     id: SMOKE_AL_CANDIDATE_ID,
-    detail: {
+    detail: candidateDetail({
       id: SMOKE_AL_CANDIDATE_ID,
-      fec_candidate_id: "H0AL00001",
+      fec_candidate_id: "S0AL00001",
       name: "Candidate Alabama",
       slug: "candidate-alabama",
       slug_is_unique: false,
@@ -2002,6 +2025,7 @@ export const smokeFixtures = {
       district: null,
       incumbent_challenge: "C",
       principal_committee_id: SMOKE_COMMITTEE_ID,
+      candidacies: [],
       sources: [
         {
           domain: "campaign_finance",
@@ -2013,7 +2037,7 @@ export const smokeFixtures = {
           pull_date: "2026-03-19T00:00:00Z"
         }
       ]
-    },
+    }),
     summary: {
       candidate_id: SMOKE_AL_CANDIDATE_ID,
       candidate_name: "Candidate Alabama",
@@ -2062,9 +2086,9 @@ export const smokeFixtures = {
   },
   candidateGa: {
     id: SMOKE_GA_CANDIDATE_ID,
-    detail: {
+    detail: candidateDetail({
       id: SMOKE_GA_CANDIDATE_ID,
-      fec_candidate_id: "H0GA00001",
+      fec_candidate_id: "S0GA00001",
       name: "Candidate Georgia",
       slug: "candidate-georgia",
       slug_is_unique: false,
@@ -2077,6 +2101,7 @@ export const smokeFixtures = {
       district: null,
       incumbent_challenge: "C",
       principal_committee_id: SMOKE_COMMITTEE_ID,
+      candidacies: [],
       sources: [
         {
           domain: "campaign_finance",
@@ -2088,7 +2113,7 @@ export const smokeFixtures = {
           pull_date: "2026-03-19T00:00:00Z"
         }
       ]
-    },
+    }),
     summary: {
       candidate_id: SMOKE_GA_CANDIDATE_ID,
       candidate_name: "Candidate Georgia",
@@ -2436,7 +2461,7 @@ export const smokeFixtures = {
             type: "Feature",
             geometry: { type: "Polygon", coordinates: [] },
             properties: {
-              id: "district-nc-01",
+              id: SMOKE_NC_SHOWCASE_DISTRICT_DIVISION_ID,
               name: SMOKE_NC_SHOWCASE_DISTRICT_DIVISION_NAME,
               division_type: "congressional_district",
               state: "NC",
@@ -2576,7 +2601,7 @@ export const smokeFixtures = {
       id: SMOKE_OFFICE_ID,
       name: SMOKE_OFFICE_NAME,
       office_level: "federal",
-      title: "Senator",
+      title: "Representative",
       jurisdiction_id: null,
       state: "NC",
       is_elected: true,
@@ -2594,8 +2619,8 @@ export const smokeFixtures = {
         person_id: SMOKE_PERSON_ID,
         person_name: SMOKE_OFFICE_OFFICEHOLDER_NAME,
         holder_status: "elected",
-        electoral_division_id: null,
-        electoral_division_type: "state",
+        electoral_division_id: SMOKE_NC_SHOWCASE_DISTRICT_DIVISION_ID,
+        electoral_division_type: SMOKE_NC_SHOWCASE_DISTRICT_DIVISION_TYPE,
         electoral_division_state: "NC",
         valid_period_lower: "2021-01-03",
         valid_period_upper: null,
@@ -2607,8 +2632,8 @@ export const smokeFixtures = {
           person_id: SMOKE_PERSON_ID,
           person_name: SMOKE_OFFICE_OFFICEHOLDER_NAME,
           holder_status: "elected",
-          electoral_division_id: null,
-          electoral_division_type: "state",
+          electoral_division_id: SMOKE_NC_SHOWCASE_DISTRICT_DIVISION_ID,
+          electoral_division_type: SMOKE_NC_SHOWCASE_DISTRICT_DIVISION_TYPE,
           electoral_division_state: "NC",
           valid_period_lower: "2021-01-03",
           valid_period_upper: null,
@@ -2624,15 +2649,15 @@ export const smokeFixtures = {
           election_date: "2026-11-03",
           election_type: "general" as const,
           filing_deadline: "2026-06-15",
-          electoral_division_id: null,
-          electoral_division_type: "state",
+          electoral_division_id: SMOKE_NC_SHOWCASE_DISTRICT_DIVISION_ID,
+          electoral_division_type: SMOKE_NC_SHOWCASE_DISTRICT_DIVISION_TYPE,
           electoral_division_state: "NC",
           is_partisan: true,
           candidate_list_incomplete: false
         }
       ],
-      selected_electoral_division_id: null,
-      selected_electoral_division_type: "state",
+      selected_electoral_division_id: SMOKE_NC_SHOWCASE_DISTRICT_DIVISION_ID,
+      selected_electoral_division_type: SMOKE_NC_SHOWCASE_DISTRICT_DIVISION_TYPE,
       selected_electoral_division_state: "NC",
       incomplete_data_states: [],
       sources: [
@@ -2678,7 +2703,9 @@ export const smokeFixtures = {
       election_date: "2026-11-03",
       election_type: "general" as const,
       office_id: SMOKE_OFFICE_ID,
-      electoral_division_id: null,
+      electoral_division_id: SMOKE_NC_SHOWCASE_DISTRICT_DIVISION_ID,
+      electoral_division_type: SMOKE_NC_SHOWCASE_DISTRICT_DIVISION_TYPE,
+      electoral_division_state: "NC",
       number_of_seats: 1,
       filing_deadline: "2026-06-15",
       is_partisan: true,
@@ -3098,3 +3125,51 @@ export const smokeFixtures = {
     ]
   }
 } as const;
+
+type CandidateDetailFixtureShape = {
+  readonly detail: {
+    readonly fec_candidate_id: string;
+    readonly office: string;
+  };
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function isCandidateDetailFixture(value: unknown): value is CandidateDetailFixtureShape {
+  if (!isRecord(value) || !isRecord(value.detail)) {
+    return false;
+  }
+
+  return (
+    typeof value.detail.fec_candidate_id === "string" &&
+    typeof value.detail.office === "string"
+  );
+}
+
+export function selectStandardCandidateDetailFixtures<
+  const FixtureRegistry extends Record<string, unknown>
+>(
+  fixtures: FixtureRegistry
+): Array<Extract<FixtureRegistry[keyof FixtureRegistry], CandidateDetailFixtureShape>> {
+  return Object.values(fixtures).filter(isCandidateDetailFixture) as Array<
+    Extract<FixtureRegistry[keyof FixtureRegistry], CandidateDetailFixtureShape>
+  >;
+}
+
+export const STANDARD_CANDIDATE_DETAIL_FIXTURES =
+  selectStandardCandidateDetailFixtures(smokeFixtures);
+
+/**
+ * Mutable copy of the congressional-district geometry the fixture backend
+ * serves for `level=congressional_district&state=NC`. The registry is
+ * `as const`, but RegionMap's props want a mutable feature list, so every map
+ * consumer test needs the same re-wrap — one owner instead of one per test.
+ */
+export function buildSmokeCongressionalDistrictGeometry() {
+  return {
+    type: "FeatureCollection" as const,
+    features: [...smokeFixtures.ncCountyDrilldown.geometryByLevel.congressional_district.features]
+  };
+}

@@ -38,20 +38,19 @@ from domains.campaign_finance.jurisdictions.states.load_utils import (
     LoadResult,
     commit_managed_transaction,
     ensure_data_source,
-    ensure_transaction_open,
     iter_rows_with_limit,
     link_entity_source_and_optional_mailing_address,
     try_row_without_savepoint,
     validated_limit,
 )
-from domains.campaign_finance.types.models import Filing, Transaction
+from domains.campaign_finance.types.models import Filing, SupportOpposeLiteral, Transaction
 
 from . import (
     _load_column_for_semantic_path,
     _load_data_source_name_for_data_type,
     _load_data_source_url_for_data_type,
 )
-from .extract import extract_wi_transaction
+from .extract import WITransactionExtraction, extract_wi_transaction
 from .parse import parse_transactions
 
 LOGGER = logging.getLogger(__name__)
@@ -59,6 +58,7 @@ LOGGER = logging.getLogger(__name__)
 _WI_DOMAIN = "campaign_finance"
 _WI_JURISDICTION = "state/WI"
 _WI_SOURCE_FORMAT = "csv"
+_COMMIT_BATCH_ROWS = 1_000
 
 
 @dataclass(slots=True)
@@ -107,7 +107,7 @@ def _wi_source_record_key(row: Mapping[str, str | None]) -> str:
 
 
 def _build_wi_source_record(data_source_id: UUID, row: Mapping[str, str | None]) -> SourceRecord:
-    raw_fields = dict(row)
+    raw_fields: dict[str, object] = dict(row)
     return SourceRecord(
         data_source_id=data_source_id,
         source_record_key=_wi_source_record_key(row),
@@ -135,7 +135,7 @@ def _load_wi_transaction_entities(
     conn: psycopg.Connection,
     *,
     source_record_id: UUID,
-    extracted: dict[str, object],
+    extracted: WITransactionExtraction,
 ) -> None:
     address = extracted["address"]
     address_id: UUID | None = None
@@ -249,7 +249,7 @@ def _load_wi_rows(
             counts.skipped += 1
 
         processed_count = counts.inserted + counts.skipped + counts.errors
-        if processed_count % 1_000 == 0:
+        if processed_count % _COMMIT_BATCH_ROWS == 0:
             commit_managed_transaction(conn, manages_outer_transaction)
 
     commit_managed_transaction(conn, manages_outer_transaction)
@@ -313,7 +313,7 @@ def _effective_wi_transaction_date(row: Mapping[str, str | None]) -> date | None
     return _parse_wi_date(row.get(_column("wi.transaction.communication_date")))
 
 
-def _normalize_support_stance(raw_value: str | None) -> str | None:
+def _normalize_support_stance(raw_value: str | None) -> SupportOpposeLiteral | None:
     normalized_value = normalize_optional_text(raw_value)
     if normalized_value is None:
         return None
@@ -518,6 +518,7 @@ def _load_wi_relational_transactions(
     filing_lookup: dict[str, _WIFilingLookupEntry] = {}
     relational_errors = 0
     manages_outer_transaction = conn.info.transaction_status == psycopg.pq.TransactionStatus.IDLE
+    processed_count = 0
 
     for row in iter_rows_with_limit(rows, limit):
         if not isinstance(row, Mapping):
@@ -528,43 +529,49 @@ def _load_wi_relational_transactions(
             data_source_id=data_source_id,
             source_record_key=_wi_source_record_key(row),
         )
-        if source_record_id is None:
-            continue
+        if source_record_id is not None:
 
-        def _link_wi_row() -> bool:
-            """Upsert filing + link transaction. No per-row savepoint.
-            Returns True on success so try_row_without_savepoint can
-            distinguish success (True) from failure (None)."""
-            filing_entry = _upsert_wi_filing(
+            def _link_wi_row(source_record_id: UUID = source_record_id) -> bool:
+                """Upsert filing + link transaction. No per-row savepoint.
+                Returns True on success so try_row_without_savepoint can
+                distinguish success (True) from failure (None)."""
+                filing_entry = _upsert_wi_filing(
+                    conn,
+                    row,
+                    source_record_id=source_record_id,
+                    filing_lookup=filing_lookup,
+                )
+                _upsert_wi_transaction_with_filing(
+                    conn,
+                    row,
+                    filing_id=filing_entry.filing_id,
+                    committee_id=filing_entry.committee_id,
+                    source_record_id=source_record_id,
+                )
+                return True
+
+            result, was_db_error = try_row_without_savepoint(
                 conn,
-                row,
-                source_record_id=source_record_id,
-                filing_lookup=filing_lookup,
+                _link_wi_row,
+                manages_outer_transaction=manages_outer_transaction,
+                label="WI filing link",
             )
-            _upsert_wi_transaction_with_filing(
-                conn,
-                row,
-                filing_id=filing_entry.filing_id,
-                committee_id=filing_entry.committee_id,
-                source_record_id=source_record_id,
-            )
-            return True
 
-        result, was_db_error = try_row_without_savepoint(
-            conn,
-            _link_wi_row,
-            manages_outer_transaction=manages_outer_transaction,
-            label="WI filing link",
-        )
+            if result is None:
+                relational_errors += 1
+                # Invalidate any filing lookup entry that was created/updated
+                # by this row, since the DB change was rolled back or never committed.
+                try:
+                    filing_lookup.pop(_build_wi_filing_fec_id(row), None)
+                except Exception:  # noqa: BLE001
+                    pass
 
-        if result is None:
-            relational_errors += 1
-            # Invalidate any filing lookup entry that was created/updated
-            # by this row, since the DB change was rolled back or never committed.
-            try:
-                filing_lookup.pop(_build_wi_filing_fec_id(row), None)
-            except Exception:  # noqa: BLE001
-                pass
+        # Every iterated row advances the boundary, including rows with no source record:
+        # the lookup above opens a read transaction either way, so counting only linked
+        # rows would let a run of missing rows hold one open.
+        processed_count += 1
+        if processed_count % _COMMIT_BATCH_ROWS == 0:
+            commit_managed_transaction(conn, manages_outer_transaction)
 
     commit_managed_transaction(conn, manages_outer_transaction)
     return relational_errors
@@ -577,11 +584,12 @@ def load_wi_transactions_with_filings(
     limit: int | None = None,
 ) -> LoadResult:
     validated_row_limit = validated_limit(limit)
-    data_source_id = ensure_wi_data_source(conn, data_type="transactions")
+    # Capture ownership before ensure_wi_data_source runs SQL and implicitly opens a
+    # transaction; committing the data-source row here leaves the connection IDLE so each
+    # inner pass owns and periodically commits its own batch.
     manages_outer_transaction = conn.info.transaction_status == psycopg.pq.TransactionStatus.IDLE
-
-    if manages_outer_transaction:
-        ensure_transaction_open(conn)
+    data_source_id = ensure_wi_data_source(conn, data_type="transactions")
+    commit_managed_transaction(conn, manages_outer_transaction)
 
     try:
         load_result = _load_wi_file(conn, fp, data_source_id=data_source_id, limit=validated_row_limit)
@@ -596,8 +604,7 @@ def load_wi_transactions_with_filings(
             conn.rollback()
         raise
 
-    if manages_outer_transaction:
-        conn.commit()
+    commit_managed_transaction(conn, manages_outer_transaction)
 
     return load_result
 

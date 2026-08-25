@@ -21,7 +21,7 @@ source "${script_dir}/b2_backup_lib.sh"
 FLY_DB_HOST="${FLY_DB_HOST:-civibus-db.internal}"
 FLY_DB_PORT="${FLY_DB_PORT:-5432}"
 FLY_DB_NAME="${FLY_DB_NAME:-civibus}"
-FLY_DB_USER="${FLY_DB_USER:-civibus}"
+FLY_DB_USER="${FLY_DB_USER:-civibus_backup}"
 
 escape_pgpass_field() {
   local value="$1"
@@ -47,7 +47,7 @@ require_matching_pg_dump_major_version() {
   local server_version_pattern='^[[:space:]]*([0-9]+)[[:space:]]*$'
   local client_version_output client_major server_version_output server_version_num server_major
 
-  if ! client_version_output="$(pg_dump --version 2>&1)"; then
+  if ! client_version_output="$(b2_backup_run_database_client pg_dump --version 2>&1)"; then
     echo "Unable to run local pg_dump: ${client_version_output}" >&2
     return 1
   fi
@@ -57,7 +57,7 @@ require_matching_pg_dump_major_version() {
   fi
   client_major="${BASH_REMATCH[1]}"
 
-  if ! server_version_output="$(psql \
+  if ! server_version_output="$(b2_backup_run_database_client psql \
     --host "${FLY_DB_HOST}" \
     --port "${FLY_DB_PORT}" \
     --username "${FLY_DB_USER}" \
@@ -91,13 +91,14 @@ if [[ -f "${env_file}" ]]; then
   load_civibus_env "${env_file}"
 fi
 
-: "${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env or the machine environment}"
+: "${FLY_BACKUP_DB_PASSWORD:?FLY_BACKUP_DB_PASSWORD must be set in the machine environment}"
 
 b2_backup_configure_rclone_env
 
 # libpq authenticates from a private .pgpass only: the password never enters
-# argv, and PGPASSWORD/POSTGRES_PASSWORD (exported by load_civibus_env) are
-# removed from the environment pg_dump and psql inherit.
+# argv, and FLY_BACKUP_DB_PASSWORD plus any PGPASSWORD/POSTGRES_PASSWORD loaded
+# from a local env file are removed from the environment pg_dump and psql
+# inherit.
 pgpass_path="$(mktemp -t civibus-fly-backup-pgpass.XXXXXX)"
 remote_path=""
 upload_complete=0
@@ -118,7 +119,7 @@ pgpass_host="$(escape_pgpass_field "${FLY_DB_HOST}")"
 pgpass_port="$(escape_pgpass_field "${FLY_DB_PORT}")"
 pgpass_database="$(escape_pgpass_field "${FLY_DB_NAME}")"
 pgpass_user="$(escape_pgpass_field "${FLY_DB_USER}")"
-pgpass_password="$(escape_pgpass_field "${POSTGRES_PASSWORD}")"
+pgpass_password="$(escape_pgpass_field "${FLY_BACKUP_DB_PASSWORD}")"
 printf '%s:%s:%s:%s:%s\n' \
   "${pgpass_host}" \
   "${pgpass_port}" \
@@ -127,7 +128,7 @@ printf '%s:%s:%s:%s:%s\n' \
   "${pgpass_password}" \
   >"${pgpass_path}"
 export PGPASSFILE="${pgpass_path}"
-unset PGPASSWORD POSTGRES_PASSWORD pgpass_password
+unset FLY_BACKUP_DB_PASSWORD PGPASSWORD POSTGRES_PASSWORD pgpass_password
 
 require_matching_pg_dump_major_version
 
@@ -136,7 +137,7 @@ remote_path="$(b2_backup_fly_dump_path "${timestamp}")"
 
 echo "[$(date -Iseconds)] starting fly backup -> ${remote_path}"
 
-pg_dump \
+b2_backup_run_database_client pg_dump \
     --host "${FLY_DB_HOST}" \
     --port "${FLY_DB_PORT}" \
     --username "${FLY_DB_USER}" \

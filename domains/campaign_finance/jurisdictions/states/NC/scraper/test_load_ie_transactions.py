@@ -1,25 +1,47 @@
 from __future__ import annotations
 
+from contextlib import ExitStack
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
-from uuid import UUID
+from typing import NamedTuple
+from uuid import UUID, uuid4
 
 import psycopg
 import pytest
 from psycopg.rows import dict_row
 
+from core.db import get_connection, try_insert_source_record
+from core.types.python.models import SourceRecord, compute_record_hash, utc_now
+from domains.campaign_finance.ingest.filing_loader import (
+    generate_synthetic_committee_id,
+    upsert_filing,
+)
+from domains.campaign_finance.jurisdictions._bulk_fixture_support import (
+    BulkFixtureInterruption,
+    bulk_fixture_entity_row_counts,
+    bulk_fixture_row_counts,
+    install_write_interrupt,
+    seed_bulk_fixture,
+)
 from domains.campaign_finance.jurisdictions.states.NC.scraper import load as nc_load_module
 from domains.campaign_finance.jurisdictions.states.NC.scraper import load_ie_transactions as ie_tx_loader
 from domains.campaign_finance.jurisdictions.states.NC.scraper.load import (
+    LoadResult,
     ensure_nc_ie_document_index_data_source,
     load_nc_ie_document_index,
     load_nc_ie_transactions,
+    resolve_nc_committee_bridge,
 )
 from domains.campaign_finance.jurisdictions.states.NC.scraper.load_support import (
+    resolve_nc_ie_data_source_before_managed_load,
     set_nc_source_record_report_section_url,
 )
-from domains.campaign_finance.jurisdictions.states.NC.scraper.parse_ie_report_section import NCIEReportRow
+from domains.campaign_finance.jurisdictions.states.NC.scraper.parse_ie_report_section import (
+    NCIEReportRow,
+    parse_ie_report_section_csv,
+)
+from domains.campaign_finance.types.models import Filing
 
 pytestmark = pytest.mark.integration
 
@@ -464,3 +486,247 @@ Date,Name,Street 1,Street 2,City,State,Full Zip,Country Name,Outside US Postal C
 
     assert [row["target_name"] for row in rows] == ["UNMATCHED CANDIDATE", "PIERCE RODNEY D"]
     assert all(row["recipient_candidate_id"] is None for row in rows)
+
+
+# --- Stage 4: the work-item loop commits each completed batch mid-loop --------
+#
+# `_EXPECTED_DURABLE_BATCH_ROWS` is a frozen literal, deliberately NOT read from
+# `ie_tx_loader._COMMIT_BATCH_ROWS`. The falsifiability probe for this specimen
+# monkeypatches that module constant above the fixture size; an expectation derived from
+# the live constant would move with the probe and the specimen could never go red.
+
+_EXPECTED_DURABLE_BATCH_ROWS = 1_000
+_NC_BULK_WORK_ITEM_COUNT = _EXPECTED_DURABLE_BATCH_ROWS + 1
+# Every seeded work item shares one committee, and the loader writes no contributor
+# person or address rows, so a completed load's whole entity footprint is that committee.
+_NC_LOADED_COMMITTEE_ROWS = 1
+_NC_BULK_REPORT_SECTION_URL = "https://cf.ncsbe.gov/CFOrgLkup/ReportSection/?RID=999999&SID=Batch"
+_NC_BULK_REPORT_DETAIL_URL = "https://cf.ncsbe.gov/CFOrgLkup/ReportDetail/?RID=999999&TP=EXP"
+_NC_BULK_REPORT_EXPORT_URL = "https://cf.ncsbe.gov/CFOrgLkup/ExportDetailResults/?ReportID=999999&Type=EXP"
+
+
+def _single_row_detail_export_csv() -> str:
+    """Return the known-answer detail export trimmed to its first expenditure row.
+
+    One row per filing keeps 1,001 work items cheap while still driving the real parse,
+    source-record, and transaction writes for every one of them.
+    """
+    banner, header, first_row = _KNOWN_ANSWER_DETAIL_FIXTURE.read_text(encoding="utf-8").splitlines()[:3]
+    return "\n".join([banner, header, first_row]) + "\n"
+
+
+class NCIEBulkFixture(NamedTuple):
+    """One synthetic NC IE committee, its filing work items, and everything they write."""
+
+    run_suffix: str
+    committee_native_id: str
+    committee_name: str
+    filing_fec_ids: list[str]
+    source_record_keys: list[str]
+
+    @property
+    def committee_fec_id(self) -> str:
+        return generate_synthetic_committee_id("NC", self.committee_native_id)
+
+
+def _build_nc_ie_bulk_fixture(*, work_item_count: int) -> NCIEBulkFixture:
+    """Derive every identity the specimen will write, before touching the database.
+
+    The filing source-record keys are this module's own; the transaction source-record
+    keys are computed with the loader's own `_build_source_record_key`, so they cannot
+    drift from the keys a real load writes and cleanup cannot miss them.
+    """
+    run_suffix = uuid4().hex[:12]
+    filing_fec_ids = [f"NC-IE-{run_suffix}{index:04d}" for index in range(work_item_count)]
+    detail_rows = parse_ie_report_section_csv(
+        _single_row_detail_export_csv(),
+        spender_committee_name=f"NC Bounded Commit Test Committee {run_suffix}",
+        source_filing_url=_NC_BULK_REPORT_SECTION_URL,
+        report_detail_url=_NC_BULK_REPORT_DETAIL_URL,
+        report_export_url=_NC_BULK_REPORT_EXPORT_URL,
+    )
+    source_record_keys = [f"nc-ie-doc:{run_suffix}:{index}" for index in range(work_item_count)]
+    source_record_keys += [
+        ie_tx_loader._build_source_record_key(filing_fec_id=filing_fec_id, row=row)
+        for filing_fec_id in filing_fec_ids
+        for row in detail_rows
+    ]
+    return NCIEBulkFixture(
+        run_suffix=run_suffix,
+        committee_native_id=f"NCIE{run_suffix}",
+        committee_name=f"NC Bounded Commit Test Committee {run_suffix}",
+        filing_fec_ids=filing_fec_ids,
+        source_record_keys=source_record_keys,
+    )
+
+
+def _commit_nc_ie_filing_work_items(fixture: NCIEBulkFixture, *, data_source_id: UUID) -> None:
+    """Commit the committee and one IE filing per work item on an independent connection.
+
+    Committed rather than left in the caller's transaction because the loader under test
+    runs on its own connection and only sees what another connection made durable.
+    """
+    seed_conn = get_connection()
+    try:
+        committee_id = resolve_nc_committee_bridge(
+            seed_conn,
+            fixture.committee_native_id,
+            committee_name=fixture.committee_name,
+        )
+        for index, filing_fec_id in enumerate(fixture.filing_fec_ids):
+            raw_fields = {
+                "source_record_key": fixture.source_record_keys[index],
+                "report_section_url": _NC_BULK_REPORT_SECTION_URL,
+            }
+            source_record_id = try_insert_source_record(
+                seed_conn,
+                SourceRecord(
+                    data_source_id=data_source_id,
+                    source_record_key=fixture.source_record_keys[index],
+                    raw_fields=raw_fields,
+                    pull_date=utc_now(),
+                    record_hash=compute_record_hash(raw_fields),
+                ),
+            )
+            assert source_record_id is not None
+            upsert_filing(
+                seed_conn,
+                Filing(
+                    filing_fec_id=filing_fec_id,
+                    committee_id=committee_id,
+                    filing_name="Independent Expenditure Report",
+                    amendment_indicator="N",
+                    source_record_id=source_record_id,
+                ),
+            )
+        seed_conn.commit()
+    finally:
+        seed_conn.close()
+
+
+def _assert_nc_ie_fixture_owns_selected_batch(
+    selected_filing_ids: list[str],
+    fixture_filing_ids: list[str],
+) -> None:
+    """Fail explicitly when foreign DB rows would consume this specimen's batch."""
+    assert set(selected_filing_ids) == set(fixture_filing_ids), (
+        "fixture does not own the selected work-item batch: "
+        f"selected={len(selected_filing_ids)}, fixture={len(fixture_filing_ids)}, "
+        f"foreign={set(selected_filing_ids) - set(fixture_filing_ids)}"
+    )
+
+
+def test_nc_ie_bulk_fixture_selection_precondition_rejects_foreign_work_items() -> None:
+    fixture = _build_nc_ie_bulk_fixture(work_item_count=2)
+    selected_filing_ids = ["NC-IE-foreign", fixture.filing_fec_ids[0]]
+
+    with pytest.raises(AssertionError, match="fixture does not own the selected work-item batch"):
+        _assert_nc_ie_fixture_owns_selected_batch(selected_filing_ids, fixture.filing_fec_ids)
+
+
+def test_load_nc_ie_transactions_commits_batch_mid_loop(
+    db_conn: psycopg.Connection,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An interrupt on work item 1,001 leaves the first 1,000 work items' rows durable.
+
+    Before Stage 4 the work-item loop committed once, at the end of the job, so this
+    interruption discarded every transaction and an independent connection saw zero.
+    """
+    with ExitStack() as resources:
+        fixture = _build_nc_ie_bulk_fixture(work_item_count=_NC_BULK_WORK_ITEM_COUNT)
+        seed_bulk_fixture(
+            resources,
+            db_conn,
+            fixture,
+            expected_unique_source_record_keys=len(fixture.source_record_keys),
+        )
+
+        loader_conn = get_connection()
+        resources.callback(loader_conn.close)
+        data_source_id = resolve_nc_ie_data_source_before_managed_load(loader_conn)
+        _commit_nc_ie_filing_work_items(fixture, data_source_id=data_source_id)
+
+        selected_work_items = ie_tx_loader._select_ie_filing_work_items(
+            loader_conn,
+            limit=_NC_BULK_WORK_ITEM_COUNT,
+        )
+        _assert_nc_ie_fixture_owns_selected_batch(
+            [work_item.filing_fec_id for work_item in selected_work_items],
+            fixture.filing_fec_ids,
+        )
+        loader_conn.rollback()
+
+        monkeypatch.setattr(
+            ie_tx_loader,
+            "fetch_ie_report_detail_export_csv",
+            lambda _url: (
+                _single_row_detail_export_csv(),
+                _NC_BULK_REPORT_DETAIL_URL,
+                _NC_BULK_REPORT_EXPORT_URL,
+            ),
+        )
+        work_item_counts = install_write_interrupt(
+            monkeypatch,
+            ie_tx_loader,
+            "_load_filing_transactions",
+            raise_after_writes=_EXPECTED_DURABLE_BATCH_ROWS,
+        )
+
+        # The loader owns its own commits only if it starts IDLE, which is what the
+        # data-source resolution above preserves.
+        assert loader_conn.info.transaction_status == psycopg.pq.TransactionStatus.IDLE
+        with pytest.raises(BulkFixtureInterruption):
+            load_nc_ie_transactions(loader_conn, data_source_id=data_source_id, limit=None)
+        loader_conn.rollback()
+
+        assert work_item_counts["writes"] == _NC_BULK_WORK_ITEM_COUNT
+        source_record_count, transaction_count = bulk_fixture_row_counts(fixture)
+        # Every seeded filing source record is durable; only the first full batch of
+        # work items also wrote a transaction source record and a transaction.
+        assert source_record_count == _NC_BULK_WORK_ITEM_COUNT + _EXPECTED_DURABLE_BATCH_ROWS
+        assert transaction_count == _EXPECTED_DURABLE_BATCH_ROWS
+
+        # The bridge organisation and committee behind those filings are part of the
+        # fixture's footprint too; the stack's cleanup deletes them and re-reads this
+        # same count, so a cleanup that stops covering them fails this specimen.
+        assert bulk_fixture_entity_row_counts(fixture) == {
+            "person": 0,
+            "organization": _NC_LOADED_COMMITTEE_ROWS,
+            "address": 0,
+            "committee": _NC_LOADED_COMMITTEE_ROWS,
+        }
+
+
+def test_cli_ie_transactions_load_hands_the_loader_an_idle_connection() -> None:
+    """`run_nc_refresh`'s ie-transactions arm must resolve the data source *before* the loader.
+
+    Same ordering contract as the doc-index arm: a data-source lookup left open makes the
+    loader read INTRANS and silently drop its 1,000-item commit boundary.
+    """
+    import argparse
+
+    from domains.campaign_finance.jurisdictions.states.NC.scraper import cli
+
+    observed_transaction_status: list[object] = []
+
+    def _recording_loader(conn, *, data_source_id, limit):
+        observed_transaction_status.append(conn.info.transaction_status)
+        assert data_source_id is not None
+        assert limit == 3
+        return LoadResult(inserted=0, skipped=0, quarantined=0, superseded=0, errors=0, elapsed_seconds=0.0)
+
+    with pytest.MonkeyPatch.context() as patcher:
+        patcher.setattr(cli, "load_nc_ie_transactions", _recording_loader)
+        connection = get_connection()
+        try:
+            cli._load_input_data(
+                connection,
+                None,
+                argparse.Namespace(data_type="ie-transactions", limit=3),
+            )
+        finally:
+            connection.rollback()
+            connection.close()
+
+    assert observed_transaction_status == [psycopg.pq.TransactionStatus.IDLE]

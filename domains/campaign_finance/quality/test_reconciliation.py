@@ -29,8 +29,7 @@ from domains.campaign_finance.quality.reconciliation import (
     resolve_data_source_ids,
     source_record_scope_where,
 )
-
-_TEST_FILE_LINE_HARD_LIMIT = 800
+from test_support.line_budget import HARD_LINE_LIMIT, count_lines
 
 
 def _mock_conn(rows: list[tuple], *, fetchone: bool = False) -> MagicMock:
@@ -48,9 +47,9 @@ def _mock_conn(rows: list[tuple], *, fetchone: bool = False) -> MagicMock:
 
 class TestTestFileSizeGuard:
     def test_reconciliation_file_stays_within_line_hard_limit(self) -> None:
-        line_count = len(Path(__file__).read_text().splitlines())
-        assert line_count <= _TEST_FILE_LINE_HARD_LIMIT, (
-            "test_reconciliation.py exceeds the 800-line hard limit and must be split"
+        line_count = count_lines(Path(__file__))
+        assert line_count <= HARD_LINE_LIMIT, (
+            f"test_reconciliation.py exceeds the {HARD_LINE_LIMIT}-line hard limit and must be split"
         )
 
 

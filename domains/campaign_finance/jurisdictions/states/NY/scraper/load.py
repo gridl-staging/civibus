@@ -605,6 +605,12 @@ def _resolve_ny_transaction_type(row: Mapping[str, str | None], *, data_type: st
     return _normalize_optional_text(row.get(sched_col)) or data_type.rstrip("s")
 
 
+def _ny_transaction_identifier(row: Mapping[str, str | None], *, data_type: str) -> str:
+    """Return the transaction's natural key: trans_number when present, else the row hash."""
+    trans_num_col = _load_column_for_semantic_path(data_type, "ny.trans_number")
+    return _normalize_optional_text(row.get(trans_num_col)) or _ny_source_record_key(row)
+
+
 def _upsert_ny_transaction_with_filing(
     conn: psycopg.Connection,
     row: Mapping[str, str | None],
@@ -640,9 +646,7 @@ def _upsert_ny_transaction_with_filing(
 
     txn_type = _resolve_ny_transaction_type(row, data_type=data_type)
 
-    # Use trans_number as the unique transaction identifier.
-    trans_num_col = _load_column_for_semantic_path(data_type, "ny.trans_number")
-    txn_identifier = _normalize_optional_text(row.get(trans_num_col)) or _ny_source_record_key(row)
+    txn_identifier = _ny_transaction_identifier(row, data_type=data_type)
 
     # NY r_amend flag for amendment detection.
     amend_col = _load_column_for_semantic_path(data_type, "ny.r_amend")

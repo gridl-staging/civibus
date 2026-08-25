@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import tomllib
 from collections.abc import Callable
 from datetime import date
 from pathlib import Path
@@ -27,6 +28,8 @@ from domains.campaign_finance.jurisdictions.states.GA.scraper.parse import (
 
 _ALLOWED_GA_SEARCH_URL = "https://media.ethics.ga.gov/search/Campaign/Campaign_ByContributions.aspx"
 _GA_IE_SOURCE_NAME = "Georgia Campaign Portal — Independent Expenditures Search Export"
+_PYTEST_TIMEOUT_MARGIN_SECONDS = 5
+_REPO_ROOT = Path(__file__).resolve().parents[6]
 _STRICT_PLAYWRIGHT_FLOW_CASES = (
     (
         "contributions",
@@ -102,11 +105,6 @@ class TestGAPortalContract2026:
             assert any("2026-04-29" in issue and "HTTP 404" in issue for issue in source.known_issues)
 
 
-def _is_playwright_timeout(error: Exception) -> bool:
-    error_type = type(error)
-    return error_type.__name__ == "TimeoutError" and error_type.__module__.startswith("playwright")
-
-
 def _patch_build_search_url(
     monkeypatch: pytest.MonkeyPatch,
     *,
@@ -147,14 +145,37 @@ def _assert_integration_download_returns_nonempty_parseable_file(
         if "playwright" in str(error).lower():
             pytest.skip(f"Playwright unavailable for integration test: {error}")
         raise
-    except Exception as error:  # noqa: BLE001
-        if _is_playwright_timeout(error):
-            pytest.skip(f"GA portal timed out during {data_type} integration test: {error}")
-        raise
 
     assert export_path.exists()
     assert export_path.stat().st_size > 0
     assert list(parser(export_path))
+
+
+def test_integration_download_helper_does_not_skip_playwright_portal_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    class TimeoutError(Exception):
+        pass
+
+    TimeoutError.__module__ = "playwright.sync_api"
+
+    portal_timeout = TimeoutError("export button did not become visible")
+    monkeypatch.setitem(globals(), "download_ga_export", MagicMock(side_effect=portal_timeout))
+
+    try:
+        _assert_integration_download_returns_nonempty_parseable_file(
+            tmp_path,
+            data_type="contributions",
+            candidate="Hatfield",
+            date_start="01/01/2025",
+            date_end="12/31/2025",
+            parser=MagicMock(),
+        )
+    except BaseException as error:
+        assert error is portal_timeout
+    else:
+        pytest.fail("Expected Playwright portal timeout to propagate")
 
 
 @pytest.mark.parametrize("data_type", ["contributions", "expenditures", "independent_expenditures"])
@@ -172,6 +193,24 @@ def test_build_search_url_raises_for_unknown_data_type() -> None:
 
 def test_strict_playwright_flow_cases_exclude_unverified_ie_contract() -> None:
     assert tuple(case[0] for case in _STRICT_PLAYWRIGHT_FLOW_CASES) == ("contributions", "expenditures")
+
+
+def test_download_ga_export_results_wait_leaves_pytest_timeout_margin() -> None:
+    pyproject = tomllib.loads((_REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    pytest_timeout_seconds = pyproject["tool"]["pytest"]["ini_options"]["timeout"]
+    max_browser_wait_ms = (pytest_timeout_seconds - _PYTEST_TIMEOUT_MARGIN_SECONDS) * 1000
+
+    browser_wait_budget_ms = (
+        download_module._PAGE_GOTO_TIMEOUT_MS
+        + download_module._RESULTS_READY_TIMEOUT_MS
+        + download_module._RESULTS_READY_TIMEOUT_MS
+        + download_module._DOWNLOAD_EVENT_TIMEOUT_MS
+    )
+
+    assert download_module._PAGE_GOTO_TIMEOUT_MS > 0
+    assert download_module._RESULTS_READY_TIMEOUT_MS > 0
+    assert download_module._DOWNLOAD_EVENT_TIMEOUT_MS > 0
+    assert browser_wait_budget_ms <= max_browser_wait_ms
 
 
 @pytest.mark.parametrize(
@@ -290,7 +329,11 @@ def test_download_ga_export_runs_expected_playwright_flow(
 
     assert saved_path == tmp_path / "downloads" / suggested_filename
     build_search_url_mock.assert_called_once_with(data_type)
-    page.goto.assert_called_once_with(_ALLOWED_GA_SEARCH_URL, wait_until="domcontentloaded")
+    page.goto.assert_called_once_with(
+        _ALLOWED_GA_SEARCH_URL,
+        wait_until="domcontentloaded",
+        timeout=download_module._PAGE_GOTO_TIMEOUT_MS,
+    )
     playwright_instance.chromium.launch.assert_called_once_with(headless=True)
     browser.new_context.assert_called_once_with(accept_downloads=True)
     assert page.fill.call_args_list == [
@@ -299,13 +342,177 @@ def test_download_ga_export_runs_expected_playwright_flow(
         call(date_end_selector, date_end),
     ]
     search_button.click.assert_called_once_with()
-    page.expect_navigation.assert_called_once_with(wait_until="domcontentloaded", timeout=120_000)
-    export_button.wait_for.assert_called_once_with(state="visible", timeout=120_000)
-    page.expect_download.assert_called_once_with(timeout=180_000)
+    page.expect_navigation.assert_called_once_with(
+        wait_until="domcontentloaded",
+        timeout=download_module._RESULTS_READY_TIMEOUT_MS,
+    )
+    export_button.wait_for.assert_called_once_with(
+        state="visible",
+        timeout=download_module._RESULTS_READY_TIMEOUT_MS,
+    )
+    page.expect_download.assert_called_once_with(timeout=download_module._DOWNLOAD_EVENT_TIMEOUT_MS)
     export_button.click.assert_called_once_with(no_wait_after=True)
     download.save_as.assert_called_once_with(str(saved_path))
     browser_context.close.assert_called_once_with()
     browser.close.assert_called_once_with()
+
+
+def test_trigger_export_download_posts_contribution_result_form_when_download_event_is_absent(
+    tmp_path: Path,
+) -> None:
+    page = MagicMock()
+    export_button = MagicMock()
+    export_button.get_attribute.return_value = "ctl00$ContentPlaceHolder1$Export"
+    page.locator.return_value = export_button
+    page.url = (
+        "https://media.ethics.ga.gov/search/Campaign/Campaign_ByContributionsearchresults.aspx?Candidate=Hatfield"
+    )
+    page.evaluate.return_value = {
+        "__VIEWSTATE": "viewstate-token",
+        "__EVENTVALIDATION": "eventvalidation-token",
+    }
+    response = MagicMock()
+    response.status = 200
+    response.headers = {"content-disposition": 'attachment; filename="StateEthicsReport.csv"'}
+    response.body.return_value = b"FilerID,Type\\n123,Contribution\\n"
+    page.context.request.post.return_value = response
+
+    saved_path = download_module._trigger_export_download(page, tmp_path)
+
+    assert saved_path == tmp_path / "StateEthicsReport.csv"
+    assert saved_path.read_bytes() == b"FilerID,Type\\n123,Contribution\\n"
+    export_button.wait_for.assert_called_once_with(
+        state="visible",
+        timeout=download_module._RESULTS_READY_TIMEOUT_MS,
+    )
+    page.context.request.post.assert_called_once_with(
+        page.url,
+        form={
+            "__VIEWSTATE": "viewstate-token",
+            "__EVENTVALIDATION": "eventvalidation-token",
+            "ctl00$ContentPlaceHolder1$Export.x": "1",
+            "ctl00$ContentPlaceHolder1$Export.y": "1",
+        },
+        timeout=download_module._DOWNLOAD_EVENT_TIMEOUT_MS,
+        max_redirects=0,
+    )
+    page.expect_download.assert_not_called()
+
+    page.url = "https://attacker.example/Campaign_ByContributionsearchresults.aspx"
+    with pytest.raises(ValueError, match="GA search URL must use"):
+        download_module._trigger_export_download(page, tmp_path)
+    assert page.context.request.post.call_count == 1
+
+    page.url = "https://media.ethics.ga.gov/search/Campaign/Campaign_ByContributionsearchresults.aspx"
+    response.status = 307
+    with pytest.raises(RuntimeError, match="HTTP 307"):
+        download_module._trigger_export_download(page, tmp_path)
+
+    response.status = 200
+    response.body.return_value = b""
+    with pytest.raises(RuntimeError, match="empty response body"):
+        download_module._trigger_export_download(page, tmp_path)
+    assert saved_path.read_bytes() == b"FilerID,Type\\n123,Contribution\\n"
+
+
+def test_trigger_export_download_falls_back_to_parseable_contribution_grid(
+    tmp_path: Path,
+) -> None:
+    page = MagicMock()
+    export_button = MagicMock()
+    export_button.get_attribute.return_value = "ctl00$ContentPlaceHolder1$Export"
+    page.locator.return_value = export_button
+    page.url = (
+        "https://media.ethics.ga.gov/search/Campaign/Campaign_ByContributionsearchresults.aspx?Candidate=Hatfield"
+    )
+    page.evaluate.side_effect = [
+        {
+            "__VIEWSTATE": "viewstate-token",
+            "__EVENTVALIDATION": "eventvalidation-token",
+        },
+        [
+            [
+                "Filer",
+                "Contributor's Name",
+                "PAC Affiliation /\nOccupation / Employer",
+                "Received /\nType /\nElection",
+                "Cash\nAmount",
+                "In-Kind\nAmount",
+                "In-Kind Description",
+            ],
+            [
+                "C2006000122\nHatfield for House\nJohn Mark Hatfield Jr\n",
+                "Waycross Bank & Trust\n501 Tebeau Street\nWaycross, georgia 31501",
+                "Georgia Bankers Association\nBank President\nWaycross Bank & Trust",
+                "12/30/2025\nMonetary\nPrimary\n2026",
+                "$25.00",
+                "$0.00",
+                "",
+            ],
+            ["1"],
+        ],
+    ]
+    page.context.request.post.side_effect = TimeoutError("contribution export POST timed out")
+
+    saved_path = download_module._trigger_export_download(page, tmp_path)
+    parsed_rows = list(parse_contributions(saved_path))
+
+    assert saved_path == tmp_path / "StateEthicsReport.csv"
+    assert len(parsed_rows) == 1
+    assert parsed_rows[0]["FilerID"] == "C2006000122"
+    assert parsed_rows[0]["Committee_Name"] == "Hatfield for House"
+    assert parsed_rows[0]["Candidate_FirstName"] == "John"
+    assert parsed_rows[0]["Candidate_MiddleName"] == "Mark"
+    assert parsed_rows[0]["Candidate_LastName"] == "Hatfield"
+    assert parsed_rows[0]["Candidate_Suffix"] == "Jr"
+    assert parsed_rows[0]["LastName"] == "Waycross Bank & Trust"
+    assert parsed_rows[0]["PAC"] == "Georgia Bankers Association"
+    assert parsed_rows[0]["Occupation"] == "Bank President"
+    assert parsed_rows[0]["Employer"] == "Waycross Bank & Trust"
+    assert parsed_rows[0]["Date"] == "2025-12-30"
+
+
+def test_trigger_export_download_fails_closed_for_paginated_contribution_grid(
+    tmp_path: Path,
+) -> None:
+    page = MagicMock()
+    export_button = MagicMock()
+    export_button.get_attribute.return_value = "ctl00$ContentPlaceHolder1$Export"
+    page.locator.return_value = export_button
+    page.url = "https://media.ethics.ga.gov/search/Campaign/Campaign_ByContributionsearchresults.aspx?Candidate=Kemp"
+    page.evaluate.side_effect = [
+        {
+            "__VIEWSTATE": "viewstate-token",
+            "__EVENTVALIDATION": "eventvalidation-token",
+        },
+        [
+            [
+                "Filer",
+                "Contributor's Name",
+                "PAC Affiliation /\nOccupation / Employer",
+                "Received /\nType /\nElection",
+                "Cash\nAmount",
+                "In-Kind\nAmount",
+                "In-Kind Description",
+            ],
+            [
+                "C2018000222\nKemp for Governor\nBrian P Kemp\n",
+                "Jane Contributor\n100 Peach Street\nAtlanta, georgia 30303",
+                "\n\n",
+                "01/15/2022\nMonetary\nPrimary\n2022",
+                "$100.00",
+                "$0.00",
+                "",
+            ],
+            ["1", "2", "3", "...", "20"],
+        ],
+    ]
+    page.context.request.post.side_effect = TimeoutError("contribution export POST timed out")
+
+    with pytest.raises(RuntimeError, match="paginated result grid"):
+        download_module._trigger_export_download(page, tmp_path)
+
+    assert not (tmp_path / "StateEthicsReport.csv").exists()
 
 
 def test_download_ga_export_closes_browser_when_context_creation_fails(
@@ -371,8 +578,8 @@ def test_download_ga_export_contributions_integration_returns_nonempty_parseable
         tmp_path,
         data_type="contributions",
         candidate="Hatfield",
-        date_start="01/01/2026",
-        date_end="03/31/2026",
+        date_start="12/01/2025",
+        date_end="12/31/2025",
         parser=parse_contributions,
     )
 
@@ -385,7 +592,7 @@ def test_download_ga_export_expenditures_integration_returns_nonempty_parseable_
         tmp_path,
         data_type="expenditures",
         candidate="Hatfield",
-        date_start="01/01/2026",
-        date_end="03/31/2026",
+        date_start="01/01/2025",
+        date_end="12/31/2025",
         parser=parse_expenditures,
     )

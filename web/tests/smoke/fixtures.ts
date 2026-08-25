@@ -57,6 +57,11 @@ export const SMOKE_PHL_COMMITTEE_ID = "12121212-1212-4121-8121-121212121212";
 export const SMOKE_NC_SHOWCASE_STATE_CODE = "NC";
 export const SMOKE_NC_SHOWCASE_COUNTY_SLUG = "wake";
 export const SMOKE_NC_SHOWCASE_COUNTY_DIVISION_NAME = "nc_county_wake";
+// NC-01 congressional district: the electoral division shared by the House
+// office fixture and the civic-geometry feature the fixture backend serves
+// for level=congressional_district&state=NC.
+export const SMOKE_NC_SHOWCASE_DISTRICT_DIVISION_ID = "district-nc-01";
+export const SMOKE_NC_SHOWCASE_DISTRICT_DIVISION_TYPE = "congressional_district";
 export const SMOKE_NC_SHOWCASE_DISTRICT_DIVISION_NAME = "nc_cd_01";
 export const SMOKE_NC_SHOWCASE_COUNTY_HEADING = "Wake County, NC";
 export const SMOKE_NC_SHOWCASE_DONOR_TOTAL = "$1,234.56";
@@ -79,8 +84,9 @@ export const SMOKE_SEARCH_CANDIDATE_QUERY = "pat";
 // declared below; string duplicated here only because const declaration order
 // forbids the forward reference).
 export const SMOKE_SEARCH_CANDIDATE_RESULT_NAME = "Pat Candidate";
-export const SMOKE_SEARCH_CONTEST_QUERY = "senate";
-export const SMOKE_SEARCH_CONTEST_RESULT_NAME = "2026 NC Senate General";
+export const SMOKE_CONTEST_NAME = "North Carolina House District 1 General";
+export const SMOKE_SEARCH_CONTEST_QUERY = "house";
+export const SMOKE_SEARCH_CONTEST_RESULT_NAME = SMOKE_CONTEST_NAME;
 export const SMOKE_SEARCH_EMPTY_TITLE = "Search | Civibus";
 export const SMOKE_SEARCH_EMPTY_DESCRIPTION =
   "Search people, organizations, committees, candidates, offices, and contests across campaign-finance and civic records.";
@@ -653,8 +659,7 @@ export const SMOKE_CONTEST_ID = process.env.SMOKE_CONTEST_ID ?? "ab111111-1111-4
 export const SMOKE_CANDIDACY_ID = "ac111111-1111-4111-8111-111111111111";
 export const SMOKE_OFFICEHOLDING_ID = "ad111111-1111-4111-8111-111111111111";
 
-export const SMOKE_CONTEST_NAME = "2026 NC Senate General";
-export const SMOKE_CONTEST_TITLE = "2026 NC Senate General | Contest | Civibus";
+export const SMOKE_CONTEST_TITLE = `${SMOKE_CONTEST_NAME} | Contest | Civibus`;
 export const SMOKE_CONTEST_DESCRIPTION = "Contest profile with 1 candidacy.";
 export const SMOKE_CANDIDACY_PERSON_NAME = "Jane Doe";
 export const SMOKE_CANDIDACY_TITLE = "Jane Doe | Candidacy | Civibus";
@@ -666,8 +671,8 @@ export const SMOKE_OFFICEHOLDING_PERSON_NAME = "Jane Doe";
 export const SMOKE_OFFICEHOLDING_TITLE = "Jane Doe | Officeholding | Civibus";
 export const SMOKE_OFFICEHOLDING_DESCRIPTION = "Officeholding profile for Jane Doe.";
 
-export const SMOKE_OFFICE_NAME = "U.S. Senator, North Carolina";
-export const SMOKE_OFFICE_TITLE = "U.S. Senator, North Carolina | Office | Civibus";
+export const SMOKE_OFFICE_NAME = "U.S. Representative for North Carolina's 1st congressional district";
+export const SMOKE_OFFICE_TITLE = `${SMOKE_OFFICE_NAME} | Office | Civibus`;
 export const SMOKE_OFFICE_DESCRIPTION = "Office profile with 1 current officeholder.";
 export const SMOKE_OFFICE_OFFICEHOLDER_NAME = "Jane Doe";
 export const SMOKE_EMPTY_OFFICE_NAME = "State Auditor, North Carolina";

@@ -49,6 +49,7 @@ import psycopg
 
 from core.db import merge_person_identifiers
 from core.db_ingest import find_person_by_identifier
+from core.entity_resolution.candidacy_merge import repoint_candidacy_person
 from core.types.python.models import DataSource, ValidDateRange
 from domains.civics.types.models import Officeholding
 from domains.campaign_finance.ingest.bulk_stage4_loader import LoadResult
@@ -74,7 +75,7 @@ from domains.campaign_finance.ingest.officeholder_contact import (
     run_officeholder_row,
 )
 from domains.campaign_finance.jurisdictions.states.load_utils import ensure_data_source
-from domains.civics.ingest import repoint_candidacy_person, upsert_officeholding
+from domains.civics.ingest import upsert_officeholding
 
 LOGGER = logging.getLogger(__name__)
 
@@ -224,9 +225,9 @@ def _converge_spine_candidacies(
     exact rather than heuristic: ``cf.candidate.fec_candidate_id`` is NOT NULL
     UNIQUE, and both sides are now keyed off one identifier.
 
-    The move goes through ``repoint_candidacy_person``, the existing conflict-safe
-    owner in ``domains/civics/ingest.py`` — this deliberately does not open a
-    second reconciliation path. ``uq_candidacy_canonical_key`` is
+    The move goes through ``repoint_candidacy_person``, the conflict-safe owner in
+    ``core/entity_resolution/candidacy_merge.py`` — this deliberately does not
+    open a second reconciliation path. ``uq_candidacy_canonical_key`` is
     ``(person_id, contest_id)``, so a naive UPDATE would raise whenever the spine
     person already holds a candidacy in the same contest. That helper instead
     COALESCEs the shadow row's fields into the canonical row and copies its

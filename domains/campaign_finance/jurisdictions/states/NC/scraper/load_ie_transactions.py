@@ -20,11 +20,14 @@ from domains.campaign_finance.jurisdictions.states.load_utils import (
 from domains.campaign_finance.types.models import Transaction
 
 from .download import NCIEReportUnavailableError, fetch_ie_report_detail_export_csv
-from .load_support import ensure_nc_ie_document_index_data_source, select_nc_source_record_id
+from .load_support import resolve_nc_ie_data_source_before_managed_load, select_nc_source_record_id
 from .load_types import NCLoadCounts
 from .parse_ie_report_section import NCIEReportRow, parse_ie_report_section_csv
 
 LOGGER = logging.getLogger(__name__)
+
+# One commit per this many iterated filing work items.
+_COMMIT_BATCH_ROWS = 1_000
 
 _NC_IE_FILING_PREFIX = "NC-IE-"
 _OFFICE_TO_CANDIDATE_CODE = {
@@ -349,8 +352,13 @@ def load_nc_ie_transactions(
     """Load NC IE transaction rows from filing-linked CFOrgLkup detail exports."""
     started_at = time.monotonic()
     counts = NCLoadCounts()
-    filings = _select_ie_filing_work_items(conn, limit=limit)
+    # Sample ownership before the work-item SELECT implicitly opens a transaction:
+    # sampling afterwards would read INTRANS off this loader's own read and make the
+    # periodic commits below no-ops.
     manages_outer_transaction = conn.info.transaction_status == psycopg.pq.TransactionStatus.IDLE
+    filings = _select_ie_filing_work_items(conn, limit=limit)
+
+    processed_count = 0
 
     for filing in filings:
         if manages_outer_transaction:
@@ -365,6 +373,14 @@ def load_nc_ie_transactions(
             counts.skipped += filing_counts.skipped
             counts.errors += filing_counts.errors
 
+        # Every iterated work item advances the boundary regardless of how many rows its
+        # report detail inserted, skipped, or errored on: a filing whose detail was
+        # unavailable still opened a transaction, so the boundary must not depend on the
+        # nested row counts.
+        processed_count += 1
+        if processed_count % _COMMIT_BATCH_ROWS == 0:
+            commit_managed_transaction(conn, manages_outer_transaction)
+
     commit_managed_transaction(conn, manages_outer_transaction)
     return _build_load_result(counts, started_at=started_at)
 
@@ -375,7 +391,7 @@ def run_nc_ie_transactions_refresh(*, limit: int | None = None) -> LoadResult:
 
     connection = get_connection()
     try:
-        data_source_id = ensure_nc_ie_document_index_data_source(connection)
+        data_source_id = resolve_nc_ie_data_source_before_managed_load(connection)
         result = load_nc_ie_transactions(connection, data_source_id=data_source_id, limit=limit)
         connection.commit()
         return result

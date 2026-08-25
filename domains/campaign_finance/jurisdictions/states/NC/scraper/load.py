@@ -65,6 +65,7 @@ from .parse import (
 LOGGER = logging.getLogger(__name__)
 build_data_source = load_support.build_data_source
 ensure_nc_ie_document_index_data_source = load_support.ensure_nc_ie_document_index_data_source
+resolve_nc_ie_data_source_before_managed_load = load_support.resolve_nc_ie_data_source_before_managed_load
 _NC_ROW_LOADER_TYPE = _NCRowLoader
 
 _NC_TRANSACTION_ENTITY_ROLES = {

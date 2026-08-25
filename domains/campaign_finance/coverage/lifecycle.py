@@ -140,7 +140,7 @@ def render_lifecycle_summary_markdown(lifecycle: ImplementedRegionLifecycleRegis
         _LIFECYCLE_AUTHORITY_NOTE,
         (
             "This summary is a derived view of lifecycle statuses for the FEC plus "
-            "implemented campaign-finance state packages."
+            "implemented campaign-finance state and independent-city packages."
         ),
         "",
         "## Implemented Region Layer Status",

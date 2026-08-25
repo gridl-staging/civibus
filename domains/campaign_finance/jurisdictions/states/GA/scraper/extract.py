@@ -116,6 +116,7 @@ def build_ga_data_source(transaction_type: str) -> DataSource:
         jurisdiction="state/GA",
         name=data_source_block.name,
         source_url=data_source_block.url,
+        update_frequency=data_source_block.update_frequency,
     )
 
 

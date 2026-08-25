@@ -1,18 +1,23 @@
 from __future__ import annotations
 
+import os
+import threading
 import zipfile
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Callable
 from unittest.mock import MagicMock
 from uuid import UUID, uuid4
 
 import psycopg
 import pytest
 
+from core import db
 from core.refresh import job_builders, runner
+from core.types.python.models import DataSource, RefreshRun
 from core.refresh.test_job_builders import _EXPECTED_WEEKLY_FEDERAL_SCOPE_JOB_KEYS
 from domains.campaign_finance.ingest.candidate_summary_loader import update_candidate_person_link
 from domains.campaign_finance.ingest.federal_spine_loader import SpineLoadResult
@@ -23,6 +28,12 @@ from test_support.donor_search_fixture import (
     fetch_full_scope_donor_search_counts,
     seed_full_scope_skewed_donor_search_fixture,
 )
+from test_support.refresh_run_fixtures import (
+    assert_single_in_flight_row,
+    delete_refresh_runs_for_job,
+    record_terminal_refresh_run,
+    refresh_job_for_tests,
+)
 
 
 def _job_for_tests(
@@ -31,16 +42,15 @@ def _job_for_tests(
     run_callable: MagicMock | None = None,
     refresh_history_key: str | None = None,
     activity_denominator_result_field: str | None = None,
+    data_source_names: tuple[str, ...] | None = None,
 ) -> runner.RefreshJob:
-    return runner.RefreshJob(
-        key=key,
-        domain="campaign_finance",
-        jurisdiction="state/CO",
-        cadence="daily",
-        data_source_names=("TRACER Bulk Download — Contributions",),
-        run_callable=run_callable or MagicMock(),
+    overrides = {} if data_source_names is None else {"data_source_names": data_source_names}
+    return refresh_job_for_tests(
+        key,
+        run_callable=run_callable,
         refresh_history_key=refresh_history_key,
         activity_denominator_result_field=activity_denominator_result_field,
+        **overrides,
     )
 
 
@@ -763,7 +773,7 @@ def test_federal_fec_masters_uses_refresh_run_history_for_cadence_gate() -> None
     cursor = connection.cursor.return_value.__enter__.return_value
     cursor.fetchone.return_value = (datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc),)
 
-    latest_pull_at = runner._select_latest_pull_at(connection, job)
+    latest_pull_at = runner.select_latest_pull_at(connection, job)
 
     assert latest_pull_at == datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc)
     query = cursor.execute.call_args.args[0]
@@ -772,6 +782,86 @@ def test_federal_fec_masters_uses_refresh_run_history_for_cadence_gate() -> None
     assert "job_key = %s" in query
     assert "pull_status = ANY(%s)" in query
     assert params == ("federal-fec-masters", ["success"])
+
+
+def test_public_cadence_selector_data_source_branch_uses_runner_data_source_identity() -> None:
+    job = _job_for_tests(
+        key="state-co-contributions",
+        refresh_history_key=None,
+        data_source_names=("TRACER Bulk Download — Contributions",),
+    )
+    connection = MagicMock()
+    cursor = connection.cursor.return_value.__enter__.return_value
+    cursor.fetchone.return_value = (datetime(2026, 6, 2, 12, 0, tzinfo=timezone.utc),)
+
+    latest_pull_at = runner.select_latest_pull_at(connection, job)
+
+    assert latest_pull_at == datetime(2026, 6, 2, 12, 0, tzinfo=timezone.utc)
+    query = cursor.execute.call_args.args[0]
+    params = cursor.execute.call_args.args[1]
+    assert "FROM core.data_source" in query
+    assert "MAX(last_pull_at)" in query
+    assert "domain = %s" in query
+    assert "jurisdiction = %s" in query
+    assert "name = ANY(%s)" in query
+    assert params == (
+        "campaign_finance",
+        "state/CO",
+        ["TRACER Bulk Download — Contributions"],
+    )
+
+
+def test_select_latest_completed_run_returns_newer_failed_attempt_not_older_success() -> None:
+    job = _job_for_tests(key="state-co-contributions", refresh_history_key="state-co-cadence-history")
+    completed_at = datetime(2026, 6, 3, 12, 0, tzinfo=timezone.utc)
+    connection = MagicMock()
+    cursor = connection.cursor.return_value.__enter__.return_value
+    cursor.fetchone.return_value = (completed_at, "crashed", 11, 22, 33, 44, 55, "boom")
+
+    latest_run = runner.select_latest_completed_run(connection, job)
+
+    assert latest_run == {
+        "completed_at": completed_at,
+        "pull_status": "crashed",
+        "inserted_count": 11,
+        "skipped_count": 22,
+        "quarantined_count": 33,
+        "superseded_count": 44,
+        "error_count": 55,
+        "error": "boom",
+    }
+    query = cursor.execute.call_args.args[0]
+    params = cursor.execute.call_args.args[1]
+    normalized_query = " ".join(query.split())
+    assert (
+        "SELECT completed_at, pull_status, inserted_count, skipped_count, quarantined_count, "
+        "superseded_count, error_count, error FROM core.refresh_run"
+    ) in normalized_query
+    assert "job_key = %s" in query
+    assert "completed_at IS NOT NULL" in query
+    assert "ORDER BY completed_at DESC, created_at DESC, id DESC" in normalized_query
+    assert "pull_status = ANY" not in query
+    assert params == ("state-co-contributions",)
+
+
+def test_select_latest_completed_run_returns_none_without_completed_row() -> None:
+    job = _job_for_tests(key="state-co-contributions")
+    connection = MagicMock()
+    cursor = connection.cursor.return_value.__enter__.return_value
+    cursor.fetchone.return_value = None
+
+    assert runner.select_latest_completed_run(connection, job) is None
+
+
+def test_select_latest_completed_run_filters_by_job_key_not_refresh_history_key() -> None:
+    job = _job_for_tests(key="state-co-contributions", refresh_history_key="state-co-cadence-history")
+    connection = MagicMock()
+    cursor = connection.cursor.return_value.__enter__.return_value
+    cursor.fetchone.return_value = None
+
+    runner.select_latest_completed_run(connection, job)
+
+    assert cursor.execute.call_args.args[1] == ("state-co-contributions",)
 
 
 def test_refresh_history_key_cadence_gate_ignores_crashed_runs() -> None:
@@ -1584,12 +1674,15 @@ def _run_weekly_pair_main(
         return original_format_result_line(result)
 
     monkeypatch.setattr(job_builders, "build_refresh_plan", lambda **kwargs: jobs)
-    monkeypatch.setattr(runner, "get_connection", lambda: _Connection())
+    monkeypatch.setattr(runner, "get_connection", lambda **overrides: _Connection())
     monkeypatch.setattr(runner, "_utc_now", lambda: _PARTIAL_RUN_SCHEDULED_AT)
     monkeypatch.setattr(runner, "_select_latest_pull_at", lambda connection, job: last_pull_by_key[job.key])
     monkeypatch.setattr(runner, "_recent_nonempty_activity_counts", lambda *args, **kwargs: [])
     monkeypatch.setattr(runner, "_select_data_source_id", lambda *args, **kwargs: None)
     monkeypatch.setattr(runner, "_record_refresh_run", lambda *args, **kwargs: None)
+    # run_job now writes the attempt row twice, and the stub connection has no cursor.
+    monkeypatch.setattr(runner, "insert_refresh_run", lambda *args, **kwargs: None)
+    monkeypatch.setattr(runner, "update_refresh_run", lambda *args, **kwargs: None)
     monkeypatch.setattr(runner, "_format_result_line", _capture_result_line)
 
     exit_code = runner.main(
@@ -1929,8 +2022,10 @@ def test_run_job_dry_run_skips_callable_and_metadata_sync(monkeypatch: pytest.Mo
     run_callable = MagicMock()
     job = _job_for_tests(key="dry-run-job", run_callable=run_callable)
     sync_data_source_metadata = MagicMock()
+    insert_refresh_run = MagicMock()
 
     monkeypatch.setattr(runner, "sync_data_source_metadata", sync_data_source_metadata)
+    monkeypatch.setattr(runner, "insert_refresh_run", insert_refresh_run)
 
     result = runner.run_job(connection, job, dry_run=True)
 
@@ -1938,12 +2033,19 @@ def test_run_job_dry_run_skips_callable_and_metadata_sync(monkeypatch: pytest.Mo
     assert result.metadata_updates == 0
     run_callable.assert_not_called()
     sync_data_source_metadata.assert_not_called()
+    # A dry run must leave no attempt row behind, in flight or otherwise.
+    insert_refresh_run.assert_not_called()
+    connection.commit.assert_not_called()
 
 
 def test_run_job_syncs_metadata_through_shared_helper(monkeypatch: pytest.MonkeyPatch) -> None:
     connection = MagicMock()
     run_callable = MagicMock()
-    job = _job_for_tests(key="metadata-job", run_callable=run_callable)
+    job = _job_for_tests(
+        key="metadata-job",
+        run_callable=run_callable,
+        data_source_names=("TRACER Bulk Download — Contributions",),
+    )
     data_source_id = UUID("baf6456e-cf99-47c1-8738-b77f8cfb3f82")
     select_data_source_id = MagicMock(return_value=data_source_id)
     sync_data_source_metadata = MagicMock(return_value=42)
@@ -2029,6 +2131,430 @@ def test_run_job_includes_loader_counts_in_success_message(monkeypatch: pytest.M
     assert result.message == "Refresh job succeeded: inserted=12 skipped=3 quarantined=1 superseded=0 errors=0"
 
 
+class _RefreshRunCallRecorder:
+    """Record ledger writes, callable execution, and transaction boundaries in call order.
+
+    The attempt lifecycle is defined by ordering — the start row must be committed
+    before the job runs — so counting calls is not enough to prove it.
+    """
+
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+        self.connection = MagicMock()
+        self.connection.commit.side_effect = lambda: self.calls.append("commit")
+        self.connection.rollback.side_effect = lambda: self.calls.append("rollback")
+        self.insert_refresh_run = MagicMock(side_effect=lambda connection, refresh_run: self.calls.append("insert"))
+        self.update_refresh_run = MagicMock(side_effect=lambda connection, refresh_run: self.calls.append("update"))
+
+    def install(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(runner, "insert_refresh_run", self.insert_refresh_run)
+        monkeypatch.setattr(runner, "update_refresh_run", self.update_refresh_run)
+
+    def recording_callable(self, *, result: object = None, error: Exception | None = None) -> MagicMock:
+        def _run() -> object:
+            self.calls.append("run_callable")
+            if error is not None:
+                raise error
+            return result
+
+        return MagicMock(side_effect=_run)
+
+    @property
+    def started_run(self) -> RefreshRun:
+        return self.insert_refresh_run.call_args.args[1]
+
+    @property
+    def finished_run(self) -> RefreshRun:
+        return self.update_refresh_run.call_args.args[1]
+
+
+def test_run_job_commits_running_attempt_row_before_executing_callable(monkeypatch: pytest.MonkeyPatch) -> None:
+    recorder = _RefreshRunCallRecorder()
+    job = _job_for_tests(key="in-flight-job", run_callable=recorder.recording_callable())
+
+    recorder.install(monkeypatch)
+    monkeypatch.setattr(runner, "_select_data_source_id", MagicMock(return_value=None))
+    monkeypatch.setattr(runner, "sync_data_source_metadata", MagicMock())
+
+    result = runner.run_job(recorder.connection, job)
+
+    assert recorder.calls == ["insert", "commit", "run_callable", "update"]
+    started_run = recorder.started_run
+    assert started_run.job_key == "in-flight-job"
+    assert started_run.pull_status == "running"
+    assert started_run.completed_at is None
+    assert started_run.message == "Refresh job started"
+    assert started_run.error is None
+    assert started_run.inserted_count == 0
+    assert started_run.skipped_count == 0
+    assert started_run.quarantined_count == 0
+    assert started_run.superseded_count == 0
+    assert started_run.error_count == 0
+    assert started_run.metadata_updates == 0
+    assert result.status == "success"
+
+
+def test_run_job_finishes_the_attempt_row_it_started(monkeypatch: pytest.MonkeyPatch) -> None:
+    recorder = _RefreshRunCallRecorder()
+    loader_result = SimpleNamespace(inserted=7, skipped=1, quarantined=0, superseded=0, errors=0)
+    job = _job_for_tests(key="finished-job", run_callable=recorder.recording_callable(result=loader_result))
+
+    recorder.install(monkeypatch)
+    monkeypatch.setattr(runner, "_select_data_source_id", MagicMock(return_value=None))
+    monkeypatch.setattr(runner, "_recent_nonempty_activity_counts", MagicMock(return_value=[]))
+    monkeypatch.setattr(runner, "sync_data_source_metadata", MagicMock())
+
+    result = runner.run_job(recorder.connection, job)
+
+    recorder.update_refresh_run.assert_called_once()
+    finished_run = recorder.finished_run
+    assert finished_run.id == recorder.started_run.id
+    assert finished_run.job_key == "finished-job"
+    assert finished_run.pull_status == "success"
+    assert finished_run.completed_at is not None
+    assert finished_run.started_at == recorder.started_run.started_at
+    assert finished_run.inserted_count == 7
+    assert finished_run.skipped_count == 1
+    assert finished_run.message == result.message
+
+
+def test_run_job_fails_without_executing_callable_when_start_row_cannot_be_recorded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    connection = MagicMock()
+    run_callable = MagicMock()
+    job = _job_for_tests(key="unstartable-job", run_callable=run_callable)
+
+    monkeypatch.setattr(runner, "insert_refresh_run", MagicMock(side_effect=RuntimeError("start write boom")))
+    monkeypatch.setattr(runner, "update_refresh_run", MagicMock())
+    monkeypatch.setattr(runner, "_select_data_source_id", MagicMock(return_value=None))
+    monkeypatch.setattr(runner, "sync_data_source_metadata", MagicMock())
+
+    result = runner.run_job(connection, job)
+
+    assert result.status == "failed"
+    assert result.message == "Refresh-run start recording failed"
+    assert result.error == "start write boom"
+    assert result.metadata_updates == 0
+    # An attempt we could not record must not run, or the ledger under-reports work done.
+    run_callable.assert_not_called()
+    connection.rollback.assert_called_once_with()
+    runner.update_refresh_run.assert_not_called()
+
+
+@pytest.mark.integration
+def test_run_job_leaves_running_row_readable_when_finish_update_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    db_conn: psycopg.Connection,
+) -> None:
+    job_key = "finish-update-failure-job"
+    started_at = datetime(2099, 2, 1, 12, 0, tzinfo=timezone.utc)
+    job = _job_for_tests(key=job_key, run_callable=MagicMock(return_value=_successful_loader_result()))
+
+    monkeypatch.setattr(runner, "_utc_now", lambda: started_at)
+    monkeypatch.setattr(runner, "_select_data_source_id", lambda *args, **kwargs: None)
+    monkeypatch.setattr(runner, "update_refresh_run", MagicMock(side_effect=RuntimeError("finish write boom")))
+
+    try:
+        result = runner.run_job(db_conn, job)
+
+        assert result.status == "failed"
+        assert result.message == "Refresh-run recording failed"
+        assert result.error == "finish write boom"
+
+        db_conn.rollback()
+        with db_conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT pull_status, completed_at, message FROM core.refresh_run WHERE job_key = %s",
+                (job_key,),
+            )
+            rows = cursor.fetchall()
+
+        # The operator needs the in-flight row to survive for diagnosis; the committed
+        # start row is exactly what a later rollback can no longer erase.
+        assert rows == [("running", None, "Refresh job started")]
+    finally:
+        delete_refresh_runs_for_job(db_conn, job_key)
+
+
+def test_run_job_finishes_attempt_as_failed_after_rolling_back_a_metadata_sync_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recorder = _RefreshRunCallRecorder()
+    job = _job_for_tests(key="metadata-failure-job", run_callable=recorder.recording_callable())
+
+    recorder.install(monkeypatch)
+    monkeypatch.setattr(runner, "_select_data_source_id", MagicMock(return_value=uuid4()))
+    monkeypatch.setattr(
+        runner,
+        "sync_data_source_metadata",
+        MagicMock(side_effect=RuntimeError("metadata write boom")),
+    )
+
+    result = runner.run_job(recorder.connection, job)
+
+    # The sync failure aborted the runner transaction, so the UPDATE is only legal
+    # after the rollback; the trailing commit makes the terminal row durable.
+    assert recorder.calls == ["insert", "commit", "run_callable", "rollback", "update", "commit"]
+    finished_run = recorder.finished_run
+    assert finished_run.id == recorder.started_run.id
+    assert finished_run.pull_status == "failed"
+    assert finished_run.completed_at is not None
+    assert finished_run.message == "Metadata sync failed"
+    assert finished_run.error == "metadata write boom"
+    assert result.status == "failed"
+    assert result.message == "Metadata sync failed"
+    assert result.error == "metadata write boom"
+
+
+def test_run_job_reports_metadata_sync_failure_even_when_finishing_the_attempt_also_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    connection = MagicMock()
+    job = _job_for_tests(key="double-failure-job", run_callable=MagicMock())
+
+    monkeypatch.setattr(runner, "insert_refresh_run", MagicMock())
+    monkeypatch.setattr(runner, "update_refresh_run", MagicMock(side_effect=RuntimeError("finish write boom")))
+    monkeypatch.setattr(runner, "_select_data_source_id", MagicMock(return_value=uuid4()))
+    monkeypatch.setattr(
+        runner,
+        "sync_data_source_metadata",
+        MagicMock(side_effect=RuntimeError("metadata write boom")),
+    )
+
+    result = runner.run_job(connection, job)
+
+    # The original failure is the one the caller must see; the salvage attempt is best-effort.
+    assert result.status == "failed"
+    assert result.message == "Metadata sync failed"
+    assert result.error == "metadata write boom"
+
+
+@pytest.mark.integration
+def test_crashed_attempt_row_is_committed_in_place_over_the_started_row(
+    monkeypatch: pytest.MonkeyPatch,
+    db_conn: psycopg.Connection,
+) -> None:
+    job_key = "crashed-attempt-survives-job"
+    run_at = datetime(2099, 2, 2, 12, 0, tzinfo=timezone.utc)
+    job = _job_for_tests(key=job_key, run_callable=MagicMock(side_effect=RuntimeError("loader boom")))
+
+    monkeypatch.setattr(runner, "_utc_now", lambda: run_at)
+    monkeypatch.setattr(runner, "_select_data_source_id", lambda *args, **kwargs: None)
+
+    try:
+        results = runner.run_all_jobs(db_conn, [job], force=True)
+        assert [result.status for result in results] == ["crashed"]
+
+        # A rollback after the run proves the writes are durable rather than pending:
+        # _finalize_job_transaction commits crashed outcomes, and the start row was
+        # already committed before the callable ran.
+        db_conn.rollback()
+        with db_conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT pull_status, started_at, completed_at, error_count, message, error
+                FROM core.refresh_run
+                WHERE job_key = %s
+                """,
+                (job_key,),
+            )
+            rows = cursor.fetchall()
+
+        # Exactly one row: the attempt finished in place instead of inserting a second.
+        assert rows == [("crashed", run_at, run_at, 1, "loader boom", "loader boom")]
+    finally:
+        delete_refresh_runs_for_job(db_conn, job_key)
+
+
+@pytest.mark.integration
+def test_recent_nonempty_activity_counts_ignores_an_in_flight_running_row(
+    db_conn: psycopg.Connection,
+) -> None:
+    job_key = "in-flight-median-job"
+    history_at = datetime(2099, 2, 3, 12, 0, tzinfo=timezone.utc)
+    lookback_floor = history_at - timedelta(days=runner._DEGRADED_LOOKBACK_DAYS)
+    job = _job_for_tests(key=job_key)
+
+    try:
+        # Pre-clear as well as clean up: a killed run's leaked rows would otherwise wedge
+        # the vacuity guard below permanently red.
+        delete_refresh_runs_for_job(db_conn, job_key)
+        record_terminal_refresh_run(
+            db_conn,
+            job,
+            pull_status="success",
+            completed_at=history_at,
+            counts={"inserted": 500, "skipped": 0, "quarantined": 0, "superseded": 0, "errors": 0},
+        )
+        db_conn.commit()
+
+        counts_without_in_flight_row = runner._recent_nonempty_activity_counts(
+            db_conn,
+            job,
+            completed_after=lookback_floor,
+        )
+
+        runner._start_refresh_run(db_conn, job, started_at=history_at + timedelta(days=1))
+        # Guards against a vacuous pass: the in-flight row really is in the table.
+        assert_single_in_flight_row(db_conn, job_key)
+
+        counts_with_in_flight_row = runner._recent_nonempty_activity_counts(
+            db_conn,
+            job,
+            completed_after=lookback_floor,
+        )
+
+        assert counts_without_in_flight_row == [500]
+        # A zero-count running row must not drag the degraded-volume median down.
+        assert counts_with_in_flight_row == counts_without_in_flight_row
+    finally:
+        delete_refresh_runs_for_job(db_conn, job_key)
+
+
+@pytest.mark.integration
+def test_refresh_history_cadence_clock_ignores_an_in_flight_running_row(
+    db_conn: psycopg.Connection,
+) -> None:
+    # key == refresh_history_key mirrors the real federal-fec-masters shape
+    # (job_builders.py:1005). _build_refresh_run writes every row under job.key, but the
+    # refresh_history cadence branch reads WHERE job_key = job.refresh_history_key, so an
+    # unequal pair would make the terminal row unreadable and prove exclusion by a job_key
+    # mismatch instead of the completed_at/pull_status filter under test.
+    job_key = "in-flight-cadence-job"
+    job = _job_for_tests(key=job_key, refresh_history_key=job_key)
+    terminal_at = datetime(2099, 3, 1, 12, 0, tzinfo=timezone.utc)
+
+    try:
+        delete_refresh_runs_for_job(db_conn, job_key)
+        record_terminal_refresh_run(
+            db_conn,
+            job,
+            pull_status="success",
+            completed_at=terminal_at,
+            counts={"inserted": 500, "skipped": 0, "quarantined": 0, "superseded": 0, "errors": 0},
+        )
+        db_conn.commit()
+
+        cadence_without_in_flight_row = runner.select_latest_pull_at(db_conn, job)
+
+        runner._start_refresh_run(db_conn, job, started_at=terminal_at + timedelta(days=1))
+        # Vacuity guard, scoped to the key the cadence branch actually reads: the in-flight
+        # row is present under refresh_history_key, so a byte-identical clock proves the
+        # completed_at/pull_status filter — not a job_key mismatch.
+        assert_single_in_flight_row(db_conn, job.refresh_history_key)
+
+        cadence_with_in_flight_row = runner.select_latest_pull_at(db_conn, job)
+
+        assert cadence_without_in_flight_row == terminal_at
+        # The newer running row's started_at must not advance the cadence clock.
+        assert cadence_with_in_flight_row == cadence_without_in_flight_row
+    finally:
+        delete_refresh_runs_for_job(db_conn, job_key)
+
+
+@pytest.mark.integration
+def test_select_latest_completed_run_ignores_an_in_flight_running_row(
+    db_conn: psycopg.Connection,
+) -> None:
+    job_key = "in-flight-latest-completed-job"
+    job = _job_for_tests(key=job_key, refresh_history_key=job_key)
+    terminal_at = datetime(2099, 3, 2, 12, 0, tzinfo=timezone.utc)
+
+    try:
+        delete_refresh_runs_for_job(db_conn, job_key)
+        record_terminal_refresh_run(
+            db_conn,
+            job,
+            pull_status="degraded",
+            completed_at=terminal_at,
+            counts={"inserted": 7, "skipped": 3, "quarantined": 1, "superseded": 2, "errors": 4},
+            error="low volume",
+        )
+        db_conn.commit()
+
+        latest_without_in_flight_row = runner.select_latest_completed_run(db_conn, job)
+
+        runner._start_refresh_run(db_conn, job, started_at=terminal_at + timedelta(days=1))
+        assert_single_in_flight_row(db_conn, job_key)
+
+        latest_with_in_flight_row = runner.select_latest_completed_run(db_conn, job)
+
+        assert latest_without_in_flight_row == {
+            "completed_at": terminal_at,
+            "pull_status": "degraded",
+            "inserted_count": 7,
+            "skipped_count": 3,
+            "quarantined_count": 1,
+            "superseded_count": 2,
+            "error_count": 4,
+            "error": "low volume",
+        }
+        # The newer running row carries no completed_at, so the terminal attempt still wins
+        # and every returned field is unchanged.
+        assert latest_with_in_flight_row == latest_without_in_flight_row
+    finally:
+        delete_refresh_runs_for_job(db_conn, job_key)
+
+
+@pytest.mark.integration
+def test_start_refresh_run_running_row_leaves_data_source_cadence_clock_untouched(
+    db_conn: psycopg.Connection,
+) -> None:
+    # A non-refresh_history job reads its cadence clock from core.data_source.last_pull_at.
+    # _start_refresh_run writes only core.refresh_run, so the data_source branch of
+    # _select_latest_pull_at must be unmoved by an in-flight attempt. A real data_source
+    # row with a known last_pull_at gives the guard teeth: the pre-running-row clock is a
+    # concrete timestamp, so a regression that made _start_refresh_run sync data_source
+    # metadata would move it and turn the equality red.
+    job_key = "in-flight-data-source-cadence-job"
+    # A synthetic source name, never a natural key a production loader owns: the pre-clear
+    # DELETE and the seeded row below must not be able to touch real provenance data.
+    job = _job_for_tests(
+        key=job_key,
+        refresh_history_key=None,
+        data_source_names=("In-flight cadence guard source",),
+    )
+    assert runner.cadence_last_pull_owner(job) == "data_source"
+    seeded_last_pull_at = datetime(2099, 3, 3, 6, 0, tzinfo=timezone.utc)
+    data_source = DataSource(
+        domain=job.domain,
+        jurisdiction=job.jurisdiction,
+        name=job.data_source_names[0],
+        source_url="https://example.invalid/in-flight-cadence-guard",
+        last_pull_at=seeded_last_pull_at,
+        last_pull_status="success",
+    )
+
+    try:
+        delete_refresh_runs_for_job(db_conn, job_key)
+        # Clear any row a prior interrupted run of this test leaked, so try_insert seeds ours.
+        db_conn.execute(
+            "DELETE FROM core.data_source WHERE domain = %s AND jurisdiction = %s AND name = %s",
+            (data_source.domain, data_source.jurisdiction, data_source.name),
+        )
+        seeded_id = db.try_insert_data_source(db_conn, data_source)
+        db_conn.commit()
+        assert seeded_id == data_source.id
+
+        cadence_without_in_flight_row = runner.select_latest_pull_at(db_conn, job)
+        # The clock is a concrete seeded timestamp, not None, so the equality below can fail.
+        assert cadence_without_in_flight_row == seeded_last_pull_at
+
+        runner._start_refresh_run(db_conn, job, started_at=datetime(2099, 3, 3, 12, 0, tzinfo=timezone.utc))
+        assert_single_in_flight_row(db_conn, job_key)
+
+        cadence_with_in_flight_row = runner.select_latest_pull_at(db_conn, job)
+
+        # _start_refresh_run wrote no data_source row, so the seeded cadence clock is unmoved.
+        assert cadence_with_in_flight_row == seeded_last_pull_at
+        assert cadence_with_in_flight_row == cadence_without_in_flight_row
+    finally:
+        delete_refresh_runs_for_job(db_conn, job_key)
+        db_conn.execute("DELETE FROM core.data_source WHERE id = %s", (data_source.id,))
+        db_conn.commit()
+
+
 def test_run_job_records_federal_spine_result_counts(monkeypatch: pytest.MonkeyPatch) -> None:
     connection = MagicMock()
     spine_result = SpineLoadResult()
@@ -2040,10 +2566,12 @@ def test_run_job_records_federal_spine_result_counts(monkeypatch: pytest.MonkeyP
     run_callable = MagicMock(return_value=spine_result)
     job = _job_for_tests(key="federal-congress-spine", run_callable=run_callable)
     insert_refresh_run = MagicMock()
+    update_refresh_run = MagicMock()
 
     monkeypatch.setattr(runner, "_select_data_source_id", MagicMock(return_value=None))
     monkeypatch.setattr(runner, "sync_data_source_metadata", MagicMock())
     monkeypatch.setattr(runner, "insert_refresh_run", insert_refresh_run)
+    monkeypatch.setattr(runner, "update_refresh_run", update_refresh_run)
 
     result = runner.run_job(connection, job)
 
@@ -2052,7 +2580,7 @@ def test_run_job_records_federal_spine_result_counts(monkeypatch: pytest.MonkeyP
         result.message
         == "Refresh job completed with loader errors: inserted=541 skipped=1 quarantined=0 superseded=0 errors=1"
     )
-    refresh_run = insert_refresh_run.call_args.args[1]
+    refresh_run = update_refresh_run.call_args.args[1]
     assert refresh_run.pull_status == "degraded"
     assert refresh_run.inserted_count == 541
     assert refresh_run.skipped_count == 1
@@ -2089,16 +2617,18 @@ def test_run_job_maps_ncsbe_refresh_summary_to_loader_counts(monkeypatch: pytest
     )
     job = _job_for_tests(key="ncsbe-summary-job", run_callable=run_callable)
     insert_refresh_run = MagicMock()
+    update_refresh_run = MagicMock()
 
     monkeypatch.setattr(runner, "_select_data_source_id", MagicMock(return_value=None))
     monkeypatch.setattr(runner, "sync_data_source_metadata", MagicMock())
     monkeypatch.setattr(runner, "insert_refresh_run", insert_refresh_run)
+    monkeypatch.setattr(runner, "update_refresh_run", update_refresh_run)
 
     result = runner.run_job(connection, job)
 
     assert result.status == "success"
     assert result.message == "Refresh job succeeded: inserted=14 skipped=0 quarantined=0 superseded=0 errors=0"
-    refresh_run = insert_refresh_run.call_args.args[1]
+    refresh_run = update_refresh_run.call_args.args[1]
     assert refresh_run.inserted_count == 14
     assert refresh_run.skipped_count == 0
     assert refresh_run.quarantined_count == 0
@@ -2111,16 +2641,18 @@ def test_run_job_maps_dictionary_loader_counts(monkeypatch: pytest.MonkeyPatch) 
     run_callable = MagicMock(return_value={"inserted": 4, "skipped": 2, "quarantined": 0, "superseded": 0, "errors": 0})
     job = _job_for_tests(key="mapping-counts-job", run_callable=run_callable)
     insert_refresh_run = MagicMock()
+    update_refresh_run = MagicMock()
 
     monkeypatch.setattr(runner, "_select_data_source_id", MagicMock(return_value=None))
     monkeypatch.setattr(runner, "sync_data_source_metadata", MagicMock())
     monkeypatch.setattr(runner, "insert_refresh_run", insert_refresh_run)
+    monkeypatch.setattr(runner, "update_refresh_run", update_refresh_run)
 
     result = runner.run_job(connection, job)
 
     assert result.status == "success"
     assert result.message == "Refresh job succeeded: inserted=4 skipped=2 quarantined=0 superseded=0 errors=0"
-    refresh_run = insert_refresh_run.call_args.args[1]
+    refresh_run = update_refresh_run.call_args.args[1]
     assert refresh_run.inserted_count == 4
     assert refresh_run.skipped_count == 2
 
@@ -2136,10 +2668,12 @@ def test_run_job_aggregates_loader_counts_from_multi_file_result(monkeypatch: py
     )
     job = _job_for_tests(key="multi-file-job", run_callable=run_callable)
     insert_refresh_run = MagicMock()
+    update_refresh_run = MagicMock()
 
     monkeypatch.setattr(runner, "_select_data_source_id", MagicMock(return_value=None))
     monkeypatch.setattr(runner, "sync_data_source_metadata", MagicMock())
     monkeypatch.setattr(runner, "insert_refresh_run", insert_refresh_run)
+    monkeypatch.setattr(runner, "update_refresh_run", update_refresh_run)
 
     result = runner.run_job(connection, job)
 
@@ -2148,7 +2682,7 @@ def test_run_job_aggregates_loader_counts_from_multi_file_result(monkeypatch: py
         result.message
         == "Refresh job completed with loader errors: inserted=60 skipped=6 quarantined=1 superseded=1 errors=1"
     )
-    refresh_run = insert_refresh_run.call_args.args[1]
+    refresh_run = update_refresh_run.call_args.args[1]
     assert refresh_run.pull_status == "degraded"
     assert refresh_run.inserted_count == 60
     assert refresh_run.skipped_count == 6
@@ -2162,17 +2696,19 @@ def test_run_job_records_empty_pull_status_for_zero_activity_loader_result(monke
     run_callable = MagicMock(return_value=SimpleNamespace(inserted=0, skipped=0, quarantined=0, superseded=0, errors=0))
     job = _job_for_tests(key="empty-job", run_callable=run_callable)
     insert_refresh_run = MagicMock()
+    update_refresh_run = MagicMock()
     sync_data_source_metadata = MagicMock()
 
     monkeypatch.setattr(runner, "_select_data_source_id", MagicMock(return_value=None))
     monkeypatch.setattr(runner, "sync_data_source_metadata", sync_data_source_metadata)
     monkeypatch.setattr(runner, "insert_refresh_run", insert_refresh_run)
+    monkeypatch.setattr(runner, "update_refresh_run", update_refresh_run)
 
     result = runner.run_job(connection, job)
 
     assert result.status == "empty"
     assert result.message == "Refresh job completed with no inserted rows"
-    assert insert_refresh_run.call_args.args[1].pull_status == "empty"
+    assert update_refresh_run.call_args.args[1].pull_status == "empty"
     # Honest reruns must NOT backfill a fake success state into core.data_source.
     sync_data_source_metadata.assert_not_called()
 
@@ -2184,18 +2720,20 @@ def test_run_job_records_success_pull_status_for_skipped_only_loader_result(monk
     )
     job = _job_for_tests(key="skipped-only-job", run_callable=run_callable)
     insert_refresh_run = MagicMock()
+    update_refresh_run = MagicMock()
     sync_data_source_metadata = MagicMock()
 
     monkeypatch.setattr(runner, "_select_data_source_id", MagicMock(return_value=None))
     monkeypatch.setattr(runner, "_recent_nonempty_activity_counts", MagicMock(return_value=[120, 140, 160]))
     monkeypatch.setattr(runner, "sync_data_source_metadata", sync_data_source_metadata)
     monkeypatch.setattr(runner, "insert_refresh_run", insert_refresh_run)
+    monkeypatch.setattr(runner, "update_refresh_run", update_refresh_run)
 
     result = runner.run_job(connection, job)
 
     assert result.status == "success"
     assert result.message == "Refresh job succeeded: inserted=0 skipped=37 quarantined=0 superseded=0 errors=0"
-    refresh_run = insert_refresh_run.call_args.args[1]
+    refresh_run = update_refresh_run.call_args.args[1]
     assert refresh_run.pull_status == "success"
     assert refresh_run.inserted_count == 0
     assert refresh_run.skipped_count == 37
@@ -2248,12 +2786,14 @@ def test_run_job_records_degraded_when_loader_reports_errors_even_with_bulk_acti
     )
     job = _job_for_tests(key="federal-fec-masters", run_callable=run_callable)
     insert_refresh_run = MagicMock()
+    update_refresh_run = MagicMock()
     sync_data_source_metadata = MagicMock()
 
     monkeypatch.setattr(runner, "_select_data_source_id", MagicMock(return_value=None))
     monkeypatch.setattr(runner, "_recent_nonempty_activity_counts", MagicMock(return_value=[21_836]))
     monkeypatch.setattr(runner, "sync_data_source_metadata", sync_data_source_metadata)
     monkeypatch.setattr(runner, "insert_refresh_run", insert_refresh_run)
+    monkeypatch.setattr(runner, "update_refresh_run", update_refresh_run)
 
     result = runner.run_job(connection, job)
 
@@ -2262,7 +2802,7 @@ def test_run_job_records_degraded_when_loader_reports_errors_even_with_bulk_acti
         "Refresh job completed with loader errors: inserted=175 skipped=40414 quarantined=0 superseded=0 errors=1"
     )
     sync_data_source_metadata.assert_not_called()
-    assert insert_refresh_run.call_args.args[1].pull_status == "degraded"
+    assert update_refresh_run.call_args.args[1].pull_status == "degraded"
 
 
 def test_run_job_records_degraded_pull_status_when_activity_is_below_recent_median(
@@ -2274,19 +2814,21 @@ def test_run_job_records_degraded_pull_status_when_activity_is_below_recent_medi
     )
     job = _job_for_tests(key="degraded-job", run_callable=run_callable)
     insert_refresh_run = MagicMock()
+    update_refresh_run = MagicMock()
     sync_data_source_metadata = MagicMock()
 
     monkeypatch.setattr(runner, "_select_data_source_id", MagicMock(return_value=None))
     monkeypatch.setattr(runner, "_recent_nonempty_activity_counts", MagicMock(return_value=[180, 200, 220]))
     monkeypatch.setattr(runner, "sync_data_source_metadata", sync_data_source_metadata)
     monkeypatch.setattr(runner, "insert_refresh_run", insert_refresh_run)
+    monkeypatch.setattr(runner, "update_refresh_run", update_refresh_run)
 
     result = runner.run_job(connection, job)
 
     assert result.status == "degraded"
     assert result.message == "Refresh job completed below historical volume threshold: activity=85 median=200"
     sync_data_source_metadata.assert_not_called()
-    assert insert_refresh_run.call_args.args[1].pull_status == "degraded"
+    assert update_refresh_run.call_args.args[1].pull_status == "degraded"
 
 
 def test_derive_pull_status_compares_incremental_enrichment_with_like_for_like_history() -> None:
@@ -2642,18 +3184,20 @@ def test_run_job_records_crashed_pull_status_on_exception(monkeypatch: pytest.Mo
     run_callable = MagicMock(side_effect=RuntimeError("boom"))
     job = _job_for_tests(key="crashed-job", run_callable=run_callable)
     insert_refresh_run = MagicMock()
+    update_refresh_run = MagicMock()
     sync_data_source_metadata = MagicMock()
 
     monkeypatch.setattr(runner, "_select_data_source_id", MagicMock(return_value=None))
     monkeypatch.setattr(runner, "sync_data_source_metadata", sync_data_source_metadata)
     monkeypatch.setattr(runner, "insert_refresh_run", insert_refresh_run)
+    monkeypatch.setattr(runner, "update_refresh_run", update_refresh_run)
 
     result = runner.run_job(connection, job)
 
     assert result.status == "crashed"
     assert result.error == "boom"
     sync_data_source_metadata.assert_not_called()
-    assert insert_refresh_run.call_args.args[1].pull_status == "crashed"
+    assert update_refresh_run.call_args.args[1].pull_status == "crashed"
 
 
 def test_run_all_jobs_isolates_failures_and_continues(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -2705,7 +3249,13 @@ def test_run_all_jobs_stops_after_failure_when_requested(monkeypatch: pytest.Mon
 
     assert results == [first_result]
     assert streamed == [first_result]
-    run_job.assert_called_once_with(connection, first_job, dry_run=False)
+    run_job.assert_called_once_with(
+        connection,
+        first_job,
+        dry_run=False,
+        on_heartbeat=None,
+        heartbeat_interval_seconds=runner._HEARTBEAT_INTERVAL_SECONDS,
+    )
     connection.commit.assert_called_once_with()
 
 
@@ -2824,7 +3374,13 @@ def test_run_all_jobs_isolates_gating_failures_and_continues(monkeypatch: pytest
     assert [result.status for result in results] == ["failed", "success"]
     assert results[0].message == "Refresh orchestration failed"
     assert results[0].error == "metadata read failed"
-    run_job.assert_called_once_with(connection, second_job, dry_run=False)
+    run_job.assert_called_once_with(
+        connection,
+        second_job,
+        dry_run=False,
+        on_heartbeat=None,
+        heartbeat_interval_seconds=runner._HEARTBEAT_INTERVAL_SECONDS,
+    )
 
 
 def test_run_all_jobs_streams_results_via_on_result_callback(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -3094,6 +3650,110 @@ def test_main_threads_federal_scope_to_build_refresh_plan(monkeypatch: pytest.Mo
     assert isinstance(captured["parameters"], runner.RunnerParameters)
 
 
+def test_main_builds_refresh_plan_before_acquiring_per_job_locks(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    events: list[str] = []
+    job = _job_for_tests(key="state-wa-contributions")
+    primary_base_lock_path = tmp_path / "civibus-refresh-runner.lock"
+    expected_key_lock_path = tmp_path / "civibus-refresh-runner-state-wa-contributions.lock"
+    acquired_fds: list[int] = []
+    release_runner_locks = runner._release_runner_locks
+
+    class FakeConnection:
+        def close(self) -> None:
+            events.append("close")
+
+    def _fake_build_refresh_plan(
+        *,
+        scope: str,
+        parameters: runner.RunnerParameters,
+        job_key_prefixes: tuple[str, ...],
+    ) -> list[runner.RefreshJob]:
+        events.append("build_refresh_plan")
+        assert scope == "all"
+        assert job_key_prefixes == ("state-wa-contributions",)
+        return [job]
+
+    def _fake_acquire_runner_lock(lock_path: Path, wait_seconds: float = 0.0) -> int:
+        events.append(f"acquire:{lock_path.name}")
+        assert wait_seconds == 0.0
+        assert lock_path == expected_key_lock_path
+        fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR)
+        acquired_fds.append(fd)
+        return fd
+
+    def _fake_get_connection(**overrides: object) -> FakeConnection:
+        events.append("get_connection")
+        return FakeConnection()
+
+    def _fake_run_all_jobs(
+        connection: object,
+        jobs: list[runner.RefreshJob],
+        dry_run: bool,
+        force: bool,
+        on_result: object,
+        stop_on_failure: bool = False,
+        on_heartbeat: object = None,
+    ) -> list[runner.RefreshRunResult]:
+        events.append("run_all_jobs")
+        # main() must hand the heartbeat the same stdout owner the result stream uses.
+        assert on_heartbeat is runner._emit_stdout_line
+        assert connection is not None
+        assert jobs == [job]
+        assert dry_run is False
+        assert force is False
+        assert stop_on_failure is False
+        assert callable(on_result)
+        result = runner.RefreshRunResult(
+            key=job.key,
+            status="success",
+            metadata_updates=0,
+            message="ok\nline2",
+            error="\x1b[31mboom\x1b[0m",
+        )
+        on_result(result)
+        return [result]
+
+    def _fake_release_runner_locks(held: list[int]) -> None:
+        events.append("release")
+        assert held == acquired_fds
+        release_runner_locks(held)
+
+    monkeypatch.setattr(runner, "_RUNNER_LOCK_PATH", primary_base_lock_path)
+    monkeypatch.setattr(runner, "_fallback_runner_lock_path", lambda: tmp_path / "fallback.lock")
+    monkeypatch.setattr(runner, "_acquire_runner_lock", _fake_acquire_runner_lock)
+    monkeypatch.setattr(job_builders, "build_refresh_plan", _fake_build_refresh_plan)
+    monkeypatch.setattr(runner, "get_connection", _fake_get_connection)
+    monkeypatch.setattr(runner, "run_all_jobs", _fake_run_all_jobs)
+    monkeypatch.setattr(runner, "_release_runner_locks", _fake_release_runner_locks)
+
+    try:
+        exit_code = runner.main(["--scope", "all", "--job-key-prefix", "state-wa-contributions"])
+    finally:
+        for fd in acquired_fds:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+
+    assert exit_code == 0
+    assert events == [
+        "build_refresh_plan",
+        "acquire:civibus-refresh-runner-state-wa-contributions.lock",
+        "get_connection",
+        "run_all_jobs",
+        "close",
+        "release",
+    ]
+    captured = capsys.readouterr()
+    assert captured.out == (
+        "state-wa-contributions: status=success metadata_updates=0 message=ok\\nline2 error=\\x1b[31mboom\\x1b[0m\n"
+    )
+
+
 def test_main_enables_fail_fast_for_federal_scope(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict[str, object] = {}
     job = _job_for_tests(key="federal-fec-masters")
@@ -3108,7 +3768,7 @@ def test_main_enables_fail_fast_for_federal_scope(monkeypatch: pytest.MonkeyPatc
         return [runner.RefreshRunResult(key=job.key, status="success", metadata_updates=0, message="ok")]
 
     monkeypatch.setattr(job_builders, "build_refresh_plan", lambda **kwargs: [job])
-    monkeypatch.setattr(runner, "get_connection", lambda: FakeConnection())
+    monkeypatch.setattr(runner, "get_connection", lambda **overrides: FakeConnection())
     monkeypatch.setattr(runner, "run_all_jobs", _fake_run_all_jobs)
 
     exit_code = runner.main(["--scope", "federal", "--no-lock"])
@@ -3141,3 +3801,554 @@ def test_main_returns_non_zero_when_any_federal_result_is_failing(
         f"runner.main() must exit non-zero when any federal result is {failing_status!r} so an honest "
         "rerun cannot silently look successful"
     )
+
+
+# ---------------------------------------------------------------------------
+# In-flight heartbeat emission
+# ---------------------------------------------------------------------------
+
+_HEARTBEAT_STARTED_AT = datetime(2099, 3, 1, 9, 0, tzinfo=timezone.utc)
+
+
+class _FakeHeartbeatClock:
+    """A clock that only ever moves when the fake stop event reports a timeout."""
+
+    def __init__(self, started_at: datetime) -> None:
+        self._now = started_at
+
+    def now(self) -> datetime:
+        return self._now
+
+    def advance(self, seconds: float) -> None:
+        self._now += timedelta(seconds=seconds)
+
+
+class _FakeHeartbeatStopEvent:
+    """Stand-in for ``threading.Event`` that scripts waits instead of sleeping.
+
+    ``wait`` reports a timeout (``False``) once per scripted interval, advancing the
+    optional fake clock by the interval, and reports stop (``True``) forever after, so
+    the worker thread always terminates without a real sleep.
+    """
+
+    def __init__(self, *, timeout_returns: int, clock: _FakeHeartbeatClock | None = None) -> None:
+        self._remaining_timeouts = timeout_returns
+        self._clock = clock
+        self._stopped = threading.Event()
+        self.wait_calls = 0
+        self.set_calls = 0
+
+    def wait(self, timeout: float) -> bool:
+        self.wait_calls += 1
+        if self._stopped.is_set() or self._remaining_timeouts <= 0:
+            return True
+        self._remaining_timeouts -= 1
+        if self._clock is not None:
+            self._clock.advance(timeout)
+        return False
+
+    def set(self) -> None:
+        self.set_calls += 1
+        self._stopped.set()
+
+
+def _live_heartbeat_threads() -> list[threading.Thread]:
+    return [thread for thread in threading.enumerate() if thread.name.startswith("refresh-heartbeat-")]
+
+
+def _heartbeat_for_tests(
+    *,
+    stop_event: _FakeHeartbeatStopEvent,
+    clock: _FakeHeartbeatClock,
+    emit: Callable[[str], None],
+    job_key: str = "state-pa-expenditures",
+    refresh_run_id: UUID | None = None,
+    interval_seconds: float = 60.0,
+    started_at: datetime | None = None,
+) -> runner._JobHeartbeat:
+    return runner._JobHeartbeat(
+        runner._HeartbeatAttempt(
+            job_key=job_key,
+            refresh_run_id=refresh_run_id if refresh_run_id is not None else UUID(int=7),
+            started_at=started_at if started_at is not None else _HEARTBEAT_STARTED_AT,
+        ),
+        interval_seconds=interval_seconds,
+        now_fn=clock.now,
+        emit=emit,
+        event_factory=lambda: stop_event,
+    )
+
+
+def test_job_heartbeat_emits_one_line_per_elapsed_interval() -> None:
+    emitted: list[str] = []
+    clock = _FakeHeartbeatClock(_HEARTBEAT_STARTED_AT)
+    stop_event = _FakeHeartbeatStopEvent(timeout_returns=3, clock=clock)
+    run_id = UUID("11111111-2222-3333-4444-555555555555")
+
+    with _heartbeat_for_tests(
+        stop_event=stop_event,
+        clock=clock,
+        emit=emitted.append,
+        refresh_run_id=run_id,
+        interval_seconds=60.0,
+    ):
+        pass
+
+    assert emitted == [
+        f"state-pa-expenditures: heartbeat elapsed_s=60 refresh_run_id={run_id} message=Refresh job in flight",
+        f"state-pa-expenditures: heartbeat elapsed_s=120 refresh_run_id={run_id} message=Refresh job in flight",
+        f"state-pa-expenditures: heartbeat elapsed_s=180 refresh_run_id={run_id} message=Refresh job in flight",
+    ]
+
+
+def test_job_heartbeat_emits_nothing_when_job_finishes_before_first_interval() -> None:
+    emitted: list[str] = []
+    clock = _FakeHeartbeatClock(_HEARTBEAT_STARTED_AT)
+    stop_event = _FakeHeartbeatStopEvent(timeout_returns=0, clock=clock)
+
+    with _heartbeat_for_tests(stop_event=stop_event, clock=clock, emit=emitted.append):
+        pass
+
+    assert emitted == []
+
+
+def test_job_heartbeat_stops_and_joins_its_worker_on_context_exit() -> None:
+    emitted: list[str] = []
+    clock = _FakeHeartbeatClock(_HEARTBEAT_STARTED_AT)
+    stop_event = _FakeHeartbeatStopEvent(timeout_returns=3, clock=clock)
+
+    heartbeat = _heartbeat_for_tests(stop_event=stop_event, clock=clock, emit=emitted.append)
+    with heartbeat:
+        pass
+
+    assert len(emitted) == 3
+    assert stop_event.set_calls == 1
+    # The worker is joined, not merely signalled, so nothing can emit after the context exits.
+    assert not heartbeat._worker.is_alive()
+    assert _live_heartbeat_threads() == []
+    assert len(emitted) == 3
+
+
+def test_job_heartbeat_line_is_distinguishable_from_result_line() -> None:
+    emitted: list[str] = []
+    clock = _FakeHeartbeatClock(_HEARTBEAT_STARTED_AT)
+    stop_event = _FakeHeartbeatStopEvent(timeout_returns=1, clock=clock)
+
+    with _heartbeat_for_tests(stop_event=stop_event, clock=clock, emit=emitted.append, job_key="state-pa"):
+        pass
+
+    result_line = runner._format_result_line(
+        runner.RefreshRunResult(key="state-pa", status="success", metadata_updates=2, message="ok")
+    )
+    (heartbeat_line,) = emitted
+    assert "heartbeat" in heartbeat_line
+    assert "heartbeat" not in result_line
+    # Heartbeats carry no verdict, so the result-only fields must never appear on one.
+    assert "status=" not in heartbeat_line
+    assert "metadata_updates=" not in heartbeat_line
+
+
+def test_job_heartbeat_elapsed_is_measured_from_the_attempt_row_started_at() -> None:
+    """``elapsed_s`` must mean the same thing here as in ``core.refresh_run``.
+
+    The attempt row's ``started_at`` is stamped before the start row is inserted and committed,
+    so a heartbeat that timed itself from its own construction would under-report elapsed time by
+    however long that commit took.
+    """
+    emitted: list[str] = []
+    started_at = _HEARTBEAT_STARTED_AT
+    # The heartbeat is constructed 45s after the attempt row was stamped, mimicking a slow commit.
+    clock = _FakeHeartbeatClock(started_at + timedelta(seconds=45))
+    stop_event = _FakeHeartbeatStopEvent(timeout_returns=1, clock=clock)
+
+    with _heartbeat_for_tests(
+        stop_event=stop_event,
+        clock=clock,
+        emit=emitted.append,
+        interval_seconds=60.0,
+        started_at=started_at,
+    ):
+        pass
+
+    (heartbeat_line,) = emitted
+    assert "elapsed_s=105 " in heartbeat_line
+
+
+def test_job_heartbeat_rejects_a_non_positive_interval_before_starting_a_thread(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock = _FakeHeartbeatClock(_HEARTBEAT_STARTED_AT)
+    stop_event = _FakeHeartbeatStopEvent(timeout_returns=1, clock=clock)
+
+    with pytest.raises(ValueError, match="interval_seconds"):
+        _heartbeat_for_tests(stop_event=stop_event, clock=clock, emit=lambda line: None, interval_seconds=0)
+
+    assert _live_heartbeat_threads() == []
+
+    recorder = _RefreshRunCallRecorder()
+    run_callable = recorder.recording_callable()
+    job = _job_for_tests(key="invalid-heartbeat-job", run_callable=run_callable)
+    recorder.install(monkeypatch)
+
+    result = runner.run_job(
+        recorder.connection,
+        job,
+        on_heartbeat=lambda line: None,
+        heartbeat_interval_seconds=0,
+    )
+
+    assert result.status == "failed"
+    assert result.message == "Refresh execution orchestration failed"
+    assert result.error == "heartbeat interval_seconds must be positive, got 0"
+    run_callable.assert_not_called()
+    assert recorder.calls == ["insert", "commit", "rollback", "update", "commit"]
+    assert recorder.finished_run.id == recorder.started_run.id
+    assert recorder.finished_run.pull_status == "failed"
+    assert recorder.finished_run.completed_at is not None
+
+
+def test_emit_stdout_line_escapes_non_printable_characters(capsys: pytest.CaptureFixture[str]) -> None:
+    runner._emit_stdout_line("state-pa: message=we\x07ird")
+
+    assert capsys.readouterr().out == "state-pa: message=we\\x07ird\n"
+
+
+def test_emit_stdout_line_writes_the_whole_line_in_one_write(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A heartbeat worker shares stdout with the job thread's own prints.
+
+    ``print`` writes the text and the newline separately, so a heartbeat landing between the two
+    would split a concurrent line. One write per emitted line removes that interleaving.
+    """
+    writes: list[str] = []
+    fake_stdout = SimpleNamespace(write=writes.append, flush=lambda: None)
+    monkeypatch.setattr(runner.sys, "stdout", fake_stdout)
+
+    runner._emit_stdout_line("state-pa-expenditures: heartbeat elapsed_s=60")
+
+    assert writes == ["state-pa-expenditures: heartbeat elapsed_s=60\n"]
+
+
+def _install_fake_heartbeat_event(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    timeout_returns: int,
+) -> _FakeHeartbeatStopEvent:
+    stop_event = _FakeHeartbeatStopEvent(timeout_returns=timeout_returns)
+    monkeypatch.setattr(runner, "_new_heartbeat_stop_event", lambda: stop_event)
+    return stop_event
+
+
+def test_run_job_starts_heartbeat_after_start_row_commit(monkeypatch: pytest.MonkeyPatch) -> None:
+    recorder = _RefreshRunCallRecorder()
+    job = _job_for_tests(key="heartbeat-job", run_callable=recorder.recording_callable())
+    emitted: list[str] = []
+
+    def _emit(line: str) -> None:
+        recorder.calls.append("heartbeat")
+        emitted.append(line)
+
+    recorder.install(monkeypatch)
+    monkeypatch.setattr(runner, "_select_data_source_id", MagicMock(return_value=None))
+    monkeypatch.setattr(runner, "sync_data_source_metadata", MagicMock())
+    _install_fake_heartbeat_event(monkeypatch, timeout_returns=1)
+
+    result = runner.run_job(recorder.connection, job, on_heartbeat=_emit, heartbeat_interval_seconds=30.0)
+
+    assert result.status == "success"
+    # The heartbeat may only start once the in-flight row is durable, so operators never
+    # see liveness for an attempt the ledger has no row for.
+    assert recorder.calls[:2] == ["insert", "commit"]
+    assert recorder.calls.count("heartbeat") == 1
+    assert recorder.calls.index("heartbeat") > recorder.calls.index("commit")
+    (heartbeat_line,) = emitted
+    assert f"refresh_run_id={recorder.started_run.id}" in heartbeat_line
+    assert heartbeat_line.startswith("heartbeat-job: heartbeat ")
+
+
+def test_run_job_dry_run_emits_no_heartbeat(monkeypatch: pytest.MonkeyPatch) -> None:
+    job = _job_for_tests(key="dry-run-job", run_callable=MagicMock())
+    emitted: list[str] = []
+    factory = MagicMock(side_effect=AssertionError("dry runs must not create a heartbeat worker"))
+    monkeypatch.setattr(runner, "_new_heartbeat_stop_event", factory)
+
+    result = runner.run_job(MagicMock(), job, dry_run=True, on_heartbeat=emitted.append)
+
+    assert result.status == "dry_run"
+    assert emitted == []
+    factory.assert_not_called()
+
+
+def test_run_job_without_heartbeat_callback_creates_no_worker(monkeypatch: pytest.MonkeyPatch) -> None:
+    recorder = _RefreshRunCallRecorder()
+    job = _job_for_tests(key="silent-job", run_callable=recorder.recording_callable())
+
+    recorder.install(monkeypatch)
+    monkeypatch.setattr(runner, "_select_data_source_id", MagicMock(return_value=None))
+    monkeypatch.setattr(runner, "sync_data_source_metadata", MagicMock())
+    factory = MagicMock(side_effect=AssertionError("no heartbeat callback means no worker thread"))
+    monkeypatch.setattr(runner, "_new_heartbeat_stop_event", factory)
+
+    result = runner.run_job(recorder.connection, job)
+
+    assert result.status == "success"
+    factory.assert_not_called()
+    assert _live_heartbeat_threads() == []
+
+
+def test_run_job_stops_heartbeat_before_returning(monkeypatch: pytest.MonkeyPatch) -> None:
+    recorder = _RefreshRunCallRecorder()
+    job = _job_for_tests(key="stopped-heartbeat-job", run_callable=recorder.recording_callable())
+    emitted: list[str] = []
+
+    recorder.install(monkeypatch)
+    monkeypatch.setattr(runner, "_select_data_source_id", MagicMock(return_value=None))
+    monkeypatch.setattr(runner, "sync_data_source_metadata", MagicMock())
+    stop_event = _install_fake_heartbeat_event(monkeypatch, timeout_returns=2)
+
+    runner.run_job(recorder.connection, job, on_heartbeat=emitted.append)
+
+    assert len(emitted) == 2
+    assert stop_event.set_calls == 1
+    assert _live_heartbeat_threads() == []
+
+
+def test_run_job_stops_heartbeat_before_returning_on_the_failed_attempt_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recorder = _RefreshRunCallRecorder()
+    job = _job_for_tests(key="failed-heartbeat-job", run_callable=recorder.recording_callable())
+    emitted: list[str] = []
+
+    recorder.install(monkeypatch)
+    monkeypatch.setattr(runner, "_select_data_source_id", MagicMock(return_value=uuid4()))
+    monkeypatch.setattr(
+        runner,
+        "sync_data_source_metadata",
+        MagicMock(side_effect=RuntimeError("metadata boom")),
+    )
+    stop_event = _install_fake_heartbeat_event(monkeypatch, timeout_returns=2)
+
+    result = runner.run_job(recorder.connection, job, on_heartbeat=emitted.append)
+
+    assert result.status == "failed"
+    assert result.message == "Metadata sync failed"
+    assert len(emitted) == 2
+    assert stop_event.set_calls == 1
+    assert _live_heartbeat_threads() == []
+
+
+def test_main_heartbeat_lines_do_not_change_exit_code_or_result_stream(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    job = _job_for_tests(
+        key="state-pa-expenditures",
+        run_callable=MagicMock(return_value=_successful_loader_result()),
+    )
+    streamed_results: list[runner.RefreshRunResult] = []
+    original_format_result_line = runner._format_result_line
+
+    def _capture_result_line(result: runner.RefreshRunResult) -> str:
+        streamed_results.append(result)
+        return original_format_result_line(result)
+
+    monkeypatch.setattr(job_builders, "build_refresh_plan", lambda **kwargs: [job])
+    monkeypatch.setattr(runner, "get_connection", MagicMock(return_value=MagicMock()))
+    monkeypatch.setattr(runner, "_select_latest_pull_at", lambda connection, job: None)
+    monkeypatch.setattr(runner, "_recent_nonempty_activity_counts", lambda *args, **kwargs: [])
+    monkeypatch.setattr(runner, "_select_data_source_id", lambda *args, **kwargs: None)
+    monkeypatch.setattr(runner, "sync_data_source_metadata", MagicMock(return_value=1))
+    monkeypatch.setattr(runner, "insert_refresh_run", lambda *args, **kwargs: None)
+    monkeypatch.setattr(runner, "update_refresh_run", lambda *args, **kwargs: None)
+    monkeypatch.setattr(runner, "_format_result_line", _capture_result_line)
+    _install_fake_heartbeat_event(monkeypatch, timeout_returns=2)
+
+    exit_code = runner.main(["--no-lock", "--force"])
+
+    stdout_lines = capsys.readouterr().out.splitlines()
+    heartbeat_lines = [line for line in stdout_lines if " heartbeat " in line]
+    result_lines = [line for line in stdout_lines if " status=" in line]
+
+    assert exit_code == 0
+    assert len(heartbeat_lines) == 2
+    assert len(result_lines) == 1
+    # Heartbeats are operator aid printed while the job is in flight; the single terminal
+    # result line still closes the job's stdout story.
+    assert stdout_lines == heartbeat_lines + result_lines
+    assert [(result.key, result.status) for result in streamed_results] == [("state-pa-expenditures", "success")]
+
+
+# ---------------------------------------------------------------------------
+# Per-job connection identity
+# ---------------------------------------------------------------------------
+
+
+def _ambient_application_name() -> str | None:
+    """Read the application name a connection opened right now would carry."""
+    # build_connection_parameters() is typed for every override value (str | int);
+    # application_name is always textual, so narrow it here rather than at each caller.
+    value = db.build_connection_parameters().get("application_name")
+    return None if value is None else str(value)
+
+
+def _identity_observing_job(
+    key: str,
+    observed: list[str | None],
+    *,
+    error: Exception | None = None,
+) -> runner.RefreshJob:
+    """Build a job whose callable records the ambient identity it runs under."""
+
+    def _run() -> object:
+        observed.append(_ambient_application_name())
+        if error is not None:
+            raise error
+        return None
+
+    return _job_for_tests(key=key, run_callable=MagicMock(side_effect=_run))
+
+
+def test_execute_job_scopes_the_connection_identity_to_the_job_key() -> None:
+    observed: list[str | None] = []
+    job = _identity_observing_job("state-pa-expenditures", observed)
+
+    outcome = runner._execute_job(MagicMock(), job)
+
+    assert observed == ["refresh:state-pa-expenditures"]
+    assert outcome.error is None
+    # The scope is execution-local: nothing outside the callable inherits the job identity.
+    assert "application_name" not in db.build_connection_parameters()
+
+
+def test_execute_job_gives_each_sequential_job_its_own_connection_identity() -> None:
+    observed: list[str | None] = []
+    connection = MagicMock()
+
+    runner._execute_job(connection, _identity_observing_job("state-co-contributions", observed))
+    runner._execute_job(connection, _identity_observing_job("federal-fec-masters", observed))
+
+    assert observed == ["refresh:state-co-contributions", "refresh:federal-fec-masters"]
+    assert "application_name" not in db.build_connection_parameters()
+
+
+def test_execute_job_restores_the_ambient_identity_when_the_callable_raises() -> None:
+    observed: list[str | None] = []
+    job = _identity_observing_job("state-ca-contributions", observed, error=RuntimeError("boom"))
+
+    with db.connection_identity("refresh:enclosing-owner"):
+        outcome = runner._execute_job(MagicMock(), job)
+        # A crashed job must not strand its own identity on the enclosing scope.
+        assert _ambient_application_name() == "refresh:enclosing-owner"
+
+    assert observed == ["refresh:state-ca-contributions"]
+    assert outcome.pull_status == "crashed"
+    assert str(outcome.error) == "boom"
+    assert "application_name" not in db.build_connection_parameters()
+
+
+@pytest.mark.parametrize(
+    "over_limit_key",
+    [
+        "state-" + "a" * 60,
+        "state-" + "\u00e9" * 40,
+    ],
+    ids=["ascii", "multibyte"],
+)
+def test_execute_job_bounds_an_over_limit_job_key_instead_of_crashing(over_limit_key: str) -> None:
+    # A data-driven source id could push `refresh:<key>` past PostgreSQL's 63-byte
+    # application_name ceiling, including across a multibyte UTF-8 boundary. That
+    # must not turn a healthy job into a `crashed` ledger row for a naming reason.
+    observed: list[str | None] = []
+    job = _identity_observing_job(over_limit_key, observed)
+
+    outcome = runner._execute_job(MagicMock(), job)
+
+    assert outcome.error is None
+    assert outcome.pull_status != "crashed"
+    (identity,) = observed
+    assert identity is not None
+    assert identity.startswith("refresh:")
+    assert len(identity.encode("utf-8")) <= db.APPLICATION_NAME_LIMIT_BYTES
+
+
+def test_scoped_connection_identity_stays_distinct_for_distinct_over_limit_keys() -> None:
+    # Two keys that truncate to the same prefix must still resolve to different
+    # identities so `pg_stat_activity` can tell their sessions apart.
+    shared_prefix = "civics-roster-" + "a" * 50
+    first = runner._scoped_connection_identity(shared_prefix + "-one")
+    second = runner._scoped_connection_identity(shared_prefix + "-two")
+
+    assert first != second
+    assert len(first.encode("utf-8")) <= db.APPLICATION_NAME_LIMIT_BYTES
+    assert len(second.encode("utf-8")) <= db.APPLICATION_NAME_LIMIT_BYTES
+
+
+def test_scoped_connection_identity_leaves_within_limit_keys_verbatim() -> None:
+    assert runner._scoped_connection_identity("state-pa-expenditures") == "refresh:state-pa-expenditures"
+
+
+def test_main_opens_the_orchestration_connection_with_the_runner_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job = _job_for_tests(key="federal-fec-masters")
+    open_overrides: list[dict[str, object]] = []
+
+    class FakeConnection:
+        def close(self) -> None:
+            pass
+
+    def _fake_get_connection(**overrides: object) -> FakeConnection:
+        open_overrides.append(dict(overrides))
+        return FakeConnection()
+
+    monkeypatch.setattr(job_builders, "build_refresh_plan", lambda **kwargs: [job])
+    monkeypatch.setattr(runner, "get_connection", _fake_get_connection)
+    monkeypatch.setattr(
+        runner,
+        "run_all_jobs",
+        lambda *args, **kwargs: [
+            runner.RefreshRunResult(key=job.key, status="success", metadata_updates=0, message="ok")
+        ],
+    )
+
+    exit_code = runner.main(["--scope", "federal", "--no-lock"])
+
+    assert exit_code == 0
+    # The shared orchestration connection is one long-lived session; it carries the runner's
+    # own identity rather than any job's.
+    assert open_overrides == [{"application_name": "refresh:runner"}]
+
+
+def test_heartbeat_worker_never_opens_a_database_connection(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The heartbeat worker stays DB-free, so no connection is opened off the job thread.
+
+    The job's own callable opens one, which is what makes this guard able to fail: the spy
+    proves it records opens and which thread made them.
+    """
+    recorder = _RefreshRunCallRecorder()
+    opens: list[tuple[str, str | None]] = []
+    emitted: list[str] = []
+
+    def _spy_get_connection(**overrides: object) -> MagicMock:
+        opens.append((threading.current_thread().name, _ambient_application_name()))
+        return MagicMock()
+
+    def _run() -> object:
+        recorder.calls.append("run_callable")
+        db.get_connection()
+        return None
+
+    job = _job_for_tests(key="heartbeat-db-free-job", run_callable=MagicMock(side_effect=_run))
+    recorder.install(monkeypatch)
+    monkeypatch.setattr(runner, "get_connection", _spy_get_connection)
+    monkeypatch.setattr(db, "get_connection", _spy_get_connection)
+    monkeypatch.setattr(runner, "_select_data_source_id", MagicMock(return_value=None))
+    monkeypatch.setattr(runner, "sync_data_source_metadata", MagicMock())
+    _install_fake_heartbeat_event(monkeypatch, timeout_returns=1)
+
+    result = runner.run_job(recorder.connection, job, on_heartbeat=emitted.append, heartbeat_interval_seconds=30.0)
+
+    assert result.status == "success"
+    assert len(emitted) == 1
+    assert opens == [(threading.current_thread().name, "refresh:heartbeat-db-free-job")]
+    assert not any(thread_name.startswith("refresh-heartbeat-") for thread_name, _ in opens)

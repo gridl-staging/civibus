@@ -1,10 +1,14 @@
+"""Generate the tracked jurisdiction master CSV from the coverage registry."""
+
 import csv
 import json
+from io import StringIO
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 REGISTRY_PATH = REPO_ROOT / "docs" / "reference" / "research" / "coverage-registry.json"
 OUTPUT_PATH = REPO_ROOT / "docs" / "reference" / "research" / "jurisdiction-master.csv"
+OWNED_INPUT_PATHS = (Path(__file__), REGISTRY_PATH)
 
 # 2020 US Census state populations (source: census.gov/2020census)
 STATE_POPULATIONS_2020: dict[str, int] = {
@@ -352,12 +356,33 @@ def _get_portal_url(row: dict) -> str:
     return ""
 
 
-def generate() -> None:
-    """Generate the master jurisdiction CSV."""
-    with open(REGISTRY_PATH) as f:
+FIELDNAMES = [
+    "jurisdiction_code",
+    "name",
+    "type",
+    "parent_state",
+    "population_2020",
+    "primary_date_2026",
+    "portal_url",
+    "data_frequency",
+    "pipeline_status",
+    "tier",
+    "covers_sub_jurisdictions",
+    "source_count",
+    "audit_method",
+    "audit_confidence",
+    "audit_date",
+    "next_action",
+    "notes",
+]
+
+
+def _sorted_registry_rows(registry_path: Path = REGISTRY_PATH) -> list[dict]:
+    """Load and sort registry rows for CSV projection."""
+    with registry_path.open() as f:
         registry = json.load(f)
 
-    rows = registry["rows"]
+    rows = list(registry["rows"])
 
     # Sort: federal first, then states by population desc, then municipalities by population desc
     def sort_key(r: dict) -> tuple:
@@ -366,56 +391,77 @@ def generate() -> None:
         return (type_order.get(r["jurisdiction_type"], 9), -pop)
 
     rows.sort(key=sort_key)
+    return rows
 
-    fieldnames = [
-        "jurisdiction_code",
-        "name",
-        "type",
-        "parent_state",
-        "population_2020",
-        "primary_date_2026",
-        "portal_url",
-        "data_frequency",
-        "pipeline_status",
-        "tier",
-        "covers_sub_jurisdictions",
-        "source_count",
-        "audit_method",
-        "audit_confidence",
-        "audit_date",
-        "next_action",
-        "notes",
-    ]
 
-    with open(OUTPUT_PATH, "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
+def render_csv_text(registry_path: Path = REGISTRY_PATH) -> str:
+    """Render the full jurisdiction master CSV text."""
+    buffer = StringIO(newline="")
+    writer = csv.DictWriter(buffer, fieldnames=FIELDNAMES)
+    writer.writeheader()
 
-        for row in rows:
-            method = _audit_method(row)
-            writer.writerow(
-                {
-                    "jurisdiction_code": row["jurisdiction_code"],
-                    "name": row["name"],
-                    "type": row["jurisdiction_type"],
-                    "parent_state": row.get("parent_jurisdiction_code", ""),
-                    "population_2020": _get_population(row) or "",
-                    "primary_date_2026": _get_primary_date(row),
-                    "portal_url": _get_portal_url(row),
-                    "data_frequency": row.get("best_update_frequency", ""),
-                    "pipeline_status": _pipeline_status(row),
-                    "tier": row["tier"],
-                    "covers_sub_jurisdictions": row.get("covers_sub_jurisdictions", ""),
-                    "source_count": row.get("source_count", ""),
-                    "audit_method": method,
-                    "audit_confidence": _audit_confidence(method),
-                    "audit_date": row.get("evidence_date", ""),
-                    "next_action": row.get("next_action", ""),
-                    "notes": row.get("operational_reason", ""),
-                }
-            )
+    for row in _sorted_registry_rows(registry_path):
+        method = _audit_method(row)
+        writer.writerow(
+            {
+                "jurisdiction_code": row["jurisdiction_code"],
+                "name": row["name"],
+                "type": row["jurisdiction_type"],
+                "parent_state": row.get("parent_jurisdiction_code", ""),
+                "population_2020": _get_population(row) or "",
+                "primary_date_2026": _get_primary_date(row),
+                "portal_url": _get_portal_url(row),
+                "data_frequency": row.get("best_update_frequency", ""),
+                "pipeline_status": _pipeline_status(row),
+                "tier": row["tier"],
+                "covers_sub_jurisdictions": row.get("covers_sub_jurisdictions", ""),
+                "source_count": row.get("source_count", ""),
+                "audit_method": method,
+                "audit_confidence": _audit_confidence(method),
+                "audit_date": row.get("evidence_date", ""),
+                "next_action": row.get("next_action", ""),
+                "notes": row.get("operational_reason", ""),
+            }
+        )
 
-    print(f"Wrote {len(rows)} rows to {OUTPUT_PATH}")
+    return buffer.getvalue()
+
+
+def stale_input_paths(
+    output_path: Path = OUTPUT_PATH,
+    input_paths: tuple[Path, ...] = OWNED_INPUT_PATHS,
+) -> tuple[Path, ...]:
+    """Return owned inputs newer than the generated CSV."""
+    if not output_path.exists():
+        return input_paths
+
+    output_mtime_ns = output_path.stat().st_mtime_ns
+    stale_inputs: list[Path] = []
+    for input_path in input_paths:
+        if not input_path.exists() or input_path.stat().st_mtime_ns > output_mtime_ns:
+            stale_inputs.append(input_path)
+    return tuple(stale_inputs)
+
+
+def assert_output_is_fresh(
+    output_path: Path = OUTPUT_PATH,
+    input_paths: tuple[Path, ...] = OWNED_INPUT_PATHS,
+) -> None:
+    """Fail closed when the generated CSV is missing or older than its inputs."""
+    stale_inputs = stale_input_paths(output_path=output_path, input_paths=input_paths)
+    if stale_inputs:
+        joined = ", ".join(str(path) for path in stale_inputs)
+        raise RuntimeError(f"{output_path} is stale or missing; regenerate after updating: {joined}")
+
+
+def generate(output_path: Path = OUTPUT_PATH) -> None:
+    """Generate the master jurisdiction CSV."""
+    csv_text = render_csv_text()
+    with output_path.open("w", newline="") as f:
+        f.write(csv_text)
+
+    row_count = len(_sorted_registry_rows())
+    print(f"Wrote {row_count} rows to {output_path}")
 
 
 if __name__ == "__main__":

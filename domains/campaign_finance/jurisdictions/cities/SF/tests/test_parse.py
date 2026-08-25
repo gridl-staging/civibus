@@ -80,6 +80,26 @@ def test_parser_rejects_header_drift(tmp_path: Path) -> None:
         list(parser)
 
 
+def test_parser_accepts_unmapped_live_socrata_columns(tmp_path: Path) -> None:
+    live_header_path = tmp_path / "live_header.csv"
+    fixture_row = _read_rows(_FIXTURE_PATH)[0]
+    live_columns = list(SF_TRANSACTION_COLUMNS)
+    insertion_index = live_columns.index("loan_amount_8") + 1
+    live_columns[insertion_index:insertion_index] = ["loan_date_1", "loan_date_2", "loan_rate"]
+    live_row = {**fixture_row, "loan_date_1": "", "loan_date_2": "", "loan_rate": ""}
+
+    with live_header_path.open("w", encoding="utf-8", newline="") as csv_file:
+        writer = csv.DictWriter(csv_file, fieldnames=live_columns)
+        writer.writeheader()
+        writer.writerow(live_row)
+
+    rows = list(parse_transactions(live_header_path, year_from=2022))
+
+    assert len(rows) == 1
+    assert rows[0]["filing_id_number"] == fixture_row["filing_id_number"]
+    assert rows[0]["transaction_amount_1"] == Decimal(fixture_row["transaction_amount_1"])
+
+
 def test_parse_transactions_normalizes_empty_strings_to_none() -> None:
     row = next(iter(parse_transactions(_FIXTURE_PATH)))
 

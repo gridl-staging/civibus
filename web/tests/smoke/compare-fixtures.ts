@@ -1,10 +1,13 @@
 /** Deterministic officeholder and campaign-finance fixtures for the compare smoke suite. */
+import type {
+  CandidateDetailResponse,
+  CandidateListItem
+} from "$lib/campaign-finance-detail/contract";
 
 const fixtureConstants =
   (await import(new URL("./fixtures.ts", import.meta.url).href)) as typeof import("./fixtures");
 
 const {
-  SMOKE_CANDIDATE_ID,
   SMOKE_COMPARE_UNAVAILABLE_VALUE,
   SMOKE_CONGRESS_LEADER_NAME,
   SMOKE_CONGRESS_LEADER_PERSON_ID,
@@ -88,13 +91,18 @@ function buildPersonDetail(config: FixtureConfig) {
 
 /**
  */
-function buildCandidate(config: FixtureConfig) {
+function buildCandidate(
+  config: FixtureConfig,
+  candidateSummary: ReturnType<typeof buildCandidateSummary> | null
+) {
   return {
     id: config.candidateId,
     fec_candidate_id: config.fecCandidateId,
     name: config.name,
     slug: `compare-${config.name.toLowerCase().replaceAll(" ", "-")}`,
     slug_is_unique: true,
+    identity_is_safe: true,
+    has_official_total: candidateSummary !== null,
     person_id: config.id,
     party: null,
     office: config.office,
@@ -102,8 +110,9 @@ function buildCandidate(config: FixtureConfig) {
     district: config.district,
     incumbent_challenge: "I",
     principal_committee_id: null,
+    candidacies: [],
     sources: []
-  };
+  } satisfies CandidateDetailResponse;
 }
 
 function buildCandidateListItem(candidate: ReturnType<typeof buildCandidate>) {
@@ -117,8 +126,10 @@ function buildCandidateListItem(candidate: ReturnType<typeof buildCandidate>) {
     state: candidate.state,
     district: candidate.district,
     slug: candidate.slug,
-    slug_is_unique: candidate.slug_is_unique
-  };
+    slug_is_unique: candidate.slug_is_unique,
+    identity_is_safe: candidate.identity_is_safe,
+    has_official_total: candidate.has_official_total
+  } satisfies CandidateListItem;
 }
 
 /**
@@ -318,8 +329,9 @@ function percentLabel(value: string): string {
 /**
  */
 function buildOfficeholderFixture(config: FixtureConfig) {
-  const candidate = buildCandidate(config);
   const hasSummary = config.candidateSummaryStatus !== 404;
+  const candidateSummary = hasSummary ? buildCandidateSummary(config) : null;
+  const candidate = buildCandidate(config, candidateSummary);
   const moneyFails = config.contributionInsightsErrorStatus !== undefined;
   const hasItemizedData = config.hasItemizedData !== false;
 
@@ -369,7 +381,7 @@ function buildOfficeholderFixture(config: FixtureConfig) {
       offset: 0,
       limit: 10
     },
-    candidateSummary: hasSummary ? buildCandidateSummary(config) : null,
+    candidateSummary,
     independentExpenditureSummary: hasSummary
       ? buildIndependentExpenditureSummary(config)
       : null,
@@ -476,7 +488,11 @@ const congressCompareHandoffOfficeholders = [
   buildOfficeholderFixture({
     id: SMOKE_CONGRESS_LEADER_PERSON_ID,
     name: SMOKE_CONGRESS_LEADER_NAME,
-    candidateId: SMOKE_CANDIDATE_ID,
+    // Distinct from SMOKE_CANDIDATE_ID on purpose. Standard candidate detail
+    // fixture ids shadow compare ids in the backend router, so reusing one
+    // would resolve this fixture's own `compare-jane-doe` slug to the standard
+    // Pat Candidate detail.
+    candidateId: "11111111-1111-4111-8111-111111111114",
     fecCandidateId: "H6NC01001",
     searchQuery: "jane congress compare",
     office: "H",
@@ -526,6 +542,9 @@ const compareLookupFixtures = [...compareOfficeholders, ...congressCompareHandof
 export const compareFixtureById = new Map(compareLookupFixtures.map((fixture) => [fixture.id, fixture]));
 export const compareFixtureByCandidateId = new Map(
   compareLookupFixtures.map((fixture) => [fixture.candidateId, fixture])
+);
+export const compareFixtureByCandidateSlug = new Map(
+  compareLookupFixtures.map((fixture) => [fixture.candidate.slug, fixture])
 );
 export const compareFixtureBySearchQuery = new Map(
   compareLookupFixtures.map((fixture) => [fixture.searchQuery, fixture])

@@ -98,6 +98,79 @@ laws:
     corporate_direct: "prohibited"
     union_direct: 2000
     party_to_candidate: null
+  contribution_limit_rules:
+    - donor_type: individual
+      recipient_type: candidate_committee
+      office_level: citywide
+      limit_status: numeric
+      limit_amount: 2000
+      limit_basis: per_election
+      effective_date: "2018-01-12"
+      source_citation: "NYC CFB 2021 Limits & Thresholds (new program participant contribution limits); contributions received beginning 2018-01-12"
+    - donor_type: individual
+      recipient_type: candidate_committee
+      office_level: borough_president
+      limit_status: numeric
+      limit_amount: 1500
+      limit_basis: per_election
+      effective_date: "2018-01-12"
+      source_citation: "NYC CFB 2021 Limits & Thresholds (new program participant contribution limits); contributions received beginning 2018-01-12"
+    - donor_type: individual
+      recipient_type: candidate_committee
+      office_level: city_council
+      limit_status: numeric
+      limit_amount: 1000
+      limit_basis: per_election
+      effective_date: "2018-01-12"
+      source_citation: "NYC CFB 2021 Limits & Thresholds (new program participant contribution limits); contributions received beginning 2018-01-12"
+    - donor_type: pac
+      recipient_type: candidate_committee
+      office_level: citywide
+      limit_status: numeric
+      limit_amount: 2000
+      limit_basis: per_election
+      effective_date: "2018-01-12"
+      source_citation: "NYC CFB 2021 Limits & Thresholds (new program participant contribution limits); contributions received beginning 2018-01-12"
+    - donor_type: pac
+      recipient_type: candidate_committee
+      office_level: borough_president
+      limit_status: numeric
+      limit_amount: 1500
+      limit_basis: per_election
+      effective_date: "2018-01-12"
+      source_citation: "NYC CFB 2021 Limits & Thresholds (new program participant contribution limits); contributions received beginning 2018-01-12"
+    - donor_type: pac
+      recipient_type: candidate_committee
+      office_level: city_council
+      limit_status: numeric
+      limit_amount: 1000
+      limit_basis: per_election
+      effective_date: "2018-01-12"
+      source_citation: "NYC CFB 2021 Limits & Thresholds (new program participant contribution limits); contributions received beginning 2018-01-12"
+    - donor_type: union
+      recipient_type: candidate_committee
+      office_level: citywide
+      limit_status: numeric
+      limit_amount: 2000
+      limit_basis: per_election
+      effective_date: "2018-01-12"
+      source_citation: "NYC CFB 2021 Limits & Thresholds (new program participant contribution limits); contributions received beginning 2018-01-12"
+    - donor_type: union
+      recipient_type: candidate_committee
+      office_level: borough_president
+      limit_status: numeric
+      limit_amount: 1500
+      limit_basis: per_election
+      effective_date: "2018-01-12"
+      source_citation: "NYC CFB 2021 Limits & Thresholds (new program participant contribution limits); contributions received beginning 2018-01-12"
+    - donor_type: union
+      recipient_type: candidate_committee
+      office_level: city_council
+      limit_status: numeric
+      limit_amount: 1000
+      limit_basis: per_election
+      effective_date: "2018-01-12"
+      source_citation: "NYC CFB 2021 Limits & Thresholds (new program participant contribution limits); contributions received beginning 2018-01-12"
   itemization_threshold: 99
   reporting:
     periods:

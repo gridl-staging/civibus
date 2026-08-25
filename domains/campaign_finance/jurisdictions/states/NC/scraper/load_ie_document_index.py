@@ -41,6 +41,9 @@ from domains.campaign_finance.jurisdictions.states.load_utils import (
 
 LOGGER = logging.getLogger(__name__)
 
+# One commit per this many iterated candidate IE rows.
+_COMMIT_BATCH_ROWS = 1_000
+
 
 def _build_nc_ie_filing_fec_id(row: Mapping[str, str | None]) -> str:
     source_record_key = compute_record_hash(dict(row))
@@ -174,6 +177,8 @@ def load_nc_ie_document_index(
 
     report_section_url_queues = _build_report_section_url_queues_by_row_key(candidate_ie_rows)
 
+    processed_count = 0
+
     for row in candidate_ie_rows:
         try:
             if manages_outer_transaction:
@@ -194,12 +199,19 @@ def load_nc_ie_document_index(
                 compute_record_hash(dict(row)),
             )
             counts.errors += 1
-            continue
-
-        if inserted:
-            counts.inserted += 1
         else:
-            counts.skipped += 1
+            if inserted:
+                counts.inserted += 1
+            else:
+                counts.skipped += 1
+
+        # Every persistence-pass row advances the boundary, including a row that raised
+        # and a row whose source record was a dedupe skip: both already opened a
+        # transaction. The earlier classification scan persists nothing and is deliberately
+        # not a second boundary.
+        processed_count += 1
+        if processed_count % _COMMIT_BATCH_ROWS == 0:
+            commit_managed_transaction(conn, manages_outer_transaction)
 
     commit_managed_transaction(conn, manages_outer_transaction)
     return build_load_result(counts, rows=parser, started_at=started_at)

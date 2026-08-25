@@ -108,11 +108,34 @@ def test_main_download_mode_resolves_path_and_loads(
     captured = capsys.readouterr()
 
     assert exit_code == 0
-    download_wa_csv.assert_called_once_with("contributions", dest_dir=ANY)
+    download_wa_csv.assert_called_once_with("contributions", dest_dir=ANY, limit=None)
     load_with_filings.assert_called_once_with(connection, downloaded_path, limit=None)
     assert "WA contributions load complete" in captured.out
     assert captured.err == ""
     connection.close.assert_called_once_with()
+
+
+def test_main_download_mode_passes_limit_to_download(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    downloaded_path = tmp_path / "wa_loans.csv"
+
+    download_wa_csv = MagicMock(return_value=downloaded_path)
+    monkeypatch.setattr(cli, "download_wa_csv", download_wa_csv)
+    monkeypatch.setattr(
+        cli,
+        "parse_loans",
+        MagicMock(return_value=iter([{"a": "1"}, {"a": "2"}])),
+    )
+
+    exit_code = cli.main(["--download", "--data-type", "loans", "--limit", "2", "--dry-run"])
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    download_wa_csv.assert_called_once_with("loans", dest_dir=ANY, limit=2)
+    assert "WA loans dry-run: parsed 2 rows" in captured.out
 
 
 def test_main_dry_run_uses_path_without_db(

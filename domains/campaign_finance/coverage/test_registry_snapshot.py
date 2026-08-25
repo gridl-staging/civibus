@@ -194,6 +194,50 @@ def test_stage3_wisconsin_contract_gate_uses_live_sunshine_exports() -> None:
     assert wi_row.evidence_date is not None
 
 
+def test_washington_ie_disposition_is_explicit() -> None:
+    registry = _load_coverage_registry()
+
+    wa_row = next(row for row in registry.rows if row.jurisdiction_code == "WA")
+
+    assert wa_row.ie_coverage_available is True
+
+
+def test_stage3_washington_ie_receipt_is_recorded_as_bounded_degraded_coverage() -> None:
+    registry = _load_coverage_registry()
+
+    wa_row = next(row for row in registry.rows if row.jurisdiction_code == "WA")
+    inherited_municipal_rows = [row for row in registry.rows if row.parent_jurisdiction_code == "WA"]
+
+    assert wa_row.evidence_date is not None
+    assert wa_row.evidence_date.isoformat() == "2026-08-23"
+    assert wa_row.evidence_summary is not None
+    assert "operator-attended" in wa_row.evidence_summary
+    assert "one 1,000-row Socrata page out of 39,383 rows" in wa_row.evidence_summary
+    assert "921 relational independent-expenditure transactions" in wa_row.evidence_summary
+    assert "79 rows with missing `expenditure_amount`" in wa_row.evidence_summary
+    assert "pull_status=degraded" in wa_row.evidence_summary
+    assert wa_row.operational_reason is not None
+    assert "bounded" in wa_row.operational_reason
+    assert "qualifying recurring/unattended production refresh evidence" in wa_row.operational_reason
+    assert wa_row.next_action is not None
+    assert "decide independent expenditures" not in wa_row.next_action
+    assert "full-history" not in wa_row.next_action
+    assert "recurring/unattended" in wa_row.next_action
+    assert {row.jurisdiction_code for row in inherited_municipal_rows} == {
+        "WA_SEATTLE",
+        "WA_SPOKANE",
+    }
+    for municipal_row in inherited_municipal_rows:
+        assert municipal_row.evidence_date is not None
+        assert municipal_row.evidence_date.isoformat() == "2026-08-23"
+        assert municipal_row.operational_reason is not None
+        assert "bounded 2026-08-23 independent-expenditures disposition" in municipal_row.operational_reason
+        assert "qualifying recurring/unattended production refresh evidence" in municipal_row.operational_reason
+        assert municipal_row.next_action is not None
+        assert "bounded 2026-08-23 independent-expenditures receipt" in municipal_row.next_action
+        assert "decide whether independent expenditures" not in municipal_row.next_action
+
+
 def test_stage4_new_jersey_contract_gate_uses_verified_export_and_api_paths() -> None:
     registry = _load_coverage_registry()
 
@@ -366,8 +410,8 @@ def test_stage5_municipality_layer_snapshot_invariants() -> None:
                 assert parent.covers_sub_jurisdictions is False
 
 
-_IMPLEMENTED_CITY_PIPELINES = frozenset({"CA_LOS_ANGELES", "NY_NEW_YORK", "PA_PHILADELPHIA"})
-_PRE_BUILD_INDEPENDENT_CITIES = _BROWSER_VERIFIED_INDEPENDENT_CITIES - _IMPLEMENTED_CITY_PIPELINES
+def _derive_implemented_independent_city_codes() -> frozenset[str]:
+    return frozenset(_BROWSER_VERIFIED_INDEPENDENT_CITIES & derive_implemented_jurisdiction_codes())
 
 
 def test_stage1_city_portal_reclassifications() -> None:
@@ -385,20 +429,29 @@ def test_stage1_city_portal_reclassifications() -> None:
         assert row.municipal_portal_url != "needs_investigation"
         assert row.municipal_portal_url == _STAGE1_CITY_PORTAL_URLS[code]
 
+    implemented_independent_city_codes = _derive_implemented_independent_city_codes()
+    pre_build_independent_city_codes = _BROWSER_VERIFIED_INDEPENDENT_CITIES - implemented_independent_city_codes
+
     # Non-implemented cities: still pre-build, browser-verified research state
-    for code in _PRE_BUILD_INDEPENDENT_CITIES:
+    assert "DC_WASHINGTON" in pre_build_independent_city_codes
+    assert "DC" not in derive_implemented_jurisdiction_codes()
+    for code in pre_build_independent_city_codes:
         row = rows_by_code[code]
         assert row.runner_wired is False, f"{code} should have runner_wired=False (no city pipeline exists)"
         assert row.evidence_summary is not None
         assert "browser-verified" in row.evidence_summary.lower() or "Browser-verified" in row.evidence_summary
 
-    # Implemented cities: LA and NYC have pipelines wired in runner.py
-    for code in _IMPLEMENTED_CITY_PIPELINES:
+    # Implemented-city membership is structural and comes from the shared membership owner.
+    # The coverage registry remains the runner_wired fact authority: every derived implemented
+    # city must carry runner_wired=True there. This invariant catches a stale readability
+    # duplicate that membership-only taxonomy checks miss — a city cannot be derived-implemented
+    # while its registry row still records runner_wired=False.
+    for code in implemented_independent_city_codes:
         row = rows_by_code[code]
-        assert row.runner_wired is True, f"{code} should have runner_wired=True (pipeline implemented)"
-        assert row.tier == "implemented but unproven", f"{code} tier should be 'implemented but unproven'"
-        assert row.evidence_summary is not None
-        assert "Pipeline implemented" in row.evidence_summary, f"{code} evidence must cite pipeline implementation"
+        assert row.municipal_audit_decision == "independent_target"
+        assert row.jurisdiction_type == "municipality"
+        assert row.parent_jurisdiction_code is not None
+        assert row.runner_wired is True, f"{code} is derived-implemented; registry must record runner_wired=True"
 
 
 def test_stage4_phl_row_matches_shipped_pipeline_and_closeout_status() -> None:

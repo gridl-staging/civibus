@@ -28,7 +28,7 @@ from domains.campaign_finance.jurisdictions.states.NC.scraper.load import (
     LoadResult,
     ensure_nc_committee_document_data_source,
     ensure_nc_data_source,
-    ensure_nc_ie_document_index_data_source,
+    resolve_nc_ie_data_source_before_managed_load,
     load_nc_committee_documents,
     load_nc_committee_registry_rows,
     load_nc_ie_document_index,
@@ -372,7 +372,7 @@ def _load_ie_document_index_data(
     *,
     limit: int | None,
 ) -> LoadResult:
-    ie_source_id = ensure_nc_ie_document_index_data_source(connection)
+    ie_source_id = resolve_nc_ie_data_source_before_managed_load(connection)
     return load_nc_ie_document_index(
         connection,
         input_path,
@@ -402,7 +402,7 @@ def _load_input_data(
     if args.data_type == "committee-discovery":
         return _load_committee_discovery_data(connection, limit=args.limit)
     if args.data_type == "ie-transactions":
-        ie_source_id = ensure_nc_ie_document_index_data_source(connection)
+        ie_source_id = resolve_nc_ie_data_source_before_managed_load(connection)
         return load_nc_ie_transactions(
             connection,
             data_source_id=ie_source_id,

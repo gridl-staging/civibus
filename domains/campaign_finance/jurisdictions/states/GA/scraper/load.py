@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import logging
 import time
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from decimal import Decimal
 from pathlib import Path
 from uuid import UUID
@@ -68,6 +68,9 @@ from .relational_utils import (
 )
 
 LOGGER = logging.getLogger(__name__)
+
+# One commit per this many iterated rows: both GA row loops share the boundary.
+_COMMIT_BATCH_ROWS = 1_000
 
 _GA_TRANSACTION_TYPE_FIELD = "Type"
 _GA_TRANSACTION_DATE_FIELD = "Date"
@@ -474,7 +477,7 @@ def _maybe_commit_and_log_progress(
 ) -> None:
     processed_count = counts.inserted + counts.skipped + counts.errors
 
-    if processed_count % 1_000 == 0:
+    if processed_count % _COMMIT_BATCH_ROWS == 0:
         commit_managed_transaction(conn, manages_outer_transaction)
 
     if processed_count % 10_000 == 0:
@@ -644,6 +647,7 @@ def _load_ga_relational_transactions(
 ) -> None:
     filing_lookup: dict[str, _GAFilingLookupEntry] = {}
     manages_outer_transaction = conn.info.transaction_status == TransactionStatus.IDLE
+    processed_count = 0
 
     for index, row in enumerate(rows, start=1):
         if limit is not None and index > limit:
@@ -656,29 +660,88 @@ def _load_ga_relational_transactions(
             data_source_id=data_source_id,
             source_record_key=ga_source_record_key(row),
         )
-        if source_record_id is None:
-            continue
+        if source_record_id is not None:
+            if manages_outer_transaction:
+                ensure_transaction_open(conn)
 
-        if manages_outer_transaction:
-            ensure_transaction_open(conn)
-        with conn.transaction():
-            filing_entry = _upsert_ga_filing(
-                conn,
-                row,
-                source_record_id=source_record_id,
-                data_type=data_type,
-                filing_lookup=filing_lookup,
-            )
-            _upsert_ga_transaction_with_filing(
-                conn,
-                row,
-                filing_id=filing_entry.filing_id,
-                committee_id=filing_entry.committee_id,
-                source_record_id=source_record_id,
-                data_type=data_type,
-            )
+            with conn.transaction():
+                filing_entry = _upsert_ga_filing(
+                    conn,
+                    row,
+                    source_record_id=source_record_id,
+                    data_type=data_type,
+                    filing_lookup=filing_lookup,
+                )
+                _upsert_ga_transaction_with_filing(
+                    conn,
+                    row,
+                    filing_id=filing_entry.filing_id,
+                    committee_id=filing_entry.committee_id,
+                    source_record_id=source_record_id,
+                    data_type=data_type,
+                )
+
+        # Every iterated row advances the boundary, including rows with no source record:
+        # the lookup above opens a read transaction either way, so counting only linked
+        # rows would let a run of missing rows hold one open.
+        processed_count += 1
+        if processed_count % _COMMIT_BATCH_ROWS == 0:
+            commit_managed_transaction(conn, manages_outer_transaction)
 
     commit_managed_transaction(conn, manages_outer_transaction)
+
+
+_GAParser = Callable[[Path], Iterable[Mapping[str, object]]]
+_GAProvenanceLoader = Callable[..., LoadResult]
+_GAWithFilingsPass = tuple[_GAProvenanceLoader, _GAParser]
+
+
+def _ga_with_filings_passes() -> dict[str, _GAWithFilingsPass]:
+    """Pair each source-record loader with its parser using current module globals."""
+    return {
+        "contributions": (load_ga_contributions, parse_contributions),
+        "expenditures": (load_ga_expenditures, parse_expenditures),
+    }
+
+
+def _load_ga_with_filings(
+    conn: psycopg.Connection,
+    file_path: str | Path,
+    *,
+    data_type: str,
+    limit: int | None,
+) -> LoadResult:
+    """Run the source-record pass then the relational pass over one GA export.
+
+    The data source is resolved and committed up front rather than in the relational
+    pass's argument list: both passes sample transaction ownership on entry, so a lookup
+    left open here would make them believe an outer caller owns the transaction and
+    silently skip every periodic commit — leaving the boundary in place but dead.
+
+    The paired dispatch is rebuilt from module globals per call so tests and callers
+    cannot combine one data type's parser with the other type's provenance loader.
+    """
+    validated_row_limit = validated_limit(limit)
+    parsed_path = Path(file_path)
+    provenance_loader, parse_rows = _ga_with_filings_passes()[data_type]
+
+    manages_outer_transaction = conn.info.transaction_status == TransactionStatus.IDLE
+    data_source_id = ensure_ga_data_source(conn, data_type)
+    commit_managed_transaction(conn, manages_outer_transaction)
+
+    provenance_result = provenance_loader(
+        conn,
+        parse_rows(parsed_path),
+        limit=validated_row_limit,
+    )
+    _load_ga_relational_transactions(
+        conn,
+        parse_rows(parsed_path),
+        data_source_id=data_source_id,
+        data_type=data_type,
+        limit=validated_row_limit,
+    )
+    return provenance_result
 
 
 def load_ga_contributions_with_filings(
@@ -687,21 +750,12 @@ def load_ga_contributions_with_filings(
     *,
     limit: int | None = None,
 ) -> LoadResult:
-    validated_row_limit = validated_limit(limit)
-    parsed_path = Path(file_path)
-    provenance_result = load_ga_contributions(
+    return _load_ga_with_filings(
         conn,
-        parse_contributions(parsed_path),
-        limit=validated_row_limit,
-    )
-    _load_ga_relational_transactions(
-        conn,
-        parse_contributions(parsed_path),
-        data_source_id=ensure_ga_data_source(conn, "contributions"),
+        file_path,
         data_type="contributions",
-        limit=validated_row_limit,
+        limit=limit,
     )
-    return provenance_result
 
 
 def load_ga_expenditures_with_filings(
@@ -710,21 +764,12 @@ def load_ga_expenditures_with_filings(
     *,
     limit: int | None = None,
 ) -> LoadResult:
-    validated_row_limit = validated_limit(limit)
-    parsed_path = Path(file_path)
-    provenance_result = load_ga_expenditures(
+    return _load_ga_with_filings(
         conn,
-        parse_expenditures(parsed_path),
-        limit=validated_row_limit,
-    )
-    _load_ga_relational_transactions(
-        conn,
-        parse_expenditures(parsed_path),
-        data_source_id=ensure_ga_data_source(conn, "expenditures"),
+        file_path,
         data_type="expenditures",
-        limit=validated_row_limit,
+        limit=limit,
     )
-    return provenance_result
 
 
 __all__ = [

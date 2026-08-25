@@ -14,6 +14,10 @@ import {
   buildOfficeholdingDetailPresentation
 } from "./presentation";
 import DetailPage from "./DetailPage.svelte";
+import {
+  buildSmokeCongressionalDistrictGeometry,
+  smokeFixtures
+} from "../../../tests/smoke/fixture-data";
 
 type NavTarget = { url: URL; params: null; route: { id: null }; scroll: null };
 type MockNavigation = { from: NavTarget | null; to: NavTarget | null };
@@ -915,6 +919,44 @@ describe("civic detail page rendering", () => {
 
     expect(rendered.body).toContain("District map context");
     expect(rendered.body).toContain(`data-feature-id="${ELECTORAL_DIVISION_ID}"`);
+    expect(rendered.body).toMatch(/class="[^"]*region-map__feature--highlighted[^"]*"/);
+  });
+
+  it("highlights the NC-01 district for the House smoke office fixture through the RegionMap seam", () => {
+    // Closes the loop opened by the /office/[id] loader test: the geometry the
+    // fixture backend serves for the office's selected division has to contain
+    // a feature the map can actually highlight, otherwise the smoke office
+    // renders a district page with no district on its map.
+    const office = smokeFixtures.office.detail;
+    const congressionalDistricts = buildSmokeCongressionalDistrictGeometry();
+
+    const rendered = render(DetailPage, {
+      props: {
+        entityType: "office",
+        data: office as unknown as OfficeDetailResponse,
+        contestMap: {
+          pageLevel: "state",
+          stateCode: office.state,
+          layerVisibility: {
+            nc_statewide_boundary: true,
+            nc_county_boundaries: false,
+            // This component-level guard supplies visibility explicitly so it
+            // measures RegionMap independently from route projection behavior.
+            nc_congressional_districts: true
+          },
+          geometryByLevel: {
+            state: { type: "FeatureCollection", features: [] },
+            county: { type: "FeatureCollection", features: [] },
+            congressional_district: congressionalDistricts
+          }
+        }
+      }
+    });
+
+    expect(rendered.body).toContain("District map context");
+    expect(rendered.body).toContain(
+      `data-feature-id="${office.selected_electoral_division_id}"`
+    );
     expect(rendered.body).toMatch(/class="[^"]*region-map__feature--highlighted[^"]*"/);
   });
 

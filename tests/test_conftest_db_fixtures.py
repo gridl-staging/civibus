@@ -466,6 +466,27 @@ def test_stage1_canaries_include_candidate_committee_link_date_precision() -> No
     assert canary_names == list(bootstrap_canaries.BOOTSTRAP_CANARIES)
 
 
+def test_stage1_canaries_include_contribution_limit_rules() -> None:
+    canary_names = [name for name, _check in bootstrap_canaries._stage1_canary_checks()]
+
+    assert "cf.contribution_limit_rules" in bootstrap_canaries.BOOTSTRAP_CANARIES
+    assert canary_names == list(bootstrap_canaries.BOOTSTRAP_CANARIES)
+
+
+def test_stage1_canary_bootstrap_repairs_contribution_limit_rules() -> None:
+    mocked_connection = MagicMock()
+    mocked_cursor = MagicMock()
+    mocked_connection.cursor.return_value.__enter__.return_value = mocked_cursor
+
+    root_conftest._bootstrap_missing_stage1_canaries(
+        mocked_connection,
+        missing_canaries=["cf.contribution_limit_rules"],
+    )
+
+    executed_sql = "\n".join(str(call.args[0]) for call in mocked_cursor.execute.call_args_list)
+    assert "CREATE TABLE IF NOT EXISTS cf.contribution_limit_rules" in executed_sql
+
+
 def test_stage1_canary_bootstrap_repairs_candidate_committee_link_date_precision(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

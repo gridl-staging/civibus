@@ -541,13 +541,13 @@ def test_stage4_pipeline_persists_decisions_clusters_and_edges_end_to_end(
         graph_conn,
         entity_ids=(a, b, c, d, e),
     )
-    assigned_cluster_id = next(row["er_cluster_id"] for row in people if row["id"] == a)
-    assert assigned_cluster_id is not None
-    for row in people:
-        if row["id"] in {a, b, c}:
-            assert row["er_cluster_id"] == assigned_cluster_id
-        else:
-            assert row["er_cluster_id"] is None
+    assignments = {row["id"]: row["er_cluster_id"] for row in people}
+    # The person branch absorbs physically, so only the auto-merge cluster's canonical member
+    # survives; the probable-match pair never merges and both of its people stay standalone.
+    assert set(assignments) == {expected_canonical, d, e}
+    assert assignments[expected_canonical] is not None
+    assert assignments[d] is None
+    assert assignments[e] is None
 
     assert (
         _edge_count(

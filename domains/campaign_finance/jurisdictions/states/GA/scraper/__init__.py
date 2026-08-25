@@ -14,6 +14,7 @@ _CONFIG_PATH = Path(__file__).resolve().parents[1] / "config.yaml"
 class _GADataSourceBlock:
     name: str
     url: str
+    update_frequency: str
     transaction_types: tuple[str, ...]
     field_mapping_keys: tuple[str, ...]
     date_selectors: tuple[str, str] | None
@@ -32,6 +33,7 @@ def _load_ga_data_source_blocks() -> tuple[_GADataSourceBlock, ...]:
         _GADataSourceBlock(
             name=data_source.name,
             url=data_source.url,
+            update_frequency=data_source.update_frequency,
             transaction_types=tuple(data_source.coverage.transaction_types),
             field_mapping_keys=tuple(data_source.field_mappings.keys()),
             date_selectors=(

@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 import os
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Any
 from uuid import UUID
 
@@ -17,6 +19,20 @@ from core.types.python.models import Address, DataSource, Organization, Person, 
 ConnectionOverrideValue = str | int
 PostConnectHook = Callable[[psycopg.Connection], None]
 DatabaseRow = dict[str, Any]
+
+APPLICATION_NAME_LIMIT_BYTES = 63
+_CONNECTION_IDENTITY: ContextVar[str | None] = ContextVar("connection_identity", default=None)
+
+
+@contextmanager
+def connection_identity(value: str) -> Iterator[None]:
+    """Apply a PostgreSQL application name within the current execution context."""
+    token = _CONNECTION_IDENTITY.set(value)
+    try:
+        yield
+    finally:
+        _CONNECTION_IDENTITY.reset(token)
+
 
 _PERSON_COLUMNS = (
     "id",
@@ -152,6 +168,25 @@ _REFRESH_RUN_COLUMNS = (
     "created_at",
 )
 
+# Identity and lineage are decided when an attempt row is first written; only the
+# outcome columns may change when that attempt finishes. Derived from
+# _REFRESH_RUN_COLUMNS so a future column joins the update path automatically.
+_REFRESH_RUN_IMMUTABLE_COLUMNS = frozenset(
+    {
+        "id",
+        "job_key",
+        "domain",
+        "jurisdiction",
+        "data_source_names",
+        "started_at",
+        "created_at",
+    }
+)
+
+_REFRESH_RUN_MUTABLE_COLUMNS = tuple(
+    column_name for column_name in _REFRESH_RUN_COLUMNS if column_name not in _REFRESH_RUN_IMMUTABLE_COLUMNS
+)
+
 upsert_address = db_ingest.upsert_address
 find_organization_by_canonical_name = db_ingest.find_organization_by_canonical_name
 find_organization_by_identifier = db_ingest.find_organization_by_identifier
@@ -231,6 +266,14 @@ def resolve_organization_by_canonical_name(
     return insert_organization(conn, organization)
 
 
+def _validate_application_name(value: ConnectionOverrideValue) -> str:
+    if not isinstance(value, str):
+        raise ValueError("PostgreSQL application_name must be a string")
+    if len(value.encode("utf-8")) > APPLICATION_NAME_LIMIT_BYTES:
+        raise ValueError(f"PostgreSQL application_name must not exceed {APPLICATION_NAME_LIMIT_BYTES} bytes")
+    return value
+
+
 def _build_connection_parameters(
     overrides: Mapping[str, ConnectionOverrideValue],
 ) -> dict[str, ConnectionOverrideValue]:
@@ -250,14 +293,19 @@ def _build_connection_parameters(
     if env_password:
         connection_parameters["password"] = env_password
 
-    allowed_override_keys = {"user", "password", "dbname", "host", "port"}
+    allowed_override_keys = {"user", "password", "dbname", "host", "port", "application_name"}
     unexpected_override_keys = set(overrides) - allowed_override_keys
     if unexpected_override_keys:
         invalid_keys = ", ".join(sorted(unexpected_override_keys))
         raise ValueError(f"Unsupported connection override keys: {invalid_keys}")
 
     for key, value in overrides.items():
-        connection_parameters[key] = value
+        if key != "application_name":
+            connection_parameters[key] = value
+
+    selected_application_name = overrides.get("application_name", _CONNECTION_IDENTITY.get())
+    if selected_application_name is not None:
+        connection_parameters["application_name"] = _validate_application_name(selected_application_name)
 
     return connection_parameters
 
@@ -354,6 +402,29 @@ def _select_row_by_id(
         row = cursor.fetchone()
 
     return row
+
+
+def _update_row_by_id(
+    conn: psycopg.Connection,
+    table_name: str,
+    columns: Sequence[str],
+    values: Sequence[object],
+    record_id: UUID,
+) -> UUID | None:
+    """Overwrite `columns` on one row, returning its id, or None when no row matched."""
+    statement = SQL("UPDATE core.{table} SET {assignments} WHERE id = %s RETURNING id").format(
+        table=Identifier(table_name),
+        assignments=SQL(", ").join(
+            SQL("{column} = {value}").format(column=Identifier(column_name), value=Placeholder())
+            for column_name in columns
+        ),
+    )
+
+    with conn.cursor() as cursor:
+        cursor.execute(statement, (*values, record_id))
+        row = cursor.fetchone()
+
+    return None if row is None else row[0]
 
 
 def _normalize_json_dictionary(value: object, field_name: str) -> dict[str, Any]:
@@ -959,3 +1030,32 @@ def select_refresh_run(conn: psycopg.Connection, refresh_run_id: UUID) -> Refres
     if row is None:
         return None
     return RefreshRun(**row)
+
+
+def _mutable_refresh_run_values(refresh_run: RefreshRun) -> tuple[object, ...]:
+    """Select the outcome values of a refresh run, in _REFRESH_RUN_MUTABLE_COLUMNS order."""
+    return tuple(
+        value
+        for column_name, value in zip(_REFRESH_RUN_COLUMNS, _refresh_run_values(refresh_run), strict=True)
+        if column_name not in _REFRESH_RUN_IMMUTABLE_COLUMNS
+    )
+
+
+def update_refresh_run(conn: psycopg.Connection, refresh_run: RefreshRun) -> UUID:
+    """Finish an existing attempt row in place, leaving its identity and lineage untouched.
+
+    A refresh attempt is written once as `running` and completed here, so the
+    caller's identity and lineage values are ignored in favour of the stored ones.
+    A missing target means the attempt row vanished mid-run, which is a failure the
+    caller must see rather than an optional result it can drop.
+    """
+    updated_id = _update_row_by_id(
+        conn,
+        "refresh_run",
+        _REFRESH_RUN_MUTABLE_COLUMNS,
+        _mutable_refresh_run_values(refresh_run),
+        refresh_run.id,
+    )
+    if updated_id is None:
+        raise RuntimeError(f"No core.refresh_run row exists for id {refresh_run.id}")
+    return updated_id

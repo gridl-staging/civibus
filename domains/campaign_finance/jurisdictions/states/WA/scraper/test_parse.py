@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import Counter
 from pathlib import Path
 
 import pytest
@@ -16,6 +17,7 @@ from domains.campaign_finance.jurisdictions.states.WA.scraper.parse import (
 )
 
 _FIXTURE_DIR = Path(__file__).parent / "test_fixtures"
+_MIXED_INDEPENDENT_EXPENDITURES_PATH = _FIXTURE_DIR / "mixed_record_classes_independent_expenditures.csv"
 _SAMPLE_INDEPENDENT_EXPENDITURES_PATH = _FIXTURE_DIR / "sample_independent_expenditures.csv"
 
 
@@ -63,6 +65,38 @@ def test_parse_independent_expenditures_reads_committed_fixture() -> None:
     assert tuple(rows[0].keys()) == INDEPENDENT_EXPENDITURE_COLUMNS
     assert rows[0]["for_or_against"] == "For"
     assert rows[1]["for_or_against"] == "Against"
+
+
+def test_parse_independent_expenditures_preserves_mixed_record_class_shapes() -> None:
+    rows = list(parse_independent_expenditures(_MIXED_INDEPENDENT_EXPENDITURES_PATH))
+
+    assert len(rows) == 7
+    assert tuple(rows[0].keys()) == INDEPENDENT_EXPENDITURE_COLUMNS
+    assert Counter(row["origin"] for row in rows) == {
+        "C6.2 - Itemized Expenditures": 2,
+        "C6.3 - Identified Entities": 3,
+        "C6.5 - Funding Sources": 2,
+    }
+
+    c62_rows = [row for row in rows if row["origin"] == "C6.2 - Itemized Expenditures"]
+    assert {row["expenditure_amount"] for row in c62_rows} == {"30.90", "9204.71"}
+    assert all(row["portion_of_amount"] is None and row["amount"] is None for row in c62_rows)
+
+    c63_rows = [row for row in rows if row["origin"] == "C6.3 - Identified Entities"]
+    assert {(row["for_or_against"], row["portion_of_amount"]) for row in c63_rows} == {
+        ("For", "25000.00"),
+        ("Against", "8450.00"),
+        (None, "2787.86"),
+    }
+    assert all(row["expenditure_amount"] is None and row["amount"] is None for row in c63_rows)
+
+    c65_rows = [row for row in rows if row["origin"] == "C6.5 - Funding Sources"]
+    assert {(row["funders_name"], row["date_received"], row["amount"]) for row in c65_rows} == {
+        ("SEIU WASHINGTON STATE COUNCIL PAC", "2026-06-03T00:00:00.000", "100000.00"),
+        ("JUSTICE FOR ALL PAC", "2026-06-17T00:00:00.000", "100000.00"),
+    }
+    assert all(row["expenditure_amount"] is None for row in c65_rows)
+    assert {row["for_or_against"] for row in rows} == {"For", "Against", None}
 
 
 def test_parse_contributions_reads_rows_and_normalizes_empty_strings(tmp_path: Path) -> None:

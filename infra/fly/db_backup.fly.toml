@@ -11,8 +11,10 @@
 # neither. The scheduled machine command is (set via `flyctl machine run`):
 #   bash /opt/civibus/infra/scripts/backup_fly_db_to_b2.sh
 #
-# Secrets (POSTGRES_PASSWORD, B2_ACCOUNT_ID, B2_APPLICATION_KEY) are set once via
-# `flyctl secrets import` and never appear in this file.
+# Secrets (FLY_BACKUP_DB_PASSWORD, B2_ACCOUNT_ID, B2_APPLICATION_KEY) are set
+# once via `flyctl secrets import` and never appear in this file. The database
+# secret belongs to the read-only civibus_backup role; never reuse the writable
+# production-owner POSTGRES_PASSWORD here.
 #
 # Build/push from repo root: flyctl deploy --build-only --push -c infra/fly/db_backup.fly.toml
 # Create or update the scheduled machine explicitly with `flyctl machine run`
@@ -34,7 +36,7 @@ primary_region = "sjc"
   FLY_DB_HOST = "civibus-db.internal"
   FLY_DB_PORT = "5432"
   FLY_DB_NAME = "civibus"
-  FLY_DB_USER = "civibus"
+  FLY_DB_USER = "civibus_backup"
   B2_BUCKET = "civibus-db-backups"
   BACKUP_RETENTION_DAYS = "7"
 

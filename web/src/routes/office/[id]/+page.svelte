@@ -36,7 +36,10 @@
   } as JsonLdObject;
   $: officeMap = {
     pageLevel: "state" as const,
-    layerVisibility: buildMapLayerVisibilityDefaults("state"),
+    layerVisibility: buildMapLayerVisibilityDefaults(
+      "state",
+      data.office.selected_electoral_division_type
+    ),
     geometryByLevel: data.geometryByLevel ?? {},
     stateCode: data.office.selected_electoral_division_state?.toUpperCase() ?? null
   };

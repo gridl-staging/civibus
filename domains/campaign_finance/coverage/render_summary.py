@@ -4,8 +4,15 @@ from __future__ import annotations
 
 import argparse
 import sys
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
+
+from core.refresh.runner import _SUPPORTED_CITY_CODES
+from domains.campaign_finance.jurisdictions.config_schema import (
+    discover_jurisdiction_configs,
+    load_jurisdiction_config,
+)
 
 from .registry import (
     DEFAULT_REGISTRY_PATH,
@@ -26,7 +33,14 @@ _DEFAULT_QUEUE_PATH = (
 _DEFAULT_MATRIX_PATH = (
     Path(__file__).resolve().parents[3] / "docs" / "reference" / "research" / "2026-launch-support-matrix.md"
 )
+_DEFAULT_JURISDICTIONS_ROOT = Path(__file__).resolve().parents[1] / "jurisdictions"
 _REGISTRY_AUTHORITY_NOTE = "Authoritative source: `docs/reference/research/coverage-registry.json`."
+_CITY_CONFIG_TO_REGISTRY_CODE = {
+    "LA": "CA_LOS_ANGELES",
+    "NYC": "NY_NEW_YORK",
+    "PHL": "PA_PHILADELPHIA",
+    "SF": "CA_SAN_FRANCISCO",
+}
 _TIER_SORT_ORDER = {
     "launch-support candidate": 0,
     "implemented but unproven": 1,
@@ -64,6 +78,21 @@ class _PartitionedRegistryRows:
     @property
     def publishable_rows(self) -> list[CoverageRegistryRow]:
         return [*self.state_rows, *self.municipality_rows]
+
+
+def registry_code_for_city_config_code(city_config_code: str) -> str:
+    """Return the coverage-registry jurisdiction code for a supported city config."""
+
+    return _CITY_CONFIG_TO_REGISTRY_CODE[city_config_code]
+
+
+def city_config_code_for_registry_code(registry_code: str) -> str:
+    """Return the city config code for a supported coverage-registry municipality."""
+
+    for city_config_code, candidate_registry_code in _CITY_CONFIG_TO_REGISTRY_CODE.items():
+        if candidate_registry_code == registry_code:
+            return city_config_code
+    raise KeyError(registry_code)
 
 
 def _partition_registry_rows(
@@ -240,12 +269,8 @@ def _render_matrix_markdown(
     implemented_jurisdiction_codes: set[str],
     publication_date: str,
 ) -> str:
-    """Render a launch-support matrix filtered to implemented state-equivalent packages."""
-    matrix_rows = [
-        row
-        for row in rows
-        if row.jurisdiction_code in implemented_jurisdiction_codes and row.jurisdiction_type in _STATE_EQUIVALENT_TYPES
-    ]
+    """Render a launch-support matrix filtered by canonical implemented membership."""
+    matrix_rows = [row for row in rows if row.jurisdiction_code in implemented_jurisdiction_codes]
 
     lines = _publication_header_lines(
         "# 2026 Launch Support Matrix (Derived Implemented Packages)",
@@ -255,7 +280,7 @@ def _render_matrix_markdown(
     lines.extend(
         [
             "Implemented package scope is derived from runtime discovery via",
-            "`seed_registry.derive_state_registry_rows()` plus `seed_registry.build_fec_registry_row()`.",
+            "`render_summary.derive_implemented_jurisdiction_codes()`.",
             "",
             "| Jurisdiction | Type | Tier | Best Cadence | Runner Wired | Next Action |",
             "| --- | --- | --- | --- | --- | --- |",
@@ -270,9 +295,40 @@ def _render_matrix_markdown(
     return "\n".join(lines) + "\n"
 
 
+def _discover_supported_city_codes(jurisdictions_root: Path | None = None) -> set[str]:
+    resolved_root = jurisdictions_root or _DEFAULT_JURISDICTIONS_ROOT
+    supported_city_codes = set(_SUPPORTED_CITY_CODES)
+    configured_city_codes: set[str] = set()
+    for config_path in discover_jurisdiction_configs(resolved_root):
+        config = load_jurisdiction_config(config_path)
+        if config.jurisdiction.type != _MUNICIPALITY_TYPE:
+            continue
+        if config.jurisdiction.code not in supported_city_codes:
+            continue
+        configured_city_codes.add(config.jurisdiction.code)
+    return configured_city_codes
+
+
+def _derive_implemented_city_jurisdiction_codes(
+    *,
+    configured_city_codes: Iterable[str] | None = None,
+    supported_city_codes: Iterable[str] = _SUPPORTED_CITY_CODES,
+) -> set[str]:
+    resolved_configured_city_codes = (
+        _discover_supported_city_codes() if configured_city_codes is None else configured_city_codes
+    )
+    supported_config_codes = sorted(set(supported_city_codes) & set(resolved_configured_city_codes))
+    missing_bridge_codes = [code for code in supported_config_codes if code not in _CITY_CONFIG_TO_REGISTRY_CODE]
+    if missing_bridge_codes:
+        joined_codes = ", ".join(missing_bridge_codes)
+        raise ValueError(f"Missing coverage-registry identity bridge for supported city config(s): {joined_codes}")
+    return {_CITY_CONFIG_TO_REGISTRY_CODE[code] for code in supported_config_codes}
+
+
 def derive_implemented_jurisdiction_codes() -> set[str]:
     implemented_codes = {row.jurisdiction_code for row in derive_state_registry_rows()}
     implemented_codes.add(build_fec_registry_row().jurisdiction_code)
+    implemented_codes.update(_derive_implemented_city_jurisdiction_codes())
     return implemented_codes
 
 

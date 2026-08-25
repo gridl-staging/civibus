@@ -1,6 +1,7 @@
 import { ApiResponseError } from "$lib/server/api/client";
 import type { OfficeDetailResponse } from "$lib/civic-detail/contract";
 import { describe, expect, it, vi } from "vitest";
+import { smokeFixtures } from "../../../../tests/smoke/fixture-data";
 import { load } from "./+page.server";
 
 const OFFICE_ID = "33333333-3333-4333-8333-333333333333";
@@ -76,6 +77,41 @@ describe("/office/[id] +page.server load", () => {
     expect(calledPaths.every((path) => !path.startsWith("/v1/graph/"))).toBe(true);
     expect(calledPaths.every((path) => !path.startsWith("/v1/er/"))).toBe(true);
     expect(calledPaths.every((path) => !path.includes("slug"))).toBe(true);
+  });
+
+  it("requests and highlights congressional-district geometry for the House NC-01 smoke office fixture", async () => {
+    // Binds the browser smoke fixture to the real SSR map consumer: the office
+    // page derives its geometry level from selected_electoral_division_type, so
+    // a district office fixture left on "state" fetches nothing at all
+    // (toCivicGeometryLevel only maps "statewide") and the map renders empty.
+    const office = smokeFixtures.office.detail;
+    const districtGeometry =
+      smokeFixtures.ncCountyDrilldown.geometryByLevel.congressional_district;
+    const districtGeometryPath = "/v1/civics/geometry?level=congressional_district&state=NC";
+
+    const requestJson = vi.fn(async (path: string) => {
+      if (path === `/v1/offices/${office.id}`) {
+        return office;
+      }
+      if (path === districtGeometryPath) {
+        return districtGeometry;
+      }
+      throw new Error(`unexpected path: ${path}`);
+    });
+
+    const data = (await load(createLoadEvent(requestJson, office.id))) as {
+      geometryByLevel: Record<string, { features: { properties: { id: string } }[] }>;
+    };
+
+    expect(requestJson.mock.calls.map(([path]) => String(path))).toEqual([
+      `/v1/offices/${office.id}`,
+      districtGeometryPath
+    ]);
+    expect(
+      data.geometryByLevel.congressional_district.features.map((feature) => feature.properties.id)
+    ).toContain(office.selected_electoral_division_id);
+    expect(data.geometryByLevel.state.features).toEqual([]);
+    expect(data.geometryByLevel.county.features).toEqual([]);
   });
 
   it("preserves backend-owned 404 Office not found semantics", async () => {

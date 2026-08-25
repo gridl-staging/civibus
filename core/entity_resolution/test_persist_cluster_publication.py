@@ -1,3 +1,9 @@
+"""Logical cluster publication, rerun/shrink, and shared-source ownership specimens.
+
+Production owner: `core/entity_resolution/persist.py::persist_auto_merge_clusters()`.
+Merge contract: `docs/design/2026_08_21_er_general_merge_design.md`.
+"""
+
 from __future__ import annotations
 
 from uuid import UUID, uuid4
@@ -7,6 +13,12 @@ import pytest
 from psycopg.rows import dict_row
 
 from core.entity_resolution.persist import persist_auto_merge_clusters
+from core.entity_resolution.persist_clusters_test_support import (
+    _cluster_component,
+    _manual_tombstone_cluster_fixture,
+    _setup_entities_with_individual_sources,
+    _setup_three_entities_with_shared_source,
+)
 from core.entity_resolution.test_persist import (
     _create_org,
     _create_person,
@@ -17,149 +29,65 @@ from core.entity_resolution.test_persist import (
 
 pytestmark = pytest.mark.integration
 
-_PERSON_NAME_SUFFIXES = ("Alpha", "Beta", "Gamma", "Delta", "Echo")
 
-
-def _cluster_component(
-    *,
-    canonical_entity_id: UUID,
-    member_ids: set[UUID],
-    min_confidence: float,
-) -> dict[str, object]:
-    return {
-        "canonical_entity_id": canonical_entity_id,
-        "member_ids": member_ids,
-        "min_confidence": min_confidence,
-        "min_decision": "match",
-        "links": [],
-    }
-
-
-def _setup_people_with_individual_sources(
-    db_conn: psycopg.Connection,
-    *,
-    scenario_prefix: str,
-    count: int,
-) -> tuple[list[UUID], list[UUID]]:
-    if count > len(_PERSON_NAME_SUFFIXES):
-        raise ValueError(f"count must be <= {len(_PERSON_NAME_SUFFIXES)}")
-
-    person_ids = [uuid4() for _ in range(count)]
-    data_source_id = _insert_data_source(db_conn, name=f"{scenario_prefix.lower()}-source")
-    source_record_ids = [
-        _insert_source_record(
-            db_conn,
-            data_source_id=data_source_id,
-            source_record_key=f"{scenario_prefix.lower()}-{suffix.lower()}",
-        )
-        for suffix in _PERSON_NAME_SUFFIXES[:count]
-    ]
-    for person_id, suffix, source_record_id in zip(
-        person_ids,
-        _PERSON_NAME_SUFFIXES[:count],
-        source_record_ids,
-        strict=True,
-    ):
-        _create_person(db_conn, person_id=person_id, name=f"{scenario_prefix} {suffix}")
-        _insert_entity_source(
-            db_conn,
-            entity_type="person",
-            entity_id=person_id,
-            source_record_id=source_record_id,
-            extraction_role="donor",
-        )
-    return person_ids, source_record_ids
-
-
-def _setup_three_people_with_shared_source(
-    db_conn: psycopg.Connection,
-    *,
-    scenario_prefix: str,
-) -> tuple[UUID, UUID, UUID, UUID, UUID, UUID, UUID]:
-    person_a = uuid4()
-    person_b = uuid4()
-    person_c = uuid4()
-    _create_person(db_conn, person_id=person_a, name=f"{scenario_prefix} Alpha")
-    _create_person(db_conn, person_id=person_b, name=f"{scenario_prefix} Beta")
-    _create_person(db_conn, person_id=person_c, name=f"{scenario_prefix} Gamma")
-
-    data_source_id = _insert_data_source(db_conn, name=f"{scenario_prefix.lower()}-source")
-    source_a = _insert_source_record(
-        db_conn, data_source_id=data_source_id, source_record_key=f"{scenario_prefix.lower()}-a"
-    )
-    source_b = _insert_source_record(
-        db_conn, data_source_id=data_source_id, source_record_key=f"{scenario_prefix.lower()}-b"
-    )
-    source_c = _insert_source_record(
-        db_conn, data_source_id=data_source_id, source_record_key=f"{scenario_prefix.lower()}-c"
-    )
-    source_shared = _insert_source_record(
-        db_conn,
-        data_source_id=data_source_id,
-        source_record_key=f"{scenario_prefix.lower()}-shared",
-    )
-
-    for entity_id, source_record_id in (
-        (person_a, source_a),
-        (person_b, source_b),
-        (person_c, source_c),
-        (person_a, source_shared),
-        (person_c, source_shared),
-    ):
-        _insert_entity_source(
-            db_conn,
-            entity_type="person",
-            entity_id=entity_id,
-            source_record_id=source_record_id,
-            extraction_role="donor",
-        )
-
-    return person_a, person_b, person_c, source_a, source_b, source_c, source_shared
-
-
-def _fetch_person_source_rows_by_source_record(
+def _fetch_source_rows_by_source_record(
     db_conn: psycopg.Connection,
     *,
     source_record_id: UUID,
+    entity_type: str = "person",
 ) -> list[dict[str, object]]:
     with db_conn.cursor(row_factory=dict_row) as cursor:
         cursor.execute(
             """
             SELECT entity_id, source_record_id, extracted_fields
             FROM core.entity_source
-            WHERE entity_type = 'person'
+            WHERE entity_type = %s
               AND source_record_id = %s
               AND extraction_role = 'donor'
             ORDER BY entity_id
             """,
-            (source_record_id,),
+            (entity_type, source_record_id),
         )
         return cursor.fetchall()
+
+
+def _fetch_person_source_owner_rows(db_conn: psycopg.Connection, *, source_record_id: UUID) -> list[dict[str, object]]:
+    """Owner-id view of the same donor links, without the source-record column."""
+    return [
+        {"entity_id": row["entity_id"], "extracted_fields": row["extracted_fields"]}
+        for row in _fetch_source_rows_by_source_record(db_conn, source_record_id=source_record_id)
+    ]
 
 
 def test_persist_auto_merge_clusters_inserts_cluster_members_updates_entities_and_relinks_sources(
     db_conn: psycopg.Connection,
 ) -> None:
-    people, source_records = _setup_people_with_individual_sources(
+    """Logical cluster publication for a non-absorbing entity type: every member row survives.
+
+    `organization` is the entity type that still carries the reversible logical-merge contract;
+    `person` components are absorbed physically and are covered by the absorption suite below.
+    """
+    orgs, source_records = _setup_entities_with_individual_sources(
         db_conn,
         scenario_prefix="Cluster",
         count=3,
+        entity_type="organization",
     )
-    canonical_id, member_b, member_c = people
+    canonical_id, member_b, member_c = orgs
 
     data_source_id = _insert_data_source(db_conn, name="cluster-dup-source")
     source_dup = _insert_source_record(db_conn, data_source_id=data_source_id, source_record_key="cluster-dup")
     # Duplicate link role/source between canonical and non-canonical; non-canonical row must be deleted.
     _insert_entity_source(
         db_conn,
-        entity_type="person",
+        entity_type="organization",
         entity_id=canonical_id,
         source_record_id=source_dup,
         extraction_role="donor",
     )
     _insert_entity_source(
         db_conn,
-        entity_type="person",
+        entity_type="organization",
         entity_id=member_b,
         source_record_id=source_dup,
         extraction_role="donor",
@@ -172,7 +100,7 @@ def test_persist_auto_merge_clusters_inserts_cluster_members_updates_entities_an
                 canonical_entity_id=canonical_id, member_ids={canonical_id, member_b, member_c}, min_confidence=0.97
             )
         ],
-        "person",
+        "organization",
     )
 
     assert len(cluster_ids) == 1
@@ -211,7 +139,7 @@ def test_persist_auto_merge_clusters_inserts_cluster_members_updates_entities_an
         cursor.execute(
             """
             SELECT id, er_cluster_id, er_confidence
-            FROM core.person
+            FROM core.organization
             WHERE id IN (%s, %s, %s)
             ORDER BY id
             """,
@@ -228,7 +156,7 @@ def test_persist_auto_merge_clusters_inserts_cluster_members_updates_entities_an
             """
             SELECT entity_id, source_record_id, extraction_role
             FROM core.entity_source
-            WHERE entity_type = 'person'
+            WHERE entity_type = 'organization'
               AND source_record_id = ANY(%s)
             ORDER BY source_record_id
             """,
@@ -245,22 +173,24 @@ def test_persist_auto_merge_clusters_inserts_cluster_members_updates_entities_an
 def test_persist_auto_merge_clusters_rerun_supersedes_active_memberships_and_reassigns_canonical(
     db_conn: psycopg.Connection,
 ) -> None:
-    people, source_records = _setup_people_with_individual_sources(
+    """A rerun may hand the canonical role to a different member of a non-absorbing entity type."""
+    orgs, source_records = _setup_entities_with_individual_sources(
         db_conn,
         scenario_prefix="Rerun",
         count=2,
+        entity_type="organization",
     )
-    person_a, person_b = people
+    org_a, org_b = orgs
 
     first_cluster_id = persist_auto_merge_clusters(
         db_conn,
-        [_cluster_component(canonical_entity_id=person_a, member_ids={person_a, person_b}, min_confidence=0.96)],
-        "person",
+        [_cluster_component(canonical_entity_id=org_a, member_ids={org_a, org_b}, min_confidence=0.96)],
+        "organization",
     )[0]
     second_cluster_id = persist_auto_merge_clusters(
         db_conn,
-        [_cluster_component(canonical_entity_id=person_b, member_ids={person_a, person_b}, min_confidence=0.98)],
-        "person",
+        [_cluster_component(canonical_entity_id=org_b, member_ids={org_a, org_b}, min_confidence=0.98)],
+        "organization",
     )[0]
 
     assert first_cluster_id != second_cluster_id
@@ -270,11 +200,11 @@ def test_persist_auto_merge_clusters_rerun_supersedes_active_memberships_and_rea
             """
             SELECT cluster_id, entity_id, split_at, split_by
             FROM core.cluster_member
-            WHERE entity_type = 'person'
+            WHERE entity_type = 'organization'
               AND entity_id IN (%s, %s)
             ORDER BY created_at
             """,
-            (person_a, person_b),
+            (org_a, org_b),
         )
         rows = cursor.fetchall()
 
@@ -290,23 +220,23 @@ def test_persist_auto_merge_clusters_rerun_supersedes_active_memberships_and_rea
         cursor.execute(
             """
             SELECT id, er_cluster_id, er_confidence
-            FROM core.person
+            FROM core.organization
             WHERE id IN (%s, %s)
             ORDER BY id
             """,
-            (person_a, person_b),
+            (org_a, org_b),
         )
-        person_rows = cursor.fetchall()
+        org_rows = cursor.fetchall()
 
-    assert all(row["er_cluster_id"] == second_cluster_id for row in person_rows)
-    assert all(row["er_confidence"] == pytest.approx(0.98) for row in person_rows)
+    assert all(row["er_cluster_id"] == second_cluster_id for row in org_rows)
+    assert all(row["er_confidence"] == pytest.approx(0.98) for row in org_rows)
 
     with db_conn.cursor(row_factory=dict_row) as cursor:
         cursor.execute(
             """
             SELECT entity_id, source_record_id
             FROM core.entity_source
-            WHERE entity_type = 'person'
+            WHERE entity_type = 'organization'
               AND source_record_id = ANY(%s)
             ORDER BY source_record_id
             """,
@@ -314,33 +244,31 @@ def test_persist_auto_merge_clusters_rerun_supersedes_active_memberships_and_rea
         )
         entity_source_rows = cursor.fetchall()
 
-    assert {row["entity_id"] for row in entity_source_rows} == {person_b}
+    assert {row["entity_id"] for row in entity_source_rows} == {org_b}
 
 
 def test_persist_auto_merge_clusters_rerun_shrink_restores_dropped_member_state_and_provenance(
     db_conn: psycopg.Connection,
 ) -> None:
-    people, source_records = _setup_people_with_individual_sources(
+    """A shrunk rerun restores the dropped member's own cluster state and source provenance."""
+    orgs, source_records = _setup_entities_with_individual_sources(
         db_conn,
         scenario_prefix="Shrink",
         count=3,
+        entity_type="organization",
     )
-    person_a, person_b, person_c = people
+    org_a, org_b, org_c = orgs
     source_a, source_b, source_c = source_records
 
     first_cluster_id = persist_auto_merge_clusters(
         db_conn,
-        [
-            _cluster_component(
-                canonical_entity_id=person_a, member_ids={person_a, person_b, person_c}, min_confidence=0.96
-            )
-        ],
-        "person",
+        [_cluster_component(canonical_entity_id=org_a, member_ids={org_a, org_b, org_c}, min_confidence=0.96)],
+        "organization",
     )[0]
     second_cluster_id = persist_auto_merge_clusters(
         db_conn,
-        [_cluster_component(canonical_entity_id=person_b, member_ids={person_a, person_b}, min_confidence=0.98)],
-        "person",
+        [_cluster_component(canonical_entity_id=org_b, member_ids={org_a, org_b}, min_confidence=0.98)],
+        "organization",
     )[0]
 
     assert first_cluster_id != second_cluster_id
@@ -350,11 +278,11 @@ def test_persist_auto_merge_clusters_rerun_shrink_restores_dropped_member_state_
             """
             SELECT cluster_id, entity_id, split_at
             FROM core.cluster_member
-            WHERE entity_type = 'person'
+            WHERE entity_type = 'organization'
               AND entity_id IN (%s, %s, %s)
             ORDER BY created_at, entity_id
             """,
-            (person_a, person_b, person_c),
+            (org_a, org_b, org_c),
         )
         membership_rows = cursor.fetchall()
 
@@ -363,39 +291,39 @@ def test_persist_auto_merge_clusters_rerun_shrink_restores_dropped_member_state_
     assert len(active_rows) == 2
     assert len(split_rows) == 3
     assert {row["cluster_id"] for row in active_rows} == {second_cluster_id}
-    assert {row["entity_id"] for row in active_rows} == {person_a, person_b}
+    assert {row["entity_id"] for row in active_rows} == {org_a, org_b}
     assert {row["entity_id"] for row in split_rows if row["cluster_id"] == first_cluster_id} == {
-        person_a,
-        person_b,
-        person_c,
+        org_a,
+        org_b,
+        org_c,
     }
 
     with db_conn.cursor(row_factory=dict_row) as cursor:
         cursor.execute(
             """
             SELECT id, er_cluster_id, er_confidence
-            FROM core.person
+            FROM core.organization
             WHERE id IN (%s, %s, %s)
             ORDER BY id
             """,
-            (person_a, person_b, person_c),
+            (org_a, org_b, org_c),
         )
-        person_rows = cursor.fetchall()
+        org_rows = cursor.fetchall()
 
-    by_id = {row["id"]: row for row in person_rows}
-    assert by_id[person_a]["er_cluster_id"] == second_cluster_id
-    assert by_id[person_b]["er_cluster_id"] == second_cluster_id
-    assert by_id[person_a]["er_confidence"] == pytest.approx(0.98)
-    assert by_id[person_b]["er_confidence"] == pytest.approx(0.98)
-    assert by_id[person_c]["er_cluster_id"] is None
-    assert by_id[person_c]["er_confidence"] is None
+    by_id = {row["id"]: row for row in org_rows}
+    assert by_id[org_a]["er_cluster_id"] == second_cluster_id
+    assert by_id[org_b]["er_cluster_id"] == second_cluster_id
+    assert by_id[org_a]["er_confidence"] == pytest.approx(0.98)
+    assert by_id[org_b]["er_confidence"] == pytest.approx(0.98)
+    assert by_id[org_c]["er_cluster_id"] is None
+    assert by_id[org_c]["er_confidence"] is None
 
     with db_conn.cursor(row_factory=dict_row) as cursor:
         cursor.execute(
             """
             SELECT entity_id, source_record_id
             FROM core.entity_source
-            WHERE entity_type = 'person'
+            WHERE entity_type = 'organization'
               AND source_record_id = ANY(%s)
             ORDER BY source_record_id
             """,
@@ -404,16 +332,16 @@ def test_persist_auto_merge_clusters_rerun_shrink_restores_dropped_member_state_
         entity_source_rows = cursor.fetchall()
 
     assert {(row["entity_id"], row["source_record_id"]) for row in entity_source_rows} == {
-        (person_b, source_a),
-        (person_b, source_b),
-        (person_c, source_c),
+        (org_b, source_a),
+        (org_b, source_b),
+        (org_c, source_c),
     }
 
 
 def test_persist_auto_merge_clusters_merge_policy_records_owner_ids_for_shared_source_tuple(
     db_conn: psycopg.Connection,
 ) -> None:
-    person_a, person_b, person_c, _, _, _, source_shared = _setup_three_people_with_shared_source(
+    person_a, person_b, person_c, _, _, _, source_shared = _setup_three_entities_with_shared_source(
         db_conn,
         scenario_prefix="Policy",
     )
@@ -428,7 +356,7 @@ def test_persist_auto_merge_clusters_merge_policy_records_owner_ids_for_shared_s
         "person",
     )
 
-    shared_rows = _fetch_person_source_rows_by_source_record(db_conn, source_record_id=source_shared)
+    shared_rows = _fetch_source_rows_by_source_record(db_conn, source_record_id=source_shared)
     assert len(shared_rows) == 1
     assert shared_rows[0]["entity_id"] == person_a
     extracted_fields = shared_rows[0]["extracted_fields"]
@@ -439,69 +367,67 @@ def test_persist_auto_merge_clusters_merge_policy_records_owner_ids_for_shared_s
 def test_persist_auto_merge_clusters_rerun_shrink_then_reexpand_restores_shared_source_ownership(
     db_conn: psycopg.Connection,
 ) -> None:
-    person_a, person_b, person_c, source_a, source_b, source_c, source_shared = _setup_three_people_with_shared_source(
+    """Shrink then re-expand round-trips a shared source tuple back onto the new canonical."""
+    org_a, org_b, org_c, source_a, source_b, source_c, source_shared = _setup_three_entities_with_shared_source(
         db_conn,
         scenario_prefix="Reexpand",
+        entity_type="organization",
     )
 
     persist_auto_merge_clusters(
         db_conn,
-        [
-            _cluster_component(
-                canonical_entity_id=person_a, member_ids={person_a, person_b, person_c}, min_confidence=0.95
-            )
-        ],
-        "person",
+        [_cluster_component(canonical_entity_id=org_a, member_ids={org_a, org_b, org_c}, min_confidence=0.95)],
+        "organization",
     )
     persist_auto_merge_clusters(
         db_conn,
-        [_cluster_component(canonical_entity_id=person_b, member_ids={person_a, person_b}, min_confidence=0.96)],
-        "person",
+        [_cluster_component(canonical_entity_id=org_b, member_ids={org_a, org_b}, min_confidence=0.96)],
+        "organization",
     )
 
-    shrunk_rows = _fetch_person_source_rows_by_source_record(db_conn, source_record_id=source_shared)
+    shrunk_rows = _fetch_source_rows_by_source_record(
+        db_conn, source_record_id=source_shared, entity_type="organization"
+    )
     assert len(shrunk_rows) == 2
     shrunk_by_entity = {row["entity_id"]: row["extracted_fields"] for row in shrunk_rows}
-    assert shrunk_by_entity[person_b]["_er_source_entity_ids"] == [str(person_a)]
-    assert shrunk_by_entity[person_c] is None
+    assert shrunk_by_entity[org_b]["_er_source_entity_ids"] == [str(org_a)]
+    assert shrunk_by_entity[org_c] is None
 
     final_cluster_id = persist_auto_merge_clusters(
         db_conn,
-        [
-            _cluster_component(
-                canonical_entity_id=person_c, member_ids={person_a, person_b, person_c}, min_confidence=0.99
-            )
-        ],
-        "person",
+        [_cluster_component(canonical_entity_id=org_c, member_ids={org_a, org_b, org_c}, min_confidence=0.99)],
+        "organization",
     )[0]
 
-    reexpanded_shared_rows = _fetch_person_source_rows_by_source_record(db_conn, source_record_id=source_shared)
+    reexpanded_shared_rows = _fetch_source_rows_by_source_record(
+        db_conn, source_record_id=source_shared, entity_type="organization"
+    )
     assert len(reexpanded_shared_rows) == 1
-    assert reexpanded_shared_rows[0]["entity_id"] == person_c
+    assert reexpanded_shared_rows[0]["entity_id"] == org_c
     assert reexpanded_shared_rows[0]["extracted_fields"]["_er_source_entity_ids"] == [
-        str(owner_id) for owner_id in sorted({person_a, person_c})
+        str(owner_id) for owner_id in sorted({org_a, org_c})
     ]
 
     with db_conn.cursor(row_factory=dict_row) as cursor:
         cursor.execute(
             """
             SELECT id, er_cluster_id, er_confidence
-            FROM core.person
+            FROM core.organization
             WHERE id IN (%s, %s, %s)
             ORDER BY id
             """,
-            (person_a, person_b, person_c),
+            (org_a, org_b, org_c),
         )
-        people = cursor.fetchall()
+        orgs = cursor.fetchall()
 
-    assert all(row["er_cluster_id"] == final_cluster_id for row in people)
-    assert all(row["er_confidence"] == pytest.approx(0.99) for row in people)
+    assert all(row["er_cluster_id"] == final_cluster_id for row in orgs)
+    assert all(row["er_confidence"] == pytest.approx(0.99) for row in orgs)
     with db_conn.cursor(row_factory=dict_row) as cursor:
         cursor.execute(
             """
             SELECT entity_id, source_record_id
             FROM core.entity_source
-            WHERE entity_type = 'person'
+            WHERE entity_type = 'organization'
               AND source_record_id = ANY(%s)
             ORDER BY source_record_id, entity_id
             """,
@@ -510,64 +436,57 @@ def test_persist_auto_merge_clusters_rerun_shrink_then_reexpand_restores_shared_
         final_source_rows = cursor.fetchall()
 
     assert {(row["entity_id"], row["source_record_id"]) for row in final_source_rows} == {
-        (person_c, source_a),
-        (person_c, source_b),
-        (person_c, source_c),
-        (person_c, source_shared),
+        (org_c, source_a),
+        (org_c, source_b),
+        (org_c, source_c),
+        (org_c, source_shared),
     }
 
 
 def test_persist_auto_merge_clusters_empty_rerun_clears_previous_active_cluster_state(
     db_conn: psycopg.Connection,
 ) -> None:
-    person_a = uuid4()
-    person_b = uuid4()
-    _create_person(db_conn, person_id=person_a, name="Dissolve Alpha")
-    _create_person(db_conn, person_id=person_b, name="Dissolve Beta")
+    """An empty rerun dissolves the cluster and returns every member to standalone provenance."""
+    org_a = uuid4()
+    org_b = uuid4()
+    _create_org(db_conn, organization_id=org_a, name="Dissolve Alpha")
+    _create_org(db_conn, organization_id=org_b, name="Dissolve Beta")
 
     data_source_id = _insert_data_source(db_conn, name="cluster-dissolve-source")
     source_a = _insert_source_record(db_conn, data_source_id=data_source_id, source_record_key="dissolve-a")
     source_b = _insert_source_record(db_conn, data_source_id=data_source_id, source_record_key="dissolve-b")
     _insert_entity_source(
         db_conn,
-        entity_type="person",
-        entity_id=person_a,
+        entity_type="organization",
+        entity_id=org_a,
         source_record_id=source_a,
         extraction_role="donor",
     )
     _insert_entity_source(
         db_conn,
-        entity_type="person",
-        entity_id=person_b,
+        entity_type="organization",
+        entity_id=org_b,
         source_record_id=source_b,
         extraction_role="donor",
     )
 
     first_cluster_id = persist_auto_merge_clusters(
         db_conn,
-        [
-            {
-                "canonical_entity_id": person_a,
-                "member_ids": {person_a, person_b},
-                "min_confidence": 0.96,
-                "min_decision": "match",
-                "links": [],
-            }
-        ],
-        "person",
+        [_cluster_component(canonical_entity_id=org_a, member_ids={org_a, org_b}, min_confidence=0.96)],
+        "organization",
     )[0]
 
-    assert persist_auto_merge_clusters(db_conn, [], "person") == []
+    assert persist_auto_merge_clusters(db_conn, [], "organization") == []
 
     active_membership_count = db_conn.execute(
         """
         SELECT count(*)
         FROM core.cluster_member
-        WHERE entity_type = 'person'
+        WHERE entity_type = 'organization'
           AND entity_id IN (%s, %s)
           AND split_at IS NULL
         """,
-        (person_a, person_b),
+        (org_a, org_b),
     ).fetchone()[0]
     assert active_membership_count == 0
 
@@ -575,7 +494,7 @@ def test_persist_auto_merge_clusters_empty_rerun_clears_previous_active_cluster_
         """
         SELECT count(*)
         FROM core.cluster_member
-        WHERE entity_type = 'person'
+        WHERE entity_type = 'organization'
           AND cluster_id = %s
           AND split_at IS NOT NULL
         """,
@@ -587,23 +506,23 @@ def test_persist_auto_merge_clusters_empty_rerun_clears_previous_active_cluster_
         cursor.execute(
             """
             SELECT id, er_cluster_id, er_confidence
-            FROM core.person
+            FROM core.organization
             WHERE id IN (%s, %s)
             ORDER BY id
             """,
-            (person_a, person_b),
+            (org_a, org_b),
         )
-        people = cursor.fetchall()
+        orgs = cursor.fetchall()
 
-    assert all(row["er_cluster_id"] is None for row in people)
-    assert all(row["er_confidence"] is None for row in people)
+    assert all(row["er_cluster_id"] is None for row in orgs)
+    assert all(row["er_confidence"] is None for row in orgs)
 
     with db_conn.cursor(row_factory=dict_row) as cursor:
         cursor.execute(
             """
             SELECT entity_id, source_record_id
             FROM core.entity_source
-            WHERE entity_type = 'person'
+            WHERE entity_type = 'organization'
               AND source_record_id IN (%s, %s)
             ORDER BY source_record_id
             """,
@@ -612,9 +531,124 @@ def test_persist_auto_merge_clusters_empty_rerun_clears_previous_active_cluster_
         entity_source_rows = cursor.fetchall()
 
     assert {(row["entity_id"], row["source_record_id"]) for row in entity_source_rows} == {
-        (person_a, source_a),
-        (person_b, source_b),
+        (org_a, source_a),
+        (org_b, source_b),
     }
+
+
+def test_persist_auto_merge_clusters_tombstone_shrink_drops_absorbed_source_owner(
+    db_conn: psycopg.Connection,
+) -> None:
+    canonical_id, absorbed_id, first_cluster_id, source_record_id = _manual_tombstone_cluster_fixture(
+        db_conn,
+        scenario_prefix="Tombstone Shrink",
+    )
+
+    second_cluster_id = persist_auto_merge_clusters(
+        db_conn,
+        [_cluster_component(canonical_entity_id=canonical_id, member_ids={canonical_id}, min_confidence=0.97)],
+        "person",
+    )[0]
+
+    assert second_cluster_id != first_cluster_id
+    rows = _fetch_person_source_owner_rows(db_conn, source_record_id=source_record_id)
+    assert rows == [{"entity_id": canonical_id, "extracted_fields": None}]
+    absorbed_source_link_count = db_conn.execute(
+        """
+        SELECT count(*)
+        FROM core.entity_source
+        WHERE entity_type = 'person'
+          AND entity_id = %s
+        """,
+        (absorbed_id,),
+    ).fetchone()[0]
+    assert absorbed_source_link_count == 0
+
+
+def test_persist_auto_merge_clusters_tombstone_absorbed_only_source_stays_with_canonical(
+    db_conn: psycopg.Connection,
+) -> None:
+    canonical_id, _absorbed_id, _first_cluster_id, source_record_id = _manual_tombstone_cluster_fixture(
+        db_conn,
+        scenario_prefix="Tombstone Absorbed Only",
+        absorbed_only_source=True,
+    )
+
+    persist_auto_merge_clusters(
+        db_conn,
+        [_cluster_component(canonical_entity_id=canonical_id, member_ids={canonical_id}, min_confidence=0.97)],
+        "person",
+    )
+
+    assert _fetch_person_source_owner_rows(db_conn, source_record_id=source_record_id) == [
+        {"entity_id": canonical_id, "extracted_fields": None}
+    ]
+
+
+def test_persist_auto_merge_clusters_tombstone_reassignment_filters_absorbed_owner_id(
+    db_conn: psycopg.Connection,
+) -> None:
+    canonical_id, absorbed_id, _first_cluster_id, source_record_id = _manual_tombstone_cluster_fixture(
+        db_conn,
+        scenario_prefix="Tombstone Reassign",
+    )
+    new_member_id = uuid4()
+    _create_person(db_conn, person_id=new_member_id, name="Tombstone Reassign New Member")
+
+    second_cluster_id = persist_auto_merge_clusters(
+        db_conn,
+        [
+            _cluster_component(
+                canonical_entity_id=new_member_id, member_ids={canonical_id, new_member_id}, min_confidence=0.98
+            )
+        ],
+        "person",
+    )[0]
+
+    rows = _fetch_person_source_owner_rows(db_conn, source_record_id=source_record_id)
+    assert rows == [
+        {
+            "entity_id": new_member_id,
+            "extracted_fields": {"_er_source_entity_ids": [str(canonical_id)]},
+        }
+    ]
+    absorbed_membership_count = db_conn.execute(
+        """
+        SELECT count(*)
+        FROM core.cluster_member
+        WHERE cluster_id = %s
+          AND entity_id = %s
+          AND split_at IS NULL
+        """,
+        (second_cluster_id, absorbed_id),
+    ).fetchone()[0]
+    assert absorbed_membership_count == 0
+
+
+def test_persist_auto_merge_clusters_tombstone_empty_rerun_does_not_resurrect_absorbed_source(
+    db_conn: psycopg.Connection,
+) -> None:
+    canonical_id, absorbed_id, first_cluster_id, source_record_id = _manual_tombstone_cluster_fixture(
+        db_conn,
+        scenario_prefix="Tombstone Empty",
+    )
+
+    assert persist_auto_merge_clusters(db_conn, [], "person") == []
+
+    active_membership_count = db_conn.execute(
+        """
+        SELECT count(*)
+        FROM core.cluster_member
+        WHERE entity_type = 'person'
+          AND cluster_id = %s
+          AND split_at IS NULL
+        """,
+        (first_cluster_id,),
+    ).fetchone()[0]
+    assert active_membership_count == 0
+    rows = _fetch_person_source_owner_rows(db_conn, source_record_id=source_record_id)
+    assert rows == [{"entity_id": canonical_id, "extracted_fields": None}]
+    assert db_conn.execute("SELECT count(*) FROM core.person WHERE id = %s", (absorbed_id,)).fetchone()[0] == 0
 
 
 def test_persist_auto_merge_clusters_updates_organization_rows_when_entity_type_is_organization(
@@ -628,13 +662,11 @@ def test_persist_auto_merge_clusters_updates_organization_rows_when_entity_type_
     cluster_id = persist_auto_merge_clusters(
         db_conn,
         [
-            {
-                "canonical_entity_id": canonical_org,
-                "member_ids": {canonical_org, merged_org},
-                "min_confidence": 0.95,
-                "min_decision": "match",
-                "links": [],
-            }
+            _cluster_component(
+                canonical_entity_id=canonical_org,
+                member_ids={canonical_org, merged_org},
+                min_confidence=0.95,
+            )
         ],
         "organization",
     )[0]
@@ -668,13 +700,11 @@ def test_persist_auto_merge_clusters_rejects_cluster_without_canonical_member(
         persist_auto_merge_clusters(
             db_conn,
             [
-                {
-                    "canonical_entity_id": canonical_org,
-                    "member_ids": {other_org},
-                    "min_confidence": 0.95,
-                    "min_decision": "match",
-                    "links": [],
-                }
+                _cluster_component(
+                    canonical_entity_id=canonical_org,
+                    member_ids={other_org},
+                    min_confidence=0.95,
+                )
             ],
             "organization",
         )

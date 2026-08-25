@@ -43,6 +43,9 @@ from .parse import parse_contributions, parse_debts, parse_expenditures, parse_f
 
 LOGGER = logging.getLogger(__name__)
 
+# One commit per this many iterated rows: both PA row loops share the boundary.
+_COMMIT_BATCH_ROWS = 1_000
+
 ensure_pa_data_source = _load_support.ensure_pa_data_source
 _build_filer_amendment_lookup = _load_support._build_filer_amendment_lookup
 _build_filer_row_lookup = _load_support._build_filer_row_lookup
@@ -206,6 +209,10 @@ def _load_pa_rows(
             counts.inserted += 1
         else:
             counts.skipped += 1
+
+        processed_count = counts.inserted + counts.skipped + counts.errors
+        if processed_count % _COMMIT_BATCH_ROWS == 0:
+            commit_managed_transaction(conn, manages_outer_transaction)
 
     commit_managed_transaction(conn, manages_outer_transaction)
     return counts
@@ -371,6 +378,7 @@ def _load_pa_relational_transactions(
     filing_lookup: dict[str, _PAFilingLookupEntry] = {}
     manages_outer_transaction = conn.info.transaction_status == psycopg.pq.TransactionStatus.IDLE
     superseded = 0
+    processed_count = 0
 
     for row in _iter_pa_mapping_rows(rows, limit=limit):
         if (
@@ -384,29 +392,34 @@ def _load_pa_relational_transactions(
             data_source_id=data_source_id,
             source_record_key=_pa_source_record_key(row, data_type=data_type),
         )
-        if source_record_id is None:
-            continue
+        if source_record_id is not None:
+            if manages_outer_transaction:
+                ensure_transaction_open(conn)
 
-        if manages_outer_transaction:
-            ensure_transaction_open(conn)
+            with conn.transaction():
+                filing_entry = _upsert_pa_filing(
+                    conn,
+                    row,
+                    source_record_id=source_record_id,
+                    data_type=data_type,
+                    filer_context=filer_context,
+                    filing_lookup=filing_lookup,
+                )
+                _upsert_pa_transaction_with_filing(
+                    conn,
+                    row,
+                    filing_entry=filing_entry,
+                    source_record_id=source_record_id,
+                    data_type=data_type,
+                    filer_context=filer_context,
+                )
 
-        with conn.transaction():
-            filing_entry = _upsert_pa_filing(
-                conn,
-                row,
-                source_record_id=source_record_id,
-                data_type=data_type,
-                filer_context=filer_context,
-                filing_lookup=filing_lookup,
-            )
-            _upsert_pa_transaction_with_filing(
-                conn,
-                row,
-                filing_entry=filing_entry,
-                source_record_id=source_record_id,
-                data_type=data_type,
-                filer_context=filer_context,
-            )
+        # Every iterated row advances the boundary, including rows with no source
+        # record: the lookup above opens a read transaction either way, so counting
+        # only upserted rows would leave a run of missing rows holding it open.
+        processed_count += 1
+        if processed_count % _COMMIT_BATCH_ROWS == 0:
+            commit_managed_transaction(conn, manages_outer_transaction)
 
     commit_managed_transaction(conn, manages_outer_transaction)
     return superseded
@@ -438,13 +451,16 @@ def _load_pa_with_filings(
     year: int,
     limit: int | None = None,
 ) -> LoadResult:
+    start = time.perf_counter()
     validated_row_limit = validated_limit(limit)
-    data_source_id = ensure_pa_data_source(conn, data_type=data_type)
+    # Capture ownership before ensure_pa_data_source runs SQL and implicitly opens
+    # a transaction; committing the data-source row here leaves the connection IDLE
+    # so each inner loop owns and periodically commits its own batch.
     manages_outer_transaction = conn.info.transaction_status == psycopg.pq.TransactionStatus.IDLE
-    if manages_outer_transaction:
-        ensure_transaction_open(conn)
-
     try:
+        data_source_id = ensure_pa_data_source(conn, data_type=data_type)
+        commit_managed_transaction(conn, manages_outer_transaction)
+
         load_result = _load_pa_file(
             conn,
             file_path,
@@ -468,13 +484,12 @@ def _load_pa_with_filings(
             filer_context=filer_context,
             limit=validated_row_limit,
         )
+        commit_managed_transaction(conn, manages_outer_transaction)
     except Exception:
         if manages_outer_transaction:
             conn.rollback()
         raise
-
-    if manages_outer_transaction:
-        conn.commit()
+    load_result.elapsed_seconds = time.perf_counter() - start
     return load_result
 
 

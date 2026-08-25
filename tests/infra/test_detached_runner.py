@@ -1,102 +1,77 @@
+"""Contract tests for the start, wait, status, and progress-probe paths of
+infra/scripts/detached_runner.sh.
+
+The `run_stop()` contracts live in tests/infra/test_detached_runner_stop.py.
+"""
+
 from __future__ import annotations
 
 import json
 import os
 import re
+import shlex
+import shutil
 import signal
 import subprocess
 import sys
-import time
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-SCRIPT_PATH = REPO_ROOT / "infra/scripts/detached_runner.sh"
-PROBE_SCRIPT_PATH = REPO_ROOT / "infra/scripts/probe_load_progress.sh"
-UTC_TIMESTAMP = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+import pytest
 
+from test_support.line_budget import oversized_modules
+from tests.infra.detached_runner_helpers import (
+    REPO_ROOT,
+    SCRIPT_PATH,
+    UTC_TIMESTAMP,
+    _assert_no_ownership_metadata,
+    _assert_recorded_wrapper_pgid,
+    _fixture_command,
+    _json_stdout,
+    _kill_exact_pid,
+    _observed_process_identity,
+    _pid_is_alive,
+    _run_probe,
+    _run_runner,
+    _runner_path_without_session_launcher,
+    _signal_resistant_fixture,
+    _status,
+    _stop_if_running,
+    _terminate_exact_pid,
+    _terminate_recorded_processes,
+    _wait_for_file,
+    _wait_for_pid_file,
+    _wait_for_pid_to_exit,
+    _write_executable,
+    _write_kill_logging_bash_env,
+)
 
-def _run_runner(
-    job_root: Path,
-    *args: str,
-    extra_env: dict[str, str] | None = None,
-) -> subprocess.CompletedProcess[str]:
-    env = {**os.environ, "DETACHED_RUNNER_ROOT": str(job_root), **(extra_env or {})}
-    return subprocess.run(
-        ["bash", str(SCRIPT_PATH), *args],
-        capture_output=True,
-        text=True,
-        check=False,
-        env=env,
-        timeout=10,
-    )
-
-
-def _json_stdout(result: subprocess.CompletedProcess[str]) -> dict:
-    assert result.stdout.strip(), result.stderr
-    return json.loads(result.stdout)
-
-
-def _wait_for_file(path: Path, *, timeout_seconds: float = 3.0) -> str:
-    deadline = time.monotonic() + timeout_seconds
-    while time.monotonic() < deadline:
-        if path.exists():
-            value = path.read_text(encoding="utf-8").strip()
-            if value:
-                return value
-        time.sleep(0.05)
-    raise AssertionError(f"timed out waiting for {path}")
-
-
-def _status(job_root: Path, job_name: str) -> dict:
-    result = _run_runner(job_root, "status", job_name)
-    assert result.returncode == 0, result.stderr
-    payload = _json_stdout(result)
-    assert set(payload) == {
-        "job",
-        "pid",
-        "alive",
-        "exit_code",
-        "started_at",
-        "last_log_line",
-        "progress",
+_KNOWN_SOURCED_RUNNER_LIBRARIES = frozenset(
+    {
+        "detached_runner_job_state_lib.sh",
+        "detached_runner_ownership_lib.sh",
+        "detached_runner_launch_lib.sh",
     }
-    return payload
+)
+_RUNNER_SOURCE_LINE = re.compile(r'^source "\$\{script_dir\}/([^"]+)"$', re.MULTILINE)
+_STOP_CADENCE_CONSTANTS = ("STOP_POLLS_PER_SECOND", "DEFAULT_STOP_GRACE_SECONDS")
+# The exact operator-visible duplicate-start refusals, pinned in full so the
+# runner keeps one wording per case instead of near-copies that can drift.
+_SURVIVING_CHILD_REFUSAL = (
+    "surviving child PID {pid} is still recorded and alive; terminate that PID "
+    "or remove the stale job directory before retrying"
+)
+_UNVERIFIABLE_CHILD_REFUSAL = (
+    "recorded child PID {pid} is still observable but its identity cannot be "
+    "verified; inspect that PID or remove the stale job directory before retrying"
+)
 
 
-def _run_probe(
-    *,
-    job_dir: Path,
-    progress_file: Path,
-    stub_bin: Path,
-    table: str,
-    port: str,
-    count: int,
-) -> subprocess.CompletedProcess[str]:
-    env = {
-        **os.environ,
-        "PATH": f"{stub_bin}{os.pathsep}{os.environ['PATH']}",
-        "DETACHED_RUNNER_JOB_DIR": str(job_dir),
-        "DETACHED_RUNNER_PROGRESS_FILE": str(progress_file),
-        "PSQL_STUB_COUNT": str(count),
-    }
-    return subprocess.run(
-        ["bash", str(PROBE_SCRIPT_PATH), table, port],
-        capture_output=True,
-        text=True,
-        check=False,
-        env=env,
-        timeout=10,
-    )
+def _runner_sourced_library_names() -> set[str]:
+    return set(_RUNNER_SOURCE_LINE.findall(SCRIPT_PATH.read_text(encoding="utf-8")))
 
 
-def _stop_if_running(job_root: Path, job_name: str) -> None:
-    result = _run_runner(job_root, "status", job_name)
-    if result.returncode != 0:
-        return
-    payload = _json_stdout(result)
-    if payload["alive"]:
-        _run_runner(job_root, "stop", job_name)
-        _run_runner(job_root, "wait", job_name, "--poll-seconds", "1", "--timeout-seconds", "5")
+def _ownership_library_source() -> str:
+    return (SCRIPT_PATH.parent / "detached_runner_ownership_lib.sh").read_text(encoding="utf-8")
 
 
 def test_probe_load_progress_appends_row_count_deltas_under_current_job(tmp_path: Path) -> None:
@@ -135,26 +110,6 @@ def test_probe_load_progress_appends_row_count_deltas_under_current_job(tmp_path
     ]
     assert all(UTC_TIMESTAMP.match(payload["ts"]) for payload in payloads)
     assert (job_dir / "probe_cf_transactions.previous_rows_total").read_text(encoding="utf-8") == "17\n"
-
-
-def _fixture_command(*, exit_code: int, sleep_seconds: str = "0.3") -> list[str]:
-    script = f"""
-import json
-import os
-import sys
-import time
-
-progress_path = os.environ["DETACHED_RUNNER_PROGRESS_FILE"]
-print("fixture stdout start", flush=True)
-with open(progress_path, "a", encoding="utf-8") as handle:
-    handle.write(json.dumps({{"phase": "started", "rows": 1}}) + "\\n")
-time.sleep({sleep_seconds})
-with open(progress_path, "a", encoding="utf-8") as handle:
-    handle.write(json.dumps({{"phase": "finished", "rows": 2}}) + "\\n")
-print("fixture final log", flush=True)
-sys.exit({exit_code})
-"""
-    return [sys.executable, "-c", script]
 
 
 def test_start_status_and_wait_report_terminal_metadata(tmp_path: Path) -> None:
@@ -275,6 +230,7 @@ def test_wait_timeout_is_distinct_and_does_not_kill_job(tmp_path: Path) -> None:
 def test_start_python_session_fallback_keeps_job_alive_after_launcher_exits(tmp_path: Path) -> None:
     job_root = tmp_path / "jobs"
     job_name = "python_session_detach"
+    job_dir = job_root / job_name
 
     start = _run_runner(
         job_root,
@@ -284,29 +240,236 @@ def test_start_python_session_fallback_keeps_job_alive_after_launcher_exits(tmp_
         *_fixture_command(exit_code=0, sleep_seconds="3.0"),
         extra_env={"DETACHED_RUNNER_FORCE_PYTHON_SESSION": "1"},
     )
-    assert start.returncode == 0, start.stderr
+    try:
+        assert start.returncode == 0, start.stderr
+        wrapper_pid = _json_stdout(start)["pid"]
+        status_payload = _status(job_root, job_name)
+        assert status_payload["alive"] is True
+        assert status_payload["exit_code"] is None
+        _assert_recorded_wrapper_pgid(job_dir, wrapper_pid)
+    finally:
+        _stop_if_running(job_root, job_name)
+        _terminate_recorded_processes(job_dir)
 
-    status_payload = _status(job_root, job_name)
-    assert status_payload["alive"] is True
-    assert status_payload["exit_code"] is None
-    _stop_if_running(job_root, job_name)
+
+def test_start_setsid_branch_records_isolated_wrapper_ownership(tmp_path: Path) -> None:
+    job_root = tmp_path / "jobs"
+    job_name = "setsid_session_detach"
+    job_dir = job_root / job_name
+    stub_bin = tmp_path / "bin"
+    stub_bin.mkdir()
+    _write_executable(
+        stub_bin / "setsid",
+        f"""#!{sys.executable}
+import os
+import sys
+
+os.setsid()
+os.execvp(sys.argv[1], sys.argv[1:])
+""",
+    )
+
+    start = _run_runner(
+        job_root,
+        "start",
+        job_name,
+        "--",
+        *_fixture_command(exit_code=0, sleep_seconds="3.0"),
+        extra_env={
+            "DETACHED_RUNNER_FORCE_PYTHON_SESSION": "0",
+            "PATH": f"{stub_bin}{os.pathsep}{os.environ['PATH']}",
+        },
+    )
+    try:
+        assert start.returncode == 0, start.stderr
+        wrapper_pid = _json_stdout(start)["pid"]
+        _assert_recorded_wrapper_pgid(job_dir, wrapper_pid)
+    finally:
+        _stop_if_running(job_root, job_name)
+        _terminate_recorded_processes(job_dir)
 
 
-def test_wait_uses_child_identity_when_wrapper_identity_races(tmp_path: Path) -> None:
+def test_start_terminates_nonisolated_wrapper_and_withholds_ownership_metadata(tmp_path: Path) -> None:
+    job_root = tmp_path / "jobs"
+    job_name = "nonisolated_wrapper"
+    job_dir = job_root / job_name
+    child_pid_path = tmp_path / "child.pid"
+    stub_bin = tmp_path / "bin"
+    stub_bin.mkdir()
+    path = _runner_path_without_session_launcher(stub_bin)
+    _write_executable(stub_bin / "setsid", '#!/usr/bin/env bash\nexec "$@"\n')
+
+    start = _run_runner(
+        job_root,
+        "start",
+        job_name,
+        "--",
+        *_signal_resistant_fixture(child_pid_path),
+        extra_env={"DETACHED_RUNNER_FORCE_PYTHON_SESSION": "0", "PATH": path},
+    )
+
+    try:
+        assert start.returncode != 0
+        assert "isolated process group" in start.stderr
+        _assert_no_ownership_metadata(job_dir)
+        assert not child_pid_path.exists()
+        assert not (job_dir / "child_pid").exists()
+        wrapper_pid = int((job_dir / "pid").read_text(encoding="utf-8").strip())
+        assert _observed_process_identity(wrapper_pid) == ""
+    finally:
+        _terminate_recorded_processes(job_dir)
+
+
+def test_start_refuses_delayed_wrapper_without_signaling_unverified_pid(tmp_path: Path) -> None:
+    job_root = tmp_path / "jobs"
+    job_name = "delayed_wrapper"
+    job_dir = job_root / job_name
+    child_pid_path = tmp_path / "child.pid"
+    stub_bin = tmp_path / "bin"
+    bash_env = tmp_path / "bash_env"
+    kill_log = tmp_path / "kill.log"
+    stub_bin.mkdir()
+    path = _runner_path_without_session_launcher(stub_bin)
+    _write_executable(
+        stub_bin / "setsid",
+        """#!/usr/bin/env bash
+directory="$4"
+while true; do
+  state=""
+  if [[ -f "${directory}/wrapper_ready" ]]; then
+    IFS= read -r state < "${directory}/wrapper_ready" || true
+  fi
+  [[ "${state}" == "$$ refused" ]] && exec "$@"
+  sleep 0.05
+done
+""",
+    )
+    _write_kill_logging_bash_env(bash_env, kill_log)
+
+    start = _run_runner(
+        job_root,
+        "start",
+        job_name,
+        "--",
+        *_signal_resistant_fixture(child_pid_path),
+        extra_env={
+            "BASH_ENV": str(bash_env),
+            "DETACHED_RUNNER_FORCE_PYTHON_SESSION": "0",
+            "PATH": path,
+        },
+    )
+
+    wrapper_pid = int((job_dir / "pid").read_text(encoding="utf-8").strip())
+    assert start.returncode != 0
+    assert "did not become ready" in start.stderr
+    assert "failed to receive cleanup proof" not in start.stderr
+    _assert_no_ownership_metadata(job_dir)
+    assert not child_pid_path.exists()
+    assert not (job_dir / "child_pid").exists()
+    assert _observed_process_identity(wrapper_pid) == ""
+    kill_lines = kill_log.read_text(encoding="utf-8").splitlines() if kill_log.exists() else []
+    assert f"-TERM {wrapper_pid}" not in kill_lines
+    assert f"-KILL {wrapper_pid}" not in kill_lines
+
+
+def test_start_cleans_up_wrapper_when_process_identity_is_unobservable(tmp_path: Path) -> None:
+    job_root = tmp_path / "jobs"
+    job_name = "unobservable_identity"
+    job_dir = job_root / job_name
+    child_pid_path = tmp_path / "child.pid"
+    stub_bin = tmp_path / "bin"
+    bash_env = tmp_path / "bash_env"
+    kill_log = tmp_path / "kill.log"
+    real_ps = shutil.which("ps")
+    assert real_ps is not None
+    stub_bin.mkdir()
+    _write_kill_logging_bash_env(bash_env, kill_log)
+    _write_executable(
+        stub_bin / "ps",
+        f"""#!/usr/bin/env bash
+for arg in "$@"; do
+  if [[ "$arg" == "command=" ]]; then
+    exit 0
+  fi
+done
+exec {real_ps} "$@"
+""",
+    )
+
+    start = _run_runner(
+        job_root,
+        "start",
+        job_name,
+        "--",
+        *_signal_resistant_fixture(child_pid_path),
+        extra_env={
+            "BASH_ENV": str(bash_env),
+            "DETACHED_RUNNER_FORCE_PYTHON_SESSION": "1",
+            "PATH": f"{stub_bin}{os.pathsep}{os.environ['PATH']}",
+        },
+    )
+
+    try:
+        assert start.returncode != 0
+        assert "could not observe process identity" in start.stderr
+        assert "failed to terminate unobservable wrapper" not in start.stderr
+        _assert_no_ownership_metadata(job_dir)
+        assert not child_pid_path.exists()
+        assert not (job_dir / "child_pid").exists()
+        wrapper_pid = int((job_dir / "pid").read_text(encoding="utf-8").strip())
+        assert _observed_process_identity(wrapper_pid) == ""
+        kill_lines = kill_log.read_text(encoding="utf-8").splitlines()
+        assert f"-TERM {wrapper_pid}" not in kill_lines
+        assert f"-KILL {wrapper_pid}" not in kill_lines
+    finally:
+        _terminate_recorded_processes(job_dir)
+
+
+def test_start_refuses_when_no_session_isolating_launcher_is_available(tmp_path: Path) -> None:
+    job_root = tmp_path / "jobs"
+    job_name = "missing_session_launcher"
+    job_dir = job_root / job_name
+    stub_bin = tmp_path / "bin"
+    stub_bin.mkdir()
+    path = _runner_path_without_session_launcher(stub_bin)
+    _write_executable(stub_bin / "nohup", '#!/usr/bin/env bash\nexec "$@"\n')
+
+    start = _run_runner(
+        job_root,
+        "start",
+        job_name,
+        "--",
+        *_fixture_command(exit_code=0, sleep_seconds="5.0"),
+        extra_env={"DETACHED_RUNNER_FORCE_PYTHON_SESSION": "0", "PATH": path},
+    )
+
+    try:
+        assert start.returncode != 0
+        assert "no session-isolating launcher is available" in start.stderr
+        _assert_no_ownership_metadata(job_dir)
+        if (job_dir / "pid").exists():
+            wrapper_pid = int((job_dir / "pid").read_text(encoding="utf-8").strip())
+            assert _observed_process_identity(wrapper_pid) == ""
+    finally:
+        _terminate_recorded_processes(job_dir)
+
+
+def test_wait_fails_closed_when_wrapper_identity_is_stale(tmp_path: Path) -> None:
     job_root = tmp_path / "jobs"
     job_name = "child_identity_fallback"
     start = _run_runner(job_root, "start", job_name, "--", *_fixture_command(exit_code=0, sleep_seconds="5.0"))
     assert start.returncode == 0, start.stderr
 
+    _wait_for_file(job_root / job_name / "child_process_identity")
     identity_path = job_root / job_name / "process_identity"
     recorded_identity = identity_path.read_text(encoding="utf-8")
     identity_path.write_text("stale-wrapper-identity\n", encoding="utf-8")
 
-    timeout = _run_runner(job_root, "wait", job_name, "--poll-seconds", "1", "--timeout-seconds", "1")
-    assert timeout.returncode == 124, timeout.stderr
-    timeout_payload = _json_stdout(timeout)
-    assert timeout_payload["alive"] is True
-    assert timeout_payload["exit_code"] is None
+    wait = _run_runner(job_root, "wait", job_name, "--poll-seconds", "1", "--timeout-seconds", "1")
+    assert wait.returncode == 1, wait.stderr
+    wait_payload = _json_stdout(wait)
+    assert wait_payload["alive"] is False
+    assert wait_payload["exit_code"] is None
 
     identity_path.write_text(recorded_identity, encoding="utf-8")
     _stop_if_running(job_root, job_name)
@@ -324,19 +487,281 @@ def test_start_refuses_duplicate_live_job(tmp_path: Path) -> None:
     _stop_if_running(job_root, job_name)
 
 
-def test_stop_refuses_when_recorded_process_identity_does_not_match(tmp_path: Path) -> None:
+def test_status_does_not_report_alive_from_child_when_wrapper_is_gone(tmp_path: Path) -> None:
     job_root = tmp_path / "jobs"
-    job_name = "identity_guard"
-    start = _run_runner(job_root, "start", job_name, "--", *_fixture_command(exit_code=0, sleep_seconds="2.0"))
+    job_name = "dead_wrapper_live_child"
+    job_dir = job_root / job_name
+    child_pid_path = tmp_path / "child.pid"
+    start = _run_runner(job_root, "start", job_name, "--", *_signal_resistant_fixture(child_pid_path))
     assert start.returncode == 0, start.stderr
+    wrapper_pid = _json_stdout(start)["pid"]
+    child_pid = _wait_for_pid_file(child_pid_path)
 
-    identity_path = job_root / job_name / "process_identity"
-    recorded_identity = identity_path.read_text(encoding="utf-8")
-    identity_path.write_text("definitely-not-the-recorded-command\n", encoding="utf-8")
+    try:
+        _kill_exact_pid(wrapper_pid)
+        _wait_for_pid_to_exit(wrapper_pid)
+        assert _pid_is_alive(child_pid)
 
-    refused = _run_runner(job_root, "stop", job_name)
-    assert refused.returncode == 4
-    assert "process identity mismatch" in refused.stderr
+        status_payload = _status(job_root, job_name)
+        assert status_payload["alive"] is False
+        assert status_payload["exit_code"] is None
 
-    identity_path.write_text(recorded_identity, encoding="utf-8")
-    _stop_if_running(job_root, job_name)
+        stop = _run_runner(job_root, "stop", job_name)
+        assert stop.returncode == 4
+        assert "wrapper PID" in stop.stderr
+        assert "no longer observable" in stop.stderr
+    finally:
+        _terminate_exact_pid(child_pid)
+        _terminate_recorded_processes(job_dir)
+
+
+@pytest.mark.parametrize(
+    ("child_identity_state", "expected_reason"),
+    [
+        ("matching", _SURVIVING_CHILD_REFUSAL),
+        ("missing", _UNVERIFIABLE_CHILD_REFUSAL),
+        ("stale", _UNVERIFIABLE_CHILD_REFUSAL),
+    ],
+)
+def test_start_refuses_when_wrapper_died_but_recorded_child_is_observable(
+    tmp_path: Path,
+    child_identity_state: str,
+    expected_reason: str,
+) -> None:
+    job_root = tmp_path / "jobs"
+    job_name = "dead_wrapper_duplicate_start"
+    job_dir = job_root / job_name
+    child_pid_path = tmp_path / "child.pid"
+    start = _run_runner(job_root, "start", job_name, "--", *_signal_resistant_fixture(child_pid_path))
+    assert start.returncode == 0, start.stderr
+    wrapper_pid = _json_stdout(start)["pid"]
+    child_pid = _wait_for_pid_file(child_pid_path)
+    recorded_child_pid_path = job_dir / "child_pid"
+    child_identity_path = job_dir / "child_process_identity"
+    _wait_for_file(child_identity_path)
+    if child_identity_state == "missing":
+        child_identity_path.unlink()
+    elif child_identity_state == "stale":
+        child_identity_path.write_text("stale-child-identity\n", encoding="utf-8")
+
+    try:
+        _kill_exact_pid(wrapper_pid)
+        _wait_for_pid_to_exit(wrapper_pid)
+        assert _pid_is_alive(child_pid)
+        assert recorded_child_pid_path.read_text(encoding="utf-8").strip() == str(child_pid)
+
+        duplicate = _run_runner(job_root, "start", job_name, "--", *_fixture_command(exit_code=0))
+        assert duplicate.returncode == 3
+        assert expected_reason.format(pid=child_pid) in duplicate.stderr
+        assert recorded_child_pid_path.read_text(encoding="utf-8").strip() == str(child_pid)
+        assert _pid_is_alive(child_pid)
+    finally:
+        _kill_exact_pid(child_pid)
+        _terminate_recorded_processes(job_dir)
+
+
+def test_start_ignores_recorded_child_pid_that_was_gone_at_identity_verdict(tmp_path: Path) -> None:
+    """A gone child verdict must not be re-opened by a second PID observation."""
+    job_root = tmp_path / "jobs"
+    job_name = "gone_child_duplicate_start"
+    job_dir = job_root / job_name
+    stale_child_pid = "424242"
+    ps_state = tmp_path / "child_ps_calls"
+    stub_bin = tmp_path / "bin"
+    stub_bin.mkdir()
+    ps_stub = stub_bin / "ps"
+    real_ps = shutil.which("ps") or "/bin/ps"
+    _write_executable(
+        ps_stub,
+        f"""#!/usr/bin/env bash
+if [[ "$1" == "-p" && "$2" == "{stale_child_pid}" && "$3" == "-o" && "$4" == "command=" ]]; then
+  calls=0
+  if [[ -f "{ps_state}" ]]; then
+    calls="$(<"{ps_state}")"
+  fi
+  printf '%s\n' "$((calls + 1))" > "{ps_state}"
+  if (( calls == 0 )); then
+    exit 0
+  fi
+  printf '%s\n' "reused process for stale child PID"
+  exit 0
+fi
+exec "{real_ps}" "$@"
+""",
+    )
+    job_dir.mkdir(parents=True)
+    (job_dir / "child_pid").write_text(f"{stale_child_pid}\n", encoding="utf-8")
+    (job_dir / "child_process_identity").write_text("original child identity\n", encoding="utf-8")
+
+    start = _run_runner(
+        job_root,
+        "start",
+        job_name,
+        "--",
+        *_fixture_command(exit_code=0, sleep_seconds="0.1"),
+        extra_env={"PATH": f"{stub_bin}{os.pathsep}{os.environ['PATH']}"},
+    )
+
+    try:
+        assert start.returncode == 0, start.stderr
+        assert ps_state.read_text(encoding="utf-8").strip() == "1"
+    finally:
+        _terminate_recorded_processes(job_dir)
+
+
+def test_status_and_wait_liveness_ignore_stop_only_pgid_metadata(tmp_path: Path) -> None:
+    """Pin wrapper identity as the only liveness truth for `status` and `wait`.
+
+    `pgid` exists so `stop` can prove it is signalling a group the wrapper still
+    leads; it is not evidence of liveness. Routing the shared recorded-wrapper
+    identity verdict through that stop-only metadata would report a job with an
+    unreadable `pgid` as dead while its wrapper is demonstrably alive, and would
+    make `wait` exit 1 on a running job instead of timing out.
+    """
+    job_root = tmp_path / "jobs"
+    job_name = "pgid_independent_liveness"
+    job_dir = job_root / job_name
+    start = _run_runner(job_root, "start", job_name, "--", *_fixture_command(exit_code=0, sleep_seconds="5.0"))
+    assert start.returncode == 0, start.stderr
+    wrapper_pid = _json_stdout(start)["pid"]
+
+    try:
+        (job_dir / "pgid").unlink()
+
+        status_payload = _status(job_root, job_name)
+        assert status_payload["alive"] is True
+        assert status_payload["exit_code"] is None
+        assert _pid_is_alive(wrapper_pid)
+
+        wait = _run_runner(job_root, "wait", job_name, "--poll-seconds", "1", "--timeout-seconds", "1")
+        assert wait.returncode == 124, wait.stderr
+        wait_payload = _json_stdout(wait)
+        assert wait_payload["alive"] is True
+        assert wait_payload["exit_code"] is None
+    finally:
+        _terminate_recorded_processes(job_dir)
+
+
+def test_runner_and_every_library_it_sources_stay_within_the_line_budget() -> None:
+    """Hold the runner and its libraries to the repository's file-size ceiling.
+
+    The set under budget is discovered from the runner's own `source` lines, so
+    a library inherits the ceiling the moment the runner depends on it rather
+    than when someone remembers to list it here. Asserting each discovered path
+    exists keeps the guard fail-closed: a typo in a `source` line would
+    otherwise shrink the budgeted set to a passing one.
+    """
+    sourced_names = _runner_sourced_library_names()
+    budgeted_paths = [SCRIPT_PATH, *(SCRIPT_PATH.parent / name for name in sourced_names)]
+    for path in budgeted_paths:
+        assert path.is_file(), f"detached_runner.sh sources a path that does not exist: {path}"
+
+    assert oversized_modules(budgeted_paths) == {}
+
+
+def test_runner_sourced_library_discovery_is_fail_closed() -> None:
+    assert _runner_sourced_library_names() == _KNOWN_SOURCED_RUNNER_LIBRARIES
+
+
+def test_runner_shellcheck_directives_require_source_following_lint() -> None:
+    runner_source = SCRIPT_PATH.read_text(encoding="utf-8")
+    source_directives = [
+        line
+        for line in runner_source.splitlines()
+        if line.startswith("# shellcheck source=infra/scripts/detached_runner_")
+    ]
+
+    assert len(source_directives) == len(_KNOWN_SOURCED_RUNNER_LIBRARIES)
+    assert all("disable=SC1091" not in line for line in source_directives)
+
+
+def test_runner_and_its_sourced_libraries_lint_clean_under_check_sourced() -> None:
+    """Run the lint gate here so the flag that reaches the libraries lives in code.
+
+    `-x` alone only makes sourced definitions visible while analysing the
+    top-level file; shellcheck reports findings from inside a sourced file only
+    under `--check-sourced`. A prose-only `-x` gate therefore leaves most of the
+    runner's shell lines unlinted while reading as full coverage, so the command
+    is executed by this test rather than quoted in a checklist.
+    """
+    shellcheck = shutil.which("shellcheck")
+    assert shellcheck is not None, "shellcheck is required to lint the detached runner and its libraries"
+
+    result = subprocess.run(
+        [shellcheck, "-x", "--check-sourced", "-S", "style", str(SCRIPT_PATH)],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stdout or result.stderr
+
+
+def test_recorded_liveness_publishes_no_verdict_from_a_previous_call_after_a_terminal_receipt(
+    tmp_path: Path,
+) -> None:
+    """A settled job must clear every global the recorded-process seam publishes.
+
+    `recorded_process_is_alive()` returns before consulting the identity seam
+    once `exit_code` exists, so anything it leaves behind is whatever the last
+    call published. The PID, the verdict, and the refusal reason are one set
+    describing one answer; leaving the reason set would hand the first caller
+    that reads it a message about a different process.
+    """
+    job_dir = tmp_path / "settled_job"
+    job_dir.mkdir()
+    (job_dir / "exit_code").write_text("0\n", encoding="utf-8")
+    (job_dir / "pid").write_text("1\n", encoding="utf-8")
+    (job_dir / "process_identity").write_text("recorded wrapper identity\n", encoding="utf-8")
+
+    probe = f"""
+set -euo pipefail
+job_root={shlex.quote(str(tmp_path))}
+source {shlex.quote(str(SCRIPT_PATH.parent / "detached_runner_job_state_lib.sh"))}
+source {shlex.quote(str(SCRIPT_PATH.parent / "detached_runner_ownership_lib.sh"))}
+RECORDED_PROCESS_PID="pid-from-a-previous-call"
+RECORDED_PROCESS_VERDICT="verdict-from-a-previous-call"
+RECORDED_PROCESS_REFUSAL_REASON="reason-from-a-previous-call"
+if recorded_process_is_alive {shlex.quote(str(job_dir))} wrapper; then
+  echo "settled job reported alive" >&2
+  exit 1
+fi
+printf 'pid=[%s]\nverdict=[%s]\nreason=[%s]\n' \
+  "${{RECORDED_PROCESS_PID}}" "${{RECORDED_PROCESS_VERDICT}}" "${{RECORDED_PROCESS_REFUSAL_REASON}}"
+"""
+    result = subprocess.run(["bash", "-c", probe], capture_output=True, text=True, check=False)
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "pid=[]\nverdict=[]\nreason=[]\n"
+
+
+def test_stop_cadence_constants_live_with_the_ownership_owner() -> None:
+    """Guard where the stop cadence constants are declared, not what they hold.
+
+    Retuning either window is a legitimate behaviour-only edit, so this asserts
+    on the assignment site alone; pinning the values here would red a placement
+    guard for a change that moved nothing.
+    """
+    runner_source = SCRIPT_PATH.read_text(encoding="utf-8")
+    ownership_source = _ownership_library_source()
+
+    for name in _STOP_CADENCE_CONSTANTS:
+        assignment = re.compile(rf"^{name}=", re.MULTILINE)
+        assert not assignment.search(runner_source), f"{name} is declared in the runner, not its cadence owner"
+        assert assignment.search(ownership_source), f"{name} is not declared by the ownership owner"
+
+
+def test_usage_advertises_the_stop_grace_default_its_owner_declares(tmp_path: Path) -> None:
+    """`--help` must quote the live constant rather than a copy of its value.
+
+    The default is operator-visible, and its constant lives in another file, so
+    a hardcoded copy here would go stale the moment the window is retuned.
+    """
+    declared = re.search(r"^DEFAULT_STOP_GRACE_SECONDS=(\S+)$", _ownership_library_source(), re.MULTILINE)
+    assert declared is not None, "the ownership library no longer declares DEFAULT_STOP_GRACE_SECONDS"
+
+    result = _run_runner(tmp_path / "jobs", "--help")
+
+    assert result.returncode == 0, result.stderr
+    assert f"(default: {declared.group(1)})" in result.stderr

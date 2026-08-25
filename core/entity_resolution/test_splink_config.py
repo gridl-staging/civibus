@@ -28,6 +28,9 @@ from core.entity_resolution.splink_config import (
     PERSON_FIRST_NAME_DISAGREEMENT_U_PROBABILITY,
     build_person_probabilistic_settings,
 )
+from core.entity_resolution.test_splink_config_identifier_writer_guard import (
+    _function_writes_key_to_organization_identifiers,
+)
 
 # Synthetic test data — realistic but entirely fictitious records
 # designed to test specific matching scenarios.
@@ -38,6 +41,96 @@ DONOR_FALSE_MERGE_CASE_IDS = (
     "fec_person_cluster_030872d9_dennis_vs_stephanie_robinson",
     "fec_person_cluster_81136b39_linda_vs_ryan_garcia",
 )
+_RULE_IDENTIFIER_KEY_PATTERN = re.compile(r"identifiers\s*(?:->>|->)\s*'([A-Za-z0-9_]+)'")
+_IDENTIFIER_WRITER_SCAN_ROOTS = ("core", "domains")
+
+
+def _identifier_keys_named_in_deterministic_rules(
+    entity_label: str,
+    rules: list[dict[str, str]],
+) -> dict[str, set[str]]:
+    """Map each deterministic rule name to the identifier keys its SQL reads."""
+    keys_by_rule: dict[str, set[str]] = {}
+    for rule in rules:
+        keys = set(_RULE_IDENTIFIER_KEY_PATTERN.findall(rule["sql"]))
+        assert keys, (
+            f"deterministic {entity_label} rule {rule['name']!r} names no identifiers->>'key' "
+            "expression this guard can extract; update _RULE_IDENTIFIER_KEY_PATTERN "
+            "or exempt the rule explicitly with a comment explaining its predicate"
+        )
+        keys_by_rule[rule["name"]] = keys
+    return keys_by_rule
+
+
+def _production_files_that_could_write_identifiers() -> list[Path]:
+    """Return production ingest candidates without letting ER rules vouch for themselves."""
+    er_package_dir = Path(__file__).resolve().parent
+    return [
+        path
+        for scan_root in _IDENTIFIER_WRITER_SCAN_ROOTS
+        for path in sorted((REPO_ROOT / scan_root).rglob("*.py"))
+        if er_package_dir not in path.parents
+        and not path.name.startswith("test_")
+        and path.name != "conftest.py"
+        and "tests" not in path.parts
+    ]
+
+
+def _writes_key_to_organization_identifiers(path: Path, key: str) -> bool:
+    """Whether a production file can pass the key to an Organization identifier map."""
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and (
+            _function_writes_key_to_organization_identifiers(node, key)
+        ):
+            return True
+    return False
+
+
+def test_every_deterministic_person_rule_keys_on_an_identifier_some_ingest_path_writes() -> None:
+    """A deterministic person rule keyed on an unwritten identifier is a dead rule."""
+    scanned_files = _production_files_that_could_write_identifiers()
+    assert scanned_files, "identifier-writer scan found no production files; scan roots are wrong"
+    scanned_texts = [path.read_text(encoding="utf-8") for path in scanned_files]
+
+    unwritten_keys_by_rule: dict[str, set[str]] = {}
+    person_rule_keys = _identifier_keys_named_in_deterministic_rules("person", DETERMINISTIC_PERSON_RULES)
+    for rule_name, keys in person_rule_keys.items():
+        for key in keys:
+            quoted_forms = (f"'{key}'", f'"{key}"')
+            written = any(quoted_form in text for text in scanned_texts for quoted_form in quoted_forms)
+            if not written:
+                unwritten_keys_by_rule.setdefault(rule_name, set()).add(key)
+
+    assert not unwritten_keys_by_rule, (
+        "Deterministic person rules key on identifier keys that NO ingest path "
+        f"writes: {unwritten_keys_by_rule}. Such a rule is a silent no-op at "
+        "confidence 1.0. Either make an ingest path write the key or re-key/delete the rule."
+    )
+
+
+def test_every_deterministic_organization_rule_keys_on_an_identifier_some_ingest_path_writes() -> None:
+    """Organization deterministic rules must key on real organization identifiers."""
+    scanned_files = _production_files_that_could_write_identifiers()
+    assert scanned_files, "identifier-writer scan found no production files; scan roots are wrong"
+
+    unwritten_keys_by_rule: dict[str, set[str]] = {}
+    organization_rule_keys = _identifier_keys_named_in_deterministic_rules("organization", DETERMINISTIC_ORG_RULES)
+    for rule_name, keys in organization_rule_keys.items():
+        for key in keys:
+            if not any(_writes_key_to_organization_identifiers(path, key) for path in scanned_files):
+                unwritten_keys_by_rule.setdefault(rule_name, set()).add(key)
+
+    assert not unwritten_keys_by_rule, (
+        "Deterministic organization rules key on identifier keys that NO production "
+        f"path writes to core.organization.identifiers: {unwritten_keys_by_rule}. "
+        "Quoted literals, parser/model fields, table columns, and "
+        "organization.identifiers.get(...) reads do not prove a deterministic "
+        "organization matcher can ever fire. Either make an organization ingest "
+        "path write the key or re-key/delete the rule."
+    )
+
+
 SYNTHETIC_PERSONS = [
     # --- Pair 1: Same person, slight name variation + same address ---
     {
@@ -696,264 +789,3 @@ def test_person_settings_term_frequency_adjustments_are_name_only() -> None:
         "first_name",
         "last_name",
     }
-
-
-# ---------------------------------------------------------------------------
-# civibus-s5q guard: no deterministic person rule may key on an identifier
-# key that no ingest path writes.
-#
-# WHY THIS EXISTS: the original fec rule keyed on identifiers->>'fec_id',
-# a key NOTHING in production ever wrote (every ingest path writes
-# 'fec_candidate_id' / 'fec_candidate_ids'). A deterministic rule aimed at a
-# key with no writer is a silent no-op at confidence 1.0 — it looks exactly
-# like a rule that simply found no duplicates, so the defect is invisible in
-# every run report. That dead rule is why the exact duplicate class it
-# targeted (FEC-only shadow persons) accumulated in production and had to be
-# repaired imperatively in federal_spine_loader instead of by ER.
-# ---------------------------------------------------------------------------
-
-_RULE_IDENTIFIER_KEY_PATTERN = re.compile(r"identifiers\s*(?:->>|->)\s*'([A-Za-z0-9_]+)'")
-
-# Directories whose production code counts as "an ingest path that writes
-# identifier keys". Deliberately broad (all of core/ and domains/) so a writer
-# anywhere in the product vouches for a key; test files and this ER package
-# itself are excluded below — a rule must never vouch for its own key.
-_IDENTIFIER_WRITER_SCAN_ROOTS = ("core", "domains")
-
-
-def _identifier_keys_named_in_deterministic_rules(
-    entity_label: str,
-    rules: list[dict[str, str]],
-) -> dict[str, set[str]]:
-    """Map each deterministic rule name to the identifier keys its SQL reads."""
-    keys_by_rule: dict[str, set[str]] = {}
-    for rule in rules:
-        keys = set(_RULE_IDENTIFIER_KEY_PATTERN.findall(rule["sql"]))
-        # A rule that keys on no identifiers at all would silently escape
-        # this guard; every rule in the current closed set keys on identifiers,
-        # so an empty extraction means the SQL shape drifted past the regex and
-        # the guard must be updated consciously, not bypassed.
-        assert keys, (
-            f"deterministic {entity_label} rule {rule['name']!r} names no identifiers->>'key' "
-            "expression this guard can extract; update _RULE_IDENTIFIER_KEY_PATTERN "
-            "or exempt the rule explicitly with a comment explaining its predicate"
-        )
-        keys_by_rule[rule["name"]] = keys
-    return keys_by_rule
-
-
-def _production_files_that_could_write_identifiers() -> list[Path]:
-    files: list[Path] = []
-    er_package_dir = Path(__file__).resolve().parent
-    for scan_root in _IDENTIFIER_WRITER_SCAN_ROOTS:
-        for path in sorted((REPO_ROOT / scan_root).rglob("*.py")):
-            if er_package_dir in path.parents:
-                continue  # the rule may not vouch for its own key
-            if path.name.startswith("test_") or path.name == "conftest.py":
-                continue
-            if "tests" in path.parts:
-                continue
-            files.append(path)
-    return files
-
-
-def _identifier_keys_named_in_person_rules() -> dict[str, set[str]]:
-    return _identifier_keys_named_in_deterministic_rules("person", DETERMINISTIC_PERSON_RULES)
-
-
-def _identifier_keys_named_in_organization_rules() -> dict[str, set[str]]:
-    return _identifier_keys_named_in_deterministic_rules("organization", DETERMINISTIC_ORG_RULES)
-
-
-def _constant_string_value(node: ast.AST) -> str | None:
-    if isinstance(node, ast.Constant) and isinstance(node.value, str):
-        return node.value
-    return None
-
-
-def _subscript_key(node: ast.Subscript) -> str | None:
-    return _constant_string_value(node.slice)
-
-
-def _dict_literal_contains_key(node: ast.AST, key: str) -> bool:
-    return isinstance(node, ast.Dict) and any(_constant_string_value(dict_key) == key for dict_key in node.keys)
-
-
-def _call_name(node: ast.AST) -> str | None:
-    if isinstance(node, ast.Name):
-        return node.id
-    if isinstance(node, ast.Attribute):
-        return node.attr
-    return None
-
-
-def _organization_call_identifier_argument(call: ast.Call) -> ast.AST | None:
-    if _call_name(call.func) != "Organization":
-        return None
-    for keyword in call.keywords:
-        if keyword.arg == "identifiers":
-            return keyword.value
-    return None
-
-
-def _assigns_key_to_local_identifiers(node: ast.AST, key: str) -> bool:
-    targets: list[ast.AST] = []
-    if isinstance(node, ast.Assign):
-        targets = list(node.targets)
-    elif isinstance(node, ast.AnnAssign):
-        targets = [node.target]
-    elif isinstance(node, ast.AugAssign):
-        targets = [node.target]
-
-    for target in targets:
-        if (
-            isinstance(target, ast.Subscript)
-            and isinstance(target.value, ast.Name)
-            and target.value.id == "identifiers"
-            and _subscript_key(target) == key
-        ):
-            return True
-    return False
-
-
-def _updates_local_identifiers_with_key(node: ast.AST, key: str) -> bool:
-    if not isinstance(node, ast.Call):
-        return False
-    if not isinstance(node.func, ast.Attribute) or node.func.attr != "update":
-        return False
-    if not isinstance(node.func.value, ast.Name) or node.func.value.id != "identifiers":
-        return False
-    return any(_dict_literal_contains_key(argument, key) for argument in node.args)
-
-
-def _walk_current_lexical_scope(function_node: ast.FunctionDef | ast.AsyncFunctionDef) -> list[ast.AST]:
-    scoped_nodes: list[ast.AST] = []
-    nested_scope_types = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)
-    queue = list(function_node.body)
-
-    while queue:
-        node = queue.pop(0)
-        scoped_nodes.append(node)
-        if isinstance(node, nested_scope_types):
-            continue
-        queue[0:0] = ast.iter_child_nodes(node)
-
-    return scoped_nodes
-
-
-def _function_writes_key_to_organization_identifiers(
-    function_node: ast.FunctionDef | ast.AsyncFunctionDef,
-    key: str,
-) -> bool:
-    scoped_nodes = _walk_current_lexical_scope(function_node)
-    writes_local_key = any(
-        _assigns_key_to_local_identifiers(node, key) or _updates_local_identifiers_with_key(node, key)
-        for node in scoped_nodes
-    )
-    if not writes_local_key:
-        return False
-
-    for node in scoped_nodes:
-        if not isinstance(node, ast.Call):
-            continue
-        identifier_argument = _organization_call_identifier_argument(node)
-        if isinstance(identifier_argument, ast.Name) and identifier_argument.id == "identifiers":
-            return True
-    return False
-
-
-def _writes_key_to_organization_identifiers(path: Path, key: str) -> bool:
-    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Call):
-            identifier_argument = _organization_call_identifier_argument(node)
-            if identifier_argument is not None and _dict_literal_contains_key(identifier_argument, key):
-                return True
-
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            if _function_writes_key_to_organization_identifiers(node, key):
-                return True
-
-    return False
-
-
-def test_organization_identifier_writer_guard_ignores_nested_local_assignments() -> None:
-    """A nested identifier assignment must not vouch for an outer Organization call."""
-    function_node = ast.parse(
-        """
-def build_organization():
-    identifiers = {}
-
-    def build_person_identifiers():
-        identifiers = {}
-        identifiers["dead_key"] = "person-only"
-        return identifiers
-
-    return Organization(identifiers=identifiers)
-"""
-    ).body[0]
-
-    assert isinstance(function_node, ast.FunctionDef)
-    assert not _function_writes_key_to_organization_identifiers(function_node, "dead_key")
-
-
-def test_every_deterministic_person_rule_keys_on_an_identifier_some_ingest_path_writes() -> None:
-    """civibus-s5q: a matching rule keyed on an unwritten identifier is a dead rule.
-
-    For every identifier key named in DETERMINISTIC_PERSON_RULES, some production
-    file under core/ or domains/ (tests and this ER package excluded) must
-    mention the key as a quoted literal — the shape every real writer takes
-    (`identifiers={"fec_candidate_id": ...}`, `identifier_payload["bioguide_id"]`,
-    `identifier_key="bioguide_id"`).
-
-    Proven red 2026-08-20 against the pre-fix rules: 'fec_id' and 'voter_reg_id'
-    each had ZERO production occurrences — the only non-test mentions in the
-    repo were the rules themselves and a stale schema comment. The test fails
-    again the moment anyone adds a rule keyed on a key nothing writes, which is
-    the exact condition it guards: a silent no-op matcher at confidence 1.0.
-
-    Limitation, on purpose: a key that production only READS would also pass.
-    That failure mode still leaves the key present in live rows somewhere, which
-    is categorically different from the fec_id defect (no writer, no reader, no
-    data — matcher provably inert).
-    """
-    scanned_files = _production_files_that_could_write_identifiers()
-    assert scanned_files, "identifier-writer scan found no production files; scan roots are wrong"
-    scanned_texts = [path.read_text(encoding="utf-8") for path in scanned_files]
-
-    unwritten_keys_by_rule: dict[str, set[str]] = {}
-    for rule_name, keys in _identifier_keys_named_in_person_rules().items():
-        for key in keys:
-            quoted_forms = (f"'{key}'", f'"{key}"')
-            written = any(quoted_form in text for text in scanned_texts for quoted_form in quoted_forms)
-            if not written:
-                unwritten_keys_by_rule.setdefault(rule_name, set()).add(key)
-
-    assert not unwritten_keys_by_rule, (
-        "Deterministic person rules key on identifier keys that NO ingest path "
-        f"writes: {unwritten_keys_by_rule}. Such a rule is a silent no-op at "
-        "confidence 1.0 (civibus-s5q). Either make an ingest path write the key "
-        "or re-key/delete the rule — never leave a matcher aimed at a key with "
-        "no writer."
-    )
-
-
-def test_every_deterministic_organization_rule_keys_on_an_identifier_some_ingest_path_writes() -> None:
-    """civibus-3tz: organization deterministic rules must key on real org identifiers."""
-    scanned_files = _production_files_that_could_write_identifiers()
-    assert scanned_files, "identifier-writer scan found no production files; scan roots are wrong"
-
-    unwritten_keys_by_rule: dict[str, set[str]] = {}
-    for rule_name, keys in _identifier_keys_named_in_organization_rules().items():
-        for key in keys:
-            if not any(_writes_key_to_organization_identifiers(path, key) for path in scanned_files):
-                unwritten_keys_by_rule.setdefault(rule_name, set()).add(key)
-
-    assert not unwritten_keys_by_rule, (
-        "Deterministic organization rules key on identifier keys that NO production "
-        f"path writes to core.organization.identifiers: {unwritten_keys_by_rule}. "
-        "Quoted literals, parser/model fields, table columns, and "
-        "organization.identifiers.get(...) reads do not prove a deterministic "
-        "organization matcher can ever fire. Either make an organization ingest "
-        "path write the key or re-key/delete the rule."
-    )

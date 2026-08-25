@@ -62,7 +62,10 @@ export function getMapLayersForLevel(pageLevel: MapPageLevel): readonly MapLayer
   );
 }
 
-export function buildMapLayerVisibilityDefaults(pageLevel: MapPageLevel): MapLayerVisibility {
+export function buildMapLayerVisibilityDefaults(
+  pageLevel: MapPageLevel,
+  selectedDivisionType: string | null = null
+): MapLayerVisibility {
   const defaults: MapLayerVisibility = {
     nc_statewide_boundary: false,
     nc_county_boundaries: false,
@@ -70,7 +73,8 @@ export function buildMapLayerVisibilityDefaults(pageLevel: MapPageLevel): MapLay
   };
 
   for (const layer of getMapLayersForLevel(pageLevel)) {
-    defaults[layer.id] = layer.alwaysOn || layer.defaultVisible;
+    defaults[layer.id] =
+      layer.alwaysOn || layer.defaultVisible || layer.divisionType === selectedDivisionType;
   }
 
   return defaults;

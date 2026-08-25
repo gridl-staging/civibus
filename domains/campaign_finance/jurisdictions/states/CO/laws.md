@@ -59,7 +59,7 @@ Limits are per election cycle unless noted. Current amounts effective 2023-02-15
 
 ### Aggregate limits on party contributions
 
-No person (other than a small donor committee) may contribute more than $4,675/calendar year to all party committees combined, of which no more than $3,875 may go to the state party. Small donor committees: $15,000 combined, $12,500 to state party.
+No person (other than a small donor committee) may contribute more than $4,675/calendar year to all party committees combined, of which no more than $3,875 may go to the state party. Small donor committees: $23,600 combined, $19,650 to state party.
 
 **Corporate direct to candidates: PROHIBITED** — Art. XXVIII § 3(4)(a).
 **Union direct to candidates: PROHIBITED** — Art. XXVIII § 3(4)(a).

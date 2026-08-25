@@ -3,6 +3,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import yaml
+
 REPO_ROOT = Path(__file__).resolve().parents[5]
 
 from _test_helpers import YAML_KEY_LINE, assert_files_exist, extract_named_block, extract_source_blocks, read  # noqa: E402
@@ -20,6 +22,10 @@ def load_spec_example_text() -> str:
     if match is None:
         raise AssertionError(f"expected YAML example block in {SPEC_PATH}")
     return match.group(1)
+
+
+def load_template_config() -> dict:
+    return yaml.safe_load(read(CONFIG_PATH))
 
 
 def assert_block_contains(block: str, required_keys: list[str]) -> None:
@@ -238,13 +244,26 @@ def test_data_semantics_has_required_sections_and_portal_navigation():
 
 def test_data_source_nullability_is_explicit():
     text = read(CONFIG_PATH)
-    assert "api_base_url: null" in text
-    assert "bulk_download_url: null" in text
-    assert "last_successful_pull: null" in text
-    assert "last_verified_working: null" in text
-    assert "party_to_candidate: null" in text
+    config = load_template_config()
+    data_sources = config["data_sources"]
+
+    assert all(source["api_base_url"] is None for source in data_sources)
+    assert any(source["bulk_download_url"] is None for source in data_sources)
+    assert all(source["last_successful_pull"] is None for source in data_sources)
+    assert all(source["last_verified_working"] is None for source in data_sources)
+    assert config["laws"]["contribution_limits"]["party_to_candidate"] is None
     # The config must document the omit-vs-null resolution (case/punctuation flexible)
     assert "omit" in text.lower() and "not applicable" in text.lower()
+
+
+def test_legacy_status_placeholders_are_neutral_in_template():
+    assert load_template_config()["status"] == {
+        "discovery": "unknown",
+        "scraper": "unknown",
+        "normalization": "unknown",
+        "entity_resolution": "unknown",
+        "last_full_update": None,
+    }
 
 
 def test_spec_example_matches_reconciled_template_shape():

@@ -10,10 +10,10 @@ from uuid import UUID
 import psycopg
 from psycopg.rows import dict_row
 
+from core.entity_resolution.candidacy_merge import repoint_candidacy_person
 from core.entity_resolution.confidence import classify_scored_pairs
 from core.entity_resolution.extract import extract_rows_for_matching
 from core.entity_resolution.scoring import run_deterministic_rules, score_rows
-from domains.civics.ingest import repoint_candidacy_person
 
 
 @dataclass(frozen=True, slots=True)

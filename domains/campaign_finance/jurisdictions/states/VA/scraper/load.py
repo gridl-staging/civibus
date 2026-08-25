@@ -47,7 +47,6 @@ from domains.campaign_finance.jurisdictions.states.load_utils import (
     LoadResult,
     commit_managed_transaction,
     ensure_data_source,
-    ensure_transaction_open,
     iter_rows_with_limit,
     link_entity_source_and_optional_mailing_address,
     try_row_without_savepoint,
@@ -72,6 +71,7 @@ LOGGER = logging.getLogger(__name__)
 _VA_DOMAIN = "campaign_finance"
 _VA_JURISDICTION = "state/VA"
 _VA_SOURCE_FORMAT = "csv"
+_COMMIT_BATCH_ROWS = 1_000
 
 # VA date formats vary: MM/DD/YYYY (common) and YYYY-MM-DD HH:MM:SS.nnnnnnnnn
 _VA_DATE_FORMATS = ("%m/%d/%Y", "%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d")
@@ -130,7 +130,7 @@ def _build_va_source_record(
     row: Mapping[str, str | None],
     data_type: str,
 ) -> SourceRecord:
-    raw_fields = dict(row)
+    raw_fields: dict[str, object] = dict(row)
     record_hash = compute_record_hash(raw_fields)
     return SourceRecord(
         data_source_id=data_source_id,
@@ -367,7 +367,7 @@ def _load_va_phase1(
             counts.skipped += 1
 
         processed = counts.inserted + counts.skipped + counts.errors
-        if processed % 1_000 == 0:
+        if processed % _COMMIT_BATCH_ROWS == 0:
             commit_managed_transaction(conn, manages_outer)
 
     commit_managed_transaction(conn, manages_outer)
@@ -586,6 +586,7 @@ def _load_va_phase2(
     filing_lookup: dict[str, _VAFilingLookupEntry] = {}
     relational_errors = 0
     manages_outer = conn.info.transaction_status == TransactionStatus.IDLE
+    processed_count = 0
 
     txn_upserter = (
         _upsert_va_contribution_transaction if data_type == "contributions" else _upsert_va_expenditure_transaction
@@ -601,39 +602,45 @@ def _load_va_phase2(
             data_source_id=data_source_id,
             source_record_key=source_record_key,
         )
-        if source_record_id is None:
-            continue
+        if source_record_id is not None:
 
-        def _link_va_row(r=row, sr_id=source_record_id) -> bool:
-            filing_entry = _upsert_va_filing(
+            def _link_va_row(r=row, sr_id=source_record_id) -> bool:
+                filing_entry = _upsert_va_filing(
+                    conn,
+                    r,
+                    data_type=data_type,
+                    source_record_id=sr_id,
+                    filing_lookup=filing_lookup,
+                )
+                txn_upserter(
+                    conn,
+                    r,
+                    filing_id=filing_entry.filing_id,
+                    committee_id=filing_entry.committee_id,
+                    source_record_id=sr_id,
+                )
+                return True
+
+            result, _was_db_error = try_row_without_savepoint(
                 conn,
-                r,
-                data_type=data_type,
-                source_record_id=sr_id,
-                filing_lookup=filing_lookup,
+                _link_va_row,
+                manages_outer_transaction=manages_outer,
+                label=f"VA {data_type} filing link",
             )
-            txn_upserter(
-                conn,
-                r,
-                filing_id=filing_entry.filing_id,
-                committee_id=filing_entry.committee_id,
-                source_record_id=sr_id,
-            )
-            return True
 
-        result, _was_db_error = try_row_without_savepoint(
-            conn,
-            _link_va_row,
-            manages_outer_transaction=manages_outer,
-            label=f"VA {data_type} filing link",
-        )
+            if result is None:
+                relational_errors += 1
+                try:
+                    filing_lookup.pop(_build_va_filing_fec_id(row, data_type), None)
+                except Exception:  # noqa: BLE001
+                    pass
 
-        if result is None:
-            relational_errors += 1
-            try:
-                filing_lookup.pop(_build_va_filing_fec_id(row, data_type), None)
-            except Exception:  # noqa: BLE001
-                pass
+        # Every iterated row advances the boundary, including rows with no source record:
+        # the lookup above opens a read transaction either way, so counting only linked
+        # rows would let a run of missing rows hold one open.
+        processed_count += 1
+        if processed_count % _COMMIT_BATCH_ROWS == 0:
+            commit_managed_transaction(conn, manages_outer)
 
     commit_managed_transaction(conn, manages_outer)
     return relational_errors
@@ -673,11 +680,12 @@ def _load_va_file(
 ) -> LoadResult:
     """Full two-phase load for a VA CSV file."""
     validated_row_limit = validated_limit(limit)
-    data_source_id = ensure_va_data_source(conn, data_type=data_type)
+    # Capture ownership before ensure_va_data_source runs SQL and implicitly opens a
+    # transaction; committing the data-source row here leaves the connection IDLE so each
+    # phase owns and periodically commits its own batch.
     manages_outer = conn.info.transaction_status == TransactionStatus.IDLE
-
-    if manages_outer:
-        ensure_transaction_open(conn)
+    data_source_id = ensure_va_data_source(conn, data_type=data_type)
+    commit_managed_transaction(conn, manages_outer)
 
     parser_fn = parse_contributions if data_type == "contributions" else parse_expenditures
 
@@ -706,8 +714,7 @@ def _load_va_file(
             conn.rollback()
         raise
 
-    if manages_outer:
-        conn.commit()
+    commit_managed_transaction(conn, manages_outer)
 
     return load_result
 

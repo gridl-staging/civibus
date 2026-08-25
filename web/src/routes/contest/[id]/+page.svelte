@@ -36,7 +36,10 @@
   } as JsonLdObject;
   $: contestMap = {
     pageLevel: "state" as const,
-    layerVisibility: buildMapLayerVisibilityDefaults("state"),
+    layerVisibility: buildMapLayerVisibilityDefaults(
+      "state",
+      data.contest.electoral_division_type
+    ),
     geometryByLevel: data.geometryByLevel ?? {},
     stateCode: data.contest.electoral_division_state?.toUpperCase() ?? null
   };

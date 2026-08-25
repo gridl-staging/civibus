@@ -53,9 +53,9 @@ CREATE TABLE core.refresh_run (
     domain           TEXT NOT NULL,
     jurisdiction     TEXT NOT NULL,
     data_source_names TEXT[] NOT NULL DEFAULT '{}',
-    pull_status      TEXT NOT NULL CHECK (pull_status IN ('crashed', 'empty', 'degraded', 'failed', 'success')),
+    pull_status      TEXT NOT NULL CHECK (pull_status IN ('crashed', 'empty', 'degraded', 'failed', 'success', 'running')),
     started_at       TIMESTAMPTZ NOT NULL,
-    completed_at     TIMESTAMPTZ NOT NULL,
+    completed_at     TIMESTAMPTZ,
     inserted_count   INTEGER NOT NULL DEFAULT 0,
     skipped_count    INTEGER NOT NULL DEFAULT 0,
     quarantined_count INTEGER NOT NULL DEFAULT 0,
@@ -64,9 +64,19 @@ CREATE TABLE core.refresh_run (
     metadata_updates INTEGER NOT NULL DEFAULT 0,
     message          TEXT NOT NULL,
     error            TEXT,
-    created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    -- An in-flight attempt is committed as 'running' with no completed_at and
+    -- updated in place when it finishes, so 'running' is exactly the state
+    -- with no completion timestamp. Mirrored by
+    -- migrations/2026_08_23_refresh_run_running_status.sql.
+    CONSTRAINT refresh_run_running_completed_at_check
+        CHECK ((pull_status = 'running') = (completed_at IS NULL))
 );
 
+-- Plain btrees, not partial indexes on WHERE completed_at IS NOT NULL: btrees
+-- index NULLs, but in-flight and interrupted attempts are expected to remain
+-- sparse relative to terminal history, so a second index shape would add
+-- maintenance complexity without a demonstrated query or size benefit.
 CREATE INDEX idx_refresh_run_job_key_completed_at ON core.refresh_run (job_key, completed_at DESC);
 CREATE INDEX idx_refresh_run_completed_at ON core.refresh_run (completed_at DESC);
 CREATE INDEX idx_refresh_run_pull_status ON core.refresh_run (pull_status);

@@ -169,6 +169,16 @@ def test_repo_sources_registry_registers_federal_chartered_sources(tmp_path: Pat
     assert {source_result.status for source_result in result.source_results} == {"pass"}
 
 
+def test_public_sources_registry_loader_matches_private_loader_and_default_path() -> None:
+    repo_root = Path(__file__).resolve().parents[2]
+
+    public_registry = keel_gate_l3.load_sources_registry(keel_gate_l3.DEFAULT_SOURCES_REGISTRY_PATH)
+    private_registry = keel_gate_l3._load_registry(repo_root / "sources.yaml")
+
+    assert keel_gate_l3.DEFAULT_SOURCES_REGISTRY_PATH == repo_root / "sources.yaml"
+    assert public_registry == private_registry
+
+
 def test_repo_sources_registry_passes_current_nc_roster_state_mix_contract(tmp_path: Path) -> None:
     repo_root = Path(__file__).resolve().parents[2]
     registry = yaml.safe_load((repo_root / "sources.yaml").read_text(encoding="utf-8"))

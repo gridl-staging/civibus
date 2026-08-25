@@ -102,6 +102,55 @@ laws:
     corporate_direct: "prohibited"
     union_direct: 500
     party_to_candidate: null
+  contribution_limit_rules:
+    - donor_type: individual
+      recipient_type: candidate_committee
+      office_level: citywide
+      limit_status: numeric
+      limit_amount: 500
+      limit_basis: per_election
+      effective_date: "2009-11-20"
+      source_citation: "S.F. C&GCC § 1.114(a); SF Ethics contributor guide; S.F. Ethics 2025 streamlining preview notes the $500 cap was set in 2009 and has not been adjusted"
+    - donor_type: individual
+      recipient_type: candidate_committee
+      office_level: board_of_supervisors
+      limit_status: numeric
+      limit_amount: 500
+      limit_basis: per_election
+      effective_date: "2009-11-20"
+      source_citation: "S.F. C&GCC § 1.114(a); SF Ethics contributor guide; S.F. Ethics 2025 streamlining preview notes the $500 cap was set in 2009 and has not been adjusted"
+    - donor_type: pac
+      recipient_type: candidate_committee
+      office_level: citywide
+      limit_status: numeric
+      limit_amount: 500
+      limit_basis: per_election
+      effective_date: "2009-11-20"
+      source_citation: "S.F. C&GCC § 1.114(a); SF Ethics contributor guide; S.F. Ethics 2025 streamlining preview notes the $500 cap was set in 2009 and has not been adjusted"
+    - donor_type: pac
+      recipient_type: candidate_committee
+      office_level: board_of_supervisors
+      limit_status: numeric
+      limit_amount: 500
+      limit_basis: per_election
+      effective_date: "2009-11-20"
+      source_citation: "S.F. C&GCC § 1.114(a); SF Ethics contributor guide; S.F. Ethics 2025 streamlining preview notes the $500 cap was set in 2009 and has not been adjusted"
+    - donor_type: union
+      recipient_type: candidate_committee
+      office_level: citywide
+      limit_status: numeric
+      limit_amount: 500
+      limit_basis: per_election
+      effective_date: "2009-11-20"
+      source_citation: "S.F. C&GCC § 1.114(a); SF Ethics contributor guide; S.F. Ethics 2025 streamlining preview notes the $500 cap was set in 2009 and has not been adjusted"
+    - donor_type: union
+      recipient_type: candidate_committee
+      office_level: board_of_supervisors
+      limit_status: numeric
+      limit_amount: 500
+      limit_basis: per_election
+      effective_date: "2009-11-20"
+      source_citation: "S.F. C&GCC § 1.114(a); SF Ethics contributor guide; S.F. Ethics 2025 streamlining preview notes the $500 cap was set in 2009 and has not been adjusted"
   itemization_threshold: 100
   reporting:
     periods:

@@ -17,11 +17,22 @@ import {
   SMOKE_FILINGS_PAGE_2_LABEL,
   SMOKE_FILINGS_HIGH_TOTAL_LABEL,
   SMOKE_CANDIDATE_ID,
+  SMOKE_CONTEST_ID,
+  SMOKE_CONTEST_NAME,
+  SMOKE_ELECTION_DATE,
   SMOKE_EMPTY_CANDIDATE_ID,
   SMOKE_LOADED_ZERO_CANDIDATE_ID,
   SMOKE_BACKEND_FAILURE_CANDIDATE_ID
 } from "../../../tests/smoke/fixtures";
-import { smokeFixtures } from "../../../tests/smoke/fixture-data";
+import {
+  selectStandardCandidateDetailFixtures,
+  smokeFixtures,
+  STANDARD_CANDIDATE_DETAIL_FIXTURES
+} from "../../../tests/smoke/fixture-data";
+import {
+  compareFixtureByCandidateSlug,
+  compareFixtureById
+} from "../../../tests/smoke/compare-fixtures";
 import {
   COMMITTEE_FILINGS_PAGE_SIZE,
   COMMITTEE_SUMMARY_SOURCE_LABELS,
@@ -306,6 +317,194 @@ function renderedFilingRowLabel(row: { filingName: string; filingFecId: string }
 }
 
 describe("candidate money smoke fixture readiness", () => {
+  it("serves contract-complete candidate details for every compare fixture", () => {
+    for (const fixture of compareFixtureById.values()) {
+      const hasOfficialTotal = fixture.candidateSummary !== null;
+
+      expect(fixture.candidate).toMatchObject({
+        identity_is_safe: true,
+        has_official_total: hasOfficialTotal,
+        candidacies: []
+      });
+      expect(fixture.candidateList.items).toEqual([
+        expect.objectContaining({
+          identity_is_safe: true,
+          has_official_total: hasOfficialTotal
+        })
+      ]);
+    }
+  });
+
+  it.each(STANDARD_CANDIDATE_DETAIL_FIXTURES)(
+    "keeps candidate office and FEC id prefix coherent for standard fixture %#",
+    (fixture) => {
+      expect(fixture.detail.fec_candidate_id[0]).toBe(fixture.detail.office);
+    }
+  );
+
+  it("gives every registered compare candidate slug a one-to-one detail identity", () => {
+    // The backend answers /v1/candidates/by-slug/<slug> with the compare
+    // fixture's candidate LIST item, and the candidate page then re-fetches the
+    // detail by that item's id. getCompareCandidateResponse short-circuits on
+    // isStandardCandidateFixtureId, so a compare fixture that reuses a standard
+    // candidate id serves a different person's detail under its own slug.
+    const standardCandidateIds = new Set(
+      STANDARD_CANDIDATE_DETAIL_FIXTURES.map((standardFixture) => standardFixture.id)
+    );
+
+    expect(compareFixtureByCandidateSlug.size).toBeGreaterThan(0);
+    for (const [slug, fixture] of compareFixtureByCandidateSlug) {
+      expect(standardCandidateIds.has(fixture.candidate.id)).toBe(false);
+      expect(fixture.candidate.slug).toBe(slug);
+      expect(fixture.candidateList.items).toEqual([
+        expect.objectContaining({
+          id: fixture.candidate.id,
+          name: fixture.candidate.name,
+          slug
+        })
+      ]);
+    }
+  });
+
+  it("keeps the populated House candidate, contest, and office semantically coherent", () => {
+    const candidate = smokeFixtures.candidate.detail;
+    const candidacy = candidate.candidacies[0];
+    const contestMoneyRow = smokeFixtures.contest.candidateMoney.rows.find(
+      (row) => row.candidate_id === candidate.id
+    );
+
+    expect(candidate).toMatchObject({ office: "H", state: "NC", district: "01" });
+    expect(candidacy).toEqual({
+      contest_id: smokeFixtures.contest.id,
+      contest_name: "North Carolina House District 1 General",
+      election_date: SMOKE_ELECTION_DATE
+    });
+    expect(smokeFixtures.contest.detail).toMatchObject({
+      name: candidacy.contest_name,
+      office_id: smokeFixtures.office.id
+    });
+    expect(smokeFixtures.office.detail).toMatchObject({
+      name: "U.S. Representative for North Carolina's 1st congressional district",
+      title: "Representative",
+      state: "NC"
+    });
+    expect(contestMoneyRow?.fec_candidate_id).toBe(candidate.fec_candidate_id);
+  });
+
+  it("classifies the House NC-01 contest as federal across every response surface", () => {
+    const canonicalOfficeLevel = smokeFixtures.office.detail.office_level;
+    expect(canonicalOfficeLevel).toBe("federal");
+
+    const electionIndexRows = [
+      smokeFixtures.upcomingElectionTimeline[0].contests[0],
+      smokeFixtures.electionDateAggregate.contests[0]
+    ];
+    for (const row of electionIndexRows) {
+      expect(row.office_id).toBe(smokeFixtures.office.id);
+      expect(row.office_level).toBe(canonicalOfficeLevel);
+      // House district seat context: NC-01 congressional district, not a bare state row.
+      expect(row.electoral_division_type).toBe("congressional_district");
+      expect(row.electoral_division_state).toBe("NC");
+      expect(row.district_number).toBe("01");
+    }
+
+    const personCandidacy = smokeFixtures.personNoPortrait.detail.candidacies[0];
+    expect(personCandidacy.office_id).toBe(smokeFixtures.office.id);
+    expect(personCandidacy.office_level).toBe(canonicalOfficeLevel);
+  });
+
+  it("selects the NC-01 congressional district on every House office division surface", () => {
+    const office = smokeFixtures.office.detail;
+    // The geometry the fixture backend actually serves for
+    // /v1/civics/geometry?level=congressional_district&state=NC. The office
+    // page highlights by selected_electoral_division_id, so the office's
+    // division metadata has to name a feature in this collection or the map
+    // silently renders no district context.
+    const districtFeatures =
+      smokeFixtures.ncCountyDrilldown.geometryByLevel.congressional_district.features;
+    const districtFeature = districtFeatures.find(
+      (feature) => feature.properties.district_number === smokeFixtures.candidate.detail.district
+    );
+    expect(districtFeature).toBeDefined();
+    expect(districtFeature?.properties.state).toBe(office.state);
+
+    const expectedDivision = {
+      electoral_division_id: districtFeature?.properties.id,
+      electoral_division_type: districtFeature?.properties.division_type,
+      electoral_division_state: office.state
+    };
+
+    expect(office.current_holder_card).toMatchObject(expectedDivision);
+    expect(office.officeholding_timeline[0]).toMatchObject(expectedDivision);
+    expect(office.recent_contests[0]).toMatchObject(expectedDivision);
+    expect(smokeFixtures.contest.detail).toMatchObject(expectedDivision);
+    expect({
+      electoral_division_id: office.selected_electoral_division_id,
+      electoral_division_type: office.selected_electoral_division_type,
+      electoral_division_state: office.selected_electoral_division_state
+    }).toEqual(expectedDivision);
+  });
+
+  it("derives the standard registry when a candidate detail fixture is added", () => {
+    const additionalCandidateFixture = {
+      id: "55555555-5555-4555-8555-555555555556",
+      detail: {
+        fec_candidate_id: "H6NC01002",
+        office: "H"
+      }
+    } as const;
+
+    const selectedFixtures = selectStandardCandidateDetailFixtures({
+      ...smokeFixtures,
+      additionalCandidateFixture
+    });
+
+    expect(selectedFixtures).toEqual([
+      ...STANDARD_CANDIDATE_DETAIL_FIXTURES,
+      additionalCandidateFixture
+    ]);
+  });
+
+  it("excludes detail-bearing fixtures that are not candidate details", () => {
+    // The registry is derived by shape, and every selected fixture is served at
+    // /v1/candidates/{id}. A discriminator loose enough to admit an office,
+    // contest, or committee fixture would silently reroute those ids.
+    const nonCandidateDetailFixture = {
+      id: "66666666-6666-4666-8666-666666666666",
+      detail: { office_level: "federal", title: "Representative" }
+    } as const;
+
+    const selectedFixtures = selectStandardCandidateDetailFixtures({
+      ...smokeFixtures,
+      nonCandidateDetailFixture
+    });
+
+    expect(selectedFixtures).toEqual([...STANDARD_CANDIDATE_DETAIL_FIXTURES]);
+    for (const excluded of [smokeFixtures.office, smokeFixtures.contest, smokeFixtures.committee]) {
+      expect(STANDARD_CANDIDATE_DETAIL_FIXTURES).not.toContain(excluded);
+    }
+  });
+
+  it.each(STANDARD_CANDIDATE_DETAIL_FIXTURES)(
+    "provides contract-complete candidacies for standard candidate fixture %#",
+    (fixture) => {
+      expect(Object.hasOwn(fixture.detail, "candidacies")).toBe(true);
+      expect(Array.isArray(fixture.detail.candidacies)).toBe(true);
+
+      const expectedCandidacies =
+        fixture === smokeFixtures.candidate
+          ? [
+              {
+                contest_id: SMOKE_CONTEST_ID,
+                contest_name: SMOKE_CONTEST_NAME,
+                election_date: SMOKE_ELECTION_DATE
+              }
+            ]
+          : [];
+      expect(fixture.detail.candidacies).toEqual(expectedCandidacies);
+    }
+  );
+
   const candidateFixtures = [
     {
       label: "populated",

@@ -121,7 +121,8 @@ def _validate_header(
     expected_columns: tuple[str, ...],
     row_label: str,
 ) -> None:
-    if tuple(fieldnames or ()) != expected_columns:
+    actual_columns = iter(fieldnames or ())
+    if not all(expected_column in actual_columns for expected_column in expected_columns):
         raise ValueError(f"Unexpected SF {row_label} CSV header")
 
 

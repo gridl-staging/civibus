@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import json
 import os
+import re
 import uuid
 from collections.abc import Iterator
 from pathlib import Path
+from typing import get_args
 
 import psycopg
 import pytest
@@ -18,6 +21,16 @@ from core.schema_sql_runner import (
     run_psql_file,
 )
 from domains.campaign_finance.ingest.bulk_stage4_loader import STAGE4_RESUME_IDENTITY_COLUMNS
+from domains.campaign_finance.jurisdictions.config_schema import (
+    ContributionDonorTypeLiteral,
+    ContributionLimitBasisLiteral,
+    ContributionRecipientTypeLiteral,
+    ElectionTypeLiteral,
+    KnownNonNumericContributionLimitRule,
+    LegalRuleOfficeLevelLiteral,
+    NumericContributionLimitRule,
+    UnknownContributionLimitRule,
+)
 
 
 pytestmark = pytest.mark.integration
@@ -35,6 +48,7 @@ CF_TABLES = [
     "stage4_resume_checkpoint",
     "candidate",
     "election",
+    "contribution_limit_rules",
     "filing",
     "transaction",
     "candidate_committee_link",
@@ -996,6 +1010,527 @@ def _check_constraint_exists(database: str, table_name: str, constraint_name: st
         )::text;
         """,
     )
+
+
+def _check_constraint_tokens(database: str, constraint_name: str) -> set[str]:
+    """Quoted token set from a closed-vocabulary CHECK, as materialized in the DB.
+
+    Postgres rewrites ``col IN (...)`` to ``col = ANY (ARRAY['a'::text, ...])`` in the
+    stored constraint definition, so the tokens are recovered as the ``'...'::text``
+    literals. This reads the real schema, not the SQL file, so it proves what the loaded
+    database actually enforces.
+    """
+    definition = _run_psql_command(
+        database,
+        f"""
+        SELECT pg_get_constraintdef(c.oid)
+        FROM pg_constraint c
+        WHERE c.conrelid = 'cf.contribution_limit_rules'::regclass
+          AND c.conname = '{constraint_name}';
+        """,
+    )[0]
+    return set(re.findall(r"'([^']*)'::text", definition))
+
+
+# ---------------------------------------------------------------------------
+# Structured contribution-limit rule storage contract tests
+# ---------------------------------------------------------------------------
+
+
+_LIMIT_STATUS_TOKENS = tuple(
+    token
+    for model in (
+        NumericContributionLimitRule,
+        KnownNonNumericContributionLimitRule,
+        UnknownContributionLimitRule,
+    )
+    for token in get_args(model.model_fields["limit_status"].annotation)
+)
+_CONTRIBUTION_LIMIT_VOCABULARIES = (
+    ("donor_type", get_args(ContributionDonorTypeLiteral), 11),
+    ("recipient_type", get_args(ContributionRecipientTypeLiteral), 6),
+    ("office_level", get_args(LegalRuleOfficeLevelLiteral), 35),
+    ("election_type", get_args(ElectionTypeLiteral), 5),
+    ("limit_basis", get_args(ContributionLimitBasisLiteral), 3),
+    ("limit_status", _LIMIT_STATUS_TOKENS, 5),
+)
+_CONTRIBUTION_LIMIT_CHECKS = frozenset(
+    {
+        "ck_contribution_limit_rules_basis",
+        "ck_contribution_limit_rules_citation_nonblank",
+        "ck_contribution_limit_rules_date_order",
+        "ck_contribution_limit_rules_donor_type",
+        "ck_contribution_limit_rules_election_type",
+        "ck_contribution_limit_rules_metadata_shape",
+        "ck_contribution_limit_rules_non_numeric_fields",
+        "ck_contribution_limit_rules_note_nonblank",
+        "ck_contribution_limit_rules_numeric_fields",
+        "ck_contribution_limit_rules_office_level",
+        "ck_contribution_limit_rules_recipient_type",
+        "ck_contribution_limit_rules_status",
+        "ck_contribution_limit_rules_unknown_fields",
+    }
+)
+_CONTRIBUTION_LIMIT_NON_OVERLAP_CONSTRAINT = "contribution_limit_rules_non_overlapping_periods"
+_CONTRIBUTION_LIMIT_VOCABULARY_CONSTRAINTS = {
+    "donor_type": "ck_contribution_limit_rules_donor_type",
+    "recipient_type": "ck_contribution_limit_rules_recipient_type",
+    "office_level": "ck_contribution_limit_rules_office_level",
+    "election_type": "ck_contribution_limit_rules_election_type",
+    "limit_basis": "ck_contribution_limit_rules_basis",
+    "limit_status": "ck_contribution_limit_rules_status",
+}
+_PYTHON_WHITESPACE = tuple(chr(code_point) for code_point in range(0x110000) if chr(code_point).isspace())
+
+
+def _sql_literal(value: object) -> str:
+    if value is None:
+        return "NULL"
+    if isinstance(value, bool):
+        return "TRUE" if value else "FALSE"
+    if isinstance(value, int):
+        return str(value)
+    return "'" + str(value).replace("'", "''") + "'"
+
+
+def _insert_contribution_limit_rule(
+    jurisdiction_fips: str,
+    *,
+    limit_status: str = "numeric",
+    **overrides: object,
+) -> None:
+    values: dict[str, object] = {
+        "jurisdiction_fips": jurisdiction_fips,
+        "limit_status": limit_status,
+        "source_citation": "Test authority section 1",
+    }
+    if limit_status == "numeric":
+        values.update(limit_amount=1000, limit_basis="per_election", effective_date="2025-01-01")
+    elif limit_status in {"prohibited", "unlimited", "no_statutory_limit"}:
+        values["effective_date"] = "2025-01-01"
+    elif limit_status == "unknown":
+        values.update(research_observed_date="2026-08-22", note="Research remains open")
+    values.update(overrides)
+
+    columns = ", ".join(values)
+    literals = ", ".join(_sql_literal(value) for value in values.values())
+    _run_psql_command(
+        TEST_DATABASE,
+        f"INSERT INTO cf.contribution_limit_rules ({columns}) VALUES ({literals});",
+    )
+
+
+def _assert_contribution_limit_rule_rejected(
+    constraint_name: str,
+    *,
+    limit_status: str = "numeric",
+    **overrides: object,
+) -> None:
+    with pytest.raises(RuntimeError, match=constraint_name):
+        _insert_contribution_limit_rule(
+            "rejected-rule",
+            limit_status=limit_status,
+            **overrides,
+        )
+
+
+@pytest.fixture(autouse=True)
+def _empty_contribution_limit_rules_after_inserting_tests(request):
+    """Return cf.contribution_limit_rules to empty after any test that populates it.
+
+    The session-scoped schema fixture loads the DDL once, and the insert helpers commit
+    through psql, so rows survive across tests. Without this teardown, the zero-seed guard
+    would pass only by being declared before the inserting tests; cleaning up makes it
+    order-independent so a real shipped seed row is what fails it, not test residue.
+    """
+
+    yield
+    if "contribution_limit_rules" in request.node.name:
+        _run_psql_command(
+            TEST_DATABASE,
+            "DELETE FROM cf.contribution_limit_rules;",
+            expect_tuples=False,
+        )
+
+
+def test_contribution_limit_rules_ordered_column_contract():
+    expected_columns = [
+        "id|uuid|NO|uuid_generate_v4()",
+        "jurisdiction_fips|text|NO|",
+        "donor_type|text|YES|",
+        "recipient_type|text|YES|",
+        "office_level|text|YES|",
+        "election_type|text|YES|",
+        "limit_status|text|NO|",
+        "limit_amount|integer|YES|",
+        "limit_basis|text|YES|",
+        "source_citation|text|NO|",
+        "effective_date|date|YES|",
+        "sunset_date|date|YES|",
+        "research_observed_date|date|YES|",
+        "local_override_allowed|boolean|NO|false",
+        "note|text|YES|",
+        "metadata|jsonb|NO|'[]'::jsonb",
+        "created_at|timestamp with time zone|NO|now()",
+        "updated_at|timestamp with time zone|NO|now()",
+    ]
+    actual_columns = _run_psql_command(
+        TEST_DATABASE,
+        """
+        SELECT column_name || '|' || data_type || '|' || is_nullable
+               || '|' || COALESCE(column_default, '')
+        FROM information_schema.columns
+        WHERE table_schema = 'cf'
+          AND table_name = 'contribution_limit_rules'
+        ORDER BY ordinal_position;
+        """,
+    )
+    assert actual_columns == expected_columns
+
+
+def test_contribution_limit_rules_named_check_contract():
+    actual_checks = set(
+        _run_psql_command(
+            TEST_DATABASE,
+            """
+            SELECT c.conname
+            FROM pg_constraint c
+            WHERE c.conrelid = 'cf.contribution_limit_rules'::regclass
+              AND c.contype = 'c'
+            ORDER BY c.conname;
+            """,
+        )
+    )
+    assert actual_checks == _CONTRIBUTION_LIMIT_CHECKS
+
+
+def test_contribution_limit_rules_has_no_seed_rows():
+    assert _run_psql_command(TEST_DATABASE, "SELECT COUNT(*) FROM cf.contribution_limit_rules;") == ["0"]
+
+
+@pytest.mark.parametrize(
+    ("column_name", "constraint_name"),
+    [
+        ("limit_status", "ck_contribution_limit_rules_status"),
+        ("limit_basis", "ck_contribution_limit_rules_basis"),
+        ("donor_type", "ck_contribution_limit_rules_donor_type"),
+        ("recipient_type", "ck_contribution_limit_rules_recipient_type"),
+        ("office_level", "ck_contribution_limit_rules_office_level"),
+        ("election_type", "ck_contribution_limit_rules_election_type"),
+    ],
+)
+def test_contribution_limit_rules_reject_out_of_vocabulary_values(
+    column_name: str,
+    constraint_name: str,
+):
+    if column_name == "limit_status":
+        _assert_contribution_limit_rule_rejected(constraint_name, limit_status="outside_contract")
+        return
+    _assert_contribution_limit_rule_rejected(constraint_name, **{column_name: "outside_contract"})
+
+
+@pytest.mark.parametrize(
+    ("column_name", "tokens", "expected_count"),
+    _CONTRIBUTION_LIMIT_VOCABULARIES,
+)
+def test_contribution_limit_rules_accept_config_schema_vocabulary(
+    column_name: str,
+    tokens: tuple[str, ...],
+    expected_count: int,
+):
+    assert len(tokens) == expected_count
+    for position, token in enumerate(tokens):
+        jurisdiction_fips = f"vocabulary-{column_name}-{position}"
+        if column_name == "limit_status":
+            _insert_contribution_limit_rule(jurisdiction_fips, limit_status=token)
+        else:
+            _insert_contribution_limit_rule(jurisdiction_fips, **{column_name: token})
+
+
+@pytest.mark.parametrize(
+    ("limit_status", "overrides", "constraint_name"),
+    [
+        ("numeric", {"limit_amount": None}, "ck_contribution_limit_rules_numeric_fields"),
+        ("numeric", {"limit_basis": None}, "ck_contribution_limit_rules_numeric_fields"),
+        ("numeric", {"effective_date": None}, "ck_contribution_limit_rules_numeric_fields"),
+        (
+            "numeric",
+            {"research_observed_date": "2026-08-22"},
+            "ck_contribution_limit_rules_numeric_fields",
+        ),
+        ("prohibited", {"limit_amount": 1}, "ck_contribution_limit_rules_non_numeric_fields"),
+        ("prohibited", {"limit_basis": "per_cycle"}, "ck_contribution_limit_rules_non_numeric_fields"),
+        ("unlimited", {"limit_amount": 1}, "ck_contribution_limit_rules_non_numeric_fields"),
+        ("unlimited", {"limit_basis": "per_cycle"}, "ck_contribution_limit_rules_non_numeric_fields"),
+        ("no_statutory_limit", {"limit_amount": 1}, "ck_contribution_limit_rules_non_numeric_fields"),
+        (
+            "no_statutory_limit",
+            {"limit_basis": "per_cycle"},
+            "ck_contribution_limit_rules_non_numeric_fields",
+        ),
+        ("prohibited", {"effective_date": None}, "ck_contribution_limit_rules_non_numeric_fields"),
+        ("unlimited", {"effective_date": None}, "ck_contribution_limit_rules_non_numeric_fields"),
+        (
+            "no_statutory_limit",
+            {"effective_date": None},
+            "ck_contribution_limit_rules_non_numeric_fields",
+        ),
+        (
+            "prohibited",
+            {"research_observed_date": "2026-08-22"},
+            "ck_contribution_limit_rules_non_numeric_fields",
+        ),
+        (
+            "unlimited",
+            {"research_observed_date": "2026-08-22"},
+            "ck_contribution_limit_rules_non_numeric_fields",
+        ),
+        (
+            "no_statutory_limit",
+            {"research_observed_date": "2026-08-22"},
+            "ck_contribution_limit_rules_non_numeric_fields",
+        ),
+        ("unknown", {"research_observed_date": None}, "ck_contribution_limit_rules_unknown_fields"),
+        ("unknown", {"note": None}, "ck_contribution_limit_rules_unknown_fields"),
+        ("unknown", {"effective_date": "2025-01-01"}, "ck_contribution_limit_rules_unknown_fields"),
+        ("unknown", {"sunset_date": "2025-12-31"}, "ck_contribution_limit_rules_unknown_fields"),
+        ("unknown", {"limit_amount": 1}, "ck_contribution_limit_rules_unknown_fields"),
+        ("unknown", {"limit_basis": "per_cycle"}, "ck_contribution_limit_rules_unknown_fields"),
+    ],
+)
+def test_contribution_limit_rules_enforce_status_branches(
+    limit_status: str,
+    overrides: dict[str, object],
+    constraint_name: str,
+):
+    _assert_contribution_limit_rule_rejected(
+        constraint_name,
+        limit_status=limit_status,
+        **overrides,
+    )
+
+
+def test_contribution_limit_rules_reject_blank_citation_and_note():
+    _assert_contribution_limit_rule_rejected(
+        "ck_contribution_limit_rules_citation_nonblank",
+        source_citation=" \t ",
+    )
+    _assert_contribution_limit_rule_rejected(
+        "ck_contribution_limit_rules_note_nonblank",
+        note=" \n ",
+    )
+
+
+def test_contribution_limit_rules_known_status_accepts_omitted_and_null_note():
+    _insert_contribution_limit_rule("known-note-omitted")
+    _insert_contribution_limit_rule("known-note-null", note=None)
+
+
+def test_contribution_limit_rules_reject_reversed_effective_dates():
+    _assert_contribution_limit_rule_rejected(
+        "ck_contribution_limit_rules_date_order",
+        effective_date="2025-01-02",
+        sunset_date="2025-01-01",
+    )
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        "{}",
+        "[1]",
+        '[{"source_citation": "Authority"}]',
+        '[{"description": "Exception"}]',
+        '[{"description": "   ", "source_citation": "Authority"}]',
+        '[{"description": "Exception", "source_citation": "\\n"}]',
+        '[{"description": 1, "source_citation": "Authority"}]',
+        '[{"description": "Exception", "source_citation": false}]',
+        '[{"description": "Exception", "source_citation": "Authority", "extra": true}]',
+        # A nested array item is not an object. SQL/JSON lax mode auto-unwraps arrays,
+        # so this only fails once the shape scan runs the item under strict mode, which
+        # mirrors list[ContributionRuleMetadataItem] rejecting a nested list.
+        '[[{"description": "d", "source_citation": "s"}]]',
+    ],
+)
+def test_contribution_limit_rules_reject_invalid_metadata_shape(metadata: str):
+    _assert_contribution_limit_rule_rejected(
+        "ck_contribution_limit_rules_metadata_shape",
+        metadata=metadata,
+    )
+
+
+def test_contribution_limit_rules_default_metadata_is_empty_array():
+    _insert_contribution_limit_rule("metadata-default")
+    assert _run_psql_command(
+        TEST_DATABASE,
+        """
+        SELECT metadata::text
+        FROM cf.contribution_limit_rules
+        WHERE jurisdiction_fips = 'metadata-default';
+        """,
+    ) == ["[]"]
+
+
+def test_contribution_limit_rules_null_aware_identity():
+    _insert_contribution_limit_rule("identity-null-dimensions")
+    with pytest.raises(RuntimeError, match="uq_contribution_limit_rules_identity"):
+        _insert_contribution_limit_rule(
+            "identity-null-dimensions",
+            source_citation="Different citation does not change identity",
+        )
+
+    _insert_contribution_limit_rule("identity-null-dimensions", donor_type="individual")
+    assert _run_psql_command(
+        TEST_DATABASE,
+        """
+        SELECT COUNT(*)
+        FROM cf.contribution_limit_rules
+        WHERE jurisdiction_fips = 'identity-null-dimensions';
+        """,
+    ) == ["2"]
+
+    index_definition = _run_psql_command(
+        TEST_DATABASE,
+        """
+        SELECT indexdef
+        FROM pg_indexes
+        WHERE schemaname = 'cf'
+          AND indexname = 'uq_contribution_limit_rules_identity';
+        """,
+    )[0].lower()
+    for dimension in ("donor_type", "recipient_type", "office_level", "election_type"):
+        assert f"({dimension} is null)" in index_definition
+        assert f"coalesce({dimension}, ''::text)" in index_definition
+    for date_column in ("effective_date", "sunset_date"):
+        assert f"({date_column} is null)" in index_definition
+        assert f"coalesce({date_column}, '0001-01-01'::date)" in index_definition
+
+    with pytest.raises(RuntimeError, match="ck_contribution_limit_rules_donor_type"):
+        _insert_contribution_limit_rule("identity-null-dimensions", donor_type="")
+
+
+def test_contribution_limit_rules_identity_preserves_successive_effective_periods():
+    jurisdiction_fips = "identity-temporal-history"
+    _insert_contribution_limit_rule(
+        jurisdiction_fips,
+        effective_date="2023-01-01",
+        sunset_date="2025-01-01",
+    )
+    _insert_contribution_limit_rule(
+        jurisdiction_fips,
+        effective_date="2025-01-01",
+        sunset_date=None,
+    )
+
+    assert _run_psql_command(
+        TEST_DATABASE,
+        """
+        SELECT COUNT(*)
+        FROM cf.contribution_limit_rules
+        WHERE jurisdiction_fips = 'identity-temporal-history';
+        """,
+    ) == ["2"]
+
+    with pytest.raises(RuntimeError, match="uq_contribution_limit_rules_identity"):
+        _insert_contribution_limit_rule(
+            jurisdiction_fips,
+            limit_amount=2000,
+            source_citation="Different citation does not change period identity",
+            effective_date="2023-01-01",
+            sunset_date="2025-01-01",
+        )
+
+
+@pytest.mark.parametrize("whitespace_char", _PYTHON_WHITESPACE, ids=[f"U+{ord(c):04X}" for c in _PYTHON_WHITESPACE])
+def test_contribution_limit_rules_reject_unicode_blank_citation(whitespace_char: str):
+    # Every code point config_schema.NonBlankText (str.strip) treats as whitespace must
+    # also fail the SQL citation CHECK; a U+00A0-only citation passing `~ '\S'` was the gap.
+    _assert_contribution_limit_rule_rejected(
+        "ck_contribution_limit_rules_citation_nonblank",
+        source_citation=whitespace_char,
+    )
+
+
+def test_contribution_limit_rules_reject_unicode_blank_note_and_metadata():
+    non_breaking_space = " "
+    _assert_contribution_limit_rule_rejected(
+        "ck_contribution_limit_rules_note_nonblank",
+        note=non_breaking_space,
+    )
+    for field in ("description", "source_citation"):
+        item = {"description": "Exception", "source_citation": "Authority"}
+        item[field] = non_breaking_space
+        _assert_contribution_limit_rule_rejected(
+            "ck_contribution_limit_rules_metadata_shape",
+            metadata=json.dumps([item]),
+        )
+
+
+@pytest.mark.parametrize(("column_name", "tokens", "_expected_count"), _CONTRIBUTION_LIMIT_VOCABULARIES)
+def test_contribution_limit_rules_vocabulary_exactly_matches_config_schema(
+    column_name: str,
+    tokens: tuple[str, ...],
+    _expected_count: int,
+):
+    # Acceptance of every Python token plus rejection of one sentinel leaves a superset
+    # undetected: an SQL-only token (e.g. a legacy `comptroller` alias the spec bars) would
+    # pass. Assert set equality so any extra SQL token fails red.
+    constraint_name = _CONTRIBUTION_LIMIT_VOCABULARY_CONSTRAINTS[column_name]
+    assert _check_constraint_tokens(TEST_DATABASE, constraint_name) == set(tokens)
+
+
+def test_contribution_limit_rules_reject_overlapping_effective_periods():
+    assert _has_exclusion_constraint(
+        TEST_DATABASE,
+        "cf.contribution_limit_rules",
+        _CONTRIBUTION_LIMIT_NON_OVERLAP_CONSTRAINT,
+    ), "Missing non-overlap exclusion on contribution_limit_rules"
+
+    # Two open-ended (sunset NULL) rules for one tuple overlap unboundedly.
+    _insert_contribution_limit_rule("overlap-open", effective_date="2023-01-01", sunset_date=None)
+    with pytest.raises(RuntimeError, match=_CONTRIBUTION_LIMIT_NON_OVERLAP_CONSTRAINT):
+        _insert_contribution_limit_rule("overlap-open", effective_date="2024-01-01", sunset_date=None)
+
+    # Two bounded periods that overlap.
+    _insert_contribution_limit_rule("overlap-bounded", effective_date="2023-01-01", sunset_date="2025-12-31")
+    with pytest.raises(RuntimeError, match=_CONTRIBUTION_LIMIT_NON_OVERLAP_CONSTRAINT):
+        _insert_contribution_limit_rule("overlap-bounded", effective_date="2024-01-01", sunset_date="2026-12-31")
+
+    # An unknown row (NULL dates -> unbounded) cannot coexist with a known rule for the tuple.
+    _insert_contribution_limit_rule("overlap-unknown", effective_date="2023-01-01")
+    with pytest.raises(RuntimeError, match=_CONTRIBUTION_LIMIT_NON_OVERLAP_CONSTRAINT):
+        _insert_contribution_limit_rule("overlap-unknown", limit_status="unknown")
+
+
+@pytest.mark.parametrize(
+    ("dimension", "distinct_value"),
+    [
+        ("donor_type", "pac"),
+        ("recipient_type", "candidate_committee"),
+        ("office_level", "governor"),
+        ("election_type", "primary"),
+    ],
+)
+def test_contribution_limit_rules_overlap_key_covers_each_dimension(
+    dimension: str,
+    distinct_value: str,
+):
+    # Two rows sharing one period but differing in exactly one non-NULL dimension are
+    # distinct tuples, so the non-overlap EXCLUDE must admit both. If that dimension were
+    # dropped from the EXCLUDE key, the second insert would collide and raise instead —
+    # the all-NULL-dimension overlap probes above cannot catch a dropped key column.
+    fips = f"overlap-dim-{dimension}"
+    _insert_contribution_limit_rule(fips, effective_date="2023-01-01", sunset_date="2025-12-31")
+    _insert_contribution_limit_rule(
+        fips,
+        effective_date="2023-01-01",
+        sunset_date="2025-12-31",
+        **{dimension: distinct_value},
+    )
+    assert _run_psql_command(
+        TEST_DATABASE,
+        f"SELECT COUNT(*) FROM cf.contribution_limit_rules WHERE jurisdiction_fips = '{fips}';",
+    ) == ["2"]
 
 
 def test_nc_registry_required_columns():

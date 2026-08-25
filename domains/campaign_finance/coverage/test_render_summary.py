@@ -6,11 +6,18 @@ from pathlib import Path
 import pytest
 
 from domains.campaign_finance.coverage.registry import CoverageRegistry
+from domains.campaign_finance.coverage import render_summary
 from domains.campaign_finance.coverage.render_summary import (
+    _derive_implemented_city_jurisdiction_codes,
+    city_config_code_for_registry_code,
+    derive_implemented_jurisdiction_codes,
+    registry_code_for_city_config_code,
     main,
     render_publication_markdown,
     render_summary_markdown,
 )
+from core.refresh.runner import _SUPPORTED_CITY_CODES
+from domains.campaign_finance.jurisdictions.config_schema import discover_jurisdiction_configs, load_jurisdiction_config
 from domains.campaign_finance.coverage.seed_registry import main as seed_registry_main
 from domains.campaign_finance.coverage.seed_registry import merge_seed_registry
 from domains.campaign_finance.coverage.validate_registry import main as validate_registry_main
@@ -81,6 +88,16 @@ def _assert_publication_date(markdown: str, expected_date: str) -> None:
     assert f"Date: {expected_date}" in markdown
 
 
+def _configured_supported_city_codes() -> set[str]:
+    configured_city_codes: set[str] = set()
+    project_root = Path(__file__).resolve().parents[3]
+    for config_path in discover_jurisdiction_configs(project_root):
+        config = load_jurisdiction_config(config_path)
+        if config.jurisdiction.type == "municipality" and config.jurisdiction.code in _SUPPORTED_CITY_CODES:
+            configured_city_codes.add(config.jurisdiction.code)
+    return configured_city_codes
+
+
 def test_central_coverage_control_modules_do_not_ship_stub_or_todo_docstrings() -> None:
     project_root = Path(__file__).resolve().parents[3]
     paths = (
@@ -93,6 +110,66 @@ def test_central_coverage_control_modules_do_not_ship_stub_or_todo_docstrings() 
     for path in paths:
         source = path.read_text(encoding="utf-8")
         assert "Stub summary for" not in source, path.name
+
+
+def test_derive_implemented_jurisdiction_codes_includes_supported_city_configs() -> None:
+    configured_city_codes = _configured_supported_city_codes()
+    expected_registry_codes = {registry_code_for_city_config_code(city_code) for city_code in configured_city_codes}
+
+    implemented_codes = derive_implemented_jurisdiction_codes()
+
+    assert configured_city_codes == set(_SUPPORTED_CITY_CODES)
+    assert expected_registry_codes <= implemented_codes
+    assert "DC" not in implemented_codes
+
+
+def test_launch_support_matrix_uses_canonical_membership_for_supported_city_packages() -> None:
+    city_registry_codes = {
+        "CA_LOS_ANGELES",
+        "CA_SAN_FRANCISCO",
+        "NY_NEW_YORK",
+        "PA_PHILADELPHIA",
+    }
+    registry = _registry_from_rows(
+        *(
+            _row_payload(
+                jurisdiction_code=code,
+                name=code,
+                jurisdiction_type="municipality",
+                covers_sub_jurisdictions=False,
+                parent_jurisdiction_code=code.split("_", maxsplit=1)[0],
+                municipal_audit_decision="independent_target",
+            )
+            for code in sorted(city_registry_codes)
+        )
+    )
+
+    matrix = render_publication_markdown(
+        registry,
+        implemented_jurisdiction_codes=derive_implemented_jurisdiction_codes(),
+    ).matrix_markdown
+
+    assert "`render_summary.derive_implemented_jurisdiction_codes()`" in matrix
+    for code in city_registry_codes:
+        assert f"| {code} | municipality |" in matrix
+
+
+def test_city_config_registry_code_accessor_exposes_both_directions(monkeypatch: pytest.MonkeyPatch) -> None:
+    assert registry_code_for_city_config_code("SF") == "CA_SAN_FRANCISCO"
+    assert city_config_code_for_registry_code("CA_SAN_FRANCISCO") == "SF"
+    assert registry_code_for_city_config_code("PHL") == "PA_PHILADELPHIA"
+    assert city_config_code_for_registry_code("PA_PHILADELPHIA") == "PHL"
+
+    monkeypatch.setitem(render_summary._CITY_CONFIG_TO_REGISTRY_CODE, "TEST", "ZZ_TEST_CITY")
+    assert city_config_code_for_registry_code("ZZ_TEST_CITY") == "TEST"
+
+
+def test_city_membership_identity_bridge_refuses_supported_config_without_mapping() -> None:
+    with pytest.raises(ValueError, match="Missing coverage-registry identity bridge"):
+        _derive_implemented_city_jurisdiction_codes(
+            configured_city_codes={"TEST_CITY"},
+            supported_city_codes=("TEST_CITY",),
+        )
 
 
 def test_render_summary_markdown_matches_registry_rows() -> None:

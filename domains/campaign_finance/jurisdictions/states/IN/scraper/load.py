@@ -44,7 +44,12 @@ from domains.campaign_finance.jurisdictions.states.load_utils import (
 from domains.campaign_finance.types.models import Filing, Transaction
 
 from . import _load_data_source_for_data_type
-from .extract import extract_in_contribution, extract_in_expenditure
+from .extract import (
+    INContributionExtraction,
+    INExpenditureExtraction,
+    extract_in_contribution,
+    extract_in_expenditure,
+)
 from .load_helpers import (
     _in_amendment_indicator,
     _in_counterparty_occupation,
@@ -64,6 +69,7 @@ LOGGER = logging.getLogger(__name__)
 _IN_DOMAIN = "campaign_finance"
 _IN_JURISDICTION = "state/IN"
 _IN_SOURCE_FORMAT = "csv"
+_COMMIT_BATCH_ROWS = 1_000
 
 
 @dataclass(slots=True)
@@ -84,7 +90,7 @@ class _INDataTypeSpec:
     address_role: str
     person_roles: tuple[str, ...]
     organization_roles: tuple[str, ...]
-    extract_row: Callable[[dict[str, str | None]], dict[str, Any]]
+    extract_row: Callable[[dict[str, str | None]], INContributionExtraction | INExpenditureExtraction]
     parse_rows: Callable[[Path], Iterable[Mapping[str, str | None]]]
 
 
@@ -144,7 +150,7 @@ def ensure_in_data_source(conn: psycopg.Connection, data_type: str = "contributi
     return ensure_data_source(conn, data_source)
 
 
-def _in_extract_row(row: Mapping[str, str | None], data_type: str) -> dict[str, Any]:
+def _in_extract_row(row: Mapping[str, str | None], data_type: str) -> Mapping[str, Any]:
     spec = _in_data_type_spec(data_type)
     return spec.extract_row(dict(row))
 
@@ -155,7 +161,7 @@ def _build_in_source_record(
     *,
     data_type: str,
 ) -> SourceRecord:
-    raw_fields = dict(row)
+    raw_fields: dict[str, object] = dict(row)
     return SourceRecord(
         data_source_id=data_source_id,
         source_record_key=_in_source_record_key(row, data_type=data_type),
@@ -183,7 +189,7 @@ def _load_in_transaction_entities(
     conn: psycopg.Connection,
     *,
     source_record_id: UUID,
-    extracted: dict[str, Any],
+    extracted: Mapping[str, Any],
     spec: _INDataTypeSpec,
 ) -> None:
     address = extracted["address"]
@@ -306,7 +312,7 @@ def _load_in_rows(
             LOGGER.exception("Failed loading IN %s row: invalid amendment indicator", data_type.rstrip("s"))
             counts.errors += 1
             processed_count = counts.inserted + counts.skipped + counts.errors
-            if processed_count % 1_000 == 0:
+            if processed_count % _COMMIT_BATCH_ROWS == 0:
                 commit_managed_transaction(conn, manages_outer_transaction)
             continue
 
@@ -329,7 +335,7 @@ def _load_in_rows(
             counts.skipped += 1
 
         processed_count = counts.inserted + counts.skipped + counts.errors
-        if processed_count % 1_000 == 0:
+        if processed_count % _COMMIT_BATCH_ROWS == 0:
             commit_managed_transaction(conn, manages_outer_transaction)
 
     commit_managed_transaction(conn, manages_outer_transaction)
@@ -600,6 +606,7 @@ def _load_in_relational_transactions(
 ) -> None:
     filing_lookup: dict[str, _INFilingLookupEntry] = {}
     manages_outer_transaction = conn.info.transaction_status == psycopg.pq.TransactionStatus.IDLE
+    processed_count = 0
 
     for row in iter_rows_with_limit(rows, limit):
         if not isinstance(row, Mapping):
@@ -610,28 +617,33 @@ def _load_in_relational_transactions(
             data_source_id=data_source_id,
             source_record_key=_in_source_record_key(row, data_type=data_type),
         )
-        if source_record_id is None:
-            continue
+        if source_record_id is not None:
+            if manages_outer_transaction:
+                ensure_transaction_open(conn)
 
-        if manages_outer_transaction:
-            ensure_transaction_open(conn)
+            with conn.transaction():
+                filing_entry = _upsert_in_filing(
+                    conn,
+                    row,
+                    source_record_id=source_record_id,
+                    data_type=data_type,
+                    filing_lookup=filing_lookup,
+                )
+                _upsert_in_transaction_with_filing(
+                    conn,
+                    row,
+                    filing_id=filing_entry.filing_id,
+                    committee_id=filing_entry.committee_id,
+                    source_record_id=source_record_id,
+                    data_type=data_type,
+                )
 
-        with conn.transaction():
-            filing_entry = _upsert_in_filing(
-                conn,
-                row,
-                source_record_id=source_record_id,
-                data_type=data_type,
-                filing_lookup=filing_lookup,
-            )
-            _upsert_in_transaction_with_filing(
-                conn,
-                row,
-                filing_id=filing_entry.filing_id,
-                committee_id=filing_entry.committee_id,
-                source_record_id=source_record_id,
-                data_type=data_type,
-            )
+        # Every iterated row advances the boundary, including rows with no source record:
+        # the lookup above opens a read transaction either way, so counting only linked
+        # rows would let a run of missing rows hold one open.
+        processed_count += 1
+        if processed_count % _COMMIT_BATCH_ROWS == 0:
+            commit_managed_transaction(conn, manages_outer_transaction)
 
     commit_managed_transaction(conn, manages_outer_transaction)
 
@@ -644,11 +656,12 @@ def _load_in_with_filings(
     limit: int | None = None,
 ) -> LoadResult:
     validated_row_limit = validated_limit(limit)
-    data_source_id = ensure_in_data_source(conn, data_type=data_type)
+    # Capture ownership before ensure_in_data_source runs SQL and implicitly opens a
+    # transaction; committing the data-source row here leaves the connection IDLE so each
+    # inner pass owns and periodically commits its own batch.
     manages_outer_transaction = conn.info.transaction_status == psycopg.pq.TransactionStatus.IDLE
-
-    if manages_outer_transaction:
-        ensure_transaction_open(conn)
+    data_source_id = ensure_in_data_source(conn, data_type=data_type)
+    commit_managed_transaction(conn, manages_outer_transaction)
 
     try:
         load_result = _load_in_file(
@@ -670,8 +683,7 @@ def _load_in_with_filings(
             conn.rollback()
         raise
 
-    if manages_outer_transaction:
-        conn.commit()
+    commit_managed_transaction(conn, manages_outer_transaction)
 
     return load_result
 

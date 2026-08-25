@@ -163,6 +163,97 @@ laws:
     corporate_direct: "prohibited"
     union_direct: "prohibited"
     party_to_candidate: null
+  contribution_limit_rules:
+    - donor_type: individual
+      recipient_type: candidate_committee
+      office_level: legislative
+      limit_status: numeric
+      limit_amount: 5900
+      limit_basis: per_election
+      effective_date: "2025-01-01"
+      source_citation: "Gov. Code § 85301; FPPC 2025-2026 Contribution Limits Chart"
+    - donor_type: individual
+      recipient_type: candidate_committee
+      office_level: statewide_except_governor
+      limit_status: numeric
+      limit_amount: 9800
+      limit_basis: per_election
+      effective_date: "2025-01-01"
+      source_citation: "Gov. Code § 85301; FPPC 2025-2026 Contribution Limits Chart"
+    - donor_type: individual
+      recipient_type: candidate_committee
+      office_level: governor
+      limit_status: numeric
+      limit_amount: 39200
+      limit_basis: per_election
+      effective_date: "2025-01-01"
+      source_citation: "Gov. Code § 85301; FPPC 2025-2026 Contribution Limits Chart"
+    - donor_type: pac
+      recipient_type: candidate_committee
+      office_level: legislative
+      limit_status: numeric
+      limit_amount: 5900
+      limit_basis: per_election
+      effective_date: "2025-01-01"
+      source_citation: "Gov. Code § 85301; FPPC 2025-2026 Contribution Limits Chart"
+    - donor_type: pac
+      recipient_type: candidate_committee
+      office_level: statewide_except_governor
+      limit_status: numeric
+      limit_amount: 9800
+      limit_basis: per_election
+      effective_date: "2025-01-01"
+      source_citation: "Gov. Code § 85301; FPPC 2025-2026 Contribution Limits Chart"
+    - donor_type: pac
+      recipient_type: candidate_committee
+      office_level: governor
+      limit_status: numeric
+      limit_amount: 39200
+      limit_basis: per_election
+      effective_date: "2025-01-01"
+      source_citation: "Gov. Code § 85301; FPPC 2025-2026 Contribution Limits Chart"
+    - donor_type: small_contributor_committee
+      recipient_type: candidate_committee
+      office_level: legislative
+      limit_status: numeric
+      limit_amount: 11800
+      limit_basis: per_election
+      effective_date: "2025-01-01"
+      source_citation: "Gov. Code § 85302; FPPC 2025-2026 Contribution Limits Chart"
+    - donor_type: small_contributor_committee
+      recipient_type: candidate_committee
+      office_level: statewide_except_governor
+      limit_status: numeric
+      limit_amount: 19600
+      limit_basis: per_election
+      effective_date: "2025-01-01"
+      source_citation: "Gov. Code § 85302; FPPC 2025-2026 Contribution Limits Chart"
+    - donor_type: small_contributor_committee
+      recipient_type: candidate_committee
+      office_level: governor
+      limit_status: numeric
+      limit_amount: 39200
+      limit_basis: per_election
+      effective_date: "2025-01-01"
+      source_citation: "Gov. Code § 85302; FPPC 2025-2026 Contribution Limits Chart"
+    - donor_type: party_committee
+      recipient_type: candidate_committee
+      office_level: legislative
+      limit_status: no_statutory_limit
+      effective_date: "2025-01-01"
+      source_citation: "Gov. Code § 85302; FPPC 2025-2026 Contribution Limits Chart"
+    - donor_type: party_committee
+      recipient_type: candidate_committee
+      office_level: statewide_except_governor
+      limit_status: no_statutory_limit
+      effective_date: "2025-01-01"
+      source_citation: "Gov. Code § 85302; FPPC 2025-2026 Contribution Limits Chart"
+    - donor_type: party_committee
+      recipient_type: candidate_committee
+      office_level: governor
+      limit_status: no_statutory_limit
+      effective_date: "2025-01-01"
+      source_citation: "Gov. Code § 85302; FPPC 2025-2026 Contribution Limits Chart"
   itemization_threshold: 100
   reporting:
     periods: ["semi-annual", "pre-election", "quarterly"]
@@ -170,8 +261,8 @@ laws:
   public_financing: false
   notes:
     - "Limits per election (primary/general each); amounts are 2025-2026 cycle per FPPC"
-    - "Individual limit to candidate: $5,500 per election (Gov. Code § 85301)"
-    - "Small contributor committee to candidate: $10,200 per election (Gov. Code § 85302)"
+    - "Individual/PAC limits per election: $5,900 legislative, $9,800 statewide except governor, $39,200 governor (Gov. Code § 85301)"
+    - "Small contributor committee limits per election: $11,800 legislative, $19,600 statewide except governor, $39,200 governor (Gov. Code § 85302)"
     - "Corporate and union direct contributions to candidates are prohibited (Gov. Code § 85301)"
     - "No explicit party-to-candidate limit in Political Reform Act; party spending treated differently"
     - "Itemization threshold: name and address required at $100+ (Gov. Code § 84211)"

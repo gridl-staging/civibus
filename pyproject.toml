@@ -63,6 +63,10 @@ timeout = 120
 # ~10% when deselected by the unit run). Measured 2026-07-07: product-only
 # coverage 72.6% vs 69% with test files mixed in.
 #
+# *_test_support.py is test code too: the shared synthetic-fixture and cleanup
+# helpers under jurisdictions/states/ sit outside the per-state omit patterns
+# below, and they only execute under the parked selection.
+#
 # The jurisdictions patterns are the parked-jurisdiction quarantine
 # counterpart to the conftest.py collect_ignore gate: per-state/city tests are
 # excluded from default collection, so their (frozen) product code must not
@@ -74,6 +78,7 @@ timeout = 120
 [tool.coverage.run]
 omit = [
   "*/test_*.py",
+  "*_test_support.py",
   "*/tests/*",
   "*/conftest.py",
   "conftest.py",

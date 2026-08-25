@@ -6,6 +6,16 @@ from pathlib import Path
 import pytest
 import yaml
 
+from domains.campaign_finance.jurisdictions._config_specimens import (
+    DIRECTORY_JURISDICTION_TYPES,
+    EXPANDED_CONFIG_IDS,
+    EXPANDED_CONFIG_PATHS,
+    JURISDICTIONS_DIR,
+    NC_CONFIG_PATH,
+    PILOT_CONFIG_PATHS,
+    SF_CONFIG_PATH,
+    TEMPLATE_CONFIG_PATH,
+)
 from domains.campaign_finance.jurisdictions.config_schema import (
     JurisdictionConfig,
     PublicFinancingConfig,
@@ -13,53 +23,27 @@ from domains.campaign_finance.jurisdictions.config_schema import (
     load_jurisdiction_config,
 )
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
-JURISDICTIONS_DIR = REPO_ROOT / "domains" / "campaign_finance" / "jurisdictions"
-TEMPLATE_CONFIG_PATH = JURISDICTIONS_DIR / "_template" / "config.yaml"
-SF_CONFIG_PATH = JURISDICTIONS_DIR / "cities" / "SF" / "config.yaml"
-CO_CONFIG_PATH = JURISDICTIONS_DIR / "states" / "CO" / "config.yaml"
-GA_CONFIG_PATH = JURISDICTIONS_DIR / "states" / "GA" / "config.yaml"
-NC_CONFIG_PATH = JURISDICTIONS_DIR / "states" / "NC" / "config.yaml"
-PILOT_CONFIG_PATHS = [
-    CO_CONFIG_PATH,
-    GA_CONFIG_PATH,
-    NC_CONFIG_PATH,
-]
-EXPANDED_CONFIG_PATHS = [JURISDICTIONS_DIR / "cities" / code / "config.yaml" for code in ("LA", "NYC", "PHL", "SF")] + [
-    JURISDICTIONS_DIR / "states" / code / "config.yaml"
-    for code in (
-        "AL",
-        "CA",
-        "CO",
-        "FL",
-        "GA",
-        "IL",
-        "IN",
-        "KY",
-        "LA",
-        "MA",
-        "MN",
-        "NC",
-        "NE",
-        "NJ",
-        "NY",
-        "OH",
-        "OR",
-        "PA",
-        "TX",
-        "VA",
-        "WA",
-        "WI",
-    )
-]
 
-
-@pytest.mark.parametrize("config_path", PILOT_CONFIG_PATHS)
+@pytest.mark.parametrize("config_path", EXPANDED_CONFIG_PATHS, ids=EXPANDED_CONFIG_IDS)
 def test_load_jurisdiction_config_loads_each_pilot(config_path: Path) -> None:
+    """Every checked-in non-template config must keep loading through the canonical owner.
+
+    The node name is deliberately unchanged: the accepted contract in
+    ``docs/reference/specs/jurisdiction-config.md`` ("Backward compatibility") cites this
+    exact node id as the guarantee that the flat ``laws.contribution_limits`` block keeps
+    all 26 configs loading, and this test-audit stage may not edit that spec.
+
+    Parametrizing over the full ``EXPANDED_CONFIG_PATHS`` set rather than the three pilots
+    means a config that is deleted, renamed, silently skipped, or whose identity block
+    drifts from its directory turns red here. ``cities/LA`` (Los Angeles) and ``states/LA``
+    (Louisiana) share a code, so the directory-derived type is asserted alongside the code
+    to keep the two specimens distinguishable.
+    """
     config = load_jurisdiction_config(config_path)
 
     assert isinstance(config, JurisdictionConfig)
-    assert config.jurisdiction.code in {"CO", "GA", "NC"}
+    assert config.jurisdiction.code == config_path.parent.name
+    assert config.jurisdiction.type == DIRECTORY_JURISDICTION_TYPES[config_path.parent.parent.name]
 
 
 def test_load_jurisdiction_config_loads_san_francisco_city_config() -> None:
@@ -182,6 +166,24 @@ def test_public_financing_accepts_false_and_required_object_shape(tmp_path: Path
     assert object_config.laws.public_financing.type == "matching_funds"
     assert object_config.laws.public_financing.administering_agency == "State Elections Office"
 
+    required_field_lines = {
+        "type": '    type: "matching_funds"\n',
+        "administering_agency": '    administering_agency: "State Elections Office"',
+    }
+    for missing_field, field_line in required_field_lines.items():
+        incomplete_config_path = tmp_path / f"public_financing_missing_{missing_field}.yaml"
+        incomplete_config_path.write_text(
+            object_config_text.replace(field_line, "", 1),
+            encoding="utf-8",
+        )
+
+        with pytest.raises(ValueError) as validation_error:
+            load_jurisdiction_config(incomplete_config_path)
+
+        validation_message = str(validation_error.value)
+        assert "laws.public_financing" in validation_message
+        assert missing_field in validation_message
+
 
 def test_nc_field_mappings_preserve_quoted_and_spaced_yaml_keys() -> None:
     nc_config = load_jurisdiction_config(NC_CONFIG_PATH)
@@ -195,7 +197,7 @@ def test_nc_field_mappings_preserve_quoted_and_spaced_yaml_keys() -> None:
     )
 
 
-@pytest.mark.parametrize("config_path", PILOT_CONFIG_PATHS)
+@pytest.mark.parametrize("config_path", EXPANDED_CONFIG_PATHS, ids=EXPANDED_CONFIG_IDS)
 def test_yaml_dates_parse_to_date_or_none(config_path: Path) -> None:
     config = load_jurisdiction_config(config_path)
 

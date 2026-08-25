@@ -14,7 +14,7 @@ FPPC publishes office-tiered per-election limits for the 2025-2026 cycle, includ
 - Governor tier.
 - Small-contributor-committee and party distinctions.
 
-Because config.yaml currently stores a flattened contribution-limits object, office-tier nuance is represented in notes rather than a full tier matrix. [S1]
+The structured contribution-limit rules in config.yaml represent the state-office tier matrix while preserving the legacy flattened contribution-limits object. [S1]
 
 ## Itemization threshold
 Government Code section 84211 requires contributor identifying details at and above statutory thresholds, including name/address and occupation/employer details where applicable. Current CA config uses a 100-dollar itemization threshold consistent with this disclosure baseline. [S2]
@@ -33,7 +33,7 @@ No statewide public-financing program is represented in the current CA stage-2 c
 - Office-tiered legal limits do not map cleanly to the current flattened config schema without losing detail.
 
 ## Office-level or election-type variation
-CA limits vary by office class (for example governor versus statewide-except-governor versus legislative tiers) and election type (primary/general/special as separate elections). This variation remains narrative because the current schema does not encode a multi-tier limit matrix.
+CA limits vary by office class (for example governor versus statewide-except-governor versus legislative tiers) and election type (primary/general/special as separate elections). The structured rules encode the state-office tiers; this narrative preserves the broader election context and the flattened object's limitations.
 
 ## Open questions
 - Should the CA package encode the default city/county state-floor limits or statewide state-office limits in the flattened laws.contribution_limits fields?

@@ -10,6 +10,7 @@ from domains.campaign_finance.jurisdictions.config_schema import JurisdictionCon
 class DataSourceBlock:
     name: str
     url: str
+    update_frequency: str
     bulk_download_url: str | None
     api_base_url: str | None
     transaction_types: tuple[str, ...]
@@ -34,6 +35,7 @@ def build_data_source_blocks(config: JurisdictionConfig) -> tuple[DataSourceBloc
         DataSourceBlock(
             name=data_source.name,
             url=data_source.url,
+            update_frequency=data_source.update_frequency,
             bulk_download_url=data_source.bulk_download_url,
             api_base_url=data_source.api_base_url,
             transaction_types=tuple(normalize_data_type(value) for value in data_source.coverage.transaction_types),

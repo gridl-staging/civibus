@@ -44,10 +44,10 @@ from domains.civics.loaders.official_rosters.source_templates import (
 from domains.civics.loaders.official_rosters.source_registry import (
     list_nc_roster_source_metadata,
 )
-from domains.campaign_finance.jurisdictions.config_schema import load_jurisdiction_config
-from domains.campaign_finance.jurisdictions.states.NC.scraper import _CONFIG_PATH as _NC_CONFIG_PATH
-from domains.campaign_finance.jurisdictions.states.NC.scraper.load_support import (
-    NC_COMMITTEE_DOCUMENT_SOURCE_NAME,
+from domains.campaign_finance.jurisdictions.config_schema import (
+    JurisdictionConfig,
+    discover_jurisdiction_configs,
+    load_jurisdiction_config,
 )
 
 _EXPECTED_STAGE2_CIVIC_ROSTER_KEYS = (
@@ -139,6 +139,15 @@ _EXPECTED_CAMPAIGN_FINANCE_KEYS = (
     "state-wa-loans",
     "state-wi-transactions",
 )
+
+
+def _load_nc_jurisdiction_config() -> JurisdictionConfig:
+    repo_root = Path(__file__).resolve().parents[2]
+    for config_path in discover_jurisdiction_configs(repo_root):
+        config = load_jurisdiction_config(config_path)
+        if config.jurisdiction.type == "state" and config.jurisdiction.code == "NC":
+            return config
+    raise AssertionError("NC jurisdiction config was not discovered")
 
 
 @pytest.mark.unit
@@ -3360,10 +3369,15 @@ class TestNCIEDocumentIndexJobContract:
 
 @pytest.mark.unit
 class TestNCCommitteeDiscoveryJobContract:
-    def test_plan_contains_nc_committee_discovery_job_with_config_owned_metadata(self) -> None:
-        config = load_jurisdiction_config(_NC_CONFIG_PATH)
+    def test_plan_contains_nc_committee_discovery_job_with_config_owned_metadata(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        config = _load_nc_jurisdiction_config()
         source_config = next(
-            source for source in config.data_sources if source.name == NC_COMMITTEE_DOCUMENT_SOURCE_NAME
+            source for source in config.data_sources if source.name == job_builders.NC_COMMITTEE_DOCUMENT_SOURCE_NAME
         )
         jobs = build_refresh_plan(job_key_prefixes=("state-nc-committee-discovery",))
 
@@ -3725,7 +3739,29 @@ class TestCivicRosterJobContract:
         all_jobs = build_refresh_plan()
         campaign_finance_keys = tuple(sorted(job.key for job in all_jobs if job.domain == "campaign_finance"))
 
+        proof_batch_prefixes = ("state-ca-", "state-wa-", "state-nc-")
+        expected_proof_batch_keys = (
+            "state-ca-refresh",
+            "state-nc-committee-discovery",
+            "state-wa-contributions",
+            "state-wa-expenditures",
+            "state-wa-independent_expenditures",
+            "state-wa-loans",
+        )
+        actual_proof_batch_keys = tuple(key for key in campaign_finance_keys if key.startswith(proof_batch_prefixes))
+        inventory_proof_batch_keys = tuple(
+            key for key in _EXPECTED_CAMPAIGN_FINANCE_KEYS if key.startswith(proof_batch_prefixes)
+        )
+        optional_nc_detail_keys = {
+            "state-nc-ie-document-index",
+            "state-nc-ie-transactions",
+            "state-nc-transactions",
+        }
+
         assert campaign_finance_keys == _EXPECTED_CAMPAIGN_FINANCE_KEYS
+        assert inventory_proof_batch_keys == expected_proof_batch_keys
+        assert actual_proof_batch_keys == expected_proof_batch_keys
+        assert optional_nc_detail_keys.isdisjoint(campaign_finance_keys)
 
     def test_civic_roster_templates_keep_data_source_and_job_jurisdictions_aligned(self) -> None:
         for template in civic_roster_refresh_templates():

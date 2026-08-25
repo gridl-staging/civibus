@@ -156,6 +156,47 @@ laws:
     corporate_direct: "prohibited"
     union_direct: "prohibited"
     party_to_candidate: "unlimited"
+  contribution_limit_rules:
+    - donor_type: individual
+      recipient_type: candidate_committee
+      limit_status: numeric
+      limit_amount: 6800
+      limit_basis: per_election
+      effective_date: "2025-01-01"
+      source_citation: "NCSBE $6,800 notice; G.S. 163-278.13(a),(b)"
+    - donor_type: pac
+      recipient_type: candidate_committee
+      limit_status: numeric
+      limit_amount: 6800
+      limit_basis: per_election
+      effective_date: "2025-01-01"
+      source_citation: "NCSBE $6,800 notice; G.S. 163-278.13(a),(b)"
+    - donor_type: party_committee
+      recipient_type: candidate_committee
+      limit_status: unlimited
+      effective_date: "2025-01-01"
+      source_citation: "G.S. 163-278.13(h)"
+    - donor_type: self
+      recipient_type: candidate_committee
+      limit_status: unlimited
+      effective_date: "2025-01-01"
+      source_citation: "G.S. 163-278.13(d)"
+    - donor_type: corporation
+      recipient_type: candidate_committee
+      limit_status: prohibited
+      effective_date: "2025-01-01"
+      source_citation: "G.S. 163-278.15(a)"
+      metadata:
+        - description: "G.S. 163-278.19 permits a separate segregated fund financed from lawful voluntary contributions."
+          source_citation: "G.S. 163-278.19(d)"
+    - donor_type: union
+      recipient_type: candidate_committee
+      limit_status: prohibited
+      effective_date: "2025-01-01"
+      source_citation: "G.S. 163-278.15(a); G.S. 163-278.19(a)"
+      metadata:
+        - description: "G.S. 163-278.19 permits a separate segregated fund financed from lawful voluntary contributions."
+          source_citation: "G.S. 163-278.19(d)"
   itemization_threshold: 50
   reporting:
     periods: ["quarterly", "semiannual", "pre-election", "post-election", "annual"]

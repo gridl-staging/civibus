@@ -3,9 +3,14 @@ import { createServer } from "node:http";
 
 const { SMOKE_API_HOST, SMOKE_API_PORT } =
   (await import(new URL("./fixtures.ts", import.meta.url).href)) as typeof import("./fixtures");
-const { smokeFixtures } =
+const { smokeFixtures, STANDARD_CANDIDATE_DETAIL_FIXTURES } =
   (await import(new URL("./fixture-data.ts", import.meta.url).href)) as typeof import("./fixture-data");
-const { compareFixtureByCandidateId, compareFixtureById, compareFixtureBySearchQuery } =
+const {
+  compareFixtureByCandidateId,
+  compareFixtureByCandidateSlug,
+  compareFixtureById,
+  compareFixtureBySearchQuery
+} =
   (await import(new URL("./compare-fixtures.ts", import.meta.url).href)) as typeof import("./compare-fixtures");
 const { buildDonorSearchResponse } =
   (await import(new URL("./donor_lookup_fixture.ts", import.meta.url).href)) as typeof import("./donor_lookup_fixture");
@@ -285,19 +290,7 @@ type PersonFixture =
   | (typeof smokeFixtures)["rosterDurhamPerson"]
   | (typeof smokeFixtures)["rosterNcHousePerson"]
   | (typeof smokeFixtures)["personMissingPortraitField"];
-const standardCandidateFixtures = [
-  smokeFixtures.candidate,
-  smokeFixtures.candidateOutOfCycle,
-  smokeFixtures.candidateEmpty,
-  smokeFixtures.candidateLoadedZero,
-  smokeFixtures.candidateBackendFailure,
-  smokeFixtures.candidateDeviant,
-  smokeFixtures.candidateAuditedMalformed,
-  smokeFixtures.candidateSafeAllCaps,
-  smokeFixtures.candidateAl,
-  smokeFixtures.candidateGa
-] as const;
-type StandardCandidateFixture = (typeof standardCandidateFixtures)[number];
+type StandardCandidateFixture = (typeof STANDARD_CANDIDATE_DETAIL_FIXTURES)[number];
 
 /**
  */
@@ -330,7 +323,7 @@ function getCommitteeFixtureById(committeeId: string | null): CommitteeFixture |
 }
 
 function getStandardCandidateFixtureById(candidateId: string): StandardCandidateFixture | null {
-  return standardCandidateFixtures.find((fixture) => fixture.id === candidateId) ?? null;
+  return STANDARD_CANDIDATE_DETAIL_FIXTURES.find((fixture) => fixture.id === candidateId) ?? null;
 }
 
 function isStandardCandidateFixtureId(candidateId: string): boolean {
@@ -772,7 +765,12 @@ const server = createServer(async (request, response) => {
   const candidateSlug = decodeBySlugPath(url.pathname, "/v1/candidates/by-slug/");
   if (candidateSlug !== null) {
     const candidateSlugLookups = smokeFixtures.slugLookups.candidates as Record<string, unknown>;
-    writeJson(response, 200, candidateSlugLookups[candidateSlug] ?? []);
+    const compareFixture = compareFixtureByCandidateSlug.get(candidateSlug);
+    writeJson(
+      response,
+      200,
+      compareFixture?.candidateList.items ?? candidateSlugLookups[candidateSlug] ?? []
+    );
     return;
   }
 

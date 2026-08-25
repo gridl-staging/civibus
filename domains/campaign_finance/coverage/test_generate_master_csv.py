@@ -1,6 +1,18 @@
 from __future__ import annotations
 
-from domains.campaign_finance.coverage.generate_master_csv import _audit_method, _get_portal_url
+import os
+from pathlib import Path
+
+import pytest
+
+from domains.campaign_finance.coverage.generate_master_csv import (
+    OUTPUT_PATH,
+    _audit_method,
+    _get_portal_url,
+    assert_output_is_fresh,
+    render_csv_text,
+    stale_input_paths,
+)
 
 
 def test_get_portal_url_uses_current_illinois_bulk_download_page() -> None:
@@ -53,3 +65,60 @@ def test_audit_method_returns_browser_verified_for_browser_evidence() -> None:
         "evidence_date": "2026-03-31",
     }
     assert _audit_method(row) == "browser_verified"
+
+
+def test_tracked_jurisdiction_master_csv_matches_generator() -> None:
+    assert OUTPUT_PATH.read_bytes() == render_csv_text().encode()
+
+
+def test_output_is_stale_when_owned_input_is_newer(tmp_path: Path) -> None:
+    output_path = tmp_path / "jurisdiction-master.csv"
+    older_input_path = tmp_path / "older_input.txt"
+    newer_input_path = tmp_path / "newer_input.txt"
+
+    output_path.write_text("generated")
+    older_input_path.write_text("older")
+    newer_input_path.write_text("newer")
+
+    older_timestamp = 100
+    output_timestamp = 200
+    newer_timestamp = 300
+    os.utime(older_input_path, (older_timestamp, older_timestamp))
+    os.utime(output_path, (output_timestamp, output_timestamp))
+    os.utime(newer_input_path, (newer_timestamp, newer_timestamp))
+
+    stale_inputs = stale_input_paths(
+        output_path=output_path,
+        input_paths=(older_input_path, newer_input_path),
+    )
+
+    assert stale_inputs == (newer_input_path,)
+    with pytest.raises(RuntimeError) as exc_info:
+        assert_output_is_fresh(
+            output_path=output_path,
+            input_paths=(older_input_path, newer_input_path),
+        )
+
+    message = str(exc_info.value)
+    assert str(output_path) in message
+    assert str(newer_input_path) in message
+    assert str(older_input_path) not in message
+
+
+def test_output_is_stale_when_generated_csv_is_missing(tmp_path: Path) -> None:
+    output_path = tmp_path / "jurisdiction-master.csv"
+    first_input_path = tmp_path / "first_input.txt"
+    second_input_path = tmp_path / "second_input.txt"
+    first_input_path.write_text("first")
+    second_input_path.write_text("second")
+
+    input_paths = (first_input_path, second_input_path)
+
+    assert stale_input_paths(output_path=output_path, input_paths=input_paths) == input_paths
+    with pytest.raises(RuntimeError) as exc_info:
+        assert_output_is_fresh(output_path=output_path, input_paths=input_paths)
+
+    message = str(exc_info.value)
+    assert str(output_path) in message
+    assert str(first_input_path) in message
+    assert str(second_input_path) in message

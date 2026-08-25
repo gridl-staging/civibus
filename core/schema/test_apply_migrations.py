@@ -9,13 +9,14 @@ and applies only the explicitly enumerated pending deltas.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import sys
 import textwrap
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
-
 import psycopg
 import pytest
 
@@ -110,8 +111,9 @@ _MINIMAL_CORE_SQL = textwrap.dedent("""\
     );
 
     CREATE TABLE IF NOT EXISTS core.refresh_run (
-        pull_status TEXT NOT NULL
-            CHECK (pull_status IN ('crashed', 'empty', 'degraded', 'success'))
+        pull_status  TEXT NOT NULL
+            CHECK (pull_status IN ('crashed', 'empty', 'degraded', 'success')),
+        completed_at TIMESTAMPTZ NOT NULL
     );
 
     CREATE TABLE IF NOT EXISTS core.entity_source (
@@ -337,10 +339,80 @@ _PENDING_FILENAMES = [
     "2026_08_01_donor_search_rollup.sql",
     "2026_08_02_donor_search_rollup_representative_id.sql",
     "2026_08_03_donor_search_rollup_identity_variants.sql",
+    "2026_08_23_contribution_limit_rules.sql",
+    "2026_08_23_refresh_run_running_status.sql",
+    "2026_08_24_person_absorption.sql",
 ]
 
 _DONOR_IDENTITY_MIGRATION = "2026_07_28_donor_identity_er_contract.sql"
 _DONOR_CLUSTER_PERSON_MIGRATION = "2026_07_28_donor_identity_person_mapping.sql"
+_CONTRIBUTION_LIMIT_RULES_MIGRATION = "2026_08_23_contribution_limit_rules.sql"
+_PERSON_ABSORPTION_MIGRATION = "2026_08_24_person_absorption.sql"
+_PERSON_ABSORPTION_COLUMNS = [
+    ("absorbed_person_id", "uuid", "NO"),
+    ("canonical_person_id", "uuid", "NO"),
+    ("cluster_id", "uuid", "NO"),
+    ("merged_by", "text", "NO"),
+    ("absorbed_at", "timestamp with time zone", "NO"),
+    ("absorbed_payload", "jsonb", "NO"),
+]
+_PERSON_ABSORPTION_INDEXES = [
+    "idx_person_absorption_absorbed_at",
+    "idx_person_absorption_canonical_person",
+    "idx_person_absorption_cluster",
+    "person_absorption_pkey",
+]
+_CONTRIBUTION_LIMIT_RULE_COLUMNS = [
+    ("id", "uuid", "NO", "uuid_generate_v4()"),
+    ("jurisdiction_fips", "text", "NO", None),
+    ("donor_type", "text", "YES", None),
+    ("recipient_type", "text", "YES", None),
+    ("office_level", "text", "YES", None),
+    ("election_type", "text", "YES", None),
+    ("limit_status", "text", "NO", None),
+    ("limit_amount", "integer", "YES", None),
+    ("limit_basis", "text", "YES", None),
+    ("source_citation", "text", "NO", None),
+    ("effective_date", "date", "YES", None),
+    ("sunset_date", "date", "YES", None),
+    ("research_observed_date", "date", "YES", None),
+    ("local_override_allowed", "boolean", "NO", "false"),
+    ("note", "text", "YES", None),
+    ("metadata", "jsonb", "NO", "'[]'::jsonb"),
+    ("created_at", "timestamp with time zone", "NO", "now()"),
+    ("updated_at", "timestamp with time zone", "NO", "now()"),
+]
+_CONTRIBUTION_LIMIT_RULE_IDENTITY_INDEX_TERMS = (
+    "jurisdiction_fips",
+    "(donor_type IS NULL)",
+    "COALESCE(donor_type, '')",
+    "(recipient_type IS NULL)",
+    "COALESCE(recipient_type, '')",
+    "(office_level IS NULL)",
+    "COALESCE(office_level, '')",
+    "(election_type IS NULL)",
+    "COALESCE(election_type, '')",
+    "(effective_date IS NULL)",
+    "COALESCE(effective_date, DATE '0001-01-01')",
+    "(sunset_date IS NULL)",
+    "COALESCE(sunset_date, DATE '0001-01-01')",
+)
+# Pinned non-overlap EXCLUDE key: the four dimensions keyed by equality plus the
+# effectivity period keyed by overlap. Pinning (not just cross-file equality) fails red
+# even if a dimension were dropped from both owners in lockstep.
+_CONTRIBUTION_LIMIT_RULE_EXCLUDE_TERMS = (
+    "jurisdiction_fips WITH =",
+    "(donor_type IS NULL) WITH =",
+    "COALESCE(donor_type, '') WITH =",
+    "(recipient_type IS NULL) WITH =",
+    "COALESCE(recipient_type, '') WITH =",
+    "(office_level IS NULL) WITH =",
+    "COALESCE(office_level, '') WITH =",
+    "(election_type IS NULL) WITH =",
+    "COALESCE(election_type, '') WITH =",
+    "daterange(effective_date, sunset_date, '[)') WITH &&",
+)
+_CONTRIBUTION_LIMIT_NON_OVERLAP_CONSTRAINT = "contribution_limit_rules_non_overlapping_periods"
 _DONOR_IDENTITY_COLUMNS = [
     "id",
     "canonical_name",
@@ -401,12 +473,7 @@ def _build_fixture_migrations_dir(target: Path, source_dir: Path) -> None:
 
 @pytest.fixture(scope="module")
 def disposable_db() -> str:
-    db_name = f"{_DB_NAME_PREFIX}{uuid.uuid4().hex[:12]}"
-    admin = _admin_connect()
-    try:
-        admin.execute(f"CREATE DATABASE {db_name}")
-    finally:
-        admin.close()
+    db_name = _create_database()
 
     conn = _connect_to(db_name)
     try:
@@ -419,43 +486,38 @@ def disposable_db() -> str:
 
     yield db_name
 
-    admin = _admin_connect()
-    try:
-        admin.execute(
-            f"""
-            SELECT pg_terminate_backend(pid)
-            FROM pg_stat_activity
-            WHERE datname = '{db_name}' AND pid <> pg_backend_pid()
-            """
-        )
-        admin.execute(f"DROP DATABASE IF EXISTS {db_name}")
-    finally:
-        admin.close()
+    _drop_database(db_name)
 
 
 @pytest.fixture(scope="module")
 def empty_disposable_db() -> str:
-    db_name = f"{_DB_NAME_PREFIX}{uuid.uuid4().hex[:12]}"
-    admin = _admin_connect()
-    try:
-        admin.execute(f"CREATE DATABASE {db_name}")
-    finally:
-        admin.close()
+    db_name = _create_database()
 
     yield db_name
 
-    admin = _admin_connect()
+    _drop_database(db_name)
+
+
+@pytest.fixture
+def provenance_shape_db() -> str:
+    """A database holding only the fresh-install shape of core.refresh_run.
+
+    Kept separate from empty_disposable_db, whose tests depend on that database
+    staying uninitialized.
+    """
+    db_name = _create_database()
+    conn = _connect_to(db_name)
     try:
-        admin.execute(
-            f"""
-            SELECT pg_terminate_backend(pid)
-            FROM pg_stat_activity
-            WHERE datname = '{db_name}' AND pid <> pg_backend_pid()
-            """
-        )
-        admin.execute(f"DROP DATABASE IF EXISTS {db_name}")
+        conn.autocommit = True
+        conn.execute("CREATE SCHEMA core")
+        conn.execute('CREATE EXTENSION IF NOT EXISTS "uuid-ossp"')
+        conn.execute(_refresh_run_ddl_from_provenance_sql())
     finally:
-        admin.close()
+        conn.close()
+
+    yield db_name
+
+    _drop_database(db_name)
 
 
 @pytest.fixture(scope="module")
@@ -498,6 +560,93 @@ def _run_main(
                 os.environ.pop(k, None)
             else:
                 os.environ[k] = v
+
+
+def _create_database() -> str:
+    db_name = f"{_DB_NAME_PREFIX}{uuid.uuid4().hex[:12]}"
+    admin = _admin_connect()
+    try:
+        admin.execute(f"CREATE DATABASE {db_name}")
+    finally:
+        admin.close()
+    return db_name
+
+
+def _drop_database(db_name: str) -> None:
+    admin = _admin_connect()
+    try:
+        admin.execute(
+            f"""
+            SELECT pg_terminate_backend(pid)
+            FROM pg_stat_activity
+            WHERE datname = '{db_name}' AND pid <> pg_backend_pid()
+            """
+        )
+        admin.execute(f"DROP DATABASE IF EXISTS {db_name}")
+    finally:
+        admin.close()
+
+
+# ---------------------------------------------------------------------------
+# core.refresh_run insert helper
+# ---------------------------------------------------------------------------
+# The fixture core.refresh_run carries only the columns these tests exercise,
+# but production (core/schema/provenance.sql) makes job_key, domain,
+# jurisdiction, started_at and message NOT NULL with no default. Route every
+# insert through one helper that names pull_status and completed_at explicitly
+# so a rejection is provably the CHECK under test and never a NotNullViolation.
+
+_TERMINAL_PULL_STATUSES = ("crashed", "empty", "degraded", "success", "failed")
+_COMPLETED_AT = datetime(2026, 8, 23, 12, 5, tzinfo=timezone.utc)
+
+
+def _insert_refresh_run(cur: psycopg.Cursor, *, pull_status: str, completed_at: datetime | None) -> None:
+    cur.execute(
+        "INSERT INTO core.refresh_run (pull_status, completed_at) VALUES (%s, %s)",
+        (pull_status, completed_at),
+    )
+
+
+def _refresh_run_ddl_from_provenance_sql() -> str:
+    """Extract the core.refresh_run CREATE TABLE block from provenance.sql.
+
+    Lets a test stand up the fresh-database shape of one table without running
+    the whole provenance schema and its dependencies.
+    """
+    sql = (REPO_ROOT / "core" / "schema" / "provenance.sql").read_text()
+    start = sql.index("CREATE TABLE core.refresh_run")
+    end = sql.index(");", start) + len(");")
+    ddl = sql[start:end]
+    assert "pull_status" in ddl and "completed_at" in ddl, ddl
+    return ddl
+
+
+def _refresh_run_check_constraints(conn: psycopg.Connection) -> list[tuple[str, str]]:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT conname, pg_get_constraintdef(oid)
+            FROM pg_constraint
+            WHERE conrelid = 'core.refresh_run'::regclass
+              AND contype = 'c'
+            ORDER BY conname
+            """
+        )
+        return [(row[0], row[1]) for row in cur.fetchall()]
+
+
+def _refresh_run_completed_at_is_nullable(conn: psycopg.Connection) -> bool:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT is_nullable
+            FROM information_schema.columns
+            WHERE table_schema = 'core'
+              AND table_name = 'refresh_run'
+              AND column_name = 'completed_at'
+            """
+        )
+        return cur.fetchone()[0] == "YES"
 
 
 def _column_names(conn: psycopg.Connection, *, table_schema: str, table_name: str) -> list[str]:
@@ -589,6 +738,133 @@ def _assert_donor_identity_upgrade_contract(conn: psycopg.Connection) -> None:
         assert cur.fetchone()[0] is True
 
 
+def _contribution_limit_rule_columns(conn: psycopg.Connection) -> list[tuple[str, str, str, str | None]]:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT column_name, data_type, is_nullable, column_default
+            FROM information_schema.columns
+            WHERE table_schema = 'cf'
+              AND table_name = 'contribution_limit_rules'
+            ORDER BY ordinal_position
+            """
+        )
+        return cur.fetchall()
+
+
+def _person_absorption_columns(conn: psycopg.Connection) -> list[tuple[str, str, str]]:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT column_name, data_type, is_nullable
+            FROM information_schema.columns
+            WHERE table_schema = 'core'
+              AND table_name = 'person_absorption'
+            ORDER BY ordinal_position
+            """
+        )
+        return cur.fetchall()
+
+
+def _person_absorption_constraints(conn: psycopg.Connection) -> dict[str, str]:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT conname, pg_get_constraintdef(oid)
+            FROM pg_constraint
+            WHERE conrelid = 'core.person_absorption'::regclass
+            ORDER BY conname
+            """
+        )
+        return {row[0]: row[1] for row in cur.fetchall()}
+
+
+def _person_absorption_index_names(conn: psycopg.Connection) -> list[str]:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT indexname
+            FROM pg_indexes
+            WHERE schemaname = 'core'
+              AND tablename = 'person_absorption'
+            ORDER BY indexname
+            """
+        )
+        return [row[0] for row in cur.fetchall()]
+
+
+def _assert_contribution_rule_insert_rejected(
+    conn: psycopg.Connection,
+    statement: str,
+    constraint_name: str,
+    params: tuple[object, ...] | None = None,
+) -> None:
+    conn.execute("SAVEPOINT contribution_rule_rejection")
+    try:
+        with pytest.raises(psycopg.errors.IntegrityError) as exc_info:
+            conn.execute(statement, params)
+        assert exc_info.value.diag.constraint_name == constraint_name
+    finally:
+        conn.execute("ROLLBACK TO SAVEPOINT contribution_rule_rejection")
+        conn.execute("RELEASE SAVEPOINT contribution_rule_rejection")
+
+
+def _contribution_limit_rule_ddl_names(path: Path) -> set[str]:
+    ddl = path.read_text(encoding="utf-8")
+    return set(
+        re.findall(
+            r"\b(?:CONSTRAINT|CREATE UNIQUE INDEX(?: IF NOT EXISTS)?)\s+"
+            r"((?:ck_|uq_)?contribution_limit_rules_[a-z_]+)",
+            ddl,
+        )
+    )
+
+
+def _contribution_limit_rule_table_body(path: Path) -> str:
+    """Normalized CREATE TABLE body shared by the fresh and migration owners."""
+
+    ddl = path.read_text(encoding="utf-8")
+    match = re.search(
+        r"CREATE TABLE(?: IF NOT EXISTS)? cf\.contribution_limit_rules \((.*?)\n\);",
+        ddl,
+        re.DOTALL,
+    )
+    assert match is not None, f"No contribution_limit_rules table found in {path}"
+    return "\n".join(line.rstrip() for line in match.group(1).strip().splitlines())
+
+
+def _contribution_limit_rule_identity_index_terms(path: Path) -> tuple[str, ...]:
+    ddl = path.read_text(encoding="utf-8")
+    match = re.search(
+        r"CREATE UNIQUE INDEX(?: IF NOT EXISTS)? uq_contribution_limit_rules_identity\s+"
+        r"ON cf\.contribution_limit_rules \((.*?)\);",
+        ddl,
+        re.DOTALL,
+    )
+    assert match is not None
+    return tuple(" ".join(line.strip().rstrip(",").split()) for line in match.group(1).splitlines() if line.strip())
+
+
+def _contribution_limit_rule_exclude_terms(path: Path) -> tuple[str, ...]:
+    """Normalized term list from the non-overlap EXCLUDE key in a schema-owner file.
+
+    Compared across the two owners so dropping a dimension from one EXCLUDE key — which
+    leaves the constraint name unchanged and so is invisible to the name-set drift check —
+    fails red. The closing ``)`` of the EXCLUDE sits on its own line, while daterange's own
+    parens stay inline, so a non-greedy match up to a standalone paren line captures the
+    whole key without tripping on the inner parens.
+    """
+
+    ddl = path.read_text(encoding="utf-8")
+    match = re.search(
+        r"EXCLUDE USING gist \((.*?)\n\s*\)\s*;",
+        ddl,
+        re.DOTALL,
+    )
+    assert match is not None, f"No EXCLUDE key found in {path}"
+    return tuple(" ".join(line.strip().rstrip(",").split()) for line in match.group(1).splitlines() if line.strip())
+
+
 # ---------------------------------------------------------------------------
 # Happy-path tests
 # ---------------------------------------------------------------------------
@@ -602,6 +878,368 @@ class TestApplyMigrations:
     ) -> None:
         result = _run_main(disposable_db, fixture_paths, monkeypatch)
         assert result == 0
+
+    def test_contribution_limit_rules_migration_is_pending_delta(
+        self,
+        fixture_paths: dict[str, Path],
+    ) -> None:
+        assert _CONTRIBUTION_LIMIT_RULES_MIGRATION in _PENDING_FILENAMES
+        assert _CONTRIBUTION_LIMIT_RULES_MIGRATION not in _BASELINE_ENTRIES
+        assert (fixture_paths["migrations_dir"] / _CONTRIBUTION_LIMIT_RULES_MIGRATION).is_file()
+
+    def test_person_absorption_migration_is_pending_delta(
+        self,
+        fixture_paths: dict[str, Path],
+    ) -> None:
+        assert _PERSON_ABSORPTION_MIGRATION in _PENDING_FILENAMES
+        assert _PERSON_ABSORPTION_MIGRATION not in _BASELINE_ENTRIES
+        assert (fixture_paths["migrations_dir"] / _PERSON_ABSORPTION_MIGRATION).is_file()
+
+    def test_person_absorption_pending_delta_schema_contract(
+        self, disposable_db: str, fixture_paths: dict[str, Path], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _run_main(disposable_db, fixture_paths, monkeypatch)
+        conn = _connect_to(disposable_db)
+        try:
+            assert _person_absorption_columns(conn) == _PERSON_ABSORPTION_COLUMNS
+            constraints = _person_absorption_constraints(conn)
+            assert constraints["person_absorption_pkey"] == "PRIMARY KEY (absorbed_person_id)"
+            assert constraints["person_absorption_canonical_person_id_fkey"] == (
+                "FOREIGN KEY (canonical_person_id) REFERENCES core.person(id)"
+            )
+            assert constraints["person_absorption_cluster_id_fkey"] == (
+                "FOREIGN KEY (cluster_id) REFERENCES core.entity_cluster(id)"
+            )
+            assert not any(
+                "absorbed_person_id" in definition and "core.person" in definition
+                for definition in constraints.values()
+            )
+            assert _person_absorption_index_names(conn) == _PERSON_ABSORPTION_INDEXES
+        finally:
+            conn.close()
+
+    def test_contribution_limit_rules_migrated_schema_contract(
+        self, disposable_db: str, fixture_paths: dict[str, Path], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _run_main(disposable_db, fixture_paths, monkeypatch)
+        conn = _connect_to(disposable_db)
+        try:
+            assert _contribution_limit_rule_columns(conn) == _CONTRIBUTION_LIMIT_RULE_COLUMNS
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT conname FROM pg_constraint
+                    WHERE conrelid = 'cf.contribution_limit_rules'::regclass
+                      AND contype = 'c'
+                    """
+                )
+                migration_path = REPO_ROOT / "core" / "schema" / "migrations" / _CONTRIBUTION_LIMIT_RULES_MIGRATION
+                expected_checks = {
+                    name for name in _contribution_limit_rule_ddl_names(migration_path) if name.startswith("ck_")
+                }
+                assert {row[0] for row in cur.fetchall()} == expected_checks
+                cur.execute(
+                    "SELECT indexdef FROM pg_indexes "
+                    "WHERE schemaname = 'cf' AND indexname = 'uq_contribution_limit_rules_identity'"
+                )
+                index_definition = cur.fetchone()[0].lower()
+                for dimension in ("donor_type", "recipient_type", "office_level", "election_type"):
+                    assert f"({dimension} is null)" in index_definition
+                    assert f"coalesce({dimension}, ''::text)" in index_definition
+                for date_column in ("effective_date", "sunset_date"):
+                    assert f"({date_column} is null)" in index_definition
+                    assert f"coalesce({date_column}, '0001-01-01'::date)" in index_definition
+                cur.execute(
+                    """
+                    SELECT COUNT(*) FROM pg_trigger
+                    WHERE tgrelid = 'cf.contribution_limit_rules'::regclass
+                      AND tgname = 'trg_contribution_limit_rules_updated_at'
+                      AND NOT tgisinternal
+                    """
+                )
+                assert cur.fetchone()[0] == 1
+                cur.execute(
+                    """
+                    SELECT COUNT(*) FROM pg_constraint
+                    WHERE conrelid = 'cf.contribution_limit_rules'::regclass
+                      AND contype = 'x'
+                      AND conname = %s
+                    """,
+                    (_CONTRIBUTION_LIMIT_NON_OVERLAP_CONSTRAINT,),
+                )
+                assert cur.fetchone()[0] == 1
+                cur.execute("SELECT COUNT(*) FROM cf.contribution_limit_rules")
+                assert cur.fetchone()[0] == 0
+        finally:
+            conn.close()
+
+    def test_contribution_limit_rules_migrated_status_and_date_behavior(
+        self, disposable_db: str, fixture_paths: dict[str, Path], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _run_main(disposable_db, fixture_paths, monkeypatch)
+        conn = _connect_to(disposable_db)
+        try:
+            rejected = [
+                (
+                    "INSERT INTO cf.contribution_limit_rules "
+                    "(jurisdiction_fips, limit_status, limit_basis, source_citation, effective_date) "
+                    "VALUES ('missing-amount', 'numeric', 'per_election', 'Authority', '2025-01-01')",
+                    "ck_contribution_limit_rules_numeric_fields",
+                ),
+                (
+                    "INSERT INTO cf.contribution_limit_rules "
+                    "(jurisdiction_fips, limit_status, limit_amount, source_citation, effective_date) "
+                    "VALUES ('prohibited-amount', 'prohibited', 1, 'Authority', '2025-01-01')",
+                    "ck_contribution_limit_rules_non_numeric_fields",
+                ),
+                (
+                    "INSERT INTO cf.contribution_limit_rules "
+                    "(jurisdiction_fips, limit_status, limit_amount, limit_basis, source_citation, "
+                    "effective_date, research_observed_date) VALUES "
+                    "('known-research-date', 'numeric', 1, 'per_cycle', 'Authority', "
+                    "'2025-01-01', '2026-08-22')",
+                    "ck_contribution_limit_rules_numeric_fields",
+                ),
+                (
+                    "INSERT INTO cf.contribution_limit_rules "
+                    "(jurisdiction_fips, limit_status, source_citation, research_observed_date, note, effective_date) "
+                    "VALUES ('unknown-effective', 'unknown', 'Authority', '2026-08-22', 'Open', '2025-01-01')",
+                    "ck_contribution_limit_rules_unknown_fields",
+                ),
+                (
+                    "INSERT INTO cf.contribution_limit_rules "
+                    "(jurisdiction_fips, limit_status, source_citation, research_observed_date) "
+                    "VALUES ('unknown-note', 'unknown', 'Authority', '2026-08-22')",
+                    "ck_contribution_limit_rules_unknown_fields",
+                ),
+                (
+                    "INSERT INTO cf.contribution_limit_rules "
+                    "(jurisdiction_fips, limit_status, limit_amount, limit_basis, source_citation, "
+                    "effective_date, sunset_date) VALUES "
+                    "('reversed-dates', 'numeric', 1, 'per_cycle', 'Authority', '2025-02-01', '2025-01-01')",
+                    "ck_contribution_limit_rules_date_order",
+                ),
+            ]
+            for statement, constraint_name in rejected:
+                _assert_contribution_rule_insert_rejected(conn, statement, constraint_name)
+
+            row = conn.execute(
+                """
+                INSERT INTO cf.contribution_limit_rules
+                    (jurisdiction_fips, limit_status, source_citation, research_observed_date, note)
+                VALUES ('valid-unknown', 'unknown', 'Authority', '2026-08-22', 'Research remains open')
+                RETURNING effective_date, sunset_date, limit_amount, limit_basis
+                """
+            ).fetchone()
+            assert row == (None, None, None, None)
+            conn.rollback()
+        finally:
+            conn.close()
+
+    def test_contribution_limit_rules_migrated_metadata_and_identity_behavior(
+        self, disposable_db: str, fixture_paths: dict[str, Path], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _run_main(disposable_db, fixture_paths, monkeypatch)
+        conn = _connect_to(disposable_db)
+        try:
+            for metadata in (
+                '[{"description":"Cap","source_citation":"Law","extra":true}]',
+                '[{"description":"Cap"}]',
+                # Nested array item: rejected by the strict-mode scan (lax mode would unwrap it).
+                '[[{"description":"Cap","source_citation":"Law"}]]',
+                # U+00A0-only strings are blank to config_schema.NonBlankText (str.strip).
+                '[{"description":"\\u00a0","source_citation":"Law"}]',
+                '[{"description":"Cap","source_citation":"\\u00a0"}]',
+            ):
+                _assert_contribution_rule_insert_rejected(
+                    conn,
+                    "INSERT INTO cf.contribution_limit_rules "
+                    "(jurisdiction_fips, limit_status, limit_amount, limit_basis, source_citation, "
+                    "effective_date, metadata) VALUES "
+                    f"('invalid-metadata', 'numeric', 1, 'per_cycle', 'Authority', '2025-01-01', '{metadata}')",
+                    "ck_contribution_limit_rules_metadata_shape",
+                )
+
+            _assert_contribution_rule_insert_rejected(
+                conn,
+                "INSERT INTO cf.contribution_limit_rules "
+                "(jurisdiction_fips, limit_status, limit_amount, limit_basis, source_citation, effective_date) "
+                "VALUES ('blank-citation', 'numeric', 1, 'per_cycle', E'\\u00a0', '2025-01-01')",
+                "ck_contribution_limit_rules_citation_nonblank",
+            )
+
+            row = conn.execute(
+                """
+                INSERT INTO cf.contribution_limit_rules
+                    (jurisdiction_fips, limit_status, limit_amount, limit_basis, source_citation,
+                     effective_date, metadata)
+                VALUES ('valid-rule', 'numeric', 100, 'per_election', 'Authority', '2025-01-01',
+                        '[{"description":"Cap","source_citation":"Law"}]')
+                RETURNING local_override_allowed, metadata
+                """
+            ).fetchone()
+            assert row == (False, [{"description": "Cap", "source_citation": "Law"}])
+            conn.rollback()
+
+            conn.execute(
+                """
+                INSERT INTO cf.contribution_limit_rules
+                    (jurisdiction_fips, limit_status, limit_amount, limit_basis, source_citation, effective_date)
+                VALUES ('duplicate-rule', 'numeric', 100, 'per_election', 'Authority', '2025-01-01')
+                """
+            )
+            _assert_contribution_rule_insert_rejected(
+                conn,
+                """
+                INSERT INTO cf.contribution_limit_rules
+                    (jurisdiction_fips, limit_status, limit_amount, limit_basis, source_citation, effective_date)
+                VALUES ('duplicate-rule', 'numeric', 200, 'per_election', 'Other authority', '2025-01-01')
+                """,
+                "uq_contribution_limit_rules_identity",
+            )
+        finally:
+            conn.close()
+
+    def test_contribution_limit_rules_migrated_identity_preserves_successive_effective_periods(
+        self, disposable_db: str, fixture_paths: dict[str, Path], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _run_main(disposable_db, fixture_paths, monkeypatch)
+        conn = _connect_to(disposable_db)
+        try:
+            conn.execute(
+                """
+                INSERT INTO cf.contribution_limit_rules
+                    (jurisdiction_fips, limit_status, limit_amount, limit_basis, source_citation,
+                     effective_date, sunset_date)
+                VALUES ('temporal-rule', 'numeric', 100, 'per_election', 'Authority',
+                        '2023-01-01', '2025-01-01')
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO cf.contribution_limit_rules
+                    (jurisdiction_fips, limit_status, limit_amount, limit_basis, source_citation,
+                     effective_date)
+                VALUES ('temporal-rule', 'numeric', 200, 'per_election', 'Authority',
+                        '2025-01-01')
+                """
+            )
+            count = conn.execute(
+                """
+                SELECT COUNT(*) FROM cf.contribution_limit_rules
+                WHERE jurisdiction_fips = 'temporal-rule'
+                """
+            ).fetchone()[0]
+            assert count == 2
+
+            _assert_contribution_rule_insert_rejected(
+                conn,
+                """
+                INSERT INTO cf.contribution_limit_rules
+                    (jurisdiction_fips, limit_status, limit_amount, limit_basis, source_citation,
+                     effective_date, sunset_date)
+                VALUES ('temporal-rule', 'numeric', 300, 'per_election', 'Different authority',
+                        '2023-01-01', '2025-01-01')
+                """,
+                "uq_contribution_limit_rules_identity",
+            )
+            conn.rollback()
+        finally:
+            conn.close()
+
+    def test_contribution_limit_rules_migrated_rejects_overlapping_periods(
+        self, disposable_db: str, fixture_paths: dict[str, Path], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _run_main(disposable_db, fixture_paths, monkeypatch)
+        conn = _connect_to(disposable_db)
+        try:
+            base = (
+                "INSERT INTO cf.contribution_limit_rules "
+                "(jurisdiction_fips, limit_status, limit_amount, limit_basis, source_citation, "
+                "effective_date, sunset_date) VALUES "
+            )
+            # Two open-ended (sunset NULL) rules for one tuple.
+            conn.execute(base + "('open', 'numeric', 1, 'per_election', 'A', '2023-01-01', NULL)")
+            _assert_contribution_rule_insert_rejected(
+                conn,
+                base + "('open', 'numeric', 2, 'per_election', 'A', '2024-01-01', NULL)",
+                _CONTRIBUTION_LIMIT_NON_OVERLAP_CONSTRAINT,
+            )
+            conn.rollback()
+
+            # Two overlapping bounded periods.
+            conn.execute(base + "('bounded', 'numeric', 1, 'per_election', 'A', '2023-01-01', '2025-12-31')")
+            _assert_contribution_rule_insert_rejected(
+                conn,
+                base + "('bounded', 'numeric', 2, 'per_election', 'A', '2024-01-01', '2026-12-31')",
+                _CONTRIBUTION_LIMIT_NON_OVERLAP_CONSTRAINT,
+            )
+            conn.rollback()
+
+            # An unknown row (NULL dates -> unbounded) coexisting with a known rule.
+            conn.execute(base + "('unk', 'numeric', 1, 'per_election', 'A', '2023-01-01', NULL)")
+            _assert_contribution_rule_insert_rejected(
+                conn,
+                "INSERT INTO cf.contribution_limit_rules "
+                "(jurisdiction_fips, limit_status, source_citation, research_observed_date, note) "
+                "VALUES ('unk', 'unknown', 'A', '2026-08-22', 'open')",
+                _CONTRIBUTION_LIMIT_NON_OVERLAP_CONSTRAINT,
+            )
+            conn.rollback()
+
+            # Two rows sharing a period but differing in exactly one non-NULL dimension are
+            # distinct tuples the EXCLUDE must admit. A dimension dropped from the key would
+            # collide these instead — the all-NULL-dimension cases above cannot detect that.
+            for dimension, value in (
+                ("donor_type", "pac"),
+                ("recipient_type", "candidate_committee"),
+                ("office_level", "governor"),
+                ("election_type", "primary"),
+            ):
+                conn.execute(
+                    "INSERT INTO cf.contribution_limit_rules "
+                    "(jurisdiction_fips, limit_status, limit_amount, limit_basis, source_citation, "
+                    "effective_date, sunset_date) VALUES "
+                    "('accept-dim', 'numeric', 1, 'per_election', 'A', '2023-01-01', '2025-12-31')"
+                )
+                conn.execute(
+                    "INSERT INTO cf.contribution_limit_rules "
+                    f"(jurisdiction_fips, limit_status, limit_amount, limit_basis, {dimension}, "
+                    "source_citation, effective_date, sunset_date) VALUES "
+                    f"('accept-dim', 'numeric', 1, 'per_election', '{value}', 'A', "
+                    "'2023-01-01', '2025-12-31')"
+                )
+                count = conn.execute(
+                    "SELECT COUNT(*) FROM cf.contribution_limit_rules WHERE jurisdiction_fips = 'accept-dim'"
+                ).fetchone()[0]
+                assert count == 2, dimension
+                conn.rollback()
+        finally:
+            conn.close()
+
+    def test_contribution_limit_rule_schema_owners_do_not_drift(self) -> None:
+        migration_path = REPO_ROOT / "core" / "schema" / "migrations" / _CONTRIBUTION_LIMIT_RULES_MIGRATION
+        fresh_schema_path = REPO_ROOT / "domains" / "campaign_finance" / "schema" / "tables.sql"
+        migration_names = _contribution_limit_rule_ddl_names(migration_path)
+        fresh_schema_names = _contribution_limit_rule_ddl_names(fresh_schema_path)
+        assert migration_names == fresh_schema_names
+        # The table body owns the ordered columns, defaults, and every CHECK body.
+        # Compare it whole so matching names cannot conceal divergent enforcement.
+        assert _contribution_limit_rule_table_body(migration_path) == _contribution_limit_rule_table_body(
+            fresh_schema_path
+        )
+        assert _contribution_limit_rule_identity_index_terms(
+            migration_path
+        ) == _contribution_limit_rule_identity_index_terms(fresh_schema_path)
+        assert (
+            _contribution_limit_rule_identity_index_terms(migration_path)
+            == _CONTRIBUTION_LIMIT_RULE_IDENTITY_INDEX_TERMS
+        )
+        # Constraint names alone cannot catch a dimension dropped from one EXCLUDE key
+        # (the name is unchanged), so compare the key body between the two owners too.
+        migration_exclude = _contribution_limit_rule_exclude_terms(migration_path)
+        assert migration_exclude == _contribution_limit_rule_exclude_terms(fresh_schema_path)
+        assert migration_exclude == _CONTRIBUTION_LIMIT_RULE_EXCLUDE_TERMS
 
     def test_adopted_baseline_not_executed(
         self, disposable_db: str, fixture_paths: dict[str, Path], monkeypatch: pytest.MonkeyPatch
@@ -630,16 +1268,73 @@ class TestApplyMigrations:
         conn = _connect_to(disposable_db)
         try:
             with conn.cursor() as cur:
-                closed_statuses = ("crashed", "empty", "degraded", "success", "failed")
-                for status in closed_statuses:
-                    cur.execute("INSERT INTO core.refresh_run (pull_status) VALUES (%s)", (status,))
+                for status in _TERMINAL_PULL_STATUSES:
+                    _insert_refresh_run(cur, pull_status=status, completed_at=_COMPLETED_AT)
                     conn.rollback()
 
                 with pytest.raises(psycopg.errors.CheckViolation):
-                    cur.execute("INSERT INTO core.refresh_run (pull_status) VALUES ('unknown')")
+                    _insert_refresh_run(cur, pull_status="unknown", completed_at=_COMPLETED_AT)
                 conn.rollback()
         finally:
             conn.close()
+
+    def test_refresh_run_running_status_migration_accepts_in_flight_attempt(
+        self, disposable_db: str, fixture_paths: dict[str, Path], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A 'running' attempt with no completed_at must be storable."""
+        _run_main(disposable_db, fixture_paths, monkeypatch)
+        conn = _connect_to(disposable_db)
+        try:
+            with conn.cursor() as cur:
+                _insert_refresh_run(cur, pull_status="running", completed_at=None)
+                cur.execute("SELECT pull_status, completed_at FROM core.refresh_run WHERE pull_status = 'running'")
+                assert cur.fetchall() == [("running", None)]
+                conn.rollback()
+        finally:
+            conn.close()
+
+    def test_refresh_run_running_status_migration_enforces_paired_invariant(
+        self, disposable_db: str, fixture_paths: dict[str, Path], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """running <=> completed_at IS NULL, for every status in the closed set."""
+        _run_main(disposable_db, fixture_paths, monkeypatch)
+        conn = _connect_to(disposable_db)
+        try:
+            with conn.cursor() as cur:
+                with pytest.raises(psycopg.errors.CheckViolation):
+                    _insert_refresh_run(cur, pull_status="running", completed_at=_COMPLETED_AT)
+                conn.rollback()
+
+                for status in _TERMINAL_PULL_STATUSES:
+                    with pytest.raises(psycopg.errors.CheckViolation):
+                        _insert_refresh_run(cur, pull_status=status, completed_at=None)
+                    conn.rollback()
+        finally:
+            conn.close()
+
+    def test_refresh_run_migrated_shape_matches_provenance_sql(
+        self,
+        disposable_db: str,
+        provenance_shape_db: str,
+        fixture_paths: dict[str, Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A migrated core.refresh_run must constrain exactly what a fresh one does.
+
+        provenance.sql builds new databases and the migrations rebuild existing
+        ones; if the two drift, a check that holds in dev silently does not hold
+        in production.
+        """
+        _run_main(disposable_db, fixture_paths, monkeypatch)
+        migrated = _connect_to(disposable_db)
+        fresh = _connect_to(provenance_shape_db)
+        try:
+            assert _refresh_run_check_constraints(migrated) == _refresh_run_check_constraints(fresh)
+            assert _refresh_run_completed_at_is_nullable(migrated)
+            assert _refresh_run_completed_at_is_nullable(fresh)
+        finally:
+            fresh.close()
+            migrated.close()
 
     def test_zcta_07_07_not_reexecuted(
         self, disposable_db: str, fixture_paths: dict[str, Path], monkeypatch: pytest.MonkeyPatch

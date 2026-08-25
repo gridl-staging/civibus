@@ -11,6 +11,7 @@ import {
 } from "./smoke-helpers";
 import {
   compareExpectedChartScales,
+  compareFixtureByCandidateSlug,
   compareMetricRows,
   compareNationalGeographyCopy,
   compareNoItemizedCopy,
@@ -56,6 +57,38 @@ test.describe("officeholder compare fixture smoke", () => {
       })
     ).toBeVisible();
   });
+
+  test("person detail candidate link resolves through its canonical slug", async ({
+    page
+  }: {
+    page: Page;
+  }) => {
+    await page.goto(`/person/${delayedOfficeholder.id}`);
+
+    await page.getByRole("link", { name: delayedOfficeholder.name, exact: true }).click();
+
+    await expect(page).toHaveURL(`/candidate/${delayedOfficeholder.candidate.slug}`);
+    await expect(
+      page.getByRole("heading", { name: delayedOfficeholder.name, level: 2 })
+    ).toBeVisible();
+  });
+
+  // Every registered compare slug, not just the one reached by the person-page
+  // link above: a compare fixture that reuses a standard candidate id resolves
+  // its own slug to a different candidate's detail.
+  for (const [candidateSlug, fixture] of compareFixtureByCandidateSlug) {
+    test(`compare candidate slug ${candidateSlug} resolves to its own candidate detail`, async ({
+      page
+    }: {
+      page: Page;
+    }) => {
+      await page.goto(`/candidate/${candidateSlug}`);
+
+      await expect(
+        page.getByRole("heading", { name: fixture.candidate.name, level: 2 })
+      ).toBeVisible();
+    });
+  }
 
   test("visible add, remove, and four-person controls keep canonical URL state", async ({
     page

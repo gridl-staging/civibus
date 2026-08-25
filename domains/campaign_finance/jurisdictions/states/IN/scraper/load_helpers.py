@@ -6,6 +6,7 @@ from decimal import Decimal, InvalidOperation
 
 from core.types.python.models import compute_record_hash
 from domains.campaign_finance.ingest.text_utils import normalize_optional_text
+from domains.campaign_finance.types.models import AmendmentIndicatorLiteral
 
 from . import _load_column_for_semantic_path
 
@@ -89,7 +90,7 @@ def _in_transaction_identifier(row: Mapping[str, str | None], *, data_type: str)
     return _in_source_record_key(row, data_type=data_type)
 
 
-def _in_amendment_indicator(row: Mapping[str, str | None], *, data_type: str) -> str:
+def _in_amendment_indicator(row: Mapping[str, str | None], *, data_type: str) -> AmendmentIndicatorLiteral:
     amended_flag = normalize_optional_text(_in_row_value(row, data_type=data_type, semantic_path="transaction.amended"))
     if amended_flag in {None, "0", "N"}:
         return "N"

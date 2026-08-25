@@ -1,6 +1,6 @@
 # Coverage Registry Summary (Derived)
 
-Date: 2026-04-29
+Date: 2026-08-23
 
 Authoritative source: `docs/reference/research/coverage-registry.json`.
 This summary is a derived view of the full coverage registry.
@@ -19,7 +19,7 @@ This summary is a derived view of the full coverage registry.
 | CT | deferred/blocked | annual | no | 1 |
 | DC | freshness-limited | annual | no | 1 |
 | DE | deferred/blocked | annual | no | 1 |
-| FEC | implemented but unproven | continuous | yes | 3 |
+| FEC | launch-support candidate | continuous | yes | 3 |
 | FL | launch-support candidate | daily | yes | 6 |
 | GA | launch-support candidate | continuous | yes | 3 |
 | GU | deferred/blocked | annual | no | 0 |
@@ -91,7 +91,7 @@ This summary is a derived view of the full coverage registry.
 | CA_SACRAMENTO | CA | covered_by_parent | implemented but unproven | daily | 1 |
 | CA_SANTA_ANA | CA | covered_by_parent | implemented but unproven | daily | 1 |
 | CA_SAN_DIEGO | CA | covered_by_parent | implemented but unproven | daily | 1 |
-| CA_SAN_FRANCISCO | CA | independent_target | deferred/blocked | daily | 1 |
+| CA_SAN_FRANCISCO | CA | independent_target | implemented but unproven | daily | 1 |
 | CA_SAN_JOSE | CA | covered_by_parent | implemented but unproven | daily | 1 |
 | CA_STOCKTON | CA | covered_by_parent | implemented but unproven | daily | 1 |
 | CO_AURORA | CO | covered_by_parent | implemented but unproven | weekly | 1 |

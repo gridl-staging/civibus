@@ -613,7 +613,7 @@ def test_main_ie_document_index_loads_and_prints_summary(
     monkeypatch.setattr(cli, "get_connection", MagicMock(return_value=connection))
     monkeypatch.setattr(
         cli,
-        "ensure_nc_ie_document_index_data_source",
+        "resolve_nc_ie_data_source_before_managed_load",
         MagicMock(return_value=ie_source_id),
     )
     load_nc_ie_document_index = MagicMock(return_value=load_result)
@@ -648,7 +648,7 @@ def test_main_ie_document_index_passes_limit_to_loader(
     monkeypatch.setattr(cli, "get_connection", MagicMock(return_value=connection))
     monkeypatch.setattr(
         cli,
-        "ensure_nc_ie_document_index_data_source",
+        "resolve_nc_ie_data_source_before_managed_load",
         MagicMock(return_value=ie_source_id),
     )
     load_nc_ie_document_index = MagicMock(return_value=load_result)
@@ -838,7 +838,7 @@ def test_run_nc_refresh_executes_pathless_ie_transactions_mode(monkeypatch: pyte
     monkeypatch.setattr(cli, "get_connection", MagicMock(return_value=connection))
     monkeypatch.setattr(
         cli,
-        "ensure_nc_ie_document_index_data_source",
+        "resolve_nc_ie_data_source_before_managed_load",
         MagicMock(return_value=ie_source_id),
     )
     monkeypatch.setattr(cli, "load_nc_ie_transactions", load_nc_ie_transactions, raising=False)

@@ -77,7 +77,7 @@ def _resolve_input_path(args: argparse.Namespace) -> tuple[Path, tempfile.Tempor
 
     temp_dir = tempfile.TemporaryDirectory(prefix=f"wa-{args.data_type}-")
     try:
-        download_path = download_wa_csv(args.data_type, dest_dir=Path(temp_dir.name))
+        download_path = download_wa_csv(args.data_type, dest_dir=Path(temp_dir.name), limit=args.limit)
         return download_path, temp_dir
     except Exception:
         temp_dir.cleanup()

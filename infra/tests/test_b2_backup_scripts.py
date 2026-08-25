@@ -231,6 +231,7 @@ def _stage_backup_harness(tmp_path: Path, *, write_env_file: bool) -> tuple[Path
         "B2_BUCKET": TEST_BUCKET,
         "B2_ACCOUNT_ID": "b2-account-id",
         "B2_APPLICATION_KEY": TEST_B2_APPLICATION_KEY,
+        "FLY_BACKUP_DB_PASSWORD": TEST_DB_PASSWORD,
         "POSTGRES_PASSWORD": TEST_DB_PASSWORD,
     }
     Path(env["HOME"]).mkdir()
@@ -288,6 +289,9 @@ def _assert_no_password_exposure(run: ScriptRun) -> None:
         _assert_sensitive_value_not_exposed(run, sensitive_value)
 
     for call in run.calls:
+        assert TEST_DB_PASSWORD not in call.env.values(), f"{call.tool} inherited raw database password material"
+        if call.tool != "rclone":
+            assert TEST_B2_APPLICATION_KEY not in call.env.values(), f"{call.tool} inherited the B2 application key"
         paired = list(zip(call.argv, call.argv[1:]))
         assert not any(first == "-e" and second == "PGPASSWORD" for first, second in paired), (
             f"PGPASSWORD must not be injected via -e: {call.argv}"
@@ -347,9 +351,23 @@ def test_lib_resolves_bucket_from_env_with_documented_default() -> None:
 def test_lib_resolves_retention_window_from_env_with_documented_default() -> None:
     configured = _run_lib_shell("b2_backup_retention_days", BACKUP_RETENTION_DAYS="30")
     defaulted = _run_lib_shell("b2_backup_retention_days")
+    zero_days = _run_lib_shell("b2_backup_retention_days", BACKUP_RETENTION_DAYS="0")
+    non_numeric = _run_lib_shell("b2_backup_retention_days", BACKUP_RETENTION_DAYS="seven")
+    zero_day_prune = _run_lib_shell(
+        'rclone() { echo "unexpected rclone call"; }\nb2_backup_prune_fly_dumps',
+        BACKUP_RETENTION_DAYS="0",
+    )
 
+    assert configured.returncode == 0, configured.stderr
     assert configured.stdout.strip() == "30"
+    assert defaulted.returncode == 0, defaulted.stderr
     assert defaulted.stdout.strip() == "7"
+    assert zero_days.returncode != 0
+    assert "positive integer" in zero_days.stderr
+    assert non_numeric.returncode != 0
+    assert "positive integer" in non_numeric.stderr
+    assert zero_day_prune.returncode != 0
+    assert "unexpected rclone call" not in zero_day_prune.stdout
 
 
 def test_lib_owns_the_fly_prefix_and_full_object_paths() -> None:
@@ -503,7 +521,7 @@ def test_fly_wrapper_dumps_the_live_fly_database_coordinates(tmp_path: Path) -> 
     dump_call = dump_calls[0]
     assert dump_call.flag_value("--host") == "civibus-db.internal"
     assert dump_call.flag_value("--port") == "5432"
-    assert dump_call.flag_value("--username") == "civibus"
+    assert dump_call.flag_value("--username") == "civibus_backup"
     assert dump_call.flag_value("--dbname") == "civibus"
     for flag in CUSTOM_FORMAT_DUMP_FLAGS:
         assert flag in dump_call.argv, f"{flag} missing from Fly dump argv: {dump_call.argv}"
@@ -522,26 +540,32 @@ def test_fly_wrapper_never_spools_the_dump_to_a_local_file(tmp_path: Path) -> No
 
 def test_fly_wrapper_authenticates_via_private_pgpassfile_without_password_env(tmp_path: Path) -> None:
     run = _run_backup_script(tmp_path, FLY_WRAPPER_PATH)
+    backup_dockerfile = (REPO_ROOT / "infra/db/backup.Dockerfile").read_text(encoding="utf-8")
 
     assert run.completed.returncode == 0, run.output
+    assert "\nUSER postgres:postgres\n" in backup_dockerfile, (
+        "the credential-bearing Fly backup process must not run as container root"
+    )
     _assert_no_password_exposure(run)
 
     libpq_calls = run.calls_for("pg_dump") + run.calls_for("psql")
     assert libpq_calls, "expected the Fly wrapper to invoke libpq clients"
     for call in libpq_calls:
+        assert "RCLONE_CONFIG_B2_ACCOUNT" not in call.env, f"{call.tool} inherited the B2 account id"
+        assert "RCLONE_CONFIG_B2_KEY" not in call.env, f"{call.tool} inherited the B2 application key"
         assert "PGPASSWORD" not in call.env, f"{call.tool} must not inherit PGPASSWORD: {sorted(call.env)}"
         assert "POSTGRES_PASSWORD" not in call.env, f"{call.tool} must not inherit POSTGRES_PASSWORD"
         assert TEST_DB_PASSWORD not in call.env.values(), f"{call.tool} inherited password material"
         assert call.env.get("PGPASSFILE"), f"{call.tool} must authenticate through PGPASSFILE"
         assert call.pgpassfile_mode == "600", f"PGPASSFILE must be mode 0600, got {call.pgpassfile_mode}"
-        assert call.pgpassfile_content == (f"civibus-db.internal:5432:civibus:civibus:{TEST_DB_PASSWORD}\n"), (
+        assert call.pgpassfile_content == (f"civibus-db.internal:5432:civibus:civibus_backup:{TEST_DB_PASSWORD}\n"), (
             call.pgpassfile_content
         )
 
 
 def test_fly_wrapper_escapes_pgpass_separator_characters(tmp_path: Path) -> None:
     special_password = r"colon:and\backslash"
-    run = _run_backup_script(tmp_path, FLY_WRAPPER_PATH, POSTGRES_PASSWORD=special_password)
+    run = _run_backup_script(tmp_path, FLY_WRAPPER_PATH, FLY_BACKUP_DB_PASSWORD=special_password)
 
     assert run.completed.returncode == 0, run.output
     _assert_sensitive_value_not_exposed(run, special_password)
@@ -549,7 +573,7 @@ def test_fly_wrapper_escapes_pgpass_separator_characters(tmp_path: Path) -> None
     assert libpq_calls, "expected the Fly wrapper to invoke libpq clients"
     for call in libpq_calls:
         assert special_password not in call.env.values(), f"{call.tool} inherited password material"
-        assert call.pgpassfile_content == "civibus-db.internal:5432:civibus:civibus:colon\\:and\\\\backslash\n"
+        assert call.pgpassfile_content == ("civibus-db.internal:5432:civibus:civibus_backup:colon\\:and\\\\backslash\n")
 
 
 def test_fly_wrapper_removes_its_temporary_pgpass_file_on_exit(tmp_path: Path) -> None:
@@ -591,10 +615,16 @@ def test_fly_wrapper_refuses_an_indeterminate_server_version(tmp_path: Path, ser
 
 
 def test_fly_wrapper_requires_a_database_password(tmp_path: Path) -> None:
-    run = _run_backup_script(tmp_path, FLY_WRAPPER_PATH, write_env_file=False, POSTGRES_PASSWORD="")
+    run = _run_backup_script(
+        tmp_path,
+        FLY_WRAPPER_PATH,
+        write_env_file=False,
+        FLY_BACKUP_DB_PASSWORD="",
+        POSTGRES_PASSWORD="owner-password-is-not-a-backup-credential",
+    )
 
     assert run.completed.returncode != 0, run.output
-    assert "POSTGRES_PASSWORD" in run.output
+    assert "FLY_BACKUP_DB_PASSWORD" in run.output
     assert not run.rclone_calls("rcat")
 
 

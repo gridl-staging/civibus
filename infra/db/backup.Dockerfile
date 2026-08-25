@@ -31,6 +31,11 @@ COPY infra/scripts/backup_fly_db_to_b2.sh /opt/civibus/infra/scripts/backup_fly_
 COPY infra/scripts/b2_backup_lib.sh /opt/civibus/infra/scripts/b2_backup_lib.sh
 COPY infra/scripts/env_lib.sh /opt/civibus/infra/scripts/env_lib.sh
 
+# The official base already provides this account. The streaming job needs no
+# root capability, so keep its database and B2 credentials out of a
+# root-running process boundary.
+USER postgres:postgres
+
 # No default CMD that would launch postgres: the Fly machine command is the
 # backup wrapper. Keep the container inert unless explicitly told to back up.
 ENTRYPOINT []

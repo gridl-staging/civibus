@@ -984,7 +984,7 @@ export function buildCandidateFactRows(detail: CandidateDetailResponse): Campaig
     { label: "District", value: formatRowValue(detail.district), href: null },
     { label: "Incumbent/challenge", value: formatRowValue(detail.incumbent_challenge), href: null }
   ];
-  const firstCandidacy = detail.candidacies[0];
+  const firstCandidacy = detail.candidacies?.[0];
   if (firstCandidacy !== undefined) {
     factRows.push({
       label: "Race",

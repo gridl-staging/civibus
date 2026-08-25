@@ -8,6 +8,17 @@ from pathlib import Path
 
 import pytest
 
+from tests.ci.fly_doctrine_helpers import (
+    FLY_LOCALITY_FACTS,
+    current_doctrine_text,
+    current_prod_ops_forbidden_fragments,
+    doc_lede,
+    has_affirmative_fly_claim,
+    has_historical_apr30_hetzner_bare_docker_rationale,
+    lede_is_parked,
+    relpath,
+)
+
 
 pytestmark = pytest.mark.dev_repo_only(
     private_asset="private Fly ops docs and ledgers: ROADMAP.md, PROJECT_OVERVIEW.md, docs/live-state/",
@@ -21,6 +32,11 @@ LIVE_STATE_PATH = REPO_ROOT / "docs/live-state/2026_07_07_lane1_fly_probe.md"
 ROADMAP_PATH = REPO_ROOT / "ROADMAP.md"
 PROJECT_OVERVIEW_PATH = REPO_ROOT / "PROJECT_OVERVIEW.md"
 CAMPAIGN_FINANCE_REFRESH_RUNBOOK_PATH = REPO_ROOT / "docs/howto/operations/campaign-finance-refresh.md"
+SCRAI_RULES_PATH = REPO_ROOT / ".scrai/rules.md"
+AGENTS_DOC_PATH = REPO_ROOT / "AGENTS.md"
+CLAUDE_DOC_PATH = REPO_ROOT / "CLAUDE.md"
+PROD_OPS_DISCIPLINE_PATH = REPO_ROOT / "docs/howto/operations/prod_ops_discipline.md"
+HETZNER_RUNBOOK_PATH = REPO_ROOT / "docs/howto/operations/hetzner-runbook.md"
 REFRESH_MACHINE_IMAGE_RECEIPT_PATH = REPO_ROOT / "docs/live-state/2026_07_31_refresh_machine_image_deploy.md"
 SCHEDULER_BOUNDARY_RED_RECEIPT_PATH = REPO_ROOT / "docs/live-state/2026_07_28_refresh_scheduler_boundary.md"
 SCHEDULER_BOUNDARY_NO_START_RECEIPT_PATH = REPO_ROOT / "docs/live-state/2026_08_04_refresh_scheduler_boundary.md"
@@ -75,10 +91,35 @@ def _read_text(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
+def _fenced_code_block_containing(text: str, marker: str) -> str:
+    """Return the one fenced code block in ``text`` that contains ``marker``."""
+    blocks = re.findall(r"^```[^\n]*\n(.*?)^```", text, flags=re.MULTILINE | re.DOTALL)
+    matches = [block for block in blocks if marker in block]
+    assert len(matches) == 1, f"expected exactly one fenced block containing {marker!r}"
+    return matches[0]
+
+
+def _heredoc_body(block: str, delimiter: str) -> str:
+    """Return the body of the one ``<<'DELIM' ... DELIM`` heredoc in ``block``."""
+    pattern = rf"<<'{delimiter}'\n(.*?)^{delimiter}$"
+    matches = re.findall(pattern, block, flags=re.MULTILINE | re.DOTALL)
+    assert len(matches) == 1, f"expected exactly one {delimiter!r} heredoc in the block"
+    return matches[0]
+
+
 def _single_line_starting_with(text: str, prefix: str) -> str:
     rows = [line for line in text.splitlines() if line.startswith(prefix)]
     assert len(rows) == 1
     return rows[0]
+
+
+def _h3_subsection_body(text: str, heading: str) -> str:
+    """Return the body of one H3 subsection, from its heading to the next H2/H3."""
+    start = re.search(rf"(?m)^###\s+{re.escape(heading)}\s*$", text)
+    assert start is not None, f"missing subsection heading: {heading}"
+    rest = text[start.end() :]
+    following = re.search(r"(?m)^#{2,3}\s+\S", rest)
+    return rest[: following.start()] if following is not None else rest
 
 
 def _split_markdown_row(row: str) -> list[str]:
@@ -203,6 +244,101 @@ def test_fly_runbook_documents_current_refresh_machine_model() -> None:
         assert fragment in refresh_runbook_text
 
 
+def test_refresh_writer_gate_is_job_key_scoped_not_database_wide() -> None:
+    runbook_text = _read_text(CAMPAIGN_FINANCE_REFRESH_RUNBOOK_PATH)
+    normalized_runbook_text = " ".join(line.removeprefix("> ").strip() for line in runbook_text.splitlines())
+
+    for database_wide_gate_fragment in (
+        "state = 'active'",
+        r"\m(insert|update|delete|copy|truncate|merge)\M",
+    ):
+        assert database_wide_gate_fragment not in runbook_text
+
+    preflight_sql_block = _fenced_code_block_containing(runbook_text, "REFRESH_JOB_KEY")
+    for preflight_sql_fragment in (
+        ': "${REFRESH_JOB_KEY:?set the exact selected job key}"',
+        '-v refresh_job_key="$REFRESH_JOB_KEY"',
+        "state LIKE 'idle in transaction%'",
+        "xact_start < now() - interval '30 minutes'",
+        "SELECT coalesce(max(completed_at)::text, 'never')",
+        "FROM core.refresh_run",
+        "WHERE job_key = :'refresh_job_key'",
+    ):
+        assert preflight_sql_fragment in preflight_sql_block, (
+            f"the production writer preflight probe must keep {preflight_sql_fragment!r}"
+        )
+
+    preflight_sql_statements = [
+        statement for statement in _heredoc_body(preflight_sql_block, "SQL").split(";") if statement.strip()
+    ]
+    assert len(preflight_sql_statements) == 3, (
+        "the preflight probe must stay three statements: the read-only check, the "
+        "long-idle-transaction count, and the same-job ledger line; an extra "
+        "statement is how a database-wide DML gate gets reintroduced"
+    )
+    assert preflight_sql_block.count("pg_stat_activity") == 1, (
+        "a second pg_stat_activity scan reintroduces a database-wide gate"
+    )
+    assert preflight_sql_block.count("count(") == 1, (
+        "the preflight probe must keep exactly one count, over long-idle transactions"
+    )
+    assert "query" not in preflight_sql_block, (
+        "the preflight probe must not inspect pg_stat_activity.query; matching on "
+        "query text is a database-wide DML gate however it is worded"
+    )
+
+    guarded_probe_invocation = (
+        ': "${REFRESH_JOB_KEY:?set the exact selected job key}" &&\n  printf \'job_key=%s\\n\' "$REFRESH_JOB_KEY" &&\n'
+    )
+    assert guarded_probe_invocation in preflight_sql_block, (
+        "the job-key guard must be chained into the probe with `&&` so an unset key "
+        "skips psql in an interactive shell too, and must echo the resolved key so a "
+        "typo is visible in the receipt"
+    )
+
+    assert ': "${CIVIBUS_PROBE_PORT:?' in preflight_sql_block, (
+        "an unset or empty CIVIBUS_PROBE_PORT must be chained into the same `&&` guard "
+        "so `psql -p ''` cannot silently fall back to the default 5432 and report a "
+        "fabricated PASS from the wrong database"
+    )
+
+    for preflight_fragment in (
+        "timestamp-or-`never`",
+        "exactly four lines",
+        "byte-identical to the selected job key",
+        "same-job in-flight work is not detected here by design",
+        "No normal refresh job class requires database-wide quiescence",
+        "one named launcher per job key per lane",
+    ):
+        assert preflight_fragment in normalized_runbook_text
+
+    for ownership_fragment in (
+        "`core/refresh/runner.py` is the single same-host same-job serialization owner",
+        "per-job-key `flock`",
+        "no single fixed execution host",
+        "It provides no cross-host serialization",
+        "not distinguishable in `pg_stat_activity` today",
+    ):
+        assert ownership_fragment in normalized_runbook_text
+
+    for in_flight_visibility_fragment in (
+        "Refresh-run in-flight visibility",
+        "`core/schema/migrations/2026_08_23_refresh_run_running_status.sql`",
+        "drops the old terminal-only `completed_at` constraint",
+        "adds `running` status",
+        "paired running/null-completed invariant",
+        "`docs/live-state/2026_08_23_refresh_in_flight_visibility_acceptance_receipt.md`",
+    ):
+        assert in_flight_visibility_fragment in normalized_runbook_text
+
+    for superseded_ledger_deviation_fragment in (
+        "Documented deviation from deliverable (a)",
+        "`completed_at TIMESTAMPTZ NOT NULL`",
+        "terminal-state-only insert",
+    ):
+        assert superseded_ledger_deviation_fragment not in runbook_text
+
+
 def test_fly_runbook_documents_current_deploy_workflow_model() -> None:
     runbook_text = _read_text(RUNBOOK_PATH)
 
@@ -285,6 +421,8 @@ def test_fly_runbook_password_guidance_points_to_pgpass_owners() -> None:
     )
     for fragment in forbidden_fragments:
         assert fragment not in runbook_text
+
+    assert "PGPASSWORD=" not in runbook_text
 
     assert not SECRET_SHAPED_FLY_IMPORT_RE.search(live_state_text)
 
@@ -426,6 +564,52 @@ def test_scheduler_boundary_red_keeps_weekly_refresh_recheck_open() -> None:
         assert fragment in matrix_row
     assert "scheduled fire unobserved" not in matrix_row
     assert "automatic scheduler acceptance is still owed by the bounded" not in matrix_row
+
+
+def test_campaign_finance_runbook_routes_non_federal_refreshes_through_fly_proxy() -> None:
+    runbook_text = _read_text(CAMPAIGN_FINANCE_REFRESH_RUNBOOK_PATH)
+    current_text = current_doctrine_text(runbook_text)
+    normalized_runbook_text = re.sub(r"\s+", " ", runbook_text)
+
+    for fragment in (
+        "`--job-key-prefix` non-federal/state execution locality",
+        '`flyctl proxy "$CIVIBUS_PROBE_PORT":5432 -a civibus-db`',
+        "`core.refresh.runner`",
+        "`core/refresh/runner.py`",
+        "`core/refresh/job_builders.py::build_refresh_plan()`",
+        "`civibus-parked-deny-inbound` (`11326537`)",
+        "`docs/howto/operations/hetzner-runbook.md`",
+    ):
+        assert fragment in normalized_runbook_text
+    assert "controller shell" in current_text
+    assert "VM cron and wrapper material remains for legacy and non-federal priority support" not in current_text
+    assert "Legacy VM and non-federal priority support" not in current_text
+
+
+def test_campaign_finance_runbook_non_federal_run_is_executable_and_not_federally_scoped() -> None:
+    runbook_text = _read_text(CAMPAIGN_FINANCE_REFRESH_RUNBOOK_PATH)
+    current_text = current_doctrine_text(runbook_text)
+    non_federal_body = _h3_subsection_body(runbook_text, "Non-federal/state job-key-prefix locality")
+    normalized_non_federal = re.sub(r"\s+", " ", non_federal_body)
+
+    # The non-federal locality must show how the runner is actually pointed at the
+    # lane-owned Fly proxy, or the documented controller-shell path is non-executable.
+    for fragment in (
+        "POSTGRES_HOST=127.0.0.1",
+        'POSTGRES_PORT="$CIVIBUS_PROBE_PORT"',
+        "python -m core.refresh.runner --job-key-prefix",
+        "core/db.py::_build_connection_parameters",
+    ):
+        assert fragment in normalized_non_federal
+
+    # The non-federal post-run proof must not inherit the federal-only FEC pull date
+    # or the fixed federal person page, which would false-fail/false-green state runs.
+    assert "EXPECTED_FEC_PULL_DATE_UTC" not in non_federal_body
+    assert "d2944415-3ec6-47b0-b44f-2cd28ddfbc0b" not in non_federal_body
+
+    # The federal acceptance probe still lives in current doctrine under its own scope.
+    assert "EXPECTED_FEC_PULL_DATE_UTC" in current_text
+    assert "d2944415-3ec6-47b0-b44f-2cd28ddfbc0b" in current_text
 
 
 def test_feature_matrix_history_split_preserves_owner_contract_and_continuations() -> None:
@@ -645,6 +829,154 @@ def test_project_overview_current_scope_matches_implemented_fly_refresh_model() 
     overview_text = _read_text(PROJECT_OVERVIEW_PATH)
 
     assert "federal-first" in overview_text
-    assert "543 elected federal officials" in overview_text
+    assert "543-slot federal office universe" in overview_text
     assert "Fly self-managed Postgres" in overview_text
     assert "scheduled Fly machine `civibus-refresh`" in overview_text
+
+
+def _rel(path: Path) -> str:
+    return relpath(path, REPO_ROOT)
+
+
+def _forbidden(text: str) -> list[str]:
+    return [fragment for fragment, _clause in current_prod_ops_forbidden_fragments(text)]
+
+
+def test_current_production_doctrine_fly_claim_helper_regressions() -> None:
+    rejected_claims = (
+        "Never use Fly for the current production path.",
+        "Fly isn't the current production path.",
+        "Fly is no longer the current production path.",
+        "Fly is the future production target.",
+        "Fly will become the current production path.",
+    )
+    accepted_claims = (
+        ("Fly is the current production path.", ("production",)),
+        ("Current read-only production access is through Fly.", ("read-only",)),
+        ("Fly is the active refresh locality.", ("refresh",)),
+        ("Fly is the current production path; do not use Hetzner.", ("production",)),
+    )
+    assert [claim for claim in rejected_claims if has_affirmative_fly_claim(claim, ("production",))] == []
+    assert [claim for claim, terms in accepted_claims if not has_affirmative_fly_claim(claim, terms)] == []
+
+
+def test_current_production_doctrine_legacy_helper_regressions() -> None:
+    current_sections = current_doctrine_text(
+        "# Production Ops\n\n## Incident response\n\nUse Hetzner during active production incidents.\n\n"
+        "## Worked example\n\nRun infra/scripts/prod_compose.sh for this current operation.\n\n## Historical stack now active\n\nUse Hetzner for production proof.\n"
+        "## Historical but current production procedure\n\nUse Hetzner for fallback proof.\n"
+    )
+    assert "Use Hetzner during active production incidents." in current_sections
+    assert "Run infra/scripts/prod_compose.sh for this current operation." in current_sections
+    assert all(
+        fragment in current_sections
+        for fragment in ("Use Hetzner for production proof.", "Use Hetzner for fallback proof.")
+    )
+    assert _forbidden("Use bare Docker for production proof.") == ["bare docker"]
+    assert _forbidden("Run docker compose up for production proof.") == ["docker compose up"]
+    assert _forbidden(
+        "Run infra/scripts/prod_compose.sh on the Hetzner prod VM at 5.78.207.136 for production proof."
+    ) == ["5.78.207.136", "Hetzner", "prod_compose.sh"]
+    assert _forbidden("Do not use Hetzner or infra/scripts/prod_compose.sh for production proof.") == []
+    assert _forbidden("Bare `docker compose ...` is forbidden. Hetzner is active and no longer parked.") == ["Hetzner"]
+    assert (
+        _forbidden("The Hetzner prod VM at 5.78.207.136 is parked; never use bare Docker for production proof.") == []
+    )
+    assert _forbidden("Use Hetzner for production proof rather than Fly.") == ["Hetzner"]
+    active_legacy_path = (
+        "Run infra/scripts/prod_compose.sh on the Hetzner prod VM at 5.78.207.136 for production proof, not Fly."
+    )
+    assert _forbidden(active_legacy_path) == ["5.78.207.136", "Hetzner", "prod_compose.sh"]
+    assert _forbidden("Do not use Fly, use Hetzner for production proof.") == ["Hetzner"]
+    assert _forbidden("Use Hetzner for production proof because Fly is forbidden.") == ["Hetzner"]
+    assert "Hetzner-first" not in current_doctrine_text(
+        "# Ops\n\n## Historical note\n\nHetzner-first used the Hetzner prod VM.\n"
+    )
+    assert "Use Hetzner" in current_doctrine_text("# Ops\n\n## Not historical: current procedure\n\nUse Hetzner.\n")
+    date_only_heading = (
+        "# Ops\n\n## Apr 30 current production procedure\n\n"
+        "Run infra/scripts/prod_compose.sh on the Hetzner prod VM with bare Docker as the 2026-04-30 production proof.\n"
+    )
+    assert "Hetzner prod VM" in current_doctrine_text(date_only_heading)
+    assert not has_historical_apr30_hetzner_bare_docker_rationale(date_only_heading)
+    assert not has_historical_apr30_hetzner_bare_docker_rationale(
+        "# Ops\n\nApr 30 lede.\n\n## Historical note\n\nNo protected rationale.\n"
+    )
+    assert has_historical_apr30_hetzner_bare_docker_rationale(
+        "# Ops\n\n## Apr 30 historical rationale\n\n"
+        "Hetzner used infra/scripts/prod_compose.sh because docker compose up mounted the wrong volume.\n"
+    )
+    assert lede_is_parked("This stack is parked and superseded by Fly.")
+    assert lede_is_parked("The Hetzner stack remains historical reference material.")
+    assert not lede_is_parked("This stack is not historical or parked.")
+    assert not lede_is_parked("This stack will be parked once Fly lands.")
+    assert not lede_is_parked("This stack is no longer parked.")
+    assert not lede_is_parked("Hetzner runbook: historical context appears below.")
+    assert not lede_is_parked("The Hetzner stack was parked until Fly launched, but is now active.")
+    assert all(
+        not lede_is_parked(reactivated_lede)
+        for reactivated_lede in (
+            "The Hetzner stack was historical, but is now the production path again.",
+            "The Hetzner stack was historical, but now runs production.",
+        )
+    )
+    assert not lede_is_parked("The Hetzner stack was parked during migration, but will now be active.")
+    assert not lede_is_parked("The Hetzner stack was parked. It is now active.")
+
+
+def test_current_production_doctrine_points_to_fly_and_parks_hetzner() -> None:
+    doctrine_paths = (SCRAI_RULES_PATH, AGENTS_DOC_PATH, CLAUDE_DOC_PATH, PROD_OPS_DISCIPLINE_PATH)
+    docs = {path: _read_text(path) for path in (*doctrine_paths, RUNBOOK_PATH, HETZNER_RUNBOOK_PATH)}
+    current = {path: current_doctrine_text(docs[path]) for path in doctrine_paths}
+    violations: list[str] = []
+
+    violations.extend(
+        f"{_rel(RUNBOOK_PATH)}: Fly runbook must own current-locality fact {fact!r}"
+        for fact in FLY_LOCALITY_FACTS
+        if fact not in docs[RUNBOOK_PATH]
+    )
+    violations.extend(
+        f"{_rel(path)}: current-locality fact {fact!r} duplicated from {_rel(RUNBOOK_PATH)}"
+        for path in doctrine_paths
+        for fact in FLY_LOCALITY_FACTS
+        if fact in docs[path]
+    )
+
+    fly_claims = (
+        ("active production locality", ("production",)),
+        ("read-only production access locality", ("read-only",)),
+        ("refresh locality", ("refresh",)),
+    )
+    for path in (SCRAI_RULES_PATH, PROD_OPS_DISCIPLINE_PATH):
+        for label, required_terms in fly_claims:
+            if not has_affirmative_fly_claim(current[path], required_terms):
+                violations.append(
+                    f"{_rel(path)}: current doctrine must affirm Fly as the {label}; "
+                    f"missing affirmative Fly claim with terms {required_terms!r}"
+                )
+
+    violations.extend(
+        f"{_rel(path)}: current-tense directive {fragment!r} still present; route routine production/acquisition to Fly"
+        for path in (SCRAI_RULES_PATH, AGENTS_DOC_PATH, CLAUDE_DOC_PATH)
+        for fragment in ("Hetzner prod VM", "Hetzner-first")
+        if fragment in current[path]
+    )
+    violations.extend(
+        f"{_rel(PROD_OPS_DISCIPLINE_PATH)}: {fragment!r} presented as the current production "
+        f"proof path outside a historical section: {clause[:120]!r}"
+        for fragment, clause in current_prod_ops_forbidden_fragments(current[PROD_OPS_DISCIPLINE_PATH])
+    )
+    if not has_historical_apr30_hetzner_bare_docker_rationale(docs[PROD_OPS_DISCIPLINE_PATH]):
+        violations.append(
+            f"{_rel(PROD_OPS_DISCIPLINE_PATH)}: Apr-30 rationale must be retained under an "
+            "explicitly historical section with Hetzner/prod_compose.sh/bare-docker rationale"
+        )
+    if not lede_is_parked(doc_lede(docs[HETZNER_RUNBOOK_PATH])):
+        violations.append(
+            f"{_rel(HETZNER_RUNBOOK_PATH)}: lede must affirmatively state the stack is "
+            "historical/parked/superseded/retired"
+        )
+    if "5.78.207.136" not in docs[HETZNER_RUNBOOK_PATH]:
+        violations.append(f"{_rel(HETZNER_RUNBOOK_PATH)}: parked runbook must retain its Hetzner identity/IP")
+
+    assert not violations, "current-production-locality doctrine violations:\n" + "\n".join(violations)

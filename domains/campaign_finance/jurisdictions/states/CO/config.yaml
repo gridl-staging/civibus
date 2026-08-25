@@ -208,6 +208,160 @@ laws:
     corporate_direct: "prohibited" # Art. XXVIII § 3(4)(a)
     union_direct: "prohibited" # Art. XXVIII § 3(4)(a)
     party_to_candidate: 789060 # governor; varies dramatically by office — see notes
+  contribution_limit_rules:
+    - donor_type: individual
+      recipient_type: candidate_committee
+      office_level: statewide
+      limit_status: numeric
+      limit_amount: 725
+      limit_basis: per_cycle
+      effective_date: "2023-02-15"
+      source_citation: "Colorado SOS contribution limits page; Art. XXVIII § 3; CPF Rule 10.17"
+    - donor_type: pac
+      recipient_type: candidate_committee
+      office_level: statewide
+      limit_status: numeric
+      limit_amount: 725
+      limit_basis: per_cycle
+      effective_date: "2023-02-15"
+      source_citation: "Colorado SOS contribution limits page; Art. XXVIII § 3; CPF Rule 10.17"
+    - donor_type: individual
+      recipient_type: candidate_committee
+      office_level: legislative
+      limit_status: numeric
+      limit_amount: 225
+      limit_basis: per_cycle
+      effective_date: "2023-02-15"
+      source_citation: "Colorado SOS contribution limits page; Art. XXVIII § 3; CPF Rule 10.17"
+    - donor_type: pac
+      recipient_type: candidate_committee
+      office_level: legislative
+      limit_status: numeric
+      limit_amount: 225
+      limit_basis: per_cycle
+      effective_date: "2023-02-15"
+      source_citation: "Colorado SOS contribution limits page; Art. XXVIII § 3; CPF Rule 10.17"
+    - donor_type: individual
+      recipient_type: candidate_committee
+      office_level: county
+      limit_status: numeric
+      limit_amount: 1425
+      limit_basis: per_cycle
+      effective_date: "2023-02-15"
+      source_citation: "Colorado SOS contribution limits page; C.R.S. § 1-45-103.7; CPF Rule 10.17"
+      local_override_allowed: true
+    - donor_type: pac
+      recipient_type: candidate_committee
+      office_level: county
+      limit_status: numeric
+      limit_amount: 1425
+      limit_basis: per_cycle
+      effective_date: "2023-02-15"
+      source_citation: "Colorado SOS contribution limits page; C.R.S. § 1-45-103.7; CPF Rule 10.17"
+      local_override_allowed: true
+    - donor_type: individual
+      recipient_type: candidate_committee
+      office_level: municipal
+      limit_status: numeric
+      limit_amount: 400
+      limit_basis: per_election
+      effective_date: "2023-02-15"
+      source_citation: "Colorado SOS contribution limits page; C.R.S. § 1-45-103.7; CPF Rule 10.17"
+      local_override_allowed: true
+    - donor_type: pac
+      recipient_type: candidate_committee
+      office_level: municipal
+      limit_status: numeric
+      limit_amount: 400
+      limit_basis: per_election
+      effective_date: "2023-02-15"
+      source_citation: "Colorado SOS contribution limits page; C.R.S. § 1-45-103.7; CPF Rule 10.17"
+      local_override_allowed: true
+    - donor_type: individual
+      recipient_type: candidate_committee
+      office_level: school_district
+      limit_status: numeric
+      limit_amount: 2500
+      limit_basis: per_election
+      effective_date: "2023-02-15"
+      source_citation: "Colorado SOS contribution limits page; C.R.S. § 1-45-103.7; CPF Rule 10.17"
+    - donor_type: small_donor_committee
+      recipient_type: candidate_committee
+      office_level: statewide
+      limit_status: numeric
+      limit_amount: 7825
+      limit_basis: per_cycle
+      effective_date: "2023-02-15"
+      source_citation: "Colorado SOS contribution limits page; Art. XXVIII § 3; CPF Rule 10.17"
+    - donor_type: small_donor_committee
+      recipient_type: candidate_committee
+      office_level: legislative
+      limit_status: numeric
+      limit_amount: 3100
+      limit_basis: per_cycle
+      effective_date: "2023-02-15"
+      source_citation: "Colorado SOS contribution limits page; Art. XXVIII § 3; CPF Rule 10.17"
+    - donor_type: small_donor_committee
+      recipient_type: candidate_committee
+      office_level: county
+      limit_status: numeric
+      limit_amount: 14400
+      limit_basis: per_cycle
+      effective_date: "2023-02-15"
+      source_citation: "Colorado SOS contribution limits page; C.R.S. § 1-45-103.7; CPF Rule 10.17"
+      local_override_allowed: true
+    - donor_type: small_donor_committee
+      recipient_type: candidate_committee
+      office_level: school_district
+      limit_status: numeric
+      limit_amount: 25000
+      limit_basis: per_election
+      effective_date: "2023-02-15"
+      source_citation: "Colorado SOS contribution limits page; C.R.S. § 1-45-103.7; CPF Rule 10.17"
+    - donor_type: party_committee
+      recipient_type: candidate_committee
+      office_level: governor
+      limit_status: numeric
+      limit_amount: 789060
+      limit_basis: per_cycle
+      effective_date: "2023-02-15"
+      source_citation: "Colorado SOS contribution limits page; Art. XXVIII § 3; CPF Rule 10.17"
+    - donor_type: party_committee
+      recipient_type: candidate_committee
+      office_level: statewide_except_governor
+      limit_status: numeric
+      limit_amount: 157805
+      limit_basis: per_cycle
+      effective_date: "2023-02-15"
+      source_citation: "Colorado SOS contribution limits page; Art. XXVIII § 3; CPF Rule 10.17"
+    - donor_type: party_committee
+      recipient_type: candidate_committee
+      office_level: legislative
+      limit_status: numeric
+      limit_amount: 20500
+      limit_basis: per_cycle
+      effective_date: "2023-02-15"
+      source_citation: "Colorado SOS contribution limits page; Art. XXVIII § 3; CPF Rule 10.17"
+    - donor_type: individual
+      recipient_type: party_committee
+      limit_status: numeric
+      limit_amount: 4675
+      limit_basis: per_calendar_year
+      effective_date: "2023-02-15"
+      source_citation: "Colorado SOS contribution limits page; Art. XXVIII § 3; CPF Rule 10.17"
+      metadata:
+        - description: "State-party sublimit: $3,875 per calendar year."
+          source_citation: "Colorado SOS contribution limits page; Art. XXVIII § 3; CPF Rule 10.17"
+    - donor_type: small_donor_committee
+      recipient_type: party_committee
+      limit_status: numeric
+      limit_amount: 23600
+      limit_basis: per_calendar_year
+      effective_date: "2023-02-15"
+      source_citation: "Colorado SOS contribution limits page; Art. XXVIII § 3; CPF Rule 10.17"
+      metadata:
+        - description: "State-party sublimit: $19,650 per calendar year."
+          source_citation: "Colorado SOS contribution limits page; Art. XXVIII § 3; CPF Rule 10.17"
   itemization_threshold: 20 # name/address required at $20+; employer/occupation at $100+
   reporting:
     periods: ["quarterly", "biweekly", "monthly", "pre-election", "post-election"]

@@ -70,6 +70,7 @@ import {
   SMOKE_OFFICE_OFFICEHOLDER_NAME,
   SMOKE_OFFICE_TITLE,
   SMOKE_OFFICEHOLDER_EMPTY_STATE,
+  SMOKE_NC_SHOWCASE_DISTRICT_DIVISION_ID,
   SMOKE_OFFICEHOLDING_DESCRIPTION,
   SMOKE_OFFICEHOLDING_ID,
   SMOKE_OFFICEHOLDING_PERSON_NAME,
@@ -395,6 +396,11 @@ test.describe("entity and civic detail smoke", () => {
     await expect(page.getByRole("heading", { name: "Elections for this office" })).toBeVisible();
     await expect(page.getByRole("heading", { name: "District map context" })).toBeVisible();
     await expect(
+      page.locator(
+        `[data-layer-id="nc_congressional_districts"][data-feature-id="${SMOKE_NC_SHOWCASE_DISTRICT_DIVISION_ID}"]`
+      )
+    ).toHaveClass(/region-map__feature--highlighted/);
+    await expect(
       page.getByRole("link", { name: SMOKE_OFFICE_OFFICEHOLDER_NAME, exact: true }).first()
     ).toHaveAttribute("href", `/person/${SMOKE_PERSON_ID}`);
     await expect(page.getByRole("link", { name: SMOKE_OFFICE_RECENT_CONTEST_NAME })).toHaveAttribute(
@@ -466,6 +472,11 @@ test.describe("entity and civic detail smoke", () => {
     await expect(page.getByRole("heading", { name: "Candidacies" })).toBeVisible();
     await expect(page.getByRole("heading", { name: "Money in this race" })).toBeVisible();
     await expect(page.getByRole("heading", { name: "District map context" })).toBeVisible();
+    await expect(
+      page.locator(
+        `[data-layer-id="nc_congressional_districts"][data-feature-id="${SMOKE_NC_SHOWCASE_DISTRICT_DIVISION_ID}"]`
+      )
+    ).toHaveClass(/region-map__feature--highlighted/);
     await expect(page.getByRole("link", { name: "View office record" })).toHaveAttribute(
       "href",
       `/office/${SMOKE_OFFICE_ID}`

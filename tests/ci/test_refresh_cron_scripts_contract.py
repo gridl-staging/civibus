@@ -496,10 +496,10 @@ def test_backup_status_docs_keep_shipped_language_and_forbidden_slug_out() -> No
     assert forbidden_slug not in claude_text
     assert forbidden_slug not in agents_text
 
+    # Commit 9ffb034ec follows .scrai/overview.md's anti-snapshot rule (do not "carry a dated
+    # production-status snapshot"); the canonical wrong-volume incident owner is
+    # docs/howto/operations/postmortems/2026_04_30_prod_data_link_severed.md.
     assert "DB backup to B2 — CLOSED/PASS." in roadmap_text
-    for text in (overview_text, claude_text, agents_text):
-        assert "Production status as of 2026-04-30" in text
-        assert "wrong-volume bootstrap incident" in text
 
 
 @pytest.mark.dev_repo_only(

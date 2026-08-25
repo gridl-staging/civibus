@@ -84,7 +84,7 @@ prefix_path="$(b2_backup_fly_prefix_path)"
 
 # List only the Fly prefix, never the bucket root. `t;p` gives the object's B2
 # modification time and its path, one row per object.
-if ! listing="$(rclone lsf --format "tp" "${prefix_path}")"; then
+if ! listing="$(b2_backup_rclone lsf --format "tp" "${prefix_path}")"; then
   echo "ERROR: could not list the Fly backup prefix (${prefix_path}); failing closed" >&2
   exit 1
 fi

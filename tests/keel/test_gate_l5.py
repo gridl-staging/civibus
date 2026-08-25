@@ -1,10 +1,20 @@
 from __future__ import annotations
 
 import json
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
-from core.refresh import gate_l5
+import psycopg
+import pytest
+
+from core.refresh import gate_l5, runner
+from test_support.refresh_run_fixtures import (
+    assert_single_in_flight_row,
+    delete_refresh_runs_completed_on,
+    delete_refresh_runs_for_job,
+    record_terminal_refresh_run,
+    refresh_job_for_tests,
+)
 
 
 def _read_json(path: Path) -> dict[str, object]:
@@ -44,3 +54,56 @@ def test_build_evidence_marks_pass_when_all_runs_are_success(tmp_path: Path) -> 
 
     assert payload["status"] == "pass"
     assert payload["gate_command"] == "make gate-L5"
+
+
+@pytest.mark.integration
+def test_summarize_refresh_runs_excludes_an_in_flight_running_row(
+    db_conn: psycopg.Connection,
+) -> None:
+    # A running row has no completed_at, so the window's completed_at >=/< predicate must
+    # drop it: an in-flight job can never change L5 counts, verdict, or status-key set.
+    job_key = "l5-in-flight-job"
+    job = refresh_job_for_tests(job_key)
+    evidence_date = date(2099, 4, 1)
+    window_at = datetime(2099, 4, 1, 12, 0, tzinfo=timezone.utc)
+
+    try:
+        # summarize_refresh_runs has no job_key filter, so it reads global window state.
+        # Own the sentinel window outright before seeding, and clear this job's own rows
+        # (the running row has no completed_at, so the window clear cannot reach it) —
+        # otherwise a killed run's leaked rows wedge the exact-count assertion and the
+        # vacuity guard below permanently red.
+        delete_refresh_runs_completed_on(db_conn, evidence_date)
+        delete_refresh_runs_for_job(db_conn, job_key)
+        record_terminal_refresh_run(db_conn, job, pull_status="success", completed_at=window_at)
+        record_terminal_refresh_run(db_conn, job, pull_status="success", completed_at=window_at + timedelta(hours=1))
+        record_terminal_refresh_run(db_conn, job, pull_status="crashed", completed_at=window_at + timedelta(hours=2))
+        db_conn.commit()
+
+        counts_without_in_flight, total_without_in_flight = gate_l5.summarize_refresh_runs(
+            db_conn, evidence_date=evidence_date
+        )
+
+        # started_at inside the window but completed_at IS NULL — the schema invariant
+        # forbids setting completed_at on a running row, and the window filters on it.
+        runner._start_refresh_run(db_conn, job, started_at=window_at + timedelta(hours=3))
+        # Vacuity guard: the running row really is committed, so before/after equality
+        # cannot pass on a missing insert.
+        assert_single_in_flight_row(db_conn, job_key)
+
+        counts_with_in_flight, total_with_in_flight = gate_l5.summarize_refresh_runs(
+            db_conn, evidence_date=evidence_date
+        )
+
+        assert counts_without_in_flight == {"crashed": 1, "empty": 0, "degraded": 0, "success": 2}
+        assert total_without_in_flight == 3
+        # The running row is excluded: counts, total, key-set, and verdict are all unmoved.
+        assert counts_with_in_flight == counts_without_in_flight
+        assert total_with_in_flight == total_without_in_flight
+        assert set(counts_with_in_flight) == set(gate_l5._STATUS_KEYS)
+        assert "running" not in counts_with_in_flight
+        verdict_before = gate_l5._evidence_status(counts=counts_without_in_flight, total_runs=total_without_in_flight)
+        verdict_after = gate_l5._evidence_status(counts=counts_with_in_flight, total_runs=total_with_in_flight)
+        assert verdict_before == verdict_after == "fail"
+    finally:
+        delete_refresh_runs_for_job(db_conn, job_key)

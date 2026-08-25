@@ -194,6 +194,7 @@ PUBLIC_MIRROR_TEST_CLASSIFICATIONS: tuple[PublicMirrorTestClassification, ...] =
         owner="Fly ops documentation and private open-work ledger",
         node_ids=(
             "tests/ci/test_fly_ops_docs_contract.py::test_fly_runbook_documents_current_refresh_machine_model",
+            "tests/ci/test_fly_ops_docs_contract.py::test_refresh_writer_gate_is_job_key_scoped_not_database_wide",
             "tests/ci/test_fly_ops_docs_contract.py::test_fly_runbook_documents_current_deploy_workflow_model",
             "tests/ci/test_fly_ops_docs_contract.py::test_fly_runbook_password_guidance_points_to_pgpass_owners",
             "tests/ci/test_fly_ops_docs_contract.py::test_stage_owned_runnable_docs_do_not_publish_password_prefix_commands",
@@ -207,8 +208,19 @@ PUBLIC_MIRROR_TEST_CLASSIFICATIONS: tuple[PublicMirrorTestClassification, ...] =
             ),
             "tests/ci/test_fly_ops_docs_contract.py::test_aug03_batch_stage2_roadmap_reconciliation_is_falsifiable",
             "tests/ci/test_fly_ops_docs_contract.py::test_project_overview_current_scope_matches_implemented_fly_refresh_model",
+            "tests/ci/test_fly_ops_docs_contract.py::test_current_production_doctrine_fly_claim_helper_regressions",
+            "tests/ci/test_fly_ops_docs_contract.py::test_current_production_doctrine_legacy_helper_regressions",
+            "tests/ci/test_fly_ops_docs_contract.py::test_current_production_doctrine_points_to_fly_and_parks_hetzner",
             "tests/ci/test_fly_ops_docs_contract.py::test_lane10_refresh_digest_proof_accepts_the_deployed_workflow_image",
             "tests/ci/test_fly_ops_docs_contract.py::test_lane10_refresh_digest_proof_rejects_old_image_after_unrelated_machine_update",
+            (
+                "tests/ci/test_fly_ops_docs_contract.py::"
+                "test_campaign_finance_runbook_routes_non_federal_refreshes_through_fly_proxy"
+            ),
+            (
+                "tests/ci/test_fly_ops_docs_contract.py::"
+                "test_campaign_finance_runbook_non_federal_run_is_executable_and_not_federally_scoped"
+            ),
         ),
     ),
     *_entries(

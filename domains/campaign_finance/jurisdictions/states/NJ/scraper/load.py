@@ -53,7 +53,7 @@ from . import (
     _load_data_source_name_for_data_type,
     _load_data_source_url_for_data_type,
 )
-from .extract import extract_nj_contribution
+from .extract import NJContributionExtraction, extract_nj_contribution
 from .parse import parse_contributions
 
 LOGGER = logging.getLogger(__name__)
@@ -61,6 +61,7 @@ LOGGER = logging.getLogger(__name__)
 _NJ_DOMAIN = "campaign_finance"
 _NJ_JURISDICTION = "state/NJ"
 _NJ_SOURCE_FORMAT = "csv"
+_COMMIT_BATCH_ROWS = 1_000
 
 
 @dataclass(slots=True)
@@ -151,7 +152,7 @@ def _nj_source_record_key(row: Mapping[str, str | None]) -> str:
 
 
 def _build_nj_source_record(data_source_id: UUID, row: Mapping[str, str | None]) -> SourceRecord:
-    raw_fields = dict(row)
+    raw_fields: dict[str, object] = dict(row)
     return SourceRecord(
         data_source_id=data_source_id,
         source_record_key=_nj_source_record_key(row),
@@ -173,7 +174,7 @@ def _load_nj_contribution_entities(
     conn: psycopg.Connection,
     *,
     source_record_id: UUID,
-    extracted: dict[str, object],
+    extracted: NJContributionExtraction,
 ) -> None:
     """Persist extracted entities (person, org, committee, address) with provenance links."""
     address = extracted["address"]
@@ -291,7 +292,7 @@ def _load_nj_rows(
             counts.skipped += 1
 
         processed_count = counts.inserted + counts.skipped + counts.errors
-        if processed_count % 1_000 == 0:
+        if processed_count % _COMMIT_BATCH_ROWS == 0:
             commit_managed_transaction(conn, manages_outer_transaction)
 
     commit_managed_transaction(conn, manages_outer_transaction)
@@ -477,7 +478,7 @@ def _upsert_nj_contribution_with_filing(
             filing_id=filing_id,
             committee_id=committee_id,
             transaction_type=_normalized_column_text(row, "transaction.type") or "contribution",
-            transaction_identifier=None,
+            transaction_identifier=_nj_source_record_key(row),
             transaction_date=_parse_nj_date(row.get(_column("transaction.date"))),
             amount=_parse_nj_amount(row.get(_column("transaction.amount"))),
             contributor_name_raw=contributor_name,
@@ -508,6 +509,7 @@ def _load_nj_relational_contributions(
     filing_lookup: dict[str, _NJFilingLookupEntry] = {}
     relational_errors = 0
     manages_outer_transaction = conn.info.transaction_status == psycopg.pq.TransactionStatus.IDLE
+    processed_count = 0
 
     for row in iter_rows_with_limit(rows, limit):
         if not isinstance(row, Mapping):
@@ -518,30 +520,39 @@ def _load_nj_relational_contributions(
             data_source_id=data_source_id,
             source_record_key=_nj_source_record_key(row),
         )
-        if source_record_id is None:
-            continue
+        if source_record_id is not None:
+            try:
+                if manages_outer_transaction:
+                    ensure_transaction_open(conn)
 
-        try:
-            if manages_outer_transaction:
-                ensure_transaction_open(conn)
+                with conn.transaction():
+                    filing_entry = _upsert_nj_filing(
+                        conn,
+                        row,
+                        source_record_id=source_record_id,
+                        filing_lookup=filing_lookup,
+                    )
+                    _upsert_nj_contribution_with_filing(
+                        conn,
+                        row,
+                        filing_id=filing_entry.filing_id,
+                        committee_id=filing_entry.committee_id,
+                        source_record_id=source_record_id,
+                    )
+            except Exception:  # noqa: BLE001
+                try:
+                    filing_lookup.pop(_build_nj_filing_fec_id(row), None)
+                except Exception:  # noqa: BLE001
+                    pass
+                relational_errors += 1
+                LOGGER.exception("Failed linking NJ contribution row to filing")
 
-            with conn.transaction():
-                filing_entry = _upsert_nj_filing(
-                    conn,
-                    row,
-                    source_record_id=source_record_id,
-                    filing_lookup=filing_lookup,
-                )
-                _upsert_nj_contribution_with_filing(
-                    conn,
-                    row,
-                    filing_id=filing_entry.filing_id,
-                    committee_id=filing_entry.committee_id,
-                    source_record_id=source_record_id,
-                )
-        except Exception:  # noqa: BLE001
-            relational_errors += 1
-            LOGGER.exception("Failed linking NJ contribution row to filing")
+        # Every iterated row advances the boundary, including rows with no source record:
+        # the lookup above opens a read transaction either way, so counting only linked
+        # rows would let a run of missing rows hold one open.
+        processed_count += 1
+        if processed_count % _COMMIT_BATCH_ROWS == 0:
+            commit_managed_transaction(conn, manages_outer_transaction)
 
     commit_managed_transaction(conn, manages_outer_transaction)
     return relational_errors
@@ -558,11 +569,12 @@ def load_nj_contributions_with_filings(
 ) -> LoadResult:
     """Two-pass NJ contribution load: base entities, then filings + transactions."""
     validated_row_limit = validated_limit(limit)
-    data_source_id = ensure_nj_data_source(conn, data_type="contributions")
+    # Capture ownership before ensure_nj_data_source runs SQL and implicitly opens
+    # a transaction; committing the data-source row here leaves the connection IDLE
+    # so each inner loop owns and periodically commits its own batch.
     manages_outer_transaction = conn.info.transaction_status == psycopg.pq.TransactionStatus.IDLE
-
-    if manages_outer_transaction:
-        ensure_transaction_open(conn)
+    data_source_id = ensure_nj_data_source(conn, data_type="contributions")
+    commit_managed_transaction(conn, manages_outer_transaction)
 
     try:
         load_result = _load_nj_file(conn, fp, data_source_id=data_source_id, limit=validated_row_limit)
@@ -577,8 +589,7 @@ def load_nj_contributions_with_filings(
             conn.rollback()
         raise
 
-    if manages_outer_transaction:
-        conn.commit()
+    commit_managed_transaction(conn, manages_outer_transaction)
 
     return load_result
 

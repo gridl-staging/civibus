@@ -18,6 +18,7 @@ FEC_CANDIDATE_ID_REGEX = r"^[HSP]\d[A-Z0-9]{2}\d{5}$"
 JurisdictionTypeLiteral = Literal["federal", "state", "other"]
 IncumbentChallengeLiteral = Literal["I", "C", "O"]
 AmendmentIndicatorLiteral = Literal["N", "A", "T"]
+SupportOpposeLiteral = Literal["S", "O"]
 FecMoney = Annotated[Decimal, Field(max_digits=14, decimal_places=2)]
 CommitteeSummaryMoney = FecMoney
 CandidateMoney = FecMoney
@@ -298,7 +299,7 @@ class Transaction(CampaignFinanceBaseModel):
     amended_by_transaction_id: Optional[UUID] = None
     source_record_id: Optional[UUID] = None
     date_is_reliable: bool = True
-    support_oppose: Optional[Literal["S", "O"]] = None
+    support_oppose: Optional[SupportOpposeLiteral] = None
     dissemination_date: Optional[date] = None
     aggregate_amount: Optional[Decimal] = None
 

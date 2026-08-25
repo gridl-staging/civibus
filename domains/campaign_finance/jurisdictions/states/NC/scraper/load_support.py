@@ -17,7 +17,7 @@ from core.types.python.models import (
     utc_now,
 )
 from domains.campaign_finance.jurisdictions.config_schema import DataSourceConfig, load_jurisdiction_config
-from domains.campaign_finance.jurisdictions.states.load_utils import ensure_data_source
+from domains.campaign_finance.jurisdictions.states.load_utils import commit_managed_transaction, ensure_data_source
 
 from . import _CONFIG_PATH
 
@@ -91,6 +91,21 @@ def ensure_nc_committee_document_data_source(conn: psycopg.Connection) -> UUID:
 
 def ensure_nc_ie_document_index_data_source(conn: psycopg.Connection) -> UUID:
     return _ensure_nc_data_source(conn, build_ie_document_index_data_source())
+
+
+def resolve_nc_ie_data_source_before_managed_load(conn: psycopg.Connection) -> UUID:
+    """Resolve the NC IE data source, leaving transaction ownership as the caller had it.
+
+    The lookup itself opens a transaction. A loader that samples ``transaction_status``
+    afterwards therefore reads INTRANS, concludes an outer caller owns the transaction,
+    and turns its own periodic ``commit_managed_transaction()`` calls into no-ops — so an
+    interrupted bulk load would lose every batch it had completed. Sampling before the
+    lookup and committing it hands the loader the same ownership the caller passed in.
+    """
+    manages_outer_transaction = conn.info.transaction_status == psycopg.pq.TransactionStatus.IDLE
+    data_source_id = ensure_nc_ie_document_index_data_source(conn)
+    commit_managed_transaction(conn, manages_outer_transaction)
+    return data_source_id
 
 
 def build_nc_source_record(data_source_id: UUID, row: Mapping[str, str | None]) -> SourceRecord:

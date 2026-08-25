@@ -42,7 +42,14 @@ b2_backup_bucket() {
 }
 
 b2_backup_retention_days() {
-  printf '%s\n' "${BACKUP_RETENTION_DAYS:-${B2_BACKUP_DEFAULT_RETENTION_DAYS}}"
+  local retention_days="${BACKUP_RETENTION_DAYS:-${B2_BACKUP_DEFAULT_RETENTION_DAYS}}"
+
+  if [[ ! "${retention_days}" =~ ^0*[1-9][0-9]*$ ]]; then
+    echo "Backup retention days must be a positive integer: ${retention_days}" >&2
+    return 1
+  fi
+
+  printf '%s\n' "${retention_days}"
 }
 
 b2_backup_new_utc_timestamp() {
@@ -179,18 +186,45 @@ b2_backup_configure_rclone_env() {
   export "RCLONE_CONFIG_${remote_env_key}_KEY=${B2_APPLICATION_KEY}"
 }
 
+# Keep the two credential domains out of subprocesses that do not need them.
+# The backup wrappers deliberately run database clients and rclone in one
+# process tree, so relying on ordinary environment inheritance would hand each
+# tool the other system's destructive credential as well as its own.
+b2_backup_run_database_client() {
+  env \
+    -u B2_ACCOUNT_ID \
+    -u B2_APPLICATION_KEY \
+    -u FLY_BACKUP_DB_PASSWORD \
+    -u PGPASSWORD \
+    -u POSTGRES_PASSWORD \
+    -u RCLONE_CONFIG_B2_ACCOUNT \
+    -u RCLONE_CONFIG_B2_KEY \
+    "$@"
+}
+
+b2_backup_rclone() {
+  env \
+    -u B2_ACCOUNT_ID \
+    -u B2_APPLICATION_KEY \
+    -u FLY_BACKUP_DB_PASSWORD \
+    -u PGPASSFILE \
+    -u PGPASSWORD \
+    -u POSTGRES_PASSWORD \
+    rclone "$@"
+}
+
 # Upload stdin straight to the remote object. Streaming keeps multi-GB dumps
 # off local disk, so no caller needs a spool file or a cleanup path for one.
 b2_backup_upload_stream() {
   local remote_path="$1"
 
-  rclone rcat "${remote_path}"
+  b2_backup_rclone rcat "${remote_path}"
 }
 
 b2_backup_delete_object() {
   local remote_path="$1"
 
-  rclone deletefile "${remote_path}"
+  b2_backup_rclone deletefile "${remote_path}"
 }
 
 b2_backup_root_dump_include_pattern() {
@@ -202,21 +236,17 @@ b2_backup_prune_prefix_path() {
   local include_pattern="${2:-}"
   local retention_days
 
-  retention_days="$(b2_backup_retention_days)"
-  if [[ ! "${retention_days}" =~ ^[0-9]+$ ]]; then
-    echo "Refusing to prune with a non-numeric retention window: ${retention_days}" >&2
-    return 1
-  fi
+  retention_days="$(b2_backup_retention_days)" || return 1
 
   if [[ -n "${include_pattern}" ]]; then
-    rclone delete \
+    b2_backup_rclone delete \
       --min-age "${retention_days}d" \
       --include "${include_pattern}" \
       "${prefix_path}"
     return
   fi
 
-  rclone delete --min-age "${retention_days}d" "${prefix_path}"
+  b2_backup_rclone delete --min-age "${retention_days}d" "${prefix_path}"
 }
 
 # Prune helpers take no path argument: each deployment's prune scope is fixed

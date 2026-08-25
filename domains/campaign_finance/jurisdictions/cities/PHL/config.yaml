@@ -116,6 +116,37 @@ laws:
     corporate_direct: null
     union_direct: null
     party_to_candidate: null
+  contribution_limit_rules:
+    - donor_type: individual
+      recipient_type: candidate_committee
+      limit_status: unknown
+      research_observed_date: "2026-08-22"
+      source_citation: "docs/reference/research/phl_campaign_finance_contract_2026_04_25.md; Philadelphia Board of Ethics campaign-finance research gap observed 2026-08-22"
+      note: "PHL local candidate limits remain unresearched; see docs/reference/research/phl_campaign_finance_contract_2026_04_25.md and the Philadelphia Board of Ethics campaign-finance page."
+    - donor_type: pac
+      recipient_type: candidate_committee
+      limit_status: unknown
+      research_observed_date: "2026-08-22"
+      source_citation: "docs/reference/research/phl_campaign_finance_contract_2026_04_25.md; Philadelphia Board of Ethics campaign-finance research gap observed 2026-08-22"
+      note: "PHL local candidate limits remain unresearched; see docs/reference/research/phl_campaign_finance_contract_2026_04_25.md and the Philadelphia Board of Ethics campaign-finance page."
+    - donor_type: corporation
+      recipient_type: candidate_committee
+      limit_status: unknown
+      research_observed_date: "2026-08-22"
+      source_citation: "docs/reference/research/phl_campaign_finance_contract_2026_04_25.md; Philadelphia Board of Ethics campaign-finance research gap observed 2026-08-22"
+      note: "PHL local candidate limits remain unresearched; see docs/reference/research/phl_campaign_finance_contract_2026_04_25.md and the Philadelphia Board of Ethics campaign-finance page."
+    - donor_type: union
+      recipient_type: candidate_committee
+      limit_status: unknown
+      research_observed_date: "2026-08-22"
+      source_citation: "docs/reference/research/phl_campaign_finance_contract_2026_04_25.md; Philadelphia Board of Ethics campaign-finance research gap observed 2026-08-22"
+      note: "PHL local candidate limits remain unresearched; see docs/reference/research/phl_campaign_finance_contract_2026_04_25.md and the Philadelphia Board of Ethics campaign-finance page."
+    - donor_type: party_committee
+      recipient_type: candidate_committee
+      limit_status: unknown
+      research_observed_date: "2026-08-22"
+      source_citation: "docs/reference/research/phl_campaign_finance_contract_2026_04_25.md; Philadelphia Board of Ethics campaign-finance research gap observed 2026-08-22"
+      note: "PHL local candidate limits remain unresearched; see docs/reference/research/phl_campaign_finance_contract_2026_04_25.md and the Philadelphia Board of Ethics campaign-finance page."
   itemization_threshold: 50  # placeholder pending PHL Board-of-Ethics research; see config.notes
   reporting:
     periods:

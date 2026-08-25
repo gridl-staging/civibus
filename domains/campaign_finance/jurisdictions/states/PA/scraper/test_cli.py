@@ -3,9 +3,14 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import ANY, MagicMock
 
+import psycopg
 import pytest
 
 from domains.campaign_finance.jurisdictions.states.PA.scraper import cli
+from domains.campaign_finance.jurisdictions._bulk_fixture_support import (
+    cleanup_bulk_fixture,
+)
+from domains.campaign_finance.jurisdictions.states.PA.scraper import pa_load_test_support as pa_support
 from domains.campaign_finance.jurisdictions.states.PA.scraper.load import LoadResult
 
 _FIXTURE_DIR = Path(__file__).parent / "test_fixtures"
@@ -156,3 +161,45 @@ def test_run_pa_refresh_rejects_filings_data_type(monkeypatch: pytest.MonkeyPatc
         cli.run_pa_refresh(year=2025, data_type="filings", path=_SAMPLE_CONTRIBUTIONS_PATH)
 
     get_connection.assert_not_called()
+
+
+def test_load_resolved_path_commits_then_closes_on_idle_connection(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Now that the loader commits its own work, the connection is IDLE on return:
+    # the trailing commit is a harmless no-op and close must not discard the
+    # already-committed batches. The commit still precedes the close.
+    connection = pa_support.FakeTransactionConnection()
+    monkeypatch.setattr(cli, "get_connection", lambda: connection)
+    monkeypatch.setattr(cli, "_load_path", lambda *_args, **_kwargs: _build_load_result())
+
+    result = cli._load_resolved_path(_SAMPLE_CONTRIBUTIONS_PATH, data_type="contributions", year=2025, limit=None)
+
+    assert result == _build_load_result()
+    assert connection.calls == ["commit", "close"]
+    assert connection.info.transaction_status == psycopg.pq.TransactionStatus.IDLE
+
+
+def test_run_pa_refresh_preserves_load_result_counts_for_sample_fixture(
+    db_conn: psycopg.Connection,
+    tmp_path: Path,
+) -> None:
+    # Behavior-preservation proof: bounded commits must not change the LoadResult
+    # counts run_pa_refresh returns. run_pa_refresh opens its own connection; db_conn
+    # is requested only to gate the test on database availability.
+    fixture = pa_support.write_pa_fixture_pair(tmp_path)
+    db_conn.rollback()
+    cleanup_bulk_fixture(fixture)
+
+    try:
+        result = cli.run_pa_refresh(
+            year=pa_support.PA_FIXTURE_YEAR,
+            data_type="contributions",
+            path=fixture.detail_path,
+        )
+
+        assert result.inserted == 1
+        assert result.skipped == 0
+        assert result.quarantined == 0
+        assert result.superseded == 0
+        assert result.errors == 0
+    finally:
+        cleanup_bulk_fixture(fixture)

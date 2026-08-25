@@ -168,6 +168,23 @@ def _resolve_input_path(
         raise
 
 
+def _load_path(
+    connection: psycopg.Connection,
+    input_path: Path,
+    *,
+    data_type: str,
+    limit: int | None,
+) -> LoadResult:
+    """Run the loader for one data type against an already-open connection.
+
+    Single owner of the CLI's loader selection, so the handoff can be exercised without
+    reaching through the parked write-mode refusal in ``run_va_refresh``.
+    """
+    normalized = _validate_data_type(data_type)
+    loader = load_va_contributions_with_filings if normalized == "contributions" else load_va_expenditures_with_filings
+    return loader(connection, input_path, limit=limit)
+
+
 def run_va_refresh(
     *,
     data_type: str,
@@ -206,12 +223,8 @@ def run_va_refresh(
         if dry_run:
             return _count_rows(input_path, data_type=data_type, limit=limit)
 
-        loader = (
-            load_va_contributions_with_filings if data_type == "contributions" else load_va_expenditures_with_filings
-        )
         connection = get_connection()
-        result = loader(connection, input_path, limit=limit)
-        return result
+        return _load_path(connection, input_path, data_type=data_type, limit=limit)
     finally:
         if connection is not None:
             connection.close()

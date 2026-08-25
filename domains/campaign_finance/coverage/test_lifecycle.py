@@ -61,6 +61,19 @@ def test_render_lifecycle_summary_markdown_contains_expected_columns(tmp_path: P
     assert "| EX | bulk_file | researched | encoded |" in markdown
 
 
+def test_render_lifecycle_summary_markdown_describes_state_and_independent_city_scope(tmp_path: Path) -> None:
+    path = tmp_path / "lifecycle.json"
+    path.write_text(json.dumps(_valid_payload()), encoding="utf-8")
+
+    lifecycle = load_lifecycle(path)
+    markdown = render_lifecycle_summary_markdown(lifecycle)
+
+    assert (
+        "This summary is a derived view of lifecycle statuses for the FEC plus "
+        "implemented campaign-finance state and independent-city packages." in markdown
+    )
+
+
 def test_render_lifecycle_summary_markdown_escapes_table_breaking_text(tmp_path: Path) -> None:
     payload = _valid_payload()
     payload["rows"][0]["main_blocker"] = "Needs committee | enrichment\nand proof"
@@ -121,29 +134,34 @@ def test_lifecycle_operational_maturity_respects_registry_runner_wiring_floor() 
         assert row.operational_maturity in {"unknown", "manual_only"}, row.jurisdiction_code
 
 
-def test_lifecycle_examples_capture_illinois_ohio_and_texas_statuses() -> None:
+def test_washington_lifecycle_preserves_unattended_refresh_blocker_after_ie_disposition() -> None:
     lifecycle = load_lifecycle(DEFAULT_IMPLEMENTED_REGION_LIFECYCLE_PATH)
-    rows_by_code = {row.jurisdiction_code: row for row in lifecycle.rows}
+    wa_row = next(row for row in lifecycle.rows if row.jurisdiction_code == "WA")
 
-    il_row = rows_by_code["IL"]
-    assert il_row.acquisition_pattern == "browser_session_portal"
-    assert il_row.discovery_maturity == "interactively_proven"
-    assert il_row.source_contract_maturity == "verified"
-    assert il_row.legal_filing_semantics_maturity == "substantial"
-    assert il_row.implementation_maturity == "live_proven"
-    assert il_row.operational_maturity == "runner_wired"
-    assert il_row.public_claim_status == "implemented but unproven"
-    assert il_row.completeness_intelligence_maturity == "not_started"
+    assert lifecycle.updated_at.isoformat() == "2026-08-23"
+    assert wa_row.main_blocker == (
+        "Need qualifying production core.refresh_run rows for state-wa-* on civibus-db/civibus to regain "
+        "operational; WA still lacks qualifying recurring/unattended production refresh evidence."
+    )
+    assert "decide independent-expenditures ingest scope" not in wa_row.main_blocker
 
-    oh_row = rows_by_code["OH"]
-    assert oh_row.acquisition_pattern == "protected_or_blocked"
-    assert oh_row.discovery_maturity == "blocked"
-    assert oh_row.operational_maturity == "manual_only"
-    assert oh_row.public_claim_status == "deferred/blocked"
 
-    tx_row = rows_by_code["TX"]
-    assert tx_row.operational_maturity == "runner_wired"
-    assert tx_row.public_claim_status == "launch-support candidate"
+def test_lifecycle_owner_contract_does_not_infer_source_maturity_from_status(tmp_path: Path) -> None:
+    payload = _valid_payload(jurisdiction_code="OWNER_CONTRACT")
+    row = payload["rows"][0]
+    assert isinstance(row, dict)
+    row["source_contract_maturity"] = "encoded"
+    row["operational_maturity"] = "runner_wired"
+    row["public_claim_status"] = "launch-support candidate"
+    path = tmp_path / "lifecycle.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    lifecycle = load_lifecycle(path)
+
+    loaded_row = lifecycle.rows[0]
+    assert loaded_row.source_contract_maturity == "encoded"
+    assert loaded_row.operational_maturity == "runner_wired"
+    assert loaded_row.public_claim_status == "launch-support candidate"
 
 
 def test_implemented_state_packages_have_required_lifecycle_artifacts() -> None:

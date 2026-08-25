@@ -212,6 +212,7 @@ class TestDataSourceAndComposition:
         assert data_source.jurisdiction == "state/GA"
         assert data_source.name == "Georgia Campaign Portal — Contributions Search Export"
         assert data_source.source_url == "https://media.ethics.ga.gov/search/Campaign/Campaign_ByContributions.aspx"
+        assert data_source.update_frequency == "continuous"
 
     def test_build_ga_data_source_expenditures(self) -> None:
         data_source = build_ga_data_source("expenditures")
@@ -220,6 +221,7 @@ class TestDataSourceAndComposition:
         assert data_source.jurisdiction == "state/GA"
         assert data_source.name == "Georgia Campaign Portal — Expenditures Search Export"
         assert data_source.source_url == "https://media.ethics.ga.gov/search/Campaign/Campaign_ByExpenditures.aspx"
+        assert data_source.update_frequency == "continuous"
 
     def test_build_ga_data_source_unsupported_type_raises(self) -> None:
         with pytest.raises(ValueError, match="Unsupported GA transaction type"):

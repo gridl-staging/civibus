@@ -500,9 +500,27 @@ def _assert_persisted_run_cluster_state(
         person_rows = cursor.fetchall()
     assigned_cluster_ids = {row["id"]: row["er_cluster_id"] for row in person_rows}
     assert all(cluster_id is not None for cluster_id in assigned_cluster_ids.values())
-    assert assigned_cluster_ids[fixtures.auto_merge_person_a] == assigned_cluster_ids[fixtures.auto_merge_person_b]
-    assert assigned_cluster_ids[fixtures.auto_merge_person_c] == assigned_cluster_ids[fixtures.auto_merge_person_d]
-    assert assigned_cluster_ids[fixtures.auto_merge_person_a] != assigned_cluster_ids[fixtures.auto_merge_person_c]
+
+    # Person components are absorbed physically, so exactly the canonical member of each pair
+    # survives; the other id lives on as a `cluster_member` alias plus its absorption tombstone.
+    first_pair = {fixtures.auto_merge_person_a, fixtures.auto_merge_person_b}
+    second_pair = {fixtures.auto_merge_person_c, fixtures.auto_merge_person_d}
+    first_survivors = first_pair & set(assigned_cluster_ids)
+    second_survivors = second_pair & set(assigned_cluster_ids)
+    assert len(first_survivors) == 1
+    assert len(second_survivors) == 1
+    assert assigned_cluster_ids[next(iter(first_survivors))] != assigned_cluster_ids[next(iter(second_survivors))]
+
+    absorption_rows = graph_conn.execute(
+        """
+        SELECT absorbed_person_id, canonical_person_id
+        FROM core.person_absorption
+        WHERE absorbed_person_id = ANY(%s)
+        """,
+        ([*first_pair, *second_pair],),
+    ).fetchall()
+    assert {row[0] for row in absorption_rows} == (first_pair | second_pair) - first_survivors - second_survivors
+    assert {row[1] for row in absorption_rows} == first_survivors | second_survivors
 
 
 def _assert_persisted_run_relinked_sources(

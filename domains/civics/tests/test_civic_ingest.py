@@ -1646,7 +1646,8 @@ class TestProvenanceWiring:
     def test_repoint_candidacy_person_merge_preserves_candidacy_entity_source(
         self, db_conn: psycopg.Connection
     ) -> None:
-        from domains.civics.ingest import repoint_candidacy_person, upsert_candidacy, upsert_contest, upsert_office
+        from core.entity_resolution.candidacy_merge import repoint_candidacy_person
+        from domains.civics.ingest import upsert_candidacy, upsert_contest, upsert_office
 
         data_source = _make_data_source(db_conn)
         target_source_record = _make_source_record(db_conn, data_source.id, f"target-candidacy-source-{uuid4()}")
@@ -1666,13 +1667,27 @@ class TestProvenanceWiring:
         )
         target_person_id = _make_person(db_conn, name=f"Target Person {uuid4()}")
         source_person_id = _make_person(db_conn, name=f"Source Person {uuid4()}")
+        # Distinguishing fields make the merge precedence observable: the target row
+        # already has a party (target-wins), and only the source row carries a ballot
+        # name (fill-from-source).
         target_candidacy_id = upsert_candidacy(
             db_conn,
-            Candidacy(person_id=target_person_id, contest_id=contest_id, source_record_id=target_source_record.id),
+            Candidacy(
+                person_id=target_person_id,
+                contest_id=contest_id,
+                source_record_id=target_source_record.id,
+                party="D",
+            ),
         )
         source_candidacy_id = upsert_candidacy(
             db_conn,
-            Candidacy(person_id=source_person_id, contest_id=contest_id, source_record_id=source_source_record.id),
+            Candidacy(
+                person_id=source_person_id,
+                contest_id=contest_id,
+                source_record_id=source_source_record.id,
+                party="R",
+                name_on_ballot="SOURCE ON BALLOT",
+            ),
         )
 
         repointed = repoint_candidacy_person(
@@ -1685,10 +1700,11 @@ class TestProvenanceWiring:
         assert repointed is True
 
         merged_candidacy_rows = db_conn.execute(
-            "SELECT id FROM civic.candidacy WHERE person_id = %s AND contest_id = %s",
+            "SELECT id, party, name_on_ballot FROM civic.candidacy WHERE person_id = %s AND contest_id = %s",
             (target_person_id, contest_id),
         ).fetchall()
-        assert merged_candidacy_rows == [(target_candidacy_id,)]
+        assert merged_candidacy_rows == [(target_candidacy_id, "D", "SOURCE ON BALLOT")]
+        # Target party wins (COALESCE target, source); missing target name_on_ballot fills from source.
 
         source_row = db_conn.execute(
             "SELECT id FROM civic.candidacy WHERE id = %s",

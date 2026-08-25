@@ -47,7 +47,7 @@
     },
     "dwo_new_routes.spec.ts": {
       "modes": ["fixture"],
-      "reason": "Explicitly fixture-backed by its own test names: /coverage and /data-sources assert registry rows for `state/NC` and `NC Campaign Finance`, and /calendar and /election/[date] assert a `2026 NC Senate General` contest. The federal seed writes no civic.contest rows and no NC data source. Live equivalents would need a state-jurisdiction seed, which federal-first v1 parks; the routes' server-side contracts are held by web/src/routes unit tests."
+      "reason": "Explicitly fixture-backed by its own test names: /coverage and /data-sources assert registry rows for `state/NC` and `NC Campaign Finance`, and /calendar and /election/[date] assert a `North Carolina House District 1 General` contest. The federal seed writes no civic.contest rows and no NC data source. Live equivalents would need a state-jurisdiction seed, which federal-first v1 parks; the routes' server-side contracts are held by web/src/routes unit tests."
     },
     "entity-and-civic.spec.ts": {
       "modes": ["fixture", "live"],
@@ -115,7 +115,7 @@
     },
     "shell-and-responsive.spec.ts": {
       "modes": ["fixture"],
-      "reason": "A layout, SEO and responsive-viewport suite that uses fixture entities as scaffolding: it asserts fixture-only civic routes (/contest, /candidacy, /officeholding), a synthetic backend 422 the real validator cannot emit, and a fixture office named `U.S. Senator, North Carolina`. Its oracle is presentation, not data, so the fixture lane is the correct and complete owner; live-mode rendering of the same shell is covered by accessibility.spec.ts and primary_nav_nonempty.spec.ts."
+      "reason": "A layout, SEO and responsive-viewport suite that uses fixture entities as scaffolding: it asserts fixture-only civic routes (/contest, /candidacy, /officeholding), a synthetic backend 422 the real validator cannot emit, and a fixture office named `U.S. Representative for North Carolina's 1st congressional district`. Its oracle is presentation, not data, so the fixture lane is the correct and complete owner; live-mode rendering of the same shell is covered by accessibility.spec.ts and primary_nav_nonempty.spec.ts."
     },
     "state_detail.spec.ts": {
       "modes": ["fixture"],

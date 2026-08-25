@@ -39,8 +39,8 @@ data_sources: # One entry per authoritative filing source or access path
       TRANSACTION_ID: "transaction.id"
       OFFICE_SOURCED: "jurisdiction.office_level"
     scraper: "./scraper/download.ts" # Optional path for generated scraper; null if not applicable
-    last_successful_pull: null # YYYY-MM-DD; explicit null when unknown/unrun
-    last_verified_working: null # YYYY-MM-DD; explicit null when not yet verified
+    last_successful_pull: null # Legacy snapshot only; live run truth comes from core.refresh_run
+    last_verified_working: null # Legacy snapshot only; L3 maturity comes from sources.yaml evidence
     known_issues: [] # Add concrete data quality gaps for this source
 
   # Example 2: web portal with CSV export
@@ -68,8 +68,8 @@ data_sources: # One entry per authoritative filing source or access path
       CATEGORY: "transaction.type"
       OFFICE: "jurisdiction.office_level"
     scraper: "./scraper/portal.ts" # Optional path for generated scraper; null if not applicable
-    last_successful_pull: null # YYYY-MM-DD; explicit null when unknown/unrun
-    last_verified_working: null # YYYY-MM-DD; explicit null when not yet verified
+    last_successful_pull: null # Legacy snapshot only; live run truth comes from core.refresh_run
+    last_verified_working: null # Legacy snapshot only; L3 maturity comes from sources.yaml evidence
     known_issues: # Concrete source-specific data quality or access gaps
       - "Fill in portal-specific quirks in data_semantics.md#portal-navigation"
 
@@ -95,11 +95,11 @@ laws: # Structured legal constraints used during normalization and validation
   notes: # Freeform caveats that do not yet fit the structured schema
     - "Document office-level/election-type variation here until Stage 3 rules schema exists."
 
-status: # Pipeline progress for this jurisdiction
+status: # Legacy compatibility snapshot; not live health, L3 maturity, or public coverage authority
   # Each status uses the same canonical enum:
   # pending | in_progress | complete | working | partial | broken | unknown
-  discovery: "complete" # Research/discovery completeness for this jurisdiction
-  scraper: "working" # Current scraper health and operational status
-  normalization: "partial" # Coverage of normalization logic for this jurisdiction
-  entity_resolution: "unknown" # Entity resolution readiness against shared graph entities
-  last_full_update: "2026-03-01" # YYYY-MM-DD of the most recent end-to-end refresh
+  discovery: "unknown" # Required compatibility placeholder; not current discovery maturity
+  scraper: "unknown" # Required compatibility placeholder; not current scraper health
+  normalization: "unknown" # Required compatibility placeholder; not a current normalization claim
+  entity_resolution: "unknown" # Required compatibility placeholder; not current entity-resolution readiness
+  last_full_update: null # Legacy snapshot only; live run truth comes from core.refresh_run

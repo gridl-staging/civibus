@@ -336,11 +336,15 @@ class TestEnsureDataSource:
         )
         mock_try_insert = MagicMock()
         monkeypatch.setattr(load_utils, "try_insert_data_source", mock_try_insert)
+        mock_reconcile = MagicMock()
+        monkeypatch.setattr(load_utils, "reconcile_existing_data_source", mock_reconcile)
 
-        result = ensure_data_source(MagicMock(), data_source)
+        connection = MagicMock()
+        result = ensure_data_source(connection, data_source)
 
         assert result == existing_id
         mock_try_insert.assert_not_called()
+        mock_reconcile.assert_called_once_with(connection, existing_id, data_source)
 
     def test_inserts_when_not_found_and_returns_new_id(self, data_source, monkeypatch: pytest.MonkeyPatch) -> None:
         new_id = uuid4()
@@ -363,6 +367,7 @@ class TestEnsureDataSource:
         # First select returns None, insert returns None (conflict),
         # second select returns the existing id
         existing_id = uuid4()
+        connection = MagicMock()
         monkeypatch.setattr(
             load_utils,
             "select_data_source_id",
@@ -373,10 +378,51 @@ class TestEnsureDataSource:
             "try_insert_data_source",
             MagicMock(return_value=None),
         )
+        mock_reconcile = MagicMock()
+        monkeypatch.setattr(load_utils, "reconcile_existing_data_source", mock_reconcile)
 
-        result = ensure_data_source(MagicMock(), data_source)
+        result = ensure_data_source(connection, data_source)
 
         assert result == existing_id
+        mock_reconcile.assert_called_once_with(connection, existing_id, data_source)
+
+    def test_reconciles_existing_row_metadata(self, db_conn: psycopg.Connection) -> None:
+        stale_source = DataSource(
+            domain="campaign_finance",
+            jurisdiction="state/GA",
+            name=f"GA stale source {uuid4()}",
+            source_url="https://example.com/stale",
+        )
+        insert_data_source(db_conn, stale_source)
+
+        configured_source = DataSource(
+            domain=stale_source.domain,
+            jurisdiction=stale_source.jurisdiction,
+            name=stale_source.name,
+            source_url="https://media.ethics.ga.gov/search/Campaign/Campaign_ByContributions.aspx",
+            update_frequency="continuous",
+        )
+
+        result = ensure_data_source(db_conn, configured_source)
+
+        assert result == stale_source.id
+        with db_conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT source_url, source_format, update_frequency, last_pull_at, record_count
+                FROM core.data_source
+                WHERE id = %s
+                """,
+                (stale_source.id,),
+            )
+            row = cursor.fetchone()
+        assert row == (
+            "https://media.ethics.ga.gov/search/Campaign/Campaign_ByContributions.aspx",
+            None,
+            "continuous",
+            None,
+            None,
+        )
 
     def test_raises_when_conflict_and_reselect_fails(self, data_source, monkeypatch: pytest.MonkeyPatch) -> None:
         # Both selects return None, insert returns None (conflict)

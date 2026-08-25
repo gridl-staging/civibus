@@ -6,6 +6,11 @@ POSTGRES_PORT_CALLER_SUPPLIED := $(if $(filter environment command line,$(POSTGR
 # Freeze caller values without recursively expanding embedded Make syntax. These
 # values also enter shell recipes, where they must be read from the environment.
 override POSTGRES_PORT := $(value POSTGRES_PORT)
+# Status selectors are accepted from either the environment or command line and
+# cross the same Make-to-shell boundary; keep their caller-supplied text literal.
+override BASE_URL := $(value BASE_URL)
+override REGION := $(value REGION)
+export BASE_URL REGION
 WORKSPACE_SLUG := $(shell basename "$$(dirname "$(CURDIR)")" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9' '_' | sed 's/_$$//')
 COMPOSE_PROJECT_NAME_ORIGIN := $(origin COMPOSE_PROJECT_NAME)
 COMPOSE_PROJECT_NAME ?= civibus_$(WORKSPACE_SLUG)
@@ -31,9 +36,9 @@ IRS_527_DATA_DIR ?= data/irs_527
 IRS_527_PATH ?= $(IRS_527_DATA_DIR)/FullDataFile.txt
 IRS_527_BATCH_SIZE ?= 1000
 REFRESH_CF_ARGS ?= --dry-run
-# Federal-first v1: quality sweeps default to the active FEC jurisdiction so
-# parked state/city sources (frozen, often stale in dev DBs) don't add noise.
-# Use `make quality-check-all` / override the vars to sweep everything.
+# Fast default: quality sweeps stay scoped to FEC so unrelated regional data
+# does not add noise. Region work passes an explicit jurisdiction; use
+# `make quality-check-all` / override the vars only for the deliberate sweep.
 QUALITY_CHECK_ARGS ?= --jurisdiction federal/fec
 QUALITY_FRESHNESS_ARGS ?= --jurisdiction federal/fec
 RETIRED_SYMBOLS := INDIANA_FRESHNESS_NOTE _CASE_FIXTURE_SOURCES _PILOT_SUPPORTED_STATES is_autopublish_enabled
@@ -69,7 +74,7 @@ QA_FAST_PRODUCT_TEST_PATHS := \
 QA_FAST_PRODUCT_MARKER_EXPRESSION := not integration and not e2e and not projected_public_contract and not dev_repo_only
 
 
-.PHONY: db-up db-wait db-down db-teardown db-reset test qa-fast qa-fast-public coverage-public test-public test-e2e-smoke test-projected-public-contract test-api test-e2e lint check-retired-symbols ingest-fec-sample ingest-fec-bulk-sample ingest-fec-bulk ingest-fec-federal ingest-fec-ie-sample download-fec-bulk download-fec-weball download-fec-schedule-e download-fec-committee-summary ingest-fec-schedule-e download-irs-527 ingest-irs-527-sample ingest-irs-527 validate-configs validate-registry render-coverage-views render-region-lifecycle ingest-co-sample ingest-durham-sample require-postgres-password ingest-nc-sample ingest-nc-ie-sample ingest-ga-sample ingest-ca-sample ingest-mn-sample ingest-wa-sample ingest-tx-sample ingest-pa-sample ingest-oh-sample ingest-in-sample ingest-il-sample ingest-nj-sample ingest-va-sample ingest-sf-sample ingest-la-city-sample ingest-nyc-sample ingest-nc-past-results-2022-2024 download-ga quality-check quality-freshness entity-resolve entity-resolve-dry api-dev graph-load load-test refresh-cf-data refresh-cf-priority gate-L1 gate-L3 gate-L5 gate-L6 gate-L6-pilot gate-L7 gate-L10 gate-L14 keel-status keel-summary keel-current keel-reviews-status evidence-rotate
+.PHONY: db-up db-wait db-down db-teardown db-reset test qa-fast qa-fast-public coverage-public test-public test-e2e-smoke test-projected-public-contract test-api test-e2e lint check-retired-symbols ingest-fec-sample ingest-fec-bulk-sample ingest-fec-bulk ingest-fec-federal ingest-fec-ie-sample download-fec-bulk download-fec-weball download-fec-schedule-e download-fec-committee-summary ingest-fec-schedule-e download-irs-527 ingest-irs-527-sample ingest-irs-527 validate-configs validate-registry render-coverage-views render-region-lifecycle coverage-status region-status product-status ingest-co-sample ingest-durham-sample require-postgres-password ingest-nc-sample ingest-nc-ie-sample ingest-ga-sample ingest-ca-sample ingest-mn-sample ingest-wa-sample ingest-tx-sample ingest-pa-sample ingest-oh-sample ingest-in-sample ingest-il-sample ingest-nj-sample ingest-va-sample ingest-sf-sample ingest-la-city-sample ingest-nyc-sample ingest-nc-past-results-2022-2024 download-ga quality-check quality-freshness entity-resolve entity-resolve-dry api-dev graph-load load-test refresh-cf-data refresh-cf-priority gate-L1 gate-L3 gate-L5 gate-L6 gate-L6-pilot gate-L7 gate-L10 gate-L14 keel-status keel-summary keel-current keel-reviews-status evidence-rotate
 
 require-postgres-password:
 	@test -n "$${POSTGRES_PASSWORD:-}" || { echo "POSTGRES_PASSWORD must be set in the environment" >&2; exit 1; }
@@ -300,10 +305,10 @@ qa-integration:
 
 test-integration-local: qa-integration
 
-# Parked state/city pipeline suite (frozen for federal-first v1; excluded from
-# `make test` and CI by the conftest.py quarantine). Run before touching shared
-# loader surfaces (jurisdictions/states/load_utils.py, core/refresh/job_builders.py)
-# or when un-parking a jurisdiction post-v1.
+# Full state/city pipeline suite. It remains outside `make test` and merge CI to
+# protect fast iteration; region work runs its focused path. Run this before
+# touching shared loader surfaces or as a deliberate regional signoff gate.
+# The historical target name is retained to avoid needless command churn.
 # Declared .PHONY on its own line to avoid textual conflicts on the shared list.
 .PHONY: test-parked
 test-parked:
@@ -360,6 +365,21 @@ render-coverage-views:
 
 render-region-lifecycle:
 	uv run python -m domains.campaign_finance.coverage.lifecycle
+
+# Read-only derived status view: prints one JSON report and never writes an artifact.
+coverage-status:
+	@uv run python -m domains.campaign_finance.coverage.status.coverage_status
+
+region-status:
+	@test -n "$${REGION:-}" || { echo "REGION must be set, e.g. make region-status REGION=CA" >&2; exit 1; }
+	@uv run python -m domains.campaign_finance.coverage.status.region_status --region "$$REGION"
+
+product-status:
+	@if [ -n "$${BASE_URL:-}" ]; then \
+		uv run python -m domains.campaign_finance.coverage.status.product_status --base-url "$$BASE_URL"; \
+	else \
+		uv run python -m domains.campaign_finance.coverage.status.product_status; \
+	fi
 
 ingest-fec-sample:
 	uv run python -m domains.campaign_finance.ingest.cli --state NC --cycle 2024 --limit 10
@@ -475,7 +495,7 @@ download-ga:
 quality-check:
 	uv run python -m domains.campaign_finance.quality.cli $(QUALITY_CHECK_ARGS)
 
-# Unscoped sweep across every jurisdiction present in the DB (incl. parked).
+# Deliberate unscoped sweep across every jurisdiction present in the DB.
 .PHONY: quality-check-all
 quality-check-all:
 	uv run python -m domains.campaign_finance.quality.cli

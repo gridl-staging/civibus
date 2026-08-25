@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join, relative } from 'node:path';
-import { APP_SHELL, MAP_LAYERS } from './app';
+import { APP_SHELL, MAP_LAYERS, buildMapLayerVisibilityDefaults } from './app';
 
 const ANALYTICS_INTEGRATION_PATTERN =
   /@segment\/analytics|analytics-next|@vercel\/analytics|posthog-js|mixpanel-browser|google-analytics|googletagmanager|plausible\.io|matomo|\bgtag\s*\(/i;
@@ -337,5 +337,18 @@ describe('MAP_LAYERS shared map-layer contract', () => {
     expect(ncCongressionalLayer?.applicableLevels).toEqual(
       expect.arrayContaining(['state', 'county'])
     );
+  });
+
+  it('shows a selected congressional-district layer without changing the unselected default', () => {
+    expect(buildMapLayerVisibilityDefaults('state')).toEqual({
+      nc_statewide_boundary: true,
+      nc_county_boundaries: true,
+      nc_congressional_districts: false
+    });
+    expect(buildMapLayerVisibilityDefaults('state', 'congressional_district')).toEqual({
+      nc_statewide_boundary: true,
+      nc_county_boundaries: true,
+      nc_congressional_districts: true
+    });
   });
 });

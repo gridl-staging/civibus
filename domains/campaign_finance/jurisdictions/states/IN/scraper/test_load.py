@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+from contextlib import ExitStack
 from dataclasses import replace
 from datetime import date
 from pathlib import Path
@@ -11,7 +12,15 @@ import psycopg
 import pytest
 from psycopg.rows import dict_row
 
+from core.db import get_connection
 from core.types.python.models import compute_record_hash
+from domains.campaign_finance.jurisdictions._bulk_fixture_support import (
+    BulkFixtureInterruption,
+    assert_loader_arm_is_caller_owned,
+    bulk_fixture_row_counts,
+    install_write_interrupt,
+    seed_written_bulk_fixture,
+)
 from domains.campaign_finance.jurisdictions._test_helpers import clear_state_loader_records
 from domains.campaign_finance.jurisdictions.states.IN.scraper import (
     _load_column_for_semantic_path,
@@ -30,6 +39,9 @@ from domains.campaign_finance.jurisdictions.states.IN.scraper.load import (
     load_in_contribution,
     load_in_contributions_with_filings,
     load_in_expenditures_with_filings,
+)
+from domains.campaign_finance.jurisdictions.states.IN.scraper.load_test_support import (
+    write_in_contribution_fixture,
 )
 from domains.campaign_finance.jurisdictions.states.IN.scraper.parse import parse_contributions, parse_expenditures
 
@@ -454,8 +466,10 @@ def test_ingest_in_rolls_back_raw_phase_when_relational_phase_fails(
         elapsed_seconds=0.1,
     )
 
-    ensure_transaction_open = pytest.importorskip("unittest.mock").MagicMock()
-    monkeypatch.setattr(in_load_module, "ensure_transaction_open", ensure_transaction_open)
+    # Every commit the entry point owns now routes through commit_managed_transaction, so
+    # patching it is what keeps conn.commit.assert_not_called() meaningful.
+    commit_managed_transaction = pytest.importorskip("unittest.mock").MagicMock()
+    monkeypatch.setattr(in_load_module, "commit_managed_transaction", commit_managed_transaction)
     monkeypatch.setattr(in_load_module, "ensure_in_data_source", lambda *_args, **_kwargs: "in-source-id")
     monkeypatch.setattr(in_load_module, "_load_in_file", lambda *_args, **_kwargs: load_result)
     original_spec = in_load_module._IN_DATA_TYPE_SPECS["contributions"]
@@ -473,7 +487,8 @@ def test_ingest_in_rolls_back_raw_phase_when_relational_phase_fails(
     with pytest.raises(RuntimeError, match="relational failed"):
         in_load_module._load_in_with_filings(conn, _SAMPLE_CONTRIBUTIONS_PATH, data_type="contributions")
 
-    ensure_transaction_open.assert_called_once_with(conn)
+    # Once, not twice: the relational stub raises before the terminal commit is reached.
+    commit_managed_transaction.assert_called_once_with(conn, True)
     conn.rollback.assert_called_once_with()
     conn.commit.assert_not_called()
 
@@ -545,3 +560,177 @@ def test_in_transaction_type_returns_ie_when_expenditure_code_is_ie() -> None:
 def test_in_transaction_type_returns_normal_type_for_non_ie() -> None:
     row = {"ExpenditureCode": "Advertising", "ExpenditureType": "Direct"}
     assert in_load_helpers._in_transaction_type(row, data_type="expenditures") == "direct"
+
+
+# ---------------------------------------------------------------------------
+# Stage 3: the entry point owns its outer transaction and commits each batch
+# ---------------------------------------------------------------------------
+#
+# `_EXPECTED_DURABLE_BATCH_ROWS` is a frozen literal, deliberately NOT read from a live
+# loader constant: the boundary these specimens prove is exactly 1,000 rows, and an
+# expectation derived from the loader could never go red against a broken loader.
+
+_EXPECTED_DURABLE_BATCH_ROWS = 1_000
+_IN_BULK_ROW_COUNT = _EXPECTED_DURABLE_BATCH_ROWS + 1
+# The caller-owned invariant does not depend on crossing the batch boundary, so it uses a
+# small fixture to keep the full phase 1 + phase 2 load off the suite's critical path.
+_IN_CALLER_ARM_ROW_COUNT = 5
+
+
+def test_write_in_contribution_fixture_produces_unique_keys_and_one_committee(tmp_path: Path) -> None:
+    """The bulk writer gives every row a distinct source-record key but one shared committee."""
+    fixture = write_in_contribution_fixture(tmp_path, row_count=_IN_BULK_ROW_COUNT)
+
+    assert len(fixture.source_record_keys) == _IN_BULK_ROW_COUNT
+    assert len(set(fixture.source_record_keys)) == _IN_BULK_ROW_COUNT
+
+    with fixture.input_path.open(encoding="utf-8", newline="") as csv_file:
+        written_rows = list(csv.DictReader(csv_file))
+    assert len(written_rows) == _IN_BULK_ROW_COUNT
+    assert {row["Committee"] for row in written_rows} == {f"IN Bounded Commit Test Committee {fixture.run_suffix}"}
+    assert len({row["CommitteeType"] for row in written_rows}) == 1
+    assert len({row["FileNumber"] for row in written_rows}) == 1
+    assert len({_parse_in_date(row["ContributionDate"]).year for row in written_rows}) == 1
+    # Pinned to the non-amended value so no row can take `_load_in_rows`' amendment-error
+    # branch, which owns its own 1,000-row commit boundary.
+    assert {row["Amended"] for row in written_rows} == {"0"}
+
+    parsed_first_row = next(iter(parse_contributions(fixture.input_path)))
+    assert fixture.committee_native_id == _in_native_committee_id(parsed_first_row, data_type="contributions")
+
+
+@pytest.mark.integration
+def test_load_in_contributions_with_filings_commits_source_record_batch_mid_loop(
+    db_conn: psycopg.Connection,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An interrupt after 1,000 source records leaves exactly those 1,000 durable.
+
+    With the pre-Stage-3 ordering `_load_in_with_filings` resolved the data source before
+    sampling the transaction status, so it read INTRANS, decided it did not manage the outer
+    transaction, and turned every `commit_managed_transaction` — including phase 1's
+    1,000-row boundary — into a no-op. This interruption then discarded all 1,000 rows and
+    an independent connection saw zero.
+    """
+    with ExitStack() as resources:
+        fixture = seed_written_bulk_fixture(
+            resources,
+            db_conn,
+            lambda: write_in_contribution_fixture(tmp_path, row_count=_IN_BULK_ROW_COUNT),
+            row_count=_IN_BULK_ROW_COUNT,
+        )
+        write_counts = install_write_interrupt(
+            monkeypatch,
+            in_load_module,
+            "try_insert_source_record",
+            raise_after_writes=_EXPECTED_DURABLE_BATCH_ROWS,
+        )
+
+        with pytest.raises(BulkFixtureInterruption):
+            load_in_contributions_with_filings(db_conn, fixture.input_path)
+        db_conn.rollback()
+
+        # Phase 1 flushed its first full batch at row 1,000 and was interrupted on row 1,001,
+        # so exactly that batch of source records is durable. Phase 2 never started, so no
+        # cf.transaction rows exist.
+        assert write_counts["writes"] == _IN_BULK_ROW_COUNT
+        source_record_count, transaction_count = bulk_fixture_row_counts(fixture)
+        assert source_record_count == _EXPECTED_DURABLE_BATCH_ROWS
+        assert transaction_count == 0
+
+
+@pytest.mark.integration
+def test_load_in_contributions_with_filings_commits_relational_batch_mid_loop(
+    db_conn: psycopg.Connection,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An interrupt after 1,000 relational rows leaves exactly those 1,000 durable.
+
+    Before the relational boundary fix, an interruption on transaction 1,001 discarded
+    every linked row because the pass committed only at the end of the job.
+    `BulkFixtureInterruption` subclasses `BaseException` on purpose: that is what makes IN's
+    `with conn.transaction():` block roll back only transaction 1,001's savepoint and re-raise,
+    so the interrupt propagates as a genuine interruption instead of being swallowed as a row
+    error.
+    """
+    with ExitStack() as resources:
+        fixture = seed_written_bulk_fixture(
+            resources,
+            db_conn,
+            lambda: write_in_contribution_fixture(tmp_path, row_count=_IN_BULK_ROW_COUNT),
+            row_count=_IN_BULK_ROW_COUNT,
+        )
+        # `_load_in_relational_transactions` resolves `_upsert_in_transaction_with_filing` as a
+        # module global at call time, so patching the module attribute takes
+        # effect.
+        write_counts = install_write_interrupt(
+            monkeypatch,
+            in_load_module,
+            "_upsert_in_transaction_with_filing",
+            raise_after_writes=_EXPECTED_DURABLE_BATCH_ROWS,
+        )
+
+        with pytest.raises(BulkFixtureInterruption):
+            load_in_contributions_with_filings(db_conn, fixture.input_path)
+        db_conn.rollback()
+
+        # Phase 1 ran to completion so all 1,001 source records are durable; the relational
+        # pass was interrupted on transaction 1,001, so exactly its first full batch survives.
+        assert write_counts["writes"] == _IN_BULK_ROW_COUNT
+        assert bulk_fixture_row_counts(fixture) == (_IN_BULK_ROW_COUNT, _EXPECTED_DURABLE_BATCH_ROWS)
+
+
+@pytest.mark.integration
+def test_load_in_contributions_with_filings_writes_into_caller_transaction(
+    db_conn: psycopg.Connection,
+    tmp_path: Path,
+) -> None:
+    """A caller-supplied INTRANS connection owns the commit: the loader writes but never commits.
+
+    Holds both before and after the Stage 3 ordering fix — when the caller hands over an open
+    transaction the entry point must observe it does not manage it — so it is a standing
+    invariant, not part of the red evidence.
+    """
+    with ExitStack() as resources:
+        fixture = seed_written_bulk_fixture(
+            resources,
+            db_conn,
+            lambda: write_in_contribution_fixture(tmp_path, row_count=_IN_CALLER_ARM_ROW_COUNT),
+            row_count=_IN_CALLER_ARM_ROW_COUNT,
+        )
+        db_conn.execute("BEGIN")
+        assert_loader_arm_is_caller_owned(
+            fixture,
+            db_conn,
+            expected_source_records=_IN_CALLER_ARM_ROW_COUNT,
+            run_loader=lambda: load_in_contributions_with_filings(db_conn, fixture.input_path),
+        )
+
+
+@pytest.mark.integration
+def test_cli_load_path_hands_the_loader_an_idle_connection(db_conn: psycopg.Connection) -> None:
+    """`cli._load_path` must hand the loader an IDLE connection.
+
+    A data-source lookup left open would make the loader read INTRANS and silently drop its
+    1,000-row commit boundary — the exact defect Stage 3 fixes inside the entry point.
+    """
+    from domains.campaign_finance.jurisdictions.states.IN.scraper import cli
+
+    observed_transaction_status: list[object] = []
+
+    def _recording_loader(conn: psycopg.Connection, input_path: Path, *, limit: int | None) -> LoadResult:
+        observed_transaction_status.append(conn.info.transaction_status)
+        return LoadResult(inserted=0, skipped=0, quarantined=0, superseded=0, errors=0, elapsed_seconds=0.0)
+
+    with pytest.MonkeyPatch.context() as patcher:
+        patcher.setattr(cli, "load_in_contributions_with_filings", _recording_loader)
+        connection = get_connection()
+        try:
+            cli._load_path(connection, Path("unused.csv"), data_type="contributions", limit=3)
+        finally:
+            connection.rollback()
+            connection.close()
+
+    assert observed_transaction_status == [psycopg.pq.TransactionStatus.IDLE]

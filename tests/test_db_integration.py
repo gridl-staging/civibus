@@ -22,6 +22,7 @@ from core.db import (
     select_person_portrait,
     select_refresh_run,
     select_source_record,
+    update_refresh_run,
 )
 from core.people.enrichment.models import CandidateEnrichmentRecord, CandidateEnrichmentTarget, PortraitBinaryMetadata
 from core.people.enrichment.orchestrator import run_cf_candidate_enrichment, run_nc_enrichment
@@ -330,6 +331,76 @@ def test_refresh_run_round_trip(db_conn: psycopg.Connection) -> None:
     selected = select_refresh_run(db_conn, inserted_id)
 
     assert selected == refresh_run
+
+    in_flight = RefreshRun(
+        job_key="state-co-contributions-in-flight",
+        domain="campaign_finance",
+        jurisdiction="state/CO",
+        data_source_names=["TRACER Bulk Download - Contributions"],
+        pull_status="running",
+        started_at=datetime(2026, 4, 24, 13, 0, tzinfo=timezone.utc),
+        completed_at=None,
+        message="Refresh job started",
+    )
+
+    attempt_id = insert_refresh_run(db_conn, in_flight)
+    started = select_refresh_run(db_conn, attempt_id)
+
+    assert started is not None
+    assert started == in_flight
+    assert started.pull_status == "running"
+    assert started.completed_at is None
+
+    terminal_outcome = {
+        "pull_status": "degraded",
+        "completed_at": datetime(2026, 4, 24, 13, 7, tzinfo=timezone.utc),
+        "inserted_count": 120,
+        "skipped_count": 4,
+        "quarantined_count": 1,
+        "superseded_count": 2,
+        "error_count": 3,
+        "metadata_updates": 1,
+        "message": "Refresh job finished with quarantined rows",
+        "error": "3 rows failed validation",
+    }
+    # Deliberately conflicting identity/lineage values: a correct update must ignore
+    # every one of them and rewrite only the outcome columns of the targeted row.
+    conflicting_lineage = {
+        "job_key": "rewritten-job-key",
+        "domain": "rewritten_domain",
+        "jurisdiction": "state/ZZ",
+        "data_source_names": ["Rewritten Source"],
+        "started_at": datetime(2020, 1, 1, 0, 0, tzinfo=timezone.utc),
+        "created_at": datetime(2020, 1, 2, 0, 0, tzinfo=timezone.utc),
+    }
+    terminal_update = in_flight.model_copy(update={**terminal_outcome, **conflicting_lineage})
+
+    assert update_refresh_run(db_conn, terminal_update) == attempt_id
+    assert select_refresh_run(db_conn, attempt_id) == in_flight.model_copy(update=terminal_outcome)
+
+    with db_conn.cursor() as cursor:
+        cursor.execute(
+            "SELECT COUNT(*) FROM core.refresh_run WHERE job_key = %s",
+            (in_flight.job_key,),
+        )
+        assert cursor.fetchone()[0] == 1
+
+
+def test_update_refresh_run_rejects_missing_target(db_conn: psycopg.Connection) -> None:
+    missing_target = RefreshRun(
+        id=uuid4(),
+        job_key="state-co-contributions-missing",
+        domain="campaign_finance",
+        jurisdiction="state/CO",
+        data_source_names=["TRACER Bulk Download - Contributions"],
+        pull_status="success",
+        started_at=datetime(2026, 4, 24, 14, 0, tzinfo=timezone.utc),
+        completed_at=datetime(2026, 4, 24, 14, 2, tzinfo=timezone.utc),
+        message="Refresh job succeeded",
+    )
+
+    with pytest.raises(RuntimeError, match=str(missing_target.id)):
+        update_refresh_run(db_conn, missing_target)
 
 
 def test_minimal_fields_round_trip_for_all_models(db_conn: psycopg.Connection) -> None:

@@ -94,6 +94,9 @@ _DONOR_ROLLUP_IDENTITY_VARIANT_MIGRATION_PATH = (
 _ENTITY_SOURCE_CIVIC_TYPES_MIGRATION_PATH = (
     _REPO_ROOT / "core" / "schema" / "migrations" / "2026_07_13_entity_source_civic_types.sql"
 )
+_CONTRIBUTION_LIMIT_RULES_MIGRATION_PATH = (
+    _REPO_ROOT / "core" / "schema" / "migrations" / "2026_08_23_contribution_limit_rules.sql"
+)
 _ER_VIEWS_SCHEMA_PATH = _REPO_ROOT / "core" / "schema" / "er_views.sql"
 _CONTEST_SECTION_START = "-- Contest"
 _CONTEST_SECTION_END = "-- Contest Result"
@@ -207,10 +210,11 @@ if "scripts" not in sys.modules:
     _repo_scripts_module.__path__ = [str(_REPO_ROOT / "scripts")]  # type: ignore[attr-defined]
     sys.modules["scripts"] = _repo_scripts_module
 
-# --- Parked-jurisdiction quarantine (federal-first v1, see PRIORITIES.md) ---
-# State/city campaign-finance pipelines are FROZEN until post-v1, so their
-# ~2,500 tests are excluded from default collection to keep `make test` and CI
-# focused on active code. Only per-state/city SUBDIRECTORIES are ignored:
+# --- Region-suite collection boundary ---
+# The combined state/city campaign-finance suite is intentionally excluded from
+# default collection to keep `make test` and CI fast. Active region work runs
+# the focused region path; shared-loader/signoff work uses `make test-parked`.
+# Only per-state/city SUBDIRECTORIES are ignored:
 # shared helpers directly under jurisdictions/states/ (load_utils.py etc.) are
 # live federal-ingest dependencies and their colocated tests must keep running.
 # Escape hatch: CIVIBUS_INCLUDE_PARKED=1 (used by `make test-parked`).
@@ -691,6 +695,13 @@ def _bootstrap_missing_stage1_canaries(connection: psycopg.Connection, *, missin
                 connection,
                 cursor,
                 _ENTITY_SOURCE_CIVIC_TYPES_MIGRATION_PATH.read_text(encoding="utf-8"),
+            )
+    if "cf.contribution_limit_rules" in missing_canaries:
+        with connection.cursor() as cursor:
+            _execute_stage1_canary_repair(
+                connection,
+                cursor,
+                _CONTRIBUTION_LIMIT_RULES_MIGRATION_PATH.read_text(encoding="utf-8"),
             )
     if "civic.officeholding.date_precision" in missing_canaries:
         _ensure_core_date_precision_type(connection)

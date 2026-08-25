@@ -47,33 +47,40 @@ from . import (
     _load_data_source_name_for_data_type,
     _load_data_source_url_for_data_type,
 )
-from .extract import (
-    extract_wa_contribution,
-    extract_wa_expenditure,
-    extract_wa_independent_expenditure,
-    extract_wa_loan,
+from .ie_record_classes import (
+    _WA_EXTRACT_FN,
+    _WATransactionDispatch,
+    _WATransactionRoles,
+    _resolve_wa_ie_record_class,
+    _transaction_amount_field,
+    _transaction_date_from_row,
+    _transaction_type_from_row,
+    _wa_effective_dispatch,
+    _wa_support_oppose,
 )
 from .load_support import (
-    _normalize_support_oppose,
-    _parse_optional_wa_date,
     _parse_required_wa_amount,
     _required_wa_text,
 )
 from .parse import parse_contributions, parse_expenditures, parse_independent_expenditures, parse_loans
+from .relational_utils import (
+    WAFilingLookupEntry as _WAFilingLookupEntry,
+    WALoadCounts as _WALoadCounts,
+    WARelationalOperations,
+    WARelationalPassSettings,
+    WASourceRecordKeyLedger as _WASourceRecordKeyLedger,
+    load_wa_relational_transactions as _run_wa_relational_transactions,
+)
 
 LOGGER = logging.getLogger(__name__)
 
 _WA_DOMAIN = "campaign_finance"
 _WA_JURISDICTION = "state/WA"
 _WA_SOURCE_FORMAT = "csv"
+
+# One commit per this many iterated rows: both WA row loops share the boundary.
+_COMMIT_BATCH_ROWS = 1_000
 _normalize_optional_text = normalize_optional_text
-
-
-@dataclass(slots=True)
-class _WALoadCounts:
-    inserted: int = 0
-    skipped: int = 0
-    errors: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,53 +91,6 @@ class _WATransactionEntities:
     address: Address | None
 
 
-@dataclass(frozen=True, slots=True)
-class _WATransactionRoles:
-    person: str
-    organization: str
-    committee: str
-    address: str
-
-
-@dataclass(frozen=True, slots=True)
-class _WAFilingLookupEntry:
-    filing_id: UUID
-    committee_id: UUID
-    source_record_id: UUID
-
-
-_WA_ENTITY_ROLES_BY_TYPE = {
-    "contributions": _WATransactionRoles(
-        person="donor", organization="contributor", committee="recipient", address="contributor_address"
-    ),
-    "expenditures": _WATransactionRoles(
-        person="payee", organization="payee", committee="payer", address="payee_address"
-    ),
-    "independent_expenditures": _WATransactionRoles(
-        person="payee", organization="payee", committee="sponsor", address="payee_address"
-    ),
-    "loans": _WATransactionRoles(
-        person="lender", organization="lender", committee="borrower", address="lender_address"
-    ),
-}
-_WA_COUNTERPARTY_ROLES_BY_TYPE = {
-    "contributions": (("donor",), ("contributor",)),
-    "expenditures": (("payee",), ("payee",)),
-    "independent_expenditures": (("payee",), ("payee",)),
-    "loans": (("lender",), ("lender",)),
-}
-_WA_EXTRACT_FN = {
-    "contributions": extract_wa_contribution,
-    "expenditures": extract_wa_expenditure,
-    "independent_expenditures": extract_wa_independent_expenditure,
-    "loans": extract_wa_loan,
-}
-_WA_ENTITY_KEYS = {
-    "contributions": ("donor_person", "donor_org"),
-    "expenditures": ("payee_person", "payee_org"),
-    "independent_expenditures": ("payee_person", "payee_org"),
-    "loans": ("lender_person", "lender_org"),
-}
 _WA_PARSER_FN = {
     "contributions": parse_contributions,
     "expenditures": parse_expenditures,
@@ -284,11 +244,11 @@ def _extract_and_load_wa_row(
     *,
     data_type: str,
 ) -> bool:
-    extract_fn = _WA_EXTRACT_FN.get(data_type)
-    if extract_fn is None:
+    if data_type not in _WA_EXTRACT_FN:
         raise ValueError(f"Unsupported WA data_type: {data_type}")
-    person_key, org_key = _WA_ENTITY_KEYS[data_type]
-    extracted = extract_fn(dict(row))
+    dispatch = _wa_effective_dispatch(data_type, _resolve_wa_ie_record_class(row, data_type))
+    person_key, org_key = dispatch.entity_keys
+    extracted = dispatch.extract_fn(dict(row))
     return _load_wa_transaction_row(
         conn,
         row,
@@ -300,7 +260,7 @@ def _extract_and_load_wa_row(
             committee=extracted["committee"],
             address=extracted["address"],
         ),
-        roles=_WA_ENTITY_ROLES_BY_TYPE[data_type],
+        roles=dispatch.entity_roles,
     )
 
 
@@ -341,7 +301,17 @@ def _load_wa_rows(
     data_source_id: UUID,
     data_type: str,
     limit: int | None,
+    key_ledger: _WASourceRecordKeyLedger | None = None,
 ) -> LoadResult:
+    """Load WA source records for ``data_type``, tallying per-row load outcomes.
+
+    When ``key_ledger`` is supplied, every row's source-record key is recorded on it — as
+    rejected when this pass errors on the row, as persisted when the row lands by insert or
+    by dedupe skip. The two-pass ``_load_wa_with_filings`` uses that ledger to let the
+    relational pass skip a row this pass errored on and nothing persisted — so a single
+    malformed row (e.g. an unknown IE origin) is counted once, even if a stale source record
+    for it survives from an earlier load.
+    """
     started_at = time.monotonic()
     counts = _WALoadCounts()
     manages_outer_transaction = conn.info.transaction_status == psycopg.pq.TransactionStatus.IDLE
@@ -361,13 +331,18 @@ def _load_wa_rows(
         )
         if inserted is None:
             counts.errors += 1
-        elif inserted:
-            counts.inserted += 1
+            if key_ledger is not None:
+                key_ledger.rejected_attempts[_wa_source_record_key(row)] += 1
         else:
-            counts.skipped += 1
+            if inserted:
+                counts.inserted += 1
+            else:
+                counts.skipped += 1
+            if key_ledger is not None:
+                key_ledger.persisted.add(_wa_source_record_key(row))
 
         processed_count = counts.inserted + counts.skipped + counts.errors
-        if processed_count % 1_000 == 0:
+        if processed_count % _COMMIT_BATCH_ROWS == 0:
             commit_managed_transaction(conn, manages_outer_transaction)
 
     commit_managed_transaction(conn, manages_outer_transaction)
@@ -389,6 +364,7 @@ def _load_wa_file(
     data_source_id: UUID,
     data_type: str,
     limit: int | None = None,
+    key_ledger: _WASourceRecordKeyLedger | None = None,
 ) -> LoadResult:
     validated_row_limit = validated_limit(limit)
     parser = _WA_PARSER_FN[data_type](Path(file_path))
@@ -398,6 +374,7 @@ def _load_wa_file(
         data_source_id=data_source_id,
         data_type=data_type,
         limit=validated_row_limit,
+        key_ledger=key_ledger,
     )
 
 
@@ -442,40 +419,18 @@ def _select_wa_source_record_id(
     return row[0]
 
 
-def _transaction_field(data_type: str, semantic: str) -> str:
-    return _load_column_for_semantic_path(data_type, semantic)
-
-
-def _transaction_type_from_row(row: Mapping[str, str | None], data_type: str) -> str:
-    candidate_paths = ("transaction.type", "transaction.loan_type", "transaction.receipt_type")
-    for semantic_path in candidate_paths:
-        try:
-            column_name = _load_column_for_semantic_path(data_type, semantic_path)
-        except RuntimeError:
-            continue
-        normalized = _normalize_optional_text(row.get(column_name))
-        if normalized is not None:
-            return normalized
-    if data_type == "independent_expenditures":
-        return "Independent Expenditure"
-    # Live data sometimes has empty type columns; fall back to singularized data_type
-    return data_type.rstrip("s")
-
-
-def _wa_support_oppose(row: Mapping[str, str | None], data_type: str) -> str | None:
-    if data_type != "independent_expenditures":
-        return None
-    column_name = _load_column_for_semantic_path(data_type, "transaction.support_oppose")
-    return _normalize_support_oppose(row.get(column_name))
-
-
-def _build_wa_filing_fec_id(row: Mapping[str, str | None], data_type: str) -> str:
+def _build_wa_filing_fec_id(
+    row: Mapping[str, str | None],
+    data_type: str,
+    *,
+    record_class: _WATransactionDispatch | None,
+) -> str:
     committee_id_column = _load_column_for_semantic_path(data_type, "committee.id")
     year_column = _load_column_for_semantic_path(data_type, "transaction.year")
     committee_identifier = _required_wa_text(row.get(committee_id_column), committee_id_column)
     filing_year = _normalize_optional_text(row.get(year_column))
     if filing_year is None:
-        transaction_date = _parse_optional_wa_date(row.get(_transaction_field(data_type, "transaction.date")))
+        transaction_date = _transaction_date_from_row(row, data_type, record_class=record_class)
         if transaction_date is None:
             raise ValueError("WA row is missing both transaction year and transaction date")
         filing_year = str(transaction_date.year)
@@ -486,8 +441,10 @@ def _resolve_wa_filing_committee_id(
     conn: psycopg.Connection,
     row: Mapping[str, str | None],
     data_type: str,
+    *,
+    record_class: _WATransactionDispatch | None,
 ) -> UUID:
-    extracted = _WA_EXTRACT_FN[data_type](dict(row))
+    extracted = _wa_effective_dispatch(data_type, record_class).extract_fn(dict(row))
     committee_organization_id = _resolve_wa_committee_id(conn, extracted["committee"])
     committee_id_column = _load_column_for_semantic_path(data_type, "committee.id")
     native_committee_id = _required_wa_text(row.get(committee_id_column), committee_id_column)
@@ -505,16 +462,26 @@ def _build_wa_filing(
     committee_id: UUID,
     source_record_id: UUID,
     data_type: str,
+    record_class: _WATransactionDispatch | None,
 ) -> Filing:
-    transaction_date = _parse_optional_wa_date(row.get(_transaction_field(data_type, "transaction.date")))
+    """Build the WA filing a row belongs to, dated independently of its record class.
+
+    ``record_class`` reaches the filing identity only. A filing is keyed by committee and
+    year, so rows of different record classes upsert the same filing row and ``upsert_filing``
+    COALESCEs a non-null date over the stored one — dating the filing from the row's
+    record-class date column would let source row order pick C6.3's ``report_date`` over
+    C6.2's ``date_expense_obligated``. The filing date is a filing-level fact, so it uses the
+    class-independent date path.
+    """
+    filing_date = _transaction_date_from_row(row, data_type, record_class=None)
     return Filing(
-        filing_fec_id=_build_wa_filing_fec_id(row, data_type),
+        filing_fec_id=_build_wa_filing_fec_id(row, data_type, record_class=record_class),
         committee_id=committee_id,
         report_type=data_type,
         amendment_indicator="N",
         filing_name=_normalize_optional_text(row.get(_load_column_for_semantic_path(data_type, "committee.name"))),
-        receipt_date=transaction_date,
-        accepted_date=transaction_date,
+        receipt_date=filing_date,
+        accepted_date=filing_date,
         source_record_id=source_record_id,
     )
 
@@ -526,11 +493,14 @@ def _upsert_wa_filing(
     source_record_id: UUID,
     data_type: str,
     filing_lookup: dict[str, _WAFilingLookupEntry],
+    record_class: _WATransactionDispatch | None,
 ) -> _WAFilingLookupEntry:
-    filing_fec_id = _build_wa_filing_fec_id(row, data_type)
+    filing_fec_id = _build_wa_filing_fec_id(row, data_type, record_class=record_class)
     existing_entry = filing_lookup.get(filing_fec_id)
     committee_id = (
-        _resolve_wa_filing_committee_id(conn, row, data_type) if existing_entry is None else existing_entry.committee_id
+        _resolve_wa_filing_committee_id(conn, row, data_type, record_class=record_class)
+        if existing_entry is None
+        else existing_entry.committee_id
     )
     filing_source_record_id = source_record_id if existing_entry is None else existing_entry.source_record_id
 
@@ -539,6 +509,7 @@ def _upsert_wa_filing(
         committee_id=committee_id,
         source_record_id=filing_source_record_id,
         data_type=data_type,
+        record_class=record_class,
     )
     filing_id = upsert_filing(conn, filing)
     if existing_entry is not None and existing_entry.filing_id != filing_id:
@@ -574,8 +545,9 @@ def _resolve_wa_transaction_address_id(
     *,
     source_record_id: UUID,
     data_type: str,
+    record_class: _WATransactionDispatch | None,
 ) -> UUID | None:
-    address_role = _WA_ENTITY_ROLES_BY_TYPE[data_type].address
+    address_role = _wa_effective_dispatch(data_type, record_class).entity_roles.address
     with conn.cursor() as cursor:
         cursor.execute(
             """
@@ -602,8 +574,16 @@ def _upsert_wa_transaction_with_filing(
     committee_id: UUID,
     source_record_id: UUID,
     data_type: str,
+    record_class: _WATransactionDispatch | None,
 ) -> None:
-    person_roles, organization_roles = _WA_COUNTERPARTY_ROLES_BY_TYPE[data_type]
+    """Upsert a WA transaction through its record-class-aware dispatch.
+
+    The dispatch extractor is the router's authoritative output and cannot diverge from
+    the resolved record class. Recomputing this pure, cheap extraction keeps the filing
+    and transaction paths independent; caching its payload is intentionally unnecessary.
+    """
+    dispatch = _wa_effective_dispatch(data_type, record_class)
+    person_roles, organization_roles = dispatch.counterparty_roles
     contributor_person_id, contributor_organization_id = resolve_transaction_counterparty_ids(
         conn,
         source_record_id=source_record_id,
@@ -614,22 +594,23 @@ def _upsert_wa_transaction_with_filing(
         conn,
         source_record_id=source_record_id,
         data_type=data_type,
+        record_class=record_class,
     )
 
-    counterparty_addr = _WA_EXTRACT_FN[data_type](dict(row))["address"]
+    counterparty_addr = dispatch.extract_fn(dict(row))["address"]
     contributor_state = counterparty_addr.state if counterparty_addr is not None else None
     contributor_city = counterparty_addr.city if counterparty_addr is not None else None
     contributor_zip = counterparty_addr.zip5 if counterparty_addr is not None else None
 
-    amount_field = _transaction_field(data_type, "transaction.amount")
+    amount_field = _transaction_amount_field(data_type, record_class=record_class)
     upsert_transaction(
         conn,
         Transaction(
             filing_id=filing_id,
             committee_id=committee_id,
-            transaction_type=_transaction_type_from_row(row, data_type),
+            transaction_type=_transaction_type_from_row(row, data_type, record_class=record_class),
             transaction_identifier=_wa_source_record_key(row),
-            transaction_date=_parse_optional_wa_date(row.get(_transaction_field(data_type, "transaction.date"))),
+            transaction_date=_transaction_date_from_row(row, data_type, record_class=record_class),
             amount=_parse_required_wa_amount(row.get(amount_field), amount_field),
             contributor_name_raw=_counterparty_name_raw(row, data_type),
             contributor_employer=_counterparty_employer(row, data_type),
@@ -642,9 +623,27 @@ def _upsert_wa_transaction_with_filing(
             recipient_committee_id=committee_id,
             amendment_indicator="N",
             source_record_id=source_record_id,
-            support_oppose=_wa_support_oppose(row, data_type),
+            support_oppose=_wa_support_oppose(row, data_type, record_class=record_class),
         ),
     )
+
+
+def _evict_rolled_back_filing(
+    filing_lookup: dict[str, _WAFilingLookupEntry],
+    row: Mapping[str, str | None],
+    data_type: str,
+    record_class: _WATransactionDispatch | None,
+) -> None:
+    """Drop a rolled-back filing's cache entry so a later good row re-upserts it.
+
+    The failing row may not have a computable filing_fec_id (e.g. an unknown origin that
+    raised before any filing was built), in which case there is nothing cached to evict.
+    """
+    try:
+        filing_fec_id = _build_wa_filing_fec_id(row, data_type, record_class=record_class)
+    except Exception:  # noqa: BLE001
+        return
+    filing_lookup.pop(filing_fec_id, None)
 
 
 def _load_wa_relational_transactions(
@@ -654,51 +653,31 @@ def _load_wa_relational_transactions(
     data_source_id: UUID,
     data_type: str,
     limit: int | None,
-) -> int:
-    filing_lookup: dict[str, _WAFilingLookupEntry] = {}
-    relational_errors = 0
-    manages_outer_transaction = conn.info.transaction_status == psycopg.pq.TransactionStatus.IDLE
-    singular_data_type = data_type.rstrip("s")
+    key_ledger: _WASourceRecordKeyLedger | None = None,
+) -> _WALoadCounts:
+    """Delegate WA's relational pass while keeping its row operations patchable here.
 
-    for index, row in enumerate(rows, start=1):
-        if limit is not None and index > limit:
-            break
-        if not isinstance(row, Mapping):
-            raise TypeError(f"Expected mapping row, got {type(row)!r}")
-
-        source_record_id = _select_wa_source_record_id(
-            conn,
+    :func:`~.relational_utils.load_wa_relational_transactions` owns the loop, the commit
+    boundary, and what the returned counts mean.
+    """
+    return _run_wa_relational_transactions(
+        conn,
+        rows,
+        settings=WARelationalPassSettings(
             data_source_id=data_source_id,
-            source_record_key=_wa_source_record_key(row),
-        )
-        if source_record_id is None:
-            continue
-
-        try:
-            if manages_outer_transaction:
-                ensure_transaction_open(conn)
-            with conn.transaction():
-                filing_entry = _upsert_wa_filing(
-                    conn,
-                    row,
-                    source_record_id=source_record_id,
-                    data_type=data_type,
-                    filing_lookup=filing_lookup,
-                )
-                _upsert_wa_transaction_with_filing(
-                    conn,
-                    row,
-                    filing_id=filing_entry.filing_id,
-                    committee_id=filing_entry.committee_id,
-                    source_record_id=source_record_id,
-                    data_type=data_type,
-                )
-        except Exception:  # noqa: BLE001
-            relational_errors += 1
-            LOGGER.exception("Failed linking WA %s row to filing", singular_data_type)
-
-    commit_managed_transaction(conn, manages_outer_transaction)
-    return relational_errors
+            data_type=data_type,
+            limit=limit,
+            commit_batch_rows=_COMMIT_BATCH_ROWS,
+            key_ledger=key_ledger,
+            operations=WARelationalOperations(
+                source_record_key=_wa_source_record_key,
+                select_source_record_id=_select_wa_source_record_id,
+                upsert_filing=_upsert_wa_filing,
+                upsert_transaction=_upsert_wa_transaction_with_filing,
+                evict_rolled_back_filing=_evict_rolled_back_filing,
+            ),
+        ),
+    )
 
 
 def _load_wa_with_filings(
@@ -708,22 +687,52 @@ def _load_wa_with_filings(
     data_type: str,
     limit: int | None = None,
 ) -> LoadResult:
+    """Run the source-record pass then the relational pass, folding both into one result.
+
+    The relational pass's ``errors`` and ``skipped`` counts are folded into the
+    ``LoadResult`` the source-record pass produced;
+    :func:`~.relational_utils.load_wa_relational_transactions` owns what those two counts
+    mean. Conflating both skip causes into one field is
+    intentional — it keeps the decision's "a skip is never an error" invariant without
+    adding a cross-loader field to the shared ``LoadResult``.
+    """
     validated_row_limit = validated_limit(limit)
+    # Sample ownership before ensure_wa_data_source runs SQL and implicitly opens a
+    # transaction, then commit the data-source row so the connection is IDLE again. Both
+    # passes below sample ownership on entry, so a lookup left open here would make them
+    # believe an outer caller owns the transaction and silently skip every periodic
+    # commit — leaving the boundary in place but dead.
+    manages_outer_transaction = conn.info.transaction_status == psycopg.pq.TransactionStatus.IDLE
     data_source_id = ensure_wa_data_source(conn, data_type=data_type)
+    commit_managed_transaction(conn, manages_outer_transaction)
+    key_ledger = _WASourceRecordKeyLedger()
     load_result = _load_wa_file(
         conn,
         file_path,
         data_source_id=data_source_id,
         data_type=data_type,
         limit=validated_row_limit,
+        key_ledger=key_ledger,
     )
-    load_result.errors += _load_wa_relational_transactions(
+    # A key the source-record pass both rejected and persisted lost nothing: attempts may
+    # have failed non-deterministically, but a byte-identical duplicate row confirmed the
+    # content persisted, so those attempt errors are spurious and every copy links below.
+    # The attempts move to ``skipped`` rather than disappearing: their content was already
+    # persisted by the copy that landed, which is what a dedupe skip means, and rebucketing
+    # keeps inserted + skipped + errors equal to the rows the source-record pass read.
+    spurious_attempt_errors = key_ledger.rejected_attempts_for_persisted_keys()
+    load_result.errors -= spurious_attempt_errors
+    load_result.skipped += spurious_attempt_errors
+    relational_counts = _load_wa_relational_transactions(
         conn,
         _WA_PARSER_FN[data_type](Path(file_path)),
         data_source_id=data_source_id,
         data_type=data_type,
         limit=validated_row_limit,
+        key_ledger=key_ledger,
     )
+    load_result.errors += relational_counts.errors
+    load_result.skipped += relational_counts.skipped
     return load_result
 
 

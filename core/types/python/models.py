@@ -113,7 +113,12 @@ def validate_temporal_range(start: date | None, end: date | None) -> None:
 
 
 DatePrecisionLiteral = Literal["day", "month", "quarter", "year", "approximate"]
-RefreshPullStatus = Literal["crashed", "empty", "degraded", "failed", "success"]
+RefreshPullStatus = Literal["crashed", "empty", "degraded", "failed", "success", "running"]
+# The one status that means "attempt still in flight"; every other member of
+# RefreshPullStatus is terminal. Paired with completed_at by
+# RefreshRun.validate_completion_pairing and by the SQL constraint
+# refresh_run_running_completed_at_check.
+REFRESH_PULL_STATUS_RUNNING = "running"
 
 
 class ValidDateRange(BaseModel):
@@ -393,7 +398,7 @@ class RefreshRun(BaseModel):
     data_source_names: list[str] = Field(default_factory=list)
     pull_status: RefreshPullStatus
     started_at: datetime
-    completed_at: datetime
+    completed_at: datetime | None = None
     inserted_count: int = 0
     skipped_count: int = 0
     quarantined_count: int = 0
@@ -417,6 +422,20 @@ class RefreshRun(BaseModel):
         if value < 0:
             raise ValueError("refresh-run counts must be non-negative")
         return value
+
+    @model_validator(mode="after")
+    def validate_completion_pairing(self) -> RefreshRun:
+        """Mirror the SQL constraint refresh_run_running_completed_at_check.
+
+        An in-flight attempt carries no completion timestamp and a finished one
+        always does, so the model rejects exactly the states the database does.
+        """
+        is_running = self.pull_status == REFRESH_PULL_STATUS_RUNNING
+        if is_running and self.completed_at is not None:
+            raise ValueError("completed_at must be unset while pull_status is 'running'")
+        if not is_running and self.completed_at is None:
+            raise ValueError(f"completed_at is required for terminal pull_status {self.pull_status!r}")
+        return self
 
 
 CONTACT_POINT_OWNER_TYPES = Literal[

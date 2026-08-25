@@ -113,6 +113,27 @@ CREATE UNIQUE INDEX idx_cluster_member_active
     WHERE split_at IS NULL;
 
 -- ============================================================================
+-- Person Absorption Tombstone
+-- ============================================================================
+-- irreversible `person` tombstone. Physical person absorption deletes absorbed
+-- rows from core.person, so this table preserves the absorbed ID as a durable
+-- alias without an FK back to the deleted row.
+-- absorbed_payload stores the pre-delete `core.person` row from `core/schema/entities.sql`.
+
+CREATE TABLE core.person_absorption (
+    absorbed_person_id UUID PRIMARY KEY,
+    canonical_person_id UUID NOT NULL REFERENCES core.person(id),
+    cluster_id UUID NOT NULL REFERENCES core.entity_cluster(id),
+    merged_by TEXT NOT NULL,
+    absorbed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    absorbed_payload JSONB NOT NULL
+);
+
+CREATE INDEX idx_person_absorption_canonical_person ON core.person_absorption (canonical_person_id);
+CREATE INDEX idx_person_absorption_cluster ON core.person_absorption (cluster_id);
+CREATE INDEX idx_person_absorption_absorbed_at ON core.person_absorption (absorbed_at);
+
+-- ============================================================================
 -- Manual Override
 -- ============================================================================
 -- Human-confirmed or human-rejected match decisions. These take precedence over

@@ -75,6 +75,61 @@ laws:
     corporate_direct: "prohibited"
     union_direct: 900
     party_to_candidate: null
+  contribution_limit_rules:
+    - donor_type: individual
+      recipient_type: candidate_committee
+      office_level: citywide
+      limit_status: numeric
+      limit_amount: 1000
+      limit_basis: per_election
+      effective_date: "2011-04-08"
+      source_citation: "L.A. Charter § 470(c)(3)-(4), (f); Charter Amendment H approved 2011-03-08 effective 2011-04-08"
+      note: "Los Angeles City contribution ceilings may be adjusted by ordinance under Charter § 470(f); re-verify indexed amounts before each election cycle."
+    - donor_type: individual
+      recipient_type: candidate_committee
+      office_level: city_council
+      limit_status: numeric
+      limit_amount: 500
+      limit_basis: per_election
+      effective_date: "2011-04-08"
+      source_citation: "L.A. Charter § 470(c)(3)-(4), (f); Charter Amendment H approved 2011-03-08 effective 2011-04-08"
+      note: "Los Angeles City contribution ceilings may be adjusted by ordinance under Charter § 470(f); re-verify indexed amounts before each election cycle."
+    - donor_type: pac
+      recipient_type: candidate_committee
+      office_level: citywide
+      limit_status: numeric
+      limit_amount: 1000
+      limit_basis: per_election
+      effective_date: "2011-04-08"
+      source_citation: "L.A. Charter § 470(c)(3)-(4), (f); Charter Amendment H approved 2011-03-08 effective 2011-04-08"
+      note: "Los Angeles City contribution ceilings may be adjusted by ordinance under Charter § 470(f); re-verify indexed amounts before each election cycle."
+    - donor_type: pac
+      recipient_type: candidate_committee
+      office_level: city_council
+      limit_status: numeric
+      limit_amount: 500
+      limit_basis: per_election
+      effective_date: "2011-04-08"
+      source_citation: "L.A. Charter § 470(c)(3)-(4), (f); Charter Amendment H approved 2011-03-08 effective 2011-04-08"
+      note: "Los Angeles City contribution ceilings may be adjusted by ordinance under Charter § 470(f); re-verify indexed amounts before each election cycle."
+    - donor_type: union
+      recipient_type: candidate_committee
+      office_level: citywide
+      limit_status: numeric
+      limit_amount: 1000
+      limit_basis: per_election
+      effective_date: "2011-04-08"
+      source_citation: "L.A. Charter § 470(c)(3)-(4), (f); Charter Amendment H approved 2011-03-08 effective 2011-04-08"
+      note: "Los Angeles City contribution ceilings may be adjusted by ordinance under Charter § 470(f); re-verify indexed amounts before each election cycle."
+    - donor_type: union
+      recipient_type: candidate_committee
+      office_level: city_council
+      limit_status: numeric
+      limit_amount: 500
+      limit_basis: per_election
+      effective_date: "2011-04-08"
+      source_citation: "L.A. Charter § 470(c)(3)-(4), (f); Charter Amendment H approved 2011-03-08 effective 2011-04-08"
+      note: "Los Angeles City contribution ceilings may be adjusted by ordinance under Charter § 470(f); re-verify indexed amounts before each election cycle."
   itemization_threshold: 100
   reporting:
     periods:

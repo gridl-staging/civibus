@@ -59,7 +59,7 @@ def test_data_source_blocks_include_only_expected_in_shapes() -> None:
     }
 
 
-def test_indiana_ingest_contract_is_annual_zip_for_contributions_and_expenditures() -> None:
+def test_indiana_ingest_contract_is_weekly_refreshed_annual_zip_for_contributions_and_expenditures() -> None:
     data_sources, data_sources_by_transaction_type = _in_data_sources_by_type()
 
     assert len(data_sources) == 2
@@ -67,7 +67,7 @@ def test_indiana_ingest_contract_is_annual_zip_for_contributions_and_expenditure
 
     for data_type, expected_url in _EXPECTED_BULK_DOWNLOAD_URL_BY_DATA_TYPE.items():
         source = data_sources_by_transaction_type[(data_type,)]
-        assert source.update_frequency == "annual"
+        assert source.update_frequency == "weekly"
         assert source.bulk_download_url == expected_url
 
 

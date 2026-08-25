@@ -178,6 +178,43 @@ class TestRefreshRunModel:
 
         assert recreated == original
 
+    def test_refresh_run_running_round_trip_has_no_completed_at(self) -> None:
+        original = RefreshRun(
+            job_key="state-co-contributions",
+            domain="campaign_finance",
+            jurisdiction="state/CO",
+            pull_status="running",
+            started_at=datetime(2026, 4, 24, 12, 0, tzinfo=timezone.utc),
+            message="Refresh job in flight",
+        )
+
+        assert original.completed_at is None
+        assert RefreshRun(**original.model_dump()) == original
+
+    def test_refresh_run_rejects_running_with_completed_at(self) -> None:
+        with pytest.raises(ValidationError, match="completed_at"):
+            RefreshRun(
+                job_key="state-co-contributions",
+                domain="campaign_finance",
+                jurisdiction="state/CO",
+                pull_status="running",
+                started_at=datetime(2026, 4, 24, 12, 0, tzinfo=timezone.utc),
+                completed_at=datetime(2026, 4, 24, 12, 5, tzinfo=timezone.utc),
+                message="bad",
+            )
+
+    @pytest.mark.parametrize("pull_status", ["crashed", "empty", "degraded", "failed", "success"])
+    def test_refresh_run_rejects_terminal_status_without_completed_at(self, pull_status: str) -> None:
+        with pytest.raises(ValidationError, match="completed_at"):
+            RefreshRun(
+                job_key="state-co-contributions",
+                domain="campaign_finance",
+                jurisdiction="state/CO",
+                pull_status=pull_status,
+                started_at=datetime(2026, 4, 24, 12, 0, tzinfo=timezone.utc),
+                message="bad",
+            )
+
     def test_refresh_run_rejects_unknown_pull_status(self) -> None:
         with pytest.raises(ValidationError, match="Input should be"):
             RefreshRun(

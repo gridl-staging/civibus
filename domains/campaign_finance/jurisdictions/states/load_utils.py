@@ -63,9 +63,50 @@ def select_data_source_id(
     return row[0]
 
 
+def reconcile_existing_data_source(conn: psycopg.Connection, data_source_id: UUID, data_source: DataSource) -> None:
+    with conn.cursor() as cursor:
+        cursor.execute(
+            """
+            UPDATE core.data_source
+            SET source_url = %s::text,
+                source_format = COALESCE(%s::text, source_format),
+                license = COALESCE(%s::text, license),
+                update_frequency = COALESCE(%s::text, update_frequency),
+                notes = COALESCE(%s::text, notes),
+                updated_at = NOW()
+            WHERE id = %s
+              AND (
+                  source_url IS DISTINCT FROM %s::text
+                  OR (%s::text IS NOT NULL AND source_format IS DISTINCT FROM %s::text)
+                  OR (%s::text IS NOT NULL AND license IS DISTINCT FROM %s::text)
+                  OR (%s::text IS NOT NULL AND update_frequency IS DISTINCT FROM %s::text)
+                  OR (%s::text IS NOT NULL AND notes IS DISTINCT FROM %s::text)
+              )
+            """,
+            (
+                data_source.source_url,
+                data_source.source_format,
+                data_source.license,
+                data_source.update_frequency,
+                data_source.notes,
+                data_source_id,
+                data_source.source_url,
+                data_source.source_format,
+                data_source.source_format,
+                data_source.license,
+                data_source.license,
+                data_source.update_frequency,
+                data_source.update_frequency,
+                data_source.notes,
+                data_source.notes,
+            ),
+        )
+
+
 def ensure_data_source(conn: psycopg.Connection, data_source: DataSource) -> UUID:
     existing_id = select_data_source_id(conn, data_source.domain, data_source.jurisdiction, data_source.name)
     if existing_id is not None:
+        reconcile_existing_data_source(conn, existing_id, data_source)
         return existing_id
 
     inserted_id = try_insert_data_source(conn, data_source)
@@ -75,6 +116,7 @@ def ensure_data_source(conn: psycopg.Connection, data_source: DataSource) -> UUI
     # Concurrent insert won the race — the row must exist now.
     existing_id = select_data_source_id(conn, data_source.domain, data_source.jurisdiction, data_source.name)
     if existing_id is not None:
+        reconcile_existing_data_source(conn, existing_id, data_source)
         return existing_id
 
     raise RuntimeError(f"{data_source.name} insert reported a conflict, but the existing row could not be selected")
