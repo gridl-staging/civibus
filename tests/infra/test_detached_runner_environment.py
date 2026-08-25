@@ -37,6 +37,17 @@ def _runner_sourced_library_names() -> set[str]:
     return set(_RUNNER_SOURCE_LINE.findall(SCRIPT_PATH.read_text(encoding="utf-8")))
 
 
+# The harness's own Python modules, matched rather than listed, so a module
+# extracted out of an oversized one inherits the ceiling the moment it lands
+# instead of when someone remembers to add it to a list here.
+_HARNESS_MODULE_GLOBS = ("detached_runner*.py", "test_detached_runner*.py")
+
+
+def _harness_module_paths() -> list[Path]:
+    directory = Path(__file__).resolve().parent
+    return sorted({path for glob in _HARNESS_MODULE_GLOBS for path in directory.glob(glob)})
+
+
 def test_runner_environment_resolves_bash_to_an_interpreter_that_defines_bashpid(tmp_path: Path) -> None:
     """Prove the runner is handed a usable bash by name, not only by path.
 
@@ -125,6 +136,24 @@ def test_runner_and_every_library_it_sources_stay_within_the_line_budget() -> No
         assert path.is_file(), f"detached_runner.sh sources a path that does not exist: {path}"
 
     assert oversized_modules(budgeted_paths) == {}
+
+
+def test_detached_runner_harness_modules_stay_within_the_line_budget() -> None:
+    """Hold the harness's own Python modules to the repository's file-size ceiling.
+
+    The guard above budgets what the runner sources; this one budgets what tests
+    it, so a helper module that grows past the ceiling reds here rather than
+    being noticed by a reviewer. Asserting that discovery still finds one module
+    per glob keeps the guard fail-closed: a glob that stopped matching would
+    otherwise shrink the budgeted set to a vacuously passing one.
+    """
+    harness_modules = _harness_module_paths()
+    directory = Path(__file__).resolve().parent
+
+    for anchor in ("detached_runner_helpers.py", Path(__file__).name):
+        assert directory / anchor in harness_modules, f"harness module discovery no longer matches {anchor}"
+
+    assert oversized_modules(harness_modules) == {}
 
 
 def test_runner_sourced_library_discovery_is_fail_closed() -> None:

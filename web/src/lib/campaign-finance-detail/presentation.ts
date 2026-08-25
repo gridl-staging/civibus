@@ -416,7 +416,7 @@ function formatRowValue(value: string | null | undefined): string {
   return value;
 }
 
-function resolveCanonicalName(rawName: string, fallbackLabel: "Candidate" | "Committee"): string {
+export function resolveCanonicalName(rawName: string, fallbackLabel: "Candidate" | "Committee"): string {
   const trimmedName = rawName.trim();
   return trimmedName === "" ? fallbackLabel : trimmedName;
 }

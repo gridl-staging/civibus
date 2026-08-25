@@ -176,6 +176,16 @@ describe("buildCommitteeListItemPresentation", () => {
     expect(result.href).toBe(`/committee/${COMMITTEE_ID}`);
   });
 
+  it("falls back to non-empty link text when a source committee name is blank", () => {
+    const result = buildCommitteeListItemPresentation({
+      ...FULL_COMMITTEE,
+      name: "   "
+    });
+
+    expect(result.name).toBe("Committee");
+    expect(result.name.trim().length).toBeGreaterThan(0);
+  });
+
   it("returns committee_type alone when it is the only non-null field", () => {
     const result = buildCommitteeListItemPresentation({
       ...SPARSE_COMMITTEE,

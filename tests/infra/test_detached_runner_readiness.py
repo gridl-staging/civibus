@@ -4,10 +4,12 @@ import os
 import sys
 from pathlib import Path
 
-from tests.infra.detached_runner_helpers import (
+from tests.infra.detached_runner_budgets import (
     _READY_WINDOW_SECONDS,
     _READY_WINDOW_WALL_SECONDS,
     _assert_ready_window_budget_ordering,
+)
+from tests.infra.detached_runner_helpers import (
     _assert_recorded_wrapper_pgid,
     _json_stdout,
     _run_runner,

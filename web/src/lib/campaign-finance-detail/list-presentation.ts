@@ -1,5 +1,5 @@
 import { buildCandidateHref, buildCommitteeHref, type CandidateListItem, type CommitteeListItem } from "./contract";
-import { formatCandidatePublicName, formatOptionalCurrency } from "./presentation";
+import { formatCandidatePublicName, formatOptionalCurrency, resolveCanonicalName } from "./presentation";
 
 /** Label for the candidate browse money column. */
 export const CANDIDATE_TOTAL_RAISED_LABEL = "Total raised";
@@ -70,7 +70,7 @@ export function buildCommitteeListItemPresentation(
     .join(" \u00b7 ");
 
   return {
-    name: item.name,
+    name: resolveCanonicalName(item.name, "Committee"),
     href: buildCommitteeHref(item),
     contextLine
   };
