@@ -125,7 +125,7 @@ run_wrapper() {
   # does not exist in stock macOS Bash 3.2.
   local child_pid="" child_status="" receipt_written=false wrapper_pid="$$"
 
-  # shellcheck disable=SC2329  # Invoked by the EXIT trap below.
+  # shellcheck disable=SC2317,SC2329  # Invoked by the EXIT trap below.
   write_cleanup_receipt_on_exit() {
     local requested_wrapper_pid
     requested_wrapper_pid="$(read_first_line_or_empty "${directory}/cleanup_requested")"
@@ -164,7 +164,7 @@ run_wrapper() {
     [[ "${WRAPPER_LAUNCH_APPROVAL_VERDICT}" != "pending" ]]
   }
 
-  # shellcheck disable=SC2329  # Invoked by the signal traps below.
+  # shellcheck disable=SC2317,SC2329  # Invoked by the signal traps below.
   forward_signal() {
     local signal_name="$1"
     local signal_status="$2"

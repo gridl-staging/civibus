@@ -410,10 +410,11 @@ def test_minimal_fields_round_trip_for_all_models(db_conn: psycopg.Connection) -
     person = Person(canonical_name="Minimal Person")
     organization = Organization(canonical_name="Minimal Org")
     address = Address(raw_address="1 Minimal St, Durham, NC 27701")
+    # campaign_finance data sources require a typed filing authority (DataSource validator).
     data_source = DataSource(
         domain="campaign_finance",
-        filing_authority_type="state",
-        filing_authority_code="NC",
+        filing_authority_type="federal",
+        filing_authority_code="FEC",
         name="Minimal Source",
         source_url="https://example.gov/source/minimal",
     )
@@ -1418,8 +1419,20 @@ def test_select_active_roster_portrait_for_person_prefers_roster_sourced_active_
         pull_date=datetime(2026, 4, 29, 1, 5, tzinfo=timezone.utc),
         record_hash=compute_record_hash({"record_type": "roster_portrait"}),
     )
+    # Supersession must stay within one data source, so the successor that
+    # retires roster_record belongs to roster_source (trigger
+    # core.enforce_source_record_supersession_scope).
+    roster_successor_record = SourceRecord(
+        data_source_id=roster_source.id,
+        source_record_key=f"roster-successor-{uuid4()}",
+        source_url="https://example.org/roster/record",
+        raw_fields={"record_type": "roster_portrait", "revision": 2},
+        pull_date=datetime(2026, 4, 29, 1, 10, tzinfo=timezone.utc),
+        record_hash=compute_record_hash({"record_type": "roster_portrait", "revision": 2}),
+    )
     insert_source_record(db_conn, legacy_civics_record)
     insert_source_record(db_conn, roster_record)
+    insert_source_record(db_conn, roster_successor_record)
 
     insert_person_portrait(
         db_conn,
@@ -1458,19 +1471,10 @@ def test_select_active_roster_portrait_for_person_prefers_roster_sourced_active_
 
     # Supersession stays within the roster source; the legacy civics source
     # remains a separate provenance chain.
-    successor_record = SourceRecord(
-        data_source_id=roster_source.id,
-        source_record_key=f"roster-successor-{uuid4()}",
-        source_url="https://example.org/roster/successor",
-        raw_fields={"record_type": "roster_portrait_successor"},
-        pull_date=datetime(2026, 4, 29, 1, 10, tzinfo=timezone.utc),
-        record_hash=compute_record_hash({"record_type": "roster_portrait_successor"}),
-    )
-    insert_source_record(db_conn, successor_record)
     with db_conn.cursor() as cursor:
         cursor.execute(
             "UPDATE core.source_record SET superseded_by = %s WHERE id = %s",
-            (successor_record.id, roster_record.id),
+            (roster_successor_record.id, roster_record.id),
         )
 
     assert select_active_roster_portrait_for_person(db_conn, person_id=person.id) is None

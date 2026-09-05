@@ -172,6 +172,26 @@ def test_runner_shellcheck_directives_require_source_following_lint() -> None:
     assert all("disable=SC1091" not in line for line in source_directives)
 
 
+def test_runner_trap_callbacks_suppress_both_shellcheck_codes() -> None:
+    runner_source = SCRIPT_PATH.read_text(encoding="utf-8")
+    wrapper = re.search(r"^run_wrapper\(\) \{\n(.*?)^\}", runner_source, re.MULTILINE | re.DOTALL)
+    assert wrapper is not None, "run_wrapper function is missing"
+    wrapper_body = wrapper.group(1)
+
+    for callback_name in ("write_cleanup_receipt_on_exit", "forward_signal"):
+        callback = re.search(rf"^  {callback_name}\(\) \{{$", wrapper_body, re.MULTILINE)
+        assert callback is not None, f"{callback_name} function is missing from run_wrapper"
+        preceding_lines = wrapper_body[: callback.start()].splitlines()
+        assert preceding_lines, f"{callback_name} has no adjacent ShellCheck directive"
+        directive = re.fullmatch(
+            r"  # shellcheck disable=(SC\d+(?:,SC\d+)*)(?:[ \t]+#.*)?",
+            preceding_lines[-1],
+        )
+        assert directive is not None, f"{callback_name} has no adjacent function-scoped ShellCheck directive"
+        suppressed_codes = set(directive.group(1).split(","))
+        assert {"SC2317", "SC2329"} <= suppressed_codes, f"{callback_name}: {suppressed_codes}"
+
+
 def test_runner_and_its_sourced_libraries_lint_clean_under_check_sourced() -> None:
     """Run the lint gate here so the flag that reaches the libraries lives in code.
 
